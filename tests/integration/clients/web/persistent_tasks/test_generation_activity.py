@@ -2,6 +2,9 @@
 
 from app.core.resource_uri import thread_resource_uri
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
+)
 from tests.integration.backend.sessions.test_persistent_task_generations import (
     generation_configuration,
 )
@@ -25,11 +28,11 @@ from tests.support.api_waiters import wait_for_job_done
 
 
 async def test_queued_output_appearing_opens_the_actual_generated_session(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner, web_workbench_assets,
 ):
     async with (
         oauth_endpoint_factory() as secure, http_schema_endpoint_factory("sibling") as sibling,
-        product_case(secure, sibling, web=True) as (client, replay, case),
+        product_case(secure, sibling, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)}) as (client, replay, case),
     ):
         title = "保持选择的起始会话"
         origin = await create_session(client, title)
@@ -49,7 +52,8 @@ async def test_queued_output_appearing_opens_the_actual_generated_session(
                 deltas=({"role": "assistant", "content": "自动激活验收完成。"},), finish_reason="stop",
             ))
         calls = replay.control.plan_model_calls(output, thread, cassette.raw["interactions"])
-        result = await browser_runner(case, client, title=title, other_session_id=output,
+        result = await browser_runner(case, client, title=title,
+            other_target_uri=thread_resource_uri(case.mount.workspace_id, output, thread),
             target_uri=thread_resource_uri(case.mount.workspace_id, origin,
                 (await client.get(f"/api/v1/sessions/{origin}/main-thread")).json()["data"]["thread_id"]),
             script="generation_activity", environment=replay.environment)

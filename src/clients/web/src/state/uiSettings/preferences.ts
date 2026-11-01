@@ -27,8 +27,8 @@ export const CONVERSATION_CONTENT_VIEWS = [
 ] as const satisfies readonly ConversationContentView[];
 
 /**
- * 归一 `layout.content_view`：它来自 Gateway 用户 profile，是当前会话内容视图的
- * 唯一权威来源。未知取值会被前端静默展示成「默认视图」，因此这里按仓库既有约定
+ * 归一 `layout.content_view`：它来自浏览器本地展示偏好。
+ * 未知取值会被前端静默展示成「默认视图」，因此这里按仓库既有约定
  * （参见同文件的 `normalizeExpandedPathsByWorkspace`）响亮失败，不静默收敛。
  */
 export function normalizeContentView(value: unknown): void {
@@ -48,8 +48,8 @@ export function normalizeContentView(value: unknown): void {
 }
 
 /**
- * 归一 `workspace_file_tree.expanded_paths_by_workspace`：它来自 Gateway 用户
- * profile，是文件树展开态的唯一权威来源。非法载荷一旦被当成合法设置传下去，
+ * 归一 `workspace_file_tree.expanded_paths_by_workspace`：它来自浏览器本地展示偏好。
+ * 非法载荷一旦被当成合法设置传下去，
  * 会让文件树在 `new Set(expandedPaths)` 处整块崩溃，因此这里按仓库既有约定
  * （参见 `api/workspaceFilesystem.ts` 的 items 校验）响亮失败，不静默收敛成空对象。
  */
@@ -127,61 +127,6 @@ export function normalizeWebUiSettings(
       ...defaults.theme,
       ...value.theme,
     },
-  };
-}
-
-function mergeReturnedSection<T extends object>(
-  current: T,
-  returned: T,
-  patch: Partial<T> | null | undefined,
-): T {
-  if (patch === null || patch === undefined) {
-    return current;
-  }
-  const merged = { ...current };
-  for (const key of Object.keys(patch) as Array<keyof T>) {
-    if (patch[key] !== undefined) {
-      merged[key] = returned[key];
-    }
-  }
-  return merged;
-}
-
-/**
- * 游客设置不写入 Gateway profile，因此要把接口返回的本次补丁合并回页面内存。
- * 返回值仍以 Gateway 的归一化结果为准，未参与本次更新的设置继续沿用当前页面状态。
- */
-export function mergeGuestWebUiSettings(
-  current: WebUiSettings,
-  returned: WebUiSettings,
-  patch: WebUiSettingsUpdate,
-): WebUiSettings {
-  const layout = mergeReturnedSection(current.layout, returned.layout, patch.layout);
-  const theme = patch.theme === null || patch.theme === undefined
-    ? current.theme
-    : {
-        ...mergeReturnedSection(current.theme, returned.theme, patch.theme),
-        resolved_theme: returned.theme.resolved_theme,
-      };
-  return {
-    ...current,
-    layout,
-    session_sidebar: mergeReturnedSection(
-      current.session_sidebar,
-      returned.session_sidebar,
-      patch.session_sidebar,
-    ),
-    workspace_file_tree: mergeReturnedSection(
-      current.workspace_file_tree,
-      returned.workspace_file_tree,
-      patch.workspace_file_tree,
-    ),
-    gateway_console: mergeReturnedSection(
-      current.gateway_console,
-      returned.gateway_console,
-      patch.gateway_console,
-    ),
-    theme,
   };
 }
 

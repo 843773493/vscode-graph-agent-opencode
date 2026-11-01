@@ -19,6 +19,7 @@ const FIXED_BUILD_INPUTS = Object.freeze([
   "resources",
   "src/shared",
   "src/clients/web",
+  "src/clients/workbench",
   "src/workspace-services",
   "packages/launcher",
   "packaging/runtime",

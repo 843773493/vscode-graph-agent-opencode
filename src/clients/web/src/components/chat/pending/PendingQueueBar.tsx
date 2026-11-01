@@ -52,6 +52,8 @@ const PendingQueueItem = React.memo(function PendingQueueItem({
     <div
       className="chat-pending-composer-item"
       role="listitem"
+      data-message-id={userMessage.message_id}
+      data-turn-id={conversation.turnId}
       aria-label={`排队消息 ${conversation.enqueueSequence ?? conversation.pendingPosition ?? ""}：${userMessage.content}`}
       title={conversation.waitingReason ?? undefined}
     >

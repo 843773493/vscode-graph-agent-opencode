@@ -31,11 +31,12 @@ class SessionResourceService:
         *,
         include_history: bool = True,
     ) -> SessionResourceListDTO:
-        await self._session_service.get(session_id)
-        items = await self._provider_registry.list_resources(
-            session_id,
-            include_history=include_history,
-        )
+        async with self._session_service.session_read_admission(session_id):
+            await self._session_service.get(session_id)
+            items = await self._provider_registry.list_resources(
+                session_id,
+                include_history=include_history,
+            )
         items.sort(key=lambda item: item.created_at, reverse=True)
         return SessionResourceListDTO(session_id=session_id, items=items)
 

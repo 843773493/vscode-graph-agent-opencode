@@ -56,3 +56,4 @@ tests/unit/services/business/
 
 - 测试应快速、独立、可重复。
 - 文件系统副作用必须使用 `tmp_path` 等临时资源隔离。
+- Agent 列表并发回归在 Provider 校验未释放时验证事件循环心跳已执行，测试线程有独立超时和清理；保留真实配置及 Provider 返回值断言，不靠加长健康检查期限通过。

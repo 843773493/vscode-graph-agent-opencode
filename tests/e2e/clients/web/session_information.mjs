@@ -20,7 +20,9 @@ await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: 
 const page = await context.newPage();
 
 try {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  const target = new URL(baseUrl);
+  await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.locator("#workbench .monaco-workbench").waitFor({ state: "visible" });
   const sessionAction = page.locator(`[data-session-id="${fixture.sessionId}"]`);
   await sessionAction.waitFor({ state: "visible", timeout: 15_000 });
   await sessionAction.locator("xpath=..").click({ button: "right" });

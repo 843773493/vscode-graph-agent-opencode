@@ -51,6 +51,7 @@ function sourceFixture(targetPlatform, scenario) {
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, bytes);
   }
+  mkdirSync(path.join(root, "src/clients/workbench"), { recursive: true });
   return root;
 }
 
@@ -228,6 +229,25 @@ describe("构建输入指纹的文件读取", () => {
         "export const validate = () => false;\n",
       );
       expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).not.toBe(initialFingerprint);
+    });
+
+    test(`${targetPlatform}的工作台宿主、构建定制和固定上游变化均使发布缓存失效`, () => {
+      const projectRoot = sourceFixture(targetPlatform, "workbench-source-change");
+      const buildResultPath = path.join(projectRoot, "out/packaging", targetPlatform, "build-result.json");
+      mkdirSync(path.dirname(buildResultPath), { recursive: true });
+      for (const relative of ["src/startWorkbench.ts", "scripts/sourceTransform.mjs", "upstream/src/vs/workbench/browser/web.main.ts"]) {
+        const file = path.join(projectRoot, "src/clients/workbench", relative);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, "export const value = 1;\n");
+        const startingSourceFingerprint = beginRuntimeBuild({ projectRoot, targetPlatform, buildResultPath });
+        writeFileSync(file, "export const value = 2;\n");
+        expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).not.toBe(startingSourceFingerprint);
+        expect(() => publishRuntimeBuildResult({
+          projectRoot, targetPlatform, buildResultPath, startingSourceFingerprint,
+          metadata: { platform: targetPlatform, version: "fixture", install_tarballs: {} },
+        })).toThrow(/构建期间输入源码发生变化/);
+        expect(existsSync(buildResultPath)).toBe(false);
+      }
     });
 
     test(`${targetPlatform}只忽略构建工具及Launcher的开发文件并保留产品输入`, () => {

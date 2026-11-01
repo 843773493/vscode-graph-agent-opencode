@@ -1,92 +1,64 @@
-import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import {
-  composerDraftScopeKey,
-  composerDraftExceedsLimit,
-  readComposerDraft,
-  writeComposerDraft,
-} from "../../state/composerDrafts/storage";
-import { sessionScopeKey } from "../../state/session/sessionScope";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { composerDraftScopeKey, composerDraftExceedsLimit, readComposerDraft, writeComposerDraft } from "../../state/composerDrafts/storage";
+import { readBrowserView, updateBrowserView } from "../../state/browserViewStore";
+import type { SelectedAttachment } from "../../utils/media/mediaAttachments";
+import { errorMessage } from "../../utils/errorMessage";
 
-const NEW_SESSION_DRAFT_ID = "__new_session_draft__";
-const ephemeralDraftsByScope = new Map<string, string>();
+const EMPTY_ATTACHMENTS: SelectedAttachment[] = [];
 
-function ephemeralDraftScopeKey(
-  workspaceId: string | null,
-  sessionId: string | null,
-): string | null {
-  if (!workspaceId) {
-    return null;
+function useStoredDraft<T>(scopeKey: string | null, empty: T, read: (key: string | null) => Promise<T>, write: (key: string | null, value: T) => Promise<void>, onError?: (message: string) => void): [T, Dispatch<SetStateAction<T>>] {
+  const [draft, setDraft] = useState({ scopeKey, value: empty });
+  const current = useRef(draft);
+  const report = useRef(onError); report.current = onError;
+  const [failure, setFailure] = useState<Error | null>(null);
+  const reportFailure = useCallback((error: unknown) => {
+    const message = `草稿尚未保存：${errorMessage(error)}`;
+    if (report.current) report.current(message);
+    else setFailure(new Error(message));
+  }, []);
+  if (current.current.scopeKey !== scopeKey) {
+    current.current = { scopeKey, value: empty };
+    setDraft(current.current);
   }
-  return sessionScopeKey(workspaceId, sessionId ?? NEW_SESSION_DRAFT_ID);
+  useEffect(() => {
+    let active = true;
+    const before = current.current;
+    void read(scopeKey).then(value => {
+      // 恢复期间的新输入和 owner 切换优先，旧读取不能覆盖它们。
+      if (!active || current.current !== before) return;
+      current.current = { scopeKey, value };
+      setDraft(current.current);
+    }).catch(error => { if (active) reportFailure(error); });
+    return () => { active = false; };
+  }, [scopeKey, read, reportFailure]);
+  const update = useCallback<Dispatch<SetStateAction<T>>>(action => {
+    const before = current.current;
+    const value = typeof action === "function" ? (action as (current: T) => T)(before.value) : action;
+    current.current = { scopeKey: before.scopeKey, value };
+    setDraft(current.current);
+    void write(before.scopeKey, value).catch(reportFailure);
+  }, [write, reportFailure]);
+  if (failure) throw failure;
+  return [draft.scopeKey === scopeKey ? draft.value : empty, update];
 }
 
-export function useComposerDraft(
-  workspaceId: string | null,
-  sessionId: string | null,
-  userScope?: string | null,
-): [string, Dispatch<SetStateAction<string>>] {
-  const persistentScopeKey = composerDraftScopeKey(workspaceId, sessionId, userScope);
-  const ephemeralScopeKey = ephemeralDraftScopeKey(workspaceId, sessionId);
-  const scopeKey = persistentScopeKey ?? ephemeralScopeKey;
-  const activeScopeKeyRef = useRef(scopeKey);
-  const activePersistentScopeKeyRef = useRef(persistentScopeKey);
-  const [draftState, setDraftState] = useState(() => ({
-    scopeKey,
-    value: persistentScopeKey
-      ? readComposerDraft(persistentScopeKey)
-      : ephemeralScopeKey
-        ? ephemeralDraftsByScope.get(ephemeralScopeKey) ?? ""
-        : "",
-  }));
-  activeScopeKeyRef.current = scopeKey;
-  activePersistentScopeKeyRef.current = persistentScopeKey;
-  if (draftState.scopeKey !== scopeKey) {
-    // React 会在提交 DOM 前重新渲染，避免先显示上一会话草稿再由 effect 修正。
-    setDraftState({
-      scopeKey,
-      value: persistentScopeKey
-        ? readComposerDraft(persistentScopeKey)
-        : ephemeralScopeKey
-          ? ephemeralDraftsByScope.get(ephemeralScopeKey) ?? ""
-          : "",
-    });
-  }
-  const draft = draftState.scopeKey === scopeKey
-    ? draftState.value
-    : persistentScopeKey
-      ? readComposerDraft(persistentScopeKey)
-      : ephemeralScopeKey
-        ? ephemeralDraftsByScope.get(ephemeralScopeKey) ?? ""
-        : "";
+async function saveText(key: string | null, value: string): Promise<void> {
+  if (composerDraftExceedsLimit(value)) throw new Error("输入超过 100000 个字符，当前内容仅保留在输入框中");
+  await writeComposerDraft(key, value);
+}
 
-  const setDraft = useCallback<Dispatch<SetStateAction<string>>>((action) => {
-    const scopeKeyAtCall = activeScopeKeyRef.current;
-    const persistentScopeKeyAtCall = activePersistentScopeKeyRef.current;
-    setDraftState((current) => {
-      const currentValue = current.scopeKey === scopeKeyAtCall
-        ? current.value
-        : persistentScopeKeyAtCall
-          ? readComposerDraft(persistentScopeKeyAtCall)
-          : scopeKeyAtCall
-            ? ephemeralDraftsByScope.get(scopeKeyAtCall) ?? ""
-            : "";
-      const next = typeof action === "function" ? action(currentValue) : action;
-      if (persistentScopeKeyAtCall) {
-        // 超长草稿本身不是错误：界面必须照常持有并显示用户输入，只是不写盘，
-        // 否则粘贴一大段文本会把这个 setState 上抛的异常炸成整页渲染失败。
-        if (!composerDraftExceedsLimit(next)) {
-          writeComposerDraft(persistentScopeKeyAtCall, next);
-        }
-      } else if (scopeKeyAtCall) {
-        if (next) {
-          ephemeralDraftsByScope.set(scopeKeyAtCall, next);
-        } else {
-          ephemeralDraftsByScope.delete(scopeKeyAtCall);
-        }
-      }
-      return { scopeKey: scopeKeyAtCall, value: next };
-    });
-  }, []);
+export function useComposerDraft(workspaceId: string | null, sessionId: string | null, browserScope?: string | null, threadId?: string, onError?: (message: string) => void): [string, Dispatch<SetStateAction<string>>] {
+  return useStoredDraft(composerDraftScopeKey(workspaceId, sessionId, browserScope, threadId), "", readComposerDraft, saveText, onError);
+}
 
-  return [draft, setDraft];
+async function readAttachments(key: string | null): Promise<SelectedAttachment[]> {
+  return key ? await readBrowserView<SelectedAttachment[]>(`attachments:${key}`) ?? EMPTY_ATTACHMENTS : EMPTY_ATTACHMENTS;
+}
+export async function writeComposerAttachments(key: string | null, attachments: SelectedAttachment[]): Promise<void> {
+  if (key) await updateBrowserView(`attachments:${key}`, () => attachments.length ? attachments : undefined);
+}
+
+/** 附件 data URL 与引用由 IndexedDB 保存，不再随输入框卸载而丢失。 */
+export function useComposerAttachments(key: string | null, onError: (message: string) => void): [SelectedAttachment[], Dispatch<SetStateAction<SelectedAttachment[]>>] {
+  return useStoredDraft(key, EMPTY_ATTACHMENTS, readAttachments, writeComposerAttachments, onError);
 }

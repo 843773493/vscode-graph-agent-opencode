@@ -1,7 +1,6 @@
 import React from "react";
 import type {
   AttachmentRef,
-  DeliveryPolicy,
   MessageReplayRequest,
 } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";

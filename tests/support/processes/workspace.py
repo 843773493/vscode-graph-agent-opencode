@@ -16,6 +16,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+import psutil
+
 from app.core.mounted_workspaces import MountedWorkspace
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from configs.installer import install_user_configuration
@@ -122,6 +124,23 @@ def wait_for_backend_ready(
                 "后端进程提前退出: "
                 f"pid={process.pid}, returncode={process.returncode}, port={port}"
             )
+        # uvicorn 在 lifespan 完成后才监听。提前连接可能选中同一源端口，形成
+        # TCP 自连接并留下 TIME_WAIT，反而阻止本次后端绑定正式测试端口。
+        try:
+            listening = any(
+                connection.status == psutil.CONN_LISTEN
+                and connection.laddr.ip == "127.0.0.1"
+                and connection.laddr.port == port
+                for connection in psutil.Process(process.pid).net_connections(kind="tcp")
+            )
+        except psutil.NoSuchProcess as error:
+            raise RuntimeError(f"后端进程在监听前退出: pid={process.pid}, port={port}") from error
+        if not listening:
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
             with urlopen(request, timeout=min(1, remaining)) as response:
                 if response.status != 200:
@@ -232,6 +251,8 @@ def start_backend_process(
     backend_generation: str | None = None,
     env_unset: Sequence[str] = (),
     refresh_user_configuration: bool = True,
+    boxteam_home: Path | None = None,
+    artifacts_dir: Path | None = None,
 ) -> BackendProcess:
     ensure_local_port_available(port, service_name="Workspace 后端")
     if debugpy_port is not None:
@@ -239,7 +260,7 @@ def start_backend_process(
 
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
-    boxteam_home = Path(workspace_root).resolve().parent / "boxteam-home"
+    boxteam_home = (boxteam_home or Path(workspace_root).resolve().parent / "boxteam-home").resolve()
     install_user_configuration(
         config_root=boxteam_home / "config",
         profile="default",
@@ -299,7 +320,7 @@ def start_backend_process(
         ]
     )
 
-    log_dir = Path(workspace_root) / ".boxteam" / "logs"
+    log_dir = artifacts_dir or Path(workspace_root) / ".boxteam" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     # 创建失败时回收已打开的日志；成功后交给 BackendProcess 持有。
     with ExitStack() as log_files:

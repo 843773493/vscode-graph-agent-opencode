@@ -20,7 +20,7 @@ const healthy: api.TaskRuntimeStatusDTO = { state: "running", recovering_tasks: 
 const snapshot = (items: api.PersistentTaskDTO[], runtime = healthy): api.PersistentTaskSnapshot => ({ items, runtime });
 const streams: Array<{ signal: AbortSignal; publish: (value: api.PersistentTaskSnapshot) => void; sessionId?: string }> = [];
 const restores: Array<() => void> = [];
-function Probe({ owner, sessionId }: { owner: GatewayWorkspaceRequestTarget; sessionId?: string }) { value = usePersistentTasks(8014, owner, sessionId); return null; }
+function Probe({ owner, sessionId, active = true }: { owner: GatewayWorkspaceRequestTarget; sessionId?: string; active?: boolean }) { value = usePersistentTasks(8014, owner, sessionId, active); return null; }
 async function mount() { await act(async () => { renderer = create(<Probe owner={target} />); }); }
 
 beforeEach(() => {
@@ -45,6 +45,23 @@ test("切换关联会话撤销旧状态流，迟到的原会话快照不能覆�
   await act(async () => { previous.publish(snapshot([original])); });
   expect(value.items).toEqual([]);
   expect(value.loaded).toBe(true);
+});
+
+test("隐藏编辑器停止订阅并保留选中任务，重新显示后读取新快照", async () => {
+  await mount();
+  await act(async () => { value.select(original.task_id); });
+  const previous = streams[0];
+  await act(async () => { renderer.update(<Probe owner={target} active={false} />); });
+  expect(previous.signal.aborted).toBe(true);
+  expect(streams).toHaveLength(1);
+  expect(value.selected?.task_id).toBe(original.task_id);
+  await act(async () => { previous.publish(snapshot([])); });
+  expect(value.items).toEqual([original]);
+  records = [{ ...original, revision: 2, lifecycle: "paused" }];
+  await act(async () => { renderer.update(<Probe owner={target} />); });
+  expect(streams).toHaveLength(2);
+  expect(streams[1].signal.aborted).toBe(false);
+  expect(value.selected).toEqual(records[0]);
 });
 
 test("切换后端工作区后不保留旧详情，旧订阅和动作闭包均不能回写", async () => {
@@ -108,4 +125,13 @@ test("worker失败由完整快照替换，刷新和空列表均不能伪造恢�
   restores.push(() => list.mockRestore(), () => watch.mockRestore());
   await act(async () => { await value.refresh(); });
   expect(value.runtime).toEqual(failed);
+});
+
+test("Goal 详情也从同一任务 ID 读取运行记录", async () => {
+  records = [{ ...original, application_type: "goal", configuration: undefined }];
+  await act(async () => { renderer = create(<Probe owner={target} sessionId="session-one" />); });
+  await act(async () => { value.select(original.task_id); });
+  expect(api.listPersistentTaskRuns).toHaveBeenCalledWith(8014, target, original.task_id, expect.any(AbortSignal));
+  expect(value.history?.runs).toEqual([]);
+  expect(value.history?.loading).toBe(false);
 });

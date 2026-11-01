@@ -1,8 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { writeFile } from "node:fs/promises";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
@@ -22,10 +21,7 @@ const resultPath = requiredEnvironment("BOXTEAM_E2E_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_E2E_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 
-const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
-const runtimeDirectory = path.join(runContext.outputRoot, "runtime");
-await mkdir(runtimeDirectory, { recursive: true });
-for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtimeDirectory;
+const runContext = TestRunContext.fromTestFile("tests/integration/clients/web/test_manual_browser_connection.py");
 let context;
 let page;
 let executionError;
@@ -39,7 +35,9 @@ let abortClientModuleOnce = false;
 const result = {
   schema_version: 1,
   browser_id: null,
-  popup_url: null,
+  popup_count: 0,
+  preview_owner: null,
+  creation_owner: null,
   attach_url: null,
   transition: null,
   final: null,
@@ -113,27 +111,34 @@ try {
     await fetchThroughRoute(route);
   });
 
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  // 会话按钮的可访问名包含标题之外的时间/活动文本，不能用 exact 角色名匹配；
-  // 按仓库既有模式（gateway_auth 同款）用 data-session-id + hasText 定位。
-  const sessionButton = page.locator("[data-session-id]").filter({
-    hasText: fixture.sessionTitle,
-  }).first();
-  await sessionButton.waitFor({ state: "visible", timeout: 15_000 });
-  await sessionButton.click();
-
-  // 资源面板入口是内容区的“运行与连接”标签（gateway_auth 同款），
-  // 不存在名为“后台连接”的按钮。
-  await page.getByRole("tab", { name: "运行与连接", exact: true }).click();
-  await page.getByRole("button", { name: /新建连接/ }).waitFor({ state: "visible" });
-  await page.getByRole("button", { name: /新建连接/ }).click();
+  const target = new URL("/", baseUrl);
+  await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  const guest = await page.evaluate(async () => {
+    const credential = await fetch("/api/gateway/auth/local-credential");
+    const token = (await credential.json()).data.token;
+    const response = await fetch("/api/gateway/users/guest", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": token },
+      body: JSON.stringify({ tracking: { source: "manual-browser-workbench" } }),
+    });
+    return { status: response.status, body: await response.text() };
+  });
+  assertCondition(guest.status === 200, guest.body);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
+  await page.locator(`button[data-session-id="${fixture.sessionId}"]`).dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.backendWorkspaceId}"][data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
+  await expect(thread).toBeVisible();
+  const toggle = thread.getByRole("button", { name: "切换会话资源", exact: true });
+  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+  await thread.getByRole("tab", { name: "运行与连接", exact: true }).click();
+  await thread.getByRole("button", { name: /新建连接/ }).click();
 
   const createResponsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST"
       && response.url().includes("/api/v1/resources/browsers"),
     { timeout: 30_000 },
   );
-  const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
+  page.on("popup", () => { result.popup_count += 1; });
   await page.getByRole("menuitem", { name: /新建浏览器/ }).click();
   const createResponse = await createResponsePromise;
   assertCondition(createResponse.ok(), `新建浏览器请求失败: ${createResponse.status()}`);
@@ -141,28 +146,20 @@ try {
   const browserId = createPayload?.data?.resource_id;
   assertCondition(typeof browserId === "string" && browserId, "新建浏览器响应缺少 resource_id");
   result.browser_id = browserId;
-
-  // 产品链路：新建浏览器后由 openExtensionWindow 打开扩展窗口，
-  // 预览 iframe 渲染在扩展窗口中，主页面只保留资源面板与成功提示。
-  const popup = await popupPromise;
-  // popup 事件触发时 URL 尚未提交，先等扩展窗口路由生效再读取参数。
-  await popup.waitForURL(
-    (url) => url.pathname === "/extension",
-    { timeout: 15_000 },
-  );
-  const popupUrl = new URL(popup.url());
-  assertCondition(
-    popupUrl.pathname === "/extension"
-      && popupUrl.searchParams.get("resourceType") === "browser"
-      && popupUrl.searchParams.get("resourceId") === browserId,
-    `扩展窗口没有定位到新建浏览器资源: ${popup.url()}`,
-  );
-  result.popup_url = popup.url();
+  const creation = createResponse.request().postDataJSON();
+  result.creation_owner = { workspaceId: (await createResponse.request().allHeaders())["x-boxteam-workspace-id"],
+    sessionId: creation.session_id, threadId: creation.thread_id };
+  assertCondition(result.creation_owner.workspaceId === fixture.workspaceId
+    && result.creation_owner.sessionId === fixture.sessionId && result.creation_owner.threadId === fixture.threadId,
+  `新建浏览器请求归属错误: ${JSON.stringify(result.creation_owner)}`);
+  result.preview_owner = { workspaceId: await thread.getAttribute("data-workspace-id"),
+    sessionId: await thread.getAttribute("data-session-id"), threadId: await thread.getAttribute("data-thread-id") };
 
   // iframe title 由资源显示名拼接（含浏览器标题，导航后会变化），
   // 改用包含 browserId 的 src 属性稳定定位。
   const iframeSelector = `iframe[src*="browserId=${encodeURIComponent(browserId)}"]`;
-  const iframe = popup.locator(iframeSelector);
+  const preview = thread.getByRole("region", { name: "运行时预览", exact: true });
+  const iframe = preview.locator(iframeSelector);
   await iframe.waitFor({ state: "visible", timeout: 15_000 });
   result.attach_url = await iframe.getAttribute("src");
   assertCondition(
@@ -172,7 +169,7 @@ try {
     `浏览器预览未使用 Gateway attach 地址: ${result.attach_url}`,
   );
 
-  const attachedPage = popup.frameLocator(iframeSelector);
+  const attachedPage = preview.frameLocator(iframeSelector);
   const badge = attachedPage.locator("#attach-state-badge");
   const statusLine = attachedPage.locator("#status-line");
   const overlay = attachedPage.locator("#screen-overlay");
@@ -186,7 +183,7 @@ try {
     badge: (await badge.getAttribute("aria-label"))?.trim() || "",
     status: (await statusLine.getAttribute("aria-label"))?.trim() || "",
     overlay: (await overlay.textContent())?.trim() || "",
-    parentNotice: (await page.locator(".resource-notice").textContent())?.trim() || "",
+    parentNotice: (await thread.locator(".resource-notice").textContent())?.trim() || "",
     queuedAddress: await address.inputValue(),
   };
   const transitionText = Object.values(result.transition).join(" ");
@@ -199,17 +196,7 @@ try {
   assertCondition(result.transition.queuedAddress === targetUrl, "初始化阶段提交的 URL 没有保留");
 
   await badge.waitFor({ state: "visible", timeout: 15_000 });
-  await popup.waitForFunction(
-    ({ browserId }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
-        candidate.src.includes(`browserId=${browserId}`),
-      );
-      return frame?.contentDocument?.querySelector("#attach-state-badge")
-        ?.getAttribute("aria-label")?.includes("已连接");
-    },
-    { browserId },
-    { timeout: 20_000 },
-  );
+  await expect(badge).toHaveAttribute("aria-label", /已连接/, { timeout: 20_000 });
 
   const focusedElement = await attachedPage.locator("body").evaluate(
     () => document.activeElement?.id || "",
@@ -221,7 +208,7 @@ try {
   });
   result.final = {
     badge: (await badge.getAttribute("aria-label"))?.trim() || "",
-    parentNotice: (await page.locator(".resource-notice").textContent())?.trim() || "",
+    parentNotice: (await thread.locator(".resource-notice").textContent())?.trim() || "",
     focusedElement,
     submittedDuringInitialization: true,
     firstNavigationTitle: "Manual Ready",
@@ -248,35 +235,17 @@ try {
     state: "visible",
     timeout: 20_000,
   });
-  await popup.waitForFunction(
-    ({ browserId }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
-        candidate.src.includes(`browserId=${browserId}`),
-      );
-      const targetCanvas = frame?.contentDocument?.querySelector("#screen-canvas");
-      if (targetCanvas?.tagName !== "CANVAS") return false;
-      const pixel = targetCanvas.getContext("2d")?.getImageData(20, 20, 1, 1).data;
-      return pixel && pixel[1] > 150 && pixel[0] < 80;
-    },
-    { browserId },
-    { timeout: 20_000 },
-  );
+  await expect.poll(() => canvas.evaluate(element => {
+    const pixel = element.getContext("2d").getImageData(20, 20, 1, 1).data;
+    return pixel[1] > 150 && pixel[0] < 80;
+  }), { timeout: 20_000 }).toBe(true);
 
   await attachedPage.locator("#new-tab-button").click();
   await attachedPage.locator(".browser-tab").nth(1).waitFor({ state: "visible", timeout: 10_000 });
-  await popup.waitForFunction(
-    ({ browserId }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
-        candidate.src.includes(`browserId=${browserId}`),
-      );
-      const targetCanvas = frame?.contentDocument?.querySelector("#screen-canvas");
-      if (targetCanvas?.tagName !== "CANVAS") return false;
-      const pixel = targetCanvas.getContext("2d")?.getImageData(20, 20, 1, 1).data;
-      return pixel && !(pixel[1] > 150 && pixel[0] < 80);
-    },
-    { browserId },
-    { timeout: 20_000 },
-  );
+  await expect.poll(() => canvas.evaluate(element => {
+    const pixel = element.getContext("2d").getImageData(20, 20, 1, 1).data;
+    return !(pixel[1] > 150 && pixel[0] < 80);
+  }), { timeout: 20_000 }).toBe(true);
   const blankPixel = await canvas.evaluate((element) => (
     [...element.getContext("2d").getImageData(20, 20, 1, 1).data]
   ));
@@ -285,17 +254,10 @@ try {
   const failedUrl = "http://127.0.0.1:1/";
   await address.fill(failedUrl);
   await address.press("Enter");
-  await popup.waitForFunction(
-    ({ browserId }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
-        candidate.src.includes(`browserId=${browserId}`),
-      );
-      const status = frame?.contentDocument?.querySelector("#status-line")?.getAttribute("aria-label") || "";
-      return status.includes("ERR_") && status.includes("127.0.0.1:1");
-    },
-    { browserId },
-    { timeout: 20_000 },
-  );
+  await expect.poll(async () => {
+    const status = await statusLine.getAttribute("aria-label");
+    return status.includes("ERR_") && status.includes("127.0.0.1:1");
+  }, { timeout: 20_000 }).toBe(true);
   const navigationFailedStatus = (await statusLine.getAttribute("aria-label"))?.trim() || "";
   const navigationFailedOverlay = (await overlay.textContent())?.trim() || "";
   assertCondition(await address.inputValue() === failedUrl, "导航失败后地址栏没有保留用户请求 URL");
@@ -311,19 +273,10 @@ try {
     state: "visible",
     timeout: 20_000,
   });
-  await popup.waitForFunction(
-    ({ browserId }) => {
-      const frame = [...document.querySelectorAll("iframe")].find((candidate) =>
-        candidate.src.includes(`browserId=${browserId}`),
-      );
-      const targetCanvas = frame?.contentDocument?.querySelector("#screen-canvas");
-      if (targetCanvas?.tagName !== "CANVAS") return false;
-      const pixel = targetCanvas.getContext("2d")?.getImageData(20, 20, 1, 1).data;
-      return pixel && pixel[2] > 150 && pixel[0] < 80;
-    },
-    { browserId },
-    { timeout: 20_000 },
-  );
+  await expect.poll(() => canvas.evaluate(element => {
+    const pixel = element.getContext("2d").getImageData(20, 20, 1, 1).data;
+    return pixel[2] > 150 && pixel[0] < 80;
+  }), { timeout: 20_000 }).toBe(true);
   result.tab_and_navigation_failure = {
     blankPixel,
     failedStatus: navigationFailedStatus,
@@ -417,9 +370,7 @@ try {
   for (const candidate of context?.pages() ?? []) {
     const entry = { url: candidate.url() };
     try {
-      entry.iframes = await candidate.evaluate(() => [
-        ...document.querySelectorAll("iframe"),
-      ].map((frame) => ({
+      entry.iframes = await candidate.locator("iframe").evaluateAll(frames => frames.map((frame) => ({
         title: frame.title,
         src: frame.getAttribute("src"),
         badge: frame.contentDocument?.querySelector("#attach-state-badge")?.getAttribute("aria-label") ?? null,

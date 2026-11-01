@@ -6,8 +6,8 @@
 
 ```text
 composer/
-├── useComposerDraft.ts                    草稿作用域、持久化与超限内存态
-├── useComposerDraftOverflow.test.tsx      超限草稿仍可编辑且不写入 localStorage
+├── useComposerDraft.ts                    文本与附件草稿 IndexedDB 持久化、异步恢复和超限反馈
+├── useComposerDraftOverflow.test.tsx      草稿及附件恢复、Thread 隔离、异步竞态和存储失败反馈
 ├── useComposerSlashCommands.ts            斜杠命令副作用与结果提示
 ├── useComposerSlashCommands.test.tsx      命令识别、执行和结果处理
 ├── useComposerStateProjection.ts          AppState 到 Composer 状态快照的投影

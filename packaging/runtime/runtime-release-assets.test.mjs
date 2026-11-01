@@ -189,6 +189,9 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   const pythonExecutable = path.join(runtimePackageRoot, "python", mode === "linux" ? "bin/python3" : "python.exe");
   const stopBeforePack = new Error("fixture在第一次npm pack前结束");
   const packCalls = [];
+  const frontendBuilds = [];
+  // 两份不同的旧产物用于识别构建、复制目录错配，不能由装具替构建入口选中来源。
+  for (const client of ["web", "workbench"]) write(`src/clients/${client}/dist/index.html`, `stale-${client}`);
   process.env.BOXTEAM_PROJECT_ROOT = fixtureRoot;
   const context = createContext({ console, Buffer, process: {
     env: { BOXTEAM_PROJECT_ROOT: fixtureRoot }, cwd: () => fixtureRoot,
@@ -219,7 +222,15 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
           return { error: stopBeforePack };
         }
         if (command === "tar") write(path.relative(fixtureRoot, pythonExecutable), "fixture-python");
-        if (command === "bun" && args[0] === "run" && args[1] === "build") write("src/clients/web/dist/index.html", "fixture-web");
+        if (command === "bun" && args[0] === "run" && args[1] === "build") {
+          const relativeRoot = path.relative(fixtureRoot, options.cwd);
+          const marker = `fixture-frontend:${relativeRoot}`;
+          for (const [name, content] of [
+            ["index.html", marker], ["out/worker.js", `${marker}:worker`],
+            ["extensions/fixture/package.json", JSON.stringify({ name: marker })],
+          ]) write(path.join(relativeRoot, "dist", name), content);
+          frontendBuilds.push({ command, args: [...args], cwd: options.cwd });
+        }
         if (command === process.execPath) {
           const browserExecutable = path.join(options.env.PLAYWRIGHT_BROWSERS_PATH, "chromium-fixture", "browser.exe");
           if (args.includes("--eval")) return { status: 0, stdout: `${browserExecutable}\n` };
@@ -241,10 +252,15 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   const isDevelopmentFile = (name) => name.split("/").includes("node_modules") || name.endsWith(".test.mjs") || path.posix.basename(name) === "AGENTS.md";
   const expectedFiles = sourceFiles.filter(({ path: name }) => !isDevelopmentFile(name));
   const stagedFiles = snapshot(launcherPackageRoot);
+  assert.equal(frontendBuilds.length, 1, "平台构建必须只生成一份 Web 产物");
+  const frontendSource = path.join(frontendBuilds[0].cwd, "dist");
+  const stagedFrontend = path.join(runtimePackageRoot, "web");
+  const builtFrontendFiles = snapshot(frontendSource);
+  const stagedFrontendFiles = snapshot(stagedFrontend);
   const cliArgs = [path.join(launcherPackageRoot, "bin/boxteam.mjs"), "--version"];
   const cli = spawnSync(process.execPath, cliArgs, { cwd: fixtureRoot, timeout: 5000 });
   const summary = {
-    mode, sourceFiles, stagedFiles, packCalls,
+    mode, sourceFiles, stagedFiles, packCalls, frontendBuilds, builtFrontendFiles, stagedFrontendFiles,
     cli: { command: [process.execPath, ...cliArgs], status: cli.status, signal: cli.signal,
       error: cli.error ? { name: cli.error.name, message: cli.error.message } : null },
   };
@@ -252,6 +268,11 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
   fs.writeFileSync(path.join(artifacts, "stage-observation.json"), `${JSON.stringify(summary, null, 2)}\n`, { flag: "wx" });
   fs.writeFileSync(path.join(artifacts, "launcher-version.stdout.raw"), cli.stdout ?? "", { flag: "wx" });
   fs.writeFileSync(path.join(artifacts, "launcher-version.stderr.raw"), cli.stderr ?? "", { flag: "wx" });
+  assert.equal(frontendBuilds[0].cwd, path.join(fixtureRoot, "src/clients/workbench"), "平台发行必须构建唯一 Workbench 入口");
+  assert.deepEqual(stagedFrontendFiles, builtFrontendFiles, "发行资源必须完整来自本次实际构建目录");
+  for (const { path: name } of builtFrontendFiles) {
+    assert.deepEqual(fs.readFileSync(path.join(stagedFrontend, name)), fs.readFileSync(path.join(frontendSource, name)), name);
+  }
   assert.equal(cli.status, 0, String(cli.stderr));
   assert.equal(String(cli.stdout), `${fixtureVersion}\n`);
   assert.deepEqual(stagedFiles.map(({ path }) => path), expectedFiles.map(({ path }) => path));

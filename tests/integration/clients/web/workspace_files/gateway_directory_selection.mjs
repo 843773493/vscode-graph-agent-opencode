@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { dirname } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 import { configureChromiumTemporaryDirectory } from "./chromium-temporary-directory.mjs";
 
@@ -37,15 +38,14 @@ try {
       })());
     }
   });
-  await page.goto(process.env.BOXTEAM_BROWSER_BASE_URL, { waitUntil: "domcontentloaded" });
+  await page.goto(new URL("/", process.env.BOXTEAM_BROWSER_BASE_URL).href, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   const openDialog = async () => {
     await page.getByRole("button", { name: "添加工作区", exact: true }).first().click();
     await page.getByRole("button").filter({ hasText: "当前电脑" }).click();
     await page.getByLabel("目录地址", { exact: true }).waitFor();
-    await page.waitForFunction(() => {
-      const input = document.querySelector('input[aria-label="目录地址"]');
-      return input && !input.disabled && input.value.startsWith("boxteam://");
-    });
+    await expect(page.getByLabel("目录地址", { exact: true })).toBeEnabled();
+    await expect(page.getByLabel("目录地址", { exact: true })).toHaveValue(/^boxteam:\/\//);
   };
   const dialog = page.getByRole("dialog", { name: "选择工作区文件夹" });
   const address = page.getByLabel("目录地址", { exact: true });

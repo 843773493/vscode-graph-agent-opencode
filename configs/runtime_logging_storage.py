@@ -6,14 +6,23 @@ import json
 import sqlite3
 from copy import deepcopy
 from pathlib import Path
+from typing import cast
 
 from app.core.config_sources import config_revision
 from app.core.sqlite_state import utc_now_text
-from app.gateway.config.connection_ids import _normalize_connection_ids
+from app.gateway.config.connection_ids import (
+    _CONNECTION_ID_RECORD_VERSION,
+    _normalize_connection_ids,
+)
+from app.services.infrastructure.config.state import (
+    restore_environment_secret_references,
+)
+from configs.runtime import merge_json_objects
 from configs.runtime_logging_migration import (
     TARGET_CONFIG_VERSIONS,
     ConfigDomain,
     RuntimeLoggingMigrationPlan,
+    read_connection_identity,
 )
 
 MUTABLE_TABLES = ("config_source_layers", "config_active_snapshot", "config_revision_meta")
@@ -66,9 +75,18 @@ def migrate_database(
     connection: sqlite3.Connection, *, domain: ConfigDomain,
     source_path: Path, plan: RuntimeLoggingMigrationPlan,
     file_digests: dict[str, tuple[str | None, str | None]],
+    inline_config: dict[str, object],
     connection_entries: list[dict[str, object]] | None = None,
 ) -> None:
     connection.row_factory = sqlite3.Row
+    if domain == "gateway":
+        identity = read_connection_identity(connection)
+        if identity is not None and identity[0] != _CONNECTION_ID_RECORD_VERSION:
+            # v3 的 entries 与稳定 ID 原样保留，只升级格式标记；不触碰其它 Gateway 记录。
+            connection.execute(
+                "UPDATE gateway_config SET config_version=? WHERE config_key='gateway_connection_ids'",
+                (_CONNECTION_ID_RECORD_VERSION,),
+            )
     selected = {item.key for item in plan.inputs if item.path == source_path and item.kind == "source_layer"}
     references: dict[str, tuple[dict[str, object], dict[str, object]]] = {}
     for row in connection.execute("SELECT * FROM config_source_layers ORDER BY config_key").fetchall():
@@ -108,6 +126,9 @@ def migrate_database(
     old = dict(row)
     payload = json.loads(str(old["payload_json"]))
     changed = migrated_payload(payload, domain, plan, connection_entries)
+    if domain == "workspace":
+        # 显式离线升级补齐旧 active 缺失的新字段，保留已有取值；来源层仍是局部覆盖。
+        changed = merge_json_objects(inline_config, changed)
     if domain == "gateway":
         logging = changed.setdefault("logging", {})
         if not isinstance(logging, dict):
@@ -117,7 +138,11 @@ def migrate_database(
             raise TypeError("Gateway logging.runtime 必须是对象")
         runtime.setdefault("level", plan.contract.default_level)
         runtime.setdefault("pretty", plan.contract.default_pretty)
-    if payload == changed and not references and old["schema_version"] == TARGET_CONFIG_VERSIONS[domain]:
+    # Workspace 启动按还原后的用户配置校验摘要，不能对 env:NAME 存储格式记账。
+    effective = restore_environment_secret_references(changed) if domain == "workspace" else changed
+    effective_digest = config_revision(cast(dict[str, object], effective))
+    if (payload == changed and not references and old["schema_version"] == TARGET_CONFIG_VERSIONS[domain]
+            and old["effective_digest"] == effective_digest):
         return
     baseline = json.loads(str(old["source_baseline_json"]))
     revisions = json.loads(str(old["layer_revisions_json"]))
@@ -146,13 +171,24 @@ def migrate_database(
         "source_generation=?, layer_revisions_json=?, layer_digests_json=?, effective_digest=?, schema_version=? "
         "WHERE config_domain=?",
         (revision, _dump(changed), _dump(baseline), max([int(old["source_generation"]), *generations]),
-         _dump(revisions), _dump(digests), config_revision(changed), TARGET_CONFIG_VERSIONS[domain], domain),
+         _dump(revisions), _dump(digests), effective_digest, TARGET_CONFIG_VERSIONS[domain], domain),
     )
 
 
 def replace_configuration_rows(connection: sqlite3.Connection, source: sqlite3.Connection) -> None:
-    """只替换三个可变配置表；其它业务数据和不可变配置历史不受恢复影响。"""
+    """替换可变配置表及单条连接身份；其它业务数据和不可变历史不受恢复影响。"""
     source.row_factory = sqlite3.Row
+    if source.execute("SELECT 1 FROM sqlite_master WHERE name='gateway_config'").fetchone():
+        identity = source.execute(
+            "SELECT config_version,payload_json,updated_at FROM gateway_config WHERE config_key='gateway_connection_ids'"
+        ).fetchone()
+        if identity is not None:
+            connection.execute(
+                "INSERT INTO gateway_config(config_key,config_version,payload_json,updated_at) "
+                "VALUES ('gateway_connection_ids',?,?,?) ON CONFLICT(config_key) DO UPDATE SET "
+                "config_version=excluded.config_version,payload_json=excluded.payload_json,updated_at=excluded.updated_at",
+                tuple(identity),
+            )
     for table in MUTABLE_TABLES:
         columns = list(source.execute(f'PRAGMA table_info("{table}")'))
         names = [str(column[1]) for column in columns]

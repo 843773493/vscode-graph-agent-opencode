@@ -1,5 +1,5 @@
 {
-  // 客户端 E2E 当前只实现纯 Web。其他客户端保留 disabled TODO，不能被报告为通过。
+  // 客户端 E2E 当前只实现纯 Web；Electron 原生固定回放回归归 Integration。
   // suite 默认带数据段内存上限与外部超时；POSIX 上限按进程生效，不限制多个运行组的总占用。
   "schemaVersion": 1,
   "suites": [
@@ -9,9 +9,12 @@
     {"id":"integration-session-creation-io","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-vv","--tb=short","tests/integration/backend/sessions/lifecycle/test_session_creation_io.py"]},
     {"id":"integration-fork-confirmation-io","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-vv","--tb=short","tests/integration/backend/sessions/lifecycle/test_fork_confirmation_io.py"]},
     {"id":"integration-fork-child-preparation-io","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/fork/test_child_preparation_io.py","tests/integration/backend/sessions/fork/test_child_publication.py"]},
-    {"id":"integration-session-delete-catalog-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_catalog_io.py"]},
     {"id":"integration-session-delete-child-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_thread_creation_io.py"]},
     {"id":"integration-session-delete-control-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_drain_control_io.py"]},
+    {"id":"integration-session-replay-gc-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_replay_gc_io.py"]},
+    {"id":"integration-session-delete-catalog-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_catalog_io.py"]},
+    {"id":"integration-session-isolation-probe","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_isolation_io.py","-k","target-probe"]},
+    {"id":"integration-session-isolation-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_isolation_io.py","tests/integration/backend/sessions/navigation/test_delete_settlement_errors.py","tests/integration/backend/sessions/test_catalog_startup_directories.py::test_lifespan_accepts_registered_leaf_isolated_during_directory_scan","-k","not target-probe"]},
     {"id":"integration-file-watch-shutdown","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/lifecycle/test_file_watch_shutdown.py"]},
     {"id":"integration-generation-definition-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/session_generation/test_definition_errors.py"]},
     {"id":"integration-debug-tool-diagnostics","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/agents/node_debug/test_tool_diagnostics.py","-k","log-ok"]},
@@ -25,9 +28,6 @@
     {"id":"integration-catalog-maintenance-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_catalog_maintenance_errors.py","tests/integration/backend/sessions/test_catalog_sqlite_integrity.py"]},
     {"id":"integration-catalog-maintenance-schema","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_catalog_navigation_schema.py"]},
     {"id":"integration-catalog-access-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_catalog_access_errors.py"]},
-    {"id":"integration-session-replay-gc-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_replay_gc_io.py"]},
-    {"id":"integration-session-isolation-probe","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_isolation_io.py","-k","target-probe"]},
-    {"id":"integration-session-isolation-io","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/navigation/test_isolation_io.py","tests/integration/backend/sessions/navigation/test_delete_settlement_errors.py","tests/integration/backend/sessions/test_catalog_startup_directories.py::test_lifespan_accepts_registered_leaf_isolated_during_directory_scan","-k","not target-probe"]},
     {"id":"integration-fork-source-scope","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/fork/test_snapshot_scope_errors.py"]},
     {"id":"integration-fork-prepared-control","layer":"integration","client":null,"enabled":true,"timeoutMs":120000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/fork/test_prepared_target_control.py"]},
     {"id":"integration-fork-child-publication","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-vv","--tb=short","tests/integration/backend/sessions/fork/test_child_publication.py"]},
@@ -44,6 +44,7 @@
     {"id":"integration-gateway-profile-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/gateway/test_user_profile_errors.py"]},
     {"id":"integration-gateway-credential-errors","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/gateway/test_credential_diagnostic_errors.py"]},
     {"id":"integration-test-gate","layer":"integration","client":null,"enabled":true,"timeoutMs":90000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/harness/test_integration_gate.py"]},
+    {"id":"integration-process-port-lease","layer":"integration","client":null,"enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/harness/test_process_port_lease.py"]},
     {
       "id": "integration-itemized-legacy-migration",
       "layer": "integration",
@@ -81,14 +82,28 @@
     {"id":"integration-mcp-tool-approval-recovery","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/agents/test_mcp_tool_approval_recovery.py"]},
     {"id":"integration-mcp-tool-approval","layer":"integration","client":null,"enabled":true,"timeoutMs":720000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/agents/test_mcp_tool_approval.py"]},
     {"id":"integration-web-tool-approval","layer":"integration","client":"web","enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_mcp_tool_approval.py"]},
+    {"id":"integration-web-chat-tool-loop","layer":"integration","client":"web","enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_basic_chat_tool_loop.py"]},
+    {"id":"integration-web-metadata","layer":"integration","client":"web","enabled":true,"timeoutMs":600000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_workspace_metadata_bootstrap.py"]},
+    {"id":"integration-web-workbench-proxy","layer":"integration","client":"web","enabled":true,"timeoutMs":45000,"dataLimitKb":4194304,"command":["bun","test","tests/integration/clients/web/workbench_server.test.mjs"]},
+    {"id":"integration-web-resource-recovery","layer":"integration","client":"web","enabled":true,"timeoutMs":480000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_gateway_auth_resource_recovery.py","tests/integration/clients/web/test_manual_browser_connection.py"]},
+    {"id":"integration-web-diagnostics-lifetime","layer":"integration","client":"web","enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/harness/test_web_diagnostic_response_lifetime.py"]},
+    {"id":"unit-workbench-build","layer":"unit","client":"web","enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["bun","test","src/clients/workbench/scripts/extensions.test.mjs"]},
+    {"id":"integration-web-progressive-history","layer":"integration","client":"web","enabled":true,"timeoutMs":600000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_rollout_history_progressive_loading.py"]},
+    {"id":"integration-web-context-inspection","layer":"integration","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/itemized_context/test_itemized_context_browser.py"]},
     {"id":"integration-web-fork-prefix-recovery","layer":"integration","client":"web","enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/itemized_context/test_fork_prefix_recovery.py"]},
     {"id":"integration-web-turn-source-freezing","layer":"integration","client":"web","enabled":true,"timeoutMs":660000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/itemized_context/test_turn_source_freezing.py"]},
     {"id":"integration-web-model-call-source-freezing","layer":"integration","client":"web","enabled":true,"timeoutMs":660000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/itemized_context/test_model_call_source_freezing.py"]},
     {"id":"integration-web-mixed-source-freezing","layer":"integration","client":"web","enabled":true,"timeoutMs":660000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/itemized_context/test_mixed_source_freezing.py"]},
+    {"id":"integration-web-persistent-resources","layer":"integration","client":"web","enabled":true,"timeoutMs":600000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_persistent_resource_lifecycle.py"]},
+    {"id":"integration-web-child-thread","layer":"integration","client":"web","enabled":true,"timeoutMs":420000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_child_thread_panel.py"]},
+    {"id":"integration-web-browser-views","layer":"integration","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_browser_view_sessions.py"]},
+    {"id":"e2e-web-session-information","layer":"e2e","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/e2e/clients/web/test_session_information.py"]},
+    {"id":"e2e-web-goal-tasks","layer":"e2e","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/e2e/clients/web/test_goal_sidebar.py"]},
+    {"id":"e2e-web-session-navigation","layer":"e2e","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/e2e/clients/web/test_session_physical_tree.py"]},
     {"id":"integration-task-generations","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_generations.py"]},
     {"id":"integration-task-generation-strategies","layer":"integration","client":null,"enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_session_generation_strategies.py"]},
     {"id":"integration-gateway-generator-import","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/gateway/test_session_generator_control.py"]},
-    {"id":"integration-web-persistent-tasks","layer":"integration","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/persistent_tasks"]},
+    {"id":"integration-web-persistent-tasks","layer":"integration","client":"web","enabled":true,"timeoutMs":600000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/persistent_tasks"]},
     {"id":"integration-persistent-task-goal-fork-restart","layer":"integration","client":null,"enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_goal_storage.py::test_fork_goal_publication_hard_restart_preserves_original_creation","tests/integration/backend/sessions/test_persistent_task_goal_storage.py::test_fork_goal_install_publish_replay_and_abort_use_the_same_owner"]},
     {"id":"integration-persistent-task-goal-user-restart","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_goal_storage.py::test_user_created_goal_without_a_goal_admission_root_recovers_after_hard_restart"]},
     {"id":"integration-persistent-task-goal-storage","layer":"integration","client":null,"enabled":true,"timeoutMs":900000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_goal_storage.py"]},
@@ -525,6 +540,16 @@
       "command": ["bun", "tests/integration/clients/web/components/anchored_overlay_positioning.mjs"]
     },
     {
+      "id": "integration-web-react-surface",
+      "layer": "integration",
+      "client": "web",
+      "enabled": true,
+      "timeoutMs": 90000,
+      "dataLimitKb": 4194304,
+      // TODO：Bun 的 Vite listen 回调未返回；与产品 Vite 入口统一使用 Node，恢复前须真实启动对照。
+      "command": ["node", "tests/integration/clients/web/components/react_surface.mjs"]
+    },
+    {
       "id": "integration-web-session-catalog-outbox-idb",
       "layer": "integration",
       "client": "web",
@@ -541,24 +566,33 @@
       "command": ["uv", "run", "pytest", "tests/e2e/clients/web"]
     },
     {
-      "id": "e2e-web-basic-chat-tool-loop",
-      "layer": "e2e",
+      "id": "integration-web-conversation-lifecycle",
+      "layer": "integration",
       "client": "web",
       "enabled": true,
       "dataLimitKb": 4194304,
       "timeoutMs": 12600000,
       "command": [
         "uv", "run", "pytest",
-        "tests/e2e/clients/web/test_basic_chat_tool_loop.py::test_basic_chat_tool_loop_through_real_web_surface"
+        "tests/integration/clients/web/conversation_lifecycle/test_conversation_lifecycle.py::test_conversation_lifecycle_through_real_workbench"
       ]
     },
     {"id":"integration-runtime-context-publication","layer":"integration","client":null,"enabled":true,"timeoutMs":240000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_runtime_context_publication.py"]},
+    {
+      "id": "integration-electron-packaged-workbench",
+      "layer": "integration",
+      "client": "electron",
+      "enabled": true,
+      "timeoutMs": 900000,
+      "dataLimitKb": 4194304,
+      "command": ["uv", "run", "--no-sync", "pytest", "-q", "tests/integration/clients/electron/test_packaged_workbench.py"]
+    },
     {
       "id": "e2e-electron",
       "layer": "e2e",
       "client": "electron",
       "enabled": false,
-      "todo": "等待 Electron 客户端独立 OpenSpec"
+      "todo": "真实 Provider 与各平台完整 Electron E2E 待验收；Linux ASAR 产物固定模型回放见 integration-electron-packaged-workbench"
     },
     {
       "id": "e2e-mobile-native",

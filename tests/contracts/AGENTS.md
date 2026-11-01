@@ -14,6 +14,7 @@
 ## 规范
 
 - 契约断言必须面向公开边界，不依赖内部类或私有实现。
+- `test_runner_cli.py` 同时核对矩阵 CLI 和 Bun 测试发现边界；仅在隔离哨兵项目中验证 Web／Workbench 自有测试会执行，固定上游、参考仓库和生成产物不执行，绝不运行真实上游测试。
 - Agent HTTP 结构核对四个真实路由的请求、列表及详情响应、嵌套 Provider 和候选 descriptor 漂移；导出产物只写入隔离输出，不改写客户端快照。
 - 会话生成器 HTTP 结构核对实际预览／定义校验的请求和响应、字段漂移及候选 descriptor 的发布前拒绝；与其它 Workspace HTTP 契约共用独立 OpenAPI 副本 fixture，产物按本测试文件写入 `out/tests/`，保留 Pydantic 命名与策略约束。
 - 运行时 HTTP 结构核对状态、排空／取消／强制中断及快照回执的实际响应，覆盖阻塞资源的嵌套字段与候选 descriptor 漂移，保留生命周期业务约束。

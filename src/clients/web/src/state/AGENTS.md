@@ -1,6 +1,6 @@
 # 目录用途
 
-`src/clients/web/src/state/` 放浏览器前端的状态派生、聚合和纯数据转换逻辑，服务于 `../hooks.tsx` 中的 AppProvider。
+`src/clients/web/src/state/` 放浏览器前端的状态派生、聚合和纯数据转换逻辑，服务于显式 owner 的会话控制器与工作台贡献。
 
 ## 职责树
 
@@ -11,6 +11,7 @@ state/
 ├── 会话与对话
 │   ├── session/                 会话标识、目录投影、turn 历史与会话诊断
 │   ├── conversations.ts         对话列表的状态入口
+│   ├── threadHistoryCache.ts     与 Tab 生命周期分离的历史镜像，内存与 IndexedDB 有界保存
 │   ├── conversations/           消息流、pending 请求和 turn 到对话的投影
 │   ├── composerState.ts         当前编辑器草稿状态
 │   ├── composerDrafts/          按会话保存的草稿存储
@@ -30,7 +31,6 @@ state/
 ├── 工作区与 Gateway
 │   ├── gatewayWorkspaceState.ts Gateway 工作区列表投影
 │   ├── workspaceInformation.ts  工作区诊断信息
-│   ├── workspaceBottomPanel.ts  工作区底部面板展示偏好
 │   ├── workspaceFileTreeEvents.ts 文件树变更事件
 │   └── workspaceFiles/          待确认操作和上传 Blob 的 IndexedDB 存储
 ├── 输入、资源与偏好
@@ -39,8 +39,8 @@ state/
 │   ├── slashCommands.ts         斜杠命令解析和建议
 │   ├── skillKeyFlow.ts          Skill 选择键流
 │   ├── contentViews.ts          消息内容视图模式
-│   ├── defaultViewChanges.ts    默认视图变化提示
 │   ├── uiSettings/              UI 设置归一化和偏好合并
+│   ├── browserViewStore.ts       浏览器展示数据 IndexedDB 事务与窗口通知
 │   └── storage.ts               浏览器本地状态持久化边界
 ├── appStateMaps.ts              Provider 状态 Map 的浅层复制
 ├── pendingRequests.ts           待处理请求的列表状态
@@ -68,6 +68,6 @@ state/
 
 - 保持函数纯净、输入输出显式。
 - 代码注释使用中文，专业术语除外。
-- 需要副作用时优先留在 `../hooks.tsx` 或 `../api.ts`。
+- 需要副作用时留在所属 `../hooks/`，请求在 `../api/`；不恢复旧 AppProvider 聚合入口。
 - `workspaceFiles/` 只保存客户端待发送、待确认记录，不充当文件内容、revision 或操作结果的业务权威；不在存储模块发起 HTTP 或轮询。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

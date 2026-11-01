@@ -123,7 +123,8 @@ def test_repository_matrix_lists_full_and_focused_web_suites(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stderr
     assert "e2e-web\te2e\tweb\tenabled" in result.stdout
-    assert "e2e-web-basic-chat-tool-loop\te2e\tweb\tenabled" in result.stdout
+    assert "integration-web-conversation-lifecycle\tintegration\tweb\tenabled" in result.stdout
+    assert "integration-web-metadata\tintegration\tweb\tenabled" in result.stdout
     assert not sentinel.exists()
 
 
@@ -132,17 +133,55 @@ def test_web_matrix_suites_keep_full_and_focused_pytest_scopes() -> None:
     matrix = commentjson.loads(matrix_path.read_text(encoding="utf-8"))
     suites = matrix["suites"]
     full_suite = [suite for suite in suites if suite["id"] == "e2e-web"]
-    focused_suite = [suite for suite in suites if suite["id"] == "e2e-web-basic-chat-tool-loop"]
+    focused_suite = [suite for suite in suites if suite["id"] == "integration-web-conversation-lifecycle"]
 
     assert len(full_suite) == 1
     assert full_suite[0]["command"] == ["uv", "run", "pytest", "tests/e2e/clients/web"]
     assert len(focused_suite) == 1
+    assert focused_suite[0]["layer"] == "integration"
+    assert focused_suite[0]["timeoutMs"] == 12600000
+    assert focused_suite[0]["dataLimitKb"] == 4194304
     assert focused_suite[0]["command"] == [
         "uv",
         "run",
         "pytest",
-        "tests/e2e/clients/web/test_basic_chat_tool_loop.py::test_basic_chat_tool_loop_through_real_web_surface",
+        "tests/integration/clients/web/conversation_lifecycle/test_conversation_lifecycle.py::test_conversation_lifecycle_through_real_workbench",
     ]
+
+
+def test_bun_discovers_product_tests_without_running_upstream_or_generated_tests(tmp_path: Path) -> None:
+    project = tmp_path / "discovery"
+    project.mkdir()
+    (project / "bunfig.toml").write_bytes((Path.cwd() / "bunfig.toml").read_bytes())
+    markers = tmp_path / "executed"
+    markers.mkdir()
+    fixtures = {
+        "src/clients/web/src/product.test.ts": ("web", True),
+        "src/clients/workbench/scripts/product.test.mjs": ("workbench", True),
+        "src/clients/workbench/upstream/src/vs/sentinel.test.ts": ("upstream", False),
+        "reference_repo/vscode/sentinel.test.ts": ("reference", False),
+        "out/generated/sentinel.test.ts": ("generated", False),
+    }
+    for name, (marker, allowed) in fixtures.items():
+        target = project / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            'import { expect, test } from "bun:test";\n'
+            'import { writeFileSync } from "node:fs";\n'
+            f"test({json.dumps(marker)}, () => {{\n"
+            f"  writeFileSync({json.dumps(str(markers / marker))}, 'executed');\n"
+            f"  expect({str(allowed).lower()}).toBe(true);\n"
+            "});\n", encoding="utf-8",
+        )
+    command = ["bun", "test"]
+    result = subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=20, check=False)
+    (tmp_path / "discovery.stdout.raw").write_text(result.stdout, encoding="utf-8")
+    (tmp_path / "discovery.stderr.raw").write_text(result.stderr, encoding="utf-8")
+    (tmp_path / "discovery-process.json").write_text(json.dumps({
+        "command": command, "cwd": str(project), "returncode": result.returncode,
+    }, indent=2) + "\n", encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sorted(path.name for path in markers.iterdir()) == ["web", "workbench"]
 
 
 @pytest.fixture

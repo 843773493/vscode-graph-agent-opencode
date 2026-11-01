@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -26,6 +28,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
+)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.custom_tool_test_workspace import (
     custom_tool_workspace_template_copy_paths,
@@ -241,6 +246,9 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
               execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
             assemblies[turn_id] = prepare(saver, key=f"progressive-display:{turn_id}").assembly_id
     for turn_id, execution_id, items, has_result, final_id in pending:
+        # 样本先构造推理再插入工具；构造时刻不代表逻辑顺序，统一使用真实提交时刻。
+        output_created_at = datetime.now(UTC).isoformat()
+        items = tuple(replace(item, created_at=output_created_at) for item in items)
         saver.converge_execution(
             STATIC_LONG_SESSION_ID, thread_id=owner.thread_id, turn_id=turn_id,
             execution_id=execution_id, items=items, assembly_id=assemblies[turn_id],
@@ -318,6 +326,7 @@ async def test_rollout_history_around_loading_real_web_chain(
     browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
     integration_workspace_root_path: str,
+    web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     chromium_path = (
@@ -329,16 +338,7 @@ async def test_rollout_history_around_loading_real_web_chain(
     if chromium_path is None:
         pytest.fail("Rollout 历史浏览器集成需要 Chromium")
 
-    build = await asyncio.to_thread(
-        subprocess.run,
-        ["bun", "run", "build"],
-        cwd=project_root / "src" / "clients" / "web",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
-
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     session_id = STATIC_LONG_SESSION_ID
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_dir)
@@ -412,13 +412,10 @@ async def test_rollout_history_around_loading_real_web_chain(
         workspace_root=Path(browser_backend[1]),
         default_backend_url=browser_backend[0],
         port=port_block.port(20),
-        extra_env={
-            "BOXTEAM_WEB_ASSETS": str(
-                project_root / "src" / "clients" / "web" / "dist"
-            ),
-        },
+        artifacts_dir=context.artifacts_dir / "gateway",
+        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
     )
-    artifacts = Path(browser_backend[1]).parent / "artifacts"
+    artifacts = context.artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     result_path = artifacts / "rollout-history-progressive-result.json"
     screenshot_path = artifacts / "rollout-history-progressive-failure.png"
@@ -446,18 +443,21 @@ async def test_rollout_history_around_loading_real_web_chain(
                 "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                 "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
                 "BOXTEAM_BROWSER_SESSION_ID": session_id,
+                "BOXTEAM_BROWSER_OWNER": json.dumps({
+                    "workspaceId": read_workspace_id(browser_backend[1]),
+                    "sessionId": session_id, "threadId": resolver.main_thread_id(session_id),
+                }),
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
                 "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
             environment.update(temporary_environment)
             browser_result = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    "node",
+                    "bun",
                     "tests/integration/clients/web/rollout_history_progressive_loading.mjs",
                 ],
                 cwd=project_root,
@@ -469,6 +469,7 @@ async def test_rollout_history_around_loading_real_web_chain(
             )
         (artifacts / "browser.stdout.log").write_text(browser_result.stdout)
         (artifacts / "browser.stderr.log").write_text(browser_result.stderr)
+        (artifacts / "browser-process.json").write_text(json.dumps({"exit_code": browser_result.returncode}) + "\n")
         assert browser_result.returncode == 0, (
             "rollout 历史浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"
@@ -508,7 +509,7 @@ async def test_rollout_history_around_loading_real_web_chain(
         # 不把前端渲染预算误当成数据库耗时。
         assert result["historyRequestP95Ms"] < 200
         # 首次真实浏览器 prepend 包含 Virtuoso 首次布局和 Gateway 冷路径；
-        # 热路径 API p95 仍由上面的 100ms 断言约束。
+        # 热路径 API p95 仍由上面的 200ms 断言约束。
         assert result["browserPrependMs"] < 500
         assert result["noPageErrors"] is True
     finally:

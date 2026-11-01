@@ -9,7 +9,7 @@ WorkspaceEditorHeader
 └── WorkspaceAuxiliaryPanel                 辅助标签导航与视图组合
     ├── fileTree/                            工作区文件树、目录缓存、操作入口
     ├── sessionChanges/                      会话变更集与文件变更树
-    └── 外部注入的资源、Goal、调试、附件视图
+    └── 外部注入的资源、任务、调试、附件视图
 
 WorkspaceFilePreviewArea                    工作区文件和会话 diff 预览、编辑
 ├── preview/                                 Markdown、图片、附件、Mermaid 渲染器
@@ -20,7 +20,7 @@ WorkspaceFileReferenceContext               文件资源引用上下文
 gateway/                                    Gateway 控制中心、连接、诊断、主题
 portForward/                                工作区端口转发面板与端口校验
 mcp/                                        工作区 MCP 连接管理与会话授权入口
-persistentTasks/                            当前工作区持久任务管理、表单及运行记录
+persistentTasks/                            会话与工作区共用的持久任务管理、表单及运行记录
 WorkspaceAddDialog.tsx                      添加对话框轻量入口与延迟加载
 └── workspaceAddDialog/                     设备选项模型与目录选择交互
 WorkspaceRenameDialog                       工作区重命名对话框

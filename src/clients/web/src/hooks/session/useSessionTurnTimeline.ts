@@ -51,8 +51,8 @@ export function useSessionJobTurnLoader({
   useEffect(() => {
     if (!needsActiveTurn || !activeTurnId) return;
     let cancelled = false;
-    // 普通准入不刷新整段历史，复用详情 reader 的 generation/epoch/abort 边界。
-    void loadTurnDetails([activeTurnId], `active-turn:${activeTurnId}`, false, ["metadata"])
+    // 读取根消息的正式附件引用，不让上传前的临时 ID 留在活动回合；不刷新整段历史。
+    void loadTurnDetails([activeTurnId], `active-turn:${activeTurnId}`, false, ["metadata", "user"])
       .catch((error: unknown) => {
         if (cancelled) return;
         setState((previous) => ({

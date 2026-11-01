@@ -1,3 +1,4 @@
+import type { SessionViewState } from "../../state/sessionViewState";
 import React from "react";
 import { Virtuoso } from "react-virtuoso";
 import type {
@@ -9,7 +10,6 @@ import type {
   AttachmentRef,
   DeliveryPolicy,
   SessionChangesSummary,
-  GatewayUserViewState,
   InternalExecutionHistory,
   InternalDisplayProvenance,
 } from "../../types/backend";
@@ -169,36 +169,6 @@ export function transcriptConversationsForDisplay(
   );
 }
 
-function TurnNavigationControls({ conversations, disabled, navigation, onNavigate }: {
-  conversations: readonly ConversationView[];
-  disabled: boolean;
-  navigation: ReturnType<typeof useTurnVirtualScroller>["navigation"];
-  onNavigate: (turnId: string) => void;
-}): React.ReactNode {
-  const [turnId, setTurnId] = React.useState("");
-  const listId = React.useId();
-  return (
-    <form className="chat-turn-navigation" aria-label="跳到指定轮次" onSubmit={(event) => {
-      event.preventDefault();
-      onNavigate(turnId);
-    }}>
-      <label htmlFor={listId + "-input"}>轮次 ID</label>
-      <input id={listId + "-input"} aria-label="轮次 ID" list={listId} value={turnId}
-        placeholder="输入轮次 ID，或选择已加载轮次" disabled={disabled}
-        onChange={(event) => setTurnId(event.target.value)} />
-      <datalist id={listId}>
-        {conversations.filter((turn) => turn.displayMode === "history" && !turn.pending && turn.turnId).map((turn) => (
-          <option key={turn.turnId} value={turn.turnId}>
-            {"第 " + turn.turnOrdinal + " 轮 · " + (turn.userMessage?.content.trim().replace(/\s+/g, " ").slice(0, 60) || "对话记录")}
-          </option>
-        ))}
-      </datalist>
-      <button type="submit" disabled={disabled || !turnId.trim()}>跳到指定轮次</button>
-      {navigation ? <span role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</span> : null}
-    </form>
-  );
-}
-
 export default function ChatPanel({
   apiPort,
   workspaceId,
@@ -265,7 +235,7 @@ export default function ChatPanel({
   onOpenChanges?: () => void;
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
   onOpenChildReport?: (source: InternalDisplayProvenance) => void;
-  viewState?: GatewayUserViewState | null;
+  viewState?: SessionViewState | null;
   onViewStateChange?: (payload: {
     turn_anchor: string | null;
     scroll_offset: number;
@@ -298,7 +268,6 @@ export default function ChatPanel({
     handleAtBottomChange,
     handleEndReached,
     handleStartReached,
-    navigateToTurn,
     navigation,
     scheduleAnchorAlignment,
     scrollToLatest,
@@ -423,8 +392,6 @@ export default function ChatPanel({
     <section className="chat-stream-shell">
       {hasActiveSession && sessionId && threadId ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId])}
         apiPort={apiPort} workspaceId={workspaceId} sessionId={sessionId} threadId={threadId} /> : null}
-      {hasActiveSession ? <TurnNavigationControls key={scopeKey} conversations={transcriptConversations}
-        disabled={!sessionId || !threadId || historyLoading} navigation={navigation} onNavigate={navigateToTurn} /> : null}
       <section
         data-expand-details={String(expandDetails)}
         data-owner-session-id={sessionId ?? ""}

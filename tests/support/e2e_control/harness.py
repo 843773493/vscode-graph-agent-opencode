@@ -11,6 +11,7 @@ import select
 import socket
 import socketserver
 import sqlite3
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -43,7 +44,7 @@ def _process_start_time(pid: int) -> float | None:
 
 @dataclass(slots=True)
 class E2EProcessLease:
-    """当前pytest进程的服务端口使用声明，不持有监听socket或操作系统文件锁。"""
+    """声明当前进程的服务端口；Linux 同时保留绑定，避免自动客户端抢占。"""
 
     # JSON 租约文件；start_time 保存跨平台进程创建时间。
     path: Path
@@ -51,6 +52,7 @@ class E2EProcessLease:
     ports: tuple[int, ...]
     # release 用本次凭据和进程创建时间校验 owner，再删除本次记录。
     token: str = field(default_factory=lambda: secrets.token_hex(16))
+    _reservations: ExitStack = field(default_factory=ExitStack, init=False, repr=False)
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,29 +73,42 @@ class E2EProcessLease:
             if previous_start_time is not None and previous_start_time == previous["start_time"]:
                 raise RuntimeError(f"E2E 独占租约仍有效，禁止抢占: {previous}")
             self.path.unlink()
-        for port in self.ports:
-            if 8010 <= port <= 8016:
-                raise ValueError(f"正式 E2E 不得租用开发端口: {port}")
-            ensure_local_port_available(port, service_name="E2E process lease owner")
-        with ExitStack() as cleanup:
-            with self.path.open("x", encoding="utf-8") as stream:
-                cleanup.callback(self.path.unlink)
-                json.dump(record, stream)
-            cleanup.pop_all()
+        with ExitStack() as reservations:
+            for port in self.ports:
+                if 8010 <= port <= 8016:
+                    raise ValueError(f"正式 E2E 不得租用开发端口: {port}")
+                ensure_local_port_available(port, service_name="E2E process lease owner")
+                if sys.platform == "linux":
+                    # 不监听、不启用 REUSEPORT；真实服务沿用 REUSEADDR 绑定后再监听。
+                    # 自动分配源端口的客户端不会选用这个仍绑定的端口。
+                    reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    reservations.callback(reservation.close)
+                    reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    reservation.bind(("127.0.0.1", port))
+                # TODO：其它平台需单独验证端口移交语义，目前只声明并检查端口。
+            with ExitStack() as cleanup:
+                with self.path.open("x", encoding="utf-8") as stream:
+                    cleanup.callback(self.path.unlink)
+                    json.dump(record, stream)
+                cleanup.pop_all()
+            self._reservations = reservations.pop_all()
 
     def release(self) -> None:
-        for port in self.ports:
-            ensure_local_port_available(port, service_name="E2E process lease teardown")
-        record = json.loads(self.path.read_text(encoding="utf-8"))
-        owner_pid = os.getpid()
-        owner_start_time = _process_start_time(owner_pid)
-        if owner_start_time is None:
-            raise RuntimeError(f"无法读取当前 E2E owner 的进程创建时间: pid={owner_pid}")
-        record_owner = (record["pid"], record["start_time"], record["token"])
-        current_owner = (owner_pid, owner_start_time, self.token)
-        if record_owner != current_owner:
-            raise RuntimeError("E2EProcessLease owner 变化，拒绝删除其它 owner 的租约")
-        self.path.unlink()
+        try:
+            for port in self.ports:
+                ensure_local_port_available(port, service_name="E2E process lease teardown")
+            record = json.loads(self.path.read_text(encoding="utf-8"))
+            owner_pid = os.getpid()
+            owner_start_time = _process_start_time(owner_pid)
+            if owner_start_time is None:
+                raise RuntimeError(f"无法读取当前 E2E owner 的进程创建时间: pid={owner_pid}")
+            record_owner = (record["pid"], record["start_time"], record["token"])
+            current_owner = (owner_pid, owner_start_time, self.token)
+            if record_owner != current_owner:
+                raise RuntimeError("E2EProcessLease owner 变化，拒绝删除其它 owner 的租约")
+            self.path.unlink()
+        finally:
+            self._reservations.close()
 
 
 @dataclass(slots=True)

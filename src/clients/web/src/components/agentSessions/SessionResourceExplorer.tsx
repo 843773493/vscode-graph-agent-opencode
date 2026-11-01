@@ -63,6 +63,7 @@ interface SessionResourceExplorerProps {
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
   gatewayUserAccess?: GatewayUserAccess | null;
   onSelectSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
+  onPinSession?: (workspaceId: string, sessionId: string) => void;
   onStatusChange: (message: string) => void;
   onOpenDiagnostic: (title: string, detail: string) => void;
   onOpenWorkspaceMenu: (workspace: GatewayWorkspace, x: number, y: number) => void;
@@ -105,6 +106,7 @@ export default function SessionResourceExplorer({
   sessionCatalogOutboxSnapshot,
   gatewayUserAccess,
   onSelectSession,
+  onPinSession,
   onStatusChange,
   onOpenDiagnostic,
   onOpenWorkspaceMenu,
@@ -163,7 +165,7 @@ export default function SessionResourceExplorer({
     scope: { workspaceId?: string; retryActivation?: boolean } = {},
   ) => {
     setActionError({ title, detail: errorMessage(error), ...scope });
-    onStatusChange(`${title}，可在输出中查看详情`);
+    onStatusChange(`${title}，可通过“查看日志”打开诊断详情`);
   };
   const openDiagnostic = (title: string, detail: string, workspaceId?: string) => {
     const workspace = workspaceId ? workspacesById.get(workspaceId) : null;
@@ -561,6 +563,8 @@ export default function SessionResourceExplorer({
             aria-busy={opening || undefined}
             disabled={node.state === "deleting"}
             onClick={openNode}
+            onDoubleClick={!isFolder && node.session_id && onPinSession
+              ? () => onPinSession(workspaceId, node.session_id!) : undefined}
           >
             <span className={`codicon ${isFolder ? "codicon-folder" : "codicon-comment-discussion"}`} aria-hidden="true" />
             <span className="session-resource-label">{node.name}</span>

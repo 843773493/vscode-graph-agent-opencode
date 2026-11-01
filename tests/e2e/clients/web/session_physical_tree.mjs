@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
 import { beginForkSubmissionDeadline, bindForkOperationDeadline, closeForkDeadlineWatchdog,
   waitForForkOperation } from "../../../support/e2e_control/browser_client.mjs";
 
@@ -20,14 +22,13 @@ const resultPath = requiredEnvironment("BOXTEAM_E2E_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_E2E_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 
-const browser = await chromium.launch({ executablePath, headless: true });
-const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseUrl });
-const page = await context.newPage();
-
-const parentRow = page.locator(`[data-testid$="-${fixture.parentSessionId}"]`);
-const childRow = page.locator(`[data-testid$="-${fixture.childSessionId}"]`);
-const folderRow = page.locator(`[data-testid$="-${fixture.folderId}"]`);
+const scope = TestRunContext.fromTestFile("tests/e2e/clients/web/test_session_physical_tree.py");
+const pageErrors = [];
+const navigationRequests = [];
+const dragEvents = [];
+let page;
+let context;
+let failure;
 let forkThreadId = null;
 let forkThreadUri = null;
 let forkDurableHistory = null;
@@ -57,7 +58,7 @@ async function localToken() {
 
 async function loadForkThreadHistory(sessionId, threadId) {
   const token = await localToken();
-  return page.evaluate(async ({ sessionId: targetSessionId, threadId: targetThreadId, token: localTokenValue, workspaceId }) => {
+  return page.evaluate(async ({ sessionId: targetSessionId, threadId: targetThreadId, token: localTokenValue, workspaceId, timeoutMs }) => {
     const response = await fetch(
       `/api/v1/sessions/${targetSessionId}/threads/${targetThreadId}/history`,
       {
@@ -68,7 +69,7 @@ async function loadForkThreadHistory(sessionId, threadId) {
           "X-BoxTeam-Workspace-Id": workspaceId,
         },
         body: JSON.stringify({ direction: "tail", turns: 256 }),
-        signal: AbortSignal.timeout(FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
         credentials: "include",
       },
     );
@@ -78,7 +79,7 @@ async function loadForkThreadHistory(sessionId, threadId) {
     if (!response.ok) throw new Error(`fork Thread 历史读取失败 ${response.status}: ${text}`);
     if (!requestId || payload?.request_id !== requestId) throw new Error("fork Thread 历史响应 request_id 不一致");
     return payload;
-  }, { sessionId, threadId, token, workspaceId: fixture.parentWorkspaceId });
+  }, { sessionId, threadId, token, workspaceId: fixture.parentWorkspaceId, timeoutMs: FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS });
 }
 
 async function expandRow(row) {
@@ -86,6 +87,25 @@ async function expandRow(row) {
   await chevron.waitFor({ state: "visible", timeout: 10_000 });
   const label = await chevron.getAttribute("aria-label");
   if (label?.startsWith("展开")) await chevron.click();
+}
+
+async function dragInside(source, target) {
+  await source.hover({ timeout: 5_000 });
+  await page.mouse.down();
+  try {
+    const origin = await source.boundingBox();
+    const destination = await target.boundingBox();
+    assert.ok(origin && destination, "拖放两端必须在当前布局中可见");
+    await page.mouse.move(origin.x + origin.width / 2 + 6, origin.y + origin.height / 2, { steps: 3 });
+    const x = destination.x + destination.width / 2;
+    const y = destination.y + destination.height / 2;
+    // 原版工作台内经过真实 dragenter 后，再移动以交付 dragover；放下前核对产品的 inside 反馈。
+    await page.mouse.move(x, y, { steps: 10 });
+    await page.mouse.move(x + 1, y);
+    await expect(target).toHaveClass(/\bdrop-inside\b/);
+  } finally {
+    await page.mouse.up();
+  }
 }
 
 function matchingCatalogIntent(request, expected) {
@@ -139,7 +159,32 @@ async function requireCatalogCommit(response, expected) {
 }
 
 try {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  const browser = await chromium.launch({ executablePath, headless: true });
+  scope.addCleanup("会话目录 Chromium", () => browser.close());
+  context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  scope.addCleanup("会话目录 context", () => context.close());
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseUrl });
+  page = await context.newPage();
+  page.on("pageerror", error => pageErrors.push(error.message));
+  page.on("request", request => {
+    if (/\/api\/gateway\/(workspace-navigation|workspaces)/.test(request.url()) && request.method() !== "GET") {
+      navigationRequests.push({ method: request.method(), url: request.url(), body: request.postData() });
+    }
+  });
+  await page.exposeFunction("recordNavigationDrag", event => dragEvents.push(event));
+  await page.addInitScript(() => {
+    for (const type of ["dragstart", "dragenter", "dragover", "drop", "dragend"]) {
+      document.addEventListener(type, event => {
+        const row = event.composedPath().find(node => node instanceof HTMLElement && node.matches(".session-resource-row"));
+        if (row) void globalThis.recordNavigationDrag({ type, target: row.dataset.testid, x: event.clientX, y: event.clientY });
+      }, true);
+    }
+  });
+  const parentRow = page.locator(`[data-testid$="-${fixture.parentSessionId}"]`);
+  const childRow = page.locator(`[data-testid$="-${fixture.childSessionId}"]`);
+  const folderRow = page.locator(`[data-testid$="-${fixture.folderId}"]`);
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
   await childRow.waitFor({ state: "visible", timeout: 15_000 });
   await folderRow.waitFor({ state: "visible", timeout: 15_000 });
@@ -255,19 +300,27 @@ try {
   await page.getByRole("menuitem", { name: "新建会话文件夹", exact: true }).click();
   const workspaceSessionFolderDialog = page.getByRole("dialog", { name: "新建会话文件夹" });
   await workspaceSessionFolderDialog.getByRole("textbox", { name: "文件夹名称" }).fill("菜单工作区文件夹");
-  const workspaceSessionFolderIntent = { kind: "create_folder", name: "菜单工作区文件夹", parent_node_id: null };
+  // 根文件夹的创建请求省略 parent_node_id；提交后从权威 breadcrumb 确认根归属。
+  const workspaceSessionFolderIntent = { kind: "create_folder", name: "菜单工作区文件夹" };
   const workspaceSessionFolderResponsePromise = waitForCatalogAcceptance(workspaceSessionFolderIntent);
   await workspaceSessionFolderDialog.getByRole("button", { name: "创建", exact: true }).click();
   const workspaceSessionFolderResponse = await workspaceSessionFolderResponsePromise;
-  await requireCatalogCommit(workspaceSessionFolderResponse, workspaceSessionFolderIntent);
+  const workspaceSessionFolderReceipt = await requireCatalogCommit(workspaceSessionFolderResponse, workspaceSessionFolderIntent);
+  const folderBreadcrumb = await context.request.get(
+    new URL(`/api/v1/session-catalog/breadcrumb/${workspaceSessionFolderReceipt.created_node_id}`, baseUrl).href,
+    { headers: Object.fromEntries(Object.entries(workspaceSessionFolderResponse.request().headers()).filter(
+      ([name]) => ["x-local-token", "x-boxteam-workspace-id", "x-boxteam-backend-workspace-id"].includes(name),
+    )) },
+  );
+  assert.equal(folderBreadcrumb.status(), 200, await folderBreadcrumb.text());
+  assert.deepEqual((await folderBreadcrumb.json()).data.items.map(item => item.node_id),
+    [workspaceSessionFolderReceipt.created_node_id], "新文件夹必须位于目标工作区的会话目录根级");
   await page.getByText("菜单工作区文件夹", { exact: true }).waitFor({ state: "visible" });
   workspaceMenuCreatedSessionFolder = true;
-  const bindWorkspaceResponsePromise = page.waitForResponse(
+  const [bindWorkspaceResponse] = await Promise.all([page.waitForResponse(
     (response) => response.request().method() === "PATCH"
       && response.url().includes(`/workspaces/${fixture.childWorkspaceId}`),
-  );
-  await childWorkspaceRow.dragTo(parentWorkspaceRow);
-  const bindWorkspaceResponse = await bindWorkspaceResponsePromise;
+  ), dragInside(childWorkspaceRow, parentWorkspaceRow)]);
   if (!bindWorkspaceResponse.ok()) {
     throw new Error(`设置子工作区失败: ${await bindWorkspaceResponse.text()}`);
   }
@@ -282,12 +335,10 @@ try {
   if (!(childWorkspacePadding > parentWorkspacePadding)) {
     throw new Error("子工作区没有显示在父工作区下方");
   }
-  const unbindWorkspaceResponsePromise = page.waitForResponse(
+  const [unbindWorkspaceResponse] = await Promise.all([page.waitForResponse(
     (response) => response.request().method() === "PATCH"
       && response.url().includes(`/workspaces/${fixture.childWorkspaceId}`),
-  );
-  await childWorkspaceRow.dragTo(workspaceFolderOneRow);
-  const unbindWorkspaceResponse = await unbindWorkspaceResponsePromise;
+  ), dragInside(childWorkspaceRow, workspaceFolderOneRow)]);
   if (!unbindWorkspaceResponse.ok()) {
     throw new Error(`工作区移入虚拟文件夹失败: ${await unbindWorkspaceResponse.text()}`);
   }
@@ -418,6 +469,7 @@ try {
   await requireCatalogCommit(moveFolderUnderSession, moveFolderUnderSessionIntent);
   await expandRow(parentRow);
   await folderRow.waitFor({ state: "visible" });
+  await expect(folderRow.locator(".session-resource-pending-state")).toHaveCount(0);
 
   const workspaceRow = page.locator('[data-testid^="workspace-node-"]').first();
   const moveFolderToRootIntent = { kind: "move_node", target_node_id: fixture.folderId, parent_node_id: null };
@@ -487,10 +539,9 @@ try {
     });
   const clickPromise = forkDialog.getByRole("button", { name: "创建分支", exact: true })
     .click({ timeout: 0 });
-  const [{ request: forkPostRequest, body: forkRequest, deadline: forkDeadline }] = await Promise.all([
-    waitForForkOperation(Promise.all([forkRequestPromise, clickPromise]),
-      forkSubmissionDeadline, "提交 fork 并等待实际 POST request"),
-  ]);
+  const [{ request: forkPostRequest, body: forkRequest, deadline: forkDeadline }] = await waitForForkOperation(
+    Promise.all([forkRequestPromise, clickPromise]), forkSubmissionDeadline, "提交 fork 并等待实际 POST request",
+  );
   const forkResponse = await waitForForkOperation(forkResponsePromise, forkDeadline, "fork POST 响应头");
   assert.equal(forkResponse.request(), forkPostRequest, "fork 响应必须属于唯一已观察 POST");
   const forkResponseText = await waitForForkOperation(forkResponse.text(), forkDeadline, "fork POST 响应正文");
@@ -532,15 +583,17 @@ try {
   ["new_child_thread", point.child_container_uri, "目录入口的上下文分支", "detached", [], null]);
   const fork = forkPayload.data;
   assert.equal(fork.session.session_id, fixture.parentSessionId);
+  const canonicalSessionUri = `boxteam://${fixture.gatewayId}/workspace/${fixture.parentOwner.workspace_id}/resources/session/${fixture.parentSessionId}`;
+  // Gateway 的 fork 回执使用完整 URI；请求仍可使用来源点返回的本地 URI。
   assert.deepEqual([fork.creation_kind, fork.source_uri, fork.source_view_id, fork.source_view_revision,
     fork.anchor_item_id, fork.mode],
-  [forkRequest.creation_kind, forkRequest.source_uri, forkRequest.source_view_id,
+  [forkRequest.creation_kind, `${canonicalSessionUri}/threads/${fixture.parentOwner.thread_id}`, forkRequest.source_view_id,
     forkRequest.source_view_revision, forkRequest.anchor_item_id, forkRequest.mode]);
   assert.equal(typeof fork.thread_id, "string");
   assert.ok(fork.thread_id.length > 0);
-  assert.equal(fork.session.workspace_id, fixture.parentWorkspaceId);
+  assert.equal(fork.session.workspace_id, fixture.parentOwner.workspace_id);
   assert.notEqual(fork.thread_id, fork.session.thread_id);
-  assert.equal(fork.thread_uri, `${point.child_container_uri}/threads/${fork.thread_id}`);
+  assert.equal(fork.thread_uri, `${canonicalSessionUri}/threads/${fork.thread_id}`);
   assert.equal(Array.isArray(fork.resources), true);
   assert.deepEqual(fork.resources.filter((resource) => resource.owner_reference), [],
     "请求未选择 live owner 时终态响应不能附带额外 owner receipt");
@@ -556,8 +609,9 @@ try {
     sourceViewRevision: durableHistory.data.source_view_revision,
     turnCount: durableHistory.data.items.length,
   };
-  await page.locator(`.child-thread-conversation[data-thread-id="${forkThreadId}"]`)
-    .waitFor({ state: "visible", timeout: FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS });
+  const forkEditor = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.parentOwner.workspace_id}"][data-session-id="${fixture.parentSessionId}"][data-thread-id="${forkThreadId}"]`);
+  await expect(forkEditor).toBeVisible({ timeout: FORK_POST_RESPONSE_VALIDATION_TIMEOUT_MS });
+  await expect(forkEditor.locator("#input")).toBeVisible();
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
   assert.equal(await parentRow.getAttribute("aria-current"), "true");
 
@@ -569,8 +623,13 @@ try {
   await deleteSessionDialog.getByRole("button", { name: "删除", exact: true }).click();
   const deleteResponse = await deleteResponsePromise;
   await requireCatalogCommit(deleteResponse, deleteIntent);
+  await expect(page.locator(`section.boxteam-thread[data-session-id="${fixture.parentSessionId}"]`)).toHaveCount(0);
+  await expect(childRow).toBeVisible();
+  assert.deepEqual(pageErrors, [], "目录和分支操作出现页面异常");
 
   await writeFile(resultPath, `${JSON.stringify({
+    pageErrors,
+    deletedEditorsClosed: true,
     bloodlineTextPresent,
     sessionMainActionOpenedCatalogSession,
     folderMainActionToggledExpansion,
@@ -588,12 +647,14 @@ try {
     workspaceMenuCreatedSessionFolder,
   }, null, 2)}\n`, "utf8");
 } catch (error) {
-  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
-  throw error;
+  failure = error;
 } finally {
-  try {
-    await browser.close();
-  } finally {
-    await closeForkDeadlineWatchdog();
+  const errors = failure ? [failure] : [];
+  if (failure && page) {
+    try { await writeFile(resultPath, `${JSON.stringify({ error: String(failure), pageErrors, navigationRequests, dragEvents }, null, 2)}\n`, "utf8"); } catch (error) { errors.push(error); }
+    try { await page.screenshot({ path: screenshotPath, fullPage: true }); } catch (error) { errors.push(error); }
   }
+  try { await scope.close(); } catch (error) { errors.push(error); }
+  try { await closeForkDeadlineWatchdog(); } catch (error) { errors.push(error); }
+  if (errors.length) throw new AggregateError(errors, "会话目录 Workbench 验收失败");
 }

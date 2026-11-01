@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   controlSessionResource as apiControlSessionResource,
   getSessionResources,
@@ -19,6 +19,36 @@ import type { RefreshOptions, SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
 
 export type SessionResourceRefreshResult = "loaded" | "failed" | "stale";
+
+/** 只为可见资源面板轮询；两个工作台共用同一调度和权威读取链。 */
+export function useSessionResourcePolling({ active, workspaceId, sessionId, refresh, onStatusChange }: {
+  active: boolean;
+  workspaceId: string | null;
+  sessionId: string | null;
+  refresh: (sessionId: string, options?: RefreshOptions) => Promise<SessionResourceRefreshResult>;
+  onStatusChange: (message: string) => void;
+}): void {
+  useEffect(() => {
+    if (!active || !sessionId) return;
+    let disposed = false;
+    let pollInFlight = false;
+    const poll = async (silent: boolean) => {
+      if (disposed || pollInFlight || (silent && document.visibilityState !== "visible")) return;
+      pollInFlight = true;
+      try {
+        const result = await refresh(sessionId, { silent });
+        if (result === "failed" && !silent) onStatusChange("后台连接刷新失败，请查看运行与连接中的错误详情");
+      } finally { pollInFlight = false; }
+    };
+    const initialTimer = window.setTimeout(() => void poll(false), 120);
+    const timer = window.setInterval(() => void poll(true), 5000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, [active, workspaceId, sessionId, refresh, onStatusChange]);
+}
 
 function isExpiredGatewayUserAccess(error: unknown): error is HttpRequestError {
   return (

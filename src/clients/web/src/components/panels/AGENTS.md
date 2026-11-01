@@ -6,13 +6,13 @@
 
 - `components/chat/`：聊天回合内部的渲染单元（ChatTurn、虚拟滚动等），本目录的 ChatPanel 只做列表容器与分页编排。
 - `components/agentSessions/`：Agent 会话树与筛选菜单内部实现，本目录的 AgentSessionsPanel 只做面板级组合。
-- `components/workspace/`：工作区文件与端口等面板实现，本目录的 PortForwardPanel 只做工作区端口面板的接入层。
+- `components/workspace/`：工作区文件与端口等面板实现，工作台的 `workspacePanelView.tsx` 直接挂载端口面板，不再保留底部标签包装组件。
 - `components/eventQueue/`、`components/contextInspection/`、`components/nodeDebug/`、`components/gatewayExtensions/`：各自专属面板的进一步拆分子包。
 - `components/panels/resourceTree/`：会话与 Gateway 可重连资源树的面板、行组件及其测试。
-- `components/panels/bottomPanel/`：主窗口底部面板族的终端、输出、端口、自动化与 MCP 连接标签页容器。
-- `components/panels/sessionPanels/`：左侧侧边栏会话面板与右侧侧边栏子会话线程面板。
+- `components/panels/bottomPanel/`：原版工作区面板复用的终端、服务输出与 Browser 内容；标签和外壳由 Workbench 提供。
+- `components/panels/sessionPanels/`：会话导航与精确 Thread 内的子线程资源面板。
 - `components/panels/inspectionPanels/`：事件视图、请求视图与 Agent State 只读诊断面板。
-- `components/overlays/`：AnchoredOverlay、WarmActionDialog、SessionNameDialog、SessionContextForkDialog 与 GatewayUserAccessMenu 等覆盖层和对话框；锚定定位实现按需加载。
+- `components/overlays/`：AnchoredOverlay、WarmActionDialog、SessionNameDialog 与 SessionContextForkDialog 等覆盖层和对话框；锚定定位实现按需加载。
 
 # 可修改内容
 

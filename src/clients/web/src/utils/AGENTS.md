@@ -11,7 +11,6 @@ utils/
 ├── clipboard.ts                 剪贴板读写
 ├── displayText.ts               展示文本清理
 ├── errorMessage.ts              未知错误转展示文案
-├── extensionResourceWindow.ts   扩展窗口入口与 URL
 ├── fileTransferHost.ts          工作区文件下载宿主
 ├── format.ts                    日期、数字等展示格式
 ├── jsonDisplay.ts               JSON 展示共用判定
@@ -36,6 +35,8 @@ utils/
 - 不在工具函数中静默吞掉错误；遇到不合法输入时应暴露明确错误。
 
 # 规范
+
+- `ReportedError` 只表示已有可见错误回执，保留原 cause；复合错误仅在所有子错误均有回执时才视为已报告，不根据文案推断。
 
 - 工具函数应尽量保持输入输出明确，避免依赖全局可变状态。
 - 仅在浏览器 API 是函数职责的一部分时使用浏览器对象。

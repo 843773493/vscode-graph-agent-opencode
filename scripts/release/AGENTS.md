@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 可以维护 Linux、Windows 和 Windows 交叉打包命令入口。
+- 可以维护 Linux、Windows、Windows 交叉打包及已授权 Electron 容器的发布命令入口。
 - 可以编排 `packaging/runtime/` 中的构建与验证实现。
 
 # 不可修改内容
@@ -17,4 +17,5 @@
 - JavaScript 脚本使用 ESM，失败时保留底层命令的明确退出信息。
 - 所有产物写入 `out/packaging/`，版本和下载资源遵守 `packaging/runtime/` 的固定清单。
 - 本地与 CI 使用相同的 `package.json` 发布入口。
+- Electron 正式回归复用同一发布入口，通过 `--output-root` 将临时构建与归档写入正式测试镜像的 runtime，不复用开发应用 bundle。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

@@ -22,6 +22,7 @@ import type { SetAppState } from "../contentViewLoaderTypes";
 export interface TurnScopeLoaderProps {
   apiPort: number | null;
   sessionId: string | null;
+  threadId?: string;
   workspaceId: string | null;
   sessionCacheKey: string | null;
   generationRef: MutableRefObject<number>;
@@ -89,7 +90,9 @@ export function preserveTimelineAfterTransientNetworkFailure(
     phase: hasVisibleContent ? timeline.phase : "error",
     loadingBefore: false,
     loadingAfter: false,
-    error: hasVisibleContent
+    error: timeline.restoredFromCache
+      ? "历史同步失败，已保留上次缓存，请重试"
+      : hasVisibleContent
       ? null
       : "历史服务暂时断开，当前没有可显示的历史；请稍后重试",
     generation: targetGeneration,

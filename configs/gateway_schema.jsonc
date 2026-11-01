@@ -35,7 +35,7 @@
     "config_version": {
       "type": "integer",
       "enum": [1, 2, 3, 4],
-      "description": "v1 允许缺少 connection_id，v2 持久化连接身份；显式 migrate-runtime-logging 推进到 v4，移除迁至工作区的生成器轮询设置。Gateway workspaces 变化属于 restart_gateway。"
+      "description": "v1 允许缺少 connection_id，v2 持久化连接身份；显式 migrate-runtime-config 推进到 v4，移除迁至工作区的生成器轮询设置。Gateway workspaces 变化属于 restart_gateway。"
     },
     "logging": {
       "type": "object",

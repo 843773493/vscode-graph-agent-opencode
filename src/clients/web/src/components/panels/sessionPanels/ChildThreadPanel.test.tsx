@@ -73,6 +73,44 @@ function panelProps(overrides: {
 }
 
 describe("子会话线程面板", () => {
+  test("没有报告且未展开的子线程也能按精确 owner 创建整线程分支", () => {
+    const children = [thread(1), thread(2)];
+    const forks: { threadId: string; point: ChildThreadForkPoint }[] = [];
+    const opened: ChildThreadSummary[] = [];
+    const selected: string[] = [];
+    const props = panelProps();
+    let renderer!: ReactTestRenderer;
+    try {
+      act(() => { renderer = create(<ChildThreadPanel {...props} threads={children} total={2}
+        onOpenThread={value => opened.push(value)}
+        onForkFromThread={(threadId, point) => forks.push({ threadId, point })}
+        conversation={{ ...props.conversation, selectThread: id => selected.push(id) }} />); });
+      expect(renderer.root.findAllByProps({ className: "child-thread-report-link" })).toHaveLength(0);
+      const row = renderer.root.findByProps({ "data-thread-id": children[1].thread_id });
+      act(() => row.findByProps({ "aria-label": "从此线程创建分支" }).props.onClick());
+      expect(forks).toEqual([{ threadId: children[1].thread_id, point: {} }]);
+      expect(opened).toEqual([]);
+      expect(selected).toEqual([]);
+    } finally { act(() => renderer?.unmount()); }
+  });
+
+  test("原生工作台通过回调打开完整 Thread 编辑器", () => {
+    const child = thread(1);
+    const opened: ChildThreadSummary[] = [];
+    const embedded: string[] = [];
+    const props = panelProps();
+    let renderer!: ReactTestRenderer;
+    try {
+      act(() => { renderer = create(<ChildThreadPanel {...props} threads={[child]} total={1}
+        onOpenThread={value => opened.push(value)} conversation={{ ...props.conversation,
+          selectThread: id => embedded.push(id),
+        }} />); });
+      const button = renderer.root.findAllByType("button").find(node => node.props.title === `打开子线程对话：${child.title}`);
+      act(() => button!.props.onClick());
+      expect(opened).toEqual([child]);
+      expect(embedded).toEqual([]);
+    } finally { act(() => renderer?.unmount()); }
+  });
   test("列表已确认缺少所选报告来源时明确提示，不回退主线程", () => {
     const props = panelProps();
     const html = renderToStaticMarkup(<ChildThreadPanel {...props} conversation={{ ...props.conversation,

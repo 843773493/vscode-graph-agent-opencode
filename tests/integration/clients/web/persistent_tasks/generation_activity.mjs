@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { openWorkbench, selectThread, automation } from "./workbench.mjs";
 import { testControl } from "../../../../support/e2e_control/browser_client.mjs";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
@@ -14,11 +15,8 @@ const barriers = new Set();
 try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "用户视图", exact: true }).click();
-  await page.getByPlaceholder("新用户名称").fill("会话动作验收用户");
-  await page.getByRole("button", { name: "创建", exact: true }).click();
-  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
+  await openWorkbench(page, fixture.baseUrl);
+  await selectThread(page, fixture.owner, 0);
   const headers = await page.evaluate(async (workspaceId) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     if (!credential.ok) throw new Error(`凭据读取失败：${credential.status}`);
@@ -45,10 +43,7 @@ try {
   const root = "/api/v1/persistent-tasks";
   const task = (await request(root)).items.find((item) => item.configuration?.name === "自动打开的会话任务");
   assert(task);
-  const toggle = page.getByRole("button", { name: "切换底部面板", exact: true });
-  if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
-  await page.getByRole("tab", { name: "自动化", exact: true }).click();
-  const panel = page.getByRole("region", { name: "工作区持久任务", exact: true });
+  const panel = await automation(page);
   await panel.getByRole("button", { name: /自动打开的会话任务/ }).click();
   await panel.getByText("暂无运行记录。", { exact: true }).waitFor();
   for (const [id, phase, details] of [
@@ -69,10 +64,12 @@ try {
   await testControl({ action: "acknowledged_match", barrier_id: "generation-executing" });
   const accepted = (await request(`${root}/${task.task_id}/runs`)).items[0];
   assert.equal(accepted.generation.status, "queued");
-  assert.equal(accepted.generation.outputs[0].session_id, fixture.otherSessionId);
+  assert.equal(accepted.generation.outputs[0].session_id, fixture.otherOwner.sessionId);
   // 没有点击输出会话；自动切换后其真实消息才会出现在中心会话区。
   await testControl({ action: "release_match", barrier_id: "generation-executing" }); barriers.delete("generation-executing");
-  await page.getByText("自动激活验收完成。", { exact: true }).waitFor();
+  await page.locator(".editor-group-container").nth(0)
+    .locator(`section.boxteam-thread[data-workspace-id="${fixture.otherOwner.workspaceId}"][data-session-id="${fixture.otherOwner.sessionId}"][data-thread-id="${fixture.otherOwner.threadId}"]`)
+    .getByText("自动激活验收完成。", { exact: true }).waitFor();
   await panel.getByText("会话动作：completed", { exact: true }).waitFor();
   assert.deepEqual(errors, []);
   await page.screenshot({ path: path.join(artifacts, "generation-auto-open.png"), fullPage: true });

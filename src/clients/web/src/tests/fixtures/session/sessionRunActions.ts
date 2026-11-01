@@ -2,13 +2,18 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Session } from "../../../types/backend";
 import type { AppState } from "../../../types/frontend";
-import { useSessionActions } from "../../../hooks/session/useSessionActions";
+import { useSessionLifecycleActions } from "../../../hooks/session/useSessionLifecycleActions";
+import { useSessionRunActions } from "../../../hooks/session/useSessionRunActions";
 import { createAppStateMirror } from "./appState";
 import {
   testGatewayUserAccess,
   testWorkspaceRequestTargetsFor,
 } from "./gatewayEnvironment";
 import { createSessionCatalogOutboxTestRuntime } from "./sessionCatalogOutbox";
+
+type RunActions = ReturnType<typeof useSessionRunActions> & {
+  selectSession: ReturnType<typeof useSessionLifecycleActions>["selectSession"];
+};
 
 /**
  * 挂载 useSessionRunActions 并把最新 state 镜像到闭包。网关工作区标识从传入
@@ -18,26 +23,23 @@ export function mountSessionRunActions(options: {
   currentSession: Session | null;
   state: AppState;
   cacheKey: string;
-}): { state: () => AppState; actions: ReturnType<typeof useSessionActions> } {
+}): { state: () => AppState; actions: RunActions } {
   const { currentSession, cacheKey } = options;
   const gatewayWorkspaceId = options.state.currentSessionWorkspaceId
     ?? options.state.activeGatewayWorkspaceId;
   const mirror = createAppStateMirror(options.state);
-  let actions: ReturnType<typeof useSessionActions> | null = null;
+  let actions: RunActions | null = null;
   const selectionIntentRef = { current: 0 };
   const sessionCatalogOutboxRuntime = createSessionCatalogOutboxTestRuntime().runtime;
   function Harness(): React.ReactNode {
-    actions = useSessionActions({
+    const lifecycle = useSessionLifecycleActions({
       apiPort: 8014,
       currentSession,
       activeGatewayWorkspaceId: gatewayWorkspaceId,
       currentSessionGatewayWorkspaceId: gatewayWorkspaceId,
-      currentSessionCacheKey: cacheKey,
       defaultGatewayWorkspaceId: gatewayWorkspaceId,
-      contentView: "default",
       readState: mirror.current,
       setState: mirror.setState,
-      refreshAgentStateSnapshot: async () => undefined,
       abortCurrentStream: () => undefined,
       invalidateAgentState: () => undefined,
       sessionCatalogOutboxRuntime,
@@ -45,6 +47,19 @@ export function mountSessionRunActions(options: {
       selectionIntentRef,
       workspaceRequestTargets: testWorkspaceRequestTargetsFor(gatewayWorkspaceId),
     });
+    const run = useSessionRunActions({
+      apiPort: 8014,
+      currentSession,
+      activeGatewayWorkspaceId: gatewayWorkspaceId,
+      currentSessionGatewayWorkspaceId: gatewayWorkspaceId,
+      currentSessionCacheKey: cacheKey,
+      defaultGatewayWorkspaceId: gatewayWorkspaceId,
+      contentView: "default",
+      setState: mirror.setState,
+      refreshAgentStateSnapshot: async () => undefined,
+      createSession: lifecycle.createSession,
+    });
+    actions = { ...run, selectSession: lifecycle.selectSession };
     return null;
   }
   renderToStaticMarkup(React.createElement(Harness));

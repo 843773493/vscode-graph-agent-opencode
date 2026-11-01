@@ -15,7 +15,7 @@
         "mode": "none"
       },
       "recording": {
-        "artifact_root": "out/tests/e2e/clients/web/test_basic_chat_tool_loop/artifacts/model-stream"
+        "artifact_root": "out/tests/integration/clients/web/conversation_lifecycle/test_conversation_lifecycle/artifacts/model-stream"
       }
     }
   }

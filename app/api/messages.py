@@ -62,12 +62,19 @@ logger = logging.getLogger(__name__)
 )
 async def list_pending_requests(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    thread_id: CanonicalThreadId | None = None,
 ):
     try:
-        result = await job_service.list_pending(session_id)
+        if thread_id is None:
+            result = await job_service.list_pending(session_id)
+        else:
+            async with session_service.session_read_admission(session_id):
+                thread_id = await session_service.resolve_thread(session_id, thread_id)
+                result = await job_service.list_pending(session_id, thread_id=thread_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except SessionDeletionPendingError as error:
@@ -128,14 +135,21 @@ async def remove_pending_request(
 )
 async def clear_pending_requests(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    thread_id: CanonicalThreadId | None = None,
 ):
     try:
-        result = await job_service.clear_pending(session_id)
+        async with session_service.session_read_admission(session_id):
+            if thread_id is not None:
+                thread_id = await session_service.resolve_thread(session_id, thread_id)
+            result = await job_service.clear_pending(session_id, thread_id=thread_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

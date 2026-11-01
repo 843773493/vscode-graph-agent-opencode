@@ -4,7 +4,7 @@ import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity"
 import { errorMessage } from "../../utils/errorMessage";
 import { authorizeMcpInWindow } from "./authorizationWindow";
 
-export function useMcpConnections(port: number, target: GatewayWorkspaceRequestTarget) {
+export function useMcpConnections(port: number, target: GatewayWorkspaceRequestTarget, enabled = true) {
   const requestTarget = useMemo(() => ({ ...target }), [target.workspace_id, target.backend_workspace_id, target.connection_kind]);
   const scope = useMemo(() => ({ controller: new AbortController(), generation: 0, busy: false, reading: 0 }), [port, requestTarget]);
   const [view, setView] = useState({ scope, servers: [] as McpServerDTO[], operations: [] as McpConnectionOperationDTO[], error: null as string | null, busy: false, loaded: false });
@@ -28,6 +28,11 @@ export function useMcpConnections(port: number, target: GatewayWorkspaceRequestT
     scope.controller = controller;
     scope.busy = false;
     setView({ scope, servers: [], operations: [], error: null, busy: false, loaded: false });
+    return () => { ++scope.generation; controller.abort(); };
+  }, [scope]);
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = scope.controller;
     const poll = async () => {
       if (scope.busy || scope.reading) return;
       try { await refresh(); }
@@ -35,8 +40,8 @@ export function useMcpConnections(port: number, target: GatewayWorkspaceRequestT
     };
     void poll();
     const timer = window.setInterval(() => void poll(), 2000);
-    return () => { ++scope.generation; controller.abort(); window.clearInterval(timer); };
-  }, [refresh, scope]);
+    return () => window.clearInterval(timer);
+  }, [enabled, refresh, scope]);
   const act = useCallback(async (action: () => Promise<McpConnectionOperationDTO | void>) => {
     if (scope.busy || current.current !== scope || scope.controller.signal.aborted) return;
     ++scope.generation;

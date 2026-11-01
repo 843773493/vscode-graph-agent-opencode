@@ -3,9 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite --strictPort",
-    "preview": "vite preview",
+    "build": "bun ../workbench/scripts/build.mjs",
     "test:skill-display": "bun ../../../scripts/test_web_state_display.mjs"
   },
   "dependencies": {
@@ -27,6 +25,7 @@
     "@types/react-test-renderer": "18.3.1",
     "@vitejs/plugin-react-swc": "^3.8.0",
     "ajv": "^8.20.0",
+    "fake-indexeddb": "^6.2.7",
     "react-test-renderer": "18.3.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"

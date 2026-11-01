@@ -55,15 +55,16 @@
 ```
 > ### suite <name> [focus]
 > [测试] 运行测试矩阵中的指定套件
-> 必须显式传入套件名。`e2e-web` 运行整个 Web E2E 目录，`e2e-web-basic-chat-tool-loop` 只运行 Section 8 目标 node。两者都要求通过 `focus` 参数或 `BOXTEAM_E2E_SECTION8_FOCUS` 显式选择该 node 内的 `default` 场景集或合法 scenario key；focus 不改变 pytest node 范围。多个 key 用逗号分隔，`read_cursor_expiry` 必须与 `read_recovery` 连续选择并位于最后。
+> 必须显式传入套件名。`e2e-web` 运行整个 Web E2E 目录，`integration-web-conversation-lifecycle` 只运行 Section 8 目标 node。后者要求通过 `focus` 参数或 `BOXTEAM_E2E_SECTION8_FOCUS` 显式选择该 node 内的 `default` 场景集或合法 scenario key；focus 不改变 pytest node 范围。多个 key 用逗号分隔，`read_cursor_expiry` 必须与 `read_recovery` 连续选择并位于最后。
+> 日常使用明确的场景列表；`default` 包含耗时数小时的完整集合，不作为失败后的自动重试。先读取失败原件，修复或相关条件变化后只补验受影响场景；已通过结果须结合源码及产物核对复用。当前 pytest 集成/E2E 受仓库级独占闸门约束，不通过多开进程绕过。
 ```sh
   name="${name:?请显式指定测试矩阵 suite 名称}"
-  if [ "$name" = "e2e-web" ] || [ "$name" = "e2e-web-basic-chat-tool-loop" ]; then
+  if [ "$name" = "integration-web-conversation-lifecycle" ]; then
     focus="${focus:-${BOXTEAM_E2E_SECTION8_FOCUS:-}}"
-    focus="${focus:?运行 Web E2E suite 必须显式指定 Section 8 focus}"
+    focus="${focus:?运行完整会话 Integration suite 必须显式指定 Section 8 focus}"
     BOXTEAM_E2E_SECTION8_FOCUS="$focus" bun run test:matrix -- --suite="$name"
   elif [ -n "$focus" ]; then
-    echo "focus 只适用于 Web E2E suite" >&2
+    echo "focus 只适用于完整会话 Integration suite" >&2
     exit 2
   else
     bun run test:matrix -- --suite="$name"

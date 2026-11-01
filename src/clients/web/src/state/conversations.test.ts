@@ -1151,3 +1151,50 @@ test("终态事件之后的迟到 running 事件不能恢复转圈", () => {
 
   expect(statusForConversationEvents(events, "running")).toBe("error");
 });
+
+test.each(["running", "completed"] as const)("%s Turn 用户详情替换临时附件引用，摘要仍保留完整输入", (status) => {
+  const sessionId = "ses_canonical_attachment";
+  const threadId = "thr_conversation";
+  const turnId = "turn_attachment";
+  const messageId = "msg_attachment";
+  const canonicalAttachment = { file_id: "boxteam://workspace/ws/resources/attachments/att_published/original/content", name: "正式附件.txt", content_type: "text/plain" };
+  const pending: ConversationView = {
+    conversationId: messageId, sessionId, threadId, turnId, jobId: "job_attachment",
+    displayMode: "live", source: "pending", pending: true, status: "running",
+    assistantMessages: [], events: [], userMessage: {
+      message_id: messageId, session_id: sessionId, thread_id: threadId, role: "user",
+      content: "上传时的完整输入", attachments: [{ file_id: "local-file-before-ingest", name: "临时附件.txt" }],
+      metadata: { source: "optimistic_replay", replay_action: "regenerate" },
+      created_at: "2026-10-29T00:00:02Z", updated_at: "2026-10-29T00:00:02Z",
+    },
+  };
+  const summary = {
+    turn_id: turnId, session_id: sessionId, job_id: "job_attachment", ordinal: 1, revision: 1,
+    root_logical_item_ordinal: 1,
+    source_view_id: "view_attachment", source_view_revision: 1,
+    status, created_at: "2026-10-29T00:00:00Z", updated_at: "2026-10-29T00:00:01Z",
+    items_view: "summary" as const, source_message_ids: [messageId],
+    user_messages: [{ message_id: messageId, preview: "摘要", content_truncated: true,
+      attachment_count: 1, created_at: "2026-10-29T00:00:00Z" }],
+    response_preview: "",
+  };
+  const timeline = {
+    ...createSessionTurnTimeline(sessionId), threadId, phase: "ready" as const,
+    orderedTurnIds: [turnId], turnsById: { [turnId]: summary },
+  };
+  const state = { pendingConversations: new Map([[sessionId, [pending]]]),
+    turnTimelinesBySession: new Map([[sessionId, timeline]]), messageStreamsByTurnStream: new Map() } as unknown as AppState;
+  const [withSummary] = getConversationsForSession(sessionId, state);
+  expect(withSummary.userMessage?.content).toBe("上传时的完整输入");
+  expect(withSummary.userMessage?.attachments?.[0].file_id).toBe("local-file-before-ingest");
+  state.turnTimelinesBySession.get(sessionId)!.turnsById[turnId] = {
+    ...summary, items_view: "full", items: [], final_response: "", assistant_text: [],
+    user_messages: [{ message_id: messageId, content: "后端接受的完整输入", attachments: [canonicalAttachment],
+      created_at: "2026-10-29T00:00:00Z", metadata: {} }],
+  };
+  const [withDetail] = getConversationsForSession(sessionId, state);
+  expect(withDetail.userMessage?.content).toBe("后端接受的完整输入");
+  expect(withDetail.userMessage?.attachments).toEqual([canonicalAttachment]);
+  expect(withDetail.userMessage?.created_at).toBe("2026-10-29T00:00:00Z");
+  expect(withDetail.userMessage?.metadata?.replay_action).toBe("regenerate");
+});

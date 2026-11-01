@@ -43,6 +43,7 @@ function emptyHistory(scopeKey: string, generation: number): SessionTraceHistory
 export function useSessionTraceHistory({
   apiPort,
   currentSession,
+  threadId,
   workspaceId,
   scopeKey,
   active,
@@ -51,6 +52,7 @@ export function useSessionTraceHistory({
 }: {
   apiPort: number;
   currentSession: Session | null;
+  threadId?: string;
   workspaceId: string | null;
   scopeKey: string | null;
   active: boolean;
@@ -83,7 +85,7 @@ export function useSessionTraceHistory({
         apiPort,
         sessionId,
         workspaceId,
-        { limit: 100, signal: controller.signal },
+        { limit: 100, signal: controller.signal, threadId },
       );
       if (controller.signal.aborted || generationRef.current !== generation) return;
       setState((previous) => {
@@ -117,7 +119,7 @@ export function useSessionTraceHistory({
         };
       });
     }
-  }, [apiPort, scopeKey, sessionId, setState, workspaceId]);
+  }, [apiPort, scopeKey, sessionId, setState, threadId, workspaceId]);
 
   React.useEffect(() => {
     if (!active || !sessionId || !scopeKey) {
@@ -165,7 +167,7 @@ export function useSessionTraceHistory({
         apiPort,
         sessionId,
         workspaceId,
-        { cursor, limit: 100, signal: controller.signal },
+        { cursor, limit: 100, signal: controller.signal, threadId },
       );
       if (controller.signal.aborted || generationRef.current !== generation) return 0;
       let added = 0;
@@ -206,7 +208,7 @@ export function useSessionTraceHistory({
       });
       return 0;
     }
-  }, [active, apiPort, history, scopeKey, sessionId, setState, workspaceId]);
+  }, [active, apiPort, history, scopeKey, sessionId, setState, threadId, workspaceId]);
 
   return { loadOlder, refresh };
 }

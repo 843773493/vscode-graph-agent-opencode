@@ -1,0 +1,16 @@
+{
+  "extends": "../workbench/tsconfig.jsonc",
+  "include": [
+    "main.ts",
+    "../workbench/src/**/*.ts",
+    "../workbench/src/**/*.tsx",
+    "../workbench/upstream/src/typings/*.d.ts",
+    "../workbench/upstream/src/vscode-dts/*.d.ts",
+    "../workbench/upstream/src/vs/monaco.d.ts",
+    "../workbench/upstream/src/vs/workbench/contrib/debug/common/debugProtocol.d.ts"
+  ],
+  "compilerOptions": {
+    "typeRoots": ["../workbench/node_modules/@types", "../workbench/node_modules"],
+    "types": ["trusted-types", "@webgpu/types", "vscode-notebook-renderer", "wicg-file-system-access"]
+  }
+}

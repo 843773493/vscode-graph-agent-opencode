@@ -1,7 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import { isTransientNetworkError } from "../../api/http";
 import { getSessionTurnBootstrap } from "../../api/session/sessionTurnHistory";
-import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
+import { listThreadPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import { replaceSessionMetadata } from "../../state/session/sessions";
 import {
@@ -37,6 +37,7 @@ export function partialBootstrapPollDelay(attempt: number): number {
 export function useTurnBootstrap({
   apiPort,
   sessionId,
+  threadId,
   workspaceId,
   sessionCacheKey,
   reloadNonce,
@@ -49,6 +50,7 @@ export function useTurnBootstrap({
 }: {
   apiPort: number | null;
   sessionId: string | null;
+  threadId?: string;
   workspaceId: string | null;
   sessionCacheKey: string | null;
   reloadNonce: number;
@@ -67,7 +69,7 @@ export function useTurnBootstrap({
   const lastManualReloadNonceByScopeRef = useRef(new Map<string, number>());
 
   useEffect(() => {
-    if (!apiPort || !sessionId || !sessionCacheKey) {
+    if (apiPort === null || !sessionId || !sessionCacheKey) {
       bootstrapAbortRef.current?.abort();
       return;
     }
@@ -140,11 +142,11 @@ export function useTurnBootstrap({
           status: "已从本地缓存恢复会话",
         };
       }
-      const timeline = shouldLoadInitialHistory
+      const timeline = shouldLoadInitialHistory && !cachedTimeline?.restoredFromCache
         // 重建历史窗口不能清空同一 Session 已确认的不可变 owner，否则跳转控件会重挂载。
         ? { ...createSessionTurnTimeline(sessionCacheKey),
             threadId: timelineForScope(previous.turnTimelinesBySession, sessionCacheKey).threadId }
-        : isNewScope && !hasVisitedScope
+        : isNewScope && !hasVisitedScope && !cachedTimeline?.restoredFromCache
           ? createSessionTurnTimeline(sessionCacheKey)
           : timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
       return {
@@ -167,8 +169,10 @@ export function useTurnBootstrap({
           sessionId,
           workspaceId,
           controller.signal,
+          threadId,
         );
         if (controller.signal.aborted || generationRef.current !== targetGeneration) return;
+        if (threadId !== undefined && bootstrap.thread_id !== threadId) throw new Error("Turn bootstrap 的 thread owner 与请求不一致");
         const projectionState = bootstrap.projection_state ?? "ready";
         if (
           lastProjectionEpochRef.current !== null
@@ -246,11 +250,12 @@ export function useTurnBootstrap({
           ].join(":");
           if (nextPendingIdentity !== pendingSnapshotIdentity) {
             pendingSnapshotIdentity = nextPendingIdentity;
-            void listMainThreadPendingRequests(
+            void listThreadPendingRequests(
               apiPort,
               sessionId,
               workspaceId,
               controller.signal,
+              threadId,
             ).then((snapshot) => {
               if (
                 controller.signal.aborted
@@ -362,7 +367,7 @@ export function useTurnBootstrap({
                     ...timeline,
                     loadingBefore: false,
                     loadingAfter: false,
-                    error: null,
+                    error: timeline.restoredFromCache ? message : null,
                   }
                 : failTurnTimeline(
                     timeline,
@@ -401,6 +406,7 @@ export function useTurnBootstrap({
     reloadNonce,
     sessionCacheKey,
     sessionId,
+    threadId,
     setState,
     workspaceId,
   ]);

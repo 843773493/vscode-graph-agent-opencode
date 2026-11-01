@@ -66,7 +66,7 @@
     "config_version": {
       "type": "integer",
       "const": 2,
-      "description": "配置格式版本；旧 logger 必须通过 migrate-runtime-logging 显式迁移。"
+      "description": "配置格式版本；旧 logger 必须通过 migrate-runtime-config 显式迁移。"
     },
     "llm": {
       "type": "object",

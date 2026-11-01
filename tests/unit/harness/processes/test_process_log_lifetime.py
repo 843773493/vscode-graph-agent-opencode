@@ -125,6 +125,25 @@ def test_ready_handle_owns_logs_until_close(startup: ProcessStartup) -> None:
     startup.terminate.assert_called_once_with(handle.process)
 
 
+@pytest.mark.parametrize("startup", ["workspace"], indirect=True)
+def test_explicit_backend_home_is_used_for_config_and_process(
+    startup: ProcessStartup, tmp_path: Path,
+) -> None:
+    isolated_home = tmp_path / "runtime/run-current/node-current/boxteam-home"
+    artifacts = tmp_path / "runs/run-current/nodes/node-current/artifacts"
+    handle = partial(startup.start, boxteam_home=isolated_home, artifacts_dir=artifacts)()
+    try:
+        workspace_processes.install_user_configuration.assert_called_once_with(
+            config_root=isolated_home / "config", profile="default",
+            project_root=Path.cwd().resolve(), force=True,
+        )
+        assert startup.spawn.call_args.kwargs["env"]["BOXTEAM_HOME"] == str(isolated_home)
+        assert Path(handle.stdout_file.name).parent == artifacts
+        assert Path(handle.stderr_file.name).parent == artifacts
+    finally:
+        startup.close(handle)
+
+
 def test_readiness_failure_releases_process_and_logs(startup: ProcessStartup) -> None:
     error = KeyboardInterrupt("就绪等待被中断")
     startup.ready.side_effect = error

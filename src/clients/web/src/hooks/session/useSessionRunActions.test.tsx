@@ -525,7 +525,7 @@ describe("发送消息状态更新", () => {
     const mounted = runActions(currentSession);
 
     await expect(mounted.actions.interruptSession())
-      .rejects.toThrow("中断执行器崩溃");
+      .rejects.toThrow("中断执行器崩溃；重新读取运行状态也失败: 请求失败 503 : 队列服务不可用");
 
     // 两条事实必须同时可见：中断失败本身 + 补偿重取也失败。
     expect(mounted.state().status).toBe(
@@ -574,6 +574,8 @@ describe("发送消息状态更新", () => {
     // 轮次回放失败会改动后端历史投影，必须触发一次历史 bootstrap 重载。
     expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
     expect(mounted.state().status).toBe("轮次操作失败: 请求失败 409 : 上下文窗口已失效");
+    // 此错误属于单次轮次操作，不能写入工作区初始化失败通道并替换整个聊天区。
+    expect(mounted.state().error).toBeNull();
   });
 
   test("P3-1 replay 失败不改动本地运行态，不覆盖后端真值也不做多余队列重取", async () => {
@@ -607,6 +609,7 @@ describe("发送消息状态更新", () => {
     // 失败侧显式可见：状态串带原始原因，且触发一次历史 bootstrap 承接权威收敛。
     expect(mounted.state().status).toBe("轮次操作失败: 请求失败 409 : 上下文窗口已失效");
     expect(mounted.state().sessionHistoryReloadNonce).toBe(1);
+    expect(mounted.state().error).toBeNull();
     // replay 失败不在此 hook 内做本地待处理队列重取（无乐观态可失配）；
     // 若将来引入，必须是「后端权威快照校准」而非此处的一次多余探测。
     expect(pendingRequestsFetches).toBe(0);
@@ -1153,4 +1156,45 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     expect(mirror.current().status).toBe("新 owner 状态");
     expect(mirror.current().sessionHistoryReloadNonce).toBe(1);
   });
+});
+
+test("显式子 Thread 发送与停止失败重读始终冻结目标，不改写主线程 metadata", async () => {
+  const child = "thr_explicit_child";
+  const cacheKey = JSON.stringify(["gw_send_regression", SESSION_ID, child]);
+  const mirror = createAppStateMirror(state(session()));
+  let actions!: ReturnType<typeof useSessionRunActions>;
+  function Harness() {
+    actions = useSessionRunActions({
+      apiPort: 0, currentSession: session(), currentThreadId: child,
+      activeGatewayWorkspaceId: "gw_send_regression", currentSessionGatewayWorkspaceId: "gw_send_regression",
+      currentSessionCacheKey: cacheKey, defaultGatewayWorkspaceId: "gw_send_regression",
+      contentView: "default", setState: mirror.setState, refreshAgentStateSnapshot: async () => undefined,
+      createSession: async () => { throw new Error("固定 Thread 不应创建替代会话"); },
+    });
+    return null;
+  }
+  const requests: string[] = [];
+  installGatewayFetch(({ path, url, method }) => {
+    requests.push(`${method} ${new URL(url, "http://localhost").pathname}${new URL(url, "http://localhost").search}`);
+    if (method === "POST" && path === `/api/v1/sessions/${SESSION_ID}/threads/${child}/messages`) return apiSuccessResponse({
+      session_id: SESSION_ID, thread_id: child, message_id: "msg_child", job_id: "job_child", turn_id: "turn_child", status: "running",
+      dispatch: { ...dispatchFacts({ job_id: "job_child", active_job_id: "job_child" }), thread_id: child },
+    });
+    if (path.endsWith("/interrupt")) return apiErrorResponse(409, "精确线程停止冲突");
+    if (path.endsWith("/pending-requests")) return apiSuccessResponse({
+      session_id: SESSION_ID, thread_id: child, snapshot_version: 3, active_job_id: "job_child", requests: [], queue: [],
+    });
+  });
+  renderToStaticMarkup(<Harness />);
+  await actions.sendMessage("只发送给子线程");
+  expect(mirror.current().pendingConversations.get(cacheKey)?.[0]?.threadId).toBe(child);
+  expect(mirror.current().currentSession?.thread_id).toBe("thr_run_actions");
+  await expect(actions.interruptSession()).rejects.toThrow("精确线程停止冲突");
+  expect(requests).toEqual([
+    `POST /api/v1/sessions/${SESSION_ID}/threads/${child}/messages`,
+    `POST /api/v1/sessions/${SESSION_ID}/interrupt?thread_id=${child}`,
+    `GET /api/v1/sessions/${SESSION_ID}/pending-requests?thread_id=${child}`,
+  ]);
+  expect(mirror.current().activeJobIdsBySession.get(cacheKey)).toBe("job_child");
+  expect(mirror.current().currentSession?.thread_id).toBe("thr_run_actions");
 });

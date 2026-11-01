@@ -37,7 +37,7 @@ interface WorkspaceAuxiliaryPanelProps {
   attachmentPreview: ReactNode;
   runtimePreview: ReactNode;
   debugPanel: ReactNode;
-  goalPanel: ReactNode;
+  taskPanel: ReactNode;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
   onSelectSessionChangeset: (changesetId: string) => void;
@@ -48,6 +48,7 @@ interface WorkspaceAuxiliaryPanelProps {
     reviewed: boolean,
   ) => Promise<void>;
   onOpenFile: (node: WorkspaceFileNode) => void;
+  onFileOpenMenu?: import("./fileTree/WorkspaceFileTreeContextMenu").FileOpenMenuHandler;
   onStatusChange: (message: string) => void;
 }
 
@@ -78,7 +79,7 @@ export default function WorkspaceAuxiliaryPanel({
   attachmentPreview,
   runtimePreview,
   debugPanel,
-  goalPanel,
+  taskPanel,
   onToggleSearch,
   onCollapseAll,
   onSelectSessionChangeset,
@@ -86,6 +87,7 @@ export default function WorkspaceAuxiliaryPanel({
   onOpenSessionChangeFile,
   onReviewSessionChangeFile,
   onOpenFile,
+  onFileOpenMenu,
   onStatusChange,
 }: WorkspaceAuxiliaryPanelProps) {
   return (
@@ -176,6 +178,7 @@ export default function WorkspaceAuxiliaryPanel({
             onExpandedPathsChange={onExpandedFileTreePathsChange}
             onCloseSearch={onToggleSearch}
             onOpenFile={onOpenFile}
+            onFileOpenMenu={onFileOpenMenu}
             onStatusChange={onStatusChange}
           />
       </div>
@@ -195,15 +198,15 @@ export default function WorkspaceAuxiliaryPanel({
         hidden={tab !== "goal"}
         data-bt-surface="layout"
         role="tabpanel"
-        aria-label="Goal"
+        aria-label="任务"
       >
         {sessionId ? (
-          <div className="auxiliary-scope-context" aria-label="Goal 范围">
+          <div className="auxiliary-scope-context" aria-label="任务范围">
             <span>当前会话</span>
-            <strong title={sessionTitle}>{sessionTitle} · 主线程</strong>
+            <strong title={sessionTitle}>{sessionTitle} · 关联任务</strong>
           </div>
         ) : null}
-        {tab === "goal" ? goalPanel : null}
+        {tab === "goal" ? taskPanel : null}
       </div>
       <div
         className={`auxiliary-view-body auxiliary-debug-body${tab === "debug" ? "" : " preserve-mounted-hidden"}`}

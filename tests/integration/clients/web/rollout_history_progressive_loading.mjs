@@ -1,6 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -11,6 +13,9 @@ function requiredEnvironment(name) {
 const baseUrl = requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
 const workspaceId = requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
 const sessionId = requiredEnvironment("BOXTEAM_BROWSER_SESSION_ID");
+const owner = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_OWNER"));
+const historyPath = `/api/v1/sessions/${sessionId}/threads/${owner.threadId}/history`;
+const scope = TestRunContext.fromTestFile("tests/integration/clients/web/test_rollout_history_progressive_loading.py");
 const resultPath = requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const expectedFinalText = "工具调用完成";
@@ -58,7 +63,7 @@ async function waitUntil(predicate, label, timeout = 30_000) {
 }
 
 async function ensureGuest(page) {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
   const current = await page.evaluate(async () => {
     const response = await fetch("/api/gateway/users/current");
     return { status: response.status, body: await response.text() };
@@ -100,18 +105,15 @@ async function dispatchTopWheel(page, stream, deltaY) {
       deltaY: wheelDelta,
     }));
   }, deltaY);
-  await page.waitForFunction(
-    () => document.querySelector(".chat-stream")?.scrollTop <= 2,
-    { timeout: 30_000, polling: "raf" },
-  );
+  await expect.poll(() => stream.evaluate(element => element.scrollTop)).toBeLessThanOrEqual(2);
 }
 
-async function loadNextOlder(page, stream, expectedFirstOrdinal) {
+async function loadNextOlder(page, thread, stream, expectedFirstOrdinal) {
   const started = performance.now();
   const responsePromise = page.waitForResponse(
     (response) => {
       return (
-        response.url().includes("/history") &&
+        new URL(response.url()).pathname === historyPath &&
         response.status() === 200 &&
         historyPayload(response) !== null
       );
@@ -126,25 +128,10 @@ async function loadNextOlder(page, stream, expectedFirstOrdinal) {
   // prepend 后必须继续保持当前可见锚点，新增批次通常在视口上方，
   // 因此不能用“DOM 数量增加”判断。用列表外壳上的状态镜像确认
   // React 已经合并批次，列表外壳本身也已经重新渲染。
-  await page.waitForFunction(
-    ({ expectedFirstOrdinal, expectedCount }) => {
-      const shell = document.querySelector(".chat-stream-virtual-shell");
-      return (
-        shell?.getAttribute("data-first-turn-id") ===
-          `job-${String(expectedFirstOrdinal).padStart(4, "0")}` &&
-        Number(shell?.getAttribute("data-turn-count")) >= expectedCount
-      );
-    },
-    {
-      expectedFirstOrdinal,
-      expectedCount: Number(expectedFirstOrdinal) === 121
-        ? 8
-        : Number(expectedFirstOrdinal) === 118
-          ? 11
-          : 14,
-    },
-    { timeout: 30_000, polling: "raf" },
-  );
+  const shell = thread.locator(".chat-stream-virtual-shell");
+  await expect(shell).toHaveAttribute("data-first-turn-id", `job-${String(expectedFirstOrdinal).padStart(4, "0")}`);
+  const expectedCount = expectedFirstOrdinal === 121 ? 8 : expectedFirstOrdinal === 118 ? 11 : 14;
+  await expect.poll(async () => Number(await shell.getAttribute("data-turn-count"))).toBeGreaterThanOrEqual(expectedCount);
   const renderedMs = performance.now() - triggerStarted;
   return {
     request: historyPayload(response),
@@ -156,24 +143,29 @@ async function loadNextOlder(page, stream, expectedFirstOrdinal) {
   };
 }
 
-const browser = await chromium.launch({ executablePath, headless: true });
-const context = await browser.newContext({
-  viewport: { width: 1920, height: 1100 },
-});
-const page = await context.newPage();
 const pageErrors = [];
-page.on("pageerror", (error) => pageErrors.push(String(error)));
+let page;
 let result;
-
+let failure;
 try {
+  const browser = await chromium.launch({ executablePath, headless: true });
+  scope.addCleanup("长历史 Chromium", () => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1100 } });
+  scope.addCleanup("长历史 context", () => context.close());
+  page = await context.newPage();
+  page.on("pageerror", error => pageErrors.push(String(error)));
   await ensureGuest(page);
   const sessionButton = page.locator(`button[data-session-id="${sessionId}"]`);
   await sessionButton.waitFor({ state: "visible", timeout: 30_000 });
-  await sessionButton.click();
-  await page
+  await sessionButton.dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${sessionId}"][data-thread-id="${owner.threadId}"]`);
+  await expect(thread).toBeVisible();
+  await thread
     .locator('.chat-turn[data-turn-id="job-0128"]')
     .waitFor({ state: "visible", timeout: 30_000 });
-  const latestTurn = page.locator('.chat-turn[data-turn-id="job-0128"]').last();
+  await expect(thread.locator(".chat-stream-virtual-shell")).toHaveAttribute("data-owner-thread-id", owner.threadId);
+  await expect(thread.locator(".chat-stream-virtual-shell")).toHaveAttribute("data-owner-session-id", sessionId);
+  const latestTurn = thread.locator('.chat-turn[data-turn-id="job-0128"]').last();
   await waitUntil(
     async () => (await latestTurn.innerText()).includes(expectedFinalText),
     "最新 Turn 最终响应",
@@ -377,7 +369,7 @@ try {
 
   const toolDetailsResponsePromise = page.waitForResponse(
     (response) => {
-      if (!response.url().includes("/history") || response.status() !== 200)
+      if (new URL(response.url()).pathname !== historyPath || response.status() !== 200)
         return false;
       try {
         const body = JSON.parse(response.request().postData() || "{}");
@@ -436,10 +428,11 @@ try {
     });
   }
 
-  const stream = page.locator(".chat-stream");
+  const stream = thread.locator(".chat-stream");
+  await expect(stream).toBeVisible();
   const progressivePages = [];
   for (const expected of [121, 118, 115]) {
-    const pageResult = await loadNextOlder(page, stream, expected);
+    const pageResult = await loadNextOlder(page, thread, stream, expected);
     if (pageResult.ordinals[0] !== expected) {
       throw new Error(
         `渐进历史批次首 Turn 不符: expected=${expected}, actual=${pageResult.ordinals[0]}`,
@@ -523,7 +516,7 @@ try {
   if (responseActionLabels.includes("重新生成最后回复")) {
     throw new Error(`回复操作栏不应再显示重新生成: ${JSON.stringify(responseActionLabels)}`);
   }
-  const boundaryTurn = page.locator('.chat-turn[data-turn-id="job-0127"]').last();
+  const boundaryTurn = thread.locator('.chat-turn[data-turn-id="job-0127"]').last();
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
   await boundaryTurn.hover();
   const boundaryResponseActions = boundaryTurn.locator(".chat-response-actions");
@@ -549,6 +542,7 @@ try {
   }
 
   result = {
+    owner,
     defaultProjectionSafe,
     detailProjectionSafe,
     canonicalMixedMessageRestored,
@@ -579,11 +573,13 @@ try {
   };
   await writeFile(resultPath, JSON.stringify(result, null, 2));
 } catch (error) {
-  await page
-    .screenshot({ path: screenshotPath, fullPage: true })
-    .catch(() => undefined);
-  throw error;
+  failure = error;
 } finally {
-  await context.close();
-  await browser.close();
+  const errors = failure ? [failure] : [];
+  try {
+    if (failure && page) await page.screenshot({ path: screenshotPath, fullPage: true });
+    await writeFile(resultPath, JSON.stringify({ ...result, pageErrors, failure: failure?.stack }, null, 2) + "\n");
+  } catch (error) { errors.push(error); }
+  try { await scope.close(); } catch (error) { errors.push(error); }
+  if (errors.length) throw new AggregateError(errors, "长历史浏览器验收失败");
 }

@@ -284,4 +284,54 @@ describe("useSessionTraceHistory", () => {
     expect(latestState.eventQueuesBySession).toBeUndefined();
     renderer!.unmount();
   });
+  test("同一会话的 Thread 切换丢弃旧响应，尾页与旧页均发送精确 Thread", async () => {
+    const port = 49_305;
+    installWindow(port);
+    const threadA = "thr_00000000700070008000000000000001";
+    const threadB = "thr_00000000700070008000000000000002";
+    const requests: { thread: string | null; cursor: string | null }[] = [];
+    let resolveA!: (response: Response) => void;
+    const pendingA = new Promise<Response>(resolve => { resolveA = resolve; });
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const url = new URL(String(args[0]), `http://127.0.0.1:${port}`);
+      if (url.pathname === "/api/gateway/auth/local-credential") {
+        return Response.json({ request_id: "req_token", data: { token: "thread-trace-token" } });
+      }
+      if (url.pathname.startsWith("/api/gateway/users/")) {
+        return Response.json({ request_id: "req_guest", data: { kind: "guest" } });
+      }
+      const thread = url.searchParams.get("thread_id");
+      const cursor = url.searchParams.get("cursor");
+      requests.push({ thread, cursor });
+      if (thread === threadA) return pendingA;
+      const page = await tracePage("session-shared", cursor ? "event-b-old" : "event-b-new").json();
+      page.data.items[0].thread_id = threadB;
+      page.data.next_cursor = cursor ? null : "older-b";
+      page.data.has_more = !cursor;
+      return Response.json(page);
+    }, { preconnect: originalFetch.preconnect });
+    let latestState = state();
+    let loadOlder!: () => Promise<number>;
+    function Harness({ threadId }: { threadId: string }): React.ReactNode {
+      const [current, setCurrent] = React.useState(state);
+      latestState = current;
+      const scopeKey = `workspace-a::session-shared::${threadId}`;
+      const controller = useSessionTraceHistory({ apiPort: port, currentSession: session("session-shared"),
+        workspaceId: "workspace-a", threadId, scopeKey, active: true,
+        history: current.sessionTraceHistoryBySession.get(scopeKey) ?? null, setState: setCurrent });
+      loadOlder = controller.loadOlder;
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness threadId={threadA} />); });
+    await act(async () => { renderer.update(<Harness threadId={threadB} />); });
+    await act(async () => { resolveA(tracePage("session-shared", "event-a-late")); });
+    await act(async () => { expect(await loadOlder()).toBe(1); });
+    expect(requests).toEqual([{ thread: threadA, cursor: null }, { thread: threadB, cursor: null }, { thread: threadB, cursor: "older-b" }]);
+    expect(latestState.sessionTraceHistoryBySession.get(`workspace-a::session-shared::${threadA}`)?.items).toEqual([]);
+    expect(latestState.sessionTraceHistoryBySession.get(`workspace-a::session-shared::${threadB}`)?.items.map(item => item.event_id))
+      .toEqual(["event-b-old", "event-b-new"]);
+    renderer.unmount();
+  });
+
 });

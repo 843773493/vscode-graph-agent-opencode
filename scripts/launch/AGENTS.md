@@ -51,6 +51,10 @@ Windows每个清理阶段只读取一次完整TCP监听表，按目标端口分�
 
 # 规范
 
+- 完整浏览器前端只从 `src/clients/workbench` 启动 Vite；端口与 Gateway 路由由统一环境布局传入，不启动旧 React App 外壳。
+
+- `cross-platform-development-target.test.mjs` 的 Linux bootstrap 检查实际执行管理脚本，uv、bun、node、python3 和 Git 为明确的命令替身；验证缺失上游时在安装前失败、三份依赖安装顺序、Workbench 锁变化的 metadata 指纹，以及安装失败的退出码与零成功回执。命令、原始 stdout/stderr 和替身调用保留在同名正式镜像目录的 artifacts/<run_id>/bootstrap/；只在隔离 fixture 写文件，不连接目标或修改宿主环境，不替代 Windows 及真实依赖安装验收。
+
 - JavaScript 脚本使用 ESM，并从仓库根目录或显式路径解析资源。
 - 开发启动必须尊重 `BOXTEAM_HOME`、worktree 隔离和显式端口配置。
 - 启动失败时直接报告具体命令、路径或服务错误。

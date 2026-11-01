@@ -15,6 +15,9 @@ from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 构建装具
+)
 from tests.integration.backend.agents.test_tool_discovery_policy import (
     discovery_plan as discovery_plan,  # noqa: PLC0414 - 复用同一 model_stream 响应资产
 )
@@ -32,6 +35,7 @@ from tests.integration.backend.agents.test_tool_discovery_policy import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.paths import chromium_temporary_environment
 
 
 @pytest.fixture
@@ -39,17 +43,18 @@ def browser_runner():
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "MCP Web 产品验收需要 Chromium"
 
-    async def run(case, *, base_url, session_title, mode):
+    async def run(case, *, base_url, session_title, session_id, thread_id, mode):
         artifacts = case.context.artifacts_dir / f"browser-{mode}"
         artifacts.mkdir()
         command = ["bun", "tests/integration/clients/web/mcp_connection_authorization.mjs"]
-        result = await asyncio.to_thread(subprocess.run, command,
-            cwd=case.context.project_root, timeout=400 if mode == "errors" else 130, check=False, capture_output=True, text=True,
-            env={**os.environ, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
-                 "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
-                     "baseUrl": base_url, "sessionTitle": session_title, "mode": mode,
-                     "workspaceId": case.mount.workspace_id,
-                 })})
+        with chromium_temporary_environment(case.context.runtime_root_for_node(f"mcp-browser:{mode}") / "chromium-tmp") as temporary_environment:
+            result = await asyncio.to_thread(subprocess.run, command,
+                cwd=case.context.project_root, timeout=400 if mode == "errors" else 130, check=False, capture_output=True, text=True,
+                env={**os.environ, **temporary_environment, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
+                     "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
+                         "baseUrl": base_url, "sessionTitle": session_title, "mode": mode,
+                         "workspaceId": case.mount.workspace_id, "sessionId": session_id, "threadId": thread_id,
+                     })})
         (artifacts / "browser.raw").write_text(result.stdout + result.stderr, encoding="utf-8")
         (artifacts / "receipt.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}))
         assert result.returncode == 0, (artifacts / "browser.raw").read_text()
@@ -59,11 +64,11 @@ def browser_runner():
 
 
 async def test_web_authorization_reaches_original_owner_then_discovers_and_executes(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan, browser_runner,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan, browser_runner, web_workbench_assets,
 ):
     async with (
         oauth_endpoint_factory() as secure, http_schema_endpoint_factory("sibling") as sibling,
-        product_case(secure, sibling, web=True) as (client, replay, case),
+        product_case(secure, sibling, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)}) as (client, replay, case),
     ):
         title = "Web 首次 MCP 授权与真实执行"
         session = await create_session(client, title)
@@ -74,7 +79,7 @@ async def test_web_authorization_reaches_original_owner_then_discovers_and_execu
             ("search_tools", {"tool_ids": ["connections.manage", "mcp__secure__probe"]}),
             ("invoke_extension_tool", {"tool_name": "connections.manage", "arguments": {"request": {"operation": "connect", "server_id": "secure"}}}),
         ], key="web-before-authorization")
-        authorized = await browser_runner(case, base_url=str(client.base_url), session_title=title, mode="authorize")
+        authorized = await browser_runner(case, base_url=str(client.base_url), session_title=title, session_id=session, thread_id=thread, mode="authorize")
         await wait_for_job_done(client, authorized["jobId"], max_attempts=60)
         assert authorized["backendReady"] and authorized["bottomTabPersisted"] and authorized["privateReferrerAbsent"]
         assert secure.registrations == secure.exchanges == len(secure.authorizations) == 1
@@ -82,7 +87,7 @@ async def test_web_authorization_reaches_original_owner_then_discovers_and_execu
             ("search_tools", {"tool_ids": ["mcp__secure__probe"]}),
             ("invoke_extension_tool", {"tool_name": "mcp__secure__probe", "arguments": {"proof": "actual-web-oauth-owner"}}),
         ], key="web-after-authorization")
-        executed = await browser_runner(case, base_url=str(client.base_url), session_title=title, mode="execute")
+        executed = await browser_runner(case, base_url=str(client.base_url), session_title=title, session_id=session, thread_id=thread, mode="execute")
         await wait_for_job_done(client, executed["jobId"], max_attempts=60)
         assert [json.loads(line) for line in secure.receipts.read_text().splitlines()] == [
             {"name": "probe", "arguments": {"proof": "actual-web-oauth-owner"}},

@@ -206,6 +206,8 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
     }
     if (deletingRoots.has(operation.target_node_id ?? "")
       || !catalogOutboxOperationIsTerminal(operation)
+      // 收到提交回执不等于分支镜像已刷新；只有权威回读后的 prune 才能清除同步标记。
+      || operation.state === "committed"
       || operation.state === "dependency_failed"
       || operation.state === "rejected") {
       target.node.pending_state = operation.state;

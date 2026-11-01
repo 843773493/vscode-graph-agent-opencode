@@ -1,54 +1,23 @@
-# src/clients/web
+# 目录用途
 
-## 目录用途
+完整 Code OSS 工作台复用的 React 会话产品：聊天、输入、工具、文件预览、任务、资源、API、展示状态及浏览器缓存。独立外层布局及产品 HTML 入口统一在同级 `workbench/`。私有 OAuth 回调仍以本目录 `mcp-oauth-callback.html` 为唯一源文件。
 
-`src/clients/web/` 是当前已经实现的浏览器桌面客户端，是一个可直接运行的 React + Vite + TypeScript 工程。它不依赖 VS Code webview、Electron 或 React Native 运行环境；未来桌面 DOM 复用应下沉到 `../shared/web-ui`，而不是复制到 `electron-web`。
+# 可修改内容
 
-通过根目录 `bun run dev` 启动时，本工程由 `scripts/launch/dev.mjs` 拉起，浏览器前端端口为 `8011`。
+- `src/` 下的共享 React 产品、协议消费者、业务 hook、状态、样式及其测试。
+- `package.json` 的依赖和共享构建命令、TypeScript 配置。
 
-如果你主要写后端，可以把这里理解成：
+# 不可修改内容
 
-- 这是一个纯浏览器的前端应用入口
-- 这里负责页面、交互、状态管理和浏览器本地存储
-- 这里不负责 VS Code 扩展注入和 webview 宿主通信
+- 不恢复 App/main 或独立旧 Vite 页面入口。
+- 不复制 Workbench 外层布局，不实现 Electron main/preload、React Native 或后端业务规则。
 
-## 架构
+# 规范
 
-```text
-src/clients/web/
-├── index.html           # 浏览器入口
-├── mcp-oauth-callback.html # 无资源加载的私有 OAuth 回调入口
-├── preview.html         # 可选的预览入口
-├── package.json         # 前端依赖与脚本
-├── tsconfig.json        # TypeScript 配置
-├── vite.config.ts       # Vite 构建配置
-└── src/
-    ├── main.tsx         # React 挂载入口
-    ├── App.tsx          # 页面总布局
-    ├── state.tsx        # 浏览器本地状态中心
-    ├── api.ts          # 浏览器端数据源与存储适配
-    ├── index.css       # 全局样式
-    ├── types/          # 类型定义
-    ├── utils/          # 通用工具
-    └── components/     # 页面组件
-```
+- 每个 Thread 显式接收工作区、Session、Thread，业务状态以 API 为权威。
+- `bun run --cwd src/clients/web build` 直接调用唯一 Workbench 构建脚本。Vite 依赖保留供组件 harness 使用，完整产品开发只经统一 `bun run dev`。
+- 共享组件样式限定在 ReactSurface 的 ShadowRoot；不污染原版工作台。
+- 使用 React、TypeScript、CSS；展示态和历史镜像复用既有浏览器数据库，不成为第二业务事实源。
+- 修改后完成真实类型检查和上述构建；组件测试不能替代真实 Gateway 页面验收。
 
-## 可修改内容
-
-- `src/` 下的所有前端源码
-- `vite.config.ts`、`package.json`、`tsconfig.json`
-
-## 不可修改内容
-
-- 不要在这里引入 VS Code webview 专用依赖
-- 不要依赖扩展宿主传消息来驱动核心功能
-- 不要在本目录实现 Electron main/preload、React Native 或其他客户端 adapter
-
-## 规范
-
-- 使用 React + TypeScript + 纯 CSS
-- 运行环境是浏览器，优先使用 `localStorage` 或内存状态，不要依赖 Node.js built-in 模块
-- 状态更新必须经过统一的状态中心，不要让组件自己散落保存业务状态
-- 代码注释使用中文，专业术语除外
-- 修改后必须运行 `bun run --cwd src/clients/web build`
-- 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行
+- 模板示例；在整理 `AGENTS.md` 时请保留此行。

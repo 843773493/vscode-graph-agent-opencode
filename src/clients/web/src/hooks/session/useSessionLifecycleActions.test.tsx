@@ -326,9 +326,14 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     });
 
     const { state: readState, actions } = mountRace(sesA, [sesA]);
-    await expect(
-      actions.forkSessionContext(RACE_WORKSPACE, sesA.session_id, forkRequest(sesA)),
-    ).rejects.toThrow("上下文快照损坏");
+    const pending = actions.forkSessionContext(RACE_WORKSPACE, sesA.session_id, forkRequest(sesA));
+    await expect(pending).rejects.toThrow("上下文快照损坏");
+    const failure = await pending.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toHaveLength(2);
+    expect((failure as AggregateError).errors[0].message).toContain("上下文快照损坏");
+    expect((failure as AggregateError).errors[1].message).toContain("列表不可用");
+    expect((failure as Error).message).toContain("列表不可用");
     // 二次失败必须保留在提示里，且不得成为调用方看到的主错误。
     expect(readState().status).toContain("上下文快照损坏");
     expect(readState().status).toContain("列表不可用");
@@ -668,6 +673,32 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
 });
 
 describe("会话生命周期失败后的后端重取校准", () => {
+  test.each(["agent", "provider"] as const)("工作区默认 %s 写入及回读失败保留两项原因", async (kind) => {
+    const before = raceSession("ses-defaults");
+    const reads: string[] = [];
+    installGatewayFetch(({ path, method }) => {
+      if (method === "PUT" && path.startsWith("/api/v1/agents/")) {
+        return apiSuccessResponse({ message: "默认项写入被拒绝" }, 409);
+      }
+      if (path === "/api/v1/agents" && method === "GET") {
+        reads.push(path);
+        return apiSuccessResponse({ message: "权威 Agent 列表不可用" }, 503);
+      }
+      return undefined;
+    });
+    const { actions, state: readState } = mountRace(before, [before]);
+    const failure = await (kind === "agent"
+      ? actions.setWorkspaceDefaultAgent("agent-new")
+      : actions.setWorkspaceDefaultProvider("agent-new", "provider-new"))
+      .then(() => { throw new Error("必须拒绝"); }, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toHaveLength(2);
+    expect((failure as Error).message).toContain("默认项写入被拒绝");
+    expect((failure as Error).message).toContain("权威 Agent 列表不可用");
+    expect(readState().status).toBe((failure as Error).message);
+    expect(reads).toEqual(["/api/v1/agents"]);
+  });
+
   test("W9-a Agent 切换失败后用后端真值校准 current_agent_id", async () => {
     const before = raceSession(RACE_WORKSPACE, "agent_old");
     let getCalls = 0;

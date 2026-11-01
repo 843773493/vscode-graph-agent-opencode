@@ -1828,15 +1828,6 @@
   }
 }
 
-.app-shell.extension-window .workspace-editor-body-debug > .layout-sash-auxiliary-left {
-  display: block;
-}
-
-.app-shell.extension-window .workspace-editor-body-debug > .workspace-preview-panel,
-.app-shell.extension-window .workspace-editor-body-debug > .auxiliary-panel {
-  min-width: min(260px, 42vw);
-}
-
 /* 源码预览和扩展窗口共用的 VS Code 风格特殊断点标记。 */
 .node-debug-gutter {
   display: inline-grid;

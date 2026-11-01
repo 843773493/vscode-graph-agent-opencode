@@ -1,7 +1,7 @@
 import React, { useMemo, useRef } from "react";
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { ComposerContext, type ComposerContextType } from "../../hooks";
+import { ComposerContext, type ComposerContextType } from "../../hooks/app/appContext";
 import {
   reuseComposerStateSnapshot,
   selectComposerState,
@@ -148,6 +148,25 @@ function inputValue(renderer: ReactTestRenderer): string {
 }
 
 describe("Composer 会话作用域守卫：在途提交只回写发起它的会话", () => {
+  test("停止在途切换会话后，迟到失败不进入另一会话错误区", async () => {
+    installComposerEnvironment();
+    let state = appState(SESSION_A);
+    state.activeJobIdsBySession.set(SCOPE_KEY, "job-a");
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, fail) => { reject = fail; });
+    const { renderer, element } = mountComposer(() => state,
+      baseActions({ interruptSession: () => pending }));
+    try {
+      act(() => renderer.root.findByProps({ id: "interruptButton" }).props.onClick());
+      state = appState(SESSION_B);
+      act(() => renderer.update(element()));
+      await act(async () => { reject(new Error("A 的停止被拒绝")); await Promise.resolve(); });
+      expect(JSON.stringify(renderer.toJSON())).not.toContain("A 的停止被拒绝");
+      expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+    } finally {
+      act(() => renderer.unmount());
+    }
+  });
   test("在途发送失败不得把 A 的输入回填进已切换的 B 会话", async () => {
     installComposerEnvironment();
     let rejectSend: (error: unknown) => void = () => undefined;

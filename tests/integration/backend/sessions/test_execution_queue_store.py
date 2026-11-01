@@ -1,17 +1,21 @@
 """canonical 准入、SQLite 队列投影和显式 v5 迁移共用同一 owner。"""
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import portalocker
 import pytest
 from langchain_core.messages import HumanMessage
 
 from app.core.identifier import create_prefixed_id
+from app.core.session_lifecycle_gate import SessionLifecycleGate
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.execution_queue import ExecutionQueueInput
@@ -111,6 +115,81 @@ async def test_cold_projection_reads_canonical_body_and_frozen_identity(store_ca
     with case.saver._storage.storage.read_connection(case.session, case.thread) as connection:
         serialized, = connection.execute("SELECT input_json FROM execution_queue").fetchone()
     assert "不可变正文" not in serialized and "content" not in json.loads(serialized)
+
+
+async def test_global_queue_scan_holds_read_guard_until_snapshot_finishes(
+    store_case: StoreCase, monkeypatch: pytest.MonkeyPatch,
+):
+    case = store_case
+    record = case.accept()
+    session_dir = case.workspace.session_dir(case.session)
+    entered = threading.Event()
+    release = threading.Event()
+    drained = asyncio.Event()
+    validate = case.saver.validate_execution_queue
+
+    def blocked_validate(session_id: str, thread_id: str) -> None:
+        entered.set()
+        assert release.wait(5), "测试未释放原队列读取"
+        validate(session_id, thread_id)
+
+    async def drain(session_id: str) -> None:
+        assert session_id == case.session
+        drained.set()
+
+    monkeypatch.setattr(case.saver, "validate_execution_queue", blocked_validate)
+    case.workspace.delete_service.set_session_drain_callback(drain)
+    reading = asyncio.create_task(case.store.records())
+    deletion = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        guard = SessionLifecycleGate(case.workspace.sessions_root).shared(case.session)
+        # 使用删除 owner 的同一把 OS 锁，不能用内存标记证明读取已获保护。
+        with guard.path.open("a+b") as lock, pytest.raises(portalocker.AlreadyLocked):
+            portalocker.lock(lock, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        deletion = asyncio.create_task(case.workspace.resolver.delete_subtree(
+            idempotency_key="queue-read-before-delete", root_node_id=case.session,
+        ))
+        async with asyncio.timeout(3):
+            while case.workspace.node(case.session).state != "deleting":
+                await asyncio.sleep(0.01)
+        assert not drained.is_set() and session_dir.is_dir()
+        release.set()
+        assert await asyncio.wait_for(reading, 3) == (record,)
+        result = await asyncio.wait_for(deletion, 3)
+        assert result.record_state == "completed" and drained.is_set()
+        assert not session_dir.exists()
+    finally:
+        release.set()
+        await asyncio.wait_for(reading, 3)
+        if deletion is not None:
+            await asyncio.wait_for(deletion, 3)
+
+
+async def test_global_queue_scan_skips_deleting_owner_but_explicit_drain_can_read(store_case: StoreCase):
+    case = store_case
+    record = case.accept()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def drain(session_id: str) -> None:
+        assert session_id == case.session
+        entered.set()
+        await release.wait()
+
+    case.workspace.delete_service.set_session_drain_callback(drain)
+    deletion = asyncio.create_task(case.workspace.resolver.delete_subtree(
+        idempotency_key="queue-delete-before-scan", root_node_id=case.session,
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        assert case.workspace.node(case.session).state == "deleting"
+        assert await asyncio.wait_for(case.store.records(), 3) == ()
+        # 精确 Session 读取由删除排空持锁调用，不能在这里重新抢同一把锁。
+        assert await asyncio.wait_for(case.store.records(case.session), 3) == (record,)
+    finally:
+        release.set()
+        await asyncio.wait_for(deletion, 3)
 
 
 async def test_summaries_never_read_body_and_policy_is_durable_cas(store_case: StoreCase):

@@ -122,18 +122,6 @@ function optionalJsonObject(
   return asRecord(value, `${path}/${key}`) as JsonObject;
 }
 
-function optionalJsonValue(
-  record: JsonRecord,
-  key: string,
-  path: string,
-): JsonValue | undefined {
-  const value = record[key];
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return value as JsonValue;
-}
-
 function mapHeader(event: JsonRecord): JsonObject {
   const path = "/event";
   const header: JsonObject = {

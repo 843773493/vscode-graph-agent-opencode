@@ -177,3 +177,15 @@ def test_port_block_keeps_offsets_in_zero_through_99() -> None:
         block.port(100)
     with pytest.raises(ValueError, match="offset=-1"):
         block.port(-1)
+
+
+def test_shifted_port_block_does_not_extend_its_original_boundary() -> None:
+    block = TestFilePortBlock(
+        test_file=Path("test_ports.py"), index=0,
+        start=INTEGRATION_PORT_START + 20,
+        end=INTEGRATION_PORT_START + TEST_FILE_PORT_BLOCK_SIZE - 1,
+    )
+
+    assert block.port(79) == block.end
+    with pytest.raises(ValueError, match="offset=80"):
+        block.port(80)

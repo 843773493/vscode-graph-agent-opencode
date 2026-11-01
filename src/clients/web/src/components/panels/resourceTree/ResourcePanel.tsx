@@ -39,6 +39,7 @@ type ResourcePanelProps = {
   workspaceId: string | null;
   mainThread: ResourceThreadRef | null;
   extensionWindow?: boolean;
+  inlinePreview?: boolean;
   activePreviewPath: string | null;
   onRefresh: () => void;
   onControl: (
@@ -93,6 +94,7 @@ function ResourcePanelForOwner({
   workspaceId,
   mainThread,
   extensionWindow = false,
+  inlinePreview = false,
   activePreviewPath,
   onRefresh,
   onControl,
@@ -279,7 +281,7 @@ function ResourcePanelForOwner({
     }
     setOpenedTerminal({ requestId, resourceId });
     onOpenTerminalPreview(resourceId);
-    presentNotice(requestId, "已在主窗口底部面板打开终端；连接管理请在运行与连接中查看");
+    presentNotice(requestId, inlinePreview ? "已在当前会话标签内打开终端" : "已在主窗口底部面板打开终端；连接管理请在运行与连接中查看");
   };
   const handleOpenBrowser = (resourceId: string, existingRequestId?: number) => {
     if (!mountedRef.current) return;
@@ -290,7 +292,7 @@ function ResourcePanelForOwner({
     }
     setOpenedBrowser({ requestId, resourceId });
     onOpenBrowserPreview(resourceId);
-    presentNotice(requestId, "已在扩展窗口打开浏览器预览；连接状态请在当前运行与连接界面查看");
+    presentNotice(requestId, inlinePreview ? "已在当前会话标签内打开浏览器预览" : "已在扩展窗口打开浏览器预览；连接状态请在当前运行与连接界面查看");
   };
   const createThread = mainThread?.session_id === sessionId && mainThread.thread_id
     ? mainThread
@@ -313,7 +315,7 @@ function ResourcePanelForOwner({
         );
         presentNotice(
           requestId,
-          kind === "terminal"
+          inlinePreview ? `${option?.label ?? "新建连接"}成功，已在当前会话标签内打开` : kind === "terminal"
             ? "终端创建成功，已在主窗口底部面板打开"
             : `${option?.label ?? "新建连接"}成功；连接管理请在运行与连接中查看`,
         );
@@ -477,6 +479,7 @@ function ResourcePanelForOwner({
                           {kindGroup.resources.map((resource) => (
                             <ResourceTreeRow
                               key={`${resource.kind}-${resource.resource_id}`}
+                              previewContext={inlinePreview ? "thread" : undefined}
                               resource={resource}
                               selected={isPreviewedResource(resource, activePreviewPath)}
                               busy={busyResourceId === resource.resource_id}

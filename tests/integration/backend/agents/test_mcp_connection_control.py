@@ -46,7 +46,7 @@ def product_case(recovery_case, free_tcp_port_factory):
     backend_port, gateway_port = free_tcp_port_factory(), free_tcp_port_factory()
 
     @asynccontextmanager
-    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None, confirmation_required=None, web=False, oauth_redirect_uri=None, backend_app="tests.support.e2e_control.backend_app:app", sealed_call_timeout_seconds=None):
+    async def start(secure, sibling, *, boundary="turn", startup_mount=None, backend_processes=None, tool_restrictions=None, confirmation_required=None, web=False, gateway_environment=None, oauth_redirect_uri=None, backend_app="tests.support.e2e_control.backend_app:app", sealed_call_timeout_seconds=None):
         home = case.context.boxteam_home_for_node(f"mcp-product-gateway:{case.mount.workspace_id}")
         install_user_configuration(config_root=home / "config", profile="default", project_root=case.context.project_root, force=True)
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
@@ -96,7 +96,7 @@ def product_case(recovery_case, free_tcp_port_factory):
                     default_backend_url=f"http://127.0.0.1:{backend_port}", port=gateway_port,
                     boxteam_home=home,
                     artifacts_dir=case.context.artifacts_dir / "gateway",
-                    extra_env={"BOXTEAM_WEB_ASSETS": str(case.context.project_root / "src/clients/web/dist")} if web else None,
+                    extra_env=gateway_environment or {},
                 )
                 try:
                     async with httpx.AsyncClient(

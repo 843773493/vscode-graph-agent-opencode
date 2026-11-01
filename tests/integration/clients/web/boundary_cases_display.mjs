@@ -1,8 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
@@ -103,7 +103,8 @@ async function api(page, pathname, init = {}) {
 }
 
 async function ensureGuest(page) {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   const current = await page.evaluate(async () => {
     const response = await fetch("/api/gateway/users/current");
     return { status: response.status, body: await response.text() };
@@ -159,8 +160,10 @@ async function loadBoundaryCase(page, item) {
 
   // 会话目录同步完成后再刷新，避免把初始目录竞态误判为展示问题。
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator(`button[data-session-id="${item.sessionId}"]`).click();
-  const turn = page.locator(`.chat-turn[data-turn-id="${item.turnId}"]`);
+  await page.locator(`button[data-session-id="${item.sessionId}"]`).dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-session-id="${item.sessionId}"]`);
+  await expect(thread).toBeVisible();
+  const turn = thread.locator(`.chat-turn[data-turn-id="${item.turnId}"]`);
   await turn.waitFor({ state: "visible", timeout: 30_000 });
   await waitUntil(
     async () => (await turn.innerText()).includes(item.finalText),

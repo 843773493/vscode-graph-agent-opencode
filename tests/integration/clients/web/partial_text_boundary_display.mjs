@@ -1,8 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
@@ -62,7 +62,8 @@ async function waitUntil(predicate, label, timeout = 30_000) {
 }
 
 async function ensureGuest(page) {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   const current = await page.evaluate(async () => {
     const response = await fetch("/api/gateway/users/current");
     return { status: response.status, body: await response.text() };
@@ -123,8 +124,10 @@ try {
     throw new Error(`历史 API 未返回 cancelled: ${JSON.stringify(historyItem)}`);
   }
 
-  await page.locator(`button[data-session-id="${sessionId}"]`).click();
-  const boundaryTurn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
+  await page.locator(`button[data-session-id="${sessionId}"]`).dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-session-id="${sessionId}"]`);
+  await expect(thread).toBeVisible();
+  const boundaryTurn = thread.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
   await boundaryTurn
     .getByRole("button", { name: /展开 Turn 中间消息/ })

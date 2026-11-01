@@ -250,10 +250,10 @@ async function main() {
   installNodeDependencies(applicationRoot);
 
   run("bun", ["run", "build"], {
-    cwd: path.join(projectRoot, "src", "clients", "web"),
+    cwd: path.join(projectRoot, "src", "clients", "workbench"),
   });
   cpSync(
-    path.join(projectRoot, "src", "clients", "web", "dist"),
+    path.join(projectRoot, "src", "clients", "workbench", "dist"),
     path.join(runtimePackageRoot, "web"),
     { recursive: true },
   );

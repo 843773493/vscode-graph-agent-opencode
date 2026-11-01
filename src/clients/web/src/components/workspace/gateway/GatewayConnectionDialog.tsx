@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { OverlayRootContext } from "../../overlays/OverlayRootContext";
 import {
   createGatewayDeviceConnection,
   listGatewayDeviceAccessAddresses,
@@ -106,6 +107,7 @@ export default function GatewayConnectionDialog({
   onAddSsh,
   onDeviceConnectionsChanged,
 }: GatewayConnectionDialogProps) {
+  const overlayRoot = useContext(OverlayRootContext);
   const [page, setPage] = useState<ConnectionPage>("ssh-select");
   const [connections, setConnections] = useState<SshConnectionOption[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
@@ -466,6 +468,6 @@ export default function GatewayConnectionDialog({
         </div>
       </section>
     </div>,
-    document.body,
+    overlayRoot ?? document.body,
   );
 }

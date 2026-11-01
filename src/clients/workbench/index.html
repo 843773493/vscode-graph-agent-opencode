@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code - OSS</title>
+<link rel="icon" type="image/svg+xml" href="/out/vs/workbench/browser/media/code-icon.svg">
+<link rel="stylesheet" href="/out/main.css">
+<style>html,body,#workbench{width:100%;height:100%;margin:0;overflow:hidden}#startup-status{position:absolute;inset:0;display:grid;place-content:center;font:14px system-ui;color:#666;pointer-events:none}#startup-error{position:absolute;inset:16px;white-space:pre-wrap;overflow:auto;background:#351919;color:#fff;padding:20px;z-index:10000}#startup-error:empty,body:has(.monaco-workbench) #startup-status{display:none}</style>
+<script>globalThis._VSCODE_FILE_ROOT = new URL('/out/', location.href).href;</script>
+</head>
+<body><div id="workbench"></div><div id="startup-status" role="status">正在加载工作台…</div><pre id="startup-error" role="alert"></pre>
+<script>
+// 在业务模块依赖图加载前显示失败，网络或模块错误不能留下白屏。
+function showStartupError(error) {
+  if (document.querySelector('.monaco-workbench')) return;
+  document.getElementById('startup-status').textContent = '工作台加载失败';
+  document.getElementById('startup-error').textContent = error instanceof Error ? error.stack ?? error.message : String(error);
+}
+window.addEventListener('error', event => {
+  if (event.target instanceof HTMLScriptElement) showStartupError(`无法加载工作台脚本：${event.target.src}`);
+  else if (event.error || event.message) showStartupError(event.error ?? event.message);
+}, true);
+window.addEventListener('unhandledrejection', event => showStartupError(event.reason));
+</script>
+<script type="module" src="/out/main.js"></script>
+</body>
+</html>

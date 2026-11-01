@@ -1,5 +1,6 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useContext } from "react";
 import { createPortal } from "react-dom";
+import { OverlayRootContext } from "../overlays/OverlayRootContext";
 
 import type {
   AddManagedGatewayWorkspaceRequest,
@@ -18,6 +19,7 @@ export interface WorkspaceAddDialogProps {
 const WorkspaceAddDialogContent = lazy(() => import("./workspaceAddDialog/Content"));
 
 function WorkspaceAddDialogLoading({ onClose }: Pick<WorkspaceAddDialogProps, "onClose">) {
+  const overlayRoot = useContext(OverlayRootContext);
   return createPortal(
     <div
       className="workspace-add-overlay"
@@ -54,7 +56,7 @@ function WorkspaceAddDialogLoading({ onClose }: Pick<WorkspaceAddDialogProps, "o
         </div>
       </section>
     </div>,
-    document.body,
+    overlayRoot ?? document.body,
   );
 }
 

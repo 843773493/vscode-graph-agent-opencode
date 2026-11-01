@@ -1,8 +1,9 @@
 // Integration：完整生产页面、Gateway 与文件 owner；文件引用场景由本地 Provider 桩回显 Markdown。
 import assert from "node:assert/strict";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 import { configureChromiumTemporaryDirectory } from "./chromium-temporary-directory.mjs";
 
@@ -15,10 +16,12 @@ const runtime = process.env.BOXTEAM_BROWSER_RUNTIME_PATH;
 assert.ok(runtime);
 const releaseChromiumTemporaryDirectory = await configureChromiumTemporaryDirectory(runtime);
 const pageErrors = [], exchanges = [], pending = [];
-let browser, context, page;
+let context, page;
 try {
-  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
-  context = await browser.newContext({ viewport: { width: 1920, height: 1100 } });
+  context = await chromium.launchPersistentContext(join(runtime, `profile-${fixture.session_id}`), {
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true,
+    viewport: { width: 1920, height: 1100 },
+  });
   await context.addCookies(fixture.cookies ?? []);
   page = await context.newPage();
   page.setDefaultTimeout(15_000);
@@ -35,15 +38,17 @@ try {
       })());
     }
   });
+  const thread = page.locator(`section.boxteam-thread[data-session-id="${fixture.session_id}"]`);
   const selectSession = async () => {
-    const session = page.locator(`[data-session-id="${fixture.session_id}"]`);
-    await session.first().waitFor({ state: "visible", timeout: 30_000 });
-    await session.first().click();
-    await page.getByRole("tab", { name: "文件", exact: true }).click();
-    await page.locator(".files-tree-root button.root").first().waitFor();
+    await page.locator(`button[data-session-id="${fixture.session_id}"]`).dblclick();
+    await expect(thread).toBeVisible();
+    const toggle = thread.getByRole("button", { name: "切换会话资源", exact: true });
+    if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+    await thread.getByRole("tab", { name: "文件", exact: true }).click();
+    await thread.locator(".files-tree-root button.root").first().waitFor();
   };
   const revealTreeRow = async (row) => {
-    const scroller = page.locator(".files-tree-virtualized");
+    const scroller = thread.locator(".files-tree-virtualized");
     if (await row.count() === 0 && await scroller.count() > 0) {
       await scroller.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
       await scroller.hover();
@@ -58,57 +63,43 @@ try {
     await row.waitFor({ state: "visible" });
     return row;
   };
-  await page.goto(process.env.BOXTEAM_BROWSER_BASE_URL, { waitUntil: "domcontentloaded" });
+  await page.goto(new URL("/", process.env.BOXTEAM_BROWSER_BASE_URL).href, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   await selectSession();
-  const editor = page.locator(".workspace-preview-text-editor:visible");
-  const filePreferences = async (directoryUri) => {
-    const credential = await context.request.get(`${process.env.BOXTEAM_BROWSER_BASE_URL}/api/gateway/auth/local-credential`);
-    assert.equal(credential.status(), 200);
-    const { data: { token } } = await credential.json();
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline) {
-      const response = await context.request.get(`${process.env.BOXTEAM_BROWSER_BASE_URL}/api/gateway/ui-settings`, {
-        headers: { "X-Local-Token": token },
-      });
-      assert.equal(response.status(), 200, await response.text());
-      const body = await response.json();
-      assert.ok(body.request_id);
-      assert.equal(body.request_id, response.headers()["x-request-id"]);
-      assert.ok(!JSON.stringify(body).includes(fixture.directory), "UI 设置响应泄露原生绝对目录");
-      const { data } = body;
-      const active = data.layout.workspace_preview_active_file_path;
-      const expanded = Object.values(data.workspace_file_tree.expanded_paths_by_workspace).flat();
-      if (active?.startsWith(directoryUri + "/") && data.layout.workspace_preview_file_paths.includes(active)
-          && expanded.includes(directoryUri)) return data;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    throw new Error("真实用户 profile 没有持久化文件预览及目录展开 URI");
+  const editor = thread.locator(".workspace-preview-text-editor:visible");
+  const flushView = () => page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
+  const verifyNativeContent = async (content) => {
+    const editor = page.locator(".monaco-editor:visible");
+    await expect(editor).toBeVisible();
+    await expect.poll(async () => (await editor.locator(".view-line").allTextContents())
+      .join("\n").replaceAll("\u00a0", " ").trimEnd()).toBe(content.trimEnd());
   };
   if (fixture.references) {
     const opened = [];
     for (const reference of fixture.references) {
-      const link = page.locator("button.chat-file-reference").filter({ hasText: reference.label });
+      await selectSession();
+      const link = thread.locator("button.chat-file-reference").filter({ hasText: reference.label });
       await link.waitFor();
       assert.ok((await link.getAttribute("title")).includes(reference.uri));
       assert.ok((await link.getAttribute("title")).includes("第 2 行"));
       await link.click();
-      await editor.waitFor();
-      assert.equal(await editor.inputValue(), reference.content);
+      await verifyNativeContent(reference.content);
       opened.push(reference.uri);
     }
-    assert.equal(await page.locator("button.chat-file-reference").filter({ hasText: "缺失绝对" }).count(), 0);
-    await page.locator(".chat-file-reference-fallback").filter({ hasText: "缺失绝对" }).waitFor();
-    const inline = page.locator("button.chat-file-reference.inline-code");
+    await selectSession();
+    assert.equal(await thread.locator("button.chat-file-reference").filter({ hasText: "缺失绝对" }).count(), 0);
+    await thread.locator(".chat-file-reference-fallback").filter({ hasText: "缺失绝对" }).waitFor();
+    const inline = thread.locator("button.chat-file-reference.inline-code");
     await inline.waitFor();
     await inline.click();
-    assert.equal(await editor.inputValue(), fixture.references[0].content);
+    await verifyNativeContent(fixture.references[0].content);
+    await flushView();
     await page.reload({ waitUntil: "domcontentloaded" });
     await selectSession();
-    const reopened = page.locator("button.chat-file-reference").filter({ hasText: fixture.references[3].label });
+    const reopened = thread.locator("button.chat-file-reference").filter({ hasText: fixture.references[3].label });
     await reopened.waitFor();
     await reopened.click();
-    await editor.waitFor();
-    assert.equal(await editor.inputValue(), fixture.references[3].content);
+    await verifyNativeContent(fixture.references[3].content);
     await Promise.all(pending);
     assert.ok(exchanges.some((item) => new URL(item.url).searchParams.get("path") === fixture.missing
       && item.status === 404));
@@ -121,7 +112,7 @@ try {
   if (fixture.shortcut_uri) {
     shortcut = { path: fixture.shortcut_uri };
   } else {
-    const roots = page.locator(".files-tree-root button.root");
+    const roots = thread.locator(".files-tree-root button.root");
     const workspaceRoot = roots.first(), filesystemRoot = roots.last();
     if (await workspaceRoot.getAttribute("aria-expanded") === "true") await workspaceRoot.click();
     await Promise.all(pending);
@@ -139,45 +130,47 @@ try {
       const child = listing.items.find((item) => item.name === segment);
       assert.ok(child, `真实目录结果缺少 ${segment}`);
       response = directoryResponse(child.path);
-      await (await revealTreeRow(page.getByTitle(child.path, { exact: true }))).click();
+      await (await revealTreeRow(thread.getByTitle(child.path, { exact: true }))).click();
       listing = (await (await response).json()).data;
     }
     const directoryUri = listing.path;
     const file = listing.items.find((item) => item.name === fixture.file_name);
     assert.ok(file);
-    await (await revealTreeRow(page.getByTitle(file.path, { exact: true }))).click();
+    await (await revealTreeRow(thread.getByTitle(file.path, { exact: true }))).click();
 
     await editor.waitFor();
     assert.equal(await editor.inputValue(), fixture.original);
-    await page.getByRole("button", { name: "编辑文件", exact: true }).click();
+    await thread.getByRole("button", { name: "编辑文件", exact: true }).click();
     await editor.fill(fixture.edited);
     const saveResponse = page.waitForResponse((response) => response.request().method() === "PUT"
       && new URL(response.url()).pathname === "/api/v1/workspace/files/content");
-    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await thread.getByRole("button", { name: "保存", exact: true }).click();
     const saved = await saveResponse;
     assert.equal(saved.status(), 200, await saved.text());
-    await (await revealTreeRow(page.getByTitle(directoryUri, { exact: true }))).click({ button: "right" });
+    await (await revealTreeRow(thread.getByTitle(directoryUri, { exact: true }))).click({ button: "right" });
     const shortcutResponse = page.waitForResponse((response) => response.request().method() === "POST"
       && new URL(response.url()).pathname === `/api/v1/sessions/${fixture.session_id}/file-tree-shortcuts`);
-    await page.getByRole("menuitem", { name: "添加到当前会话快捷路径", exact: true }).click();
+    await thread.getByRole("menuitem", { name: "添加到当前会话快捷路径", exact: true }).click();
     const added = await shortcutResponse;
     assert.equal(added.status(), 200, await added.text());
     const settings = (await added.json()).data;
     assert.equal(settings.session_shortcuts.length, 1);
     shortcut = settings.session_shortcuts[0];
     assert.ok(shortcut.path.startsWith("boxteam://gateway/"));
-    if (fixture.persist_files) await filePreferences(shortcut.path);
+    await expect(editor).toHaveValue(fixture.edited);
+    await flushView();
     await page.reload({ waitUntil: "domcontentloaded" });
     await selectSession();
   }
   if (fixture.persist_files) {
     await editor.waitFor();
-    assert.equal(await editor.inputValue(), fixture.edited, "页面应从用户 profile 自动恢复文件预览");
+    await expect(editor).toHaveValue(fixture.edited);
   }
-  const shortcutRow = await revealTreeRow(page.getByTitle(shortcut.path, { exact: true }).and(page.locator("button.root")));
+  const shortcutRow = await revealTreeRow(thread.getByTitle(shortcut.path, { exact: true }).and(thread.locator("button.root")));
   assert.equal(await shortcutRow.getAttribute("title"), shortcut.path);
-  if (await shortcutRow.getAttribute("aria-expanded") !== "true") await shortcutRow.click();
-  const fileRow = page.locator(".files-tree-root button.files-tree-item").filter({
+  // 冷启动必须直接恢复展开状态；不能靠测试重新展开而掩盖丢失的视图。
+  await expect(shortcutRow).toHaveAttribute("aria-expanded", "true");
+  const fileRow = thread.locator(".files-tree-root button.files-tree-item").filter({
     has: page.locator(".file-label").getByText(fixture.file_name, { exact: true }),
   }).first();
   await revealTreeRow(fileRow);
@@ -187,9 +180,13 @@ try {
   assert.equal(await editor.inputValue(), fixture.edited);
   await Promise.all(pending);
   assert.deepEqual(pageErrors, []);
-  const preferences = fixture.persist_files ? await filePreferences(shortcut.path) : null;
+  const previewUri = await fileRow.getAttribute("title");
+  assert.ok(exchanges.some(item => new URL(item.url).pathname.endsWith("/files/content")
+    && item.status === 200 && item.body.data.path === previewUri
+    && item.body.data.content === fixture.edited), "重开必须从真实文件 owner 读取已保存正文");
+  await flushView();
   await writeFile(output, JSON.stringify({ shortcut_uri: shortcut.path, reopened_content: await editor.inputValue(),
-    file_preferences: preferences, page_errors: pageErrors, exchanges }, null, 2) + "\n");
+    preview_uri: previewUri, expanded_restored: true, page_errors: pageErrors, exchanges }, null, 2) + "\n");
   }
   await page.screenshot({ path: `${artifacts}/native-directory-browser.png` });
 } catch (error) {
@@ -203,7 +200,6 @@ try {
 } finally {
   try { if (context) await context.close(); }
   finally {
-    try { if (browser) await browser.close(); }
-    finally { await releaseChromiumTemporaryDirectory(); }
+    await releaseChromiumTemporaryDirectory();
   }
 }

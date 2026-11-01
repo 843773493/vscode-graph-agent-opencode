@@ -4,7 +4,9 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TextIO
+from unittest.mock import Mock
 
 import pytest
 
@@ -16,6 +18,7 @@ class LeaseCase:
     lease: e2e_test_control.E2EProcessLease
     port_checks: list[tuple[int, str]]
     start_times: dict[int, float]
+    reservations: list[Mock]
 
     def expected_record(self) -> dict[str, object]:
         return {
@@ -30,6 +33,15 @@ class LeaseCase:
 def lease_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LeaseCase:
     checks: list[tuple[int, str]] = []
     start_times = {os.getpid(): 100.25}
+    reservations: list[Mock] = []
+
+    def reserve_socket(*_args: object) -> Mock:
+        reserved = Mock()
+        reservations.append(reserved)
+        return reserved
+
+    monkeypatch.setattr(e2e_test_control, "sys", SimpleNamespace(platform="linux"), raising=False)
+    monkeypatch.setattr(e2e_test_control.socket, "socket", reserve_socket)
     monkeypatch.setattr(
         e2e_test_control,
         "_process_start_time",
@@ -44,6 +56,7 @@ def lease_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LeaseCase:
         ),
         checks,
         start_times,
+        reservations,
     )
 
 
@@ -85,6 +98,8 @@ def test_new_lease_write_failure_removes_own_file_and_allows_explicit_retry(
 
         assert failure.value is error
         assert not lease.path.exists(), "本次失败写入不能遗留损坏或未取得的租约"
+        assert len(lease_case.reservations) == 1
+        lease_case.reservations[0].close.assert_called_once_with()
 
     lease.acquire()
     assert json.loads(lease.path.read_text()) == lease_case.expected_record()
@@ -187,6 +202,29 @@ def test_success_preserves_record_and_checks_ports_on_acquire_and_release(lease_
         (18800, "E2E process lease owner"),
         (18800, "E2E process lease teardown"),
     ]
+    assert len(lease_case.reservations) == 1
+    lease_case.reservations[0].bind.assert_called_once_with(("127.0.0.1", 18800))
+    lease_case.reservations[0].close.assert_called_once_with()
+
+
+def test_teardown_error_preserves_record_and_closes_owned_reservations(
+    lease_case: LeaseCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_case.lease
+    lease.acquire()
+    before = lease.path.read_bytes()
+    error = RuntimeError("原服务仍监听，不能释放租约记录")
+
+    def occupied(_port: int, *, service_name: str) -> None:
+        raise error
+
+    monkeypatch.setattr(e2e_test_control, "ensure_local_port_available", occupied)
+    with pytest.raises(RuntimeError) as failure:
+        lease.release()
+    assert failure.value is error
+    assert lease.path.read_bytes() == before
+    assert len(lease_case.reservations) == 1
+    lease_case.reservations[0].close.assert_called_once_with()
 
 
 def test_reused_pid_with_different_creation_time_does_not_own_old_lease(

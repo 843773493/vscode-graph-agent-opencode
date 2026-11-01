@@ -87,6 +87,7 @@ infrastructure/
 - 会话专属持久化必须先通过统一会话路径解析器取得物理会话节点，再使用该节点下的对应子目录；禁止拼接或假设 `${workspace_abs_path}/.boxteam/sessions/{session_id}/` 固定路径。
 - 新增会话存储时必须同时考虑会话移动、删除、导出和迁移，确保操作解析后的整个会话目录即可完整处理数据。
 - 派生索引不得反向覆盖物理目录树；发现重复稳定 ID、损坏 manifest 或越界路径时必须直接报告冲突。
+- `pending_request_store.py` 的全工作区恢复扫描逐个取得短 topology 准入和 Session read guard，重新核对 catalog active 状态后读取 main/child 队列；guard 覆盖同步读取线程及取消结算，不并持两个 Session 锁。删除排空中的精确 Session 读取沿用调用方已有的准入，不在 store 内重入该锁；原存储故障必须继续抛出。
 - `workspace_state_sql/` 是 WorkspaceStateStore 的静态迁移唯一来源；Python 保留版本顺序和条件数据转换。
 
 - `message_stream_store.py` 是消息流持久读取的唯一 owner；公开错误只带稳定身份、artifact 和错误事实，物理路径及损坏原文留在诊断日志；全部恢复依赖校验成功后才能发布状态及幂等缓存。

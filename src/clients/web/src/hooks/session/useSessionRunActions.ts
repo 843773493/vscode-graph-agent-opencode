@@ -17,7 +17,7 @@ import type {
   SessionCompactResult,
 } from "../../types/backend";
 import type { AppState, ConversationContentView, ConversationView } from "../../types/frontend";
-import { listMainThreadPendingRequests as apiListMainThreadPendingRequests } from "../../pendingRequestsApi";
+import { listThreadPendingRequests as apiListThreadPendingRequests } from "../../pendingRequestsApi";
 import { updateSessionAttachmentSummary } from "../../state/attachments";
 import {
   dispatchToConversationProjection,
@@ -50,6 +50,7 @@ function isCurrentSessionOwner(
 export function useSessionRunActions({
   apiPort,
   currentSession,
+  currentThreadId,
   activeGatewayWorkspaceId,
   currentSessionGatewayWorkspaceId,
   currentSessionCacheKey,
@@ -61,6 +62,7 @@ export function useSessionRunActions({
 }: {
   apiPort: number;
   currentSession: Session | null;
+  currentThreadId?: string;
   activeGatewayWorkspaceId: string | null;
   currentSessionGatewayWorkspaceId: string | null;
   currentSessionCacheKey: string | null;
@@ -76,6 +78,7 @@ export function useSessionRunActions({
   const pendingRequestActions = usePendingRequestActions({
     apiPort,
     currentSession,
+    currentThreadId,
     currentSessionGatewayWorkspaceId,
     currentSessionCacheKey,
     setState,
@@ -89,8 +92,8 @@ export function useSessionRunActions({
       const activeSession = currentSession ?? await createSession(
         DEFAULT_SESSION_TITLE, activeGatewayWorkspaceId ?? defaultGatewayWorkspaceId,
       );
-      const mainThreadId = activeSession.thread_id;
-      if (!mainThreadId) throw new Error(`发送消息缺少 catalog 主线程身份: ${activeSession.session_id}`);
+      const targetThreadId = currentThreadId ?? activeSession.thread_id;
+      if (!targetThreadId) throw new Error(`发送消息缺少 catalog 主线程身份: ${activeSession.session_id}`);
       const activeSessionGatewayWorkspaceId =
         currentSessionGatewayWorkspaceId ??
         activeGatewayWorkspaceId ??
@@ -114,11 +117,11 @@ export function useSessionRunActions({
           conversationId: pendingSubmissionId,
           displayMode: "live",
           sessionId: activeSession.session_id,
-          threadId: mainThreadId,
+          threadId: targetThreadId,
           userMessage: {
             message_id: pendingSubmissionId,
             session_id: activeSession.session_id,
-            thread_id: mainThreadId,
+            thread_id: targetThreadId,
             role: "user",
             content,
             metadata: {
@@ -168,7 +171,9 @@ export function useSessionRunActions({
           attachments,
           activeSessionGatewayWorkspaceId,
           deliveryPolicy,
+          currentThreadId,
         );
+        if (currentThreadId !== undefined && accepted.thread_id !== targetThreadId) throw new Error("消息接受结果的 Thread 归属不一致");
       } catch (error) {
         let message = errorMessage(error);
         // 发送失败不等于后端没收到：网关超时或响应丢失时，消息可能已经落库
@@ -177,10 +182,12 @@ export function useSessionRunActions({
         let snapshot: PendingRequestList | null = null;
         let reconciliationFailure: string | null = null;
         try {
-          snapshot = await apiListMainThreadPendingRequests(
+          snapshot = await apiListThreadPendingRequests(
             apiPort,
             activeSession.session_id,
             activeSessionGatewayWorkspaceId,
+            undefined,
+            currentThreadId,
           );
         } catch (reconciliationError) {
           reconciliationFailure = errorMessage(reconciliationError);
@@ -305,6 +312,7 @@ export function useSessionRunActions({
       activeGatewayWorkspaceId,
       apiPort,
       currentSession,
+      currentThreadId,
       currentSessionCacheKey,
       currentSessionGatewayWorkspaceId,
       createSession,
@@ -326,6 +334,8 @@ export function useSessionRunActions({
     }));
 
     try {
+      // TODO: 压缩 API 当前只支持主线程，接通精确 Thread 合同后移除此限制。
+      if (currentThreadId && currentThreadId !== session.thread_id) throw new Error("子线程上下文压缩尚未接入");
       const result = await apiCompactSessionContext(
         apiPort,
         session.session_id,
@@ -394,6 +404,7 @@ export function useSessionRunActions({
     apiPort,
     contentView,
     currentSession,
+    currentThreadId,
     currentSessionGatewayWorkspaceId,
     refreshAgentStateSnapshot,
     setState,
@@ -404,7 +415,8 @@ export function useSessionRunActions({
     if (!session) {
       throw new Error("当前没有可中断的会话");
     }
-    if (!session.thread_id) {
+    const targetThreadId = currentThreadId ?? session.thread_id;
+    if (!targetThreadId) {
       throw new Error("当前会话缺少权威 main Thread 身份，无法中断");
     }
 
@@ -413,7 +425,7 @@ export function useSessionRunActions({
       const result = await apiInterruptSession(
         apiPort,
         session.session_id,
-        session.thread_id,
+        targetThreadId,
         currentSessionGatewayWorkspaceId,
       );
       setState((prev) => {
@@ -434,19 +446,19 @@ export function useSessionRunActions({
         return { ...prev, status };
       });
     } catch (error) {
-      const sessionCacheKey = currentSessionGatewayWorkspaceId
-        ? sessionScopeKey(currentSessionGatewayWorkspaceId, session.session_id)
-        : session.session_id;
+      const sessionCacheKey = currentSessionCacheKey ?? sessionScopeKey(currentSessionGatewayWorkspaceId, session.session_id);
       if (!(error instanceof HttpRequestError) || error.status !== 404) {
         // 中断失败说明后端任务很可能仍在运行，不能在这里乐观清掉前端运行态；
         // 但要重新拉取待处理队列快照，让 activeJobIds 与后端真值保持一致。
         const message = errorMessage(error);
         let notice = `中断生成失败: ${message}`;
         try {
-          const snapshot = await apiListMainThreadPendingRequests(
+          const snapshot = await apiListThreadPendingRequests(
             apiPort,
             session.session_id,
             currentSessionGatewayWorkspaceId,
+            undefined,
+            currentThreadId,
           );
           setState((prev) => {
             const next = {
@@ -475,6 +487,7 @@ export function useSessionRunActions({
             }
             return { ...prev, status: notice };
           });
+          throw new Error(`${message}；重新读取运行状态也失败: ${recoveryMessage}`, { cause: error });
         }
         throw error;
       }
@@ -495,7 +508,7 @@ export function useSessionRunActions({
         return next;
       });
     }
-  }, [apiPort, currentSession, currentSessionGatewayWorkspaceId, setState]);
+  }, [apiPort, currentSession, currentThreadId, currentSessionCacheKey, currentSessionGatewayWorkspaceId, setState]);
 
   const replayTurn = useCallback(async (
     targetMessageId: string,
@@ -520,6 +533,8 @@ export function useSessionRunActions({
     }));
 
     try {
+      // TODO: 回放 API 当前只支持主线程，接通精确 Thread 合同后移除此限制。
+      if (currentThreadId && currentThreadId !== session.thread_id) throw new Error("子线程轮次回放尚未接入");
       const accepted = await apiReplayMessageTurn(
         apiPort,
         session.session_id,
@@ -618,6 +633,7 @@ export function useSessionRunActions({
   }, [
     apiPort,
     currentSession,
+    currentThreadId,
     currentSessionCacheKey,
     currentSessionGatewayWorkspaceId,
     setState,

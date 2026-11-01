@@ -70,7 +70,8 @@ export class HttpRequestError extends Error {
     readonly status: number,
     readonly statusText: string,
     readonly detail: unknown,
-    path: string,
+    readonly path: string,
+    readonly requestId: string | null,
   ) {
     super(`请求失败 ${status} ${statusText}: ${httpErrorDetailMessage(detail, path)}`);
     this.name = "HttpRequestError";
@@ -482,6 +483,7 @@ async function runGatewayRequest<T>(
         response.statusText,
         await readHttpErrorDetail(response),
         path,
+        response.headers.get("X-Request-ID"),
       );
     }
     return await consume(response, abortState.signal);

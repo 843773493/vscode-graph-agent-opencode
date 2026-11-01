@@ -10,7 +10,7 @@ composer/
 └── composerTestFixtures.ts   Composer hook 测试共享的浏览器全局环境
 ```
 
-Composer 专属的 API fake、数据装配和行为断言留在相邻测试文件；全局 window、存储、浮层构造器、BroadcastChannel 和可控轮询计时器由共享 fixture 安装并按描述符还原。
+Composer 专属的 API fake、数据装配和行为断言留在相邻测试文件；共享 fixture 显式加载 fake-indexeddb，为进程内浏览器存储提供真实事务仿真，不依赖其他测试文件的导入顺序。全局 window、存储、浮层构造器、BroadcastChannel 和可控轮询计时器由共享 fixture 安装并按描述符还原。
 
 # 可修改内容
 
@@ -25,5 +25,6 @@ Composer 专属的 API fake、数据装配和行为断言留在相邻测试文�
 # 规范
 
 - 后端状态通过 `api.ts` 或上层 App 状态访问，失败必须显示给用户。
+- 输入区的停止、草稿读写、模型列表刷新和默认投递设置失败直接使用本地错误区；停止回执须核发起作用域，不写入已切换的 Thread。不得依赖外层旧状态栏来证明错误可见。
 - 浮层需支持键盘关闭、视口边界约束和窄屏操作。
 

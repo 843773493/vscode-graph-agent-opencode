@@ -11,7 +11,7 @@ session/
 ├── sessionCatalogOutbox.ts      会话目录 outbox 状态机测试运行时
 ├── reactHarness.ts              共享 React hook 挂载器
 ├── sessionLifecycleActions.ts   生命周期动作 hook harness
-├── sessionRunActions.ts         运行动作 hook harness
+├── sessionRunActions.ts         直接挂载运行动作及创建、选择依赖，不经旧外壳聚合入口
 ├── sessionMessageStream.ts      消息流 hook Harness 工厂
 ├── sessionResourceExplorer.ts   资源探索器状态、props 和 harness
 ├── sessionGoalController.ts     Goal 控制器 harness

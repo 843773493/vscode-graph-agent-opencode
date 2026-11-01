@@ -35,25 +35,8 @@
 
 .layout-sash:hover::after,
 .layout-sash:focus-visible::after,
-body.is-layout-resizing .layout-sash::after,
-body.is-gateway-panel-resizing .layout-sash-gateway-panel::after {
+body.is-layout-resizing .layout-sash::after {
   background: color-mix(in srgb, var(--bt-accent) 55%, transparent);
-}
-
-.layout-sash-gateway-panel {
-  flex: 0 0 8px;
-  width: auto;
-  min-width: 0;
-  height: 8px;
-  min-height: 8px;
-  margin: -4px 0;
-  cursor: row-resize;
-}
-
-.layout-sash-gateway-panel::after {
-  width: 100%;
-  height: 2px;
-  margin: 3px auto 0;
 }
 
 body.is-gateway-panel-resizing {
@@ -64,35 +47,6 @@ body.is-gateway-panel-resizing {
 body.is-layout-resizing {
   cursor: col-resize;
   user-select: none;
-}
-
-.content-layout.auxiliary-collapsed .sessions-part-card {
-  margin-right: 0;
-}
-
-.workspace-editor-shell {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--bt-panel-border);
-  border-radius: var(--bt-radius-large);
-  background: var(--bt-panel-background);
-}
-
-.app-shell.extension-window .agent-sessions-panel,
-.app-shell.extension-window .chat-panel,
-.app-shell.extension-window .layout-sash-agent-sessions-right,
-.app-shell.extension-window .layout-sash-workspace-editor-left,
-.app-shell.extension-window .layout-sash-gateway-panel,
-.app-shell.extension-window .gateway-log-panel {
-  display: none;
-}
-
-.app-shell.extension-window .workspace-editor-shell {
-  flex-grow: 1 !important;
 }
 
 .workspace-editor-header {
@@ -1591,32 +1545,6 @@ button.files-tree-item:hover {
   display: none;
 }
 
-@media (max-width: 1180px) {
-  .toolbar-group-left {
-    width: 210px;
-  }
-
-  .toolbar-group-right {
-    flex-basis: 150px;
-    gap: 4px;
-  }
-
-  .badge.neutral.toolbar-path {
-    flex: 0 0 24px;
-    max-width: 24px;
-    padding-inline: 4px;
-  }
-
-  .badge.neutral.toolbar-path > span:last-child {
-    display: none;
-  }
-
-  .toolbar-group-right > .badge.neutral:last-child {
-    flex-basis: 104px;
-    max-width: 104px;
-  }
-}
-
 @media (max-width: 640px) {
   .workspace-add-overlay {
     padding: 16px 10px;
@@ -1650,20 +1578,8 @@ button.files-tree-item:hover {
     box-shadow: none;
   }
 
-  .agent-sessions-closed .agent-sessions-panel {
-    display: none;
-  }
-
   .agent-sessions-backdrop {
     display: none;
-  }
-
-  .content-layout {
-    padding: 0 8px 8px;
-  }
-
-  .sessions-part-card {
-    margin: 0;
   }
 
   .workspace-preview-panel {
@@ -1692,10 +1608,6 @@ button.files-tree-item:hover {
     display: none;
   }
 
-  .layout-sash-gateway-panel {
-    display: block;
-  }
-
   .auxiliary-panel {
     position: static;
     z-index: auto;
@@ -1704,18 +1616,6 @@ button.files-tree-item:hover {
     width: auto;
     max-width: none;
     box-shadow: none;
-  }
-
-  .toolbar-group-left,
-  .toolbar-group-right {
-    width: auto;
-    flex-basis: auto;
-  }
-
-  .toolbar-path,
-  .toolbar-group-right > .badge:last-child,
-  .toolbar-update-button {
-    display: none;
   }
 
   .composer {
@@ -1970,11 +1870,4 @@ button.files-tree-item:hover {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-
-.gateway-view-slot {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
 }

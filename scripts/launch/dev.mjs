@@ -37,7 +37,7 @@ const {
   ports,
 } = developmentLayout;
 const logContract = loadRuntimeLogContract(projectRoot);
-const webRoot = path.join(projectRoot, "src", "clients", "web");
+const webRoot = path.join(projectRoot, "src", "clients", "workbench");
 const terminalFrontendRoot = path.join(
   projectRoot,
   "src",

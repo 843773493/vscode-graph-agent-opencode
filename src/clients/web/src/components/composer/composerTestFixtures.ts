@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 interface ComposerTestIntervalController {

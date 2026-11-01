@@ -218,7 +218,7 @@ export default function GatewayThemeSettings({
       {notice ? <div className="gateway-console-notice" role="status"><span className="codicon codicon-pass-filled" />{notice}</div> : null}
 
       <section className="gateway-theme-section">
-        <div className="gateway-theme-section-heading"><div><h2>快速切换</h2><p>主题由 Gateway 统一解析并持久化，切换无需刷新页面。</p></div><button type="button" disabled={busy} onClick={() => void handleReload()}>重新读取配置</button></div>
+        <div className="gateway-theme-section-heading"><div><h2>快速切换</h2><p>主题保存在当前浏览器，切换无需刷新页面。</p></div><button type="button" disabled={busy} onClick={() => void handleReload()}>重新读取配置</button></div>
         <div className="gateway-theme-grid">
           {catalog.items.map((theme) => (
             <button

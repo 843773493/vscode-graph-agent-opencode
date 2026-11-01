@@ -7,6 +7,7 @@ import {
   catalogOutboxParentCreation,
   createCatalogOutbox,
   markCatalogOutboxOperationPersisted,
+  pruneReconciledCatalogOutbox,
   type CatalogOutbox,
 } from "./sessionCatalogOutbox";
 import {
@@ -170,6 +171,34 @@ describe("会话目录 pending 投影：移动不制造重复 node", () => {
     expect(source.items.map((item) => item.node_id)).toEqual([]);
     // 目标分支尚未加载，pending 目标 node 不出现在任何已加载分支。
     expect(target.items.map((item) => item.node_id)).toEqual([]);
+  });
+});
+
+describe("会话目录提交回执与权威分支对账", () => {
+  test.each(["rename_node", "move_node"] as const)("%s 已提交但分支未回读时保留同步标记及原 revision", (kind) => {
+    const original = node({ node_id: "folder-a", folder_id: "folder-a" });
+    const parent = kind === "move_node" ? "folder-b" : null;
+    let outbox = outboxWith((base) => addCatalogOutboxIntent(base, opId("update"), {
+      kind, targetNodeId: original.node_id,
+      ...(kind === "move_node" ? { parentNodeId: parent } : { name: "更新后的名称" }),
+    }, { baseCatalogRevision: 3, expectedRevision: 1 }));
+    outbox = applyCatalogOutboxReceipts(outbox, [receipt(opId("update"), {
+      kind, state: "committed", committed_catalog_revision: 4,
+    })]);
+    const stale = projectCatalogBranch(page(kind === "move_node" ? [] : [original], parent), {
+      confirmedNodes: [original], outbox,
+    });
+    expect(stale.items).toHaveLength(1);
+    expect(stale.items[0].pending_state).toBe("committed");
+    expect(stale.items[0].node_revision).toBe(1);
+
+    const refreshed = { ...page([node({ ...original, node_revision: 2,
+      name: kind === "rename_node" ? "更新后的名称" : original.name })], parent), catalog_revision: 4 };
+    outbox = pruneReconciledCatalogOutbox(outbox, refreshed.catalog_revision);
+    const confirmed = projectCatalogBranch(refreshed, { confirmedNodes: refreshed.items, outbox });
+    expect(confirmed.items[0].pending_state).toBeNull();
+    expect(confirmed.items[0].node_revision).toBe(2);
+    expect(confirmed.items[0].parent_node_id).toBe(parent);
   });
 });
 

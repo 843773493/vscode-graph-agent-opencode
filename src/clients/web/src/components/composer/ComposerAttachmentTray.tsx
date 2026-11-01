@@ -59,7 +59,7 @@ export default function ComposerAttachmentTray({
         </div>
       )}
       {notice && <div className="composer-attachment-notice">{notice}</div>}
-      {error && <div className="composer-attachment-error">{error}</div>}
+      {error && <div className="composer-attachment-error" role="alert">{error}</div>}
     </>
   );
 }

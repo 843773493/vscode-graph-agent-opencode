@@ -1,6 +1,6 @@
 # 目录用途
 
-存放由客户端源码合同测试共同消费的稳定语义选择器；端到端场景和 Playwright 生命周期归对应 E2E 测试目录所有。
+存放由客户端源码合同测试共同消费的稳定语义选择器；浏览器场景和 Playwright 生命周期归各自 Integration 或 E2E 测试目录所有。
 
 ## 职责树
 
@@ -10,7 +10,7 @@ clients/
     └── web-selectors.mjs    Web 语义选择器的唯一声明；由 Web 源码合同测试核对
 ```
 
-浏览器测试与选择器合同属于不同边界：浏览器启动、访客登录、页面动作和产物收集放在 `tests/e2e/clients/web/`；选择器名称与 Web 组件中的 `data-testid` 对照放在 `src/clients/web/src/tests/`。不要在此目录另建未被测试入口消费的 driver、scenario 或客户端能力清单。
+浏览器测试与选择器合同属于不同边界：浏览器启动、访客登录、页面动作和产物收集按实际依赖放在 `tests/integration/clients/web/` 或 `tests/e2e/clients/web/`；使用固定模型回放的完整 Workbench 场景属于 Integration。选择器名称与 Workbench 入口、共享 React 组件的真实属性对照放在 `src/clients/web/src/tests/`，Thread 内控件须由使用方按编辑器组及完整 owner 定位 ShadowRoot。不要在此目录另建未被测试入口消费的 driver、scenario 或客户端能力清单。
 
 ## 可修改内容
 

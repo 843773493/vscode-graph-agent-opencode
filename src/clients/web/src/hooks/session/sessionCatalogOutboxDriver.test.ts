@@ -934,7 +934,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
   test("503 背压归为 unknown 并保留 outbox", async () => {
     const driver = driverWithAdapter({
       async enqueue() {
-        throw new HttpRequestError(503, "Service Unavailable", "backpressure", "/enqueue");
+        throw new HttpRequestError(503, "Service Unavailable", "backpressure", "/enqueue", null);
       },
       async queryStatus() {
         throw new Error("本用例不应查询状态");
@@ -953,7 +953,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
   test("4xx 明确拒绝：重读权威状态、移除失败项并报 rejected", async () => {
     const driver = driverWithAdapter({
       async enqueue() {
-        throw new HttpRequestError(409, "Conflict", "revision conflict", "/enqueue");
+        throw new HttpRequestError(409, "Conflict", "revision conflict", "/enqueue", null);
       },
       async queryStatus(_port, _workspaceId, operationIds): Promise<SessionCatalogOperationStatusPage> {
         return {
@@ -1026,7 +1026,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
           if (enqueueCalls.length === 1) {
             enqueueStarted.resolve();
             await rejectA.promise;
-            throw new HttpRequestError(409, "Conflict", "revision conflict", "/enqueue");
+            throw new HttpRequestError(409, "Conflict", "revision conflict", "/enqueue", null);
           }
           return {
             workspace_id: BACKEND_WORKSPACE_ID,

@@ -48,10 +48,13 @@ export function useWorkspaceDefaultActions(context: SessionLifecycleContext) {
           }));
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);
+          const failure = new AggregateError([error, reconciliationError],
+            `设置工作区默认 Agent 失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`);
           setState((prev) => ({
             ...prev,
-            status: `设置工作区默认 Agent 失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`,
+            status: failure.message,
           }));
+          throw failure;
         }
         throw error;
       }
@@ -101,10 +104,13 @@ export function useWorkspaceDefaultActions(context: SessionLifecycleContext) {
           }));
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);
+          const failure = new AggregateError([error, reconciliationError],
+            `设置工作区默认模型失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`);
           setState((prev) => ({
             ...prev,
-            status: `设置工作区默认模型失败: ${message}；重新读取 Agent 也失败: ${reconciliationMessage}`,
+            status: failure.message,
           }));
+          throw failure;
         }
         throw error;
       }

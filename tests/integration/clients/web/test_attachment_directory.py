@@ -18,6 +18,9 @@ import pytest
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 完整 Workbench 产物
+)
 from tests.integration.backend.sessions.rollout_context.test_execution_history_storage import (
     history_target as history_target,  # noqa: PLC0414
 )
@@ -28,15 +31,8 @@ from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS, acquire_gateway
 
 
 @pytest.fixture(autouse=True)
-def attachment_web_assets(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
-    build = subprocess.run(["bun", "run", "--cwd", "src/clients/web", "build"], capture_output=True, text=True, check=False)
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    (context.artifacts_dir / "web-build.stdout.raw").write_text(build.stdout)
-    (context.artifacts_dir / "web-build.stderr.raw").write_text(build.stderr)
-    (context.artifacts_dir / "web-build-exit-code.txt").write_text(str(build.returncode) + "\n")
-    assert build.returncode == 0, build.stdout + build.stderr
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(Path.cwd() / "src/clients/web/dist"))
-
+def attachment_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
 
 @pytest.fixture
 async def attachment_case(history_target, request) -> AsyncIterator[tuple]:
@@ -110,7 +106,7 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
     result_path = context.artifacts_dir / "attachment-directory-browser.json"
     environment = {**os.environ,
         "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
-        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": workspace_id, "sessionId": session,
+        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": workspace_id, "sessionId": session, "threadId": thread,
             "directoryUri": normalized, "attachment": attachment, "content": content, "edited": edited}),
         "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
         "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "attachment-directory-browser.png"),
@@ -120,13 +116,14 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
     with chromium_temporary_environment(temporary) as temporary_environment:
         process = await asyncio.to_thread(subprocess.run,
             ["bun", "tests/integration/clients/web/attachment_directory.mjs"],
-            env={**environment, **temporary_environment}, capture_output=True, text=True, check=False,
+            env={**environment, **temporary_environment}, capture_output=True, text=True, check=False, timeout=130,
         )
     (context.artifacts_dir / "browser.stdout.raw").write_text(process.stdout)
     (context.artifacts_dir / "browser.stderr.raw").write_text(process.stderr)
+    (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"exit_code": process.returncode}) + "\n")
     assert process.returncode == 0, process.stdout + process.stderr
     proof = json.loads(result_path.read_text())
-    assert proof["reopened"] and proof["saved"] and proof["settingsSaved"]
+    assert proof["reopened"] and proof["saved"] and proof["viewRestored"]
     assert proof["pageErrors"] == proof["settingsFailures"] == []
     settings = await client.get(f"/api/v1/sessions/{session}/file-tree-settings")
     assert settings.status_code == 200, settings.text

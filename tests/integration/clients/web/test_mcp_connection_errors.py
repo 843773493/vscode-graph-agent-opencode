@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 构建装具
+)
 from tests.integration.clients.web.test_mcp_connection_authorization import (
     browser_runner as browser_runner,  # noqa: PLC0414 - 复用同一 Chromium 场景和初始化校验
 )
@@ -23,18 +26,19 @@ from tests.support.api_helpers import create_session
 
 
 async def test_web_denial_original_deadline_and_disconnect_keep_authoritative_state(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner, web_workbench_assets,
 ):
     async with (
         oauth_endpoint_factory() as secure, http_schema_endpoint_factory("sibling") as sibling,
-        product_case(secure, sibling, web=True) as (client, _replay, case),
+        product_case(secure, sibling, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)}) as (client, _replay, case),
     ):
         secure.deny_next_authorization = True
         title = "MCP 授权拒绝与真实期限"
-        await create_session(client, title)
+        session = await create_session(client, title)
+        thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
         ledger_path = case.mount.workspace_root / ".boxteam/resources.json"
         before = {item["resource_id"]: item for item in json.loads(ledger_path.read_text())["records"]}
-        observed = await browser_runner(case, base_url=str(client.base_url), session_title=title, mode="errors")
+        observed = await browser_runner(case, base_url=str(client.base_url), session_title=title, session_id=session, thread_id=thread, mode="errors")
         response = await client.get("/api/v1/mcp/connection-operations")
         assert response.status_code == 200, response.text
         latest, = response.json()["data"]

@@ -1,12 +1,11 @@
 # 目录用途
 
-存放跨运行面复用的覆盖层与对话框：锚定浮层 AnchoredOverlay、暖色确认/操作对话框 WarmActionDialog、会话命名对话框 SessionNameDialog 和 Gateway 用户访问菜单 GatewayUserAccessMenu，负责把浮层定位、Portal 渲染与确认交互封装成可复用组件。
+存放跨运行面复用的覆盖层与对话框：锚定浮层 AnchoredOverlay、暖色确认/操作对话框 WarmActionDialog、会话命名对话框 SessionNameDialog，负责把浮层定位、Portal 渲染与确认交互封装成可复用组件。
 
 ```text
 overlays/
 ├── AnchoredOverlay.tsx           轻量入口；默认关闭时不加载定位引擎
 ├── AnchoredOverlayFloating.tsx   首次打开时加载的 Floating UI 定位实现
-├── GatewayUserAccessMenu.tsx     Gateway 用户访问菜单
 ├── SessionContextForkDialog.tsx  会话上下文分叉对话框
 ├── SessionNameDialog.tsx         会话命名对话框
 └── WarmActionDialog.tsx          通用确认与操作对话框
@@ -22,7 +21,6 @@ overlays/
 
 - 浮层定位、Portal 挂载与关闭交互。
 - 对话框的确认/取消流程与焦点管理。
-- 用户访问菜单的渲染与数据接入。
 - 与上述逻辑直接相关的组件测试。
 
 # 不可修改内容

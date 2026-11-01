@@ -6,8 +6,6 @@
 
 ```text
 src/
-├── main.tsx, App.tsx           应用入口与主窗口组合
-├── hooks.tsx                   AppProvider、全局状态与 hook 装配
 ├── index.css                   全局基础样式
 ├── shared.d.ts                 全局声明与跨模块环境类型
 ├── api.ts                      工作区、会话等 API 的公开导出
@@ -67,7 +65,7 @@ src/
 
 # 规范
 
-- 页面功能继续在 `src/clients/web` 实现；其他客户端按各自运行面维护。
+- React 会话产品继续在本目录实现；原版外层布局和每个 EditorPane 的装配在 `src/clients/workbench`，不恢复全局当前会话外壳。
 - 组件负责渲染和局部交互；API、状态变换和副作用遵循上方职责分层。
 - 重量级依赖放入 `runtime/` 并按需加载；纯客户端核心不得依赖浏览器全局对象。
 - 每个新增源码子目录都要包含“目录用途、可修改内容、不可修改内容、规范”四部分的 `AGENTS.md`。

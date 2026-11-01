@@ -32,6 +32,7 @@ export default function ChildThreadPanel({
   activeThreadId,
   onRefresh,
   onSelectThread,
+  onOpenThread,
   onForkFromThread,
   conversation,
 }: {
@@ -49,6 +50,7 @@ export default function ChildThreadPanel({
   activeThreadId: string | null;
   onRefresh: () => void;
   onSelectThread?: (threadId: string) => void;
+  onOpenThread?: (thread: ChildThreadSummary) => void;
   onForkFromThread?: (threadId: string, point: ChildThreadForkPoint) => void;
   conversation: ReturnType<typeof useChildThreadConversation>;
 }) {
@@ -212,7 +214,7 @@ export default function ChildThreadPanel({
                   <button
                     type="button"
                     className="child-thread-main"
-                    onClick={() => conversation.selectThread(thread.thread_id)}
+                    onClick={() => onOpenThread ? onOpenThread(thread) : conversation.selectThread(thread.thread_id)}
                     title={`打开子线程对话：${thread.title ?? thread.thread_id}`}
                   >
                     <span
@@ -233,6 +235,9 @@ export default function ChildThreadPanel({
                   </button>
                   {onSelectThread ? <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={`调试子线程：${thread.thread_id}`} title={isCurrent ? "当前调试 owner" : "调试此子线程"}>
                     <span className="codicon codicon-debug" aria-hidden="true" />
+                  </button> : null}
+                  {onForkFromThread ? <button type="button" className="child-thread-copy-id" onClick={() => onForkFromThread(thread.thread_id, {})} aria-label="从此线程创建分支" title="从此线程创建分支">
+                    <span className="codicon codicon-git-branch" aria-hidden="true" />
                   </button> : null}
                   <button
                     type="button"

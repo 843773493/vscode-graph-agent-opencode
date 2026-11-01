@@ -38,6 +38,9 @@ from app.services.mapping.itemized.resource_activation import (
 )
 from app.testing.model_stream import build_cassette, responses_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
+)
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     EMPTY_TOOL_SET,
     dispatch_execution_scope,
@@ -51,6 +54,7 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
 )
 from tests.support.e2e_control.runtime_ports import ControlledIdentifiers
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
+from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -77,6 +81,7 @@ def browser_runtime(
     integration_workspace_root_path,
     integration_workspace_config_path,
     setup_test_config,
+    web_workbench_assets: Path,
 ):
     del setup_test_config
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -104,7 +109,7 @@ def browser_runtime(
             port=ports.port(20),
             extra_env={
                 "BOXTEAM_HOME": str(runtime_home),
-                "BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist"),
+                "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
             },
         )
         try:
@@ -118,10 +123,10 @@ def browser_runtime(
                         "backend_port": backend.port,
                         "gateway_pid": gateway.process.pid,
                         "gateway_port": gateway.port,
-                        "web_assets": str(Path.cwd() / "src/clients/web/dist"),
+                        "web_assets": str(web_workbench_assets),
                         "web_main_sha256": hashlib.sha256(
                             (
-                                Path.cwd() / "src/clients/web/dist/assets/main2.js"
+                                web_workbench_assets / "out/main.js"
                             ).read_bytes()
                         ).hexdigest(),
                     },
@@ -415,6 +420,9 @@ async def browser_source(browser_runtime, browser_model_replay, inspection_resou
             key: other_session[key] for key in ("resource_identity", "uri", "scope")
         },
         "workspace_id": workspace_id,
+        "workspace_business_id": session["workspace_id"],
+        "thread_id": thread_id,
+        "other_thread_id": other_session["thread_id"],
         "session_id": session_id,
         "other_session_id": other_id,
         "first": first_evidence,
@@ -428,7 +436,7 @@ async def browser_source(browser_runtime, browser_model_replay, inspection_resou
 
 @pytest.mark.asyncio
 async def test_itemized_context_through_real_web_gateway_with_model_stream_replay(
-    browser_runtime, browser_source
+    browser_runtime, browser_source, request: pytest.FixtureRequest,
 ):
     context, base_url = browser_runtime
     chromium_path = (
@@ -446,18 +454,23 @@ async def test_itemized_context_through_real_web_gateway_with_model_stream_repla
         "BOXTEAM_BROWSER_ARTIFACTS": str(context.artifacts_dir),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
     }
-    result = await asyncio.to_thread(
-        subprocess.run,
-        [
-            "bun",
-            "tests/integration/clients/web/itemized_context/itemized_context_browser.mjs",
-        ],
-        cwd=Path.cwd(),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=240,
-        check=False,
+    temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
+    with chromium_temporary_environment(temporary) as temporary_environment:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "bun",
+                "tests/integration/clients/web/itemized_context/itemized_context_browser.mjs",
+            ],
+            cwd=Path.cwd(),
+            env={**env, **temporary_environment},
+            capture_output=True,
+            text=True,
+            timeout=240,
+            check=False,
+        )
+    (context.artifacts_dir / "browser-process.json").write_text(
+        json.dumps({"exit_code": result.returncode}) + "\n", encoding="utf-8",
     )
     (context.artifacts_dir / "browser.stdout.log").write_text(
         result.stdout, encoding="utf-8"

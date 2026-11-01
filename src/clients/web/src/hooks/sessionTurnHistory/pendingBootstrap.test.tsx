@@ -32,11 +32,14 @@ afterEach(() => {
 describe("useSessionTurnHistory pending bootstrap", () => {
   test.each(["snapshot_first", "metadata_first", "queued_to_active", "internal_turn",
     "metadata_then_full", "full_then_metadata", "completed_metadata_expand"] as const)(
-    "真实活动 Turn reader 在 %s 顺序下读取一次 metadata 并保留 live 内容", async (order) => {
+    "真实活动 Turn reader 在 %s 顺序下读取一次根消息和 metadata 并保留 live 内容", async (order) => {
       const apiPort = 9116;
       const jobId = "job_active_metadata";
       const turnId = "turn_active_metadata";
       const threadId = "thr_018f0000000070008000000000000001";
+      const userMessages = [{ message_id: "msg_active_metadata", content: "权威用户消息",
+        attachments: [{ file_id: "boxteam://workspace/ws/resources/attachments/att_original/original/content", content_type: "text/plain" }],
+        created_at: "2026-10-09T00:00:00Z", metadata: {} }];
       installWindow(apiPort);
       let resolveMetadata!: (response: Response) => void;
       let resolvePending!: (response: Response) => void;
@@ -95,7 +98,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
           const parameters = JSON.parse(String(args[1]?.body));
           if (parameters.direction === "tail") return emptyHistoryPageResponse("req_active_tail");
           requests.push(parameters);
-          return parameters.include?.length === 1 && parameters.include[0] === "metadata"
+          return parameters.include?.length === 2 && parameters.include.includes("metadata") && parameters.include.includes("user")
             ? metadataResponse : fullResponse;
         }
         throw new Error(`测试收到未预期请求: ${path}`);
@@ -128,6 +131,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         ...HISTORY_SOURCE_BINDING,
         projection_epoch: 1, internal_executions: [], items: [{ ...turnDetail(1),
           turn_id: turnId, job_id: jobId,
+          user_messages: userMessages,
           status: order === "completed_metadata_expand" ? "completed" : "running",
           root_logical_item_ordinal: 15, activity_stats: { duration_ms: 1000, item_count: 1 },
           final_response: "", response_preview: "", response_parts: [] }],
@@ -137,6 +141,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         ...HISTORY_SOURCE_BINDING,
         projection_epoch: 1, internal_executions: [], items: [{ ...turnDetail(1),
           turn_id: turnId, job_id: jobId,
+          user_messages: userMessages,
           status: order === "completed_metadata_expand" ? "completed" : "running",
           root_logical_item_ordinal: 15, activity_stats: { duration_ms: 1000, item_count: 1 },
           final_response: "历史完整正文", response_preview: "历史完整正文", response_parts: fullParts }],
@@ -206,7 +211,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         });
         await wait(40);
       });
-      const expectedRequests: typeof requests = [{ direction: "around", turn_ids: [turnId], include: ["metadata"] }];
+      const expectedRequests: typeof requests = [{ direction: "around", turn_ids: [turnId], include: ["metadata", "user"] }];
       if (order === "metadata_then_full" || order === "full_then_metadata") {
         expectedRequests.push({ direction: "around", turn_ids: [turnId] });
       }
@@ -218,6 +223,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       const projected = getConversationsForSession(SESSION_ID, currentState, SCOPE_KEY)[0]!;
       expect(projected.rootLogicalItemOrdinal).toBe(15);
       expect(projected.turnItemsView).toBe("full");
+      expect(projected.userMessage?.attachments?.[0].file_id).toBe(userMessages[0].attachments[0].file_id);
       if (order === "completed_metadata_expand") {
         expect(projected.assistantMessages?.[0]?.content).toBe("历史完整正文");
         expect(projected.responseParts).toEqual(fullParts);

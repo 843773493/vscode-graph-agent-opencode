@@ -17,6 +17,8 @@
 - `test_fork_prefix_recovery.py` 是较早回答截点的定向回归，不替代 `conversation_lifecycle/` 的 Section 8 总验收；当前文件的 fixture 管理独立 Gateway、受管 Backend、model_stream、工作区、端口和产物。真实 Composer 产生两轮工具历史，公开 fork 按第一轮 final item 创建 child，先刷新，再离开页面关闭 SSE；首次正常关闭之前，核对本次 Gateway 创建时间、Backend 祖先和测试命令行后强杀 Backend，经公开 Gateway start 冷恢复，再执行原安全重启。两次核真实 PID/generation 更换和精确历史，最后重开 child 后续聊；只读核原 canonical 来源和封存请求，排除后续工具轮次。通过独立矩阵入口运行，保留原60秒 fork watchdog，不修改公共 fixture 或长回归驱动。
 - 工作区与产物镜像本测试 Python 文件路径；截图、下载和 trace 显式写入 artifacts。
 - 启动前验证专用端口未占用，只清理本测试拥有的进程。
+- 完整页面加载正式 Workbench 产物，按精确 workspace/session/thread 穿透 ShadowRoot；展开真实 manifest 折叠项后核对完整 selection，不把延迟物化正文当作空数据。
+- 浏览器保留同步阶段与内存记录、操作 trace、截图和独立业务网络证据；Bun 1.3.11 重复采集完整工作台脚本响应会中止，trace 不采集 DOM/网络快照，不能因此删减分页、刷新和隔离断言。
 
 - `test_model_call_source_freezing.py`只在自身隔离工作区使用既有AGENTS model_call覆盖；与默认Turn入口共用`verify_agents_source_boundary`和唯一浏览器驱动。真实Composer触发工具循环，在首请求封存后改AGENTS，核配对结果之后才追加新来源、同assembly其余binding的Turn边界、下一Turn与安全重启后API/UI/冷Saver原文及请求hash；不代替策略热更新、Skill变化或Section8总验收。
 

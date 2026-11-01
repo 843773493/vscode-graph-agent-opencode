@@ -1,19 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 from collections.abc import Generator
+from contextlib import ExitStack
 from pathlib import Path
 
 import commentjson
 import httpx
 import pytest
 
+from app.core.mounted_workspaces import MountedWorkspace
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from tests.harness.python.browser_manager import (
+    close_browser_manager_processes,
+    start_browser_manager_processes,
+)
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
+)
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
@@ -25,6 +38,7 @@ from tests.support.processes.gateway import (
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
+    terminate_process,
 )
 
 
@@ -54,15 +68,36 @@ def browser_backend(
         encoding="utf-8",
     )
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    with model_stream_replay(
-        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+    with ExitStack() as services, model_stream_replay(
+        context.run_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="real-web-composer-read-file-tool-loop",
     ) as replay:
+        # 整个服务组保留绑定，避免等待闸门或启动其它服务时被客户端临时源端口抢占。
+        lease = E2EProcessLease(
+            context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
+            tuple(port_block.port(offset) for offset in (0, 2, 3, 4, 10, 20)),
+        )
+        lease.acquire()
+        services.callback(lease.release)
+        terminal = start_terminal_backend(
+            backend_port=port_block.port(2), workspace_root=str(workspace_root), artifacts_dir=context.artifacts_dir,
+        )
+        services.callback(terminate_process, terminal)
+        browser = start_browser_manager_processes(
+            workspace_root=workspace_root, artifacts_dir=context.artifacts_dir,
+            backend_port=port_block.port(3), frontend_port=port_block.port(4), backend_host="127.0.0.1",
+        )
+        services.callback(close_browser_manager_processes, browser)
         backend = start_backend_process(
             workspace_root=str(workspace_root),
             port=port_block.port(0),
             log_name="basic-chat-tool-loop-browser-backend",
             asgi_app="tests.support.e2e_control.backend_app:app",
+            startup_mount=MountedWorkspace(
+                load_or_create_workspace_id(workspace_root), workspace_root,
+                terminal_backend_url=f"http://127.0.0.1:{port_block.port(2)}",
+                browser_backend_url=f"http://127.0.0.1:{port_block.port(3)}",
+            ),
             env_overrides={
                 "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key",
                 "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}",
@@ -79,6 +114,7 @@ def browser_backend(
 async def test_basic_chat_tool_loop_through_real_browser_composer(
     request: pytest.FixtureRequest,
     browser_backend: tuple[str, Path, ModelStreamReplay],
+    web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     backend_url, workspace_root, replay = browser_backend
@@ -91,27 +127,17 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
     if chromium_path is None:
         pytest.fail("浏览器 Composer 集成需要 Chromium")
 
-    build = await asyncio.to_thread(
-        subprocess.run,
-        ["bun", "run", "build"],
-        cwd=project_root / "src" / "clients" / "web",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
-
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway = start_gateway_process(
         workspace_root=workspace_root,
         default_backend_url=backend_url,
         port=port_block.port(20),
         extra_env={
-            "BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist")
+            "BOXTEAM_WEB_ASSETS": str(web_workbench_assets)
         },
     )
-    artifacts = workspace_root.parent / "artifacts"
-    artifacts.mkdir(parents=True, exist_ok=True)
+    artifacts = context.artifacts_dir
     result_path = artifacts / "basic-chat-tool-loop-result.json"
     screenshot_path = artifacts / "basic-chat-tool-loop-failure.png"
     result_path.unlink(missing_ok=True)
@@ -148,10 +174,21 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
                 deltas=deltas, finish_reason=finish_reason,
             ),
         ).raw["interactions"][0] for index, (deltas, finish_reason) in enumerate(responses, start=1)]
+        parallel_interactions = [build_cassette(
+            asset_id="browser-parallel-threads", model="browser-chat-tool-loop-stub",
+            url=f"http://127.0.0.1:{port_block.port(10)}/v1/chat/completions",
+            frames=chat_completion_frames(
+                response_id=f"chatcmpl-parallel-{index}", model="browser-chat-tool-loop-stub",
+                deltas=[{"role": "assistant", "content": text}], finish_reason="stop",
+            ),
+        ).raw["interactions"][0] for index, text in enumerate(
+            ("主线程独立回复 alpha", "子线程独立回复 beta"), start=1,
+        )]
         environment.update(
             {
                 **replay.environment,
                 "BOXTEAM_BROWSER_MODEL_INTERACTIONS": json.dumps(interactions),
+                "BOXTEAM_BROWSER_PARALLEL_INTERACTIONS": json.dumps(parallel_interactions),
                 "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                 "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
@@ -173,6 +210,11 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
                 timeout=240,
                 check=False,
             )
+        (artifacts / "browser.log").write_text(browser_result.stdout + browser_result.stderr, encoding="utf-8")
+        (artifacts / "browser-process.json").write_text(json.dumps({
+            "command": ["bun", "tests/integration/clients/web/basic_chat_tool_loop.mjs"],
+            "exit_code": browser_result.returncode,
+        }, indent=2) + "\n", encoding="utf-8")
         assert browser_result.returncode == 0, (
             "浏览器 Composer 工具循环失败:\n"
             f"stdout:\n{browser_result.stdout}\n"
@@ -188,6 +230,43 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         assert "read_file" in result["completedToolText"]
         assert result["finalTextVisible"] is True
         assert result["noPageErrors"] is True, result["pageErrors"]
+        assert result["workbenchLoaded"] is True
+        clipboard_failure = result["clipboardFailure"]
+        assert clipboard_failure["routeId"] == result["workspaceId"]
+        assert clipboard_failure["sessionId"] == result["sessionId"]
+        assert clipboard_failure["counts"] == {"write": 1, "fallback": 1}
+        assert clipboard_failure["errorVisible"] is True
+        assert clipboard_failure["draftPreserved"] is True
+        deletion = result["deletionRefresh"]
+        assert deletion["sessionId"] == result["tabs"]["spareSessionId"]
+        assert deletion["removedFromBothGroups"] is True
+        assert deletion["survivorOperable"] is True
+        assert deletion["receipt"]["state"] == "committed"
+        assert deletion["receipt"]["settlement"] == "settled"
+        assert deletion["restoredReads"] == []
+        replay_failure = result["replayFailure"]
+        assert replay_failure["threadId"] == result["threadId"]
+        assert replay_failure["turnId"] == result["turnId"]
+        assert replay_failure["requestId"]
+        assert replay_failure["errorVisible"] is True
+        assert replay_failure["editPreserved"] is True
+        assert replay_failure["draftPreserved"] is True
+        assert replay_failure["authoritativeHistoryReloaded"] is True
+        assert replay_failure["chatOperable"] is True
+        assert len(replay_failure["interceptions"]) == 1
+        rejection = replay_failure["interceptions"][0]
+        assert rejection["routeId"] == result["workspaceId"]
+        assert rejection["method"] == "POST"
+        assert rejection["payload"]["action"] == "edit_and_continue"
+        tabs = result["tabs"]
+        assert tabs["previewReplaced"] is True
+        assert tabs["treeDoubleClickPinned"] is True
+        assert tabs["tabDoubleClickPinned"] is True
+        assert tabs["closePreservedSessions"] is True
+        assert tabs["lateNavigationPreservedActiveTab"] is True
+        assert tabs["reopenedThreadId"] == result["threadId"]
+        assert tabs["spareSessionId"] != result["sessionId"]
+        assert tabs["spareThreadId"] != result["threadId"]
 
         call_ids = result["modelCallIds"]
         assert len(call_ids) == 2 and len(set(call_ids)) == 2
@@ -198,7 +277,7 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         ]
         with replay.control._condition:
             assert sum(count for namespace, count in replay.control._counters.items()
-                       if namespace.startswith("model_call/")) == 2
+                       if namespace.startswith("model_call/")) == 4
         first_request, second_request = [record["request"] for record in recorded]
         first_messages = first_request["messages"]
         assert first_messages[0]["role"] == "system"
@@ -226,5 +305,56 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         ]
         assert len(tool_messages) == 1
         assert "# 统一测试工作区" in tool_messages[0]["content"]
+        parallel = result["parallel"]
+        assert parallel["sessionId"] == result["sessionId"]
+        assert parallel["draftsIsolated"] is True
+        assert parallel["concurrentCalls"] is True
+        assert parallel["repliesIsolated"] is True
+        assert parallel["groupResourcesIsolated"] is True
+        interrupt_failure = parallel["interruptFailure"]
+        assert interrupt_failure["errorVisible"] is True
+        assert interrupt_failure["errorIsolated"] is True
+        assert interrupt_failure["draftPreserved"] is True
+        assert interrupt_failure["requestId"]
+        assert interrupt_failure["sessionId"] == result["sessionId"]
+        assert interrupt_failure["threadId"] == result["threadId"]
+        assert interrupt_failure["activeJobId"] == parallel["receipts"][0]["job_id"]
+        assert interrupt_failure["interceptions"] == [{
+            "path": f"/api/v1/sessions/{result['sessionId']}/interrupt",
+            "threadId": result["threadId"], "routeId": workspace_id,
+        }]
+        calls = parallel["calls"]
+        assert len(calls) == 2
+        assert calls[0]["threadId"] == result["threadId"]
+        assert calls[1]["threadId"] != result["threadId"]
+        for index, call in enumerate(calls):
+            record = json.loads((replay.artifacts / f"{call['callId']}.json").read_text())
+            assert record["identity"] == {
+                "session_id": result["sessionId"], "thread_id": call["threadId"], "model_call_id": call["callId"],
+            }
+            messages = record["request"]["messages"]
+            user_inputs = [message["content"] for message in messages if message["role"] == "user"]
+            assert call["message"] in user_inputs
+            assert calls[1 - index]["message"] not in user_inputs
+            assert messages[0] == first_messages[0]
+            assert messages[1] == first_messages[1]
+            # fork 复制 canonical 对话，CSM 在 child 首次执行时独立激活，位置不属于继承前缀。
+            assert [message for message in messages if message["role"] in {"assistant", "tool"}] == [
+                assistant, tool_result,
+                {"role": "assistant", "content": [{"text": "浏览器 SSE 工具调用已完成。", "type": "text"}]},
+            ]
+            context_frames = [json.loads(message["content"]) for message in messages
+                if message["role"] == "user" and isinstance(message["content"], str)
+                and message["content"].startswith('{"protocol":"boxteam-context-sources:v2"')]
+            assert len(context_frames) == 1
+            assert context_frames[0]["sources"]
+        file = result["file"]
+        assert file["inlinePreviewFirst"] is True
+        assert file["nativeEditorSaved"] is True
+        assert file["path"].startswith("boxteam://")
+        content = (workspace_root / "README.md").read_bytes()
+        assert content.decode("utf-8") == file["content"]
+        assert content.endswith("Workbench 原生编辑器保存验证\n".encode())
+        assert hashlib.sha256(content).hexdigest() == file["revision"]
     finally:
         close_gateway_process(gateway)

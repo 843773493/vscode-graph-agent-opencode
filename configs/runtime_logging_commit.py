@@ -17,13 +17,13 @@ import psutil
 from app.core.config_migration_guard import config_migration_marker
 from app.core.config_sources import config_revision, read_stable_config_file
 from app.core.sqlite_state import SQLiteProcessOwnership, sqlite_file_uri
-from app.gateway.config.connection_ids import _CONNECTION_ID_RECORD_VERSION
 from configs.installer import atomic_write, resolve_config_resource_source
 from configs.runtime import merge_json_objects, read_jsonc_object, validate_config
 from configs.runtime_logging_migration import (
     ConfigDomain,
     RuntimeLoggingMigrationPlan,
     preview_runtime_logging_migration,
+    read_connection_identity,
 )
 from configs.runtime_logging_storage import (
     configuration_rows,
@@ -134,11 +134,9 @@ def _prepare(
     connection_entries: list[dict[str, object]] = []
     for domain, path in plan.databases:
         if domain == "gateway" and path in connections:
-            record = connections[path].execute("SELECT config_version,payload_json FROM gateway_config WHERE config_key='gateway_connection_ids'").fetchone()
+            record = read_connection_identity(connections[path])
             if record is not None:
-                if record[0] != _CONNECTION_ID_RECORD_VERSION:
-                    raise ValueError("Gateway connection_id 账本版本不受支持，必须先完成既有连接身份迁移")
-                connection_entries = json.loads(record[1])["entries"]
+                connection_entries = cast(list[dict[str, object]], record[1]["entries"])
     for index, item in enumerate(entry for entry in plan.inputs if entry.kind == "file"):
         original = read_stable_config_file(item.path)
         if original.digest != item.digest:
@@ -165,7 +163,11 @@ def _prepare(
         atomic_write(after, before.read_bytes(), 0o600)
         with closing(_connection(after)) as target:
             target.execute("BEGIN IMMEDIATE")
-            migrate_database(target, domain=domain, source_path=path, plan=plan, file_digests=digests, connection_entries=connection_entries)
+            migrate_database(
+                target, domain=domain, source_path=path, plan=plan, file_digests=digests,
+                inline_config=read_jsonc_object(resolve_config_resource_source(f"{domain}_inline.jsonc", project_root=project_root)),
+                connection_entries=connection_entries,
+            )
             target.commit()
             after_digest = _database_digest(target)
         databases[path] = (domain, after)

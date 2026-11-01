@@ -11,6 +11,7 @@ import shutil
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -36,6 +37,7 @@ from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.event import JobStartedEvent, JobStartedPayload
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -108,10 +110,26 @@ async def test_public_session_history_and_replay_stay_on_main_with_real_child(
                 assert job.status.value == "completed", job.error_message
                 accepted[thread_id].append(data)
 
+        # 此 runner fixture 不安装 Trace sink；为已完成的真实 child Job 写入游标见证。
+        await container.trace_event_store.append(session_id, JobStartedEvent(
+            event_id="evt_thread_bootstrap_witness", job_id=accepted[child][-1]["job_id"],
+            timestamp=datetime.now(UTC), payload=JobStartedPayload(session_id=session_id, thread_id=child),
+        ))
         bootstrap = await history_client.get(base + "/bootstrap")
         assert bootstrap.status_code == 200, bootstrap.text
         assert bootstrap.json()["data"]["thread_id"] == main
         assert bootstrap.json()["data"]["latest_turn"]["turn_id"] == accepted[main][-1]["turn_id"]
+        child_bootstrap = await history_client.get(base + "/bootstrap", params={"thread_id": child})
+        assert child_bootstrap.status_code == 200, child_bootstrap.text
+        child_snapshot = child_bootstrap.json()["data"]
+        assert child_snapshot["session"]["thread_id"] == main
+        assert child_snapshot["thread_id"] == child
+        assert child_snapshot["latest_turn"]["turn_id"] == accepted[child][-1]["turn_id"]
+        assert child_snapshot["event_cursor"] != bootstrap.json()["data"]["event_cursor"]
+        child_pending = await history_client.get(base + "/pending-requests", params={"thread_id": child})
+        assert child_pending.status_code == 200, child_pending.text
+        assert child_pending.json()["data"]["thread_id"] == child
+        assert child_pending.json()["data"]["requests"] == []
         visible = await history_client.get(base + "/messages")
         assert visible.status_code == 200, visible.text
         visible_items = visible.json()["data"]["items"]

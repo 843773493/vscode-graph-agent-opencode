@@ -182,7 +182,7 @@ def main() -> None:
             "initialize",
             "install-source-development",
             "migrate",
-            "migrate-runtime-logging",
+            "migrate-runtime-config",
             "doctor",
             "diagnose",
         ),
@@ -192,7 +192,7 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
     parser.add_argument("--preview", action="store_true")
-    parser.add_argument("--restore", action="store_true", help="恢复最近一次日志配置迁移的原件")
+    parser.add_argument("--restore", action="store_true", help="恢复最近一次运行时配置迁移的原件")
     parser.add_argument("--level")
     parser.add_argument("--pretty", choices=("true", "false"))
     parser.add_argument("--home", type=Path, default=Path.home())
@@ -202,14 +202,14 @@ def main() -> None:
         help="显式用普通静态模板重建 Gateway 与 Workspace 用户配置",
     )
     args = parser.parse_args()
-    if args.action != "migrate-runtime-logging" and (
+    if args.action != "migrate-runtime-config" and (
         args.preview
         or args.restore
         or args.level is not None
         or args.pretty is not None
         or args.migration_workspace
     ):
-        parser.error("--preview、--restore、--level、--pretty、--migration-workspace 只用于 migrate-runtime-logging")
+        parser.error("--preview、--restore、--level、--pretty、--migration-workspace 只用于 migrate-runtime-config")
     if args.action in {"doctor", "diagnose"}:
         _print_configuration_diagnostic(
             home=args.home,
@@ -226,7 +226,7 @@ def main() -> None:
         if args.project_root is not None
         else None
     )
-    if args.action == "migrate-runtime-logging":
+    if args.action == "migrate-runtime-config":
         from configs.runtime_logging_commit import commit_runtime_logging_migration
         from configs.runtime_logging_migration import preview_runtime_logging_migration
 

@@ -1,0 +1,28 @@
+# 目录用途
+
+真实 Electron 原生容器与共享 Workbench、Gateway、工作区后端的集成回归。`test_packaged_workbench.py` 构建并校验便携归档，`packaged_workbench.mjs` 从解压后的 ASAR 产物操作会话、虚拟文件和重启恢复；`seed_electron_cache.mjs` 通过当前官方下载库校验并导入已有运行时 ZIP。
+
+# 可修改内容
+
+- Linux 原生 Electron 的产物构建、窗口操作、独立 profile、固定页面来源和缓存恢复验收。
+- 明确的模型传输回放及真实请求延迟装具。
+
+# 不可修改内容
+
+- 不用 electron-web 或 Chromium 页面替代原生 Electron，不伪造 Gateway／Backend 响应。
+- 不向 renderer 暴露 Node、文件系统 IPC 或原生扩展能力。
+
+# 规范
+
+- 通过正式 `package:electron` 入口构建；使用 `--output-root` 将全部产物放入本测试镜像的 runtime，校验归档摘要后解压启动。
+- Electron 使用独立 cwd、空 PATH 和独立 BOXTEAM_HOME；不读取其它测试的会话或应用 bundle。已有官方 Electron 下载缓存可以复制加速，仍由打包器校验固定版本摘要。
+- 首窗口句柄不代表根文档就绪；先按现有页面操作预算等待默认根 URL 的 DOMContentLoaded，再执行控件断言。最终独立 HTTP 历史审计使用正常 Gateway 用户认证，不能用本地凭据替代用户会话。
+- 通过真实 Gateway、Backend、Agent 和精确模型回放验证业务，分类为 Integration；HTTP 延迟代理只转发真实响应。
+- 正常退出必须经过真实 BrowserWindow.close，并等待进程退出；不得手动调用缓存 flush 冒充原生关闭链路。
+- 每次启动保存 renderer 的原始 console error；正常关窗和重启的 IndexedDB 写入错误必须失败，不能归为原版 shutdown joiner 日志。
+- 延迟代理在客户端响应关闭时销毁对应上游请求，正常窗口关闭也必须释放 SSE；只关闭监听和客户端 socket 不能证明上游已释放，不用强制退出驱动掩盖保活连接。
+- 回放控制服务必须晚于 Backend 关闭，附件运行时释放仍会使用受控时钟；业务驱动退出后还要核对 Backend 的正常关闭日志，不能以 pytest 成功掩盖 ASGI 关闭失败。
+- Linux 当前以 Xvfb 和显式 `--no-sandbox` 启动，记录实际参数；WebPreferences 的 sandbox 配置不证明 Chromium 进程沙箱已启用。Windows／macOS、真实 Provider 和崩溃恢复另行验收。
+- 正式工作区、profile、日志、截图和归档只写 `out/tests/integration/clients/electron/test_packaged_workbench/`，按 run／node 隔离；矩阵提供外部超时和 4GiB 数据段保护。
+- 打包和原生驱动都必须登记完整进程组 owner，超时也回收子进程并保存实际退出回执；不得直接复制旧下载缓存的散列目录假设当前下载库仍使用同一键。
+- 构建和依赖仍使用 Bun。原生 Playwright Electron inspector 驱动暂用 Node：Bun 1.3.11 下连接不完成，同一 ASAR 在 Node 下可连接；保留 TODO 和原始对照证据，不增产品兼容层。Xvfb 等工具的临时目录也放入本次 runtime。

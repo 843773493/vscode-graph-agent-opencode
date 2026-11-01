@@ -7,7 +7,7 @@ export type RunGatewayWorkspaceListTask = <Result>(
   consume?: (result: Result) => void,
 ) => Promise<Result>;
 export type RefreshOptions = { silent?: boolean; force?: boolean };
-// 唯一来源，与 hooks.tsx 中 finishWorkspaceRefresh 的实现签名逐字一致。
+// 工作区刷新编排与其消费方共用的唯一签名。
 // 返回值是本次刷新真正落到 state 的活动工作区 id：刷新被作废时返回 null。
 // 调用方不能把它当布尔用——正式激活必须比对它是否等于自己请求的 workspaceId。
 // 历史成因：useGatewayWorkspaceMutations.ts 与 useGatewayWorkspaceRuntimeLifecycle.ts

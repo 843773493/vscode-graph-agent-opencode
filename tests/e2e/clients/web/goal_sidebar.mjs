@@ -13,6 +13,7 @@ const browser = await chromium.launch({
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 const page = await context.newPage();
 let token;
+let panel;
 const writes = [];
 page.on("request", (request) => {
   if (request.method() === "PUT" && new URL(request.url()).pathname.endsWith("/goal")) {
@@ -31,7 +32,13 @@ async function api(path, method = "GET", data) {
 }
 
 async function selectSession(session) {
-  await page.locator(`[data-session-id="${session.session_id}"]`).click();
+  await page.locator(`button[data-session-id="${session.session_id}"]`).click();
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${session.workspace_id}"][data-session-id="${session.session_id}"][data-thread-id="${session.thread_id}"]`);
+  await expect(thread).toBeVisible();
+  const toggle = thread.getByRole("button", { name: "切换会话资源", exact: true });
+  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+  await thread.getByRole("tab", { name: "任务", exact: true }).click();
+  panel = thread.getByRole("tabpanel", { name: "任务", exact: true });
 }
 
 try {
@@ -47,20 +54,14 @@ try {
   const original = await api(`/api/v1/sessions/${first.session_id}/goal`, "PUT", {
     objective: "验证原始 Goal", status: "paused", token_budget: 1000,
   });
-  // 已有四标签布局必须由设置 owner 补齐 Goal，并保留用户的相对排序。
-  const settings = await api("/api/gateway/ui-settings", "PUT", { layout: {
-    auxiliary_visible: true,
-    auxiliary_tab: "files",
-    auxiliary_tab_order: ["files", "changes", "debug", "resources"],
-  } });
-  assert.deepEqual(settings.layout.auxiliary_tab_order, ["files", "changes", "goal", "debug", "resources"]);
-
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  const target = new URL(baseUrl);
+  await page.goto(target.href, { waitUntil: "domcontentloaded" });
   await selectSession(first);
-  const tab = page.getByRole("tab", { name: "Goal", exact: true });
-  await tab.click();
-  const panel = page.getByRole("tabpanel", { name: "Goal", exact: true });
+  await page.locator(`button[data-session-id="${first.session_id}"]`).dblclick();
+  const tab = page.locator(`section.boxteam-thread[data-session-id="${first.session_id}"][data-thread-id="${first.thread_id}"]`)
+    .getByRole("tab", { name: "任务", exact: true });
   await expect(panel).toContainText("验证原始 Goal");
+  await panel.getByRole("button", { name: "验证原始 Goal", exact: true }).click();
   await expect(panel).toContainText("已暂停");
   await expect(panel).toContainText("Token 0 / 1,000");
   await panel.getByRole("button", { name: "编辑", exact: true }).click();
@@ -74,36 +75,85 @@ try {
   assert.equal(edited.thread_id, first.thread_id);
   assert.equal(edited.status, "paused");
   assert.equal(edited.objective, "通过界面编辑的 Goal");
-  assert.deepEqual(writes, [{ objective: edited.objective, status: "paused" }]);
-  assert.equal((await api("/api/gateway/ui-settings")).layout.auxiliary_tab, "goal");
+  assert.equal(edited.token_budget, original.token_budget);
+  assert.deepEqual(writes, [{ objective: edited.objective, token_budget: original.token_budget, status: "paused" }]);
+  // 新工作台把会话资源展示态保存到对应 EditorInput，由原版存储恢复。
+  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(tab).toHaveAttribute("aria-selected", "true");
   await selectSession(first);
   await expect(panel).toContainText(edited.objective);
+  await panel.getByRole("button", { name: edited.objective, exact: true }).click();
 
   await panel.getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByRole("dialog", { name: "编辑 Goal", exact: true })
     .getByRole("button", { name: "关闭", exact: true }).click();
   await selectSession(second);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(panel).toContainText("当前会话没有 Goal");
+  await expect(panel).toContainText("当前会话没有关联任务。");
   await expect(panel).not.toContainText(edited.objective);
+  await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
+  await panel.getByRole("button", { name: "Goal", exact: true }).click();
   await panel.getByRole("button", { name: "新建 Goal", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "新建 Goal", exact: true });
   await expect(dialog.getByRole("button", { name: "开始 Goal", exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await selectSession(first);
   await expect(panel).toContainText(edited.objective);
-  await panel.getByRole("button", { name: "清除", exact: true }).click();
+  await panel.getByRole("button", { name: edited.objective, exact: true }).click();
+  await panel.getByRole("button", { name: "删除 Goal", exact: true }).click();
   const confirmation = page.getByRole("dialog");
-  await confirmation.getByRole("button", { name: "清除 Goal", exact: true }).click();
-  await expect(panel).toContainText("当前会话没有 Goal");
+  await expect(confirmation).toContainText("会话消息保留");
+  await confirmation.getByRole("button", { name: "取消", exact: true }).click();
+  assert.equal((await api(`/api/v1/sessions/${first.session_id}/goal`)).goal_id, original.goal_id);
+  await panel.getByRole("button", { name: "删除 Goal", exact: true }).click();
+  await page.getByRole("dialog", { name: "删除当前 Goal？", exact: true })
+    .getByRole("button", { name: "删除 Goal", exact: true }).click();
+  await expect(panel).toContainText("当前会话没有关联任务。");
   assert.equal(await api(`/api/v1/sessions/${first.session_id}/goal`), null);
-  await page.screenshot({ path: join(artifacts, "goal-sidebar.png") });
+  // 从会话侧栏创建普通任务，验证默认目标、直接管理及两处完整镜像。
+  await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
+  await panel.getByRole("button", { name: "自定义", exact: true }).click();
+  let taskForm = panel.getByRole("form", { name: "创建持久任务" });
+  assert.equal(await taskForm.getByLabel("工作 Thread URI", { exact: true }).inputValue(),
+    `boxteam://workspace/${first.workspace_id}/resources/session/${first.session_id}/threads/${first.thread_id}`);
+  await taskForm.getByLabel("任务名称", { exact: true }).fill("会话侧栏创建的任务");
+  await taskForm.getByLabel("提示内容", { exact: true }).fill("服务上线后检查状态");
+  await taskForm.getByLabel("动作", { exact: true }).selectOption("context_only");
+  const createdReceipt = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/persistent-tasks" && response.request().method() === "POST");
+  await taskForm.getByRole("button", { name: "保存任务", exact: true }).click();
+  const createdResponse = await createdReceipt;
+  assert.equal(createdResponse.status(), 200);
+  const created = (await createdResponse.json()).data;
+  await panel.getByRole("button", { name: "暂停任务", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "恢复任务", exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "编辑任务", exact: true }).click();
+  taskForm = panel.getByRole("form", { name: "编辑持久任务" });
+  await taskForm.getByLabel("任务名称", { exact: true }).fill("会话侧栏编辑的任务");
+  await taskForm.getByRole("button", { name: "保存任务", exact: true }).click();
+  await expect(panel.getByRole("heading", { name: "会话侧栏编辑的任务", exact: true })).toBeVisible();
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand("boxteam.automation.focus"));
+  const workspaceTasks = page.getByRole("region", { name: "工作区持久任务", exact: true });
+  await workspaceTasks.getByRole("button", { name: "会话侧栏编辑的任务", exact: true }).click();
+  await expect(workspaceTasks.getByRole("button", { name: "恢复任务", exact: true })).toBeVisible();
+  await workspaceTasks.getByRole("button", { name: "恢复任务", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "暂停任务", exact: true })).toBeVisible();
+  const persisted = await api(`/api/v1/persistent-tasks/${created.task_id}`);
+  assert.equal(persisted.task_id, created.task_id);
+  assert.equal(persisted.lifecycle, "active");
+  assert.equal(persisted.configuration.name, "会话侧栏编辑的任务");
+  await panel.getByRole("button", { name: "返回任务列表", exact: true }).click();
+  await selectSession(second);
+  await expect(panel).toContainText("当前会话没有关联任务。");
+  await expect(panel).not.toContainText(persisted.configuration.name);
+  await selectSession(first);
+  await panel.getByRole("button", { name: persisted.configuration.name, exact: true }).click();
+  await expect(panel.getByRole("button", { name: "暂停任务", exact: true })).toBeVisible();
+  await page.screenshot({ path: join(artifacts, "session-tasks.png") });
   await writeFile(join(artifacts, "result.json"), JSON.stringify({
     sessionId: first.session_id, mainThreadId: first.thread_id,
-    settingsRestored: true, editedThroughUI: true, sessionSwitchIsolated: true,
-    clearedThroughUI: true, modelCalls: 0,
+    editorViewRestored: true, editedThroughUI: true, sessionSwitchIsolated: true,
+    deletedThroughUI: true, deletionCancelledThroughUI: true, taskId: created.task_id, sidebarCreateAndEdit: true, sharedState: true, modelCalls: 0,
   }, null, 2));
 } catch (error) {
   await page.screenshot({ path: join(artifacts, "goal-sidebar-failure.png") });

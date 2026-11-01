@@ -16,7 +16,7 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": ["system", "user", "user", "user", "user", "user"]
+          "message_roles": ["system", "user", "user"]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 0 },
@@ -41,16 +41,7 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": [
-            "system",
-            "user",
-            "user",
-            "user",
-            "user",
-            "user",
-            "assistant",
-            "user"
-          ]
+          "message_roles": ["system", "user", "user", "assistant", "user"]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 1 },
@@ -75,18 +66,7 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": [
-            "system",
-            "user",
-            "user",
-            "user",
-            "user",
-            "user",
-            "assistant",
-            "user",
-            "assistant",
-            "tool"
-          ]
+          "message_roles": ["system", "user", "user", "assistant", "user", "assistant", "tool"]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 2 },
@@ -111,17 +91,7 @@
         "match": {
           "model": "big-pickle",
           "stream": true,
-          "message_roles": [
-            "system",
-            "user",
-            "user",
-            "user",
-            "user",
-            "user",
-            "assistant",
-            "user",
-            "assistant"
-          ]
+          "message_roles": ["system", "user", "user", "assistant", "user", "assistant"]
         }
       },
       "replay": { "sequence_id": "child-thread-delegate", "step": 3 },
@@ -135,6 +105,40 @@
           { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "子代理" }, "finish_reason": null }] } },
           { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "content": "任务已完成。" }, "finish_reason": null }] } },
           { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-delegate-4", "object": "chat.completion.chunk", "created": 4, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": { "model": "big-pickle", "stream": true, "message_roles": ["system", "user"] }
+      },
+      "replay": { "sequence_id": "child-thread-seed", "step": 0 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-seed", "object": "chat.completion.chunk", "created": 5, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "子线程已完成示例任务。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-seed", "object": "chat.completion.chunk", "created": 5, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
+          { "kind": "done", "encoding": "text", "payload": "[DONE]" }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://opencode.ai/zen/v1/chat/completions",
+        "match": { "model": "big-pickle", "stream": true, "message_roles": ["system", "user", "user", "assistant", "user", "assistant", "tool", "assistant", "user"] }
+      },
+      "replay": { "sequence_id": "child-thread-report", "step": 0 },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "text/event-stream" },
+        "frames": [
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-report", "object": "chat.completion.chunk", "created": 6, "model": "big-pickle", "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "已收到子线程执行结果。" }, "finish_reason": null }] } },
+          { "kind": "data", "encoding": "json", "payload": { "id": "child-thread-report", "object": "chat.completion.chunk", "created": 6, "model": "big-pickle", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] } },
           { "kind": "done", "encoding": "text", "payload": "[DONE]" }
         ]
       }

@@ -28,10 +28,11 @@ const WORKSPACE_COMPONENT_OPTIONS: ReadonlyArray<{
     icon: "codicon-diff",
   },
   {
+    // 保持用户已保存的布局标识，展示范围为会话关联任务。
     tab: "goal",
-    label: "Goal",
-    description: "管理当前会话的 Goal、查看耗时和 Token 用量",
-    icon: "codicon-target",
+    label: "任务",
+    description: "管理当前会话关联的 Goal、定时与条件任务",
+    icon: "codicon-checklist",
   },
   {
     tab: "debug",

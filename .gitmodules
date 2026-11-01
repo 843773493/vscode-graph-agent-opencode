@@ -1,0 +1,3 @@
+[submodule "code-oss"]
+	path = src/clients/workbench/upstream
+	url = https://github.com/microsoft/vscode.git

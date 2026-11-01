@@ -114,9 +114,9 @@
 
 1. 如果 `package.json` 中的命令过长，将其移到 `scripts/` 下的 `.mjs` 脚本中。
 2. 仓库中的 JavaScript 代码必须始终使用 ESM（ES 模块）通过 `import`/`export`，避免使用 CommonJS。
-3. `src/clients/` 按运行面组织客户端：`web` 是浏览器中的桌面布局，`electron` 是 Electron 的 main/preload 原生宿主，`electron-web` 是 Electron renderer 的浏览器可运行 parity 客户端，`mobile` 是 React Native 客户端，`mobile-web` 是移动布局的浏览器 parity 客户端；可复用的纯客户端核心和桌面 DOM 组件分别位于 `src/clients/shared/core`、`src/clients/shared/web-ui`，移动 Web DOM 组件可放入 `src/clients/shared/mobile-web-ui`。
+3. `src/clients/` 按运行面组织客户端：`workbench` 是 Web 与 Electron 共用的完整 Code OSS 入口和外层布局，`web` 是其复用的 React 会话产品，`electron` 是 Electron 的 main/preload 原生宿主，`electron-web` 是 Electron renderer 的浏览器可运行 parity 客户端，`mobile` 是 React Native 客户端，`mobile-web` 是移动布局的浏览器 parity 客户端；可复用的纯客户端核心和桌面 DOM 组件分别位于 `src/clients/shared/core`、`src/clients/shared/web-ui`，移动 Web DOM 组件可放入 `src/clients/shared/mobile-web-ui`。
 4. `app/` 中除 `app/gateway/` 外的工作区后端模块负责 Agent 业务规则、会话状态和核心计算；`app/gateway/` 只负责工作区路由和代理。
-5. **当前已实现的页面功能仍只在 `src/clients/web` 开发（浏览器前端 8011，端口以 `scripts/launch/dev.mjs` 的 `frontendPort` 为准）。** `electron-web` 和 `mobile-web` 只承载对应原生端约 90% 的非原生 UI parity 测试，不能替代 Electron、React Native 真机或模拟器测试；`electron/main`、`electron/preload` 和 `mobile` 的原生实现必须通过各自的 OpenSpec 变更进入。用户未指定客户端时，现阶段“UI”仍指 `src/clients/web`。
+5. **当前完整工作台入口为 `src/clients/workbench`，会话 React 组件、业务 hook 和共享状态继续在 `src/clients/web` 维护（浏览器前端默认 8011，由 `scripts/launch/dev.mjs` 统一传入）。** Web 与 Electron 构建同一 Workbench；Electron 只承担窗口、生命周期和固定存储位置。`electron-web` 与 `mobile-web` 的浏览器 parity 不能替代原生验收；原生能力必须经对应 OpenSpec 变更进入。用户未指定客户端时，“UI”仍指浏览器中的这一工作台。
 6. 编写纯 Web 代码时应保持共享协议和纯业务模型不绑定浏览器全局对象，但不要为尚未实现的客户端预写 adapter、bridge 或兼容层。
 
 

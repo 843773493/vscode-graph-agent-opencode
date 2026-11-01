@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
@@ -16,8 +17,26 @@ try {
   page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
-  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
+  const target = new URL(fixture.baseUrl);
+  await page.goto(target.href, { waitUntil: "domcontentloaded" });
+  // Cookie 交由真实浏览器处理，避免 Bun 的 Node HTTP 兼容层改变响应 URL。
+  const access = await page.evaluate(async () => {
+    const credential = await fetch("/api/gateway/auth/local-credential");
+    if (!credential.ok) throw new Error("读取本机凭据失败");
+    const response = await fetch("/api/gateway/users/guest", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": (await credential.json()).data.token },
+      body: JSON.stringify({ tracking: { source: "mcp-workbench-browser" } }),
+    });
+    return { status: response.status, body: await response.text() };
+  });
+  assert.equal(access.status, 200, access.body);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
+  const session = page.locator(`button[data-session-id="${fixture.sessionId}"]`);
+  await expect(session).toContainText(fixture.sessionTitle);
+  await session.dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
+  await expect(thread).toBeVisible();
   const initialization = await page.evaluate(async (backendWorkspaceId) => {
     const tokenResponse = await fetch("/api/gateway/auth/local-credential");
     if (!tokenResponse.ok) throw new Error("读取本机凭证失败");
@@ -43,16 +62,23 @@ try {
     assert(result.requestId);
     assert.equal(result.requestId, result.body.request_id);
   }
-  await page.getByTestId("composer-input").fill("发现并发出两个 probe，等待我逐一审批。");
+  await thread.getByTestId("composer-input").fill("发现并发出两个 probe，等待我逐一审批。");
   const accepted = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/messages") && response.request().method() === "POST");
-  await page.getByTestId("composer-send").click();
+  await thread.getByTestId("composer-send").click();
   const acceptance = await accepted;
   assert.equal(acceptance.status(), 200);
+  assert.equal(new URL(acceptance.url()).pathname, `/api/v1/sessions/${fixture.sessionId}/threads/${fixture.threadId}/messages`);
+  const messageHeaders = await acceptance.request().allHeaders();
+  const acceptedOwner = initialization.find(item => item.url === "/api/gateway/workspaces").body.data.items.find(item => item.backend_workspace_id === fixture.workspaceId);
+  assert.equal(messageHeaders["x-boxteam-workspace-id"], acceptedOwner.workspace_id);
+  await expect(thread).toHaveAttribute("data-workspace-id", fixture.workspaceId);
   const jobId = (await acceptance.json()).data.job_id;
-  const panel = page.getByRole("complementary", { name: "待确认的工具操作" });
+  const panel = thread.getByRole("complementary", { name: "待确认的工具操作" });
   await panel.getByRole("heading", { name: "确认工具操作" }).waitFor({ timeout: 60000 });
   // 刷新后从目标后端重新读取同一检查点，不依赖内存表单状态。
+  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(thread).toBeVisible();
   await panel.getByRole("heading", { name: "确认工具操作" }).waitFor({ timeout: 30000 });
   const actions = panel.locator("fieldset");
   assert.equal(await actions.count(), 2);
@@ -67,10 +93,11 @@ try {
   assert.equal(result.status(), 200, JSON.stringify(body));
   assert.equal(result.headers()["x-request-id"], body.request_id);
   assert.equal(body.data.status, "accepted");
+  assert.equal((await result.request().allHeaders())["x-boxteam-workspace-id"], acceptedOwner.workspace_id);
   const request = result.request().postDataJSON();
   assert.equal(request.responses[0].decisions[0].type, "edit");
   assert.equal(request.responses[0].decisions[1].type, "reject");
-  await page.getByText("工具审批已按原调用逐一结算。", { exact: false }).first().waitFor({ timeout: 60000 });
+  await thread.getByText("工具审批已按原调用逐一结算。", { exact: false }).first().waitFor({ timeout: 60000 });
   assert.equal(await panel.count(), 0);
   assert.deepEqual(errors, []);
   await page.screenshot({ path: path.join(artifacts, "approval-complete.png"), fullPage: true });

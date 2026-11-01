@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": ["react", "react-dom"],
+    "typeRoots": ["../../../../../src/clients/web/node_modules/@types"],
+    "paths": {
+      "react": ["../../../../../src/clients/web/node_modules/@types/react/index.d.ts"],
+      "react/*": ["../../../../../src/clients/web/node_modules/@types/react/*"],
+      "react-dom": ["../../../../../src/clients/web/node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/*": ["../../../../../src/clients/web/node_modules/@types/react-dom/*"]
+    }
+  },
+  "include": ["react_surface_harness.tsx", "../../../../../src/clients/workbench/src/react/styles.d.ts"]
+}

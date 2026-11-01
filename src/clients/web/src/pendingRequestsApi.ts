@@ -6,19 +6,23 @@ import type {
 } from "./types/backend";
 
 
-export async function listMainThreadPendingRequests(
+export async function listThreadPendingRequests(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
   signal?: AbortSignal,
+  threadId?: string,
 ): Promise<PendingRequestList> {
-  return unwrapApiData(
+  const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/${threadId === undefined ? "main-thread/pending-requests" : `pending-requests?thread_id=${encodeURIComponent(threadId)}`}`;
+  const snapshot = unwrapApiData(
     await requestJson<APIResponse<PendingRequestList>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/main-thread/pending-requests`,
+      path,
       { headers: workspaceHeader(workspaceId), signal },
     ),
   );
+  if (threadId !== undefined && (snapshot.session_id !== sessionId || snapshot.thread_id !== threadId)) throw new Error("待处理消息快照的 Session / Thread 归属不一致");
+  return snapshot;
 }
 
 export async function removePendingRequest(
@@ -40,11 +44,12 @@ export async function clearPendingRequests(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
+  threadId?: string,
 ): Promise<PendingRequestList> {
   return unwrapApiData(
     await requestJson<APIResponse<PendingRequestList>>(
       port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests`,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/pending-requests${threadId === undefined ? "" : `?thread_id=${encodeURIComponent(threadId)}`}`,
       { method: "DELETE", headers: workspaceHeader(workspaceId) },
     ),
   );

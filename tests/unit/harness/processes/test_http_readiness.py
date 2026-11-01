@@ -10,6 +10,7 @@ from unittest.mock import Mock
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
+import psutil
 import pytest
 
 import tests.support.processes.gateway as gateway_processes
@@ -44,6 +45,19 @@ def process() -> Mock:
     value.poll.return_value = None
     value.communicate.return_value = ("启动标准输出", "启动错误详情")
     return value
+
+
+@pytest.fixture(autouse=True)
+def backend_connections(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    backend = Mock()
+    backend.net_connections.return_value = [SimpleNamespace(
+        status=psutil.CONN_LISTEN, laddr=SimpleNamespace(ip="127.0.0.1", port=4312),
+    )]
+    monkeypatch.setattr(workspace_processes, "psutil", SimpleNamespace(
+        Process=Mock(return_value=backend), CONN_LISTEN=psutil.CONN_LISTEN,
+        NoSuchProcess=psutil.NoSuchProcess,
+    ))
+    return backend
 
 
 @contextmanager
@@ -267,6 +281,67 @@ def test_workspace_ready_keeps_identity_header_without_one_second_polling(
         and request.get_header("X-boxteam-workspace-id") == "workspace-expected"
         for request in requests
     )
+
+
+def test_workspace_does_not_connect_until_owned_listener_exists(
+    clock: ManualClock, process: Mock, backend_connections: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def connections(*, kind: str):
+        assert kind == "tcp"
+        if clock.now < 0.15:
+            return [SimpleNamespace(status=psutil.CONN_ESTABLISHED,
+                laddr=SimpleNamespace(ip="127.0.0.1", port=4312))]
+        return [SimpleNamespace(status=psutil.CONN_LISTEN,
+            laddr=SimpleNamespace(ip="127.0.0.1", port=4312))]
+
+    backend_connections.net_connections.side_effect = connections
+    observed = []
+
+    def connect(_request: Request, *, timeout: float):
+        observed.append(clock.now)
+        return workspace_health_response({"workspace_id": "workspace-expected"})
+
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+    workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
+    assert observed == pytest.approx([0.15])
+
+
+@pytest.mark.parametrize("address", [("127.0.0.1", 4313), ("127.0.0.2", 4312)])
+def test_workspace_other_listener_does_not_start_health_probe(
+    address: tuple[str, int], clock: ManualClock, process: Mock,
+    backend_connections: Mock, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend_connections.net_connections.return_value = [SimpleNamespace(
+        status=psutil.CONN_LISTEN, laddr=SimpleNamespace(ip=address[0], port=address[1]),
+    )]
+    monkeypatch.setattr(workspace_processes, "TEST_READY_TIMEOUT_SECONDS", 0.12)
+    connect = Mock()
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+    with pytest.raises(TimeoutError, match="端口: 4312"):
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
+    connect.assert_not_called()
+    assert clock.now == pytest.approx(0.12)
+
+
+def test_workspace_listener_inspection_consumes_readiness_budget(
+    clock: ManualClock, process: Mock, backend_connections: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listener = backend_connections.net_connections.return_value
+
+    def connections(*, kind: str):
+        clock.sleep(0.12)
+        return listener
+
+    backend_connections.net_connections.side_effect = connections
+    monkeypatch.setattr(workspace_processes, "TEST_READY_TIMEOUT_SECONDS", 0.12)
+    connect = Mock()
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+    with pytest.raises(TimeoutError, match="端口: 4312"):
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
+    connect.assert_not_called()
+    assert clock.now == pytest.approx(0.12)
 
 
 @pytest.mark.parametrize("connection_timeout", [False, True])

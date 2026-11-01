@@ -1,12 +1,8 @@
 import type {
   Activity,
-  ActiveState,
-  InterruptState,
   MessageBlockSnapshot,
   ModelCallSnapshot,
-  RecoveryState,
   ResourceRef,
-  StreamFailure,
   StreamSnapshot,
   ToolCall,
   ToolExecutionSnapshot,

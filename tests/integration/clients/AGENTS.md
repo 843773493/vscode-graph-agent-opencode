@@ -4,7 +4,7 @@
 
 ## 可修改内容
 
-- 浏览器客户端、Gateway 和后端之间的集成测试。
+- 浏览器或已授权原生客户端、Gateway 和后端之间的集成测试。
 - 客户端集成测试专用的模型或 HTTP 服务替身。
 
 ## 不可修改内容
@@ -17,3 +17,4 @@
 - 浏览器测试必须验证真实 HTTP 请求和页面行为。
 - 被替换的服务边界必须在测试名称或 fixture 中明确。
 - 二进制、截图和指标只写入对应的 `out/tests/integration/` 目录。
+- `electron/` 使用真实 Linux Electron ASAR 产物及精确模型回放，按独立 OpenSpec 验证会话、虚拟文件、窗口关闭和持久缓存；不得由 electron-web 或 Chromium parity 页面代替。

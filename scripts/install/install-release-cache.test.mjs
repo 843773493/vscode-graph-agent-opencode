@@ -79,6 +79,7 @@ async function observeLocalRelease(scriptUrl, targetPlatform, scenario) {
     ["package.json", '{"version":"1.2.3"}\n'], ["bun.lock", "bun"], ["uv.lock", "uv"],
     ["pyproject.toml", "python"], ["app/example.py", "before\n"], ["configs/example.jsonc", "{}"],
     ["resources/example.txt", "resource"], ["src/clients/web/index.ts", "web"],
+    ["src/clients/workbench/src/main.ts", "workbench"],
     ["src/shared/sseRuntimeValidators.js", "shared before\n"],
     ["src/workspace-services/example.ts", "service"], ["packages/launcher/package.json", "{}"],
     ["packaging/runtime/example.mjs", "runtime"], ["scripts/install/runtime-postinstall.mjs", "postinstall"],

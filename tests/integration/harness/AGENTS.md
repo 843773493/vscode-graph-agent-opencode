@@ -5,7 +5,7 @@
 ```text
 harness/
 ├── test_browser_manager_addressing.py       Browser 监听、访问 URL 与端口冲突接线
-├── test_boundary_display_fixture_lifetime.py 历史边界展示装具的准备及清理失败回收
+├── test_boundary_display_fixture_lifetime.py 历史边界展示及聊天装具的准备、诊断及清理失败回收
 ├── test_catalog_fixture_lifetime.py          Catalog 根路径、owner 复用与隔离释放
 ├── test_gateway_launcher_control_endpoint.py 原生控制端点的监听、身份与清理
 ├── test_gateway_readiness.py                 Gateway 就绪探针的认证与 HTTP 拒绝
@@ -20,6 +20,7 @@ harness/
 ├── test_outbox_fixture_lifetime.py            静态 HTTP/Chromium 装具准备及清理失败回收
 ├── test_posix_gateway_target.py              POSIX Gateway 启动、健康探测与进程清理
 ├── test_process_ownership.py                 进程归属、端口替换、静态服务绑定与回收
+├── test_process_port_lease.py                Linux 租约保留自动端口、真实服务复用和既有监听者保护
 ├── test_run_task_source_snapshot.py           源码快照、profile 基线与进程组回收
 ├── test_windows_gateway_target.py             原生 PowerShell Gateway 启动、健康探测与进程树清理
 ├── test_windows_target_activation.py           Windows 目标激活生命周期
@@ -32,6 +33,8 @@ harness/
 ```
 
 浏览器场景保留在`clients/web/`；这里通过准备边界故障验证它的真实句柄生命周期，不重写业务场景。先观察被测装具的释放结果，再由探针回收仍持有的资源，不能用探针兜底制造“装具已释放”的结论。
+
+聊天装具复用历史边界展示的真实 Chromium 探针，覆盖 launch/context/page、事件注册、导航及两级关闭故障，另核截图同步抛错和结果写入失败。核对原始错误、逆序关闭和失败阶段，不能用诊断失败掩盖原场景错误；这些准备边界检查不证明 Gateway 或模型业务执行通过。
 
 开发 Gateway 等待测试使用真实本地 HTTP、隔离就绪文件和明确的 systemctl 状态替身，覆盖挂起、迟到、重试和 manager 替换；不启动或操作用户的 systemd unit，不作为完整开发栈启动验收。
 
@@ -64,6 +67,7 @@ JS 控制客户端测试使用本用例创建的 TCP 服务替身，覆盖跨 UT
 
 ## 规范
 
+- 元数据页面装具复用边界展示的真实 Chromium 故障探针，覆盖准备、清理、截图及结果写入失败；核原异常、全部资源回收和诊断落盘，不连接业务服务，也不代替 Vite 或 Gateway 页面验收。
 - 通过 pytest fixture 注入依赖，所有测试子进程由创建者确定性回收。
 - 就绪HTTP替身在socket绑定后立即登记关闭，线程成功启动后再登记停止和等待；任一释放失败或中断仍尝试其余动作，不对未启动线程调用shutdown/join。HTTP认证、身份和状态断言仍沿真实传输入口验证。
 - 只操作本用例创建的进程；端口被占用时保留原所有者并明确失败。
@@ -71,3 +75,4 @@ JS 控制客户端测试使用本用例创建的 TCP 服务替身，覆盖跨 UT
 - 高输出接线用例可用真实 HTTP 子进程替换被启动的程序，但保留装具实际输出载体和就绪路径；它证明 Browser、Terminal 装具日志不会阻塞，不证明相应产品行为。
 - 辅助服务高输出接线同时使用嵌套工作区和显式正式产物根，验证日志归属跟随调用测试，不随工作区深度改变；同一测试的多个服务共用产物根并以唯一日志名区分。
 - 工作区、日志和运行数据写入镜像路径 `out/tests/integration/harness/<测试名>/`。
+- `test_web_diagnostic_response_lifetime.py` 与正式驱动统一用Node／`--expose-gc`，以真实 Chromium 调用正式聊天诊断入口，使用显式 HTTP 正文检验读取后释放；负例仅通过Node模块resolve hook把精确驱动的正文读取替换为旧Playwright缓存读取，证明同一检查会拒绝累积正文，不修改产品或全局原型。同时读取等量成功静态资源，核对已完成请求释放且诊断响应仅保留业务 API。不替代真实 Gateway 完整聊天回归。

@@ -16,6 +16,10 @@ import commentjson
 import httpx
 
 from app.core.logging_contract import load_runtime_log_contract
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
+)
 from tests.integration.gateway.runtime_logging_controls import (
     join_runtime_logging_workspaces,
     verify_runtime_logging_controls,
@@ -134,14 +138,12 @@ def test_launcher_rejects_shared_log_sink_before_rotation(tmp_path: Path) -> Non
 def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
     request,
     integration_workspace_root_path: str,
+    web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     workspace_root = Path(integration_workspace_root_path).resolve()
-    output_root = workspace_root.parent
-    boxteam_home = output_root / "launcher-home"
-    if boxteam_home.exists():
-        shutil.rmtree(boxteam_home)
-    boxteam_home.mkdir(parents=True)
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
     token = "launcher-handoff-test-token"
     credential_path = (
         boxteam_home / "state" / "gateway" / "credentials" / "local-token"
@@ -162,7 +164,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
     if not runtime_manifest.is_file():
         raise FileNotFoundError(f"Launcher runtime manifest 不存在: {runtime_manifest}")
 
-    artifacts = output_root / "artifacts"
+    artifacts = context.artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     stdout_path = artifacts / "launcher-handoff.stdout.log"
     stderr_path = artifacts / "launcher-handoff.stderr.log"
@@ -172,7 +174,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         "BOXTEAM_PROJECT_ROOT": str(project_root),
         "BOXTEAM_RUNTIME_MANIFEST": str(runtime_manifest),
         "BOXTEAM_PYTHON_BIN": str(python_executable),
-        "BOXTEAM_WEB_ASSETS": str(project_root / "src/clients/web/dist"),
+        "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
         "BOXTEAM_NODE_BIN": node_executable,
         "BOXTEAM_GATEWAY_PORT": str(port),
         "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace_root),
@@ -184,7 +186,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         "BOXTEAM_DEVELOPMENT_RESTART_CWD": str(project_root),
         "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(prepare_e2e_model_stream_config(
             project_root / "configs/tests/model_stream/model_stream_chat_basic.jsonc",
-            output_root=output_root,
+            output_root=context.run_root,
             mode="replay",
         )),
     }
@@ -682,13 +684,21 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         finally:
             database.close()
 
-        time.sleep(1)
-        stdout_file.flush()
-        stderr_file.flush()
-        log_text = (
-            stdout_path.read_text(encoding="utf-8")
-            + stderr_path.read_text(encoding="utf-8")
-        )
+        # 新 generation 已接管监听时，旧进程仍可能处于连接排空阶段。
+        # 沿用 Launcher 的 10 秒退出期限，等待真实完成记录而非固定睡眠。
+        shutdown_deadline = time.monotonic() + 10
+        while True:
+            stdout_file.flush()
+            stderr_file.flush()
+            log_text = (
+                stdout_path.read_text(encoding="utf-8")
+                + stderr_path.read_text(encoding="utf-8")
+            )
+            if f"Finished server process [{initial_process_id}]" in log_text:
+                break
+            if time.monotonic() >= shutdown_deadline:
+                raise TimeoutError(f"旧 Gateway 未在 Launcher 退出期限内结束: pid={initial_process_id}")
+            time.sleep(0.05)
         assert f"Started server process [{initial_process_id}]" in log_text
         assert f"Started server process [{new_process_id}]" in log_text
         assert f"Finished server process [{initial_process_id}]" in log_text

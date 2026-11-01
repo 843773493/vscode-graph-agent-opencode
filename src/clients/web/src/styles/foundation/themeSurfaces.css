@@ -1,8 +1,6 @@
 /* 顶层布局只在这里绑定语义表面角色，业务组件不自行决定背景图显露程度。 */
 html,
-body,
-.app-shell[data-bt-surface="canvas"],
-.agent-sessions-workbench.app-shell {
+body {
   background-color: var(--bt-canvas-background);
 }
 
@@ -13,13 +11,7 @@ body,
   backdrop-filter: var(--bt-chrome-backdrop-filter);
 }
 
-.toolbar {
-  background: var(--bt-toolbar-background);
-  backdrop-filter: var(--bt-chrome-backdrop-filter);
-}
-
 [data-bt-surface="workspace"],
-.sessions-part-card,
 .auxiliary-panel,
 .workspace-preview-panel {
   background: var(--bt-workspace-surface);
@@ -32,8 +24,6 @@ body,
   backdrop-filter: none;
 }
 
-.content.sessions-workbench-grid,
-.gateway-view-slot,
 [data-bt-surface="layout"],
 .gateway-control-shell,
 .gateway-control-main {
@@ -59,7 +49,6 @@ body,
   background: transparent;
 }
 
-.workbench-view-menu,
 .sessions-filter-menu,
 .composer-view-menu,
 .composer-agent-menu,

@@ -4,10 +4,11 @@ import { requestJson, unwrapApiData, workspaceHeader } from "./http";
 
 export type { ResourceThreadRef, WorkspaceResourceDTO };
 export type ResourceAction = "promote" | "attach" | "detach" | "stop" | "delete";
+export type WorkspaceConnectionKind = "terminal" | "browser";
 
-export async function listWorkspaceTerminals(port: number, workspaceId: string): Promise<WorkspaceResourceListDTO> {
+export async function listWorkspaceResources(port: number, workspaceId: string, kind: WorkspaceConnectionKind): Promise<WorkspaceResourceListDTO> {
   return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceListDTO>>(
-    port, "/api/v1/resources?kind=terminal", { headers: workspaceHeader(workspaceId) },
+    port, `/api/v1/resources?kind=${kind}`, { headers: workspaceHeader(workspaceId) },
   ));
 }
 

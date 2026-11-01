@@ -1,4 +1,5 @@
 import { getWorkspace } from "../../api/workspace";
+import { HttpRequestError } from "../../api/http";
 import {
   fetchSessionCatalogSnapshot,
   listSessionCatalogNavigationEvents,
@@ -6,7 +7,8 @@ import {
 import { getGatewayHealth } from "../../gatewayApi";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import type { GatewayUserAccess } from "../../types/backend";
-import { errorMessage } from "../../utils/errorMessage";
+import { errorMessage, ReportedError } from "../../utils/errorMessage";
+import { CatalogReadSupersededError } from "../sessionResourceExplorer/resourceTreeSync";
 import {
   catalogOutboxPartitionKey,
   catalogOutboxOperationIsTerminal,
@@ -265,7 +267,11 @@ export function createSessionCatalogOutboxRuntime(
     unsubscribeBroadcast = broadcast.subscribe((partitionKey) => {
       const runtimeDriver = driversByPartition.get(partitionKey);
       if (!runtimeDriver || !isCurrentDriver(runtimeDriver)) return;
-      void runtimeDriver.driver.reload().catch((error: unknown) => {
+      // 跨窗口广播可能早于首次 IndexedDB 恢复；恢复完成后再消费最新磁盘事实。
+      void runtimeDriver.opening.then(() => {
+        assertCurrentDriver(runtimeDriver);
+        return runtimeDriver.driver.reload();
+      }).catch((error: unknown) => {
         if (isCurrentDriver(runtimeDriver)) {
           reportError(
             `重新读取会话目录本地 outbox 失败 (${runtimeDriver.gatewayWorkspaceId}): ${errorMessage(error)}`,
@@ -276,7 +282,6 @@ export function createSessionCatalogOutboxRuntime(
   };
 
   const reconcileWorkspace = async (runtimeDriver: RuntimeDriver): Promise<void> => {
-    if (runtimeDriver.reconciliation) return await runtimeDriver.reconciliation;
     const request = (async () => {
       await runtimeDriver.opening;
       assertCurrentDriver(runtimeDriver);
@@ -379,11 +384,17 @@ export function createSessionCatalogOutboxRuntime(
     if (reconcileTimer !== null) return;
     reconcileTimer = globalThis.setInterval(() => {
       for (const runtimeDriver of driversByScope.values()) {
-        if (!isCurrentDriver(runtimeDriver)) continue;
+        // 每轮对账只注册一个错误回调；在途期间不为同一请求重复订阅失败。
+        if (!isCurrentDriver(runtimeDriver) || runtimeDriver.reconciliation) continue;
         void reconcileWorkspace(runtimeDriver).catch((error: unknown) => {
+          // 新的目录读取已接管发布权。保留原事件水位，由既有对账继续取得完整 confirmed；
+          // 不能将被取代的旧页记为成功，也不能把正常取消升级成用户可见的业务故障。
+          if (error instanceof CatalogReadSupersededError) return;
           if (isCurrentDriver(runtimeDriver)) {
+            const requestIdentity = error instanceof HttpRequestError && error.requestId
+              ? ` [request_id=${error.requestId}]` : "";
             reportError(
-              `对账会话目录操作失败 (${runtimeDriver.gatewayWorkspaceId}): ${errorMessage(error)}`,
+              `对账会话目录操作失败 (${runtimeDriver.gatewayWorkspaceId}): ${errorMessage(error)}${requestIdentity}`,
             );
           }
         });
@@ -504,11 +515,11 @@ export function createSessionCatalogOutboxRuntime(
                 || operation.settlement === "repair_required")
                 && isCurrentDriver(runtimeDriver)
                 && !reportedFailures.has(operationKey)) {
-                reportedFailures.add(operationKey);
                 reportError(
                   `会话目录操作 ${operation.client_operation_id}${operation.state === "committed" ? "删除已提交但排空失败" : `未提交 (${operation.state})`}`
                   + `: ${operation.error_detail ?? operation.error_code ?? "后端未提供错误详情"}`,
                 );
+                if (options.onError) reportedFailures.add(operationKey);
               }
             }
           }
@@ -586,8 +597,9 @@ export function createSessionCatalogOutboxRuntime(
             && catalogOutboxOperationIsTerminal(operation),
         );
       if (terminal) {
+        const TerminalError = reportedFailures.has(terminalKey) ? ReportedError : Error;
         if (terminal.state !== "committed") {
-          throw new Error(
+          throw new TerminalError(
             `会话目录操作 ${operationId} 被 ${terminal.state}：`
             + `${terminal.error_code ?? "unknown"} ${terminal.error_detail ?? ""}`.trim(),
           );
@@ -596,7 +608,7 @@ export function createSessionCatalogOutboxRuntime(
           throw new Error(`已提交的会话目录操作缺少 committed_catalog_revision: ${operationId}`);
         }
         if (terminal.settlement === "repair_required") {
-          throw new Error(`会话目录操作 ${operationId} 删除已提交但排空失败，需修复: ${terminal.error_detail ?? terminal.error_code}`);
+          throw new TerminalError(`会话目录操作 ${operationId} 删除已提交但排空失败，需修复: ${terminal.error_detail ?? terminal.error_code}`);
         }
         const catalog = await withRuntimeRequestSignal(runtimeDriver, (signal) =>
           fetchSessionCatalogSnapshot(
@@ -670,6 +682,7 @@ export function createSessionCatalogOutboxRuntime(
         reportError(
           `会话目录操作 ${operationId} 本地持久化失败: ${errorMessage(error)}`,
         );
+        if (options.onError) throw new ReportedError(errorMessage(error), error);
       }
       throw error;
     }

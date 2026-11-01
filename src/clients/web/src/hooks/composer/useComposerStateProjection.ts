@@ -1,12 +1,11 @@
 import { useCallback, useMemo, useRef, type MutableRefObject } from "react";
 import type { AppState } from "../../types/frontend";
-import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   reuseComposerStateSnapshot,
   selectComposerState,
   type ComposerStateSnapshot,
 } from "../../state/composerState";
-import type { ComposerContextType } from "../../hooks";
+import type { ComposerContextType } from "../app/appContext";
 
 /** Composer 状态投影入参：AppState 切片，加上 ComposerContext 需要的外部回调。 */
 export interface ComposerStateProjectionInput
@@ -44,12 +43,8 @@ export function useComposerStateProjection({
 
   const getLatestAssistantContent = useCallback((): string | null => {
     const latest = latestStateRef.current;
-    const latestSessionId = latest.currentSession?.session_id ?? null;
-    const latestWorkspaceId =
-      latest.currentSessionWorkspaceId ?? latest.activeGatewayWorkspaceId;
-    const scopeKey = latestSessionId && latestWorkspaceId
-      ? sessionScopeKey(latestWorkspaceId, latestSessionId)
-      : latestSessionId;
+    if (!latest.currentSession) return null;
+    const scopeKey = currentSessionCacheKey;
     const timeline = scopeKey
       ? latest.turnTimelinesBySession.get(scopeKey)
       : null;
@@ -68,7 +63,7 @@ export function useComposerStateProjection({
       }
     }
     return null;
-  }, []);
+  }, [currentSessionCacheKey, latestStateRef]);
 
   const composerValue = useMemo<ComposerContextType>(() => ({
     state: composerState,

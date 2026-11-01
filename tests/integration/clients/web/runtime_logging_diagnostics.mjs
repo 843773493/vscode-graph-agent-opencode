@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
@@ -11,7 +12,8 @@ let executionError;
 try {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible();
   const initialization = await page.evaluate(async () => {
     const token = (await (await fetch("/api/gateway/auth/local-credential")).json()).data.token;
     const observed = [];
@@ -25,16 +27,19 @@ try {
     }
     return observed;
   });
-  await page.getByRole("button", { name: "工作台视图", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Gateway 控制台/ }).click();
+  await page.getByRole("button", { name: "添加工作区", exact: true }).click();
+  await page.getByRole("dialog", { name: "选择工作区所在设备", exact: true })
+    .getByRole("button", { name: "连接新的远程主机…", exact: true }).click();
+  const control = page.getByRole("dialog", { name: "Gateway 控制中心", exact: true });
+  await expect(control).toBeVisible();
   const pending = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/gateway/diagnostics");
-  await page.getByRole("button", { name: "日志与诊断", exact: true }).click();
+  await control.getByRole("button", { name: "日志与诊断", exact: true }).click();
   const response = await pending;
   const diagnostics = (await response.json()).data;
   if (response.status() !== 200 || diagnostics.processes.length !== 7) throw new Error("真实双工作区进程诊断缺失");
   const backends = diagnostics.processes.filter((process) => process.service === "backend");
   if (backends.length !== 1 || backends[0].workspace_ids.length !== 2) throw new Error("共享 Backend 未按实例去重");
-  const panel = page.locator(".gateway-diagnostics-runtime");
+  const panel = control.locator(".gateway-diagnostics-runtime");
   await panel.waitFor({ state: "visible" });
   const text = await panel.innerText();
   for (const process of diagnostics.processes) {

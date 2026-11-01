@@ -1,8 +1,11 @@
+import hashlib
 from datetime import UTC, datetime
 
 import pytest
 
+from app.core.identifier import uuid7_datetime_from_hex
 from app.core.job_event_bus import JobEventBus
+from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
@@ -20,6 +23,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING_JSON
 from tests.support.message_service import build_message_service
 from tests.unit.services.business.job.test_pending_persistence import (
     pending_input_owner as pending_input_owner,  # noqa: PLC0414
@@ -489,3 +493,81 @@ async def test_promoted_pending_head_exposes_no_waiting_reason(job_service_facto
         item for item in after_remove.requests if item.message_id == "msg_tail"
     )
     assert promoted.waiting_reason is None
+
+
+@pytest.mark.asyncio
+async def test_clear_thread_pending_preserves_sibling_fifo_active_jobs_and_durable_inputs(
+    job_service_factory, monkeypatch, session_lifecycle_guard, tmp_path,
+    session_bundle_factory, pending_input_owner, store_factory,
+):
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_019b990a9cce734bbccc60ec5321f320"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    main = pending_input_owner._resolve_main_thread_id(session_id)
+    child = "thr_019b990a9cce734bbccc60ec5321f321"
+    control = SessionControlStore(session_dir / "session-control.sqlite")
+    try:
+        key = "pending-sibling"
+        control.create_or_get_thread_creation_record(
+            idempotency_key=key, initial_state="idle", preimage_hash="a" * 64,
+            graph_binding=TEST_THREAD_GRAPH_BINDING_JSON, capability_profile="{}",
+            created_at=uuid7_datetime_from_hex(child[4:]), thread_id=child,
+        )
+        control.freeze_thread_creation_artifact_manifest(
+            key, artifact_manifest="{}",
+            artifact_manifest_hash=hashlib.sha256(b"{}").hexdigest(),
+        )
+        published = control.publish_thread_creation_record(key, session_id=session_id)
+        (session_dir / published.final_relative_locator).mkdir(parents=True)
+    finally:
+        control.close()
+    saver = pending_input_owner._checkpointer
+    store = store_factory(sessions_dir)
+    service = job_service_factory(
+        job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
+        session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
+        input_owner=pending_input_owner, terminal_status_writer=saver,
+    )
+    monkeypatch.setattr(service, "_start_job_task", lambda job: setattr(job, "task", _DummyTask()))
+    jobs = {}
+    for thread, label in [(main, "main"), (child, "child")]:
+        for suffix in ["active", "queued", "tail"]:
+            message_id = f"msg_{label}_{suffix}"
+            binding = service.reserve_user_execution_identity()
+            now = datetime.now(UTC)
+            pending_input_owner.accept_user_message(MessageDTO(
+                message_id=message_id, session_id=session_id, thread_id=thread,
+                role=MessageRole.user, content=message_id, created_at=now, updated_at=now,
+            ), execution_identity=binding, queue_input=ExecutionQueueInput(
+                execution_binding=binding, message_id=message_id, agent_id="default", provider_id=None,
+                delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat(),
+            ))
+            jobs[message_id] = await service.start_job(
+                session_id, message_id, thread_id=thread, message_id=message_id,
+                message_created_at=now.isoformat(), execution_binding=binding,
+            )
+    before = await service.list_pending(session_id, thread_id=main)
+    sibling = await service.list_pending(session_id, thread_id=child)
+    cleared = await service.clear_pending(session_id, thread_id=main)
+    assert cleared.thread_id == main and cleared.requests == []
+    assert cleared.active_job_id == jobs["msg_main_active"].job_id
+    assert cleared.snapshot_version > before.snapshot_version
+    assert service._jobs[jobs["msg_main_active"].job_id].status == "running"
+    assert service._jobs[jobs["msg_child_active"].job_id].status == "running"
+    assert service._jobs[jobs["msg_main_queued"].job_id].status == "cancelled"
+    assert service._jobs[jobs["msg_main_tail"].job_id].status == "cancelled"
+    child_snapshot = await service.list_pending(session_id, thread_id=child)
+    assert [(item.message_id, item.enqueue_sequence, item.position, item.delivery_policy) for item in child_snapshot.requests] == [
+        (item.message_id, item.enqueue_sequence, item.position, item.delivery_policy) for item in sibling.requests
+    ]
+    assert child_snapshot.active_job_id == sibling.active_job_id
+    assert [item.message_id for item in await store.load(session_id)] == ["msg_child_queued", "msg_child_tail"]
+    with saver._storage.storage.read_connection(session_id, main, "") as connection:
+        assert {row[0] for row in connection.execute("SELECT job_id FROM executions WHERE outcome='cancelled'")} == {
+            jobs["msg_main_queued"].job_id, jobs["msg_main_tail"].job_id,
+        }
+    # 原 Session 级入口仍显式清空所有余下 Thread，不取消当前执行。
+    all_cleared = await service.clear_pending(session_id)
+    assert all_cleared.thread_id is None and all_cleared.requests == []
+    assert await store.load(session_id) == []
+    assert service._jobs[jobs["msg_child_active"].job_id].status == "running"

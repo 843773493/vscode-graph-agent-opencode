@@ -1,6 +1,9 @@
 """真实 worker 生命周期与后台恢复，经 Gateway 和 Web 核对暂停及失败。"""
 
 from app.core.resource_uri import thread_resource_uri
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
+)
 from tests.integration.clients.web.persistent_tasks.test_management import (
     browser_runner as browser_runner,  # noqa: PLC0414 - 共用真实浏览器装具
 )
@@ -20,11 +23,11 @@ from tests.support.api_helpers import create_session
 
 
 async def test_runtime_recovery_pause_and_worker_failure_are_visible(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner, web_workbench_assets,
 ):
     async with (
         oauth_endpoint_factory() as secure, http_schema_endpoint_factory("sibling") as sibling,
-        product_case(secure, sibling, web=True,
+        product_case(secure, sibling, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
                      backend_app="tests.integration.clients.web.persistent_tasks.runtime_app:app") as (client, replay, case),
     ):
         title = "恢复与失败验收"
@@ -42,7 +45,7 @@ async def test_runtime_recovery_pause_and_worker_failure_are_visible(
             },
         })
         assert response.status_code == 200, response.text
-        result = await browser_runner(case, client, target_uri=uri, title=title, other_session_id=session,
+        result = await browser_runner(case, client, target_uri=uri, title=title, other_target_uri=uri,
                                       script="runtime", environment=replay.environment)
         assert result["paused"]["lifecycle"] == "paused"
         assert result["final"]["lifecycle"] == "paused" and not result["final"]["recovering"]

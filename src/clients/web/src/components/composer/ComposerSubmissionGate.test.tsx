@@ -1,7 +1,7 @@
 import React, { useMemo, useRef } from "react";
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { ComposerContext, type ComposerContextType } from "../../hooks";
+import { ComposerContext, type ComposerContextType } from "../../hooks/app/appContext";
 import {
   reuseComposerStateSnapshot,
   selectComposerState,

@@ -866,6 +866,12 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 2289份采样源码前后无变化；正式`run-0aa95245e35e`的`workbench-build.json`及稳定dist保留，可供迁移会话复核。三个阶段均无pageerror，但不称控制台／网络全净：删除冲突409为显式注入，Session查询404发生在提交删除后，另一次Terminal列表409发生在停止／删除阶段，原驱动未保存其响应正文，具体原因仍未核实。
 - 准确命令、原始输出、源码指纹、三个阶段回执和清理证据见`out/tests/temp/resource_web_acceptance_20261101/artifacts/verification.json`。不替代首次取消、未知执行终止、整个operation／shutdown期限或Windows验收，5.2／5.4及21/23保持未完成；未修改正式driver、公共fixture、另一会话的迁移实现或共享debug。
 
+### 2026-11-01 资源HTTP错误采集与限定重验
+
+- 唯一`persistent_resource_lifecycle.mjs`补采错误HTTP正文、request_id、请求工作区、当前精确Thread及phase/step，排空采集任务；未归因错误使验收失败，Terminal列表409不获状态码豁免。显式Browser409核原请求版本、owner及正文；Session404仅消费响应发生时冻结的committed/settled删除证明，不能借未来回执追认。原guest401探测仅按同一request_id分类，不扩大到其它401；原业务断言、期限和前端generation隔离保持。
+- 仅运行包含after-unload的unload-restart参数，正式`run-c5189c859147`为1 passed／1 deselected／133.84秒，最终exit0、Gateway清理完成并释放名额。唯一捕获的Browser409核expected=6／actual=7及头体同request_id；旧Terminal409本次未复现。旧request_id仅有access记录、没有正文，原因继续未确定，不按stop/delete时序归因，不改产品或盲重试。
+- 2289份采样源码运行中无变化；最终仅补强诊断分类与采集收尾。当前唯一函数消费同一真实HTTP原件、拒绝7类错误反例，并通过先404后删除、未提交删除、冻结证明副本、精确guest探测与其它401拒绝的短检查，语法检查通过。时序和guest分支使用明确诊断HTTP替身，不称产品分支验收，未因此重复业务组。正式构建、原始失败限制和自检源码保留；准确命令、指纹、patch及原输出见`out/tests/temp/resource_http_error_audit_20261101/artifacts/verification.json`，5.2／5.4及21/23继续未完成。
+
 ### 2026-11-01 GC 与终态 fork 暂存的原 worker 结算（5.4 部分）
 
 - 到期候选和终态 fork 操作查询复用受保护 worker；同一目录的 deleting、物理删除、原账本 stopped 和 tombstone 在原目录 holder 内依次结算。物理删除后归还工作区文件写锁，账本等待不阻塞无关文件；账本失败保留 deleting、原 locator 与期限，下一次原 GC 幂等重试。终态 fork 的快照、原生探测与删除在原 import holder 内结算，取消和迟到失败不遗弃原访问，不扫描未知目录。

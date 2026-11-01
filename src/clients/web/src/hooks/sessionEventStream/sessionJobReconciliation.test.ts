@@ -698,3 +698,17 @@ describe("运行中 Job 对账", () => {
     expect(harness.current().status).toBe("任务已完成");
   });
 });
+
+test("同一 Thread 的两个 Editor 收尾分别更新镜像，不被全局请求合并跳过", async () => {
+  const port = 49_130;
+  installMockBackend({ port, activeJob: job("completed"), traces: [completedTrace()] });
+  const left = stateHarness(appState());
+  const right = stateHarness(appState());
+  await Promise.all([left, right].map(harness => refreshTerminalSession(
+    port, SESSION_ID, WORKSPACE_ID, SESSION_CACHE_KEY, completedTrace(), harness.setState,
+  )));
+  for (const instance of [left, right]) {
+    expect(instance.current().activeJobIdsBySession.has(SESSION_CACHE_KEY)).toBe(false);
+    expect(instance.current().status).toBe("回复已完成");
+  }
+});

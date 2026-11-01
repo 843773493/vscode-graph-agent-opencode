@@ -59,7 +59,7 @@ export function useWorkspaceSessionActivity({
   currentSessionCacheKeyRef.current = currentSessionCacheKey;
 
   useEffect(() => {
-    if (!apiPort || !workspaceTarget || observationState.paused) return;
+    if (apiPort === null || !workspaceTarget || observationState.paused) return;
     const workspaceId = workspaceTarget.workspace_id;
     const controller = new AbortController();
     const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);

@@ -41,11 +41,13 @@ class SessionTurnHistoryService:
         self,
         session_id: str,
         *,
+        thread_id: str | None = None,
         history_loading: HistoryLoadingConfig | None = None,
     ) -> SessionTurnBootstrapDTO:
         async with self._session_service.session_read_admission(session_id):
             session = await self._session_service.get(session_id)
-            thread_id = session.thread_id
+            requested_thread_id = thread_id
+            thread_id = session.thread_id if thread_id is None else await self._session_service.resolve_thread(session_id, thread_id)
             if thread_id is None:
                 raise RuntimeError(
                     "SessionDTO 缺少权威 main thread 身份，无法解析历史归属（fail closed）: "
@@ -101,7 +103,7 @@ class SessionTurnHistoryService:
                 older_cursor=older_cursor,
                 event_cursor=bind_trace_cursor(
                     self._trace_event_store.latest_event_cursor(session_id),
-                    session_id=session_id, thread_id=None, kind="stream",
+                    session_id=session_id, thread_id=requested_thread_id, kind="stream",
                 ),
                 projection_epoch=projection_epoch,
             )

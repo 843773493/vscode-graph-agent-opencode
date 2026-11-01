@@ -18,8 +18,8 @@ function deferred<T>() {
   const promise = new Promise<T>((accept) => { resolve = accept; });
   return { promise, resolve };
 }
-function Probe({ owner }: { owner: GatewayWorkspaceRequestTarget }) {
-  value = useMcpConnections(8014, owner);
+function Probe({ owner, enabled = true }: { owner: GatewayWorkspaceRequestTarget; enabled?: boolean }) {
+  value = useMcpConnections(8014, owner, enabled);
   return null;
 }
 async function mount() { await act(async () => { renderer = create(<Probe owner={target} />); }); }
@@ -81,4 +81,31 @@ test("慢读取不被轮询反复作废，动作后的旧读取不能覆盖回�
   operations.mockResolvedValue([{ ...operation, status: "succeeded" }]);
   await act(async () => { await value.submit("secure", "connect"); pending.resolve([operation]); });
   expect(value.operations[0].status).toBe("succeeded");
+});
+
+test("隐藏面板停止轮询，已提交的连接动作仍完成并回读，重新展开恢复观察", async () => {
+  const servers = spyOn(api, "listMcpServers");
+  const clear = spyOn(window, "clearInterval");
+  const pending = deferred<api.McpConnectionOperationDTO>();
+  let signal: AbortSignal | undefined;
+  const submit = spyOn(api, "submitMcpOperation").mockImplementation((_port, _owner, _server, _action, requestSignal) => {
+    signal = requestSignal;
+    return pending.promise;
+  });
+  restores.push(() => clear.mockRestore(), () => submit.mockRestore());
+  await act(async () => { renderer = create(<Probe owner={target} enabled={false} />); });
+  expect(servers).not.toHaveBeenCalled();
+  await act(async () => { renderer.update(<Probe owner={target} />); });
+  expect(value.servers).toEqual([server]);
+  let action!: Promise<void>;
+  act(() => { action = value.submit("secure", "connect"); });
+  await act(async () => { renderer.update(<Probe owner={target} enabled={false} />); });
+  expect(clear).toHaveBeenCalled();
+  expect(signal?.aborted).toBe(false);
+  await act(async () => { pending.resolve({ ...operation, status: "succeeded" }); await action; });
+  expect(value.loaded).toBe(true);
+  expect(value.busy).toBe(false);
+  const reads = servers.mock.calls.length;
+  await act(async () => { renderer.update(<Probe owner={target} />); });
+  expect(servers.mock.calls.length).toBe(reads + 1);
 });

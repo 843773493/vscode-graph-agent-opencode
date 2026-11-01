@@ -7,16 +7,21 @@ import errno
 import json
 import os
 import shutil
-import socket
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import ExitStack
 from pathlib import Path
 
 import commentjson
 import httpx
 import pytest
 
+from app.gateway.runtime.process_lifecycle import ManagedProcess
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式模块产物
+)
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
@@ -26,6 +31,10 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.processes.scope import capture_test_processes, register_test_process
+from tests.support.processes.workspace import (
+    wait_for_http_ok,
+)
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -34,17 +43,23 @@ from tests.support.workspaces import (
 
 def _select_free_port(
     port_block: TestFilePortBlock,
+    reservations: ExitStack,
+    lease_path: Path,
 ) -> tuple[int, list[tuple[int, bool]]]:
     probes: list[tuple[int, bool]] = []
     for port in range(port_block.start, port_block.end + 1):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
-            try:
-                candidate.bind(("127.0.0.1", port))
-            except OSError as error:
-                if error.errno != errno.EADDRINUSE and getattr(error, "winerror", None) != 10048:
-                    raise RuntimeError(f"测试端口预探测失败: port={port}") from error
-                probes.append((port, False))
-                continue
+        lease = E2EProcessLease(lease_path, (port,))
+        try:
+            lease.acquire()
+        except RuntimeError as error:
+            cause = error.__cause__
+            if not isinstance(cause, OSError) or (
+                cause.errno != errno.EADDRINUSE and getattr(cause, "winerror", None) != 10048
+            ):
+                raise
+            probes.append((port, False))
+            continue
+        reservations.callback(lease.release)
         probes.append((port, True))
         return port, probes
     raise RuntimeError(
@@ -54,17 +69,25 @@ def _select_free_port(
 
 
 @pytest.fixture(autouse=True)
-def metadata_web_assets(monkeypatch: pytest.MonkeyPatch) -> None:
-    assets = Path.cwd() / "src/clients/web/dist"
-    assert (assets / "index.html").is_file(), "先对本批源码执行 Web build，再复用其产物验证初始化"
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
+def metadata_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
 
 
 @pytest.fixture
-async def metadata_case(request: pytest.FixtureRequest) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay]]:
+def metadata_port_reservations() -> Iterator[ExitStack]:
+    with ExitStack() as reservations:
+        yield reservations
+
+
+@pytest.fixture
+async def metadata_case(
+    request: pytest.FixtureRequest, metadata_port_reservations: ExitStack,
+) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
-    gateway_port, gateway_probes = _select_free_port(ports)
+    gateway_port, gateway_probes = _select_free_port(
+        ports, metadata_port_reservations, context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json",
+    )
     provider_port = ports.port(10)
     (context.artifacts_dir / "port-allocation.json").write_text(
         json.dumps(
@@ -87,7 +110,7 @@ async def metadata_case(request: pytest.FixtureRequest) -> AsyncIterator[tuple[h
         + "\n"
     )
     workspace = prepare_default_test_workspace(
-        workspace_root=context.workspace_root / "metadata",
+        workspace_root=context.workspace_root / context.run_root.name / context.runtime_root_for_node(request.node.nodeid).name / "metadata",
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
     (workspace / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
@@ -133,22 +156,76 @@ async def metadata_data(client: httpx.AsyncClient, path: str):
     return payload["data"]
 
 
+@pytest.fixture(params=["static", "vite"])
+async def metadata_frontend(
+    request: pytest.FixtureRequest,
+    metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
+    metadata_port_reservations: ExitStack,
+) -> AsyncIterator[str]:
+    client, context, _workspace, _provider = metadata_case
+    if request.param == "static":
+        yield str(client.base_url).rstrip("/")
+        return
+    runtime = context.runtime_root_for_node(request.node.nodeid)
+    port, port_probes = _select_free_port(
+        integration_port_block_for_file(Path(request.node.path)), metadata_port_reservations, runtime / "vite-port.json",
+    )
+    allocation_path = context.artifacts_dir / "port-allocation.json"
+    allocation = json.loads(allocation_path.read_text())
+    allocation["frontend"] = {"port": port, "transport": "vite", "bind_probes": [
+        {"port": candidate, "available": available} for candidate, available in port_probes
+    ]}
+    allocation_path.write_text(json.dumps(allocation, ensure_ascii=False, indent=2) + "\n")
+    base_url = f"http://127.0.0.1:{port}"
+    command = ["bun", "run", "dev", "--port", str(port), "--gateway", str(client.base_url).rstrip("/"),
+               "--outdir", str(runtime / "vite-assets" / "dist"), "--cache", str(runtime / "vite-cache")]
+    log_path = context.artifacts_dir / "vite.log"
+    with log_path.open("x", encoding="utf-8") as log, capture_test_processes():
+        process = await asyncio.to_thread(
+            subprocess.Popen, command, cwd=Path.cwd() / "src/clients/workbench",
+            stdout=log, stderr=subprocess.STDOUT, text=True, start_new_session=True,
+        )
+        managed = ManagedProcess(process=process, log_file=log)
+        register_test_process(managed, managed.close)
+        await asyncio.to_thread(wait_for_http_ok, f"{base_url}/health", process, timeout_seconds=180)
+        async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=90) as frontend:
+            health = await frontend.get("/health")
+            assert health.status_code == 200
+            assert health.json() == {"status": "ok", "service": "frontend"}
+            await acquire_gateway_guest(frontend)
+            initialization = {path: await metadata_data(frontend, path) for path in (
+                "/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace",
+            )}
+            html = await frontend.get("/")
+            assert html.status_code == 200
+            assert 'src="/@vite/client"' in html.text
+            assert 'src="/src/main.ts"' in html.text
+        (context.artifacts_dir / "vite-initialization.json").write_text(json.dumps({
+            "command": command, "pid": process.pid, "base_url": base_url,
+            "health": health.json(), "initialization": initialization,
+        }, ensure_ascii=False, indent=2) + "\n")
+        yield base_url
+
+
 @pytest.mark.asyncio
 async def test_workspace_metadata_without_root_initializes_real_web(
     request: pytest.FixtureRequest,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
+    metadata_frontend: str,
 ) -> None:
     client, context, workspace, provider = metadata_case
     await metadata_data(client, "/api/gateway/health")
     workspaces = await metadata_data(client, "/api/gateway/workspaces")
     active = next(item for item in workspaces["items"] if item["workspace_id"] == workspaces["active_workspace_id"])
-    external = context.workspace_root / "未注册目录 Ω"
+    external = workspace.with_name("未注册目录 Ω")
     external.mkdir()
     external_file = external / "未注册 %.txt"
     external_file.write_text("未注册目录原正文\n", encoding="utf-8")
     created = await client.post("/api/v1/sessions", json={"title": "原生目录浏览编辑"})
     assert created.status_code == 200, created.text
     session_id = created.json()["data"]["session_id"]
+    thread_id = created.json()["data"]["thread_id"]
+    assert isinstance(thread_id, str) and thread_id
     shortcut = await client.post(f"/api/v1/sessions/{session_id}/file-tree-shortcuts",
                                  json={"path": str(external), "label": "未注册目录"})
     assert shortcut.status_code == 200, shortcut.text
@@ -168,9 +245,9 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     result_path = context.artifacts_dir / "workspace-metadata-browser.json"
     environment = {
         **os.environ,
-        "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
+        "BOXTEAM_BROWSER_BASE_URL": metadata_frontend,
         "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": active["workspace_id"], "backendWorkspaceId": active["backend_workspace_id"],
-            "nativeDirectory": {"sessionId": session_id, "rootUri": root_uri, "fileName": external_file.name,
+            "nativeDirectory": {"sessionId": session_id, "threadId": thread_id, "rootUri": root_uri, "fileName": external_file.name,
                                 "content": "未注册目录原正文\n", "edited": "浏览器修改后的未注册目录正文 Ω\n"}}),
         "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
         "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "workspace-metadata-browser.png"),
@@ -191,6 +268,21 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     assert result["route_stubs"] == []
     assert result["workspace_navigation_visible"] is True
     assert result["native_directory_reopened"] is True
+    theme_warning = result["theme_background_warning"]
+    assert theme_warning["http_status"] == 404
+    assert theme_warning["request_id"]
+    assert theme_warning["asset_id"] == "0" * 64
+    assert theme_warning["url"].endswith("/api/gateway/ui-assets/" + "0" * 64)
+    assert theme_warning["notification"] == (
+        "主题背景图加载失败，已回退为无背景图：背景图片加载失败: " + theme_warning["url"]
+    )
+    assert theme_warning["hosts"] >= 2
+    assert result["settings_reload_rounds"] == [
+        {"fontSize": size, "phase": "restored", "restoredFontSize": f"{size}px"}
+        for size in (16, 19, 17)
+    ]
+    assert result["controlled_shutdown"]["after"] > result["controlled_shutdown"]["before"]
+    assert result["controlled_shutdown"]["keys"]
     assert external_file.read_text(encoding="utf-8") == "浏览器修改后的未注册目录正文 Ω\n"
     assert not (external / ".boxteam").exists()
     after = await metadata_data(client, "/api/gateway/workspaces")

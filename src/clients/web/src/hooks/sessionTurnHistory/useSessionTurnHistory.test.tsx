@@ -29,6 +29,40 @@ afterEach(() => {
 });
 
 describe("useSessionTurnHistory partial bootstrap", () => {
+  test("同一 Session 的显式 Thread 在同源端口分别初始化、分页与水合", async () => {
+    installWindow(0);
+    const threads = [THREAD_ID, "thr_018f0000000070008000000000000002"];
+    const states = threads.map(() => appState());
+    const readers: Array<ReturnType<typeof useSessionTurnHistory>> = [];
+    const requests: Array<{ path: string; thread: string | null; direction?: string }> = [];
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const url = new URL(String(args[0]), "http://127.0.0.1");
+      if (url.pathname === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "explicit-thread-token" } });
+      const thread = url.searchParams.get("thread_id") ?? threads.find((id) => url.pathname.includes(`/threads/${id}/`)) ?? null;
+      const body = args[1]?.body ? JSON.parse(String(args[1].body)) : null;
+      requests.push({ path: url.pathname, thread, ...(body ? { direction: body.direction } : {}) });
+      if (url.pathname.endsWith("/bootstrap")) return Response.json({ code: 0, message: "ok", request_id: "bootstrap-thread", data: { ...bootstrap("ready", 1), thread_id: thread, latest_turn: null } });
+      if (url.pathname.endsWith("/history")) return Response.json({ code: 0, message: "ok", request_id: "history-thread", data: { thread_id: thread, ...HISTORY_SOURCE_BINDING, projection_epoch: 1, items: [turnDetail(1)], internal_executions: [], before_cursor: "older", has_before: true } });
+      throw new Error(`未声明的精确 Thread 请求: ${url}`);
+    }, { preconnect: originalFetch.preconnect });
+    function Harness({ index }: { index: number }): React.ReactNode {
+      const key = `${SCOPE_KEY}::${threads[index]}`;
+      readers[index] = useSessionTurnHistory({ apiPort: 0, sessionId: SESSION_ID, threadId: threads[index], workspaceId: WORKSPACE_ID,
+        sessionCacheKey: key, getCurrentTimeline: () => states[index].turnTimelinesBySession.get(key) ?? null,
+        reloadNonce: 0, setState: (update) => { states[index] = typeof update === "function" ? update(states[index]) : update; } });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<><Harness index={0} /><Harness index={1} /></>); await wait(60); });
+    for (let index = 0; index < threads.length; index++) {
+      const key = `${SCOPE_KEY}::${threads[index]}`;
+      expect(states[index].turnTimelinesBySession.get(key)?.threadId).toBe(threads[index]);
+      await act(async () => { await readers[index].loadOlderTurns(); await readers[index].loadTurnDetails(["job_latest"], "explicit-thread-detail", true); });
+      expect(requests.filter((request) => request.thread === threads[index]).map((request) => request.direction ?? "bootstrap")).toEqual(["bootstrap", "tail", "before", "around"]);
+    }
+    expect(requests.every((request) => request.thread !== null)).toBe(true);
+    act(() => renderer.unmount());
+  });
   test.each([THREAD_ID, "thr_foreign_page"])("真实 bootstrap/page owner 经 %s 响应进入投影或明确拒绝", async (pageOwner) => {
     const apiPort = 9120;
     installWindow(apiPort);

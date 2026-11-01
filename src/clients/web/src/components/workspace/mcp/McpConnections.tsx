@@ -8,8 +8,8 @@ const labels: Record<string, string> = {
 };
 const active = new Set(["pending", "waiting_user", "verifying"]);
 
-export default function McpConnections({ apiPort, target }: { apiPort: number; target: GatewayWorkspaceRequestTarget }) {
-  const state = useMcpConnections(apiPort, target);
+export default function McpConnections({ apiPort, target, active: visible = true }: { apiPort: number; target: GatewayWorkspaceRequestTarget; active?: boolean }) {
+  const state = useMcpConnections(apiPort, target, visible);
   return <div style={{ padding: 12, overflow: "auto" }} aria-label="工作区 MCP 连接">
     <p>MCP Server 连接属于当前工作区。上游应用授权请使用 Server 提供的管理能力。</p>
     <button type="button" disabled={state.busy} onClick={() => void state.refresh()}>刷新 MCP 状态</button>

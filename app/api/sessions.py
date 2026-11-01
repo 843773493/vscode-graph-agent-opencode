@@ -574,6 +574,8 @@ async def list_session_resources(
             session_id,
             include_history=include_history,
         )
+    except SessionDeletionPendingError as exc:
+        raise state_conflict_http_error(exc) from exc
     except (KeyError, NotFoundError) as exc:
         raise not_found_http_error(exc) from exc
     return APIResponse(data=result, request_id=request_id)

@@ -23,6 +23,8 @@ let route: Route = () => {
   throw new Error("测试未设置路由");
 };
 const calls: string[] = [];
+const queries: string[] = [];
+let currentThreadId: string | undefined;
 
 function apiResponse(data: unknown, status = 200): Response {
   return Response.json({
@@ -36,11 +38,12 @@ function apiResponse(data: unknown, status = 200): Response {
 function installFetch(): void {
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(
+      const url = new URL(
         typeof input === "string" || input instanceof URL
           ? String(input)
           : input.url,
-      ).pathname;
+      );
+      const path = url.pathname;
       const method = String(init?.method ?? "GET");
       if (path === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "local-pending-error-token" });
@@ -49,6 +52,7 @@ function installFetch(): void {
         return apiResponse({ kind: "guest", user_id: null });
       }
       calls.push(`${method} ${path}`);
+      queries.push(url.search);
       return route(path, method);
     },
     { preconnect: originalFetch.preconnect },
@@ -127,6 +131,7 @@ function Harness(): null {
   actions = usePendingRequestActions({
     apiPort: PORT,
     currentSession: session(),
+    currentThreadId,
     currentSessionGatewayWorkspaceId: WORKSPACE_ID,
     currentSessionCacheKey: CACHE_KEY,
     setState: (update) => {
@@ -141,6 +146,7 @@ function Harness(): null {
 async function mount(): Promise<void> {
   currentState = state();
   calls.length = 0;
+  queries.length = 0;
   installFetch();
   await act(async () => {
     renderer = create(<Harness />);
@@ -150,6 +156,7 @@ async function mount(): Promise<void> {
 afterEach(() => {
   act(() => renderer?.unmount());
   renderer = undefined;
+  currentThreadId = undefined;
   globalThis.fetch = originalFetch;
 });
 
@@ -239,4 +246,23 @@ describe("待处理请求动作的失败补偿", () => {
     expect(conversations?.[0].queueSnapshotVersion).toBe(5);
     expect(currentState.activeJobIdsBySession.get(CACHE_KEY)).toBe("job_msg_c");
   });
+  test("Thread 全部撤回请求和后续重取均指定同一 owner，完整替换队列镜像", async () => {
+    currentThreadId = "thr_018f0000000070008000000000000001";
+    await mount();
+    route = () => apiResponse({ ...snapshot("msg_removed", "等待撤回", 6), active_job_id: "job_active" });
+    await actions.updatePendingRequestPolicy("msg_removed", "after_turn");
+    expect(currentState.pendingConversations.get(CACHE_KEY)).toHaveLength(1);
+    calls.length = 0;
+    queries.length = 0;
+    route = () => apiResponse({ ...snapshot("msg_removed", "已撤回", 7), active_job_id: "job_active", requests: [] });
+    await actions.clearPendingRequests();
+    expect(calls).toEqual([
+      `DELETE /api/v1/sessions/${SESSION_ID}/pending-requests`,
+      `GET /api/v1/sessions/${SESSION_ID}/pending-requests`,
+    ]);
+    expect(queries).toEqual([`?thread_id=${currentThreadId}`, `?thread_id=${currentThreadId}`]);
+    expect(currentState.pendingConversations.has(CACHE_KEY)).toBe(false);
+    expect(currentState.activeJobIdsBySession.get(CACHE_KEY)).toBe("job_active");
+  });
+
 });

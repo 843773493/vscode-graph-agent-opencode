@@ -55,6 +55,11 @@ export default function GoalManagerCard({
   const confirm = useWarmConfirm();
   const [editorMode, setEditorMode] = useState<GoalEditorMode>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [tokenBudget, setTokenBudget] = useState("");
+  const openEditor = (mode: Exclude<GoalEditorMode, null>) => {
+    setTokenBudget(mode === "edit" && goal?.token_budget != null ? String(goal.token_budget) : "");
+    setEditorMode(mode);
+  };
 
   useEffect(() => {
     setEditorMode(null);
@@ -70,14 +75,14 @@ export default function GoalManagerCard({
     });
   };
 
-  const clearGoal = async () => {
+  const deleteGoal = async () => {
     if (!goal) {
       throw new Error("当前会话没有 Goal");
     }
     const confirmed = await confirm({
-      title: "清除当前 Goal？",
-      message: `将清除“${goal.objective}”的 Goal 状态。`,
-      confirmText: "清除 Goal",
+      title: "删除当前 Goal？",
+      message: `将删除“${goal.objective}”并停止后续自动续跑。会话消息保留，已经开始的轮次不会被中断。`,
+      confirmText: "删除 Goal",
       danger: true,
     });
     if (confirmed) {
@@ -130,6 +135,7 @@ export default function GoalManagerCard({
               <button
                 type="button"
                 disabled={!canManage}
+                title="停止后续自动续跑，保留目标和累计用量；不会中断当前轮次"
                 onClick={() => run(() => onUpdate({ status: "paused" }))}
               >
                 暂停
@@ -138,6 +144,7 @@ export default function GoalManagerCard({
               <button
                 type="button"
                 disabled={!canManage}
+                title="继续执行此目标，保留累计用量"
                 onClick={() => run(() => onUpdate({ status: "active" }))}
               >
                 继续
@@ -146,6 +153,7 @@ export default function GoalManagerCard({
               <button
                 type="button"
                 disabled={!canManage}
+                title="以相同目标和预算创建新 Goal，重新累计用量"
                 onClick={() => run(() => onUpdate(restartCompletedGoalPayload(goal)))}
               >
                 重新开始
@@ -154,18 +162,21 @@ export default function GoalManagerCard({
             <button
               type="button"
               disabled={!canManage}
-              onClick={() => setEditorMode("edit")}
+              onClick={() => openEditor("edit")}
             >
               {goal.status === "complete" ? "修改后继续" : "编辑"}
             </button>
             <button
               type="button"
               disabled={!canManage}
-              onClick={() => run(clearGoal)}
+              onClick={() => run(deleteGoal)}
             >
-              清除
+              删除 Goal
             </button>
           </div>
+          {goal.status === "budget_limited" ? (
+            <p>预算已用尽；可编辑提高预算后继续，或删除后新建 Goal。</p>
+          ) : null}
         </>
       ) : !sessionId ? (
         <div className="goal-manager-empty">请先选择会话，再管理该会话的 Goal。</div>
@@ -177,7 +188,7 @@ export default function GoalManagerCard({
           <button
             type="button"
             disabled={!canManage}
-            onClick={() => setEditorMode("create")}
+            onClick={() => openEditor("create")}
           >
             新建 Goal
           </button>
@@ -208,7 +219,7 @@ export default function GoalManagerCard({
             ? goal?.status === "complete"
               ? "保存后重新激活原 Goal，并保留已经累计的耗时与 Token 用量。"
               : "预算仍不足时会继续保持受限，其他状态保持不变。"
-            : "Goal 会跨轮次持续执行，直到完成、暂停、受限或被清除。"
+            : "开始后会围绕目标自动续跑，可随时暂停或删除。"
         }
         inputLabel="目标"
         initialValue={editorMode === "edit" ? goal?.objective ?? "" : ""}
@@ -224,23 +235,33 @@ export default function GoalManagerCard({
         onClose={() => setEditorMode(null)}
         onConfirm={async (objective) => {
           setOperationError(null);
+          const budget = tokenBudget.trim() ? Number(tokenBudget) : null;
+          if (budget !== null && (!Number.isSafeInteger(budget) || budget <= 0)) {
+            throw new Error("Token 预算必须是正整数，留空表示不限制");
+          }
           if (editorMode === "edit") {
             if (!goal) {
               throw new Error("当前 Goal 已不存在");
             }
             await onUpdate({
               objective,
+              token_budget: budget,
               status: goalEditStatus(goal.status),
             });
             return;
           }
           await onUpdate({
             objective,
+            token_budget: budget,
             status: "active",
             replace: true,
           });
         }}
-      />
+      >
+        <label className="workspace-dialog-wide"><span>Token 预算（留空不限制）</span>
+          <input aria-label="Goal Token 预算" type="number" min={1} step={1} value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} />
+        </label>
+      </WarmActionDialog>
     </section>
   );
 }

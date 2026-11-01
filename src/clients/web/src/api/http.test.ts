@@ -352,7 +352,7 @@ describe("requestJson 请求取消", () => {
 });
 
 describe("HttpRequestError 错误体诊断", () => {
-  function installErrorResponse(port: number, body: BodyInit | null, contentType?: string): void {
+  function installErrorResponse(port: number, body: BodyInit | null, contentType?: string, headers: Record<string, string> = {}): void {
     globalThis.fetch = withFetchPreconnect(
       async (...args: Parameters<typeof fetch>) => {
         const [input] = args;
@@ -368,7 +368,7 @@ describe("HttpRequestError 错误体诊断", () => {
         return new Response(body, {
           status: 500,
           statusText: "Internal Server Error",
-          headers: contentType ? { "content-type": contentType } : undefined,
+          headers: { ...headers, ...(contentType ? { "content-type": contentType } : {}) },
         });
       },
     );
@@ -431,6 +431,23 @@ describe("HttpRequestError 错误体诊断", () => {
     expect(error).toBeInstanceOf(HttpRequestError);
     expect((error as HttpRequestError).detail).toBe("目录读取失败");
     expect((error as Error).message).toContain("目录读取失败");
+  });
+
+  test.each(["request-original", null])("HTTP 错误保留原 request_id，不从正文补造身份：%s", async (requestId) => {
+    const port = 49_345;
+    installWindow(port);
+    installErrorResponse(port, JSON.stringify({ detail: "目录读取失败", request_id: requestId ?? "body-only" }),
+      "application/json", requestId === null ? {} : { "X-Request-ID": requestId });
+    const error = await requestJson(port, "/api/v1/session-catalog/snapshot", {
+      skipGatewayUserSession: true,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HttpRequestError);
+    const failure = error as HttpRequestError;
+    expect(failure.requestId).toBe(requestId);
+    expect(failure.path).toBe("/api/v1/session-catalog/snapshot");
+    expect(failure.detail).toBe("目录读取失败");
+    expect(failure.message).toBe("请求失败 500 Internal Server Error: 目录读取失败");
   });
 });
 

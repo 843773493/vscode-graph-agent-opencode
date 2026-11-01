@@ -15,7 +15,7 @@
         "mode": "none"
       },
       "recording": {
-        "artifact_root": "out/tests/e2e/clients/web/test_child_thread_panel/artifacts/model-stream"
+        "artifact_root": "out/tests/integration/clients/web/test_child_thread_panel/artifacts/model-stream"
       }
     }
   }

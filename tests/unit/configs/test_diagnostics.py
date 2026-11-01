@@ -422,5 +422,5 @@ def test_real_cli_preserves_rejection_of_unrelated_migration_options(
         check=False,
     )
     assert completed.returncode == 2
-    assert "只用于 migrate-runtime-logging" in completed.stderr
+    assert "只用于 migrate-runtime-config" in completed.stderr
     assert not diagnostic_home.exists()

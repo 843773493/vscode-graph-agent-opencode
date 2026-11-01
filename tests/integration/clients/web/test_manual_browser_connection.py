@@ -15,28 +15,34 @@ from tests.harness.python.browser_manager import (
     close_browser_frontend_process,
     start_browser_frontend_process,
 )
+from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_frontend import (
     close_terminal_frontend_process,
     start_terminal_frontend_process,
 )
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
+)
+from tests.support.paths import chromium_temporary_environment
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 
 
 @pytest.mark.asyncio
 async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
+    web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     workspace_root = Path(integration_workspace_root_path).resolve()
-    artifacts = workspace_root.parent / "artifacts"
-    artifacts.mkdir(parents=True, exist_ok=True)
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.artifacts_dir
     result_path = artifacts / "manual-browser-connection-result.json"
     screenshot_path = artifacts / "manual-browser-connection-failure.png"
     result_path.unlink(missing_ok=True)
@@ -50,16 +56,6 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     )
     if chromium_path is None:
         pytest.fail("手动浏览器连接 Web Integration 需要 Chromium")
-
-    build = await asyncio.to_thread(
-        subprocess.run,
-        ["bun", "run", "build"],
-        cwd=project_root / "src" / "clients" / "web",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
 
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     gateway_port = port_block.port(20)
@@ -82,8 +78,10 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             workspace_root=workspace_root,
             default_backend_url=None,
             port=gateway_port,
+            artifacts_dir=artifacts / "gateway",
+            boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
             extra_env={
-                "BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist"),
+                "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
                 "BOXTEAM_TERMINAL_FRONTEND_URL": f"http://127.0.0.1:{terminal_frontend_port}",
                 "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{browser_frontend_port}",
             },
@@ -104,6 +102,9 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
                 json={"title": session_title},
             )
             assert session_response.status_code == 200, session_response.text
+            session = session_response.json()["data"]
+            main = await client.get(f"/api/v1/sessions/{session['session_id']}/main-thread")
+            assert main.status_code == 200, main.text
 
         environment = os.environ.copy()
         environment.update(
@@ -113,6 +114,9 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
                     {
                         "sessionTitle": session_title,
                         "workspaceId": workspace_id,
+                        "sessionId": session["session_id"],
+                        "backendWorkspaceId": session["workspace_id"],
+                        "threadId": main.json()["data"]["thread_id"],
                     },
                     ensure_ascii=False,
                 ),
@@ -121,16 +125,17 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        playwright_result = await asyncio.to_thread(
-            subprocess.run,
-            ["node", "tests/integration/clients/web/manual_browser_connection.mjs"],
-            cwd=project_root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
+        temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
+        with chromium_temporary_environment(temporary) as temporary_environment:
+            playwright_result = await asyncio.to_thread(
+                subprocess.run,
+                ["bun", "tests/integration/clients/web/manual_browser_connection.mjs"],
+                cwd=project_root, env={**environment, **temporary_environment},
+                capture_output=True, text=True, timeout=120, check=False,
+            )
+        (artifacts / "browser.stdout.raw").write_text(playwright_result.stdout)
+        (artifacts / "browser.stderr.raw").write_text(playwright_result.stderr)
+        (artifacts / "browser-process.json").write_text(json.dumps({"exit_code": playwright_result.returncode}) + "\n")
         assert playwright_result.returncode == 0, (
             "手动浏览器连接 Web Integration 失败:\n"
             f"stdout:\n{playwright_result.stdout}\n"
@@ -138,8 +143,15 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             f"结果: {result_path}\n截图: {screenshot_path}"
         )
         browser_result = json.loads(result_path.read_text(encoding="utf-8"))
-        assert "/extension?" in browser_result["popup_url"]
-        assert f"resourceId={browser_result['browser_id']}" in browser_result["popup_url"]
+        assert browser_result["preview_owner"] == {
+            "workspaceId": session["workspace_id"], "sessionId": session["session_id"],
+            "threadId": main.json()["data"]["thread_id"],
+        }
+        assert browser_result["popup_count"] == 0
+        assert browser_result["creation_owner"] == {
+            "workspaceId": workspace_id, "sessionId": session["session_id"],
+            "threadId": main.json()["data"]["thread_id"],
+        }
         assert browser_result["transition"]["badge"] in {"正在初始化", "连接中"}
         assert browser_result["final"]["badge"].startswith("已连接")
         assert "新建浏览器成功" in browser_result["final"]["parentNotice"]

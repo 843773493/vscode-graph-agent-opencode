@@ -42,11 +42,16 @@ function initialConfiguration(template: TaskTemplate): PersistentTaskConfigurati
   };
 }
 
-export default function TaskEditor({ apiPort, target, configuration, template = "scheduled", busy, onSave, onCancel }: {
+export default function TaskEditor({ apiPort, target, configuration, initialTargetUri, template = "scheduled", busy, onSave, onCancel }: {
+  initialTargetUri?: string;
   apiPort: number; target: GatewayWorkspaceRequestTarget; configuration?: PersistentTaskConfigurationDTO; template?: TaskTemplate; busy: boolean;
   onSave: (configuration: PersistentTaskConfigurationDTO) => Promise<boolean>; onCancel: () => void;
 }) {
-  const [draft, setDraft] = useState(() => configuration ?? initialConfiguration(template));
+  const [draft, setDraft] = useState(() => {
+    if (configuration) return configuration;
+    const initial = initialConfiguration(template);
+    return initialTargetUri ? { ...initial, action: { ...initial.action!, target_uri: initialTargetUri } } : initial;
+  });
   const [ruleValue, setRuleValue] = useState(JSON.stringify(configuration?.condition?.rule ? configuration.condition.rule.expected : true));
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
@@ -125,7 +130,7 @@ export default function TaskEditor({ apiPort, target, configuration, template = 
       <label>提示内容<textarea aria-label="提示内容" required={!action.generation} value={context.content} onChange={(event) => setDraft({ ...draft, context: { ...context, content: event.target.value } })} /></label>
       <label>工作动作<select aria-label="工作动作" value={action.type_id} onChange={(event) => {
         if (event.target.value === "builtin.runtime_source") {
-          setDraft({ ...draft, action: { type_id: "builtin.runtime_source", version: "1", target_uri: "", delivery_mode: "context_and_run", delivery_policy: "after_turn" } });
+          setDraft({ ...draft, action: { type_id: "builtin.runtime_source", version: "1", target_uri: initialTargetUri ?? "", delivery_mode: "context_and_run", delivery_policy: "after_turn" } });
         } else {
           setResolving(true); setError(null);
           void getWorkspace(apiPort, target.workspace_id).then((workspace) => {

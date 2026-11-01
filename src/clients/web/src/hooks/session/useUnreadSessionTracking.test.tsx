@@ -13,6 +13,7 @@ const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "
 
 interface DocStub {
   visibilityState: string;
+  focused: boolean;
   hasFocus: () => boolean;
   addEventListener: (type: string, listener: () => void) => void;
   removeEventListener: (type: string, listener: () => void) => void;
@@ -23,7 +24,8 @@ function installDoc(visible: boolean, focused: boolean): DocStub {
   const listeners = new Map<string, Set<() => void>>();
   const doc: DocStub = {
     visibilityState: visible ? "visible" : "hidden",
-    hasFocus: () => focused,
+    focused,
+    hasFocus: () => doc.focused,
     addEventListener: (type, listener) => {
       const set = listeners.get(type) ?? new Set();
       set.add(listener);
@@ -72,24 +74,27 @@ afterEach(() => {
 interface Mounted {
   current: () => AppState;
   doc: DocStub;
+  select: (key: string | null) => Promise<void>;
 }
 
-async function mountHook(initial: AppState): Promise<Mounted> {
+async function mountHook(initial: AppState, visible = true, focused = true): Promise<Mounted> {
   let latest = initial;
   let doc!: DocStub;
-  function Probe(): React.ReactNode {
+  function Probe({ cacheKey }: { cacheKey: string | null }): React.ReactNode {
     const [state, setState] = React.useState(initial);
     latest = state;
     useUnreadSessionTracking({
       unreadSessionKeys: state.unreadSessionKeys,
-      currentSessionCacheKey: SESSION_CACHE_KEY,
+      currentSessionCacheKey: cacheKey,
       setState,
     });
     return null;
   }
-  doc = installDoc(true, true);
-  await act(async () => { renderer = create(<Probe />); });
-  return { current: () => latest, doc };
+  doc = installDoc(visible, focused);
+  await act(async () => { renderer = create(<Probe cacheKey={SESSION_CACHE_KEY} />); });
+  return { current: () => latest, doc, select: async cacheKey => {
+    await act(async () => { renderer!.update(<Probe cacheKey={cacheKey} />); });
+  } };
 }
 
 describe("useUnreadSessionTracking", () => {
@@ -104,15 +109,33 @@ describe("useUnreadSessionTracking", () => {
   });
 
   test("重新可见并聚焦时通过 visibilitychange 再次标记已读", async () => {
-    const mounted = await mountHook(appState());
-    act(() => {
-      mounted.doc.visibilityState = "hidden";
-    });
+    const mounted = await mountHook(appState({ unreadSessionKeys: new Set([SESSION_CACHE_KEY, "other::key"]) }), false);
+    expect(mounted.current().unreadSessionKeys.has(SESSION_CACHE_KEY)).toBe(true);
     act(() => {
       mounted.doc.visibilityState = "visible";
       mounted.doc.fire("visibilitychange");
     });
     expect(mounted.current().unreadSessionKeys.has(SESSION_CACHE_KEY)).toBe(false);
+    expect(mounted.current().unreadSessionKeys.has("other::key")).toBe(true);
+  });
+
+  test("页面可见但未聚焦时保留未读，取得焦点后只清除当前会话", async () => {
+    const mounted = await mountHook(appState({ unreadSessionKeys: new Set([SESSION_CACHE_KEY, "other::key"]) }), true, false);
+    act(() => mounted.doc.fire("visibilitychange"));
+    expect(mounted.current().unreadSessionKeys.has(SESSION_CACHE_KEY)).toBe(true);
+    act(() => { mounted.doc.focused = true; mounted.doc.fire("focus"); });
+    expect([...mounted.current().unreadSessionKeys]).toEqual(["other::key"]);
+  });
+
+  test("切换工作区时相同会话 ID 的未读归属独立，非会话编辑器不清除未读", async () => {
+    const otherWorkspace = "other-workspace::session-unread";
+    const mounted = await mountHook(appState({ unreadSessionKeys: new Set([SESSION_CACHE_KEY, otherWorkspace]) }));
+    expect([...mounted.current().unreadSessionKeys]).toEqual([otherWorkspace]);
+    await mounted.select(null);
+    act(() => mounted.doc.fire("focus"));
+    expect([...mounted.current().unreadSessionKeys]).toEqual([otherWorkspace]);
+    await mounted.select(otherWorkspace);
+    expect(mounted.current().unreadSessionKeys.size).toBe(0);
   });
 
   test("页面不可见时不标记已读，保留未读集合", async () => {

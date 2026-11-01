@@ -18,6 +18,8 @@ export type TurnProjectionState = NonNullable<
 export type TurnProjectionEpochDecision = "apply" | "discard_older" | "refresh_bootstrap";
 
 export interface SessionTurnTimeline {
+  /** 浏览器镜像只能展示；首次权威历史页替换它后才允许订阅实时状态。 */
+  restoredFromCache?: true;
   scopeKey: string;
   threadId: string | null;
   historyViewRevision: number | null;
@@ -632,7 +634,7 @@ export function applyTurnBootstrap(
   next = {
     ...next,
     threadId: bootstrap.thread_id,
-    phase: projectionState === "ready" ? "ready" : "bootstrapping",
+    phase: projectionState === "ready" && !next.restoredFromCache ? "ready" : "bootstrapping",
     activeJobs: bootstrap.active_jobs ?? [],
     // bootstrap 只描述最新 Turn。重新进入已经加载过的会话时，不能把
     // 用户之前加载出的窗口和 before/after 游标抹掉，否则切回会话会
@@ -748,11 +750,20 @@ function releaseHistoryPageLoading(
 }
 
 export function applyTurnHistoryPage(
-  timeline: SessionTurnTimeline,
+  previous: SessionTurnTimeline,
   page: TurnHistoryPage,
   direction: "before" | "after" | "around" = "before",
 ): SessionTurnTimeline {
-  requireMatchingEpoch(timeline, page.projection_epoch);
+  requireMatchingEpoch(previous, page.projection_epoch);
+  if (previous.restoredFromCache && previous.historyViewRevision !== null
+    && page.source_view_revision !== undefined && page.source_view_revision < previous.historyViewRevision) {
+    return { ...previous, loadingBefore: false, loadingAfter: false, error: "历史同步响应版本落后，已保留缓存，请重试" };
+  }
+  // 持久化镜像可能包含已经删除、重放或切换上下文的 Turn；首个权威窗口整体替换。
+  const timeline = previous.restoredFromCache
+    ? { ...createSessionTurnTimeline(previous.scopeKey, previous.generation), threadId: previous.threadId,
+        projectionEpoch: previous.projectionEpoch, activeJobs: previous.activeJobs, eventCursor: previous.eventCursor }
+    : previous;
   if (!page.thread_id) throw new Error("Turn history 缺少精确 thread owner");
   if (timeline.threadId !== null && timeline.threadId !== page.thread_id) {
     throw new Error("Turn history 的 thread owner 与已有时间线不一致");

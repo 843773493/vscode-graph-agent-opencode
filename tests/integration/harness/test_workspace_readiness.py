@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Iterator
 from contextlib import ExitStack
@@ -72,7 +73,8 @@ def health_endpoint(
 @pytest.fixture
 def process() -> Mock:
     value = Mock(spec=subprocess.Popen)
-    value.pid = 4312
+    # HTTPServer 由当前 pytest 进程持有；只替代退出观察，不伪造监听 PID。
+    value.pid = os.getpid()
     value.poll.return_value = None
     return value
 

@@ -68,6 +68,7 @@ interface WorkspaceFilePreviewAreaProps {
   onCancelEdit: () => void;
   onSaveEdit: () => Promise<void>;
   onOpenWorkspacePath: (path: string) => Promise<void>;
+  onClose?: () => void;
   debugMode?: boolean;
   debugExecutionPath?: string | null;
   debugExecutionLine?: number | null;
@@ -158,6 +159,7 @@ export default function WorkspaceFilePreviewArea({
   onCancelEdit,
   onSaveEdit,
   onOpenWorkspacePath,
+  onClose,
   debugMode = false,
   debugExecutionPath = null,
   debugExecutionLine = null,
@@ -277,6 +279,9 @@ export default function WorkspaceFilePreviewArea({
               </span>
             </div>
             <div className="workspace-preview-toolbar-actions" aria-label="文件预览操作">
+              {onClose ? <button type="button" className="auxiliary-icon-button" title="关闭文件预览" aria-label="关闭文件预览" onClick={onClose}>
+                <span className="codicon codicon-close" aria-hidden="true" />
+              </button> : null}
               <span className="workspace-preview-meta">
                 {activeTab.language} · {formatByteSize(activeTab.size)}
               </span>

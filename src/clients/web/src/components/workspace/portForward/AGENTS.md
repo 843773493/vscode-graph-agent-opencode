@@ -4,7 +4,7 @@
 
 本目录与相邻子包的边界：
 
-- `components/panels/bottomPanel/`：底部面板外壳（标签栏 + 内容区），其中 PortForwardPanel 只做本目录组件的接入层，不实现端口转发业务规则。
+- `src/clients/workbench/src/react/workspacePanelView.tsx`：在原生工作区面板内直接挂载本目录组件，提供工作区归属与共享资源控制器，不复制端口转发业务规则。
 - `components/workspace/`：工作区会话级组件的其它族（文件树、预览、编辑器）；本目录只承载端口转发这一条链路。
 - `components/overlays/`：通用浮层；本目录只消费 WarmConfirmProvider 的确认流程。
 - `state/display/`：展示态镜像；本目录不持有端口转发的权威状态，数据只来自 `gatewayApi`。

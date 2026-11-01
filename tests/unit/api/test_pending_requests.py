@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api.messages import (
+    clear_pending_requests,
     create_message_and_run,
     list_main_thread_pending_requests,
     list_pending_requests,
@@ -74,11 +75,19 @@ def scoped_pending_readers(request: pytest.FixtureRequest):
             yield
             calls.append(("exit", session_id))
 
+        async def resolve_thread(self, session_id, thread_id):
+            calls.append(("resolve_thread", session_id, thread_id))
+            return thread_id
+
         async def resolve_main_thread(self, session_id):
             calls.append(("resolve", session_id))
             return main_thread
 
     class PendingReader:
+        async def clear_pending(self, session_id, *, thread_id=None):
+            calls.append(("clear", session_id, thread_id))
+            return PendingRequestListDTO(session_id=session_id, thread_id=thread_id)
+
         async def list_pending(self, session_id, *, thread_id=None):
             calls.append(("pending", session_id, thread_id))
             if error is not None:
@@ -99,7 +108,7 @@ async def test_main_pending_route_resolves_canonical_scope_while_session_route_a
         job_service=job_service, session_service=session_service,
     )
     aggregate = await list_pending_requests(
-        session_id, _="local", request_id="request_scope", job_service=job_service,
+        session_id, _="local", request_id="request_scope", job_service=job_service, session_service=session_service,
     )
     assert main.data.thread_id == main_thread and aggregate.data.thread_id is None
     assert calls == [
@@ -128,7 +137,7 @@ async def test_pending_read_maps_deleting_and_preserves_real_owner_failure(
             )
         else:
             await list_pending_requests(
-                session_id, _="local", request_id="request_deleting", job_service=job_service,
+                session_id, _="local", request_id="request_deleting", job_service=job_service, session_service=session_service,
             )
     except HTTPException as error:
         assert error.status_code == 409
@@ -226,3 +235,20 @@ def test_old_dispatch_fields_are_rejected_explicitly() -> None:
                 "enqueue_sequence": 99,
             }
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_id", [None, "thr_018f0000000070008000000000000002"])
+async def test_clear_pending_forwards_validated_scope_and_keeps_request_identity(scoped_pending_readers, thread_id):
+    job_service, session_service, calls, _ = scoped_pending_readers
+    session_id = "ses_018f0000000070008000000000000001"
+    response = await clear_pending_requests(
+        session_id, _="local", request_id="request_clear_scope", job_service=job_service,
+        session_service=session_service, thread_id=thread_id,
+    )
+    assert response.request_id == "request_clear_scope"
+    assert response.data.thread_id == thread_id
+    expected = [("enter", session_id)]
+    if thread_id:
+        expected.append(("resolve_thread", session_id, thread_id))
+    assert calls == [*expected, ("clear", session_id, thread_id), ("exit", session_id)]

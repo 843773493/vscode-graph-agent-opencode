@@ -54,7 +54,7 @@ export function useSessionMessageStream({
   useEffect(() => {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
-    if (!apiPort || !sessionId || !threadId || !turnId || !sessionCacheKey || observationState.paused) return;
+    if (apiPort === null || !sessionId || !threadId || !turnId || !sessionCacheKey || observationState.paused) return;
 
     const controller = new AbortController();
     const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
@@ -120,7 +120,7 @@ export function useSessionMessageStream({
         const currentWorkspaceId = previous.currentSessionWorkspaceId
           ?? previous.activeGatewayWorkspaceId;
         const ownsGlobalStatus = currentSessionId === targetSessionId
-          && previous.currentSession?.thread_id === targetThreadId
+          && (previous.turnTimelinesBySession.get(sessionCacheKey)?.threadId ?? previous.currentSession?.thread_id) === targetThreadId
           && sessionScopeKey(currentWorkspaceId, currentSessionId)
             === sessionScopeKey(targetWorkspaceId, targetSessionId);
         const conversation = previous.pendingConversations.get(sessionCacheKey)?.find((item) =>

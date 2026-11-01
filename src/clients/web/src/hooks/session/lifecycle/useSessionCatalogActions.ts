@@ -7,7 +7,7 @@ import {
 import { replaceSessionMetadata } from "../../../state/session/sessions";
 import { appendFrontendEvent } from "../../../state/traceEvents";
 import { sessionScopeKey } from "../../../state/session/sessionScope";
-import { errorMessage } from "../../../utils/errorMessage";
+import { errorMessage, ReportedAggregateError } from "../../../utils/errorMessage";
 import { requireGatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import {
   catalogOutboxOperationIsTerminal,
@@ -281,13 +281,6 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
           );
         } catch (error) {
           catalogRefreshFailure = error;
-          const status = operation.settlement === "repair_required"
-            ? `删除已提交但排空失败，需修复: ${operation.error_detail ?? operation.error_code}；目录分支刷新失败`
-            : "已到终态但目录分支刷新失败";
-          sessionCatalogOutboxRuntime?.reportError(
-            `会话目录操作 ${operation.client_operation_id} ${status}: `
-            + errorMessage(error),
-          );
         }
         if (operation.state !== "committed") {
           throw terminalError ?? new Error(
@@ -309,10 +302,15 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
       } catch (error) {
         const failure = catalogRefreshFailure === null
           ? error
-          : new AggregateError(
+          : new ReportedAggregateError(
             [error, catalogRefreshFailure],
             `${errorMessage(error)}；目录分支刷新失败: ${errorMessage(catalogRefreshFailure)}`,
           );
+        if (catalogRefreshFailure !== null) {
+          sessionCatalogOutboxRuntime?.reportError(
+            `删除会话失败 (${workspaceIdForRequest}/${sessionId}): ${errorMessage(failure)}`,
+          );
+        }
         setState((prev) => ({
           ...prev,
           status: `删除会话失败: ${errorMessage(failure)}`,
@@ -320,6 +318,11 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         throw failure;
       }
 
+      if (catalogRefreshFailure !== null) {
+        sessionCatalogOutboxRuntime?.reportError(
+          `已删除会话 (${workspaceIdForRequest}/${sessionId})，但目录分支刷新失败: ${errorMessage(catalogRefreshFailure)}`,
+        );
+      }
       const resolvedWorkspaceId = workspaceIdForRequest;
       invalidateWorkspaceSessionListSnapshot(apiPort, resolvedWorkspaceId);
       setState((prev) => {

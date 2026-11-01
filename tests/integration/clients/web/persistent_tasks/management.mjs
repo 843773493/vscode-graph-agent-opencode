@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
+import { openWorkbench, selectThread, sessionTasks, automation } from "./workbench.mjs";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
@@ -14,12 +16,8 @@ try {
   page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
-  // 使用产品用户保存工作区面板偏好，刷新后仍由后端恢复同一入口。
-  await page.getByRole("button", { name: "用户视图", exact: true }).click();
-  await page.getByPlaceholder("新用户名称").fill("持久任务验收用户");
-  await page.getByRole("button", { name: "创建", exact: true }).click();
-  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
+  await openWorkbench(page, fixture.baseUrl);
+  await selectThread(page, fixture.owner, 0);
   const initialization = await page.evaluate(async (workspaceId) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     assertResponse(credential);
@@ -42,13 +40,7 @@ try {
     function assertResponse(response) { if (!response.ok) throw new Error(`产品初始化失败：${response.status}`); }
   }, fixture.workspaceId);
   initialization.forEach((item) => { assert(item.requestId); assert.equal(item.requestId, item.bodyRequestId); });
-  async function openAutomation() {
-    const toggle = page.getByRole("button", { name: "切换底部面板", exact: true });
-    if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
-    await page.getByRole("tab", { name: "自动化", exact: true }).click();
-    return page.getByRole("region", { name: "工作区持久任务", exact: true });
-  }
-  let panel = await openAutomation();
+  let panel = await automation(page);
   await panel.getByRole("button", { name: /同一owner的暂停目标/ }).waitFor();
   // 五类入口使用现有Goal视图或同一组件表单；切换模板不创建后台任务。
   await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
@@ -60,11 +52,12 @@ try {
   await goalCard.getByRole("button", { name: "编辑", exact: true }).click();
   const goalEditor = page.getByRole("dialog", { name: "编辑 Goal", exact: true });
   const objective = goalEditor.getByRole("textbox");
-  assert.equal(await objective.inputValue(), "同一owner的暂停目标");
+  await expect(objective).toHaveValue("同一owner的暂停目标");
   await objective.fill("同一owner的编辑目标");
   await goalEditor.getByRole("button", { name: "保存 Goal", exact: true }).click();
   await panel.getByRole("button", { name: /同一owner的编辑目标/ }).waitFor();
-  await page.getByRole("region", { name: "当前会话关联任务", exact: true }).getByRole("button", { name: "同一owner的编辑目标", exact: true }).waitFor();
+  let linked = await sessionTasks(page, fixture.owner, 0);
+  await linked.getByRole("button", { name: "同一owner的编辑目标", exact: true }).waitFor();
   for (const [title, field] of [["脚本条件", "程序"], ["模型判断", "判断说明"], ["自定义", "触发方式"]]) {
     await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
     await panel.getByRole("region", { name: "选择持久任务模板", exact: true }).getByRole("button", { name: title, exact: true }).click();
@@ -175,41 +168,47 @@ try {
   await panel.getByRole("button", { name: "终止任务", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "终止任务", exact: true }).click();
   await panel.getByRole("button", { name: "终止任务", exact: true }).waitFor({ state: "visible" });
-  await page.waitForFunction(() => [...document.querySelectorAll(".persistent-task-actions button")].some((button) => button.textContent === "终止任务" && button.disabled));
-  const preferences = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/gateway/ui-settings" && response.request().method() === "GET");
+  await expect(panel.getByRole("button", { name: "终止任务", exact: true })).toBeDisabled();
+  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   await page.reload({ waitUntil: "domcontentloaded" });
-  assert.equal((await preferences).status(), 200);
-  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
-  panel = await openAutomation();
+  // 不重新执行打开面板命令，验证原版存储恢复当前工作区的自动化入口。
+  panel = page.locator('.native-workspace-panel-content:not([hidden])').getByRole("region", { name: "工作区持久任务", exact: true });
+  await expect(panel).toBeVisible();
   await panel.getByRole("button", { name: /另一客户端修改的任务/ }).click();
   assert.match(await panel.innerText(), /已终止/);
   await panel.getByRole("button", { name: /同一owner的编辑目标/ }).click();
-  await panel.getByRole("button", { name: "管理会话 Goal", exact: true }).click();
-  const linked = page.getByRole("region", { name: "当前会话关联任务", exact: true });
+  await panel.getByRole("region", { name: "当前 Goal", exact: true }).getByText("同一owner的编辑目标", { exact: true }).waitFor();
+  linked = await sessionTasks(page, fixture.owner, 0);
   await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).click();
-  await panel.getByRole("heading", { name: "另一客户端修改的任务", exact: true }).waitFor();
+  await linked.getByRole("heading", { name: "另一客户端修改的任务", exact: true }).waitFor();
   // 切换会话重建原owner镜像；读取失败不能显示成“没有任务”。
-  await page.locator(`[data-session-id="${fixture.otherSessionId}"]`).first().click();
+  linked = await sessionTasks(page, fixture.otherOwner, 0);
   await linked.getByText("当前会话没有关联任务。", { exact: true }).waitFor();
   assert.equal(await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).count(), 0);
   await page.route("**/persistent-tasks/events?session_id=*", (route) => route.abort("failed"), { times: 1 });
-  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
+  linked = await sessionTasks(page, fixture.owner, 0);
   await linked.getByRole("alert").waitFor();
   assert.equal(await linked.getByText("当前会话没有关联任务。", { exact: true }).count(), 0);
-  await linked.getByRole("button", { name: "刷新关联任务", exact: true }).click();
+  await linked.getByRole("button", { name: "刷新任务", exact: true }).click();
   await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).waitFor();
   await linked.getByRole("button", { name: "另一客户端修改的任务", exact: true }).click();
-  await panel.getByRole("heading", { name: "另一客户端修改的任务", exact: true }).waitFor();
+  await linked.getByRole("heading", { name: "另一客户端修改的任务", exact: true }).waitFor();
+  // 同一 Thread 在两个原版编辑器组中各持有资源视图，任务事实仍来自同一后端。
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.splitEditorRight"));
+  await expect(page.locator(".editor-group-container")).toHaveCount(2);
+  let right = await sessionTasks(page, fixture.owner, 1);
+  await right.getByRole("button", { name: "同一owner的编辑目标", exact: true }).click();
+  await right.getByRole("region", { name: "当前 Goal", exact: true }).getByText("同一owner的编辑目标", { exact: true }).waitFor();
+  await expect(linked.getByRole("heading", { name: "另一客户端修改的任务", exact: true })).toBeVisible();
+  right = await sessionTasks(page, fixture.otherOwner, 1);
+  await right.getByText("当前会话没有关联任务。", { exact: true }).waitFor();
+  await expect(right.getByRole("button", { name: "另一客户端修改的任务", exact: true })).toHaveCount(0);
+  await expect(linked.getByRole("heading", { name: "另一客户端修改的任务", exact: true })).toBeVisible();
+  const splitOwners = { primary: fixture.owner, other: fixture.otherOwner };
   assert(conflict);
   assert.deepEqual(errors, []);
-  const sash = await page.getByRole("button", { name: "调整底部面板高度", exact: true }).boundingBox();
-  assert(sash);
-  await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(sash.x + sash.width / 2, sash.y - 280, { steps: 10 });
-  await page.mouse.up();
   await page.screenshot({ path: path.join(artifacts, "task-management.png"), fullPage: true });
-  await writeFile(path.join(artifacts, "actual.json"), JSON.stringify({ taskId, initialization, conflict, preview, noPageErrors: true }, null, 2));
+  await writeFile(path.join(artifacts, "actual.json"), JSON.stringify({ taskId, initialization, conflict, preview, splitOwners, noPageErrors: true }, null, 2));
 } catch (error) {
   if (page) {
     await page.screenshot({ path: path.join(artifacts, "failure.png"), fullPage: true });

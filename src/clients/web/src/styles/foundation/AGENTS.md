@@ -8,7 +8,6 @@ foundation/
 ├── themeSurfaces.css      # 按主题变化的表面颜色
 ├── panelShared.css        # 面板共用布局基线
 ├── workbenchLayout.css    # 主窗口区域与尺寸布局
-├── workbenchViewSwitcher.css # 主工具栏的工作台视图切换器
 ├── workbenchPanel.css     # 停靠面板外观
 └── themeSurfaces.test.ts  # 主题表面变量约束
 ```
@@ -25,6 +24,6 @@ foundation/
 
 # 规范
 
-- 保持 `src/main.tsx` 中样式导入的层叠顺序。
+- 保持 `workbench/src/react/productStyles.ts` 中共享样式的层叠顺序和 ShadowRoot 作用域。
 - 新增样式须先判断是否为共享基线；单个视图样式放入对应领域目录。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

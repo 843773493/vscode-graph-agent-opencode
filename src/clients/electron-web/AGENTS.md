@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-预留 Electron renderer 的浏览器可运行 parity 客户端。它承载桌面布局的非原生页面，使约 90% 的 Electron renderer 功能可以在普通浏览器中开发和测试。
+Electron renderer 的浏览器可运行 parity 客户端。它承载桌面布局的非原生页面，使约 90% 的 Electron renderer 功能可以在普通浏览器中开发和测试。
 
 ## 可修改内容
 
@@ -17,5 +17,5 @@
 
 ## 规范
 
-- 与 `web/` 共享 `shared/web-ui` 和 `shared/core`；运行入口、资源加载和 bridge 适配保持独立。
+- 复用 `workbench` 的启动、构建和 `web` 的会话组件与 IndexedDB 镜像；不复制业务代码。纯共享层出现实际迁移需求时再抽取。
 - 所有产品业务状态仍通过 Gateway API 和共享状态模型取得，不能由本地 React 状态伪造成功。

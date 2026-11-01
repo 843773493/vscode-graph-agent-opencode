@@ -1418,7 +1418,7 @@ test("apiPort 为空时使用默认工作区后端端口", async () => {
 
 
 test("受控删除对整个已确认组暂停观察，409后完整对账并释放暂停", async () => {
-  const failure = new HttpRequestError(409, "Job 阻塞", { status: "blocked", blockers: [] }, "/api/gateway/workspaces/ws-other");
+  const failure = new HttpRequestError(409, "Job 阻塞", { status: "blocked", blockers: [] }, "/api/gateway/workspaces/ws-other", null);
   const group = { expected_backend_generation: "generation-1", expected_workspace_ids: ["ws-other", "ws-sibling"], desired_workspace_ids: ["ws-sibling"] };
   const controllers = [new AbortController(), new AbortController()];
   const releases = controllers.map((controller, index) => registerWorkspaceObservation(group.expected_workspace_ids[index]!, controller));

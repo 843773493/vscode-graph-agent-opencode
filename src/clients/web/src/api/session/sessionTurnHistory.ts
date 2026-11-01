@@ -93,8 +93,9 @@ export async function getSessionTurnBootstrap(
   sessionId: string,
   workspaceId?: string | null,
   signal?: AbortSignal,
+  threadId?: string,
 ): Promise<SessionTurnBootstrap> {
-  const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/bootstrap`;
+  const path = `/api/v1/sessions/${encodeURIComponent(sessionId)}/bootstrap${threadId === undefined ? "" : `?thread_id=${encodeURIComponent(threadId)}`}`;
   try {
     return unwrapApiData(await requestJson<APIResponse<SessionTurnBootstrap>>(port, path, {
       headers: workspaceHeader(workspaceId),

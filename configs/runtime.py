@@ -70,7 +70,7 @@ def validate_config_payload(
     if schema_domain == "gateway":
         features = config.get("features")
         if isinstance(features, dict) and "session_generators" in features:
-            raise ValueError("Gateway 生成器轮询配置已迁入工作区；停止服务后执行 uv run python -m configs.boxteam migrate-runtime-logging，再通过 /api/gateway/migrations/session-generators 显式导入旧任务")
+            raise ValueError("Gateway 生成器轮询配置已迁入工作区；停止服务后执行 uv run python -m configs.boxteam migrate-runtime-config，再通过 /api/gateway/migrations/session-generators 显式导入旧任务")
         logging = config.get("logging")
         runtime = logging.get("runtime") if isinstance(logging, dict) else None
         if isinstance(runtime, dict) and isinstance(runtime.get("level"), str):
@@ -102,7 +102,7 @@ def require_current_workspace_config(config: dict[str, object], *, partial: bool
     if "logger" in config or "logging" in config or config.get("config_version", 2 if partial else None) != 2:
         raise ValueError(
             "Workspace 日志配置须显式迁移到 Gateway logging.runtime；停止相关服务后执行 "
-            "uv run python -m configs.boxteam migrate-runtime-logging --migration-workspace <工作区>"
+            "uv run python -m configs.boxteam migrate-runtime-config --migration-workspace <工作区>"
         )
 
 

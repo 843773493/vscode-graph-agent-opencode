@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage
@@ -166,6 +168,9 @@ def seed_boundary_turn(
             {"source": f"boundary-cases-{turn_id}-fixture", "step": 1},
             {"messages": "1"},
         )
+    # 样本正文在准入前声明；活动成员必须在真实用户根与请求来源提交后创建。
+    output_created_at = datetime.now(UTC).isoformat()
+    items = tuple(replace(item, created_at=output_created_at) for item in items)
     saver.converge_execution(
         session_id,
         thread_id=owner.thread_id,

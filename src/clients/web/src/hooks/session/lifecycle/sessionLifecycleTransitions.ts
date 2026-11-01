@@ -1,7 +1,6 @@
 import type { Session } from "../../../types/backend";
 import type { AppState } from "../../../types/frontend";
 import { cloneMaps } from "../../../state/appStateMaps";
-import { clearLastSessionId, writeLastSessionId } from "../../../state/storage";
 import { applySessionListConvergence } from "../../../state/session/sessions";
 import { appendFrontendEvent } from "../../../state/traceEvents";
 import { resetAgentStateFields } from "../../runtime/useAgentStateSnapshot";
@@ -51,7 +50,6 @@ export function applySessionSelectionTransition(
   next.contentView = previous.contentView === "agent" ? "default" : previous.contentView;
   next.status = "正在加载会话历史";
   Object.assign(next, resetAgentStateFields(next));
-  writeLastSessionId(selected.session_id);
   appendFrontendEvent(
     next.eventQueuesBySession,
     selected.session_id,
@@ -148,11 +146,6 @@ export function convergeSessionStateAfterRemoval(
   Object.assign(next, resetSessionScopedFields(next));
   next.contentView = prev.contentView === "agent" ? "default" : prev.contentView;
   Object.assign(next, resetAgentStateFields(next));
-  if (nextSession) {
-    writeLastSessionId(nextSession.session_id);
-  } else {
-    clearLastSessionId();
-  }
   return next;
 }
 

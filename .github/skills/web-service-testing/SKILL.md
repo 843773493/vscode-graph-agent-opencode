@@ -5,109 +5,79 @@ description: "Use when: starting web service, running project, starting developm
 
 # Web 服务测试与调试
 
-## 适用场景
-- 检查 Web 应用运行状态或功能问题
-- 调试前端 UI 行为（页面元素、交互、样式）
-- 验证后端 API 是否正常工作
-- 执行需要前后端都启动的操作或测试
-- 查看应用日志或错误信息
-- 进行端到端的功能验证
+## 开发入口与依赖
 
-## 启动前准备
-1. 确认项目根目录存在 `.venv` 目录（Python 虚拟环境）
-2. 确认项目根目录存在 `tools/bun.exe`（Bun 运行时）
-3. 确认 `scripts/launch/dev.mjs` 文件存在于项目根目录
+完整页面入口是 `src/clients/workbench`，其中的原版 Code OSS 工作台挂载 `src/clients/web` 的共享 React 会话产品。旧 App、旧 HTML 和旧 Vite 页面入口已删除，不在共享组件目录启动第二套前端。
 
-## 启动开发环境
-
-### 步骤 1：使用 dev.mjs 启动前后端
-在项目根目录执行：
+在项目根目录初始化固定上游并安装依赖：
 
 ```bash
-# Windows
-.\tools\bun.exe run scripts\dev.mjs
-
-# 或使用 package.json 中的快捷命令
-.\tools\bun.exe run dev
+git submodule update --init --recursive
+uv sync --frozen
+bun install --frozen-lockfile
+bun install --cwd src/clients/web --frozen-lockfile
+bun install --cwd src/clients/workbench --frozen-lockfile
 ```
 
-`dev.mjs` 会：
-1. 清理占用 8000（后端）、8001（前端）、8002（调试）端口的旧进程
-2. 在 `src/clients/web` 目录启动前端开发服务器（默认端口 8011，以 `scripts/launch/dev.mjs` 配置为准）
-3. 在根目录启动后端 FastAPI + debugpy（端口 8000，调试端口 8002）
-4. 等待前后端健康检查通过（最多 30 秒超时）
-5. 管理进程联动退出（任一进程崩溃会自动终止另一个）
+配置异常先读取准确错误并继续不依赖它的工作；不要擅自修改用户配置或模型参数。
 
-### 步骤 2：验证服务就绪
+## 启动与停止
 
-**后端健康检查：**
-```bash
-curl http://127.0.0.1:8000/api/v1/health
-```
-预期返回：HTTP 200 OK
-
-**前端健康检查：**
-```bash
-curl http://127.0.0.1:8001/health
-```
-预期返回：HTTP 200 OK
-
-**API 文档：**
-浏览器访问 http://127.0.0.1:8000/api/v1/docs
-
-## 浏览器交互调试
-
-### 打开页面
-使用浏览器工具打开目标 URL：
-- 前端界面：http://127.0.0.1:8001
-- 后端 API 文档：http://127.0.0.1:8000/api/v1/docs
-
-### 检查页面元素
-1. 使用 `read_page` 获取页面当前状态快照
-2. 使用 `click_element` 点击特定元素
-3. 使用 `type_in_page` 在输入框中填写内容
-4. 使用 `screenshot_page` 捕获页面截图用于分析
-
-### 查看日志
-- **后端日志**：观察 dev.mjs 启动时终端输出的 Python 进程日志
-- **前端日志**：观察 dev.mjs 启动时终端输出的 Bun/Vite 进程日志
-- 如需更详细日志，检查 `.boxteam/` 目录下的日志文件（如果存在）
-
-## 健康检查与故障排查
-
-### 常见问题
-1. **端口被占用**：dev.mjs 会自动清理，但如遇权限问题可手动检查：
-   ```bash
-   # Windows
-   netstat -ano | findstr "8000\|8001\|8002"
-   
-   # 终止进程
-   taskkill /F /PID <PID>
-   ```
-
-2. **后端启动失败**：
-   - 检查 `.venv` 是否完整：`uv sync`
-   - 检查 Python 依赖：`uv pip list`
-   - 手动测试：`uv run uvicorn app.main:app --host 127.0.0.1 --port 8000`
-
-3. **前端启动失败**：
-   - 检查 `src/clients/web` 目录是否存在
-   - 检查 node_modules：`bun install --cwd src/clients/web`
-   - 手动测试：`bun --cwd src/clients/web run dev`
-
-### 停止服务
-按 `Ctrl+C` 终止 dev.mjs 进程，它会自动清理前后端子进程。
-
-## 使用 --only-launch 模式
-如果不需要进程联动管理（例如需要手动控制或调试单个进程）：
+使用统一入口：
 
 ```bash
-.\tools\bun.exe run scripts\dev.mjs --only-launch
+bun run dev
+bun run dev:status
+bun run dev:stop
 ```
 
-这会启动前后端但立即返回，不阻塞终端。
+`bun run dev` 管理当前 worktree 的完整开发栈，服务就绪后返回；需要前台联动日志时使用 `bun run dev:foreground`。后台生命周期由统一管理器负责，不以手动拼接 `--only-launch` 代替就绪及停止管理。不要只重启 Backend 而保留旧 Gateway 或旧前端。
+
+默认 Backend 为 `127.0.0.1:8010`，Workbench Vite 为 `127.0.0.1:8011`，Gateway 为 `127.0.0.1:8014`，辅助服务为 8012/8013/8015/8016，调试端口为 8002。实际端口以 `scripts/launch/dev.mjs` 读取的环境布局为准；客户端随机转发端口不是本地服务配置。
+
+源码开发默认使用当前 worktree 的 `out/development-runtime/boxteam-home/`；显式设置的 `BOXTEAM_HOME` 沿用用户设置。启动器会清理其配置端口上的旧进程，不额外终止未知监听者。
+
+## 验证真实产品链路
+
+浏览器打开默认根 URL `http://127.0.0.1:8011/`，不依赖测试专用查询参数。前端业务请求走同源 `/api`，由 Vite 代理到 Gateway，再路由当前工作区。
+
+至少经前端检查这三条真实请求：
+
+```bash
+curl http://127.0.0.1:8011/api/gateway/health
+curl http://127.0.0.1:8011/api/gateway/workspaces
+curl http://127.0.0.1:8011/api/v1/workspace
+```
+
+沿产品访客认证取得所需 Cookie 或凭据后核对响应，不能把 401、只有首页可见或 Backend 健康当成产品可用。核对激活工作区，以及 JSON 和 `X-Request-ID` 的同一 request_id。Backend API 文档为 `http://127.0.0.1:8010/api/v1/docs`，Gateway 文档为 `http://127.0.0.1:8014/api/gateway/docs`。
+
+浏览器交互按编辑器组及完整工作区／Session／Thread owner 定位，使用可穿透 ShadowRoot 的 locator。对局部 DOM 执行 evaluate 时先取得真实 Thread 内节点，不以 document 全局查询得到空集合证明消息或错误不存在。保留原版标签预览／固定、关闭重开与 Grid 分屏操作。
+
+临时浏览器工作区只能使用用户明确允许的默认工作区，或 `out/tests/temp/<task_name>/workspace/`；截图、trace 和日志先显式指定到同任务的 `artifacts/`。不把项目根目录注册为测试工作区，不向源码目录写截图。
+
+## 正式测试与构建
+
+先从矩阵选择与修改相关的套件：
+
+```bash
+bun run test:matrix -- --list
+bun run test:matrix -- --suite=integration-web-chat-tool-loop
+```
+
+矩阵提供进程外超时和内存保护；临时测试也必须使用根 AGENTS 中规定的 timeout 和 ulimit 保护。Integration/E2E 遵守仓库独占闸门，不同时另起一套。正式产物镜像测试源码路径写入 `out/tests/`。
+
+完整页面测试用 `tests/harness/python/web_workbench.py` 构建唯一 Workbench，经真实 Gateway 加载；固定模型回放属于 Integration。共享组件 harness 保留自己的受控边界，不替代真实 Gateway 页面或 Electron 产物验收。不得为迁移放宽 owner、CAS、历史坐标或原业务期限。
+
+前端修改后完成真实类型检查及 `bun run --cwd src/clients/web build`；该命令直接调用唯一 Workbench 构建脚本，根命令 `bun run build:web` 构建同一入口。测试通过范围与未验证项必须如实报告。
+
+## 日志与排错
+
+通过 `bun run dev:status` 和统一启动器记录定位运行日志；Gateway 控制面数据属于开发栈的 BOXTEAM_HOME，工作区业务日志属于该工作区 `.boxteam/`，不要混写或扫描其它工作区。
+
+区分启动失败、页面初始化失败、业务请求失败和退出清理失败，保留原始错误及 request_id。需要重跑时先确认源码、配置或环境有什么可影响结果的变化；不覆盖失败原件，不吞掉错误，不恢复用户已删除的 SSE 重连提示。
 
 ## 相关资源
-- [dev.mjs 源码](./scripts/launch/dev.mjs) - 启动脚本完整逻辑
-- [API 文档](http://127.0.0.1:8000/api/v1/docs) - 后端接口参考
-- [项目 AGENTS.md](../../../AGENTS.md) - 项目开发规范
+
+- [统一开发启动器](../../../scripts/launch/dev.mjs)
+- [正式 Workbench 构建装具](../../../tests/harness/python/web_workbench.py)
+- [项目规范](../../../AGENTS.md)

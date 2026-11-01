@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -31,8 +32,12 @@ import {
 } from "../../tools/cross-platform-development-targets/ssh-target.mjs";
 
 const projectRoot = process.cwd();
+const fixtureRunId = randomUUID();
 const fixtureRunRoot = path.resolve(
-  "out/tests/scripts/launch/cross-platform-development-target/workspace", randomUUID(),
+  "out/tests/scripts/launch/cross-platform-development-target/workspace", fixtureRunId,
+);
+const bootstrapArtifacts = path.resolve(
+  "out/tests/scripts/launch/cross-platform-development-target/artifacts", fixtureRunId, "bootstrap",
 );
 let fixtureDirectorySequence = 0;
 afterAll(() => rmSync(fixtureRunRoot, { recursive: true, force: true }));
@@ -42,6 +47,116 @@ function createFixtureRoot() {
   mkdirSync(root, { recursive: true });
   return root;
 }
+
+function bootstrapFixture({ upstream = true, failWorkbench = false } = {}) {
+  const root = createFixtureRoot();
+  const repository = path.join(root, "仓库 fixture");
+  const bin = path.join(root, "bin");
+  mkdirSync(path.join(repository, ".git"), { recursive: true });
+  mkdirSync(bin);
+  for (const relative of ["uv.lock", "bun.lock", "src/clients/web/bun.lock", "src/clients/workbench/bun.lock"]) {
+    const target = path.join(repository, relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, relative + "\n");
+  }
+  if (upstream) {
+    mkdirSync(path.join(repository, "src/clients/workbench/upstream"));
+    writeFileSync(path.join(repository, "src/clients/workbench/upstream/product.json"), "{}\n");
+  }
+  const calls = path.join(root, "calls.jsonl");
+  const source = `#!${process.execPath}
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+const name = basename(process.argv[1]);
+const args = process.argv.slice(2);
+appendFileSync(process.env.BOOTSTRAP_CALLS, JSON.stringify({ name, args, cwd: process.cwd() }) + '\\n');
+if (name === 'python3') process.stdout.write('3.12\\n');
+if (name === 'uv') mkdirSync(join(process.cwd(), '.venv'), { recursive: true });
+if (name === 'git') {
+  const repository = args[1];
+  mkdirSync(join(repository, 'src/clients/workbench/upstream'), { recursive: true });
+  writeFileSync(join(repository, 'src/clients/workbench/upstream/product.json'), '{}\\n');
+}
+if (name === 'bun' && args.includes('src/clients/workbench') && process.env.BOOTSTRAP_FAIL_WORKBENCH === '1') {
+  process.stderr.write('fixture: Workbench 依赖安装失败\\n');
+  process.exitCode = 47;
+}
+`;
+  for (const name of ["uv", "bun", "node", "python3", "git"]) {
+    const target = path.join(bin, name);
+    writeFileSync(target, source);
+    chmodSync(target, 0o755);
+  }
+  let sequence = 0;
+  return {
+    repository,
+    run(submodules = false) {
+      const args = [path.join(projectRoot, "tools/cross-platform-development-targets/linux/manage-target.sh"),
+        "bootstrap", repository, submodules ? "1" : "0"];
+      const result = spawnSync("/bin/sh", args, {
+        cwd: root, encoding: "utf8", timeout: 10_000,
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          BOOTSTRAP_CALLS: calls, BOOTSTRAP_FAIL_WORKBENCH: failWorkbench ? "1" : "0" },
+      });
+      const artifacts = path.join(bootstrapArtifacts, path.basename(root), String(++sequence));
+      mkdirSync(artifacts, { recursive: true });
+      writeFileSync(path.join(artifacts, "stdout.raw"), result.stdout ?? "");
+      writeFileSync(path.join(artifacts, "stderr.raw"), result.stderr ?? "");
+      const commands = existsSync(calls)
+        ? readFileSync(calls, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+      writeFileSync(path.join(artifacts, "result.json"), JSON.stringify({ command: ["/bin/sh", ...args],
+        exit_code: result.status, signal: result.signal, error: result.error?.message, commands }, null, 2));
+      return { ...result, commands };
+    },
+  };
+}
+
+describe.skipIf(process.platform !== "linux")("Linux bootstrap 的唯一 Workbench 依赖", () => {
+  test("缺少固定上游时在安装依赖前明确失败", () => {
+    const fixture = bootstrapFixture({ upstream: false });
+    const result = fixture.run();
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("bootstrap --submodules");
+    expect(result.commands.filter(call => ["uv", "bun"].includes(call.name))).toEqual([]);
+    expect(existsSync(path.join(fixture.repository, ".venv/.boxteam-target-metadata"))).toBe(false);
+  });
+
+  test.each([false, true])("按序安装根／Web／Workbench，submodules=%s，锁变化更新指纹", submodules => {
+    const fixture = bootstrapFixture({ upstream: !submodules });
+    const first = fixture.run(submodules);
+    expect(first.error).toBeUndefined();
+    expect(first.signal).toBeNull();
+    expect(first.status).toBe(0);
+    expect(first.commands.filter(call => call.name === "git").map(call => call.args)).toEqual(
+      submodules ? [["-C", fixture.repository, "submodule", "update", "--init", "--recursive"]] : [],
+    );
+    expect(first.commands.filter(call => call.name === "bun").map(call => ({ cwd: call.cwd, args: call.args }))).toEqual([
+      { cwd: fixture.repository, args: ["install", "--frozen-lockfile"] },
+      { cwd: fixture.repository, args: ["install", "--cwd", "src/clients/web", "--frozen-lockfile"] },
+      { cwd: fixture.repository, args: ["install", "--cwd", "src/clients/workbench", "--frozen-lockfile"] },
+    ]);
+    const metadataPath = path.join(fixture.repository, ".venv/.boxteam-target-metadata");
+    const before = readFileSync(metadataPath, "utf8");
+    writeFileSync(path.join(fixture.repository, "src/clients/workbench/bun.lock"), "changed Workbench lock\n");
+    const second = fixture.run();
+    expect(second.error).toBeUndefined();
+    expect(second.signal).toBeNull();
+    expect(second.status).toBe(0);
+    expect(readFileSync(metadataPath, "utf8")).not.toBe(before);
+  });
+
+  test("Workbench 安装失败保留退出码且不发布成功 metadata", () => {
+    const fixture = bootstrapFixture({ failWorkbench: true });
+    const result = fixture.run();
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).toBe(47);
+    expect(result.stderr).toContain("fixture: Workbench 依赖安装失败");
+    expect(existsSync(path.join(fixture.repository, ".venv/.boxteam-target-metadata"))).toBe(false);
+  });
+});
 
 function nativeExecutable(name) {
   return process.platform === "win32" ? `${name}.exe` : name;

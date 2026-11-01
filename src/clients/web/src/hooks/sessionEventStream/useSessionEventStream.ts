@@ -39,6 +39,7 @@ import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity"
 export function useSessionEventStream({
   apiPort,
   sessionId,
+  threadId,
   workspaceId,
   workspaceRequestTarget,
   sessionCacheKey,
@@ -51,6 +52,7 @@ export function useSessionEventStream({
 }: {
   apiPort: number | null;
   sessionId: string | null;
+  threadId?: string;
   workspaceId: string | null;
   workspaceRequestTarget: GatewayWorkspaceRequestTarget | null;
   sessionCacheKey: string | null;
@@ -84,7 +86,7 @@ export function useSessionEventStream({
   }, []);
 
   useEffect(() => {
-    if (!apiPort || !sessionId || !timelineReady || observationState.paused) {
+    if (apiPort === null || !sessionId || !timelineReady || observationState.paused) {
       abortCurrentStream();
       return;
     }
@@ -160,6 +162,7 @@ export function useSessionEventStream({
       flushSessionStreamEventBatch(events, {
         apiPort,
         sessionId,
+        threadId,
         workspaceId: targetWorkspaceId,
         sessionCacheKey: targetSessionCacheKey,
         setState,
@@ -195,6 +198,7 @@ export function useSessionEventStream({
         try {
           await streamSessionEvents(apiPort, sessionId, {
             workspaceId: targetWorkspaceId,
+            threadId,
             afterCursor: lastEventCursorRef.current,
             signal: controller.signal,
             onEvent: enqueueStreamEvent,
@@ -309,6 +313,7 @@ export function useSessionEventStream({
     refreshTurnHistory,
     sessionCacheKey,
     sessionId,
+    threadId,
     setState,
     timelineReady,
     observationState,
@@ -318,7 +323,7 @@ export function useSessionEventStream({
 
   useEffect(() => {
     if (
-      !apiPort
+      apiPort === null
       || !sessionId
       || !sessionCacheKey
       || !activeJobId
@@ -353,6 +358,7 @@ export function useSessionEventStream({
         setState,
         {
           afterCursor: lastEventCursorRef.current,
+          threadId,
         },
       ).then((result) => {
         if (result.lastEventCursor) {
@@ -395,6 +401,7 @@ export function useSessionEventStream({
     apiPort,
     sessionCacheKey,
     sessionId,
+    threadId,
     setState,
     workspaceId,
   ]);

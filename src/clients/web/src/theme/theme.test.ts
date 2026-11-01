@@ -176,4 +176,32 @@ describe("BoxTeam 运行时主题", () => {
       'url("https://example.com/bg.png")',
     );
   });
+
+  test.each(["load", "error"] as const)("旧背景图 %s 回执不能覆盖已切换的主题", async outcome => {
+    const { root, style, dataset } = createRootStub();
+    const image = {} as HTMLImageElement;
+    const controller = new AbortController();
+    const pending = loadAndApplyResolvedGatewayTheme({ id: "old", color_scheme: "light",
+      tokens: { "--bt-page-background": "#111111" }, background_image_url: "/old-background" },
+    { root, createImage: () => image, signal: controller.signal });
+    controller.abort(new Error("主题已切换"));
+    applyBoxTeamTheme({ id: "new", tokens: { "--bt-page-background": "#222222" } }, root);
+    if (outcome === "load") image.onload?.(new Event("load"));
+    else image.onerror?.(new Event("error"));
+    await expect(pending).rejects.toThrow("主题已切换");
+    expect(dataset.boxteamTheme).toBe("new");
+    expect(style.values.get("--bt-page-background")).toBe("#222222");
+    expect(style.values.get("--bt-background-image")).toBe("none");
+  });
+
+  test("宿主已释放时不启动新的主题图片读取", async () => {
+    const { root } = createRootStub();
+    const controller = new AbortController();
+    controller.abort(new Error("宿主已释放"));
+    let imageReads = 0;
+    await expect(loadAndApplyResolvedGatewayTheme({ id: "old", color_scheme: "light", tokens: {}, background_image_url: "/closed-background" },
+      { root, signal: controller.signal, createImage: () => { imageReads += 1; throw new Error("已释放宿主不应创建图片"); } },
+    )).rejects.toThrow("宿主已释放");
+    expect(imageReads).toBe(0);
+  });
 });

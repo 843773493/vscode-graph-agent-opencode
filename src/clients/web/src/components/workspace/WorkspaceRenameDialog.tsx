@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { OverlayRootContext } from "../overlays/OverlayRootContext";
 import type { GatewayWorkspace } from "../../types/backend";
 import { errorMessage } from "../../utils/errorMessage";
 
@@ -14,6 +15,7 @@ export default function WorkspaceRenameDialog({
   onClose,
   onSubmit,
 }: WorkspaceRenameDialogProps) {
+  const overlayRoot = useContext(OverlayRootContext);
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +112,6 @@ export default function WorkspaceRenameDialog({
         </footer>
       </form>
     </div>,
-    document.body,
+    overlayRoot ?? document.body,
   );
 }

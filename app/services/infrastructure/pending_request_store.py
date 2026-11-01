@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AsyncExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -12,7 +12,12 @@ from uuid import uuid4
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.phase_observer import observe_phase
-from app.core.session_lifecycle_gate import ThreadExecutionHolderGate
+from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
+    SessionLifecycleGate,
+    ThreadExecutionHolderGate,
+)
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
@@ -82,12 +87,14 @@ class PendingRequestStore:
         self._owner = owner
         self._input_reader = input_reader
         self._holder = ThreadExecutionHolderGate(sessions_dir)
+        self._topology_gate = NavigationTopologyGate(sessions_dir)
+        self._session_gate = SessionLifecycleGate(sessions_dir)
         self._claim_owner = uuid4().hex
 
     def _legacy_path(self, session_id: str) -> Path:
         return self._path_resolver.resolve_session_node_for_runtime(session_id) / "pending_requests.json"
 
-    def _snapshots(self, session_id: str | None) -> tuple[tuple[MutationIntentOwner, ExecutionQueueSnapshot], ...]:
+    def _snapshots(self, session_id: str) -> tuple[tuple[MutationIntentOwner, ExecutionQueueSnapshot], ...]:
         owners = self._owner.execution_queue_owners(session_id=session_id)
         for identity in dict.fromkeys(owner.session_id for owner in owners):
             if self._legacy_path(identity).exists():
@@ -117,8 +124,29 @@ class PendingRequestStore:
     async def record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord:
         return await asyncio.to_thread(self._owner.execution_queue_record, session_id, thread_id, job_id)
 
+    async def _workspace_snapshots(self) -> tuple[tuple[MutationIntentOwner, ExecutionQueueSnapshot], ...]:
+        snapshots = []
+        nodes = await run_sync_shielded(self._path_resolver.list_nodes)
+        for candidate in nodes:
+            if candidate.kind != "session" or candidate.state != "active":
+                continue
+            async with AsyncExitStack() as admission:
+                async with self._topology_gate.shared():
+                    await admission.enter_async_context(self._session_gate.shared(candidate.node_id))
+                    try:
+                        current = await run_sync_shielded(self._path_resolver.get_node, candidate.node_id)
+                    except KeyError:
+                        # 枚举后删除已提交；不能再打开该 owner 的物理目录。
+                        continue
+                    if current.state != "active":
+                        continue
+                # 删除必须等原 worker 关闭全部读取句柄；取消也不能提前归还 guard。
+                snapshots.extend(await run_sync_shielded(self._snapshots, candidate.node_id))
+        return tuple(snapshots)
+
     async def records(self, session_id: str | None = None) -> tuple[ExecutionQueueRecord, ...]:
-        snapshots = await asyncio.to_thread(self._snapshots, session_id)
+        snapshots = (await self._workspace_snapshots() if session_id is None
+                     else await asyncio.to_thread(self._snapshots, session_id))
         return tuple(record for _owner, snapshot in snapshots for record in snapshot.records)
 
     async def snapshot_version(self, session_id: str) -> int:

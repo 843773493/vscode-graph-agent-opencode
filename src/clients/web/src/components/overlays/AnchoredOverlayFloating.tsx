@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { OverlayRootContext } from "./OverlayRootContext";
 import {
   autoUpdate,
   flip,
@@ -48,6 +50,7 @@ export default function AnchoredOverlayFloating({
   onClose,
   children,
 }: AnchoredOverlayProps): React.ReactNode {
+  const overlayRoot = useContext(OverlayRootContext);
   const virtualReference = useMemo(
     () => (point ? pointReference(point) : null),
     [point],
@@ -108,7 +111,7 @@ export default function AnchoredOverlayFloating({
   }, [anchorRef, open, refs, update, virtualReference]);
 
   return (
-    <FloatingPortal>
+    <FloatingPortal root={overlayRoot ?? undefined}>
       <div
         ref={refs.setFloating}
         className="anchored-overlay-positioner"

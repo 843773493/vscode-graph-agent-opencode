@@ -1,0 +1,4 @@
+.native-session-navigation { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.native-session-navigation .agent-sessions-panel { border: 0; }
+/* 控制中心位于业务浮层下方，确认框和连接编辑器仍使用既有浮层层级。 */
+.native-navigation-dialog { position: fixed; z-index: 100; inset: 8vh 12vw; padding: 16px; overflow: auto; border: var(--bt-surface-border); border-radius: var(--bt-radius-large); background: var(--bt-panel-background); box-shadow: var(--bt-surface-shadow); }

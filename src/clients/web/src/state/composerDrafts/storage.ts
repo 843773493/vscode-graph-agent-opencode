@@ -1,59 +1,49 @@
 import { sessionScopeKey } from "../session/sessionScope";
+import { readBrowserView, updateBrowserView } from "../browserViewStore";
 
-const COMPOSER_DRAFTS_STORAGE_KEY = "boxteam.web.composerDrafts";
-const MAX_COMPOSER_DRAFTS = 100;
 const MAX_COMPOSER_DRAFT_LENGTH = 100_000;
 const NEW_SESSION_DRAFT_ID = "__new_session_draft__";
 
 export function composerDraftScopeKey(
   workspaceId: string | null,
   sessionId: string | null,
-  userScope?: string | null,
+  browserScope?: string | null,
+  threadId?: string,
 ): string | null {
-  if (!workspaceId) {
-    return null;
-  }
-  if (userScope === null) {
-    return null;
-  }
-  const scopePrefix = userScope ? `${userScope}::` : "";
-  return `${scopePrefix}${sessionScopeKey(workspaceId, sessionId ?? NEW_SESSION_DRAFT_ID)}`;
+  if (!workspaceId) return null;
+  const prefix = browserScope ? `${browserScope}::` : "";
+  const sessionKey = `${prefix}${sessionScopeKey(workspaceId, sessionId ?? NEW_SESSION_DRAFT_ID)}`;
+  return threadId === undefined ? sessionKey : `${sessionKey}::thread:${encodeURIComponent(threadId)}`;
 }
 
-function readComposerDrafts(): Record<string, string> {
-  if (typeof window === "undefined") {
-    return {};
-  }
-  const raw = window.localStorage.getItem(COMPOSER_DRAFTS_STORAGE_KEY);
-  return raw ? JSON.parse(raw) as Record<string, string> : {};
+export async function readComposerDraft(scopeKey: string | null): Promise<string> {
+  return scopeKey ? await readBrowserView<string>(`draft:${scopeKey}`) ?? "" : "";
 }
 
-export function readComposerDraft(scopeKey: string | null): string {
-  return scopeKey ? readComposerDrafts()[scopeKey] ?? "" : "";
-}
-
-/** 该草稿是否超出持久化上限。超限时界面仍须持有内容，只是不写盘。 */
+/** 超限时界面继续持有输入，同时由调用方明确提示尚未保存。 */
 export function composerDraftExceedsLimit(content: string): boolean {
   return content.length > MAX_COMPOSER_DRAFT_LENGTH;
 }
 
-export function writeComposerDraft(scopeKey: string | null, content: string): void {
-  if (typeof window === "undefined" || !scopeKey) {
-    return;
+export async function writeComposerDraft(scopeKey: string | null, content: string): Promise<void> {
+  if (!scopeKey) return;
+  if (composerDraftExceedsLimit(content)) throw new Error(`Composer 草稿长度不能超过 ${MAX_COMPOSER_DRAFT_LENGTH} 个字符`);
+  await updateBrowserView<string>(`draft:${scopeKey}`, () => content || undefined);
+}
+
+/** 一次性迁移旧 localStorage；保留完整原件，只有明确属于当前身份的草稿才移入本地视图。 */
+export async function migrateComposerDrafts(gatewayId: string, userId: string | null): Promise<void> {
+  const storageKey = "boxteam.web.composerDrafts";
+  const raw = window.localStorage.getItem(storageKey);
+  if (!raw) return;
+  const drafts: Record<string, string> = JSON.parse(raw);
+  if (Object.values(drafts).some(value => typeof value !== "string")) throw new Error("旧草稿格式无效，无法迁移到浏览器数据库");
+  await updateBrowserView(`legacy-drafts:${gatewayId}`, current => current ?? drafts);
+  const prefix = userId ? `user:${userId}::` : "";
+  for (const [key, value] of Object.entries(drafts)) {
+    if (key.startsWith("user:") && (!prefix || !key.startsWith(prefix))) continue;
+    const suffix = prefix && key.startsWith(prefix) ? key.slice(prefix.length) : key;
+    await updateBrowserView<string>(`draft:${gatewayId}::${suffix}`, current => current ?? value);
   }
-  if (composerDraftExceedsLimit(content)) {
-    throw new Error(`Composer 草稿长度不能超过 ${MAX_COMPOSER_DRAFT_LENGTH} 个字符`);
-  }
-  const drafts = readComposerDrafts();
-  if (content) {
-    delete drafts[scopeKey];
-    drafts[scopeKey] = content;
-  } else {
-    delete drafts[scopeKey];
-  }
-  const keys = Object.keys(drafts);
-  for (const staleKey of keys.slice(0, Math.max(0, keys.length - MAX_COMPOSER_DRAFTS))) {
-    delete drafts[staleKey];
-  }
-  window.localStorage.setItem(COMPOSER_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+  window.localStorage.removeItem(storageKey);
 }

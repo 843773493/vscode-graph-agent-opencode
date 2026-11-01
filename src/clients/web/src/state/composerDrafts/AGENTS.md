@@ -1,10 +1,10 @@
 # 目录用途
 
-保存浏览器端未发送的 Composer 文本草稿，并按工作区和会话隔离。
+保存浏览器端未发送的 Composer 文本草稿，并按 Gateway、工作区、会话和 Thread 隔离。
 
 # 可修改内容
 
-- 草稿 localStorage 适配与作用域键处理。
+- 草稿 IndexedDB 存储、旧 localStorage 一次性迁移与作用域键处理。
 - 草稿数量和文本大小限制。
 
 # 不可修改内容

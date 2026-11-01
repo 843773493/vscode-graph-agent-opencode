@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react-test-renderer";
 import type {
   SessionCatalogNavigationEvent,
@@ -34,7 +34,7 @@ import {
   createSessionHookState,
   createAppStateMirror,
 } from "../../tests/fixtures/session/appState";
-import { flushReactEffects } from "../../tests/fixtures/session/asyncControl";
+import { createDeferredResult, flushReactEffects } from "../../tests/fixtures/session/asyncControl";
 import {
   mountSessionResourceExplorerHarness,
 } from "../../tests/fixtures/session/sessionResourceExplorer";
@@ -44,7 +44,9 @@ import {
 } from "./sessionCatalogOutboxRuntime";
 import type { SessionCatalogOperationsAdapter } from "./sessionCatalogOutboxDriver";
 import { refreshCurrentSessionCatalogOwner } from "./useSessionLifecycleActions";
+import { CATALOG_OUTBOX_BROADCAST_CHANNEL } from "./sessionCatalogOutboxDriver";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { CatalogReadSupersededError } from "../sessionResourceExplorer/resourceTreeSync";
 
 const API_PORT = 49_441;
 const GATEWAY_ID = "gateway-test";
@@ -315,6 +317,8 @@ describe("真实 runtime 的删除修复提示", () => {
       await fixture.queried;
       fixture.releaseRepair();
       await expect(terminal).rejects.toThrow(fixture.detail);
+      await expect(terminal).rejects.toHaveProperty("name", "ReportedError");
+      expect(fixture.errors.some((message) => message.includes(fixture.detail))).toBe(true);
       fixture.runtime.dispose();
       recovered = createSessionCatalogOutboxRuntime(fixture.runtimeOptions);
       recovered.activatePrincipal(testGatewayUserAccess());
@@ -347,6 +351,94 @@ describe("真实 runtime 的删除修复提示", () => {
 });
 
 describe("会话目录 outbox runtime", () => {
+  for (const reloadFails of [false, true]) {
+    test(`恢复期间收到跨窗口广播，恢复后重读${reloadFails ? "失败仍报告真实错误" : "取得最新磁盘命令"}`, async () => {
+      installGatewayFetch(({ path }) => {
+        if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+        if (path === "/api/v1/workspace") return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+        return undefined;
+      });
+      let started!: () => void;
+      const loading = new Promise<void>(resolve => { started = resolve; });
+      let release!: () => void;
+      const restoreGate = new Promise<void>(resolve => { release = resolve; });
+      let observed!: (value: string) => void;
+      const outcome = new Promise<string>(resolve => { observed = resolve; });
+      const { record } = persistedOperation();
+      const errors: string[] = [];
+      let loads = 0;
+      const runtime = createSessionCatalogOutboxRuntime({
+        apiPort: API_PORT, reconcileIntervalMs: 60_000,
+        onError(message) { errors.push(message); observed("error"); },
+        openPersistence: async () => ({
+          async load() {
+            loads += 1;
+            if (loads === 1) { started(); await restoreGate; return []; }
+            if (reloadFails) throw new Error("IndexedDB 重读失败");
+            return [record];
+          },
+          insert: async () => { throw new Error("广播不得新增命令"); },
+          applyReceipts: async () => [],
+          delete: async () => { throw new Error("广播不得删除命令"); },
+        }),
+        adapter: {
+          enqueue: async () => { throw new Error("广播不得提交命令"); },
+          queryStatus: async () => { throw new Error("本地 pending 不应查询回执"); },
+        },
+      });
+      const sender = new BroadcastChannel(CATALOG_OUTBOX_BROADCAST_CHANNEL);
+      let delivered!: () => void;
+      const received = new Promise<void>(resolve => { delivered = resolve; });
+      const addListener = BroadcastChannel.prototype.addEventListener;
+      // 在真实接收者执行监听后确认投递，不以另一个通道收到消息推断它已处理。
+      const listenerSpy = spyOn(BroadcastChannel.prototype, "addEventListener").mockImplementation(function (
+        this: BroadcastChannel, type: string, listener: EventListenerOrEventListenerObject | null,
+        options?: boolean | AddEventListenerOptions,
+      ) {
+        addListener.call(this, type, (event: Event) => {
+          if (typeof listener === "function") listener.call(this, event);
+          else listener?.handleEvent(event);
+          delivered();
+        }, options);
+      });
+      const unsubscribe = runtime.subscribe(() => {
+        const entry = [...runtime.getSnapshot().values()][0];
+        if (entry?.outbox.operations.length) observed("reloaded");
+      });
+      let opening: ReturnType<typeof runtime.openWorkspace> | undefined;
+      try {
+        const access = testGatewayUserAccess();
+        runtime.activatePrincipal(access);
+        opening = runtime.openWorkspace(WORKSPACE_TARGET, access);
+        await loading;
+        sender.postMessage({ partitionKey: record.partition_key });
+        await received;
+        expect(loads).toBe(1);
+        expect(errors).toEqual([]);
+        release();
+        const handle = await opening;
+        expect(await outcome).toBe(reloadFails ? "error" : "reloaded");
+        expect(loads).toBe(2);
+        if (reloadFails) {
+          expect(errors).toEqual([`重新读取会话目录本地 outbox 失败 (${GATEWAY_WORKSPACE_ID}): IndexedDB 重读失败`]);
+          expect(handle.driver.current().operations).toEqual([]);
+        } else {
+          expect(errors).toEqual([]);
+          expect(handle.driver.current().operations).toEqual([record.operation]);
+        }
+      } finally {
+        release();
+        try { await opening; }
+        finally {
+          unsubscribe();
+          sender.close();
+          runtime.dispose();
+          listenerSpy.mockRestore();
+        }
+      }
+    });
+  }
+
   test("恢复的拒绝回执先经过稳定错误通道，再快速清理 outbox", async () => {
     const access: GatewayUserAccess = testGatewayUserAccess();
     const { record } = persistedOperation();
@@ -560,11 +652,12 @@ describe("失败 confirmed owner 的恢复边界", () => {
 });
 
 describe("navigation 事件的真实 runtime 消费", () => {
-  for (const mode of ["乱序重复", "事件缺口", "cursor gone", "分页"] as const) {
+  for (const mode of ["乱序重复", "事件缺口", "cursor gone", "分页", "刷新取代", "真实同文案错误"] as const) {
     test(`${mode}只使 confirmed 失效并读取最新 snapshot，不制造目录命令`, async () => {
       const errors: string[] = [];
       const refreshed: number[] = [];
       const requestedAfter: number[] = [];
+      let interruptedAt: number | null = null;
       let watermark = 0;
       let ready!: () => void;
       const initialized = new Promise<void>((resolve) => { ready = resolve; });
@@ -590,7 +683,7 @@ describe("navigation 事件的真实 runtime 消费", () => {
             items: [], next_cursor: null, has_more: false, cursor_gone: false,
           };
           if (watermark === 2 && after < 2) {
-            if (mode === "乱序重复") page.items = [navigationEvent(2), navigationEvent(1), navigationEvent(1)];
+            if (["乱序重复", "刷新取代", "真实同文案错误"].includes(mode)) page.items = [navigationEvent(2), navigationEvent(1), navigationEvent(1)];
             else if (mode === "事件缺口") page.items = [navigationEvent(2)];
             else if (mode === "cursor gone") page.cursor_gone = true;
             else if (query.get("cursor") === "page-two") page.items = [navigationEvent(2)];
@@ -622,6 +715,11 @@ describe("navigation 事件的真实 runtime 消费", () => {
             expect(target).toEqual(WORKSPACE_TARGET);
             expect(outbox.operations).toEqual([]);
             refreshed.push(revision);
+            if (revision === 9 && interruptedAt === null && ["刷新取代", "真实同文案错误"].includes(mode)) {
+              interruptedAt = requestedAfter.length;
+              const message = "会话目录分支刷新已被更新请求取代";
+              throw mode === "刷新取代" ? new CatalogReadSupersededError(message) : new Error(message);
+            }
             if (revision === 7) ready();
             else if (revision === 9) completed();
           },
@@ -632,10 +730,14 @@ describe("navigation 事件的真实 runtime 消费", () => {
         watermark = 2;
         await reconciled;
         await resumed;
-        expect(refreshed).toEqual([7, 9]);
+        expect(refreshed).toEqual(interruptedAt === null ? [7, 9] : [7, 9, 9]);
+        if (interruptedAt !== null) expect(requestedAfter[interruptedAt]).toBe(0);
         expect(requestedAfter).toContain(2);
         expect(handle.driver.current().operations).toEqual([]);
-        expect(errors).toEqual([]);
+        if (mode === "真实同文案错误") {
+          expect(errors).toHaveLength(1);
+          expect(errors[0]).toContain("会话目录分支刷新已被更新请求取代");
+        } else expect(errors).toEqual([]);
       } finally { runtime.dispose(); }
     });
   }
@@ -694,8 +796,10 @@ describe("navigation 对账中的已打开会话 owner", () => {
       if (path === "/api/v1/sessions") { listCalls += 1; throw new Error("owner失效不能重拉全量列表"); }
       if (path === `/api/v1/sessions/${owner.session_id}`) {
         expect(init?.signal?.aborted).toBe(false);
-        return status === 200 ? apiSuccessResponse(fresh)
-          : apiErrorResponse(status, status === 409 ? "会话日期目录正在隔离" : "Session not found");
+        if (status === 200) return apiSuccessResponse(fresh);
+        const response = apiErrorResponse(status, status === 409 ? "会话日期目录正在隔离" : "Session not found");
+        response.headers.set("X-Request-ID", `request-catalog-owner-${status}`);
+        return response;
       }
       return undefined;
     });
@@ -720,6 +824,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
       await pendingError;
       expect(mirror.current().currentSession).toEqual(fresh);
       expect(errors.some((message) => message.includes("会话日期目录正在隔离"))).toBe(true);
+      expect(errors).toContain(`对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : 会话日期目录正在隔离 [request_id=request-catalog-owner-409]`);
       status = 404; revision = 9;
       await removed;
       expect(mirror.current().currentSession).toBeNull();
@@ -729,6 +834,75 @@ describe("navigation 对账中的已打开会话 owner", () => {
       expect(mirror.current().unreadSessionKeys.has(key)).toBe(false);
       expect(listCalls).toBe(0);
     } finally { runtime.dispose(); }
+  });
+
+  test("周期对账在途时不重复订阅失败，后续独立请求仍报告并可恢复", async () => {
+    const mirror = createAppStateMirror({
+      ...createSessionHookState({ workspaceId: GATEWAY_WORKSPACE_ID, currentSession: owner, sessions: [owner] }),
+      apiPort: API_PORT, gatewayUserAccess: testGatewayUserAccess(),
+    });
+    const responses: ReturnType<typeof createDeferredResult<Response>>[] = [];
+    const errors: string[] = [];
+    const timer = spyOn(globalThis, "setInterval");
+    installGatewayFetch(({ path }) => {
+      if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+      if (path === "/api/v1/workspace") return apiSuccessResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+      if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
+        workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 7, event_seq_watermark: 0, generation: 1,
+      });
+      if (path === "/api/v1/session-catalog/navigation-events") return apiSuccessResponse({
+        workspace_id: BACKEND_WORKSPACE_ID, event_seq_watermark: 0, items: [], next_cursor: null, has_more: false, cursor_gone: false,
+      });
+      if (path === `/api/v1/sessions/${owner.session_id}`) {
+        const response = createDeferredResult<Response>();
+        responses.push(response);
+        return response.promise;
+      }
+      return undefined;
+    });
+    const runtime = createSessionCatalogOutboxRuntime({
+      apiPort: API_PORT, reconcileIntervalMs: 60_000,
+      openPersistence: async () => emptyPersistence, adapter: emptyAdapter,
+      onError: (message) => errors.push(message),
+      refreshSessionOwner: (target, signal) => refreshCurrentSessionCatalogOwner(
+        API_PORT, target, mirror.current, mirror.setState, signal,
+      ),
+    });
+    try {
+      const access = testGatewayUserAccess();
+      runtime.activatePrincipal(access);
+      await runtime.openWorkspace(WORKSPACE_TARGET, access);
+      expect(timer.mock.calls).toHaveLength(1);
+      const handler = timer.mock.calls[0]![0];
+      if (typeof handler !== "function") throw new Error("对账周期必须注册函数");
+      const tick = () => handler();
+      for (const attempt of [1, 2]) {
+        tick();
+        await flushReactEffects();
+        expect(responses).toHaveLength(attempt);
+        // 用同一在途 HTTP 跨越多个实际调度回调，不能把一次失败显示为多次。
+        for (let index = 0; index < 3; index += 1) tick();
+        expect(responses).toHaveLength(attempt);
+        const response = apiErrorResponse(409, "session_deletion_pending");
+        response.headers.set("X-Request-ID", `request-owner-pending-${attempt}`);
+        responses[attempt - 1]!.release(response);
+        await flushReactEffects();
+        expect(errors).toEqual(Array.from({ length: attempt }, (_, index) =>
+          `对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : session_deletion_pending [request_id=request-owner-pending-${index + 1}]`));
+        expect(mirror.current().currentSession).toEqual(owner);
+      }
+      tick();
+      await flushReactEffects();
+      expect(responses).toHaveLength(3);
+      const fresh = { ...owner, title: "新请求已恢复的完整 owner" };
+      responses[2]!.release(apiSuccessResponse(fresh));
+      await flushReactEffects();
+      expect(mirror.current().currentSession).toEqual(fresh);
+      expect(errors).toHaveLength(2);
+    } finally {
+      runtime.dispose();
+      timer.mockRestore();
+    }
   });
 
   for (const changedScope of ["会话", "工作区", "用户", "endpoint"] as const) {

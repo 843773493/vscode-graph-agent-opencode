@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import asynccontextmanager
 
+import portalocker
 import pytest
+from fastapi import HTTPException
 
 from app.abstractions.session_resources import BackgroundTaskRegistryProtocol
+from app.api.sessions import list_session_resources
 from app.core.background_task_contracts import BackgroundTaskHandle
 from app.domain.itemized.enums import PayloadKind
+from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.message_service import MessageService
+from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_resource_providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,
@@ -23,6 +30,16 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from tests.support.background_work import build_background_registry, spawn_waiting_task
 from tests.support.message_service import build_message_service
+from tests.support.session_navigation.catalog_intents import (
+    create_catalog_intent,
+    submit_catalog_intent,
+)
+from tests.unit.services.business.test_session_service_catalog import (
+    catalog_service as catalog_service,  # noqa: PLC0414 - 真实 Session/catalog 的共享 fixture
+)
+from tests.unit.services.business.test_session_service_catalog import (
+    session_config_service as session_config_service,  # noqa: PLC0414
+)
 
 
 def _owner_snapshot(record: dict[str, object]) -> dict[str, object]:
@@ -117,6 +134,10 @@ class FakeMessageService:
 
 
 class FakeSessionService:
+    @asynccontextmanager
+    async def session_read_admission(self, session_id: str):
+        yield
+
     async def get(self, session_id: str) -> object:
         return {"session_id": session_id}
 
@@ -171,6 +192,90 @@ def resource_mapper() -> SessionResourceMapper:
 @pytest.fixture
 def empty_background_task_registry() -> BackgroundTaskRegistryProtocol:
     return _EmptyBackgroundTaskRegistry()
+
+
+@pytest.mark.asyncio
+async def test_resource_list_holds_read_admission_until_providers_finish(catalog_service, monkeypatch):
+    sessions, workspace = catalog_service
+    session = await sessions.create(SessionCreateRequest(title="读取期间删除"))
+    session_id = session.session_id
+    source = workspace.resolver.resolve_session_node(session_id)
+    entered, release, deleting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    registry = SessionResourceProviderRegistry()
+
+    async def held_list(owner_id, *, include_history):
+        assert owner_id == session_id and include_history is True
+        entered.set()
+        await release.wait()
+        assert source.is_dir(), "已准入资源读取完成前，删除不得隔离 Session 目录"
+        return []
+
+    async def observe(_operation_id, phase, **_details):
+        if phase == "deletion.catalog_deleting":
+            deleting.set()
+
+    monkeypatch.setattr(registry, "list_resources", held_list)
+    monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
+    resources = SessionResourceService(session_service=sessions, job_service=FakeJobService(0), provider_registry=registry)
+    catalog = SessionCatalogService(session_service=sessions)
+    reading = asyncio.create_task(resources.list(session_id))
+    deletion = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        lock_path = sessions._session_lifecycle_gate.gates_root / f"{session_id}.lock"
+        with lock_path.open("a+b") as lock_file, pytest.raises(portalocker.AlreadyLocked):
+            portalocker.lock(lock_file, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        intent = create_catalog_intent(catalog, "delete_session", target_node_id=session_id)
+        deletion = asyncio.create_task(submit_catalog_intent(catalog, intent))
+        await asyncio.wait_for(deleting.wait(), 2)
+        assert source.is_dir()
+        assert not deletion.done()
+        release.set()
+        result = await asyncio.wait_for(reading, 2)
+        assert result.session_id == session_id and result.items == []
+        receipt = await asyncio.wait_for(deletion, 2)
+        assert receipt.state == "committed" and receipt.settlement == "settled"
+        assert not source.exists()
+    finally:
+        release.set()
+        await asyncio.gather(reading, *([deletion] if deletion is not None else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_resource_list_api_rejects_deleting_session_before_provider_reads(catalog_service, monkeypatch):
+    sessions, _workspace = catalog_service
+    session = await sessions.create(SessionCreateRequest(title="删除后拒绝资源读取"))
+    deleting, release = asyncio.Event(), asyncio.Event()
+    registry = SessionResourceProviderRegistry()
+    provider_calls = []
+
+    async def observed_list(owner_id, *, include_history):
+        provider_calls.append(owner_id)
+        return []
+
+    async def observe(_operation_id, phase, **_details):
+        if phase == "deletion.catalog_deleting":
+            deleting.set()
+            await release.wait()
+
+    monkeypatch.setattr(registry, "list_resources", observed_list)
+    monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
+    resources = SessionResourceService(session_service=sessions, job_service=FakeJobService(0), provider_registry=registry)
+    catalog = SessionCatalogService(session_service=sessions)
+    intent = create_catalog_intent(catalog, "delete_session", target_node_id=session.session_id)
+    deletion = asyncio.create_task(submit_catalog_intent(catalog, intent))
+    try:
+        await asyncio.wait_for(deleting.wait(), 2)
+        with pytest.raises(HTTPException) as caught:
+            await list_session_resources(session.session_id, _="local", request_id="resource-delete-read",
+                                         include_history=True, session_resource_service=resources)
+        assert caught.value.status_code == 409
+        assert "session_deletion_pending" in caught.value.detail
+        assert session.session_id in caught.value.detail
+        assert provider_calls == []
+    finally:
+        release.set()
+        await asyncio.wait_for(deletion, 2)
 
 
 def _provider_registry(

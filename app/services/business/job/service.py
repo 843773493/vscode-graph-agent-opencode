@@ -690,10 +690,12 @@ class JobService:
 
         return await self.run_session_preparation(session_id, remove_prepared)
 
-    async def clear_pending(self, session_id: str) -> PendingRequestListDTO:
+    async def clear_pending(
+        self, session_id: str, *, thread_id: str | None = None,
+    ) -> PendingRequestListDTO:
         async def clear_prepared() -> PendingRequestListDTO:
             await self._ensure_pending_loaded(session_id)
-            snapshot = await self._pending_requests.clear(session_id)
+            snapshot = await self._pending_requests.clear(session_id, thread_id=thread_id)
             await self._publish_pending(snapshot, "pending_requests_cleared")
             return snapshot
 

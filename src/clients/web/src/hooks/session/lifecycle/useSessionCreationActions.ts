@@ -8,7 +8,6 @@ import {
 import { getGatewayHealth } from "../../../gatewayApi";
 import type { SessionForkRequest } from "../../../types/backend";
 import { cloneMaps } from "../../../state/appStateMaps";
-import { writeLastSessionId } from "../../../state/storage";
 import { sessionScopeKey } from "../../../state/session/sessionScope";
 import { appendFrontendEvent } from "../../../state/traceEvents";
 import { resetAgentStateFields } from "../../runtime/useAgentStateSnapshot";
@@ -71,14 +70,13 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
             );
           }
           if (prev.activeGatewayWorkspaceId === resolvedWorkspaceId) next.sessions = workspaceSessions;
-          if (selectionIntent === selectionIntentRef.current) {
+          if (!context.onSessionCreated && selectionIntent === selectionIntentRef.current) {
             next.activeGatewayWorkspaceId = resolvedWorkspaceId;
             next.currentSessionWorkspaceId = resolvedWorkspaceId ?? null;
             next.workspaceName = workspace?.name ?? prev.workspaceName;
             next.sessions = workspaceSessions;
             next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
             next.currentSession = session;
-            writeLastSessionId(session.session_id);
             Object.assign(next, resetSessionScopedFields(next));
             next.status = "已创建会话";
             next.contentView = "default";
@@ -100,6 +98,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
           );
           return next;
         });
+        await context.onSessionCreated?.(session, targetWorkspaceId);
         return session;
       } catch (error) {
         const message = errorMessage(error);
@@ -109,6 +108,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
       }
     },
     [
+      context.onSessionCreated,
       activeGatewayWorkspaceId,
       apiPort,
       defaultGatewayWorkspaceId,
@@ -153,8 +153,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
         return result;
       } catch (error) {
         const message = errorMessage(error);
-        // 补偿重取失败不得覆盖原始错误：列表服务不可用时抛出的是 503，
-        // 而用户真正需要看到的是 fork 失败本身（如 422 上下文快照损坏）。
+        // 补偿重取失败必须保留首次 fork 异常，同时把新读取失败交给调用方展示。
         try {
           const refreshed = await apiListSessions(apiPort, workspaceId);
           setState((prev) => {
@@ -168,10 +167,13 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
           });
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);
+          const failure = new AggregateError([error, reconciliationError],
+            `创建上下文分支失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`);
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
-            status: `创建上下文分支失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
+            status: failure.message,
           }) : prev);
+          throw failure;
         }
         throw error;
       }

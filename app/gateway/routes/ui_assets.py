@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import (
     APIRouter,
@@ -181,6 +182,34 @@ async def update_web_ui_settings(
             config=config,
             gateway_root=theme_asset_root,
         )
+    except (OSError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=resolved, request_id=request_id)
+
+
+@router.post("/api/gateway/ui-settings/resolve", response_model=APIResponse[WebUISettingsDTO])
+async def resolve_web_ui_settings(
+    payload: WebUISettingsUpdateDTO,
+    request: Request,
+    access_service: Annotated[UserAccessService, Depends(get_user_access_service)],
+    profiles: Annotated[UserProfileStore, Depends(get_user_profile_store)],
+    _: str = Depends(verify_gateway_token),
+    request_id: str = Depends(get_request_id),
+):
+    """校验并解析浏览器本地主题，不改写 Gateway 用户档案。"""
+    context = _current_user_access(request, access_service)
+    root = _theme_asset_root(context, profiles)
+    try:
+        config = load_validated_theme_config(
+            gateway_root=root,
+            config=_theme_config_for_access(
+                context, profiles=profiles,
+                base_config=getattr(request.app.state, "gateway_config", None),
+                gateway_root=root,
+            ),
+        )
+        settings = merge_web_ui_settings_values(WebUISettingsDTO(), payload)
+        resolved = resolve_settings_theme(settings, config=config, gateway_root=root)
     except (OSError, TypeError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return APIResponse(data=resolved, request_id=request_id)

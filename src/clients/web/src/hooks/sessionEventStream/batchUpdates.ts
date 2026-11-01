@@ -1,5 +1,5 @@
 import { isTransientNetworkError } from "../../api/http";
-import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
+import { listThreadPendingRequests } from "../../pendingRequestsApi";
 import { cloneMaps } from "../../state/appStateMaps";
 import { hasSessionOwner } from "../../state/session/sessions";
 import { updateAttachmentSummariesFromTraces } from "../../state/attachments";
@@ -28,6 +28,7 @@ import { errorMessage } from "../../utils/errorMessage";
 export interface SessionStreamBatchContext {
   apiPort: number;
   sessionId: string;
+  threadId?: string;
   workspaceId: string | null;
   sessionCacheKey: string;
   setState: SetAppState;
@@ -146,11 +147,12 @@ export function flushSessionStreamEventBatch(
       ),
   );
   if (pendingQueueChanged) {
-    void listMainThreadPendingRequests(
+    void listThreadPendingRequests(
       context.apiPort,
       context.sessionId,
       context.workspaceId,
       context.signal,
+      context.threadId,
     ).then((snapshot) => {
       context.setState((latest) => {
         if (context.signal?.aborted || !hasSessionOwner(latest, context.sessionId, context.workspaceId)) return latest;

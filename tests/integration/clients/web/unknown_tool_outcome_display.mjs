@@ -1,8 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
@@ -53,7 +53,8 @@ async function api(page, pathname, init = {}) {
 }
 
 async function ensureGuest(page) {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   const current = await page.evaluate(async () => {
     const response = await fetch("/api/gateway/users/current");
     return { status: response.status, body: await response.text() };
@@ -131,8 +132,10 @@ try {
   // 认证和 Gateway 会话目录同步可能晚于首次页面挂载；确认 API 已就绪后重新加载，
   // 让前端从同一份权威会话列表启动，而不是把启动竞态误判为 UI 缺陷。
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator(`button[data-session-id="${sessionId}"]`).click();
-  const boundaryTurn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
+  await page.locator(`button[data-session-id="${sessionId}"]`).dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-session-id="${sessionId}"]`);
+  await expect(thread).toBeVisible();
+  const boundaryTurn = thread.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });
   await waitUntil(
     async () => (await boundaryTurn.innerText()).includes("工具执行结果未知"),

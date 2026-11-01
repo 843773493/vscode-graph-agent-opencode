@@ -10,7 +10,7 @@ styles/
 └── inspection/  # 上下文检查和 Node 调试视图
 ```
 
-全局入口在 `src/main.tsx` 按既有层叠顺序导入各样式表；新增或移动样式时保留该顺序。
+`workbench/src/react/productStyles.ts` 按既有层叠顺序组合共享样式，并限制在 ReactSurface 的 ShadowRoot；新增或移动样式时保持顺序和作用域。
 
 # 可修改内容
 

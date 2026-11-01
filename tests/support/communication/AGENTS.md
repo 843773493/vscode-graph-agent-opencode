@@ -26,3 +26,5 @@ communication/
 - 每个联邦节点的工作区、端口和进程都由调用方上下文显式拥有并释放。
 - fault backend 必须保留原始异常和真实 owner 的调用顺序，不补造业务回执。
 - 新通信测试辅助按 probe、组合装配或进程注入职责放置，并同步更新 `tests/support/AGENTS.md`。
+
+- 调用方可显式提供 `gateway_runtime_root` 将节点控制面隔离到本次 run/node；每个节点的 Backend 与 Gateway 必须共用对应 HOME 和凭据。

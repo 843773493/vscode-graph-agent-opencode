@@ -10,14 +10,12 @@
 nodeDebug/
 ├── nodeDebugMutationGate.ts       按 owner 串行化调试 mutation
 ├── nodeDebugSync.ts               跨窗口调试状态广播通道
-├── useNodeDebugOwner.ts           当前会话与线程 owner 选择
 ├── useNodeDebugStateSync.ts       后端状态轮询、刷新和 mutation 结算
 ├── useNodeDebugController.ts      调试命令与生命周期动作控制器
-├── useNodeDebugWorkbench.ts       组合 owner、状态同步与工作台动作
 └── nodeDebugTestFixtures.ts       单测的浏览器全局 fixture，不供生产代码导入
 ```
 
-带 `.test.ts` / `.test.tsx` 的模块就近验证对应状态机或 hook；跨窗口传输与状态轮询分开，工作台 hook 只负责组合既有能力。
+带 `.test.ts` / `.test.tsx` 的模块就近验证对应状态机或 hook；跨窗口传输与状态轮询分开，Thread owner 由每个编辑器实例显式传入。
 
 ## 可修改内容
 

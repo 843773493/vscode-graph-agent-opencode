@@ -94,10 +94,11 @@ const restoreSpies: Array<() => void> = [];
 async function mountActivity(
   state: AppState,
   onChange: (next: AppState) => void,
+  apiPort = API_PORT,
 ): Promise<void> {
   function Probe(): React.ReactNode {
     useWorkspaceSessionActivity({
-      apiPort: API_PORT,
+      apiPort,
       workspaceTarget: WORKSPACE_TARGET,
       currentSessionCacheKey: null,
       setState: (update) => {
@@ -142,6 +143,20 @@ afterEach(() => {
 });
 
 describe("useWorkspaceSessionActivity 重连与卸载", () => {
+  test("同源端口 0 仍建立工作区活动订阅", async () => {
+    installWindow();
+    const listSpy = spyOn(sessionActivityApi, "listSessionActivity")
+      .mockResolvedValue({ items: [], next_cursor: 0 } as never);
+    const streamSpy = spyOn(sessionActivityApi, "streamSessionActivity")
+      .mockImplementation(async (_port, _target, options) => {
+        await new Promise<void>(resolve => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      });
+    restoreSpies.push(() => listSpy.mockRestore(), () => streamSpy.mockRestore());
+    await mountActivity(appState(), () => {}, 0);
+    await flush();
+    expect(listSpy.mock.calls[0]?.[0]).toBe(0);
+    expect(streamSpy.mock.calls[0]?.[0]).toBe(0);
+  });
   test("同一会话重复活动不产生即时提交，已读事件重放不恢复未读", async () => {
     installControlledWindow();
     const listSpy = spyOn(sessionActivityApi, "listSessionActivity")

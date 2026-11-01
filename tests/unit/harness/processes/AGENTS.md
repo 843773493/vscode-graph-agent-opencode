@@ -26,7 +26,7 @@ processes/
 
 `test_e2e_control_lifetime.py`核对pytest控制端口从构造到退出的资源归属、两类barrier释放和事件落盘。server/thread均为mock，不运行真实产品，也不改业务时钟、fork期限或控制协议；真实TCP客户端的释放和协议结果另验。
 
-`test_e2e_process_lease_lifetime.py`用真实隔离文件验证租约新建失败回收、关闭失败、竞争文件保留及显式重试。进程启动标记和端口空闲检查是显式替身；不监听端口、不操作其他进程，不将文件生命周期证据表述为OS端口独占或产品E2E。
+`test_e2e_process_lease_lifetime.py`用真实隔离文件验证租约新建失败回收、关闭失败、竞争文件保留及显式重试，并核对失败和正常退出都释放本次端口绑定。进程启动标记、端口检查和保留 socket 是显式替身；不监听端口、不操作其他进程，真实自动客户端竞争及服务监听由 Integration 单独验证。
 
 ## 可修改内容
 

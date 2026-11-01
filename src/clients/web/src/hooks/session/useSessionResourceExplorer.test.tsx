@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
-import type { SessionCatalogNode, WorkspaceNavigationTree } from "../../types/backend";
+import type { GatewayUserAccess, SessionCatalogNode, WorkspaceNavigationTree } from "../../types/backend";
+import { useSessionResourceExplorer } from './useSessionResourceExplorer';
+import type { SessionCatalogFailureOwner } from './sessionCatalogOutboxRuntime';
 import {
   apiSuccessResponse,
   catalogChildrenResponse,
@@ -18,6 +20,7 @@ import {
 import { flushReactEffects } from "../../tests/fixtures/session/asyncControl";
 import {
   createLiveSessionResourceExplorerHarness,
+  createSessionResourceExplorerProps,
   mountSessionResourceExplorerHarness,
 } from "../../tests/fixtures/session/sessionResourceExplorer";
 
@@ -73,6 +76,74 @@ function waitForCatalogPrune(
 }
 
 describe("useSessionResourceExplorer 自动同步", () => {
+  test("刷新工作区回执保留用户折叠态，重新激活才自动展开", async () => {
+    installGatewayFetch(withDefaultGatewayApiResponses(() => undefined));
+    const props = createSessionResourceExplorerProps();
+    let explorer!: ReturnType<typeof useSessionResourceExplorer>;
+    function Harness({ workspaces, activeWorkspaceId }: Pick<typeof props, "workspaces" | "activeWorkspaceId">) {
+      explorer = useSessionResourceExplorer({ ...props, workspaces, activeWorkspaceId });
+      return null;
+    }
+    let renderer: ReturnType<typeof create> | undefined;
+    try {
+      await act(async () => { renderer = create(<Harness {...props} />); await flushReactEffects(); });
+      expect(explorer.expandedIds.has("workspace:ws-test")).toBe(true);
+      await act(async () => { explorer.toggleExpanded("workspace:ws-test"); await flushReactEffects(); });
+      expect(explorer.expandedIds.has("workspace:ws-test")).toBe(false);
+      // 同一工作区的新回执会重建读取回调，不能将其误认成用户切换工作区。
+      await act(async () => {
+        renderer!.update(<Harness {...props} workspaces={props.workspaces.map(workspace => ({ ...workspace }))} />);
+        await flushReactEffects();
+      });
+      expect(explorer.expandedIds.has("workspace:ws-test")).toBe(false);
+      await act(async () => { renderer!.update(<Harness {...props} activeWorkspaceId={null} />); await flushReactEffects(); });
+      await act(async () => { renderer!.update(<Harness {...props} />); await flushReactEffects(); });
+      expect(explorer.expandedIds.has("workspace:ws-test")).toBe(true);
+    } finally { act(() => renderer?.unmount()); }
+  });
+
+  test('同一主体的 access 刷新保留目录 owner，真正切换用户才释放旧 owner', async () => {
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => path === '/api/v1/session-catalog/snapshot'
+      ? apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id, catalog_revision: 4, event_seq_watermark: 0, generation: 1 })
+      : undefined));
+    const fixture = createSessionCatalogOutboxTestRuntime();
+    const registrations: SessionCatalogFailureOwner[] = [];
+    const removed: SessionCatalogFailureOwner[] = [];
+    const originalRegister = fixture.runtime.registerFailureOwner.bind(fixture.runtime);
+    const registration = spyOn(fixture.runtime, 'registerFailureOwner').mockImplementation((access, owner) => {
+      registrations.push(owner);
+      const unregister = originalRegister(access, owner);
+      return () => { removed.push(owner); unregister(); };
+    });
+    const access = testGatewayUserAccess();
+    function Harness({ value }: { value: GatewayUserAccess }) {
+      useSessionResourceExplorer(createSessionResourceExplorerProps({
+        activeWorkspaceId: null, workspaces: [TEST_GATEWAY_WORKSPACE_REQUEST_TARGET],
+        gatewayUserAccess: value, sessionCatalogOutboxRuntime: fixture.runtime,
+      }));
+      return null;
+    }
+    let renderer: ReturnType<typeof create> | undefined;
+    try {
+      await act(async () => { renderer = create(<Harness value={access} />); await flushReactEffects(); });
+      expect(registrations).toHaveLength(1);
+      const originalOwner = registrations[0];
+      await act(async () => {
+        renderer!.update(<Harness value={{ ...access, lease_generation: 2, expires_at: '2026-10-30T00:00:00Z' }} />);
+        await flushReactEffects();
+      });
+      expect(registrations).toHaveLength(1);
+      expect(removed).toHaveLength(0);
+      const handle = await fixture.runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, access);
+      await act(async () => {
+        await originalOwner.refresh(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, handle.driver.current(), 0, new AbortController().signal);
+      });
+      await act(async () => { renderer!.update(<Harness value={{ ...access, kind: 'user', user_id: 'another-user' }} />); });
+      expect(registrations).toHaveLength(2);
+      expect(removed).toEqual([originalOwner]);
+      await expect(originalOwner.refresh(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, handle.driver.current(), 0, new AbortController().signal)).rejects.toThrow('owner 已离开');
+    } finally { act(() => renderer?.unmount()); registration.mockRestore(); fixture.runtime.dispose(); }
+  });
   for (const mode of ["展开", "定位续页"] as const) {
     test(`${mode}只发布一致的移动节点，并保留已定位的父分支分页`, async () => {
       let catalogRevision = 3;
@@ -131,6 +202,255 @@ describe("useSessionResourceExplorer 自动同步", () => {
       unmount();
     });
   }
+
+  for (const mode of ["推进", "导出落后", "持续变化", "确认失败", "版本回退", "读取被取代"] as const) {
+    test(`跨分支读取期间目录${mode}，只发布同一权威版本`, async () => {
+      let revision = 3;
+      let racing = false;
+      let releaseConfirmation: (() => void) | undefined;
+      let confirmationRequested!: () => void;
+      const confirming = new Promise<void>(resolve => { confirmationRequested = resolve; });
+      const exports: number[] = [];
+      const reads: Array<{ parent: string | null; revision: number }> = [];
+      const nodes = (): SessionCatalogNode[] => moveNodes.map(node => node.node_id === "ses_move"
+        ? { ...node, parent_node_id: revision === 3 ? "fld_old" : "fld_new", node_revision: revision }
+        : { ...node, has_children: node.node_id === (revision === 3 ? "fld_old" : "fld_new") });
+      installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+        if (path === "/api/v1/session-catalog/export") {
+          if (mode === "确认失败" && revision > 3) return apiErrorResponse(500, "确认目录原始失败");
+          const exportedRevision = mode === "导出落后" ? 3 : revision;
+          exports.push(exportedRevision);
+          const response = apiSuccessResponse({ revision: `catalog-${exportedRevision}`, catalog_revision: exportedRevision, items: nodes() });
+          if (mode === "读取被取代" && revision === 4 && !releaseConfirmation) {
+            return new Promise<Response>(resolve => {
+              releaseConfirmation = () => resolve(response);
+              confirmationRequested();
+            });
+          }
+          return response;
+        }
+        if (path === "/api/v1/session-catalog/children") {
+          const parent = new URL(url).searchParams.get("parent_node_id");
+          if (racing && parent === "fld_new") {
+            revision = mode === "版本回退" ? 2 : revision + 1;
+            if (mode === "推进" || mode === "读取被取代") racing = false;
+          }
+          reads.push({ parent, revision });
+          return catalogChildrenResponse(`catalog-${revision}`,
+            nodes().filter(node => node.parent_node_id === parent), parent, revision);
+        }
+        return undefined;
+      }));
+      const { explorer, unmount } = await mountSessionResourceExplorerHarness({});
+      try {
+        await act(async () => { await explorer().loadBranch("ws-test", "fld_old"); });
+        expect(explorer().branches.get("ws-test:fld_old")?.items.map(node => node.node_id)).toEqual(["ses_move"]);
+        racing = true;
+        // 新分支读取发生在 export 之后；cached root/old 仍属于前一版。
+        await act(async () => {
+          if (mode === "读取被取代") {
+            const original = explorer().loadBranch("ws-test", "fld_new");
+            await confirming;
+            // 同一分支的重复展开会去重；另一分支的读取才会真实接管整批发布权。
+            await explorer().loadBranch("ws-test", "fld_old");
+            releaseConfirmation!();
+            expect(await original).toBeUndefined();
+          } else if (mode === "推进") {
+            // 只推进一次；后续整批重读必须从真实的新版本重新取得各分支。
+            await explorer().loadBranch("ws-test", "fld_new");
+          } else {
+            await expect(explorer().loadBranch("ws-test", "fld_new"))
+              .rejects.toThrow(/catalog revision|revision 落后/);
+          }
+        });
+        if (mode === "推进" || mode === "读取被取代") {
+          expect(exports).toContain(4);
+          expect(reads).toContainEqual({ parent: null, revision: 4 });
+          const branches = [...explorer().branches.values()];
+          expect(branches.every(branch => branch.catalog_revision === 4 && !branch.loading && branch.error === null)).toBe(true);
+          expect(branches.flatMap(branch => branch.items).filter(node => node.node_id === "ses_move")
+            .map(node => [node.node_id, node.session_id, node.parent_node_id, node.node_revision, node.state]))
+            .toEqual([["ses_move", "ses_move", "fld_new", 4, "active"]]);
+        } else {
+          expect(explorer().branches.get("ws-test:root")?.error).toMatch(/catalog revision|revision 落后/);
+          if (mode === "确认失败") expect(explorer().branches.get("ws-test:root")?.error).toContain("确认目录原始失败");
+          if (mode === "版本回退") expect(exports).not.toContain(2);
+          expect(explorer().branches.get("ws-test:fld_old")?.items.map(node => node.node_id)).toEqual(["ses_move"]);
+          expect(explorer().branches.get("ws-test:fld_new")?.items).toEqual([]);
+        }
+      } finally { releaseConfirmation?.(); unmount(); }
+    });
+  }
+
+  for (const mode of ["撤销", "成功页同版", "仍在目录", "其它故障", "导出落后", "导出未推进", "确认失败", "读取被取代"] as const) {
+    test(`目录预读后父节点删除：${mode}，只按新权威节点集整批重读`, async () => {
+      let revision = 13;
+      let racing = false;
+      let deleted = false;
+      let deletionConfirmed = false;
+      let releaseConfirmation: (() => void) | undefined;
+      let confirmationRequested!: () => void;
+      const confirming = new Promise<void>(resolve => { confirmationRequested = resolve; });
+      const exports: number[] = [];
+      const reads: Array<{ parent: string | null; revision: number }> = [];
+      const nodes = (): SessionCatalogNode[] => deleted
+        ? moveNodes.filter(node => node.node_id === "fld_new")
+        : moveNodes;
+      installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+        if (path === "/api/v1/session-catalog/export") {
+          if (deleted) deletionConfirmed = true;
+          if (deleted && mode === "确认失败") return apiErrorResponse(500, "删除确认原始失败");
+          const exportedRevision = deleted && mode === "导出落后" ? 12
+            : deleted && mode === "导出未推进" ? 13 : revision;
+          exports.push(exportedRevision);
+          const response = apiSuccessResponse({ revision: `catalog-${exportedRevision}`,
+            catalog_revision: exportedRevision, items: mode === "仍在目录" ? moveNodes : nodes() });
+          if (deleted && mode === "读取被取代" && !releaseConfirmation) {
+            return new Promise<Response>(resolve => {
+              releaseConfirmation = () => resolve(response);
+              confirmationRequested();
+            });
+          }
+          return response;
+        }
+        if (path === "/api/v1/session-catalog/children" || path === "/api/v1/session-catalog/refresh") {
+          const parent = new URL(url).searchParams.get("parent_node_id");
+          // 新分支读取发生在 revision=13 的 export 之后，模拟另一项已提交的递归删除。
+          if (racing && parent === null) { deleted = true; revision = 19; racing = false; }
+          reads.push({ parent, revision });
+          if (deleted && parent === "fld_old") return apiErrorResponse(404, "原父节点已删除");
+          if (deleted && mode === "其它故障" && parent === "fld_new") return apiErrorResponse(500, "真实读取故障");
+          const pageRevision = deleted && !deletionConfirmed && mode === "成功页同版" ? 13 : revision;
+          return catalogChildrenResponse(`catalog-${pageRevision}`,
+            nodes().filter(node => node.parent_node_id === parent), parent, pageRevision);
+        }
+        return undefined;
+      }));
+      const { explorer, unmount } = await mountSessionResourceExplorerHarness({});
+      try {
+        await act(async () => {
+          await explorer().loadBranch("ws-test", "fld_old");
+          await explorer().loadBranch("ws-test", "fld_new");
+        });
+        expect(explorer().branches.get("ws-test:fld_old")?.items.map(node => node.node_id)).toEqual(["ses_move"]);
+        const confirmedRoot = explorer().branches.get("ws-test:root")!.items;
+        racing = true;
+        await act(async () => {
+          if (mode === "读取被取代") {
+            const original = explorer().refreshResourceTree();
+            await confirming;
+            // 确认尚未返回时，旧分支和节点都不能提前删除或发布新版。
+            expect(explorer().branches.get("ws-test:fld_old")?.items.map(node => node.node_id)).toEqual(["ses_move"]);
+            expect(explorer().branches.get("ws-test:root")!.items).toEqual(confirmedRoot);
+            await explorer().loadBranch("ws-test", null);
+            releaseConfirmation!();
+            await expect(original).rejects.toThrow("已被更新请求取代");
+          } else if (mode === "撤销" || mode === "成功页同版") {
+            await explorer().refreshResourceTree();
+          } else {
+            await expect(explorer().refreshResourceTree()).rejects.toThrow("重新读取会话目录失败");
+          }
+        });
+        if (mode === "撤销" || mode === "成功页同版" || mode === "读取被取代") {
+          expect(exports).toContain(19);
+          expect(reads).toContainEqual({ parent: null, revision: 19 });
+          expect(explorer().branches.has("ws-test:fld_old")).toBe(false);
+          const branches = [...explorer().branches.values()];
+          expect(branches.length).toBeGreaterThan(0);
+          expect(branches.every(branch => branch.catalog_revision === 19 && !branch.loading && branch.error === null)).toBe(true);
+          expect(branches.flatMap(branch => branch.items).map(node => node.node_id)).toEqual(["fld_new"]);
+        } else {
+          expect(explorer().branches.get("ws-test:fld_old")?.items.map(node => node.node_id)).toEqual(["ses_move"]);
+          expect(explorer().branches.get("ws-test:root")!.items).toEqual(confirmedRoot);
+          expect(explorer().branches.get("ws-test:root")?.error).toContain("原父节点已删除");
+          if (mode === "其它故障") {
+            expect(explorer().branches.get("ws-test:root")?.error).toContain("真实读取故障");
+            expect(exports).toEqual([13, 13, 13]);
+          }
+          if (mode === "确认失败") expect(explorer().branches.get("ws-test:root")?.error).toContain("删除确认原始失败");
+        }
+      } finally { releaseConfirmation?.(); unmount(); }
+    });
+  }
+
+  test("恢复的终态分支被新读取取代后保留新 confirmed，只由新读取清理回执", async () => {
+    const runtime = createSessionCatalogOutboxTestRuntime();
+    await runtime.runtime.submit(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, testGatewayUserAccess(),
+      { kind: "create_folder", name: "恢复的目录" }, { baseCatalogRevision: 3 });
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let newest = false;
+    installGatewayFetch(withDefaultGatewayApiResponses(async ({ path, url }) => {
+      if (path === "/api/v1/session-catalog/children" || path === "/api/v1/session-catalog/refresh") {
+        if (!newest) { started(); await held; }
+        return catalogChildrenResponse("catalog-4", [], new URL(url).searchParams.get("parent_node_id"), 4);
+      }
+      return undefined;
+    }));
+    const mounted = await mountSessionResourceExplorerHarness({ props: {
+      sessionCatalogOutboxRuntime: runtime.runtime, sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
+      gatewayUserAccess: testGatewayUserAccess(),
+    } });
+    try {
+      await reading;
+      expect(runtime.pruneCalls).toEqual([]);
+      await act(async () => {
+        newest = true;
+        await mounted.explorer().refreshResourceTree();
+      });
+      expect(runtime.pruneCalls).toEqual([{ catalogRevision: 4, operationIds: ["test_catalog_operation_1"] }]);
+      const confirmed = mounted.explorer().branches.get("ws-test:root");
+      await act(async () => { release(); await flushReactEffects(); });
+      expect(runtime.errors).toEqual([]);
+      expect(mounted.explorer().branches.get("ws-test:root")).toEqual(confirmed);
+      expect(confirmed?.catalog_revision).toBe(4);
+      expect(confirmed?.error).toBeNull();
+      expect(runtime.pruneCalls).toHaveLength(1);
+      expect(runtime.runtime.getSnapshot().get("ws-test\u0000guest")?.outbox.operations).toEqual([]);
+    } finally {
+      release();
+      mounted.unmount();
+    }
+  });
+
+  test("本地创建的终态刷新被用户刷新取代时不误报业务失败", async () => {
+    const runtime = createSessionCatalogOutboxTestRuntime();
+    let hold = false;
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let release!: () => void;
+    const delayed = new Promise<void>(resolve => { release = resolve; });
+    installGatewayFetch(withDefaultGatewayApiResponses(async ({ path, url }) => {
+      if (path === "/api/v1/session-catalog/children") {
+        if (hold) { started(); await delayed; }
+        return catalogChildrenResponse("catalog-3", [], new URL(url).searchParams.get("parent_node_id"), 3);
+      }
+      if (path === "/api/v1/session-catalog/refresh") return catalogChildrenResponse("catalog-4", [], null, 4);
+      return undefined;
+    }));
+    const mounted = await mountSessionResourceExplorerHarness({ props: {
+      sessionCatalogOutboxRuntime: runtime.runtime, gatewayUserAccess: testGatewayUserAccess(),
+    } });
+    try {
+      await act(async () => {
+        hold = true;
+        await mounted.explorer().createSessionFolder("ws-test", "本地创建目录");
+        await reading;
+      });
+      expect(runtime.pruneCalls).toEqual([]);
+      await act(async () => { await mounted.explorer().refreshResourceTree(); });
+      expect(runtime.pruneCalls).toEqual([{ catalogRevision: 4, operationIds: ["test_catalog_operation_1"] }]);
+      const confirmed = mounted.explorer().branches.get("ws-test:root");
+      await act(async () => { release(); await flushReactEffects(); });
+      expect(runtime.errors).toEqual([]);
+      expect(mounted.explorer().branches.get("ws-test:root")).toEqual(confirmed);
+      expect(confirmed?.catalog_revision).toBe(4);
+      expect(confirmed?.error).toBeNull();
+      expect(runtime.pruneCalls).toHaveLength(1);
+    } finally { release(); mounted.unmount(); }
+  });
 
   test("恢复的已提交操作在分支刷新失败后保留 outbox 并显示错误", async () => {
     const runtime = createSessionCatalogOutboxTestRuntime();

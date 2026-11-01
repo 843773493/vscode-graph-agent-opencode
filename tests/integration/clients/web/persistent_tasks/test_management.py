@@ -10,7 +10,10 @@ import subprocess
 
 import pytest
 
-from app.core.resource_uri import thread_resource_uri
+from app.core.resource_uri import parse_session_thread_uri, thread_resource_uri
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
+)
 from tests.integration.backend.agents.test_mcp_connection_control import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原产品装具依赖
 )
@@ -31,16 +34,27 @@ def browser_runner():
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "持久任务Web验收需要Chromium"
 
-    async def run(case, client, *, target_uri, title, other_session_id, script="management", environment=None):
+    async def run(case, client, *, target_uri, title, other_target_uri, script="management", environment=None):
         artifacts = case.context.artifacts_dir / "browser"
         artifacts.mkdir()
-        command = ["bun", f"tests/integration/clients/web/persistent_tasks/{script}.mjs"]
+        response = await client.get("/api/gateway/workspaces")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["request_id"] == response.headers["x-request-id"]
+        owners = []
+        for uri in (target_uri, other_target_uri):
+            parsed, session_id, thread_id = parse_session_thread_uri(uri)
+            assert thread_id, "浏览器操作必须指定精确 Thread URI"
+            route, = [row for row in body["data"]["items"] if row["backend_workspace_id"] == parsed.scope_id]
+            owners.append({"routeId": route["workspace_id"], "workspaceId": parsed.scope_id,
+                           "sessionId": session_id, "threadId": thread_id})
+        command = ["node", f"tests/integration/clients/web/persistent_tasks/{script}.mjs"]
         result = await asyncio.to_thread(subprocess.run, command, cwd=case.context.project_root,
             timeout=130, check=False, capture_output=True, text=True,
             env={**os.environ, **(environment or {}), "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                  "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
                      "baseUrl": str(client.base_url), "workspaceId": case.mount.workspace_id,
-                     "targetUri": target_uri, "sessionTitle": title, "otherSessionId": other_session_id,
+                     "targetUri": target_uri, "sessionTitle": title, "owner": owners[0], "otherOwner": owners[1],
                  })})
         (artifacts / "browser.raw").write_text(result.stdout + result.stderr, encoding="utf-8")
         (artifacts / "receipt.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}))
@@ -50,11 +64,11 @@ def browser_runner():
 
 
 async def test_workspace_task_form_controls_trial_delivery_and_conflict_readback(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner, web_workbench_assets,
 ):
     async with (
         oauth_endpoint_factory() as secure, http_schema_endpoint_factory("sibling") as sibling,
-        product_case(secure, sibling, web=True) as (client, replay, case),
+        product_case(secure, sibling, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)}) as (client, replay, case),
     ):
         title = "持久任务Web目标"
         session = await create_session(client, title)
@@ -65,9 +79,16 @@ async def test_workspace_task_form_controls_trial_delivery_and_conflict_readback
         assert response.status_code == 200, response.text
         goal = response.json()["data"]
         other_session = await create_session(client, "无关联任务的另一个会话")
+        response = await client.get(f"/api/v1/sessions/{other_session}/main-thread")
+        assert response.status_code == 200, response.text
+        other_thread = response.json()["data"]["thread_id"]
         before_preview = await client.get("/api/v1/session-catalog/export")
         assert before_preview.status_code == 200, before_preview.text
-        result = await browser_runner(case, client, target_uri=thread_resource_uri(case.mount.workspace_id, session, thread), title=title, other_session_id=other_session)
+        result = await browser_runner(case, client, target_uri=thread_resource_uri(case.mount.workspace_id, session, thread), title=title,
+            other_target_uri=thread_resource_uri(case.mount.workspace_id, other_session, other_thread))
+        assert result["splitOwners"]["primary"]["threadId"] == thread
+        assert result["splitOwners"]["other"]["threadId"] == other_thread
+        assert result["splitOwners"]["primary"]["workspaceId"] == result["splitOwners"]["other"]["workspaceId"] == case.mount.workspace_id
         assert result["preview"]["physical_location"] == "unallocated"
         after_preview = await client.get("/api/v1/session-catalog/export")
         assert after_preview.status_code == 200, after_preview.text

@@ -1,0 +1,11 @@
+{
+  "name": "@boxteam/electron-web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../workbench/scripts/serve.mjs --root ./dist",
+    "build": "bun ../workbench/scripts/build.mjs --entry ../electron-web/main.ts --outdir ../electron-web/dist",
+    "typecheck": "bun ../workbench/node_modules/@typescript/native-preview/bin/tsgo --project tsconfig.jsonc --noEmit"
+  }
+}

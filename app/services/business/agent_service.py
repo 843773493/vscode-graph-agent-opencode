@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.agents.agent_factory import provider_configuration_error
 from app.schemas.internal_v2.agent import AgentDTO, AgentProviderDTO
 from app.services.infrastructure.config_service import ConfigService
@@ -26,7 +28,9 @@ class AgentService:
                 )
                 provider_dtos: list[AgentProviderDTO] = []
                 for provider_config in agent_runtime_config["providers"]:
-                    configuration_error = provider_configuration_error(
+                    # 首次 SDK 导入及模型目录等待不能阻塞同循环的健康检查和业务请求。
+                    configuration_error = await asyncio.to_thread(
+                        provider_configuration_error,
                         provider_config,
                         agent_runtime_config,
                     )

@@ -108,13 +108,14 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 
 ### 进程、端口与HTTP就绪
 
+- `TestFilePortBlock.port()` 同时校验偏移上限和块的实际末尾；调用方在本文件端口块内平移服务布局时不得延伸原末尾或重新分配到其他文件的范围。
 - `ensure_local_port_available`按显式`host`瞬时检查监听地址，缺省仍为IPv4回环；主机名逐一检查系统解析的地址，IPv6按Node默认双栈语义绑定。不预留端口或声明长期租约。Windows使用独占地址选项，避免REUSEADDR把重复绑定误报为空闲；Linux/macOS保留REUSEADDR处理已关闭连接。探针成功或冲突都关闭自己的socket，不能终止原监听者。
 - Workspace和Gateway启动装具在创建进程前持有日志文件，任何文件打开或创建进程失败都要立即关闭已打开的文件；创建成功后由返回的进程句柄接管，关闭进程时一并关闭日志。
 - 关闭进程和各日志是独立释放动作；一个释放失败或中断时仍尝试其余动作，再用BaseExceptionGroup保留全部原始错误。全部释放成功后再注销进程句柄。
 - `processes/scope.py` 按句柄身份登记进程归属，嵌套 scope 退出后恢复外层归属；即使某个回收动作抛出中断，也先尝试回收其余已登记进程，再汇总原始错误。带标签的通用测试资源由 `tests/harness/` 的运行上下文管理。
 - 只检查 HTTP 200 的就绪等待统一由 `processes/workspace.py::wait_for_http_ok` 提供，Gateway探针通过它透传本地认证头；期限是总等待预算，连接与重试间隔使用剩余预算。HTTP 非200及进程提前退出直接暴露，不重试错误路由或鉴权拒绝。需要校验工作区身份、响应正文的后端探针保留专用合同，不降为仅检查200。
 - 就绪等待发现进程退出后，错误以已观察的退出码和目标为主；输出采集只使用剩余预算，采集超时保留已捕获内容及原始 cause，不能掩盖退出事实。就绪探针不越权终止仍持有管道的其他进程，清理由创建者负责。
-- `wait_for_backend_ready` 专门核对响应正文的工作区 UUID，连接和重试也受剩余预算约束；HTTP拒绝保留有界诊断正文并关闭响应，不把身份不符或异常状态轮询至超时。
+- `wait_for_backend_ready` 先核持有 PID 在目标回环地址的真实监听，再请求并核对响应正文的工作区 UUID，监听、连接和重试共用剩余预算；HTTP拒绝保留有界诊断正文并关闭响应，不把身份不符或异常状态轮询至超时。不能在 uvicorn lifespan 阶段反复连接尚未监听的端口，避免 TCP 自连接留下 TIME_WAIT。
 
 ### 业务装具的资源释放
 
@@ -125,7 +126,7 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 
 - `e2e_control/harness.py` 的控制端口从构造时归 harness 持有，绑定后立即登记关闭；启动准备失败也要释放，不能对未启动线程调用 shutdown。只有目录创建成功后才保存事件，线程启动成功后才登记停机与 join；close 先释放两类 barrier，再执行完整清理，一个动作失败仍尝试其余动作。控制时钟和事件用于观测，不写业务状态或延长业务期限。
 - 控制端口的 `read_directory` 只查询已登记 trace 根下的显式目标；检查叶名称时用有关闭作用域的 scandir，命中即结束，不构造父目录名称全集。缺失叶仍返回 null，父目录缺失、断链、文件和越界仍明确失败；真正返回目录内容时继续完整读取并排序。存在性查找与目录内容返回是两种成本，不维护路径缓存或改变注册根归属。
-- `E2EProcessLease`的JSON文件声明pytest当前进程使用的服务端口，不持续持有socket或系统文件锁。`start_time`来自`psutil.Process(pid).create_time()`，是用于识别PID复用的平台进程创建时间；不自行解析Linux `/proc`。release用PID、创建时间、随机token共同校验持有者，端口块如何分配归`ports.py`；进程身份、租约归属、端口分配和端口当前空闲是不同事实。
+- `E2EProcessLease`的JSON文件声明pytest当前进程使用的服务端口；Linux 还持有 REUSEADDR 的非监听绑定，防止自动客户端抢占尚未启动或已退出的服务端口，不使用 REUSEPORT 或代替真实服务监听。获取失败和退出失败也释放本次绑定，已有监听冲突仍明确失败；其它平台的绑定移交语义尚未验证。`start_time`来自`psutil.Process(pid).create_time()`，用于识别PID复用；release用PID、创建时间、随机token共同校验持有者，端口分配仍统一归`ports.py`，不改宿主临时端口范围。
 - Browser driver fork deadline 由 `e2e_control/browser_client.mjs` 维护单调时钟状态；身份和回收委托给 `fork_deadline.py`：Linux 使用 `/proc`，macOS 使用 `psutil` 加 POSIX process group，Windows 使用 `psutil` 进程树。POSIX driver 必须由 owner 用独立 session 启动，Windows 必须仍属于 matrix runner 进程树。
 - 新租约文件独占创建成功后立即登记失败回收，写入和关闭均成功才保留；写入中断后可显式重试，不留下半截JSON或尚未取得的租约。独占创建碰到竞争文件时不回收他人的记录；已有损坏记录仍明确报错，不能把新建失败回收变成通用清除。回收自身也失败时保留原始写入异常链。
 

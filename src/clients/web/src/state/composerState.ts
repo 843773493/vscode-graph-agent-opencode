@@ -5,7 +5,7 @@ export interface ComposerStateSnapshot {
   apiPort: number | null;
   activeGatewayWorkspaceId: string | null;
   gatewayWorkspaces: GatewayWorkspace[];
-  gatewayUserScope: string | null;
+  browserViewScope: string | null;
   uiSettings: WebUiSettings;
   agents: Agent[];
   currentSession: Session | null;
@@ -31,11 +31,7 @@ export function selectComposerState(
     apiPort: state.apiPort,
     activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
     gatewayWorkspaces: state.gatewayWorkspaces,
-    gatewayUserScope: state.gatewayUserAccess
-      ? state.gatewayUserAccess.kind === "user" && state.gatewayUserAccess.user_id
-        ? `user:${state.gatewayUserAccess.user_id}`
-        : null
-      : null,
+    browserViewScope: state.browserViewScope ?? null,
     uiSettings: state.uiSettings,
     agents: state.agents,
     currentSession: state.currentSession,

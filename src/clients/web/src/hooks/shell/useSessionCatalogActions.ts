@@ -5,7 +5,7 @@ import {
 } from "../../api";
 import { fetchSessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
 import { buildSessionCatalogSyncKeys } from "../sessionResourceExplorer/resourceTreeSync";
-import { errorMessage } from "../../utils/errorMessage";
+import { errorMessage, isErrorReported } from "../../utils/errorMessage";
 import { listGatewayWorkspaces } from "../../gatewayApi";
 import { HttpRequestError } from "../../api/http";
 import type { GatewayRuntimeGroupRequest, GatewayUserAccess, GatewayWorkspace, Session } from "../../types/backend";
@@ -35,6 +35,7 @@ interface SessionCatalogActionsInput extends Pick<
     danger: boolean;
   }) => Promise<boolean>;
   setStatus: (text: string) => void;
+  onError: (message: string) => void;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
   gatewayUserAccess?: GatewayUserAccess | null;
   activateGatewayWorkspace: (
@@ -73,6 +74,7 @@ export function useSessionCatalogActions({
   gatewayWorkspaces,
   confirm,
   setStatus,
+  onError,
   sessionCatalogOutboxRuntime,
   gatewayUserAccess,
   activateGatewayWorkspace,
@@ -178,7 +180,7 @@ export function useSessionCatalogActions({
       .then(() => invalidateSessionCatalog(workspaceId))
       .catch((error: unknown) => {
         invalidateSessionCatalog(workspaceId);
-        runtime.reportError(
+        if (!isErrorReported(error)) runtime.reportError(
           `新建会话文件夹失败: ${errorMessage(error)}`,
         );
       });
@@ -285,6 +287,7 @@ export function useSessionCatalogActions({
     })().catch((error: unknown) => {
       if (error !== delegatedRemovalError) {
         setStatus(`删除工作区失败: ${errorMessage(error)}`);
+        onError(`删除工作区失败 (${workspaceId}): ${errorMessage(error)}`);
       }
     });
   };
@@ -320,6 +323,7 @@ export function useSessionCatalogActions({
       // sessionCatalogSyncKeys 刷新其余已展开分支。
     }).catch((error: unknown) => {
       setStatus(`删除会话失败: ${errorMessage(error)}`);
+      if (!isErrorReported(error)) onError(`删除会话失败 (${workspaceId}/${sessionId}): ${errorMessage(error)}`);
     });
   };
   const changeSessionParent = async (

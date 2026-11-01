@@ -44,6 +44,7 @@ function detailRequestIds(turnIds: string[]): TurnDetailBatchRequest["turn_ids"]
 export function useTurnDetailLoader({
   apiPort,
   sessionId,
+  threadId,
   workspaceId,
   sessionCacheKey,
   generationRef,
@@ -77,7 +78,7 @@ export function useTurnDetailLoader({
     include?: TurnHistoryInclude[],
     toolCallIds?: string[],
   ) => {
-    if (!apiPort || !sessionId || !sessionCacheKey) return;
+    if (apiPort === null || !sessionId || !sessionCacheKey) return;
     const targetGeneration = generationRef.current;
     setState((previous) => {
       const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
@@ -111,6 +112,7 @@ export function useTurnDetailLoader({
             },
             workspaceId,
             requestSignal,
+            threadId,
           );
           break;
         } catch (error) {
@@ -224,6 +226,7 @@ export function useTurnDetailLoader({
     requestSignal,
     sessionCacheKey,
     sessionId,
+    threadId,
     setState,
     workspaceId,
   ]);
@@ -234,7 +237,7 @@ export function useTurnDetailLoader({
     include?: TurnHistoryInclude[],
     toolCallIds?: string[],
   ) => {
-    if (!apiPort || !sessionId || !sessionCacheKey || turnIds.length === 0) return;
+    if (apiPort === null || !sessionId || !sessionCacheKey || turnIds.length === 0) return;
     const requestIds = detailRequestIds(turnIds);
     if (refreshAfterInFlight) {
       const refreshLoops = requestIds.map((turnId) => {
@@ -338,5 +341,6 @@ export function useTurnDetailLoader({
     requestSignal,
     sessionCacheKey,
     sessionId,
+    threadId,
   ]);
 }

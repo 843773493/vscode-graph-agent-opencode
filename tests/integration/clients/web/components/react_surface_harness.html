@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReactSurface 隔离回归</title>
+    <style>
+      body { margin: 20px; font: 14px sans-serif; }
+      main {
+        display: flex; gap: 20px;
+        --vscode-editorWidget-background: rgb(40, 50, 60);
+        --vscode-editor-background: white;
+        --vscode-editor-foreground: black;
+        --vscode-font-family: sans-serif;
+      }
+      main > section { width: 360px; height: 320px; border: 1px solid gray; }
+      [data-bt-surface], .auxiliary-panel > .auxiliary-view-body { background: rgb(21, 31, 41); }
+    </style>
+  </head>
+  <body>
+    <aside id="outside">
+      <div data-bt-surface="layout">外层布局</div>
+      <div data-bt-surface="panel">外层面板</div>
+      <div class="auxiliary-panel"><div class="auxiliary-view-body">外层辅助区</div></div>
+    </aside>
+    <main><section id="first"></section><section id="second"></section></main>
+    <aside id="theme-notifications" aria-label="装具主题通知"></aside>
+    <script type="module" src="/react_surface_harness.tsx"></script>
+  </body>
+</html>

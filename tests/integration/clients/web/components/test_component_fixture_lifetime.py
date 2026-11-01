@@ -96,7 +96,7 @@ try {
 
 @pytest.mark.parametrize(
     "fixture_name",
-    ["anchored_overlay_positioning", "structured_user_message_attachments"],
+    ["anchored_overlay_positioning", "structured_user_message_attachments", "react_surface"],
 )
 @pytest.mark.parametrize("failure_stage", ["listen", "launch", "context"])
 def test_component_setup_failure_releases_acquired_resources(

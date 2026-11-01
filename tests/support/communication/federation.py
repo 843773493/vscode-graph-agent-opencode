@@ -117,6 +117,7 @@ async def open_communication_triad(
     backend_asgi_app: str = "app.main:app",
     backend_environment: dict[str, str] | None = None,
     gateway_environment: dict[str, str] | None = None,
+    gateway_runtime_root: Path | None = None,
     on_sshd_started: Callable[[subprocess.Popen[str], Path], None] | None = None,
     same_backend_routes: bool = False,
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
@@ -158,7 +159,7 @@ async def open_communication_triad(
         backend_starters = {}
         nodes = {}
         layout = (("a", 0), ("b", 20)) if same_backend_routes else (("a", 0), ("b", 20), ("c", 40))
-        gateway_homes = {name: context.workspace_root / name / "boxteam-home" for name, _ in layout}
+        gateway_homes = {name: (gateway_runtime_root or context.workspace_root) / name / "boxteam-home" for name, _ in layout}
         for name, offset in layout:
             if same_backend_routes and name == "b":
                 # 两条 Gateway 路由共享唯一 Popen；绝不启动第二个 backend 共写工作区。
@@ -214,6 +215,8 @@ async def open_communication_triad(
                         log_name="c3-backend", env_overrides=environment,
                         startup_mount=mount, asgi_app=backend_asgi_app,
                         refresh_user_configuration=False,
+                        boxteam_home=gateway_homes[name],
+                        artifacts_dir=context.artifacts_dir / ("backend-" + name),
                     )
                 except BaseException as startup_error:
                     startup_error.add_note(f"owned backend 节点: {name}")

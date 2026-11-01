@@ -10,6 +10,10 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
+)
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
@@ -49,12 +53,11 @@ def e2e_workspace_root_path(request: pytest.FixtureRequest) -> str:
 async def test_copy_session_information_uses_bounded_protocol_projection(
     request: pytest.FixtureRequest,
     e2e_workspace_root_path: str,
+    web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     workspace_root = Path(e2e_workspace_root_path).resolve()
-    output_root = workspace_root.parent
-    artifacts = output_root / "artifacts"
-    artifacts.mkdir(parents=True, exist_ok=True)
+    artifacts = TestRunContext.from_test_file(Path(request.node.path)).prepare().artifacts_dir
     result_path = artifacts / "session-information-result.json"
     screenshot_path = artifacts / "session-information-failure.png"
     result_path.unlink(missing_ok=True)
@@ -69,23 +72,13 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
     if chromium_path is None:
         pytest.fail("会话信息 Web E2E 需要 Chromium")
 
-    build = await asyncio.to_thread(
-        subprocess.run,
-        ["bun", "run", "build"],
-        cwd=project_root / "src" / "clients" / "web",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
-
     port = e2e_port_block_for_file(Path(request.node.fspath)).port(21)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
         default_backend_url=None,
         port=port,
         extra_env={
-            "BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist")
+            "BOXTEAM_WEB_ASSETS": str(web_workbench_assets)
         },
     )
     try:
@@ -129,6 +122,10 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
             timeout=90,
             check=False,
         )
+        (artifacts / "browser.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+        (artifacts / "browser-process.json").write_text(json.dumps({
+            "command": ["node", "tests/e2e/clients/web/session_information.mjs"], "exit_code": result.returncode,
+        }, indent=2) + "\n", encoding="utf-8")
         assert result.returncode == 0, (
             f"浏览器会话信息 E2E 失败:\nstdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}\n截图: {screenshot_path}"

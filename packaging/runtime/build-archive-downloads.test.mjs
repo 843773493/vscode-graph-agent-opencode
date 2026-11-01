@@ -30,6 +30,7 @@ async function observeBuildDownloads(scriptUrl, mode, overrideRoots) {
     ["app/source.py", "source\n"], ["configs/input.jsonc", "{}\n"],
     ["resources/input.txt", "resource\n"], ["src/shared/sse.js", "export {};\n"],
     ["src/clients/web/index.ts", "export {};\n"],
+    ["src/clients/workbench/src/main.ts", "export {};\n"],
     ["src/workspace-services/input.mjs", "export {};\n"],
     ["packages/launcher/package.json", '{"name":"boxteam","version":"fixture"}\n'],
     ["packaging/runtime/node-package.json", "{}\n"],

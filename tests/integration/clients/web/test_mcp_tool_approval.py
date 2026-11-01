@@ -14,6 +14,9 @@ from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 构建装具
+)
 from tests.integration.backend.agents.test_mcp_tool_approval import (
     approval_plan as approval_plan,  # noqa: PLC0414 - 同一模型响应资产
 )
@@ -31,6 +34,7 @@ from tests.integration.backend.agents.test_mcp_tool_approval import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.paths import chromium_temporary_environment
 
 
 @pytest.fixture
@@ -38,16 +42,18 @@ def approval_browser():
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "工具审批 Web 验收需要 Chromium"
 
-    async def run(case, *, base_url, title):
+    async def run(case, *, base_url, title, session_id, thread_id):
         artifacts = case.context.artifacts_dir / "approval-browser"
         artifacts.mkdir()
         command = ["bun", "tests/integration/clients/web/mcp_tool_approval.mjs"]
-        result = await asyncio.to_thread(subprocess.run, command, cwd=case.context.project_root,
-            timeout=150, check=False, capture_output=True, text=True,
-            env={**os.environ, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
-                 "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
-                     "baseUrl": base_url, "sessionTitle": title, "workspaceId": case.mount.workspace_id,
-                 })})
+        with chromium_temporary_environment(case.context.runtime_root_for_node("mcp-approval-browser") / "chromium-tmp") as temporary_environment:
+            result = await asyncio.to_thread(subprocess.run, command, cwd=case.context.project_root,
+                timeout=150, check=False, capture_output=True, text=True,
+                env={**os.environ, **temporary_environment, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
+                     "BOXTEAM_BROWSER_ARTIFACTS": str(artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
+                         "baseUrl": base_url, "sessionTitle": title, "workspaceId": case.mount.workspace_id,
+                         "sessionId": session_id, "threadId": thread_id,
+                     })})
         (artifacts / "browser.raw").write_text(result.stdout + result.stderr)
         (artifacts / "receipt.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}))
         assert result.returncode == 0, (artifacts / "browser.raw").read_text()
@@ -56,18 +62,18 @@ def approval_browser():
 
 
 async def test_web_edits_and_rejects_original_tool_calls(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, approval_plan, approval_browser,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, approval_plan, approval_browser, web_workbench_assets,
 ):
     async with (
         oauth_endpoint_factory() as secure, http_schema_endpoint_factory("web-approval") as original,
-        product_case(secure, original, web=True,
+        product_case(secure, original, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
                      tool_restrictions={"confirmation_required": ["mcp__schema__probe"]}) as (client, replay, case),
     ):
         title = "Web 逐调用工具审批"
         session = await create_session(client, title)
         thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
         planned, calls = approval_plan(replay, session, thread)
-        result = await approval_browser(case, base_url=str(client.base_url), title=title)
+        result = await approval_browser(case, base_url=str(client.base_url), title=title, session_id=session, thread_id=thread)
         await wait_for_job_done(client, result["jobId"], max_attempts=60)
         assert [json.loads(line)["arguments"] for line in original.receipts.read_text().splitlines()] == [{"proof": "approved-in-browser"}]
         decisions = result["request"]["responses"][0]["decisions"]

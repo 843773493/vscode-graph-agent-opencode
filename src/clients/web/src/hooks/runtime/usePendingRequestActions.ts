@@ -3,7 +3,7 @@ import { errorMessage } from "../../utils/errorMessage";
 
 import {
   clearPendingRequests as apiClearPendingRequests,
-  listMainThreadPendingRequests as apiListMainThreadPendingRequests,
+  listThreadPendingRequests as apiListThreadPendingRequests,
   removePendingRequest as apiRemovePendingRequest,
   updatePendingRequestPolicy as apiUpdatePendingRequestPolicy,
 } from "../../pendingRequestsApi";
@@ -22,12 +22,14 @@ import type { SetAppState } from "../contentViewLoaderTypes";
 export function usePendingRequestActions({
   apiPort,
   currentSession,
+  currentThreadId,
   currentSessionGatewayWorkspaceId,
   currentSessionCacheKey,
   setState,
 }: {
   apiPort: number;
   currentSession: Session | null;
+  currentThreadId?: string;
   currentSessionGatewayWorkspaceId: string | null;
   currentSessionCacheKey: string | null;
   setState: SetAppState;
@@ -38,11 +40,13 @@ export function usePendingRequestActions({
     }
     return {
       sessionId: currentSession.session_id,
+      threadId: currentThreadId,
       workspaceId: currentSessionGatewayWorkspaceId,
       cacheKey: currentSessionCacheKey ?? currentSession.session_id,
     };
   }, [
     currentSession,
+    currentThreadId,
     currentSessionCacheKey,
     currentSessionGatewayWorkspaceId,
   ]);
@@ -71,11 +75,12 @@ export function usePendingRequestActions({
     sessionId: string,
     workspaceId: string | null,
     cacheKey: string,
+    threadId?: string,
   ) => {
     replaceSnapshot(
       sessionId,
       cacheKey,
-      await apiListMainThreadPendingRequests(apiPort, sessionId, workspaceId),
+      await apiListThreadPendingRequests(apiPort, sessionId, workspaceId, undefined, threadId),
     );
   }, [apiPort, replaceSnapshot]);
 
@@ -84,13 +89,14 @@ export function usePendingRequestActions({
       sessionId: string;
       workspaceId: string | null;
       cacheKey: string;
+      threadId?: string;
     },
     request: () => Promise<PendingRequestList>,
   ) => {
     try {
       await request();
-      // 变更返回整个 Session 的控制快照；主窗口随后读取 main thread 权威快照。
-      await refreshSnapshot(target.sessionId, target.workspaceId, target.cacheKey);
+      // 变更后重读发起实例的 Thread 快照，不把 Session 聚合写入子线程。
+      await refreshSnapshot(target.sessionId, target.workspaceId, target.cacheKey, target.threadId);
     } catch (error) {
       // 补偿重取失败不得覆盖原始错误：变更请求返回的 409/422 才是用户真正
       // 需要看到的失败原因，对账用的待处理队列重取失败只是次生信息。
@@ -99,6 +105,7 @@ export function usePendingRequestActions({
           target.sessionId,
           target.workspaceId,
           target.cacheKey,
+          target.threadId,
         );
       } catch (recoveryError) {
         const recoveryMessage = errorMessage(recoveryError);
@@ -131,6 +138,7 @@ export function usePendingRequestActions({
         apiPort,
         target.sessionId,
         target.workspaceId,
+        target.threadId,
       ),
     );
   }, [apiPort, applyServerMutation, requireTarget]);

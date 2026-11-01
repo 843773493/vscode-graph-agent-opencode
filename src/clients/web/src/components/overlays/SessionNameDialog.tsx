@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { OverlayRootContext } from "./OverlayRootContext";
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -24,6 +26,7 @@ export default function SessionNameDialog({
   onCancel,
   onSubmit,
 }: SessionNameDialogProps): React.ReactNode {
+  const overlayRoot = useContext(OverlayRootContext);
   const [draft, setDraft] = useState(initialValue);
   const [localError, setLocalError] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -129,6 +132,6 @@ export default function SessionNameDialog({
         </div>
       </form>
     </div>,
-    document.body,
+    overlayRoot ?? document.body,
   );
 }

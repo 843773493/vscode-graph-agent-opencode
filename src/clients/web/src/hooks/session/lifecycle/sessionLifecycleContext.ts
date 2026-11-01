@@ -6,6 +6,7 @@ import type { SetAppState } from "../../contentViewLoaderTypes";
 import type { SessionCatalogOutboxRuntime } from "../sessionCatalogOutboxRuntime";
 
 export type SessionLifecycleContext = {
+  onSessionCreated?: (session: Session, workspaceId: string | null) => Promise<void>;
   apiPort: number;
   currentSession: Session | null;
   activeGatewayWorkspaceId: string | null;

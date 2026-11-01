@@ -282,6 +282,7 @@ type MessageStreamEventTypesExhaustive = Exclude<
 > extends never ? true : never;
 
 const MESSAGE_STREAM_EVENT_TYPES_EXHAUSTIVE: MessageStreamEventTypesExhaustive = true;
+void MESSAGE_STREAM_EVENT_TYPES_EXHAUSTIVE;
 
 const MESSAGE_STREAM_EVENT_TYPE_SET: ReadonlySet<string> = new Set(MESSAGE_STREAM_EVENT_TYPES);
 

@@ -197,7 +197,7 @@ describe("installPointerDrag", () => {
     expect(host.classes.has(CLASS_NAME)).toBe(false);
 
     // 实际行为：清理函数不是幂等的，onFinish 会被再次调用；
-    // useBottomPanelResize / useMainAreaResize 依赖把 ref 置空来保证只结束一次。
+    // 调用方依赖把 ref 置空来保证只结束一次。
     expect(() => cleanup()).not.toThrow();
     expect(finishCalls).toBe(2);
     expect(host.classes.has(CLASS_NAME)).toBe(false);

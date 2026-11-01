@@ -87,13 +87,13 @@ class JobPendingRequestService:
         await self._controller.remove(session_id, message_id)
         return await self.list(session_id)
 
-    async def clear(self, session_id: str) -> PendingRequestListDTO:
+    async def clear(self, session_id: str, *, thread_id: str | None = None) -> PendingRequestListDTO:
         try:
-            await self._controller.clear(session_id)
+            await self._controller.clear(session_id, thread_id=thread_id)
         finally:
             # 多个 thread 的终态各自提交；中途失败也保留已经撤回的队列结果。
             await self.refresh_version(session_id)
-        return await self.list(session_id)
+        return await self.list(session_id, thread_id=thread_id)
 
     async def reject_reorder(self, session_id: str) -> None:
         await self._controller.reject_reorder(session_id)

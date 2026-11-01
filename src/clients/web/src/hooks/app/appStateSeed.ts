@@ -1,12 +1,11 @@
+import { createDefaultWebUiSettings } from "../../state/uiSettings/preferences";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import type { AppState } from "../../types/frontend";
 import {
-  readCachedUiSettings,
   readUnreadSessionKeys,
 } from "../../state/storage";
 
-// 首次渲染的种子状态在模块加载时求值一次：缓存的 UI 设置与未读会话键既是初始值，
-// 也是后续后端权威数据回填前的占位。这里不做任何请求，只读本地缓存。
+// 首次渲染只用默认展示设置；异步引导随后从浏览器 IndexedDB 读取偏好。
 export const INITIAL_APP_STATE: AppState = {
   apiPort: DEFAULT_BACKEND_PORT,
   gatewayWorkspaces: [],
@@ -20,7 +19,7 @@ export const INITIAL_APP_STATE: AppState = {
   gatewayWorkspacesStale: false,
   gatewayUserAccess: null,
   gatewayUserViewStates: new Map(),
-  uiSettings: readCachedUiSettings(),
+  uiSettings: createDefaultWebUiSettings(),
   uiSettingsLoaded: false,
   themeBackgroundWarning: null,
   workspaceName: null,

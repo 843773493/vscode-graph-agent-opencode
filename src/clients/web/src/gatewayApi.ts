@@ -578,6 +578,13 @@ export async function updateGatewayUiSettings(
   );
 }
 
+/** 只解析主题和资源引用，不保存 Gateway 用户视图。 */
+export async function resolveGatewayUiSettings(port: number, payload: WebUiSettingsUpdate): Promise<WebUiSettings> {
+  return normalizeWebUiSettings(unwrapApiData(await requestJson<APIResponse<WebUiSettings>>(
+    port, "/api/gateway/ui-settings/resolve", { method: "POST", body: JSON.stringify(payload) },
+  )));
+}
+
 export async function getGatewayThemes(port: number): Promise<GatewayThemeCatalog> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayThemeCatalog>>(port, "/api/gateway/themes"),

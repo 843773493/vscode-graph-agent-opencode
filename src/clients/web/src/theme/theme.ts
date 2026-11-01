@@ -116,16 +116,19 @@ export interface ThemeApplicationResult {
  */
 export async function loadAndApplyResolvedGatewayTheme(
   theme: GatewayResolvedThemeConfig,
-  options: { root?: HTMLElement; createImage?: () => HTMLImageElement } = {},
+  options: { root?: HTMLElement; createImage?: () => HTMLImageElement; signal?: AbortSignal } = {},
 ): Promise<ThemeApplicationResult> {
+  options.signal?.throwIfAborted();
   try {
     await preloadThemeBackground(theme.background_image_url, options.createImage);
   } catch (error) {
+    options.signal?.throwIfAborted();
     applyResolvedGatewayTheme({ ...theme, background_image_url: null }, options.root);
     return {
       backgroundWarning: `主题背景图加载失败，已回退为无背景图：${errorMessage(error)}`,
     };
   }
+  options.signal?.throwIfAborted();
   applyResolvedGatewayTheme(theme, options.root);
   return { backgroundWarning: null };
 }

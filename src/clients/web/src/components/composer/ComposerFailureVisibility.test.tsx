@@ -1,7 +1,7 @@
 import React, { useMemo, useRef } from "react";
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { ComposerContext, type ComposerContextType } from "../../hooks";
+import { ComposerContext, type ComposerContextType } from "../../hooks/app/appContext";
 import {
   reuseComposerStateSnapshot,
   selectComposerState,
@@ -406,6 +406,7 @@ describe("Composer 切换类动作失败必须可见", () => {
     // 未处理 rejection 会让 bun test 以 Unhandled error 终止本文件；这里额外断言
     // 没有事件冒泡，作为第二重证据。
     expect(rejectionSeen).toBeNull();
+    expect(JSON.stringify(renderer.toJSON())).toContain("中断生成失败：请求失败 500 : 中断执行器崩溃");
     act(() => renderer.unmount());
   });
 });

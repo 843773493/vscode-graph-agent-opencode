@@ -8,6 +8,9 @@ import json
 import httpx
 
 from app.core.resource_uri import thread_resource_uri
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
+)
 from tests.integration.backend.sessions.test_persistent_tasks import _configuration
 from tests.integration.clients.web.persistent_tasks.test_management import (
     browser_runner as browser_runner,  # noqa: PLC0414 - 复用唯一浏览器入口
@@ -52,11 +55,11 @@ async def _prepare_owner(client: httpx.AsyncClient, workspace_id: str, label: st
 
 
 async def test_workspace_switch_keeps_task_actions_history_and_goal_with_their_owner(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, browser_runner, web_workbench_assets,
 ):
     async with (
         oauth_endpoint_factory() as secure, http_schema_endpoint_factory("sibling") as sibling,
-        product_case(secure, sibling, web=True) as (client, replay, case),
+        product_case(secure, sibling, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)}) as (client, replay, case),
     ):
         listed = (await client.get("/api/gateway/workspaces")).json()["data"]
         primary = next(row for row in listed["items"] if row["backend_workspace_id"] == case.mount.workspace_id)
@@ -81,7 +84,7 @@ async def test_workspace_switch_keeps_task_actions_history_and_goal_with_their_o
             second = await _prepare_owner(second_client, secondary["backend_workspace_id"], "B")
             second["routeId"] = secondary["workspace_id"]
             result = await browser_runner(case, client, title="工作区 A 会话",
-                target_uri=first["targetUri"], other_session_id=second["sessionId"], script="workspace_switch",
+                target_uri=first["targetUri"], other_target_uri=second["targetUri"], script="workspace_switch",
                 environment={"BOXTEAM_SECONDARY_WORKSPACE": json.dumps(second)})
             first_after = (await client.get(f"/api/v1/persistent-tasks/{first['task']['task_id']}")).json()["data"]
             second_after = (await second_client.get(f"/api/v1/persistent-tasks/{second['task']['task_id']}")).json()["data"]

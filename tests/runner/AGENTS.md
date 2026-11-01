@@ -2,9 +2,19 @@
 
 `integration-history-failure-boundary` 经产品消息与 model_stream 生成历史，验证三个历史入口的真实布局／I/O 拒绝和修复后冷读，核原 canonical 字节及封存请求 hash；固定120秒／4GiB并沿共享集成闸门，不代替独立Backend重启、Gateway、Web或Windows验收。
 
+`integration-web-diagnostics-lifetime` 用真实 Chromium 调用唯一聊天驱动的诊断入口，验证大正文读取后释放及旧缓存路径被拒绝；固定180秒／4GiB，使用显式 HTTP 正文，不代替真实 Gateway 完整 default。
+
+`unit-workbench-build` 以真实文件复制验证扩展构建只过滤复制源内部目录，固定60秒／4GiB；不启动服务，不代替完整扩展编译或发布验收。
+
+`integration-web-metadata` 运行静态产物与真实 Vite 两个参数用例，经 Gateway 核初始化、原生目录编辑、设置刷新与日志持久化；固定600秒/4GiB，保留各业务操作原期限。不能只验静态首页或健康接口。
+
+`integration-web-react-surface` 直接加载新 ReactSurface 及完整产品样式，用真实 Chromium 核对双根错误、Provider 初始化、浮层、焦点、释放和样式隔离；固定90秒/4GiB。属于组件 Integration，不装配 Gateway 或模型，不代替完整聊天与多 Thread 业务隔离。
+
 `integration-session-creation-io` 经消息、Agent/model_stream和ASGI fork入口核对Session冻结、准备、rename、发布CAS与隔离中止中的真实SQLite写锁及取消；原key/gate持续到I/O结算，同请求恢复原目标或原aborted记录。固定180秒/4GiB及原60秒fork watchdog和集成闸门；不代表Gateway/Web、独立Backend重启、Windows或全shutdown期限。
 
 `integration-fork-confirmation-io` 经产品消息、Agent 和 model_stream 生成带附件来源，核新 Session main/child 的异步发布确认、线程池排队及确认写入前后取消；保留原 gate、published 事实、附件结算和同 key 恢复。固定180秒/4GiB及原60秒fork期限，复用集成独占闸门；不代表独立进程重启、Gateway/Web、Windows或整个shutdown期限。
+
+`e2e-web-session-navigation` 加载正式 Workbench，通过真实 Gateway 验证会话/工作区目录、拖拽、真实模型历史、fork 与删除后的编辑器清理；固定300秒/4GiB，保留原60秒 fork 期限，不替代完整聊天或 Electron 验收。
 
 `integration-thread-attachment-isolation` 经真实 Gateway 消息与 fork 创建 main/child，使用 model_stream 验证 sibling 并行、各自 FIFO、未来输入隔离、独立上传关联及硬重启历史；固定180秒/4GiB及集成独占闸门，不代表 Web、Windows、GC 或全部 Thread 隔离验收。
 
@@ -39,6 +49,14 @@
 `integration-compaction-activity-errors` 经消息入口生成六轮历史、调用正式压缩工具，再用真实归档目录冲突及日志 ENOTDIR 验证原错误、专属活动失败事件、冷事件读取与原会话恢复压缩。固定180秒/4GiB及原集成闸门，复用 model_stream；不代 Gateway、真实 HTTP、进程重启或全部压缩验收。两个归档 suite 各选自身用例，避免重复执行或合并后超出原预算。
 
 存放测试套件注册、能力矩阵和统一命令入口，不包含具体测试实现。
+
+`integration-web-chat-tool-loop` 在完整 Workbench 静态产物、真实 Gateway/Backend 及 Terminal/Browser 辅助服务上验证工具循环和同 Session main/child 的双 Grid 草稿、并行调用与消息隔离；模型使用显式回放，固定360秒/4GiB，不代表全部旧页面场景已迁移。`e2e-web-session-information` 通过新 Workbench 的真实导航菜单与剪贴板验证有界会话诊断协议，固定300秒/4GiB。
+
+`integration-web-resource-recovery` 验证真实 Gateway 认证恢复、资源可见性轮询、窄布局及 Thread 内浏览器连接，固定480秒/4GiB；显式的网络传输拦截保留原 Gateway 响应。`integration-web-progressive-history` 保留128轮装具、投影及分页性能预算，固定600秒/4GiB；`integration-web-context-inspection` 验证真实封存上下文的检查和刷新，固定300秒/4GiB。三者加载正式 Workbench，不代表完整聊天 E2E、旧外壳删除或 Electron 宿主已经通过。
+
+`integration-web-child-thread` 使用固定模型回放及真实 Agent/task 委派，验证工作台首次与复用 child 标签的调试导航、SSE 和父子请求日志；固定420秒/4GiB，保留集成独占闸门，不标为真实 Provider E2E。
+
+`integration-web-browser-views` 使用正式 Workbench、真实 Gateway/Backend 和 model_stream 验证浏览器本地视图的刷新与新页面恢复、双浏览器隔离和未打开会话的真实通知；保留 HTTP 账户租约、接管及真实45秒过期合同，固定300秒/4GiB，不代替跨设备同步或 Electron 重启验收。
 
 ## 可修改内容
 
@@ -98,7 +116,7 @@
 
 - `integration-mcp-wait-admission`通过真实Gateway、Agent、OAuth/MCP及model_stream验证用户输入与after_turn唤醒串行、活动等待阻挡删除/取消后删除不复活、终态先完成后登记不丢通知，以及原300秒期限不因成功授权续期。固定600秒/4GiB，与原等待崩溃/child恢复套件使用不同测试文件工作区；不代替完整HITL、跨Gateway或真实Provider验收。
 
-- `integration-web-persistent-tasks`经真实Chromium、Gateway和工作区后端，由页面创建/编辑任务并核对试运行、仅保存动作、真实409回读、管理控制、刷新、后台恢复/失败、生成会话自动打开及跨工作区任务/Goal隔离。新增第二工作区原生运行时后，整组保护期限300秒/4GiB；保留各场景原期限，复用既有model_stream产品装具，不代替生成器迁移回退或完整模型判断验收。
+- `integration-web-persistent-tasks`经完整Workbench、真实Chromium、Gateway和工作区后端，由页面创建/编辑任务并核对试运行、仅保存动作、真实409回读、管理控制、刷新、后台恢复/失败、生成会话自动打开及跨工作区任务/Goal隔离。四个模块分别构建隔离Workbench产物后，整组保护期限600秒/4GiB；保留各场景原期限，复用既有model_stream产品装具，不代替生成器迁移回退或完整模型判断验收。
 
 - `integration-runtime-context-publication` 通过真实 Session、模型准备与公开 fork 入口验证仅发布事件不创建 Job/Turn、已发送请求不变、下一次准备消费及 fork 锚点闭包；提交前/后故障经全新 Saver/dispatcher 核对冷 owner 恢复。复用 model_stream 和正式 fork watchdog，固定240秒/4GiB，不代表持久任务完整运行时、进程重启或主 Web 验收。
 
@@ -158,6 +176,12 @@
 - `integration-extension-definition-recovery` 通过真实 Runner 发现、压缩和 fork，使用正式 fork watchdog；不代表外部 Provider 或 Web 验收。
 
 - `integration-mcp-tool-approval-recovery` 经真实 Gateway／消息／审批入口生成多工具等待，再硬退出并重启 Backend；验证旧决定失效、原资格释放、未知结果与原执行同事务归属、新执行唯一 MCP 收据及请求 hash，固定240秒／4GiB；不替代跨 execution 持续资源持有、跨 Gateway 授权或真实 Provider 验收。
+
+`integration-web-conversation-lifecycle` 是 Section 8 完整场景唯一入口，保留原 12600000ms／4GiB 与 focus collection preflight；`e2e-web` 不包含模型回放场景。
+
+`integration-process-port-lease` 在 Linux 上以真实 TCP 验证进程租约阻止自动客户端抢占端口、真实服务仍可复用监听、服务退出后保留至租约释放，以及既有监听者不受影响；固定60秒／4GiB。不修改宿主端口范围，内核不支持每 socket 的 IP_LOCAL_PORT_RANGE 时明确跳过竞争检查，不代替完整会话验收或其它平台证据。
+
+`integration-electron-packaged-workbench` 从正式发布入口构建并校验 Linux 便携归档，解压后以真实 Electron 连接 Gateway/Backend，核对 UI 会话创建与发送、原版虚拟文件保存、原生正常关闭、固定来源重启缓存先显和 profile 隔离；使用精确模型回放及真实 HTTP 延迟代理，固定900秒／4GiB，产物全部归测试镜像。记录实际 `--no-sandbox` 参数，不以配置代替进程沙箱证据；不代表真实 Provider、Windows/macOS、崩溃恢复或完整 Electron E2E。
 
 - `integration-web-model-call-source-freezing`经独立工作区的真实Workbench/Gateway/Backend与model_stream验证显式AGENTS model_call、工具配对后追加及安全重启冷检查；固定660秒/4GiB，沿原集成独占闸门，共用默认Turn入口的浏览器驱动。默认构建仍由公共fixture执行；不将临时复用已核正式资产的产品通过记作默认构建或整个矩阵通过。
 

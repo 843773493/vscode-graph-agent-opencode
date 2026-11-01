@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
@@ -17,6 +18,10 @@ try {
   const requests = [];
   const callbacks = [];
   const callbackPosts = [];
+  const callbackResponses = [];
+  context.on("response", (response) => {
+    if (new URL(response.url()).pathname === "/mcp-oauth-callback.html") callbackResponses.push({ status: response.status(), headers: response.headers() });
+  });
   context.on("page", (opened) => {
     opened.on("pageerror", (error) => errors.push(String(error)));
     opened.on("console", (message) => consoleMessages.push(message.text()));
@@ -28,14 +33,26 @@ try {
     if (url.pathname.endsWith("/callback") && request.method() === "POST") callbackPosts.push(request);
     requests.push({ url, headers: request.headers() });
   });
-  await page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
-  if (fixture.mode === "authorize") {
-    // 游客偏好按原合同不持久保存；通过产品入口创建用户后验收工作区标签恢复。
-    await page.getByRole("button", { name: "用户视图", exact: true }).click();
-    await page.getByPlaceholder("新用户名称").fill("MCP 授权验收用户");
-    await page.getByRole("button", { name: "创建", exact: true }).click();
-  }
-  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
+  const target = new URL(fixture.baseUrl);
+  await page.goto(target.href, { waitUntil: "domcontentloaded" });
+  // Cookie 交由真实浏览器处理，避免 Bun 的 Node HTTP 兼容层改变响应 URL。
+  const access = await page.evaluate(async () => {
+    const credential = await fetch("/api/gateway/auth/local-credential");
+    if (!credential.ok) throw new Error("读取本机凭据失败");
+    const response = await fetch("/api/gateway/users/guest", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": (await credential.json()).data.token },
+      body: JSON.stringify({ tracking: { source: "mcp-workbench-browser" } }),
+    });
+    return { status: response.status, body: await response.text() };
+  });
+  assert.equal(access.status, 200, access.body);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
+  const session = page.locator(`button[data-session-id="${fixture.sessionId}"]`);
+  await expect(session).toContainText(fixture.sessionTitle);
+  await session.dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
+  await expect(thread).toBeVisible();
   // 完整页面初始化之后，经实际同源 Gateway 再核对目标和 request_id。
   const initialization = await page.evaluate(async (workspaceId) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
@@ -62,22 +79,28 @@ try {
     assert(result.requestId);
     assert.equal(result.requestId, result.body.request_id);
   }
+  await expect(thread).toHaveAttribute("data-workspace-id", fixture.workspaceId);
+  async function mcpPanel() {
+    await page.evaluate(() => globalThis.workbench.commands.executeCommand("boxteam.mcp.focus"));
+    const panel = page.locator(`.native-workspace-panel[data-workspace-id="${initialization.owner.workspace_id}"][data-panel-kind="mcp"] .native-workspace-panel-content:not([hidden])`);
+    await expect(panel).toBeVisible();
+    return panel;
+  }
   async function send(content) {
-    await page.getByTestId("composer-input").fill(content);
+    await thread.getByTestId("composer-input").fill(content);
     const accepted = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/messages") && response.request().method() === "POST");
-    await page.getByTestId("composer-send").click();
+    await thread.getByTestId("composer-send").click();
     const response = await accepted;
     assert.equal(response.status(), 200);
+    const request = response.request();
+    assert.equal(new URL(request.url()).pathname, `/api/v1/sessions/${fixture.sessionId}/threads/${fixture.threadId}/messages`);
+    assert.equal((await request.allHeaders())["x-boxteam-workspace-id"], initialization.owner.workspace_id);
     const body = await response.json();
     assert.equal(response.headers()["x-request-id"], body.request_id);
     return body.data.job_id;
   }
   if (fixture.mode === "errors") {
-    if (await page.getByRole("button", { name: "切换底部面板", exact: true }).getAttribute("aria-pressed") !== "true") {
-      await page.getByRole("button", { name: "切换底部面板", exact: true }).click();
-    }
-    await page.getByRole("tab", { name: "MCP 连接", exact: true }).click();
-    const panel = page.getByTestId("mcp-connections-panel");
+    const panel = await mcpPanel();
     const secure = panel.getByRole("region", { name: "MCP Server secure", exact: true });
     const sibling = panel.getByRole("region", { name: "MCP Server schema", exact: true });
     await sibling.getByText("连接可用", { exact: true }).waitFor();
@@ -136,8 +159,11 @@ try {
   } else if (fixture.mode === "authorize") {
     const jobId = await send("发现 secure 工具并发起工作区连接，等待用户授权。");
     const managementPromise = page.waitForEvent("popup");
-    await page.getByRole("link", { name: "查看此工作区的 MCP 授权与连接状态" }).first().click({ timeout: 60000 });
+    await thread.getByRole("link", { name: "查看此工作区的 MCP 授权与连接状态" }).first().click({ timeout: 60000 });
     const management = await managementPromise;
+    await management.getByRole("heading", { name: "工作区 MCP 连接与授权", exact: true }).waitFor();
+    assert.equal(new URL(management.url()).searchParams.get("mcp_workspace"), initialization.owner.workspace_id);
+    assert.equal(await management.locator(".monaco-workbench").count(), 0);
     const secure = management.getByRole("region", { name: "MCP Server secure", exact: true });
     await secure.getByRole("button", { name: "打开授权页面", exact: true }).waitFor({ timeout: 30000 });
     assert.match(await secure.innerText(), /等待用户授权/);
@@ -148,20 +174,15 @@ try {
     if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 30000 });
     await secure.getByText("连接可用", { exact: true }).waitFor({ timeout: 30000 });
     await secure.getByText(/新工具在允许的上下文边界生效/).waitFor();
-    // 主窗口底部面板与会话入口使用同一工作区操作事实，标签由后端保存。
-    if (await page.getByRole("button", { name: "切换底部面板", exact: true }).getAttribute("aria-pressed") !== "true") {
-      await page.getByRole("button", { name: "切换底部面板", exact: true }).click();
-    }
-    const saved = page.waitForResponse((response) => {
-      if (new URL(response.url()).pathname !== "/api/gateway/ui-settings" || response.request().method() !== "PUT") return false;
-      return Object.values(response.request().postDataJSON().layout?.bottom_panel_by_workspace ?? {}).some((item) => item.tab === "mcp");
-    });
-    await page.getByRole("tab", { name: "MCP 连接", exact: true }).click();
-    assert.equal((await saved).status(), 200);
-    await page.getByTestId("mcp-connections-panel").getByRole("region", { name: "MCP Server secure", exact: true }).getByText("连接可用", { exact: true }).waitFor();
+    // 面板与独立入口读取同一后端事实，原版布局持久化在当前浏览器。
+    const panel = await mcpPanel();
+    await panel.getByRole("region", { name: "MCP Server secure", exact: true }).getByText("连接可用", { exact: true }).waitFor();
+    await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.getByRole("tab", { name: "MCP 连接", exact: true }).waitFor();
-    assert.equal(await page.getByRole("tab", { name: "MCP 连接", exact: true }).getAttribute("aria-selected"), "true");
+    await expect(page.getByRole("tab", { name: "MCP 连接", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(panel).toBeVisible();
+    await panel.getByRole("region", { name: "MCP Server secure", exact: true }).getByText("连接可用", { exact: true }).waitFor();
+    await expect(thread).toBeVisible();
     assert.equal(callbacks.length, 1);
     assert.equal(callbackPosts.length, 1);
     const callback = callbacks[0];
@@ -178,17 +199,26 @@ try {
     assert(secrets.every((secret) => !consoleMessages.some((message) => message.includes(secret))), "浏览器控制台含私有参数");
     for (const opened of [page, management]) {
       const persisted = await opened.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage }, html: document.body.innerText, url: location.href }));
-      assert(secrets.every((secret) => !persisted.includes(secret)), "页面或浏览器存储含私有回调参数");
+      const surfaces = opened.locator(".boxteam-react-surface");
+      assert(await surfaces.count() > 0, "必须检查真实 React 页面而非空文档");
+      const shadowText = await surfaces.evaluateAll(hosts => hosts.map(host => host.shadowRoot.textContent).join("\n"));
+      assert(secrets.every((secret) => !persisted.includes(secret) && !shadowText.includes(secret)), "页面或浏览器存储含私有回调参数");
     }
     await writeFile(path.join(artifacts, "authorization-result.json"), JSON.stringify({ jobId, initialization: true, callbackPostCount: callbackPosts.length, requestId: true, privateReferrerAbsent: true, privateStorageAbsent: true, backendReady: true, bottomTabPersisted: true, noPageErrors: errors.length === 0 }, null, 2));
   } else {
     const message = "授权已完成，读取完整 secure 定义并执行 probe 验证。";
     const jobId = await send(message);
     // 历史加载和虚拟列表会改变回复数量，只等待本轮用户输入所在的真实 Turn。
-    const turn = page.locator("article[data-turn-id]").filter({ has: page.getByText(message, { exact: true }) });
+    const turn = thread.locator("article[data-turn-id]").filter({ has: page.getByText(message, { exact: true }) });
     await turn.getByText("已核查目录与连接事实。", { exact: true }).waitFor({ timeout: 60000 });
     // 网络收据、canonical 与 hash 由 Python 在执行结束后核验。
     await writeFile(path.join(artifacts, "execution-result.json"), JSON.stringify({ jobId, initialization: true, noPageErrors: errors.length === 0 }, null, 2));
+  }
+  assert.equal(callbackResponses.length, callbacks.length);
+  for (const response of callbackResponses) {
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["cache-control"], "no-store");
+    assert.equal(response.headers["referrer-policy"], "no-referrer");
   }
   assert.deepEqual(errors, []);
 } catch (error) {

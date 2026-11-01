@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { OverlayRootContext } from "./OverlayRootContext";
 import React, { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SessionForkCreationKind, SessionForkMode, SessionForkRequest, SessionForkResourceChoice } from "../../types/backend";
@@ -11,6 +13,7 @@ export default function SessionContextForkDialog({
   onSubmit: (request: SessionForkRequest) => Promise<void>;
   onSelectionChange: (change: Partial<SessionForkDialogSelection>) => Promise<void>;
 }): React.ReactNode {
+  const overlayRoot = useContext(OverlayRootContext);
   const labelId = useId();
   const [creationKind, setCreationKind] = useState<SessionForkCreationKind>("new_child_thread");
   const [title, setTitle] = useState("");
@@ -206,6 +209,6 @@ export default function SessionContextForkDialog({
           </button>
         </div>
       </form>
-    </div>, document.body,
+    </div>, overlayRoot ?? document.body,
   );
 }

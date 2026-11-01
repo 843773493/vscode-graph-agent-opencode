@@ -5,9 +5,13 @@ from __future__ import annotations
 import faulthandler
 import json
 import os
+import signal
 
 # 只观察本显式测试 composition 的 import；进入本模块前的 Python/uvicorn 不在覆盖范围。
 faulthandler.dump_traceback_later(55, repeat=False)
+# 浏览器失败后由持有 Popen 的 fixture 请求线程栈；不改变业务期限或执行状态。
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 from app.core.identifier import bind_identifier_factory
 from app.core.phase_observer import bind_phase_observer

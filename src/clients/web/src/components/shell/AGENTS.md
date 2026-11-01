@@ -1,35 +1,20 @@
 # 目录用途
 
-存放应用外壳层组件：顶层 Provider（WarmConfirmProvider）、错误边界（AppErrorBoundary）、启动骨架（BootstrapState）、主工具栏（Toolbar）、会话区内容视图槽编排（ContentViewSlots）与主窗口底部面板（WorkbenchBottomPanel），负责应用启动、错误兜底、全局工具栏交互、内容视图槽位显隐和底部面板标签装配。
-
-本目录与相邻子包的分工边界：
-
-- `components/overlays/`：浮层与对话框；本目录的 Toolbar / WarmConfirmProvider 只消费它们。
-- `components/panels/`、`components/cards/`、`components/workspace/` 等：业务面板与卡片；本目录是承载它们的应用外壳，不含业务渲染。
-- 术语上这些组件不属于“面板”“卡片”或“浮层”，不得并入上述子包。
+React 产品共享的确认 Provider、错误边界、启动骨架和内容槽编排。导航、Tab、Grid、底部标签、布局和设置由原版 Code OSS 工作台管理。
 
 # 可修改内容
 
-- 应用级 Provider 的组合与上下文暴露。
-- 错误边界的兜底渲染与恢复入口。
-- 启动骨架与加载态展示。
-- 主工具栏的视图切换与全局动作入口。
-- 会话区内容视图槽的显隐编排，以及启动失败/骨架分支到具体面板的装配。
-- 主窗口底部面板的五个互斥标签装配与分隔条。
-- 与上述逻辑直接相关的组件测试。
-
-`ContentViewSlots` 中 Agent、事件和请求检视面板按首次访问懒加载；访问后通过隐藏保留实例。常驻会话槽直接装配，加载边界只包围这三个按需模块。
+- WarmConfirmProvider、AppErrorBoundary、BootstrapState、ContentViewSlots 及其测试。
 
 # 不可修改内容
 
-- 不定义后端协议类型的权威来源，不复制业务状态权威。
-- 不吞掉渲染或交互错误；错误必须显式呈现。
-- 不在本目录实现业务面板、卡片或浮层内部实现。
+- 不恢复 Toolbar 或 WorkbenchBottomPanel 等旧 App 外壳。
+- 不实现业务面板内部规则，不伪造成功或吞掉错误。
 
 # 规范
 
-- 外壳组件只依赖 `hooks/` 暴露的状态与 props，不伪造业务成功。
-- 导入共享模块使用显式相对路径，禁止任何指向旧平铺路径的转发层。
-- 代码注释使用中文，专业术语除外。
-- 修改本目录后需要运行 `bun run --cwd src/clients/web build`。
+- 内容槽的懒加载与隐藏保留沿用既有行为。
+- ReactSurface／双根与主题隔离由正式组件浏览器场景验证；完整失败恢复由真实 Gateway 页面验证。
+- 修改后完成相关测试、真实类型检查及 `bun run --cwd src/clients/web build`。
+
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

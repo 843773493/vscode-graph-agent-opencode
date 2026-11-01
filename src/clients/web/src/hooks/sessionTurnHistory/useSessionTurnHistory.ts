@@ -24,6 +24,7 @@ import {
 export function useSessionTurnHistory({
   apiPort,
   sessionId,
+  threadId,
   workspaceId,
   sessionCacheKey,
   getCurrentTimeline,
@@ -32,6 +33,7 @@ export function useSessionTurnHistory({
 }: {
   apiPort: number | null;
   sessionId: string | null;
+  threadId?: string;
   workspaceId: string | null;
   sessionCacheKey: string | null;
   getCurrentTimeline: () => SessionTurnTimeline | null;
@@ -74,6 +76,7 @@ export function useSessionTurnHistory({
       reloadNonce,
       sessionCacheKey,
       sessionId,
+      threadId,
       workspaceId,
     ],
   );
@@ -84,6 +87,7 @@ export function useSessionTurnHistory({
   const loadTurnDetailsRaw = useTurnDetailLoader({
     apiPort,
     sessionId,
+    threadId,
     workspaceId,
     sessionCacheKey,
     generationRef,
@@ -113,6 +117,7 @@ export function useSessionTurnHistory({
   const loadInitialTurns = useInitialTurnLoader({
     apiPort,
     sessionId,
+    threadId,
     workspaceId,
     sessionCacheKey,
     generationRef,
@@ -123,6 +128,7 @@ export function useSessionTurnHistory({
   useTurnBootstrap({
     apiPort,
     sessionId,
+    threadId,
     workspaceId,
     sessionCacheKey,
     reloadNonce,
@@ -136,6 +142,7 @@ export function useSessionTurnHistory({
   const loadOlderTurns = useOlderTurnLoader({
     apiPort,
     sessionId,
+    threadId,
     workspaceId,
     sessionCacheKey,
     getCurrentTimeline,
@@ -146,6 +153,7 @@ export function useSessionTurnHistory({
   const loadNewerTurns = useNewerTurnLoader({
     apiPort,
     sessionId,
+    threadId,
     workspaceId,
     sessionCacheKey,
     getCurrentTimeline,
@@ -156,6 +164,7 @@ export function useSessionTurnHistory({
   const loadAroundTurn = useAroundTurnLoader({
     apiPort,
     sessionId,
+    threadId,
     workspaceId,
     sessionCacheKey,
     getCurrentTimeline,

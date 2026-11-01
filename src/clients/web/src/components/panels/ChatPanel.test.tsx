@@ -99,47 +99,16 @@ describe("ChatPanel transcript 投影", () => {
     ]);
   });
 
-  test("空历史也使用显式 session/thread owner，轮次入口不会继承旧会话输入", () => {
+  test("空历史保留显式 owner，切换线程不显示轮次跳转表单", () => {
     let renderer: ReactTestRenderer;
     act(() => { renderer = create(<ChatPanel {...emptyPanelProps(() => undefined)} />); });
-    const input = () => renderer!.root.findByProps({ "aria-label": "轮次 ID" });
-    act(() => input().props.onChange({ target: { value: "turn-prior" } }));
-    expect(input().props.value).toBe("turn-prior");
+    expect(renderer!.root.findAllByType("form")).toHaveLength(0);
+    expect(renderer!.root.findAllByType("datalist")).toHaveLength(0);
     act(() => renderer!.update(<ChatPanel {...emptyPanelProps(() => undefined)} threadId="thread-next" />));
-    expect(input().props.value).toBe("");
+    expect(renderer!.root.findAllByType("form")).toHaveLength(0);
     const shell = renderer!.root.findByProps({ className: "chat-stream-virtual-shell" });
     expect(shell.props["data-owner-session-id"]).toBe("session-long");
     expect(shell.props["data-owner-thread-id"]).toBe("thread-next");
-    act(() => renderer!.unmount());
-  });
-});
-
-describe("ChatPanel 正式轮次入口", () => {
-  test("加载中可重复提交相同 ID 并取消旧请求，失败保留输入供原 ID 重试", async () => {
-    const calls: Array<{ turnId: string; signal?: AbortSignal; reject: (error: Error) => void }> = [];
-    const load = (turnId: string, signal?: AbortSignal) => new Promise<void>((_resolve, reject) => {
-      calls.push({ turnId, signal, reject });
-      signal?.addEventListener("abort", () => reject(new Error("请求已取消")), { once: true });
-    });
-    let renderer: ReactTestRenderer;
-    act(() => { renderer = create(<ChatPanel {...emptyPanelProps(() => undefined)} historyError={null} onLoadAroundTurn={load} />); });
-    const input = () => renderer!.root.findByProps({ "aria-label": "轮次 ID" });
-    const form = () => renderer!.root.findByProps({ "aria-label": "跳到指定轮次" });
-    const submit = () => form().props.onSubmit({ preventDefault() {} });
-    act(() => { input().props.onChange({ target: { value: "turn-target" } }); });
-    act(submit);
-    expect(form().findByProps({ role: "status" }).children.join("")).toBe("正在读取指定轮次…");
-    expect(input().props.disabled).toBe(false);
-    expect(renderer!.root.findByProps({ type: "submit" }).props.disabled).toBe(false);
-    act(submit);
-    expect(calls.map((call) => call.turnId)).toEqual(["turn-target", "turn-target"]);
-    expect(calls[0].signal?.aborted).toBe(true);
-    await act(async () => { calls[1].reject(new Error("历史索引损坏")); });
-    expect(form().findByProps({ role: "alert" }).children.join("")).toContain("历史索引损坏");
-    expect(input().props.value).toBe("turn-target");
-    act(submit);
-    expect(calls).toHaveLength(3);
-    expect(form().findAllByProps({ role: "alert" })).toHaveLength(0);
     act(() => renderer!.unmount());
   });
 });

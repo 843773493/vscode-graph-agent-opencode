@@ -34,7 +34,7 @@ class _FakeJobService:
     async def list_pending(self, session_id: str):
         raise CATALOG_KEY_ERROR
 
-    async def clear_pending(self, session_id: str):
+    async def clear_pending(self, session_id: str, *, thread_id=None):
         raise CATALOG_KEY_ERROR
 
 
@@ -99,26 +99,28 @@ class _FakeSessionResourceService:
 
 
 @pytest.mark.asyncio
-async def test_list_pending_requests_maps_missing_session_to_404() -> None:
+async def test_list_pending_requests_maps_missing_session_to_404(read_session_service) -> None:
     with pytest.raises(HTTPException) as captured:
         await messages_api.list_pending_requests(
             MISSING,
             _="local",
             request_id="req",
             job_service=_FakeJobService(),
+            session_service=read_session_service,
         )
 
     assert captured.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_clear_pending_requests_maps_missing_session_to_404() -> None:
+async def test_clear_pending_requests_maps_missing_session_to_404(read_session_service) -> None:
     with pytest.raises(HTTPException) as captured:
         await messages_api.clear_pending_requests(
             MISSING,
             _="local",
             request_id="req",
             job_service=_FakeJobService(),
+            session_service=read_session_service,
         )
 
     assert captured.value.status_code == 404

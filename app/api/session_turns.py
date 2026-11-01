@@ -83,10 +83,12 @@ async def get_session_turn_bootstrap(
         SessionTurnHistoryService,
         Depends(get_session_turn_history_service),
     ],
+    thread_id: CanonicalThreadId | None = None,
 ):
     try:
         result = await turn_history_service.bootstrap(
             session_id,
+            thread_id=thread_id,
             history_loading=parse_history_loading_header(
                 request.headers.get("X-BoxTeam-History-Loading")
             ),

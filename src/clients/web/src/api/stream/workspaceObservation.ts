@@ -147,7 +147,7 @@ class WorkspaceObservationTransport {
               try {
                 if (envelope.state === "error") {
                   throw new HttpRequestError(envelope.status!, "Observation failed",
-                    JSON.parse(envelope.detail_json!), STREAM_PATH);
+                    JSON.parse(envelope.detail_json!), STREAM_PATH, response.headers.get("X-Request-ID"));
                 }
                 if (envelope.state === "closed") {
                   this.settle(subscriber);

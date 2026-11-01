@@ -1,3 +1,4 @@
+import type { SessionViewState } from "../../state/sessionViewState";
 import {
   lazy,
   Suspense,
@@ -11,7 +12,6 @@ import ChatPanel from "../panels/ChatPanel";
 import { FRONTEND_EVENT_QUEUE_LIMIT } from "../../state/traceEvents";
 import type { SessionTurnTimeline } from "../../state/session/turnTimeline";
 import type {
-  GatewayUserViewState,
   LLMRequestLogRecord,
   Session,
   SessionChangeset,
@@ -86,7 +86,7 @@ interface ContentViewSlotsProps extends Pick<
   changesHint: { sessionId: string; summary: SessionChangesSummary } | null;
   changesHintLoading: boolean;
   activeChangeset: SessionChangeset | null;
-  gatewayUserViewStates: Map<string, GatewayUserViewState>;
+  gatewayUserViewStates: Map<string, SessionViewState>;
 }
 
 function ContentViewSlot({

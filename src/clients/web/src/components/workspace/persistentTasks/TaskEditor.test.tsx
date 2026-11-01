@@ -90,3 +90,16 @@ test("会话动作保留三种策略、回报与UI选项，并保存同一完整
     expect(saved[0].action).not.toHaveProperty("delivery_mode");
   } finally { act(() => renderer?.unmount()); }
 });
+
+test("会话创建预填工作目标，编辑既有任务时保持其原目标", async () => {
+  let renderer!: ReactTestRenderer;
+  const owner = { workspace_id: "route", backend_workspace_id: "ws", connection_kind: "local" as const };
+  const defaultUri = "boxteam://workspace/ws/resources/session/current/threads/main";
+  try {
+    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={owner} initialTargetUri={defaultUri} busy={false} onCancel={() => {}} onSave={async () => true} />); });
+    expect(renderer.root.findByProps({ "aria-label": "工作 Thread URI" }).props.value).toBe(defaultUri);
+    act(() => renderer.unmount());
+    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={owner} configuration={config} initialTargetUri={defaultUri} busy={false} onCancel={() => {}} onSave={async () => true} />); });
+    expect(renderer.root.findByProps({ "aria-label": "工作 Thread URI" }).props.value).toBe(config.action?.target_uri);
+  } finally { act(() => renderer?.unmount()); }
+});

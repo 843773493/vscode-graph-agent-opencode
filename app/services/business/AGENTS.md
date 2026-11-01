@@ -67,5 +67,6 @@
 
 - 保持每个文件单一职责。
 - 出现业务失败时直接抛出明确错误，不要静默降级。
+- Agent 列表的 Provider 配置校验包含同步 SDK 初始化，必须在线程中执行；保持逐 Provider 顺序、可用状态及错误原文，不阻塞工作区事件循环的健康检查。
 - 冷读在 topology shared 下取得 Session shared guard 并确认 catalog active 后立即释放 topology；Session guard 覆盖全部读取句柄。child thread 列表及后续团队/运行态投影由 API 持有同一次读准入，内部查询不嵌套取得 topology。
 - 优先通过协议隔离依赖，避免循环引用。

@@ -38,11 +38,13 @@ export function useSessionChangesLoader({
   currentSession,
   workspaceId,
   setState,
+  displayInChat = true,
 }: {
   apiPort: number;
   currentSession: Session | null;
   workspaceId: string | null;
   setState: SetAppState;
+  displayInChat?: boolean;
 }) {
   const requestIdRef = useRef(0);
   const changesetsCacheRef = useRef(new Map<string, SessionChangesetList>());
@@ -99,7 +101,7 @@ export function useSessionChangesLoader({
       requestIdRef.current = requestId;
       setState((prev) => ({
         ...prev,
-        contentView: "changes",
+        ...(displayInChat ? { contentView: "changes" as const } : {}),
         sessionChangesLoading: true,
         sessionChangesError: null,
         status: "正在读取文件变更",
@@ -125,7 +127,7 @@ export function useSessionChangesLoader({
           if (
             requestId !== requestIdRef.current ||
             prev.currentSession?.session_id !== sessionId ||
-            prev.contentView !== "changes"
+            (displayInChat && prev.contentView !== "changes")
           ) {
             return prev;
           }
@@ -146,7 +148,7 @@ export function useSessionChangesLoader({
           if (
             requestId !== requestIdRef.current ||
             prev.currentSession?.session_id !== sessionId ||
-            prev.contentView !== "changes"
+            (displayInChat && prev.contentView !== "changes")
           ) {
             return prev;
           }
@@ -159,7 +161,7 @@ export function useSessionChangesLoader({
         });
       }
     },
-    [loadSessionChangesets, setState],
+    [loadSessionChangesets, setState, displayInChat],
   );
 
   const reviewSessionChangeFile = useCallback(

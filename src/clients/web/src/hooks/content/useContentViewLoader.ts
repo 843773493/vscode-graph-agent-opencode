@@ -12,11 +12,13 @@ export function useContentViewLoader({
   currentSession,
   currentSessionGatewayWorkspaceId,
   setState,
+  displayChangesInChat = true,
 }: {
   apiPort: number;
   currentSession: Session | null;
   currentSessionGatewayWorkspaceId: string | null;
   setState: SetAppState;
+  displayChangesInChat?: boolean;
 }) {
   const {
     invalidateAgentState,
@@ -45,6 +47,7 @@ export function useContentViewLoader({
     currentSession,
     workspaceId: currentSessionGatewayWorkspaceId,
     setState,
+    displayInChat: displayChangesInChat,
   });
   const {
     controlSessionResource,

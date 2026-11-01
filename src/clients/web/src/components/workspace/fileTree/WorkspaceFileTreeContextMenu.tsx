@@ -10,7 +10,11 @@ interface WorkspaceFileTreeContextMenuProps {
   menu: WorkspaceFileTreeContextMenuApi;
   shortcuts: readonly FileTreeShortcut[];
   defaultShortcutPaths: ReadonlySet<string>;
+  onFileOpenMenu?: FileOpenMenuHandler;
 }
+
+/** 宿主提供专属打开方式，共享文件树不依赖宿主的编辑器服务。 */
+export type FileOpenMenuHandler = (path: string, anchor: { x: number; y: number }) => void;
 
 function isRootTarget(target: FileTreeContextMenuTarget): boolean {
   return parentFileTreePath(target.treePath) === target.treePath;
@@ -21,6 +25,7 @@ export default function WorkspaceFileTreeContextMenu({
   menu,
   shortcuts,
   defaultShortcutPaths,
+  onFileOpenMenu,
 }: WorkspaceFileTreeContextMenuProps) {
   const contextMenu = menu.contextMenu;
   if (!contextMenu) {
@@ -43,6 +48,18 @@ export default function WorkspaceFileTreeContextMenu({
         role="menu"
         onPointerDown={(event) => event.stopPropagation()}
       >
+        {onFileOpenMenu && contextMenu.kind !== "directory" ? <>
+          <button type="button" role="menuitem" aria-haspopup="menu" onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            menu.closeContextMenu();
+            onFileOpenMenu(contextMenu.uri, { x: rect.right, y: rect.top });
+          }}>
+            <span className="codicon codicon-code agent-sessions-menu-item-icon" aria-hidden="true" />
+            <span className="agent-sessions-menu-item-label">VS Code</span>
+            <span className="codicon codicon-chevron-right" aria-hidden="true" />
+          </button>
+          <div className="files-tree-context-separator" role="separator" />
+        </> : null}
         <button type="button" role="menuitem" onClick={() => {
           const target = contextMenu;
           menu.runContextAction("新建文件失败", () => menu.createEntry(target, "file"));

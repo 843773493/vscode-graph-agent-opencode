@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -7,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { OverlayRootContext } from "../../overlays/OverlayRootContext";
 
 import type { WorkspaceAddDialogProps } from "../WorkspaceAddDialog";
 import { browseGatewayLocalDirectories } from "../../../gatewayApi";
@@ -33,6 +35,7 @@ export default function WorkspaceAddDialogContent({
   onOpenConnectionManager,
   onAdd,
 }: WorkspaceAddDialogProps) {
+  const overlayRoot = useContext(OverlayRootContext);
   const choices = useMemo(() => buildWorkspaceAddGatewayChoices(workspaces), [workspaces]);
   const showGatewaySearch = choices.length > 4;
   const [selectedGatewayKey, setSelectedGatewayKey] = useState<string | null>(null);
@@ -496,6 +499,6 @@ export default function WorkspaceAddDialogContent({
         )}
       </section>
     </div>,
-    document.body,
+    overlayRoot ?? document.body,
   );
 }

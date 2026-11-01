@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
+import { openWorkbench, sessionTasks, automation } from "./workbench.mjs";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
 const secondary = JSON.parse(process.env.BOXTEAM_SECONDARY_WORKSPACE);
@@ -15,10 +17,7 @@ try {
   page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "用户视图", exact: true }).click();
-  await page.getByPlaceholder("新用户名称").fill("跨工作区任务验收用户");
-  await page.getByRole("button", { name: "创建", exact: true }).click();
+  await openWorkbench(page, fixture.baseUrl);
   const initialization = await page.evaluate(async () => {
     const response = await fetch("/api/gateway/auth/local-credential");
     if (!response.ok) throw new Error(`凭据读取失败：${response.status}`);
@@ -37,7 +36,9 @@ try {
   }
   const primary = initialization.find((row) => row.url === "/api/gateway/workspaces").data.items.find((row) => row.backend_workspace_id === fixture.workspaceId);
   assert(primary);
-  const activate = async (routeId, sessionId) => {
+  let summary;
+  const activate = async (owner) => {
+    const routeId = owner.routeId;
     const row = page.getByTestId(`workspace-node-${routeId}`);
     if (await row.getAttribute("aria-current") !== "location") {
       const response = page.waitForResponse((entry) => entry.request().method() === "POST"
@@ -45,33 +46,25 @@ try {
       await row.locator(".workspace-label").click();
       assert.equal((await response).status(), 200);
     }
-    await page.waitForFunction((id) => document.querySelector(`[data-testid="workspace-node-${id}"]`)?.getAttribute("aria-current") === "location", routeId);
+    await expect(row).toHaveAttribute("aria-current", "location");
     if (await row.locator("..").getAttribute("aria-expanded") === "false") await row.locator(".session-resource-chevron").click();
-    await page.locator(`[data-session-id="${sessionId}"]`).first().click();
-    const toggle = page.getByRole("button", { name: "切换底部面板", exact: true });
-    if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
-    await page.getByRole("tab", { name: "自动化", exact: true }).click();
-    const sidebar = page.getByRole("button", { name: "切换右侧侧边栏", exact: true });
-    if (await sidebar.getAttribute("aria-pressed") !== "true") await sidebar.click();
-    await page.getByRole("tab", { name: "Goal", exact: true }).click();
-    return page.getByRole("region", { name: "工作区持久任务", exact: true });
+    summary = await sessionTasks(page, owner, 0);
+    return automation(page);
   };
-  const firstSession = new URL(fixture.targetUri).pathname.split("/").at(-3);
-  let panel = await activate(primary.workspace_id, firstSession);
+  let panel = await activate(fixture.owner);
   await panel.getByRole("button", { name: /工作区 A 原任务/ }).click();
   await panel.getByText("暂无运行记录。", { exact: true }).waitFor();
-  const summary = page.getByRole("region", { name: "当前会话关联任务", exact: true });
   await summary.getByRole("button", { name: "工作区 A 原任务", exact: true }).waitFor();
-  assert.equal(await page.getByRole("region", { name: "当前 Goal", exact: true }).count(), 1);
+  assert.equal(await summary.getByRole("button", { name: /暂停目标/ }).count(), 1);
 
-  panel = await activate(secondary.routeId, secondary.sessionId);
+  panel = await activate(fixture.otherOwner);
   await panel.getByRole("button", { name: /工作区 B 原任务/ }).click();
   await panel.getByRole("heading", { name: "工作区 B 原任务", exact: true }).waitFor();
   await summary.getByRole("button", { name: "工作区 B 原任务", exact: true }).waitFor();
-  assert.equal(await page.getByRole("region", { name: "当前 Goal", exact: true }).count(), 1);
+  assert.equal(await summary.getByRole("button", { name: /暂停目标/ }).count(), 1);
   assert.equal(await panel.getByRole("button", { name: /工作区 A 原任务/ }).count(), 0);
   assert.equal(await summary.getByRole("button", { name: "工作区 A 原任务", exact: true }).count(), 0);
-  await page.getByRole("region", { name: "当前 Goal", exact: true }).getByText("工作区 B 暂停目标", { exact: true }).waitFor();
+  await summary.getByRole("button", { name: "工作区 B 暂停目标", exact: true }).waitFor();
   await panel.getByRole("button", { name: "编辑任务", exact: true }).click();
   const form = panel.getByRole("form", { name: "编辑持久任务" });
   assert.equal(await form.getByLabel("工作 Thread URI", { exact: true }).inputValue(), secondary.targetUri);
@@ -86,14 +79,14 @@ try {
   await panel.getByRole("button", { name: "恢复任务", exact: true }).waitFor();
   await page.screenshot({ path: path.join(artifacts, "workspace-b.png"), fullPage: true });
 
-  panel = await activate(primary.workspace_id, firstSession);
+  panel = await activate(fixture.owner);
   await panel.getByRole("button", { name: /工作区 A 原任务/ }).click();
   await panel.getByText("暂无运行记录。", { exact: true }).waitFor();
   await summary.getByRole("button", { name: "工作区 A 原任务", exact: true }).waitFor();
-  assert.equal(await page.getByRole("region", { name: "当前 Goal", exact: true }).count(), 1);
+  assert.equal(await summary.getByRole("button", { name: /暂停目标/ }).count(), 1);
   assert.equal(await panel.getByRole("button", { name: /工作区 B 编辑任务/ }).count(), 0);
   assert.equal(await summary.getByRole("button", { name: "工作区 B 编辑任务", exact: true }).count(), 0);
-  await page.getByRole("region", { name: "当前 Goal", exact: true }).getByText("工作区 A 暂停目标", { exact: true }).waitFor();
+  await summary.getByRole("button", { name: "工作区 A 暂停目标", exact: true }).waitFor();
   await panel.getByRole("button", { name: "暂停任务", exact: true }).click();
   await panel.getByRole("button", { name: "恢复任务", exact: true }).waitFor();
   await page.screenshot({ path: path.join(artifacts, "workspace-a.png"), fullPage: true });

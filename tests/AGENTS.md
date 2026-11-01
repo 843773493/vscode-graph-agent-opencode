@@ -38,4 +38,4 @@ tests/
 - E2E 必须经过真实客户端运行面、真实 Gateway、真实 Workspace 后端及场景所需真实外部依赖。
 - 正式产物路径镜像测试文件路径写入 `out/tests/`；临时诊断写入 `out/tests/temp/`。
 - 正式测试内部的临时目录和 `BOXTEAM_HOME` 也必须位于对应 `out/tests/.../runtime/`，并按运行与节点隔离。
-- 当前客户端自动化只实现纯 Web；其他客户端驱动均为 TODO。
+- 当前完整客户端 E2E 为纯 Web；Linux Electron 的真实 ASAR 产物与精确模型回放归 `integration/clients/electron/`，不能冒充真实 Provider 或其它平台的 E2E。其余原生运行面仍为 TODO。

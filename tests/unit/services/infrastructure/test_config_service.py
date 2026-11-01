@@ -78,7 +78,7 @@ def test_workspace_logger_requires_explicit_cross_domain_migration(tmp_path: Pat
     config = {**_base_config(), "logger": legacy_logger}
     path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path)
-    with pytest.raises(ValueError, match="migrate-runtime-logging"):
+    with pytest.raises(ValueError, match="migrate-runtime-config"):
         service.get_snapshot()
 
 

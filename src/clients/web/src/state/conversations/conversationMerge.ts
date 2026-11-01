@@ -109,6 +109,9 @@ export function mergeConversation(
     ? {
         ...persisted.userMessage,
         ...pending.userMessage,
+        // 摘要不替换已展示的完整输入；详情到达后采用后端正文及正式附件引用。
+        ...(persisted.source === "turn" && !persisted.userMessage.metadata?.summary
+          ? persisted.userMessage : pending.userMessage),
         // Turn 详情/摘要可能先于 live 状态到达；保留乐观 replay
         // 的操作元数据，否则回退提示会在新 Job 运行期间消失。
         metadata: {

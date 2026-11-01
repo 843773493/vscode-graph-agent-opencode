@@ -1,6 +1,7 @@
-import { useEffect, useId, useState } from "react";
+import { useContext, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { errorMessage } from "../../utils/errorMessage";
+import { OverlayRootContext } from "./OverlayRootContext";
 
 interface WarmActionDialogProps {
   open: boolean;
@@ -12,6 +13,7 @@ interface WarmActionDialogProps {
   inputMultiline?: boolean;
   confirmText: string;
   danger?: boolean;
+  children?: ReactNode;
   onClose: () => void;
   onConfirm: (value: string) => Promise<void>;
 }
@@ -26,9 +28,11 @@ export default function WarmActionDialog({
   inputMultiline = false,
   confirmText,
   danger = false,
+  children,
   onClose,
   onConfirm,
 }: WarmActionDialogProps) {
+  const overlayRoot = useContext(OverlayRootContext);
   const [value, setValue] = useState(initialValue);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +149,7 @@ export default function WarmActionDialog({
             </label>
           </div>
         ) : null}
+        {children ? <fieldset className="workspace-dialog-grid" disabled={submitting} style={{ border: 0, margin: 0, padding: 0 }}>{children}</fieldset> : null}
         {error ? <div className="workspace-dialog-error" role="alert">{error}</div> : null}
         <footer className="workspace-dialog-actions">
           <button type="button" disabled={submitting} onClick={onClose}>取消</button>
@@ -158,6 +163,6 @@ export default function WarmActionDialog({
         </footer>
       </form>
     </div>,
-    document.body,
+    overlayRoot ?? document.body,
   );
 }

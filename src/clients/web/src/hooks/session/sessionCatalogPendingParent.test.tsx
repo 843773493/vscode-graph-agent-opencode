@@ -189,7 +189,7 @@ async function mountPendingParent(options: {
     actions = useSessionCatalogActions({
       apiPort: 49_459, activeGatewayWorkspaceId: "ws-test", activeSessionId: null,
       sessionsByWorkspace: sessions, gatewayWorkspaces: workspaces,
-      confirm: async () => true, setStatus: (message) => statuses.push(message),
+      confirm: async () => true, setStatus: (message) => statuses.push(message), onError: (message) => errors.push(message),
       sessionCatalogOutboxRuntime: runtime, gatewayUserAccess: access,
       activateGatewayWorkspace: async () => undefined, createSession: async () => { throw new Error("不应创建会话"); },
       openWorkspaceSession: async () => undefined, removeGatewayWorkspace: async () => undefined,

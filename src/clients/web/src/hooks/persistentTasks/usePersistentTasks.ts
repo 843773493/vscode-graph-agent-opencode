@@ -3,7 +3,7 @@ import * as api from "../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
 
-export function usePersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, sessionId?: string) {
+export function usePersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, sessionId?: string, active = true) {
   const owner = useMemo(() => ({ ...target }), [target.workspace_id, target.backend_workspace_id, target.connection_kind]);
   const scope = useMemo(() => ({ controller: new AbortController(), reader: new AbortController(), busy: false }), [port, owner, sessionId]);
   const current = useRef(scope);
@@ -24,6 +24,7 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
   }, [scope]);
 
   useEffect(() => {
+    if (!active) return;
     const reader = new AbortController();
     scope.reader = reader;
     const valid = () => current.current === scope && !reader.signal.aborted;
@@ -38,13 +39,13 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
       }
     })();
     return () => reader.abort();
-  }, [port, owner, scope, version, sessionId]);
+  }, [port, owner, scope, version, sessionId, active]);
 
   useEffect(() => {
     const controller = new AbortController();
     const taskId = selected?.task_id ?? "";
-    setHistory({ scope, taskId, runs: [], loading: Boolean(selected && selected.application_type === "automation"), error: null });
-    if (selected?.application_type === "automation") {
+    setHistory({ scope, taskId, runs: [], loading: Boolean(selected), error: null });
+    if (selected) {
       void api.listPersistentTaskRuns(port, owner, taskId, controller.signal).then((runs) => {
         if (!controller.signal.aborted && current.current === scope) setHistory({ scope, taskId, runs, loading: false, error: null });
       }, (cause: unknown) => {

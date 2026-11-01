@@ -11,7 +11,12 @@ import httpx
 import pytest
 
 from app.gateway.workspace_ids import build_managed_local_workspace_id
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
+)
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -27,11 +32,12 @@ from tests.support.workspaces import prepare_test_workspace
 async def test_session_tree_context_menus_drive_physical_hierarchy(
     request: pytest.FixtureRequest,
     e2e_workspace_root_path: str,
+    web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     workspace_root = Path(e2e_workspace_root_path).resolve()
-    output_root = workspace_root.parent
-    artifacts = output_root / "artifacts"
+    scope = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = scope.artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)
     result_path = artifacts / "session-physical-tree-result.json"
     screenshot_path = artifacts / "session-physical-tree-failure.png"
@@ -47,22 +53,12 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
     if chromium_path is None:
         pytest.fail("会话物理树 Web E2E 需要 Chromium")
 
-    build = await asyncio.to_thread(
-        subprocess.run,
-        ["bun", "run", "build"],
-        cwd=project_root / "src" / "clients" / "web",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
-
     port = e2e_port_block_for_file(Path(request.node.fspath)).port(20)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
         default_backend_url=None,
         port=port,
-        extra_env={"BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist")},
+        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
     )
     try:
         async with httpx.AsyncClient(
@@ -71,6 +67,8 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             timeout=30,
         ) as client:
             await acquire_gateway_guest(client)
+            health_response = await client.get("/api/gateway/health")
+            assert health_response.status_code == 200, health_response.text
             workspaces_response = await client.get("/api/gateway/workspaces")
             assert workspaces_response.status_code == 200, workspaces_response.text
             parent_workspace_id = workspaces_response.json()["data"][
@@ -124,7 +122,10 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             assert child_response.status_code == 200, child_response.text
             assert folder_receipt["state"] == "committed"
             session_tree_browser_input = {
+                "gatewayId": health_response.json()["data"]["gateway_id"],
                 "parentSessionId": parent_response.json()["data"]["session_id"],
+                "parentOwner": parent_response.json()["data"],
+                "childOwner": child_response.json()["data"],
                 "childSessionId": child_response.json()["data"]["session_id"],
                 "folderId": str(folder_receipt["created_node_id"]),
                 "parentWorkspaceId": parent_workspace_id,
@@ -153,22 +154,28 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ["bun", "tests/e2e/clients/web/session_physical_tree.mjs"],
-            cwd=project_root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            start_new_session=os.name == "posix",
-            timeout=90,
-            check=False,
-        )
+        with chromium_temporary_environment(scope.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["bun", "tests/e2e/clients/web/session_physical_tree.mjs"],
+                cwd=project_root,
+                env=environment | temporary_environment,
+                capture_output=True,
+                text=True,
+                start_new_session=os.name == "posix",
+                timeout=90,
+                check=False,
+            )
+        (artifacts / "browser-process.json").write_text(json.dumps({"exit_code": result.returncode}) + "\n", encoding="utf-8")
+        (artifacts / "browser.stdout.log").write_text(result.stdout, encoding="utf-8")
+        (artifacts / "browser.stderr.log").write_text(result.stderr, encoding="utf-8")
         assert result.returncode == 0, (
             f"浏览器会话物理树 E2E 失败:\nstdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}\n截图: {screenshot_path}"
         )
         browser_result = json.loads(result_path.read_text(encoding="utf-8"))
+        assert browser_result["pageErrors"] == []
+        assert browser_result["deletedEditorsClosed"] is True
         assert browser_result["bloodlineTextPresent"] is False
         assert browser_result["sessionMainActionOpenedCatalogSession"] is True
         assert browser_result["folderMainActionToggledExpansion"] is True

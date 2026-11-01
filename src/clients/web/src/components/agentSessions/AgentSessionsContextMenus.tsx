@@ -4,7 +4,7 @@ import {
   readTextFromClipboard,
 } from "../../utils/clipboard";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
-import { errorMessage } from "../../utils/errorMessage";
+import { errorMessage, isErrorReported } from "../../utils/errorMessage";
 
 export interface SessionContextMenu {
   sessionId: string;
@@ -61,6 +61,7 @@ interface AgentSessionsContextMenusProps {
   onStopWorkspace: (workspaceId: string) => Promise<void>;
   startingWorkspaceIds: ReadonlySet<string>;
   onStatusChange: (message: string) => void;
+  onError: (message: string) => void;
 }
 
 export default function AgentSessionsContextMenus({
@@ -83,6 +84,7 @@ export default function AgentSessionsContextMenus({
   onStopWorkspace,
   startingWorkspaceIds,
   onStatusChange,
+  onError,
 }: AgentSessionsContextMenusProps) {
 
   const handleCopySessionId = () => {
@@ -96,8 +98,9 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已复制会话 ID: ${target.sessionId}`);
       })
       .catch((error: unknown) => {
+        if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onStatusChange(`复制会话 ID 失败: ${message}`);
+        onError(`复制会话 ID 失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
       });
   };
 
@@ -120,8 +123,9 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已将 ${childSessionId} 绑定到 ${target.sessionId}`);
       })
       .catch((error: unknown) => {
+        if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onStatusChange(`绑定剪贴板会话失败: ${message}`);
+        onError(`绑定剪贴板会话失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
       });
   };
 
@@ -137,8 +141,9 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已复制会话信息: ${target.sessionId}`);
       })
       .catch((error: unknown) => {
+        if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onStatusChange(`复制会话信息失败: ${message}`);
+        onError(`复制会话信息失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
       });
   };
 
@@ -150,8 +155,9 @@ export default function AgentSessionsContextMenus({
     onCloseSessionMenu();
     void onForkSessionContext(target.workspaceId, target.sessionId).catch(
       (error: unknown) => {
+        if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onStatusChange(`从上下文创建分支失败: ${message}`);
+        onError(`从上下文创建分支失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
       },
     );
   };
@@ -168,8 +174,9 @@ export default function AgentSessionsContextMenus({
         onStatusChange(`已复制工作区信息: ${target.workspaceId}`);
       })
       .catch((error: unknown) => {
+        if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onStatusChange(`复制工作区信息失败: ${message}`);
+        onError(`复制工作区信息失败 (${target.workspaceId}): ${message}`);
       });
   };
 
@@ -180,8 +187,9 @@ export default function AgentSessionsContextMenus({
     const target = workspaceMenu;
     onCloseWorkspaceMenu();
     void onStopWorkspace(target.workspaceId).catch((error: unknown) => {
-      onStatusChange(
-        `关闭工作区失败: ${errorMessage(error)}`,
+      if (isErrorReported(error)) return;
+      onError(
+        `关闭工作区失败 (${target.workspaceId}): ${errorMessage(error)}`,
       );
     });
   };
@@ -318,8 +326,9 @@ export default function AgentSessionsContextMenus({
                 const target = workspaceMenu;
                 onCloseWorkspaceMenu();
                 void onStartWorkspace(target.workspaceId).catch((error: unknown) => {
-                  onStatusChange(
-                    `启动工作区失败: ${errorMessage(error)}`,
+                  if (isErrorReported(error)) return;
+                  onError(
+                    `启动工作区失败 (${target.workspaceId}): ${errorMessage(error)}`,
                   );
                 });
               }}
@@ -344,8 +353,9 @@ export default function AgentSessionsContextMenus({
               onCloseWorkspaceMenu();
               void onCreateWorkspaceSession(target.workspaceId, target.name).catch(
                 (error: unknown) => {
-                  onStatusChange(
-                    `新建工作区会话失败: ${errorMessage(error)}`,
+                  if (isErrorReported(error)) return;
+                  onError(
+                    `新建工作区会话失败 (${target.workspaceId}): ${errorMessage(error)}`,
                   );
                 },
               );

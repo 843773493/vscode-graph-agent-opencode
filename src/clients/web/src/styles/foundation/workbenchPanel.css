@@ -1,3 +1,30 @@
+/* 五个底部面板共用头部；专属工具不能改变标签尺寸。 */
+
+.workbench-bottom-panel-icon-button {
+  display: inline-flex;
+  flex: 0 0 25px;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  border: 1px solid transparent;
+  border-radius: var(--bt-radius-small);
+  background: transparent;
+  color: var(--bt-text-muted);
+  cursor: pointer;
+}
+
+.workbench-bottom-panel-icon-button:hover {
+  background: var(--bt-toolbar-hover-background);
+  color: var(--bt-text-primary);
+}
+
+.workbench-bottom-panel-icon-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 /* 底部面板遵循 VS Code 的“标签栏 + 内容区”结构，日志内容保持独立滚动。 */
 .gateway-log-panel {
   display: flex;
@@ -11,26 +38,10 @@
   box-shadow: 0 -8px 24px color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
 }
 
-.gateway-log-panel-header,
 .gateway-log-panel-content,
-.gateway-log-panel-actions,
-.gateway-log-panel-toolbar,
-.gateway-log-panel-tabs {
+.gateway-log-panel-toolbar {
   display: flex;
   min-width: 0;
-}
-
-.gateway-log-panel-header {
-  align-items: stretch;
-  justify-content: space-between;
-  min-height: 35px;
-  border-bottom: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-header-background);
-}
-
-.gateway-log-panel-tabs {
-  align-items: stretch;
-  overflow-x: auto;
 }
 
 .gateway-log-panel-toolbar {
@@ -92,64 +103,6 @@
 .gateway-log-panel-channel select:disabled {
   cursor: default;
   opacity: 0.55;
-}
-
-.gateway-log-panel-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 86px;
-  padding: 0 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--bt-text-muted);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.gateway-log-panel-tab:hover,
-.gateway-log-panel-tab.active {
-  color: var(--bt-text-primary);
-}
-
-.gateway-log-panel-tab.active {
-  border-bottom-color: var(--bt-accent);
-}
-
-.gateway-log-panel-actions {
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  padding: 0 5px;
-}
-
-.gateway-log-panel-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--bt-text-muted);
-  cursor: pointer;
-}
-
-.gateway-log-panel-icon-button {
-  width: 21px;
-  height: 21px;
-  border-radius: var(--bt-radius-small);
-}
-
-.gateway-log-panel-icon-button:hover,
-.gateway-log-panel-icon-button.active {
-  background: var(--bt-toolbar-hover-background);
-  color: var(--bt-text-primary);
-}
-
-.gateway-log-panel-icon-button:disabled {
-  cursor: default;
-  opacity: 0.45;
 }
 
 .gateway-log-panel-alert {
@@ -229,9 +182,6 @@
   box-shadow: 0 -8px 24px color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
 }
 
-.terminal-panel-header,
-.terminal-panel-tabs,
-.terminal-panel-actions,
 .terminal-panel-content {
   display: flex;
   min-width: 0;
@@ -295,44 +245,7 @@
   text-align: left;
 }
 
-.terminal-panel-header {
-  align-items: stretch;
-  justify-content: space-between;
-  min-height: 35px;
-  border-bottom: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-header-background);
-}
-
-.terminal-panel-tabs {
-  align-items: stretch;
-  overflow-x: auto;
-}
-
-.terminal-panel-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 92px;
-  padding: 0 14px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--bt-text-muted);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.terminal-panel-tab:hover,
-.terminal-panel-tab.active {
-  color: var(--bt-text-primary);
-}
-
-.terminal-panel-tab.active {
-  border-bottom-color: var(--bt-accent);
-}
-
-.terminal-panel-count {
+.workbench-bottom-panel-count {
   display: inline-flex;
   align-items: center;
   min-width: 18px;
@@ -345,14 +258,7 @@
   line-height: 1;
 }
 
-.terminal-panel-actions {
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  padding: 0 7px;
-}
-
-.terminal-panel-context {
+.workbench-bottom-panel-context {
   max-width: min(240px, 28vw);
   margin-right: 6px;
   overflow: hidden;
@@ -360,29 +266,6 @@
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.terminal-panel-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 25px;
-  height: 25px;
-  border: 1px solid transparent;
-  border-radius: var(--bt-radius-small);
-  background: transparent;
-  color: var(--bt-text-muted);
-  cursor: pointer;
-}
-
-.terminal-panel-icon-button:hover {
-  background: var(--bt-toolbar-hover-background);
-  color: var(--bt-text-primary);
-}
-
-.terminal-panel-icon-button:disabled {
-  cursor: default;
-  opacity: 0.45;
 }
 
 .terminal-panel-viewer-empty button {
@@ -574,209 +457,8 @@
 }
 
 /* 端口面板复用工作区端口转发能力，但以底部面板的标签结构承载。 */
-.port-forward-bottom-panel {
-  display: flex;
-  flex: 0 1 min(300px, 36vh);
-  flex-direction: column;
-  min-width: 0;
-  min-height: 190px;
-  border-top: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-background);
-  color: var(--bt-text-primary);
-  box-shadow: 0 -8px 24px color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
-}
-
-.port-forward-bottom-panel-header,
-.port-forward-bottom-panel-tabs,
-.port-forward-bottom-panel-actions,
-.port-forward-bottom-panel-content {
-  display: flex;
-  min-width: 0;
-}
-
-.port-forward-bottom-panel-header {
-  align-items: stretch;
-  justify-content: space-between;
-  min-height: 35px;
-  border-bottom: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-header-background);
-}
-
-.port-forward-bottom-panel-tabs {
-  align-items: stretch;
-  overflow-x: auto;
-}
-
-.port-forward-bottom-panel-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 70px;
-  padding: 0 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--bt-text-muted);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.port-forward-bottom-panel-tab:hover,
-.port-forward-bottom-panel-tab.active {
-  color: var(--bt-text-primary);
-}
-
-.port-forward-bottom-panel-tab.active {
-  border-bottom-color: var(--bt-accent);
-}
-
-.port-forward-bottom-panel-actions {
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  padding: 0 5px;
-}
-
-.port-forward-bottom-panel-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 21px;
-  height: 21px;
-  border: 1px solid transparent;
-  border-radius: var(--bt-radius-small);
-  background: transparent;
-  color: var(--bt-text-muted);
-  cursor: pointer;
-}
-
-.port-forward-bottom-panel-icon-button:hover {
-  background: var(--bt-toolbar-hover-background);
-  color: var(--bt-text-primary);
-}
-
-.port-forward-bottom-panel-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  background: var(--bt-bottom-panel-background);
-}
-
-.port-forward-bottom-panel-content > .port-forward-panel {
-  flex: 1 1 auto;
-  max-height: none;
-  min-height: 0;
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.port-forward-bottom-panel-content > .port-forward-panel .port-forward-list {
-  flex: 1 1 auto;
-  max-height: none;
-}
 
 /* 自动化属于当前工作区，与终端、输出和端口共享底部面板的标签栏。 */
-.automation-bottom-panel {
-  display: flex;
-  flex: 0 1 min(360px, 42vh);
-  min-width: 0;
-  min-height: 190px;
-  flex-direction: column;
-  border-top: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-background);
-  color: var(--bt-text-primary);
-  box-shadow: 0 -8px 24px color-mix(in srgb, var(--bt-text-primary) 8%, transparent);
-}
-
-.automation-bottom-panel-header,
-.automation-bottom-panel-tabs,
-.automation-bottom-panel-actions,
-.automation-bottom-panel-content {
-  display: flex;
-  min-width: 0;
-}
-
-.automation-bottom-panel-header {
-  align-items: stretch;
-  justify-content: space-between;
-  min-height: 35px;
-  border-bottom: 1px solid var(--bt-panel-border);
-  background: var(--bt-bottom-panel-header-background);
-}
-
-.automation-bottom-panel-tabs {
-  align-items: stretch;
-  overflow-x: auto;
-}
-
-.automation-bottom-panel-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 70px;
-  padding: 0 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--bt-text-muted);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.automation-bottom-panel-tab:hover,
-.automation-bottom-panel-tab.active {
-  color: var(--bt-text-primary);
-}
-
-.automation-bottom-panel-tab.active {
-  border-bottom-color: var(--bt-accent);
-}
-
-.automation-bottom-panel-actions {
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  padding: 0 5px;
-}
-
-.automation-bottom-panel-context {
-  max-width: 220px;
-  overflow: hidden;
-  color: var(--bt-text-muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.automation-bottom-panel-icon-button {
-  display: inline-flex;
-  width: 21px;
-  height: 21px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid transparent;
-  border-radius: var(--bt-radius-small);
-  background: transparent;
-  color: var(--bt-text-muted);
-  cursor: pointer;
-}
-
-.automation-bottom-panel-icon-button:hover {
-  background: var(--bt-toolbar-hover-background);
-  color: var(--bt-text-primary);
-}
-
-.automation-bottom-panel-content {
-  display: block;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  background: var(--bt-bottom-panel-background);
-}
 
 @media (max-width: 720px) {
   .gateway-log-panel {
@@ -796,7 +478,7 @@
     flex-basis: min(150px, 23vw);
   }
 
-  .terminal-panel-context {
+  .workbench-bottom-panel-context {
     display: none;
   }
 

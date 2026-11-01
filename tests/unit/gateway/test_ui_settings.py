@@ -266,3 +266,23 @@ def test_ui_file_preference_http_rejection_does_not_echo_input(ui_settings_clien
     assert body["request_id"] == response.headers["X-Request-ID"]
     assert body["detail"] == [{"loc": ["body", "workspace_file_tree" if field == "expanded_paths_by_workspace" else "layout", field],
                                "type": "value_error", "msg": "请求参数校验失败"}]
+
+
+@pytest.mark.parametrize("identity", ["guest", "user"])
+def test_resolve_browser_theme_does_not_write_user_profile(ui_settings_client, identity):
+    client = ui_settings_client
+    if identity == "user":
+        created = client.post("/api/gateway/users", json={"display_name": "本地视图测试"})
+        user_id = created.json()["data"]["user_id"]
+        assert client.post(f"/api/gateway/users/{user_id}/access", json={}).status_code == 200
+    else:
+        assert client.post("/api/gateway/users/guest", json={}).status_code == 200
+    before = client.get("/api/gateway/ui-settings").json()["data"]
+    resolved = client.post("/api/gateway/ui-settings/resolve", json={"theme": {"theme_id": "blue"}})
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["request_id"] == resolved.headers["X-Request-ID"]
+    assert resolved.json()["data"]["theme"]["resolved_theme"]["id"] == "blue"
+    assert client.get("/api/gateway/ui-settings").json()["data"] == before
+    invalid = client.post("/api/gateway/ui-settings/resolve", json={"theme": {"theme_id": "missing-theme"}})
+    assert invalid.status_code == 409
+    assert client.get("/api/gateway/ui-settings").json()["data"] == before

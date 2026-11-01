@@ -1,3 +1,4 @@
+import type { SessionViewState } from "../state/sessionViewState";
 // 前端内部类型
 import type {
   Agent,
@@ -15,7 +16,6 @@ import type {
   WebUiSettings,
   DeliveryPolicy,
   GatewayUserAccess,
-  GatewayUserViewState,
   JobStatus,
 } from "./backend";
 import type { SessionTurnTimeline } from "../state/session/turnTimeline";
@@ -174,8 +174,9 @@ export interface AppState {
   /** 当前的 gatewayWorkspaces 是否已不可信：Gateway 刷新整体失败或部分工作区
    * 的会话列表读取失败时置真，UI 不得把这份数据当作当前权威结构展示。 */
   gatewayWorkspacesStale: boolean;
+  browserViewScope?: string;
   gatewayUserAccess: GatewayUserAccess | null;
-  gatewayUserViewStates: Map<string, GatewayUserViewState>;
+  gatewayUserViewStates: Map<string, SessionViewState>;
   uiSettings: WebUiSettings;
   uiSettingsLoaded: boolean;
   /** 主题背景图（纯装饰画布）加载失败时的可见警告；核心主题已正常应用，

@@ -1,9 +1,10 @@
-"""验证三个历史边界展示装具在真实 Chromium 准备与清理失败时的资源归属。"""
+"""验证历史边界展示及聊天装具在真实 Chromium 准备与清理失败时的资源归属。"""
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -51,7 +52,13 @@ mock.module("playwright", () => ({
                   return page.on(...args);
                 },
                 async goto() { throw new Error(startupMessage); },
-                screenshot(...args) { return page.screenshot(...args); },
+                waitForResponse() { return new Promise(() => {}); },
+                locator(...args) { return page.locator(...args); },
+                screenshot(...args) {
+                  if (failureStage === "screenshot") throw new Error("边界展示诊断失败: screenshot");
+                  return page.screenshot(...args);
+                },
+                url() { return page.url(); },
               };
             },
             async close() {
@@ -100,12 +107,11 @@ try {
 
 
 @pytest.mark.parametrize(
-    "script_name",
-    ["boundary_cases_display", "partial_text_boundary_display", "unknown_tool_outcome_display"],
-)
-@pytest.mark.parametrize(
-    "failure_stage",
-    ["launch", "context", "page", "event", "goto", "context-close", "browser-close"],
+    ("script_name", "failure_stage"),
+    [(script, stage)
+     for script in ("boundary_cases_display", "partial_text_boundary_display", "unknown_tool_outcome_display", "basic_chat_tool_loop", "workspace_metadata_bootstrap")
+     for stage in ("launch", "context", "page", "event", "goto", "context-close", "browser-close")]
+    + [(script, stage) for script in ("basic_chat_tool_loop", "workspace_metadata_bootstrap") for stage in ("screenshot", "result-write")],
 )
 def test_boundary_display_failure_releases_resources_and_preserves_errors(
     script_name: str,
@@ -121,9 +127,15 @@ def test_boundary_display_failure_releases_resources_and_preserves_errors(
         "BOXTEAM_BROWSER_WORKSPACE_ID": "unused",
         "BOXTEAM_BROWSER_SESSION_ID": "unused",
         "BOXTEAM_BROWSER_TURN_ID": "unused",
-        "BOXTEAM_BROWSER_RESULT_PATH": str(tmp_path / "result.json"),
+        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"nativeDirectory": {"sessionId": "unused"}}),
+        "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+        or shutil.which("chromium") or shutil.which("chromium-browser"),
+        "BOXTEAM_BROWSER_RESULT_PATH": str(
+            tmp_path / "missing/result.json" if failure_stage == "result-write" else tmp_path / "result.json"
+        ),
         "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(tmp_path / "failure.png"),
     }
+    assert environment["PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"], "装具资源验收需要真实 Chromium"
     with chromium_temporary_environment(tmp_path / "chromium-tmp") as temporary_environment:
         environment.update(temporary_environment)
         result = subprocess.run(
@@ -156,3 +168,31 @@ def test_boundary_display_failure_releases_resources_and_preserves_errors(
         else ["context", "browser"]
     )
     assert observation["cleanupOrder"] == expected_order, observation
+    if script_name == "workspace_metadata_bootstrap":
+        if failure_stage == "result-write":
+            assert any("ENOENT" in message for message in observation["errors"]), observation
+            assert not (tmp_path / "missing/result.json").exists()
+            return
+        if failure_stage == "screenshot":
+            assert "边界展示诊断失败: screenshot" in observation["errors"], observation
+        diagnostic = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+        assert diagnostic["error"] == f"Error: 边界展示准备失败: {failure_stage}"
+        assert diagnostic["page_errors"] == []
+        assert diagnostic["settings_reload_rounds"] == []
+    if script_name == "basic_chat_tool_loop":
+        if failure_stage == "result-write":
+            assert any("ENOENT" in message for message in observation["errors"]), observation
+            assert not (tmp_path / "missing/result.json").exists()
+            return
+        if failure_stage == "screenshot":
+            assert "边界展示诊断失败: screenshot" in observation["errors"], observation
+        diagnostic = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+        assert diagnostic["error"] == f"Error: 边界展示准备失败: {failure_stage}"
+        assert diagnostic["phase"] == (
+            "gateway-bootstrap" if failure_stage in {"goto", "context-close", "browser-close", "screenshot"}
+            else "browser-setup"
+        )
+        assert diagnostic["pageErrors"] == []
+        assert diagnostic["streamResponses"] == []
+        assert diagnostic["traceStreams"] == []
+        assert "composerSendRequest" not in diagnostic

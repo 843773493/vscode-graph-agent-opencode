@@ -31,6 +31,8 @@ runtime/
 
 发布资产测试只创建最小npm包、runtime组件树及归档替身，不创建业务工作区。输入与原始结果分别保留在`out/tests/packaging/runtime/runtime-release-assets/{workspace,artifacts}/<run_id>/<scenario>/`；运行及场景目录独占创建，不依赖系统临时目录，不在结束时删除现场。Node原始stdout、stderr及退出结果先保存再解析，不执行打包、下载或安装。Launcher接线场景只复制Launcher源码包，执行builder全文至第一次npm pack之前；下载、依赖安装、应用复制和外部命令是替身，包复制、版本注入、metadata与staged Launcher的`--version`使用真实实现。
 
+前端构建替身按实际命令的 `cwd` 生成首页、Worker 和嵌套扩展资源，两份不同的陈旧客户端产物用于暴露构建与复制目录错配。三种平台模式都明确要求从 `src/clients/workbench` 构建，并核对 runtime `web/` 的完整文件列表及字节与本次构建目录一致，保留原始构建调用和两侧快照；这只证明发布接线，不替代真实 Workbench 构建、静态服务或原生平台验收。
+
 ```text
 runtime-release-assets/
 ├── workspace/<run_id>/

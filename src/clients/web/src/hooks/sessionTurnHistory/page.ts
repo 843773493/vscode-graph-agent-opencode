@@ -73,6 +73,7 @@ function isInitialHistoryRetryableError(error: unknown): boolean {
 export function useInitialTurnLoader({
   apiPort,
   sessionId,
+  threadId,
   workspaceId,
   sessionCacheKey,
   generationRef,
@@ -81,7 +82,7 @@ export function useInitialTurnLoader({
   onMissingTurn,
 }: TurnScopeLoaderProps): (latestTurnId?: string) => Promise<void> {
   return useCallback(async (latestTurnId?: string) => {
-    if (!apiPort || !sessionId || !sessionCacheKey) return;
+    if (apiPort === null || !sessionId || !sessionCacheKey) return;
     const targetGeneration = generationRef.current;
     setState((previous) => {
       const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
@@ -118,6 +119,7 @@ export function useInitialTurnLoader({
             },
             workspaceId,
             requestSignal,
+            threadId,
           );
           break;
         } catch (error) {
@@ -285,6 +287,7 @@ export function useInitialTurnLoader({
     requestSignal,
     sessionCacheKey,
     sessionId,
+    threadId,
     setState,
     workspaceId,
   ]);
@@ -293,6 +296,7 @@ export function useInitialTurnLoader({
 export function useDirectionalTurnLoader({
   apiPort,
   sessionId,
+  threadId,
   workspaceId,
   sessionCacheKey,
   getCurrentTimeline,
@@ -303,6 +307,7 @@ export function useDirectionalTurnLoader({
 }: {
   apiPort: number | null;
   sessionId: string | null;
+  threadId?: string;
   workspaceId: string | null;
   sessionCacheKey: string | null;
   getCurrentTimeline: () => SessionTurnTimeline | null;
@@ -312,7 +317,7 @@ export function useDirectionalTurnLoader({
   direction: TurnPageDirection;
 }): () => Promise<void> {
   return useCallback(async () => {
-    if (!apiPort || !sessionId || !sessionCacheKey) return;
+    if (apiPort === null || !sessionId || !sessionCacheKey) return;
     const targetGeneration = generationRef.current;
     const currentTimeline = getCurrentTimeline();
     const cursor = currentTimeline ? pageCursor(currentTimeline, direction) : null;
@@ -352,6 +357,7 @@ export function useDirectionalTurnLoader({
         { direction, cursor, turns: CURSOR_HISTORY_TURNS },
         workspaceId,
         requestSignal,
+        threadId,
       );
       setState((previous) => {
         const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
@@ -463,6 +469,7 @@ export function useDirectionalTurnLoader({
     requestSignal,
     sessionCacheKey,
     sessionId,
+    threadId,
     setState,
     workspaceId,
   ]);
@@ -479,6 +486,7 @@ export function useNewerTurnLoader(props: Omit<Parameters<typeof useDirectionalT
 export function useAroundTurnLoader({
   apiPort,
   sessionId,
+  threadId,
   workspaceId,
   sessionCacheKey,
   getCurrentTimeline,
@@ -489,7 +497,7 @@ export function useAroundTurnLoader({
   (anchorTurnId: string, signal?: AbortSignal) => Promise<void> {
   const activeRequestRef = useRef<AbortController | null>(null);
   return useCallback(async (anchorTurnId: string, navigationSignal?: AbortSignal) => {
-    if (!apiPort || !sessionId || !sessionCacheKey || !anchorTurnId) {
+    if (apiPort === null || !sessionId || !sessionCacheKey || !anchorTurnId) {
       throw new Error("当前会话尚未就绪，无法定位轮次");
     }
     const targetGeneration = generationRef.current;
@@ -601,6 +609,7 @@ export function useAroundTurnLoader({
     requestSignal,
     sessionCacheKey,
     sessionId,
+    threadId,
     setState,
     workspaceId,
   ]);

@@ -1,5 +1,5 @@
 import { getJob, getSession } from "../../api";
-import { listMainThreadPendingRequests } from "../../pendingRequestsApi";
+import { listThreadPendingRequests } from "../../pendingRequestsApi";
 import {
   preservePendingTerminalConversation,
   writePendingSnapshot,
@@ -20,16 +20,7 @@ import type { SetAppState } from "../contentViewLoaderTypes";
 import { isSessionActivelyViewed } from "../../state/session/viewedSession";
 import { TERMINAL_JOB_STATUSES } from "./sessionEventStreamPolicy";
 
-const terminalSessionRefreshes = new Map<string, Promise<void>>();
-
-function terminalSessionRefreshKey(
-  apiPort: number,
-  sessionId: string,
-  workspaceId: string | null,
-  turnId: string,
-): string {
-  return `${apiPort}:${workspaceId ?? ""}:${sessionId}:${turnId}`;
-}
+const terminalRefreshesByInstance = new WeakMap<SetAppState, Map<string, Promise<void>>>();
 
 export interface ActiveJobReconciliationResult {
   jobStatus: JobStatus;
@@ -167,6 +158,7 @@ async function refreshTerminalSessionInternal(
   setState: SetAppState,
   knownPendingSnapshot?: PendingRequestList,
   knownTerminalJob?: Job,
+  threadId?: string,
 ) {
   const terminalJobId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
   const effectiveTerminalEvent = terminalTraceEvent
@@ -196,7 +188,7 @@ async function refreshTerminalSessionInternal(
     getSession(apiPort, sessionId, workspaceId),
     knownPendingSnapshot
       ? Promise.resolve(knownPendingSnapshot)
-      : listMainThreadPendingRequests(apiPort, sessionId, workspaceId),
+      : listThreadPendingRequests(apiPort, sessionId, workspaceId, undefined, threadId),
   ]);
   const pendingSnapshot = fetchedPendingSnapshot.active_job_id === terminalJobId
     ? { ...fetchedPendingSnapshot, active_job_id: null }
@@ -256,48 +248,29 @@ export function refreshTerminalSession(
   setState: SetAppState,
   knownPendingSnapshot?: PendingRequestList,
   knownTerminalJob?: Job,
+  threadId?: string,
 ): Promise<void> {
-  const terminalJobId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
-  if (!terminalJobId) {
-    return refreshTerminalSessionInternal(
-      apiPort,
-      sessionId,
-      workspaceId,
-      sessionCacheKey,
-      terminalTraceEvent,
-      setState,
-      knownPendingSnapshot,
-      knownTerminalJob,
-    );
-  }
-
-  const key = terminalSessionRefreshKey(
-    apiPort,
-    sessionId,
-    workspaceId,
-    terminalJobId,
+  // 同实例消息流与 Trace 可以合并收尾；不同 Editor 各自更新展示镜像。
+  const jobId = terminalTraceEvent?.job_id ?? knownTerminalJob?.job_id;
+  const refresh = () => refreshTerminalSessionInternal(
+    apiPort, sessionId, workspaceId, sessionCacheKey, terminalTraceEvent,
+    setState, knownPendingSnapshot, knownTerminalJob, threadId,
   );
-  const existing = terminalSessionRefreshes.get(key);
-  if (existing) {
-    return existing;
+  if (!jobId) return refresh();
+  let requests = terminalRefreshesByInstance.get(setState);
+  if (!requests) {
+    requests = new Map();
+    terminalRefreshesByInstance.set(setState, requests);
   }
-  const request = refreshTerminalSessionInternal(
-    apiPort,
-    sessionId,
-    workspaceId,
-    sessionCacheKey,
-    terminalTraceEvent,
-    setState,
-    knownPendingSnapshot,
-    knownTerminalJob,
-  );
-  const trackedRequest = request.finally(() => {
-    if (terminalSessionRefreshes.get(key) === trackedRequest) {
-      terminalSessionRefreshes.delete(key);
-    }
+  const key = JSON.stringify([apiPort, workspaceId, sessionId, threadId, jobId]);
+  const existing = requests.get(key);
+  if (existing) return existing;
+  const pending = requests;
+  const request = refresh().finally(() => {
+    if (pending.get(key) === request) pending.delete(key);
   });
-  terminalSessionRefreshes.set(key, trackedRequest);
-  return trackedRequest;
+  pending.set(key, request);
+  return request;
 }
 
 export async function reconcileActiveJob(
@@ -309,9 +282,13 @@ export async function reconcileActiveJob(
   setState: SetAppState,
   options?: {
     afterCursor?: string | null;
+    threadId?: string;
   },
 ): Promise<ActiveJobReconciliationResult> {
   const job = await getJob(apiPort, activeJobId, workspaceId);
+  if (job.session_id !== sessionId || (options?.threadId !== undefined && job.thread_id !== options.threadId)) {
+    throw new Error("运行任务与请求的 Session / Thread 归属不一致");
+  }
   if (!TERMINAL_JOB_STATUSES.has(job.status)) {
     return {
       jobStatus: job.status,
@@ -320,7 +297,7 @@ export async function reconcileActiveJob(
     };
   }
 
-  const pendingSnapshot = await listMainThreadPendingRequests(apiPort, sessionId, workspaceId);
+  const pendingSnapshot = await listThreadPendingRequests(apiPort, sessionId, workspaceId, undefined, options?.threadId);
   // Job API 是终态的权威来源。Gateway/旧 SSE 可能在 Job 已失败后仍暂时
   // 保留 active_job_id；此时必须修复 pending 镜像，而不是把已知终态重新
   // 当成对账失败，否则 Composer 会永久保持“正在生成”。
@@ -336,6 +313,7 @@ export async function reconcileActiveJob(
     setState,
     normalizedPendingSnapshot,
     job,
+    options?.threadId,
   );
   return {
     jobStatus: job.status,

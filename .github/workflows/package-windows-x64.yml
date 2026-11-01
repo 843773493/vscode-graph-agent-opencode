@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -24,6 +26,8 @@ jobs:
           node-version: "22"
 
       - run: bun install --frozen-lockfile
+      - run: bun install --cwd src/clients/web --frozen-lockfile
+      - run: bun install --cwd src/clients/workbench --frozen-lockfile
       - run: uv sync --locked
       - run: bun run package:windows-x64
 

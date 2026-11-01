@@ -6,13 +6,6 @@
 
 ```text
 clients/web/
-├── conftest.py                         文件级收集与运行前置条件
-├── test_basic_chat_tool_loop.py         BasicChat 主流程及持久资源验收
-│   ├── basic-chat-tool-loop.e2e.mjs     主窗口真实浏览器操作
-│   ├── persistent-resource-lifecycle.e2e.mjs 持久资源生命周期分阶段浏览器操作
-│   └── generated-internal-history-oracle.mjs 生成历史成员断言的独立 oracle
-├── test_child_thread_panel.py           子线程面板行为
-│   └── child-thread-panel.e2e.mjs       对应真实浏览器操作
 ├── test_session_information.py           会话信息展示
 │   └── session_information.mjs          对应真实浏览器操作
 └── test_session_physical_tree.py         会话树、工作区导航与物理删除
@@ -43,3 +36,9 @@ clients/web/
 - 使用 fork deadline watchdog 的 browser driver 在 POSIX 由 owner 设置 `start_new_session=True`；Windows 由外置 Python watchdog 校验 matrix runner 祖先并按进程树回收
 - 纯 Web 是当前唯一实现的客户端 E2E；不得据此宣称 Electron、VS Code 或 React Native 已通过
 - 缺少 Chromium 或真实服务时明确报告未满足前置条件，不得切换到替身
+- 使用固定模型回放的子 Thread 委派场景归 `tests/integration/clients/web/test_child_thread_panel.py`，不保留 E2E 别名或旧入口。
+- 会话目录场景使用 `web_workbench_assets` 和真实 Gateway，保留目录操作 acceptance/commit、拖拽、跨工作区、真实模型历史与 fork 原期限；按完整 owner 核新编辑器，删除 Session 后核所有所属标签关闭，其他 Session 不受影响。
+
+- 模型回放的持久资源生命周期已迁至 `tests/integration/clients/web/test_persistent_resource_lifecycle.py`，不保留旧扩展窗口测试入口。
+
+- Section 8 精确模型回放的唯一 owner 已迁至 `tests/integration/clients/web/conversation_lifecycle/`；完整 E2E suite 不再要求 Section 8 focus。

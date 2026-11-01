@@ -12,6 +12,9 @@ import pytest
 from app.core.mounted_workspaces import MountedWorkspace
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 构建装具
+)
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _prepare_workspace,
 )
@@ -42,7 +45,7 @@ def product_case(request: pytest.FixtureRequest):
     boundary = request.param
 
     @asynccontextmanager
-    async def start(secure, sibling, *, web):
+    async def start(secure, sibling, *, web, gateway_environment):
         assert web is True
 
         def prepare(node_context, model_port, gateway_port):
@@ -82,7 +85,7 @@ def product_case(request: pytest.FixtureRequest):
             async with open_communication_triad(
                 context, prepare, ports=ports, backend_asgi_app="tests.support.e2e_control.backend_app:app",
                 backend_environment={**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
-                gateway_environment={"BOXTEAM_WEB_ASSETS": str(context.project_root / "src/clients/web/dist")},
+                gateway_environment=gateway_environment,
             ) as nodes:
                 hub, target = nodes["a"], nodes["b"]
                 listing = await hub.client.get("/api/gateway/workspaces")
@@ -126,8 +129,8 @@ def product_case(request: pytest.FixtureRequest):
 
 @pytest.mark.parametrize("product_case", ["turn", "model_call"], indirect=True)
 async def test_remote_gateway_callback_reaches_original_workspace(
-    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan, browser_runner,
+    product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan, browser_runner, web_workbench_assets,
 ):
     await _verify_web_authorization(
-        product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan, browser_runner,
+        product_case, oauth_endpoint_factory, http_schema_endpoint_factory, discovery_plan, browser_runner, web_workbench_assets,
     )

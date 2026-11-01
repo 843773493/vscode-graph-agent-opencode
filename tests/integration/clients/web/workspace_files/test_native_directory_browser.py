@@ -15,6 +15,9 @@ import pytest
 
 from app.core.resource_uri import file_uri_child, file_uri_root, parse_resource_uri
 from app.core.workspace_identity import workspace_identity_path
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 显式导入模块级正式产物装具
+)
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
 )
@@ -36,9 +39,11 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture(autouse=True)
-def local_model_metadata(monkeypatch):
+def local_model_metadata(monkeypatch, web_workbench_assets):
     # 本场景不使用外部模型；避免 LiteLLM 首次导入联网更新价格表阻塞页面初始化。
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+    monkeypatch.setenv("BOXTEAM_BROWSER_RUNTIME_PATH", str(web_workbench_assets.parent / "browser"))
 
 
 async def _browse(case, fixture: dict, artifacts: Path) -> dict:
@@ -54,7 +59,7 @@ async def _browse(case, fixture: dict, artifacts: Path) -> dict:
                  {"name": cookie.name, "value": cookie.value, "url": str(case.client.base_url)}
                  for cookie in case.client.cookies.jar]}, ensure_ascii=False),
              "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
-             "BOXTEAM_BROWSER_RUNTIME_PATH": str(case.workspace.parent / "runtime/browser"),
+             "BOXTEAM_BROWSER_RUNTIME_PATH": os.environ["BOXTEAM_BROWSER_RUNTIME_PATH"],
              "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable},
         cwd=Path.cwd(), capture_output=True, text=True, timeout=240, check=False)
     (artifacts / "playwright.log").write_text(process.stdout + process.stderr)
@@ -79,10 +84,7 @@ def _workspace_state(response) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("communication_case", [{"gateway_environment": {
-    "BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist"),
-}}], indirect=True)
-async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communication_case):
+async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communication_case, web_workbench_assets):
     case = communication_case
     user_id = "file-preference-user"
     created = await case.client.post("/api/gateway/users", json={"user_id": user_id, "display_name": "文件偏好验收"})
@@ -102,6 +104,8 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     fixture = {"session_id": session_id, "session_title": title, "directory": str(external),
                "file_name": file.name, "original": original, "edited": edited, "persist_files": True}
     artifacts = case.artifacts / f"run-{os.getpid()}"
+    profile_path = case.workspace.parent / "boxteam-home/state/gateway/users" / user_id / "profile.jsonc"
+    profile = json.loads(profile_path.read_text())
     result = await _browse(case, fixture, artifacts / "edit-and-reload")
     uri = result["shortcut_uri"]
     parsed = parse_resource_uri(uri)
@@ -122,13 +126,11 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     saved = json.loads(persisted.read_text())
     assert saved["shortcuts"] == [{"path": uri, "label": external.name}]
     assert str(external) not in persisted.read_text()
-    profile_path = case.workspace.parent / "boxteam-home/state/gateway/users" / user_id / "profile.jsonc"
-    profile = json.loads(profile_path.read_text())
-    preview_uri = result["file_preferences"]["layout"]["workspace_preview_active_file_path"]
-    assert profile["layout"]["workspace_preview_file_paths"] == [preview_uri]
-    assert profile["layout"]["workspace_preview_active_file_path"] == preview_uri
-    expanded = profile["preferences"]["workspace_file_tree"]["expanded_paths_by_workspace"]
-    assert uri in next(iter(expanded.values()))
+    # 展示态属于浏览器和原版 EditorInput，不再写回 Gateway 的旧用户档案。
+    assert json.loads(profile_path.read_text()) == profile
+    preview_uri = result["preview_uri"]
+    assert preview_uri.startswith(uri + "/")
+    assert result["expanded_restored"] is True
     assert str(external) not in profile_path.read_text()
     for field, value in (("workspace_preview_file_paths", [str(file)]), ("workspace_preview_active_file_path", str(file))):
         original_profile = profile_path.read_bytes()
@@ -159,14 +161,14 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
             assert profile_path.read_bytes() == invalid_bytes
     finally:
         profile_path.write_bytes(original_profile)
-    # 两个 owner 均重启，新 Chromium context 没有本地快捷目录或文件内容缓存。
+    # 两个 owner 均重启，并重新启动同一持久 Chromium profile；后端快捷目录仍需真实冷读。
     await case.hard_restart()
     previous_gateway = case.gateway
     await asyncio.to_thread(close_gateway_process, previous_gateway)
     case.gateway = await asyncio.to_thread(
         start_gateway_process, workspace_root=case.workspace, port=previous_gateway.port,
         default_backend_url=f"http://127.0.0.1:{case.backend.port}",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist")},
+        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
     )
     assert case.gateway.process.pid != previous_gateway.process.pid
     access = await case.client.post(f"/api/gateway/users/{user_id}/takeover", json={"client_label": "冷读文件偏好验收"})
@@ -175,7 +177,9 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
     assert health.status_code == 200 and health.json()["data"]["gateway_id"] == case.gateway_id
     reopened = await _browse(case, {**fixture, "shortcut_uri": uri}, artifacts / "cold-reopen")
     assert reopened["shortcut_uri"] == uri and reopened["reopened_content"] == edited
-    assert reopened["file_preferences"]["layout"]["workspace_preview_active_file_path"] == preview_uri
+    assert reopened["preview_uri"] == preview_uri
+    assert reopened["expanded_restored"] is True
+    assert json.loads(profile_path.read_text()) == profile
     assert file.read_text(encoding="utf-8") == edited
     after_restart = await case.client.get("/api/gateway/workspaces")
     assert after_restart.status_code == 200, after_restart.text
@@ -185,9 +189,6 @@ async def test_unregistered_directory_browser_edit_and_shortcut_reopen(communica
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("communication_case", [{"gateway_environment": {
-    "BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist"),
-}}], indirect=True)
 async def test_chat_file_references_preserve_native_and_uri_targets(communication_case):
     case = communication_case
     local = case.workspace / "reference-target.ts"
@@ -249,9 +250,6 @@ async def test_chat_file_references_preserve_native_and_uri_targets(communicatio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("communication_case", [{"gateway_environment": {
-    "BOXTEAM_WEB_ASSETS": str(Path.cwd() / "src/clients/web/dist"),
-}}], indirect=True)
 async def test_gateway_directory_selector_registers_uri_after_native_input_and_reload(communication_case):
     case = communication_case
     directory = case.workspace.parent / "选择 目录% Ω"

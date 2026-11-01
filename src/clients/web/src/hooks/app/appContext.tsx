@@ -194,10 +194,10 @@ type HotReloadContextStore = {
 
 // Vite 热更新会分别重载 Provider 和消费者模块；复用 Context 身份，避免
 // 旧 AppShell 读取到新 AppProvider 之外的 Context。生产构建不依赖这段状态。
-const hotReloadContextStore = import.meta.hot?.data as HotReloadContextStore | undefined;
+const hotReloadContextStore = (import.meta as ImportMeta & { hot?: { data: HotReloadContextStore } }).hot?.data;
 // 与 ComposerContext 同形显式导出：测试需要直接用真实 Provider 注入 AppState，
 // 而不是替换整个 hooks 模块（bun 的 mock.module 是进程级且不可撤销）。
-export const AppContext = hotReloadContextStore?.appContext
+export const AppContext: React.Context<AppContextType | null> = hotReloadContextStore?.appContext
   ?? createContext<AppContextType | null>(null);
 if (hotReloadContextStore) {
   hotReloadContextStore.appContext = AppContext;
@@ -228,7 +228,7 @@ export interface ComposerContextType extends ComposerContextActions {
   getLatestAssistantContent: () => string | null;
 }
 
-export const ComposerContext = hotReloadContextStore?.composerContext
+export const ComposerContext: React.Context<ComposerContextType | null> = hotReloadContextStore?.composerContext
   ?? createContext<ComposerContextType | null>(null);
 if (hotReloadContextStore) {
   hotReloadContextStore.composerContext = ComposerContext;

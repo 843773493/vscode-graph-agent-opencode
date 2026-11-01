@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import Mock
 
 import psutil
 import pytest
@@ -35,6 +36,7 @@ def test_e2e_process_lease_rejects_live_owner_and_reclaims_reused_pid(
     owner_pid = os.getpid()
     start_times = {owner_pid: 100.25}
     checked_ports: list[tuple[int, str]] = []
+    monkeypatch.setattr(harness.socket, "socket", lambda *_args: Mock())
     monkeypatch.setattr(
         harness,
         "_process_start_time",

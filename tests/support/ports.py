@@ -47,9 +47,10 @@ class TestFilePortBlock:
         return self.start
 
     def port(self, offset: int) -> int:
-        if offset < 0 or offset >= TEST_FILE_PORT_BLOCK_SIZE:
+        if offset < 0 or offset >= TEST_FILE_PORT_BLOCK_SIZE or self.start + offset > self.end:
             raise ValueError(
-                f"测试文件端口偏移超出端口块: offset={offset}, block_size={TEST_FILE_PORT_BLOCK_SIZE}"
+                f"测试文件端口偏移超出端口块: offset={offset}, block_size={TEST_FILE_PORT_BLOCK_SIZE}, "
+                f"start={self.start}, end={self.end}"
             )
         return self.start + offset
 

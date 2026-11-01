@@ -153,7 +153,6 @@ export function useNodeDebugStateSync({
 
   useEffect(() => {
     const effectOwnerKey = ownerKey;
-    const effectOwnerGeneration = mutationGate.ownerGeneration;
     const pollGeneration = ++pollGenerationRef.current;
     setError(null);
     setState(null);

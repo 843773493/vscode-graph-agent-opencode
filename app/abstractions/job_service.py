@@ -116,7 +116,9 @@ class JobServiceProtocol(Protocol):
         message_id: str,
     ) -> PendingRequestListDTO: ...
 
-    async def clear_pending(self, session_id: str) -> PendingRequestListDTO: ...
+    async def clear_pending(
+        self, session_id: str, *, thread_id: str | None = None,
+    ) -> PendingRequestListDTO: ...
 
     async def start_job(
         self,

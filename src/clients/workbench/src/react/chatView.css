@@ -1,0 +1,16 @@
+.react-session-content { height: 100%; min-height: 0; }
+.native-thread-conversation { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.native-thread-conversation .chat-panel { flex: 1; min-height: 0; }
+.native-thread-conversation .composer { flex: 0 0 auto; }
+.native-thread-status { padding: 2px 12px; font-size: 11px; color: var(--bt-text-muted); }
+.native-thread-cached-history { height: 100%; }
+.native-thread-cached-content { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; margin: 0; padding: 0; border: 0; }
+
+.native-thread-layout { display: flex; height: 100%; min-height: 0; }
+.native-thread-conversation { flex: 1 1 0; min-width: 0; background: var(--bt-canvas-background); }
+.native-thread-resources { display: flex; flex: 1 1 0; flex-direction: column; min-width: 200px; border-left: var(--bt-surface-border); min-height: 0; }
+.native-thread-resources[hidden] { display: none; }
+.native-thread-resources .auxiliary-panel { min-height: 0; flex: 1; }
+.preserve-mounted-hidden { display: none !important; }
+
+.native-inspection-scope { flex: 0 0 auto; padding: 6px 12px; color: var(--bt-text-muted); font-size: 11px; border-bottom: var(--bt-surface-border); }

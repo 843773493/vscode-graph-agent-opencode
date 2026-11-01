@@ -1,306 +1,74 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react-test-renderer";
-import * as userViewStateApi from "../../api/gateway/userViewState";
-import type {
-  GatewayUserAccess,
-  GatewayUserViewState,
-} from "../../types/backend";
+import * as views from "./browserSessionViews";
+import type { SessionViewState } from "../../state/sessionViewState";
 import type { AppState } from "../../types/frontend";
-import type {
-  SessionViewStateHost,
-  SessionViewStateLoadOutcome,
-} from "./useSessionViewState";
 import { mountViewStateController } from "../../tests/fixtures/session/sessionViewState";
 
-function viewState(overrides: Partial<GatewayUserViewState> = {}): GatewayUserViewState {
-  return {
-    user_id: "user-view-state",
-    workspace_id: "workspace-view-state",
-    session_id: "session-view-state",
-    turn_anchor: "turn-0",
-    scroll_offset: 0,
-    follow_latest: true,
-    projection_version: 1,
-    tool_details_expanded: false,
-    updated_at: "2026-09-20T00:00:00Z",
-    ...overrides,
-  };
+const value: SessionViewState = { workspace_id: "workspace", session_id: "session", turn_anchor: "turn-1", scroll_offset: 45,
+  follow_latest: false, projection_version: 1, tool_details_expanded: true, updated_at: "2026-10-30T00:00:00Z" };
+const mounted: Array<{ unmount: () => void }> = [];
+const restores: Array<() => void> = [];
+afterEach(() => { mounted.splice(0).forEach(item => item.unmount()); restores.splice(0).forEach(restore => restore()); });
+async function mount(threadId?: string) {
+  const instance = await mountViewStateController({ initial: { currentSession: { session_id: "session" }, currentSessionWorkspaceId: "workspace",
+    gatewayUserViewStates: new Map(), expandDetails: false, status: "" } as unknown as AppState,
+    host: state => ({ apiPort: 0, currentWorkspaceId: "workspace", currentSessionId: "session", threadId,
+      scopeKey: threadId,
+      gatewayUserViewStates: state.gatewayUserViewStates, expandDetails: state.expandDetails }) });
+  mounted.push(instance); return instance;
 }
 
-function access(leaseGeneration = 3): GatewayUserAccess {
-  return {
-    kind: "user",
-    user_id: "user-view-state",
-    lease_generation: leaseGeneration,
-    expires_at: "2026-09-20T00:00:00Z",
-    takeover: false,
-  };
-}
-
-const host: SessionViewStateHost = {
-  apiPort: 49_413,
-  currentWorkspaceId: "workspace-view-state",
-  currentSessionId: "session-view-state",
-  gatewayUserAccess: access(),
-  gatewayUserViewStates: new Map(),
-  expandDetails: false,
-};
-
-const SCOPE_KEY = "workspace-view-state::session-view-state";
-
-let restoreApi = () => {};
-
-/** 只覆盖本链路读写的状态字段，其余字段对本链路无意义。 */
-function appState(overrides: Partial<AppState> = {}): AppState {
-  return {
-    currentSession: { session_id: "session-view-state" },
-    currentSessionWorkspaceId: "workspace-view-state",
-    gatewayUserViewStates: new Map(),
-    expandDetails: false,
-    status: "",
-    ...overrides,
-  } as unknown as AppState;
-}
-
-/** 挂载视图状态控制器并登记卸载；harness 通过 afterEach 统一回收。 */
-const liveHarnesses: Array<{ unmount: () => void }> = [];
-
-async function mount(options: {
-  host?: SessionViewStateHost | ((state: AppState) => SessionViewStateHost);
-  initial?: AppState;
-}) {
-  const mounted = await mountViewStateController({
-    host: options.host ?? host,
-    initial: options.initial ?? appState(),
-  });
-  liveHarnesses.push(mounted);
-  return mounted;
-}
-
-afterEach(() => {
-  for (const mounted of liveHarnesses.splice(0)) mounted.unmount();
-  restoreApi();
-});
-
-describe("useSessionViewState", () => {
-  test("并发加载共享请求，并在成功后完整应用后端对象", async () => {
-    let resolveRequest!: (value: GatewayUserViewState) => void;
-    let requests = 0;
-    const reader = spyOn(userViewStateApi, "getGatewayUserViewState").mockImplementation(
-      async () => {
-        requests += 1;
-        return await new Promise<GatewayUserViewState>((resolve) => {
-          resolveRequest = resolve;
-        });
-      },
-    );
-    restoreApi = () => reader.mockRestore();
-
-    const mounted = await mount({});
-    const first = mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
-    const second = mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
-    await Promise.resolve();
-    expect(requests).toBe(1);
-
-    const loaded = viewState({ tool_details_expanded: true, scroll_offset: 48 });
-    resolveRequest(loaded);
-    await act(async () => {
-      await Promise.all([first, second]);
-    });
-    // 后端对象整体落到会话 scope，并且当前会话命中时同步工具详情展开态。
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)).toEqual(loaded);
-    expect(mounted.state().expandDetails).toBe(true);
-  });
-
-  test("保存响应在 lease generation 变化后不污染当前用户状态", async () => {
-    let resolveRequest!: (value: GatewayUserViewState) => void;
-    const writer = spyOn(userViewStateApi, "putGatewayUserViewState").mockImplementation(
-      async () => await new Promise<GatewayUserViewState>((resolve) => {
-        resolveRequest = resolve;
-      }),
-    );
-    restoreApi = () => writer.mockRestore();
-
-    let currentHost = { ...host, gatewayUserAccess: access(7) };
-    const mounted = await mount({ host: () => currentHost });
-
-    mounted.controller().saveSessionViewState({
-      turn_anchor: "turn-1",
-      scroll_offset: 10,
-      follow_latest: true,
-    });
-    await Promise.resolve();
-    currentHost = { ...currentHost, gatewayUserAccess: access(8) };
-    await mounted.update();
-    resolveRequest(viewState({ scroll_offset: 10 }));
-    await act(async () => { await Promise.resolve(); });
-    // 迟到响应属于旧 lease：不得写进当前用户的视图状态。
-    expect(mounted.state().gatewayUserViewStates.size).toBe(0);
-  });
-
-  test("toggleExpandDetails 写入展开态并触发保存", async () => {
-    const writer = spyOn(userViewStateApi, "putGatewayUserViewState").mockImplementation(
-      async () => viewState(),
-    );
-    restoreApi = () => writer.mockRestore();
-
-    const mounted = await mount({});
-    act(() => mounted.controller().toggleExpandDetails(true));
-    await act(async () => { await Promise.resolve(); });
-
-    expect(mounted.state().expandDetails).toBe(true);
-    expect(writer).toHaveBeenCalledTimes(1);
-  });
-
-  test("读取失败把原始错误文本写进 status", async () => {
-    const reader = spyOn(userViewStateApi, "getGatewayUserViewState").mockImplementation(
-      async () => {
-        throw new Error("网关视图位置不可读");
-      },
-    );
-    restoreApi = () => reader.mockRestore();
-
-    const mounted = await mount({});
-    await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
-    });
-
-    expect(mounted.state().status).toBe("读取用户视图位置失败: 网关视图位置不可读");
-  });
-
-  test("后端权威返回 null 时删除该会话的陈旧视图状态", async () => {
-    const reader = spyOn(userViewStateApi, "getGatewayUserViewState").mockImplementation(
-      async () => null,
-    );
-    restoreApi = () => reader.mockRestore();
-
-    const mounted = await mount({
-      initial: appState({ gatewayUserViewStates: new Map([[SCOPE_KEY, viewState()]]) }),
-    });
-    await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
-    });
-
-    // 后端权威地表示「该会话没有保存的视图位置」：陈旧的本地缓存必须被删除，
-    // 而不是留成幽灵条目继续影响后续投影。
-    expect(mounted.state().gatewayUserViewStates.has(SCOPE_KEY)).toBe(false);
-    expect(mounted.state().gatewayUserViewStates.size).toBe(0);
-  });
-
-  test("接管换代后上一代 lease 的本地残留不再被应用", async () => {
-    // 第 7 代先正常读到一条视图状态，本地因此留有带代际登记的残留。
-    const reader = spyOn(userViewStateApi, "getGatewayUserViewState")
-      .mockResolvedValueOnce(viewState({ turn_anchor: "turn-stale" }))
-      .mockResolvedValueOnce(viewState({ turn_anchor: "turn-new" }));
-    restoreApi = () => reader.mockRestore();
-
-    // host 与 AppState 共用同一份镜像（生产里由 AppProvider 从 state 装配）。
-    let leaseGeneration = 7;
-    const mounted = await mount({
-      host: (state) => ({
-        ...host,
-        gatewayUserAccess: access(leaseGeneration),
-        gatewayUserViewStates: state.gatewayUserViewStates,
-      }),
-    });
-
-    await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
-    });
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)?.turn_anchor).toBe("turn-stale");
-
-    // 用户被接管：user_id 不变，lease 升到第 8 代；后端此时权威地没有视图位置。
-    leaseGeneration = 8;
-    await mounted.update();
-    await act(async () => {
-      await mounted.controller().loadSessionViewState("workspace-view-state", "session-view-state");
-    });
-
-    // 上一代的残留不得被应用，也不能短路掉读取：必须走后端并接受权威结果。
-    expect(reader).toHaveBeenCalledTimes(2);
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)?.turn_anchor).toBe("turn-new");
-  });
-
-  test("权威空与读取失败对调用方可见地区分", async () => {
-    const emptyMirror = new Map<string, GatewayUserViewState>();
-
-    // 404：后端权威地没有保存视图位置，属于合法空，不是失败。
-    const absentReader = spyOn(userViewStateApi, "getGatewayUserViewState")
-      .mockResolvedValue(null);
-    restoreApi = () => absentReader.mockRestore();
-    const absent = await mount({
-      host: { ...host, gatewayUserViewStates: emptyMirror },
-    });
-    let absentOutcome!: SessionViewStateLoadOutcome;
-    await act(async () => {
-      absentOutcome = await absent.controller()
-        .loadSessionViewState("workspace-view-state", "session-view-state");
-    });
-    // 权威空：loaded 且 viewState 为 null，不能与失败混淆。
-    expect(absentOutcome).toEqual({ kind: "loaded", viewState: null });
-    expect(emptyMirror.has(SCOPE_KEY)).toBe(false);
-    absent.unmount();
-
-    // 500：读取失败必须显式表现为 failed，并带上原始错误。
-    const failure = new Error("网关视图位置不可读");
-    const failingReader = spyOn(userViewStateApi, "getGatewayUserViewState")
-      .mockRejectedValue(failure);
-    restoreApi = () => failingReader.mockRestore();
-    const failing = await mount({
-      host: { ...host, gatewayUserViewStates: new Map<string, GatewayUserViewState>() },
-    });
-    let failureOutcome!: SessionViewStateLoadOutcome;
-    await act(async () => {
-      failureOutcome = await failing.controller()
-        .loadSessionViewState("workspace-view-state", "session-view-state");
-    });
-    expect(failureOutcome).toEqual({ kind: "failed", error: failure });
-  });
-
-  test("保存失败后重取校准，本地回到后端权威值并给出可见提示", async () => {
-    const writer = spyOn(userViewStateApi, "putGatewayUserViewState")
-      .mockRejectedValue(new Error("保存接口不可用"));
-    // 后端权威值：工具详情未展开（与本地乐观值相反），滚动位置为 5。
-    const reader = spyOn(userViewStateApi, "getGatewayUserViewState")
-      .mockResolvedValue(viewState({ tool_details_expanded: false, scroll_offset: 5 }));
-    restoreApi = () => { reader.mockRestore(); writer.mockRestore(); };
-
-    const mounted = await mount({
-      host: (state) => ({ ...host, gatewayUserViewStates: state.gatewayUserViewStates }),
-    });
-
-    // 乐观置位后保存失败：必须被重取校准纠正回后端真值。
-    await act(async () => {
-      mounted.controller().toggleExpandDetails(true);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
+describe("浏览器会话视图", () => {
+  test("未选择用户也恢复位置，并发读取只发起一次", async () => {
+    let finish!: (view: SessionViewState) => void;
+    const reader = spyOn(views, "readSessionView").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    restores.push(() => reader.mockRestore());
+    const m = await mount();
+    const first = m.controller().loadSessionViewState("workspace", "session");
+    const second = m.controller().loadSessionViewState("workspace", "session");
     expect(reader).toHaveBeenCalledTimes(1);
-    expect(mounted.state().expandDetails).toBe(false);
-    expect(mounted.state().gatewayUserViewStates.get(SCOPE_KEY)?.scroll_offset).toBe(5);
-    expect(mounted.state().status).toBe("保存用户视图位置失败: 保存接口不可用");
+    await act(async () => { finish(value); await first; await second; });
+    expect(m.state().gatewayUserViewStates.get("workspace::session")).toEqual(value);
+    expect(m.state().expandDetails).toBe(true);
   });
-
-  test("保存失败且重取也失败时，提示同时包含两段失败原因", async () => {
-    const writer = spyOn(userViewStateApi, "putGatewayUserViewState")
-      .mockRejectedValue(new Error("保存接口不可用"));
-    const reader = spyOn(userViewStateApi, "getGatewayUserViewState")
-      .mockRejectedValue(new Error("读取接口不可用"));
-    restoreApi = () => { writer.mockRestore(); reader.mockRestore(); };
-
-    const mounted = await mount({
-      host: (state) => ({ ...host, gatewayUserViewStates: state.gatewayUserViewStates }),
-    });
-
-    await act(async () => {
-      mounted.controller().toggleExpandDetails(true);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(mounted.state().status).toBe(
-      "保存用户视图位置失败: 保存接口不可用；重新读取用户视图位置也失败: 读取接口不可用",
-    );
+  test("Thread 读写精确携带 owner，保存镜像来自持久化返回值", async () => {
+    const reader = spyOn(views, "readSessionView").mockResolvedValue(null);
+    const writer = spyOn(views, "writeSessionView").mockResolvedValue(value);
+    restores.push(() => reader.mockRestore(), () => writer.mockRestore());
+    const m = await mount("thread-b");
+    await act(async () => { await m.controller().loadSessionViewState("workspace", "session"); });
+    expect(reader.mock.calls[0]).toEqual([0, "workspace", "session", "thread-b"]);
+    await act(async () => { m.controller().saveSessionViewState({ turn_anchor: "turn-1", scroll_offset: 45, follow_latest: false }); });
+    expect(writer.mock.calls[0]?.[4]).toBe("thread-b");
+    expect(m.state().gatewayUserViewStates.get("thread-b")).toEqual(value);
+  });
+  test("旧读取完成不能覆盖用户后续保存的位置", async () => {
+    let finish!: (view: SessionViewState) => void;
+    const reader = spyOn(views, "readSessionView").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const writer = spyOn(views, "writeSessionView").mockResolvedValue({ ...value, turn_anchor: "turn-new" });
+    restores.push(() => reader.mockRestore(), () => writer.mockRestore());
+    const m = await mount();
+    const pending = m.controller().loadSessionViewState("workspace", "session");
+    await act(async () => { m.controller().saveSessionViewState({ turn_anchor: "turn-new", scroll_offset: 0, follow_latest: false }); });
+    await act(async () => { finish(value); await pending; });
+    expect(m.state().gatewayUserViewStates.get("workspace::session")?.turn_anchor).toBe("turn-new");
+  });
+  test("读取失败和没有保存的视图不同，故障明确显示", async () => {
+    const reader = spyOn(views, "readSessionView").mockRejectedValue(new Error("数据库不可读"));
+    restores.push(() => reader.mockRestore());
+    const m = await mount();
+    await act(async () => { expect((await m.controller().loadSessionViewState("workspace", "session")).kind).toBe("failed"); });
+    expect(m.state().status).toBe("读取浏览器视图位置失败: 数据库不可读");
+  });
+  test("保存失败交给宿主错误出口，保留先前持久化镜像", async () => {
+    const reader = spyOn(views, "readSessionView").mockResolvedValue(value);
+    const writer = spyOn(views, "writeSessionView").mockRejectedValue(new Error("事务提交失败"));
+    restores.push(() => reader.mockRestore(), () => writer.mockRestore());
+    const m = await mount("thread-b");
+    await act(async () => { await m.controller().loadSessionViewState("workspace", "session"); });
+    await act(async () => { m.controller().saveSessionViewState({ turn_anchor: "unsaved", scroll_offset: 99, follow_latest: false }); });
+    expect(m.state().status).toBe("保存浏览器视图位置失败: 事务提交失败");
+    expect(m.state().gatewayUserViewStates.get("thread-b")).toEqual(value);
   });
 });

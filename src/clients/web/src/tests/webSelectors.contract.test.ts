@@ -11,7 +11,7 @@ const selectorFile = new URL("../../../../tests/clients/selectors/web-selectors.
 
 /** 每个选择器对应的 Web 源码文件；新增选择器必须在此登记，否则用例失败。 */
 const selectorAnchors: Record<string, string> = {
-  appRoot: "../index.html",
+  appRoot: "../../workbench/index.html",
   composer: "./components/composer/Composer.tsx",
   sendButton: "./components/composer/ComposerActionButtons.tsx",
   sessionTree: "./components/agentSessions/AgentSessionsSessionTree.tsx",

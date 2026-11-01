@@ -11,6 +11,7 @@ from typing import Literal
 
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contract
+from app.gateway.config.connection_ids import _CONNECTION_ID_RECORD_VERSION
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
@@ -28,7 +29,7 @@ _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
 class LoggingMigrationInput:
     domain: ConfigDomain
     path: Path
-    kind: Literal["file", "source_layer", "active"]
+    kind: Literal["file", "source_layer", "active", "connection_identity"]
     key: str
     payload: dict[str, object] | None
     digest: str | None
@@ -120,6 +121,36 @@ def _json_payload(content: str, *, source: str) -> dict[str, object]:
     return payload
 
 
+def read_connection_identity(connection: sqlite3.Connection) -> tuple[int, dict[str, object]] | None:
+    """离线读取可无损升级的身份账本；运行时仍只接受当前版本。"""
+    row = connection.execute(
+        "SELECT config_version,payload_json FROM gateway_config WHERE config_key='gateway_connection_ids'"
+    ).fetchone()
+    if row is None:
+        return None
+    version, content = row
+    if version not in {3, _CONNECTION_ID_RECORD_VERSION}:
+        raise ValueError(f"Gateway connection_id 账本版本不在离线迁移支持范围: {version}")
+    payload = _json_payload(content, source="gateway_connection_ids")
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        raise TypeError("Gateway connection_id 账本 entries 必须是数组")
+    identities: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise TypeError("Gateway connection_id 账本条目必须是对象")
+        identity = entry.get("connection_id")
+        if not isinstance(identity, str) or not identity or identity in identities:
+            raise ValueError("Gateway connection_id 账本身份为空或重复，拒绝重新分配")
+        if not isinstance(entry.get("fingerprint"), list):
+            raise TypeError("Gateway connection_id 账本 fingerprint 必须是数组")
+        identities.add(identity)
+    migration = payload.get("migration")
+    if migration is not None and (not isinstance(migration, dict) or "backup_path" in migration):
+        raise ValueError("Gateway connection_id 账本含无法无损升级的迁移元数据，拒绝丢弃原备份路径")
+    return version, payload
+
+
 def _read_database(
     path: Path, domain: ConfigDomain,
 ) -> tuple[list[LoggingMigrationInput], list[dict[str, str]]]:
@@ -176,9 +207,14 @@ def _read_database(
         ):
             unsettled.append({"source": str(path), "kind": "claim", "id": apply_id[0], "state": "claimed"})
         if domain == "gateway":
-            row = connection.execute("SELECT payload_json FROM gateway_config WHERE config_key='gateway_connection_ids'").fetchone()
-            if row is not None:
-                migration = _json_payload(row[0], source=str(path)).get("migration")
+            identity = read_connection_identity(connection)
+            if identity is not None:
+                version, payload = identity
+                inputs.append(LoggingMigrationInput(
+                    domain, path, "connection_identity", "gateway_connection_ids",
+                    payload, None, source_config_version=version,
+                ))
+                migration = payload.get("migration")
                 if isinstance(migration, dict) and migration.get("state") == "planned":
                     unsettled.append({"source": str(path), "kind": "connection_id_migration", "id": "gateway_connection_ids", "state": "planned"})
     finally:

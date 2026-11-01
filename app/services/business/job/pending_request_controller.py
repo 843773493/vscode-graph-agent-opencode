@@ -239,11 +239,11 @@ class JobPendingRequestController:
             )
         return await self.list(session_id)
 
-    async def clear(self, session_id: str) -> PendingRequestListDTO:
+    async def clear(self, session_id: str, *, thread_id: str | None = None) -> PendingRequestListDTO:
         async with self._lock:
             jobs = self._get_jobs()
             now = datetime.now()  # noqa: DTZ005
-            for job_id in self._queue.queued_job_ids(session_id):
+            for job_id in self._queue.queued_job_ids(session_id, thread_id):
                 job = jobs[job_id]
                 await self._persist_terminal_status(job, "cancelled")
                 self._queue.remove(session_id, job_id)
@@ -253,7 +253,7 @@ class JobPendingRequestController:
                     error_message="消息已从队列撤回",
                     now=now,
                 )
-        return await self.list(session_id)
+        return await self.list(session_id, thread_id=thread_id)
 
     async def reject_reorder(self, session_id: str) -> None:
         async with self._lock:

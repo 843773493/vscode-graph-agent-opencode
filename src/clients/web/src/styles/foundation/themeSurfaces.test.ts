@@ -18,7 +18,6 @@ describe("顶层语义表面", () => {
     for (const token of [
       "--bt-canvas-background",
       "--bt-chrome-surface",
-      "--bt-toolbar-background",
       "--bt-workspace-surface",
       "--bt-panel-surface",
       "--bt-floating-surface",
@@ -35,29 +34,19 @@ describe("顶层语义表面", () => {
   });
 
   test("布局宿主透明且大面积工作区不叠加内容面板", async () => {
-    const [css, app] = await Promise.all([
-      Bun.file(new URL("./themeSurfaces.css", import.meta.url)).text(),
-      Bun.file(new URL("../../App.tsx", import.meta.url)).text(),
-    ]);
+    const css = await Bun.file(new URL("./themeSurfaces.css", import.meta.url)).text();
 
     expect(css).toMatch(/\[data-bt-surface="layout"\][\s\S]*?background:\s*transparent/);
-    expect(app).toMatch(/sessions-workbench-grid[\s\S]*?data-bt-surface="layout"/);
-    expect(app).toMatch(/sessions-part-card[\s\S]*?data-bt-surface="workspace"/);
+    // 新宿主实际应用完整产品样式且不影响外层的行为，由 react_surface.mjs 验证。
     expect(css).toMatch(
       /\[data-bt-surface="workspace"\][\s\S]*?backdrop-filter:\s*var\(--bt-workspace-backdrop-filter\)/,
     );
   });
 
   test("辅助区所有标签页及整区列表后代保持透明", async () => {
-    const [surfaceCss, layoutCss, auxiliaryPanel] = await Promise.all([
+    const [surfaceCss, layoutCss] = await Promise.all([
       Bun.file(new URL("./themeSurfaces.css", import.meta.url)).text(),
       Bun.file(new URL("./workbenchLayout.css", import.meta.url)).text(),
-      Bun.file(
-        new URL(
-          "../../components/workspace/WorkspaceAuxiliaryPanel.tsx",
-          import.meta.url,
-        ),
-      ).text(),
     ]);
     const contractStart = surfaceCss.indexOf(
       ".auxiliary-panel > .auxiliary-view-body",
@@ -76,7 +65,7 @@ describe("顶层语义表面", () => {
       expect(contract).toContain(selector);
     }
     expect(contract).toMatch(/background:\s*transparent/);
-    expect(auxiliaryPanel.match(/data-bt-surface="layout"/g)).toHaveLength(4);
+    // 所有五个真实资源标签的 surface 及计算背景色由 react_surface.mjs 逐项核对。
     expect(layoutCss).not.toMatch(
       /\.auxiliary-resources-body\s*\{[^}]*background:/,
     );

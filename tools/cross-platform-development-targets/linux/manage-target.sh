@@ -168,6 +168,7 @@ case "$action" in
     if test "$initialize_submodules" = 1; then
       git -C "$repository" submodule update --init --recursive
     fi
+    test -f "$repository/src/clients/workbench/upstream/product.json" || fail "Workbench 固定子模块未初始化，请执行 bootstrap --submodules"
     system_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     if test -x "$repository/.venv/bin/python"; then
       venv_version=$($repository/.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)
@@ -188,7 +189,8 @@ case "$action" in
       fi
       node -e 'require("node-pty")' >/dev/null
       bun install --cwd src/clients/web --frozen-lockfile
-      lock_hash=$(sha256sum uv.lock bun.lock src/clients/web/bun.lock | sha256sum | awk '{print $1}')
+      bun install --cwd src/clients/workbench --frozen-lockfile
+      lock_hash=$(sha256sum uv.lock bun.lock src/clients/web/bun.lock src/clients/workbench/bun.lock | sha256sum | awk '{print $1}')
       printf 'platform=linux\npython=%s\nlocks=%s\n' "$system_version" "$lock_hash" > .venv/.boxteam-target-metadata
     )
     printf '%s\n' "$repository/.venv/bin/python"

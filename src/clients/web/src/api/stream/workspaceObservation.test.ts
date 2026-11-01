@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { HttpRequestError } from "../http";
 import { streamSessionActivity } from "../session/sessionActivity";
 import { SessionStreamIdleTimeoutError, streamSessionEvents, TraceCursorGoneError } from "./sessionTraceStream";
 import { streamWorkspaceFileEvents } from "./workspaceFileEvents";
@@ -19,7 +20,7 @@ function envelope(value: object): Uint8Array {
   return encoder.encode(`event: observation\ndata: ${JSON.stringify(value)}\n\n`);
 }
 
-function installBackend(): Connection[] {
+function installBackend(requestId: string | null = null): Connection[] {
   const connections: Connection[] = [];
   globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
     const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
@@ -43,7 +44,8 @@ function installBackend(): Connection[] {
       },
       cancel() { connection.cancelled = true; },
     });
-    return new Response(body, { headers: { "Content-Type": "text/event-stream", "X-BoxTeam-Route-Revision": "gateway:9" } });
+    return new Response(body, { headers: { "Content-Type": "text/event-stream", "X-BoxTeam-Route-Revision": "gateway:9",
+      ...(requestId ? { "X-Request-ID": requestId } : {}) } });
   }, { preconnect: originalFetch.preconnect });
   return connections;
 }
@@ -165,6 +167,21 @@ describe("Workspace 单物理 SSE 观察者", () => {
       await waitUntil(() => active.received.files.length === 1);
       expect(connections).toHaveLength(1);
       expect(active.received.activity).toEqual([5]);
+    } finally { await active.stop(); }
+  });
+
+  test.each(["request-observation-original", null])("逻辑流 HTTP 错误保留物理响应请求身份：%s", async (requestId) => {
+    const connections = installBackend(requestId);
+    const active = readers(49_109);
+    try {
+      await waitUntil(() => connections.length === 1);
+      connections[0].controller.enqueue(envelope({ subscription_id: owner(connections[0], "workspace_files").subscription_id,
+        state: "error", status: 503, detail_json: JSON.stringify({ reason: "读取失败", request_id: "body-only" }) }));
+      const failure = await active.outcomes.files;
+      expect(failure).toBeInstanceOf(HttpRequestError);
+      expect((failure as HttpRequestError).requestId).toBe(requestId);
+      expect((failure as HttpRequestError).path).toBe("/api/v1/workspace/observations/stream");
+      expect(connections[0].cancelled).toBe(false);
     } finally { await active.stop(); }
   });
 

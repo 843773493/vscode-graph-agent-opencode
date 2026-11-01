@@ -37,7 +37,7 @@ import {
   type SessionGroupingMode,
   type SessionSortMode,
 } from '../../agentSessions/agentSessionsUtils';
-import { errorMessage } from "../../../utils/errorMessage";
+import { errorMessage, isErrorReported } from "../../../utils/errorMessage";
 
 const SessionResourceExplorer = React.lazy(
   () => import('../../agentSessions/SessionResourceExplorer'),
@@ -60,6 +60,7 @@ interface AgentSessionsPanelProps {
     sourceSessionId: string,
   ) => Promise<void>;
   onStatusChange: (message: string) => void;
+  onError: (message: string) => void;
   onOpenDiagnostic: (title: string, detail: string) => void;
   isOpen: boolean;
   workspaceName: string;
@@ -87,6 +88,7 @@ interface AgentSessionsPanelProps {
   ) => Promise<void>;
   onCopyWorkspaceInformation: (workspaceId: string) => Promise<void>;
   onSelectWorkspaceSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
+  onPinSession?: (workspaceId: string, sessionId: string) => void;
   activeSession: Session | null;
   sessionAttachmentSummaries: Map<string, SessionAttachmentSummary>;
   activeJobIdsBySession: ReadonlyMap<string, string>;
@@ -130,6 +132,7 @@ export default function AgentSessionsPanel({
   onSetSessionParent,
   onForkSessionContext,
   onStatusChange,
+  onError,
   onOpenDiagnostic,
   isOpen,
   workspaceName,
@@ -151,6 +154,7 @@ export default function AgentSessionsPanel({
   onCopySessionInformation,
   onCopyWorkspaceInformation,
   onSelectWorkspaceSession,
+  onPinSession,
   activeSession,
   sessionAttachmentSummaries,
   activeJobIdsBySession,
@@ -211,8 +215,8 @@ export default function AgentSessionsPanel({
       try {
         await onRefreshWorkspaceSessions(workspaceId);
       } catch (error) {
-        onStatusChange(
-          `工作区已启动，但刷新会话列表失败: ${errorMessage(error)}`,
+        onError(
+          `工作区已启动，但刷新会话列表失败 (${workspaceId}): ${errorMessage(error)}`,
         );
       }
       onInvalidateSessionCatalog(workspaceId);
@@ -350,15 +354,6 @@ export default function AgentSessionsPanel({
       ),
     }));
   };
-  const handleActivateWorkspace = (workspace: GatewayWorkspace) => {
-    if (workspace.workspace_id === activeGatewayWorkspaceId || workspaceSwitching) {
-      return;
-    }
-    void onActivateWorkspace(workspace.workspace_id).catch((error: unknown) => {
-      const message = errorMessage(error);
-      onStatusChange(`工作区切换失败: ${message}`);
-    });
-  };
   const collapseAllSessionSections = () => {
     onPreferencesChange(() => ({
       collapsed_section_ids: sessionSections.map((section) => section.id),
@@ -382,8 +377,9 @@ export default function AgentSessionsPanel({
               className="new-session-pill"
               onClick={() => {
                 void onCreateSession().catch((error: unknown) => {
+                  if (isErrorReported(error)) return;
                   const message = errorMessage(error);
-                  onStatusChange(`创建会话失败: ${message}`);
+                  onError(`创建会话失败: ${message}`);
                 });
               }}
               title="新建会话"
@@ -508,6 +504,7 @@ export default function AgentSessionsPanel({
                 sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
                 gatewayUserAccess={gatewayUserAccess}
                 onSelectSession={onSelectWorkspaceSession}
+                onPinSession={onPinSession}
                 onStatusChange={onStatusChange}
                 onOpenDiagnostic={onOpenDiagnostic}
                 onOpenWorkspaceMenu={openWorkspaceMenu}
@@ -617,8 +614,9 @@ export default function AgentSessionsPanel({
           onUnbindSession={(sessionId, workspaceId) => {
             void onSetSessionParent(workspaceId, sessionId, null).catch(
               (error: unknown) => {
+                if (isErrorReported(error)) return;
                 const message = errorMessage(error);
-                onStatusChange(`解除会话绑定失败: ${message}`);
+                onError(`解除会话绑定失败 (${workspaceId}/${sessionId}): ${message}`);
               },
             );
           }}
@@ -642,7 +640,7 @@ export default function AgentSessionsPanel({
               (candidate) => candidate.workspace_id === workspaceId,
             );
             if (!workspace) {
-              onStatusChange(`无法重命名未知工作区: ${workspaceId}`);
+              onError(`无法重命名未知工作区: ${workspaceId}`);
               return;
             }
             setRenamingWorkspace(workspace);
@@ -653,6 +651,7 @@ export default function AgentSessionsPanel({
           onStopWorkspace={onStopWorkspace}
           startingWorkspaceIds={startingWorkspaceIds}
           onStatusChange={onStatusChange}
+          onError={onError}
         />
         <WorkspaceRenameDialog
           workspace={renamingWorkspace}

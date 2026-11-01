@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
-import { useComposerState } from "../../hooks";
+import { useComposerState } from "../../hooks/app/appContext";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
-import { useComposerDraft } from "../../hooks/composer/useComposerDraft";
+import { useComposerAttachments, useComposerDraft, writeComposerAttachments } from "../../hooks/composer/useComposerDraft";
 import { useSkillUntrackCommand } from "../../hooks/composer/useSkillUntrackCommand";
 import {
   composerDraftScopeKey,
@@ -22,7 +22,6 @@ import {
   fileToSelectedAttachment,
   MEDIA_ONLY_PROMPT,
   mediaFilesFromClipboard,
-  type SelectedAttachment,
 } from "../../utils/media/mediaAttachments";
 import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
@@ -71,7 +70,7 @@ function nextDeliveryPolicy(policy: DeliveryPolicy): DeliveryPolicy {
   return "after_turn";
 }
 
-function Composer() {
+function Composer({ threadId }: { threadId?: string }) {
   const {
     state,
     setStatus,
@@ -93,7 +92,6 @@ function Composer() {
     getLatestAssistantContent,
   } =
     useComposerState();
-  const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
   const [selectedBrowserElements, setSelectedBrowserElements] = useState<
     BrowserElementSelection[]
   >([]);
@@ -124,20 +122,23 @@ function Composer() {
   const currentSessionId = state.currentSession?.session_id ?? null;
   const currentWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
-  const currentSessionCacheKey =
-    currentSessionId && currentWorkspaceId
-      ? sessionScopeKey(currentWorkspaceId, currentSessionId)
-      : currentSessionId;
+  const sessionKey = currentSessionId && currentWorkspaceId
+    ? sessionScopeKey(currentWorkspaceId, currentSessionId) : currentSessionId;
+  const currentSessionCacheKey = threadId === undefined ? sessionKey
+    : JSON.stringify([currentWorkspaceId, currentSessionId, threadId]);
   const [input, setInput] = useComposerDraft(
     currentWorkspaceId,
     currentSessionId,
-    state.gatewayUserScope,
+    state.browserViewScope,
+    threadId,
+    setAttachmentError,
   );
+  const draftScopeKey = composerDraftScopeKey(currentWorkspaceId, currentSessionId, state.browserViewScope, threadId);
+  const [attachments, setAttachments] = useComposerAttachments(draftScopeKey, setAttachmentError);
   // 最近一次渲染的会话作用域键。提交失败回填必须按「发起提交时的作用域」归属，
   // 否则用户在发送在途期间切走会话后，失败回填会把上一个会话的输入写进新会话。
   const currentScopeKeyRef = useRef(currentSessionCacheKey);
   currentScopeKeyRef.current = currentSessionCacheKey;
-  // TODO: 附件包含 data URL，后续使用 IndexedDB 恢复；本轮只持久化文本草稿。
   const previousSessionIdRef = useRef<string | null>(currentSessionCacheKey);
   const visibleGoal = state.currentGoalSessionId === currentSessionId
     ? state.currentGoal
@@ -185,7 +186,6 @@ function Composer() {
       return;
     }
     previousSessionIdRef.current = currentSessionCacheKey;
-    setAttachments([]);
     setSelectedBrowserElements([]);
     setAttachmentError("");
     setComposerNotice("");
@@ -484,7 +484,8 @@ function Composer() {
       draftScopeKey: composerDraftScopeKey(
         currentWorkspaceId,
         currentSessionId,
-        state.gatewayUserScope,
+        state.browserViewScope,
+        threadId,
       ),
     };
     inFlightSubmissionRef.current = submission;
@@ -525,7 +526,10 @@ function Composer() {
       // 污染成当前会话的输入，同时用户切回该会话时内容仍在。失败原因已由
       // AppProvider 写入 AppState.status，不会静默消失。
       if (!composerDraftExceedsLimit(typedContent)) {
-        writeComposerDraft(submission.draftScopeKey, typedContent);
+        void Promise.all([
+          writeComposerDraft(submission.draftScopeKey, typedContent),
+          writeComposerAttachments(submission.draftScopeKey, sentAttachments),
+        ]).catch(cause => setStatus(`恢复草稿失败：${errorMessage(cause)}`));
       }
     }).then(() => {
       if (inFlightSubmissionRef.current === submission) {
@@ -605,9 +609,10 @@ function Composer() {
       return;
     }
 
-    void interruptSession().catch(() => {
-      // 失败已由 AppProvider 写入 AppState.status，状态栏会显示；这里只需
-      // 接住 rejection，避免变成未处理拒绝。
+    setAttachmentError("");
+    const scopeKey = currentSessionCacheKey;
+    void interruptSession().catch((error: unknown) => {
+      if (currentScopeKeyRef.current === scopeKey) setAttachmentError(`中断生成失败：${errorMessage(error)}`);
     });
   };
 
@@ -654,7 +659,7 @@ function Composer() {
       return;
     }
     void refreshAgents(currentWorkspaceId).catch((error: unknown) => {
-      setStatus(`刷新模型列表失败: ${errorMessage(error)}`);
+      setAttachmentError(`刷新模型列表失败: ${errorMessage(error)}`);
     });
   };
 
@@ -908,7 +913,7 @@ function Composer() {
                           delivery_policy_default: nextPolicy,
                         },
                       }).catch((error: unknown) => {
-                        setStatus(
+                        setAttachmentError(
                           `保存默认发送方式失败: ${errorMessage(error)}`,
                         );
                       });

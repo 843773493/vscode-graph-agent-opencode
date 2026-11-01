@@ -29,7 +29,6 @@ import {
 import { useWorkspaceFileTreeDirectories } from "./useWorkspaceFileTreeDirectories";
 import {
   useWorkspaceFileTreeContextMenu,
-  type FileTreeContextMenuTarget,
   type WorkspaceFileTreeContextMenuApi,
 } from "./useWorkspaceFileTreeContextMenu";
 import WorkspaceFileTreeContextMenu from "./WorkspaceFileTreeContextMenu";
@@ -63,6 +62,7 @@ interface WorkspaceFileTreeProps {
   onExpandedPathsChange: (paths: string[]) => void;
   onCloseSearch: () => void;
   onOpenFile: (node: WorkspaceFileNode) => void;
+  onFileOpenMenu?: import("./WorkspaceFileTreeContextMenu").FileOpenMenuHandler;
   onStatusChange: (text: string) => void;
 }
 
@@ -104,6 +104,7 @@ export default function WorkspaceFileTree({
   onExpandedPathsChange,
   onCloseSearch,
   onOpenFile,
+  onFileOpenMenu,
   onStatusChange,
 }: WorkspaceFileTreeProps) {
   const port = apiPort ?? DEFAULT_BACKEND_PORT;
@@ -1066,6 +1067,7 @@ export default function WorkspaceFileTree({
         menu={menu}
         shortcuts={shortcuts}
         defaultShortcutPaths={defaultShortcutPaths}
+        onFileOpenMenu={onFileOpenMenu}
       />
     </div>
   );

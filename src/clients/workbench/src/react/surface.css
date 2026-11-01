@@ -1,0 +1,48 @@
+:host {
+  color: var(--vscode-editor-foreground);
+  background: var(--bt-canvas-background);
+  background-image: var(--bt-background-image);
+  background-position: var(--bt-background-position);
+  background-size: var(--bt-background-size);
+  background-repeat: no-repeat;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  --bt-text-primary: var(--vscode-editor-foreground);
+  --bt-text-muted: var(--vscode-descriptionForeground);
+  --bt-text-subtle: var(--vscode-descriptionForeground);
+  --bt-text-on-strong: var(--vscode-button-foreground);
+  --bt-accent: var(--vscode-focusBorder);
+  --bt-panel-background: var(--vscode-editor-background);
+  --bt-surface-background: var(--vscode-editor-background);
+  --bt-surface-raised: var(--vscode-editorWidget-background);
+  --bt-menu-background: var(--vscode-menu-background);
+  --bt-input-background: var(--vscode-input-background);
+  --bt-panel-border: var(--vscode-panel-border);
+  --bt-border: var(--vscode-panel-border);
+  --bt-surface-border: 1px solid var(--vscode-panel-border);
+  --bt-focus-border: var(--vscode-focusBorder);
+  --bt-button-background: var(--vscode-button-background);
+  --bt-hover-background: var(--vscode-list-hoverBackground);
+  --bt-toolbar-hover-background: var(--vscode-toolbar-hoverBackground);
+  --bt-active-selection-background: var(--vscode-list-activeSelectionBackground);
+  --bt-active-selection-foreground: var(--vscode-list-activeSelectionForeground);
+  --bt-badge-background: var(--vscode-badge-background);
+  --bt-badge-foreground: var(--vscode-badge-foreground);
+  --bt-status-danger: var(--vscode-errorForeground);
+  --bt-status-warning: var(--vscode-editorWarning-foreground);
+  --bt-status-success: var(--vscode-testing-iconPassed);
+  --bt-status-info: var(--vscode-editorInfo-foreground);
+  --bt-font-family-mono: var(--monaco-monospace-font);
+  --bt-radius-small: 3px;
+  --bt-radius-large: 6px;
+}
+* { box-sizing: border-box; }
+.react-session-content { height: 100%; min-height: 0; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .5; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.react-session-overlays .workspace-dialog-backdrop { position: fixed; padding: 16px; }
+.react-session-overlays .workspace-dialog { max-width: 100%; }
+.react-session-content [role=alert] { color: var(--vscode-errorForeground); }

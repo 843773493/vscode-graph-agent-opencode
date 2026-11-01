@@ -14,6 +14,9 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
+)
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
 from tests.support.ports import integration_port_block_for_file
@@ -104,6 +107,7 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
     request: pytest.FixtureRequest,
     browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
+    web_workbench_assets: Path,
     integration_workspace_root_path: str,
 ) -> None:
     project_root = Path.cwd().resolve()
@@ -115,16 +119,6 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
     )
     if chromium_path is None:
         pytest.fail("partial text 浏览器集成需要 Chromium")
-
-    build = await asyncio.to_thread(
-        subprocess.run,
-        ["bun", "run", "build"],
-        cwd=project_root / "src" / "clients" / "web",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
 
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_dir)
@@ -179,13 +173,11 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
         default_backend_url=browser_backend[0],
         port=port_block.port(20),
         extra_env={
-            "BOXTEAM_WEB_ASSETS": str(
-                project_root / "src" / "clients" / "web" / "dist"
-            ),
+            "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
         },
     )
-    artifacts = Path(browser_backend[1]).parent / "artifacts"
-    artifacts.mkdir(parents=True, exist_ok=True)
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.artifacts_dir
     result_path = artifacts / "partial-text-boundary-display-result.json"
     screenshot_path = artifacts / "partial-text-boundary-display-failure.png"
     result_path.unlink(missing_ok=True)
@@ -218,7 +210,6 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
             environment.update(temporary_environment)
             browser_result = await asyncio.to_thread(
@@ -234,6 +225,8 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
                 timeout=120,
                 check=False,
             )
+        (artifacts / "browser.log").write_text(browser_result.stdout + browser_result.stderr)
+        (artifacts / "browser-process.json").write_text(json.dumps({"exit_code": browser_result.returncode}) + "\n")
         assert browser_result.returncode == 0, (
             "partial text 浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"

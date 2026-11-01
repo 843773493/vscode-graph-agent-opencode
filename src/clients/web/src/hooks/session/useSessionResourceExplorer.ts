@@ -17,6 +17,7 @@ import {
 import type {
   GatewaySessionSearchResults,
   GatewayUserAccess,
+  SessionCatalogExport,
   SessionCatalogNode,
   SessionCatalogPage,
   WorkspaceNavigationTree,
@@ -39,7 +40,7 @@ import {
   type SessionCatalogOutboxRuntime,
   type SessionCatalogOutboxSnapshot,
 } from "./sessionCatalogOutboxRuntime";
-import { changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
+import { CatalogReadSupersededError, changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 import { HttpRequestError, isTransientNetworkError } from "../../api/http";
@@ -72,8 +73,6 @@ const emptySearch: GatewaySessionSearchResults = {
 };
 
 const CATALOG_RETRY_LIMIT = 3;
-
-class CatalogReadSupersededError extends Error {}
 
 /**
  * 目录分支读取是否可重试的唯一判据：只认「明确的错误类型 + 状态码」，不再对错误
@@ -529,95 +528,139 @@ export function useSessionResourceExplorer({
       reuseConfirmedBranches?: boolean;
     } = {},
   ) => {
-    const removed = new Map<string, number>();
-    const readableParents = [...new Set(parentNodeIds)].filter((parentNodeId) => {
-      if (parentNodeId === null || !confirmedRead.visibleParentIds
-        || confirmedRead.visibleParentIds.has(parentNodeId)) return true;
-      const key = branchKey(workspaceId, parentNodeId);
-      const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
-      // 权威节点集已撤销该可见分支；旧在途页不得把缓存重新写回来。
-      branchRequestRefs.current.set(key, requestId);
-      removed.set(key, requestId);
-      return false;
-    });
-    const results = await Promise.all(readableParents.map(async (parentNodeId) => {
-      const key = branchKey(workspaceId, parentNodeId);
-      const cached = branchesRef.current.get(key);
-      if (confirmedRead.reuseConfirmedBranches
-        && !confirmedRead.additionalParentNodeIds?.includes(parentNodeId)
-        && confirmedRead.minimumCatalogRevision !== undefined
-        && cached !== undefined
-        && cached.catalog_revision === confirmedRead.minimumCatalogRevision
-        && !cached.loading && cached.error === null) {
-        return {
-          key, requestId: branchRequestRefs.current.get(key), parentNodeId,
-          page: { ...cached, catalog_revision: confirmedRead.minimumCatalogRevision }, error: null,
-        };
+    for (let attempt = 0; ; attempt += 1) {
+      const removed = new Map<string, number>();
+      const readableParents = [...new Set(parentNodeIds)].filter((parentNodeId) => {
+        if (parentNodeId === null || !confirmedRead.visibleParentIds
+          || confirmedRead.visibleParentIds.has(parentNodeId)) return true;
+        const key = branchKey(workspaceId, parentNodeId);
+        const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
+        // 权威节点集已撤销该可见分支；旧在途页不得把缓存重新写回来。
+        branchRequestRefs.current.set(key, requestId);
+        removed.set(key, requestId);
+        return false;
+      });
+      const results = await Promise.all(readableParents.map(async (parentNodeId) => {
+        const key = branchKey(workspaceId, parentNodeId);
+        const cached = branchesRef.current.get(key);
+        if (confirmedRead.reuseConfirmedBranches
+          && !confirmedRead.additionalParentNodeIds?.includes(parentNodeId)
+          && confirmedRead.minimumCatalogRevision !== undefined
+          && cached !== undefined
+          && cached.catalog_revision === confirmedRead.minimumCatalogRevision
+          && !cached.loading && cached.error === null) {
+          return {
+            key, requestId: branchRequestRefs.current.get(key), parentNodeId,
+            page: { ...cached, catalog_revision: confirmedRead.minimumCatalogRevision }, error: null,
+          };
+        }
+        const request = readCatalogBranch(
+          workspaceId, parentNodeId,
+          confirmedRead.appendParentNodeId !== undefined && confirmedRead.appendParentNodeId === parentNodeId,
+          confirmedRead,
+        );
+        const requestId = branchRequestRefs.current.get(key);
+        try {
+          const page = await request;
+          if (!page) throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`);
+          return { key, requestId, parentNodeId, page, error: null };
+        } catch (error) {
+          return { key, requestId, parentNodeId, page: null, error };
+        }
+      }));
+      const errors = results.flatMap((result) => result.error === null ? [] : [`${result.parentNodeId ?? "root"}: ${errorMessage(result.error)}`]);
+      let superseded = results.some((result) => result.error instanceof CatalogReadSupersededError);
+      let failed = results.some((result) => result.error !== null && !(result.error instanceof CatalogReadSupersededError));
+      if (confirmedRead.signal?.aborted) {
+        errors.push("权威分支刷新已取消");
+        failed = true;
       }
-      const request = readCatalogBranch(
-        workspaceId, parentNodeId,
-        confirmedRead.appendParentNodeId !== undefined && confirmedRead.appendParentNodeId === parentNodeId,
-        confirmedRead,
-      );
-      const requestId = branchRequestRefs.current.get(key);
-      try {
-        const page = await request;
-        if (!page) throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`);
-        return { key, requestId, parentNodeId, page, error: null };
-      } catch (error) {
-        return { key, requestId, parentNodeId, page: null, error };
+      for (const result of results) {
+        if (branchRequestRefs.current.get(result.key) !== result.requestId) {
+          errors.push(`${result.parentNodeId ?? "root"}: 分支刷新已被更新请求取代`);
+          superseded = true;
+        }
       }
-    }));
-    const errors = results.flatMap((result) => result.error === null ? [] : [`${result.parentNodeId ?? "root"}: ${errorMessage(result.error)}`]);
-    let superseded = results.some((result) => result.error instanceof CatalogReadSupersededError);
-    if (confirmedRead.signal?.aborted) errors.push("权威分支刷新已取消");
-    for (const result of results) {
-      if (branchRequestRefs.current.get(result.key) !== result.requestId) {
-        errors.push(`${result.parentNodeId ?? "root"}: 分支刷新已被更新请求取代`);
-        superseded = true;
+      for (const [key, requestId] of removed) {
+        if (branchRequestRefs.current.get(key) !== requestId) {
+          errors.push(`${key}: 分支撤销已被更新请求取代`);
+          superseded = true;
+        }
       }
-    }
-    for (const [key, requestId] of removed) {
-      if (branchRequestRefs.current.get(key) !== requestId) {
-        errors.push(`${key}: 分支撤销已被更新请求取代`);
-        superseded = true;
+      const pages = results.flatMap((result) => result.page === null ? [] : [result.page]);
+      if (pages.some((page) => !Number.isSafeInteger(page.catalog_revision)
+        || page.catalog_revision < (confirmedRead.minimumCatalogRevision ?? 0))) {
+        errors.push("权威分支的 catalog revision 落后，保留原 confirmed 等待重新对账");
+        failed = true;
       }
-    }
-    const pages = results.flatMap((result) => result.page === null ? [] : [result.page]);
-    if (pages.some((page) => !Number.isSafeInteger(page.catalog_revision)
-      || page.catalog_revision < (confirmedRead.minimumCatalogRevision ?? 0))) {
-      errors.push("权威分支的 catalog revision 落后，保留原 confirmed 等待重新对账");
-    }
-    if (new Set(pages.map((page) => page.catalog_revision)).size > 1) {
-      errors.push("权威分支的 catalog revision 不一致，保留原 confirmed 等待重新对账");
-    }
-    if (errors.length > 0) {
-      const message = `重新读取会话目录失败: ${errors.join("；")}`;
+      const missingParents = results.filter(({ parentNodeId, error }) => parentNodeId !== null
+        && error instanceof HttpRequestError && error.status === 404
+        && error.path.startsWith("/api/v1/session-catalog/children?")
+        && new URLSearchParams(error.path.split("?")[1]).get("parent_node_id") === parentNodeId);
+      const mixedRevisions = new Set(pages.map((page) => page.catalog_revision)).size > 1;
+      if (mixedRevisions || missingParents.length > 0) {
+        const maximumRevision = Math.max(confirmedRead.minimumCatalogRevision ?? 0,
+          ...pages.map(page => page.catalog_revision));
+        // 仅缺失父分支的精确 404 可进入撤销确认；其它读取、版本或取消错误仍直接失败。
+        if (errors.length === missingParents.length && !superseded && attempt < CATALOG_RETRY_LIMIT - 1) {
+          let latest: SessionCatalogExport | undefined;
+          try {
+            latest = await getSessionCatalogExport(apiPort, workspaceRequestTarget(workspaceId), { signal: confirmedRead.signal });
+          } catch (error) {
+            errors.push(`确认目录是否推进失败: ${errorMessage(error)}`);
+            failed = true;
+          }
+          if (latest) {
+            if (!Number.isSafeInteger(latest.catalog_revision) || latest.catalog_revision < maximumRevision) {
+              errors.push(`会话目录完整节点集 revision 落后: actual=${latest.catalog_revision}, minimum=${maximumRevision}`);
+              failed = true;
+            } else if (latest.catalog_revision > (confirmedRead.minimumCatalogRevision ?? 0)
+              && missingParents.every(result => !latest.items.some(node => node.node_id === result.parentNodeId))) {
+              if (confirmedRead.signal?.aborted) throw new Error("会话目录权威分支刷新已取消");
+              // 确认推进期间发布权仍可能被下一批读取接管；旧批次不得重新抢占分支。
+              if (results.some(result => branchRequestRefs.current.get(result.key) !== result.requestId)
+                || [...removed].some(([key, requestId]) => branchRequestRefs.current.get(key) !== requestId)) {
+                throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}`);
+              }
+              // 新 export 须同时确认推进及全部 404 父节点已撤销；旧页整批作废，不提前 prune。
+              confirmedRead = { ...confirmedRead, minimumCatalogRevision: latest.catalog_revision,
+                visibleParentIds: new Set(latest.items.map(node => node.node_id)) };
+              continue;
+            }
+          }
+        }
+        if (mixedRevisions) errors.push(`权威分支的 catalog revision 不一致 (${results.filter(result => result.page)
+          .map(result => `${result.parentNodeId ?? "root"}=${result.page!.catalog_revision}`).join(", ")})，保留原 confirmed 等待重新对账`);
+        failed = true;
+      }
+      if (errors.length > 0) {
+        const message = `重新读取会话目录失败: ${errors.join("；")}`;
+        updateBranches((previous) => {
+          const next = new Map(previous);
+          for (const result of results) {
+            if (branchRequestRefs.current.get(result.key) !== result.requestId) continue;
+            next.set(result.key, branchFailureState(next.get(result.key), result.parentNodeId, message));
+          }
+          return next;
+        });
+        throw superseded && !failed ? new CatalogReadSupersededError(message) : new Error(message);
+      }
+      // 同一批权威页一次进入现有 confirmed，避免外部移动被投影为两处不同 revision 的节点。
       updateBranches((previous) => {
         const next = new Map(previous);
+        for (const key of removed.keys()) next.delete(key);
         for (const result of results) {
-          if (branchRequestRefs.current.get(result.key) !== result.requestId) continue;
-          next.set(result.key, branchFailureState(next.get(result.key), result.parentNodeId, message));
+          if (result.page) next.set(result.key, { ...result.page, loading: false, error: null });
+        }
+        for (const result of results) {
+          if (result.page) updateParentNodeChildFlag(next, workspaceId, result.parentNodeId, result.page.total > 0);
         }
         return next;
       });
-      throw superseded ? new CatalogReadSupersededError(message) : new Error(message);
+      await pruneOutboxAfterBranchRefresh(workspaceId, pages, operationIds);
+      return pages;
     }
-    // 同一批权威页一次进入现有 confirmed，避免外部移动被投影为两处不同 revision 的节点。
-    updateBranches((previous) => {
-      const next = new Map(previous);
-      for (const key of removed.keys()) next.delete(key);
-      for (const result of results) {
-        if (result.page) next.set(result.key, { ...result.page, loading: false, error: null });
-      }
-      for (const result of results) {
-        if (result.page) updateParentNodeChildFlag(next, workspaceId, result.parentNodeId, result.page.total > 0);
-      }
-      return next;
-    });
-    await pruneOutboxAfterBranchRefresh(workspaceId, pages, operationIds);
-    return pages;
-  }, [readCatalogBranch, pruneOutboxAfterBranchRefresh, updateBranches]);
+  }, [apiPort, readCatalogBranch, pruneOutboxAfterBranchRefresh, updateBranches, workspaceRequestTarget]);
 
   const refreshCatalogWorkspace = useCallback(async (
     workspaceId: string,
@@ -806,8 +849,14 @@ export function useSessionResourceExplorer({
     setCatalogViewVersion((previous) => previous + 1);
   };
 
+  // 心跳和工作区刷新会返回新的 access DTO；相同认证主体不撤销正在对账的目录 owner。
+  const failureOwnerAccessRef = useRef(gatewayUserAccess);
+  failureOwnerAccessRef.current = gatewayUserAccess;
+  const failureOwnerKind = gatewayUserAccess?.kind;
+  const failureOwnerUserId = gatewayUserAccess?.user_id;
   useEffect(() => {
-    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) return;
+    const access = failureOwnerAccessRef.current;
+    if (!sessionCatalogOutboxRuntime || !access) return;
     const controllers = new Set<AbortController>();
     let active = true;
     const owner: SessionCatalogFailureOwner = {
@@ -849,14 +898,14 @@ export function useSessionResourceExplorer({
         });
       },
     };
-    const unregister = sessionCatalogOutboxRuntime.registerFailureOwner(gatewayUserAccess, owner);
+    const unregister = sessionCatalogOutboxRuntime.registerFailureOwner(access, owner);
     return () => {
       active = false;
       unregister();
       for (const controller of controllers) controller.abort();
       for (const check of [...projectionWaitersRef.current]) check();
     };
-  }, [gatewayUserAccess, sessionCatalogOutboxRuntime]);
+  }, [failureOwnerKind, failureOwnerUserId, sessionCatalogOutboxRuntime]);
 
   const refreshResourceTree = useCallback(async () => {
     if (activeWorkspaceId && sessionCatalogOutboxRuntime && gatewayUserAccess) {
@@ -1042,7 +1091,7 @@ export function useSessionResourceExplorer({
           operationIds: [operationId],
         });
       } catch (error: unknown) {
-        refreshError = error;
+        if (!(error instanceof CatalogReadSupersededError)) refreshError = error;
       }
       if (terminalError || refreshError) {
         const status = committed
@@ -1221,7 +1270,7 @@ export function useSessionResourceExplorer({
           operationIds: [result.operationId],
         });
       } catch (error: unknown) {
-        refreshError = error;
+        if (!(error instanceof CatalogReadSupersededError)) refreshError = error;
       }
       if (terminalError || refreshError) {
         const status = committed
@@ -1451,6 +1500,8 @@ export function useSessionResourceExplorer({
         if (terminalOutboxSyncKeysRef.current.get(scopeKey) === signature) continue;
         void refreshCatalogWorkspace(entry.gatewayWorkspaceId, { operationIds })
           .catch((error: unknown) => {
+            // 最新目录读取接管 confirmed 和回执清理；旧读取取消不能报告成业务失败。
+            if (error instanceof CatalogReadSupersededError) return;
             const repairDetails = terminalOperations
               .filter((operation) => operation.settlement === "repair_required")
               .map((operation) =>
@@ -1479,6 +1530,10 @@ export function useSessionResourceExplorer({
     }
     const id = `workspace:${activeWorkspaceId}`;
     setExpandedIds((previous) => new Set(previous).add(id));
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
     const key = branchKey(activeWorkspaceId, null);
     if (!branchesRef.current.has(key)) {
       void loadBranch(activeWorkspaceId, null)

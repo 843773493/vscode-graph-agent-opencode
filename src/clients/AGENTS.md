@@ -2,11 +2,11 @@
 
 ## 目录用途
 
-`src/clients/` 按客户端运行面组织源码。当前 `web/` 是唯一已经实现的桌面 Web 客户端；完整架构包含 `web/`、`electron/`、`electron-web/`、`mobile/` 和 `mobile-web/` 五个运行面，以及共享的 `core/`、`web-ui/` 和可选 `mobile-web-ui/` 层。
+`src/clients/` 按客户端运行面组织源码。`workbench/` 是 Web 与 Electron 共用的完整 Code OSS 工作台，`web/` 提供复用的 React 会话产品；其余运行面包括 `electron/`、`electron-web/`、`mobile/` 和 `mobile-web/`，以及共享的 `core/`、`web-ui/` 和可选 `mobile-web-ui/` 层。
 
 ## 可修改内容
 
-- `web/` 中的浏览器桌面客户端。
+- `workbench/` 中的唯一工作台入口与外层布局，以及 `web/` 中的 React 会话产品。
 - `electron/` 中的 main/preload 原生宿主边界。
 - `electron-web/` 中可在浏览器运行的 Electron renderer parity 客户端。
 - `mobile/` 中的 React Native 客户端。
@@ -22,7 +22,7 @@
 
 ## 规范
 
-- 当前已有页面功能默认继续落到 `web/`；新增 Electron、React Native 或 parity 功能必须明确其运行面。
+- 外层导航、标签、Grid、命令和设置在 `workbench/`，聊天及会话资源产品在 `web/`；不得恢复旧 App 外壳。新增原生能力必须明确其运行面。
 - `shared/core` 不依赖任何 UI 或平台；`shared/web-ui` 只放桌面 DOM；`shared/mobile-web-ui` 只放移动 Web DOM。
 - `electron-web` 与 `mobile-web` 只能验证浏览器可运行的非原生功能，不能宣称完成原生端验证。
 - 新增源码子目录必须有四段式 `AGENTS.md`。

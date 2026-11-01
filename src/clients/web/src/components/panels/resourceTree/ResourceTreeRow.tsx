@@ -36,6 +36,7 @@ export default function ResourceTreeRow({
   onOpenBrowser,
   onReplaceBrowser,
   extensionWindow = false,
+  previewContext,
   canAttachCurrent = false,
 }: {
   resource: SessionResource;
@@ -51,8 +52,9 @@ export default function ResourceTreeRow({
   onOpenTerminal: (resourceId: string) => void;
   onOpenTerminalExtension?: (resourceId: string) => void;
   onOpenBrowser: (resourceId: string) => void;
-  onReplaceBrowser: () => void;
+  onReplaceBrowser?: () => void;
   extensionWindow?: boolean;
+  previewContext?: "thread" | "workspace";
   canAttachCurrent?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -61,6 +63,10 @@ export default function ResourceTreeRow({
     && (resource.metadata.retention_scope === "workspace" || resourceThreadAssociations(resource).length > 0);
   const title = resourceTreeTitle(resource);
   const description = resourceTreeDescription(resource);
+  const openLabel = previewContext === "thread" ? `在当前会话标签内打开${resource.kind === "terminal" ? "终端" : "浏览器"}`
+    : previewContext === "workspace" ? "在工作区面板打开浏览器"
+      : resource.kind === "terminal" ? extensionWindow ? "在扩展窗口查看终端" : "在底部面板打开终端"
+        : extensionWindow ? "打开浏览器预览" : "在扩展窗口打开浏览器";
 
   const handleOpen = () => {
     if (resource.kind === "terminal" && canOpen) {
@@ -128,8 +134,8 @@ export default function ResourceTreeRow({
                 className="resource-action-open"
                 disabled={busy}
                 onClick={handleOpen}
-                title={extensionWindow ? "在扩展窗口查看终端" : "在底部面板打开终端"}
-                aria-label={extensionWindow ? "在扩展窗口查看终端" : "在底部面板打开终端"}
+                title={openLabel}
+                aria-label={openLabel}
               >
                 <span className={`codicon ${extensionWindow ? "codicon-open-preview" : "codicon-terminal"}`} aria-hidden="true" />
               </button>
@@ -152,8 +158,8 @@ export default function ResourceTreeRow({
                 className="resource-action-open"
                 disabled={busy}
                 onClick={handleOpen}
-                title={extensionWindow ? "打开浏览器预览" : "在扩展窗口打开浏览器"}
-                aria-label={extensionWindow ? "打开浏览器预览" : "在扩展窗口打开浏览器"}
+                title={openLabel}
+                aria-label={openLabel}
               >
                 <span className="codicon codicon-open-preview" aria-hidden="true" />
               </button>
@@ -171,7 +177,7 @@ export default function ResourceTreeRow({
                 <span className={`codicon ${resourceActionIcon(action)}`} aria-hidden="true" />
               </button>
             ))}
-            {resource.kind === "browser" &&
+            {resource.kind === "browser" && onReplaceBrowser &&
             (resource.status === "lost" || resource.available_actions.includes("resume")) ? (
               <button
                 type="button"
@@ -188,7 +194,7 @@ export default function ResourceTreeRow({
           {["terminal", "browser"].includes(resource.kind) ? <div className="resource-tree-lifecycle">
             <span>{resource.metadata.retention_scope === "workspace" ? "保留到工作区" : "随来源线程释放"}</span>
             {resource.metadata.retention_scope === "thread" && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "promote")}>保留到工作区</button> : null}
-            {resourceThreadAssociations(resource).filter((ref) => extensionWindow || ref.session_id === resource.session_id).map((ref) => <span key={`${ref.session_id}/${ref.thread_id}`} title={`${ref.session_id} / ${ref.thread_id}`}>
+            {resourceThreadAssociations(resource).filter((ref) => extensionWindow || previewContext === "workspace" || ref.session_id === resource.session_id).map((ref) => <span key={`${ref.session_id}/${ref.thread_id}`} title={`${ref.session_id} / ${ref.thread_id}`}>
               线程 {ref.thread_id.slice(-8)}
               {onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "detach", ref)}>解除关联</button> : null}
             </span>)}

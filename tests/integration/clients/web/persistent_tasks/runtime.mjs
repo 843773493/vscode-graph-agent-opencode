@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { openWorkbench, selectThread, sessionTasks, automation } from "./workbench.mjs";
 import { testControl } from "../../../../support/e2e_control/browser_client.mjs";
 
 const fixture = JSON.parse(process.env.BOXTEAM_BROWSER_FIXTURE);
@@ -16,11 +17,8 @@ try {
   page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "用户视图", exact: true }).click();
-  await page.getByPlaceholder("新用户名称").fill("任务恢复验收用户");
-  await page.getByRole("button", { name: "创建", exact: true }).click();
-  await page.locator("[data-session-id]").filter({ hasText: fixture.sessionTitle }).first().click();
+  await openWorkbench(page, fixture.baseUrl);
+  await selectThread(page, fixture.owner, 0);
   const initialization = await page.evaluate(async (workspaceId) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     if (!credential.ok) throw new Error(`凭据读取失败：${credential.status}`);
@@ -53,10 +51,7 @@ try {
   assert.equal(initial.runtime.state, "running");
   const task = initial.items.find((item) => item.configuration?.name === "恢复期间暂停的任务");
   assert(task);
-  const toggle = page.getByRole("button", { name: "切换底部面板", exact: true });
-  if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
-  await page.getByRole("tab", { name: "自动化", exact: true }).click();
-  const panel = page.getByRole("region", { name: "工作区持久任务", exact: true });
+  const panel = await automation(page);
   await panel.getByRole("button", { name: /恢复期间暂停的任务/ }).click();
   await request("/api/v1/_test/task-runtime/stop", {});
   await panel.getByRole("status").filter({ hasText: "运行时已停止" }).waitFor();
@@ -86,12 +81,9 @@ try {
   const suppressed = runs.find((run) => run.run_id === queued.run_id);
   assert.equal(suppressed.phase, "suppressed");
   assert.equal(suppressed.delivery, null);
-  const sidebar = page.getByRole("button", { name: "切换右侧侧边栏", exact: true });
-  if (await sidebar.getAttribute("aria-pressed") !== "true") await sidebar.click();
-  await page.getByRole("tab", { name: "Goal", exact: true }).click();
+  const summary = await sessionTasks(page, fixture.owner, 0);
   await request("/api/v1/_test/task-runtime/cancel", {});
   await panel.getByRole("alert").filter({ hasText: "持久任务后台运行失败（RuntimeError）" }).waitFor();
-  const summary = page.getByRole("region", { name: "当前会话关联任务", exact: true });
   await summary.getByRole("alert").filter({ hasText: "持久任务后台运行失败" }).waitFor();
   await panel.getByRole("button", { name: "刷新任务", exact: true }).click();
   await panel.getByRole("alert").filter({ hasText: "持久任务后台运行失败" }).waitFor();

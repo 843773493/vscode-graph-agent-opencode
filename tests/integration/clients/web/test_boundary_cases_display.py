@@ -13,6 +13,9 @@ import pytest
 
 from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
+)
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment, output_root_for_test
 from tests.support.ports import integration_port_block_for_file
@@ -107,6 +110,7 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
     request: pytest.FixtureRequest,
     browser_backend: tuple[str, Path, ModelStreamReplay],
     browser_backend_client: httpx.AsyncClient,
+    web_workbench_assets: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     chromium_path = (
@@ -117,16 +121,6 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
     )
     if chromium_path is None:
         pytest.fail("边界状态浏览器集成需要 Chromium")
-
-    build = await asyncio.to_thread(
-        subprocess.run,
-        ["bun", "run", "build"],
-        cwd=project_root / "src" / "clients" / "web",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
 
     for session_id, turn_id, expected_status in BOUNDARY_CASES:
         response = await browser_backend_client.post(
@@ -156,11 +150,11 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
         default_backend_url=browser_backend[0],
         port=port_block.port(20),
         extra_env={
-            "BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist"),
+            "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
         },
     )
-    artifacts = Path(browser_backend[1]).parent / "artifacts"
-    artifacts.mkdir(parents=True, exist_ok=True)
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    artifacts = context.artifacts_dir
     result_path = artifacts / "boundary-cases-display-result.json"
     screenshot_path = artifacts / "boundary-cases-display-failure.png"
     result_path.unlink(missing_ok=True)
@@ -191,7 +185,6 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
             }
         )
-        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary_environment:
             environment.update(temporary_environment)
             browser_result = await asyncio.to_thread(
@@ -204,6 +197,8 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
                 timeout=180,
                 check=False,
             )
+        (artifacts / "browser.log").write_text(browser_result.stdout + browser_result.stderr)
+        (artifacts / "browser-process.json").write_text(json.dumps({"exit_code": browser_result.returncode}) + "\n")
         assert browser_result.returncode == 0, (
             "边界状态浏览器集成失败:\n"
             f"stdout:\n{browser_result.stdout}\n"

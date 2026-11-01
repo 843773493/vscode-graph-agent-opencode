@@ -13,6 +13,8 @@
 
 # 规范
 
+- bootstrap 安装根、共享 Web 和 Workbench 的 frozen-lockfile 依赖；固定上游尚未初始化时明确提示使用 `bootstrap --submodules`，不复制参考仓库或静默忽略缺失依赖。
+
 - 使用严格错误模式并通过结构化动作参数分派。
 - `test` 由 `run-tests.py` 在目标端调用 `app/runtime/windows_job.py` 管理 pytest 及其后代，总期限600秒、Job 提交内存上限4GiB；先挂起绑定再启动，超限明确失败，退出时回收整个 Job，不依赖宿主SSH进程退出代替目标清理。
 - TODO 必须明确标注尚需真实 Windows VMware 验证的兼容性代码。

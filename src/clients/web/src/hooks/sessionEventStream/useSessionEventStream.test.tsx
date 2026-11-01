@@ -413,3 +413,33 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
     act(() => renderer!.unmount());
   });
 });
+
+test("同源端口 0 的两个 Thread 各自连接并在卸载时取消自身订阅", async () => {
+  installWindow();
+  const signals: AbortSignal[] = [];
+  const calls: string[] = [];
+  const stream = spyOn(traceStream, "streamSessionEvents").mockImplementation(async (port, sessionId, options) => {
+    expect(port).toBe(0); expect(sessionId).toBe("ses_parallel");
+    calls.push(options!.threadId!); signals.push(options!.signal!);
+    await new Promise<void>(resolve => options!.signal!.addEventListener("abort", () => resolve(), { once: true }));
+  });
+  const refresh = () => undefined;
+  const load = async () => undefined;
+  const setState = () => undefined;
+  function Thread({ id }: { id: string }) {
+    useSessionEventStream({ apiPort: 0, sessionId: "ses_parallel", threadId: id,
+      workspaceId: "gw_parallel", workspaceRequestTarget: null, sessionCacheKey: `gw_parallel::ses_parallel::${id}`,
+      activeJobId: null, timelineReady: true, initialEventCursor: null,
+      refreshTurnHistory: refresh, loadTerminalJobTurn: load, setState });
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => { renderer = create(<><Thread id="a" /><Thread id="b" /></>); });
+    await flush();
+    expect([...calls].sort()).toEqual(["a", "b"]);
+    expect(signals.every(signal => !signal.aborted)).toBe(true);
+    act(() => renderer.unmount());
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+  } finally { renderer?.unmount(); stream.mockRestore(); }
+});

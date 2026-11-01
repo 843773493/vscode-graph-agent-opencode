@@ -1,6 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { chromium } from "playwright";
+import { expect } from "playwright/test";
+import { TestRunContext } from "../../../harness/js/run-context.mjs";
 
 function required(name) {
   const value = process.env[name];
@@ -14,71 +16,83 @@ const baseUrl = required("BOXTEAM_BROWSER_BASE_URL");
 const fixture = JSON.parse(required("BOXTEAM_BROWSER_FIXTURE"));
 const resultPath = required("BOXTEAM_BROWSER_RESULT_PATH");
 const screenshotPath = required("BOXTEAM_BROWSER_SCREENSHOT_PATH");
-const browser = await chromium.launch({
-  executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-  headless: true,
-});
-const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
-const page = await context.newPage();
+const scope = TestRunContext.fromTestFile("tests/integration/clients/web/test_managed_backend_runtime.py");
 const result = { classification: "Integration", provider_boundary: "OpenAI HTTP stub", route_stubs: [],
   requests: [], errors: [], cancel: null, joined: null, blocked: null, forced: null, stale: null, removed: null, empty_exit: null, deleted: null };
 let phase = "initial";
-page.on("pageerror", (error) => result.errors.push(error.message));
-page.on("response", async (response) => {
-  const request = response.request();
-  if (request.method() === "POST" && /\/runtime\/(start|stop|restart-safe|restart-force)$/.test(new URL(response.url()).pathname)) {
-    result.requests.push({ phase, path: new URL(response.url()).pathname, status: response.status(), body: request.postDataJSON() });
-  }
-});
-async function api(path, { method = "GET", body, expected = 200 } = {}) {
-  const output = await page.evaluate(async ({ path, method, body }) => {
-    const credential = await fetch("/api/gateway/auth/local-credential");
-    const token = (await credential.json()).data.token;
-    const response = await fetch(path, {
-      method, credentials: "include",
-      headers: { "X-Local-Token": token, ...(body ? { "Content-Type": "application/json" } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    return { status: response.status, payload: await response.json(), requestId: response.headers.get("X-Request-ID") };
-  }, { path, method, body });
-  check(output.status === expected, `真实 Gateway HTTP ${output.status}: ${JSON.stringify(output.payload)}`);
-  check(output.requestId === output.payload.request_id, "Gateway 请求 ID 不一致");
-  return output.payload.data;
-}
-const panel = page.locator('section[aria-label="Backend 运行时"]');
-const dialog = page.getByRole("dialog");
-const primaryArticle = () => panel.locator("article").filter({ has: page.locator("h2").filter({ hasText: fixture.primaryName }) }).first();
-async function confirm(action) {
-  await dialog.waitFor({ state: "visible" });
-  const text = await dialog.innerText();
-  check(text.includes(fixture.primaryId), "完整组确认缺少默认成员 ID");
-  if (action !== "cancel-singleton") check(text.includes(fixture.secondaryId), "完整组确认缺少另一成员 ID");
-  if (action === "force") check(text.includes("interrupted"), "强制确认缺少持久化中断说明");
-  if (action.startsWith("cancel")) await dialog.getByRole("button", { name: "取消", exact: true }).click();
-  else await dialog.getByRole("button", { name: action === "force" ? "强制重启" : "安全重启", exact: true }).click();
-  await dialog.waitFor({ state: "hidden" });
-  return text;
-}
-async function lifecycleResponse(action, trigger, expected = 200) {
-  const pending = page.waitForResponse((response) => response.request().method() === "POST"
-    && new URL(response.url()).pathname === `/api/gateway/workspaces/${fixture.primaryId}/runtime/${action}`,
-  { timeout: 120_000 });
-  await trigger();
-  const response = await pending;
-  const payload = await response.json();
-  check(response.status() === expected, `生命周期请求 ${response.status()}: ${JSON.stringify(payload)}`);
-  return payload.data ?? payload;
-}
-function groupRequest(snapshot) {
-  return { expected_backend_generation: snapshot.backend_generation, expected_workspace_ids: snapshot.affected_workspace_ids };
-}
+let page;
+let failure;
 try {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await page.getByRole("button", { name: "工作台视图", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
-  await page.getByRole("button", { name: "工作台视图", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Gateway 控制台/ }).click();
-  await page.getByRole("button", { name: "服务运行时", exact: true }).click();
-  await panel.waitFor({ state: "visible" });
+  const browser = await chromium.launch({
+    executablePath: required("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"), headless: true,
+  });
+  scope.addCleanup("Backend 运行时 Chromium", () => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+  scope.addCleanup("Backend 运行时 context", () => context.close());
+  page = await context.newPage();
+  page.on("pageerror", (error) => result.errors.push(error.message));
+  page.on("response", async (response) => {
+    const request = response.request();
+    if (request.method() === "POST" && /\/runtime\/(start|stop|restart-safe|restart-force)$/.test(new URL(response.url()).pathname)) {
+      result.requests.push({ phase, path: new URL(response.url()).pathname, status: response.status(), body: request.postDataJSON() });
+    }
+  });
+  async function api(path, { method = "GET", body, expected = 200 } = {}) {
+    const output = await page.evaluate(async ({ path, method, body }) => {
+      const credential = await fetch("/api/gateway/auth/local-credential");
+      const token = (await credential.json()).data.token;
+      const response = await fetch(path, {
+        method, credentials: "include",
+        headers: { "X-Local-Token": token, ...(body ? { "Content-Type": "application/json" } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      return { status: response.status, payload: await response.json(), requestId: response.headers.get("X-Request-ID") };
+    }, { path, method, body });
+    check(output.status === expected, `真实 Gateway HTTP ${output.status}: ${JSON.stringify(output.payload)}`);
+    check(output.requestId === output.payload.request_id, "Gateway 请求 ID 不一致");
+    return output.payload.data;
+  }
+  const panel = page.locator('section[aria-label="Backend 运行时"]');
+  const dialog = page.locator('form.workspace-dialog[role="dialog"]');
+  async function openRuntime() {
+    await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
+    await page.getByRole("button", { name: "添加工作区", exact: true }).click();
+    await page.getByRole("dialog", { name: "选择工作区所在设备", exact: true })
+      .getByRole("button", { name: "连接新的远程主机…", exact: true }).click();
+    const control = page.getByRole("dialog", { name: "Gateway 控制中心", exact: true });
+    await control.getByRole("button", { name: "服务运行时", exact: true }).click();
+    await expect(panel).toBeVisible();
+  }
+  const primaryArticle = () => panel.locator("article").filter({ has: page.locator("h2").filter({ hasText: fixture.primaryName }) }).first();
+  async function confirm(action) {
+    await dialog.waitFor({ state: "visible" });
+    const text = await dialog.innerText();
+    check(text.includes(fixture.primaryId), "完整组确认缺少默认成员 ID");
+    if (action !== "cancel-singleton") check(text.includes(fixture.secondaryId), "完整组确认缺少另一成员 ID");
+    if (action === "force") check(text.includes("interrupted"), "强制确认缺少持久化中断说明");
+    if (action.startsWith("cancel")) await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    else await dialog.getByRole("button", { name: action === "force" ? "强制重启" : "安全重启", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    return text;
+  }
+  async function lifecycleResponse(action, trigger, expected = 200) {
+    const pending = page.waitForResponse((response) => response.request().method() === "POST"
+      && new URL(response.url()).pathname === `/api/gateway/workspaces/${fixture.primaryId}/runtime/${action}`,
+    { timeout: 120_000 });
+    await trigger();
+    const response = await pending;
+    const payload = await response.json();
+    check(response.status() === expected, `生命周期请求 ${response.status()}: ${JSON.stringify(payload)}`);
+    check(response.headers()["x-request-id"] === payload.request_id, "生命周期响应请求 ID 不一致");
+    return payload.data ?? payload;
+  }
+  function groupRequest(snapshot) {
+    return { expected_backend_generation: snapshot.backend_generation, expected_workspace_ids: snapshot.affected_workspace_ids };
+  }
+  await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await api("/api/gateway/users/guest", { method: "POST", body: { tracking: { source: "managed-backend-workbench" } } });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await openRuntime();
   await primaryArticle().getByRole("button", { name: "安全重启", exact: true }).waitFor({ state: "visible" });
 
   phase = "cancel";
@@ -164,7 +178,9 @@ try {
     "另一调用方未真正推进 generation");
   phase = "stale-confirmation";
   result.stale = await lifecycleResponse("restart-safe", () => confirm("safe"), 409);
-  check(JSON.stringify(result.stale).includes("generation"), "陈旧合同错误没有标明 generation");
+  // 现行公开错误只携带阶段和异常类别；Python 通过同一 request_id 核验原始 generation 诊断。
+  check(result.stale.detail === "工作区安全重启失败: stage=workspace_restart_safe, error=ValueError",
+    "陈旧合同错误阶段或类别不一致");
   await panel.getByRole("alert").waitFor({ state: "visible" });
   const fresh = (await api("/api/gateway/workspaces")).items.find((item) => item.workspace_id === fixture.primaryId);
   check(fresh.backend_generation === advanced.backend_generation && fresh.affected_workspace_ids.length === 2,
@@ -187,10 +203,7 @@ try {
   phase = "empty-exit";
   await api(`/api/gateway/workspaces/${fixture.secondaryId}/runtime/start`, { method: "POST" });
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "工作台视图", exact: true }).waitFor({ state: "visible", timeout: 30_000 });
-  await page.getByRole("button", { name: "工作台视图", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Gateway 控制台/ }).click();
-  await page.getByRole("button", { name: "服务运行时", exact: true }).click();
+  await openRuntime();
   const secondaryArticle = () => panel.locator("article").filter({ has: page.locator("h2").filter({ hasText: fixture.secondaryName }) }).first();
   await secondaryArticle().getByText("运行中 · 1 个工作区共用一个 Backend", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
   await secondaryArticle().getByRole("button", { name: "调整成员", exact: true }).click();
@@ -214,8 +227,7 @@ try {
   // 真实主窗口删除入口提交最后成员的完整合同，成功后从权威列表收敛。
   phase = "delete-last-member";
   await api(`/api/gateway/workspaces/${fixture.secondaryId}/runtime/start`, { method: "POST" });
-  await page.getByRole("button", { name: "工作台视图", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /会话工作台/ }).click();
+  await page.getByRole("button", { name: "关闭 Gateway 控制中心", exact: true }).click();
   const row = page.getByTestId(`workspace-node-${fixture.secondaryId}`);
   await row.waitFor({ state: "visible", timeout: 30_000 });
   await row.click({ button: "right" });
@@ -237,11 +249,17 @@ try {
   check(result.errors.length === 0, `页面异常: ${result.errors.join("; ")}`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
 } catch (error) {
-  result.failure = { phase, message: error.message, page: await page.locator("body").innerText().catch(() => "") };
-  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-  throw error;
+  failure = error;
+  result.failure = { phase, message: error.message };
 } finally {
-  await writeFile(resultPath, JSON.stringify(result, null, 2) + "\n");
-  await context.close();
-  await browser.close();
+  const errors = failure ? [failure] : [];
+  try {
+    if (page) {
+      result.page = await page.locator(".native-session-navigation").innerText();
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+    }
+    await writeFile(resultPath, JSON.stringify(result, null, 2) + "\n");
+  } catch (error) { errors.push(error); }
+  try { await scope.close(); } catch (error) { errors.push(error); }
+  if (errors.length) throw new AggregateError(errors, "Backend 运行时 Web 验收失败");
 }
