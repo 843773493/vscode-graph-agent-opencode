@@ -1445,3 +1445,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 独立测试通过原应用lifespan、公开消息／中断入口和既有model_stream生成Job、scope、inbox及封存请求，只在真实控制文件原子替换处注入PermissionError。accepted发布失败保持原文件／内存／序号和Job running，无中断事件；解除故障后公开POST成功。consumed发布失败则HTTP500，但原中断已接受、原Job仍取消；两场景均只有一条归属原Thread／Turn的interrupt.requested、终态interrupted，无未采纳的模型正文。迟到POST保持404且不增事件，同Thread新Turn正常完成，原事件经新Store冷读逐项不变；四份封存请求分别核原transport及request_hash。
 - 最终2 passed／58.03秒，外层63.90秒、exit0；180秒进程外期限、4GiB数据段上限与原集成独占闸门保持，3231项采样源码前后不变。Ruff、compileall、真实Pyright零诊断。初版2项已通过；独审发现barrier未覆盖_send前置失败，已前移try/finally，补头体request_id、冷读和封存hash后取得最终结果；初次静态8条新测试标注问题修正后零诊断。最终只读复审无finding、未运行测试。
 - 证据：`out/tests/temp/interrupt_product_settlement_20261101/artifacts/verification.json`及正式同名测试runs。公开中断接口每次生成新ID，本片不宣称HTTP幂等；HTTP为ASGI进程内，冷读不是进程重启，不代真实Gateway网络、Web、Windows或完整Section8。未修改产品代码、前端实现、公共fixture、长回归驱动或共享debug；7.5／8.3与整体111/119保持未完成。
+
+
+### 2026-11-01 7.5-E 真实外部 Provider、来源 v2 与冷恢复补验（部分）
+
+- 迁齐现有 `test_provider_provenance.py`：root 按显式来源协议 v2 解析并精确核原文、revision、信任资格；A→B→C 的 user 来源 delta 精确核基准、正文和具名 `replaces`，保留 CRLF、尾部空白及 Unicode。records 的可读 reasoning 语义类型与 Provider carrier 按既有合同对账，受保护的 `redacted_thinking` 保持精确类型；原消息、model-call、part 身份与正文断言保留，并补公开 part 坐标校验。正式产物改用既有 TestRunContext 按 run 隔离，避免覆盖旧结果。
+- 最终 `real-provider-005` 为1 passed／183.98秒、exit0，经独立真实 Gateway／Backend 与已配置外部 Provider 生成三轮请求；核 sealed request hash、canonical output、稳定前缀、AGENTS 更新和三次 Backend 安全重启后的历史／日志内容、旧 assembly 规范化字节及 checkpoint 正文／引用不变。32 个 checkpoint 包含5个消息 snapshot、27个 delta，6份非空状态正文被多个 checkpoint 复用；不把该观察外推为完整存储收益基准。
+- Ruff、compileall、真实 Pyright 零诊断及两个 change 的 strict validation 通过；1470份采样源码在最终产品运行前后逐项一致，已知测试进程和两端口均回收。测试文件753行；非作者只读复审无finding，未独立跑测试。首轮旧纯文本 root 断言、第二轮旧 reasoning carrier 类型假设及中间静态失败原件保留；此前候选另一次完整通过不合并计数。
+- 准确命令、源码指纹、raw／实际退出码、失败归因、正式 run 路径和限定审查见 `out/tests/temp/itemized_provider_acceptance_20261101/artifacts/verification.json`。本片不新增工具循环、fork、Web、Windows、同步执行或硬退出证据，不替代7.5／8.3／全部 Section8；整体111/119及团队延期项保持未完成。未改产品、前端、公共 fixture、长回归驱动、共享 Debug 服务或其它会话独有改动。

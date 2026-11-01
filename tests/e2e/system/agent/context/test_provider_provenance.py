@@ -24,7 +24,10 @@ from app.domain.itemized.epoch.prefix_epoch import (
     stable_prefix_bytes,
     stable_prefix_digest,
 )
-from app.domain.itemized.epoch.source_protocol import parse_source_blocks
+from app.domain.itemized.epoch.source_protocol import (
+    SourceVersionRef,
+    parse_source_blocks,
+)
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
@@ -45,7 +48,7 @@ from app.services.mapping.itemized.content_blocks import (
     direct_content_blocks,
     reasoning_content_rows,
 )
-from tests.support.paths import output_root_for_test
+from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -74,8 +77,8 @@ _AGENTS_VERSIONS = (
 
 @pytest.fixture(scope="module")
 def provenance_artifacts(request: pytest.FixtureRequest) -> Path:
-    root = output_root_for_test(Path(request.node.fspath), test_layer="e2e", project_root=Path.cwd())
-    artifacts = root / "artifacts"
+    context = TestRunContext.from_test_file(Path(request.node.fspath), project_root=Path.cwd())
+    artifacts = context.run_root / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
     return artifacts
 
@@ -443,8 +446,15 @@ async def _assembly_history(
             for row in reasoning_content_rows(expected_raw["content"])
         ]
         for part in expected_raw["response_metadata"].get("content_part_refs", []):
-            assert actual_blocks[part["index"]]["type"] == part["type"]
+            carrier_type = actual_blocks[part["index"]]["type"]
+            # records 统一可读 reasoning 类型；redacted_thinking 保留原类型及保护状态。
+            semantic_type = (
+                "reasoning" if carrier_type in {"reasoning_content", "reasoning_items", "thinking"} else carrier_type
+            )
+            assert part["type"] == semantic_type
+            assert expected_blocks[part["index"]]["type"] == part["type"]
             assert expected_blocks[part["index"]]["id"] == part["id"]
+            assert expected_blocks[part["index"]]["index"] == part["index"]
     return messages
 
 
@@ -510,7 +520,7 @@ def _checkpoint_state(thread_node: Path) -> dict:
             "source_snapshots": ("checkpoint_context_source_snapshots", "checkpoint_id"),
             "source_states": ("checkpoint_context_source_states", "checkpoint_id, source_id"),
         }
-        state = {
+        state: dict[str, object] = {
             name: [tuple({"blob_hex": value.hex()} if isinstance(value, bytes) else value for value in row)
                    for row in connection.execute(f"SELECT * FROM {table} ORDER BY {order}")]
             for name, (table, order) in tables.items()
@@ -574,14 +584,34 @@ def _audit_agents_versions(
                         if source.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
         assert root_source.revision == revisions[0]
         assert root_source.content_hash == contribution_content_hash("root_source", _AGENTS_VERSIONS[0])
-        assert _AGENTS_VERSIONS[0] in binding.root.content
+        assert binding.root.source_protocol == 2
+        root_block, = [block for block in parse_source_blocks(
+            binding.root.content, expected_version=binding.root.source_protocol,
+        ) if block.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
+        assert (root_block.revision, root_block.base_revision, root_block.operation,
+                root_block.representation, root_block.body, root_block.replaces) == (
+            revisions[0], None, "activate", "full", _AGENTS_VERSIONS[0], (),
+        )
+        assert (root_block.source_kind, root_block.source_tracking_at_seal, root_block.root_placement) == (
+            "workspace_agents", "tracked", "root_eligible",
+        )
         members = [(frame, ref, block) for frame in binding.prefix.state.frames
                    if frame.role == "user" and frame.source_protocol is not None
-                   for ref, block in zip(frame.item_refs, parse_source_blocks(frame.content), strict=True)
+                   for ref, block in zip(frame.item_refs, parse_source_blocks(
+                       frame.content, expected_version=frame.source_protocol,
+                   ), strict=True)
                    if ref.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
         assert [(ref.source_revision, frame.role, block.body) for frame, ref, block in members] == [
             (revisions[index + 1], "user", deltas[index]) for index in range(ordinal - 1)
         ]
+        for index, (frame, ref, block) in enumerate(members):
+            assert frame.source_protocol == 2
+            assert (block.revision, block.base_revision, block.operation, block.representation,
+                    block.replaces) == (
+                revisions[index + 1], revisions[index], "update", "unified_diff",
+                (SourceVersionRef(WORKSPACE_AGENTS_SOURCE_ID, revisions[index]),),
+            )
+            assert block.source_tracking_at_seal == ref.source_tracking_at_seal == "tracked"
         frames_by_assembly[snapshot.assembly_id] = [frame.to_dict() for frame, _ref, _block in members]
         for revision in binding.source_revisions:
             if revision.source_id == WORKSPACE_AGENTS_SOURCE_ID:

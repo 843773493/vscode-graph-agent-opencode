@@ -563,3 +563,9 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 来源恢复、重试原子性、显式 Skill、历史不可变与注册拒绝等回归117 passed／142.44秒；其中未进入执行的3个 full-copy 用例因缺正式 runner 在 setup 拒绝，经原 matrix suite 补跑3 passed／12.30秒。最终 catalog 专项覆盖同步／异步 rewind × 常驻／冷恢复，4 passed／11.24秒，并核本次冻结目录、正文不被激活、旧 assembly 原字节及 transition 消费。新反例修正前真实重现相同错误；首次 fixture 漏供已跟踪 Skill 的失败原件保留，不计产品缺陷。
 - 原完整产品工作负载1 passed／351.96秒、exit0，经真实 Gateway/Backend 与统一 model_stream 生成历史，保留并行工具、摘要、两代 fork、源删除、冷恢复、regenerate 与20次历史请求 hash 原断言。该次3476个源码指纹前后一致；后续只补测试断言，生产实现未再变动。测试串行；完整工作负载及 fork 补跑置于临时 cgroup，整组限制6 GiB、无 swap、4 CPU 配额；这不是跨 agent 的全局并发闸门，也不据此声明性能改善。
 - Ruff／compileall通过，Pyright最终31项既有诊断、新增用例零诊断，按文件、最窄AST owner、规则和完整消息相对原始基线零新增；类型检查本身exit1。AST作者自查确认生产唯一变更是原 SQL 的自动来源集合，无新增调用链或 writer，不冒称独立审查。OpenSpec strict 51/0。准确命令、全源码指纹、原始输出、退出码、类型对比和正式测量位置见 `out/tests/temp/uri-global-closure/artifacts/verification-075.json`。本切片不关闭团队／协作延期项、全量7.5或其它整体门。
+
+
+### 2026-11-01 来源 v2 的真实 Provider 与冷恢复补验（部分）
+
+- 复用现有真实 Gateway／Backend／外部 Provider 验收，迁齐来源协议 v2 的 root 和 A→B→C 精确差分／基准／具名替代断言，正式产物按 run 隔离。最终1 passed／183.98秒；三轮请求 hash、来源身份与原文、稳定前缀及 Backend 安全重启后的历史／assembly／checkpoint 不变，Ruff／compileall／Pyright和 strict validation 通过。
+- 限定证据及失败原件见 `out/tests/temp/itemized_provider_acceptance_20261101/artifacts/verification.json`，详细范围见 itemized 同日7.5-E收据。本片没有工具循环、Web、Windows、同步执行或硬退出验证，不关闭7.1–7.5综合门，69/76及用户延期的团队／协作任务保持未完成；产品、前端和公共测试装具未改。
