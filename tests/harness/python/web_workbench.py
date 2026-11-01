@@ -1,10 +1,13 @@
-"""为正式页面测试构建唯一的 Workbench 静态产物，不启动替代页面服务。"""
+"""同一 pytest 会话复用正式 Workbench 构建，模块分别保留消费收据。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -12,28 +15,60 @@ import pytest
 from tests.harness.python.run_context import TestRunContext
 
 
-@pytest.fixture(scope="module")
-def web_workbench_assets(request: pytest.FixtureRequest) -> Path:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    assets = context.runtime_root_for_node(request.node.nodeid) / "dist"
+@dataclass(frozen=True)
+class WorkbenchBuild:
+    assets: Path
+    receipt_path: Path
+    log_path: Path
+
+
+@pytest.fixture(scope="session")
+def shared_web_workbench_build(integration_test_gate: None) -> WorkbenchBuild:
+    context = TestRunContext.from_test_file(Path("tests/harness/python/web_workbench.py")).prepare()
+    assets = context.runtime_root_for_node("shared-workbench-build") / "dist"
     command = ["bun", "run", "build", "--outdir", str(assets)]
     directory = context.project_root / "src/clients/workbench"
     log_path = context.artifacts_dir / "workbench-build.log"
-    with log_path.open("x", encoding="utf-8") as log:
-        result = subprocess.run(
-            command, cwd=directory, stdout=log, stderr=subprocess.STDOUT,
-            timeout=180, check=False,
-        )
     receipt: dict[str, object] = {
-        "command": command, "cwd": str(directory), "exit_code": result.returncode,
-        "log": str(log_path), "assets": str(assets),
+        "command": command, "cwd": str(directory), "exit_code": None,
+        "log": str(log_path), "assets": str(assets), "timeout_seconds": 180,
     }
-    if result.returncode == 0:
-        receipt["version"] = json.loads((assets / "version.json").read_text(encoding="utf-8"))
-        with (assets / "out/main.js").open("rb") as main:
-            receipt["main_sha256"] = hashlib.file_digest(main, "sha256").hexdigest()
+    receipt_path = context.artifacts_dir / "workbench-build.json"
+    started = time.monotonic()
+    try:
+        with log_path.open("x", encoding="utf-8") as log:
+            result = subprocess.run(
+                command, cwd=directory, stdout=log, stderr=subprocess.STDOUT,
+                timeout=180, check=False,
+            )
+        receipt["exit_code"] = result.returncode
+        if result.returncode == 0:
+            receipt["version"] = json.loads((assets / "version.json").read_text(encoding="utf-8"))
+            with (assets / "out/main.js").open("rb") as main:
+                receipt["main_sha256"] = hashlib.file_digest(main, "sha256").hexdigest()
+    except subprocess.TimeoutExpired as error:
+        receipt["error"] = str(error)
+        raise
+    finally:
+        receipt["elapsed_seconds"] = time.monotonic() - started
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+    assert result.returncode == 0, f"Workbench 构建失败：{log_path}\n{log_path.read_text(encoding='utf-8')}"
+    return WorkbenchBuild(assets, receipt_path, log_path)
+
+
+@pytest.fixture(scope="module")
+def web_workbench_assets(
+    request: pytest.FixtureRequest, shared_web_workbench_build: WorkbenchBuild,
+) -> Path:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    build = shared_web_workbench_build
+    log_path = context.artifacts_dir / "workbench-build.log"
+    shutil.copyfile(build.log_path, log_path)
+    receipt = json.loads(build.receipt_path.read_text(encoding="utf-8"))
+    receipt.update(log=str(log_path), shared_build_receipt=str(build.receipt_path))
     (context.artifacts_dir / "workbench-build.json").write_text(
         json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
-    assert result.returncode == 0, f"Workbench 构建失败：{log_path}\n{log_path.read_text(encoding='utf-8')}"
-    return assets
+    return build.assets

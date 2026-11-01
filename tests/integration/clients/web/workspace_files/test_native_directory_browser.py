@@ -15,6 +15,7 @@ import pytest
 
 from app.core.resource_uri import file_uri_child, file_uri_root, parse_resource_uri
 from app.core.workspace_identity import workspace_identity_path
+from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 显式导入模块级正式产物装具
 )
@@ -39,11 +40,12 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture(autouse=True)
-def local_model_metadata(monkeypatch, web_workbench_assets):
+def local_model_metadata(request, monkeypatch, web_workbench_assets):
     # 本场景不使用外部模型；避免 LiteLLM 首次导入联网更新价格表阻塞页面初始化。
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
     monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
-    monkeypatch.setenv("BOXTEAM_BROWSER_RUNTIME_PATH", str(web_workbench_assets.parent / "browser"))
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    monkeypatch.setenv("BOXTEAM_BROWSER_RUNTIME_PATH", str(context.runtime_root_for_node(request.node.nodeid) / "browser"))
 
 
 async def _browse(case, fixture: dict, artifacts: Path) -> dict:

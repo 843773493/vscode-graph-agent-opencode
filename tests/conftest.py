@@ -19,7 +19,10 @@ from tests.support.session_catalog_owner import (
 )
 from tests.support.workspaces import render_test_workspace_config
 
-pytest_plugins = ["tests.harness.python.integration_gate"]
+pytest_plugins = [
+    "tests.harness.python.integration_gate",
+    "tests.harness.python.web_workbench",
+]
 
 # 测试进程显式加载仓库环境；产品运行时只读取 BOXTEAM_HOME/config/.env。
 load_dotenv(Path.cwd() / ".env", override=False)

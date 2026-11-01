@@ -7,7 +7,7 @@
 ```text
 python/
 ├── run_context.py         测试运行上下文及登记资源的生命周期
-├── web_workbench.py       正式页面测试的模块级 Workbench 构建及原始证据
+├── web_workbench.py       正式页面测试的会话级 Workbench 构建及各模块消费收据
 ├── integration_gate.py    集成/E2E session跨worktree独占运行名额
 ├── browser_manager.py     Browser 后端、attach 前端的启动与清理
 ├── terminal_backend.py    Terminal 后端的启动及启动失败清理
@@ -40,6 +40,7 @@ out/tests/<test-id>/
 ## 规范
 
 - 依赖注入统一使用 pytest fixture；失败不得回退到替身。
+- Workbench 构建由根 pytest plugin 注册的 session fixture 统一持有，并先取得集成闸门；各模块沿用 `web_workbench_assets`，只共享静态产物，保留各自构建收据与日志。浏览器 profile、端口、工作区与其它可写运行数据必须留在调用方的节点目录，不得写入共享产物或其相邻目录；新 pytest 会话重新构建，不读取上轮产物。
 - 启动前检查端口占用，冲突时明确失败；退出只终止持有的进程句柄，不按端口杀未知监听进程。
 - Browser组合装具的`backend_host`是监听目标，端口预检使用同一主机及地址族；健康检查和前端配置共用一个后端URL。通配监听地址`0.0.0.0/::`分别通过`127.0.0.1/::1`访问，IPv6方括号只用于URL，不传给Node的`--host`。
 - 多进程装具在每个进程创建成功后立即登记清理，后续启动失败或被中断时也要释放已持有的资源。
