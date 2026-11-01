@@ -1438,3 +1438,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 原生产四组合（热／冷 writer × 已取消／已关闭 scope）均失败；最终整文件18项通过，覆盖真实 Path.replace 失败、同 ID 不同 reason 冲突、正确重试、终态冷载入及新 late ID 零事件。另112项核心／存储单测、23项中断服务单测及矩阵定向1项继承 fork 控制回归通过，共136个不同单测；Chat／Responses真实TCP中断及delta持久化竞争3项通过，共21个不同集成。均保留进程外180秒／4GiB保护，集成复用原共享独占闸门；各轮3230项受测代码／配置前后指纹一致。
 - Ruff、compileall通过；core和集成测试真实Pyright零诊断，完整三文件仍有Store既有2条索引诊断，与完整HEAD归档基线按文件、AST方法owner／完整方法、规则、消息和表达式逐项一致，不称完整类型全绿。限定三文件只读独审无finding、未运行测试；审查提出的payload冲突覆盖已补且最终18项通过。
 - 准确命令、原始输出、退出码、指纹、类型基线和审查范围见 `out/tests/temp/interrupt_settlement_reconcile_20261101/artifacts/verification.json`。本片不代完整控制恢复、OS崩溃、Gateway／Web、Windows、同步入口或Section8总验收；7.5／8.3与整体111/119保持未完成。前端实现、公共fixture、长回归驱动、其它会话改动与共享暂存未纳入本片提交。
+
+
+### 2026-11-01 7.5／8.3 中断控制文件故障的真实消息入口补验（部分）
+
+- 独立测试通过原应用lifespan、公开消息／中断入口和既有model_stream生成Job、scope、inbox及封存请求，只在真实控制文件原子替换处注入PermissionError。accepted发布失败保持原文件／内存／序号和Job running，无中断事件；解除故障后公开POST成功。consumed发布失败则HTTP500，但原中断已接受、原Job仍取消；两场景均只有一条归属原Thread／Turn的interrupt.requested、终态interrupted，无未采纳的模型正文。迟到POST保持404且不增事件，同Thread新Turn正常完成，原事件经新Store冷读逐项不变；四份封存请求分别核原transport及request_hash。
+- 最终2 passed／58.03秒，外层63.90秒、exit0；180秒进程外期限、4GiB数据段上限与原集成独占闸门保持，3231项采样源码前后不变。Ruff、compileall、真实Pyright零诊断。初版2项已通过；独审发现barrier未覆盖_send前置失败，已前移try/finally，补头体request_id、冷读和封存hash后取得最终结果；初次静态8条新测试标注问题修正后零诊断。最终只读复审无finding、未运行测试。
+- 证据：`out/tests/temp/interrupt_product_settlement_20261101/artifacts/verification.json`及正式同名测试runs。公开中断接口每次生成新ID，本片不宣称HTTP幂等；HTTP为ASGI进程内，冷读不是进程重启，不代真实Gateway网络、Web、Windows或完整Section8。未修改产品代码、前端实现、公共fixture、长回归驱动或共享debug；7.5／8.3与整体111/119保持未完成。
