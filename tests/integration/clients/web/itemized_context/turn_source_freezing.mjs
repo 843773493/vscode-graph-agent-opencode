@@ -21,9 +21,12 @@ const owner = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_OWNER"));
 const resource = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_CONTEXT_RESOURCE"));
 const agentsFile = requiredEnvironment("BOXTEAM_BROWSER_AGENTS_FILE");
 const versions = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_AGENTS_VERSIONS"));
+const boundary = requiredEnvironment("BOXTEAM_BROWSER_AGENTS_BOUNDARY");
+assert(["turn", "model_call"].includes(boundary));
+const firstReply = requiredEnvironment("BOXTEAM_BROWSER_FIRST_REPLY");
 const interactions = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_MODEL_CASSETTES")).map(cassette => cassette.interactions[0]);
 const resources = TestRunContext.fromTestFile(requiredEnvironment("BOXTEAM_BROWSER_TEST_OWNER"));
-const facts = { phase: "setup", owner, modelCalls: [], pageErrors: [], responses: [], browserRequests: [], consoleErrors: [], inspectedAssemblies: [] };
+const facts = { phase: "setup", owner, boundary, modelCalls: [], pageErrors: [], responses: [], browserRequests: [], consoleErrors: [], inspectedAssemblies: [] };
 let page;
 let token;
 let executionError;
@@ -179,14 +182,14 @@ try {
   facts.modelCalls.push(...calls);
   await testControl({ action: "arm", operation_id: calls[0], phase: "model.response_ready" });
   try {
-    facts.firstTurn = await send(thread, "读取 README.md；本轮工具循环必须保持原来源快照。");
+    facts.firstTurn = await send(thread, "读取 README.md；工具循环按配置的来源边界执行。");
     await testControl({ action: "acknowledged", operation_id: calls[0], phase: "model.response_ready" });
     assert.equal((await api(`/api/v1/jobs/${facts.firstTurn.job_id}`)).status, "running");
     // 只改变真实来源文件；不改 registry、checkpoint、assembly 或执行状态。
     await writeFile(agentsFile, versions[1]);
     assert.equal(await readFile(agentsFile, "utf8"), versions[1]);
   } finally { await testControl({ action: "release", operation_id: calls[0], phase: "model.response_ready" }); }
-  await completed(thread, facts.firstTurn, "本轮继续沿用冻结来源。");
+  await completed(thread, facts.firstTurn, firstReply);
   facts.firstAssemblies = await assemblies();
   assert.equal(facts.firstAssemblies.length, 2);
   phase("next-turn");
@@ -212,7 +215,7 @@ try {
   assert.deepEqual(facts.coldAssemblies, facts.assemblies);
   await openWorkbench(page, baseUrl);
   thread = await selectThread(page, owner, 0);
-  await expect(thread.getByText("本轮继续沿用冻结来源。", { exact: true })).toBeVisible();
+  await expect(thread.getByText(firstReply, { exact: true })).toBeVisible();
   await expect(thread.getByText("下一轮采用新的来源版本。", { exact: true })).toBeVisible();
   await thread.locator("#viewModeButton").click();
   await thread.getByRole("menuitemradio", { name: /^上下文状态/ }).click();

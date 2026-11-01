@@ -1518,3 +1518,9 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 限定构建边界：首次默认 `web_workbench_assets` 在180秒超时、exit1，子构建随后完整生成正式Workbench。最终通过临时pytest fixture显式复用该真实产物，核version／79扩展／全部资产SHA及2077份生产输入不变；没有替换页面、API或业务状态，不将默认构建fixture记为通过。**TODO：**公共构建耗时及超时后子进程回收另行复核，本片不放宽公共装具期限、不新增永久fallback。矩阵新增 `integration-web-turn-source-freezing`（660秒／4GiB），本轮只验证矩阵加载注册，未将默认矩阵执行记为通过。
 - Ruff、compileall、Pyright、Node语法检查和两change strict均exit0；最终代码及矩阵增量的非作者只读复审无finding。此前消息等待、分页／目录初始化、单facet假设和两次端口预检失败均保留；`ss`核原端口TIME-WAIT后，原合同预检明确全部available才完成最终运行，未终止未知进程或改宿主网络配置。代码与全部原件索引见 `out/tests/temp/turn_source_freezing_20261101/artifacts/verification.json`；正式产品原件位于其登记的 `run-235deb2ee0bf`，共享暂存gitlink保持不变。
 - 本片只补默认Turn的AGENTS来源冻结、安全重启与真实UI展示，不关闭9.7、7.5、8.3或8.13，不替代唯一 `conversation_lifecycle/` owner、显式model_call策略、Skill／混合边界、团队／协作、Windows或真实外部Provider验收；不因局部通过勾选综合门。
+
+### 2026-11-01 9.7 显式model_call来源与冷UI补验（部分）
+
+- 独立`test_model_call_source_freezing.py`复用默认Turn的唯一产品步骤和浏览器驱动，仅设置本文件工作区AGENTS为model_call。两模式各1场完整通过，六次实际model_stream请求核精确owner、工具配对/后继来源位置和封存hash；两组各三份assembly核真实API分页、UI展开完整selection/provenance、双facet原文、其余binding仍为Turn及安全重启后的历史不变。未同时修改其他来源，不能据标签与原绑定声称其变化时的完整混合策略行为已验证。
+- 默认Turn在`product-002`通过（同批新入口因40910占用setup拒绝）；同bind核空后仅补跑显式入口，`product-003`为1 passed/186.04秒、exit0。3578份采样源码前后稳定，进程外超时/4GiB和原集成独占闸门保持，未知占用进程未被终止。Ruff/Pyright零诊断、编译/Node语法通过；新矩阵注册只做加载解析，未称默认矩阵完整运行。
+- 本次显式复用已核2077份输入、全部资产SHA及固定干净上游的真实Workbench；两份已提交Python DTO差异不参与页面构建。原公共构建180秒超时及超时回收TODO未关闭，未放宽fixture或加入永久fallback。准确命令、原始输出、实际退出码、指纹、正式产物和作者结构审查见`out/tests/temp/model_call_source_freezing_20261101/artifacts/verification.json`。不代策略热更新、其他来源变化/Skill、团队、Windows、真实Provider或唯一Section8总验收；9.7、7.5、8.3、8.13及111/119保持未完成，前端/公共fixture/长回归驱动/共享Debug及他人暂存不纳入本片。

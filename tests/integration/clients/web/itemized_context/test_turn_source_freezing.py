@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import pytest
@@ -65,6 +66,15 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
     prefix_runtime: tuple[str, Path, ModelStreamReplay, int],
     agents_source: Path,
 ) -> None:
+    await verify_agents_source_boundary(request, prefix_runtime, agents_source, boundary="turn")
+
+
+async def verify_agents_source_boundary(
+    request: pytest.FixtureRequest,
+    prefix_runtime: tuple[str, Path, ModelStreamReplay, int],
+    agents_source: Path,
+    *, boundary: Literal["turn", "model_call"],
+) -> None:
     base_url, workspace, replay, _ = prefix_runtime
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     artifacts = context.artifacts_dir
@@ -84,10 +94,11 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
         updated = await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "primary"})
         assert updated.status_code == 200 and updated.json()["data"]["current_provider_id"] == "primary", updated.text
     ports = integration_port_block_for_file(Path(request.node.path))
+    first_reply = "本轮继续沿用冻结来源。" if boundary == "turn" else "本轮采用更新来源。"
     responses = [
         ([{"role": "assistant", "tool_calls": [{"index": 0, "id": "frozen-turn-read", "type": "function",
             "function": {"name": "read_file", "arguments": '{"path":"README.md"}'}}]}], "tool_calls"),
-        ([{"role": "assistant", "content": "本轮继续沿用冻结来源。"}], "stop"),
+        ([{"role": "assistant", "content": first_reply}], "stop"),
         ([{"role": "assistant", "content": "下一轮采用新的来源版本。"}], "stop"),
     ]
     cassettes = [build_cassette(
@@ -105,6 +116,8 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
         "BOXTEAM_BROWSER_CONTEXT_RESOURCE": json.dumps({key: session[key] for key in ("resource_identity", "uri", "scope")}),
         "BOXTEAM_BROWSER_AGENTS_FILE": str(agents_source),
         "BOXTEAM_BROWSER_AGENTS_VERSIONS": json.dumps(AGENTS_VERSIONS),
+        "BOXTEAM_BROWSER_AGENTS_BOUNDARY": boundary,
+        "BOXTEAM_BROWSER_FIRST_REPLY": first_reply,
         "BOXTEAM_BROWSER_MODEL_CASSETTES": json.dumps(cassettes),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
     }
@@ -123,6 +136,7 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
     assert returncode == 0, (artifacts / "browser.log").read_text()
     facts = json.loads((artifacts / "turn-source-result.json").read_text())
     assert facts["phase"] == "complete" and facts["pageErrors"] == []
+    assert facts["boundary"] == boundary
     assert facts["coldAssemblies"] == facts["assemblies"]
     assert agents_source.read_bytes() == AGENTS_VERSIONS[2].encode()
     calls = facts["modelCalls"]
@@ -131,12 +145,17 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
     assert all(record["identity"] == {"session_id": session_id, "thread_id": thread_id, "model_call_id": call}
                for call, record in captures.items())
     first, followup, successor = [captures[call]["request"]["messages"] for call in calls]
-    assert followup[:-2] == first
-    assistant, result = followup[-2:]
+    assert followup[:len(first)] == first
+    tail = followup[len(first):]
+    assert len(tail) == (2 if boundary == "turn" else 3)
+    assistant, result = tail[:2]
     assert [assistant["role"], result["role"]] == ["assistant", "tool"]
     assert assistant["tool_calls"][0]["id"] == result["tool_call_id"] == "frozen-turn-read"
     assert "# 统一测试工作区" in result["content"]
-    assert "WEB_TURN_SOURCE_B" not in json.dumps(followup, ensure_ascii=False)
+    assert ("WEB_TURN_SOURCE_B" in json.dumps(followup, ensure_ascii=False)) == (boundary == "model_call")
+    if boundary == "model_call":
+        assert tail[2]["role"] == "user"
+        assert "WEB_TURN_SOURCE_B" in json.dumps(tail[2], ensure_ascii=False)
     assert "WEB_TURN_SOURCE_B" in json.dumps(successor, ensure_ascii=False)
     assert successor[0] == first[0]
     assert all("WEB_TURN_SOURCE_C_CURRENT_IS_NOT_HISTORY" not in json.dumps(record["request"], ensure_ascii=False)
@@ -151,6 +170,7 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
     by_call = {report["model_call_id"]: report for report in reports}
     revisions = [sha256_jcs({"content": content}) for content in AGENTS_VERSIONS]
     frozen = []
+    version_indexes = (0, 0, 1) if boundary == "turn" else (0, 1, 1)
     with RolloutCheckpointSaver(workspace / ".boxteam/sessions") as cold:
         for ordinal, call in enumerate(calls):
             assembly_id = by_call[call]["assembly_id"]
@@ -159,6 +179,8 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
             activation = projection.resource_activation
             assert activation is not None
             agents = [item for item in activation.bindings if item.resource_kind == "workspace_agents"]
+            others = [item for item in activation.bindings if item.resource_kind != "workspace_agents"]
+            assert others and all(item.effective_boundary == "turn" for item in others)
             assert sorted(item.facet for item in agents) == ["chain", "raw-file"]
             chain = next(item for item in agents if item.facet == "chain")
             raw = next(item for item in agents if item.facet == "raw-file")
@@ -166,9 +188,10 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
             assert raw.display_uri == f"boxteam://workspace/{session['workspace_id']}/resources/agent-spec/root/AGENTS.md"
             assert chain.source_lineage_ref.sources == ((raw.resource_id, raw.revision),)
             for binding in agents:
-                assert (binding.revision, binding.effective_boundary) == (revisions[ordinal // 2], "turn")
+                expected_version = version_indexes[ordinal]
+                assert (binding.revision, binding.effective_boundary) == (revisions[expected_version], boundary)
                 payload = cold.read_resource_activation_payload(activation, binding, storage_owner=(session_id, thread_id))
-                assert agents_content(payload) == AGENTS_VERSIONS[ordinal // 2]
+                assert agents_content(payload) == AGENTS_VERSIONS[expected_version]
             public = next(item for item in facts["assemblies"] if item["assemblyId"] == assembly_id)
             assert public["selection"] == [entry.to_dict() for entry in snapshot.selection]
             assert public["resources"] == [item.model_dump(mode="json") for item in project_sealed_resource_refs(activation)]
@@ -180,12 +203,12 @@ async def test_tool_loop_freezes_agents_until_next_turn_and_cold_inspection(
             updates = [block for frame in seal.prefix.state.frames if frame.role == "user" and frame.source_protocol is not None
                        for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol)
                        if block.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
-            assert len(updates) == (1 if ordinal == 2 else 0)
+            assert len(updates) == version_indexes[ordinal]
             if updates:
                 update, = updates
                 assert (update.revision, update.base_revision, update.operation, update.representation, update.replaces) == (
                     revisions[1], revisions[0], "update", "unified_diff", (SourceVersionRef(WORKSPACE_AGENTS_SOURCE_ID, revisions[0]),))
             frozen.append(canonical_json_bytes(activation.to_dict()).decode())
-    assert frozen[0] == frozen[1]
+    assert (frozen[0] == frozen[1]) == (boundary == "turn")
     assert frozen[2] != frozen[0]
     (artifacts / "sealed-request-audit.json").write_text(json.dumps({"audit": audit, "activation": frozen}, ensure_ascii=False, indent=2))

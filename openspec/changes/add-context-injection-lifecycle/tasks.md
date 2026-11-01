@@ -576,3 +576,9 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 独立 `itemized_context/test_turn_source_freezing.py` 经真实Composer／Gateway／受管Backend和统一model_stream生成两轮三次请求，在首请求封存后的响应屏障中仅修改AGENTS A→B，证明同Turn工具循环保持A、下一Turn采用B。再改成C并经公开安全重启，三份assembly的API完整分页、UI展开selection／资源版本／provenance、冷Saver两facet原文及transport／日志／canonical／request_hash一致。
 - 最终 `product-008` 为1 passed／190.13秒、exit0，外层660秒／4GiB和集成独占闸门保持。Ruff／compileall／Pyright／Node语法和两份strict通过，当前代码限定独立复审无finding。准确命令、源码指纹、所有失败原件和正式产品产物索引见 `out/tests/temp/turn_source_freezing_20261101/artifacts/verification.json`；详细范围以itemized同日9.7收据为准。
 - 默认Workbench构建fixture首轮180秒超时仍记失败；最终显式临时复用同轮完整生成、2077份生产输入及全部资产SHA核验一致的真实产物，不替代页面或业务状态。**TODO：**公共构建耗时及超时后的子进程回收另行复核；默认矩阵仅完成新增注册解析，未记为整场通过。本片不改公共fixture、默认开发服务或唯一Section8 owner，不关闭7.1–7.5、显式model_call／Skill／混合边界及团队／协作等综合门。
+
+### 2026-11-01 显式model_call的真实Workbench来源补验（部分）
+
+- 新独立入口仅在自身工作区覆盖AGENTS为model_call；与默认Turn入口共用产品步骤和断言，不复制模型协议、Gateway fixture或浏览器驱动。两种模式各1场通过：默认Turn同轮保持A、下一轮B；显式model_call在成对工具结果后追加B。三份assembly逐项核真实API/UI、来源双facet、其余binding的Turn边界、安全重启冷Saver原文、v2替代协议及封存request_hash。
+- 默认Turn为184.86秒批次内1 passed，显式model_call独立补跑1 passed/186.04秒，外层超时/4GiB及原集成闸门保持；3578份采样源码前后无变化。首次新入口因40910占用在fixture拒绝，原同bind核空后仅补新入口，未杀未知进程。Ruff/Pyright/编译/Node语法通过；矩阵只新增并解析独立注册，未记默认矩阵或构建通过。
+- 明确临时复用此前已完整生成的正式Workbench，核2077份输入（仅两份已提交Python DTO与旧输入不同，不参与页面构建）、全部资产SHA及干净上游固定commit；默认构建180秒超时及回收TODO继续保留。准确命令、指纹、原始输出、退出码、构建复用边界和作者结构审查见`out/tests/temp/model_call_source_freezing_20261101/artifacts/verification.json`。本片不验证同时变更其他来源、策略热更新、Skill、团队/协作、Windows或真实Provider，不关闭7.1–7.5及itemized9.7等综合门；不改公共fixture、唯一Section8长回归驱动、前端或共享debug。
