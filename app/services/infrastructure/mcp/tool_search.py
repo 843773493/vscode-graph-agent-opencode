@@ -13,6 +13,7 @@ from dataclasses import asdict
 
 from app.agents.policy.tool_capability import ToolCapabilityPolicy
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.core.failures import report_failure
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.services.infrastructure.mcp.catalog_activation import (
     EXTENSION_CATALOG_SOURCE_ID,
@@ -172,10 +173,11 @@ async def search_tool_catalog(
                 try:
                     reference = await materialize(definition, entry)
                 except (OSError, RuntimeError) as error:
-                    logger.exception("工具定义物化失败: tool_id=%s", tool_id)
-                    raise ToolSearchStorageError(
-                        f"definition-materialization-failed: error_type={type(error).__name__}"
-                    ) from error
+                    detail = report_failure(
+                        error, detail=f"definition-materialization-failed: error_type={type(error).__name__}",
+                        diagnostic_logger=logger, extra={"tool_id": tool_id},
+                    )
+                    raise ToolSearchStorageError(detail) from error
                 entry = {key: value for key, value in entry.items() if key != "input_schema"}
                 entry.update({
                     "schema_state": "needs_read", "schema_ref": reference.path,

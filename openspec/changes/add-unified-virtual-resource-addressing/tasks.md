@@ -1888,3 +1888,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 冷读直接从原 dataclass 推导整批结构，迁除 Thread／fork 回执逐字段构造；原 envelope、默认值、业务校验及写出格式保持。损坏 JSON／编码、根类型及嵌套结构明确拒绝，位置和原值仅留诊断与直接 cause，日志次错不覆盖原拒绝；全部候选成功才发布，不改写原件。三个 revision 字段严格要求整数，拒绝字符串、布尔与小数，避免冷读归一化历史版本；未更改有效记录格式或 schema 版本。
 - 原生产反例确认日期错误回显原路径；最终两领域相关回归1066 passed，新独立集成2 passed／28.09秒。正式 Session／ASGI 创建真实 PTY／Chromium 后注入日期及版本损坏，核原件、热记录、账本、外部身份／版本不变，恢复原字节后冷 store 逐项一致，原管理 API 停止同一资源。Ruff、compileall、新集成 Pyright 和本 change strict 通过；原生产两条 Pyright 诊断与完整 HEAD 基线按文件、规则、消息、函数及最窄表达式 AST 完全一致，新增单测零诊断。独立只读复审无待处理 finding，未代运行验证。
 - 命令、源码指纹、红绿原件、真实退出码及限制见 `out/tests/temp/resource_record_decode_20261101/artifacts/verification.json`。所有测试使用外部超时与4GiB数据段保护，集成沿原独占闸门；不代完整冷 owner 恢复、Backend硬重启、Gateway／Web、Windows或全局不变量。未改公共 fixture、前端、回归 driver、共享开发服务或他人暂存；2.2／7.2仍未勾，整体51/53，团队及MCP持有延期保持。
+
+### 2026-11-01 工具定义保存失败与诊断次错（2.2／7.2部分收口）
+
+- 工具搜索沿原物化失败出口复用 `report_failure`，保留原异常及直接 cause、原存储失败说明和配对 ToolException；日志不可写只追加次错类别与原异常 notes。失败不伪造可读定义引用，不增加正文存储、日志回退或重试链。
+- 完整旧生产归档的四种原生路径／正文冲突在真实日志 ENOTDIR 下均复现主错被覆盖（4 failed／4健康日志控制 passed）。最终工具搜索及定义恢复回归45 passed，新增真实消息入口集成1 passed／85.93秒：原 model_stream 产生6次调用，核双错后 Job 完成、精确 canonical 配对、移除目录阻塞后的同 Session／Thread 搜索与普通 read_file 读取、完整字节／schema hash、原失败历史不变及全部 sealed request_hash。
+- Ruff、compileall、生产与新增集成真实 Pyright 零诊断；触达单测原有两条类型诊断与完整归档及 HEAD 的同函数／表达式 AST 一致，不扩修。首轮合跑因90秒外部保护退出124，分文件后全部通过；集成前两轮分别因点名扩展工具触发既有实际调用恢复、以及缺少 Gateway 身份的测试前提失败，后沿原 fixture 取得真实 Gateway 身份，未改产品或放宽原失败／正文断言。独立只读复审无功能 finding；既存 Agent 集成测试目录分组观察保留，不扩张重构。
+- 准确命令、源码指纹、完整归档摘要、原始输出及实际退出码见 `out/tests/temp/tool_search_diagnostics_20261101/artifacts/verification.json`。测试使用外部超时与4GiB数据段保护，集成沿共享独占闸门；业务请求为进程内 ASGI，Gateway 仅提供真实来源与身份，不代完整 Gateway 业务网络、Web、Backend重启或 Windows 验收。未改前端、公共 fixture、回归 driver、共享 debug 或他人暂存；2.2／7.2仍未勾，整体51/53，团队及显式 MCP 持有仍延期。

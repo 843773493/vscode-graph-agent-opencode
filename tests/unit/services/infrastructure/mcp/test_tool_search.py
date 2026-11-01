@@ -43,6 +43,10 @@ from app.services.infrastructure.tool_output_store import ToolOutputStore
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 当前测试路径的正式 SQLite fixture
 )
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 复用真实原生日志写入故障。
+)
 from tests.support.mcp.session_doubles import drain_pending_relists
 from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
     CatalogSessionFactory,
@@ -283,10 +287,15 @@ async def test_actual_output_middleware_keeps_schema_reference_complete(discover
     OSError(5, "写入失败", r"\\target\private\workspace\tool-results\definition.json"),
     RuntimeError("正文冲突: /private/workspace/tool-results/definition.json"),
 ], ids=["posix", "windows-drive", "windows-unc", "body-conflict"])
+@pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_materialization_failure_is_paired_and_never_forges_reference(
     discovery_case, discovery_tool_factory, discovery_store, registry_db, caplog, failure,
+    diagnostic_sink: DiagnosticFailure, log_fails: bool,
 ):
     recovered_tool, catalog, policies, frozen, read = discovery_case
+    original_args = failure.args
+    if log_fails:
+        diagnostic_sink.primary = failure
 
     async def failed(_definition, _entry):
         raise failure
@@ -297,11 +306,22 @@ async def test_materialization_failure_is_paired_and_never_forges_reference(
     with caplog.at_level(logging.ERROR, logger="app.services.infrastructure.mcp.tool_search"):
         message = await tool.ainvoke(call)
     assert message.tool_call_id == "write-failure" and message.status == "error"
-    assert message.content == f"definition-materialization-failed: error_type={type(failure).__name__}"
+    assert message.content == f"definition-materialization-failed: error_type={type(failure).__name__}" + (
+        ", diagnostic_sink_error=NotADirectoryError" if log_fails else ""
+    )
     assert message.artifact is None
+    assert failure.args == original_args
     diagnostic, = [record for record in caplog.records if record.name == "app.services.infrastructure.mcp.tool_search"]
     assert diagnostic.exc_info is not None and diagnostic.exc_info[1] is failure
     assert str(failure) in caplog.text
+    if log_fails:
+        sink_error, = diagnostic_sink.errors
+        sink_record, = diagnostic_sink.records
+        assert sink_record is diagnostic
+        assert any(str(sink_error) in note for note in failure.__notes__)
+        assert "diagnostic-log-secret" not in message.content
+    else:
+        assert not diagnostic_sink.errors
     # 显式重试复用原冻结正文，失败不生成可读取引用或改写目录。
     assert tool_catalog_from_activation(frozen, read) == catalog
     recovered = await recovered_tool.ainvoke(call)
