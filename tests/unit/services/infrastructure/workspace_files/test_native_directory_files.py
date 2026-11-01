@@ -107,7 +107,7 @@ def test_native_reply_preserves_envelope_owner_and_absolute_root_checks(native_r
 
 
 @pytest.mark.parametrize("operation", ["bind", "resolve"])
-@pytest.mark.parametrize("invalid", ["data", "json", "extra_key", "message"])
+@pytest.mark.parametrize("invalid", ["data", "json", "extra_key", "message", "uri"])
 @pytest.mark.parametrize("private", [
     "/private-native-root/secret", r"C:\private-native-root\secret", r"\\host\private-native-root\secret",
 ])
@@ -129,6 +129,9 @@ def test_native_reply_validation_keeps_raw_input_in_diagnostics_and_allows_retry
     elif invalid == "message":
         payload["message"] = {"diagnostic": private}
         rule = "string_type"
+    elif invalid == "uri":
+        payload["data"]["uri"] = private
+        rule = "value_error"
     else:
         rule = "json_invalid"
     reply.content = ("invalid-json " + private).encode() if invalid == "json" else json.dumps(payload).encode()

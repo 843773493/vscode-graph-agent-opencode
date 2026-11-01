@@ -1964,3 +1964,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 修改前DTO与真实任务库冷读均接受原生路径的反例已保留。最终100项模型／任务引用／导入检查、90项公开结构及任务错误回归、1项真实Session/任务ASGI与SQLite验收、3项既有生成及历史／在途导入验收通过，共194项不同用例；新产品用例的直接运行和正式matrix复跑重叠，不相加。五文件Pyright零错误／警告，Ruff、严格OpenSpec与差异检查通过。
 - 首轮产品断言通过但后台worker并发读到故障注入，关闭报错；本场景只验冷读，改为注入前真实停止隔离worker后通过，不修改产品故障语义。宽协议／API组合虽打印156项通过，进程在60秒外部期限退出124，不称整组通过；一次错误筛选已显式终止，退出143，随后用准确节点完成90项检查。
 - 命令、原始输出、退出码及2567份源码／依赖前后指纹核对见 `out/tests/temp/generation_source_publication_20261101/artifacts/verification.json`。产品suite固定60秒／4GiB并沿原集成独占闸门；不代表Gateway业务网络、Web、独立Backend硬重启、Windows或整个生成执行／fork验收。总门2.2／7.2仍未勾，整体51/53。
+
+### 2026-11-01 原生目录根回执的构造与发布校验（2.2／7.2有限证据）
+
+- bind／resolve DTO 在构造和序列化时复用同一 grammar，只接受无 authority、无 child 的 Gateway files 根；客户端删除重复根形状校验，保留认证、loopback、request_id、精确 owner 和原生绝对根校验。同机解析回执的 native_root 临时传递保持，不新增字段、parser 或存储链。
+- 先复现旧实现真实 Gateway HTTP 200 泄漏注入路径，再验证修复后的六次发布拒绝与同请求重试。245项不同定向检查通过，包含156项模型、87项客户端及既有文件链回归、1项真实 Gateway／Backend 网络验收和1项公开协议检查；原目录字节、未注册状态、注册身份和路由配置保持。首次绿版最后误将动态健康投影纳入注册不变断言，按注册合同纠正后通过；新 Gateway HOME 再按运行／节点隔离并复验。
+- 六份输入／输出 JSON Schema 逐项相同；Ruff、compileall和本 change strict 通过。Pyright保留4项HEAD既存诊断，完整首行消息、规则和最窄表达式AST一致，无新增。准确命令、源码指纹、红绿原件、实际退出码与作者结构自查见 `out/tests/temp/native_directory_publication_20261101/artifacts/verification.json`。
+- 测试带外部期限／4GiB保护，真实网络沿原独占闸门；本片不代Web、Windows、真实联邦或进程重启总验收。2.2／7.2仍未勾，整体51/53；未动另一会话前端、公共fixture、长回归驱动及共享debug，团队／协作和显式MCP持有继续延期。

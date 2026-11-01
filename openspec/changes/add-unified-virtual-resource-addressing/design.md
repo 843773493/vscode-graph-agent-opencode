@@ -125,6 +125,8 @@ Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定�
 
 原生目录控制链的 schema 与回执校验失败复用 `failure_detail`，原始回包附在原异常诊断中，普通错误只公开 bind／resolve、response／envelope 阶段、异常类别和原校验规则／数量。日志故障只补充其类别，不能替换原拒绝或开始扫描、发布目录观察。原 loopback、认证、request_id、owner 与绝对根校验保持；修正回包后沿原请求重试，不缓存损坏绑定或增加另一根解析链。
 
+绑定及解析回执的 `uri` 在 DTO 构造和序列化时共用唯一 grammar 校验，只允许无 authority、无 child 的 Gateway files 根。复制或赋值不绕过发布校验；客户端消费该 DTO，不另留一份根形状校验。解析回执与请求根的精确归属核对仍由客户端承担，认证同机链路中的 `native_root` 临时传递合同保持。
+
 ### D1c：原始诊断日志与 Browser 本地页面 URL 的具名例外
 
 2026-10-23 用户明确裁定，唯一寻址 owner 登记以下两项例外，消费者只引用对应 requirement：

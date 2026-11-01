@@ -95,10 +95,7 @@ class GatewayNativeDirectoryClient:
     def bind(self, root: Path) -> str:
         result = self._request("POST", "", response_type=APIResponse[NativeDirectoryBindingDTO],
                                body={"native_root": str(root)})
-        parsed = parse_resource_uri(result.uri)
-        if parsed.kind != "files" or parsed.scope != "gateway" or len(parsed.tail_segments) != 1 or parsed.gateway_authority is not None:
-            raise ValueError("原生根绑定控制链返回了错误资源")
-        return parsed.display_uri
+        return result.uri
 
     def resolve(self, parsed: ParsedResourceUri) -> Path:
         root_uri = resource_uri.file_uri_root(parsed.display_uri)
