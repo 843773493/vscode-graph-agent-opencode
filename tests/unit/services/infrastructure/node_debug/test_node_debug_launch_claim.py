@@ -1027,7 +1027,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
     )
 
     await service._claim_runtime.mark_claim_phase(stale, "settled", "旧代际回调")
-    service._claim_runtime.mark_claim_running(stale)
+    await service._claim_runtime.mark_claim_running(stale)
 
     persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted is not None

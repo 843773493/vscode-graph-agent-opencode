@@ -601,3 +601,9 @@ tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记
 原 stop 管理入口对 creating／unknown 意图取得新的管理 operation 后，调用受既有工作区／owner 授权保护的 `POST /api/{terminals|browsers}/{resource_id}/cancel-creation`，传入原冻结 `owner_revision`。尚无原生登记时，在现有 TerminalSession／BrowserSession 恢复记录保存 deleted／verified 与 `release_reason=creation_cancelled`，不启动 PTY／context。先将同一 ID 登记到原 Manager 集合以阻断异步准入与迟到创建，再等待原 writer；等待或写入失败期间只在运行态标记该候选尚未发布，普通 snapshot 返回 unknown。原 writer 成功后才清除此标记并签 not_created；重启从已发布记录恢复，终端历史配额不回收该取消事实。字段沿用现有记录，未新增数据库结构、文件或 lease 账本。
 
 回执绑定 resource_id／workspace_id／owner_revision；Python 严格核整数版本和 not_created，再通过原 owner writer 提交 deleted／verified、解除关联、同步账本及结清原待核实 lease。已有原生记录（包括 created／unknown）只返回 present 和当前快照，新管理操作随后走原版本推进／停止链；不能从空 PID／context 推导停止。取消请求失败、损坏回执、日志或后续本地落盘失败继续沿原 dispatching／unknown 保护和显式管理核实，不通过 finally 释放。此片不解决 Node 硬退出后已登记但缺少真实进程／context 身份的意图，也不代表整个 operation／shutdown 的期限完成。
+
+### Node Debug 握手占用的异步发布（5.4 部分收口）
+
+握手后的 typed 资源登记与 process-instance lease 获取一起进入既有受保护 worker，继续使用唯一账本、原 writer 锁与发布顺序；原 owner 准入及锁覆盖排队、写入和取消结算。运行时现有 state_lock 同时串行化登记与终态 claim 迁移，进程 monitor 不能先结清尚未发布的占用。取消保留原取消及迟到写盘失败，不代表进程已经停止；原管理 stop 仍须核实原 PID 身份并结清同一实例。移除仅供该链使用的同步登记及身份辅助入口，启动回调与测试全部迁为 await。
+
+claim 同步读写、不可抢占的原生 I/O、无身份旧代接管，以及整个 operation／shutdown 总期限继续 TODO；5.2／5.4 保持未完成。本切片没有新增存储、账本、后台释放或副作用重放。

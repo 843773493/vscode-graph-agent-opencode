@@ -148,7 +148,7 @@ class NodeDebugLaunchSelectionWriter(Protocol):
 
 
 class NodeDebugLaunchClaimMarker(Protocol):
-    def __call__(self, runtime: NodeDebugRuntime) -> None: ...
+    async def __call__(self, runtime: NodeDebugRuntime) -> None: ...
 
 
 class NodeDebugPausedBreakpointChecker(Protocol):
@@ -201,7 +201,7 @@ class NodeDebugLaunchOrchestrator:
         ready = asyncio.ensure_future(runtime.inspector.inspector_ready.wait())
         failed = asyncio.ensure_future(runtime.inspector.inspector_failed.wait())
         exited = asyncio.ensure_future(runtime.process_task) if runtime.process_task else None
-        waiters: list[asyncio.Future[object]] = [ready, failed]
+        waiters: list[asyncio.Task[object]] = [ready, failed]
         if exited is not None:
             waiters.append(exited)
         try:
@@ -444,7 +444,7 @@ class NodeDebugLaunchOrchestrator:
                 "NodeRuntime.notifyWhenWaitingForDisconnect",
                 {"enabled": True},
             )
-            context.mark_claim_running(runtime)
+            await context.mark_claim_running(runtime)
             for breakpoint in runtime.breakpoints.values():
                 if breakpoint.relocation_status == "current":
                     await context.breakpoint_mutations.install_breakpoint(runtime, breakpoint)

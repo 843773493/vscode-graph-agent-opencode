@@ -112,7 +112,7 @@ class NodeDebugActionDispatchMixin:
                 # stop 与 start 共用 per-owner 临界区（R3b 复核残留项）：否则 stop 落在
                 # "runtime 已登记、进程尚未 spawn"的窗口会以 process is None 判定
                 # "已停止/可证明不存在"，随后启动序列仍会 spawn，形成"exited + 进程
-                # 存活"的假终态。临界区内的 await 全部有界（见 _owner_lock 文档）。
+                # 存活"的假终态；临界区须覆盖原副作用与账本worker的真实结算。
                 async with self._owner_lock(owner):
                     outcome = await self._lifecycle.stop_runtime(runtime)
                     if outcome != "reconcile_required":

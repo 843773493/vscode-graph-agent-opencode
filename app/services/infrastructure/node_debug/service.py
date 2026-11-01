@@ -217,9 +217,9 @@ class NodeDebugService(
         """取（或懒建）该 owner 的临界区：串行化 start/stop/restart/close 的整段序列。
 
         asyncio 单线程事件循环内 check-then-set 之间没有 await，不存在竞态。
-        临界区内的 await 全部有界：旧实例停止的 terminate 核实 3s + kill 核实 3s
-        超时、socket.close、已 cancel 任务的 gather；不存在无界等待，也不会与
-        ``_runtimes_lock`` 形成反向持锁（``close()`` 先释放 ``_runtimes_lock`` 再取本锁）。
+        旧实例停止的 terminate/kill 核实各有期限；账本worker须真实结算后才释放本锁。
+        TODO(5.4)：原生I/O不可抢占，整个临界区与shutdown的总期限仍未收口。
+        ``close()`` 先释放 ``_runtimes_lock`` 再取本锁，避免形成反向持锁。
         """
         lock = self._owner_locks.get(owner)
         if lock is None:

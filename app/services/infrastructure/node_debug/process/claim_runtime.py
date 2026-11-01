@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.thread_residency_contracts import ResidencyBlocker
 from app.schemas.internal_v2.node_debug import (
     NodeDebugLaunchClaimDTO,
@@ -87,35 +89,6 @@ class NodeDebugClaimRuntime:
         self._runtimes = runtimes
         self._residency_tracker = residency_tracker
         self._state_events = state_events
-
-    def process_lease_identity(
-        self, runtime: NodeDebugRuntime
-    ) -> NodeDebugProcessLeaseIdentity | None:
-        process_instance_id = runtime.process_instance_id
-        if process_instance_id is None:
-            return None
-        return NodeDebugProcessLeaseIdentity.for_process_instance(
-            session_id=runtime.session_id,
-            thread_id=runtime.thread_id,
-            process_instance_id=process_instance_id,
-        )
-
-    def ensure_process_lease(self, runtime: NodeDebugRuntime) -> None:
-        """握手成功后登记跨 Turn 占用；账本失败直接抛出。"""
-        identity = self.process_lease_identity(runtime)
-        if identity is None:
-            return
-        self._external_resource_leases.register_external(
-            resource_id=identity.resource_id,
-            kind="node_debug_process",
-            lifetime_scope="session",
-        )
-        self._external_resource_leases.acquire(
-            resource_id=identity.resource_id,
-            turn_stream_id=identity.holder_id,
-            lease_id=identity.lease_id,
-            operation_id=identity.operation_id,
-        )
 
     async def settle_process_lease(
         self,
@@ -201,18 +174,44 @@ class NodeDebugClaimRuntime:
             return None
         return claim
 
-    def mark_claim_running(self, runtime: NodeDebugRuntime) -> None:
-        claim = self.claim_for_runtime(runtime)
-        if claim is None:
-            return
-        if claim.phase != "running":
-            self.write_launch_claim(
-                claim_running(
-                    claim,
-                    inspector_port=self._authoritative_inspector_port(runtime),
+    async def mark_claim_running(self, runtime: NodeDebugRuntime) -> None:
+        # 进程monitor也通过原state_lock结清，不能越过尚未发布的同实例占用。
+        async with runtime.state_lock:
+            claim = self.claim_for_runtime(runtime)
+            if claim is None:
+                return
+            if claim.phase != "running":
+                self.write_launch_claim(
+                    claim_running(
+                        claim,
+                        inspector_port=self._authoritative_inspector_port(runtime),
+                    )
                 )
+            identity = NodeDebugProcessLeaseIdentity.for_process_instance(
+                session_id=claim.session_id, thread_id=claim.thread_id,
+                process_instance_id=claim.process_instance_id,
             )
-        self.ensure_process_lease(runtime)
+
+            def register() -> None:
+                self._external_resource_leases.register_external(
+                    resource_id=identity.resource_id, kind="node_debug_process", lifetime_scope="session",
+                )
+                self._external_resource_leases.acquire(
+                    resource_id=identity.resource_id, turn_stream_id=identity.holder_id,
+                    lease_id=identity.lease_id, operation_id=identity.operation_id,
+                )
+
+            # 原owner准入与锁持续覆盖worker结算；取消不能留下晚于停止发布的活跃占用。
+            # TODO(5.4)：claim读写、原生I/O抢占与整个启动/关闭期限仍须分别收口。
+            pending = asyncio.create_task(run_sync_shielded(register))
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError as original:
+                try:
+                    await run_cleanup_shielded(lambda: pending)
+                except BaseException as failure:
+                    raise original from failure
+                raise
 
     @staticmethod
     def _authoritative_inspector_port(runtime: NodeDebugRuntime) -> int:
@@ -229,22 +228,23 @@ class NodeDebugClaimRuntime:
         phase: Literal["stopping", "reconcile_required", "settled"],
         reason: str | None = None,
     ) -> None:
-        claim = self.claim_for_runtime(runtime)
-        if claim is None or claim.phase == "settled":
-            return
-        if phase == "reconcile_required":
-            self.notify_release_failed(
-                session_id=claim.session_id,
-                thread_id=claim.thread_id,
-                process_instance_id=claim.process_instance_id,
-            )
-        if phase == "settled":
-            await self.settle_process_lease(
-                session_id=claim.session_id,
-                thread_id=claim.thread_id,
-                process_instance_id=claim.process_instance_id,
-            )
-        self.write_launch_claim(claim_marked(claim, phase=phase, reason=reason))
+        async with runtime.state_lock:
+            claim = self.claim_for_runtime(runtime)
+            if claim is None or claim.phase == "settled":
+                return
+            if phase == "reconcile_required":
+                self.notify_release_failed(
+                    session_id=claim.session_id,
+                    thread_id=claim.thread_id,
+                    process_instance_id=claim.process_instance_id,
+                )
+            if phase == "settled":
+                await self.settle_process_lease(
+                    session_id=claim.session_id,
+                    thread_id=claim.thread_id,
+                    process_instance_id=claim.process_instance_id,
+                )
+            self.write_launch_claim(claim_marked(claim, phase=phase, reason=reason))
 
     def notify_release_failed(
         self,

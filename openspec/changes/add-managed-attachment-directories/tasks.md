@@ -909,3 +909,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 修改前4项反例失败、正常对照通过（非完整归档变异）；修改后222项相关单测通过。新场景经正式创建、新标签及run入口生成真实Chromium页面，原指针reset先完成，仅暂扣回执；peer真实关闭原活动页，核关闭已发生但激活尚未结算、stop408与磁盘unknown、peer可用、释放原回执后同身份/版本重试verified，以及原迟到激活错误已持久保存。与下载、弹出页补验合计3 passed/28.36秒，源码2837份采样前后无变化。
 - Ruff、Pyright零诊断、compileall、Node语法及OpenSpec严格检查通过。准确命令、原始输出/退出码、源码指纹和作者结构审查在`out/tests/temp/browser_page_close_20261101/artifacts/`，正式场景产物沿测试镜像目录保留。未修改前端迁移、公共fixture、长回归驱动或共享debug；没有新增独立审查。
 - 此片不证明不合作执行可强制终止、Python业务owner接管、Gateway/Web、硬重启、Windows或整个operation/shutdown期限。5.2、5.4仍未完成，整体21/23。
+
+### 2026-11-01 Node Debug 进程占用发布与终态顺序（5.4 部分）
+
+- 资源登记与获取沿同一受保护 worker 结算，原 owner 锁和运行时锁覆盖取消及真实进程终态；删除两个无其它调用方的同步辅助方法，迁齐异步回调。修改前两个事件循环阻塞反例失败；首版异步实现的两个进程退出反例也失败，随后复用原 state_lock 修正顺序，未新增状态账本。
+- 正式矩阵 10 passed／60.38秒，覆盖真实 API／Node／Inspector、两处账本发布、取消与迟到写盘失败、同 owner stop 等待、冷 service 重读及同方案重启；退出信号调用改用标准库后定向 2 passed／10.42秒。相关回归 66 passed／50.11秒；Ruff／编译通过，两份生产执行模块与新增集成 Pyright 零诊断，另修正握手等待列表的两项既有类型错误。所有测试有外部期限／4GiB，集成沿原独占闸门。
+- 准确命令、原始输出、退出码、源码指纹及作者复审见 `out/tests/temp/debug_lease_admission_20261101/artifacts/verification.json`。不代替 Gateway／Web、独立进程重启、Windows、线程池永久排队或整个 operation／shutdown 期限；5.2／5.4 及 21/23 仍未完成。未修改前端、共享 debug、公共 fixture 或长回归驱动。

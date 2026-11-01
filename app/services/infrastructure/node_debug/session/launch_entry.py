@@ -49,9 +49,9 @@ class NodeDebugLaunchEntryMixin:
         后写的登记会覆盖先启动实例的登记，先启动的进程随之游离，Inspector 端口也被抢。
         R5b 起同一临界区也覆盖 ``apply_action("stop")``、``restart()`` 与 ``close()`` 的
         停止路径：stop 落在 spawn 窗口不会再产生"exited + 进程存活"的假终态。临界区内
-        的 await 全部有界（旧实例停止的 terminate/kill 核实各有 3s 超时、socket.close
-        与已 cancel 任务的 gather 均有界），不会与 ``_runtimes_lock`` 形成反向持锁
-        （``_owner_lock → _runtimes_lock → runtime.state_lock`` 单向）。
+        等待覆盖原副作用和账本worker的真实结算，不能提前释放锁或伪报停止。
+        TODO(5.4)：原生I/O抢占及整个启动/关闭期限尚未收口。
+        锁序保持 ``_owner_lock → _runtimes_lock → runtime.state_lock``。
         """
         async with self._admit_mutation(session_id, thread_id) as admitted_owner:
             session_id, thread_id = admitted_owner
