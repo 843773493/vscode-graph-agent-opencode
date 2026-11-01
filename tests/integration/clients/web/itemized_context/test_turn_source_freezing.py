@@ -28,6 +28,9 @@ from app.services.business.resource_derivations.agents import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
+    skill_catalog_from_activation,
+)
 from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
@@ -51,6 +54,13 @@ AGENTS_VERSIONS = (
     "WEB_TURN_SOURCE_B 🧭\r\n保留末尾空白  \n保持工具结果的精确身份。\n",
     "WEB_TURN_SOURCE_C_CURRENT_IS_NOT_HISTORY\n",
 )
+SKILL_BODIES = ("WEB_MIXED_SKILL_A\n", "WEB_MIXED_SKILL_B é\n", "WEB_MIXED_SKILL_C 🧭\n")
+SKILL_NAME = "web-mixed-boundary"
+MIXED_CURRENT_AGENTS = "WEB_MIXED_CURRENT_D_IS_NOT_HISTORY\n"
+
+
+def skill_file_content(body: str) -> str:
+    return f"---\nname: {SKILL_NAME}\ndescription: 固定metadata的混合来源\n---\n{body}"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -74,6 +84,7 @@ async def verify_agents_source_boundary(
     prefix_runtime: tuple[str, Path, ModelStreamReplay, int],
     agents_source: Path,
     *, boundary: Literal["turn", "model_call"],
+    skill_source: Path | None = None,
 ) -> None:
     base_url, workspace, replay, _ = prefix_runtime
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -101,6 +112,14 @@ async def verify_agents_source_boundary(
         ([{"role": "assistant", "content": first_reply}], "stop"),
         ([{"role": "assistant", "content": "下一轮采用新的来源版本。"}], "stop"),
     ]
+    if skill_source is not None:
+        assert boundary == "turn"
+        responses = [
+            ([{"role": "assistant", "tool_calls": [{"index": 0, "id": f"mixed-load-{index}", "type": "function",
+                "function": {"name": "skill_load", "arguments": json.dumps({"name": SKILL_NAME})}}]}], "tool_calls")
+            if index in (0, 1, 3) else ([{"role": "assistant", "content": text}], "stop")
+            for index, text in enumerate(("", "", first_reply, "", "下一轮采用新的来源版本。"))
+        ]
     cassettes = [build_cassette(
         asset_id="web-turn-source-freezing", model="browser-chat-tool-loop-stub",
         url=f"http://127.0.0.1:{ports.port(10)}/v1/chat/completions",
@@ -119,6 +138,10 @@ async def verify_agents_source_boundary(
         "BOXTEAM_BROWSER_AGENTS_BOUNDARY": boundary,
         "BOXTEAM_BROWSER_FIRST_REPLY": first_reply,
         "BOXTEAM_BROWSER_MODEL_CASSETTES": json.dumps(cassettes),
+        **({"BOXTEAM_BROWSER_MIXED_SKILL": json.dumps({"path": str(skill_source),
+            "uri": f"boxteam://workspace/{session['workspace_id']}/resources/skills/{SKILL_NAME}/SKILL.md",
+            "currentAgents": MIXED_CURRENT_AGENTS,
+            "versions": [skill_file_content(body) for body in SKILL_BODIES]})} if skill_source is not None else {}),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
     }
     command = ["node", "tests/integration/clients/web/itemized_context/turn_source_freezing.mjs"]
@@ -131,46 +154,55 @@ async def verify_agents_source_boundary(
             stdout=output, stderr=subprocess.STDOUT, text=True, start_new_session=True)
         managed = ManagedProcess(process=process, log_file=output)
         register_test_process(managed, managed.close)
-        returncode = await asyncio.to_thread(process.wait, timeout=240)
+        # 三调用场景原预算不变；五调用与五份完整UI检查按相同单位工作量计预算。
+        returncode = await asyncio.to_thread(process.wait, timeout=80 * len(responses))
     (artifacts / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": returncode}, indent=2))
     assert returncode == 0, (artifacts / "browser.log").read_text()
     facts = json.loads((artifacts / "turn-source-result.json").read_text())
     assert facts["phase"] == "complete" and facts["pageErrors"] == []
     assert facts["boundary"] == boundary
     assert facts["coldAssemblies"] == facts["assemblies"]
-    assert agents_source.read_bytes() == AGENTS_VERSIONS[2].encode()
+    assert agents_source.read_bytes() == (MIXED_CURRENT_AGENTS if skill_source is not None else AGENTS_VERSIONS[2]).encode()
     calls = facts["modelCalls"]
-    assert len(calls) == len(set(calls)) == 3
+    assert len(calls) == len(set(calls)) == (5 if skill_source is not None else 3)
     captures = {call: json.loads((replay.artifacts / f"{call}.json").read_text()) for call in calls}
     assert all(record["identity"] == {"session_id": session_id, "thread_id": thread_id, "model_call_id": call}
                for call, record in captures.items())
-    first, followup, successor = [captures[call]["request"]["messages"] for call in calls]
+    wires = [captures[call]["request"]["messages"] for call in calls]
+    first, followup, successor = wires[0], wires[1], wires[-1]
     assert followup[:len(first)] == first
     tail = followup[len(first):]
-    assert len(tail) == (2 if boundary == "turn" else 3)
+    assert len(tail) == (2 if boundary == "turn" and skill_source is None else 3)
     assistant, result = tail[:2]
     assert [assistant["role"], result["role"]] == ["assistant", "tool"]
-    assert assistant["tool_calls"][0]["id"] == result["tool_call_id"] == "frozen-turn-read"
-    assert "# 统一测试工作区" in result["content"]
+    assert assistant["tool_calls"][0]["id"] == result["tool_call_id"] == (
+        "frozen-turn-read" if skill_source is None else "mixed-load-0")
+    if skill_source is None:
+        assert "# 统一测试工作区" in result["content"]
     assert ("WEB_TURN_SOURCE_B" in json.dumps(followup, ensure_ascii=False)) == (boundary == "model_call")
     if boundary == "model_call":
         assert tail[2]["role"] == "user"
         assert "WEB_TURN_SOURCE_B" in json.dumps(tail[2], ensure_ascii=False)
-    assert "WEB_TURN_SOURCE_B" in json.dumps(successor, ensure_ascii=False)
+    assert ("WEB_TURN_SOURCE_B" if skill_source is None else "WEB_TURN_SOURCE_C_CURRENT_IS_NOT_HISTORY") in json.dumps(successor, ensure_ascii=False)
     assert successor[0] == first[0]
-    assert all("WEB_TURN_SOURCE_C_CURRENT_IS_NOT_HISTORY" not in json.dumps(record["request"], ensure_ascii=False)
-               for record in captures.values())
+    if skill_source is None:
+        assert all("WEB_TURN_SOURCE_C_CURRENT_IS_NOT_HISTORY" not in json.dumps(record["request"], ensure_ascii=False)
+                   for record in captures.values())
 
     resolver = get_session_path_resolver(workspace / ".boxteam/sessions")
     node = resolver.resolve_thread_node(session_id, thread_id)
     audit = audit_sealed_requests(node / "rollout/index.sqlite",
         (resolver.resolve_session_node(session_id) / "logs/llm_requests").glob("*.json"), captures)
     reports = audit["requests"]
-    assert isinstance(reports, list) and len(reports) == 3
+    assert isinstance(reports, list) and len(reports) == len(calls)
     by_call = {report["model_call_id"]: report for report in reports}
     revisions = [sha256_jcs({"content": content}) for content in AGENTS_VERSIONS]
     frozen = []
-    version_indexes = (0, 0, 1) if boundary == "turn" else (0, 1, 1)
+    version_indexes = (0, 0, 0, 2, 2) if skill_source is not None else (0, 0, 1) if boundary == "turn" else (0, 1, 1)
+    metadata = []
+    receipts = []
+    catalogs = []
+    agent_bindings = []
     with RolloutCheckpointSaver(workspace / ".boxteam/sessions") as cold:
         for ordinal, call in enumerate(calls):
             assembly_id = by_call[call]["assembly_id"]
@@ -179,7 +211,9 @@ async def verify_agents_source_boundary(
             activation = projection.resource_activation
             assert activation is not None
             agents = [item for item in activation.bindings if item.resource_kind == "workspace_agents"]
-            others = [item for item in activation.bindings if item.resource_kind != "workspace_agents"]
+            agent_bindings.append(agents)
+            others = [item for item in activation.bindings if item.resource_kind != "workspace_agents"
+                      and not (skill_source is not None and item.resource_kind == "skill")]
             assert others and all(item.effective_boundary == "turn" for item in others)
             assert sorted(item.facet for item in agents) == ["chain", "raw-file"]
             chain = next(item for item in agents if item.facet == "chain")
@@ -203,12 +237,43 @@ async def verify_agents_source_boundary(
             updates = [block for frame in seal.prefix.state.frames if frame.role == "user" and frame.source_protocol is not None
                        for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol)
                        if block.source_identity == WORKSPACE_AGENTS_SOURCE_ID]
-            assert len(updates) == version_indexes[ordinal]
+            assert len(updates) == int(version_indexes[ordinal] > 0)
             if updates:
                 update, = updates
                 assert (update.revision, update.base_revision, update.operation, update.representation, update.replaces) == (
-                    revisions[1], revisions[0], "update", "unified_diff", (SourceVersionRef(WORKSPACE_AGENTS_SOURCE_ID, revisions[0]),))
+                    revisions[version_indexes[ordinal]], revisions[0], "update", "unified_diff", (SourceVersionRef(WORKSPACE_AGENTS_SOURCE_ID, revisions[0]),))
+            if skill_source is not None:
+                catalog = skill_catalog_from_activation(activation, lambda snapshot, binding:
+                    cold.read_resource_activation_payload(snapshot, binding, storage_owner=(session_id, thread_id)))
+                assert catalog is not None
+                catalogs.append(catalog)
+                assert catalog.entries[SKILL_NAME].body == SKILL_BODIES[min(ordinal, 2)]
+                skill_refs = [item for item in activation.bindings if item.resource_kind == "skill"
+                              and item.display_uri == catalog.entries[SKILL_NAME].display_uri]
+                assert {item.facet for item in skill_refs} == {"metadata", "activation"}
+                assert all(item.effective_boundary == "model_call" for item in skill_refs)
+                metadata.append(next(item for item in skill_refs if item.facet == "metadata"))
+                if ordinal in (1, 2, 4):
+                    previous = wires[ordinal - 1]
+                    assert wires[ordinal][:len(previous)] == previous
+                    tool_tail = wires[ordinal][len(previous):]
+                    assert [row["role"] for row in tool_tail[:2]] == ["assistant", "tool"]
+                    tool_call = tool_tail[0]["tool_calls"][0]["id"]
+                    assert tool_tail[1]["tool_call_id"] == tool_call == f"mixed-load-{ordinal - 1}"
+                    receipt = json.loads(tool_tail[1]["content"])
+                    assert receipt["status"] == "loaded" and receipt["error"] is None and not receipt["tracked"]
+                    assert receipt["revision"] == catalogs[ordinal - 1].entries[SKILL_NAME].activation_revision
+                    assert SKILL_BODIES[len(receipts)].strip() in json.dumps(tool_tail, ensure_ascii=False)
+                    receipts.append(receipt)
             frozen.append(canonical_json_bytes(activation.to_dict()).decode())
-    assert (frozen[0] == frozen[1]) == (boundary == "turn")
+    if skill_source is not None:
+        assert len({item.revision for item in metadata[:3]}) == 1
+        assert len({item.source_lineage_digest for item in metadata[:3]}) == 3
+        assert len({receipt["revision"] for receipt in receipts}) == 3
+        assert not skill_source.exists()
+        assert agent_bindings[0] == agent_bindings[1] == agent_bindings[2]
+        assert agent_bindings[3] == agent_bindings[4] != agent_bindings[0]
+    else:
+        assert (frozen[0] == frozen[1]) == (boundary == "turn")
     assert frozen[2] != frozen[0]
     (artifacts / "sealed-request-audit.json").write_text(json.dumps({"audit": audit, "activation": frozen}, ensure_ascii=False, indent=2))

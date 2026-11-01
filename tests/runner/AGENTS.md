@@ -160,3 +160,5 @@
 - `integration-mcp-tool-approval-recovery` 经真实 Gateway／消息／审批入口生成多工具等待，再硬退出并重启 Backend；验证旧决定失效、原资格释放、未知结果与原执行同事务归属、新执行唯一 MCP 收据及请求 hash，固定240秒／4GiB；不替代跨 execution 持续资源持有、跨 Gateway 授权或真实 Provider 验收。
 
 - `integration-web-model-call-source-freezing`经独立工作区的真实Workbench/Gateway/Backend与model_stream验证显式AGENTS model_call、工具配对后追加及安全重启冷检查；固定660秒/4GiB，沿原集成独占闸门，共用默认Turn入口的浏览器驱动。默认构建仍由公共fixture执行；不将临时复用已核正式资产的产品通过记作默认构建或整个矩阵通过。
+
+- `integration-web-mixed-source-freezing` 复用正式 Workbench 和来源冻结唯一驱动，以真实 Composer/Gateway/Backend 与 model_stream 验证 Turn AGENTS/model_call Skill 的同请求混合边界、原调用 Skill 选择及安全重启后的完整 API/UI/冷 Saver 检查；固定660秒/4GiB，沿原集成独占闸门。不改公共构建 fixture，不替代 Section8、Windows、真实 Provider 或默认构建期限的验收。

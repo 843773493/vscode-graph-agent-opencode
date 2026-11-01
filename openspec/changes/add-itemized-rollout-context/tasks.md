@@ -1540,3 +1540,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - product-004保留原缺陷与后续fixture transport计数错误原件，不把其错误算通过。product-008修复后已完成全部5次调用，但新测试错误地只期待显式skill override，漏计配置继承的mcp_tool_catalog=turn；integrated-010改为与生产配置owner发布的完整有效policy严格对账并通过，未放宽版本、身份、顺序或业务期限。unit-final-011、integrated-010和final-static-012的2874份采样源码前后均无变化；使用原集成独占闸门、外置timeout与4GiB数据段保护。
 - Ruff、compileall和54项strict均通过。Pyright实测exit1/21条诊断，与修改前完整HEAD归档按文件/规则/完整消息逐项相同，新场景零诊断；不称整个类型检查全绿。作者结构复核：CSM目录12个直接Python文件、seal目录5个、generation目录6个；app/agents既有35个直接Python文件且本片未增加，不能代全仓结构门。命令、源码指纹、原始输出/实际退出码、完整类型基线比对与正式产物引用见out/tests/temp/mixed_activation_sources_20261101/artifacts/verification.json。
 - 本片未改前端迁移、公共fixture、唯一conversation_lifecycle长驱动、共享debug或他人暂存；不代真实浏览器、独立Backend硬重启、Windows、同步Provider SDK或外部模型验收。9.7/7.5/8.3/8.13及整体111/119保持未完成；团队与MCP持有延期仍保留TODO，无新增非作者独审。
+
+
+### 2026-11-01 9.7 同请求混合来源的真实Workbench补验（部分）
+
+- 新独立Web入口复用唯一来源冻结驱动、正式Workbench、真实Gateway/Backend和model_stream。真实Composer两轮五次请求、三次skill_load；在两个模型响应屏障内同时修改真实AGENTS与Skill，核watcher精确URI/原始SHA/available发布后才放行。Turn AGENTS前三份assembly保持A、下轮采用C；model_call Skill正文A/B/C各由发起工具调用的原snapshot加载。metadata语义revision不变而lineage更新，assistant/tool身份、顺序与前缀精确核对。
+- 删除当前Skill、再改AGENTS为D后，公开安全重启；五份assembly的完整API分页与冷读深比对、UI完整selection/资源版本/provenance、冷Saver双facet原文及transport/日志/canonical/request_hash均通过。混合场景product-007为1 passed/349.58秒；共用驱动的默认Turn和显式model_call补跑regression-008为2 passed/372.48秒。3581份采样源码各运行前后无变化；最终只改TODO事实表述，esbuild去注释可执行代码SHA相同。
+- 默认构建product-002在180秒超时、未进业务，回收本次已核名下的构建子进程；最终显式复用此前完整正式产物，742份编译输入及全部资产SHA、干净固定上游commit均相同，不把默认构建或默认矩阵记为通过。product-003已完成五次调用及冷API，但旧240秒整段预算只容纳2/5 UI；新增五调用按原单位工作量改400秒，原三调用仍240秒，业务期限与全部断言不变。product-005端口占用在setup拒绝；核空后补跑，不杀未知进程。
+- product-006的目标Session/main-thread请求均200而目标Tab缺席、仍Welcome，未进模型业务；本场景明确先等原版Welcome并通过原按钮关闭，再调用一次原精确owner导航。**TODO：**该初始化导航时序根因交前端owner核实，构建耗时/超时子进程回收继续后置；失败原件全部保留。未改前端实现、公共fixture、唯一Section8长驱动、共享debug或他人暂存。
+- Ruff、3文件Pyright零诊断、compileall、Node语法、矩阵注册解析及两份strict通过；最终驱动经既有非作者只读复核无finding。准确命令、源码/资产指纹、原始输出/退出码、正式运行与审查原件见out/tests/temp/web_mixed_sources_20261101/artifacts/verification.json。独立定向证据不替代9.7唯一owner或完整Section8、7.5/8.3/8.13、策略热更新、Windows、硬退出、同步Provider SDK或真实外部Provider；整体任务均保持未勾选，团队/MCP持有延期不变。

@@ -582,3 +582,10 @@ R01／R02可空 files URI selector、默认／schema／dev、目标文件 owner�
 - 新独立入口仅在自身工作区覆盖AGENTS为model_call；与默认Turn入口共用产品步骤和断言，不复制模型协议、Gateway fixture或浏览器驱动。两种模式各1场通过：默认Turn同轮保持A、下一轮B；显式model_call在成对工具结果后追加B。三份assembly逐项核真实API/UI、来源双facet、其余binding的Turn边界、安全重启冷Saver原文、v2替代协议及封存request_hash。
 - 默认Turn为184.86秒批次内1 passed，显式model_call独立补跑1 passed/186.04秒，外层超时/4GiB及原集成闸门保持；3578份采样源码前后无变化。首次新入口因40910占用在fixture拒绝，原同bind核空后仅补新入口，未杀未知进程。Ruff/Pyright/编译/Node语法通过；矩阵只新增并解析独立注册，未记默认矩阵或构建通过。
 - 明确临时复用此前已完整生成的正式Workbench，核2077份输入（仅两份已提交Python DTO与旧输入不同，不参与页面构建）、全部资产SHA及干净上游固定commit；默认构建180秒超时及回收TODO继续保留。准确命令、指纹、原始输出、退出码、构建复用边界和作者结构审查见`out/tests/temp/model_call_source_freezing_20261101/artifacts/verification.json`。本片不验证同时变更其他来源、策略热更新、Skill、团队/协作、Windows或真实Provider，不关闭7.1–7.5及itemized9.7等综合门；不改公共fixture、唯一Section8长回归驱动、前端或共享debug。
+
+
+### 2026-11-01 Turn AGENTS与model_call Skill混合边界的真实Web补验（部分）
+
+- 独立入口复用正式Workbench、唯一来源驱动和model_stream，经真实Composer两轮五次调用、三次skill_load核对原调用snapshot、同请求两种边界、metadata语义不变而lineage更新。删除当前Skill、改写AGENTS后安全重启，完整API/UI selection/provenance、冷Saver正文和封存request_hash逐项检查。混合1 passed/349.58秒；默认Turn及显式model_call相关回归2 passed/372.48秒，3581份采样源码前后不变。
+- 新场景五调用整段400秒，原三调用仍240秒，业务期限与断言未变。默认180秒构建失败仍保留；最终只显式复用742份编译输入/全部资产SHA/固定上游相同的完整正式产物，不记默认构建或矩阵产品通过。Welcome原版关闭后才开始目标导航；先前200响应但目标Tab缺席的初始化时序与构建子进程回收仍留TODO及原件，不改前端或公共fixture。
+- Ruff/Pyright/编译/Node语法、两份strict及矩阵注册解析通过，既有独立审查无finding。准确命令、源码/资产SHA、原始退出码、失败和正式产物索引见out/tests/temp/web_mixed_sources_20261101/artifacts/verification.json；完整边界见itemized同日9.7收据。不替代唯一Section8、7.1–7.5综合门、Windows/硬退出/同步SDK或外部Provider；团队协作及MCP持有继续延期，整体不勾选。

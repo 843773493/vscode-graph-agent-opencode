@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
@@ -24,6 +24,8 @@ const versions = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_AGENTS_VERSIONS
 const boundary = requiredEnvironment("BOXTEAM_BROWSER_AGENTS_BOUNDARY");
 assert(["turn", "model_call"].includes(boundary));
 const firstReply = requiredEnvironment("BOXTEAM_BROWSER_FIRST_REPLY");
+const mixedSkill = process.env.BOXTEAM_BROWSER_MIXED_SKILL ? JSON.parse(process.env.BOXTEAM_BROWSER_MIXED_SKILL) : undefined;
+const firstCallCount = mixedSkill ? 3 : 2;
 const interactions = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_MODEL_CASSETTES")).map(cassette => cassette.interactions[0]);
 const resources = TestRunContext.fromTestFile(requiredEnvironment("BOXTEAM_BROWSER_TEST_OWNER"));
 const facts = { phase: "setup", owner, boundary, modelCalls: [], pageErrors: [], responses: [], browserRequests: [], consoleErrors: [], inspectedAssemblies: [] };
@@ -173,35 +175,59 @@ try {
   await api("/api/gateway/health");
   assert.equal((await api("/api/gateway/workspaces")).active_workspace_id, owner.routeId);
   assert.equal((await api("/api/v1/workspace")).workspace_id, owner.workspaceId);
+  // 本场景从初始编辑器恢复结束后开始；不把Welcome的异步打开与目标会话混为一次导航。
+  // TODO：product-006中目标Session/main-thread请求均为200，但目标Tab未出现且仍显示Welcome；初始化导航时序原因待前端owner核实。
+  const welcome = page.getByRole("tab", { name: "Welcome, preview", exact: true });
+  await expect(welcome).toBeVisible();
+  await welcome.getByRole("button", { name: "Close (Ctrl+W)", exact: true }).click();
+  await expect(welcome).toHaveCount(0);
   let thread = await selectThread(page, owner, 0);
   assert.equal(await readFile(agentsFile, "utf8"), versions[0]);
   phase("tool-loop-source-update");
   const calls = await testControl({ action: "plan_model", session_id: owner.sessionId, thread_id: owner.threadId,
-    interactions: interactions.slice(0, 2) });
-  assert.equal(calls.length, 2);
+    interactions: interactions.slice(0, firstCallCount) });
+  assert.equal(calls.length, firstCallCount);
   facts.modelCalls.push(...calls);
-  await testControl({ action: "arm", operation_id: calls[0], phase: "model.response_ready" });
+  const barriers = calls.slice(0, mixedSkill ? 2 : 1);
+  for (const call of barriers) await testControl({ action: "arm", operation_id: call, phase: "model.response_ready" });
   try {
-    facts.firstTurn = await send(thread, "读取 README.md；工具循环按配置的来源边界执行。");
-    await testControl({ action: "acknowledged", operation_id: calls[0], phase: "model.response_ready" });
-    assert.equal((await api(`/api/v1/jobs/${facts.firstTurn.job_id}`)).status, "running");
-    // 只改变真实来源文件；不改 registry、checkpoint、assembly 或执行状态。
-    await writeFile(agentsFile, versions[1]);
-    assert.equal(await readFile(agentsFile, "utf8"), versions[1]);
-  } finally { await testControl({ action: "release", operation_id: calls[0], phase: "model.response_ready" }); }
+    facts.firstTurn = await send(thread, mixedSkill ? "两次加载Skill，核对原调用的正文版本。" : "读取 README.md；工具循环按配置的来源边界执行。");
+    for (const [index, call] of barriers.entries()) {
+      await testControl({ action: "acknowledged", operation_id: call, phase: "model.response_ready" });
+      assert.equal((await api(`/api/v1/jobs/${facts.firstTurn.job_id}`)).status, "running");
+      // 原watcher发布后才放行工具；不改registry、checkpoint、assembly或执行状态。
+      const eventCount = mixedSkill ? (await testControl({ action: "events" })).length : 0;
+      await writeFile(agentsFile, versions[index + 1]);
+      assert.equal(await readFile(agentsFile, "utf8"), versions[index + 1]);
+      if (mixedSkill) {
+        await writeFile(mixedSkill.path, mixedSkill.versions[index + 1]);
+        const revision = `sha256:${createHash("sha256").update(mixedSkill.versions[index + 1]).digest("hex")}`;
+        await expect.poll(async () => (await testControl({ action: "events" })).slice(eventCount).some(event =>
+          event.phase === "workspace.source.watch.published" && event.operation_id === mixedSkill.uri
+          && event.details.revision === revision && event.details.available === true), { timeout: 15_000 }).toBe(true);
+        (facts.publications ??= []).push(...(await testControl({ action: "events" })).slice(eventCount).filter(event =>
+          event.phase === "workspace.source.watch.published" && event.operation_id === mixedSkill.uri
+          && event.details.revision === revision));
+      }
+      await testControl({ action: "release", operation_id: call, phase: "model.response_ready" });
+    }
+  } finally {
+    for (const call of barriers) await testControl({ action: "release", operation_id: call, phase: "model.response_ready" });
+  }
   await completed(thread, facts.firstTurn, firstReply);
   facts.firstAssemblies = await assemblies();
-  assert.equal(facts.firstAssemblies.length, 2);
+  assert.equal(facts.firstAssemblies.length, firstCallCount);
   phase("next-turn");
   facts.modelCalls.push(...await testControl({ action: "plan_model", session_id: owner.sessionId, thread_id: owner.threadId,
-    interactions: interactions.slice(2) }));
-  facts.secondTurn = await send(thread, "下一轮继续，使用已更新的来源。");
+    interactions: interactions.slice(firstCallCount) }));
+  facts.secondTurn = await send(thread, mixedSkill ? "新轮加载最新Skill，使用当前AGENTS。" : "下一轮继续，使用已更新的来源。");
   await completed(thread, facts.secondTurn, "下一轮采用新的来源版本。");
   facts.assemblies = await assemblies();
-  assert.equal(facts.assemblies.length, 3);
+  assert.equal(facts.assemblies.length, interactions.length);
   assert.deepEqual(facts.assemblies.filter(entry => facts.firstAssemblies.some(old => old.assemblyId === entry.assemblyId)), facts.firstAssemblies);
   phase("cold-inspection");
-  await writeFile(agentsFile, versions[2]);
+  await writeFile(agentsFile, mixedSkill?.currentAgents ?? versions[2]);
+  if (mixedSkill) await unlink(mixedSkill.path);
   await page.goto("about:blank");
   const registered = (await api("/api/gateway/workspaces")).items.find(entry => entry.workspace_id === owner.routeId);
   assert(registered?.managed && registered.backend_generation);
@@ -228,6 +254,7 @@ try {
   await loadInspectionPages(inspector, "加载更早请求", "正在读取封存请求");
   await expect(choices.locator("option")).toHaveCount(facts.assemblies.length + 1);
   for (const assembly of facts.assemblies) {
+    phase(`inspect-${assembly.assemblyId}`);
     await choices.selectOption(assembly.assemblyRef);
     const projection = inspector.locator(`.context-projection[data-assembly-id="${assembly.assemblyId}"]`);
     await expect.poll(async () => await projection.locator(".context-inspection-items > li").count()
@@ -245,7 +272,7 @@ try {
       await expect(entries.nth(index)).toContainText(expected.revision);
     }
     assert.equal(await inspector.getByRole("alert").count(), 0);
-    assert(!(await inspector.innerText()).includes("WEB_TURN_SOURCE_C_CURRENT_IS_NOT_HISTORY"));
+    assert(!(await inspector.innerText()).includes(mixedSkill?.currentAgents.trim() ?? "WEB_TURN_SOURCE_C_CURRENT_IS_NOT_HISTORY"));
     await page.screenshot({ path: join(artifacts, `assembly-${assembly.assemblyId}.png`) });
     facts.inspectedAssemblies.push(assembly.assemblyId);
   }
