@@ -33,6 +33,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
+from app.core.failures import report_failure
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import (
@@ -596,7 +597,7 @@ class NavigationMutationExecutor:
                 detail += f", winerror={winerror}"
         elif isinstance(error, sqlite3.Error):
             detail += f", sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)}"
-        logger.error("%s；完整诊断见异常链", detail, exc_info=error)
+        detail = report_failure(error, detail=detail, diagnostic_logger=logger)
         with self._store.write_transaction() as connection:
             self._queue.require_owner_generation(
                 connection, workspace_id=self._workspace_id,

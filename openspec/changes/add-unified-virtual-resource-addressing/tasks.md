@@ -1895,3 +1895,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 完整旧生产归档的四种原生路径／正文冲突在真实日志 ENOTDIR 下均复现主错被覆盖（4 failed／4健康日志控制 passed）。最终工具搜索及定义恢复回归45 passed，新增真实消息入口集成1 passed／85.93秒：原 model_stream 产生6次调用，核双错后 Job 完成、精确 canonical 配对、移除目录阻塞后的同 Session／Thread 搜索与普通 read_file 读取、完整字节／schema hash、原失败历史不变及全部 sealed request_hash。
 - Ruff、compileall、生产与新增集成真实 Pyright 零诊断；触达单测原有两条类型诊断与完整归档及 HEAD 的同函数／表达式 AST 一致，不扩修。首轮合跑因90秒外部保护退出124，分文件后全部通过；集成前两轮分别因点名扩展工具触发既有实际调用恢复、以及缺少 Gateway 身份的测试前提失败，后沿原 fixture 取得真实 Gateway 身份，未改产品或放宽原失败／正文断言。独立只读复审无功能 finding；既存 Agent 集成测试目录分组观察保留，不扩张重构。
 - 准确命令、源码指纹、完整归档摘要、原始输出及实际退出码见 `out/tests/temp/tool_search_diagnostics_20261101/artifacts/verification.json`。测试使用外部超时与4GiB数据段保护，集成沿共享独占闸门；业务请求为进程内 ASGI，Gateway 仅提供真实来源与身份，不代完整 Gateway 业务网络、Web、Backend重启或 Windows 验收。未改前端、公共 fixture、回归 driver、共享 debug 或他人暂存；2.2／7.2仍未勾，整体51/53，团队及显式 MCP 持有仍延期。
+
+
+### 2026-11-01 导航删除收尾与诊断双错（2.2／7.2部分收口）
+
+- 首次删除与启动恢复共用原回执结算出口，裸日志调用改为既有 `report_failure`；日志不可写不再使 worker 先退出而遗留 pending，原异常／cause 和完整次错保留诊断，公开详情只增加次错类别。原 owner generation、事务、journal、逻辑 committed 与物理 settlement 顺序保持，没有第二队列或清理实现。
+- 完整 HEAD 归档的初始测试复现原回执不能进入 repair_required：1 failed／1 健康日志控制 passed，另1项 fixture teardown error来自首次失败后未进入恢复阶段，不重复算产品反例。最终55项不同定向用例通过（队列33项、导航API22项），日志观察参数类型修正后的14项补验通过。原六类删除故障同时覆盖正常及故障日志，核原件保全、同request_id、原异常身份、重复恢复回执版本不变及解除故障后的settled；业务HTTP为进程内ASGI，不代Gateway／Web、Backend硬重启或Windows验收。
+- Ruff、compileall和strict通过；新测试真实Pyright零诊断，生产12条既有诊断与完整归档按规则、完整消息、所属函数及最窄表达式AST逐项相同。准确命令、源码指纹、原始输出、实际退出码和作者结构自查见 `out/tests/temp/navigation_settlement_diagnostics_20261101/artifacts/verification.json`。测试有外部超时／4GiB保护及原集成独占闸门；未改前端、公共fixture、长回归驱动、共享debug或他人暂存。2.2／7.2仍未勾，整体51/53，团队及显式MCP持有延期保持。
