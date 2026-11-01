@@ -7,6 +7,7 @@ from google.protobuf.descriptor_pool import DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_public_pb2
+from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
     job_pb2,
@@ -16,6 +17,25 @@ from app.protocol.generated.boxteam.workspace.v2 import (
     trace_pb2,
 )
 from app.protocol.schema import assert_public_schema
+
+# TODO: HTTP 根的定位信封及 StreamSnapshot 旧中断字段仍需具名投影核对。
+# 本登记只覆盖同形嵌套对象。
+# 不以根的具名差异跳过这些对象的字段、枚举或嵌套结构检查。
+MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS: dict[str, Descriptor] = {
+    f"MessageStream{suffix}DTO": message_stream_pb2.DESCRIPTOR.message_types_by_name[message]
+    for suffix, message in (
+        ("Failure", "StreamFailure"),
+        ("BlockSnapshot", "MessageBlockSnapshot"),
+        ("ToolExecutionSnapshot", "ToolExecutionSnapshot"),
+        ("ToolCall", "ToolCall"),
+        ("ModelCallSnapshot", "ModelCallSnapshot"),
+        ("Activity", "Activity"),
+        ("ResourceRef", "ResourceRef"),
+        ("ActiveState", "ActiveState"),
+        ("InterruptState", "InterruptState"),
+        ("RecoveryState", "RecoveryState"),
+    )
+}
 
 # 只登记已迁齐的 HTTP 公开模型，嵌套字段由 descriptor 递归校验。
 HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
@@ -58,7 +78,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "SessionGenerationValidateRequest", "SessionGenerationValidationDTO",
         "RuntimeStatusDTO", "RuntimeDrainResultDTO", "UiSnapshotResultDTO",
     )
-}
+} | MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS
 
 GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     name: gateway_public_pb2.DESCRIPTOR.message_types_by_name[name]

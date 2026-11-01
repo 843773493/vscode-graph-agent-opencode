@@ -57,6 +57,7 @@ class MessageStreamBlockSnapshotDTO(_MessageStreamDTO):
     items: list[MessageStreamJsonObject] = Field(default_factory=list)
     redacted: bool | None = None
     projection: str | None = None
+    model_call_id: str | None = Field(default=None, min_length=1)
     completion_reason: str | None = None
     partial: bool | None = None
     started_seq: int | None = Field(default=None, ge=0)

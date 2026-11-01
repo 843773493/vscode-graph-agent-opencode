@@ -85,20 +85,34 @@ async def test_snapshot_control_frame_matches_http_snapshot_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api, store, session_id, turn_id = message_stream_api
-    # 只有 block 增量：current_attempt 恒为 0，tool_calls/activities 等全为空数组。
+    # 两次真实 store 模型生命周期，块归属不能被当前模型身份覆盖。
     monkeypatch.setattr(store_module, "MESSAGE_STREAM_MAX_BYTES", 1_000)
     monkeypatch.setattr(store_module, "MESSAGE_STREAM_RETAINED_BYTES", 260)
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id=turn_id)
-    for index in range(12):
+    for attempt in range(1, 3):
+        model_call_id = f"model_{attempt}"
+        block_id = f"block_{attempt}"
         await writer.commit(
-            "block.delta",
-            {
-                "block_id": "block_1",
-                "carrier_type": "text",
-                "operation": "append",
-                "text": f"增量-{index}",
-            },
-            block_id="block_1",
+            "model.started", {"model_call_id": model_call_id, "attempt": attempt, "model": "primary"},
+            model_call_id=model_call_id,
+        )
+        await writer.commit(
+            "block.started", {"block_id": block_id, "carrier_type": "text", "block_index": 0},
+            model_call_id=model_call_id, block_id=block_id,
+        )
+        for index in range(6):
+            await writer.commit(
+                "block.delta",
+                {"block_id": block_id, "carrier_type": "text", "operation": "append", "text": f"增量-{index}"},
+                model_call_id=model_call_id, block_id=block_id,
+            )
+        await writer.commit(
+            "block.completed", {"block_id": block_id, "carrier_type": "text", "status": "completed"},
+            model_call_id=model_call_id, block_id=block_id,
+        )
+        await writer.commit(
+            "model.completed", {"model_call_id": model_call_id, "attempt": attempt, "outcome": "accepted"},
+            model_call_id=model_call_id,
         )
     # 终态快照让订阅在推送控制帧后自然结束，同时覆盖 resumable=False。
     await writer.close_failed(
@@ -106,6 +120,10 @@ async def test_snapshot_control_frame_matches_http_snapshot_payload(
         message="后端重启",
         resumable=False,
     )
+
+    # 新 store 只读原持久快照及日志，不由测试补写恢复所需的块身份。
+    cold_store = MessageStreamStore(path_resolver=store._path_resolver)
+    api.dependency_overrides[get_message_stream_store] = lambda: cold_store
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api),
@@ -139,7 +157,7 @@ async def test_snapshot_control_frame_matches_http_snapshot_payload(
     # 定位字段只保留在事件信封中，SSE payload 不得重复承载。
     assert all(field not in sse_payload for field in _IDENTITY_FIELDS)
     # 零值与空 repeated 必须在控制帧里显式存在。
-    assert sse_payload["current_attempt"] == 0
+    assert sse_payload["current_attempt"] == 2
     assert sse_payload["resumable"] is False
     for field in (
         "blocks",
@@ -150,7 +168,11 @@ async def test_snapshot_control_frame_matches_http_snapshot_payload(
         "resource_refs",
     ):
         assert isinstance(sse_payload[field], list)
-    assert [block.get("items") for block in sse_payload["blocks"]] == [[]]
+    assert [block.get("items") for block in sse_payload["blocks"]] == [[], []]
+    assert [(block["block_id"], block["model_call_id"]) for block in sse_payload["blocks"]] == [
+        ("block_1", "model_1"), ("block_2", "model_2"),
+    ]
+    assert sse_payload["current_model_call_id"] == "model_2"
 
 
 @pytest.mark.asyncio

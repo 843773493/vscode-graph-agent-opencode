@@ -16,7 +16,7 @@ type WireToolExecutionOutcome = "success" | "provider_error" | "execution_lost" 
 type WireActivityStatus = "running" | "waiting" | "stopping" | "completed" | "failed" | "unknown";
 type WireActivityOutcome = "success" | "user_interrupt" | "provider_error" | "execution_lost" | "outcome_unknown";
 
-type WireBlockSnapshot = Omit<Partial<MessageBlockSnapshot>, "model_call_id" | "block_id"> &
+type WireBlockSnapshot = Omit<Partial<MessageBlockSnapshot>, "block_id"> &
   Pick<MessageBlockSnapshot, "block_id"> & { items: JsonObject[] };
 type WireToolExecutionSnapshot = Omit<Partial<ToolExecutionSnapshot>, "tool_execution_id" | "tool_call_id" | "tool_name" | "status" | "outcome"> &
   Pick<ToolExecutionSnapshot, "tool_execution_id" | "tool_call_id" | "tool_name"> & {

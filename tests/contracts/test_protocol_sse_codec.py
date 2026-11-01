@@ -339,6 +339,7 @@ def test_message_stream_v1_round_trip_preserves_terminal_projection() -> None:
                     "block_index": 0,
                     "carrier_type": "text",
                     "status": "interrupted",
+                    "model_call_id": "model_1",
                     "text": "半截",
                     "partial": True,
                     "completion_reason": "user_interrupt",
@@ -439,6 +440,7 @@ def test_message_stream_v1_round_trip_preserves_terminal_projection() -> None:
     snapshot = decoded["payload"]
     assert decoded["job_id"] == "job_123"
     assert snapshot["blocks"][0]["partial"] is True
+    assert snapshot["blocks"][0]["model_call_id"] == "model_1"
     assert snapshot["blocks"][0]["started_seq"] == 4
     assert snapshot["blocks"][0]["completed_seq"] == 8
     assert snapshot["blocks"][0]["completed_at"] == "2026-08-24T00:00:08Z"

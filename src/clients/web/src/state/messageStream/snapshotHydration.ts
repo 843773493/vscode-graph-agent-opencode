@@ -134,7 +134,7 @@ function lifecycleFromSnapshot(value: MessageStreamLifecycle): MessageStreamLife
 function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
   return {
     block_id: value.block_id,
-    model_call_id: blockModelCallId(value),
+    model_call_id: optionalTextValue(value.model_call_id) ?? null,
     block_index: value.block_index ?? 0,
     carrier_type: defaultedTextValue(value.carrier_type, "text"),
     status: blockStatusValue(value.status),
@@ -148,32 +148,6 @@ function blockFromSnapshot(value: SnapshotBlock): MessageStreamBlock {
     partial: value.partial ?? false,
     ...lifecycleFromSnapshot(value),
   };
-}
-
-/**
- * 快照 block 的 model_call_id 还原。
- *
- * 公共 MessageBlockSnapshot 不带该字段：codec 在快照归一化里把它作为内部对账
- * 字段摘除（app/protocol/codecs/message_stream.py 的 `block.pop("model_call_id")`），
- * 但事件路径的 upsertBlock 会从事件信封写入它，且 model.retrying 以
- * `block.model_call_id === state.currentModelCallId` 决定把哪些 block 的 projection
- * 置为 "intermediate"。快照恢复后该字段若恒为 null，同一 Turn 经快照恢复与经
- * 事件重放会得到不同的 projection，而 projection 决定 responseProjection 是否
- * 保留该 block 的文本（"intermediate" 会被丢弃），因此必须还原。
- *
- * 归属真源是 block_id 前缀：后端 StreamBlockAssemblyMixin._scoped_block_id 恒定
- * 构造 `${model_call_id or "unbound-model-call"}:block:${provider_block_id}`，与
- * block.started 事件信封写入的 model_call_id 同源恒等。事件序号无法承担该职责：
- * 同一段 model_calls 区间空隙里，带新 call 显式身份的 delta 归其后第一个 call，
- * 带旧 call 身份或空身份的 delta 归 current_model_call_id，两种情形 block 的
- * started_seq 形态完全相同，纯序号规则不可能同时正确。
- */
-function blockModelCallId(value: SnapshotBlock): string | null {
-  const marker = value.block_id.indexOf(":block:");
-  // 后端 block_id 恒含 ':block:' 分隔符；缺失说明收到非法身份，不猜测归属。
-  if (marker < 0) return null;
-  const scoped = value.block_id.slice(0, marker);
-  return scoped === "unbound-model-call" ? null : scoped;
 }
 
 /**

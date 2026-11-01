@@ -11,6 +11,7 @@ from google.protobuf.descriptor_pb2 import FileDescriptorSet
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_public_pb2
+from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     public_pb2 as workspace_public_pb2,
 )
@@ -45,7 +46,7 @@ def http_descriptor_bundle() -> FileDescriptorSet:
             collect(dependency)
         file.CopyToProto(bundle.file.add())
 
-    for descriptor in (workspace_public_pb2.DESCRIPTOR, gateway_public_pb2.DESCRIPTOR):
+    for descriptor in (workspace_public_pb2.DESCRIPTOR, gateway_public_pb2.DESCRIPTOR, message_stream_pb2.DESCRIPTOR):
         collect(descriptor)
     return bundle
 

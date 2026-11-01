@@ -251,6 +251,7 @@ def test_projection_matrix_is_key_identical_for_zero_and_edge_states(
     block = matrix_dump["zero_valued_block"]
     assert isinstance(block, dict)
     assert [item.get("items") for item in block["blocks"]] == [[]]
+    assert "model_call_id" not in block["blocks"][0]
 
 
 @pytest.mark.asyncio

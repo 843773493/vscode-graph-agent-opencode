@@ -2277,12 +2277,8 @@ describe("active state kind 对齐", () => {
 });
 
 describe("block model_call_id 还原", () => {
-  // 公共 MessageBlockSnapshot 不带 model_call_id：codec 在快照归一化里把它作为
-  // 内部对账字段摘除，而事件路径 upsertBlock 会从事件信封写入它，model.retrying
-  // 又据该字段决定把哪些 block 的 projection 置为 "intermediate"。若快照恢复后
-  // 该字段恒为 null，同一 Turn 经快照恢复与经事件重放会得到不同 projection，
-  // 而 "intermediate" 会让 responseProjection 丢掉该 block 的文本并参与
-  // ChatTurn.tsx responsePartsEqual 的 memo 比较。
+  // 快照中的公开 model_call_id 与事件信封承载同一身份；retrying 只能改变
+  // 当前调用的块，恢复路径不得从序号或 block_id 再推导另一份归属。
   const blockFields = [
     "model_call_id",
     "projection",
@@ -2310,8 +2306,7 @@ describe("block model_call_id 还原", () => {
 
   test("快照恢复后 model.retrying 把当前 call 的 block projection 置为 intermediate", () => {
     // 真实后端线格式：单个 model call 收口后（block 已 completed、projection 仍
-    // streaming），随后 model.retrying。快照不带 blocks[].model_call_id，只能由
-    // block.started_seq 落在 model_calls[].started_seq 之后还原归属。
+    // streaming），随后 model.retrying；快照保留正式发布的块归属。
     const state = snapshotThenRetrying({
       snapshot_seq: 6,
       stream_status: "open",
@@ -2320,6 +2315,7 @@ describe("block model_call_id 还原", () => {
       current_attempt: 1,
       blocks: [{
         block_id: "mc_1:block:text_1",
+        model_call_id: "mc_1",
         block_index: 0,
         items: [],
         status: "completed",
@@ -2359,6 +2355,7 @@ describe("block model_call_id 还原", () => {
       blocks: [
         {
           block_id: "mc_1:block:text_1",
+          model_call_id: "mc_1",
           block_index: 0,
           items: [],
           status: "completed",
@@ -2373,6 +2370,7 @@ describe("block model_call_id 还原", () => {
         },
         {
           block_id: "mc_2:block:text_1",
+          model_call_id: "mc_2",
           block_index: 1,
           items: [],
           status: "running",
@@ -2409,6 +2407,7 @@ describe("block model_call_id 还原", () => {
       blocks: [
         {
           block_id: "mc_1:block:text_1",
+          model_call_id: "mc_1",
           block_index: 0,
           items: [],
           status: "completed",
@@ -2423,6 +2422,7 @@ describe("block model_call_id 还原", () => {
         },
         {
           block_id: "mc_2:block:text_1",
+          model_call_id: "mc_2",
           block_index: 1,
           items: [],
           status: "completed",
@@ -2450,7 +2450,7 @@ describe("block model_call_id 还原", () => {
   });
 
   test("末次 model call 之后仍 running 的 block 归入当前 call", () => {
-    // 后端把末次 call 之后的迟到事件重映射到 current_model_call_id，快照侧同样兜底。
+    // 后端提交迟到块的归属，快照侧直接消费该身份，不按当前调用兜底。
     const state = snapshotThenRetrying({
       snapshot_seq: 7,
       stream_status: "open",
@@ -2459,6 +2459,7 @@ describe("block model_call_id 还原", () => {
       current_attempt: 1,
       blocks: [{
         block_id: "mc_1:block:text_1",
+        model_call_id: "mc_1",
         block_index: 1,
         items: [],
         status: "running",
@@ -2494,6 +2495,7 @@ describe("block model_call_id 还原", () => {
       current_attempt: 1,
       blocks: [{
         block_id: "mc_1:block:text_1",
+        model_call_id: "mc_1",
         block_index: 0,
         items: [],
         status: "completed",
@@ -2946,12 +2948,7 @@ describe("终态准入与连接镜像收敛", () => {
 });
 
 describe("block model_call_id 归属真源", () => {
-  // 归属真源是 block_id 前缀：后端 _scoped_block_id 恒定构造
-  // `${model_call_id or "unbound-model-call"}:block:${provider_block_id}`，与
-  // block.started 事件信封写入的 model_call_id 恒等。事件序号区间无法表达后端
-  // _resolve_model_call_id 的真实语义：同一段空隙里，带新 call 显式身份的 delta
-  // 归其后第一个 call，带旧 call 身份或空身份的 delta 归 current_model_call_id，
-  // 两种情形 block 的 started_seq 形态完全相同（见下方两条空隙用例）。
+  // 公开身份是唯一归属来源，block_id 前缀、序号和当前模型均不参与推断。
 
   function snapshotState(snapshot: Record<string, unknown>): MessageStreamState {
     return applyMessageStreamEvent(
@@ -2964,10 +2961,8 @@ describe("block model_call_id 归属真源", () => {
     return snapshotState(snapshot).blocks.find((block) => block.block_id === blockId);
   }
 
-  test("unbound-model-call 前缀的 block 还原为 null", () => {
-    // provider delta 在任何 model.started 之前落盘：后端用 "unbound-model-call"
-    // 兜底 scoped id，事件路径的 model_call_id 也就是 null。即便 block 的
-    // started_seq 早于 mc_1 区间、且 current 已是 mc_1，也绝不能猜测成 mc_1。
+  test.each(["unbound-model-call:block:text_early", "mc_1:block:text_early"])("缺少公开归属时不从 %s 猜测", (blockId) => {
+    // 即便块名、序号或 current 看似指向已知调用，也不能补造缺失的公开身份。
     const snapshot = {
       snapshot_seq: 2,
       stream_status: "open",
@@ -2975,7 +2970,7 @@ describe("block model_call_id 归属真源", () => {
       current_model_call_id: "mc_1",
       current_attempt: 1,
       blocks: [{
-        block_id: "unbound-model-call:block:text_early",
+        block_id: blockId,
         block_index: 0,
         items: [],
         status: "completed",
@@ -2999,7 +2994,7 @@ describe("block model_call_id 归属真源", () => {
       resumable: true,
     };
 
-    const block = blockBy("unbound-model-call:block:text_early", snapshot);
+    const block = blockBy(blockId, snapshot);
     expect(block?.model_call_id).toBeNull();
     expect(block?.projection).toBe("streaming");
   });
@@ -3017,7 +3012,8 @@ describe("block model_call_id 归属真源", () => {
       current_attempt: 2,
       blocks: [
         {
-          block_id: "mc_1:block:text_late",
+          block_id: "misleading-prefix:block:text_late",
+          model_call_id: "mc_1",
           block_index: 1,
           items: [],
           status: "completed",
@@ -3032,6 +3028,7 @@ describe("block model_call_id 归属真源", () => {
         },
         {
           block_id: "mc_2:block:text_2",
+          model_call_id: "mc_2",
           block_index: 2,
           items: [],
           status: "completed",
@@ -3052,12 +3049,12 @@ describe("block model_call_id 归属真源", () => {
       resumable: true,
     };
 
-    expect(blockBy("mc_1:block:text_late", snapshot)?.model_call_id).toBe("mc_1");
+    expect(blockBy("misleading-prefix:block:text_late", snapshot)?.model_call_id).toBe("mc_1");
     expect(blockBy("mc_2:block:text_2", snapshot)?.model_call_id).toBe("mc_2");
   });
 
   test("乱序 model_calls 输入不影响归属", () => {
-    // model_calls 数组顺序不保证按 started_seq 升序；归属只取决于 block_id 前缀。
+    // model_calls 数组顺序不保证按 started_seq 升序；归属只取决于公开 model_call_id。
     const snapshot = {
       snapshot_seq: 15,
       stream_status: "open",
@@ -3067,6 +3064,7 @@ describe("block model_call_id 归属真源", () => {
       blocks: [
         {
           block_id: "mc_1:block:text_1",
+          model_call_id: "mc_1",
           block_index: 0,
           items: [],
           status: "completed",
@@ -3081,6 +3079,7 @@ describe("block model_call_id 归属真源", () => {
         },
         {
           block_id: "mc_2:block:text_2",
+          model_call_id: "mc_2",
           block_index: 1,
           items: [],
           status: "running",
@@ -3103,9 +3102,7 @@ describe("block model_call_id 归属真源", () => {
     expect(blockBy("mc_2:block:text_2", snapshot)?.model_call_id).toBe("mc_2");
   });
 
-  test("缺 ':block:' 分隔符的非法身份不猜测归属", () => {
-    // 后端 block_id 恒含 ':block:'；缺失说明身份非法，必须返回 null 而不是用
-    // started_seq 或 current 猜测。
+  test("不解析 block_id 的格式，保留明确发布的归属", () => {
     const snapshot = {
       snapshot_seq: 6,
       stream_status: "open",
@@ -3113,13 +3110,14 @@ describe("block model_call_id 归属真源", () => {
       current_model_call_id: "mc_1",
       current_attempt: 1,
       blocks: [{
-        block_id: "legacy-block-id",
+        block_id: "opaque-block-id",
+        model_call_id: "mc_1",
         block_index: 0,
         items: [],
         status: "completed",
         carrier_type: "text",
         projection: "streaming",
-        text: "旧格式身份",
+        text: "不透明块身份",
         completion_reason: "upstream_completed",
         partial: false,
         started_seq: 3,
@@ -3137,6 +3135,6 @@ describe("block model_call_id 归属真源", () => {
       resumable: true,
     };
 
-    expect(blockBy("legacy-block-id", snapshot)?.model_call_id).toBeNull();
+    expect(blockBy("opaque-block-id", snapshot)?.model_call_id).toBe("mc_1");
   });
 });

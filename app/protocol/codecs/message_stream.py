@@ -229,12 +229,6 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                     # Activity 的完成原因属于内部诊断字段，公共快照只投影
                     # schema 已声明的生命周期、结果和时间字段。
                     activity.pop("completion_reason", None)
-            for block in snapshot.get("blocks", []):
-                if isinstance(block, dict):
-                    # model_call_id 是内部 checkpoint 的对账字段，公共
-                    # MessageBlockSnapshot 只暴露 projection，避免把 attempt
-                    # 归属重复塞进 block payload。
-                    block.pop("model_call_id", None)
     else:
         # workspace_id 属于消息流信封身份，普通 oneof payload 不重复承载。
         normalized.pop("workspace_id", None)
