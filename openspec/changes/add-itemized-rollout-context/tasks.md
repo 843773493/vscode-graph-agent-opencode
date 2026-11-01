@@ -1559,3 +1559,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 新增两个局部GC场景后原GC单测文件30 passed；组合产品1 passed/164.38秒，原fork发布/删除/回滚/远端失败套件11 passed/161.43秒，共42个不同用例通过。正式suite沿240/180秒、4GiB保护与跨worktree独占闸门；未放宽fork期限。首轮在尚未运行的冷fork保活前提处失败，补正式执行后第二轮稳定复现上述产品缺陷；修复后的最终运行通过，失败原件保留。
 - Ruff与compileall通过；两个修改测试文件Pyright零诊断，catalog原有三条诊断的完整消息、所属函数和最窄AST与HEAD一致，无新增诊断，整组Pyright退出码仍为1。准确命令、源码前后指纹、原始输出、实际退出码、产品原件SHA与作者差异审查见 `out/tests/temp/attachment_fork_gc_20261101/artifacts/verification.json`。
 - 本片不代Web、Windows、跨Gateway真实网络、SIGKILL或全部8.3验收；7.5/8.3与整体111/119保持未完成，团队协作及既有性能TODO不变。
+
+### 2026-11-01 8.3-C 并行失败结果与 Skill 来源的因果闭包（部分）
+
+- 新增独立非团队产品测试：真实消息入口与 Agent 工具执行有效 `skill_load` 和非法资源身份查询；局部 fixture 只在 Skill 已真实登记 pending 后延迟返回，失败工具仍通过原 canonical writer 先提交。此时公开 Thread 历史保持 running、精确展示两次调用，未新增 assembly、来源可见版本或后继模型请求，读取前后 canonical 与控制状态相同。
+- 放行后核物理结果为失败→成功，Provider 逻辑顺序仍为原 calls→成功结果→失败结果→Skill 来源正文；四个执行／投影结果均保留 terminal status、真实 success/failure、确认位、原 Turn／ModelCall／execution 身份。新冷 Saver 恢复两份原 assembly、来源控制状态与 ToolMessage 配对，每份 request_hash_preimage 精确匹配 model_stream 的真实 transport 产物并通过 hash 校验。
+- 受保护 `product-002` 为1 passed/39.47秒，原跨 worktree 集成独占闸门、120秒外部超时及4GiB数据段上限；新增固定矩阵入口 `integration-tool-source-closure`，注册解析通过。Ruff、真实Pyright、compileall与OpenSpec strict通过。首轮因测试同时提供无效URI和非法身份，先命中URI校验；改用正式工作区URI后保留原非法身份断言，原失败输出未覆盖。
+- 准确命令、源码指纹、raw／退出码、原件及作者审查见 `out/tests/temp/tool_source_closure_20261101/artifacts/verification.json`。此为 ASGI 产品入口和独立冷 owner，不代表 Gateway 业务代理、Backend进程重启、Web、Windows、真实Provider或完整8.3-C／8.3；团队与MCP持有延期不变，总进度111/119保持未关闭。未改前端、公共fixture、长回归驱动或共享debug。

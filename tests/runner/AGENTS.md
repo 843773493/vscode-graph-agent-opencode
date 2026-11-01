@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-tool-source-closure` 通过真实 ASGI 消息、Agent 工具和 model_stream 验证并行成功／失败结果的部分历史只读、来源 pending、完整配对后的逻辑顺序及冷读 hash；固定120秒／4GiB与原集成独占闸门，不代表 Gateway 业务代理、独立进程重启、Web、Windows或延期团队验收。
+
 `integration-debug-cold-recovery` 复用真实调试 API、Node/Inspector 与冷 service，核对 claim／OS 身份／恢复审计的原生等待、同 owner 竞争及取消结算，固定90秒／4GiB与原集成闸门；准入沿现有替身，不代 Session 删除 gate、Gateway、进程硬重启或 Windows。
 
 `integration-debug-catalog-drain` 经真实导航入队、Session 删除 owner 和 SQLite 验证 Node 调试 catalog 读取／关闭等待，原连接与 gate 结算后才允许取消或继续删除；固定60秒／4GiB及原独占闸门，不代真实 Gateway、外部调试进程、重启或整个 shutdown 期限。
