@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Protocol, TypeAlias, cast
@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import StdioConnection, StreamableHttpConnection
 
 from app.core.lifecycle import LifetimeScope
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.invocation import CancellableMcpClientSession
 from app.services.infrastructure.mcp.oauth import (
@@ -99,7 +100,8 @@ class McpServerRuntime:
         self, *, server: McpServerConfig, generation: int,
         session_factory: McpSessionFactory, on_change: McpChangeNotifyCallback,
         on_failure: Callable[[McpServerRuntime, BaseException], None], scope: LifetimeScope,
-        on_closed: Callable[[McpServerRuntime, bool], None],
+        on_started: Callable[[McpServerRuntime], Awaitable[None]],
+        on_closed: Callable[[McpServerRuntime, bool], Awaitable[None]],
     ) -> None:
         self.server = server
         self.generation = generation
@@ -114,6 +116,7 @@ class McpServerRuntime:
 
         self._on_change = changed
         self._on_failure = on_failure
+        self._on_started = on_started
         self._on_closed = on_closed
         self._session: McpServerSessionPort | None = None
         self._ready = asyncio.Event()
@@ -145,14 +148,25 @@ class McpServerRuntime:
         self._task = asyncio.create_task(
             self._serve(), name=f"mcp-session:{self.server.server_id}:{self.generation}",
         )
-        await self._ready.wait()
+        try:
+            await self._ready.wait()
+        except asyncio.CancelledError as original:
+            # 登记可能正在worker中写盘；取消入口须等原task关闭并提交终态。
+            try:
+                await run_cleanup_shielded(self.close)
+            except BaseException as failure:
+                raise original from failure
+            raise
         if self._failure is not None:
             raise self._failure
+        if not self.running:
+            raise RuntimeError(f"MCP session 启动完成前已关闭: server_id={self.server.server_id}")
 
     async def _serve(self) -> None:
         try:
             async with self._session_factory(self.server, self._on_change) as session:
                 self._session = session
+                await self._on_started(self)
                 self._ready.set()
                 await self._stop.wait()
         except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001 - task 边界必须向 owner 交付所有 SDK 生命周期失败
@@ -164,8 +178,17 @@ class McpServerRuntime:
                     self._on_failure(self, error)
         finally:
             self._session = None
-            self._ready.set()
-            self._on_closed(self, self._failure is None)
+            try:
+                await self._on_closed(self, self._failure is None)
+            except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001 - 原task保存持久终态失败，交回start/close。
+                self._close_failed = True
+                self._failure = error if self._failure is None else BaseExceptionGroup(
+                    "MCP session 与终态登记均失败", [self._failure, error],
+                )
+                if self._ready.is_set() and not self._closing:
+                    self._on_failure(self, self._failure)
+            finally:
+                self._ready.set()
 
     def request_close(self) -> None:
         """同一发布屏障内同步撤销准入，SDK 关闭仍由原 task 完成。"""

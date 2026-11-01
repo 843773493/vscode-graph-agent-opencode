@@ -607,3 +607,9 @@ tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记
 握手后的 typed 资源登记与 process-instance lease 获取一起进入既有受保护 worker，继续使用唯一账本、原 writer 锁与发布顺序；原 owner 准入及锁覆盖排队、写入和取消结算。运行时现有 state_lock 同时串行化登记与终态 claim 迁移，进程 monitor 不能先结清尚未发布的占用。取消保留原取消及迟到写盘失败，不代表进程已经停止；原管理 stop 仍须核实原 PID 身份并结清同一实例。移除仅供该链使用的同步登记及身份辅助入口，启动回调与测试全部迁为 await。
 
 claim 同步读写、不可抢占的原生 I/O、无身份旧代接管，以及整个 operation／shutdown 总期限继续 TODO；5.2／5.4 保持未完成。本切片没有新增存储、账本、后台释放或副作用重放。
+
+### MCP 连接的原 task 登记与关闭（5.4 部分收口）
+
+启动、配置替换和显式重连不再分别登记资源；唯一 runtime 在 SDK 初始化后等待原 owner 的异步登记回调，提交成功后才通知就绪。登记与关闭投影沿既有 shielded worker 和原账本 writer，均由同一个 session task 串行等待，不跨 worker 持有目录 publication 锁，也不让其它 task 退出 SDK 上下文。启动取消排空该原 task 的关闭，重复取消保留首次取消及迟到错误；未发布候选的清理也保留原控制流异常。关闭状态写盘失败继续由 start／close 交付；运行中断线后的存储次错立即走原 owner 失效报告，不能只留到 shutdown。已关闭的候选不得返回启动成功。
+
+模型封存资格、调用占用、定时到期和 canonical ack 等同步账本访问继续 TODO；不据此宣称共享账本所有入口均不阻塞、原生 I/O 可抢占或整个 operation／shutdown 已有硬期限。5.2／5.4 保持未完成。

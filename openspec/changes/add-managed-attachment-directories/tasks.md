@@ -915,3 +915,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 资源登记与获取沿同一受保护 worker 结算，原 owner 锁和运行时锁覆盖取消及真实进程终态；删除两个无其它调用方的同步辅助方法，迁齐异步回调。修改前两个事件循环阻塞反例失败；首版异步实现的两个进程退出反例也失败，随后复用原 state_lock 修正顺序，未新增状态账本。
 - 正式矩阵 10 passed／60.38秒，覆盖真实 API／Node／Inspector、两处账本发布、取消与迟到写盘失败、同 owner stop 等待、冷 service 重读及同方案重启；退出信号调用改用标准库后定向 2 passed／10.42秒。相关回归 66 passed／50.11秒；Ruff／编译通过，两份生产执行模块与新增集成 Pyright 零诊断，另修正握手等待列表的两项既有类型错误。所有测试有外部期限／4GiB，集成沿原独占闸门。
 - 准确命令、原始输出、退出码、源码指纹及作者复审见 `out/tests/temp/debug_lease_admission_20261101/artifacts/verification.json`。不代替 Gateway／Web、独立进程重启、Windows、线程池永久排队或整个 operation／shutdown 期限；5.2／5.4 及 21/23 仍未完成。未修改前端、共享 debug、公共 fixture 或长回归驱动。
+
+### 2026-11-01 MCP 连接登记与关闭的原 task 结算（5.4 部分）
+
+- 启动、重连及配置替换共用原 session task 的异步登记／关闭回调，删除三个重复同步登记；原 writer 的 worker 结算后才通知就绪或完成关闭，取消保留原取消和迟到失败，未发布候选的控制流异常仍收尾。运行中断线后的终态写盘次错立即由原 owner 报告；没有新增账本、连接重放或另一套 SDK 生命周期。
+- 修改前两个原生发布屏障反例均失败；正式独立矩阵最终17 passed／26.99秒（此前16项25.96秒通过），补充控制流与最终生命周期12 passed／6.45秒，其中新增1项真实连接控制流和1项存储次错单测。既有真实stdio／HTTP协议回归28 passed／32.38秒。扩大整组110秒及单测85秒运行均外部超时；单测原输出174个明确PASS，剩余17项独立29.88秒通过，不将两次整组退出124表述为全量成功。
+- 首轮取消cause环已修正；后补控制流场景曾错误计算共享正式工作区中所有历史连接，现按本次精确owner实例核两条原身份及stopped，不放宽生命周期断言。Ruff／编译通过，最终四文件Pyright零错误零警告；准确命令、指纹、原始输出、退出码与作者复审见`out/tests/temp/mcp_connection_publication_20261101/artifacts/verification.json`。全部测试有进程外期限／4GiB，集成沿原独占闸门；不代Gateway／Web、独立Backend硬重启、Windows、其它同步账本访问或整个operation／shutdown期限。5.2／5.4及21/23保持未完成；未修改公共fixture、前端迁移、长回归驱动或共享debug。

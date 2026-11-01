@@ -34,6 +34,7 @@ from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import metadata_for_tool
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.config import McpCleanupDTO
 from app.services.infrastructure.config.contracts import (
@@ -335,9 +336,6 @@ class McpCatalogOwner:
                     # 只有标准 SDK 已确认的授权需求可局部保留；清理失败仍向外报错。
                     await runtime.scope.close()
                     continue
-                self._leases.register_external(
-                    resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace",
-                )
                 await self._apply_relist((runtime,), source="startup")
             if self._snapshot is None:
                 # 目录为空（零 server / 全 disabled）也发布固定 envelope/revision。
@@ -355,7 +353,10 @@ class McpCatalogOwner:
                 await session_scope.close()
                 self._session_scope = None
             except ExceptionGroup as cleanup_error:
-                failure = BaseExceptionGroup("MCP 启动与释放均失败", [error, cleanup_error])
+                # 取消本身作为主异常交还；cause不能再包含主异常形成环。
+                failure = cleanup_error if isinstance(error, asyncio.CancelledError) else BaseExceptionGroup(
+                    "MCP 启动与释放均失败", [error, cleanup_error],
+                )
             finally:
                 self._runtimes.clear()
                 self._tools_by_id.clear()
@@ -366,7 +367,7 @@ class McpCatalogOwner:
             if isinstance(error, asyncio.CancelledError):
                 if failure is error:
                     raise
-                raise failure
+                raise error from failure
             raise McpCatalogError(
                 _catalog_failure_text(failure, server_id=failed_server_id, stage="startup")
             ) from failure
@@ -589,7 +590,6 @@ class McpCatalogOwner:
             prepared[key] = runtime
             try:
                 await runtime.start()
-                self._leases.register_external(resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace")
                 sequences[key] = runtime.relist_sequence
                 remote_tools = await runtime.session.list_tools()
                 server_tools, descriptors[key] = _adapt_server_tools(
@@ -662,7 +662,8 @@ class McpCatalogOwner:
             return McpServerRuntime(
                 server=server, generation=generation, session_factory=session_factory or self._session_factory,
                 on_change=self._make_tools_list_changed_callback(server.server_id, generation),
-                on_failure=self._handle_session_failure, on_closed=self._handle_session_closed,
+                on_failure=self._handle_session_failure, on_started=self._handle_session_started,
+                on_closed=self._handle_session_closed,
                 scope=self._session_scope.child(f"server:{server.server_id}:{generation}"),
             )
 
@@ -693,7 +694,6 @@ class McpCatalogOwner:
         published = False
         try:
             await runtime.start()
-            self._leases.register_external(resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace")
             on_initialized()
             async with self._catalog_lock:
                 sequence = runtime.relist_sequence
@@ -715,9 +715,13 @@ class McpCatalogOwner:
                     published = True
                     self._publish_snapshot_locked(server_id=server_id, candidate_tools=tools,
                         candidate_descriptors={**self._descriptors_by_server, server_id: descriptors})
-        finally:
+        except BaseException as original:
             if not published:
-                await runtime.scope.close()
+                try:
+                    await run_cleanup_shielded(runtime.scope.close)
+                except BaseException as failure:
+                    raise original from failure
+            raise
 
     async def disconnect_server(self, server_id: str, *, admit: Callable[[], None]) -> None:
         """先撤销执行准入、保留已知契约，再核实 active 与旧退役连接实际关闭。"""
@@ -767,12 +771,24 @@ class McpCatalogOwner:
                 readiness_overrides={server_id: "authorization_required"},
             )
 
-    def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
+    async def _handle_session_started(self, runtime: McpServerRuntime) -> None:
+        # 原session task串行登记和关闭；不跨worker持有目录publication锁。
+        # TODO(5.4)：封存资格/调用占用等同步访问及整个operation/shutdown期限仍须收口。
+        await run_sync_shielded(
+            self._leases.register_external,
+            resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace",
+        )
+
+    async def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
         resource_id = self._connection_ref(runtime)
-        if self._leases.get(resource_id) is not None:
-            self._leases.update_external_state(
-                resource_id, lifetime_scope="workspace", status="stopped" if verified else "unknown",
-            )
+
+        def commit() -> None:
+            if self._leases.get(resource_id) is not None:
+                self._leases.update_external_state(
+                    resource_id, lifetime_scope="workspace", status="stopped" if verified else "unknown",
+                )
+
+        await run_sync_shielded(commit)
 
     def _connection_ref(self, runtime: McpServerRuntime) -> str:
         return f"mcp-connection:v1:{self._instance_id}:{runtime.generation}"

@@ -225,3 +225,32 @@ async def test_close_failure_remains_visible_and_blocks_reopening(lifecycle_owne
     assert lifecycle_owner._session_scope.state == "close_failed"
     with pytest.raises(RuntimeError, match="重复启动"):
         await lifecycle_owner.start()
+
+
+async def test_lost_sdk_and_terminal_write_failure_are_both_reported_immediately(
+    lifecycle_owner, lifecycle_factory, monkeypatch, caplog,
+):
+    owner, factory = lifecycle_owner, lifecycle_factory
+    await owner.start()
+    original = OSError("原终态写盘失败")
+    connection_ref = owner._connection_ref(owner._runtimes["alpha"])
+    update = owner._leases.update_external_state
+
+    def failed_update(resource_id, **kwargs):
+        if resource_id == connection_ref:
+            raise original
+        update(resource_id, **kwargs)
+
+    def contains(error):
+        return error is original or isinstance(error, BaseExceptionGroup) and any(contains(child) for child in error.exceptions)
+
+    monkeypatch.setattr(owner._leases, "update_external_state", failed_update)
+    factory.crash.set()
+    await asyncio.wait_for(asyncio.gather(*(runtime._task for runtime in owner._runtimes.values())), 2)
+    # 不能只把写盘错误留到shutdown；原owner必须立即取得原SDK与原存储失败。
+    failures = [record.exc_info[1] for record in caplog.records if record.exc_info is not None]
+    assert any(contains(error) for error in failures)
+    assert owner.publication_snapshot().status == "unavailable"
+    assert owner._leases.get(connection_ref).status == "running"
+    with pytest.raises(ExceptionGroup, match="MCP Owner 关闭失败"):
+        await owner.shutdown()
