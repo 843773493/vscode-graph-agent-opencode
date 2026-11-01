@@ -25,12 +25,16 @@ from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
+    reset_gateway_persistent_state,
     start_gateway_process,
 )
 from tests.support.session_navigation.http_operations import (
     wait_for_navigation_operation,
 )
-from tests.support.workspaces import prepare_default_test_workspace
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 
 def _tracking_counts(root: Path) -> dict[str, int]:
@@ -47,8 +51,19 @@ def _tracking_counts(root: Path) -> dict[str, int]:
 
 
 @pytest.fixture
-def navigation_files(integration_workspace_root_path: str):
+def navigation_files(integration_workspace_root_path: str, integration_config_path: str):
     workspace = Path(integration_workspace_root_path)
+    # 每个场景都从模板重建，避免上一个场景的文件编辑及Gateway注册污染后续断言。
+    reset_gateway_persistent_state(workspace_root=workspace)
+    prepare_default_test_workspace(
+        workspace_root=workspace,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        shared_skill_root=Path.cwd() / "resources/skills",
+    )
+    install_test_workspace_config(
+        workspace_root=workspace, config_path=Path(integration_config_path),
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+    )
     artifacts = workspace.parent / "artifacts"
     artifacts.mkdir(exist_ok=True)
     home = workspace.parent / "boxteam-home"
@@ -376,7 +391,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 assert receipt["state"] == "committed" and receipt["settlement"] == "repair_required"
                 assert receipt["error_code"] == "delete_settlement_repair_required"
                 assert session_id in receipt["error_detail"]
-                assert "artifact=session-directory" in receipt["error_detail"]
+                assert "artifact=session-subtree" in receipt["error_detail"]
                 serialized = json.dumps(receipt, ensure_ascii=False)
                 assert str(workspace) not in serialized and str(control_path) not in serialized
                 assert control_path.stat().st_ino == original_inode

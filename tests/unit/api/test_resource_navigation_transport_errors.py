@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -109,7 +109,11 @@ def test_remote_http_failure_survives_diagnostic_sink_error(
     logged: list[BaseException] = []
     sink_error = OSError(5, "诊断写入失败", "/private/navigation-log-sentinel")
 
-    def broken_sink(_message: str, *args: object, exc_info: BaseException) -> None:
+    def broken_sink(
+        _message: str, *args: object, exc_info: BaseException,
+        extra: Mapping[str, object] | None = None,
+    ) -> None:
+        assert extra is None
         logged.append(exc_info)
         raise sink_error
 

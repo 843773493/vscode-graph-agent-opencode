@@ -1910,3 +1910,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 最终固定候选共367项不同检查通过：210项新增模型／HTTP边界／SQLite回滚单测，110项已有文件编辑／持久操作／监听／公开协议回归，以及原 `integration-workspace-file-navigation-errors` 矩阵47项（72.80秒）。真实文件owner经ASGI列表在输出前拒绝构造后损坏引用，原文件与全部SQLite行不变，恢复原输出后同请求成功；此前因共享闸门未执行的4项上传暂存失败／日志次错／同ID重试也已补验，并包含在47项内，不重复计数。测试沿原独占闸门，带外部硬超时和4GiB数据段保护；全部最终检查2678份采样源码前后稳定。
 - Ruff、compileall及28模型序列化JSON Schema逐项相同；真实Pyright仅保留原 `file_case.add_exception_handler` 一条诊断，对应fixture与HEAD的AST完全相同，其余五文件及新增符号零诊断，不称类型全绿。首轮store测试漏填原payload字段的4项装具失败已纠正；临时schema脚本入口导入失败、原红测与所有实际退出码均保留。独立审查指出的合法编码别名遗漏已修正并补判别反例，最终只读复审无finding。
 - 准确命令、SHA、raw、JUnit、原矩阵回执与审查原件见 `out/tests/temp/uri_publication_boundary_20261101/artifacts/verification.json`。本片证明真实文件／SQLite owner与进程内HTTP发布边界，不代独立Backend TCP、Gateway／Web、Windows或进程硬重启验收；2.2／7.2继续未勾，整体51/53。未动另一会话前端迁移、公共fixture、共享debug或暂存；团队／协作和MCP显式持有继续延期。
+
+### 2026-11-01 导航引用在构造后仍遵守发布合同（2.2／7.2部分收口）
+
+- 原反例中36项构造后复制用例均绕过校验，真实文件owner经ASGI返回200并携带损坏引用。导航节点和搜索匹配现共用原URI校验器的构造及序列化合同，替换两处重复validator；POSIX、Windows、UNC与file:引用在发布前明确失败，合法编码、悬空URI、联邦authority及用户正文保持原字节，不新增parser或执行链。
+- 最终493项不同定向检查通过：新增43项模型与12项真实文件／ASGI发布检查，428项相关单元回归，2项真实Gateway／受管Backend导航与重启恢复（94.13秒），8项导航HTTP／protobuf合同。427项未受后续测试修订影响的单元通过结果复用，原失败日志替身对齐现行extra参数后19项通过；真实网络装具改为每场景重建本文件工作区／Gateway状态，消除目录和已编辑正文污染，并将删除回执artifact断言对齐既有session-subtree。未放宽原身份、状态、原件及恢复断言。
+- 五文件Ruff与compileall通过；生产模型及两份新测试真实Pyright零诊断，四模型的8份校验／序列化JSON Schema逐项相同。较大协议组合两次触发90／60秒外部保护，未算通过；collection核实其中包含协议导出子进程，未进一步追查其耗时，随后只选择本片直接合同的8项验证通过。初始红测、装具失配与中途错误修订的失败原件均保留，不将部分输出当作完整验收。
+- 准确命令、源码指纹、原始输出、退出码与作者自查见 `out/tests/temp/uri_navigation_publication_20261101/artifacts/verification.json`。全部测试带外部超时、4GiB数据段保护及适用的原集成独占闸门；本片不代Web、Windows、真实联邦或全仓URI审计。未修改前端、公共fixture、长回归驱动或共享debug；2.2／7.2仍未勾，整体51/53，团队／协作及显式MCP持有延期保持。

@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    model_validator,
+)
 
 from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
@@ -59,26 +66,32 @@ def _require_navigation_uri(value: str) -> str:
     return value
 
 
+NavigationResourceURI = Annotated[
+    str,
+    AfterValidator(_require_navigation_uri),
+    # 归属投影使用model_copy；构造后引用仍须在HTTP/联邦/模型共用的发布点核验。
+    PlainSerializer(_require_navigation_uri, return_type=str),
+]
+
+
 class ResourceNavigationNodeDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True, hide_input_in_errors=True)
 
-    uri: str
+    uri: NavigationResourceURI
     resource_shape: ResourceShape
     operations: tuple[ResourceNavigationOperation, ...]
     child_path: Literal["file_segments"] | None = None
-    _uri = field_validator("uri")(_require_navigation_uri)
 
 
 class ResourceNavigationMatchDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    uri: str
+    uri: NavigationResourceURI
     line: int = Field(ge=1)
     column: int = Field(ge=1)
     text: str
     snippet_start_column: int = Field(ge=1)
     truncated: bool = False
-    _uri = field_validator("uri")(_require_navigation_uri)
 
 
 class ResourceNavigationResultDTO(BaseModel):
