@@ -161,6 +161,14 @@ class TerminalManagerClient:
         response = await self._json_request("DELETE", f"/api/terminals/{terminal_id}")
         return self._require_terminal_envelope(response)
 
+    async def cancel_creation(self, resource_id: str, *, owner_revision: int) -> dict[str, object]:
+        response = await self._json_request("POST", f"/api/terminals/{resource_id}/cancel-creation",
+                                            {"owner_revision": owner_revision})
+        data = response.get("data")
+        if not isinstance(data, dict):
+            raise self._protocol_error("cancel_creation.data", response)
+        return data
+
     async def sync_owner_revision(self, terminal_id: str, owner_revision: int, *, for_stop: bool) -> None:
         await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/owner-revision",

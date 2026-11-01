@@ -595,3 +595,9 @@ tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记
 ### 创建回执前 Python owner 硬退出的核实边界
 
 真实创建入口先生成 intent 和 dispatching lease；独立 Python 进程在原 transport 派发前，或真实 Node 创建返回而 Python 尚未接收回执时被强杀。新进程仅从原 owner 记录与唯一 lease 账本恢复，不补写历史或复用旧创建调用。外部实例存在时，普通读取保持 reconcile_required，来源、关联和原 lease 身份不变；必须取得新的管理 operation，沿原停止链核实真实 PTY／页面终态，持久结清精确原占用后才能完成原 Session 清理。外部实例不存在时仍保留 creating／unknown 和原待核实 lease，404 与空清单均不构成未创建证明。该验收覆盖 Python owner 进程强杀与新进程恢复、真实 Node HTTP／PTY／Chromium；不替代完整 Backend／Gateway／Web 重启、Windows、无外部身份接管或整个 operation／shutdown 期限。
+
+### 尚无原生登记的创建取消证明（5.2 部分收口）
+
+原 stop 管理入口对 creating／unknown 意图取得新的管理 operation 后，调用受既有工作区／owner 授权保护的 `POST /api/{terminals|browsers}/{resource_id}/cancel-creation`，传入原冻结 `owner_revision`。尚无原生登记时，在现有 TerminalSession／BrowserSession 恢复记录保存 deleted／verified 与 `release_reason=creation_cancelled`，不启动 PTY／context。先将同一 ID 登记到原 Manager 集合以阻断异步准入与迟到创建，再等待原 writer；等待或写入失败期间只在运行态标记该候选尚未发布，普通 snapshot 返回 unknown。原 writer 成功后才清除此标记并签 not_created；重启从已发布记录恢复，终端历史配额不回收该取消事实。字段沿用现有记录，未新增数据库结构、文件或 lease 账本。
+
+回执绑定 resource_id／workspace_id／owner_revision；Python 严格核整数版本和 not_created，再通过原 owner writer 提交 deleted／verified、解除关联、同步账本及结清原待核实 lease。已有原生记录（包括 created／unknown）只返回 present 和当前快照，新管理操作随后走原版本推进／停止链；不能从空 PID／context 推导停止。取消请求失败、损坏回执、日志或后续本地落盘失败继续沿原 dispatching／unknown 保护和显式管理核实，不通过 finally 释放。此片不解决 Node 硬退出后已登记但缺少真实进程／context 身份的意图，也不代表整个 operation／shutdown 的期限完成。

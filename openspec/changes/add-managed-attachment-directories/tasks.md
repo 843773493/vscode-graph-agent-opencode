@@ -877,3 +877,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 新增独立真实进程验收：正式 Session／acceptance 和原资源创建入口生成 intent 与 dispatching lease，在 transport 派发前或真实 Node 已创建而 Python 尚未消费回执时强杀原 Python 进程。冷 owner 从原持久记录恢复，核来源、关联、精确 lease、外部 PID／页面身份和无自动重放；有实例时仅新管理 operation 可停止并结清，随后原 Session 清理完成真实删除。无实例时空清单／404仍保持 creating／unknown 和原占用，代码明确保留无身份接管 TODO。
 - 两领域×两个窗口共4 passed／89.39秒，外层180秒和4GiB数据段保护，沿原集成独占闸门；采样源码前后无变化。Ruff、compileall、Pyright零诊断，限定独立复审核准worktree／HEAD／指纹后无finding。首轮误将缺失实例的unknown期望成reconcile_required、次轮将Proto Struct整数PID限定为Python int的装具失败均保留，按现有合同修正，不改产品或放宽身份、原占用和真实终态断言；初次调用未安装的Python pyright入口失败后使用既有Bun入口。
 - 准确命令、源码指纹、原始输出和实际退出码见`out/tests/temp/resource_creation_restart_20261101/artifacts/verification.json`；正式工作区／进程日志与强杀、恢复原件在`out/tests/integration/workspace_services/test_resource_creation_restart/`。本轮只新增验收及合同登记，未修改产品、公共fixture、Web迁移或共享服务；不代表完整Backend／Gateway／Web重启、Windows、无外部身份接管或整个operation／shutdown期限。5.2／5.4及21/23继续未完成。
+
+### 2026-11-01 尚无原生登记的创建取消证明（5.2 部分）
+
+- creating／unknown 通过原 stop 入口取得新管理 operation，由原生 owner 在同一 Session 记录及 writer 发布 creation_cancelled，再签绑定资源／工作区／整数版本的 not_created。未发布候选只显示 unknown，已有原生登记只返回 present 交原停止链；排队及迟到的同 ID 创建被拒绝，冷重启和普通终端历史裁剪不消除取消事实。Python 通过原 writer 关闭 intent、解除关联、同步账本并结清精确旧占用，不新增数据库结构、文件或 lease 账本。
+- 原资源回归1118 passed／2 failed，失败仅为旧测试仍预期无管理动作；迁齐精确 stop 合同并增加真实 owner 冷恢复管理取消后，该文件22 passed。新取消专测12 passed；原生 Terminal 31 passed（Node node:test）、Browser 19 passed（Bun）。四项独立进程强杀／冷恢复／真实 HTTP、PTY／Chromium补验4 passed／91.78秒，包含取消后真实迟到创建被拒绝。原生测试装配曾因屏障释放顺序挂起及误用 Bun 执行 node:test 失败，原输出保留；修正 runner／屏障后验证通过，未修改既有行为断言。
+- Ruff、Python编译、Node ESM语法及OpenSpec strict通过；Pyright原新各13条诊断按相对文件、规则、完整消息、所属定义及最窄AST一致，新取消及本次触达的生命周期测试零诊断。准确命令、源码指纹、原始输出、实际退出码、复审及结构审查见`out/tests/temp/resource_creation_takeover_20261101/artifacts/verification.json`。真实重启补验期间只修改不参与该集成的单测，生产及集成源码未变化；不是全仓冻结。
+- 已登记但缺少 PID／context 的旧创建仍不能从空句柄推出停止；完整旧代接管、原生I/O抢占及整个operation／shutdown期限继续TODO，5.2／5.4和21/23保持未完成。本证据不替代完整Backend／Gateway／Web或Windows验收；未修改另一会话的前端、公共fixture、长回归driver或共享debug，仅复用现有独占闸门。

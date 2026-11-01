@@ -126,6 +126,7 @@ export class BrowserSession extends EventEmitter {
     this.clients = new Set();
     this.transports = new Map();
     this.transportOwnerRevision = record.transport_owner_revision;
+    this.creationCancellationPending = false;
     this.pendingDialog = null;
     this.pendingFileChooser = null;
     this.refSelectors = new Map();
@@ -1473,7 +1474,8 @@ export class BrowserSession extends EventEmitter {
       agent_lock_owner_id: agentLockActive ? this.record.agent_lock_owner_id : null,
       agent_lock_expires_at: agentLockActive ? this.record.agent_lock_expires_at : null,
       transport_owner_revision: this.transportOwnerRevision,
-      reconciliation_status: this.record.status === "lost" ? "unknown" : this.record.reconciliation_status,
+      reconciliation_status: this.creationCancellationPending || this.record.status === "lost"
+        ? "unknown" : this.record.reconciliation_status,
       client_count: this.clients.size,
       document_revision: this.documentRevision,
       operation_revision: this.operationQueue.operationRevision,

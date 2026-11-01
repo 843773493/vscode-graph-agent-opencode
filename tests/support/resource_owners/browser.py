@@ -28,6 +28,8 @@ class BrowserTransportFake:
         self.failure: BaseException | None = None
 
     async def create_browser(self, *, browser_id: str, owner_revision: int, **options: object) -> dict[str, object]:
+        if browser_id in self.records:
+            raise ValueError("Browser身份已登记，不能再次创建")
         self.creates += 1
         self.records[browser_id] = {
             "browser_id": browser_id, "workspace_id": WORKSPACE_ID,
@@ -42,6 +44,17 @@ class BrowserTransportFake:
 
     async def list_resources(self) -> list[dict[str, object]]:
         return [dict(item) for item in self.records.values()]
+
+    async def cancel_creation(self, resource_id: str, *, owner_revision: int) -> dict[str, object]:
+        record = self.records.get(resource_id)
+        if record is not None and record.get("release_reason") != "creation_cancelled":
+            return {"resource_id": resource_id, "workspace_id": WORKSPACE_ID, "owner_revision": owner_revision,
+                    "outcome": "present", "resource": dict(record)}
+        self.records[resource_id] = {"browser_id": resource_id, "workspace_id": WORKSPACE_ID,
+            "transport_owner_revision": owner_revision, "status": "deleted", "reconciliation_status": "verified",
+            "release_reason": "creation_cancelled", "title": "已取消的创建"}
+        return {"resource_id": resource_id, "workspace_id": WORKSPACE_ID, "owner_revision": owner_revision,
+                "outcome": "not_created"}
 
     async def get_resource(self, resource_id: str) -> dict[str, object]:
         return dict(self.records[resource_id])

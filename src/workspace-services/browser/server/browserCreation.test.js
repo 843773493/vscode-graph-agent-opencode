@@ -25,6 +25,63 @@ function createOptions() {
   return { workspaceId: WORKSPACE_ID, browserId: `browser_${randomUUID().replaceAll("-", "")}`, ownerRevision: 1 };
 }
 
+test("取消创建阻止原排队创建，冷重启及更高版本不能重新使用原身份", async () => {
+  const manager = createBrowserManagerWithStateWriter(null);
+  const options = createOptions();
+  const release = Promise.withResolvers();
+  manager.createAdmissionTail = release.promise;
+  const creating = manager.create(options);
+  const rejected = creating.then(() => null, error => error);
+  try {
+    expect(await manager.cancelCreation(options.browserId, 1)).toEqual({
+      resource_id: options.browserId, workspace_id: WORKSPACE_ID, owner_revision: 1, outcome: "not_created",
+    });
+    expect(manager.get(options.browserId).snapshot().active_page_id).toBeNull();
+    expect(manager.get(options.browserId).context).toBeNull();
+  } finally {
+    release.resolve();
+    expect((await rejected)?.message).toContain("唯一身份");
+  }
+  const cold = new BrowserManager({ workspaceRoot: manager.workspaceRoot, workspaceId: WORKSPACE_ID });
+  await cold.init();
+  expect(cold.get(options.browserId).snapshot().reconciliation_status).toBe("verified");
+  expect((await cold.cancelCreation(options.browserId, 1)).outcome).toBe("not_created");
+  await expect(cold.create({ ...options, ownerRevision: 2 })).rejects.toThrow("唯一身份");
+  expect((await cold.cancelCreation(options.browserId, 2)).outcome).toBe("present");
+});
+
+test("取消发布失败或等待中只显示unknown，同入口重试才签未创建回执", async () => {
+  const manager = createBrowserManagerWithStateWriter(null);
+  await manager.init();
+  const options = createOptions();
+  const before = readFileSync(manager.stateStore.stateFile, "utf8");
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const original = new Error("取消意图写入失败");
+  const write = manager.stateStore.write;
+  manager.stateStore.write = async () => { entered.resolve(); await release.promise; throw original; };
+  const cancelling = manager.cancelCreation(options.browserId, 1);
+  const rejected = cancelling.then(() => null, error => error);
+  try {
+    await entered.promise;
+    expect(manager.get(options.browserId).snapshot().reconciliation_status).toBe("unknown");
+    expect(readFileSync(manager.stateStore.stateFile, "utf8")).toBe(before);
+  } finally {
+    release.resolve();
+    expect(await rejected).toBe(original);
+    manager.stateStore.write = write;
+  }
+  expect(manager.get(options.browserId).snapshot().reconciliation_status).toBe("unknown");
+  expect((await manager.cancelCreation(options.browserId, 1)).outcome).toBe("not_created");
+  expect(manager.get(options.browserId).snapshot().reconciliation_status).toBe("verified");
+  const session = manager.get(options.browserId);
+  session.record.release_reason = null; session.record.status = "created";
+  session.record.reconciliation_status = "unknown";
+  const receipt = await manager.cancelCreation(options.browserId, 1);
+  expect(receipt.outcome).toBe("present");
+  expect(receipt.resource.status).toBe("created");
+  expect(manager.get(options.browserId)).toBe(session);
+});
+
 test("Browser原生创建必须等待原unknown意图发布", async () => {
   const manager = createBrowserManagerWithStateWriter(null);
   const options = createOptions();

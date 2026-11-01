@@ -91,7 +91,12 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 #### Scenario: 创建回执前资源 owner 进程硬退出
 
 - **WHEN** Terminal 或 Browser 已持久提交创建 intent 和原 dispatching lease，但 Python owner 进程在外部派发前或取得创建回执前硬退出
-- **THEN** 冷 owner 保留原资源身份、来源 Thread、关联和精确 lease，不自动重放创建；外部实例存在时，普通存活观察不能结清未知创建，新管理 operation 沿原停止链核实并持久提交终态后才结清原占用。外部清单缺失及详情 404 不能证明未创建，不得据此关闭 intent、释放 lease 或补造停止回执；无外部身份接管仍按任务 5.2 的未完成边界处理
+- **THEN** 冷 owner 保留原资源身份、来源 Thread、关联和精确 lease，不自动重放创建；外部实例存在时，普通存活观察不能结清未知创建，新管理 operation 沿原停止链核实并持久提交终态后才结清原占用。外部清单缺失及详情 404 不能证明未创建，不得据此关闭 intent、释放 lease 或补造停止回执；尚无原生登记时只能消费下述持久取消证明，已经登记却没有 PID／context 证明的旧意图仍按任务 5.2 的未完成边界处理
+
+#### Scenario: 新管理操作取消尚未登记的旧创建
+
+- **WHEN** 冷 owner 的原创建仍为 creating／unknown，用户通过既有 stop 管理入口发起新的 operation
+- **THEN** 原生 owner 的取消创建入口核对资源、工作区及冻结版本，在原资源记录及原 writer 中持久发布不可重新创建的取消事实；排队或迟到的同 ID 创建包括更高版本均不得越过该事实。只有发布成功后才返回绑定该 intent 的 not_created 回执，Python 核对后沿原 owner 关闭 intent、解除关联并结清原精确占用。已有原生记录只能返回 present 及真实快照，后续仍走原停止链，不能将空 PID／context 当成未创建证明。原 operation 身份不得发起接管，取消发布失败或回执未知保留 unknown 与原 lease；未发布的候选普通快照也不能成为核实证明。取消事实跨原生 owner 重启保留，不进入普通终态历史配额裁剪，不新增账本或自动重放创建
 
 #### Scenario: 停止派发前 Backend 硬退出
 

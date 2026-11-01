@@ -234,6 +234,12 @@ async function main() {
           return;
         }
 
+        if (request.method === "POST" && action === "cancel-creation") {
+          const payload = await readJson(request);
+          sendJson(response, 200, { data: await manager.cancelCreation(terminalId, payload.owner_revision) });
+          return;
+        }
+
         if (request.method === "POST" && action === "transport-grant") {
           const payload = await readJson(request);
           sendJson(response, 200, { data: manager.issueTransportGrant(terminalId, {

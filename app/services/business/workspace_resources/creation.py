@@ -28,6 +28,39 @@ if TYPE_CHECKING:
     from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
 
 
+async def cancel_pending_creation(
+    owner: WorkspaceResourceOwner, record: OwnedResourceRecord, lease_id: str,
+) -> ResourceSnapshot | None:
+    """只接受原生owner已发布的取消证明；已登记实例仍交原停止链。"""
+    async with resource_operation_dispatch(owner, record, lease_id, operation=None):
+        receipt = await owner._transport.cancel_creation(record.resource_id, owner_revision=record.owner_revision)
+        if (receipt.get("resource_id"), receipt.get("workspace_id"), receipt.get("owner_revision")) != (
+            record.resource_id, owner.workspace_id, record.owner_revision,
+        ) or type(receipt.get("owner_revision")) is not int:
+            raise ValueError("取消创建回执的身份或版本不匹配")
+        if receipt.get("outcome") == "present":
+            runtime = receipt.get("resource")
+            if not isinstance(runtime, dict):
+                raise TypeError("已登记创建缺少原生资源快照")
+            observe_resource(record, runtime, owner.kind)
+            if runtime["transport_owner_revision"] != record.owner_revision:
+                raise ValueError("取消创建观察版本与当前owner不一致")
+            return None
+        if receipt.get("outcome") != "not_created" or receipt.get("resource") is not None:
+            raise ValueError("取消创建未取得明确的未创建证明")
+        record.status = "deleted"
+        record.thread_associations.clear()
+        record.reconciliation_status = "verified"
+        record.error = None
+        record.updated_at = owner._now()
+        await owner._store.save(record)
+        await owner._sync_ledger(record)
+        for pending in owner._leases.leases_for_resource(record.resource_id):
+            if pending.lease_id != lease_id and pending.status in {"dispatching", "reconcile_required"}:
+                await owner._leases.settle(pending.lease_id)
+        return resource_projection(record, None, owner.kind)
+
+
 async def create_resource(
     owner: WorkspaceResourceOwner, *, operation: ResourceOperations, retention_scope: RetentionScope, title: str,
     create: Callable[[OwnedResourceRecord], Awaitable[ResourceSnapshot]],

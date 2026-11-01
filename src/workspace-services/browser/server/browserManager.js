@@ -294,6 +294,31 @@ export class BrowserManager {
     return session;
   }
 
+  async cancelCreation(id, ownerRevision) {
+    if (!/^browser_[a-f0-9]{32}$/.test(id) || !Number.isSafeInteger(ownerRevision) || ownerRevision < 1) {
+      throw new Error("Browser取消创建缺少有效身份或版本");
+    }
+    let session = this.browsersById.get(id);
+    if (session && (session.record.release_reason !== "creation_cancelled" || session.transportOwnerRevision !== ownerRevision)) {
+      return { resource_id: id, workspace_id: this.workspaceId, owner_revision: ownerRevision,
+        outcome: "present", resource: session.snapshot() };
+    }
+    if (!session) {
+      const stamp = nowIso();
+      session = new BrowserSession({ manager: this, record: {
+        browser_id: id, page_id: id, workspace_id: this.workspaceId, transport_owner_revision: ownerRevision,
+        status: "deleted", reconciliation_status: "verified", release_reason: "creation_cancelled",
+        title: "已取消的创建", url: "about:blank", created_at: stamp, updated_at: stamp, ended_at: stamp,
+      } });
+      // 与原创建最后一次准入核验共用Map；未发布的候选不能成为停止证明。
+      session.creationCancellationPending = true;
+      this.browsersById.set(id, session);
+    }
+    await this.persist();
+    session.creationCancellationPending = false;
+    return { resource_id: id, workspace_id: this.workspaceId, owner_revision: ownerRevision, outcome: "not_created" };
+  }
+
   async syncOwnerRevision(id, transportOwnerRevision, {
     operationDrainTimeoutMs = DEFAULT_OPERATION_DRAIN_TIMEOUT_MS,
     forStop = false,

@@ -29,6 +29,76 @@ function createTerminalTestWorkspace() {
   return root;
 }
 
+test("取消创建沿原writer发布，排队的同身份创建及冷重启均不能越过取消", async () => {
+  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
+  const release = Promise.withResolvers();
+  manager.capacityLock = release.promise;
+  const creating = manager.create({ workspaceId: manager.workspaceId, terminalId, ownerRevision: 7 });
+  const rejected = assert.rejects(creating, /身份冲突/);
+  try {
+    const receipt = await manager.cancelCreation(terminalId, 7);
+    assert.deepEqual(receipt, { resource_id: terminalId, workspace_id: manager.workspaceId, owner_revision: 7, outcome: "not_created" });
+    assert.equal(manager.get(terminalId).snapshot().os_pid, null);
+    assert.equal(manager.get(terminalId).snapshot().started_at, null);
+  } finally {
+    release.resolve();
+    await rejected;
+  }
+  const cold = new TerminalManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
+  await cold.init();
+  assert.equal(cold.get(terminalId).snapshot().reconciliation_status, "verified");
+  assert.equal((await cold.cancelCreation(terminalId, 7)).outcome, "not_created");
+  await assert.rejects(cold.create({ workspaceId: cold.workspaceId, terminalId, ownerRevision: 8 }), /身份冲突/);
+  assert.equal((await cold.cancelCreation(terminalId, 8)).outcome, "present");
+});
+
+test("取消候选发布失败或仍等待writer时不能由普通快照核实", async (t) => {
+  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  await manager.init();
+  const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
+  const before = await readFile(manager.stateFile);
+  const original = new Error("取消意图发布失败");
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const write = t.mock.method(manager.stateStore, "write", async () => {
+    entered.resolve(); await release.promise; throw original;
+  });
+  const cancelling = manager.cancelCreation(terminalId, 1);
+  const rejected = assert.rejects(cancelling, error => error === original);
+  try {
+    await entered.promise;
+    assert.equal(manager.get(terminalId).snapshot().reconciliation_status, "unknown");
+    assert.deepEqual(await readFile(manager.stateFile), before);
+  } finally { release.resolve(); await rejected; }
+  assert.equal(manager.get(terminalId).snapshot().reconciliation_status, "unknown");
+  write.mock.restore();
+  assert.equal((await manager.cancelCreation(terminalId, 1)).outcome, "not_created");
+  assert.equal(manager.get(terminalId).snapshot().reconciliation_status, "verified");
+});
+
+test("取消证明不被终端历史配额回收，已有created意图不能取得未创建证明", async () => {
+  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const id = `term_${randomUUID().replaceAll("-", "")}`;
+  await manager.cancelCreation(id, 1);
+  manager.get(id).updatedAt = "2000-01-01T00:00:00Z";
+  for (let index = 0; index <= MAX_RETAINED_TERMINAL_HISTORY; index++) {
+    const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
+    manager.terminalsById.set(terminalId, new TerminalSession({ manager, record: {
+      terminal_id: terminalId, workspace_id: manager.workspaceId, transport_owner_revision: 1,
+      cwd_relative: "", status: "deleted", reconciliation_status: "verified",
+    } }));
+  }
+  await manager.pruneTerminalHistory();
+  assert.equal(manager.terminalsById.size, MAX_RETAINED_TERMINAL_HISTORY + 1);
+  assert.equal(manager.get(id).releaseReason, "creation_cancelled");
+  const present = manager.get(id);
+  present.releaseReason = null; present.status = "created"; present.reconciliationStatus = "unknown";
+  const receipt = await manager.cancelCreation(id, 1);
+  assert.equal(receipt.outcome, "present");
+  assert.equal(receipt.resource.status, "created");
+  assert.equal(manager.get(id), present);
+});
+
 test("原生创建之前必须等待同一unknown意图发布", async (t) => {
   const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   const terminalId = `term_${randomUUID().replaceAll("-", "")}`;

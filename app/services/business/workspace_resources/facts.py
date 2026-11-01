@@ -155,6 +155,9 @@ def resource_projection(
             actions.append("stop")
         if not record.thread_associations:
             actions.append("delete")
+    elif record.status == "creating" and record.reconciliation_status != "verified":
+        # 仅显式管理stop可向原生owner申请持久取消证明，清单缺失自身不是证明。
+        actions.append("stop")
     reclaim_at = (
         (datetime.fromisoformat(record.unattached_since)
          + timedelta(seconds=ORPHAN_GRACE_SECONDS)).isoformat()

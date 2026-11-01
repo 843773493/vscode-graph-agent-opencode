@@ -303,6 +303,31 @@ export class TerminalManager {
     return session.snapshot();
   }
 
+  async cancelCreation(id, ownerRevision) {
+    if (!/^term_[a-f0-9]{32}$/.test(id) || !Number.isSafeInteger(ownerRevision) || ownerRevision < 1) {
+      throw new Error("Terminal取消创建缺少有效身份或版本");
+    }
+    let session = this.terminalsById.get(id);
+    if (session && (session.releaseReason !== "creation_cancelled" || session.transportOwnerRevision !== ownerRevision)) {
+      return { resource_id: id, workspace_id: this.workspaceId, owner_revision: ownerRevision,
+        outcome: "present", resource: session.snapshot() };
+    }
+    if (!session) {
+      const stamp = nowIso();
+      session = new TerminalSession({ manager: this, record: {
+        terminal_id: id, workspace_id: this.workspaceId, transport_owner_revision: ownerRevision,
+        status: "deleted", reconciliation_status: "verified", release_reason: "creation_cancelled",
+        cwd_relative: "", title: "已取消的创建", created_at: stamp, updated_at: stamp, ended_at: stamp,
+      } });
+      // 先阻止排队/解析中的创建；回执及verified快照须等同一writer真正发布。
+      session.creationCancellationPending = true;
+      this.terminalsById.set(id, session);
+    }
+    await this.persist();
+    session.creationCancellationPending = false;
+    return { resource_id: id, workspace_id: this.workspaceId, owner_revision: ownerRevision, outcome: "not_created" };
+  }
+
   async syncOwnerRevision(id, transportOwnerRevision) {
     this.get(id).syncOwnerRevision(transportOwnerRevision);
     for (const [token, grant] of this.transportGrants) {
@@ -388,7 +413,8 @@ export class TerminalManager {
 
   async pruneTerminalHistory() {
     const historical = [...this.terminalsById.values()]
-      .filter((session) => session.status === "deleted" && session.reconciliationStatus === "verified")
+      .filter((session) => session.status === "deleted" && session.reconciliationStatus === "verified"
+        && session.releaseReason !== "creation_cancelled")
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const removed = historical.slice(MAX_RETAINED_TERMINAL_HISTORY);
     for (const session of removed) {

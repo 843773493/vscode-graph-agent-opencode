@@ -149,6 +149,7 @@ export class TerminalSession {
     /** @type {number|string|null} 同 TerminalProcessStat：Linux 时钟滴答数或 POSIX lstart 原文，只作进程身份比较。 */
     this.processStartTime = record.process_start_time ?? null;
     this.releaseReason = record.release_reason ?? null;
+    this.creationCancellationPending = false;
     /** @type {number} 已产生的最后一条PTY输出事件序号；不等于worker的IPC包号。 */
     this.outputSequence = record.sequence || 0;
     /** @type {number} 模型已读到的输出序号（包含该条），与UI的逐连接ACK分开。 */
@@ -905,6 +906,7 @@ export class TerminalSession {
   snapshot() {
     return {
       ...this.toRecord(),
+      reconciliation_status: this.creationCancellationPending ? "unknown" : this.reconciliationStatus,
       pty_worker_pid: this.ptyProcess?.workerPid ?? null,
       display_buffer: stripCommandMarkerLines(this.buffer),
       client_count: this.outputMultiplexer.clientCount,

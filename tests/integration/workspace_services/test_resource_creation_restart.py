@@ -92,6 +92,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
         calls: list[str] = []
         create = getattr(owner._transport, f"create_{kind}")
         stop, delete = owner._transport.stop_resource, owner._transport.delete_resource
+        cancel = owner._transport.cancel_creation
 
         async def creating(**arguments: object) -> dict[str, object]:
             calls.append("create")
@@ -105,10 +106,15 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
             calls.append("delete")
             return await delete(resource_id)
 
+        async def cancelling(resource_id: str, *, owner_revision: int) -> dict[str, object]:
+            calls.append("cancel_creation")
+            return await cancel(resource_id, owner_revision=owner_revision)
+
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(owner._transport, f"create_{kind}", creating)
             patch.setattr(owner._transport, "stop_resource", stopping)
             patch.setattr(owner._transport, "delete_resource", deleting)
+            patch.setattr(owner._transport, "cancel_creation", cancelling)
             restored = await owner.get_resource(rid)
             expected_status = "reconcile_required" if identity["happened"] else "unknown"
             assert restored["source_thread"] == {
@@ -160,18 +166,37 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                 result["stopped"] = stopped
             else:
                 assert restored["status"] == "creating"
-                assert actions == []
+                assert actions == ["stop"]
                 # 清单和精确详情都没有实例，也不能据此结清已丢失的创建回执。
                 assert await owner._transport.list_resources() == []
-                with pytest.raises(ResourceRequestError):
+                with pytest.raises(ResourceConflict, match="原 operation"):
                     await owner.command(rid, action="stop", expected_revision=revision,
-                        holder_id="request:missing-creation-proof", operation_id="missing-creation-proof")
+                        holder_id="request:crash-create", operation_id="crash-create")
                 assert calls == []
                 assert owner._leases.get_lease(lease.lease_id) == lease
                 cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.json")
                 assert cold.get_lease(lease.lease_id) == lease
                 assert (await owner.get_resource(rid))["reconciliation_status"] == "unknown"
-                # TODO(5.2)：没有外部身份的旧创建 intent 仍须 owner 精确接管，不能用404当未创建证明。
+                cancelled = await owner.command(rid, action="stop", expected_revision=revision,
+                    holder_id="request:missing-creation-proof", operation_id="missing-creation-proof")
+                assert cancelled["status"] == "deleted" and cancelled["reconciliation_status"] == "verified"
+                assert cancelled["thread_associations"] == [] and cancelled["source_thread"] == restored["source_thread"]
+                assert calls == ["cancel_creation"] and not owner._leases.leases_for_resource(rid)
+                settled = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.json").get_lease(lease.lease_id)
+                assert settled is not None and settled.status == "settled"
+                assert settled.operation_id == lease.operation_id and settled.turn_stream_id == lease.turn_stream_id
+                runtime = await owner._transport.get_resource(rid)
+                assert runtime["release_reason"] == "creation_cancelled" and runtime["status"] == "deleted"
+                assert runtime["reconciliation_status"] == "verified"
+                # 正式旧请求迟到也不得创建；直接调用原transport以区别请求尝试与真实副作用。
+                with pytest.raises(ResourceRequestError):
+                    if kind == "terminal":
+                        await create(terminal_id=rid, owner_revision=revision, title="迟到创建", cwd=str(workspace))
+                    else:
+                        await create(browser_id=rid, owner_revision=revision, title="迟到创建", url="about:blank")
+                assert [item[f"{kind}_id"] for item in await owner._transport.list_resources()] == [rid]
+                assert rid not in {item["resource_id"] for item in await owner.list_resources()}
+                result["cancelled"] = cancelled
             result["side_effects"] = calls
             output.write_text(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -206,7 +231,7 @@ def test_creation_hard_restart_preserves_exact_lease_until_original_owner_proof(
         assert recovered.wait(timeout=40) == 0, (runtime / "recovery-worker.stderr.log").read_text()
         receipt = json.loads(output.read_text())
         assert receipt["pid"] != identity["pid"]
-        assert receipt["side_effects"] == (["stop", "delete"] if happened else [])
+        assert receipt["side_effects"] == (["stop", "delete"] if happened else ["cancel_creation"])
         if happened and kind == "terminal":
             running_pids = {process.info["pid"] for process in psutil.process_iter(attrs=["pid", "status"])
                             if process.info["status"] != psutil.STATUS_ZOMBIE}

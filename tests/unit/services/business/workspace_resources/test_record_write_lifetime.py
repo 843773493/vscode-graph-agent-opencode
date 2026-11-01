@@ -312,13 +312,26 @@ async def test_unstarted_creation_cleanup_survives_repeated_cancellation_and_exp
     rows = await cold.list_resources()
     if outcome == "record_error":
         row, = rows
-        assert row["resource_id"] == rid and row["status"] == "creating"
-        assert row["reconciliation_status"] == "unknown" and not row["available_actions"]
+        assert row["resource_id"] == rid and row["status"] == "creating" and row["owner_revision"] == 1
+        assert row["reconciliation_status"] == "unknown" and row["available_actions"] == ["stop"]
+        cancelled = await cold.command(
+            rid, action="stop", expected_revision=1,
+            holder_id="request:cancel-unstarted", operation_id="cancel-unstarted",
+        )
+        assert cancelled["status"] == "deleted" and cancelled["reconciliation_status"] == "verified"
+        assert cancelled["thread_associations"] == [] and cancelled["available_actions"] == []
+        assert (await cold.get_resource(rid))["status"] == "deleted" and await cold.list_resources() == []
+        external = cold._leases.get(rid)
+        assert external is not None and external.status == "stopped"
+        management, = cold._leases._leases.values()
+        assert management.status == "released" and management.operation_id == "cancel-unstarted"
+        assert management.turn_stream_id == "request:cancel-unstarted"
     else:
         assert rows == []
         detail = await cold.get_resource(rid)
         assert detail["status"] == "deleted" and detail["reconciliation_status"] == "verified"
-    assert not cold._leases._leases and resource_owner.transport.creates == 0
+        assert not cold._leases._leases
+    assert not cold._leases.leases_for_resource(rid) and resource_owner.transport.creates == 0
 
 
 async def test_cancelled_cold_preparation_finishes_single_frozen_version_before_peer_recovery(

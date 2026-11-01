@@ -24,6 +24,7 @@ from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.services.business.workspace_resources.creation import cancel_pending_creation
 from app.services.business.workspace_resources.facts import (
     ORPHAN_GRACE_SECONDS,
     STOPPED_STATUSES,
@@ -396,18 +397,21 @@ class WorkspaceResourceOwner:
                 raise failure
             record = self._require_owned_resource_record(resource_id)
         takeover = False
+        pending_creation = record.status == "creating" and record.reconciliation_status != "verified"
         if record.reconciliation_status != "verified" and action in {"stop", "delete"}:
             # 已停止时只对账；仍未知时必须以新的管理身份沿原停止链终止。
-            runtime = await self._transport.get_resource(resource_id)
-            await self._reconcile_stopped_record(record, runtime)
-            if record.reconciliation_status == "verified" and (
-                record.status == "deleted" or (action == "stop" and record.status in STOPPED_STATUSES)
-            ):
-                return resource_projection(record, runtime, self.kind)
+            if not pending_creation:
+                runtime = await self._transport.get_resource(resource_id)
+                await self._reconcile_stopped_record(record, runtime)
+                if record.reconciliation_status == "verified" and (
+                    record.status == "deleted" or (action == "stop" and record.status in STOPPED_STATUSES)
+                ):
+                    return resource_projection(record, runtime, self.kind)
+                if record.reconciliation_status != "verified":
+                    observe_resource(record, runtime, self.kind)
+                    if runtime["transport_owner_revision"] != record.owner_revision:
+                        raise ResourceConflict("外部资源 接管观察版本与当前 owner 不一致；请刷新资源")
             if record.reconciliation_status != "verified":
-                observe_resource(record, runtime, self.kind)
-                if runtime["transport_owner_revision"] != record.owner_revision:
-                    raise ResourceConflict("外部资源 接管观察版本与当前 owner 不一致；请刷新资源")
                 if lease_id is not None:
                     raise ResourceConflict("外部资源 接管必须取得新的管理 operation 身份")
                 if action == "stop" and record.status in {"deleted", "deleting"}:
@@ -449,6 +453,10 @@ class WorkspaceResourceOwner:
             record, thread, holder_id, operation_id, lease_id, allow_unverified=takeover,
         ) as acquired_lease_id:
             if action in {"stop", "delete"}:
+                if pending_creation:
+                    cancelled = await cancel_pending_creation(self, record, acquired_lease_id)
+                    if cancelled is not None:
+                        return cancelled
                 return await self._stop_or_delete(record, delete=action == "delete", reason=stop_reason, lease_id=acquired_lease_id)
             async with resource_operation_dispatch(self, record, acquired_lease_id, operation=None):
                 if fork_attachment is not None:

@@ -61,6 +61,10 @@ class BrowserManagerClient:
         )
         return self._normalize_browser_record(browser_record)
 
+    async def cancel_creation(self, resource_id: str, *, owner_revision: int) -> dict[str, object]:
+        return await self._request_data("POST", f"/api/browsers/{resource_id}/cancel-creation",
+                                        {"owner_revision": owner_revision})
+
     async def get_resource(self, browser_id: str) -> dict[str, object]:
         browser_record = await self._request_data(
             "GET", f"/api/browsers/{browser_id}"
