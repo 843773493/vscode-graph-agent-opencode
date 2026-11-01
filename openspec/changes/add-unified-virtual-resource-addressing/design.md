@@ -61,6 +61,8 @@ Terminal／Browser 的外部清单身份、工作目录及创建失败回执拒�
 
 ChatGPT／Codex凭据的原生访问与具名access_token／tokens拒绝复用同一 `failure_detail`，删除本地logger。原文件位置只附在原异常notes，字段规则、异常类别、直接cause及适用原生错误码保留；日志次错只公开类别并附到原异常，不替换主错、不进入Provider公开配置错误。文本采用统一出口的 `artifact=…: stage=…` 格式，适用原生错误码按实际字段公布，不额外复制缺省None；调用方不解析这段诊断文本，不保留第二格式。首次迁移、过期刷新、临时描述符归属、发布与清理双错、并发不覆盖和同入口显式重试仍由原唯一认证owner承担，不新增登录／刷新或诊断回退链。
 
+Provider可用性和选中模型的构建失败统一在工厂调用既有`execution_failure_message`／`report_failure`，删除原fallback局部logger及原文拼接。原生I/O、内部Pydantic和SQLite只发布原错误事实，保留原异常参数与直接cause；业务拒绝原说明保持。凭据owner在生成已分离说明的原抛错处通过`mark_public_failure`登记，工厂直接消费该说明，不重复记录或从文本判断安全性。首选构建失败仍终止，fallback继续按原顺序跳过不可用候选；不改模型路由、准入、Job结算或历史writer。
+
 **理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
 
 **备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许原生 Gateway 控制面持有具名根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。

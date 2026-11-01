@@ -22,6 +22,7 @@ from fastapi import FastAPI
 
 from app import main
 from app.abstractions.job_executor import JobRuntimeStateProtocol
+from app.agents import agent_factory
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.container import AppContainer
 from app.core import identifier, phase_observer
@@ -489,6 +490,71 @@ def _assert_generated_notice(
                                  for a in report_assemblies]) == sealed_before
     return {"canonical": cold_item.to_dict(), "cold_projection_metadata": projected.response_metadata,
             "sealed_assemblies_hash": sha256_jcs(json.loads(sealed_before))}
+
+
+@pytest.mark.asyncio
+async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    case = source_case
+    session_id = await create_session(case.client, "模型构建失败后继续执行")
+    thread_id = await case.container.session_service.resolve_main_thread(session_id)
+    missing = case.workspace / "private-provider-build" / "credentials.json"
+    errors: list[OSError] = []
+
+    def build_failure(*_args: object, **_kwargs: object) -> None:
+        try:
+            missing.read_bytes()
+        except OSError as error:
+            errors.append(error)
+            raise
+        raise AssertionError("缺失模型凭据必须失败")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(agent_factory, "build_model_from_provider", build_failure)
+        provider_response = await case.client.get("/api/v1/agents/default")
+        assert provider_response.status_code == 200, provider_response.text
+        providers = provider_response.json()["data"]["providers"]
+        assert providers and all(not provider["available"] for provider in providers)
+        assert all("FileNotFoundError" in provider["configuration_error"] for provider in providers)
+        accepted = await _send(case, session_id, "验证模型构建错误")
+        job_id = accepted["job_id"]
+        assert isinstance(job_id, str)
+        failed = await _job(case, job_id, "failed")
+        message = failed["error_message"]
+        assert isinstance(message, str)
+        assert "provider_id=primary" in message and "FileNotFoundError" in message
+        # Job先提交终态再发布事件，等原事件链完成，不把状态可见误当作事件已发布。
+        async with asyncio.timeout(10):
+            while True:
+                events = await case.client.get(f"/api/v1/jobs/{job_id}/events")
+                assert events.status_code == 200, events.text
+                if terminal := [event for event in events.json()["data"] if event["type"] == "job_failed"]:
+                    break
+                await asyncio.sleep(0.05)
+        assert len(terminal) == 1 and terminal[0]["payload"]["error"] == message
+        assert str(missing) not in provider_response.text + json.dumps(failed) + events.text
+        assert case.requests() == []
+        assert case.sql(session_id, thread_id, "SELECT outcome FROM executions") == [("failed",)]
+        assert all(error.filename == str(missing) for error in errors)
+        assert all(any(record.exc_info and record.exc_info[1] is error for record in caplog.records) for error in errors)
+        assert str(missing) in caplog.text
+
+    await case.plan(session_id, [{"content": "同一会话已恢复模型执行"}])
+    continued = await _send(case, session_id, "恢复后继续")
+    continued_job_id = continued["job_id"]
+    assert isinstance(continued_job_id, str)
+    completed = await _job(case, continued_job_id)
+    assert completed["session_id"] == session_id and completed["thread_id"] == thread_id
+    assert len(case.requests()) == 1
+    assert sorted(case.sql(session_id, thread_id, "SELECT outcome FROM executions")) == [("completed",), ("failed",)]
+    history = await case.client.get(f"/api/v1/sessions/{session_id}/bootstrap", params={"thread_id": thread_id})
+    assert history.status_code == 200, history.text
+    assert "同一会话已恢复模型执行" in history.text and str(missing) not in history.text
+    case.write_actual("provider-build-recovery", {
+        "provider": provider_response.json(), "failed_job": failed,
+        "events": events.json(), "completed_job": completed, "history": history.json(),
+    })
 
 
 @pytest.mark.asyncio

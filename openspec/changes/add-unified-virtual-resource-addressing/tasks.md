@@ -1823,3 +1823,16 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 文件 HTTP／文本回执的唯一错误出口不再凭 filename 是否存在决定发布系统原文；未登记的 OSError 只公布原类别与适用错误码。已分离的 URI 访问、写锁、journal 阶段和明确文件／附件业务拒绝在产生位置复用公开说明登记，原异常类别、参数、文案与原因链保持，不增加错误类型或路径文本扫描。
 - 原生产单元反例4失败／8通过；完整旧源码归档的四个集合 API、五种状态映射和三平台诊断样本共60项新增反例均失败，响应明确包含原生路径。候选最终相关回归520项通过（46.61秒），33份采样源码前后稳定；Ruff与compileall通过，Pyright原26条诊断按规则、全文、归属与最窄表达式AST无新增。初轮519通过／1失败暴露 journal 已分离说明未登记，补齐后226项复验及最终全批通过；未放宽原断言。证据：`out/tests/temp/file_error_public_boundary_20261031/artifacts/verification.json`。
 - API 单元装具替换文件服务，只证明路由序列化、原状态码、request_id和诊断边界；真实文件 owner 的上传暂存失败／日志次错／同ID重试新增4项集成验收尚未运行。原排队进程撤下（143）后，2026-11-01补验仍未取得共享名额，等待600.061秒后仅终止本方进程（143）；118份相关源码指纹前后稳定，没有业务结果或JUnit，不计通过或产品失败，原输出及命令见`out/tests/temp/upload_staging_acceptance_20261101/artifacts/verification.json`。未绕锁、停止另一会话进程、运行Web测试或重启共享debug，不再重复排队。本片不代真实Backend网络、Gateway、浏览器或Windows总门，2.2／7.2继续未勾，整体51/53。
+
+
+### 2026-11-01 文件错误与操作 ID 的待补产品验收（2.2／7.2有限证据）
+
+- 此前未执行的上传暂存失败／日志次错／同ID重试4项通过；操作ID真实Backend网络补强版1项通过，包含重放后持久回执、文件字节与导航快照断言。首次组合4通过、操作ID因38400端口占用在setup失败；未停止未知进程，确认占用消失后仅补跑该项，14.27秒通过。两轮3272份tracked采样源码前后稳定，不把setup错误计作业务通过。
+- 命令、准确退出码、源码采样、原始输出及JUnit见`out/tests/temp/uri_acceptance_20261101/artifacts/verification.json`。本次关闭这5项验收缺口，不代全局URI、Gateway联邦、浏览器或Windows验收；2.2／7.2仍未勾。
+
+### 2026-11-01 模型构建失败的公开边界（2.2／7.2部分收口）
+
+- Provider可用性与选中模型的构建失败共用既有执行事实／诊断原语；原生I/O、Pydantic和SQLite不再因工厂包装变成公开原文，原异常参数、直接cause、首选失败及fallback顺序保持。凭据owner在原已分离说明的构造处登记公开事实，保留artifact／stage和业务拒绝；删除原fallback重复logger，不新增错误状态或writer。
+- 完整HEAD归档叠加初始新单测，16项路径外泄反例失败、2项业务说明通过。候选147项不同单测及15项集成通过；新单测的SQLite句柄收尾改用closing后，受影响18项补跑通过。真实消息入口生成failed执行，核Provider响应、Job、失败事件、持久执行结算与bootstrap历史无原位置，故障解除后同Session／Thread通过现有model_stream完成下一次调用。首轮新测试误用不存在的历史路由，第二轮暴露Job终态先于事件发布的既有顺序；修正测试为原bootstrap及有界等待原事件后通过，未放宽错误、身份或顺序断言。
+- Ruff、compileall与本change strict通过。真实Pyright保留199条既存诊断，按相对文件、规则、完整消息、所属函数与最窄表达式AST逐项一致，新增单测及产品场景零新增诊断，不称类型全绿。准确命令、源码指纹、红绿原件、退出码与差异检查见同一`verification.json`；早期runner仅采样tracked文件，后续3300份采样含非忽略untracked，新测试SHA另记，不扩张为完整工作树冻结。
+- 新产品场景通过真实应用lifespan、路由、服务、持久owner和模型回放执行，但HTTP为进程内ASGI，不代独立Gateway网络、Web工作台或Windows实机。未实现前端OpenSpec，未修改另一会话的公共fixture、长回归驱动、共享debug及原暂存。2.2／7.2仍未勾，整体51/53；团队协作与MCP显式持有继续延期。

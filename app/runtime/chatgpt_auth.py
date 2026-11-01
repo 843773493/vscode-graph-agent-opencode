@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from app.core.failures import failure_detail
+from app.core.failures import failure_detail, mark_public_failure
 from app.core.file_permissions import restrict_private_path_access
 from app.core.path_utils import get_boxteam_home
 
@@ -143,8 +143,8 @@ def _auth_file_access(source: Path, *, artifact: str, stage: str) -> Iterator[No
             error, stage=stage, label=f"OAuth 凭据访问失败: artifact={artifact}",
         )
         if isinstance(error, OSError):
-            raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
-        raise RuntimeError(detail) from error
+            raise mark_public_failure(type(error)(error.errno, detail, None, getattr(error, "winerror", None))) from error
+        raise mark_public_failure(RuntimeError(detail)) from error
 
 
 def _build_litellm_auth_record(source: Path) -> dict[str, Any]:

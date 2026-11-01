@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
@@ -90,7 +89,12 @@ from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.failures import mark_public_failure
+from app.core.failures import (
+    execution_failure_message,
+    mark_public_failure,
+    public_failure_message,
+    report_failure,
+)
 from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
@@ -176,7 +180,6 @@ if TYPE_CHECKING:
 
 AGENT_GRAPH_RECURSION_LIMIT = 9999
 PROVIDER_REQUEST_OPTION_KEYS = {"overrides", "default_headers", "no_proxy"}
-logger = logging.getLogger(__name__)
 
 
 def _resolve_tool_policy(
@@ -278,8 +281,16 @@ def provider_configuration_error(
     try:
         build_model_from_provider(provider, runtime_config)
     except Exception as error:  # noqa: BLE001 - 配置错误需要逐 provider 隔离展示
-        return str(error) or type(error).__name__
+        return _provider_build_failure(provider, error)
     return None
+
+
+def _provider_build_failure(provider: Mapping[str, object], error: Exception) -> str:
+    """原生错误先分离诊断，再由列表或首选模型入口发布，保留业务拒绝说明。"""
+    if (message := public_failure_message(error)) is not None:
+        return message
+    error.add_note(f"模型配置构建失败: provider_id={provider.get('id') or provider.get('model') or '<unknown>'}")
+    return report_failure(error, detail=execution_failure_message(error) or type(error).__name__)
 
 
 def _get_provider_request_options(provider: dict[str, Any]) -> dict[str, Any]:
@@ -334,14 +345,11 @@ def build_runtime_for_agent(
             )
         except Exception as error:
             provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
+            detail = _provider_build_failure(provider, error)
             if index == 0:
                 raise RuntimeError(
-                    f"当前选择的模型配置不可用: provider_id={provider_id}; {error}"
+                    f"当前选择的模型配置不可用: provider_id={provider_id}; {detail}"
                 ) from error
-            logger.exception(
-                "跳过配置不可用的 fallback provider: provider_id=%s",
-                provider_id,
-            )
             continue
         candidates.append(
             build_provider_model_candidate(provider=provider, model=model)
