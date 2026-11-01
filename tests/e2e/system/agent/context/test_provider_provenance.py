@@ -42,6 +42,9 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 from app.services.infrastructure.rollout_context.storage.catalog.item_reader import (
     RolloutCanonicalReadMixin,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
+    read_message_group,
+)
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 from app.services.mapping.itemized.content_blocks import (
@@ -335,11 +338,15 @@ def _audit_attempt(
         history_message_ids = []
         for entry in snapshot.selection:
             if entry.included and entry.ref.ref_type == "canonical_item":
-                identity = cursor.execute(
-                    "SELECT json_extract(projection_manifest_json, '$.projection_identity.projection_message_id') "
-                    "FROM item_catalog WHERE item_id=?", (entry.ref.ref_id,),
-                ).fetchone()
-                assert identity is not None and isinstance(identity[0], str)
+                identities = cursor.execute(
+                    "SELECT COALESCE(json_extract(i.projection_manifest_json, '$.projection_identity.projection_message_id'), "
+                    "json_extract(anchor.projection_manifest_json, '$.projection_identity.projection_message_id')) "
+                    "FROM item_catalog i LEFT JOIN item_catalog anchor ON anchor.message_group_id=i.message_group_id "
+                    "AND json_extract(anchor.projection_manifest_json, '$.projection_identity.projection_message_id') IS NOT NULL "
+                    "WHERE i.item_id=?", (entry.ref.ref_id,),
+                ).fetchall()
+                assert len(identities) == 1 and isinstance(identities[0][0], str)
+                identity = identities[0]
                 if identity[0] not in history_message_ids:
                     history_message_ids.append(identity[0])
         checkpoint = cursor.execute(
@@ -357,24 +364,33 @@ def _audit_attempt(
         assert channel is not None and channel["storage_kind"] == "rollout_view"
         output_rows = cursor.execute(
             "SELECT item_sequence, jsonl_offset, jsonl_length FROM item_catalog WHERE execution_id=? "
-            "AND semantic_kind IN ('assistant_output', 'reasoning') "
+            "AND semantic_kind IN ('assistant_output', 'reasoning', 'tool_call', 'tool_result') "
             "AND json_extract(projection_manifest_json, '$.projection_identity.model_call_id')=? "
             "ORDER BY item_sequence",
             (reference["execution_id"], reference["callback_model_call_id"]),
         ).fetchall()
         with index.with_name("rollout.jsonl").open("rb") as stream:
-            outputs = [RolloutCanonicalReadMixin._read_v2_item_at(
+            carriers = [RolloutCanonicalReadMixin._read_v2_item_at(
                 connection, stream, sequence=row[0], offset=row[1], length=row[2],
             ) for row in output_rows]
         # 原始 stream/shadow 仍留在 canonical；checkpoint/history 按已提交的替代身份投影。
-        superseded = superseded_item_ids(outputs)
+        # 工具组择一需要同次真实结果，不能只看 call 就把已闭合 checkpoint carrier 当 shadow。
+        superseded = superseded_item_ids(carriers)
+        outputs = [item for item in carriers if item.semantic_kind != 'tool_result']
         output_ids = [item.item_id for item in outputs if item.item_id not in superseded]
         if succeeded:
             assert output_ids, "同一次 callback 的真实输出必须进入 canonical checkpoint"
-        checkpoint_items = {item[0] for item in cursor.execute(
-            "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1",
+        checkpoint_anchors = cursor.execute(
+            "SELECT i.item_id, i.jsonl_offset, i.jsonl_length FROM context_view_items v "
+            "JOIN item_catalog i USING(item_id) WHERE v.view_id=? AND v.visible=1",
             (channel["context_view_id"],),
-        )}
+        ).fetchall()
+        # 消息通道只索引 group anchor；与正式恢复相同，按显式完整 group 取得伴随 reasoning。
+        with index.with_name("rollout.jsonl").open("rb") as stream:
+            checkpoint_items = {item.item_id for anchor in checkpoint_anchors for item in read_message_group(
+                connection, stream, offset=anchor[1], length=anchor[2],
+                read_item=RolloutCanonicalReadMixin._read_v2_item_at,
+            )}
         assert set(output_ids) <= checkpoint_items
         assert {entry.ref.ref_id for entry in snapshot.selection
                 if entry.included and entry.ref.ref_type == "canonical_item"} <= checkpoint_items
@@ -388,12 +404,14 @@ def _audit_attempt(
         "job_id": job_id, "dispatch_ref": reference, "checkpoint": dict(checkpoint),
         "messages_channel": dict(channel), "output_item_ids": output_ids, "selection": selection,
         "raw_output_item_ids": [item.item_id for item in outputs],
+        "checkpoint_anchor_item_ids": [anchor[0] for anchor in checkpoint_anchors],
+        "checkpoint_group_item_ids": sorted(checkpoint_items),
         "superseded_output_item_ids": sorted(superseded),
         "selected_history_message_ids": history_message_ids,
         "desired_selection_revision": desired_revision,
         "applied_toolset_revision": binding.applied_toolset_revision,
         "provider_succeeded": succeeded, "upstream_error": attempt["error"],
-        "upstream_model": attempt["model"], "checkpoint_scope": "post_model_node",
+        "upstream_model": attempt["model"], "checkpoint_scope": "latest_namespace_post_model_checkpoint",
         "handler_error": log["response"]["error"], "model_call": dict(model_call),
     }
     _save(artifacts / f"turn-{ordinal}-provenance-receipt.json", receipt)

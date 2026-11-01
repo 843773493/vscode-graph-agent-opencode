@@ -196,12 +196,13 @@ def _openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass(slots=True)
 class _ResponsesToolCall:
-    """同一 output item 的增量与完成值；完成事件只补发尚未投递的后缀。"""
+    """added 是参数快照，delta 是从头累积的正文；done 校验后只补发缺失后缀。"""
 
     item_id: str
     call_id: str
     name: str
-    arguments: str
+    added_arguments: str
+    arguments: str = ""
     completed: bool = False
 
     def append(self, delta: str) -> str:
@@ -211,6 +212,8 @@ class _ResponsesToolCall:
         return delta
 
     def finish(self, arguments: str) -> str:
+        if self.added_arguments and not arguments.startswith(self.added_arguments):
+            raise RuntimeError(f"Responses function_call 完成参数与 added 快照冲突: call_id={self.call_id}")
         if not arguments.startswith(self.arguments) or (self.completed and arguments != self.arguments):
             raise RuntimeError(f"Responses function_call 完成参数与已投递值冲突: call_id={self.call_id}")
         suffix = arguments[len(self.arguments):]

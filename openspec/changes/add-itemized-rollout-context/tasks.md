@@ -1453,3 +1453,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 最终 `real-provider-005` 为1 passed／183.98秒、exit0，经独立真实 Gateway／Backend 与已配置外部 Provider 生成三轮请求；核 sealed request hash、canonical output、稳定前缀、AGENTS 更新和三次 Backend 安全重启后的历史／日志内容、旧 assembly 规范化字节及 checkpoint 正文／引用不变。32 个 checkpoint 包含5个消息 snapshot、27个 delta，6份非空状态正文被多个 checkpoint 复用；不把该观察外推为完整存储收益基准。
 - Ruff、compileall、真实 Pyright 零诊断及两个 change 的 strict validation 通过；1470份采样源码在最终产品运行前后逐项一致，已知测试进程和两端口均回收。测试文件753行；非作者只读复审无finding，未独立跑测试。首轮旧纯文本 root 断言、第二轮旧 reasoning carrier 类型假设及中间静态失败原件保留；此前候选另一次完整通过不合并计数。
 - 准确命令、源码指纹、raw／实际退出码、失败归因、正式 run 路径和限定审查见 `out/tests/temp/itemized_provider_acceptance_20261101/artifacts/verification.json`。本片不新增工具循环、fork、Web、Windows、同步执行或硬退出证据，不替代7.5／8.3／全部 Section8；整体111/119及团队延期项保持未完成。未改产品、前端、公共 fixture、长回归驱动、共享 Debug 服务或其它会话独有改动。
+
+### 2026-11-01 7.5-E Responses 参数快照与真实工具循环补验（部分）
+
+- 真实 Gateway／Backend／外部 Provider 的独立随机三文件链暴露 Responses 参数重复：SDK 的 `output_item.added` 已含完整 JSON，后续 delta 又从头发送。修正为 added 只保留待核快照、delta 按序累积、done 校验快照与已投递前缀后补尾；双完成不重发，冲突及完成后的增量仍拒绝，terminal 尚有未完成工具参数明确失败，不做正文去重或空参数回退。唯一构造调用已迁齐，格式检查保留重复 JSON 反例。
+- 新增 `test_provider_tool_loop.py`，复用原启动 fixture 和只读审计器：严格三组依赖前次结果的工具调用、四次模型请求、原始／有效 carrier 身份及完整消息组、请求 hash／封存／selection／owner／顺序与正文 hash，规划安全重启后修改原文件再冷读并续聊。该完整场景尚未通过，不以测试存在代表验收完成。
+- 定向 Provider 单测最终104 passed／6.65秒；真实 HTTP Responses 工具循环 sync／async 2 passed／13.98秒，含冷 Saver 恢复。已保存的真实 SDK 51个 function 事件经正式转换器只产生一份原参数；该只读诊断未重请求网络、不验证 terminal。Ruff、compileall通过；Pyright完整HEAD基线与候选均25条既有诊断，按文件／AST owner／规则／完整消息／表达式逐项一致，两个 context 测试零诊断，不称全量类型通过。
+- 真实完整运行均保留：001 的产品三次调用完成，但测试误计 stream／checkpoint 双carrier，按正式择一及完整group修正；002 复现上述真实重复参数缺陷；003 修复后仍1 failed／223.09秒，180次Job轮询到限时仍running。其第三轮经历 ResponsesStreamOpenTimeoutError、RateLimitError 后回退成功，但回退模型传 `max_lines="none"` 被工具参数校验拒绝；最终模型调用由 teardown 取消，冷读／恢复续聊未执行。不得归为纯性能或宣称完整E2E通过；003 后仅补terminal guard与负例，以定向单测和真实HTTP补验，未再次请求外部Provider。补充负例首轮漏标既有 tool_test 用途，修正装具后通过，未放宽生产派发权限。
+- TODO（未完成）：外部 Provider 限流／开流长尾及回退工具参数纠错下的完整三文件链与安全重启续聊验收。保留既有轮询期限、严格身份／三组配对／四轮数量及响应断言；原始Provider错误随后被工具组完整性错误盖过最终分类的现象也保留作后续错误出口审计输入。独立只读审查范围内无finding，未跑测试；作者AST自查不替代7.5-F全局架构门。
+- 准确命令、源码前后指纹、raw／实际退出码、三轮存储保全、SDK事件与类型基线见 `out/tests/temp/provider_tool_loop_20261101/artifacts/verification.json` 及正式同名runs。此片不新增Web／Windows／同步完整Agent执行／fork／硬退出证据；7.5／8.3和整体111/119仍未完成。前端、公共fixture、长回归驱动、共享Debug及其它会话改动未纳入本片。

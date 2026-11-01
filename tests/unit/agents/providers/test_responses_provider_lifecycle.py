@@ -34,13 +34,21 @@ def responses_function_events():
         events = [SimpleNamespace(
             type="response.output_item.added", output_index=index,
             item={"type": "function_call", "id": f"fc_{index}", "call_id": f"call_{index}",
-                  "name": "invoke_extension_tool", "arguments": body if mode == "added" else ""},
+                  "name": "invoke_extension_tool",
+                  "arguments": body if mode in {"added", "added_and_delta", "added_and_partial"} else ""},
         ) for index, body in enumerate(arguments)]
-        if mode in {"partial", "complete"}:
+        if mode in {"partial", "complete", "added_and_partial"}:
             events.extend(SimpleNamespace(
                 type="response.function_call_arguments.delta", output_index=index,
-                item_id=f"fc_{index}", delta=body[:8] if mode == "partial" else body,
+                item_id=f"fc_{index}", delta=body[:8] if mode in {"partial", "added_and_partial"} else body,
             ) for index, body in enumerate(arguments))
+        elif mode == "added_and_delta":
+            # 完整快照之后仍从头发送分片，两个调用的分片交错到达。
+            for offset in range(0, max(map(len, arguments)), 5):
+                events.extend(SimpleNamespace(
+                    type="response.function_call_arguments.delta", output_index=index,
+                    item_id=f"fc_{index}", delta=body[offset:offset + 5],
+                ) for index, body in enumerate(arguments) if offset < len(body))
         for index, body in enumerate(arguments):
             events.extend([
                 SimpleNamespace(type="response.function_call_arguments.done", output_index=index,
@@ -54,7 +62,7 @@ def responses_function_events():
     return build
 
 
-@pytest.mark.parametrize("mode", ["done_only", "partial", "complete", "added"])
+@pytest.mark.parametrize("mode", ["done_only", "partial", "complete", "added", "added_and_delta", "added_and_partial"])
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_responses_done_arguments_preserve_parallel_calls_in_both_entries(
     monkeypatch: pytest.MonkeyPatch, responses_function_events, mode: str, asynchronous: bool,
@@ -87,11 +95,40 @@ async def test_responses_done_arguments_preserve_parallel_calls_in_both_entries(
     ]
 
 
-@pytest.mark.parametrize("failure", ["arguments", "item_id", "call_id", "name", "late_delta"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_responses_terminal_rejects_unconfirmed_added_arguments(
+    monkeypatch: pytest.MonkeyPatch, responses_function_events, asynchronous: bool,
+) -> None:
+    source = responses_function_events("added")
+    events = [*source[:2], source[-1]]
+
+    async def async_events():
+        for event in events:
+            yield event
+
+    async def open_async(**_payload):
+        return async_events()
+
+    monkeypatch.setattr("app.agents.providers.openai_responses.litellm.responses", lambda **_payload: iter(events))
+    monkeypatch.setattr("app.agents.providers.openai_responses.litellm.aresponses", open_async)
+    model = BoxteamOpenAIResponsesModel(
+        model="gpt-test", api_key="test-key", custom_llm_provider="openai", invocation_purpose="tool_test",
+    )
+    with pytest.raises(RuntimeError, match="工具参数未完成") as failure:
+        if asynchronous:
+            _ = [chunk async for chunk in model._astream([HumanMessage(content="调用工具")])]
+        else:
+            list(model._stream([HumanMessage(content="调用工具")]))
+    assert is_provider_failure(failure.value)
+
+
+@pytest.mark.parametrize("failure", ["arguments", "added_arguments", "item_id", "call_id", "name", "late_delta"])
 def test_responses_completion_conflicts_fail_before_dispatch(responses_function_events, failure: str) -> None:
     events = responses_function_events("complete")
     if failure == "arguments":
         events[4].arguments = '{"lane":"other"}'
+    elif failure == "added_arguments":
+        events[0].item["arguments"] = '{"lane":"other"}'
     elif failure == "item_id":
         events[4].item_id = "fc_1"
     elif failure in {"call_id", "name"}:

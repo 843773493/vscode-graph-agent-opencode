@@ -190,7 +190,7 @@ def test_tool_call_chunks_without_any_field_fails():
     assert "name" in item.remediation
 
 
-@pytest.mark.parametrize("arguments", ["", '{"path":', "[]", "null"])
+@pytest.mark.parametrize("arguments", ["", '{"path":', "[]", "null", '{"path":"README.md"}{"path":"README.md"}'])
 def test_completed_stream_rejects_missing_or_incomplete_tool_arguments(arguments: str) -> None:
     assert not check_tool_call_arguments_complete([
         _chunk(tool_call_chunks=[{"name": "probe", "args": arguments, "id": "call_one", "index": 0}]),

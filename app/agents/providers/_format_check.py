@@ -364,7 +364,7 @@ def check_tool_call_arguments_complete(chunks: Sequence[ChatGenerationChunk]) ->
     return FormatCheckItem(
         name="完成流的工具参数必须是完整 JSON 对象", passed=not invalid,
         detail=f"不完整调用: {invalid}" if invalid else "",
-        remediation="在 Responses 参数 done/output_item.done 中补齐未投递后缀并核对冲突，不能仅凭 added 将空参数解释为 {}。",
+        remediation="Responses added 参数仅作快照；delta 从头累积，done 核快照并补齐未投递后缀，不能重复拼接或把空参数解释为 {}。",
     )
 
 

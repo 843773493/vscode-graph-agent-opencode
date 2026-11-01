@@ -351,6 +351,9 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                 raise RuntimeError(
                     f"Responses 流协议错误: {event_type} terminal event 缺少 response"
                 )
+            unfinished = [call.call_id for call in part_state.responses_tool_calls.values() if not call.completed]
+            if unfinished:
+                raise RuntimeError(f"Responses 流协议错误: terminal event 到达时工具参数未完成: {unfinished}")
             record_upstream_response(response)
             usage = getattr(response, "usage", None)
             metadata = {
@@ -412,7 +415,7 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
                             {
                                 "type": "tool_call_chunk",
                                 "name": name,
-                                "args": arguments,
+                                "args": "",
                                 "id": call_id,
                                 "index": output_index,
                             }
