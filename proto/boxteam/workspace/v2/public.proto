@@ -2133,6 +2133,8 @@ message TurnDetailDTO {
   int64 root_logical_item_ordinal = 25;
   string source_view_id = 26;
   int64 source_view_revision = 27;
+  // 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。
+  optional bool tool_summary_truncated = 28;
 }
 
 message TurnHistoryLoadRequest {
@@ -2294,6 +2296,8 @@ message TurnSummaryDTO {
   int64 root_logical_item_ordinal = 26;
   string source_view_id = 27;
   int64 source_view_revision = 28;
+  // 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。
+  optional bool tool_summary_truncated = 29;
 }
 
 message TurnThinkingBlockDTO {

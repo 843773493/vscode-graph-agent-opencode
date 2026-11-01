@@ -9284,6 +9284,13 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
    * @generated from field: int64 source_view_revision = 27;
    */
   sourceViewRevision: bigint;
+
+  /**
+   * 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。
+   *
+   * @generated from field: optional bool tool_summary_truncated = 28;
+   */
+  toolSummaryTruncated?: boolean | undefined;
 };
 
 /**
@@ -9990,6 +9997,13 @@ export declare type TurnSummaryDTO = Message<"boxteam.workspace.v2.TurnSummaryDT
    * @generated from field: int64 source_view_revision = 28;
    */
   sourceViewRevision: bigint;
+
+  /**
+   * 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。
+   *
+   * @generated from field: optional bool tool_summary_truncated = 29;
+   */
+  toolSummaryTruncated?: boolean | undefined;
 };
 
 /**

@@ -2169,6 +2169,8 @@ export interface TurnDetailDTO {
   root_logical_item_ordinal: number;
   source_view_id: string;
   source_view_revision: number;
+  /** 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。 */
+  tool_summary_truncated?: boolean | undefined;
 }
 
 export interface TurnHistoryLoadRequest {
@@ -2340,6 +2342,8 @@ export interface TurnSummaryDTO {
   root_logical_item_ordinal: number;
   source_view_id: string;
   source_view_revision: number;
+  /** 工具摘要超出展示预算时为 true；沿用历史投影的截断结果。 */
+  tool_summary_truncated?: boolean | undefined;
 }
 
 export interface TurnThinkingBlockDTO {
@@ -16349,6 +16353,7 @@ function createBaseTurnDetailDTO(): TurnDetailDTO {
     root_logical_item_ordinal: 0,
     source_view_id: "",
     source_view_revision: 0,
+    tool_summary_truncated: undefined,
   };
 }
 
@@ -16400,6 +16405,9 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
         : 0,
       source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
       source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+      tool_summary_truncated: isSet(object.tool_summary_truncated)
+        ? globalThis.Boolean(object.tool_summary_truncated)
+        : undefined,
     };
   },
 
@@ -16486,6 +16494,9 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     if (message.source_view_revision !== 0) {
       obj.source_view_revision = Math.round(message.source_view_revision);
     }
+    if (message.tool_summary_truncated !== undefined) {
+      obj.tool_summary_truncated = message.tool_summary_truncated;
+    }
     return obj;
   },
 
@@ -16523,6 +16534,7 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     message.root_logical_item_ordinal = object.root_logical_item_ordinal ?? 0;
     message.source_view_id = object.source_view_id ?? "";
     message.source_view_revision = object.source_view_revision ?? 0;
+    message.tool_summary_truncated = object.tool_summary_truncated ?? undefined;
     return message;
   },
 };
@@ -17324,6 +17336,7 @@ function createBaseTurnSummaryDTO(): TurnSummaryDTO {
     root_logical_item_ordinal: 0,
     source_view_id: "",
     source_view_revision: 0,
+    tool_summary_truncated: undefined,
   };
 }
 
@@ -17376,6 +17389,9 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
         : 0,
       source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : "",
       source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+      tool_summary_truncated: isSet(object.tool_summary_truncated)
+        ? globalThis.Boolean(object.tool_summary_truncated)
+        : undefined,
     };
   },
 
@@ -17465,6 +17481,9 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     if (message.source_view_revision !== 0) {
       obj.source_view_revision = Math.round(message.source_view_revision);
     }
+    if (message.tool_summary_truncated !== undefined) {
+      obj.tool_summary_truncated = message.tool_summary_truncated;
+    }
     return obj;
   },
 
@@ -17503,6 +17522,7 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     message.root_logical_item_ordinal = object.root_logical_item_ordinal ?? 0;
     message.source_view_id = object.source_view_id ?? "";
     message.source_view_revision = object.source_view_revision ?? 0;
+    message.tool_summary_truncated = object.tool_summary_truncated ?? undefined;
     return message;
   },
 };
