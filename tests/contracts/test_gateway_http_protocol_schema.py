@@ -20,6 +20,7 @@ from app.schemas.gateway.diagnostics import (
     GatewayHealthDTO,
 )
 from app.schemas.gateway.directory import GatewayDirectoryListDTO
+from app.schemas.gateway.lifecycle import GatewayRuntimeBlockerDTO
 from app.schemas.gateway.native_directories import NativeDirectoryBindRequest
 from app.schemas.gateway.port_forwarding import (
     ChangePortForwardLabelRequest,
@@ -249,6 +250,26 @@ def test_gateway_service_status_follows_workspace_route_and_keeps_business_valid
         GatewayServiceStatusDTO.model_validate({**service.model_dump(), "status": "unknown"})
 
 
+def test_gateway_runtime_blocker_follows_lifecycle_routes_and_keeps_business_validation(
+    gateway_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(gateway_openapi)
+    schemas = gateway_openapi["components"]["schemas"]
+    for action, model in (("start", "GatewayRuntimeStateResultDTO"), ("stop", "GatewayRuntimeStateResultDTO"),
+                          ("restart-safe", "GatewayRuntimeRestartResultDTO"), ("restart-force", "GatewayRuntimeRestartResultDTO")):
+        response = gateway_openapi["paths"][f"/api/gateway/workspaces/{{workspace_id}}/runtime/{action}"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+        envelope = schemas[response["$ref"].rsplit("/", 1)[1]]
+        assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/" + model)
+        assert schemas[model]["properties"]["blockers"]["items"]["$ref"].endswith("/GatewayRuntimeBlockerDTO")
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+    assert gateway_openapi == original
+    blocker = GatewayRuntimeBlockerDTO(kind="job", workspace_id="workspace-a", resource_id="job-a",
+                                       session_id="session-a", status="running")
+    assert blocker.detail is None
+    with pytest.raises(ValidationError, match="kind"):
+        GatewayRuntimeBlockerDTO.model_validate({**blocker.model_dump(), "kind": "unknown"})
+
+
 @pytest.mark.parametrize("name", [
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
@@ -257,7 +278,7 @@ def test_gateway_service_status_follows_workspace_route_and_keeps_business_valid
     "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO", "CreateGatewayUserRequest",
     "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
     "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
-    "GatewayServiceStatusDTO",
+    "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
 ])
 def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -309,6 +330,12 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("GatewayServiceStatusDTO", "local_port", {"type": "string"}),
     ("GatewayServiceStatusDTO", "remote_port", {"type": "string"}),
     ("GatewayServiceStatusDTO", "error", {"type": "array", "items": {"type": "string"}}),
+    ("GatewayRuntimeBlockerDTO", "kind", {"type": "integer"}),
+    ("GatewayRuntimeBlockerDTO", "workspace_id", {"type": "integer"}),
+    ("GatewayRuntimeBlockerDTO", "resource_id", {"type": "integer"}),
+    ("GatewayRuntimeBlockerDTO", "session_id", {"type": "integer"}),
+    ("GatewayRuntimeBlockerDTO", "status", {"type": "integer"}),
+    ("GatewayRuntimeBlockerDTO", "detail", {"type": "array", "items": {"type": "string"}}),
 ])
 def test_gateway_schema_rejects_nested_public_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -331,7 +358,7 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
     "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
     "GatewayDiagnosticLogDTO", "GatewayDiagnosticWorkspaceDTO", "GatewayDiagnosticProcessDTO",
     "GatewayDiagnosticLoggingStateDTO", "GatewayDiagnosticLogSinkDTO",
-    "GatewayServiceStatusDTO",
+    "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

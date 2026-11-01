@@ -73,7 +73,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO",
         "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
         "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
-        "GatewayServiceStatusDTO",
+        "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
         "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO",
         "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
         "AddLocalWorkspaceRequest", "UpdateGatewayWorkspaceRequest", "ReorderGatewayWorkspacesRequest",
