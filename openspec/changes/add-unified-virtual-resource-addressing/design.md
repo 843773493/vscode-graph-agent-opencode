@@ -417,4 +417,6 @@ Gateway profile 的原生存储与 JSON/UTF-8 解码失败复用 `failure_detail
 
 原 profile 原子写入在 `fdopen` 成功后才移交临时描述符，成功移交后只由原 stream 关闭；构造失败时先关闭尚未移交的描述符，仍继续定点清理本次临时文件。关闭或清理再失败均附在原异常 notes，保留原异常实例及中断，不能以次错替换主失败；普通 HTTP 继续消费既有 owner 的公开事实，完整位置与次错只留诊断。原 replace、文件同步、私有权限、创建回滚及删除顺序保持，不增加另一文件 writer 或清理扫描。
 
+ResourceIdentity 的唯一值校验器保持接受范围、异常类别与字段规则，拒绝原值只随原异常 notes 保留；descriptor/provenance 同样消费该规则，不增加领域日志 I/O。上下文工具在原请求解析出口复用 `report_failure` 记录诊断，再抛原 ToolException；日志次错不能阻止拒绝或替换原原因。执行事实与请求投影仍保留各自 typed 身份，模型投影沿既有择一规则保持结果唯一及原调用顺序，不能按正文相等合并，也不改写模型原始调用输入。
+
 旧生成器显式导入沿原`import_generator`校验分支记录新失败事实：reason只包含阶段、task/workspace身份与异常类别，完整原错由共享诊断出口保留。安装事务、needs_attention与修复后显式恢复保持原链；同一导入幂等重试不覆盖新revision，旧运行的历史error和generation正文不被新校验结果改写。此处不增加管理例外，也不将受支持provider/版本的明确不可用说明误当作原生异常正文。

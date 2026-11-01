@@ -134,11 +134,14 @@ def _require_identity(field_name: str, value: str) -> None:
     if not isinstance(value, str) or not value:
         raise ValueError(f"ResourceIdentity {field_name} 必须是非空字符串")
     if any(marker in value for marker in _IDENTITY_FORBIDDEN):
-        raise ValueError(
-            f"ResourceIdentity {field_name} 不得携带路径/URI/credential 形态: {value!r}"
-        )
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise ValueError(f"ResourceIdentity {field_name} 不得携带控制字符: {value!r}")
+        rule = "不得携带路径/URI/credential 形态"
+    elif any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        rule = "不得携带控制字符"
+    else:
+        return
+    error = ValueError(f"ResourceIdentity {field_name} {rule}")
+    error.add_note(f"被拒绝的 ResourceIdentity {field_name}: {value!r}")
+    raise error
 
 
 def validate_resource_identity(value: str) -> ResourceIdentity:

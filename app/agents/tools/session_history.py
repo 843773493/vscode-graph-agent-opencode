@@ -11,6 +11,7 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
 )
 from app.agents.custom_tools import CustomToolFactoryContext
+from app.core.failures import report_failure
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
@@ -92,7 +93,7 @@ def _request_identity(
             local_gateway_id=get_current_gateway_id(),
         )
     except ValueError as error:
-        raise ToolException(str(error)) from error
+        raise ToolException(report_failure(error, detail=str(error))) from error
     return resource
 
 

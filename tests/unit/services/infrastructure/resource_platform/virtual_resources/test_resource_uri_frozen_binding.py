@@ -22,6 +22,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResolvedResourceHandle,
     ResourceProvenance,
     SemanticResourceDescriptor,
+    validate_resource_identity,
 )
 
 _CAPS = frozenset({OPERATION_ACTIVATE})
@@ -164,6 +165,36 @@ def test_provenance_hides_physical_paths() -> None:
     rendered = repr(provenance)
     assert "/home" not in rendered
     assert ".boxteams" not in rendered
+
+
+@pytest.mark.parametrize("identity", [
+    "/private/resource-id", r"C:\private\resource-id", r"\\target\private\resource-id", "resource\x00id",
+])
+@pytest.mark.parametrize("owner", ["identity", "descriptor-resource", "descriptor-source", "provenance-resource", "provenance-source"])
+def test_identity_rejection_keeps_original_only_in_diagnostic_notes(identity: str, owner: str) -> None:
+    uri = _gateway_uri("code-review")
+    fields = {"resource_id": "res-gw-1", "source_id": "src-gw-1", "display_uri": uri,
+              "semantic_revision": "rev-1", "semantic_hash": "hash-1"}
+    field_name = "resource_identity" if owner == "identity" else "resource_id" if owner.endswith("resource") else "source_id"
+    rule = "不得携带控制字符" if "\x00" in identity else "不得携带路径/URI/credential 形态"
+    with pytest.raises(ValueError) as caught:
+        if owner == "identity":
+            validate_resource_identity(identity)
+        elif owner.startswith("descriptor"):
+            SemanticResourceDescriptor(**{**fields, "kind": "skills", field_name: identity})
+        else:
+            ResourceProvenance(**{**fields, field_name: identity})
+    error = caught.value
+    assert error.args == (f"ResourceIdentity {field_name} {rule}",)
+    assert error.__notes__ == [f"被拒绝的 ResourceIdentity {field_name}: {identity!r}"]
+    assert fields == {"resource_id": "res-gw-1", "source_id": "src-gw-1", "display_uri": uri,
+                      "semantic_revision": "rev-1", "semantic_hash": "hash-1"}
+    assert validate_resource_identity("res-gw-1") == "res-gw-1"
+    descriptor = SemanticResourceDescriptor(**fields, kind="skills")
+    provenance = ResourceProvenance(**fields)
+    assert descriptor.resource_id == provenance.resource_id == "res-gw-1"
+    assert descriptor.source_id == provenance.source_id == "src-gw-1"
+    assert descriptor.display_uri == provenance.display_uri == uri
 
 
 def test_handle_rejects_locator_style_snapshot_ref() -> None:

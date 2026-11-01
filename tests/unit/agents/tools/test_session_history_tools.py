@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,7 @@ from app.agents.tools.session_history import (
     create_read_context_tool,
     create_search_context_tool,
 )
+from app.core import failures
 from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
@@ -156,6 +158,79 @@ async def test_read_rejects_non_boxteam_resource_as_tool_error(history_context):
                                 "args": {**_session_input(), "uri": "file:///context.jsonl"}})
     assert isinstance(result, ToolMessage) and result.status == "error"
     assert "boxteam://" in result.text
+
+
+@pytest.mark.parametrize("identity", [
+    "/private/context/resource-id", r"C:\private\context\resource-id", r"\\target\private\context\resource-id",
+])
+@pytest.mark.parametrize("operation", ["read", "search"])
+@pytest.mark.parametrize("enveloped", [False, True])
+async def test_context_identity_rejection_keeps_path_out_of_model_result_and_allows_correction(
+    history_context, communication_probe, caplog: pytest.LogCaptureFixture,
+    identity: str, operation: str, enveloped: bool,
+):
+    valid = _session_input()
+    communication_probe.read_result = SessionContextReadResultDTO.model_validate({**valid, "view": "overview", "revision": "frozen"})
+    if operation == "search":
+        valid["query"] = "needle"
+    target = (create_read_context_tool if operation == "read" else create_search_context_tool)(history_context)
+    tool = create_extension_tool_invoker_tool(
+        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+    ) if enveloped else target
+    invalid = {**valid, "resource_identity": identity}
+    call = {"type": "tool_call", "id": "invalid-resource-identity", "name": tool.name,
+            "args": {"tool_name": target.name, "arguments": invalid} if enveloped else invalid}
+    result = await tool.ainvoke(call)
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    assert (result.name, result.tool_call_id) == (tool.name, call["id"])
+    assert result.text == "ResourceIdentity resource_identity 不得携带路径/URI/credential 形态"
+    assert identity not in result.text and "private" not in result.model_dump_json()
+    assert communication_probe.calls == history_context.session_context_query_service.calls == []
+    assert history_context.workspace_session_context_client.calls == history_context.session_target_resolver.calls == []
+    assert invalid == {**valid, "resource_identity": identity}
+    errors = [record.exc_info[1] for record in caplog.records if record.exc_info]
+    assert len(errors) == 1 and isinstance(errors[0], ValueError)
+    assert errors[0].__notes__ == [f"被拒绝的 ResourceIdentity resource_identity: {identity!r}"]
+
+    call["id"] = "corrected-resource-identity"
+    call["args"] = {"tool_name": target.name, "arguments": valid} if enveloped else valid
+    corrected = await tool.ainvoke(call)
+    assert isinstance(corrected, ToolMessage) and corrected.status == "success"
+    assert (corrected.name, corrected.tool_call_id) == (tool.name, call["id"])
+    assert json.loads(corrected.text)["resource_identity"] == valid["resource_identity"]
+    assert len(communication_probe.calls if operation == "read" else history_context.session_context_query_service.calls) == 1
+
+
+async def test_identity_diagnostic_write_failure_preserves_rejection_and_next_call(
+    history_context, communication_probe, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    blocker = tmp_path / "diagnostic-private"
+    blocker.write_text("普通文件不是日志目录。", encoding="utf-8")
+    captured: list[BaseException] = []
+
+    def blocked_sink(*_args: object, exc_info: BaseException) -> None:
+        captured.append(exc_info)
+        (blocker / "service.log").write_text("原诊断", encoding="utf-8")
+
+    monkeypatch.setattr(failures.logger, "error", blocked_sink)
+    valid = _session_input()
+    communication_probe.read_result = SessionContextReadResultDTO.model_validate({**valid, "view": "overview", "revision": "frozen"})
+    tool = create_read_context_tool(history_context)
+    result = await tool.ainvoke({"type": "tool_call", "id": "diagnostic-failed", "name": tool.name,
+                                "args": {**valid, "resource_identity": "/private/context/resource-id"}})
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    assert result.text == (
+        "ResourceIdentity resource_identity 不得携带路径/URI/credential 形态, diagnostic_sink_error=NotADirectoryError"
+    )
+    assert "private" not in result.model_dump_json()
+    assert len(captured) == 1 and isinstance(captured[0], ValueError)
+    assert captured[0].args == ("ResourceIdentity resource_identity 不得携带路径/URI/credential 形态",)
+    assert captured[0].__notes__[0] == "被拒绝的 ResourceIdentity resource_identity: '/private/context/resource-id'"
+    assert str(blocker) in captured[0].__notes__[1] and "NotADirectoryError" in captured[0].__notes__[1]
+    assert communication_probe.calls == []
+    corrected = await tool.ainvoke({"type": "tool_call", "id": "after-diagnostic-failed", "name": tool.name, "args": valid})
+    assert isinstance(corrected, ToolMessage) and corrected.status == "success"
+    assert corrected.tool_call_id == "after-diagnostic-failed" and len(communication_probe.calls) == 1
 
 
 async def test_custom_invoker_propagates_revision_conflict(history_context, communication_probe):

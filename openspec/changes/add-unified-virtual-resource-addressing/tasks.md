@@ -1848,3 +1848,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原完整 schema 摘要与封存 dispatch binding 的字段转换只将原因类别附入公开说明，动态键及原值留直接 cause；错误类别、既有错误码、输入及封存绑定不可变性、hash 校验与修正后原入口恢复保持。没有新增日志 I/O、校验器、回退或存储。
 - 完整 HEAD 归档叠加新增测试，6 项 POSIX／盘符／UNC 外泄反例均失败于公开说明；候选48项关联回归和2项缓存失败节点复验通过。初次宽跑90秒退出124，无完整结算，不计整体通过；其两个失败位置由收集顺序定位到新增Windows／UNC原因断言，Python的int异常使用repr转义，现改为核对原异常参数，未放宽公开说明或恢复断言。一次使用缓存中的旧节点名导致收集退出4，也不计业务结果。
 - Ruff、compileall、本change strict及真实Pyright通过，后者零诊断。准确命令、源码指纹、原件及退出码见`out/tests/temp/mcp_binding_errors_20261101/artifacts/verification.json`。本片为绑定构造和恢复入口的定向单测，不代完整产品执行、Backend重启、Gateway、Web或Windows实机；未改前端、公共fixture、共享debug及他人暂存。2.2／7.2仍未勾，整体51/53。
+
+### 2026-11-01 上下文工具资源身份拒绝（2.2／7.2部分收口）
+
+- 唯一 ResourceIdentity 校验保持规则，只将非法原值移至原异常 notes；上下文工具复用原诊断出口，日志次错不替换拒绝。完整 HEAD 归档的32项新增反例均复现原值回显；候选441项不同单测／契约通过，Ruff、Pyright零诊断、compileall和本change strict通过。
+- 新消息入口场景复用model_stream，1 passed／46.95秒：六次POSIX／盘符／UNC拒绝不进入业务查询，两次纠正调用沿原owner成功；核原调用输入不变、执行事实与请求投影各自身份、模型结果唯一及顺序、三份assembly owner与request_hash。首轮新测试误将两类物理记录当作单一结果，依据原写入及投影合同修正取数口径，未改存储或放宽身份断言；临时误用不存在的uv pyright入口也保留失败原件。
+- 命令、前后指纹和原始结果见`out/tests/temp/resource_identity_errors_20261101/artifacts/verification.json`。业务HTTP为进程内ASGI，不代独立Gateway业务网络、Web、Backend硬重启或Windows实机；未改前端、公共fixture、长回归driver、共享debug和他人暂存。2.2／7.2仍未勾，整体51/53，团队与显式MCP持有延期保持。

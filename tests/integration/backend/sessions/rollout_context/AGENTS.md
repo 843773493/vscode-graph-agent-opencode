@@ -16,3 +16,4 @@
 
 - 使用 pytest fixture 注入；真实 SQLite/JSONL 必须放在同名正式测试输出中。
 - 失败路径必须同时断言明确错误和已提交数据未被错误改写。
+- `test_resource_identity_errors.py` 经消息入口和 model_stream 验证拒绝及纠正调用；执行事实与请求投影分别核对 typed 身份，再核模型投影唯一性与顺序，不把物理记录顺序当作并发调用的逻辑顺序。
