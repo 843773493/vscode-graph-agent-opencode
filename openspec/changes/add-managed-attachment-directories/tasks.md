@@ -859,3 +859,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - Terminal／Browser owner迁齐共享operations异步上下文，移除重复finally。正常退出直接等待原close；主体已有错误或取消才屏蔽后续取消排空，保留主体原对象及迟到释放错误cause，原资源锁和Thread holder覆盖结算。同operation显式重试原lease，不改变预算、账本或外部动作。
 - 新增16项全部通过，相关后端回归1078 passed／67.61秒。完整旧生产归档叠加最终测试为8 failed／8 passed，分别检出正常收尾吞首次取消及释放写盘错误替换主体原错。新增装具先前误认锁返回值、额外持有无关operation holder的失败原件保留；最终隔离装具而不放宽holder、身份或异常断言。
 - Ruff、compileall及OpenSpec strict通过；Pyright原新同一条既存ResourceTransport属性诊断按文件、规则、完整消息、词法owner及最窄AST一致，新测试零诊断。准确命令、源码指纹、原输出／退出码和作者结构审查见`out/tests/temp/resource_operation_exit_20261101/artifacts/verification.json`。使用原owner、真实账本和OS holder，外部transport为替身，不替代真实HTTP／PTY／Chromium或Windows验收；完整旧代接管、原生I/O抢占及整个operation／shutdown期限仍TODO，5.2／5.4与21/23保持未完成。未改另一会话的Web迁移、回归driver、共享暂存或debug。
+
+### 2026-11-01 真实 Workbench 资源补验（5.2／5.4适用证据）
+
+- 复用唯一正式 `integration-web-persistent-resources`，两参数2 passed／176.36秒，最终退出0，Gateway清理完成并释放原集成名额。真实Gateway、PTY、Chromium验证工作区保留资源在安全重启后仍可操作、跨Thread关联／解除、revision冲突后重读、删除Session后继续使用，以及工作区Browser创建预览和删除；模型使用显式model_stream回放。
+- 2289份采样源码前后无变化；正式`run-0aa95245e35e`的`workbench-build.json`及稳定dist保留，可供迁移会话复核。三个阶段均无pageerror，但不称控制台／网络全净：删除冲突409为显式注入，Session查询404发生在提交删除后，另一次Terminal列表409发生在停止／删除阶段，原驱动未保存其响应正文，具体原因仍未核实。
+- 准确命令、原始输出、源码指纹、三个阶段回执和清理证据见`out/tests/temp/resource_web_acceptance_20261101/artifacts/verification.json`。不替代首次取消、未知执行终止、整个operation／shutdown期限或Windows验收，5.2／5.4及21/23保持未完成；未修改正式driver、公共fixture、另一会话的迁移实现或共享debug。
