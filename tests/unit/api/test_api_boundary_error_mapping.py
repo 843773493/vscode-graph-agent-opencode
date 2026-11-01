@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError
 
 from app.api import agents as agents_api
 from app.api import context as context_api
@@ -216,6 +217,33 @@ def test_context_internal_validation_is_server_failure_without_echo(
     # 路由不改写内部校验正文，原异常实例及动态字段位置只进入统一诊断。
     diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is service.error]
     assert len(diagnostics) == 1 and "context-response-sentinel" in caplog.text
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+@pytest.mark.parametrize("native", ["/private/context-response-sentinel", r"C:\private\context-response-sentinel", r"\\target\private\context-response-sentinel"])
+def test_context_internal_serialization_is_server_failure_without_echo(
+    context_boundary_client: tuple[TestClient, _ContextBoundaryService], operation: str, native: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, service = context_boundary_client
+    digest = "sha256:jcs:v1:" + "a" * 64
+    resource = SessionContextResourceDTO.model_validate({
+        "display_uri": "boxteam://workspace/context-publication/resources/files/root/file.txt",
+        "resource_kind": "file", "owner_scope": "workspace", "facet": "content",
+        "revision": digest, "availability": "available", "provenance_ref": {"token": digest},
+    }).model_copy(update={"display_uri": native})
+    with pytest.raises(PydanticSerializationError) as captured:
+        resource.model_dump_json()
+    service.error = captured.value
+    response = client.post(f"/api/v1/context/{operation}", json=_context_body(operation))
+    assert response.status_code == 500, response.text
+    assert response.json() == {"code": 500, "message": "请求处理失败: stage=http_request, error=PydanticSerializationError",
+                               "data": None, "request_id": "req-context-boundary"}
+    assert response.headers["X-Request-ID"] == "req-context-boundary"
+    assert "context-response-sentinel" not in response.text and "display_uri" not in response.text
+    assert service.calls == 1 and resource.display_uri == native
+    diagnostics = [record for record in caplog.records if record.exc_info and record.exc_info[1] is service.error]
+    assert len(diagnostics) == 1
 
 
 @pytest.mark.parametrize("operation", ["read", "search"])

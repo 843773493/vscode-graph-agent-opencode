@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.core.resource_uri import parse_resource_uri
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
@@ -47,7 +47,11 @@ def _validate_context_uri(value: str) -> str:
     return value
 
 
-SessionContextURI = Annotated[str, AfterValidator(_validate_context_uri)]
+SessionContextURI = Annotated[
+    str,
+    AfterValidator(_validate_context_uri),
+    PlainSerializer(_validate_context_uri, return_type=str),
+]
 
 
 class SessionContextReadRequest(BaseModel):

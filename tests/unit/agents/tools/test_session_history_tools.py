@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -208,7 +209,10 @@ async def test_identity_diagnostic_write_failure_preserves_rejection_and_next_ca
     blocker.write_text("普通文件不是日志目录。", encoding="utf-8")
     captured: list[BaseException] = []
 
-    def blocked_sink(*_args: object, exc_info: BaseException) -> None:
+    def blocked_sink(
+        *_args: object, exc_info: BaseException, extra: Mapping[str, object] | None = None,
+    ) -> None:
+        assert extra is None
         captured.append(exc_info)
         (blocker / "service.log").write_text("原诊断", encoding="utf-8")
 
