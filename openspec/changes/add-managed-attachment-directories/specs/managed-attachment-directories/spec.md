@@ -338,6 +338,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 启动、显式重连或配置替换已经建立真实 SDK session，但原资源登记或关闭状态仍在线程池排队或写盘
 - **THEN** 每个 Server 的原 session task 串行等待同一账本登记，再发布就绪；SDK 上下文仍由原 task 退出，终态写盘结算后该 task 才结束。worker 不持目录 publication 锁，原取消和重复取消不能遗弃登记或 SDK 清理；关闭完成后不得又迟到发布 running，关闭中的候选也不得发布就绪。写盘失败保留最后持久状态和原错误，运行中断线后的终态写入次错立即交原 owner 报告，start／close 继续返回失败，不新增账本或重放连接。模型封存资格、调用占用的其它同步访问、原生 I/O 抢占和整个 shutdown 期限仍按任务 5.4 的未完成边界验收
 
+#### Scenario: Canonical 结果提交与原占用确认尚未结算
+
+- **WHEN** canonical 追加或工具终态提交、提交后的 MCP 资格确认或后台消息消费确认仍在写盘，调用者收到取消
+- **THEN** 提交与确认在同一个受保护 worker 中依次执行，保留原 Session／Thread 准入上下文，等待该 worker 结算后才传播取消；重复取消不遗弃原写入。提交失败不执行确认，确认失败保留原异常、已提交 item 身份及取消因果，不改写原结果。进程硬退出后的提交／确认窗口仍由既有恢复对账收敛，不新增账本或把多个 owner 的写入称为同一事务；共享 publication 锁隔离、其它同步入口和整个 operation／shutdown 期限仍按 5.4 未完成边界验收
+
 ### Requirement: 单个 Thread 清理失败不得停止其它 Thread 的周期回收
 
 闲置清理 SHALL 独立尝试每个候选 Thread；失败 SHALL 保留该 Thread 的 scope/generation 和未核实资源，并明确报告 owner 与原始原因。事件循环正常调度时，扫描对单个卸载任务的等待 SHALL 最多为 30 秒，到期明确报告尚未完成并继续其它候选 Thread。该预算 MUST NOT 被解释为外部资源已经停止；唯一在途卸载任务 SHALL 继续由原 owner 持有，后续扫描 MUST NOT 为同代重复发起清理，新 admission MUST 等原任务完成。迟到成功 SHALL 沿原链释放，迟到失败 SHALL 记录原始原因并保留状态供后续周期重试。周期 worker SHALL 记录整批异常并继续原周期，不得因单项失败永久停止或把失败声明为已卸载；任务取消与关闭 MUST 正常传播。

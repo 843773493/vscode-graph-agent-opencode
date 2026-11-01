@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
-from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.abstractions.turn_terminal_status import (
+    ToolResultCompletion,
+    TurnTerminalStatusWriter,
+)
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.phase_observer import observe_phase
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.orchestration.event_stream.contracts import CanonicalItemObserverError
 
@@ -49,7 +52,7 @@ class CanonicalItemSink:
         complete_tool = getattr(checkpointer, "commit_tool_result", None)
         if not callable(complete_tool):
             raise TypeError("canonical item sink 必须绑定 Saver commit_tool_result 端口")
-        self._complete_tool = complete_tool
+        self._complete_tool = cast(TurnTerminalStatusWriter, checkpointer).commit_tool_result
         self._session_id = session_id
         self._thread_id = thread_id
         self._checkpoint_ns = checkpoint_ns
@@ -64,20 +67,16 @@ class CanonicalItemSink:
         for item in typed_items:
             if item.semantic_kind == "tool_result" and item.tool_call_id is not None:
                 await observe_phase(item.tool_call_id, "canonical.tool_result.before_commit")
-        await asyncio.to_thread(
-            self._append_items,
-            self._session_id,
-            typed_items,
-            thread_id=self._thread_id,
-            checkpoint_ns=self._checkpoint_ns,
-        )
-        if self._committed_item_observer is not None:
-            try:
-                self._committed_item_observer(self._session_id, self._thread_id, typed_items)
-            except Exception as error:
-                raise CanonicalItemObserverError(
-                    error, committed_item_ids=tuple(item.item_id for item in typed_items),
-                ) from error
+
+        def commit() -> None:
+            self._append_items(
+                self._session_id, typed_items, thread_id=self._thread_id,
+                checkpoint_ns=self._checkpoint_ns,
+            )
+            self._observe_committed(typed_items)
+
+        # 提交与原账本确认共用一次 worker，取消不能留下仍在锁外写盘的原任务。
+        await run_sync_shielded(commit)
 
     async def complete_tool_result(self, completion: ToolResultCompletion) -> CanonicalItemRecord:
         """实时完成只提交原 admission 的通知；payload 创建权归 Saver。"""
@@ -85,18 +84,28 @@ class CanonicalItemSink:
         if (admission.session_id, admission.thread_id) != (self._session_id, self._thread_id):
             raise RuntimeError("工具终态 sink 与原 admission owner 不一致")
         await observe_phase(completion.tool_call_id, "canonical.tool_result.before_commit")
-        item = await asyncio.to_thread(
-            self._complete_tool, session_id=self._session_id, thread_id=self._thread_id,
-            job_id=admission.job_id, completion=completion, checkpoint_ns=self._checkpoint_ns,
-            # 未知结果是收尾观察；工具可能已经先于事件消费者提交真实结果。
-            recovery=completion.tool_outcome == "unknown",
-        )
+
+        def commit() -> CanonicalItemRecord:
+            item = self._complete_tool(
+                session_id=self._session_id, thread_id=self._thread_id,
+                job_id=admission.job_id, completion=completion, checkpoint_ns=self._checkpoint_ns,
+                # 未知结果是收尾观察；工具可能已经先于事件消费者提交真实结果。
+                recovery=completion.tool_outcome == "unknown",
+            )
+            self._observe_committed((item,))
+            return item
+
+        return await run_sync_shielded(commit)
+
+    def _observe_committed(self, items: Sequence[CanonicalItemRecord]) -> None:
+        # TODO(5.4)：MCP 确认仍持目录 publication 锁，其它同步入口及关闭总期限另行收口。
         if self._committed_item_observer is not None:
             try:
-                self._committed_item_observer(self._session_id, self._thread_id, (item,))
+                self._committed_item_observer(self._session_id, self._thread_id, items)
             except Exception as error:
-                raise CanonicalItemObserverError(error, committed_item_ids=(item.item_id,)) from error
-        return item
+                raise CanonicalItemObserverError(
+                    error, committed_item_ids=tuple(item.item_id for item in items),
+                ) from error
 
 
 __all__ = ["CanonicalItemSink", "StepEventPublisher"]
