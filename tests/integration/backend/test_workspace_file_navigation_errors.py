@@ -702,3 +702,40 @@ async def test_file_access_log_failure_preserves_original_result_and_retry(
             logger.removeHandler(handler)
         handler.close()
         assert blocked_log.read_bytes() == b"keep obstruction"
+
+
+@pytest.mark.parametrize(("kind", "native"), [
+    ("posix", "/private/file-publication"), ("drive", r"C:\private\file-publication"),
+    ("unc", r"\\target\private\file-publication"), ("file-url", "file:///private/file-publication"),
+])
+async def test_real_listing_cannot_publish_a_reference_damaged_after_construction(
+    file_case, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, kind: str, native: str,
+):
+    case = file_case
+    original_list = case.service.list_files
+
+    async def damaged_listing(**kwargs):
+        snapshot = await original_list(**kwargs)
+        snapshot.items.append(snapshot.items[0].model_copy(update={"path": native}))
+        return snapshot
+
+    before = file_rows(case)
+    with monkeypatch.context() as patch:
+        patch.setattr(case.service, "list_files", damaged_listing)
+        failed = await case.client.get("/api/v1/workspace/files", params={"path": case.listing["path"]},
+                                       headers={"X-Request-ID": "req-file-publication"})
+    assert failed.status_code == 500, failed.text
+    body = failed.json()
+    assert body["request_id"] == failed.headers["X-Request-ID"] == "req-file-publication"
+    assert "PydanticSerializationError" in body["message"]
+    assert native not in failed.text and "file-publication" not in body["message"]
+    assert any(record.exc_info and type(record.exc_info[1]).__name__ == "PydanticSerializationError"
+               for record in caplog.records)
+    assert file_rows(case) == before
+    restored = await case.client.get("/api/v1/workspace/files", params={"path": case.listing["path"]})
+    assert restored.status_code == 200 and restored.json()["data"] == case.listing
+    assert (case.directory / "seed.txt").read_bytes() == b"original\n"
+    assert file_rows(case) == before
+    (case.artifacts / f"file-reference-publication-{kind}.json").write_text(json.dumps({
+        "failed": body, "restored": restored.json(), "files_and_store_unchanged": True,
+    }, ensure_ascii=False, indent=2) + "\n")

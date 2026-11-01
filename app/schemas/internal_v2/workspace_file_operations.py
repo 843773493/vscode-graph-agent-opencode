@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.schemas.internal_v2.session_navigation.operations import (
@@ -34,12 +43,27 @@ class WorkspaceDirectoryKeyDTO(BaseModel):
             raise ValueError("目录键的工作区 URI 与执行 owner 不一致")
         return self
 
+    @model_serializer(mode="wrap")
+    def serialize_key(self, handler: SerializerFunctionWrapHandler):
+        # model_copy 不会执行模型校验；输出和落盘仍核原有根、scope及owner配对。
+        type(self).model_validate({name: getattr(self, name) for name in type(self).model_fields})
+        return handler(self)
+
 
 def validate_file_uri(value: str) -> str:
     parsed = parse_resource_uri(value)
     if parsed.kind not in {"files", "attachments"}:
         raise ValueError("文件引用必须使用 files 或 attachments 资源 URI")
     return parsed.display_uri
+
+
+def _serialize_file_uri(value: str):
+    # 构造和发布共用原有规范化，不处理文件正文或原生请求输入。
+    # 不声明独立返回schema，保留使用字段的minLength等既有公开结构约束。
+    return validate_file_uri(value)
+
+
+WorkspaceFileURI = Annotated[str, AfterValidator(validate_file_uri), PlainSerializer(_serialize_file_uri)]
 
 
 class WorkspaceDirectoryRevisionDTO(BaseModel):
@@ -50,24 +74,22 @@ class WorkspaceDirectoryRevisionDTO(BaseModel):
 
 class WorkspaceFileNodeDTO(BaseModel):
     name: str
-    path: str
+    path: WorkspaceFileURI
     kind: Literal["file", "directory", "symlink", "other"]
     has_children: bool = False
     size: int | None = None
     modified_at: str | None = None
-    _uri = field_validator("path")(validate_file_uri)
 
 
 class WorkspaceFileListDTO(BaseModel):
-    root_path: str
-    path: str
+    root_path: WorkspaceFileURI
+    path: WorkspaceFileURI
     items: list[WorkspaceFileNodeDTO] = Field(default_factory=list)
     truncated: bool = False
     limit: int = 500
     next_cursor: str | None = None
     directory_key: WorkspaceDirectoryKeyDTO
     directory_revision: int = Field(ge=1)
-    _uris = field_validator("root_path", "path")(validate_file_uri)
 
 
 class WorkspaceFileMutationIntentDTO(BaseModel):
@@ -106,11 +128,10 @@ class WorkspaceFileMutationIntentDTO(BaseModel):
 
 
 class WorkspaceFileOperationItemDTO(BaseModel):
-    path: str
+    path: WorkspaceFileURI
     kind: Literal["file", "directory"]
     state: Literal["pending", "published", "conflict", "unverified"]
     error: str | None = None
-    _uri = field_validator("path")(validate_file_uri)
 
 
 class WorkspaceFileOperationReceiptDTO(BaseModel):
@@ -124,14 +145,9 @@ class WorkspaceFileOperationReceiptDTO(BaseModel):
     items: list[WorkspaceFileOperationItemDTO] = Field(default_factory=list)
     directories: list[WorkspaceDirectoryRevisionDTO] = Field(default_factory=list)
     snapshots: list[WorkspaceFileListDTO] = Field(default_factory=list)
-    created_path: str | None = None
+    created_path: WorkspaceFileURI | None = None
     error_code: str | None = None
     error_detail: str | None = None
-
-    @field_validator("created_path")
-    @classmethod
-    def validate_created_path(cls, value: str | None) -> str | None:
-        return None if value is None else validate_file_uri(value)
 
 
 class WorkspaceFileOperationStatusDTO(BaseModel):

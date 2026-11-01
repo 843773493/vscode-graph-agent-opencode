@@ -9,7 +9,6 @@ from pydantic import (
     Field,
     JsonValue,
     SerializerFunctionWrapHandler,
-    field_validator,
     model_serializer,
 )
 
@@ -17,7 +16,7 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryRevisionDTO,
     WorkspaceFileListDTO,
     WorkspaceFileMutationIntentDTO,
-    validate_file_uri,
+    WorkspaceFileURI,
 )
 
 _LOCATION_FIELDS = frozenset({"root", "roots", "path", "paths", "location", "locations", "directory", "directories", "cwd"})
@@ -87,10 +86,9 @@ FileTreeShortcutSource = Literal["session", "workspace"]
 
 
 class WorkspaceFileRootsDTO(BaseModel):
-    workspace_uri: str
-    filesystem_uri: str
+    workspace_uri: WorkspaceFileURI
+    filesystem_uri: WorkspaceFileURI
     filesystem_label: str
-    _uris = field_validator("workspace_uri", "filesystem_uri")(validate_file_uri)
 
 
 class WorkspaceFileReferencesRequest(BaseModel):
@@ -98,24 +96,18 @@ class WorkspaceFileReferencesRequest(BaseModel):
 
 
 class WorkspaceFileReferencesDTO(BaseModel):
-    uris: list[str]
-
-    @field_validator("uris")
-    @classmethod
-    def validate_uris(cls, values: list[str]) -> list[str]:
-        return [validate_file_uri(value) for value in values]
+    uris: list[WorkspaceFileURI]
 
 
 class WorkspaceFileContentDTO(BaseModel):
-    root_path: str
-    path: str
+    root_path: WorkspaceFileURI
+    path: WorkspaceFileURI
     name: str
     content: str
     language: str
     size: int
     modified_at: str | None = None
     revision: str
-    _uris = field_validator("root_path", "path")(validate_file_uri)
 
 
 class WorkspaceFileUpdateRequest(BaseModel):
@@ -151,8 +143,7 @@ class WorkspaceFileWatchRequest(BaseModel):
 
 class WorkspaceFileChangeDTO(BaseModel):
     kind: Literal["create", "edit", "delete"]
-    path: str = Field(min_length=1)
-    _uri = field_validator("path")(validate_file_uri)
+    path: WorkspaceFileURI = Field(min_length=1)
 
 
 class WorkspaceFileChangeBatchDTO(BaseModel):
@@ -160,18 +151,12 @@ class WorkspaceFileChangeBatchDTO(BaseModel):
     overflow: bool
     directories: list[WorkspaceDirectoryRevisionDTO] = Field(default_factory=list)
     event_id: int = Field(default=0, ge=0)
-    invalidated_roots: list[str] = Field(default_factory=list)
+    invalidated_roots: list[WorkspaceFileURI] = Field(default_factory=list)
     snapshots: list[WorkspaceFileListDTO] = Field(default_factory=list)
-
-    @field_validator("invalidated_roots")
-    @classmethod
-    def validate_roots(cls, values: list[str]) -> list[str]:
-        return [validate_file_uri(value) for value in values]
 
 
 class WorkspaceFileRevealDTO(BaseModel):
-    path: str
-    _uri = field_validator("path")(validate_file_uri)
+    path: WorkspaceFileURI
 
 
 class FileTreeShortcutRequest(BaseModel):
@@ -180,10 +165,9 @@ class FileTreeShortcutRequest(BaseModel):
 
 
 class FileTreeShortcutDTO(BaseModel):
-    path: str
+    path: WorkspaceFileURI
     label: str
     source: FileTreeShortcutSource
-    _uri = field_validator("path")(validate_file_uri)
 
 
 class SessionFileTreeSettingsDTO(BaseModel):

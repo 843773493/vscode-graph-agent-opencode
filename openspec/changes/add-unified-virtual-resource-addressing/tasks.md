@@ -1902,3 +1902,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 首次删除与启动恢复共用原回执结算出口，裸日志调用改为既有 `report_failure`；日志不可写不再使 worker 先退出而遗留 pending，原异常／cause 和完整次错保留诊断，公开详情只增加次错类别。原 owner generation、事务、journal、逻辑 committed 与物理 settlement 顺序保持，没有第二队列或清理实现。
 - 完整 HEAD 归档的初始测试复现原回执不能进入 repair_required：1 failed／1 健康日志控制 passed，另1项 fixture teardown error来自首次失败后未进入恢复阶段，不重复算产品反例。最终55项不同定向用例通过（队列33项、导航API22项），日志观察参数类型修正后的14项补验通过。原六类删除故障同时覆盖正常及故障日志，核原件保全、同request_id、原异常身份、重复恢复回执版本不变及解除故障后的settled；业务HTTP为进程内ASGI，不代Gateway／Web、Backend硬重启或Windows验收。
 - Ruff、compileall和strict通过；新测试真实Pyright零诊断，生产12条既有诊断与完整归档按规则、完整消息、所属函数及最窄表达式AST逐项相同。准确命令、源码指纹、原始输出、实际退出码和作者结构自查见 `out/tests/temp/navigation_settlement_diagnostics_20261101/artifacts/verification.json`。测试有外部超时／4GiB保护及原集成独占闸门；未改前端、公共fixture、长回归驱动、共享debug或他人暂存。2.2／7.2仍未勾，整体51/53，团队及显式MCP持有延期保持。
+
+
+### 2026-11-01 普通文件引用的统一发布校验（2.2／7.2部分收口）
+
+- 原生产反例实际返回 HTTP 200 并携带构造后追加的 POSIX／Windows／UNC 真实路径。文件引用现统一使用原 `validate_file_uri` 的构造与序列化合同，替换重复字段 validator；HTTP、事件与 SQLite 回执消费同一类型。目录键在序列化时复核原全部字段的根／scope／owner 配对，即使只投影部分字段也不能绕过。合法别名沿原规则规范化，文件正文、用户标签及原生请求输入保持；未新增 parser、writer、schema、迁移或前端接线。
+- 最终固定候选共367项不同检查通过：210项新增模型／HTTP边界／SQLite回滚单测，110项已有文件编辑／持久操作／监听／公开协议回归，以及原 `integration-workspace-file-navigation-errors` 矩阵47项（72.80秒）。真实文件owner经ASGI列表在输出前拒绝构造后损坏引用，原文件与全部SQLite行不变，恢复原输出后同请求成功；此前因共享闸门未执行的4项上传暂存失败／日志次错／同ID重试也已补验，并包含在47项内，不重复计数。测试沿原独占闸门，带外部硬超时和4GiB数据段保护；全部最终检查2678份采样源码前后稳定。
+- Ruff、compileall及28模型序列化JSON Schema逐项相同；真实Pyright仅保留原 `file_case.add_exception_handler` 一条诊断，对应fixture与HEAD的AST完全相同，其余五文件及新增符号零诊断，不称类型全绿。首轮store测试漏填原payload字段的4项装具失败已纠正；临时schema脚本入口导入失败、原红测与所有实际退出码均保留。独立审查指出的合法编码别名遗漏已修正并补判别反例，最终只读复审无finding。
+- 准确命令、SHA、raw、JUnit、原矩阵回执与审查原件见 `out/tests/temp/uri_publication_boundary_20261101/artifacts/verification.json`。本片证明真实文件／SQLite owner与进程内HTTP发布边界，不代独立Backend TCP、Gateway／Web、Windows或进程硬重启验收；2.2／7.2继续未勾，整体51/53。未动另一会话前端迁移、公共fixture、共享debug或暂存；团队／协作和MCP显式持有继续延期。
