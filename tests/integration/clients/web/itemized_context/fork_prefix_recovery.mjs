@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
 import { TestRunContext } from "../../../../harness/js/run-context.mjs";
@@ -176,28 +178,59 @@ try {
   await assertPrefixVisible(refreshedThread, earlier.turn_id);
   facts.refreshedHistory = await history(child);
   assert.deepEqual(facts.refreshedHistory, imported);
-  facts.phase = "backend-restart";
+  facts.phase = "backend-hard-exit";
   // health 沿用平铺响应；普通业务 API 继续严格核对 APIResponse 的 request_id。
-  const beforeRestart = (await responseBody("/api/v1/health", source)).body;
+  const beforeCrash = (await responseBody("/api/v1/health", source)).body;
   const registered = (await api("/api/gateway/workspaces")).items.find(item => item.workspace_id === source.routeId);
   assert(registered?.managed);
   assert.equal(registered.backend_workspace_id, source.workspaceId);
   assert.equal(typeof registered.backend_generation, "string");
-  // 离开真实页面以关闭其 SSE，再走安全重启；不以强制重启跳过活动引用保护。
+  // 离开真实页面关闭 SSE；首次正常关闭之前强杀，不让 shutdown 帮产品落盘。
   await page.goto("about:blank");
-  const restart = await api(`/api/gateway/workspaces/${source.routeId}/runtime/restart-safe`, undefined, {
+  // 原生强杀只作用于本次 Gateway 的测试 Backend；不调用 shutdown 帮产品保存恢复状态。
+  const gatewayIdentity = JSON.parse(requiredEnvironment("BOXTEAM_PREFIX_GATEWAY"));
+  const killed = await promisify(execFile)(requiredEnvironment("BOXTEAM_PREFIX_PYTHON"), [
+    "-m", "tests.integration.clients.web.itemized_context.test_fork_prefix_recovery",
+    String(beforeCrash.process_id), String(gatewayIdentity.pid), String(gatewayIdentity.created_at),
+  ], { timeout: 10_000, maxBuffer: 64 * 1024 });
+  assert.equal(killed.stderr, "");
+  const termination = JSON.parse(killed.stdout);
+  assert.equal(termination.pid, beforeCrash.process_id);
+  assert.equal(termination.alive, false);
+  facts.backendCrash = { before: beforeCrash, termination, previousGeneration: registered.backend_generation };
+  // 崩溃后的完整组恢复仍由公开 Gateway start 执行，保留原 generation 和成员前置条件。
+  const started = await api(`/api/gateway/workspaces/${source.routeId}/runtime/start`, undefined, {
     expected_backend_generation: registered.backend_generation,
     expected_workspace_ids: registered.affected_workspace_ids,
   });
+  assert.equal(started.status, "started");
+  assert.deepEqual(started.blockers, []);
+  assert.deepEqual(started.affected_workspace_ids, registered.affected_workspace_ids);
+  assert.notEqual(started.backend_generation, registered.backend_generation);
+  const afterCrash = (await responseBody("/api/v1/health", source)).body;
+  assert.equal(beforeCrash.workspace_id, source.workspaceId);
+  assert.equal(afterCrash.workspace_id, source.workspaceId);
+  assert.equal(afterCrash.backend_generation, started.backend_generation);
+  assert.notEqual(afterCrash.process_id, beforeCrash.process_id);
+  Object.assign(facts.backendCrash, { receipt: started, after: afterCrash });
+  facts.hardRestartedHistory = await history(child);
+  assert.deepEqual(facts.hardRestartedHistory, imported);
+  assert.deepEqual(await history(source), before, "Backend 硬退出恢复不能改写 source 历史");
+  facts.phase = "backend-restart";
+  // 再保留原安全重启回归，完整组前置条件不能因硬退出补验而被删去。
+  const restart = await api(`/api/gateway/workspaces/${source.routeId}/runtime/restart-safe`, undefined, {
+    expected_backend_generation: started.backend_generation,
+    expected_workspace_ids: started.affected_workspace_ids,
+  });
   assert.equal(restart.status, "restarted");
   assert.deepEqual(restart.blockers, []);
-  assert.notEqual(restart.backend_generation, registered.backend_generation);
+  assert.notEqual(restart.backend_generation, started.backend_generation);
   const afterRestart = (await responseBody("/api/v1/health", source)).body;
-  assert.equal(beforeRestart.workspace_id, source.workspaceId);
   assert.equal(afterRestart.workspace_id, source.workspaceId);
-  assert.notEqual(beforeRestart.process_id, afterRestart.process_id, "必须真正更换 Backend 进程");
-  facts.backendRestart = { before: beforeRestart, after: afterRestart, receipt: restart,
-    previousGeneration: registered.backend_generation };
+  assert.equal(afterRestart.backend_generation, restart.backend_generation);
+  assert.notEqual(afterCrash.process_id, afterRestart.process_id, "必须真正更换 Backend 进程");
+  facts.backendRestart = { before: afterCrash, after: afterRestart, receipt: restart,
+    previousGeneration: started.backend_generation };
   // 新 Backend 冷读必须由原产品 owner 完成，不能借页面缓存或手工恢复数据通过。
   facts.restartedHistory = await history(child);
   assert.deepEqual(facts.restartedHistory, imported);

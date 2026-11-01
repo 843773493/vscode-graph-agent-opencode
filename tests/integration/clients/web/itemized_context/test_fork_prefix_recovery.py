@@ -8,11 +8,14 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
+import time
 from collections.abc import Generator
 from contextlib import ExitStack, closing
 from pathlib import Path
 
 import commentjson
+import psutil
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
@@ -37,7 +40,7 @@ def prefix_runtime(
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     web_workbench_assets: Path,
-) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
+) -> Generator[tuple[str, Path, ModelStreamReplay, int], None, None]:
     """独立受管服务组；Backend 的停启必须由真实 Gateway 生命周期执行。"""
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
@@ -70,7 +73,7 @@ def prefix_runtime(
             },
         )
         lifetime.callback(close_gateway_process, gateway)
-        yield f"http://127.0.0.1:{gateway.port}", workspace, replay
+        yield f"http://127.0.0.1:{gateway.port}", workspace, replay, gateway.process.pid
 
 
 def _cassettes(model_url: str) -> list[dict[str, object]]:
@@ -96,9 +99,9 @@ def _cassettes(model_url: str) -> list[dict[str, object]]:
 @pytest.mark.asyncio
 async def test_earlier_answer_fork_excludes_later_tools_after_refresh_and_backend_restart(
     request: pytest.FixtureRequest,
-    prefix_runtime: tuple[str, Path, ModelStreamReplay],
+    prefix_runtime: tuple[str, Path, ModelStreamReplay, int],
 ) -> None:
-    base_url, workspace, replay = prefix_runtime
+    base_url, workspace, replay, gateway_pid = prefix_runtime
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     artifacts = context.artifacts_dir
     ports = integration_port_block_for_file(Path(request.node.path))
@@ -110,6 +113,10 @@ async def test_earlier_answer_fork_excludes_later_tools_after_refresh_and_backen
         "BOXTEAM_BROWSER_BASE_URL": base_url,
         "BOXTEAM_BROWSER_ARTIFACT_ROOT": str(artifacts),
         "BOXTEAM_BROWSER_TEST_OWNER": str(request.node.path),
+        "BOXTEAM_PREFIX_PYTHON": sys.executable,
+        "BOXTEAM_PREFIX_GATEWAY": json.dumps({
+            "pid": gateway_pid, "created_at": psutil.Process(gateway_pid).create_time(),
+        }),
         "BOXTEAM_BROWSER_MODEL_CASSETTES": json.dumps(_cassettes(
             f"http://127.0.0.1:{ports.port(10)}/v1/chat/completions",
         )),
@@ -137,12 +144,26 @@ async def test_earlier_answer_fork_excludes_later_tools_after_refresh_and_backen
     assert facts["pageErrors"] == []
     assert facts["refreshedHistory"] == facts["importedHistory"]
     assert facts["restartedHistory"] == facts["importedHistory"]
+    assert facts["hardRestartedHistory"] == facts["importedHistory"]
     restart = facts["backendRestart"]
     assert restart["before"]["process_id"] != restart["after"]["process_id"]
     assert restart["before"]["workspace_id"] == restart["after"]["workspace_id"]
     assert restart["receipt"]["status"] == "restarted"
     assert restart["receipt"]["blockers"] == []
     assert restart["previousGeneration"] != restart["receipt"]["backend_generation"]
+    crash = facts["backendCrash"]
+    assert crash["after"] == restart["before"]
+    assert crash["termination"]["pid"] == crash["before"]["process_id"]
+    assert crash["termination"]["gateway_pid"] == gateway_pid
+    assert crash["termination"]["alive"] is False
+    assert crash["after"]["process_id"] != crash["before"]["process_id"]
+    assert crash["after"]["workspace_id"] == crash["before"]["workspace_id"]
+    assert crash["receipt"]["status"] == "started"
+    assert crash["receipt"]["blockers"] == []
+    assert crash["after"]["backend_generation"] == crash["receipt"]["backend_generation"]
+    assert restart["before"]["backend_generation"] == crash["receipt"]["backend_generation"]
+    assert restart["after"]["backend_generation"] == restart["receipt"]["backend_generation"]
+    assert crash["previousGeneration"] != crash["receipt"]["backend_generation"]
     source, child = facts["source"], facts["child"]
     assert source["sessionId"] == child["sessionId"]
     assert source["threadId"] != child["threadId"]
@@ -196,3 +217,36 @@ async def test_earlier_answer_fork_excludes_later_tools_after_refresh_and_backen
     (artifacts / "sealed-request-audit.json").write_text(
         json.dumps({"threads": reports, "historical_rows": rows}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
+
+
+def _terminate_test_backend(backend_pid: int, gateway_pid: int, gateway_created_at: float) -> None:
+    """仅终止本次隔离 Gateway 的测试 Backend；核实原生进程已退出后交回页面。"""
+    gateway = psutil.Process(gateway_pid)
+    assert gateway.create_time() == gateway_created_at, "Gateway 原生身份已改变，拒绝终止"
+    backend = psutil.Process(backend_pid)
+    assert gateway_pid in [parent.pid for parent in backend.parents()], "目标不属于本次 Gateway"
+    command = backend.cmdline()
+    assert "tests.support.e2e_control.backend_app:app" in command, "目标不是隔离测试 Backend"
+    created_at = backend.create_time()
+    backend.kill()
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            alive = backend.is_running() and backend.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            # 进程可在身份检查与状态读取之间退出；这就是原生终止证明。
+            alive = False
+        if not alive:
+            break
+        assert time.monotonic() < deadline, "Backend 强制终止后仍在运行"
+        time.sleep(0.01)
+    print(json.dumps({
+        "pid": backend_pid, "gateway_pid": gateway_pid, "created_at": created_at,
+        "command": command, "alive": False,
+        "mechanism": "SIGKILL" if os.name == "posix" else "TerminateProcess",
+    }))
+
+
+if __name__ == "__main__":
+    backend_arg, gateway_arg, created_arg = sys.argv[1:]
+    _terminate_test_backend(int(backend_arg), int(gateway_arg), float(created_arg))
