@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
+from app.schemas.public_metadata import PublicResourceMetadata
 
 
 class ResourceThreadRef(BaseModel):
@@ -34,7 +35,7 @@ class WorkspaceResourceDTO(BaseModel):
     reclaim_at: str | None
     # 候选管理动作按核实状态、外部观察和持久关联过滤，未知资源可显式停止；仍须核 lease 与版本。
     available_actions: list[str]
-    metadata: dict[str, object]
+    metadata: PublicResourceMetadata
     created_at: str
     updated_at: str
     error: str | None

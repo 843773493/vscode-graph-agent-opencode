@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.public_metadata import PublicResourceMetadata
+
 SessionResourceKind = Literal["background_task", "terminal", "browser"]
 SessionResourceAction = Literal["pause", "resume", "cancel", "delete", "reconcile"]
 
@@ -26,7 +28,7 @@ class SessionResourceDTO(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     available_actions: list[SessionResourceAction] = Field(default_factory=list)
-    metadata: dict[str, object] = Field(default_factory=dict)
+    metadata: PublicResourceMetadata = Field(default_factory=dict)
 
 
 class SessionResourceListDTO(BaseModel):

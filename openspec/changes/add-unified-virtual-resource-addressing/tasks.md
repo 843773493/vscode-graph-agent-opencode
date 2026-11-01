@@ -1981,3 +1981,12 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 首批单元回归614项通过、1项新增用例误将合法scope当成坏地址；按原grammar修正测试，未收紧产品。修正后的模型／协议批次402项通过；最终原生文件名边界调整后，受影响的模型、真实帧解析、API与OpenAPI共242项通过。各组有重叠，不相加；未无证据重复86秒的完整相关单元批次。
 - Ruff、compileall、三个改动模型／新增测试的真实Pyright零诊断、客户端独立tsc、独立产物目录完整Workbench构建、Buf lint／build、协议产物一致性及本change strict通过。Buf相对真实基线 `9caca4f9fc2b6c15b700bd7598f8405bf2811bef` 的breaking退出100，唯一项为按本规范下线 `NodeDebugBreakpointDTO.inspector_id`，不保留兼容字段。OpenAPI除该字段外同步生成了原exporter已声明的5个descriptor元数据标记，原元数据源码与HEAD字节相同，无其它结构漂移。
 - 准确命令、源码SHA、红绿原件、实际退出码、逐字段OpenAPI差异及作者自查见 `out/tests/temp/inspector_source_publication_20261101/artifacts/verification.json`；正式产品原件保留在 `out/tests/integration/backend/agents/node_debug/test_source_publication/runs/` 下各run／node的 `artifacts/publication.json`，精确路径和SHA由verification索引。独立构建二进制和临时runner核验后删除，仅保留其指纹及日志。无新增独立代理审查；2.2／7.2总门仍未勾，整体51/53，团队及MCP持有延期边界保持。
+
+
+### 2026-11-01 资源元数据的位置发布边界（2.2／7.2部分收口）
+
+- 将工作区元数据原有的位置字段分类迁至单一公开校验，工作区信息与 Workspace／Session 资源 DTO 共用；资源在构造及三种序列化出口拒绝原生位置，复制及嵌套修改不能绕过；元数据整体被换成非对象及位置tuple也明确拒绝。运行态回执的 cwd_relative 复用同一原生相对路径判定，补拒 file URL 与资源 URI，原公开错误、完整诊断、日志次错及未发布状态保持；不扫描正文、不替换字符串，不保留旧分类器。
+- 保留工作区外相对目录、含冒号的原生文件名、命令和用户正文、配置 JSON Pointer 及 Browser 本地页面 URL；普通创建请求仍接受原生相对／绝对／资源 URI。公开字段与两份完整 OpenAPI 快照逐项一致，无 proto 或客户端结构变更。
+- 新增两个可复用 matrix suite，均固定60秒／4GiB，集成保留跨 worktree 独占闸门。最终单元／资源合同260 passed（14.55秒）、API／辅助协议136 passed、工作区公开合同17 passed；较宽批次在60秒外部上限退出124，末段未完成，不能计作整批通过。拆出具名受影响检查，不延长上限或修改公共长回归 fixture。
+- 正式 Session／资源 ASGI 入口创建真实工作区外 PTY，12组复制后输出损坏均500且同request_id，原owner／lease字节及PID不变；原生清单file URL沿原规则400且不提交观察。输出恢复后同一PTY写文件成功，正式stop后原生进程已退出且占用结清。最终1 passed（22.02秒）。首次测试作者的PID类型、外部目录隔离和Browser装具遗漏分别修正，未为测试改变产品协议或增加服务回退。
+- Ruff、compileall、真实Pyright与本change strict通过；公开descriptor核对及完整OpenAPI对照通过。准确命令、源码SHA、实际退出码、红绿原件、正式产品原件与作者差异自查见 `out/tests/temp/resource_metadata_publication_20261101/artifacts/verification.json`。本片不代Gateway业务网络、Browser本地页面实际导航、独立Backend重启、Web或Windows；2.2／7.2总门仍未勾，整体51/53，前端与延期团队／MCP持有边界保持。

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import asdict
 from datetime import datetime, timedelta
-from pathlib import PureWindowsPath
 from urllib.error import URLError
 
 from app.abstractions.browser_resources import BrowserRequestError
@@ -18,6 +17,7 @@ from app.core.failures import (
     report_failure,
 )
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
+from app.schemas.public_metadata import is_native_relative_path
 from app.services.business.workspace_resources.records import OwnedResourceRecord
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ResourceTargetFacts,
@@ -51,10 +51,7 @@ def validate_runtime(runtime: ResourceSnapshot, workspace_id: str) -> None:
     if any(key in runtime for key in ("cwd", "workspace_root", "session_id", "source_thread", "retention_scope", "thread_associations", "attach_url")):
         raise mark_public_failure(ValueError("Node 运行时 回执包含禁止上浮的真实路径"))
     relative = runtime.get("cwd_relative")
-    if relative is not None and (
-        not isinstance(relative, str) or PureWindowsPath(relative).anchor
-    ):
-        # Windows anchor 同时识别盘符、根路径和 UNC；也覆盖 POSIX 的斜杠根，不依赖中继平台。
+    if relative is not None and not is_native_relative_path(relative):
         error = mark_public_failure(ValueError("Node 运行时 工作目录不是工作区内相对目录"))
         error.add_note(f"Node 运行时 工作目录拒绝: cwd_relative={relative!r}")
         report_failure(error, detail="Node 运行时 工作目录拒绝")

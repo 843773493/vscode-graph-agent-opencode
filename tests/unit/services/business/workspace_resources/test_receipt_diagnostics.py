@@ -49,7 +49,7 @@ def receipt_log_failure(
     return failure
 
 
-@pytest.mark.parametrize("invalid", ["type", "posix", "drive", "unc", "duplicate", "unregistered"])
+@pytest.mark.parametrize("invalid", ["type", "posix", "drive", "unc", "file-url", "duplicate", "unregistered"])
 async def test_cold_receipt_rejection_preserves_error_and_unpublished_state(
     bundle: OwnerFixture, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     receipt_log_failure: OSError | None, invalid: str,
@@ -66,6 +66,7 @@ async def test_cold_receipt_rejection_preserves_error_and_unpublished_state(
     rejected: object = {
         "type": ["/private/runtime-receipt"], "posix": "/private/runtime-receipt",
         "drive": "C:\\private\\runtime-receipt", "unc": "\\\\target\\private\\runtime-receipt",
+        "file-url": "file:///private/runtime-receipt",
         "unregistered": "/private/unregistered-receipt", "duplicate": rid,
     }[invalid]
 

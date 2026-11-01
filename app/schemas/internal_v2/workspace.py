@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    JsonValue,
     SerializerFunctionWrapHandler,
     model_serializer,
 )
@@ -18,28 +16,7 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
     WorkspaceFileURI,
 )
-
-_LOCATION_FIELDS = frozenset({"root", "roots", "path", "paths", "location", "locations", "directory", "directories", "cwd"})
-_CONFIG_POINTER_FIELDS = frozenset({"changed_paths", "applied_paths", "deferred_paths"})
-
-
-def _is_location_field(field: str) -> bool:
-    return field not in _CONFIG_POINTER_FIELDS and (
-        field in _LOCATION_FIELDS or any(field.endswith(f"_{name}") for name in _LOCATION_FIELDS)
-    )
-
-
-def _reject_metadata_real_paths(value: JsonValue, field: str, *, location: bool = False) -> None:
-    """只校验结构化位置值；正文、命令和配置 JSON Pointer 保留原文。"""
-    if isinstance(value, str):
-        if location and (PurePosixPath(value).is_absolute() or PureWindowsPath(value).root):
-            raise ValueError(f"工作区元数据响应包含真实路径: field={field}")
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            _reject_metadata_real_paths(item, f"{field}.{key}", location=_is_location_field(key))
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            _reject_metadata_real_paths(item, f"{field}[{index}]", location=location)
+from app.schemas.public_metadata import reject_metadata_real_paths
 
 
 class _WorkspaceMetadataDTO(BaseModel):
@@ -49,7 +26,7 @@ class _WorkspaceMetadataDTO(BaseModel):
     @model_serializer(mode="wrap")
     def serialize_metadata(self, handler: SerializerFunctionWrapHandler):
         payload = handler(self)
-        _reject_metadata_real_paths(payload, type(self).__name__)
+        reject_metadata_real_paths(payload)
         return payload
 
 
