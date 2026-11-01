@@ -77,6 +77,56 @@ async def gc_case(tmp_path: Path, session_bundle_factory) -> AsyncIterator[GcCas
         yield GcCase(store, leases, parsed.attachment_id, directory, ledger_path)
 
 
+async def test_local_fork_claim_hands_retention_to_target_runtime_without_export(fork_capture) -> None:
+    store, record = fork_capture
+    ref, = await store.persist_inline(record.source_session_id, [AttachmentRef(
+        file_id="inline:local-fork.txt", name="local-fork.txt", content_type="text/plain",
+        data_url="data:text/plain;base64,Y3dk",
+    )], thread_id=record.source_thread_id, message_id="msg_local_fork_gc")
+    snapshot, = store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
+    assert snapshot.source_attachment_id == snapshot.target_attachment_id
+    store.release_session_references(record.source_session_id)
+    future = store._clock() + timedelta(days=31)
+    store._clock = lambda: future
+    leases = ExternalResourceLeaseLedger(state_path=store._workspace_root / ".boxteam/resources.json")
+    assert await store.collect_garbage(leases=leases) == ()  # prepared claim 保护发布前的来源。
+    claims = store._catalog.fork_attachment_claim_ids(record.copy_operation_id)
+    store._catalog.reserve_fork_attachment_owners(copy_operation_id=record.copy_operation_id, claim_ids=claims)
+    assert await store.collect_garbage(leases=leases) == ()
+    store._catalog.settle_fork_attachment_claims(
+        copy_operation_id=record.copy_operation_id, claim_ids=claims, state="committed", now=store._clock(),
+    )
+    assert await store.collect_garbage(leases=leases) == ()  # committed 后由目标活动关联保活。
+    token = "runtime:local-fork-gc:1"
+    store.bind_thread_runtime(record.target_session_id, record.target_thread_id, token)
+    store._catalog.release_associations(
+        session_id=record.target_session_id, thread_id=record.target_thread_id, binding_token=token, now=store._clock(),
+    )
+    directory = store._catalog.get_directory(snapshot.target_attachment_id)
+    assert datetime.fromisoformat(directory.gc_after) == future + timedelta(days=30)
+    future += timedelta(days=31)
+    assert await store.collect_garbage(leases=leases) == (snapshot.target_attachment_id,)
+    assert tuple(store._catalog.connection.execute(
+        "SELECT state,export_released FROM attachment_directory_fork_claims",
+    ).fetchone()) == ("committed", 0)
+
+
+async def test_cross_workspace_export_claim_retains_source_until_original_release(fork_import_target) -> None:
+    case = fork_import_target
+    source, record = case.source, case.record
+    snapshot, = case.snapshots
+    assert snapshot.source_attachment_id != snapshot.target_attachment_id
+    source.release_session_references(record.source_session_id)
+    future = source._clock() + timedelta(days=31)
+    source._clock = lambda: future
+    leases = ExternalResourceLeaseLedger(state_path=source._workspace_root / ".boxteam/resources.json")
+    directory = source._catalog.get_directory(snapshot.source_attachment_id)
+    assert datetime.fromisoformat(directory.gc_after) < future
+    assert await source.collect_garbage(leases=leases) == ()
+    source.release_fork_export(record)
+    assert await source.collect_garbage(leases=leases) == (snapshot.source_attachment_id,)
+
+
 @pytest.mark.parametrize("stage", ["candidates", "ledger", "finish"])
 @pytest.mark.parametrize("outcome", ["success", "cancel", "failure", "cancel_failure"])
 async def test_gc_storage_keeps_loop_holder_and_recoverable_publication(

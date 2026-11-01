@@ -929,3 +929,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 启动、身份登记、运行及停止／冷恢复统一等待原 claim writer 的受保护 worker；沿原 tracker 保护排队与写盘，再按真实提交更新投影，失败不遗留提交 blocker。原 owner 锁、Session 准入及 runtime state_lock 覆盖相应结算，冷恢复互斥不阻塞活跃进程的停止中快照；不新增持久账本或恢复链。
 - 真实 ASGI／Node／Inspector 的三阶段四结果矩阵12 passed／79.63秒，真实进程退出2 passed／9.73秒，既有 lease 场景10 passed／60.46秒；定向新单测7 passed／0.99秒，相关回归96 passed／64.71秒，共127个不同用例。新测试覆盖原提交、重复取消、迟到失败、实际线程池排队、闲置卸载及原进程终态。首轮屏障误挂 Path.replace，修正为原 os.replace；并发回归观察点从异步返回改为真实存储提交，原身份／顺序断言保留。失败原件未覆盖，不把中断运行或重复用例相加。
 - Ruff／编译／OpenSpec严格校验通过，五个生产文件及两个新测试 Pyright 零诊断；原始输出、命令、退出码、源码指纹及作者结构审查见 `out/tests/temp/claim_io_20261101/artifacts/verification.json`。测试均有进程外超时／4GiB保护，集成沿原独占闸门；不代 Gateway／Web、独立Backend重启、Windows、同步读取、原生I/O抢占或整个operation／shutdown期限。5.2／5.4及21/23保持未完成；未改共享debug、前端迁移、公共fixture或长回归驱动。
+
+
+### 2026-11-01 同目录 fork 释放后的到期回收补验
+
+- 已修复本地同目录 fork 因不存在的独立导出回执而无限保活；prepared/reserved和跨工作区export的原保护保留。真实上传/工具/full copy/副本执行/目录GC/来源删除/进程重启及冻结请求恢复共用 itemized 7.5-C／8.3 本轮收据，原件见 `out/tests/temp/attachment_fork_gc_20261101/artifacts/verification.json`。不据此关闭5.2或5.4，整体仍21/23。

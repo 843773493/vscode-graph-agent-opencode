@@ -1550,3 +1550,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 默认构建product-002在180秒超时、未进业务，回收本次已核名下的构建子进程；最终显式复用此前完整正式产物，742份编译输入及全部资产SHA、干净固定上游commit均相同，不把默认构建或默认矩阵记为通过。product-003已完成五次调用及冷API，但旧240秒整段预算只容纳2/5 UI；新增五调用按原单位工作量改400秒，原三调用仍240秒，业务期限与全部断言不变。product-005端口占用在setup拒绝；核空后补跑，不杀未知进程。
 - product-006的目标Session/main-thread请求均200而目标Tab缺席、仍Welcome，未进模型业务；本场景明确先等原版Welcome并通过原按钮关闭，再调用一次原精确owner导航。**TODO：**该初始化导航时序根因交前端owner核实，构建耗时/超时子进程回收继续后置；失败原件全部保留。未改前端实现、公共fixture、唯一Section8长驱动、共享debug或他人暂存。
 - Ruff、3文件Pyright零诊断、compileall、Node语法、矩阵注册解析及两份strict通过；最终驱动经既有非作者只读复核无finding。准确命令、源码/资产指纹、原始输出/退出码、正式运行与审查原件见out/tests/temp/web_mixed_sources_20261101/artifacts/verification.json。独立定向证据不替代9.7唯一owner或完整Section8、7.5/8.3/8.13、策略热更新、Windows、硬退出、同步Provider SDK或真实外部Provider；整体任务均保持未勾选，团队/MCP持有延期不变。
+
+
+### 2026-11-01 7.5-C／8.3 本地 fork 运行时释放后的目录回收与冻结恢复（部分）
+
+- 真实组合验收发现：同工作区 fork 的 source/target 为同一目录，双方 runtime 关联已释放、原30天期限已到，GC仍因 `export_released=0` 无限保留。原 catalog 删除事务现在只为物理独立的来源目录等待 export release；同目录发布前仍由 prepared/owner_reserved claim 保护，发布后由原目标关联保活，不新增 writer、状态或 schema。
+- 原 `integration-attachment-frozen-history` 扩展为真实 Gateway 消息上传 PNG、工具派生/读回、普通文件编辑、full copy、副本正式执行、进程重启释放关联、按原持久期限 GC、删除来源、再次重启与副本续聊。源5次请求及副本2次请求均核原封存 hash/transport；副本冷读精确重建5份导入 assembly与自身首份assembly，原 canonical 前缀和历史 owner/model-call身份不变，当前新调用使用目标 owner。复用原 fixture/model_stream/60秒fork监督器及同一重建断言，不预填历史、关联或期限。
+- 新增两个局部GC场景后原GC单测文件30 passed；组合产品1 passed/164.38秒，原fork发布/删除/回滚/远端失败套件11 passed/161.43秒，共42个不同用例通过。正式suite沿240/180秒、4GiB保护与跨worktree独占闸门；未放宽fork期限。首轮在尚未运行的冷fork保活前提处失败，补正式执行后第二轮稳定复现上述产品缺陷；修复后的最终运行通过，失败原件保留。
+- Ruff与compileall通过；两个修改测试文件Pyright零诊断，catalog原有三条诊断的完整消息、所属函数和最窄AST与HEAD一致，无新增诊断，整组Pyright退出码仍为1。准确命令、源码前后指纹、原始输出、实际退出码、产品原件SHA与作者差异审查见 `out/tests/temp/attachment_fork_gc_20261101/artifacts/verification.json`。
+- 本片不代Web、Windows、跨Gateway真实网络、SIGKILL或全部8.3验收；7.5/8.3与整体111/119保持未完成，团队协作及既有性能TODO不变。

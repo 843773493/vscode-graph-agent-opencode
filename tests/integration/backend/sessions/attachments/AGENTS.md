@@ -8,6 +8,8 @@
 
 `test_thread_isolation.py` 从真实消息及 fork 生成 main/child 历史，分别排队并完成工具循环，以独立 SQLite/JSONL、请求及重启历史核对隔离；外部模型复用 model_stream，工作区读取不应增加 Thread 保活关联。
 
+`test_frozen_history.py` 复用原 Gateway/Backend 与 fork 监督器，经上传、工具、文件编辑、full copy、正式副本执行和重启释放关联后回收目录，再删除来源并重启。源与副本共用精确请求重建断言，核对历史身份、原字节/hash和副本续聊；不手填关联、期限或 canonical，不代替 Web、Windows及硬退出验收。
+
 # 不可修改内容
 
 不预先写入 canonical 历史，不拼装独立 SSE 协议，不修改 fixture 源工作区。

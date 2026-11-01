@@ -286,7 +286,9 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
             ingest = connection.execute("SELECT 1 FROM attachment_directory_ingests WHERE attachment_id=? AND state IN ('preparing','durable') LIMIT 1", (attachment_id,)).fetchone()
             fork = connection.execute(
                 "SELECT 1 FROM attachment_directory_fork_claims WHERE "
-                "(source_attachment_id=? AND export_released=0 AND state NOT IN ('aborted','target_deleted')) OR "
+                # 同目录复用在发布前由目标 claim、发布后由关联保活，不等待不存在的跨端导出回执。
+                "(source_attachment_id=? AND source_attachment_id<>target_attachment_id "
+                "AND export_released=0 AND state NOT IN ('aborted','target_deleted')) OR "
                 "(target_attachment_id=? AND state IN ('prepared','owner_reserved')) LIMIT 1", (attachment_id, attachment_id),
             ).fetchone()
             if association is not None or ingest is not None or fork is not None:
