@@ -48,6 +48,7 @@
 - 导航、自动完整定义与搜索使用同一 ToolMetadata 和完整有效策略；软隐藏可搜索，硬隐藏与执行禁用不投递定义或导航。工具选择提交后在原 Owner 发布锁内重发指引与 members，不联网刷新；订阅随 Agent generation 的 LifetimeScope 释放。
 - 安全 model-call preparation 只读取 Registry 已发布的 snapshot/revision，不在请求期 relist、读取文件或访问 MCP 网络；无通知 server 的显式刷新仍由目录 owner 在发布边界执行。
 - 历史 binding/快照丢失必须显式 `extension-catalog-unavailable` 并拒绝 dispatch，不从当前 MCP 目录、当前同名 target 或空目录恢复。
+- 完整 schema 摘要与封存 binding 字段转换失败只公布原操作、错误码及异常类别；动态键和原值保留在直接 cause，交既有执行出口记录，不在纯绑定构造中增加日志 I/O。
 - 不具备 `tools/list_changed` 通知能力的 server 由 owner 在显式目录刷新边界 relist并发布，不在 model-call preparation 临时刷新，不得谎称立即生效。
 - 凭据只允许通过环境变量引用解析，不得写入日志或模型工具描述。
 - Activity 只发布受信调用身份及数值进度，不转发 Server 自由进度正文。取消、超时和断线无法确认副作用时，使用同一 typed 结果未知回执，保留调用配对、artifact 与不可自动重试事实。

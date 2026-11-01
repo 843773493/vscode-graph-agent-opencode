@@ -1842,3 +1842,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 真实 JCS 拒绝证明 `ItemSchemaError` 可在动态字段名中携带原生位置；唯一执行消息出口将其与内部 Pydantic 校验统一，只公布校验失败事实和原异常类别。原领域校验、异常参数、cause／context、Provider 归属优先级及明确业务说明保持，不修改 canonical writer 或另建诊断链。
 - 完整 HEAD 归档中的新增单测为6项外泄反例失败、3项 Provider 归属通过；候选共68项不同单测和5项集成通过。扩展后的 LLM 日志场景同时覆盖 SQLite／canonical 与同步／异步入口；新产品场景从消息入口执行真实文件读取，再注入实际 JCS 拒绝，核 Job、canonical 工具结果、失败消息流、LLM 日志、Trace、检查点及 SQLite 无诊断路径，原异常留诊断；解除注入后同 Session／Thread 完成下一轮，旧 canonical 前缀和失败流快照保持。它不代表故障工具本身的恢复或完整请求 hash 专项验收。
 - Ruff、compileall及本change strict通过；真实Pyright保留6条既存诊断，按相对文件、规则、完整消息、所属函数和最窄表达式AST核无新增。准确命令、红绿原件、源码指纹、实际退出码与作者自查见`out/tests/temp/canonical_failure_facts_20261101/artifacts/verification.json`；产品测试期间仅目录说明文件变化，全部采样执行源码保持。模型复用现有model_stream，业务HTTP为进程内ASGI，不代独立Gateway业务网络、Web、Windows或Backend重启；未改公共fixture、共享debug或另一会话暂存，2.2／7.2仍未勾、整体51/53，团队与MCP持有延期边界保持。
+
+### 2026-11-01 扩展目录绑定拒绝的公开说明（2.2／7.2部分收口）
+
+- 原完整 schema 摘要与封存 dispatch binding 的字段转换只将原因类别附入公开说明，动态键及原值留直接 cause；错误类别、既有错误码、输入及封存绑定不可变性、hash 校验与修正后原入口恢复保持。没有新增日志 I/O、校验器、回退或存储。
+- 完整 HEAD 归档叠加新增测试，6 项 POSIX／盘符／UNC 外泄反例均失败于公开说明；候选48项关联回归和2项缓存失败节点复验通过。初次宽跑90秒退出124，无完整结算，不计整体通过；其两个失败位置由收集顺序定位到新增Windows／UNC原因断言，Python的int异常使用repr转义，现改为核对原异常参数，未放宽公开说明或恢复断言。一次使用缓存中的旧节点名导致收集退出4，也不计业务结果。
+- Ruff、compileall、本change strict及真实Pyright通过，后者零诊断。准确命令、源码指纹、原件及退出码见`out/tests/temp/mcp_binding_errors_20261101/artifacts/verification.json`。本片为绑定构造和恢复入口的定向单测，不代完整产品执行、Backend重启、Gateway、Web或Windows实机；未改前端、公共fixture、共享debug及他人暂存。2.2／7.2仍未勾，整体51/53。

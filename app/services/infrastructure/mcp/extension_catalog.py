@@ -118,7 +118,7 @@ def payload_digest(
     try:
         payload_bytes = canonical_json_bytes(payload)
     except ItemSchemaError as error:
-        raise error_type(f"{context} 无法 canonical 编码: {error}") from error
+        raise error_type(f"{context} 无法 canonical 编码: error={type(error).__name__}") from error
     return sha256_token(payload_bytes)
 
 
@@ -495,7 +495,7 @@ class ExtensionDispatchBindingRef:
         except (TypeError, ValueError) as error:
             raise ExtensionCatalogUnavailableError(
                 "历史 extension dispatch binding 字段非法，拒绝 dispatch: "
-                f"{error}"
+                f"error={type(error).__name__}"
             ) from error
         declared_hash = value.get("extension_dispatch_binding_hash")
         if declared_hash is not None and declared_hash != restored.dispatch_binding_hash:

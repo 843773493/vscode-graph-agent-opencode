@@ -77,6 +77,8 @@ rollout schema 维护迁移同样在原失败 journal 写入处使用该出口�
 
 固定扩展工具信封仍只调用原 `validate_model_tool_arguments`。校验失败在原 catch 中复用 `failure_detail`，将完整 Pydantic／JSON Schema 异常留诊断及直接 cause；公开 issues 只从原异常取得规则和深度，顶层参数名限标识符，保留未知字段的纠错提示，不复制输入值、嵌套字典键、非标识符键或 schema 正文。动态键可能本身就是原生路径，不能直接把 `loc` 或 `absolute_path` 当作公开错误坐标；这一格式只表达结构信息，不扫描或改写异常正文。目标零执行、固定信封的名称与调用配对、canonical 终态、后续纠正调用和 assembly 请求封存沿原链保持，不建立第二校验器或结果存储。
 
+扩展目录的共用完整 schema 摘要和封存 dispatch binding 字段转换，继续由原构造器拒绝；公开包装只附原原因的异常类别，动态键及被转换的原值留直接 cause，不在纯绑定构造中写日志。原错误类别与 `extension-catalog-unavailable`、输入和绑定不可变性、摘要 preimage、历史 hash 核验及不回退当前目录的规则保持。
+
 主题语义校验在原 validation owner 共用 `reject_theme_value`，由原 token 与背景类型／外观规则调用，不另设校验器。公开信息只含固定字段、原规则和失败事实，未知 token 名及全部原值只留 `failure_detail` 的诊断和 cause；已登记 token 的名称可作为字段坐标。目录、设置、配置快照和背景引用的消费者继续复用原解析链，原 409、request_id、失败零写入和修正后恢复保持，配置族、合并顺序、版本与主题资源身份不变。
 
 固定Skill目录对账与底层共享watcher的失败复用 `failure_detail`，原异常和日志次错留诊断，原生读取摘要只带目录身份/作用域、阶段、类别与适用错误码，已有业务拒绝说明保留。原快照、revision、通知及观察代次仍由同一owner发布；删除转发监听错误的重复日志及watcher启动/ready/停止的直接日志，避免日志故障阻断ready、不可用发布或释放。catalog继续消费同一accepted向量，发布后的不可用诊断复用同一出口，不能因诊断失败结束后台producer；来源修复后继续沿原通知和派生链更新，不增加重试、错误账本或第二发布链。

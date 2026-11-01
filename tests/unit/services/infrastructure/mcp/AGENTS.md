@@ -9,6 +9,7 @@ mcp/
 ├── test_catalog_owner.py               # owner 生命周期、刷新、generation 与事件
 ├── test_config.py                      # MCP 配置规范化与校验
 ├── test_extension_catalog_binding.py   # 冻结 binding、namespace 与目标解析
+├── test_extension_binding_errors.py    # 完整 schema／冷恢复拒绝的公开说明与原始原因
 ├── test_naming.py                      # MCP server/tool 命名合同
 ├── test_session_lifecycle.py           # Server 原 task、取消、失败关闭及通知失效
 ├── test_config_replacement.py          # HTTP 候选隔离、stdio 停启、共同切换与退役资格排空
