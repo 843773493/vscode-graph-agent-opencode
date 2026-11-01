@@ -1502,3 +1502,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 正式矩阵1 passed／351.83秒、exit0；原20次模型请求、并行工具/多次循环、两代fork、摘要、三次Backend安全重启、来源删除后的恢复和回退及封存hash断言完整通过。四代Backend均观察到原Saver、storage与mapping，12个非探针Python进程零旧链导入；原模型响应继续由model_stream提供。
 - 保留矩阵900秒／单进程4GiB、外层1020秒／4GiB、共享集成闸门及每次60秒fork监督器。2860份采样源码前后一致，已观察Python进程及本片五个服务端口均回收；Ruff、compileall、真实Pyright零诊断和矩阵注册检查通过。作者AST核对255份domain/rollout/mapping源码，最大795行、直接Python文件最多20个，storage无禁止的LangChain/mapping直接import，不把该核对称为独立审查。
 - 准确命令、raw／退出码、源码指纹、逐进程导入记录、原存储测量与清理证据见 `out/tests/temp/v2_runtime_boundary_20261101/artifacts/verification.json`。本片不证明全部双writer/projector/schema及7.5-F职责门，也不新增真实Provider、Web、Windows、同步完整执行或硬退出证据；7.5／8.3及整体111/119保持未完成。未改产品、前端、公共fixture、原长回归驱动或共享Debug；他人独有改动和共享暂存保留。
+
+
+### 2026-11-01 7.5-F 当前单一 owner 的独立静态闭包补验（部分）
+
+- 独立审查固定 `a69f2837e`，逐条核 canonical append／JSONL durable commit、checkpoint 恢复投影、history／Provider 纯映射、schema v26 dispatch 与一次性 migration、旧 shim 调用闭包；未发现限定范围中的第二 canonical 正文 writer、重复 projector 或第二 schema。SQLite catalog 与 checkpoint message 明确按索引／恢复投影处理，不以定义计数代替事实源判断。109个增量文件按职责分组，附完整 owner／调用链和源码哈希；未为旧行数记录重新拆分已未变的 facade。
+- 根侧复核六子树272份源码／SQL／AGENTS及额外5份生产文件均与受审HEAD及工作树一致；279项总清单另含两份已被其它会话修改的OpenSpec上下文文档，单独登记。原动态验收255份Python源码逐字一致、最大795行、目录直接Python最多20个且无缺失AGENTS；动态基线为当前祖先，六子树到当前零差异，复用原1 passed／351.83秒的产品矩阵，不重复长跑。初次指纹脚本将两份文档混入工作树一致性断言而失败，修正审计范围后退出0，失败原件保留。
+- 独审原件 `out/tests/temp/rollout_boundary_review_20261101/artifacts/current-owner-review.json`，SHA256 `a610fa4ecebcc560702424014dbca94862b7a7a8ac87bd5eff68fb303e34fe91`；准确复核命令、raw／退出码、指纹和原动态证据适用范围见 `out/tests/temp/rollout_boundary_audit_20261101/artifacts/verification.json`。本片关闭限定的存储／checkpoint／assembly／fork／domain／mapping静态职责子门；不外推其它业务owner、全部7.5-F、Provider／Web／Windows或Section8总门，7.5及111/119保持未完成。未改生产、测试、前端、公共fixture／长回归driver或共享Debug；其它会话改动和共享暂存保留。
