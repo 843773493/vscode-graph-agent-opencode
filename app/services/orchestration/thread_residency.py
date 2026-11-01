@@ -105,10 +105,10 @@ class ThreadResidencyTracker:
         return f"runtime:{self._instance_id}:{generation}"
 
     def is_current_runtime_binding(self, session_id: str, thread_id: str, token: str) -> bool:
+        """原 runtime 尚未移除就仍持有关联；closing 失败后可能恢复同一代。"""
         state = self._states.get((session_id, thread_id))
         return bool(
             state is not None and state.runtime is not None
-            and self.is_current_generation(session_id, thread_id, state.runtime.generation)
             and token == self.runtime_binding_token(state.runtime.generation)
         )
 

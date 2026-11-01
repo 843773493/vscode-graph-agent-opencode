@@ -578,4 +578,10 @@ Session 正常启动与失败收尾共用原身份捕获，将这些既有字段
 
 启动枚举的权威 catalog 快照，以及定点恢复的删除 journal／active 校验、canonical 引用读取、原件清理和 pin 接管结算，统一通过既有 `run_sync_shielded` 执行原同步恢复逻辑。定点恢复仍先取得原上传 holder 再取得 Session gate，两者覆盖线程池排队、真实 I/O 和取消结算；请求上下文随 worker 传递，存储使用原有线程安全连接，不建立另一恢复任务或消息事实。
 
-启动快照取消后不进入逐 Session 恢复；已进入定点恢复则等原 worker 结束后传播取消，存储失败保留原异常及取消因果。显式重试只处理原非终态 pin，成功结算不重复。当前 runtime generation 判断仍在事件循环中，未将 tracker 回调机械迁入线程；同步运行时关联对账、GC 账本写入、锁文件打开、原生 I/O 抢占及整个 operation／shutdown 期限继续 TODO，5.2／5.4 保持未完成。
+启动快照取消后不进入逐 Session 恢复；已进入定点恢复则等原 worker 结束后传播取消，存储失败保留原异常及取消因果。显式重试只处理原非终态 pin，成功结算不重复。当前 runtime generation 判断仍在事件循环中，未将 tracker 回调机械迁入线程；运行时关联存储对账由下一切片收口，GC 账本写入、锁文件打开、原生 I/O 抢占及整个 operation／shutdown 期限继续 TODO，5.2／5.4 保持未完成。
+
+### 运行时关联对账的事件循环与存储边界（5.4 部分收口）
+
+启动、周期维护和原 Thread 卸载全部等待唯一异步对账／解绑入口。catalog 关联快照、后台任务与上传 pin 核对、队列快照和精确 token 解绑由既有受保护 worker 执行；pin 先于队列读取，保留原跨库存储交接规则。周期对账复用删除 drain 的共享附件 holder，覆盖 worker 排队、执行和取消结算；它允许新代上传并行，物理删除须等待。打开 Session 控制库前复核精确关联，快照过期且原关联已释放时不再访问可能已隔离的节点。取消须等待同一 worker 实际完成，原错误及取消因果继续交回原调用，不另起后台释放或新增 lease 账本。
+
+tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记，就包含正在 closing 或关闭失败后恢复准入的同一代；closing 仅撤销 admission，不作为失效关联依据。原卸载 listener 仍可精确释放这一代，失败由原 scope／关闭任务重试。runtime 真正移除后才成为旧代，迟到 worker 的 SQL 继续匹配旧 token；新一轮产品执行重建的关联不会被它解除。同步 acquire listener、GC 账本写入、原生 I/O 抢占、旧代无身份接管及整个 operation／shutdown 总期限继续 TODO，不据此勾选 5.2／5.4。

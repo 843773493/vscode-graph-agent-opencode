@@ -845,7 +845,7 @@ def _build_app_container(
     thread_residency_tracker.add_acquire_listener(attachment_blob_store.bind_thread_runtime)
 
     async def release_attachment_runtime(session_id: str, thread_id: str, generation: int) -> None:
-        attachment_blob_store.release_runtime_binding(
+        await attachment_blob_store.release_runtime_binding(
             session_id, thread_id, thread_residency_tracker.runtime_binding_token(generation), messages=checkpointer,
         )
 

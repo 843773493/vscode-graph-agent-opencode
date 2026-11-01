@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.core.phase_observer import observe_phase_sync
 from app.core.session_control_store import SessionControlStore
@@ -12,7 +12,7 @@ from app.core.session_control_store.copy_attachment_settlement import (
     read_copy_attachment_settlements,
     transition_copy_attachment_settlement,
 )
-from app.core.session_lifecycle_gate import SessionOperationLease
+from app.core.session_lifecycle_gate import OperationHolderGate, SessionOperationLease
 from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.execution_queue import ExecutionQueueSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes
@@ -23,6 +23,11 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
 from app.services.infrastructure.attachment_blob_catalog.records import (
     DirectoryIngestRecord,
 )
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.attachment_blob_catalog.catalog import (
+        AttachmentBlobCatalog,
+    )
 
 
 class AttachmentMessageReader(Protocol):
@@ -38,36 +43,49 @@ class AttachmentMessageReader(Protocol):
 class AttachmentIngestRecoveryMixin:
     """消息事实由 canonical owner 提供，目录 owner 只协调原上传 pin。"""
 
+    _catalog: AttachmentBlobCatalog
+    deletion_holder: OperationHolderGate
+
     def bind_thread_runtime(self, session_id: str, thread_id: str, binding_token: str) -> None:
         self._catalog.bind_thread_runtime(session_id, thread_id, binding_token, now=self._clock())
 
-    def release_runtime_binding(self, session_id: str, thread_id: str, binding_token: str, *, messages: AttachmentMessageReader) -> tuple[str, ...]:
-        """不重取调用方可能持有的 Session gate；核对和解绑间没有 await。"""
-        control = self._open_control_store(session_id)
-        try:
-            if control.list_background_tasks(thread_id=thread_id, active_only=True):
+    async def release_runtime_binding(self, session_id: str, thread_id: str, binding_token: str, *, messages: AttachmentMessageReader) -> tuple[str, ...]:
+        """不重取调用方可能持有的 Session gate；原调用等待同一 worker 结算。"""
+        def release() -> tuple[str, ...]:
+            # 全局快照可能已经过期；解绑已完成或 Session 已删除时不再打开原控制库。
+            if not self._catalog.has_runtime_binding(session_id, thread_id, binding_token):
                 return ()
-            for pin in control.list_non_terminal_leases():
-                if pin.operation_kind == "attachment" and (
-                    not pin.operation_identity.startswith(("attkey_", "attref_"))
-                    or self._upload_pin_owner(session_id, pin)[0] == thread_id
-                ):
+            control = self._open_control_store(session_id)
+            try:
+                if control.list_background_tasks(thread_id=thread_id, active_only=True):
                     return ()
-        finally:
-            control.close()
-        # 接受在线程池执行：必须先读 pin 再读队列，覆盖 pin → durable acceptance 的交接。
-        if messages.execution_queue_snapshot(session_id, thread_id).records:
-            return ()
-        return self._catalog.release_associations(session_id=session_id, thread_id=thread_id,
-                                                   binding_token=binding_token, now=self._clock())
+                for pin in control.list_non_terminal_leases():
+                    if pin.operation_kind == "attachment" and (
+                        not pin.operation_identity.startswith(("attkey_", "attref_"))
+                        or self._upload_pin_owner(session_id, pin)[0] == thread_id
+                    ):
+                        return ()
+            finally:
+                control.close()
+            # 接受在线程池执行：必须先读 pin 再读队列，覆盖 pin → durable acceptance 的交接。
+            if messages.execution_queue_snapshot(session_id, thread_id).records:
+                return ()
+            return self._catalog.release_associations(session_id=session_id, thread_id=thread_id,
+                                                       binding_token=binding_token, now=self._clock())
 
-    def reconcile_runtime_bindings(self, *, messages: AttachmentMessageReader,
-                                   is_current: Callable[[str, str, str], bool]) -> tuple[str, ...]:
+        return await run_sync_shielded(release)
+
+    async def reconcile_runtime_bindings(self, *, messages: AttachmentMessageReader,
+                                         is_current: Callable[[str, str, str], bool]) -> tuple[str, ...]:
         """只核旧 runtime token；从未建图的冷上传/fork 关联仍由原流程持有。"""
         released = []
-        for session_id, thread_id, token in self._catalog.runtime_bindings():
+        for session_id, thread_id, token in await run_sync_shielded(self._catalog.runtime_bindings):
+            # tracker 只在事件循环读取；失效代不复活，持久解绑仍精确匹配原 token。
             if not is_current(session_id, thread_id, token):
-                released.extend(self.release_runtime_binding(session_id, thread_id, token, messages=messages))
+                # 复用删除 drain 的原 holder；新代上传可并行，物理删除须等待本次 worker。
+                async with self.deletion_holder.lock_for(session_id, exclusive=False, wait=False) as holder:
+                    if holder.acquired:
+                        released.extend(await self.release_runtime_binding(session_id, thread_id, token, messages=messages))
         return tuple(released)
 
     def _upload_pin_owner(self, session_id: str, pin: SessionOperationLease) -> tuple[str, str]:

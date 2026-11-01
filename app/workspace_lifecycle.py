@@ -88,7 +88,7 @@ async def _collect_attachment_directories_periodically(container: AppContainer) 
     while True:
         await asyncio.sleep(6 * 3600)
         try:
-            container.attachment_blob_store.reconcile_runtime_bindings(
+            await container.attachment_blob_store.reconcile_runtime_bindings(
                 messages=container.checkpointer,
                 is_current=container.thread_residency_tracker.is_current_runtime_binding,
             )
@@ -377,7 +377,7 @@ class WorkspaceLifespan:
             if recovered_ingests:
                 logger.info("已按持久 operation 收敛 %s 个附件上传 pin", recovered_ingests)
             with _workspace_startup_stage(container, "attachment_blob_store.reconcile_runtime_bindings"):
-                container.attachment_blob_store.reconcile_runtime_bindings(
+                await container.attachment_blob_store.reconcile_runtime_bindings(
                     messages=container.checkpointer,
                     is_current=container.thread_residency_tracker.is_current_runtime_binding,
                 )

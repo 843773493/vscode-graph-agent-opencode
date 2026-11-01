@@ -114,10 +114,10 @@ async def test_cold_owner_releases_crash_binding_without_resetting_deadline(
     aid = parse_attachment_uri(ref.file_id, require_file=True).attachment_id
     cold_tracker = ThreadResidencyTracker()
     with closing(AttachmentBlobStore(case.runner.workspace, path_resolver=case.runner.container.session_service.path_resolver, clock=clock)) as cold:
-        assert cold.reconcile_runtime_bindings(messages=case.runner.saver, is_current=cold_tracker.is_current_runtime_binding) == (aid,)
+        assert await cold.reconcile_runtime_bindings(messages=case.runner.saver, is_current=cold_tracker.is_current_runtime_binding) == (aid,)
         deadline = cold._catalog.get_directory(aid).gc_after
         clock.advance(12)
-        assert cold.reconcile_runtime_bindings(messages=case.runner.saver, is_current=cold_tracker.is_current_runtime_binding) == ()
+        assert await cold.reconcile_runtime_bindings(messages=case.runner.saver, is_current=cold_tracker.is_current_runtime_binding) == ()
         assert cold._catalog.get_directory(aid).gc_after == deadline
 
 
@@ -144,7 +144,7 @@ async def test_existing_uri_input_has_pin_before_accept_and_queue_survives_cold_
     cold_tracker = ThreadResidencyTracker()
     with closing(AttachmentBlobStore(case.runner.workspace, path_resolver=container.session_service.path_resolver, clock=clock)) as cold:
         await cold.recover_idle_session(sid, messages=container.checkpointer)
-        assert cold.reconcile_runtime_bindings(messages=container.checkpointer, is_current=cold_tracker.is_current_runtime_binding) == ()
+        assert await cold.reconcile_runtime_bindings(messages=container.checkpointer, is_current=cold_tracker.is_current_runtime_binding) == ()
         with closing(cold._open_control_store(sid)) as control:
             assert not control.list_non_terminal_leases()
         clock.advance(31)
@@ -162,7 +162,7 @@ async def test_never_resident_queued_upload_is_not_a_crash_orphan(startup_contai
     tracker = ThreadResidencyTracker()
     store = container.attachment_blob_store
     assert tracker.snapshot(session.session_id, message.thread_id).residency == "cold"
-    assert store.reconcile_runtime_bindings(messages=container.checkpointer, is_current=tracker.is_current_runtime_binding) == ()
+    assert await store.reconcile_runtime_bindings(messages=container.checkpointer, is_current=tracker.is_current_runtime_binding) == ()
     assert store.read(session.session_id, message.attachments[0].file_id).data == b"cold queued"
     aid = parse_attachment_uri(message.attachments[0].file_id, require_file=True).attachment_id
     assert store._catalog.get_directory(aid).gc_after is None
@@ -185,7 +185,7 @@ async def test_queued_input_retains_previous_runtime_then_old_release_cannot_det
     await case.tracker.close(session_id=sid)
     assert store._catalog.runtime_bindings() == ((sid, tid, old_token),)
     cold_tracker = ThreadResidencyTracker()
-    assert store.reconcile_runtime_bindings(messages=container.checkpointer, is_current=cold_tracker.is_current_runtime_binding) == ()
+    assert await store.reconcile_runtime_bindings(messages=container.checkpointer, is_current=cold_tracker.is_current_runtime_binding) == ()
     clock.advance(31)
     assert await store.collect_garbage(leases=container.external_resource_leases) == ()
     result = await container.job_service.start_job(
@@ -199,7 +199,7 @@ async def test_queued_input_retains_previous_runtime_then_old_release_cannot_det
     assert job.status == JobStatus.completed, job.error_message
     new_token = case.tracker.runtime_binding_token(case.tracker.snapshot(sid, tid).generation)
     assert new_token != old_token and len(case.compiled) == 2
-    assert store.release_runtime_binding(sid, tid, old_token, messages=container.checkpointer) == ()
+    assert await store.release_runtime_binding(sid, tid, old_token, messages=container.checkpointer) == ()
     assert store._catalog.runtime_bindings() == ((sid, tid, new_token),)
     assert store.read(sid, ref.file_id).data == b"runtime original"
     await case.tracker.close(session_id=sid)
@@ -219,17 +219,21 @@ async def test_pin_to_queue_handoff_cannot_leave_a_false_unreferenced_window(
     message = await container.message_service.create(sid, MessageCreateRequest(content="下一条上传", attachments=[upload(b"next upload")]))
     original = SessionControlStore.list_non_terminal_leases
     accepted = False
+    loop = asyncio.get_running_loop()
+
+    async def accept_on_event_loop() -> None:
+        accept_queued_message(container.message_service, message)
 
     def accept_at_pin_read(control: SessionControlStore):
         nonlocal accepted
         if not accepted:
             accepted = True
             # 固定真实跨库交接时序：队列提交且 pin 已结算，然后才返回扫描读数。
-            accept_queued_message(container.message_service, message)
+            asyncio.run_coroutine_threadsafe(accept_on_event_loop(), loop).result(timeout=5)
         return original(control)
 
     monkeypatch.setattr(SessionControlStore, "list_non_terminal_leases", accept_at_pin_read)
-    assert store.release_runtime_binding(sid, tid, token, messages=container.checkpointer) == ()
+    assert await store.release_runtime_binding(sid, tid, token, messages=container.checkpointer) == ()
     assert accepted and container.checkpointer.execution_queue_snapshot(sid, tid).records
     assert store._catalog.get_directory(aid).gc_after is None
     assert (sid, tid, token) in store._catalog.runtime_bindings()

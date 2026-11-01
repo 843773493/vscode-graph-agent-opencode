@@ -102,7 +102,7 @@ async def test_product_directory_growth_cold_recovery_and_due_gc(
         clock=lambda: due,
     )) as cold:
         assert await cold.recover_pending_ingests(messages=container.checkpointer) == 0
-        assert cold.reconcile_runtime_bindings(
+        assert await cold.reconcile_runtime_bindings(
             messages=container.checkpointer, is_current=tracker.is_current_runtime_binding,
         ) == ()
         recovery_ns = perf_counter_ns() - started

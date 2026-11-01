@@ -250,6 +250,12 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
             "WHERE state='active' AND binding_token LIKE 'runtime:%' ORDER BY session_id,thread_id,binding_token",
         ))
 
+    def has_runtime_binding(self, session_id: str, thread_id: str, token: str) -> bool:
+        return self._connected().execute(
+            "SELECT 1 FROM attachment_directory_associations WHERE session_id=? AND thread_id=? "
+            "AND binding_token=? AND state='active' LIMIT 1", (session_id, thread_id, token),
+        ).fetchone() is not None
+
     @staticmethod
     def _mark_zero_associations(connection: sqlite3.Connection, attachment_id: str, now: datetime) -> None:
         timestamp = now.astimezone(UTC).isoformat()
