@@ -35,6 +35,7 @@ from app.schemas.gateway.users import (
 from app.schemas.gateway.workspaces import (
     CreateFederationManagedWorkspaceRequest,
     CreateGatewayManagedWorkspaceRequest,
+    GatewayServiceStatusDTO,
 )
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
@@ -229,6 +230,25 @@ def test_gateway_diagnostic_schema_follows_management_routes_and_keeps_business_
             model.model_validate(invalid)
 
 
+def test_gateway_service_status_follows_workspace_route_and_keeps_business_validation(
+    gateway_openapi: JsonSchemaValue,
+) -> None:
+    original = deepcopy(gateway_openapi)
+    response = gateway_openapi["paths"]["/api/gateway/workspaces"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    schemas = gateway_openapi["components"]["schemas"]
+    envelope = schemas[response["$ref"].rsplit("/", 1)[1]]
+    assert envelope["properties"]["data"]["anyOf"][0]["$ref"].endswith("/GatewayWorkspaceListDTO")
+    assert schemas["GatewayWorkspaceListDTO"]["properties"]["items"]["items"]["$ref"].endswith("/GatewayWorkspaceDTO")
+    services = schemas["GatewayWorkspaceDTO"]["properties"]["services"]
+    assert services["additionalProperties"]["$ref"].endswith("/GatewayServiceStatusDTO")
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+    assert gateway_openapi == original
+    service = GatewayServiceStatusDTO(status="ready", health_path="/health", local_port=8010)
+    assert service.model_dump()["local_port"] == 8010
+    with pytest.raises(ValidationError, match="status"):
+        GatewayServiceStatusDTO.model_validate({**service.model_dump(), "status": "unknown"})
+
+
 @pytest.mark.parametrize("name", [
     "GatewayDirectoryListDTO", "NativeDirectoryBindRequest", "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
     "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest", "CreateFederationManagedWorkspaceRequest",
@@ -237,6 +257,7 @@ def test_gateway_diagnostic_schema_follows_management_routes_and_keeps_business_
     "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO", "CreateGatewayUserRequest",
     "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
     "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
+    "GatewayServiceStatusDTO",
 ])
 def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -283,6 +304,11 @@ def test_gateway_schema_requires_registered_roots(gateway_openapi: JsonSchemaVal
     ("GatewayDiagnosticProcessDTO", "workspace_ids", {"type": "object"}),
     ("GatewayDiagnosticLoggingStateDTO", "pid", {"type": "string"}),
     ("GatewayDiagnosticLogSinkDTO", "inode", {"type": "integer"}),
+    ("GatewayServiceStatusDTO", "status", {"type": "integer"}),
+    ("GatewayServiceStatusDTO", "health_path", {"type": "integer"}),
+    ("GatewayServiceStatusDTO", "local_port", {"type": "string"}),
+    ("GatewayServiceStatusDTO", "remote_port", {"type": "string"}),
+    ("GatewayServiceStatusDTO", "error", {"type": "array", "items": {"type": "string"}}),
 ])
 def test_gateway_schema_rejects_nested_public_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -305,6 +331,7 @@ def test_gateway_schema_rejects_nested_public_shape_drift(
     "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
     "GatewayDiagnosticLogDTO", "GatewayDiagnosticWorkspaceDTO", "GatewayDiagnosticProcessDTO",
     "GatewayDiagnosticLoggingStateDTO", "GatewayDiagnosticLogSinkDTO",
+    "GatewayServiceStatusDTO",
 ])
 def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,

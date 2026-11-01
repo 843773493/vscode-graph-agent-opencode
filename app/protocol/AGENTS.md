@@ -7,7 +7,7 @@
 - 可以维护 Python 协议生成入口、JSON/SSE/WS codec 和边界适配器。
 - `schema.py` 从 descriptor 核对公开 JSON 的字段、嵌套结构和类型；异形消息仅由具名 adapter 投影或明确接管。业务联合的各分支合计必须完整覆盖协议字段，只有具备 presence 的协议字段可因分支而省略。业务取值与字段间约束仍属于内部 Pydantic。
 - Session SSE 的唯一生成投影从 wire descriptor 推导信封、展平 header、事件标签和 payload；状态联合保留既有业务 adapter，不能将这项具名接管扩为跳过其它结构。
-- `openapi.py` 只登记已迁齐的 HTTP 根模型；导出与协议生成均在发布产物前递归校验真实 OpenAPI，并可消费本次 Buf 编译的 descriptor。
+- `openapi.py` 只登记已迁齐的 HTTP 公开模型；导出与协议生成均在发布产物前递归校验真实 OpenAPI，并可消费本次 Buf 编译的 descriptor。
 - 工作区信息、上下文和索引响应共用该检查；动态元数据仍按原 Struct 合同传递，其位置字段的序列化约束继续归 Pydantic 与原 owner。
 - Agent 目录、详情和默认 Agent／Provider 设置共用该检查，嵌套 Provider 由 descriptor 递归核对；默认值和配置可用性仍归 Pydantic 与原 owner。
 - Workspace 与 Gateway 的 HTTP 根复用同一个递归检查入口；Gateway 目录浏览、原生目录绑定及解析的结构从其 descriptor 核对，原生输入许可、目录 URI 和授权仍由既有 Pydantic／owner 负责。
@@ -16,6 +16,7 @@
 - Gateway 端口转发的创建、改标签、改本机端口请求及完整列表共用该检查，列表成员由 descriptor 递归核对；端口范围、协议、标签及 loopback 等业务约束仍归 Pydantic 与原 owner。
 - Gateway 用户列表、创建及访问租约的请求和响应共用该检查，用户及租约成员由 descriptor 递归核对；名称、跟踪值、租约互斥和授权仍归 Pydantic 与原 owner。
 - Gateway 健康、诊断及开发重启回执共用该检查，诊断工作区、日志、进程和日志文件身份由 descriptor 递归核对；进程与计数范围、状态、管理授权及原始日志入口例外仍归 Pydantic 与原 owner。
+- Gateway 工作区列表内的服务状态共用该检查，状态、健康路径、端口与错误字段由 descriptor 核对；服务状态取值及生命周期仍归 Pydantic 与原 owner。
 - Gateway 联邦工作区、入站访问范围、资源目录与会话搜索共用该检查，工作区、peer、目录条目及搜索错误由 descriptor 递归核对；后端身份、服务集合、查询状态和管理授权仍归 Pydantic 与原 owner。资源条目的 Struct 快照边界沿用原合同，内部资源结构由工作区协议负责。
 - Gateway 运行组请求的 `desired_workspace_ids` 仅在结构检查时由 HTTP 可空数组投影到 proto 的具名 presence 包装消息，根及包装成员仍由同一 descriptor 检查；HTTP 未指定、清空和非空集合的原语义、完整组前置条件及去重约束仍归 Pydantic 与生命周期 owner。
 - Gateway 工作区注册、更新、排序、激活及导航树与面包屑共用该检查，嵌套导航节点由 descriptor 递归核对；原生路径输入、显式空值、节点类型配对与放置约束仍归 Pydantic，导航和生命周期仍归原 owner。

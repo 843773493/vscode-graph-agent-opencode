@@ -17,7 +17,7 @@ from app.protocol.generated.boxteam.workspace.v2 import (
 )
 from app.protocol.schema import assert_public_schema
 
-# 只登记本切片已迁齐的 HTTP 根模型，嵌套字段由 descriptor 递归校验。
+# 只登记已迁齐的 HTTP 公开模型，嵌套字段由 descriptor 递归校验。
 HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     name: public_pb2.DESCRIPTOR.message_types_by_name[name]
     for name in (
@@ -73,6 +73,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO",
         "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
         "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
+        "GatewayServiceStatusDTO",
         "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO",
         "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
         "AddLocalWorkspaceRequest", "UpdateGatewayWorkspaceRequest", "ReorderGatewayWorkspacesRequest",
