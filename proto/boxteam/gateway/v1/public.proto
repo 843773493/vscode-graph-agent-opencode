@@ -93,6 +93,10 @@ message FederationProtocolManifestDTO {
   string gateway_id = 2;
   optional int64 federation_depth = 3;
   repeated string capabilities = 4;
+  optional int64 config_event_cursor = 5;
+  optional string config_reload_state = 6;
+  optional bool config_reload_restart_required = 7;
+  optional string config_reload_candidate_ref = 8;
 }
 
 message FederationWorkspaceDTO {
@@ -358,6 +362,10 @@ message GatewayRemoteConnectionSummaryDTO {
   string username = 7;
   optional string ssh_config_host = 8;
   int64 remote_gateway_port = 9;
+  optional int64 config_event_cursor = 10;
+  optional string config_reload_state = 11;
+  optional bool restart_required = 12;
+  optional string candidate_ref = 13;
 }
 
 message GatewayResourceDTO {

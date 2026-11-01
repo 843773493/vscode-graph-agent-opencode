@@ -59,7 +59,6 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     )
 }
 
-# TODO：联邦 manifest 及工作区列表 remote 尚未同步 proto，需迁齐生成绑定后再登记。
 GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     name: gateway_public_pb2.DESCRIPTOR.message_types_by_name[name]
     for name in (
@@ -76,7 +75,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
         "GatewayConfigSourcesDTO", "GatewayConfigReloadStatusDTO", "GatewayConfigEventsDTO",
         "GatewayConfigPendingHealthProofRequest", "GatewayConfigPendingDiscardRequest",
-        "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO",
+        "FederationProtocolManifestDTO", "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO",
+        "GatewayWorkspaceListDTO", "GatewayRuntimeStateResultDTO", "GatewayRuntimeRestartResultDTO",
         "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
         "AddLocalWorkspaceRequest", "UpdateGatewayWorkspaceRequest", "ReorderGatewayWorkspacesRequest",
         "ActivateGatewayWorkspaceResultDTO", "WorkspaceFolderCreateRequest", "WorkspaceNavigationNodeUpdateRequest",

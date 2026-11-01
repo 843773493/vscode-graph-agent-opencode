@@ -386,6 +386,26 @@ export declare type FederationProtocolManifestDTO = Message<"boxteam.gateway.v1.
    * @generated from field: repeated string capabilities = 4;
    */
   capabilities: string[];
+
+  /**
+   * @generated from field: optional int64 config_event_cursor = 5;
+   */
+  configEventCursor?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string config_reload_state = 6;
+   */
+  configReloadState?: string | undefined;
+
+  /**
+   * @generated from field: optional bool config_reload_restart_required = 7;
+   */
+  configReloadRestartRequired?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string config_reload_candidate_ref = 8;
+   */
+  configReloadCandidateRef?: string | undefined;
 };
 
 /**
@@ -1526,6 +1546,26 @@ export declare type GatewayRemoteConnectionSummaryDTO = Message<"boxteam.gateway
    * @generated from field: int64 remote_gateway_port = 9;
    */
   remoteGatewayPort: bigint;
+
+  /**
+   * @generated from field: optional int64 config_event_cursor = 10;
+   */
+  configEventCursor?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string config_reload_state = 11;
+   */
+  configReloadState?: string | undefined;
+
+  /**
+   * @generated from field: optional bool restart_required = 12;
+   */
+  restartRequired?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string candidate_ref = 13;
+   */
+  candidateRef?: string | undefined;
 };
 
 /**

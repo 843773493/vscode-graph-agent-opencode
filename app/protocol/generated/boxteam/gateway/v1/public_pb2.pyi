@@ -142,16 +142,24 @@ class DevelopmentRuntimeRestartDTO(_message.Message):
     def __init__(self, status: _Optional[str] = ..., previous_process_id: _Optional[int] = ..., helper_process_id: _Optional[int] = ..., delay_ms: _Optional[int] = ...) -> None: ...
 
 class FederationProtocolManifestDTO(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "federation_depth", "capabilities")
+    __slots__ = ("protocol_version", "gateway_id", "federation_depth", "capabilities", "config_event_cursor", "config_reload_state", "config_reload_restart_required", "config_reload_candidate_ref")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     FEDERATION_DEPTH_FIELD_NUMBER: _ClassVar[int]
     CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_EVENT_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_RELOAD_STATE_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_RELOAD_RESTART_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_RELOAD_CANDIDATE_REF_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     federation_depth: int
     capabilities: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., federation_depth: _Optional[int] = ..., capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
+    config_event_cursor: int
+    config_reload_state: str
+    config_reload_restart_required: bool
+    config_reload_candidate_ref: str
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., federation_depth: _Optional[int] = ..., capabilities: _Optional[_Iterable[str]] = ..., config_event_cursor: _Optional[int] = ..., config_reload_state: _Optional[str] = ..., config_reload_restart_required: _Optional[bool] = ..., config_reload_candidate_ref: _Optional[str] = ...) -> None: ...
 
 class FederationWorkspaceDTO(_message.Message):
     __slots__ = ("workspace_id", "name", "managed", "connection_kind", "services", "backend_workspace_id", "backend_generation", "affected_workspace_ids")
@@ -588,7 +596,7 @@ class GatewayManagedWorkspaceListDTO(_message.Message):
     def __init__(self, gateway_connection_id: _Optional[str] = ..., gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., connection_kind: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayManagedWorkspaceDTO, _Mapping]]] = ...) -> None: ...
 
 class GatewayRemoteConnectionSummaryDTO(_message.Message):
-    __slots__ = ("gateway_connection_id", "remote_workspace_id", "gateway_id", "name", "host", "port", "username", "ssh_config_host", "remote_gateway_port")
+    __slots__ = ("gateway_connection_id", "remote_workspace_id", "gateway_id", "name", "host", "port", "username", "ssh_config_host", "remote_gateway_port", "config_event_cursor", "config_reload_state", "restart_required", "candidate_ref")
     GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     REMOTE_WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
@@ -598,6 +606,10 @@ class GatewayRemoteConnectionSummaryDTO(_message.Message):
     USERNAME_FIELD_NUMBER: _ClassVar[int]
     SSH_CONFIG_HOST_FIELD_NUMBER: _ClassVar[int]
     REMOTE_GATEWAY_PORT_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_EVENT_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_RELOAD_STATE_FIELD_NUMBER: _ClassVar[int]
+    RESTART_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_REF_FIELD_NUMBER: _ClassVar[int]
     gateway_connection_id: str
     remote_workspace_id: str
     gateway_id: str
@@ -607,7 +619,11 @@ class GatewayRemoteConnectionSummaryDTO(_message.Message):
     username: str
     ssh_config_host: str
     remote_gateway_port: int
-    def __init__(self, gateway_connection_id: _Optional[str] = ..., remote_workspace_id: _Optional[str] = ..., gateway_id: _Optional[str] = ..., name: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., username: _Optional[str] = ..., ssh_config_host: _Optional[str] = ..., remote_gateway_port: _Optional[int] = ...) -> None: ...
+    config_event_cursor: int
+    config_reload_state: str
+    restart_required: bool
+    candidate_ref: str
+    def __init__(self, gateway_connection_id: _Optional[str] = ..., remote_workspace_id: _Optional[str] = ..., gateway_id: _Optional[str] = ..., name: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., username: _Optional[str] = ..., ssh_config_host: _Optional[str] = ..., remote_gateway_port: _Optional[int] = ..., config_event_cursor: _Optional[int] = ..., config_reload_state: _Optional[str] = ..., restart_required: _Optional[bool] = ..., candidate_ref: _Optional[str] = ...) -> None: ...
 
 class GatewayResourceDTO(_message.Message):
     __slots__ = ("gateway_connection_id", "gateway_name", "workspace_id", "workspace_name", "connection_kind", "session_id", "session_title", "resource")

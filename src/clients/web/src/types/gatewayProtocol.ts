@@ -11,6 +11,13 @@ type OptionalFields<T> = T extends readonly (infer Item)[]
       : OptionalFields<T[Key]> }
     : T;
 
+// HTTP 的显式 null 仅在具名边界补回，不复制公开字段及其值类型。
+type NullableOptionalFields<T, Keys extends keyof T = keyof T> = {
+  [Key in keyof T]: Key extends Keys
+    ? undefined extends T[Key] ? T[Key] | null : T[Key]
+    : T[Key];
+};
+
 export type ActivateGatewayWorkspaceResultDTO = OptionalFields<GatewayProtocol.ActivateGatewayWorkspaceResultDTO>;
 export type AddLocalWorkspaceRequest = OptionalFields<GatewayProtocol.AddLocalWorkspaceRequest>;
 export type AddRemoteGatewayRequest = OptionalFields<GatewayProtocol.AddRemoteGatewayRequest>;
@@ -86,9 +93,10 @@ export type GatewayInboundPeerDTO = OptionalFields<GatewayProtocol.GatewayInboun
 export type GatewayInboundWorkspaceDTO = OptionalFields<GatewayProtocol.GatewayInboundWorkspaceDTO>;
 export type GatewayManagedWorkspaceDTO = OptionalFields<GatewayProtocol.GatewayManagedWorkspaceDTO>;
 export type GatewayManagedWorkspaceListDTO = OptionalFields<GatewayProtocol.GatewayManagedWorkspaceListDTO>;
-export type GatewayRemoteConnectionSummaryDTO = Omit<OptionalFields<GatewayProtocol.GatewayRemoteConnectionSummaryDTO>, "ssh_config_host"> & {
-  ssh_config_host?: string | null;
-};
+export type GatewayRemoteConnectionSummaryDTO = NullableOptionalFields<
+  GatewayProtocol.GatewayRemoteConnectionSummaryDTO,
+  "ssh_config_host" | "config_event_cursor" | "config_reload_state" | "candidate_ref"
+>;
 export type GatewayRuntimeBlockerDTO = OptionalFields<GatewayProtocol.GatewayRuntimeBlockerDTO>;
 export type GatewayRuntimeRestartResultDTO = OptionalFields<GatewayProtocol.GatewayRuntimeRestartResultDTO>;
 export type GatewayRuntimeStateResultDTO = OptionalFields<GatewayProtocol.GatewayRuntimeStateResultDTO>;
@@ -141,10 +149,6 @@ export type GatewayWorkspaceDTO = Omit<OptionalFields<GatewayProtocol.GatewayWor
 export type GatewayWorkspaceListDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceListDTO>, "active_workspace_id" | "items"> & {
   active_workspace_id?: string | null;
   items?: GatewayWorkspaceDTO[];
-};
-// Proto 的 presence 字段在 HTTP 响应中允许显式 null；取值约束仍由配置 owner 定义。
-type NullableOptionalFields<T> = {
-  [Key in keyof T]: undefined extends T[Key] ? T[Key] | null : T[Key];
 };
 export type GatewayConfigReloadStatusDTO = Omit<
   NullableOptionalFields<GatewayProtocol.GatewayConfigReloadStatusDTO>, "reason" | "layer_digests"

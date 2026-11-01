@@ -96,6 +96,10 @@ export interface FederationProtocolManifestDTO {
   gateway_id: string;
   federation_depth?: number | undefined;
   capabilities: string[];
+  config_event_cursor?: number | undefined;
+  config_reload_state?: string | undefined;
+  config_reload_restart_required?: boolean | undefined;
+  config_reload_candidate_ref?: string | undefined;
 }
 
 export interface FederationWorkspaceDTO {
@@ -363,6 +367,10 @@ export interface GatewayRemoteConnectionSummaryDTO {
   username: string;
   ssh_config_host?: string | undefined;
   remote_gateway_port: number;
+  config_event_cursor?: number | undefined;
+  config_reload_state?: string | undefined;
+  restart_required?: boolean | undefined;
+  candidate_ref?: string | undefined;
 }
 
 export interface GatewayResourceDTO {
@@ -1335,7 +1343,16 @@ export const DevelopmentRuntimeRestartDTO: MessageFns<DevelopmentRuntimeRestartD
 };
 
 function createBaseFederationProtocolManifestDTO(): FederationProtocolManifestDTO {
-  return { protocol_version: 0, gateway_id: "", federation_depth: undefined, capabilities: [] };
+  return {
+    protocol_version: 0,
+    gateway_id: "",
+    federation_depth: undefined,
+    capabilities: [],
+    config_event_cursor: undefined,
+    config_reload_state: undefined,
+    config_reload_restart_required: undefined,
+    config_reload_candidate_ref: undefined,
+  };
 }
 
 export const FederationProtocolManifestDTO: MessageFns<FederationProtocolManifestDTO> = {
@@ -1347,6 +1364,18 @@ export const FederationProtocolManifestDTO: MessageFns<FederationProtocolManifes
       capabilities: globalThis.Array.isArray(object?.capabilities)
         ? object.capabilities.map((e: any) => globalThis.String(e))
         : [],
+      config_event_cursor: isSet(object.config_event_cursor)
+        ? globalThis.Number(object.config_event_cursor)
+        : undefined,
+      config_reload_state: isSet(object.config_reload_state)
+        ? globalThis.String(object.config_reload_state)
+        : undefined,
+      config_reload_restart_required: isSet(object.config_reload_restart_required)
+        ? globalThis.Boolean(object.config_reload_restart_required)
+        : undefined,
+      config_reload_candidate_ref: isSet(object.config_reload_candidate_ref)
+        ? globalThis.String(object.config_reload_candidate_ref)
+        : undefined,
     };
   },
 
@@ -1364,6 +1393,18 @@ export const FederationProtocolManifestDTO: MessageFns<FederationProtocolManifes
     if (message.capabilities?.length) {
       obj.capabilities = message.capabilities;
     }
+    if (message.config_event_cursor !== undefined) {
+      obj.config_event_cursor = Math.round(message.config_event_cursor);
+    }
+    if (message.config_reload_state !== undefined) {
+      obj.config_reload_state = message.config_reload_state;
+    }
+    if (message.config_reload_restart_required !== undefined) {
+      obj.config_reload_restart_required = message.config_reload_restart_required;
+    }
+    if (message.config_reload_candidate_ref !== undefined) {
+      obj.config_reload_candidate_ref = message.config_reload_candidate_ref;
+    }
     return obj;
   },
 
@@ -1378,6 +1419,10 @@ export const FederationProtocolManifestDTO: MessageFns<FederationProtocolManifes
     message.gateway_id = object.gateway_id ?? "";
     message.federation_depth = object.federation_depth ?? undefined;
     message.capabilities = object.capabilities?.map((e) => e) || [];
+    message.config_event_cursor = object.config_event_cursor ?? undefined;
+    message.config_reload_state = object.config_reload_state ?? undefined;
+    message.config_reload_restart_required = object.config_reload_restart_required ?? undefined;
+    message.config_reload_candidate_ref = object.config_reload_candidate_ref ?? undefined;
     return message;
   },
 };
@@ -3092,6 +3137,10 @@ function createBaseGatewayRemoteConnectionSummaryDTO(): GatewayRemoteConnectionS
     username: "",
     ssh_config_host: undefined,
     remote_gateway_port: 0,
+    config_event_cursor: undefined,
+    config_reload_state: undefined,
+    restart_required: undefined,
+    candidate_ref: undefined,
   };
 }
 
@@ -3107,6 +3156,14 @@ export const GatewayRemoteConnectionSummaryDTO: MessageFns<GatewayRemoteConnecti
       username: isSet(object.username) ? globalThis.String(object.username) : "",
       ssh_config_host: isSet(object.ssh_config_host) ? globalThis.String(object.ssh_config_host) : undefined,
       remote_gateway_port: isSet(object.remote_gateway_port) ? globalThis.Number(object.remote_gateway_port) : 0,
+      config_event_cursor: isSet(object.config_event_cursor)
+        ? globalThis.Number(object.config_event_cursor)
+        : undefined,
+      config_reload_state: isSet(object.config_reload_state)
+        ? globalThis.String(object.config_reload_state)
+        : undefined,
+      restart_required: isSet(object.restart_required) ? globalThis.Boolean(object.restart_required) : undefined,
+      candidate_ref: isSet(object.candidate_ref) ? globalThis.String(object.candidate_ref) : undefined,
     };
   },
 
@@ -3139,6 +3196,18 @@ export const GatewayRemoteConnectionSummaryDTO: MessageFns<GatewayRemoteConnecti
     if (message.remote_gateway_port !== 0) {
       obj.remote_gateway_port = Math.round(message.remote_gateway_port);
     }
+    if (message.config_event_cursor !== undefined) {
+      obj.config_event_cursor = Math.round(message.config_event_cursor);
+    }
+    if (message.config_reload_state !== undefined) {
+      obj.config_reload_state = message.config_reload_state;
+    }
+    if (message.restart_required !== undefined) {
+      obj.restart_required = message.restart_required;
+    }
+    if (message.candidate_ref !== undefined) {
+      obj.candidate_ref = message.candidate_ref;
+    }
     return obj;
   },
 
@@ -3160,6 +3229,10 @@ export const GatewayRemoteConnectionSummaryDTO: MessageFns<GatewayRemoteConnecti
     message.username = object.username ?? "";
     message.ssh_config_host = object.ssh_config_host ?? undefined;
     message.remote_gateway_port = object.remote_gateway_port ?? 0;
+    message.config_event_cursor = object.config_event_cursor ?? undefined;
+    message.config_reload_state = object.config_reload_state ?? undefined;
+    message.restart_required = object.restart_required ?? undefined;
+    message.candidate_ref = object.candidate_ref ?? undefined;
     return message;
   },
 };
