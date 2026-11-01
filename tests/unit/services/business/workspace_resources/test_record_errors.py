@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from collections.abc import Iterator
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -154,3 +155,128 @@ async def test_native_owner_store_failure_preserves_cause_and_unpublished_state(
     restored = await owner.get_resource(rid)
     assert restored["resource_id"] == record.resource_id
     assert resource_owner.transport.creates == 1
+
+
+@pytest.mark.parametrize("location", [
+    "/private/resource-record-input", r"C:\private\resource-record-input", r"\\server\private\resource-record-input",
+], ids=["posix", "drive", "unc"])
+@pytest.mark.parametrize("field", [
+    "resource_id", "retention_scope", "created_at", "unexpected_field", "source_thread", "fork_attachments",
+])
+async def test_cold_record_rejection_keeps_native_values_in_diagnostics_only(
+    resource_owner: OwnerFixture, error_log: pytest.LogCaptureFixture,
+    owner_log_failure: OSError | None, location: str, field: str,
+) -> None:
+    resource = await resource_owner.create()
+    rid = resource["resource_id"]
+    assert isinstance(rid, str) and resource_owner.owner is not None
+    store = resource_owner.owner._store
+    original, before = store.path.read_bytes(), store.all()
+    payload = json.loads(original)
+    row = payload["records"][0]
+    if field == "unexpected_field":
+        row[location] = "未登记字段"
+    elif field == "source_thread":
+        row[field][location] = "未登记 Thread 字段"
+    elif field == "fork_attachments":
+        row[field] = {"frozen-creation": {
+            "creation_key": "frozen-creation", "target_thread": deepcopy(row["source_thread"]),
+            "expected_revision": 1, "state": "dispatching", "lease_id": "original-lease",
+            location: "未登记回执字段",
+        }}
+    else:
+        row[field] = location
+    corrupted = json.dumps(payload, ensure_ascii=False).encode()
+    store.path.write_bytes(corrupted)
+    try:
+        with pytest.raises(ValueError) as caught:
+            resource_owner.restart()
+        detail, cause = str(caught.value), caught.value.__cause__
+        assert location not in detail and repr(location) not in detail
+        assert cause is not None
+        assert str(store.path) not in detail
+        assert f"workspace_id={store.workspace_id}" in detail and f"kind={store.kind}" in detail
+        assert "stage=validate" in detail
+        assert any(record.exc_info and record.exc_info[1] is cause for record in error_log.records)
+        assert str(store.path) in error_log.text
+        assert location in error_log.text or repr(location)[1:-1] in error_log.text
+        assert "owner-log-secret" not in detail
+        if owner_log_failure is not None:
+            assert "diagnostic_sink_error=OSError" in detail
+            assert any(str(owner_log_failure) in note for note in cause.__notes__)
+        assert store.path.read_bytes() == corrupted and store.all() == before
+        assert resource_owner.transport.creates == 1
+    finally:
+        store.path.write_bytes(original)
+    recovered = resource_owner.restart()
+    assert recovered._store.all() == before and store.path.read_bytes() == original
+    assert (await recovered.get_resource(rid))["resource_id"] == rid
+    assert resource_owner.transport.creates == 1
+
+
+@pytest.mark.parametrize("payload,error_type,stage", [
+    (b"null", TypeError, "validate"),
+    (b"[]", TypeError, "validate"),
+    (b"{\"records\":", ValueError, "decode"),
+    (b"\xff", ValueError, "decode"),
+])
+async def test_cold_record_rejects_malformed_root_without_replacing_original(
+    resource_owner: OwnerFixture, error_log: pytest.LogCaptureFixture,
+    owner_log_failure: OSError | None, payload: bytes, error_type: type[Exception], stage: str,
+) -> None:
+    resource = await resource_owner.create()
+    rid = resource["resource_id"]
+    assert isinstance(rid, str) and resource_owner.owner is not None
+    store = resource_owner.owner._store
+    original = store.path.read_bytes()
+    store.path.write_bytes(payload)
+    try:
+        with pytest.raises(error_type) as caught:
+            resource_owner.restart()
+        error = caught.value
+        assert error.__cause__ is not None
+        assert f"stage={stage}" in str(error) and str(store.path) not in str(error)
+        assert any(record.exc_info and record.exc_info[1] is error.__cause__ for record in error_log.records)
+        if isinstance(error.__cause__, json.JSONDecodeError):
+            for coordinate in ("lineno", "colno", "pos"):
+                assert f"{coordinate}={getattr(error.__cause__, coordinate)}" in str(error)
+        if owner_log_failure is not None:
+            assert "diagnostic_sink_error=OSError" in str(error)
+        assert store.path.read_bytes() == payload
+    finally:
+        store.path.write_bytes(original)
+    assert (await resource_owner.restart().get_resource(rid))["resource_id"] == rid
+    assert resource_owner.transport.creates == 1
+
+
+@pytest.mark.parametrize("field", ["owner_revision", "expected_revision", "committed_revision"])
+@pytest.mark.parametrize("revision", ["1", True, 1.5], ids=["string", "boolean", "fraction"])
+async def test_cold_record_never_coerces_persisted_revision(
+    resource_owner: OwnerFixture, error_log: pytest.LogCaptureFixture,
+    owner_log_failure: OSError | None, field: str, revision: object,
+) -> None:
+    await resource_owner.create()
+    assert resource_owner.owner is not None
+    store = resource_owner.owner._store
+    original = store.path.read_bytes()
+    payload = json.loads(original)
+    row = payload["records"][0]
+    if field == "owner_revision":
+        row[field] = revision
+    else:
+        row["fork_attachments"] = {"original-key": {
+            "creation_key": "original-key", "target_thread": row["source_thread"],
+            "expected_revision": 1, "state": "dispatching", "lease_id": "original-lease",
+            field: revision,
+        }}
+    corrupted = json.dumps(payload).encode()
+    store.path.write_bytes(corrupted)
+    try:
+        with pytest.raises(ValueError, match="stage=validate") as caught:
+            resource_owner.restart()
+        assert caught.value.__cause__ is not None
+        assert store.path.read_bytes() == corrupted
+        assert resource_owner.transport.creates == 1
+    finally:
+        store.path.write_bytes(original)
+    assert resource_owner.restart()._store.all() == store.all()

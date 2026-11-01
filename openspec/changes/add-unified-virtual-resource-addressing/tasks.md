@@ -1881,3 +1881,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原生产实现的34项日志sink反例均被真实 ENOTDIR／ENOENT 覆盖主错；最终150项不同单测、3项不同集成通过。新增产品验收由消息入口和原 model_stream 产生关键历史，覆盖四类持久记录及三个读取入口的24次双错拒绝、同入口恢复、原 Thread 续聊和4份 sealed request/hash 审计；既有真实 Gateway／Backend网络用例补验损坏拒绝与硬重启后原历史一致。另12项原生读取使用生产 `_RuntimeHandler` 和真实文件写入故障，核对同一 cause、原件不变及冷缓存不发布。
 - Ruff、compileall、新测试真实 Pyright 通过；Store 原2条 `reportIndexIssue` 的所属函数与表达式 AST 和原 HEAD 相同，前轮完整基线证据保留，不扩修。首轮两项健康日志分支的 artifact 装具期望已按原合同纠正，不计为产品反例。独立复审按本 worktree 的绝对目录及最终源码指纹确认无待处理 finding。证据：`out/tests/temp/message_stream_read_diagnostics_20261101/artifacts/verification.json`。
 - 全部测试使用外部超时和4GiB数据段保护，集成沿共享独占闸门。未改前端、公共fixture、配置迁移链或共享debug服务；本片不代Windows/Web、全局路径不变量或Store职责拆分总门，2.2／7.2仍未勾，整体51/53。
+
+
+### 2026-11-01 资源 owner 记录冷读拒绝（2.2／7.2部分收口）
+
+- 冷读直接从原 dataclass 推导整批结构，迁除 Thread／fork 回执逐字段构造；原 envelope、默认值、业务校验及写出格式保持。损坏 JSON／编码、根类型及嵌套结构明确拒绝，位置和原值仅留诊断与直接 cause，日志次错不覆盖原拒绝；全部候选成功才发布，不改写原件。三个 revision 字段严格要求整数，拒绝字符串、布尔与小数，避免冷读归一化历史版本；未更改有效记录格式或 schema 版本。
+- 原生产反例确认日期错误回显原路径；最终两领域相关回归1066 passed，新独立集成2 passed／28.09秒。正式 Session／ASGI 创建真实 PTY／Chromium 后注入日期及版本损坏，核原件、热记录、账本、外部身份／版本不变，恢复原字节后冷 store 逐项一致，原管理 API 停止同一资源。Ruff、compileall、新集成 Pyright 和本 change strict 通过；原生产两条 Pyright 诊断与完整 HEAD 基线按文件、规则、消息、函数及最窄表达式 AST 完全一致，新增单测零诊断。独立只读复审无待处理 finding，未代运行验证。
+- 命令、源码指纹、红绿原件、真实退出码及限制见 `out/tests/temp/resource_record_decode_20261101/artifacts/verification.json`。所有测试使用外部超时与4GiB数据段保护，集成沿原独占闸门；不代完整冷 owner 恢复、Backend硬重启、Gateway／Web、Windows或全局不变量。未改公共 fixture、前端、回归 driver、共享开发服务或他人暂存；2.2／7.2仍未勾，整体51/53，团队及MCP持有延期保持。

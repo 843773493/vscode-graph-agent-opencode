@@ -13,10 +13,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, Never
 
+from pydantic import ConfigDict, StrictInt, TypeAdapter, ValidationError
+
 from app.abstractions.workspace_resources import ResourceKind, RetentionScope
-from app.core.failures import report_failure
+from app.core.failures import failure_detail
 from app.core.identifier import validate_session_id, validate_thread_id
-from app.core.resource_uri import parse_resource_uri
+from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
 
@@ -37,10 +39,10 @@ class ForkAttachReceipt:
 
     creation_key: str
     target_thread: ThreadRef
-    expected_revision: int
+    expected_revision: StrictInt
     state: Literal["dispatching", "committed", "rejected"]
     lease_id: str | None = None
-    committed_revision: int | None = None
+    committed_revision: StrictInt | None = None
     error: str | None = None
 
     def validate(self, key: str, revision: int) -> None:
@@ -72,7 +74,7 @@ class OwnedResourceRecord:
     # 该列表只记录关联，不代表操作租约持有者或完整准入结果。
     thread_associations: list[ThreadRef] = field(default_factory=list)
     # owner 持久化的传输授权版本，用于版本校验，并与外部 transport_owner_revision 对账。
-    owner_revision: int = 1
+    owner_revision: StrictInt = 1
     # 生命周期状态；观察时来自外部运行快照，创建、停止或删除期间也可处于过渡状态。
     status: str = "creating"
     # 外部状态及前次操作结果的核实状态，与生命周期状态分开。
@@ -116,6 +118,9 @@ class OwnedResourceRecord:
             receipt.validate(key, self.owner_revision)
 
 
+_RESOURCE_RECORDS = TypeAdapter(list[OwnedResourceRecord], config=ConfigDict(extra="forbid"))
+
+
 class ResourceRecordStore:
     """原 owner 的唯一持久快照；读取副本，写盘成功后才发布。"""
 
@@ -125,44 +130,44 @@ class ResourceRecordStore:
         self.path = workspace_root / ".boxteam" / f"{kind}-resources.json"
         self._records: dict[str, OwnedResourceRecord] = {}
         self._write_lock = asyncio.Lock()
-        with self._io("read"):
-            if not self.path.exists():
-                return
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            with self._io("read"):
+                if not self.path.exists():
+                    return
+                payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as error:
+            self._raise_failure("decode", error)
+        if not isinstance(payload, dict):
+            self._raise_failure("validate", TypeError("记录根必须是对象"))
         if payload.get("schema_version") != 1 or payload.get("workspace_id") != workspace_id:
             self._raise_failure("validate", ValueError("持久格式或工作区不匹配"))
         if not isinstance(payload.get("records"), list):
             self._raise_failure("validate", TypeError("records 必须是数组"))
-        for raw in payload["records"]:
-            record = OwnedResourceRecord(
-                **{
-                    **raw,
-                    "source_thread": ThreadRef(**raw["source_thread"]),
-                    "thread_associations": [ThreadRef(**item) for item in raw["thread_associations"]],
-                    "fork_attachments": {
-                        key: ForkAttachReceipt(**{**item, "target_thread": ThreadRef(**item["target_thread"])})
-                        for key, item in raw.get("fork_attachments", {}).items()
-                    },
-                }
-            )
-            record.validate(workspace_id, kind)
-            if record.resource_id in self._records:
-                raise ValueError(f"资源 owner 记录重复: {record.resource_id}")
-            self._records[record.resource_id] = record
+        try:
+            # 结构直接取自现有 dataclass；Thread/回执/URI 的业务规则仍由原 owner 核对。
+            candidate = {}
+            for record in _RESOURCE_RECORDS.validate_python(payload["records"]):
+                record.validate(workspace_id, kind)
+                if record.resource_id in candidate:
+                    raise ValueError(f"资源 owner 记录重复: {record.resource_id}")
+                candidate[record.resource_id] = record
+        except (ValueError, TypeError) as error:
+            self._raise_failure("validate", error)
+        self._records = candidate
 
     def _raise_failure(self, stage: str, error: OSError | ValueError | TypeError) -> Never:
-        reason = "文件访问失败" if isinstance(error, OSError) else str(error)
-        detail = f"资源 owner {reason}: workspace_id={self.workspace_id}, kind={self.kind}, stage={stage}"
-        if isinstance(error, OSError):
-            detail += f", error_type={type(error).__name__}, errno={error.errno}"
-            if (winerror := getattr(error, "winerror", None)) is not None:
-                detail += f", winerror={winerror}"
         error.add_note(f"资源 owner 记录位置: {self.path}")
-        detail = report_failure(error, detail=detail)
+        detail = failure_detail(error, stage=stage,
+            label=f"资源 owner 记录失败: workspace_id={self.workspace_id}, kind={self.kind}",
+        )
         if isinstance(error, OSError):
             if (winerror := getattr(error, "winerror", None)) is not None:
                 raise type(error)(error.errno, detail, None, winerror) from error
             raise type(error)(error.errno, detail) from error
+        if isinstance(error, ResourceUriGrammarError):
+            raise ResourceUriGrammarError(error.reason_code, detail) from error
+        if isinstance(error, (ValidationError, UnicodeError, json.JSONDecodeError)):
+            raise ValueError(detail) from error  # noqa: TRY004 — 拒绝持久正文或编码，不是调用参数类型。
         raise type(error)(detail) from error
 
     @contextmanager
