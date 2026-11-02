@@ -20,14 +20,21 @@ export function changeFileUri(owner: ThreadOwner, changesetId: string, file: Pic
   return URI.from({ scheme, authority: owner.workspaceId, path: `/${owner.sessionId}/${changesetId}/${phase}/${file.file_path.split('/').pop()}${phase === 'patch' ? '.diff' : ''}`, query: JSON.stringify(source) });
 }
 
+export function changeFileSource(resource: URI): ChangeSource {
+  const source = JSON.parse(resource.query) as ChangeSource;
+  if (resource.scheme !== scheme || source.owner.workspaceId !== resource.authority || !['before', 'after', 'patch'].includes(source.phase)) {
+    throw new Error('更改文档的 owner 或阶段无效');
+  }
+  return source;
+}
+
 class ChangeFiles implements IFileSystemProviderWithFileReadWriteCapability {
   readonly capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.PathCaseSensitive | FileSystemProviderCapabilities.Readonly;
   readonly onDidChangeCapabilities = Event.None;
   readonly onDidChangeFile = Event.None;
   watch() { return Disposable.None; }
   private async snapshot(resource: URI): Promise<{ bytes: Uint8Array; modifiedAt: number }> {
-    const source = JSON.parse(resource.query) as ChangeSource;
-    if (source.owner.workspaceId !== resource.authority || !['before', 'after', 'patch'].includes(source.phase)) throw new Error('更改文档的 owner 或阶段无效');
+    const source = changeFileSource(resource);
     await gateway.assertWorkspace(source.owner);
     const data = await gateway.request<SessionChangesetDTO>(`/api/v1/sessions/${encodeURIComponent(source.owner.sessionId)}/changesets/${encodeURIComponent(source.changesetId)}`, {}, source.owner.routeId);
     if (data.session_id !== source.owner.sessionId || data.changeset_id !== source.changesetId) throw new Error('更改响应 owner 不匹配');
@@ -65,7 +72,7 @@ registerAction2(class OpenChangePatch extends Action2 {
     const editors = accessor.get(IEditorService);
     const resource = EditorResourceAccessor.getCanonicalUri(editors.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
     if (!resource || resource.scheme !== scheme) throw new Error('当前编辑器不是会话文件更改');
-    const source = JSON.parse(resource.query) as ChangeSource;
+    const source = changeFileSource(resource);
     await editors.openEditor({ resource: changeFileUri(source.owner, source.changesetId,
       { file_path: source.filePath, latest_edit_id: source.editId }, 'patch'), options: { pinned: true } });
   }

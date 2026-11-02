@@ -41,11 +41,11 @@ export function requireGatewayWorkspaceRequestTarget(
   return target;
 }
 
-export function requireGatewayWorkspaceRoute(
-  workspaces: readonly GatewayWorkspaceRoute[],
+export function requireGatewayWorkspaceRoute<T extends GatewayWorkspaceRoute>(
+  workspaces: readonly T[],
   localGatewayId: string | null | undefined,
   owner: WorkspaceOwner,
-): GatewayWorkspaceRoute {
+): T {
   if (!localGatewayId?.trim()) {
     throw new Error("Gateway 健康回执缺少身份，无法解析目标路由");
   }

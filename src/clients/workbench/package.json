@@ -6,7 +6,7 @@
   "scripts": {
     "build": "bun scripts/build.mjs",
     "dev": "node scripts/dev.mjs",
-    "typecheck": "tsgo --project tsconfig.jsonc --noEmit"
+    "typecheck": "bun scripts/typecheck.mjs"
   },
   "dependencies": {
     "@hpke/core": "^1.9.0",

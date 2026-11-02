@@ -44,7 +44,7 @@
 - [x] 5.1 通过原 singleton 注册唯一项目 SearchService 和同一文件 file／text Provider，核最终 ServiceCollection 与生命周期，不依赖偶然 import 顺序。
 - [x] 5.2 对明确业务根的 textSearchSplitSyncAsync 使用完整 owner／URI 过滤本地未保存模型，先限制再发送 progress，当前模型覆盖同文件后端旧命中，不自动保存。
 - [x] 5.3 将业务查询显式路由到原后端文件 owner，不送浏览器文件 handle worker；原生虚拟容器仍按原服务行为处理。
-- [ ] 5.4 在原 `%` 贡献构造入口用 child InstantiationService 创建真实原 Provider 与 QueryBuilder，每次 provide 固定发起范围，取消和 dispose 释放实际操作。
+- [x] 5.4 在原 `%` 贡献构造入口用 child InstantiationService 创建真实原 Provider 与 QueryBuilder，每次 provide 固定发起范围，取消和 dispose 释放实际操作。
 - [ ] 5.5 限定 folderQueries、extraFileResources 与符号来源；业务 AI／语义搜索缺服务时明确未启用，不触发模型或其它根，不改全局设置。
 - [ ] 5.6 用 A／B 同路径不同 dirty 内容及 IndexedDB 同名文件验证首次结果、增量 progress、普通／仅已打开搜索均不串范围。
 
@@ -52,7 +52,7 @@
 
 覆盖规范：搜索编辑器必须按输入持久保存明确范围。
 
-- [ ] 6.1 在原 ViewContainer descriptor 选择项目容器，用 child 创建原 SearchView；保留唯一视图 ID、用户布局、全局 SearchViewModel 和 ReplaceService。
+- [x] 6.1 在原 SearchView descriptor 选择项目子类，并在原 ViewPaneContainer.createView 以 child 创建；移动到其它容器仍保持唯一视图 ID、用户布局、全局 SearchViewModel 和 ReplaceService。
 - [ ] 6.2 将 `%` 到 SearchView 的 replaceSearchModel 与 SearchView 到 Search Editor 的两个 rawData 分支携带同一明确范围，后续修改查询不跟随导航。
 - [ ] 6.3 在原 SearchConfiguration 增加 typed、版本化 scope，贯穿 factory 三种入口、控件重建、updateConfig 和命令参数；priorConfig 只复用查询选项，不继承 scope。
 - [ ] 6.4 在同一 sourceTransform 的原 SearchEditor 查询构建处接入 protected typed hook，实际使用 input scope、child QueryBuilder、根及受限 extras；不改私有 readonly 字段，不吞构建错误。

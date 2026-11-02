@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import shutil
+import subprocess
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
+)
+from tests.support.e2e_control.harness import E2EProcessLease
+from tests.support.paths import chromium_temporary_environment
+from tests.support.ports import integration_port_block_for_file
+from tests.support.processes.gateway import close_gateway_process, start_gateway_process
+
+
+@pytest.fixture
+def search_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    port = integration_port_block_for_file(Path(request.node.path)).port(20)
+    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (port,))
+    lease.acquire()
+    try:
+        yield port
+    finally:
+        lease.release()
+
+
+@pytest.mark.asyncio
+async def test_original_quick_text_search_and_view_keep_business_scope(
+    request: pytest.FixtureRequest,
+    integration_workspace_root_path: str,
+    integration_workspace_config_path: str,
+    search_gateway_port: int,
+    web_workbench_assets: Path,
+) -> None:
+    del integration_workspace_config_path
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    if not chromium:
+        pytest.fail("快速文本搜索验收需要 Chromium")
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    workspace = Path(integration_workspace_root_path)
+    (workspace / "quick-scope.txt").write_text("diskword quickscope\n", encoding="utf-8")
+    result_path = context.artifacts_dir / "search-result.json"
+    screenshot_path = context.artifacts_dir / "search-failure.png"
+    gateway = start_gateway_process(
+        workspace_root=workspace, default_backend_url=None, port=search_gateway_port,
+        boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
+        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
+    )
+    try:
+        command = ["bun", "tests/integration/clients/web/quick_access/text_search.mjs"]
+        with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
+            result = await asyncio.to_thread(
+                subprocess.run, command, cwd=context.project_root,
+                env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
+                     "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
+                     "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
+                capture_output=True, text=True, timeout=150, check=False,
+            )
+        (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout)
+        (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr)
+        (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}) + "\n")
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}\n{result_path}"
+        receipt = json.loads(result_path.read_text())
+        assert receipt["dirtyModelSearch"] is True
+        assert receipt["viewTransferAndRerun"] is True
+        assert receipt["movedViewRerun"] is True
+        assert receipt["unsupportedIgnoreVisible"] is True
+        assert receipt["pageErrors"] == []
+        assert (workspace / "quick-scope.txt").read_text(encoding="utf-8") == "diskword quickscope\n"
+    finally:
+        close_gateway_process(gateway)

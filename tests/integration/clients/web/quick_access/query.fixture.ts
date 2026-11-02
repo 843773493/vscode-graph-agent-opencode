@@ -1,0 +1,15 @@
+export { QueryBuilder } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/search/common/queryBuilder.js';
+export { SearchWorkspaceContext, scopeFromQuery } from '../../../../../src/clients/workbench/src/search/scope.js';
+export { URI } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
+export { InstantiationService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/instantiationService.js';
+export { ServiceCollection } from '../../../../../src/clients/workbench/upstream/src/vs/platform/instantiation/common/serviceCollection.js';
+export { IConfigurationService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/configuration/common/configuration.js';
+export { IWorkspaceContextService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/workspace/common/workspace.js';
+export { IEditorGroupsService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+export { ILogService, NullLogService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/log/common/log.js';
+export { IPathService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/path/common/pathService.js';
+export { IUriIdentityService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
+export { extUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
+export { Event } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
+export { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
+export { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';

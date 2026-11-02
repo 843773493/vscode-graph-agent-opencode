@@ -1,8 +1,25 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
+export const transformedSourcePaths = [
+  'src/vs/workbench/browser/web.main.ts',
+  'src/vs/workbench/services/search/common/queryBuilder.ts',
+  'src/vs/workbench/contrib/search/browser/search.contribution.ts',
+  'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts',
+  'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts',
+  'src/vs/workbench/contrib/search/browser/searchView.ts',
+  'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
+];
+
+function replaceOnce(source, marker, replacement) {
+  if (source.split(marker).length !== 2) throw new Error(`上游转换锚点必须恰好一次：${marker}`);
+  return source.replace(marker, () => replacement);
+}
+
 /** 构建与 Vite 共用上游源码定制，不改写固定子模块。 */
 export function sourceTransform(root, productConfiguration, extensions) {
+  if (productConfiguration.commit !== pinnedUpstreamCommit) throw new Error(`上游版本不匹配：要求 ${pinnedUpstreamCommit}`);
   const upstream = join(root, 'upstream');
   return async function transformSource(path, source) {
     let contents = source;
@@ -15,15 +32,69 @@ export function sourceTransform(root, productConfiguration, extensions) {
       const marker = 'await this.registerIndexedDBFileSystemProviders(environmentService, fileService, logService, loggerService, logsPath);';
       const cacheSchemes = '[Schemas.file, Schemas.vscodeUserData, Schemas.tmp] /* Cache all non native resources */';
       const closeDatabase = 'this.onWillShutdownDisposables.add(toDisposable(() => indexedDB?.close()));';
-      if (!contents.includes(marker)) throw new Error('上游文件系统初始化入口已变更');
-      if (!contents.includes(cacheSchemes)) throw new Error('上游本地配置资源分类入口已变更');
-      if (!contents.includes(closeDatabase)) throw new Error('上游 IndexedDB 关闭入口已变更');
       // 默认虚拟工作区与 vscode-userdata 一样由本地 IndexedDB 提供；额外配置缓存会留下关闭后的异步写入。
-      contents = `import { installWorkspaceFileSystem, workspaceFolder } from ${JSON.stringify(join(root, 'src/filesystem.ts'))};\n`
-        + contents.replace(marker, `${marker}\nawait installWorkspaceFileSystem(fileService);`)
-          .replace(cacheSchemes, '[Schemas.file, Schemas.vscodeUserData, Schemas.tmp, workspaceFolder.scheme]')
-          // pagehide 的同步 shutdown 仍会产生延迟日志；数据库连接由浏览器随文档释放，不能提前关闭并中止事务。
-          .replace(closeDatabase, '// IndexedDB 连接随浏览器文档释放，保留关闭期间日志和设置写入的机会。');
+      contents = replaceOnce(contents, marker, `${marker}\nawait installWorkspaceFileSystem(fileService);`);
+      contents = replaceOnce(contents, cacheSchemes, '[Schemas.file, Schemas.vscodeUserData, Schemas.tmp, workspaceFolder.scheme]');
+      // pagehide 的同步 shutdown 仍会产生延迟日志；数据库连接由浏览器随文档释放，不能提前关闭并中止事务。
+      contents = replaceOnce(contents, closeDatabase, '// IndexedDB 连接随浏览器文档释放，保留关闭期间日志和设置写入的机会。');
+      contents = `import { installWorkspaceFileSystem, workspaceFolder } from ${JSON.stringify(join(root, 'src/filesystem.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/search/common/queryBuilder.ts')) {
+      const commonQuery = 'private commonQuery(folderResources: (IWorkspaceFolderData | URI)[] = [], options: ICommonQueryBuilderOptions = {}): ICommonQueryProps<uri> {';
+      contents = replaceOnce(contents, commonQuery, `${commonQuery}\noptions = scopeQueryOptions(this.workspaceContextService, folderResources, options);`);
+      const queryProps = 'const queryProps: ICommonQueryProps<uri> = {';
+      contents = replaceOnce(contents, queryProps, `assertSearchFolders(this.workspaceContextService, folderQueries);\n${queryProps}`);
+      // 业务 Provider 按完整 URI 选精确已打开文件，避免原 fsPath 分支重建为其它 authority 的根。
+      contents = replaceOnce(contents, 'if (options.onlyOpenEditors) {', 'if (options.onlyOpenEditors && !scopedSearch(this.workspaceContextService)) {');
+      contents = `import { scopeQueryOptions, assertSearchFolders, scopedSearch } from ${JSON.stringify(join(root, 'src/search/scope.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/search.contribution.ts')) {
+      contents = replaceOnce(contents, 'ctorDescriptor: new SyncDescriptor(SearchView),', 'ctorDescriptor: new SyncDescriptor(ScopedSearchView),');
+      contents = replaceOnce(contents, "import { SearchView } from './searchView.js';",
+        `import { ScopedSearchView } from ${JSON.stringify(join(root, 'src/search/searchView.js'))};`);
+      contents = replaceOnce(contents, 'quickAccessRegistry.registerQuickAccessProvider({', 'quickAccessRegistry.registerQuickAccessProvider(selectTextSearchDescriptor({');
+      contents = replaceOnce(contents, '\n});\n\n// Configuration', '\n}));\n\n// Configuration');
+      contents = `import { selectTextSearchDescriptor } from ${JSON.stringify(join(root, 'src/search/textQuickAccess.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/browser/parts/views/viewPaneContainer.ts')) {
+      contents = replaceOnce(contents, 'return this.instantiationService.createInstance(viewDescriptor.ctorDescriptor.ctor, ...(viewDescriptor.ctorDescriptor.staticArguments || []), options);',
+        'return createSearchView(this.instantiationService, viewDescriptor, options);');
+      contents = `import { createSearchView } from ${JSON.stringify(join(root, 'src/search/viewFactory.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchView.ts')) {
+      contents = replaceOnce(contents, '@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,',
+        '@IWorkspaceContextService protected readonly contextService: IWorkspaceContextService,');
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts')) {
+      const declaration = 'export class SearchModelImpl extends Disposable implements ISearchModel {';
+      contents = replaceOnce(contents, declaration, `${declaration}\npublic ownSearchContext(context: IDisposable): void { this._register(context); }`);
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts')) {
+      // 由原 QueryBuilder 消费用户的 search.useIgnoreFiles，未支持的 respect 仍明确拒绝。
+      contents = replaceOnce(contents, '\tdisregardIgnoreFiles: false,\n', '');
+      const transfer = `\t\tthis._viewsService.openView(VIEW_ID, false);
+\t\tconst viewlet: SearchView | undefined = this._viewsService.getActiveViewWithId(VIEW_ID) as SearchView;
+\t\tawait viewlet.replaceSearchModel(this.searchModel, this.currentAsyncSearch);
+
+\t\tthis.searchModel = this._instantiationService.createInstance(SearchModelImpl);
+\t\tthis.searchModel.location = SearchModelLocation.QUICK_ACCESS;`;
+      contents = replaceOnce(contents, transfer, `const transferredModel = this.searchModel;
+this._store.deleteAndLeak(transferredModel);
+transferSearchContext(this._contextService, transferredModel);
+const asyncSearch = this.currentAsyncSearch;
+this.searchModel = this._register(this._instantiationService.createInstance(SearchModelImpl));
+this.searchModel.location = SearchModelLocation.QUICK_ACCESS;
+let viewlet: SearchView;
+try {
+  const view = await this._viewsService.openView<SearchView>(VIEW_ID, false);
+  if (!view) throw new Error('原搜索视图不可用');
+  viewlet = view;
+  await viewlet.replaceSearchModel(transferredModel, asyncSearch);
+} catch (error) {
+  transferredModel.dispose();
+  throw error;
+}`);
+      contents = `import { transferSearchContext } from ${JSON.stringify(join(root, 'src/search/scope.js'))};\n` + contents;
     }
     return contents;
   };
