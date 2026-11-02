@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Annotated, Literal
+from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
 
@@ -191,8 +191,8 @@ class NodeDebugBreakpointDTO(BaseModel):
     created_at: datetime
 
 
-class NodeDebugConfigurationBreakpointDTO(BaseModel):
-    """可移植方案中的断点，不包含 Inspector 安装和命中状态。"""
+class NodeDebugConfigurationBreakpointInput(BaseModel):
+    """待目标 owner 解析的方案断点输入，允许原生路径。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -211,6 +211,12 @@ class NodeDebugConfigurationBreakpointDTO(BaseModel):
     relocation_status: NodeDebugBreakpointRelocationStatus = "current"
     relocation_message: str | None = None
     created_at: datetime
+
+
+class NodeDebugConfigurationBreakpointDTO(NodeDebugConfigurationBreakpointInput):
+    """可移植方案中的断点，不包含 Inspector 安装和命中状态。"""
+
+    path: _DebugSourcePath
 
 
 class NodeDebugVariableDTO(BaseModel):
@@ -328,12 +334,13 @@ class NodeDebugConfigurationSummaryDTO(BaseModel):
     updated_at: datetime
 
 
-class NodeDebugConfigurationDTO(BaseModel):
-    """可跨会话复制的源码调试方案，不包含会话和运行时状态。"""
+_ConfigurationBreakpoint = TypeVar("_ConfigurationBreakpoint", bound=NodeDebugConfigurationBreakpointInput)
+
+
+class _NodeDebugConfigurationFields(BaseModel, Generic[_ConfigurationBreakpoint]):
+    """输入与已解析方案共用字段，路径约束由各自业务阶段声明。"""
 
     model_config = ConfigDict(extra="forbid")
-
-    # TODO: 方案导入仍复用此模型承接原生路径；分离目标解析输入后，迁齐方案发布和冷读校验。
 
     schema_version: Literal[1] = 1
     configuration_id: str = Field(
@@ -346,9 +353,20 @@ class NodeDebugConfigurationDTO(BaseModel):
     working_directory: str = ""
     launch_profile_name: str | None = None
     args: list[str] = Field(default_factory=list)
-    breakpoints: list[NodeDebugConfigurationBreakpointDTO] = Field(default_factory=list)
+    breakpoints: list[_ConfigurationBreakpoint] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class NodeDebugConfigurationInput(_NodeDebugConfigurationFields[NodeDebugConfigurationBreakpointInput]):
+    """目标 owner 解析前的可移植方案输入，保留原生路径语义。"""
+
+
+class NodeDebugConfigurationDTO(_NodeDebugConfigurationFields[NodeDebugConfigurationBreakpointDTO]):
+    """可跨会话复制的源码调试方案，不包含会话和运行时状态。"""
+
+    script_path: _DebugSourcePath | None = None
+    working_directory: _DebugSourcePath = ""
 
 
 class NodeDebugStateDTO(BaseModel):
@@ -475,7 +493,7 @@ class NodeDebugConfigurationActivateRequest(BaseModel):
 class NodeDebugConfigurationImportRequest(BaseModel):
     session_id: str = Field(min_length=1)
     thread_id: CanonicalThreadId | None = None
-    configuration: NodeDebugConfigurationDTO
+    configuration: NodeDebugConfigurationInput
     activate: bool = False
 
 

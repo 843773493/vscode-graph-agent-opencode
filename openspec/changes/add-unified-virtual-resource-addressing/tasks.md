@@ -2013,3 +2013,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 将上一片 `readiness-unit-001` 的2 failed／28 errors定位到的三份单测迁齐现有依赖：使用当前工作区准备入口、显式传入Browser日志与未消费的Workbench资源目录，HTTP生命周期测试驱动持有线程的 `health_server`。原清理顺序、异常实例与错误链断言保留，未修改产品或公共长回归fixture；生命周期场景禁止意外外部命令，不伪造构建成功，输出归当前单测路径。
 - 三文件109项与进程装具整组299项通过；随后迁用当前pytest的装具解包方法、修正生成器／文本模式类型并补异常组类型断言，Pyright从13项到0，受影响109项复验通过，其余190项源码不变复用整组证据，不重复累计。Ruff／compileall通过，全部检查保持60秒／4GiB进程外保护，不启动真实服务或浏览器。
 - 原红版直接复用已保留的失败日志，不无变化重跑；逐次命令、源码前后SHA、原始输出、实际退出码与审查索引见 `out/tests/temp/harness_fixture_calls_20261102/artifacts/verification.json`。本片只修验收设施，不新增业务完成勾选。
+
+### 2026-11-02 调试方案输入、发布与冷读（2.2／7.2部分收口）
+
+- 消除前一片登记的方案正文TODO：输入与已解析方案共用字段定义，原生路径只由原目标工厂解析，再构造已解析DTO。脚本／工作目录／断点的构造、序列化、原writer、冷读及fork source复用既有源码校验，损坏持久绝对位置不再先被工厂归一；原reader、writer、fork与断点转换文件字节不变，注册表及控制mixin仅迁接收类型、方法体AST相同。无新存储、迁移、schema版本或兼容链。
+- 原实现48个新增反例全部失败。最终366项发布／配置／存储／fork单测、65项API／工具／descriptor／完整OpenAPI对照、55项断点／源码／运行态／启动回归和3项产品matrix通过，共489项不同用例，不累加重跑。原matrix保持60秒／4GiB与集成独占闸门；其它检查均有进程外保护，Web类型28.52秒、独立完整Workbench构建50.35秒及生成产物一致性24.67秒通过。
+- 正式ASGI创建与导入入口使用绝对路径生成关键配置，脚本与断点分别指向不同文件；12组发布／原writer拒绝与冷读损坏均保持原文件和manifest，故障解除后沿原入口精确恢复同一方案、身份及revision。原真实Node／Inspector场景的36组状态拒绝、同进程控制及冷读继续通过。首轮新用例在成功创建／导入后给私有路径函数传错位置参数，改具名参数后通过，未为测试改变生产规则。
+- 新增两个输入schema组件及导入引用；归一组件名后两份完整OpenAPI与HEAD相等，输出和其它请求响应不变，仅更新生成快照。宽Pyright为89项；完整HEAD归档、同一1.1.414及Python解释器的对照也为89项，同文件／规则／完整消息逐项相同，新增0，不能称类型全绿。Ruff／compileall、strict与差异检查通过。
+- 命令、源码SHA、原始输出、实际退出码、完整类型／结构对照和作者AST复核见 `out/tests/temp/debug_configuration_publication_20261102/artifacts/verification.json`；保留正式产品JSON、构建版本与SHA，删除临时完整归档、3877个构建文件、协议staging及一次性runner。采集器首次误选Pyright位置、将gitlink当文件的失败均保留阶段说明，未运行的检查不算通过。ASGI／Node／冷service不代Gateway业务网络、Backend硬重启、Web操作或Windows，2.2／7.2总门仍未勾、整体51/53。

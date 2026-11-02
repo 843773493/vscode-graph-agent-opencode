@@ -109,6 +109,8 @@ Windows 长路径复用 `native_io_path`，只在既有目录扫描、元数据�
 
 原 `_absolute_to_workspace_relative()` 曾经用 `path.lstrip("/")` 将外部绝对路径改投工作区，且混用了 DeepAgents 虚拟根；该转换及其直接、间接调用方已随 `d7f7b94d` 删除，用户输入由统一文件 owner 在目标平台解析。聊天 Markdown 只提取展示坐标并在 URL 编码前封装原目标，不解析工作区根、不解码原生路径；只有普通相对简写的真实 404 才保留既有唯一文件名查找，显式绝对路径或 URI 失败绝不改投同名文件，打开引用以内容 owner 返回的 URI 为准。验收从真实读写入口比较三种输入的实际对象，并用外部文件与工作区同名对照文件验证无误读/误写；Linux 跨 Gateway 验收见 `4af8b758`，Windows 盘符与跨系统文件 API 见归档变更 `2026-10-28-add-unified-resource-file-tools` tasks 3.4 的 `native-windows-federation-007`，已核目标端原字节及 source/relay 不变。该历史固定候选不代当前 HEAD 或模型工具验收；UNC 共享仍待实机验证，不能只测字符串 helper。
 
+源码调试方案的输入与已解析正文共用一份字段定义，但分别声明路径约束。创建／更新／导入输入允许原生路径，由既有目标工厂统一解析后构造已解析方案；普通导出、原持久 writer、冷读及 fork source 都使用同一已解析模型的构造与序列化校验，拒绝绝对位置和 file URL。冷读不能先把损坏的持久绝对位置送回工厂归一而掩盖缺陷。输入与正文仍沿同一解析、存储和恢复链，公开字段及持久格式不变，不新增 schema 版本或迁移。
+
 ### D1b：未注册目录使用 Gateway files 根，控制面绑定与文件执行分离
 
 固定模板为 `boxteam://{gateway_authority?}/gateway/{gateway_id}/resources/files/{directory_id}`，directory_id 由原生 Gateway 创建稳定 UUIDv7；文件 child 使用同一 grammar。不是工作区，不借用执行路由的 workspace_id，也不注册 `WorkspaceTarget`。工作区内路径优先归为已有 workspace files/root。

@@ -13,7 +13,9 @@ from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugBreakpointRequest,
+    NodeDebugConfigurationBreakpointDTO,
     NodeDebugConfigurationDTO,
+    NodeDebugConfigurationInput,
 )
 from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions import (
     inspector_breakpoint_condition,
@@ -72,13 +74,11 @@ class NodeDebugConfigurationFactory:
 
     def validate_configuration(
         self,
-        configuration: NodeDebugConfigurationDTO,
+        configuration: NodeDebugConfigurationInput | NodeDebugConfigurationDTO,
     ) -> NodeDebugConfigurationDTO:
+        relative_script_path = None
         if configuration.script_path is not None:
-            _, relative_path = self.resolve_script_path(configuration.script_path)
-            configuration = configuration.model_copy(
-                update={"script_path": relative_path}
-            )
+            _, relative_script_path = self.resolve_script_path(configuration.script_path)
         resolved_directory = self.resolve_working_directory(
             configuration.working_directory
         )
@@ -94,23 +94,22 @@ class NodeDebugConfigurationFactory:
                 persistable_breakpoint(
                     reconcile_breakpoint(
                         runtime_breakpoint(
-                            breakpoint.model_copy(update={"path": relative_path})
+                            NodeDebugConfigurationBreakpointDTO(
+                                **breakpoint.model_dump(exclude={"path"}), path=relative_path,
+                            )
                         ),
                         breakpoint_path,
                         uri=self._file_paths.reference(breakpoint_path),
                     )
                 )
             )
-        return configuration.model_copy(
-            update={
-                "name": configuration.name.strip(),
-                "working_directory": relative_directory,
-                "args": self.normalize_args(configuration.args),
-                "breakpoints": [
-                    portable_breakpoint(breakpoint)
-                    for breakpoint in normalized_breakpoints
-                ],
-            }
+        return NodeDebugConfigurationDTO(
+            **configuration.model_dump(exclude={"name", "script_path", "working_directory", "args", "breakpoints"}),
+            name=configuration.name.strip(),
+            script_path=relative_script_path,
+            working_directory=relative_directory,
+            args=self.normalize_args(configuration.args),
+            breakpoints=[portable_breakpoint(breakpoint) for breakpoint in normalized_breakpoints],
         )
 
     def configuration_from_request(
@@ -136,7 +135,7 @@ class NodeDebugConfigurationFactory:
             rule = error.errors(include_input=False, include_context=False, include_url=False)[0]["type"]
             raise ValueError(f"{detail}, rules=name:{rule}") from error
         now = datetime.now(UTC)
-        configuration = NodeDebugConfigurationDTO(
+        configuration = NodeDebugConfigurationInput(
             configuration_id=configuration_id,
             name=normalized_name,
             revision=revision,

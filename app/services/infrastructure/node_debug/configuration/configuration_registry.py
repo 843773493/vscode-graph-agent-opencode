@@ -9,6 +9,7 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationDTO,
+    NodeDebugConfigurationInput,
     NodeDebugConfigurationSummaryDTO,
     NodeDebugConfigurationUpdateRequest,
     NodeDebugSessionManifestDTO,
@@ -247,7 +248,7 @@ class NodeDebugConfigurationRegistry:
     def import_configuration(
         self,
         session_id: str,
-        configuration: NodeDebugConfigurationDTO,
+        configuration: NodeDebugConfigurationInput | NodeDebugConfigurationDTO,
         *,
         thread_id: str,
         activate: bool = False,

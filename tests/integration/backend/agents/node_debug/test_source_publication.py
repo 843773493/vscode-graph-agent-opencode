@@ -9,7 +9,11 @@ import pytest
 from pydantic_core import PydanticSerializationError
 
 from app.agents.tools.debugging.payloads import _success
-from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
+from app.core.identifier import create_prefixed_id
+from app.schemas.internal_v2.node_debug import (
+    NodeDebugConfigurationDTO,
+    NodeDebugStateDTO,
+)
 from app.services.infrastructure.node_debug.process.process_identity import (
     probe_process_identity,
 )
@@ -141,4 +145,111 @@ async def test_paused_sources_reject_mutation_and_allow_same_process_retry(
         "cleared": cleared.json(), "installed": installed.json(),
         "stopped": stopped.json(), "cold": cold.json(),
         "scope": "真实调试ASGI与Node/Inspector；不代Gateway、Backend进程重启、Web或Windows",
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+async def test_configuration_input_publication_and_cold_read_share_target_resolution(
+    debug_receive_client: DebugReceiveClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, store, owner, root, reopen = debug_receive_client
+    source = root / "entry.mjs"
+    worker = root / "lib/worker.mjs"
+    worker.parent.mkdir()
+    worker.write_text("export const value = 42;\n", encoding="utf-8")
+    configured = await client.post("/api/v1/debug/node/configurations", json={
+        **owner, "name": "方案正文发布", "script_path": str(source),
+        "working_directory": str(root), "breakpoints": [{"path": str(worker), "line": 1}],
+    })
+    assert configured.status_code == 200, configured.text
+    original_id = configured.json()["data"]["active_configuration_id"]
+    exported = await client.get(f"/api/v1/debug/node/configurations/{original_id}", params=owner)
+    assert exported.status_code == 200, exported.text
+    original = exported.json()["data"]
+    assert original["script_path"] == "entry.mjs" and original["working_directory"] == ""
+    assert original["breakpoints"][0]["path"] == "lib/worker.mjs"
+    assert str(root) not in exported.text
+    imported_id = create_prefixed_id("dbgcfg")
+    incoming = {**original, "configuration_id": imported_id, "name": "原生路径导入", "script_path": str(source),
+                "working_directory": str(root),
+                "breakpoints": [{**original["breakpoints"][0], "path": str(worker)}]}
+    imported = await client.post("/api/v1/debug/node/configurations/import", json={
+        **owner, "configuration": incoming,
+    })
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["data"]["active_configuration_id"] == original_id
+    result = await client.get(f"/api/v1/debug/node/configurations/{imported_id}", params=owner)
+    assert result.status_code == 200, result.text
+    body = result.json()["data"]
+    assert body["script_path"] == "entry.mjs" and body["working_directory"] == ""
+    assert body["breakpoints"][0]["path"] == "lib/worker.mjs"
+    assert str(root) not in result.text
+    await reopen(True)
+    manifest_before, manifest = store.read_manifest_payload(**owner)
+    assert manifest_before is not None and manifest is not None
+    assert set(manifest.configuration_ids) == {original_id, imported_id}
+    registered = store.read_registered_configuration_payloads(**owner, configuration_ids=manifest.configuration_ids)
+    assert {key: value[0].model_dump(mode="json") for key, value in registered.items()} == {
+        original_id: original, imported_id: body,
+    }
+    path = store._configuration_path(configuration_id=imported_id, **owner)
+    original_bytes = path.read_bytes()
+    read_configuration = NodeDebugService.get_configuration
+    failures: list[dict[str, object]] = []
+    for field in ("script_path", "working_directory", "breakpoints"):
+        for native in (str(source), r"C:\private\configuration-secret.mjs",
+                       r"\\target\private\configuration-secret.mjs", source.as_uri()):
+            def damaged_configuration(
+                service: NodeDebugService, session_id: str, configuration_id: str, thread_id: str | None = None,
+                *, field: str = field, native: str = native,
+            ) -> NodeDebugConfigurationDTO:
+                configuration = read_configuration(service, session_id, configuration_id, thread_id).model_copy(deep=True)
+                if field == "breakpoints":
+                    configuration.breakpoints[0] = configuration.breakpoints[0].model_copy(update={"path": native})
+                    return configuration
+                return configuration.model_copy(update={field: native})
+
+            with monkeypatch.context() as patch:
+                patch.setattr(NodeDebugService, "get_configuration", damaged_configuration)
+                rejected = await client.get(f"/api/v1/debug/node/configurations/{imported_id}", params=owner)
+            assert rejected.status_code == 500, rejected.text
+            assert rejected.json()["request_id"] == rejected.headers["X-Request-ID"]
+            assert native not in rejected.text and "PydanticSerializationError" in rejected.text
+            # 直接复用同一已解析方案副本，核对原 writer 也拒绝发布。
+            candidate = registered[imported_id][0].model_copy(deep=True)
+            if field == "breakpoints":
+                candidate.breakpoints[0] = candidate.breakpoints[0].model_copy(update={"path": native})
+            else:
+                candidate = candidate.model_copy(update={field: native})
+            with pytest.raises(PydanticSerializationError):
+                store.write_configuration(configuration=candidate, **owner)
+            assert path.read_bytes() == original_bytes
+            assert store.read_manifest_payload(**owner)[0] == manifest_before
+            await reopen(True)
+            payload = json.loads(original_bytes)
+            if field == "breakpoints":
+                payload[field][0]["path"] = native
+            else:
+                payload[field] = native
+            corrupted_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            path.write_bytes(corrupted_bytes)
+            try:
+                cold = await client.get("/api/v1/debug/node", params=owner)
+                assert cold.status_code == 500, cold.text
+                assert cold.json()["request_id"] == cold.headers["X-Request-ID"]
+                assert native not in cold.text and "RuntimeError" in cold.text
+                assert path.read_bytes() == corrupted_bytes
+                with pytest.raises(RuntimeError, match="会话源码调试数据损坏"):
+                    store.read_registered_configuration_payloads(**owner, configuration_ids=manifest.configuration_ids)
+                assert store.read_manifest_payload(**owner)[0] == manifest_before
+            finally:
+                path.write_bytes(original_bytes)
+            restored = await client.get(f"/api/v1/debug/node/configurations/{imported_id}", params=owner)
+            assert restored.status_code == 200 and restored.json()["data"] == body, restored.text
+            assert path.read_bytes() == original_bytes
+            failures.append({"field": field, "publication": rejected.json(), "cold": cold.json()})
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    (context.artifacts_dir / "configuration-publication.json").write_text(json.dumps({
+        "configured": configured.json(), "original": exported.json(), "imported": imported.json(),
+        "result": result.json(), "failures": failures, "restored": restored.json(),
+        "scope": "真实调试ASGI配置／导入及原存储；不启动Node，不代Gateway或Backend硬重启",
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

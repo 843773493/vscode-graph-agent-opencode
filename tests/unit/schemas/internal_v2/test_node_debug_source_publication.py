@@ -12,6 +12,8 @@ from pydantic_core import PydanticSerializationError
 from app.agents.tools.debugging.payloads import _success
 from app.schemas.internal_v2.node_debug import (
     NodeDebugBreakpointDTO,
+    NodeDebugConfigurationDTO,
+    NodeDebugConfigurationImportRequest,
     NodeDebugConfigurationSummaryDTO,
     NodeDebugStackFrameDTO,
     NodeDebugStateDTO,
@@ -46,6 +48,56 @@ def state() -> NodeDebugStateDTO:
         )],
         call_stack=[frame], last_stopped_frame=frame.model_copy(deep=True),
     )
+
+
+@pytest.fixture
+def configuration() -> NodeDebugConfigurationDTO:
+    now = datetime(2026, 11, 2, tzinfo=UTC)
+    return NodeDebugConfigurationDTO.model_validate({
+        "configuration_id": "dbgcfg_" + "a" * 32, "name": "方案", "script_path": "entry.mjs",
+        "created_at": now, "updated_at": now,
+        "breakpoints": [{
+            "breakpoint_id": "bp", "path": "entry.mjs", "line": 1, "created_at": now,
+        }],
+    })
+
+
+@pytest.mark.parametrize("field", ["script_path", "working_directory", "breakpoints"])
+@pytest.mark.parametrize("native", NATIVE)
+def test_published_configuration_rejects_native_but_import_keeps_input(
+    configuration: NodeDebugConfigurationDTO, field: str, native: str,
+) -> None:
+    payload = configuration.model_dump()
+    if field == "breakpoints":
+        payload[field] = [{**configuration.breakpoints[0].model_dump(), "path": native}]
+    else:
+        payload[field] = native
+    imported = NodeDebugConfigurationImportRequest.model_validate({
+        "session_id": "ses_019b9dffc29a779e8564d196f78bb0a6", "configuration": payload,
+    })
+    assert imported.model_dump()["configuration"] == payload
+    assert NodeDebugConfigurationImportRequest.model_validate_json(imported.model_dump_json()) == imported
+    with pytest.raises(ValidationError):
+        NodeDebugConfigurationDTO.model_validate(payload)
+
+
+@pytest.mark.parametrize("field", ["script_path", "working_directory", "breakpoints"])
+@pytest.mark.parametrize("native", NATIVE)
+@pytest.mark.parametrize("mode", ["python", "json", "json-text"])
+def test_mutated_configuration_refuses_publication(
+    configuration: NodeDebugConfigurationDTO, field: str, native: str, mode: Mode,
+) -> None:
+    damaged = configuration.model_copy(deep=True)
+    if field == "breakpoints":
+        damaged.breakpoints[0] = damaged.breakpoints[0].model_copy(update={"path": native})
+    else:
+        damaged = damaged.model_copy(update={field: native})
+    with pytest.raises(PydanticSerializationError) as failure:
+        if mode == "json-text":
+            damaged.model_dump_json()
+        else:
+            damaged.model_dump(mode=mode)
+    assert native not in str(failure.value)
 
 
 @pytest.mark.parametrize("field", ["script_path", "working_directory", "source_changed_paths",
