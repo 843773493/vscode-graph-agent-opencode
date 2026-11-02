@@ -47,7 +47,9 @@ def _workspace_startup_stage(container: AppContainer, stage: str):
 async def _prune_workspace_activity_periodically(container: AppContainer) -> None:
     while True:
         await asyncio.sleep(3600)
-        removed = container.workspace_activity_service.prune()
+        # 原周期任务持有worker到结算；关闭不能在DELETE仍等待写锁时释放存储。
+        # TODO(5.4)：原生I/O不可抢占，其它同步活动读写和整个进程退出仍须单独核实。
+        removed = await run_sync_shielded(container.workspace_activity_service.prune)
         if removed:
             logger.info("清理 Workspace 会话活动事件: removed=%s", removed)
 
@@ -303,7 +305,7 @@ class WorkspaceLifespan:
                 container.mcp_connection_service.start()
             with _workspace_startup_stage(container, "workspace_file_resource_registry.start"):
                 await container.workspace_file_resource_registry.start()
-            removed = container.workspace_activity_service.prune()
+            removed = await run_sync_shielded(container.workspace_activity_service.prune)
             if removed:
                 logger.info("启动时清理 Workspace 会话活动事件: removed=%s", removed)
             container.config_service.set_mcp_tool_names(

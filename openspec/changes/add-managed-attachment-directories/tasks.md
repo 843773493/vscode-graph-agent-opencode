@@ -947,3 +947,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - `BrowserResourceOwner.perform`在原入口一次取得30秒准入预算，覆盖冷恢复、Thread准入、原资源锁、身份／版本／关联核验和原管理lease获取；合并原私有分支，不保留第二入口。成功后退出预算，原holder、锁和lease继续覆盖同一回执链；HTTP／Session恢复消费者及`run.timeoutMs`的既有执行期限保持。到期不派发迟到动作，不补造unknown；已提交恢复、底层TimeoutError及原取消保持归属。原生worker须结算，仍不承诺整个动作可强制终止。
 - 两项新用例在旧产品复现无界等待；修复后相关主回归92 passed，类型标注补强后14项新增场景和15项原Browser owner回归合计29 passed（与前批有重叠）。覆盖恢复／准入／锁等待、取消、跨阶段同预算、冷恢复版本保留、无Thread的workspace入口、动作超过准入预算但保持原锁／lease，以及底层超时身份。正式Session／ASGI动作API及真实Node／Chromium／HTTP两场景分别通过，核503／request_id、peer操作、原记录／lease字节、页面身份、原脚本表单副作用及同入口重试。矩阵首跑为1 passed／1 failed，失败是新测试先持资源锁再等待同锁冷恢复造成的自锁；调整测试持锁时序后锁场景定向1 passed，不重复未变的run场景，不称首轮矩阵全绿。独立suite `integration-browser-operation-admission`固定90秒／4GiB，沿原集成闸门。
 - 修改的三份Python文件Ruff、真实Pyright零诊断；命令、指纹、原始输出／实际退出码及失败归因保留在 `out/tests/temp/browser_management_admission_20261102/artifacts/verification.json`。不代表真实等待30秒、Gateway／Web、Windows、无原生身份旧代接管或完整operation／shutdown门，5.2／5.4和21/23继续未完成；未改前端或公共fixture。
+
+### 2026-11-02 活动裁剪的存储等待与关闭保留（5.4 部分）
+
+- 启动和每小时活动裁剪复用原`prune`与`run_sync_shielded`，SQLite DELETE／线程池排队不再占住事件循环；原周期任务持有worker直到结算，关闭观察到期或取消不提前关闭数据库、释放维护锁或重复裁剪。启动仍须取得原结果才继续；没有新增存储、任务账本、期限或兼容入口。
+- 真实SQLite写锁红测复现事件循环阻塞；首批第二项因前项红测清理未重入而受污染，修正测试清理后，独立启动红测以原线程身份及8秒原生屏障再次复现。修复后独立矩阵`integration-activity-prune` 5 passed／36.49秒，覆盖两种等待、两种观察中断及启动回执，核诊断request_id、原owner／locator／维护锁、只裁剪一次及冷读保留窗口；固定90秒／4GiB，沿原集成闸门。33项相关单测和3项原存储关闭集成分别通过。扩展的15项关闭回归在120秒保护下退出124，仅输出7个通过标记，整组未完成；不重复已完成部分，另选未执行的上述3项通过，不将整组记绿。
+- Ruff／compileall及OpenSpec strict 54/54通过。真实Pyright的4项JobServiceProtocol方法缺失与完整HEAD归档一致，无新增诊断；初次`uv run pyright`未找到命令，随后沿既有`bun x pyright --pythonpath .venv/bin/python`入口核验。命令、源码指纹、原始输出、退出码与失败归因见 `out/tests/temp/activity_prune_20261102/artifacts/verification.json`。其它同步活动读写、原生I/O抢占、执行关闭长尾及整个进程退出期限仍TODO，5.2／5.4和21/23保持未完成；未改前端、公共fixture或共享debug。
