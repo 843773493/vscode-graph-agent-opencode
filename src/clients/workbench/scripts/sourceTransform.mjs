@@ -64,6 +64,7 @@ export function sourceTransform(root, productConfiguration, extensions) {
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchView.ts')) {
       contents = replaceOnce(contents, '@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,',
         '@IWorkspaceContextService protected readonly contextService: IWorkspaceContextService,');
+      contents = replaceOnce(contents, 'private pauseSearching = false;', 'protected pauseSearching = false;');
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts')) {
       const declaration = 'export class SearchModelImpl extends Disposable implements ISearchModel {';

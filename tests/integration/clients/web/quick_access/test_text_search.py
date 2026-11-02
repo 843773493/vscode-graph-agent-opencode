@@ -18,6 +18,10 @@ from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 
 @pytest.fixture
@@ -40,13 +44,25 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
     search_gateway_port: int,
     web_workbench_assets: Path,
 ) -> None:
-    del integration_workspace_config_path
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     if not chromium:
         pytest.fail("快速文本搜索验收需要 Chromium")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace = Path(integration_workspace_root_path)
+    workspaces = Path(integration_workspace_root_path)
+    template = context.project_root / "tests/fixtures/workspaces/default_test_workspace"
+    workspace, other = [
+        prepare_default_test_workspace(workspace_root=workspaces / name, template_root=template)
+        for name in ("A", "B")
+    ]
+    # B 是全新工作区，稳定身份由正式注册／启动入口生成。
+    (other / ".boxteam/workspace-identity.json").unlink()
+    for target in (workspace, other):
+        install_test_workspace_config(
+            workspace_root=target, config_path=Path(integration_workspace_config_path),
+            schema_path=workspaces / ".boxteam/workspace_schema.jsonc",
+        )
     (workspace / "quick-scope.txt").write_text("diskword quickscope\n", encoding="utf-8")
+    (other / "quick-scope.txt").write_text("foreign-disk quickscope\n", encoding="utf-8")
     result_path = context.artifacts_dir / "search-result.json"
     screenshot_path = context.artifacts_dir / "search-failure.png"
     gateway = start_gateway_process(
@@ -61,6 +77,7 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
                 subprocess.run, command, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
+                     "BOXTEAM_SEARCH_OTHER_WORKSPACE": str(other),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
                 capture_output=True, text=True, timeout=150, check=False,
             )
@@ -72,8 +89,12 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["dirtyModelSearch"] is True
         assert receipt["viewTransferAndRerun"] is True
         assert receipt["movedViewRerun"] is True
+        assert receipt["crossWorkspaceIsolation"] is True
+        assert receipt["reverseOwnerIsolation"] is True
+        assert receipt["onlyOpenIsolation"] is True
         assert receipt["unsupportedIgnoreVisible"] is True
         assert receipt["pageErrors"] == []
         assert (workspace / "quick-scope.txt").read_text(encoding="utf-8") == "diskword quickscope\n"
+        assert (other / "quick-scope.txt").read_text(encoding="utf-8") == "foreign-disk quickscope\n"
     finally:
         close_gateway_process(gateway)

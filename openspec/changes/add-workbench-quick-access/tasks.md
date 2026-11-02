@@ -46,7 +46,7 @@
 - [x] 5.3 将业务查询显式路由到原后端文件 owner，不送浏览器文件 handle worker；原生虚拟容器仍按原服务行为处理。
 - [x] 5.4 在原 `%` 贡献构造入口用 child InstantiationService 创建真实原 Provider 与 QueryBuilder，每次 provide 固定发起范围，取消和 dispose 释放实际操作。
 - [ ] 5.5 限定 folderQueries、extraFileResources 与符号来源；业务 AI／语义搜索缺服务时明确未启用，不触发模型或其它根，不改全局设置。
-- [ ] 5.6 用 A／B 同路径不同 dirty 内容及 IndexedDB 同名文件验证首次结果、增量 progress、普通／仅已打开搜索均不串范围。
+- [x] 5.6 用 A／B 同路径不同 dirty 内容及 IndexedDB 同名文件验证首次结果、增量 progress、普通／仅已打开搜索均不串范围。
 
 ## 6. 原搜索视图与 Search Editor
 
@@ -209,3 +209,5 @@
 - 最终 10 项搜索服务集成及原 Thread／文件检查合计 17 项、122 条断言通过；公共 Gateway／HTTP 客户端 65 项、153 条断言通过：真实 ServiceCollection／InstantiationService 与上游匹配／结果转换，Gateway 传输为明确 spy、文本为内存存取装具。覆盖 A／B 同路径、原生容器同名 URI、零命中覆盖、双向隔离、仅已打开、上限、分页、失败归属、取消及释放。不能据此声称真实 IndexedDB、SearchView、Quick Access UI 或 Electron 已完成，5.4～5.6 保留未勾选。
 - 真实 Gateway／Chromium Thread 身份回归和同源码正式生产构建通过。首次页面等待暴露在线模型目录刷新阻塞，原后端日志有前台等待记录；测试明确改用本地目录。第二次在启动前遇临时端口占用；接入现有端口租约保留绑定后，原五秒断言和全部打开／恢复场景通过，未终止未知进程。服务装具初次遗漏上游 Worker 服务，补齐为误入即失败的明确依赖后通过。所有失败原件保留。
 - 最终真实 Workbench 类型检查、Ruff 和 OpenSpec strict 通过；本批没有公开 DTO 或协议生成变化。证据：`out/tests/temp/quick_access_search_service_20261102/artifacts/verification.json`；正式服务及浏览器产物分别位于 `out/tests/integration/clients/web/quick_access/search_service.test/` 和 `out/tests/integration/clients/web/test_thread_editor_identity/`。
+
+5.6 验收：真实 Gateway／正式 Workbench 中 A、B 同路径不同 dirty 模型及 IndexedDB 同名文件，普通／仅已打开／转交／移动视图／反向 B 均保持归属；两份磁盘正文不变。产品入口切换导航并等待选中，避免测试 API 激活与界面镜像的布局恢复竞态。16 项定向检查、实际生成源码类型检查、Ruff 及 fixture 正式构建通过。命令、源码指纹与失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/isolation-verification.json`。Search Editor 与 Electron 尚未验收。

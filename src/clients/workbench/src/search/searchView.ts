@@ -39,6 +39,8 @@ export class ScopedSearchView extends SearchView {
   }
 
   override triggerQueryChange(options?: Parameters<SearchView['triggerQueryChange']>[0]): void {
+    // 原控件同步更新期间不能排入异步查询，否则等待范围后会绕过原 pauseSearching。
+    if (this.pauseSearching) return;
     const generation = ++this.queryGeneration;
     const ready = this.pendingScope ??= this.bindScope(this.loadInitialScope());
     void ready.then(() => {
