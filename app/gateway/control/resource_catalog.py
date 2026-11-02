@@ -5,6 +5,7 @@ import logging
 
 import httpx
 
+from app.core.failures import report_failure
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.credentials import FederationCredentialStore
@@ -174,15 +175,14 @@ class GatewayResourceCatalogService:
         *,
         request_id: str,
     ) -> GatewayResourceScopeErrorDTO:
-        logger.error(
-            "工作区资源目录读取失败: workspace_id=%s request_id=%s", scope_key, request_id,
-            exc_info=error,
-        )
         message = f"工作区资源目录读取失败: {type(error).__name__}"
         if isinstance(error, httpx.HTTPStatusError):
             message += f", status={error.response.status_code}"
         return GatewayResourceScopeErrorDTO(
             scope_key=scope_key,
             label=label,
-            message=message,
+            message=report_failure(
+                error, detail=message, diagnostic_logger=logger,
+                extra={"workspace_id": scope_key, "request_id": request_id, "stage": "gateway-resource-catalog"},
+            ),
         )

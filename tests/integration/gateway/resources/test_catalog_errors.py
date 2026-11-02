@@ -25,6 +25,7 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.diagnostic_sink import install_failing_diagnostic_sink
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -42,6 +43,19 @@ from tests.support.processes.workspace import (
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 
 resource_stub_app = FastAPI()
+
+
+def create_catalog_diagnostic_failure_app() -> FastAPI:
+    """仅组合可开关的日志故障，聚合、鉴权和路由仍使用真实 Gateway。"""
+    from app.gateway.main import app
+
+    install_failing_diagnostic_sink(
+        logger_names=("app.gateway.control.resource_catalog",),
+        control=Path(os.environ["BOXTEAM_TEST_CATALOG_SINK_CONTROL"]),
+        destination=Path(os.environ["BOXTEAM_TEST_CATALOG_SINK_DESTINATION"]),
+        audit=Path(os.environ["BOXTEAM_TEST_CATALOG_SINK_AUDIT"]),
+    )
+    return app
 
 
 @resource_stub_app.post("/api/v1/context/read")
@@ -166,19 +180,28 @@ def catalog_upstream(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
-    catalog_upstream: tuple[TestRunContext, Path, str, int, int],
+    catalog_upstream: tuple[TestRunContext, Path, str, int, int], sink_fails: bool,
 ) -> None:
     context, control, failed_owner, upstream_port, gateway_port = catalog_upstream
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
-    sibling = context.workspace_root / "catalog-sibling"
+    sibling = context.workspace_root / f"catalog-sibling-{'log-failed' if sink_fails else 'log-ok'}"
     sibling.mkdir()
     sibling_owner = workspace_backend_id_for_root(sibling)
+    sink_control = control.with_name("diagnostic-enabled")
+    sink_blocker = control.with_name("diagnostic-log-secret")
+    sink_blocker.write_text("普通文件不能作为日志目录", encoding="utf-8")
+    audit = context.artifacts_dir / "resource-catalog-diagnostics.jsonl"
     evidence = []
     with ExitStack() as lifetime:
         gateway = start_gateway_process(
             workspace_root=context.workspace_root, default_backend_url=f"http://127.0.0.1:{upstream_port}",
             port=gateway_port, artifacts_dir=context.artifacts_dir,
+            asgi_app=f"{__name__}:create_catalog_diagnostic_failure_app",
+            extra_env={"BOXTEAM_TEST_CATALOG_SINK_CONTROL": str(sink_control),
+                       "BOXTEAM_TEST_CATALOG_SINK_DESTINATION": str(sink_blocker / "service.log"),
+                       "BOXTEAM_TEST_CATALOG_SINK_AUDIT": str(audit)},
         )
         lifetime.callback(close_gateway_process, gateway)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
@@ -189,6 +212,12 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
             assert added.status_code == 200, added.text
             targets = {item["backend_workspace_id"]: item for item in added.json()["data"]["items"]}
             assert set(targets) == {failed_owner, sibling_owner}
+            initial = await client.get("/api/gateway/resources")
+            assert initial.status_code == 200 and initial.json()["data"]["errors"] == [], initial.text
+            healthy_resource, = [item for item in initial.json()["data"]["items"]
+                                 if item["resource"]["workspace_id"] == sibling_owner]
+            if sink_fails:
+                sink_control.touch()
             state = json.loads(control.read_text())
             for mode in ("envelope", "validation", "http-status", "owner-envelope", "owner-item"):
                 for index, native_path in enumerate(("/private/catalog-marker/state.sqlite", r"C:\private\catalog-marker\state.sqlite", r"\\server\catalog-marker\state.sqlite", sibling_owner)):
@@ -200,14 +229,19 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
                     body = failed.json()
                     assert body["request_id"] == failed.headers["X-Request-ID"] == request_id
                     assert "catalog-marker" not in failed.text
+                    assert str(sink_blocker) not in failed.text
                     item, = body["data"]["items"]
+                    assert item == healthy_resource
                     assert item["workspace_id"] == targets[sibling_owner]["workspace_id"]
                     assert item["resource"]["workspace_id"] == sibling_owner
                     error, = body["data"]["errors"]
                     assert error["scope_key"] == targets[failed_owner]["workspace_id"]
                     assert error["label"] == f"本机 Gateway · {targets[failed_owner]['name']}"
                     error_type = {"envelope": "ValueError", "validation": "ValidationError", "http-status": "HTTPStatusError", "owner-envelope": "ValueError", "owner-item": "ValueError"}[mode]
-                    assert error["message"] == f"工作区资源目录读取失败: {error_type}" + (", status=503" if mode == "http-status" else "")
+                    expected = f"工作区资源目录读取失败: {error_type}" + (", status=503" if mode == "http-status" else "")
+                    if sink_fails:
+                        expected += ", diagnostic_sink_error=NotADirectoryError"
+                    assert error["message"] == expected
                     observed = [json.loads(line) for line in Path(state["requests_path"]).read_text().splitlines()]
                     assert {row["workspace_id"] for row in observed if row["request_id"] == request_id} == {failed_owner, sibling_owner}
                     evidence.append(body)
@@ -218,7 +252,21 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
             assert recovered.json()["data"]["errors"] == []
             assert {item["resource"]["workspace_id"] for item in recovered.json()["data"]["items"]} == {failed_owner, sibling_owner}
             evidence.append(recovered.json())
-        logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
+            assert next(item for item in recovered.json()["data"]["items"]
+                        if item["resource"]["workspace_id"] == sibling_owner) == healthy_resource
+            if sink_fails:
+                records = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+                assert len(records) == 20
+                assert [record["request_id"] for record in records] == [body["request_id"] for body in evidence[:-1]]
+                assert all(record["workspace_id"] == targets[failed_owner]["workspace_id"] for record in records)
+                assert all(record["error_type"] in {"ValueError", "ValidationError", "HTTPStatusError"} for record in records)
+                assert "catalog-marker" in audit.read_text(encoding="utf-8")
+                # 下游恢复后即使日志故障尚未解除，也不应再产生失败记录或影响资源查询。
+                sink_control.unlink()
+                log_recovered = await client.get("/api/gateway/resources")
+                assert log_recovered.status_code == 200 and log_recovered.json()["data"] == recovered.json()["data"]
+                assert len(audit.read_text(encoding="utf-8").splitlines()) == 20
+        logs = (audit if sink_fails else context.artifacts_dir / "gateway.stderr.log").read_text(encoding="utf-8")
         assert "catalog-marker" in logs and "Traceback" in logs
         assert "catalog-validation-1" in logs
         (context.artifacts_dir / "catalog-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")

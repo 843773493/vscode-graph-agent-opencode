@@ -11,6 +11,10 @@ from pydantic import ValidationError
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from tests.support.diagnostic_failures import DiagnosticFailure
+from tests.support.diagnostic_failures import (
+    diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 复用真实日志 I/O 故障。
+)
 from tests.support.resource_owners.sessions import (
     SESSION_A,
     THREAD_A,
@@ -70,6 +74,53 @@ async def test_catalog_owner_failure_exposes_workspace_error(target: WorkspaceTa
 
 
 @pytest.mark.asyncio
+async def test_catalog_log_failure_keeps_healthy_resource_and_original_error(
+    target: WorkspaceTarget, resource_record: dict[str, object],
+    diagnostic_sink: DiagnosticFailure,
+) -> None:
+    healthy = replace(target, workspace_id="gw_healthy", name="健康工作区", backend_url="http://healthy.test")
+    registry = Mock(spec=GatewayWorkspaceRegistry)
+    registry.targets.return_value = (target, healthy)
+    original = httpx.ReadError("目录读取失败: /private/catalog-marker/state.sqlite")
+    diagnostic_sink.primary = original
+    calls: list[httpx.Request] = []
+    failed = True
+
+    def request(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.host == "workspace.test" and failed:
+            raise original
+        return httpx.Response(200, json={"data": {"workspace_id": WORKSPACE_ID, "items": [resource_record]}})
+
+    before = original.args
+    async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as client:
+        service = GatewayResourceCatalogService(registry=registry, http_client=client)
+        rejected = await service.list(request_id="req_catalog_double_failure")
+        item, = rejected.items
+        assert item.workspace_id == healthy.workspace_id
+        assert item.resource.model_dump() == resource_record
+        error, = rejected.errors
+        assert error.scope_key == target.workspace_id
+        assert error.message == "工作区资源目录读取失败: ReadError, diagnostic_sink_error=NotADirectoryError"
+        assert "catalog-marker" not in rejected.model_dump_json()
+        assert str(diagnostic_sink.destination) not in rejected.model_dump_json()
+        record, = diagnostic_sink.records
+        assert record.exc_info is not None and record.exc_info[1] is original
+        assert record.__dict__["workspace_id"] == target.workspace_id
+        assert record.__dict__["request_id"] == "req_catalog_double_failure"
+        secondary, = diagnostic_sink.errors
+        assert str(secondary) in "\n".join(original.__notes__)
+        assert original.args == before
+        assert len(calls) == 2
+
+        failed = False
+        restored = await service.list(request_id="req_catalog_double_failure")
+        assert restored.errors == [] and len(calls) == 4
+        assert {item.workspace_id for item in restored.items} == {target.workspace_id, healthy.workspace_id}
+        assert all(item.resource.model_dump() == resource_record for item in restored.items)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("native_path", [
     "/private/catalog-marker/state.sqlite", r"C:\private\catalog-marker\state.sqlite",
     r"\\server\private\catalog-marker\state.sqlite",
@@ -119,8 +170,9 @@ async def test_catalog_failure_preserves_scope_and_diagnostics_without_raw_paylo
             assert original.errors()[0]["input"] == native_path
         else:
             assert native_path in str(original)
-        assert target.workspace_id in diagnostic.getMessage()
-        assert "req_catalog_failure" in diagnostic.getMessage()
+        assert diagnostic.__dict__["workspace_id"] == target.workspace_id
+        assert diagnostic.__dict__["request_id"] == "req_catalog_failure"
+        assert diagnostic.__dict__["stage"] == "gateway-resource-catalog"
         if failure == "transport":
             assert original is transport_error
         if isinstance(original, httpx.HTTPStatusError):

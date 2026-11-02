@@ -21,6 +21,8 @@ def install_failing_diagnostic_sink(
                     "logger": record.name, "message": record.getMessage(),
                     "error_type": type(primary).__name__ if primary is not None else None,
                     "diagnostic": "".join(format_exception(primary)) if primary is not None else None,
+                    **{key: record.__dict__[key] for key in ("workspace_id", "request_id", "stage")
+                       if key in record.__dict__},
                 }, ensure_ascii=False) + "\n")
             # 调用方将普通文件用作父目录，由目标 OS 抛出真实日志位置错误。
             with destination.open("a", encoding="utf-8"):
