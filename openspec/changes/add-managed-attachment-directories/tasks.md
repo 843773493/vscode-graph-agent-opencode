@@ -1008,3 +1008,8 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 服务关闭封锁新准入，已在等待Session gate的调用返回后再次核对；已进入操作登记至gate完整退出。各owner独立等待原操作，再在原owner锁内读取最终runtime并停止，覆盖尚未物化的启动；待核实终态明确失败。重叠关闭复用原任务，取消／30秒观察到期不取消真实清理，失败结算后显式重试，成功项不重放。每个等待者冻结原任务集合，后继重试不替换其原错误，同批失败与超时一并报告。
 - 新增7项单测覆盖启动窗口、真实owner锁等待、准入封锁、取消／超时／未知终态、部分失败及重叠重试；Node调试397项、驻留管理30项、新增关闭与Backend生命周期18项分别通过（含重复用例，不相加宣称独立场景数）。两项ASGI调试API／真实Node与Inspector验收通过，核原PID消失、claim／lease结清、原方案冷读和新代重启；完整旧HEAD归档的启动窗口反例在关闭提前成功处按预期失败。未手填产品运行历史。
 - Ruff、compileall、四文件Pyright零诊断及本change严格校验通过；作者AST／目录审查没有新增结构问题，不称独立审查。初轮合并回归触及90秒外部上限，且期间仅新增一条单测，未计作通过；拆分后保留各自完整退出码及耗时。准确命令、源码指纹、原始输出、归档反例与范围见`out/tests/temp/node_debug_shutdown_20261102/artifacts/verification.json`。全部测试带进程外期限／4GiB，集成沿原独占闸门；未运行Gateway／Web、独立Backend硬重启或Windows。驻留source同步I/O、无身份旧代接管、原生I/O抢占及整个operation／shutdown硬期限仍TODO，5.2／5.4和21/23保持未完成；quick-access继续暂停，未修改共享debug。
+
+### 2026-11-02 冷准备按本地阶段复用 worker（5.4 性能部分）
+
+- 原资源登记和committed fork占用结算各在一个受保护worker内顺序遍历，移除逐资源重复排队；原准备锁、账本writer、部分提交、取消结算及迟到失败链不变，不合并网络同步或新增账本。44项冷恢复／取消单测及真实PTY／Chromium／HTTP重试矩阵4项通过，Ruff、compileall、生产Pyright零诊断与规范严格校验通过。
+- 同负载每领域36个资源、每版3次：冷准备worker调度74→4，完整恢复110→40；准备中位数Terminal约30→14ms、Browser约31→13ms，写盘次数及字节不变。完整恢复中位数约186→186ms、193→195ms，未证明全链路加速；该测量使用真实领域owner和替身transport。准确命令、源码指纹、原始结果及作者结构核对见`out/tests/temp/resource_recovery_batch_20261102/artifacts/verification.json`。全部测试有进程外期限／4GiB，产品集成使用原独占闸门；不代Gateway／Web、Windows或进程硬重启。5.2／5.4及21/23保持未完成，quick-access继续暂停。

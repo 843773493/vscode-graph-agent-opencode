@@ -107,22 +107,30 @@ class ResourceRecovery:
             record.resource_id for record in records
             if record.reconciliation_status == "unknown"
         }
+
+        def register_records() -> None:
+            for record in records:
+                owner._leases.register_external(
+                    resource_id=record.resource_id,
+                    kind=owner.lease_kind,
+                    lifetime_scope=record.retention_scope,
+                )
+
+        def release_fork_leases() -> None:
+            for record in records:
+                owner._release_committed_fork_leases(record)
+
+        # 每个本地阶段只排队一次；逐项顺序、部分提交和原账本 writer 保持不变。
+        await run_sync_shielded(register_records)
         statuses: dict[str, str] = {}
         for record in records:
-            await run_sync_shielded(
-                owner._leases.register_external,
-                resource_id=record.resource_id,
-                kind=owner.lease_kind,
-                lifetime_scope=record.retention_scope,
-            )
             runtime = observed.get(record.resource_id)
             observe_resource(record, runtime, owner.kind)
             statuses[record.resource_id] = lease_status(record)
         await owner._store.save(*records)
         # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
         await owner._leases.reconcile(statuses, kind=owner.lease_kind)
-        for record in records:
-            await run_sync_shielded(owner._release_committed_fork_leases, record)
+        await run_sync_shielded(release_fork_leases)
         pending_by_resource = owner._leases.leases_for_resources(owner._store.ids())
         for record in records:
             outstanding_leases = await owner._reconcile_stopped_record(
