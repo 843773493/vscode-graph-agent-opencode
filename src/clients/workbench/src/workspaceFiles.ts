@@ -1,13 +1,19 @@
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { Event, Emitter } from '../upstream/src/vs/base/common/event.js';
 import { toDisposable, IDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
+import { isEqualOrParent } from '../upstream/src/vs/base/common/resources.js';
 import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult } from '../upstream/src/vs/platform/files/common/files.js';
 import type { WorkspaceFileContentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
 
 const scheme = 'boxteam-file';
+interface FileWatch {
+  controller: AbortController;
+  resources: Map<string, { resource: URI; references: number }>;
+}
 /** 根引用作为不透明路径段保存；子路径可直接使用原版 joinPath／relativePath。 */
 export function workspaceFileUri(owner: WorkspaceOwner, path: string, rootPath: string): URI {
   if (path !== rootPath && !path.startsWith(rootPath + '/')) throw new Error('文件不属于后端返回的文件根');
@@ -37,6 +43,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
   readonly onDidWatchError = this.watchErrors.event;
   // 仅保留文本模型实际读取的版本；stat/watch 不得推进写入基线。
   private readonly revisions = new Map<string, string>();
+  private readonly watches = new Map<string, FileWatch>();
 
   private async request<T>(resource: URI, endpoint: string, options: RequestInit = {}): Promise<T> {
     const source = workspaceFileSource(resource);
@@ -89,19 +96,52 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
     }
   }
   watch(resource: URI): IDisposable {
-    let revision = this.revisions.get(resource.toString()); let reading = false; let disposed = false;
-    const timer = setInterval(async () => {
-      if (reading || disposed) return;
-      reading = true;
-      try {
-        const file = await this.content(resource);
-        if (!disposed && revision && revision !== file.revision) this.changes.fire([{ resource, type: FileChangeType.UPDATED }]);
-        revision = file.revision;
-      } catch (error) {
-        if (!disposed) { clearInterval(timer); this.watchErrors.fire(`文件监听失败：${error instanceof Error ? error.message : String(error)}`); }
-      } finally { reading = false; }
-    }, 5000);
-    return toDisposable(() => { disposed = true; clearInterval(timer); });
+    const source = workspaceFileSource(resource);
+    const key = workspaceFileUri(source, source.root, source.root).toString();
+    let watch = this.watches.get(key);
+    if (!watch) {
+      watch = { controller: new AbortController(), resources: new Map() };
+      this.watches.set(key, watch);
+      const active = watch;
+      void this.watchRoot(source, active).catch(error => {
+        if (!active.controller.signal.aborted) this.watchErrors.fire(`文件监听失败：${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+    const name = resource.toString(), entry = watch.resources.get(name) ?? { resource, references: 0 };
+    entry.references++;
+    watch.resources.set(name, entry);
+    return toDisposable(() => {
+      if (--entry.references === 0) watch.resources.delete(name);
+      if (!watch.resources.size) { watch.controller.abort(); this.watches.delete(key); }
+    });
+  }
+
+  /** 同一规范根只订阅一次原 watcher／SSE；通知不读正文或推进保存基线。 */
+  private async watchRoot(source: ReturnType<typeof workspaceFileSource>, watch: FileWatch): Promise<void> {
+    const signal = watch.controller.signal;
+    const routeId = await gateway.resolveWorkspace(source, signal);
+    if (signal.aborted) return;
+    const invalidate = () => this.changes.fire([...watch.resources.values()].map(({ resource }) => ({ resource, type: FileChangeType.UPDATED })));
+    await streamWorkspaceFileEvents(0, [source.root], {
+      workspaceId: routeId, signal,
+      // 连接重建可能错过原生事件；沿原 FileService 重新核实已打开资源。
+      onConnected: invalidate,
+      onBatch: batch => {
+        if (signal.aborted) return;
+        if (batch.overflow) { invalidate(); return; }
+        const watched = [...watch.resources.values()];
+        const changes = batch.changes.flatMap(change => {
+          // 原观察通道也可覆盖默认工作区；仅接收本次明确根的事件。
+          if (change.path !== source.root && !change.path.startsWith(source.root + '/')) return [];
+          const resource = workspaceFileUri(source, change.path, source.root);
+          if (!watched.some(entry => isEqualOrParent(resource, entry.resource) || isEqualOrParent(entry.resource, resource))) return [];
+          const type = change.kind === 'create' ? FileChangeType.ADDED : change.kind === 'delete' ? FileChangeType.DELETED : FileChangeType.UPDATED;
+          return [{ resource, type }];
+        });
+        if (changes.length) this.changes.fire(changes);
+      },
+    });
+    if (!signal.aborted) throw new Error('文件监听流意外结束');
   }
   // 此 provider 只负责已有文本；目录管理复用会话文件树的 operation receipt 链路。
   async mkdir(): Promise<void> { throw new Error('请在会话文件树中新建目录'); }

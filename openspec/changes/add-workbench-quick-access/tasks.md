@@ -252,3 +252,9 @@
 - 在原真实 Gateway／受管 Backend 场景补齐缺失目录的 describe／有效 search、未知二进制的无正文 stat 与明确编码错误、只读 agent-spec 拒绝普通文件写入且原件不变。根内 include、大小写不敏感多行正则、CRLF／emoji 的码点与 UTF-16 完整区间均核真实 HTTP 回执；保存后 describe 只返回 stat，旧 revision 仍以 409 拒绝，保留原 request_id。
 - 真实 HTTP 场景通过（67.76 秒）；原版 FileService 定向 3 项／37 断言通过，确认目录／二进制 stat、稳定投影及 route 变化后的 CAS 基线。复用前两切片的查询选项、dirty 模型和真实页面证据，无产品变化，不重复前端构建／类型检查。Ruff、差异检查及 OpenSpec strict 通过；原文件 522 行，新增断言仍属同一导航场景，无结构 findings。
 - 首两次失败来自测试误把未知 `.bin` 当成受支持媒体；按既有合同同时核 text／auto 都明确拒绝，未扩展媒体能力。第三次缺失目录搜索漏传必需 query，修正有效请求后通过。原输出、源码指纹、命令及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/file-boundary-*.json`；真实回执保留在 `out/tests/integration/backend/agents/test_resource_navigation/artifacts/navigation-receipts.json`。这不代替尚未实施的统一 opener 或 Electron 验收。
+
+### 2026-11-02：文件观察去除正文轮询
+
+- 删除每个编辑器文件每五秒读取完整正文的轮询，复用原共享 watcher／SSE。相同完整根共用订阅，事件先按规范根及实际监听目标限制，父目录删除及溢出仍通知原 FileService；最后释放才取消，路由解析晚到不再建立订阅，流错误沿原 watch 错误通道暴露。通知不读取正文、不更新 revision／CAS。参考 `reference_repo/vscode/extensions/copilot/src/platform/filesystem/vscode/fileSystemServiceImpl.ts` 的原文件 watcher 接入。
+- FileService 定向 5 项／51 断言、真实类型检查（含 14 份转换源码）、Ruff、JS 语法通过。真实 Gateway／正式 Workbench 构建／Chromium 完整场景通过（162.79 秒）：空闲六秒正文 GET 增量为零，外部真实文件修改自动显示，dirty 草稿保存由原 FileService 明确拒绝且磁盘不被覆盖；原后端 CAS 单测及原双工作区／备份／路由恢复断言保持。结构审查无 findings：产品及服务测试各约 155 行，页面 helper 约 50 行，无新源码目录。
+- 首次类型检查的闭包收窄、单测误比较 URI 内部缓存、页面装具目录变量被接口对象遮蔽均按原输出修正，未放宽身份或冲突断言。命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/file-watch-*.json`；最终页面为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-191eb29762e2/nodes/node-f4e408bf0b21/artifacts/search-result.json`。不增加任务勾选，不代表默认 Quick Access 或 Electron 已实现。

@@ -146,6 +146,8 @@ Command Center 的 `workbench.action.quickOpenWithModes` 以 `includeHelp: true`
 
 不修改固定 upstream 子模块字节；上述贡献与搜索范围接入均使用既有受校验 transform，不将 Provider 代理到其它搜索弹窗。已有文件菜单、会话树、引用入口沿相同业务动作收口，各自默认交互保留。
 
+文件编辑器监听复用现有目标文件 watcher 和共享观察 SSE，同一稳定 Gateway／workspace／规范根仅保留一个订阅，最后一个监听者释放时取消。正常变更只通知原 FileService 核实已打开资源，连接重建或事件溢出重新核实所监听资源；监听不读取正文或推进保存基线，不再每个文件每五秒拉取全文。这与参考仓库 Copilot 直接使用 `workspace.createFileSystemWatcher` 的职责一致，文件写入仍沿原 revision／CAS。
+
 #### Search Editor 每个输入保存自己的范围
 
 原 `SearchConfiguration` 没有业务 scope，原 serializer 只保留 config、modelUri、dirty、matchRanges、backingUri；单独注入 child 上下文不能让关闭恢复或分屏复制保持范围。选择在原 SearchConfiguration 上增加可选、版本化的项目 scope metadata，由同一 transform 接入原类型声明并引用项目的具名类型。metadata 只表达 Gateway 稳定归属、选定工作区稳定身份及规范目录根，不保存 token、临时 endpoint 或把 route 冻结成身份；未绑定与原生容器范围须明确区分。它是这条查询的展示／恢复数据，不是新工作区事实源。

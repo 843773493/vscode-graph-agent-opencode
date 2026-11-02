@@ -5,13 +5,15 @@ import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { verifySearchEditors } from './search_editor.mjs';
 import { verifySearchContext } from './search_context.mjs';
 import { verifySearchRecovery } from './search_recovery.mjs';
+import { verifyFileWatch } from './file_watch.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshotPath = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 const otherWorkspace = process.env.BOXTEAM_SEARCH_OTHER_WORKSPACE;
 const replacementWorkspace = process.env.BOXTEAM_SEARCH_REPLACEMENT_WORKSPACE;
-if (!baseUrl || !resultPath || !screenshotPath || !otherWorkspace || !replacementWorkspace) throw new Error('文件快速搜索缺少运行参数');
+const workspacePath = process.env.BOXTEAM_SEARCH_WORKSPACE;
+if (!baseUrl || !resultPath || !screenshotPath || !otherWorkspace || !replacementWorkspace || !workspacePath) throw new Error('文件快速搜索缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_text_search.py');
 const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], initialization: [],
   boundary: '真实 Gateway、托管后端与正式 Workbench；无业务 HTTP 替身，源文件为隔离装具' };
@@ -121,8 +123,9 @@ try {
     root: otherRoots.data.workspace_uri, route: other.workspace_id };
   if (otherOwner.workspaceId === result.owner.workspaceId) throw new Error('隔离工作区身份重复');
   result.otherOwner = otherOwner;
-  const fileUri = owner => page.evaluate(owner => globalThis.workbench.URI.from({ scheme: 'boxteam-file', authority: owner.gatewayId,
-    path: `/${owner.workspaceId}/${encodeURIComponent(owner.root)}/quick-scope.txt` }).toString(), owner);
+  const fileUri = (owner, filename = 'quick-scope.txt') => page.evaluate(({ owner, filename }) => globalThis.workbench.URI.from({ scheme: 'boxteam-file', authority: owner.gatewayId,
+    path: `/${owner.workspaceId}/${encodeURIComponent(owner.root)}/${filename}` }).toString(), { owner, filename });
+  await verifyFileWatch({ page, command, result, workspace: workspacePath, resource: await fileUri(result.owner, 'watch-contract.txt'), owner: result.owner });
   const edit = async (resource, original, value) => {
     await command('_workbench.open', resource, [undefined, { pinned: true }]);
     const editor = page.locator('.editor-instance .monaco-editor').filter({ visible: true }).last();

@@ -63,6 +63,7 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
             schema_path=workspaces / ".boxteam/workspace_schema.jsonc",
         )
     (workspace / "quick-scope.txt").write_text("diskword quickscope\n", encoding="utf-8")
+    (workspace / "watch-contract.txt").write_text("watch initial\n", encoding="utf-8")
     (other / "quick-scope.txt").write_text("foreign-disk quickscope\n", encoding="utf-8")
     (replacement / "quick-scope.txt").write_text("replacement-C quickscope\n", encoding="utf-8")
     (workspace / "context-lines.txt").write_text("A context before\ncontextbranchonly\ncontextbranchonly\nA context after", encoding="utf-8")
@@ -85,6 +86,7 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                      "BOXTEAM_SEARCH_OTHER_WORKSPACE": str(other),
+                     "BOXTEAM_SEARCH_WORKSPACE": str(workspace),
                      "BOXTEAM_SEARCH_REPLACEMENT_WORKSPACE": str(replacement),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
                 capture_output=True, text=True, timeout=210, check=False,
@@ -112,6 +114,9 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["editorDirtyContext"] is True
         assert receipt["editorAutomaticContextRerun"] is True
         assert receipt["editorDeepBackupRecovery"] is True
+        assert receipt["fileWatch"]["idleContentReads"] == 0
+        assert receipt["fileWatch"]["externalUpdate"] is True
+        assert receipt["fileWatch"]["dirtyConflict"] is True
         assert receipt["editorLatePaneIsolation"] is True
         assert receipt["editorRouteRecovery"]["original"] != receipt["editorRouteRecovery"]["current"]
         assert receipt["pageErrors"] == []

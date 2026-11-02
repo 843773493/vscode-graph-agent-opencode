@@ -2,10 +2,11 @@ import { describe, expect, test, spyOn } from 'bun:test';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { joinPath, relativePath, isEqualOrParent } from '../upstream/src/vs/base/common/resources.js';
 import { FileService } from '../upstream/src/vs/platform/files/common/fileService.js';
-import { FileType } from '../upstream/src/vs/platform/files/common/files.js';
+import { FileType, FileChangeType, type IFileChange } from '../upstream/src/vs/platform/files/common/files.js';
 import { NullLogService } from '../upstream/src/vs/platform/log/common/log.js';
 import { gateway, GatewayRequestError } from '../src/agentApi.js';
 import { installBackendFiles, workspaceFileUri, workspaceFileSource } from '../src/workspaceFiles.js';
+import * as fileEvents from '../../web/src/api/stream/workspaceFileEvents.js';
 
 const owner = { gatewayId: 'gateway_file_test', workspaceId: 'workspace-a' };
 const root = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`;
@@ -84,5 +85,71 @@ describe('后端文件目录根和稳定投影', () => {
       expect(write[2]).toBe('replacement-route');
       expect(request.mock.calls.at(-1)?.[1]?.method).not.toBe('PUT');
     } finally { resolve.mockRestore(); request.mockRestore(); files.dispose(); }
+  });
+
+  test('同根多个文件及重复 watch 共用原 SSE，变化通知不读正文，最后解除才取消', async () => {
+    const files = fileService(), first = workspaceFileUri(owner, root + '/dir/a.txt', root);
+    const second = workspaceFileUri(owner, root + '/b.txt', root);
+    const provider = files.getProvider(first.scheme)!;
+    const changes: IFileChange[][] = [];
+    const listener = provider.onDidChangeFile(batch => changes.push([...batch]));
+    const started = Promise.withResolvers<NonNullable<Parameters<typeof fileEvents.streamWorkspaceFileEvents>[2]>>();
+    const resolve = spyOn(gateway, 'resolveWorkspace').mockResolvedValue('watch-route');
+    const request = spyOn(gateway, 'request');
+    const stream = spyOn(fileEvents, 'streamWorkspaceFileEvents').mockImplementation(async (_port, _paths, options) => {
+      if (!options?.signal) throw new Error('监听缺少生命周期');
+      started.resolve(options);
+      await new Promise<void>(done => options.signal!.addEventListener('abort', () => done(), { once: true }));
+    });
+    const handles = [first, second, first].map(resource => provider.watch(resource, { recursive: false, excludes: [] }));
+    try {
+      const options = await started.promise;
+      expect(stream.mock.calls).toHaveLength(1);
+      expect(stream.mock.calls[0].slice(0, 2)).toEqual([0, [root]]);
+      expect(options.workspaceId).toBe('watch-route');
+      expect(resolve.mock.calls[0][1]).toBe(options.signal);
+      options.onConnected?.();
+      expect(changes.pop()?.map(change => change.resource.toString())).toEqual([first.toString(), second.toString()]);
+      options.onBatch?.({ changes: [{ kind: 'edit', path: root + '/dir/a.txt' },
+        { kind: 'edit', path: root + '/not-open.txt' }, { kind: 'edit', path: root.replace('workspace-a', 'workspace-b') + '/b.txt' }],
+        overflow: false, directories: [], event_id: 1, invalidated_roots: [], snapshots: [] });
+      expect(changes.pop()?.map(change => [change.resource.toString(), change.type])).toEqual([[first.toString(), FileChangeType.UPDATED]]);
+      options.onBatch?.({ changes: [{ kind: 'delete', path: root + '/dir' }], overflow: false,
+        directories: [], event_id: 2, invalidated_roots: [], snapshots: [] });
+      expect(changes.pop()?.map(change => [change.resource.toString(), change.type])).toEqual([
+        [workspaceFileUri(owner, root + '/dir', root).toString(), FileChangeType.DELETED],
+      ]);
+      options.onBatch?.({ changes: [], overflow: true, directories: [], event_id: 3, invalidated_roots: [root], snapshots: [] });
+      expect(changes.pop()?.map(change => change.resource.toString())).toEqual([first.toString(), second.toString()]);
+      expect(request.mock.calls).toEqual([]);
+      handles[0].dispose(); handles[2].dispose();
+      expect(options.signal?.aborted).toBe(false);
+      handles[1].dispose();
+      expect(options.signal?.aborted).toBe(true);
+      options.onBatch?.({ changes: [{ kind: 'edit', path: root + '/b.txt' }], overflow: false,
+        directories: [], event_id: 4, invalidated_roots: [], snapshots: [] });
+      expect(changes).toEqual([]);
+    } finally {
+      for (const handle of handles) handle.dispose();
+      listener.dispose(); stream.mockRestore(); resolve.mockRestore(); request.mockRestore(); files.dispose();
+    }
+  });
+
+  test('watch 在路由解析前关闭不启动迟到订阅，流失败沿原错误事件暴露', async () => {
+    const files = fileService(), resource = workspaceFileUri(owner, root + '/x.txt', root);
+    const provider = files.getProvider(resource.scheme)!;
+    const route = Promise.withResolvers<string>(), notified = Promise.withResolvers<string>();
+    const resolve = spyOn(gateway, 'resolveWorkspace').mockImplementation(() => route.promise);
+    const stream = spyOn(fileEvents, 'streamWorkspaceFileEvents').mockRejectedValue(new Error('原 SSE 失败：watch-request'));
+    const listener = provider.onDidWatchError!(error => notified.resolve(error));
+    const first = provider.watch(resource, { recursive: false, excludes: [] });
+    try {
+      first.dispose(); route.resolve('late-route');
+      await route.promise; await Promise.resolve();
+      expect(stream.mock.calls).toEqual([]);
+      const second = provider.watch(resource, { recursive: false, excludes: [] });
+      try { expect(await notified.promise).toContain('原 SSE 失败：watch-request'); }
+      finally { second.dispose(); }
+    } finally { first.dispose(); listener.dispose(); stream.mockRestore(); resolve.mockRestore(); files.dispose(); }
   });
 });
