@@ -82,7 +82,10 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const run: AccessRun = { picker, group: this.groups.activeGroup.id, editorState, options, cache: {} };
     // Controller 在 provide 之后才 show，不能等异步请求后再读取焦点。
     if (!options.fileSearchDelegate) {
-      try { run.owner = options.searchOwner ?? captureSearchOwner(this.editors); }
+      try {
+        if (options.searchOwnerError) throw new Error(options.searchOwnerError);
+        run.owner = options.searchOwner ?? captureSearchOwner(this.editors);
+      }
       catch (error) { run.error = String(error); }
     }
     this.run = run;

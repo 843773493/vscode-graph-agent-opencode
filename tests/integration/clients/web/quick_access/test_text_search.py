@@ -67,6 +67,8 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
     (other / "quick-scope.txt").write_text("foreign-disk quickscope\n", encoding="utf-8")
     (workspace / "quickdiscover-file.txt").write_text("discover A line one\nabcdef\n", encoding="utf-8")
     (other / "quickdiscover-file.txt").write_text("discover B line one\nuvwxyz\n", encoding="utf-8")
+    (workspace / "mode-scope.txt").write_text("mode scope A quickmodeword\n", encoding="utf-8")
+    (other / "mode-scope.txt").write_text("mode scope B quickmodeword\n", encoding="utf-8")
     (workspace / "quickdiscover-dir").mkdir()
     (workspace / "quickdiscover-dir/deep-file.txt").write_text("nested discover A\n", encoding="utf-8")
     (replacement / "quick-scope.txt").write_text("replacement-C quickscope\n", encoding="utf-8")
@@ -124,6 +126,7 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["defaultQuickAccess"]["progressive"] is True
         assert receipt["defaultQuickAccess"]["emptyHasNoQueries"] is True
         assert receipt["defaultQuickAccess"]["helpHasNoQueries"] is True
+        assert receipt["defaultQuickAccess"]["helpKeepsInvocation"] is True
         assert receipt["editorLatePaneIsolation"] is True
         assert receipt["editorRouteRecovery"]["original"] != receipt["editorRouteRecovery"]["current"]
         assert receipt["pageErrors"] == []

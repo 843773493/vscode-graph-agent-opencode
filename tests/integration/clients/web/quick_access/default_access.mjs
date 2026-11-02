@@ -112,6 +112,30 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     expect(requests.length).toBe(beforeHelp);
     await page.keyboard.press('Escape');
 
+    // 原失焦设置保留浮层；底层焦点从 A 改成 B 后，帮助转接仍使用发起时的 A。
+    await command('_workbench.open', await fileUri(ownerA), [undefined, { pinned: true }]);
+    await command('workbench.action.quickOpenWithModes');
+    await expect(quick).toBeVisible();
+    await command('_workbench.open', await fileUri(ownerB), [undefined, { pinned: true }]);
+    await expect(quick).toBeVisible();
+    await input.fill('?');
+    await quick.getByRole('option', { name: /^%,/ }).click();
+    await expect(input).toHaveAttribute('placeholder', /搜索文件内容/);
+    const beforeMode = requests.length;
+    await input.fill('%quickmodeword');
+    await expect(quick).toContainText('mode scope A quickmodeword');
+    await expect(quick).not.toContainText('mode scope B quickmodeword');
+    const modeRequests = requests.slice(beforeMode).filter(request => request.body?.query === 'quickmodeword');
+    expect(modeRequests.length).toBeGreaterThan(0);
+    expect(modeRequests.every(request => request.route === ownerA.route && request.body?.uri === ownerA.root)).toBe(true);
+    await input.fill('?');
+    await quick.getByRole('option', { name: /^…,/ }).click();
+    await expect(quick).toContainText('最近打开');
+    await expect(quick).toContainText(ownerA.workspaceId);
+    await expect(quick).not.toContainText(ownerB.workspaceId);
+    await expect(quick).not.toContainText(/Go to File|转到文件/);
+    await page.keyboard.press('Escape');
+
     // 项目合同要求关闭历史同时隐藏空输入记录，不以枚举业务资源补空。
     await command('workbench.action.openWorkspaceSettings', '@id:search.quickOpen.includeHistory');
     const setting = page.locator('[data-key="search.quickOpen.includeHistory"]');
@@ -133,7 +157,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await page.keyboard.press('Escape');
     result.defaultQuickAccess = { sessionA: sessionA.session_id, sessionB: sessionB.session_id, requests, emptyHasNoQueries: true,
       progressive: true, scopeA: first, scopeB: second, helpHasNoQueries: true, disabledHistoryHasNoQueries: true,
-      fileSelection: '2:3', nestedPath: true, threadId: main.thread_id };
+      helpKeepsInvocation: true, fileSelection: '2:3', nestedPath: true, threadId: main.thread_id };
   } finally {
     release();
     await page.unroute('**/api/v1/session-threads/search?**', delay);

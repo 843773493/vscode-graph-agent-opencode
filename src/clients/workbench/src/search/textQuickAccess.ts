@@ -53,7 +53,10 @@ export class WorkspaceTextQuickAccess extends Disposable implements IQuickAccess
     };
     // 同步捕获发生在原 Controller 的 picker.show() 之前。
     let owner: ReturnType<typeof captureSearchOwner>;
-    try { owner = options?.searchOwner ?? captureSearchOwner(this.editors); }
+    try {
+      if (options?.searchOwnerError) throw new Error(options.searchOwnerError);
+      owner = options?.searchOwner ?? captureSearchOwner(this.editors);
+    }
     catch (error) { fail(error); return operation; }
     void loadSearchScope(owner, controller.signal).then(scope => {
       if (cancellation.token.isCancellationRequested) return;

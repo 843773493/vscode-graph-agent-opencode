@@ -4,6 +4,9 @@ import { PickerEditorState } from '../../../../../src/clients/workbench/upstream
 import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
+import { HelpQuickAccessProvider } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/browser/helpQuickAccess.js';
+import { Registry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/registry/common/platform.js';
+import { Extensions } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickAccess.js';
 
 const owner = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const root = 'boxteam://workspace/workspace-a/resources/files/root';
@@ -65,4 +68,27 @@ export function selectContract() {
     observed.received = received;
     return observed;
   } finally { f.dispose(); }
+}
+
+export function helpContract() {
+  const registry = Registry.as(Extensions.Quickaccess), registrations = [], accepts = new Emitter(), changes = new Emitter();
+  const shows = [], handleAccept = () => {}, options = { searchOwner: owner, handleAccept, includeHelp: true };
+  for (const prefix of ['', '_contract ']) registrations.push(registry.registerQuickAccessProvider({ prefix,
+    ctor: class {}, helpEntries: [{ description: '合同装具' }] }));
+  const help = new HelpQuickAccessProvider({ quickAccess: { show: (value, options) => shows.push({ value, options }) } },
+    { lookupKeybinding: () => undefined }, {});
+  const picker = { onDidAccept: accepts.event, onDidChangeValue: changes.event, selectedItems: [], items: [] };
+  const cancellation = new CancellationTokenSource(), lifetime = help.provide(picker, cancellation.token, options);
+  try {
+    picker.selectedItems = [picker.items.find(item => item.prefix === '')];
+    accepts.fire();
+    changes.fire('?_contract ');
+    return { values: shows.map(show => show.value), preserve: shows.every(show => show.options.preserveValue),
+      sameOwner: shows.every(show => show.options.providerOptions.searchOwner === owner),
+      sameReceiver: shows.every(show => show.options.providerOptions.handleAccept === handleAccept),
+      includeHelp: shows.map(show => show.options.providerOptions.includeHelp), sourceHelpUnchanged: options.includeHelp };
+  } finally {
+    lifetime.dispose(); cancellation.dispose(true); accepts.dispose(); changes.dispose();
+    for (const registration of registrations) registration.dispose();
+  }
 }

@@ -6,6 +6,8 @@ export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [
   'src/vs/workbench/browser/web.main.ts',
   'src/vs/workbench/browser/quickaccess.ts',
+  'src/vs/platform/quickinput/browser/quickAccess.ts',
+  'src/vs/platform/quickinput/browser/helpQuickAccess.ts',
   'src/vs/workbench/services/search/common/queryBuilder.ts',
   'src/vs/workbench/contrib/search/browser/search.contribution.ts',
   'src/vs/workbench/contrib/search/browser/searchQuickAccess.contribution.ts',
@@ -59,6 +61,22 @@ export function sourceTransform(root, productConfiguration, extensions) {
       contents = replaceOnce(contents, '\t\t\tawait this.editorViewState.group.openEditor(this.editorViewState.editor, {\n\t\t\t\tviewState: this.editorViewState.state,',
         '\t\t\tawait editorViewState.group.openEditor(editorViewState.editor, {\n\t\t\t\tviewState: editorViewState.state,');
       contents = replaceOnce(contents, '\n\t\t\tthis.reset();\n\t\t}\n\t}\n\n\treset()', '\n\t\t}\n\t}\n\n\treset()');
+    }
+    if (path === join(upstream, 'src/vs/platform/quickinput/browser/quickAccess.ts')) {
+      contents = replaceOnce(contents, '@IContextKeyService private readonly contextKeyService: IContextKeyService',
+        '@IContextKeyService private readonly contextKeyService: IContextKeyService,\n@IEditorService private readonly editors: IEditorService');
+      const entry = 'private doShowOrPick(value: string, pick: boolean, options?: IQuickAccessOptions): Promise<IQuickPickItem[] | undefined> | void {';
+      contents = replaceOnce(contents, entry, `${entry}\noptions = prepareSearchInvocation(options, this.editors);`);
+      contents = `import { prepareSearchInvocation } from ${JSON.stringify(join(root, 'src/search/target.js'))};\nimport { IEditorService } from ${JSON.stringify(join(root, 'upstream/src/vs/workbench/services/editor/common/editorService.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/platform/quickinput/browser/helpQuickAccess.ts')) {
+      contents = replaceOnce(contents, 'provide(picker: IQuickPick<IHelpQuickAccessPickItem, { useSeparators: true }>): IDisposable {',
+        'provide(picker: IQuickPick<IHelpQuickAccessPickItem, { useSeparators: true }>, _token: CancellationToken, options?: AnythingQuickAccessProviderRunOptions): IDisposable {');
+      contents = replaceOnce(contents, 'this.quickInputService.quickAccess.show(item.prefix, { preserveValue: true });',
+        'const providerOptions: AnythingQuickAccessProviderRunOptions = { ...options, includeHelp: item.prefix ? options?.includeHelp : false };\nthis.quickInputService.quickAccess.show(item.prefix, { preserveValue: true, providerOptions });');
+      contents = replaceOnce(contents, 'this.quickInputService.quickAccess.show(providerDescriptor.prefix, { preserveValue: true });',
+        'this.quickInputService.quickAccess.show(providerDescriptor.prefix, { preserveValue: true, providerOptions: options });');
+      contents = `import type { CancellationToken } from '../../../base/common/cancellation.js';\nimport type { AnythingQuickAccessProviderRunOptions } from '../common/quickAccess.js';\n` + contents;
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/search.contribution.ts')) {
       contents = replaceOnce(contents, 'ctorDescriptor: new SyncDescriptor(SearchView),', 'ctorDescriptor: new SyncDescriptor(ScopedSearchView),');

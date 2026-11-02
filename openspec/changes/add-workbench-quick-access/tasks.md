@@ -68,7 +68,7 @@
 - [x] 7.2 基于原 PickerQuickAccessProvider 接入原 fuzzy scorer、历史和打开服务，非空按最近／Session／Thread／文件分组，组内排序与稳定去重符合配置。
 - [ ] 7.3 在 Quick Input 聚焦前捕获发起上下文，空输入历史只限已选范围，名称／描述／详情、图标、高亮和行内动作准确，不枚举全部资源填空。
 - [ ] 7.4 保留 URI 粘贴、文件追加行列／符号、quickNavigate 和原 filesOnly／fileSearchDelegate、filter／additionPicks、handleAccept、按钮与 prefix 限制的真实调用语义。
-- [ ] 7.5 接入 `?` 与 Command Center includeHelp 的原注册帮助、命令及选模式转接，保留发起范围与接收者，默认模式关闭递归帮助。
+- [x] 7.5 接入 `?` 与 Command Center includeHelp 的原注册帮助、命令及选模式转接，保留发起范围与接收者，默认模式关闭递归帮助。
 - [ ] 7.6 验证空文件编辑器的 delegate／cache 生命周期与原 Chat 二级 picker 取消返回，不将原 widget 接受动作转投项目 Composer。
 
 ## 8. 查询范围与异步结果
@@ -267,3 +267,11 @@
 - 原 PickerEditorState 在 hide/dispose 与异步 restore 交错时读取被清空的状态；同一转换内改为 await 前消费局部状态，时序测试证明 dispose 可恢复，旧恢复不清掉下一次定位状态。固定 16 份源码的全部锚点、上游原件和真实类型检查通过。
 - 9 项定向检查／100 条断言通过。delegate／filter／补充项／handleAccept 在浏览器组件装具中验证空查询、URI 查询、取消／迟到响应、后台标志和原接收者；宿主与 Picker 事件是明确替身，不代替空文件编辑器或原 Chat 二级流程的完整验收，7.4／7.6 仍未勾选。普通页面通过后仅补齐 delegate 空输入分支，其余页面分支等价，定向检查与最终构建覆盖该增量。
 - 设置验收失败原件确认旧装具逐键插入触发自动补括号，生成无效 JSON；现以真实剪贴板粘贴和保存，并只读实际存储核对完整 JSON，未绕过设置 owner。JS 静态检查、Ruff、差异检查通过；准确命令、源码指纹、原输出、退出码及保留的失败原件位于 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/default-access-*.json`。多范围、通用 URI opener、完整帮助转接、正文和 Electron 等剩余场景继续未完成。
+
+
+### 2026-11-02：帮助与模式转接（7.5）
+
+- 原 Controller 在浮层显示前捕获发起归属，原输入前缀转接继续传递 typed options；原 HelpQuickAccess 的确认和精确前缀两个 show 直接传递 options，返回默认入口关闭本次递归帮助。独立新命令重新捕获自己的上下文，不从之前浮层隐式继承回调或错误；发起错误在显式转接中不改投后来焦点。
+- 真实 Gateway／正式 Workbench 经原设置保持浮层，将底层编辑器从 A 切到 B，经 Command Center → `?` → `%` 查询仍只访问 A，返回默认入口也只显示 A 历史且不递归帮助。原默认、dirty／watch、SearchView、Search Editor 分屏／保存／backup／route 场景继续通过；页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-a9be95922242/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
+- 11 项定向检查／126 条断言通过，原 Help 两个处理器的接收者回调保持同一对象；后者为浏览器组件装具，不冒充真实原 Chat widget 验收。18 份实际转换源码类型检查、正式页面构建、Ruff、JS 静态检查和结构审查通过；第一轮类型检查指出嵌套 options 字面量的额外属性，改为原 typed 局部变量后通过，未逃逸类型。
+- 准确命令、源码指纹、原始输出、退出码与失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/invocation-verification.json` 及相邻收据。本切片不完成 7.4／7.6、跨范围、通用 URI opener 或 Electron 的剩余验收。

@@ -8,10 +8,21 @@ import { ThreadInput } from '../threadInput.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import type { SearchScope } from './scope.js';
-import type { IQuickAccessProviderRunOptions } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
+import type { AnythingQuickAccessProviderRunOptions, IQuickAccessOptions } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 
 /** 同一次模式转接保留发起归属，不重新采样后来获得焦点的编辑器。 */
-export interface SearchInvocationOptions extends IQuickAccessProviderRunOptions { searchOwner?: WorkspaceOwner }
+export interface SearchInvocationOptions extends AnythingQuickAccessProviderRunOptions { searchOwner?: WorkspaceOwner; searchOwnerError?: string }
+
+/** 原 Controller 的同次模式转接传递调用参数；新入口在浮层聚焦前捕获归属。 */
+export function prepareSearchInvocation(options: IQuickAccessOptions | undefined, editors: IEditorService): IQuickAccessOptions {
+  const supplied = options?.providerOptions as SearchInvocationOptions | undefined;
+  const providerOptions: SearchInvocationOptions = { ...supplied };
+  if (!('fileSearchDelegate' in providerOptions) && !providerOptions.searchOwner && !providerOptions.searchOwnerError) {
+    try { providerOptions.searchOwner = captureSearchOwner(editors); }
+    catch (error) { providerOptions.searchOwnerError = String(error); }
+  }
+  return { ...options, providerOptions };
+}
 
 /** 必须在 Quick Input 获得焦点前同步读取；异步查根期间不重新采样活动目标。 */
 export function captureSearchOwner(editors: IEditorService): WorkspaceOwner {

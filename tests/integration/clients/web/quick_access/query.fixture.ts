@@ -14,3 +14,5 @@ export { Event } from '../../../../../src/clients/workbench/upstream/src/vs/base
 export { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 export { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 export { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
+export { prepareSearchInvocation } from '../../../../../src/clients/workbench/src/search/target.js';
+export { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';

@@ -33,6 +33,31 @@ function fixture(context = new m.SearchWorkspaceContext(scope), groupService = {
 }
 
 describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
+  test('显式转接保留原归属及接收者，新入口独立捕获，不隐式继承旧错误或接受动作', () => {
+    const editors = { activeEditor: new m.ThreadInput({ ...owner, sessionId: 'session-a', threadId: 'thread-a', title: 'A', routeId: '' }) };
+    const accept = () => {}, additions = [{ label: '原附件' }];
+    const initial = m.prepareSearchInvocation({ providerOptions: { handleAccept: accept, additionPicks: additions, includeHelp: true },
+      enabledProviderPrefixes: ['', '?', '%'] }, editors);
+    const other = { ...owner, workspaceId: 'workspace-b' };
+    editors.activeEditor = new m.ThreadInput({ ...other, sessionId: 'session-b', threadId: 'thread-b', title: 'B', routeId: '' });
+    const transfer = m.prepareSearchInvocation({ ...initial, preserveValue: true,
+      providerOptions: { ...initial.providerOptions, includeHelp: false } }, editors);
+    expect(transfer.providerOptions.searchOwner).toEqual(owner);
+    expect(transfer.providerOptions.handleAccept).toBe(accept);
+    expect(transfer.providerOptions.additionPicks).toBe(additions);
+    expect(transfer.providerOptions.includeHelp).toBe(false);
+    expect(transfer.enabledProviderPrefixes).toEqual(['', '?', '%']);
+    const fresh = m.prepareSearchInvocation(undefined, editors);
+    expect(fresh.providerOptions.searchOwner).toEqual(other);
+    expect(fresh.providerOptions.handleAccept).toBeUndefined();
+    expect(fresh.enabledProviderPrefixes).toBeUndefined();
+    const failed = { providerOptions: { searchOwnerError: '发起身份已失效' } };
+    const continued = m.prepareSearchInvocation(failed, editors);
+    expect(continued.providerOptions.searchOwnerError).toBe('发起身份已失效');
+    expect(continued.providerOptions.searchOwner).toBeUndefined();
+    expect(fresh.providerOptions.searchOwnerError).toBeUndefined();
+  });
+
   test('预览恢复等待关闭时可释放 Provider，迟到恢复不清除下一次定位状态', async () => {
     for (const dispose of [true, false]) {
       let release;

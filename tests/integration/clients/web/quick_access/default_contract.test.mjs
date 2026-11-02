@@ -51,3 +51,13 @@ test('补充项仍经 filter，handleAccept 保留原接收者与后台标志，
   expect(result.received).toEqual([{ label: '附件来源', kind: 'contextPick', background: true },
     { label: '附件来源', kind: 'contextPick', background: false }]);
 });
+
+test('原帮助的确认和精确前缀转接都保留归属与接收者，返回默认时只关闭本次递归帮助', async () => {
+  const result = await exercise('helpContract');
+  expect(result.values).toEqual(['', '_contract ']);
+  expect(result.preserve).toBe(true);
+  expect(result.sameOwner).toBe(true);
+  expect(result.sameReceiver).toBe(true);
+  expect(result.includeHelp).toEqual([false, true]);
+  expect(result.sourceHelpUnchanged).toBe(true);
+});

@@ -93,7 +93,8 @@ try {
   result.phase = 'configure-through-original-settings-editor';
   // 上游 Web 默认延时自动保存；关闭后才能检验搜索本身没有触发保存。
   await writeWorkspaceSettings({ page, command }, { 'search.useIgnoreFiles': false, 'files.autoSave': 'off',
-    'search.searchEditor.defaultNumberOfContextLines': 0, 'search.searchEditor.reusePriorSearchConfiguration': true });
+    'search.searchEditor.defaultNumberOfContextLines': 0, 'search.searchEditor.reusePriorSearchConfiguration': true,
+    'workbench.quickOpen.closeOnFocusLost': false });
 
   result.phase = 'explicitly-disabled-ignore-rules';
   const beforeDisabled = result.searches.length;

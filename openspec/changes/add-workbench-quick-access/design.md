@@ -128,6 +128,8 @@
 
 Command Center 的 `workbench.action.quickOpenWithModes` 以 `includeHelp: true`、`from: commandCenter` 调用默认 Provider，这是普通 `?` 之外的真实入口。空输入时将原 Registry 中当前上下文可用、具有 commandCenterOrder 的 help entries 作为快速模式候选，项目已启用入口也提供相应 help metadata；沿用顺序、标签、快捷键及无障碍描述，不等待后端资源查询。非空输入不把这些帮助当作资源结果。选择模式后保留原 provider options／preserveValue 语义和本次发起上下文，使用 Registry 的原前缀切换；返回默认模式时关闭 includeHelp 的递归。范围和接收者沿同一次交互传递，不因模式重开重新取后来的焦点；原生 Quick Chat 等附加候选仅在其真实服务可用时沿原行为提供。
 
+发起归属由原 QuickAccessController 在创建和显示浮层前同步捕获，写入本次 typed provider options；原 Controller 的输入前缀转接继续显式传递该 options。原 HelpQuickAccess 的确认与精确前缀两个 show 调用同样传递本次 options，返回空前缀时只关闭本次 includeHelp。接入均留在唯一 sourceTransform，不替换原帮助列表或交互。新发起的独立命令不读取上次浮层的参数或接受回调；没有有效归属的发起错误随本次转接保留，不因后续焦点改变而猜新目标。
+
 #### 文件搜索根与原版搜索视图
 
 文件检索注册到同一 `ISearchService` 的 file／text Provider，原文件操作 owner 负责真实后端查询。搜索根取后端公布的规范目录身份及其唯一内部编辑器投影；目录 `stat`／describe 必须真实，不能以固定成功骗过原 SearchService 的存在性检查。根下文件的 URI 拼接、父子判断和相对路径都须往返核验；不能把目前在 query 中保存整条原文件 URI 的叶子投影直接当成可 `joinPath` 的目录。继续使用同一文件投影函数，不新增搜索专用文件 scheme。
