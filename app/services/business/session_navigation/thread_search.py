@@ -1,5 +1,6 @@
 """原 catalog 和 SessionThread owner 的渐进名称查询；不加载 cold runtime。"""
 
+import asyncio
 import base64
 import binascii
 from time import monotonic
@@ -13,6 +14,7 @@ from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultDTO,
     SessionThreadSearchResultsDTO,
 )
+from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 from app.services.business.session_navigation.read_service import (
     SessionCatalogReadService,
 )
@@ -44,6 +46,7 @@ async def search_session_threads(
     query: str,
     limit: int,
     cursor: str | None,
+    deadline_at: float | None = None,
 ) -> SessionThreadSearchResultsDTO:
     """分页保留查询/目录版本和当前 Thread 版本，不假称跨库全局快照。"""
     query = query.strip().casefold()
@@ -52,7 +55,8 @@ async def search_session_threads(
     if not 1 <= limit <= 100:
         raise ValueError("Thread 名称查询 limit 必须在 1 到 100 之间")
     deadline = monotonic() + _QUERY_SECONDS
-    snapshot = await catalog.export_index()
+    budget = NameSearchBudget.create(deadline_at)
+    snapshot = await catalog.export_index(check=budget.check)
     state = _ThreadSearchCursor(
         workspace_id=sessions.workspace_id,
         gateway_id=gateway_id,
@@ -85,6 +89,7 @@ async def search_session_threads(
     scanned_session_ids: set[str] = set()
     reason: Literal["result_limit", "scan_limit", "deadline"] | None = None
     while state.node_offset < len(snapshot.items):
+        budget.check()
         if len(items) >= limit:
             reason = "result_limit"
             break
@@ -100,16 +105,25 @@ async def search_session_threads(
         node = snapshot.items[state.node_offset]
         scanned_nodes += 1
         if node.session is not None:
-            revision, rows, has_more = await sessions.thread_name_page(
-                node.node_id,
-                after_thread_id=state.after_thread_id,
-                limit=min(128, _MAX_SCANNED_THREADS - scanned_threads),
-                expected_revision=state.thread_revision,
-            )
+            # 期限覆盖准入等待；原受保护 worker 仍结算后才释放 Session 句柄。
+            waiting = asyncio.timeout(budget.remaining())
+            try:
+                async with waiting:
+                    revision, rows, has_more = await sessions.thread_name_page(
+                        node.node_id,
+                        after_thread_id=state.after_thread_id,
+                        limit=min(128, _MAX_SCANNED_THREADS - scanned_threads),
+                        expected_revision=state.thread_revision,
+                    )
+            except TimeoutError:
+                if waiting.expired():
+                    budget.check()
+                raise
             scanned_session_ids.add(node.node_id)
             state.thread_revision = revision
             consumed = 0
             for row in rows:
+                budget.check()
                 state.after_thread_id = row.thread_id if row.kind == "child" else ""
                 consumed += 1
                 scanned_threads += 1
@@ -146,6 +160,7 @@ async def search_session_threads(
     if sessions.path_resolver.revision != snapshot.catalog_revision:
         raise ValueError("Thread 搜索期间目录已更新，请重新查询")
     complete = state.node_offset == len(snapshot.items)
+    budget.check()
     return SessionThreadSearchResultsDTO(
         catalog_revision=snapshot.catalog_revision,
         items=items,

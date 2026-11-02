@@ -383,17 +383,22 @@ class SessionCatalogPathResolver:
         ]
 
     def catalog_snapshot(
-        self,
+        self, *, check: Callable[[], None] | None = None,
     ) -> tuple[int, list[SessionCatalogNodeProjection]]:
         """在同一 catalog 读快照中返回 navigation revision 与节点投影。"""
+        if check is not None:
+            check()
         self._ensure_consistency_verified()
-        navigation_revision, nodes = self._store.read_nodes_snapshot()
+        navigation_revision, nodes = self._store.read_nodes_snapshot(check=check)
         by_id = {node.node_id: node for node in nodes}
-        return navigation_revision, [
-            self._project_node(
+        projected: list[SessionCatalogNodeProjection] = []
+        for node in nodes:
+            if check is not None:
+                check()
+            projected.append(self._project_node(
                 node, self._nearest_session_ancestor_from_map(node.parent_node_id, by_id)
-            ) for node in nodes
-        ]
+            ))
+        return navigation_revision, projected
 
     def session_list_page(
         self, *, skip: int, limit: int, cursor: str | None

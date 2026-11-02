@@ -75,6 +75,7 @@ async def test_query_branches_cancel_expire_and_retry_only_their_selected_owner(
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
         assert receipt["onlySelectedOwners"] is True
+        assert receipt["serverBudget"] is True
         assert receipt["cancelledQueueAndLateResponses"] is True
         assert receipt["timeoutKeepsOtherBranches"] is True
         assert receipt["allFailuresRemainFailures"] is True

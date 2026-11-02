@@ -28,8 +28,8 @@ class _FailingCatalogService:
         }
         raise self.error
 
-    async def search(self, *, query: str, limit: int, cursor: str | None):
-        self.search_kwargs = {"query": query, "limit": limit, "cursor": cursor}
+    async def search(self, *, query: str, limit: int, cursor: str | None, deadline_at: float | None = None):
+        self.search_kwargs = {"query": query, "limit": limit, "cursor": cursor, "deadline_at": deadline_at}
         raise self.error
 
 

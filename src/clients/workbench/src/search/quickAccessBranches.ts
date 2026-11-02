@@ -57,7 +57,6 @@ export function queryNameBranches(owners: readonly WorkspaceOwner[], categories:
     controller.signal.addEventListener('abort', cancel, { once: true });
     let timedOut = false;
     // 排队、路由和该页读取共用原 JSON 期限；重试是用户明确发起的新读取。
-    // TODO：catalog 名称 owner 仍全目录扫描，需补服务端总预算；前端取消不能中断该扫描。
     const deadlineAt = Date.now() + DEFAULT_API_REQUEST_TIMEOUT_MS;
     const timer = setTimeout(() => { timedOut = true; source.cancel(); }, DEFAULT_API_REQUEST_TIMEOUT_MS);
     busy(true);

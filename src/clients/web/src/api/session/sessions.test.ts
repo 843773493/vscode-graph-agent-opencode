@@ -38,7 +38,7 @@ describe("工作区 Thread 名称查询", () => {
     });
     const result = await searchSessionThreads(48310,
       { workspace_id: "route-A", backend_workspace_id: "backend-A", connection_kind: "local" },
-      "sparse🧪", { limit: 3, cursor: "prior+/=", signal: controller.signal });
+      "sparse🧪", { limit: 3, cursor: "prior+/=", signal: controller.signal, deadlineAt: 1800000000123 });
     expect(result).toEqual(page);
     const url = new URL(requestUrl);
     expect(url.pathname).toBe("/api/v1/session-threads/search");
@@ -46,6 +46,7 @@ describe("工作区 Thread 名称查询", () => {
     const headers = new Headers(requestInit?.headers);
     expect(headers.get("X-BoxTeam-Workspace-Id")).toBe("route-A");
     expect(headers.get("X-BoxTeam-Backend-Workspace-Id")).toBe("backend-A");
+    expect(headers.get("X-BoxTeam-Name-Search-Deadline")).toBe("1800000000.123");
     expect(requestInit?.signal).toBeInstanceOf(AbortSignal);
   });
 

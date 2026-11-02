@@ -35,7 +35,8 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
   if (cursor) query.set('cursor', cursor);
   if (category === '会话') {
     const page = await gateway.request<SessionCatalogSearchResults>(`/api/v1/session-catalog/search?${query}`,
-      { signal, onResponse, headers: gatewayWorkspaceRequestHeaders(target) }, target.workspace_id);
+      { signal, onResponse, headers: { ...gatewayWorkspaceRequestHeaders(target),
+        ...(deadlineAt !== undefined ? { 'X-BoxTeam-Name-Search-Deadline': String(deadlineAt / 1000) } : {}) } }, target.workspace_id);
     return { cursor: page.cursor ?? undefined, requestIds, items: page.items.map((item): NameSearchItem => {
       if (item.node.kind === 'folder') return { kind: 'folder', nodeId: item.node.node_id, title: item.node.name,
         description: `${label} · ${item.relative_path} · ${item.node.node_id}`, detail: `文件夹 · ${item.node.node_id}` };
@@ -45,7 +46,7 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
     }) };
   }
   if (category === 'Thread') {
-    const page = await searchSessionThreads(0, target, filter, { signal, onResponse, limit: 50, cursor });
+    const page = await searchSessionThreads(0, target, filter, { signal, onResponse, limit: 50, cursor, deadlineAt });
     return { cursor: page.cursor, requestIds, limited: page.complete ? undefined : page.limited_reason ?? '尚未覆盖全部 Thread',
       items: page.items.map(item => {
         if (item.workspace_id !== owner.workspaceId) throw new Error('Thread 名称查询改变了工作区归属');

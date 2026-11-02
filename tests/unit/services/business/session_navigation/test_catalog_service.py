@@ -162,9 +162,9 @@ def _count_catalog_snapshots(
     count = [0]
     original = resolver.catalog_snapshot
 
-    def counted():
+    def counted(*, check=None):
         count[0] += 1
-        return original()
+        return original(check=check)
 
     monkeypatch.setattr(resolver, "catalog_snapshot", counted)
     return count
@@ -402,10 +402,10 @@ async def test_deep_search_builds_breadcrumbs_only_for_returned_page(
     breadcrumb_calls = 0
     original = SessionCatalogService._breadcrumb_items
 
-    def count_breadcrumbs(node, nodes_by_id):
+    def count_breadcrumbs(node, nodes_by_id, *, check):
         nonlocal breadcrumb_calls
         breadcrumb_calls += 1
-        return original(node, nodes_by_id)
+        return original(node, nodes_by_id, check=check)
 
     monkeypatch.setattr(catalog, "_breadcrumb_items", count_breadcrumbs)
 
@@ -821,8 +821,8 @@ async def test_catalog_snapshot_keeps_one_revision_when_writer_commits_after_rea
     before = resolver.catalog_store.get_node(child_id)
     original = resolver.catalog_store.read_nodes_snapshot
 
-    def write_after_snapshot():
-        revision, rows = original()
+    def write_after_snapshot(*, check=None):
+        revision, rows = original(check=check)
         resolver.catalog_store.move_node(child_id, parent_id)
         resolver.catalog_store.update_session_configuration(
             child_id, current_agent_id="default", current_provider_id="backup",

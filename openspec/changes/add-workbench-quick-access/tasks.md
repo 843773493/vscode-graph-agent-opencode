@@ -77,7 +77,7 @@
 
 - [x] 8.1 用原 Quick Input 提供已登记范围集合选择，明确显示当前范围；取消保持原查询，确认才发起新范围查询，选择停止目标不自动连接／启动／激活。
 - [x] 8.2 单目标经 Gateway 显式路由，多目标对所选 owner 有界并发；若使用原 Gateway catalog 聚合，先补其显式目标过滤，不调用全范围后隐藏 C。
-- [ ] 8.3 按查询／范围／类别／身份代际取消排队和请求、废弃迟到响应；服务端继续工作时仍受原预算和总 deadline 约束。
+- [x] 8.3 按查询／范围／类别／身份代际取消排队和请求、废弃迟到响应；服务端继续工作时仍受原预算和总 deadline 约束。
 - [x] 8.4 为每个工作区／owner 展示 busy、完成、受限、失败、取消和新鲜度，快结果先出，重试只针对失败读分支，全部失败不伪报无匹配。
 - [x] 8.5 使用每个 owner 独立 cursor 和明确续查，绑定原查询及 revision；合并保持有效活动目标和滚动，失效时不把 Enter 应用到新占行对象。
 - [x] 8.6 记录实际请求证明只 A 或明确 A+B，不访问 C；覆盖取消、超时、离线、旧 cursor、重复输入与迟到 progress，不仅查看 UI 结果。
@@ -319,3 +319,11 @@
 - 原 catalog／文件独立分页 E2E 继续通过，旧 cursor 与 Enter 不改投的原断言保留。最终完整 text_search 回归通过（225.37 秒；包装进程 228.22 秒），包含 A/B／IndexedDB、dirty／watch、默认入口、范围取消保留明确活动身份、SearchView、Search Editor 分屏／保存／backup／route 恢复，页面错误为空。原件为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-ce56a5c10600/nodes/node-f4e408bf0b21/artifacts/search-result.json`。旧测试先修虚拟列表观察，再依据鼠标滚动条点击会清空列表焦点的实际失败改用真实滚轮；未修改产品、缩减断言或延长期限，失败原件均保留。
 - 77 项定向检查／295 条断言、18 份真实转换源码的类型检查、正式构建、Ruff、JS／TS AST、结构审查及 OpenSpec strict 通过。767 份产品文件核对仅新增目录预算 TODO 注释，其余与先前通过的类型／页面证据一致。类型检查默认采用编译器原生单线程，避免并行检查撞四 GiB 保护；独立提交 `34f43a07d`。试验构建复用插件没有生效，已移除临时插件，正式页面仍由既有共享 fixture 实际构建，没有宣称跨运行复用。
 - 准确命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/branches-{contract-002,types-003,browser-003,regression-001,regression-004,structure-003,product-evidence-001}.json` 及相邻日志。未重跑不受新变化影响的已通过场景；Electron 与其余任务继续未完成。
+
+
+### 2026-11-02：名称查询服务端总期限（8.3）
+
+- catalog／Thread 名称 API 接收可选有限 UTC 截止时间，取客户端剩余期限与十五秒的较小值；Gateway 透明透传。原 catalog 冷快照逐行读取、投影、匹配和发布前检查同一期限，未完成快照不缓存；SQLite 游标在超时退出前关闭。Thread 准入等待消费剩余期限，原一秒调度分页及受保护 worker 结算规则保持，不宣称强行打断原生阻塞 I/O。
+- 386 项后端定向检查通过：已过期请求零扫描、冷读取中途停止、暖缓存匹配中途停止、远期时间戳不能扩大上限、真实准入等待超时后可继续查询。首轮唯一失败为测试 breadcrumb 包装函数未迁齐 check 参数，迁齐后通过，失败原件保留。90 项前端合同检查／332 条断言、18 份实际转换源码的真实类型检查通过；OpenAPI 两份快照同步登记 Header。
+- 正式共享 Workbench 构建／真实 Gateway／Chromium 两场景通过（206.76 秒，包装进程 209.73 秒）：两个名称端点真实返回过期 409 及同一 request_id；普通分支和单分支重试都传剩余期限，继续核三路取消、迟到响应、十五秒超时、A/B/C 隔离、身份失效、目录定位、精确 child、独立分页和旧 cursor。生命周期页面记录 47 条查询，页面错误与禁止写请求为空；原件位于 `out/tests/integration/clients/web/quick_access/test_query_lifecycle/runs/run-4f9cc6b3b59b/nodes/node-6c413386faf0/artifacts/query-lifecycle.json` 和 `out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-4f9cc6b3b59b/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 定向 Ruff、Python AST、结构审查及 OpenSpec strict 通过；API 原有 12 条 B008 按提交前后诊断逐项核对，无新增告警，未扩大修改。无新增源码目录、第二查询器或业务状态库。准确命令、指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/budget-{owner-final-001,contract-001,types-001,browser-001,static-001,structure-001,spec-001}.json`；类型及页面运行期间只有不参与构建的后端测试变化。未重跑不受此次变化影响的完整 text_search，Electron 和其它未勾选任务仍未完成。

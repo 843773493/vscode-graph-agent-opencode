@@ -96,7 +96,7 @@ export async function branchContract(mode) {
     workspace_id: `route-${index}`, backend_workspace_id: target.workspaceId, connection_kind: 'local', status: 'ready', name: `owner-${index}`,
   })) });
   gateway.request = async (_path, options, route) => {
-    const call = { route, signal: options.signal };
+    const call = { route, signal: options.signal, deadline: Number(options.headers['X-BoxTeam-Name-Search-Deadline']) };
     calls.push(call);
     if (mode === 'retry') {
       if (route === 'route-0' && calls.filter(item => item.route === route).length === 1) {
@@ -122,6 +122,7 @@ export async function branchContract(mode) {
       await failed.trigger();
       return { counts: owners.map((_, index) => calls.filter(call => call.route === `route-${index}`).length),
         error: failed.label, errorDetail: failed.detail, successDetail: branches[1].status.detail,
+        deadlines: calls.map(call => call.deadline),
         preserved: branches[1].picks[0] === successful, picks: branches.map(branch => branch.picks.map(pick => pick.id)), busy };
     }
     await entered.promise;

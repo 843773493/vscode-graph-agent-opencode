@@ -14,6 +14,8 @@ import binascii
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -159,9 +161,13 @@ class CatalogQueriesMixin:
                 has_more,
             )
 
-    def read_nodes_snapshot(self) -> tuple[int, list[SessionCatalogNode]]:
+    def read_nodes_snapshot(
+        self, *, check: Callable[[], None] | None = None,
+    ) -> tuple[int, list[SessionCatalogNode]]:
         """在同一只读事务中返回 navigation revision 与全部节点行。"""
         with self.read_transaction() as connection:
+            if check is not None:
+                check()
             generation_row = connection.execute(
                 "SELECT navigation_revision FROM catalog_metadata "
                 "WHERE singleton_id = 1"
@@ -170,10 +176,15 @@ class CatalogQueriesMixin:
                 raise CatalogMaintenanceRequiredError(
                     "session catalog 缺少 navigation revision 记录"
                 )
-            rows = connection.execute(
+            nodes: list[SessionCatalogNode] = []
+            with closing(connection.execute(
                 f"SELECT {_NODE_COLUMNS} FROM nodes ORDER BY node_id"
-            ).fetchall()
-            return int(generation_row[0]), [self._node_from_row(row) for row in rows]
+            )) as rows:
+                for row in rows:
+                    if check is not None:
+                        check()
+                    nodes.append(self._node_from_row(row))
+            return int(generation_row[0]), nodes
 
     def list_children(
         self,

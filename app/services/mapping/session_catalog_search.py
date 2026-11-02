@@ -1,6 +1,6 @@
 """公开 catalog 节点到可复用搜索键的纯投影，不读取工作区文件。"""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC
 
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
@@ -11,13 +11,16 @@ CatalogSearchTerms = tuple[str, str, str, str]
 
 def catalog_search_terms(
     nodes: Mapping[str, SessionCatalogNodeDTO],
+    *, check: Callable[[], None] = lambda: None,
 ) -> dict[str, CatalogSearchTerms]:
     paths: dict[str, str] = {}
     for node in nodes.values():
+        check()
         chain: list[SessionCatalogNodeDTO] = []
         visited: set[str] = set()
         current = node
         while current.node_id not in paths:
+            check()
             if current.node_id in visited:
                 raise ValueError(f"会话目录搜索父链包含循环: {current.node_id}")
             visited.add(current.node_id)
@@ -29,8 +32,10 @@ def catalog_search_terms(
         for item in reversed(chain):
             path = f"{path}/{item.name}" if path else item.name
             paths[item.node_id] = path
-    return {
-        node.node_id: (
+    terms = {}
+    for node in nodes.values():
+        check()
+        terms[node.node_id] = (
             node.name.casefold(),
             node.node_id.casefold(),
             paths[node.node_id].casefold(),
@@ -38,5 +43,4 @@ def catalog_search_terms(
             if node.created_at is not None and node.session_id is not None
             else "",
         )
-        for node in nodes.values()
-    }
+    return terms

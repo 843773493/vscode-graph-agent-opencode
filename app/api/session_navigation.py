@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
     get_request_id,
@@ -49,6 +49,9 @@ from app.schemas.internal_v2.session_navigation.thread_search import (
 )
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.name_search_budget import (
+    NAME_SEARCH_DEADLINE_HEADER,
+)
 from app.services.business.session_navigation.operations_service import (
     NavigationAuthScope,
 )
@@ -74,11 +77,12 @@ async def search_workspace_threads(
     sessions: Annotated[SessionService, Depends(get_session_service)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=4096)] = None,
+    deadline_at: Annotated[FiniteFloat | None, Header(alias=NAME_SEARCH_DEADLINE_HEADER)] = None,
 ):
     try:
         result = await search_session_threads(
             catalog, sessions, gateway_id=require_current_gateway_id("Thread 名称查询"),
-            query=query, limit=limit, cursor=cursor,
+            query=query, limit=limit, cursor=cursor, deadline_at=deadline_at,
         )
     except NotFoundError as error:
         raise not_found_http_error(error) from error
@@ -349,11 +353,12 @@ async def search_session_catalog(
     cursor: str | None = None,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
+    deadline_at: Annotated[FiniteFloat | None, Header(alias=NAME_SEARCH_DEADLINE_HEADER)] = None,
 ):
     try:
-        result = await service.search(query=query, limit=limit, cursor=cursor)
+        result = await service.search(query=query, limit=limit, cursor=cursor, deadline_at=deadline_at)
     except ValidationError:
         raise
-    except (TypeError, ValueError, RuntimeError) as error:
+    except (TypeError, ValueError, RuntimeError, TimeoutError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

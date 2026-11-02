@@ -23,7 +23,8 @@ try {
   const queryOf = request => new URL(request.url()).searchParams.get('query') ?? request.postDataJSON()?.query;
   page.on('request', request => {
     if (isSearch(request)) result.requests.push({ path: new URL(request.url()).pathname, query: queryOf(request),
-      route: request.headers()['x-boxteam-workspace-id'], deadline: request.headers()['x-boxteam-resource-navigation-deadline'] });
+      route: request.headers()['x-boxteam-workspace-id'], issuedAt: Date.now() / 1000,
+      deadline: request.headers()['x-boxteam-name-search-deadline'] ?? request.headers()['x-boxteam-resource-navigation-deadline'] });
     if (request.method() !== 'GET' && /\/(messages|jobs)(\/|$)/.test(new URL(request.url()).pathname)) result.forbiddenWrites.push(request.url());
   });
   page.on('requestfailed', request => {
@@ -64,6 +65,24 @@ try {
   for (const target of owners) {
     for (const title of ['branchscope', 'slowcancel', 'allfailure']) await api('/api/v1/sessions', target.workspace_id, { title: `${title} ${target === a ? 'A' : 'B'}` });
   }
+  // 经过真实 Gateway 验证总期限，不以浏览器取消或故障替身冒充服务端拒绝。
+  result.deadlineRejection = await page.evaluate(async route => {
+    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
+    const receipts = [];
+    for (const path of ['/api/v1/session-catalog/search', '/api/v1/session-threads/search']) {
+      const response = await fetch(`${path}?query=budgetcontract`, { headers: {
+        'X-Local-Token': credential.data.token, 'X-BoxTeam-Workspace-Id': route,
+        'X-BoxTeam-Name-Search-Deadline': '1',
+      } });
+      receipts.push({ path, status: response.status, header: response.headers.get('X-Request-ID'), body: await response.json() });
+    }
+    return receipts;
+  }, routeA);
+  for (const receipt of result.deadlineRejection) {
+    expect(receipt.status).toBe(409);
+    expect(receipt.body.request_id).toBe(receipt.header);
+    expect(JSON.stringify(receipt.body)).toContain('总执行期限');
+  }
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
@@ -93,6 +112,8 @@ try {
   await expectStatus(b, 'Thread', '本次查询完成');
   await inactive();
   expect(new Set(queries('branchscope').map(item => item.route))).toEqual(new Set(owners.map(item => item.workspace_id)));
+  expect(queries('branchscope').every(item => Number(item.deadline) > item.issuedAt && Number(item.deadline) <= item.issuedAt + 15)).toBe(true);
+  result.serverBudget = true;
   for (const target of owners) for (const category of ['会话', 'Thread', '文件']) {
     await expectStatus(target, category, 'request_id:');
     await expectStatus(target, category, '不代表全局快照');
@@ -176,7 +197,12 @@ try {
   await expectStatus(a, 'Thread', '本次查询完成');
   await expectStatus(b, 'Thread', '查询失败');
   await inactive();
-  expect(result.requests.slice(beforeRetry)).toEqual([{ path: '/api/v1/session-threads/search', query: 'allfailure', route: routeA, deadline: undefined }]);
+  const retried = result.requests.slice(beforeRetry);
+  expect(retried.map(({ path, query, route }) => ({ path, query, route }))).toEqual([
+    { path: '/api/v1/session-threads/search', query: 'allfailure', route: routeA },
+  ]);
+  expect(Number(retried[0].deadline)).toBeGreaterThan(retried[0].issuedAt);
+  expect(Number(retried[0].deadline)).toBeLessThanOrEqual(retried[0].issuedAt + 15);
   result.retryOnlyFailedBranch = true;
 
   result.phase = 'offline-scope';

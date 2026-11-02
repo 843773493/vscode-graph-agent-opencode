@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from heapq import nsmallest
 
@@ -23,6 +23,7 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultDTO,
     SessionCatalogSearchResultsDTO,
 )
+from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 from app.services.business.session_service import SessionService
 from app.services.mapping.session_catalog_search import (
     CatalogSearchTerms,
@@ -162,11 +163,13 @@ class SessionCatalogReadService:
         query: str,
         limit: int,
         cursor: str | None,
+        deadline_at: float | None = None,
     ) -> SessionCatalogSearchResultsDTO:
         normalized_query = query.strip().casefold()
         if not normalized_query:
             raise ValueError("会话目录搜索词不能为空")
-        snapshot = await self._snapshot()
+        budget = NameSearchBudget.create(deadline_at)
+        snapshot = await self._snapshot(check=budget.check)
         # 搜索的 cursor 作用域是查询词：把目录分页或其它查询词的 cursor 拿来翻本
         # 次搜索，会让 offset 落到错误匹配集的中间，静默跳项。
         scope = f"search:subsequence-v1\n{normalized_query}"
@@ -177,6 +180,7 @@ class SessionCatalogReadService:
         ]:
             nonlocal match_count
             for node in snapshot.nodes:
+                budget.check()
                 terms = snapshot.folded_search_terms[node.node_id]
                 if not any(is_subsequence(normalized_query, term) for term in terms):
                     continue
@@ -212,10 +216,12 @@ class SessionCatalogReadService:
             )
             page_matches = matches[offset : offset + limit]
 
+        budget.check()
         page_nodes = [node for _, node in page_matches]
         results: list[SessionCatalogSearchResultDTO] = []
         for node in page_nodes:
-            breadcrumb = self._breadcrumb_items(node, snapshot.nodes_by_id)
+            budget.check()
+            breadcrumb = self._breadcrumb_items(node, snapshot.nodes_by_id, check=budget.check)
             display_path = "/".join(item.name for item in breadcrumb)
             results.append(
                 SessionCatalogSearchResultDTO(
@@ -225,6 +231,7 @@ class SessionCatalogReadService:
                 )
             )
         next_offset = offset + len(results)
+        budget.check()
         return SessionCatalogSearchResultsDTO(
             revision=snapshot.revision,
             catalog_revision=snapshot.catalog_revision,
@@ -242,8 +249,8 @@ class SessionCatalogReadService:
             total=match_count,
         )
 
-    async def export_index(self) -> SessionCatalogExportDTO:
-        snapshot = await self._snapshot()
+    async def export_index(self, *, check: Callable[[], None] = lambda: None) -> SessionCatalogExportDTO:
+        snapshot = await self._snapshot(check=check)
         return SessionCatalogExportDTO(
             revision=snapshot.revision,
             catalog_revision=snapshot.catalog_revision,
@@ -254,7 +261,9 @@ class SessionCatalogReadService:
         self,
         *,
         force: bool = False,
+        check: Callable[[], None] = lambda: None,
     ) -> _SessionCatalogReadSnapshot:
+        check()
         current_revision = self._path_resolver.revision
         if (
             not force
@@ -262,10 +271,10 @@ class SessionCatalogReadService:
             and self._cached_snapshot.catalog_revision == current_revision
         ):
             # provider=None 的含义是当前配置默认值，缓存不能把它冻结成旧 provider。
-            replacements = {
-                node.node_id: self._session_service.project_catalog_session(node)
-                for node in self._cached_snapshot.default_provider_nodes
-            }
+            replacements = {}
+            for node in self._cached_snapshot.default_provider_nodes:
+                check()
+                replacements[node.node_id] = self._session_service.project_catalog_session(node)
             if any(
                 self._cached_snapshot.nodes_by_id[node_id].session != session
                 for node_id, session in replacements.items()
@@ -283,40 +292,36 @@ class SessionCatalogReadService:
                         **self._cached_snapshot.nodes_by_id,
                         **{node.node_id: node for node in nodes},
                     },
-                    revision=self._revision(nodes),
+                    revision=self._revision(nodes, check=check),
                 )
+            check()
             return self._cached_snapshot
 
-        catalog_revision, catalog_nodes = self._path_resolver.catalog_snapshot()
-        visible_catalog_nodes = self._visible_catalog_nodes(catalog_nodes)
+        catalog_revision, catalog_nodes = self._path_resolver.catalog_snapshot(check=check)
+        visible_catalog_nodes = self._visible_catalog_nodes(catalog_nodes, check=check)
         visible_parent_ids_with_children = {
             node.parent_node_id
             for node in visible_catalog_nodes
             if node.parent_node_id is not None
         }
-        nodes = [
-            self._to_catalog_node(node, visible_parent_ids_with_children)
-            for node in visible_catalog_nodes
-        ]
+        nodes = []
+        for node in visible_catalog_nodes:
+            check()
+            nodes.append(self._to_catalog_node(node, visible_parent_ids_with_children))
         nodes_by_id = {node.node_id: node for node in nodes}
         all_nodes_by_id = dict(nodes_by_id)
-        all_nodes_by_id.update(
-            {
-                catalog_node.node_id: self._to_pending_catalog_node(
-                    catalog_node, visible_parent_ids_with_children
-                )
-                for catalog_node in catalog_nodes
-                if catalog_node.node_id not in nodes_by_id
-            }
-        )
-        self._validate_parent_graph(list(all_nodes_by_id.values()), all_nodes_by_id)
-        revision = self._revision(nodes)
-        child_node_ids_by_parent = self._index_sorted_child_ids(nodes)
+        for catalog_node in catalog_nodes:
+            check()
+            if catalog_node.node_id not in nodes_by_id:
+                all_nodes_by_id[catalog_node.node_id] = self._to_pending_catalog_node(catalog_node, visible_parent_ids_with_children)
+        self._validate_parent_graph(list(all_nodes_by_id.values()), all_nodes_by_id, check=check)
+        revision = self._revision(nodes, check=check)
+        child_node_ids_by_parent = self._index_sorted_child_ids(nodes, check=check)
         snapshot = _SessionCatalogReadSnapshot(
             catalog_revision=catalog_revision,
             revision=revision,
             nodes=nodes,
-            folded_search_terms=catalog_search_terms(nodes_by_id),
+            folded_search_terms=catalog_search_terms(nodes_by_id, check=check),
             nodes_by_id=all_nodes_by_id,
             visible_node_ids=frozenset(node.node_id for node in nodes),
             child_node_ids_by_parent=child_node_ids_by_parent,
@@ -327,21 +332,25 @@ class SessionCatalogReadService:
                 and node.current_provider_id is None
             ],
         )
+        check()
         self._cached_snapshot = snapshot
         return snapshot
 
     @staticmethod
     def _visible_catalog_nodes(
         nodes: list[SessionCatalogNodeProjection],
+        *, check: Callable[[], None] = lambda: None,
     ) -> list[SessionCatalogNodeProjection]:
         """沿 active 父链枚举节点，隐藏 deleting 节点及其子树。"""
         children_by_parent: dict[str | None, list[SessionCatalogNodeProjection]] = {}
         for node in nodes:
+            check()
             children_by_parent.setdefault(node.parent_node_id, []).append(node)
 
         visible: list[SessionCatalogNodeProjection] = []
         frontier: list[str | None] = [None]
         while frontier:
+            check()
             parent_node_id = frontier.pop()
             for node in children_by_parent.get(parent_node_id, []):
                 if node.state != "active":
@@ -427,12 +436,15 @@ class SessionCatalogReadService:
     def _validate_parent_graph(
         nodes: list[SessionCatalogNodeDTO],
         nodes_by_id: dict[str, SessionCatalogNodeDTO],
+        *, check: Callable[[], None] = lambda: None,
     ) -> None:
         validated: set[str] = set()
         for node in nodes:
+            check()
             current: SessionCatalogNodeDTO | None = node
             chain: set[str] = set()
             while current is not None and current.node_id not in validated:
+                check()
                 if current.node_id in chain:
                     raise RuntimeError(f"会话物理目录包含循环关系: {current.node_id}")
                 chain.add(current.node_id)
@@ -452,9 +464,11 @@ class SessionCatalogReadService:
     @staticmethod
     def _index_sorted_child_ids(
         nodes: list[SessionCatalogNodeDTO],
+        *, check: Callable[[], None] = lambda: None,
     ) -> dict[str | None, tuple[str, ...]]:
         children_by_parent: dict[str | None, list[SessionCatalogNodeDTO]] = {}
         for node in nodes:
+            check()
             children_by_parent.setdefault(node.parent_node_id, []).append(node)
         return {
             parent_node_id: tuple(
@@ -475,11 +489,13 @@ class SessionCatalogReadService:
     def _breadcrumb_items(
         node: SessionCatalogNodeDTO,
         nodes_by_id: dict[str, SessionCatalogNodeDTO],
+        *, check: Callable[[], None] = lambda: None,
     ) -> list[SessionCatalogNodeDTO]:
         items: list[SessionCatalogNodeDTO] = []
         visited: set[str] = set()
         current: SessionCatalogNodeDTO | None = node
         while current is not None:
+            check()
             if current.node_id in visited:
                 raise RuntimeError(f"会话物理目录包含循环关系: {current.node_id}")
             visited.add(current.node_id)
@@ -498,16 +514,18 @@ class SessionCatalogReadService:
         return items
 
     @staticmethod
-    def _revision(nodes: list[SessionCatalogNodeDTO]) -> str:
+    def _revision(nodes: list[SessionCatalogNodeDTO], *, check: Callable[[], None] = lambda: None) -> str:
+        projected = []
+        for node in sorted(nodes, key=lambda item: item.node_id):
+            check()
+            projected.append(node.model_dump(mode="json"))
         encoded = json.dumps(
-            [
-                node.model_dump(mode="json")
-                for node in sorted(nodes, key=lambda item: item.node_id)
-            ],
+            projected,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
+        check()
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod

@@ -90,6 +90,7 @@ test('独立错误保存 request_id，重试只读取失败分支且保留另一
   expect(result.errorDetail).toBe('request_id: request-failure');
   expect(result.successDetail).toContain('不代表全局快照');
   expect(result.successDetail).toContain('request-route-1');
+  expect(result.deadlines.every(deadline => Number.isFinite(deadline) && deadline > Date.now() / 1000)).toBe(true);
   expect(result.preserved).toBe(true);
   expect(result.picks).toEqual([['route-0'], ['route-1']]);
   expect(result.busy).toBe(false);
