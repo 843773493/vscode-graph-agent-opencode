@@ -162,15 +162,15 @@
 - **WHEN** 某个既有持久化字段（如 `display_uri`、来源事实）需要承载资源引用
 - **THEN** 它以资源身份加 URI 的新格式写入并在读路径切换，旧写入形态物理下线，不留兼容层
 
-### Requirement: 配置来源位置字段遵循 owner URI 形态且不泄漏真实路径
+### Requirement: 配置来源的资源定位遵循 owner URI 合同
 
 **归属与引用**：配置来源 URI 与 real path 迁移规范唯一归 `add-unified-virtual-resource-addressing` 所有；本 capability 只具名引用其 requirement「配置来源 URI 必须使用 config kind 且只标识来源文件」及「配置 layer 必须表示逻辑来源且与载体和快照分离」，MUST NOT 复制其 layer 表、URI 规则或 carrier/snapshot 规则，也 MUST NOT 另立第二套 config 迁移规范。以下 scenario 只保留会话上下文 change 对该义务的引用验收。
 
-#### Scenario: 配置来源记录不含真实路径
+#### Scenario: 配置来源记录不恢复重复定位字段
 - **WHEN** 配置来源层被持久化到 SQLite
-- **THEN** 记录不含 `source_path`/`backup_path` 一类真实路径字段；URI 是否存在遵循 owner 的可寻址来源文件规则
+- **THEN** 资源定位使用 owner 声明的 URI，不恢复已删除的 `source_path`/`backup_path` 作为重复的权威定位字段；展示、诊断及必要原生配置按各自职责保留，URI 是否存在遵循 owner 的可寻址来源文件规则
 
-#### Scenario: API 不输出配置来源真实路径
+#### Scenario: 配置来源 API 区分资源地址与展示信息
 - **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
 - **THEN** URI 与其它来源字段遵循 owner 的平级字段和 nullable URI 规则，展示及诊断路径按字段职责合同保留
 
@@ -185,7 +185,7 @@
 已明确的数据政策与独立义务：
 
 - 旧式会话上下文 URI 的迁移面按已授权数据政策限定为「入口拒绝 + 新写字段」；历史零存量摘要未在本轮复核，不能列为本轮实测结论；
-- 配置来源的真实路径外泄义务（持久化侧与 API 响应体侧）已由 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」唯一登记，本 capability 只具名引用；该义务已由 `50bffa45`（持久化改 URI、删 `source_path`/`backup_path`）与 `76ed0089`（`ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path` 均改 URI）落地；
+- 配置来源的资源定位合同由 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」唯一登记，本 capability 只具名引用；`50bffa45` 与 `76ed0089` 已将对应持久引用和 DTO 地址改为 URI，并删除重复定位字段。该收口不禁止展示或诊断保留原生路径，本机 doctor／diagnose 按同一 owner 的只读诊断合同同时报告实际位置与既有 URI；
 - `inline` 配置来源的地址与逻辑 layer/precedence 规则均引用「统一资源寻址」change 的对应 owner requirement；`memory` 不是 URI scope。
 
 由「统一资源寻址」change 定稿并引用（本 capability 只引用、不得自行发明）：scope 闭集（`workspace` | `user` | `gateway` | `inline`，见其 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）、每个 scope 的 scope_id 语义（同前 requirement）、`kind` 闭集（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」）、以及全部拒绝码取值（含 view-kind 校验所用的 `unsupported_view`，见其拒绝码登记 requirement）。

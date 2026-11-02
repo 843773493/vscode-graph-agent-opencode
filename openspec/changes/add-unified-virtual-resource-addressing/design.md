@@ -20,7 +20,7 @@
 - 给出一套统一 URI 语法（保留 `resources` 固定段序）与规范化单一实现、**定稿**的 scope 闭集、scope_id 语义表与 kind 闭集。
 - 给出**分三套**集中登记的拒绝码（grammar 分段编码修订闭集 + resolve 7 + 联邦解析期）与其不混用约束；resolve 闭集包含 `unsupported_view`，专用于已识别的 view 与资源 kind 不兼容。
 - 给出顶层 gateway 之间**星型解析**的边界契约，并把上界做成显式 policy 常量。
-- 登记配置来源 real path 持久化这一**已存在违约**的迁移形态，并唯一规定来源 URI、逻辑 layer/precedence 与 carrier/snapshot 的边界。
+- 统一配置来源的资源定位，移除重复的权威路径引用，并明确来源 URI、逻辑 layer/precedence、carrier/snapshot 与原生诊断位置的职责。
 - 明确与另外三个 change 的接口面，避免多份定义并存。
 
 **Non-Goals**
