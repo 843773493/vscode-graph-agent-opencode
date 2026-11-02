@@ -4,7 +4,7 @@ import type { IInstantiationService } from '../../upstream/src/vs/platform/insta
 import { ServiceCollection } from '../../upstream/src/vs/platform/instantiation/common/serviceCollection.js';
 import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
 import { QueryBuilder } from '../../upstream/src/vs/workbench/services/search/common/queryBuilder.js';
-import type { ISearchService } from '../../upstream/src/vs/workbench/services/search/common/search.js';
+import type { WorkspaceSearchService } from './searchService.js';
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import type { SessionCatalogSearchResults } from '../../../web/src/types/backend.js';
 import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
@@ -27,7 +27,7 @@ export interface NameSearchPage {
 /** 查询只读取所选工作区原 owner；不使用 Gateway 全范围聚合或前端全量目录。 */
 export async function searchResourceNames(category: NameSearchCategory, filter: string,
   owner: WorkspaceOwner, target: WorkspaceTarget, label: string, signal: AbortSignal, token: CancellationToken,
-  instantiation: IInstantiationService, search: ISearchService, cursor?: string): Promise<NameSearchPage> {
+  instantiation: IInstantiationService, search: WorkspaceSearchService, cursor?: string): Promise<NameSearchPage> {
   const query = new URLSearchParams({ query: filter, limit: '50' });
   if (cursor) query.set('cursor', cursor);
   if (category === '会话') {
@@ -57,8 +57,10 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
   try {
     const child = context.ownChild(instantiation.createChild(new ServiceCollection([IWorkspaceContextService, context])));
     const builder = child.createInstance(QueryBuilder);
-    const complete = await search.fileSearch(builder.file(context.getWorkspace().folders, { filePattern: filter, maxResults: 100 }), token);
-    return { limited: complete.limitHit ? '文件结果达到本次上限，请缩小查询' : undefined,
+    const complete = await search.fileSearchPage(builder.file(context.getWorkspace().folders, { filePattern: filter, maxResults: 50 }), cursor, token);
+    return { cursor: complete.cursor,
+      limited: complete.messages.length ? complete.messages.map(message => message.text).join('；')
+        : complete.limitHit && !complete.cursor ? '文件结果达到本次上限，请缩小查询' : undefined,
       items: complete.results.map(item => {
         const relative = item.resource.path.split('/').slice(3);
         return { kind: 'resource', resource: item.resource, title: relative.at(-1)!,

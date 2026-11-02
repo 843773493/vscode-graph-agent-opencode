@@ -28,6 +28,10 @@ export function textMatch(hit: ResourceNavigationMatchDTO): ITextSearchMatch {
   }] };
 }
 
+export interface WorkspaceFileSearchPage extends ISearchComplete {
+  cursor?: string;
+}
+
 export class WorkspaceSearchProvider extends Disposable implements ISearchResultProvider {
   private readonly active = new Set<CancellationTokenSource>();
 
@@ -45,13 +49,20 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     return this.search(query, undefined, token);
   }
 
+  fileSearchPage(query: IFileQuery, cursor: string | undefined, token?: CancellationToken): Promise<WorkspaceFileSearchPage> {
+    if (query.folderQueries.length !== 1 || query.onlyOpenEditors || query.exists || query.extraFileResources?.length) {
+      throw new Error('文件续页必须使用单个明确目录根');
+    }
+    return this.search(query, undefined, token, undefined, { cursor });
+  }
+
   textSearch(query: ITextQuery, onProgress?: (item: ISearchProgressItem) => void, token?: CancellationToken,
     models = new ResourceSet()): Promise<ISearchComplete> {
     return this.search(query, onProgress, token, models);
   }
 
   private async search(query: IFileQuery | ITextQuery, onProgress?: (item: ISearchProgressItem) => void,
-    token = CancellationToken.None, models = new ResourceSet()): Promise<ISearchComplete> {
+    token = CancellationToken.None, models = new ResourceSet(), paging?: { cursor?: string }): Promise<WorkspaceFileSearchPage> {
     if (query.type === QueryType.Text) validateTextQuery(query); else validateQuery(query);
     if (token.isCancellationRequested) throw new CancellationError();
     if (this._store.isDisposed) throw new Error('文件搜索服务已释放');
@@ -64,7 +75,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     const results = new Map<string, IFileMatch>();
     const contexts = new Map<string, Map<number, ResourceNavigationContextDTO>>();
     const messages: ISearchComplete['messages'] = [];
-    let count = 0, limitHit = false;
+    let count = 0, limitHit = false, continuation: string | undefined;
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     const routes = new Map<string, Promise<string>>();
     const seen = new Set<string>();
@@ -95,9 +106,9 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
         // 固定每一目标的请求合同，分页 cursor 绑定包括 limit 在内的全部选项。
         const request = { uri: owner.path, operation: 'search', query: query.type === QueryType.Text ? query.contentPattern.pattern : query.onlyOpenEditors ? '**/*' : query.filePattern || '**/*',
           search_mode: query.type === QueryType.Text ? 'content' : query.onlyOpenEditors || query.shouldGlobMatchFilePattern || !query.filePattern ? 'glob' : 'fuzzy',
-          search_options: options, limit: Math.max(1, Math.min(1000, maximum + 1)),
+          search_options: options, limit: Math.max(1, Math.min(1000, maximum + (paging ? 0 : 1))),
           ...(query.type === QueryType.Text && query.maxFileSize !== undefined ? { max_bytes: query.maxFileSize } : {}) };
-        let cursor: string | undefined;
+        let cursor = paging?.cursor;
         do {
           if (source.token.isCancellationRequested) throw new CancellationError();
           const page = await raceCancellationError(gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/navigation', {
@@ -138,6 +149,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             limitHit = true;
             messages.push({ type: TextSearchCompleteMessageType.Warning, text: `文件搜索受限：${page.truncation_reason ?? '未知预算'}（${owner.path}）` });
           }
+          if (paging) { continuation = cursor; limitHit ||= page.truncated; break; }
         } while (cursor && !limitHit);
       }
       if (source.token.isCancellationRequested) throw new CancellationError();
@@ -164,7 +176,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
         }
       }
       if (source.token.isCancellationRequested) throw new CancellationError();
-      return { results: [...results.values()], messages, limitHit };
+      return { results: [...results.values()], messages, limitHit, ...(continuation ? { cursor: continuation } : {}) };
     } catch (error) {
       if (timedOut) throw new Error('文件搜索超过本次十秒总期限', { cause: error });
       throw error;

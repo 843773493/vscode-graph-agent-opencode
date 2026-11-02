@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+import { verifyQuickAccessPagination } from './quick_access_pagination.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL, resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const otherWorkspace = process.env.BOXTEAM_CATALOG_OTHER_WORKSPACE;
@@ -151,6 +152,8 @@ try {
   expect(result.forbidden).toEqual([]);
   expect((await api(`/api/v1/sessions/${session.session_id}/main-thread`, routeA)).thread_id).toBe(main.thread_id);
   result.deletedFolderRejected = true;
+  await verifyQuickAccessPagination({ page, command, api, result, owner: result.owner,
+    workspace: process.env.BOXTEAM_CATALOG_WORKSPACE });
   result.phase = 'complete';
   expect(result.pageErrors).toEqual([]);
 } catch (error) {

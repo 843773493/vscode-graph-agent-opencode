@@ -56,6 +56,8 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         pytest.fail("目录快速访问验收需要 Chromium")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(e2e_workspace_root_path)
+    for index in range(55):
+        (workspace / f"pagingfiles-{index:03d}.txt").write_text(f"page fixture {index}\n", encoding="utf-8")
     other = prepare_test_workspace(
         workspace_root=workspace / "other", template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace",
         template_items=(),
@@ -75,6 +77,7 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
                 subprocess.run, command, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_CATALOG_OTHER_WORKSPACE": str(other),
+                     "BOXTEAM_CATALOG_WORKSPACE": str(workspace),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
                 capture_output=True, text=True, timeout=120, check=False,
             )
@@ -88,6 +91,10 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert receipt["folderUsesFreshNavigation"] is True
         assert receipt["deletedFolderRejected"] is True
         assert receipt["folderHasNoThreadOrExecution"] is True
+        assert receipt["pagination"]["explicitIndependentPages"] is True
+        assert receipt["pagination"]["selectionPreserved"] is True
+        assert receipt["pagination"]["stalePageCleared"] is True
+        assert receipt["pagination"]["explicitBranchRestart"] is True
         assert receipt["pageErrors"] == []
     finally:
         close_gateway_process(gateway)

@@ -170,6 +170,62 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
     } finally { f.instantiation.dispose(); }
   });
 
+  test('显式文件页只读一页且不丢边界项，继续时保持原合同；普通搜索仍聚合原页', async () => {
+    const f = fixture([]);
+    const options = { type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'page', maxResults: 2 };
+    try {
+      await withTransport(async ({ requests }) => {
+        const first = await f.search.fileSearchPage(options);
+        expect(requests.mock.calls).toHaveLength(1);
+        expect(first.results.map(item => item.resource.toString())).toEqual(['page-a.txt', 'page-b.txt'].map(name => uri(ownerA, name).toString()));
+        expect(first.cursor).toBe('next-file-page');
+        const second = await f.search.fileSearchPage(options, first.cursor);
+        expect(second.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'page-c.txt').toString()]);
+        expect(second.cursor).toBeUndefined();
+        expect(second.limitHit).toBe(false);
+        const bodies = requests.mock.calls.map(call => JSON.parse(call[1].body));
+        expect(bodies.map(body => body.cursor)).toEqual([undefined, 'next-file-page']);
+        expect(bodies[0].limit).toBe(2);
+        expect({ ...bodies[1], cursor: undefined }).toEqual(bodies[0]);
+        const all = await f.search.fileSearch({ ...options, maxResults: 10 });
+        expect(all.results).toHaveLength(3);
+        expect(requests.mock.calls).toHaveLength(4);
+      }, async (_path, options) => {
+        const body = JSON.parse(options.body), names = body.cursor ? ['page-c.txt'] : ['page-a.txt', 'page-b.txt'];
+        return page(body.uri, [], { entries: names.map(name => ({ uri: body.uri + '/' + name, resource_shape: 'file' })),
+          ...(body.cursor ? {} : { truncated: true, next_cursor: 'next-file-page' }) });
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('文件页保留受限事实与原拒绝，取消中止 HTTP，单 cursor 不冒充多根分页', async () => {
+    const f = fixture([]), token = new CancellationTokenSource();
+    const options = { type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'page', maxResults: 2 };
+    try {
+      await withTransport(async ({ requests }) => {
+        const limited = await f.search.fileSearchPage(options);
+        expect(limited.limitHit).toBe(true);
+        expect(limited.cursor).toBeUndefined();
+        expect(limited.messages[0].text).toContain('response_byte_limit');
+        expect(() => f.search.fileSearchPage({ ...options, folderQueries: [...options.folderQueries, { folder: uri(ownerB) }] })).toThrow('单个明确目录根');
+        expect(requests.mock.calls).toHaveLength(1);
+      }, async (_path, options) => page(JSON.parse(options.body).uri, [], { truncated: true, truncation_reason: 'response_byte_limit' }));
+      const rejection = new Error('原 owner 拒绝旧 cursor');
+      await withTransport(async () => {
+        await expect(f.search.fileSearchPage(options, 'expired')).rejects.toBe(rejection);
+      }, async () => { throw rejection; });
+      const entered = Promise.withResolvers(), delayed = Promise.withResolvers();
+      await withTransport(async ({ requests }) => {
+        const pending = f.search.fileSearchPage(options, 'next-file-page', token.token);
+        await entered.promise;
+        token.cancel();
+        await expect(pending).rejects.toThrow();
+        expect(requests.mock.calls[0][1].signal.aborted).toBe(true);
+        delayed.resolve(page(root(ownerA)));
+      }, async () => { entered.resolve(); return delayed.promise; });
+    } finally { token.dispose(); f.instantiation.dispose(); }
+  });
+
   test('取消和 dispose 中止实际请求，迟到响应不发 progress', async () => {
     for (const mode of ['cancel', 'dispose']) {
       const f = fixture([]), token = new CancellationTokenSource();

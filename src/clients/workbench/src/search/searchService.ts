@@ -15,7 +15,7 @@ import { IExtensionService } from '../../upstream/src/vs/workbench/services/exte
 import { RemoteSearchService } from '../../upstream/src/vs/workbench/services/search/browser/searchService.js';
 import { DEFAULT_MAX_SEARCH_RESULTS, FileMatch, IAITextQuery, IFileQuery, ISearchComplete, ISearchProgressItem, ISearchService, ITextQuery, SearchProviderType } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import { editorMatchesToTextSearchResults, getTextSearchMatchWithModelContext } from '../../upstream/src/vs/workbench/services/search/common/searchHelpers.js';
-import { WorkspaceSearchProvider } from './fileProvider.js';
+import { WorkspaceSearchProvider, type WorkspaceFileSearchPage } from './fileProvider.js';
 import { businessQuery, fileScheme, openResources, resourceInQuery, validateQuery, validateTextQuery } from './query.js';
 
 export class WorkspaceSearchService extends RemoteSearchService {
@@ -45,6 +45,10 @@ export class WorkspaceSearchService extends RemoteSearchService {
   override fileSearch(query: IFileQuery, token?: CancellationToken): Promise<ISearchComplete> {
     if (businessQuery(query)) validateQuery(query);
     return super.fileSearch(query, token);
+  }
+
+  fileSearchPage(query: IFileQuery, cursor?: string, token?: CancellationToken): Promise<WorkspaceFileSearchPage> {
+    return this.businessProvider.fileSearchPage(query, cursor, token);
   }
 
   override textSearchSplitSyncAsync(query: ITextQuery, token = CancellationToken.None,

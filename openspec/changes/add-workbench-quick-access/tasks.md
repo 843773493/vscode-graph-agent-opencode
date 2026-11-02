@@ -79,7 +79,7 @@
 - [x] 8.2 单目标经 Gateway 显式路由，多目标对所选 owner 有界并发；若使用原 Gateway catalog 聚合，先补其显式目标过滤，不调用全范围后隐藏 C。
 - [ ] 8.3 按查询／范围／类别／身份代际取消排队和请求、废弃迟到响应；服务端继续工作时仍受原预算和总 deadline 约束。
 - [ ] 8.4 为每个工作区／owner 展示 busy、完成、受限、失败、取消和新鲜度，快结果先出，重试只针对失败读分支，全部失败不伪报无匹配。
-- [ ] 8.5 使用每个 owner 独立 cursor 和明确续查，绑定原查询及 revision；合并保持有效活动目标和滚动，失效时不把 Enter 应用到新占行对象。
+- [x] 8.5 使用每个 owner 独立 cursor 和明确续查，绑定原查询及 revision；合并保持有效活动目标和滚动，失效时不把 Enter 应用到新占行对象。
 - [ ] 8.6 记录实际请求证明只 A 或明确 A+B，不访问 C；覆盖取消、超时、离线、旧 cursor、重复输入与迟到 progress，不仅查看 UI 结果。
 
 ## 9. 五类正文查询与精确定位
@@ -303,3 +303,10 @@
 - 独立真实 Gateway／正式 Workbench 构建／Chromium 验收通过：同名 Session、main 与尚未打开的 durable child 分别可发现；Session 打开 main，child 保持身份；查询后移动 folder 会定位新祖先，侧栏关闭后重新打开，删除后的旧候选明确失败，B 的同名 folder 不被改投。8 条名称查询和 55 条 request_id 回执留存，标签数量、后端 Thread 列表及零消息／job 写请求均核验，页面错误为空。页面原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-55d121cf8b58/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
 - 18 份实际转换源码的真实类型检查、32 项合同检查／225 条断言、Ruff、JS 语法、差异检查及 OpenSpec strict 通过。最终 E2E 用时 100.33 秒（进程总计 103.23 秒），源码指纹未变化。准确命令、指纹、原输出与退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/catalog-target-{types-002,contract-001,static-002,browser-002}.json`。结构审查无 findings，无新增源码目录或第二目录加载链。
 - 首次浏览器失败源于装具在初始化 HTTP 完成前启动 5 秒 Composer 等待；改为由点击触发并等待精确 bootstrap HTTP 回执、核 owner／status／request_id，随后仍使用原 5 秒验证 Composer。原件保留，未改产品或放宽身份断言；实际 child 初始化约 3517ms，main 约 938ms。本切片未重跑约 200 秒的完整 text_search 场景，不代表 3.4、8.3～8.6 或 Electron 已验收。
+
+### 2026-11-02：各 owner 明确续页与失效确认（8.5）
+
+- 文件名称查询不再由 SearchService 隐式连续取页；同一 SearchService／文件 Provider 的原循环提供单根单页入口，每次最多 50 项，独立透传原 cursor，用户明确续查才取下一页。普通 file/text 搜索仍使用同一循环按原合同聚合，未新增扫描器、索引或正文 hash。分支排队时立即移除续查动作，阻止重复排队；续查失败清除该分支旧页，显式从首屏重查，其他分支保留。活动目标失效后持续清空确认，后续结果不能自动接替原 Enter 目标。
+- 正式 Workbench 构建／真实 Gateway／Chromium 通过（111.90 秒，进程总计 114.85 秒）：55 个文件按 50＋5 返回；55 个 Session 由产品创建 API 生成，其 catalog 与 main Thread 分别沿独立 cursor 取到 50＋5。拖动原列表滚动条后续页仍保持原活动文件；删除已扫描文件使原 cursor 明确返回 400，旧页消失，重查只访问文件分支，新的同位置文件未被自动选中，Enter 不打开替代对象。14 条查询回执均核验 request_id，只访问 A，B 零查询，无消息／job 写请求，页面错误为空。最终仍只挂载 7 条可见行。页面原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-9c5d5ac1ea87/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 28 项定向检查／236 条断言、18 份实际转换源码的真实类型检查、正式构建、JS 语法、Ruff、差异检查及 OpenSpec strict 通过。类型检查期间仅测试驱动改动，882 份产品源码指纹与最终验收一致。准确命令、原输出、指纹与退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/pagination-{types-001,contract-001,product-fingerprint-001,browser-005}.json` 及相邻 static／structure 收据。结构审查无 findings：搜索目录仍为 15 个 TS 文件，单一 Provider 与查询编排职责保持。
+- 四份失败页面原件保留：测试定位器同时命中隐藏树、滚轮未到末尾，以及两处异步更新后状态行重新进入虚拟列表的等待顺序。依据真实 DOM 和 HTTP 回执修正为原版滚动条与完成回执后定位，未放宽身份、页数、零请求或业务期限断言。最末文件验收首／续页约 191／182ms，响应约 10.7／1.5KiB；仅说明本工作负载，不承诺总体性能。参考 Copilot 的原搜索服务、限量与取消职责；原目录变化校验保留以履行 cursor 合同。8.3、8.4、8.6、完整 text_search 回归及 Electron 仍未验收。

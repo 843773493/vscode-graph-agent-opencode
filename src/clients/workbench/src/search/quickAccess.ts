@@ -41,6 +41,7 @@ import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourceP
 import { searchResourceNames, type NameSearchCategory, type NameSearchPage } from './quickAccessQuery.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
+import type { WorkspaceSearchService } from './searchService.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
@@ -73,7 +74,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     @IEditorGroupsService private readonly groups: IEditorGroupsService,
     @IHistoryService private readonly history: IHistoryService,
     @IConfigurationService private readonly configuration: IConfigurationService,
-    @ISearchService private readonly search: ISearchService,
+    @ISearchService private readonly search: WorkspaceSearchService,
     @IQuickInputService private readonly quickInput: IQuickInputService,
     @IContextKeyService private readonly contexts: IContextKeyService,
     @IKeybindingService private readonly keybindings: IKeybindingService,
@@ -181,7 +182,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
     const categories: NameSearchCategory[] = run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
     const branches = categories.flatMap(category => run.owners.map(owner => ({ owner, category,
-      key: `${searchOwnerKey(owner)}/${category}`, picks: [] as ResourcePick[],
+      key: `${searchOwnerKey(owner)}/${category}`, picks: [] as ResourcePick[], pending: false,
       label: run.owners.length === 1 ? category : `${owner.workspaceId} · ${category}`,
       status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${owner.workspaceId} · ${category} · 正在查询` } as ResourcePick })));
     const seen = new Set(recent.map(pick => pick.id));
@@ -210,14 +211,16 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const limiter = disposables.add(new Limiter<void>(3));
     disposables.add(limiter.onDrained(() => { if (alive()) run.picker.busy = false; }));
     const queue = async (branch: typeof branches[number], cursor?: string) => {
-      if (!alive()) return;
+      if (!alive() || branch.pending) return;
+      branch.pending = true;
       run.picker.busy = true;
+      branch.status = { id: `status-${branch.key}`, label: `${branch.label} · 正在查询` }; render();
       // 释放 Limiter 会丢弃排队任务；等待者仍随原 Picker token 及时结算。
-      await raceCancellation(limiter.queue(() => load(branch, cursor)), token);
+      try { await raceCancellation(limiter.queue(() => load(branch, cursor)), token); }
+      finally { branch.pending = false; }
     };
     const load = async (branch: typeof branches[number], cursor?: string) => {
       if (!alive()) return;
-      branch.status = { id: `status-${branch.key}`, label: `${branch.label} · 正在查询` }; render();
       try {
         const resolved = await resolveTarget(branch.owner);
         if (!alive()) return;
@@ -233,13 +236,14 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         branch.status = this.pageStatus(branch.key, branch.label, page, branch.picks.length, () => queue(branch, page.cursor));
       } catch (error) {
         if (!alive()) return;
-        branch.status = { ...this.failure(branch.label, error), id: `status-${branch.key}`,
-          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: '重试此查询' }],
-          trigger: async () => { routes = undefined; await queue(branch, cursor); return TriggerAction.NO_ACTION; } };
+        // 续查失败后不再混用旧页；明确重查该分支，其他分支保留。
+        if (cursor) branch.picks = [];
+        branch.status = { ...this.failure(cursor ? `${branch.label}续页，请重新` : branch.label, error), id: `status-${branch.key}`,
+          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: cursor ? '重新查询此类别' : '重试此查询' }],
+          trigger: async () => { routes = undefined; await queue(branch); return TriggerAction.NO_ACTION; } };
       } finally { render(); }
     };
     for (const branch of branches) this.report(queue(branch));
-    // TODO：文件原 SearchService 的续页披露仍需接入；达到上限时明确要求缩小查询。
     return [...fast, ...branches.map(branch => branch.status)];
   }
 
@@ -279,6 +283,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       // 恢复按身份等待原目标；目标消失时清空确认，不能改投新占行对象。
       const activeId = run.restoreId ?? (active?.accept ? active.id : undefined);
       run.picker.activeItems = activeId ? targets.filter(item => item.id === activeId) : targets.slice(0, 1);
+      if (activeId && !run.picker.activeItems.length) run.restoreId = activeId;
       if (run.picker.activeItems.some(item => item.id === run.restoreId)) run.restoreId = undefined;
     } finally { run.picker.keepScrollPosition = keep; run.publishing = false; }
   }

@@ -10,6 +10,7 @@ clients/web/
 │   └── session_information.mjs          对应真实浏览器操作
 ├── test_quick_access_catalog_targets.py  快速访问中的 Session、精确 child 与目录定位
 │   └── quick_access_catalog_targets.mjs  产品 API 创建历史及目录，真实打开与过期命中验证
+│       └── quick_access_pagination.mjs   原 Quick Input 的独立 cursor、续页及过期重查
 └── test_session_physical_tree.py         会话树、工作区导航与物理删除
     └── session_physical_tree.mjs        对应真实浏览器操作
 ```
