@@ -1623,3 +1623,8 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 在同一Provider已完成九次真实调用的compaction运行后，按原 `e2e-provider-tool-loop` matrix补验，1 failed／218.66秒、exit1；180次Job轮询结束仍running，未进入本次工具配对、hash或重启验收，不计通过。准确命令与最终原件见 `out/tests/temp/provider_tool_loop_final_20261102/artifacts/verification.json` 及正式 `run-9b7f654accd9`。
 - 五份持久模型调用日志共七次上游尝试：第二次节点调用的backup_3在45秒内未建立Responses事件流，primary回退429 `FreeUsageLimitError`，backup_2返回字符串 `max_lines="none"` 被原工具合同拒绝；后续backup_3纠正参数并继续读完第二、第三份文件，最终回复调用在途时达到原轮询期限，teardown取消。明确区分开流／回退耗时、真实参数纠错与测试清理，不断言所有调用均上游过载。
 - 启动后源码采样已注明采样时点；运行期仅修改不被该E2E引用的unit测试，生产变更发生于退出后。Backend原始日志、五份模型日志、canonical JSONL及一致SQLite副本另行保留并登记SHA，防止后续同名工作区覆盖原件。**TODO：**在有新上游状态或源码证据时补最终工具循环验收；不延长既有等待门槛、不无证据重跑，不将旧版本通过外推为最终源码通过。整体7.5／111/119仍未关闭。
+
+### 2026-11-02 9.7 来源lineage损坏的产品入口补验
+
+- 经真实Session／消息／Job入口和model_stream生成两个AGENTS版本及两份封存请求，再分别删除lineage正文、篡改正文和修改catalog摘要。公开context读取和冷Saver均明确拒绝；canonical及原assembly逐字不变，不使用当前文件回填。恢复原件后删除当前AGENTS，历史投影仍与原结果相同，两次请求通过独立request_hash审计。
+- 原测试错误地要求默认Turn快照存在parent，已改为对实际封存的execution快照验收，未修改生产。最终1 passed／56.53秒；Ruff和Pyright零诊断。命令、源码指纹、原始退出码及首次失败保留在 `out/tests/temp/activation_lineage_failures_20261102/artifacts/`，正式实际结果位于对应测试runs目录。运行中仅独立分页unit测试变化，相关产品源码未变；不关闭9.7综合门或团队协作TODO。
