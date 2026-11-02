@@ -1,5 +1,24 @@
 import { expect } from 'playwright/test';
 
+/** 用真实滚轮访问末尾状态，避免滚动条鼠标按下清空列表焦点。 */
+export async function expectLastSearchStatus({ page, quick, label }) {
+  const list = quick.getByRole('listbox');
+  const scroll = async end => {
+    await list.hover();
+    await page.mouse.wheel(0, end ? 1000 : -1000);
+  };
+  await expect.poll(async () => {
+    await scroll(true);
+    return quick.textContent();
+  }).toContain(label);
+  await expect.poll(async () => {
+    await scroll(false);
+    const thumb = await list.locator('.scrollbar.vertical .slider').boundingBox();
+    const track = await list.locator('.scrollbar.vertical').boundingBox();
+    return !thumb || thumb.y - track.y < 1;
+  }).toBe(true);
+}
+
 /** 检查原列表的实际展示，不以 Provider 返回字段代替渲染证据。 */
 export async function verifyResourcePresentation({ quick, sessionId }) {
   // 原列表复用节点时只隐藏旧 detail；先按真实候选身份限定，避免匹配隐藏旧文案。

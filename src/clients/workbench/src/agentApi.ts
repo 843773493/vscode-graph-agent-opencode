@@ -16,7 +16,7 @@ export interface ThreadOwner extends WorkspaceOwner {
 interface Page<T> { items: T[]; next_cursor?: string | null; has_more?: boolean }
 
 class GatewayClient {
-  async request<T>(path: string, options: RequestInit = {}, routeId?: string): Promise<T> {
+  async request<T>(path: string, options: RequestInit & { onResponse?: (requestId: string | null) => void } = {}, routeId?: string): Promise<T> {
     const headers = new Headers(options.headers);
     for (const [key, value] of Object.entries(workspaceHeader(routeId))) headers.set(key, value);
     // 所有业务贡献共用既有凭据、用户屏障和错误协议，不再维护第二套初始化。

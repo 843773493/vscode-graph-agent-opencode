@@ -22,18 +22,21 @@ export interface NameSearchPage {
   items: NameSearchItem[];
   cursor?: string;
   limited?: string;
+  requestIds: string[];
 }
 
 /** 查询只读取所选工作区原 owner；不使用 Gateway 全范围聚合或前端全量目录。 */
 export async function searchResourceNames(category: NameSearchCategory, filter: string,
   owner: WorkspaceOwner, target: WorkspaceTarget, label: string, signal: AbortSignal, token: CancellationToken,
-  instantiation: IInstantiationService, search: WorkspaceSearchService, cursor?: string): Promise<NameSearchPage> {
+  instantiation: IInstantiationService, search: WorkspaceSearchService, cursor?: string, deadlineAt?: number): Promise<NameSearchPage> {
   const query = new URLSearchParams({ query: filter, limit: '50' });
+  const requestIds: string[] = [];
+  const onResponse = (requestId: string | null) => { if (requestId) requestIds.push(requestId); };
   if (cursor) query.set('cursor', cursor);
   if (category === '会话') {
     const page = await gateway.request<SessionCatalogSearchResults>(`/api/v1/session-catalog/search?${query}`,
-      { signal, headers: gatewayWorkspaceRequestHeaders(target) }, target.workspace_id);
-    return { cursor: page.cursor ?? undefined, items: page.items.map((item): NameSearchItem => {
+      { signal, onResponse, headers: gatewayWorkspaceRequestHeaders(target) }, target.workspace_id);
+    return { cursor: page.cursor ?? undefined, requestIds, items: page.items.map((item): NameSearchItem => {
       if (item.node.kind === 'folder') return { kind: 'folder', nodeId: item.node.node_id, title: item.node.name,
         description: `${label} · ${item.relative_path} · ${item.node.node_id}`, detail: `文件夹 · ${item.node.node_id}` };
       if (!item.node.session_id) throw new Error('会话目录命中缺少精确 Session 身份');
@@ -42,8 +45,8 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
     }) };
   }
   if (category === 'Thread') {
-    const page = await searchSessionThreads(0, target, filter, { signal, limit: 50, cursor });
-    return { cursor: page.cursor, limited: page.complete ? undefined : page.limited_reason ?? '尚未覆盖全部 Thread',
+    const page = await searchSessionThreads(0, target, filter, { signal, onResponse, limit: 50, cursor });
+    return { cursor: page.cursor, requestIds, limited: page.complete ? undefined : page.limited_reason ?? '尚未覆盖全部 Thread',
       items: page.items.map(item => {
         if (item.workspace_id !== owner.workspaceId) throw new Error('Thread 名称查询改变了工作区归属');
         const target: ThreadOwner = { ...owner, routeId: '', sessionId: item.session_id, threadId: item.thread_id, title: item.title };
@@ -57,8 +60,8 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
   try {
     const child = context.ownChild(instantiation.createChild(new ServiceCollection([IWorkspaceContextService, context])));
     const builder = child.createInstance(QueryBuilder);
-    const complete = await search.fileSearchPage(builder.file(context.getWorkspace().folders, { filePattern: filter, maxResults: 50 }), cursor, token);
-    return { cursor: complete.cursor,
+    const complete = await search.fileSearchPage(builder.file(context.getWorkspace().folders, { filePattern: filter, maxResults: 50 }), cursor, token, deadlineAt);
+    return { cursor: complete.cursor, requestIds: complete.requestIds ?? [],
       limited: complete.messages.length ? complete.messages.map(message => message.text).join('；')
         : complete.limitHit && !complete.cursor ? '文件结果达到本次上限，请缩小查询' : undefined,
       items: complete.results.map(item => {

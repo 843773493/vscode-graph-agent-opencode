@@ -31,13 +31,13 @@ export async function searchSessionThreads(
   port: number,
   workspaceTarget: GatewayWorkspaceRequestTarget,
   query: string,
-  options: { limit?: number; cursor?: string | null; signal?: AbortSignal } = {},
+  options: { limit?: number; cursor?: string | null; signal?: AbortSignal; onResponse?: (requestId: string | null) => void } = {},
 ): Promise<SessionThreadSearchResultsDTO> {
   const params = new URLSearchParams({ query, limit: String(options.limit ?? 50) });
   if (options.cursor) params.set("cursor", options.cursor);
   return unwrapApiData(await requestJson<APIResponse<SessionThreadSearchResultsDTO>>(
     port, `/api/v1/session-threads/search?${params}`,
-    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal, onResponse: options.onResponse },
   ));
 }
 

@@ -30,6 +30,7 @@ export function textMatch(hit: ResourceNavigationMatchDTO): ITextSearchMatch {
 
 export interface WorkspaceFileSearchPage extends ISearchComplete {
   cursor?: string;
+  requestIds?: string[];
 }
 
 export class WorkspaceSearchProvider extends Disposable implements ISearchResultProvider {
@@ -49,11 +50,11 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     return this.search(query, undefined, token);
   }
 
-  fileSearchPage(query: IFileQuery, cursor: string | undefined, token?: CancellationToken): Promise<WorkspaceFileSearchPage> {
+  fileSearchPage(query: IFileQuery, cursor: string | undefined, token?: CancellationToken, deadlineAt?: number): Promise<WorkspaceFileSearchPage> {
     if (query.folderQueries.length !== 1 || query.onlyOpenEditors || query.exists || query.extraFileResources?.length) {
       throw new Error('文件续页必须使用单个明确目录根');
     }
-    return this.search(query, undefined, token, undefined, { cursor });
+    return this.search(query, undefined, token, undefined, { cursor, deadlineAt });
   }
 
   textSearch(query: ITextQuery, onProgress?: (item: ISearchProgressItem) => void, token?: CancellationToken,
@@ -62,7 +63,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
   }
 
   private async search(query: IFileQuery | ITextQuery, onProgress?: (item: ISearchProgressItem) => void,
-    token = CancellationToken.None, models = new ResourceSet(), paging?: { cursor?: string }): Promise<WorkspaceFileSearchPage> {
+    token = CancellationToken.None, models = new ResourceSet(), paging?: { cursor?: string; deadlineAt?: number }): Promise<WorkspaceFileSearchPage> {
     if (query.type === QueryType.Text) validateTextQuery(query); else validateQuery(query);
     if (token.isCancellationRequested) throw new CancellationError();
     if (this._store.isDisposed) throw new Error('文件搜索服务已释放');
@@ -71,10 +72,13 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     this.active.add(source);
     let timedOut = false;
     // 沿原导航的十秒预算限制整个查询；续页不重新获得完整等待期限。
-    const timer = setTimeout(() => { timedOut = true; source.cancel(); }, 10000);
+    const deadlineAt = Math.min(Date.now() + 10000, paging?.deadlineAt ?? Infinity);
+    const timer = setTimeout(() => { timedOut = true; source.cancel(); }, Math.max(0, deadlineAt - Date.now()));
+    if (deadlineAt <= Date.now()) { timedOut = true; source.cancel(); }
     const results = new Map<string, IFileMatch>();
     const contexts = new Map<string, Map<number, ResourceNavigationContextDTO>>();
     const messages: ISearchComplete['messages'] = [];
+    const requestIds: string[] = [];
     let count = 0, limitHit = false, continuation: string | undefined;
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     const routes = new Map<string, Promise<string>>();
@@ -113,6 +117,8 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           if (source.token.isCancellationRequested) throw new CancellationError();
           const page = await raceCancellationError(gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/navigation', {
             method: 'POST', body: JSON.stringify({ ...request, cursor }), signal: controller.signal,
+            headers: { 'X-BoxTeam-Resource-Navigation-Deadline': String(deadlineAt / 1000) },
+            onResponse: requestId => { if (requestId) requestIds.push(requestId); },
           }, routeId), source.token);
           if (source.token.isCancellationRequested) throw new CancellationError();
           if (page.node?.uri !== owner.path) throw new Error('文件搜索响应目标与请求不一致');
@@ -176,9 +182,9 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
         }
       }
       if (source.token.isCancellationRequested) throw new CancellationError();
-      return { results: [...results.values()], messages, limitHit, ...(continuation ? { cursor: continuation } : {}) };
+      return { results: [...results.values()], messages, limitHit, requestIds, ...(continuation ? { cursor: continuation } : {}) };
     } catch (error) {
-      if (timedOut) throw new Error('文件搜索超过本次十秒总期限', { cause: error });
+      if (timedOut) throw new Error('文件搜索超过本次总期限', { cause: error });
       throw error;
     } finally {
       clearTimeout(timer); cancellation.dispose(); source.dispose(); this.active.delete(source);

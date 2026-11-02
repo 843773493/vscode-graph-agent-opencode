@@ -1,5 +1,4 @@
-import { Limiter, raceCancellation, timeout } from '../../upstream/src/vs/base/common/async.js';
-import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
 import type { FuzzyScorerCache } from '../../upstream/src/vs/base/common/fuzzyScorer.js';
 import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
@@ -33,12 +32,15 @@ import { GotoSymbolQuickAccessProvider } from '../../upstream/src/vs/workbench/c
 import { getCodeEditor } from '../../upstream/src/vs/editor/browser/editorBrowser.js';
 import { IQuickChatService } from '../../upstream/src/vs/workbench/contrib/chat/browser/chat.js';
 import { ASK_QUICK_QUESTION_ACTION_ID } from '../../upstream/src/vs/workbench/contrib/chat/browser/actions/chatQuickInputActions.js';
-import { requireGatewayWorkspaceRoute, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
 import { gateway } from '../agentApi.js';
+import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
 import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
-import { searchResourceNames, type NameSearchCategory, type NameSearchPage } from './quickAccessQuery.js';
+import type { NameSearchCategory } from './quickAccessQuery.js';
+import { queryNameBranches } from './quickAccessBranches.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
 import type { WorkspaceSearchService } from './searchService.js';
@@ -58,6 +60,7 @@ interface AccessRun {
   globalPick?: ResourcePick;
   restoreId?: string;
   publishing?: boolean;
+  invalidated?: boolean;
 }
 interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchInvocationOptions {
   searchGroup?: number;
@@ -102,6 +105,24 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       catch (error) { run.error = String(error); }
     }
     this.run = run;
+    const access = new CancellationTokenSource(token);
+    lifetime.add(toDisposable(() => access.dispose(true)));
+    lifetime.add(toDisposable(() => { picker.busy = false; }));
+    const invalidate = () => {
+      if (run.invalidated) return;
+      run.invalidated = true;
+      access.cancel();
+      run.globalPick = undefined;
+      picker.activeItems = picker.selectedItems = [];
+      picker.items = [{ id: 'identity-invalidated', label: 'Gateway 或用户身份已改变，请重新打开快速访问' }];
+      picker.busy = false;
+    };
+    lifetime.add(toDisposable(onGatewayUserSessionInvalidated(0, invalidate)));
+    const gatewayId = workspaceContext.getSnapshot().gatewayId;
+    lifetime.add(toDisposable(workspaceContext.subscribe(() => {
+      const current = workspaceContext.getSnapshot().gatewayId;
+      if (gatewayId && current && gatewayId !== current) invalidate();
+    })));
     picker.placeholder = options.placeholder ?? (options.filesOnly ? '查找文件' : `查找会话、Thread 和文件 · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
     if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !picker.quickNavigate) {
       const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择搜索范围' };
@@ -128,7 +149,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     lifetime.add(toDisposable(() => { if (this.run === run) this.run = undefined; }));
     run.publishing = true;
     try {
-      lifetime.add(super.provide(picker, token, options));
+      lifetime.add(super.provide(picker, access.token, options));
       if (run.restoreId) picker.activeItems = picker.items.filter((item): item is ResourcePick => item.type !== 'separator' && item.id === run.restoreId);
     } finally { run.publishing = false; }
     return lifetime;
@@ -136,6 +157,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   protected override _getPicks(original: string, disposables: DisposableStore, token: CancellationToken) {
     const run = this.run!;
+    if (run.invalidated) return [{ id: 'identity-invalidated', label: 'Gateway 或用户身份已改变，请重新打开快速访问' }];
     if (run.options.searchRestore?.query !== run.picker.value) run.restoreId = undefined;
     const previousFilter = run.normalized;
     const parsed = run.options.filesOnly ? undefined : extractRangeFromFilter(original, ['@']);
@@ -181,69 +203,23 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '工作区符号未启用：当前没有可限定业务根的符号服务' });
 
     const categories: NameSearchCategory[] = run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
-    const branches = categories.flatMap(category => run.owners.map(owner => ({ owner, category,
-      key: `${searchOwnerKey(owner)}/${category}`, picks: [] as ResourcePick[], pending: false,
-      label: run.owners.length === 1 ? category : `${owner.workspaceId} · ${category}`,
-      status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${owner.workspaceId} · ${category} · 正在查询` } as ResourcePick })));
     const seen = new Set(recent.map(pick => pick.id));
-    const render = () => {
-      if (!alive()) return;
-      const items = [...fast];
-      for (const category of categories) {
-        items.push({ type: 'separator', label: category });
-        for (const branch of branches.filter(branch => branch.category === category)) {
-          items.push(...branch.picks.filter(pick => !seen.has(pick.id)), branch.status);
+    const branches = queryNameBranches(run.owners, categories, filter, disposables, token, this.instantiation, this.search, run.cache,
+      (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail)
+        : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail)
+          : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
+      branches => {
+        if (!alive()) return;
+        const items = [...fast];
+        for (const category of categories) {
+          items.push({ type: 'separator', label: category });
+          for (const branch of branches.filter(branch => branch.category === category)) {
+            items.push(...branch.picks.filter(pick => !seen.has(pick.id)), branch.status);
+          }
         }
-      }
-      this.publish(run, accepted(items));
-    };
-    run.picker.busy = true;
-    let routes: ReturnType<typeof gateway.workspaceRoutes> | undefined;
-    const labels = new Map(run.owners.map(owner => [searchOwnerKey(owner), owner.workspaceId]));
-    const resolveTarget = async (owner: WorkspaceOwner) => {
-      const snapshot = await (routes ??= timeout(200, token).then(() => gateway.workspaceRoutes(controller.signal)));
-      const target = requireGatewayWorkspaceRoute(snapshot.items, snapshot.gatewayId, owner);
-      if (target.status !== 'ready') throw new Error(`工作区 ${target.name} 当前不可查询（${target.status}），请明确启动或连接`);
-      labels.set(searchOwnerKey(owner), target.name);
-      if (alive()) run.picker.placeholder = `查找会话、Thread 和文件 · ${[...labels.values()].join('、')}`;
-      return target;
-    };
-    const limiter = disposables.add(new Limiter<void>(3));
-    disposables.add(limiter.onDrained(() => { if (alive()) run.picker.busy = false; }));
-    const queue = async (branch: typeof branches[number], cursor?: string) => {
-      if (!alive() || branch.pending) return;
-      branch.pending = true;
-      run.picker.busy = true;
-      branch.status = { id: `status-${branch.key}`, label: `${branch.label} · 正在查询` }; render();
-      // 释放 Limiter 会丢弃排队任务；等待者仍随原 Picker token 及时结算。
-      try { await raceCancellation(limiter.queue(() => load(branch, cursor)), token); }
-      finally { branch.pending = false; }
-    };
-    const load = async (branch: typeof branches[number], cursor?: string) => {
-      if (!alive()) return;
-      try {
-        const resolved = await resolveTarget(branch.owner);
-        if (!alive()) return;
-        branch.label = run.owners.length === 1 ? branch.category : `${resolved.name} · ${branch.category}`;
-        const page = await searchResourceNames(branch.category, filter, branch.owner, resolved, resolved.name,
-          controller.signal, token, this.instantiation, this.search, cursor);
-        if (!alive()) return;
-        const picks = page.items.map(item => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail)
-          : item.kind === 'session' ? this.sessionPick(run, branch.owner, item.sessionId, item.title, item.description, item.detail)
-            : this.folderPick(branch.owner, item.nodeId, item.title, item.description, item.detail));
-        const merged = new Map([...branch.picks, ...picks].map(pick => [pick.id, pick]));
-        branch.picks = rankResourcePicks([...merged.values()], filter, run.cache);
-        branch.status = this.pageStatus(branch.key, branch.label, page, branch.picks.length, () => queue(branch, page.cursor));
-      } catch (error) {
-        if (!alive()) return;
-        // 续查失败后不再混用旧页；明确重查该分支，其他分支保留。
-        if (cursor) branch.picks = [];
-        branch.status = { ...this.failure(cursor ? `${branch.label}续页，请重新` : branch.label, error), id: `status-${branch.key}`,
-          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: cursor ? '重新查询此类别' : '重试此查询' }],
-          trigger: async () => { routes = undefined; await queue(branch); return TriggerAction.NO_ACTION; } };
-      } finally { render(); }
-    };
-    for (const branch of branches) this.report(queue(branch));
+        this.publish(run, accepted(items));
+      }, value => { if (alive()) run.picker.busy = value; },
+      label => { if (alive()) run.picker.placeholder = `查找会话、Thread 和文件 · ${label}`; });
     return [...fast, ...branches.map(branch => branch.status)];
   }
 
@@ -265,12 +241,6 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       trigger: (_index, mods) => { this.report(this.open(run, { resource: active.resource! }, mods, false, true, undefined, pick.range?.selection)); return TriggerAction.CLOSE_PICKER; },
       accept: (mods, event) => this.report(this.open(run, { resource: active.resource! }, mods, event.inBackground, false, undefined, pick.range?.selection)),
     });
-  }
-
-  private pageStatus(key: string, category: string, page: NameSearchPage, count: number, more: () => Promise<void>): ResourcePick {
-    return { id: `status-${key}`, label: `${category} · ${page.limited ?? (page.cursor ? '还有更多结果' : count ? '本次查询完成' : '没有匹配的资源')}`,
-      ...(page.cursor ? { buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.more), tooltip: '继续查询此类别' }],
-        trigger: async () => { await more(); return TriggerAction.NO_ACTION; } } : {}) };
   }
 
   private publish(run: AccessRun, items: Pick<ResourcePick>[]): void {
@@ -327,6 +297,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, title: string, description: string, detail: string): ResourcePick {
     const open = async (mods: IKeyMods, background: boolean, side = false) => {
+      this.assertAccess(run);
       const group = this.targetGroup(run, mods, side);
       const routeId = await gateway.resolveWorkspace(owner);
       const main = await gateway.mainThread(routeId, sessionId);
@@ -339,11 +310,13 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       accept: (mods, event) => this.report(open(mods, event.inBackground)) };
   }
 
-  private folderPick(owner: WorkspaceOwner, nodeId: string, label: string, description: string, detail: string): ResourcePick {
+  private folderPick(run: AccessRun, owner: WorkspaceOwner, nodeId: string, label: string, description: string, detail: string): ResourcePick {
     return { id: `folder:${searchOwnerKey(owner)}/${nodeId}`, label, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.folder),
       accept: (_mods, event) => this.report((async () => {
+        this.assertAccess(run);
         const target = await gateway.resolveWorkspaceTarget(owner);
+        this.assertAccess(run);
         const view = await this.views.openView<SessionNavigation>('boxteam.sessions', !event.inBackground);
         if (!view) throw new Error('会话导航视图不可用');
         await view.revealFolder(target, nodeId, !event.inBackground);
@@ -378,7 +351,12 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
   }
 
+  private assertAccess(run: AccessRun): void {
+    if (run.invalidated) throw new Error('Gateway 或用户身份已改变，请重新选择目标');
+  }
+
   private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, group = this.targetGroup(run, mods, side), selection?: IRange): Promise<void> {
+    this.assertAccess(run);
     const options = { pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background,
       selection: editor.resource?.scheme === 'boxteam-thread' ? undefined : selection ?? run.range };
     if (isEditorInput(editor)) await this.editors.openEditor(editor, options, group);

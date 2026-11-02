@@ -1,6 +1,6 @@
 import { expect } from 'playwright/test';
 import { readSavedSettings } from './settings.mjs';
-import { verifyResourceOpenActions, verifyResourcePresentation } from './default_interactions.mjs';
+import { expectLastSearchStatus, verifyResourceOpenActions, verifyResourcePresentation } from './default_interactions.mjs';
 
 /** 名称状态通过产品创建入口生成；查询、打开及迟到结果均经过真实 Gateway。 */
 export async function verifyDefaultAccess({ page, command, api, result, fileUri, ownerA, ownerB }) {
@@ -52,7 +52,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     // 真实 Thread 查询的响应被延迟；会话与文件分支不被它阻塞。
     release();
     await expect(quick).toContainText('Thread · 本次查询完成');
-    await expect(quick).toContainText('文件 · 本次查询完成');
+    await expectLastSearchStatus({ page, quick, label: '文件 · 本次查询完成' });
     await expect(quick).toContainText('quickdiscover-file.txt');
     await expect(quick).toContainText('工作区符号未启用');
     const first = requests.filter(request => request.query === 'quickdiscover' || request.body?.query === 'quickdiscover');
@@ -97,7 +97,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await command('workbench.action.quickOpen', 'quickdiscover');
     await expect(quick).toContainText('quickdiscover B 会话');
     await expect(quick).toContainText('Thread · 本次查询完成');
-    await expect(quick).toContainText('文件 · 本次查询完成');
+    await expectLastSearchStatus({ page, quick, label: '文件 · 本次查询完成' });
     await expect(quick).not.toContainText('quickdiscover A 会话');
     const second = requests.slice(beforeB).filter(request => request.query === 'quickdiscover' || request.body?.query === 'quickdiscover');
     expect(second.length).toBeGreaterThanOrEqual(3);
@@ -107,7 +107,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await command('workbench.action.quickOpen', 'quick-no-match-unique');
     await expect(quick).toContainText('会话 · 没有匹配的资源');
     await expect(quick).toContainText('Thread · 没有匹配的资源');
-    await expect(quick).toContainText('文件 · 没有匹配的资源');
+    await expectLastSearchStatus({ page, quick, label: '文件 · 没有匹配的资源' });
     expect(requests.slice(beforeMissing).every(request => request.route === ownerB.route)).toBe(true);
     await page.keyboard.press('Escape');
     const beforeSymbols = requests.length;

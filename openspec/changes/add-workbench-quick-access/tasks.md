@@ -78,9 +78,9 @@
 - [x] 8.1 用原 Quick Input 提供已登记范围集合选择，明确显示当前范围；取消保持原查询，确认才发起新范围查询，选择停止目标不自动连接／启动／激活。
 - [x] 8.2 单目标经 Gateway 显式路由，多目标对所选 owner 有界并发；若使用原 Gateway catalog 聚合，先补其显式目标过滤，不调用全范围后隐藏 C。
 - [ ] 8.3 按查询／范围／类别／身份代际取消排队和请求、废弃迟到响应；服务端继续工作时仍受原预算和总 deadline 约束。
-- [ ] 8.4 为每个工作区／owner 展示 busy、完成、受限、失败、取消和新鲜度，快结果先出，重试只针对失败读分支，全部失败不伪报无匹配。
+- [x] 8.4 为每个工作区／owner 展示 busy、完成、受限、失败、取消和新鲜度，快结果先出，重试只针对失败读分支，全部失败不伪报无匹配。
 - [x] 8.5 使用每个 owner 独立 cursor 和明确续查，绑定原查询及 revision；合并保持有效活动目标和滚动，失效时不把 Enter 应用到新占行对象。
-- [ ] 8.6 记录实际请求证明只 A 或明确 A+B，不访问 C；覆盖取消、超时、离线、旧 cursor、重复输入与迟到 progress，不仅查看 UI 结果。
+- [x] 8.6 记录实际请求证明只 A 或明确 A+B，不访问 C；覆盖取消、超时、离线、旧 cursor、重复输入与迟到 progress，不仅查看 UI 结果。
 
 ## 9. 五类正文查询与精确定位
 
@@ -310,3 +310,12 @@
 - 正式 Workbench 构建／真实 Gateway／Chromium 通过（111.90 秒，进程总计 114.85 秒）：55 个文件按 50＋5 返回；55 个 Session 由产品创建 API 生成，其 catalog 与 main Thread 分别沿独立 cursor 取到 50＋5。拖动原列表滚动条后续页仍保持原活动文件；删除已扫描文件使原 cursor 明确返回 400，旧页消失，重查只访问文件分支，新的同位置文件未被自动选中，Enter 不打开替代对象。14 条查询回执均核验 request_id，只访问 A，B 零查询，无消息／job 写请求，页面错误为空。最终仍只挂载 7 条可见行。页面原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-9c5d5ac1ea87/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
 - 28 项定向检查／236 条断言、18 份实际转换源码的真实类型检查、正式构建、JS 语法、Ruff、差异检查及 OpenSpec strict 通过。类型检查期间仅测试驱动改动，882 份产品源码指纹与最终验收一致。准确命令、原输出、指纹与退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/pagination-{types-001,contract-001,product-fingerprint-001,browser-005}.json` 及相邻 static／structure 收据。结构审查无 findings：搜索目录仍为 15 个 TS 文件，单一 Provider 与查询编排职责保持。
 - 四份失败页面原件保留：测试定位器同时命中隐藏树、滚轮未到末尾，以及两处异步更新后状态行重新进入虚拟列表的等待顺序。依据真实 DOM 和 HTTP 回执修正为原版滚动条与完成回执后定位，未放宽身份、页数、零请求或业务期限断言。最末文件验收首／续页约 191／182ms，响应约 10.7／1.5KiB；仅说明本工作负载，不承诺总体性能。参考 Copilot 的原搜索服务、限量与取消职责；原目录变化校验保留以履行 cursor 合同。8.3、8.4、8.6、完整 text_search 回归及 Electron 仍未验收。
+
+### 2026-11-02：查询生命周期与独立状态（8.4、8.6）
+
+- 名称查询按原 Limiter 保持三路并发，原 JSON 十五秒期限覆盖排队、目标解析与该页读取；取消不发送排队请求，迟到响应不发布，超时结束 busy。文件查询复用原十秒总期限并取上层剩余期限，跨分页和 Gateway 透传同一 deadline，已经过期时不再解析路由或访问目标。分支分别展示完成／受限／失败及覆盖说明、实际 request_id；重试只读失败分支，续页失败撤下对应旧页，其余结果保留。
+- 原 HTTP 身份屏障发布失效通知，原工作区上下文通知 Gateway 变化；旧候选、活动选择和在途读取立即失效，继续输入也不沿旧身份请求。不建立第二身份缓存或公开搜索 DTO。目录名称 owner 仍全目录扫描，尚缺服务端总预算，代码已登记 TODO，因此 **8.3 继续未完成**；通用 URI opener 的 2.2 也未完成。
+- 新增真实 Gateway／正式 Workbench／Chromium 场景通过（135.20 秒）：产品 API 创建隔离 A/B/C 的关键状态，核只 A／明确 A+B、C 零查询、三条真实请求中止及第四分支不发送、迟到结果废弃、真实十五秒超时保留其它结果、全失败不伪报无匹配、单分支重试、停止目标零生命周期操作及 401 撤下旧身份。503／401 为明确 HTTP 故障注入，延迟沿原真实响应，属于 Integration，不冒充真实后端故障。页面错误与禁止写请求均为空；原件为 `out/tests/integration/clients/web/quick_access/test_query_lifecycle/runs/run-d020c09db7af/nodes/node-6c413386faf0/artifacts/query-lifecycle.json`。
+- 原 catalog／文件独立分页 E2E 继续通过，旧 cursor 与 Enter 不改投的原断言保留。最终完整 text_search 回归通过（225.37 秒；包装进程 228.22 秒），包含 A/B／IndexedDB、dirty／watch、默认入口、范围取消保留明确活动身份、SearchView、Search Editor 分屏／保存／backup／route 恢复，页面错误为空。原件为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-ce56a5c10600/nodes/node-f4e408bf0b21/artifacts/search-result.json`。旧测试先修虚拟列表观察，再依据鼠标滚动条点击会清空列表焦点的实际失败改用真实滚轮；未修改产品、缩减断言或延长期限，失败原件均保留。
+- 77 项定向检查／295 条断言、18 份真实转换源码的类型检查、正式构建、Ruff、JS／TS AST、结构审查及 OpenSpec strict 通过。767 份产品文件核对仅新增目录预算 TODO 注释，其余与先前通过的类型／页面证据一致。类型检查默认采用编译器原生单线程，避免并行检查撞四 GiB 保护；独立提交 `34f43a07d`。试验构建复用插件没有生效，已移除临时插件，正式页面仍由既有共享 fixture 实际构建，没有宣称跨运行复用。
+- 准确命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/branches-{contract-002,types-003,browser-003,regression-001,regression-004,structure-003,product-evidence-001}.json` 及相邻日志。未重跑不受新变化影响的已通过场景；Electron 与其余任务继续未完成。

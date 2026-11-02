@@ -63,6 +63,7 @@ interface GatewayResponseInit extends RequestInit {
 type RequestJsonInit = GatewayResponseInit & {
   timeoutMs?: number;
   parseInWorkerAboveBytes?: number;
+  onResponse?: (requestId: string | null) => void;
 };
 
 export class HttpRequestError extends Error {
@@ -255,6 +256,7 @@ let gatewayUserSessionInitializer: GatewayUserSessionInitializer | null = null;
 const gatewayUserSessionReadyByPort = new Map<number, Promise<void>>();
 const gatewayUserSessionRecoveryByPort = new Map<number, Promise<void>>();
 const gatewayUserSessionWritesByPort = new Map<number, Promise<void>>();
+const gatewayUserSessionInvalidations = new Map<number, Set<() => void>>();
 
 // Gateway 用户会话 cookie 的写入必须按端口串行：acquire/takeover/游客重建
 // 与 401 恢复链并发时，后到达的 Set-Cookie 会按 last-write-wins 覆盖新身份，
@@ -290,6 +292,18 @@ export function registerGatewayUserSessionInitializer(
 
 export function invalidateGatewayUserSession(port: number): void {
   gatewayUserSessionReadyByPort.delete(port);
+  for (const listener of gatewayUserSessionInvalidations.get(port) ?? []) listener();
+}
+
+/** 沿唯一身份屏障撤销在途展示，不另建用户身份或凭据缓存。 */
+export function onGatewayUserSessionInvalidated(port: number, listener: () => void): () => void {
+  const listeners = gatewayUserSessionInvalidations.get(port) ?? new Set<() => void>();
+  gatewayUserSessionInvalidations.set(port, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) gatewayUserSessionInvalidations.delete(port);
+  };
 }
 
 /**
@@ -525,6 +539,7 @@ export async function requestJson<T>(
   const {
     timeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
     parseInWorkerAboveBytes = null,
+    onResponse,
     headers,
     ...fetchInit
   } = init ?? {};
@@ -541,15 +556,17 @@ export async function requestJson<T>(
           : { "Content-Type": "application/json" }),
       },
     },
-    async (response, signal) =>
-      response.status === 204
+    async (response, signal) => {
+      onResponse?.(response.headers.get("X-Request-ID"));
+      return response.status === 204
         ? undefined as T
         : await parseJsonResponseOrThrowDiagnostic<T>(
           response,
           path,
           parseInWorkerAboveBytes,
           signal,
-        ),
+        );
+    },
   );
 }
 

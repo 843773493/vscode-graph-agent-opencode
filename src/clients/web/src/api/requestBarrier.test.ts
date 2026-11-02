@@ -2,6 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   HttpRequestError,
+  invalidateGatewayUserSession,
+  onGatewayUserSessionInvalidated,
+  requestJson,
   RAW_RESPONSE_HEADER_TIMEOUT_MS,
   requestGatewayResponse,
 } from "./http";
@@ -322,5 +325,36 @@ describe("原始响应入口的响应头等待有界", () => {
     await new Promise((resolve) => globalThis.setTimeout(resolve, 150));
     expect((requestSignal as AbortSignal | null)?.aborted).toBe(false);
     expect(await response.text()).toBe(": heartbeat\n\n");
+  });
+});
+
+describe("共享 HTTP 回执和身份失效", () => {
+  test("JSON 回执只报告本次业务响应的 request_id，不透传回调到 fetch", async () => {
+    const port = 49_399;
+    const ids: Array<string | null> = [], options: RequestInit[] = [];
+    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+      const [input, init] = args;
+      if (new URL(String(input), `http://127.0.0.1:${port}`).pathname === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "receipt-token" }, request_id: "req-token" });
+      options.push(init!);
+      return Response.json({ result: 1 }, { headers: { "X-Request-ID": "req-receipt" } });
+    }, { preconnect: originalFetch.preconnect });
+    expect(await requestJson(port, "/api/gateway/health", { onResponse: id => ids.push(id) })).toEqual({ result: 1 });
+    expect(ids).toEqual(["req-receipt"]);
+    expect(options[0]).not.toHaveProperty("onResponse");
+  });
+
+  test("身份失效订阅按目标隔离，释放后不再通知", () => {
+    const calls: number[] = [];
+    const stop = onGatewayUserSessionInvalidated(49_399, () => calls.push(49_399));
+    const other = onGatewayUserSessionInvalidated(49_398, () => calls.push(49_398));
+    try {
+      invalidateGatewayUserSession(49_399);
+      expect(calls).toEqual([49_399]);
+      stop();
+      invalidateGatewayUserSession(49_399);
+      expect(calls).toEqual([49_399]);
+      invalidateGatewayUserSession(49_398);
+      expect(calls).toEqual([49_399, 49_398]);
+    } finally { stop(); other(); }
   });
 });

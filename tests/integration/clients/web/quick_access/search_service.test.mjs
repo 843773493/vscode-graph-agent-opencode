@@ -179,10 +179,12 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
         expect(requests.mock.calls).toHaveLength(1);
         expect(first.results.map(item => item.resource.toString())).toEqual(['page-a.txt', 'page-b.txt'].map(name => uri(ownerA, name).toString()));
         expect(first.cursor).toBe('next-file-page');
+        expect(first.requestIds).toEqual(['req-first-page']);
         const second = await f.search.fileSearchPage(options, first.cursor);
         expect(second.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'page-c.txt').toString()]);
         expect(second.cursor).toBeUndefined();
         expect(second.limitHit).toBe(false);
+        expect(second.requestIds).toEqual(['req-last-page']);
         const bodies = requests.mock.calls.map(call => JSON.parse(call[1].body));
         expect(bodies.map(body => body.cursor)).toEqual([undefined, 'next-file-page']);
         expect(bodies[0].limit).toBe(2);
@@ -190,10 +192,26 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
         const all = await f.search.fileSearch({ ...options, maxResults: 10 });
         expect(all.results).toHaveLength(3);
         expect(requests.mock.calls).toHaveLength(4);
+        const deadlines = requests.mock.calls.slice(2).map(call => Number(call[1].headers['X-BoxTeam-Resource-Navigation-Deadline']));
+        expect(deadlines[0]).toBe(deadlines[1]);
+        expect(deadlines[0]).toBeGreaterThan(Date.now() / 1000);
       }, async (_path, options) => {
         const body = JSON.parse(options.body), names = body.cursor ? ['page-c.txt'] : ['page-a.txt', 'page-b.txt'];
+        options.onResponse?.(body.cursor ? 'req-last-page' : 'req-first-page');
         return page(body.uri, [], { entries: names.map(name => ({ uri: body.uri + '/' + name, resource_shape: 'file' })),
           ...(body.cursor ? {} : { truncated: true, next_cursor: 'next-file-page' }) });
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('排队已耗尽原总期限的文件页不再解析路由或访问目标', async () => {
+    const f = fixture([]);
+    try {
+      await withTransport(async ({ routes, requests }) => {
+        await expect(f.search.fileSearchPage({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'page' },
+          undefined, undefined, Date.now() - 1)).rejects.toThrow('文件搜索超过本次总期限');
+        expect(routes.mock.calls).toHaveLength(0);
+        expect(requests.mock.calls).toHaveLength(0);
       });
     } finally { f.instantiation.dispose(); }
   });

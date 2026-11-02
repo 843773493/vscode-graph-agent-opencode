@@ -47,8 +47,8 @@ export class WorkspaceSearchService extends RemoteSearchService {
     return super.fileSearch(query, token);
   }
 
-  fileSearchPage(query: IFileQuery, cursor?: string, token?: CancellationToken): Promise<WorkspaceFileSearchPage> {
-    return this.businessProvider.fileSearchPage(query, cursor, token);
+  fileSearchPage(query: IFileQuery, cursor?: string, token?: CancellationToken, deadlineAt?: number): Promise<WorkspaceFileSearchPage> {
+    return this.businessProvider.fileSearchPage(query, cursor, token, deadlineAt);
   }
 
   override textSearchSplitSyncAsync(query: ITextQuery, token = CancellationToken.None,
