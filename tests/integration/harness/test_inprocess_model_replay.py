@@ -35,7 +35,7 @@ def replay_owner_factory(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_sequential_replay_owners_use_live_sdk_clients(replay_owner_factory):
-    import litellm
+    from app.runtime.litellm_runtime import litellm
 
     session = "ses_00000000400070008000000000000021"
     thread = "thr_00000000400070008000000000000022"

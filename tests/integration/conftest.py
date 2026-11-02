@@ -12,6 +12,7 @@ import pytest
 
 from app.core import identifier
 from app.core.mounted_workspaces import MountedWorkspace
+from app.runtime.litellm_runtime import load_litellm
 from app.runtime.model_stream import (
     ModelStreamTransportController,
     configure_model_stream_from_environment,
@@ -49,7 +50,7 @@ async def inprocess_model_replay(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[ModelStreamReplay, ModelStreamTransportController]]:
     """普通进程内业务共用精确身份回放；HTTP/SDK专项仍由其网络装具负责。"""
-    import litellm
+    litellm = load_litellm()
     from litellm.caching.llm_caching_handler import LLMClientCache
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()

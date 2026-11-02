@@ -279,3 +279,10 @@
 - Goal 首场在原内层 `model_entered.wait()` 的5秒期限失败，现直接显示该调用栈；1 failed／26.39秒，其余三个参数未运行。此前外层8秒超时不能单独证明 assembly 性能原因，本轮也未将其证明为 Goal 终态写入失败；保留 SDK／assembly 冷准备的测量TODO，不延长期限、不继续无证据重跑。
 - 相邻执行前取消／终态writer正常与失败重试两场景2 passed／32.63秒。Ruff、compileall通过；真实Pyright仍exit1，完整HEAD归档与当前12项诊断按文件／AST owner／rule／severity／完整消息及数量逐项相同，无新增。作者AST核对仅两组测试的屏障调用与一个本文件helper变化，无生产链路或新目录；原文件916→932行仍属同一挂载生命周期场景owner，未为行数引入跨文件fixture依赖。
 - 命令、源码指纹、原始输出／实际退出码与类型差集见 `out/tests/temp/mounted_goal_readiness_20261102/artifacts/verification.json`；测试沿进程外60秒／4GiB与原集成独占闸门。8.2仍未完成，不代全部四参数、完整关闭期限、Web或Windows验收。
+
+### 2026-11-02 回放装具统一模型运行时入口（8.2 有限补核）
+
+- 观察性诊断的原生线程栈明确显示：共享 `inprocess_model_replay` 直接导入 LiteLLM 时，在 fixture setup 中同步下载远程模型目录。共享 fixture 及其生命周期测试现复用已有 `litellm_runtime` 入口，保持 SDK 缓存隔离、原 transport、精确模型身份与 owner 关闭，不增加导入或回放的第二实现。
+- 回放 owner 顺序重建与真实 HTTP／冷进程模型目录更新两场景2 passed／20.68秒；后者仍验证同步下载零调用、延迟采用与离线缓存，不删除真实网络验证。该结果不能证明 Goal 的模型进入期限已满足：原四参数关闭测试仍4 failed／66.12秒，全部止于内层 `model_entered.wait()` 的5秒期限，尚未执行 Goal 终态／catalog 关闭断言。原外层8秒与内层5秒、性能TODO及8.2未勾状态保持，不继续无新证据重跑。
+- 原观察性诊断进程exit139，未产生pytest终态；仅采纳崩溃前明确的同步HTTP栈，不将其作为业务验收或推断崩溃原因。准确命令、原件、源码指纹与类型对照见 `out/tests/temp/replay_runtime_20261102/artifacts/verification.json`，诊断原件保留于 `out/tests/temp/goal_model_entry_20261102/artifacts/`。本片不代完整关闭期限、附件未知操作、Windows、Web或真实Provider验收。
+- 最终导入顺序整理后，原回放 owner 场景1 passed／7.20秒；Ruff、compileall和本change strict通过。完整HEAD归档与当前Pyright均5项既有装具诊断，按文件、规则、完整消息、最窄语句AST及重数对账无新增，不称类型全绿。作者结构自查只改原fixture和原测试的导入，未新增目录、模块或生命周期owner；归档副本已回收，原始检查输出保留。
