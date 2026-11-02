@@ -40,6 +40,7 @@ await writeFile(configuration, JSON.stringify({ extends: join(projectedRoot, 'ts
   files: transformedSourcePaths.filter(path => path.startsWith('extensions/')).map(path => join(projectedRoot, 'upstream', path)) }));
 await writeFile(join(output, 'sources.json'), JSON.stringify({ commit, targets, configuration }, null, 2));
 console.log(`类型检查包含 ${targets.length} 份实际 sourceTransform 源码（${commit}）`);
-const child = spawn(join(root, 'node_modules/.bin/tsgo'), ['--project', configuration, '--noEmit', ...process.argv.slice(2)], { cwd: root, stdio: 'inherit' });
+// 全工作台并行检查会放大 checker 内存；使用编译器原生单线程选项，外部内存保护保持不变。
+const child = spawn(join(root, 'node_modules/.bin/tsgo'), ['--project', configuration, '--noEmit', '--singleThreaded', ...process.argv.slice(2)], { cwd: root, stdio: 'inherit' });
 child.on('error', error => { throw error; });
 child.on('exit', (code, signal) => { if (signal) throw new Error(`类型检查被 ${signal} 终止`); process.exitCode = code ?? 1; });
