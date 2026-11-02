@@ -109,7 +109,7 @@ Gateway native root registry 按 target ID 唯一保存物理根，并绑定 Bac
 
 safe 在原30秒期限内汇总全组执行与代理引用；超时撤销 drain并保留旧组。force 先持久化全部受影响执行 interrupted，再关闭唯一 Backend handle。remove、替换、shutdown、preserve/adopt、startup recovery 均按 owner 一次处理；故障使全成员 fail-closed/offline并逐成员反馈，按权威完整启动合同仅恢复一次。外部/attached target仍仅探测和透明转发，不因URL相同成为managed成员；默认工作区不可stop的现有限制保留。
 
-共享组配置 restart 只 promotion 发起 target 的匹配 pending proof；sibling 以各自 target ID 从唯一 Gateway registry 重新解析 root binding，并核对 Backend UUID 与健康，不从 group 副本取根。缺少 binding 或 UUID/membership 不符时必须显式拒绝，不能扫描或猜根；失败恢复完整旧 generation 和旧 mount 集合，失败补偿按原 `recovery_required` 合同报告，不新造恢复状态机。共享 owner、generation 级完整挂载合同及上述恢复入口已按 tasks 第10节实施并留有验证；原16f仅有按target句柄／锁／恢复的结论属于历史基线。当前仍由未勾选的4.3／8.2核对路径不变量与完整调用方／生命周期证据，不以既有局部通过替代总验收。
+共享组配置 restart 只 promotion 发起 target 的匹配 pending proof；sibling 以各自 target ID 从唯一 Gateway registry 重新解析 root binding，并核对 Backend UUID 与健康，不从 group 副本取根。缺少 binding 或 UUID/membership 不符时必须显式拒绝，不能扫描或猜根；失败恢复完整旧 generation 和旧 mount 集合，失败补偿按原 `recovery_required` 合同报告，不新造恢复状态机。共享 owner、generation 级完整挂载合同及上述恢复入口已按 tasks 第10节实施并留有验证；原16f仅有按target句柄／锁／恢复的结论属于历史基线。字段职责及完整调用方／生命周期按4.3／8.2具名收据收口；附件旧代接管与完整 operation／shutdown期限仍由附件 change 独立验收，不从本 change 完成推导这些额外保证。
 
 实施仍采用整批源码/DTO/调用方/核心公共fixture→少量真实共享进程核心→集中边界回归→最终一次停写冻结。首个核心须经一个Gateway/一个真实managed Backend/两个mount验证身份与数据隔离；边界覆盖单target blocked、完整集合/陈旧generation、全组排空与force、成员进退、一次close/adopt/recovery、配置失败补偿以及外部target边界。
 
