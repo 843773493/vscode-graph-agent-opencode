@@ -91,8 +91,13 @@ def observe_resource(
     validate_runtime(runtime, record.workspace_id)
     if runtime.get(f"{kind}_id") != record.resource_id:
         raise mark_public_failure(ValueError(f"Node 运行时 身份与 外部资源 owner 冲突: {record.resource_id}"))
-    record.status = str(runtime["status"])
+    status = str(runtime["status"])
     recovery = str(runtime.get("reconciliation_status", "unknown"))
+    # 原生created是尚在启动；未核实的存活观察不能抹掉原创建阶段，否则管理会跳过取消原执行。
+    pending_creation = status == "created" or (
+        record.status == "creating" and not creation_receipt and recovery != "verified"
+    )
+    record.status = "creating" if pending_creation else status
     # 已持久化的未知动作结果跨重启保留，存活快照不能证明旧动作是否执行。
     # 只有原创建回执能首次核实创建；普通清单不能替代丢失的回执。
     if record.reconciliation_status == "verified" or creation_receipt:

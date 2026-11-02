@@ -967,3 +967,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原 Node 仍持有创建 Promise 时，匹配当前版本的 cancel-creation 关闭准入、沿原资源转换释放 context，并等待迟到 context 及原 failStartup/close 的终态写盘。重复取消共用原执行，已取得 context 只返回 present；原创建结束后清除在途引用。释放首错不被随后成功的失败收尾吞掉，无原执行的冷记录继续 unknown，不新增启动链或账本。
 - 最终相关 Browser 单测189项及真实 Node/HTTP/Chromium 创建全文件4项通过；真实场景覆盖 context 交付前、页面注册后两处回执等待、管理版本推进、原创建与取消共同结算、磁盘 failed/verified、context 仅关闭一次及 peer 继续执行。原 Python owner 消费者59项回归通过，其生产依赖未变，复用原结果。完整 HEAD archive 加全部候选补丁后，仅移除 Manager 新取消分支的两项负向变异均在“立即回执而未进入关闭”处失败，未超时。
 - Ruff、真实 Pyright 零诊断、Node 语法和本 change 严格检查通过；误用不存在的 uv pyright 命令与首轮测试 run 参数写错的失败原件保留。准确命令、源码指纹、退出码、正式产物和作者结构审查见 `out/tests/temp/browser_startup_cancel_20261102/artifacts/verification.json`。全部测试有进程外期限/4GiB，集成沿原独占闸门；不代 Python lease、Backend 硬重启、Gateway/Web、Windows、无原执行接管或整个 operation/shutdown 期限。5.2/5.4及21/23仍未完成。
+
+### 2026-11-02 Python 冷恢复保留原生创建阶段（5.2 部分）
+
+- 唯一快照消费入口将原生created映射为领域creating，原creating在未verified的运行观察下保持原创建阶段。Python失去创建回执后，显式管理stop仍先取消原创建，再沿原停止链核实；已完成启动的verified快照及未知结果规则保持，不增加字段、schema、writer或第二账本。
+- 新增Terminal/Browser×created/running四个反例在修复前全部失败；最终共享创建、两类owner、冷恢复与回执诊断224项单测通过。真实Node/HTTP/Chromium两处启动屏障下强杀Python，再以独立进程冷恢复，两项通过，核原Thread、冻结版本、精确lease结算、原context只关闭一次及拒绝重放创建。既有四个原生创建场景在native-002中通过，但该组新场景失败，整组不记绿；修正新测试对原intent默认reconcile_required的误判后，新两项在native-004通过。另补启动已完成仅回执丢失的Terminal/Browser两项真实硬退出回归通过，沿原stop/delete而非cancel-creation。
+- 首次补跑被既有450文件端口容量拦在setup；独立提交`836d75046`删除固定层级配额，两层共用567个完整100端口块，当前518文件互不重叠，13项端口与46项装具回归及静态检查通过。其它原失败包括测试误判unknown/verified、一次瞬时EADDRINUSE和新增测试的类型/导入问题，原件保留；未修改宿主端口配置或杀未知进程。
+- 三份修改Python的Ruff、compileall及真实Pyright零诊断通过；严格OpenSpec、准确保护命令、源码指纹、原始输出、退出码和作者结构核对见`out/tests/temp/browser_creation_recovery_20261102/artifacts/verification.json`。所有测试有进程外期限/4GiB，集成沿原独占闸门；本片是Python owner子进程硬退出，不代完整Backend/Gateway/Web/Node硬重启或Windows。无原context身份旧代接管、原生I/O抢占和整个operation/shutdown期限继续TODO，5.2/5.4与21/23保持未完成。

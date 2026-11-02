@@ -84,6 +84,8 @@ Browser 的关闭/删除继续复用原 resource transition。原 context 关闭
 
 原生 Browser owner 仍持有原创建 Promise 时，新管理取消可沿同一执行收敛：匹配当前传输版本后关闭新操作准入，以原资源转换队列释放已取得的独立 context；原创建在取得迟到 context、完成页面初始化或首次导航后核对取消，统一进入原 failStartup／close 写盘链。取消同时等待原释放及原创建，重复请求复用同一取消 Promise；只有原失败收尾已持久核实才返回 present／failed／verified，已有 context 不签 not_created。释放或原收尾失败保留完整错误，后续原停止入口重试；不改变唯一 lease 账本。原生 owner 重启后没有原创建 Promise 的记录仍按原未知身份边界处理，原生调用不可抢占和完整 operation／shutdown 期限仍属5.4。
 
+共享快照消费将原生 created 解释为领域 creating；原记录仍在 creating 时，未 verified 的原生运行观察不能覆盖创建阶段。这样 Python 硬退出后，原生创建继续执行时仍能由同一管理 stop 先进入 cancel-creation，而不会误入拒绝 created 的直接 close。已完成启动的 verified 快照保留原状态投影和未知结果规则；核实、版本冻结、原 lease 及后续停止链不变，无 schema 或第二状态来源。
+
 ### 6. 本轮实施的失败隔离
 
 Browser的工具和管理动作统一消费同一回执提交链：成功及正式失败先核对资源/工作区和本次整数版本，再观察、核实、持久化与构建投影。失败回执内部的校验、序列化、记录或账本提交异常也沿原unknown出口保护本次精确lease，保留原Browser错误cause；不再由同层异常分支绕过保护。正式失败中的未知页面转换保持原HTTP错误并保留待核实占用，完整已核实失败保持原异常和普通释放语义。查询和冷恢复不重放动作，显式管理停止核实后才结清；该切片不替代完整旧代接管、挂起任务终止或全operation/shutdown期限验收。

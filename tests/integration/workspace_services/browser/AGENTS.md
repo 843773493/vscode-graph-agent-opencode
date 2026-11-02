@@ -4,6 +4,8 @@
 
 `test_browser_creation_intent.py`的创建取消场景经真实Node／HTTP／Chromium，分别暂扣context交付和已完成页面注册的原回执，核管理版本、原创建与取消共同结算、磁盘failed/verified、真实context只关闭一次及peer继续执行。原close/delete拒绝与SIGKILL后无身份unknown场景保持；临时preload仅观察和暂停原回执，不改写业务事实。定向pytest须用进程外超时／4GiB和原集成闸门；不代Python lease、Backend／Gateway／Web重启或Windows验收。
 
+同文件另以正式Session/资源创建生成Python记录与原dispatching lease，真实强杀Python，再由独立冷owner恢复并管理stop仍在原Node执行的创建。分别暂停context交付/页面注册，核领域creating、原身份与精确lease、取消前未结清、原取消及停止顺序、真实context只关闭一次与最终冷账本settled；不代完整Backend服务进程、Gateway/Web、Node硬重启或Windows。
+
 ```text
 browser/
 ├── test_browser_custom_tools.py        代理工具与Browser Manager接线

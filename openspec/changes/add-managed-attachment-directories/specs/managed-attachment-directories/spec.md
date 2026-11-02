@@ -98,6 +98,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 冷 owner 的原创建仍为 creating／unknown，用户通过既有 stop 管理入口发起新的 operation
 - **THEN** 原生 owner 的取消创建入口核对资源、工作区及冻结版本，在原资源记录及原 writer 中持久发布不可重新创建的取消事实；排队或迟到的同 ID 创建包括更高版本均不得越过该事实。只有发布成功后才返回绑定该 intent 的 not_created 回执，Python 核对后沿原 owner 关闭 intent、解除关联并结清原精确占用。已有原生记录只能返回 present 及真实快照，后续仍走原停止链，不能将空 PID／context 当成未创建证明。原 operation 身份不得发起接管，取消发布失败或回执未知保留 unknown 与原 lease；未发布的候选普通快照也不能成为核实证明。取消事实跨原生 owner 重启保留，不进入普通终态历史配额裁剪，不新增账本或自动重放创建
 
+#### Scenario: 冷观察不得抹掉仍在进行的创建阶段
+
+- **WHEN** Python 在创建回执前退出或失去回执，而原生 owner 仍报告 created，或原创建处于 running 且尚未 verified
+- **THEN** 共享资源 owner 将原生 created 解释为尚在创建，并保留原 creating 阶段；普通清单及详情不得用未核实的存活状态抹掉该事实。冷恢复沿同一资源、Thread、原 lease 和冻结版本继续，显式 stop 先交原取消创建入口再沿原停止链核实；没有正式停止证明前不得结清原占用。已完成启动的 verified 快照仍按原未知结果规则处理，不重放创建，不新增状态字段或账本
+
 #### Scenario: 原生 owner 仍持有原创建执行时取消
 
 - **WHEN** Python owner 已失去创建回执，新管理 operation 取消已登记的 Browser，且当前原生 owner 仍持有该资源的原创建 Promise

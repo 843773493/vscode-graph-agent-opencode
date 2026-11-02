@@ -4,22 +4,39 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import ExitStack
+from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import httpx
 import psutil
 import pytest
 
+from app.container import WorkspaceContainerRegistry
+from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.core.path_utils import catalog_provider_scope
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from tests.harness.python.browser_manager import (
     BrowserManagerProcesses,
     close_browser_manager_processes,
     start_browser_manager_processes,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.workspace_services.test_resource_owner_crash_recovery import (
+    _assert_force_terminated,
+    _publish_barrier,
+    _spawn,
+)
+from tests.support.workspace_tool_runtime import workspace_tool_runtime
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux Chromium与SIGKILL，不代替Windows")
@@ -326,3 +343,150 @@ async def test_cancel_creation_waits_for_original_context_and_terminal_receipt(
             (control / "release").touch()
             await asyncio.gather(*[task for task in (creating, cancelling) if task is not None], return_exceptions=True)
             await client.post(f"/api/browsers/{peer_id}/close", json={})
+
+
+async def _create_pending_browser(workspace: Path, control: Path, browser_url: str) -> None:
+    mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace, browser_backend_url=browser_url)
+    async with workspace_tool_runtime(workspace, startup_mount=mount) as (container, sid, context):
+        await container.terminal_steering_service.shutdown()
+        binding = context.thread_binding
+        assert binding is not None
+        owner = container.browser_resource_owner
+        original = cast(Callable[..., Awaitable[dict[str, object]]], owner._transport.create_browser)
+
+        async def creating(**arguments: object) -> dict[str, object]:
+            rid = str(arguments["browser_id"])
+            record = owner._store.get(rid)
+            assert record is not None and record.status == "creating"
+            lease, = owner._leases.leases_for_resource(rid)
+            assert lease.status == "dispatching"
+            _publish_barrier(control / "python-created.json", {
+                "pid": os.getpid(), "rid": rid, "session_id": sid, "thread_id": binding.thread_id,
+                "lease": asdict(lease), "owner_revision": record.owner_revision,
+                "reconciliation_status": record.reconciliation_status,
+            })
+            return await original(**arguments)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(owner._transport, "create_browser", creating)
+            await owner.create_browser(session_id=sid, thread_id=binding.thread_id,
+                holder_id="request:pending-create", operation_id="pending-create")
+        raise AssertionError("原创建应在Node真实启动屏障内等待，不得提前结束")
+
+
+async def _recover_pending_browser(workspace: Path, control: Path, browser_url: str) -> None:
+    identity = json.loads((control / "python-created.json").read_text())
+    rid, origin = identity["rid"], identity["lease"]
+    mount = MountedWorkspace(load_or_create_workspace_id(workspace), workspace, browser_backend_url=browser_url)
+    with (
+        WorkspaceContainerRegistry(mounted_workspaces=MountedWorkspaceRegistry([mount]), project_root=Path.cwd()) as registry,
+        catalog_provider_scope(registry), ExitStack() as cleanup,
+    ):
+        container = registry.get(mount.workspace_id)
+        cleanup.callback(container.session_catalog.close)
+        cleanup.callback(container.workspace_activity_service.store.close)
+        owner = container.browser_resource_owner
+        # 冷准备只观察并冻结版本；显式stop随后以停止意图同步，不先排空仍在启动的页面注册。
+        await owner.recover(())
+        restored = owner._store.get(rid)
+        assert identity["reconciliation_status"] == "reconcile_required"
+        assert restored is not None and restored.status == "creating" and restored.reconciliation_status == "reconcile_required"
+        pending = owner._leases.get_lease(origin["lease_id"])
+        assert pending is not None and pending.status == "reconcile_required"
+        assert {key: value for key, value in asdict(pending).items() if key not in {"status", "updated_at"}} == {
+            key: value for key, value in origin.items() if key not in {"status", "updated_at"}
+        }
+        cancel, stop = owner._transport.cancel_creation, owner._transport.stop_resource
+        calls: list[str] = []
+
+        async def cancelling(resource_id: str, *, owner_revision: int) -> dict[str, object]:
+            calls.append("cancel_creation")
+            assert owner_revision == restored.owner_revision
+            _publish_barrier(control / "python-cancelling.json", {
+                "pid": os.getpid(), "restored": asdict(restored), "lease": asdict(pending),
+            })
+            return await cancel(resource_id, owner_revision=owner_revision)
+
+        async def stopping(resource_id: str, *, reason: str | None = None) -> dict[str, object]:
+            calls.append("stop")
+            assert calls == ["cancel_creation", "stop"]
+            return await stop(resource_id, reason=reason)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(owner._transport, "cancel_creation", cancelling)
+            patch.setattr(owner._transport, "stop_resource", stopping)
+            result = await owner.command(rid, action="stop", expected_revision=restored.owner_revision,
+                holder_id="request:pending-stop", operation_id="pending-stop")
+        assert result["status"] == "closed" and result["reconciliation_status"] == "verified"
+        assert result["source_thread"] == {"session_id": identity["session_id"], "thread_id": identity["thread_id"]}
+        assert not owner._leases.leases_for_resource(rid)
+        cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.json")
+        settled = cold.get_lease(origin["lease_id"])
+        assert settled is not None and settled.status == "settled"
+        assert {key: value for key, value in asdict(settled).items() if key not in {"status", "updated_at"}} == {
+            key: value for key, value in origin.items() if key not in {"status", "updated_at"}
+        }
+        _publish_barrier(control / "python-recovered.json", {
+            "pid": os.getpid(), "result": result, "settled": asdict(settled), "calls": calls,
+        })
+
+
+async def _wait_worker_file(path: Path, worker: subprocess.Popen[str], log: Path) -> None:
+    async with asyncio.timeout(30):
+        while not path.is_file():
+            assert worker.poll() is None, log.read_text()
+            await asyncio.sleep(0.02)
+
+
+@pytest.mark.parametrize("stage", ["acquire", "registered"])
+async def test_python_hard_restart_cancels_the_original_native_start_and_settles_only_its_lease(
+    browser_service: BrowserService, monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    handle, root, control, run, _native = browser_service
+    (control / "stage").write_text(stage)
+    monkeypatch.setenv("PYTHONPATH", str(Path.cwd()))
+    monkeypatch.setenv("BOXTEAM_PROJECT_ROOT", str(Path.cwd()))
+    browser_url = f"http://127.0.0.1:{handle.backend_port}"
+    test_file = str(Path(__file__).resolve())
+    with ExitStack() as cleanup:
+        worker = _spawn(cleanup, [sys.executable, test_file, "create", str(root), str(control), browser_url],
+            cwd=Path.cwd(), logs=control / "python-create")
+        await _wait_worker_file(control / "arrived.json", worker, control / "python-create.stderr.log")
+        identity = json.loads((control / "python-created.json").read_text())
+        assert identity["pid"] == worker.pid
+        paths = [root / ".boxteam" / name for name in ("browser-resources.json", "resources.json")]
+        original_bytes = [path.read_bytes() for path in paths]
+        worker.kill()
+        await asyncio.to_thread(_assert_force_terminated, worker)
+        assert [path.read_bytes() for path in paths] == original_bytes
+        recovered = _spawn(cleanup, [sys.executable, test_file, "recover", str(root), str(control), browser_url],
+            cwd=Path.cwd(), logs=control / "python-recover")
+        try:
+            await _wait_worker_file(control / "python-cancelling.json", recovered, control / "python-recover.stderr.log")
+            await asyncio.sleep(0.1)
+            assert recovered.poll() is None and not (control / "python-recovered.json").exists()
+            pending = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json").get_lease(identity["lease"]["lease_id"])
+            assert pending is not None and pending.status == "reconcile_required"
+        finally:
+            (control / "release").touch()
+        assert await asyncio.to_thread(recovered.wait, timeout=30) == 0, (control / "python-recover.stderr.log").read_text()
+        receipt = json.loads((control / "python-recovered.json").read_text())
+        assert receipt["pid"] != identity["pid"] and receipt["calls"] == ["cancel_creation", "stop"]
+        headers = {"X-BoxTeam-Workspace-Id": load_or_create_workspace_id(root), "X-BoxTeam-Resource-Owner": "workspace-browser"}
+        async with httpx.AsyncClient(base_url=browser_url, headers=headers, trust_env=False, timeout=5) as client:
+            native = (await client.get(f"/api/browsers/{identity['rid']}")).json()["data"]
+            health = (await client.get("/health")).json()
+        assert native["status"] == "closed" and native["reconciliation_status"] == "verified"
+        assert native["transport_owner_revision"] == receipt["result"]["owner_revision"]
+        assert health["browser_runtime"]["context_count"] == 0
+        assert [json.loads(line) for line in (control / "closed.jsonl").read_text().splitlines()] == [{"context_index": 1}]
+        run.write_result("passed", {"stage": stage, "original": identity, "recovered": receipt, "native": native,
+            "scope": "真实Python硬退出/冷owner、Node/HTTP/Chromium及原lease；不代Gateway/Web、Node硬重启或Windows"})
+
+
+if __name__ == "__main__":
+    mode, workspace_arg, control_arg, browser_url_arg = sys.argv[1:]
+    assert mode in {"create", "recover"}
+    asyncio.run((_create_pending_browser if mode == "create" else _recover_pending_browser)(
+        Path(workspace_arg), Path(control_arg), browser_url_arg,
+    ))
