@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -320,6 +321,54 @@ def test_protected_reasoning_replays_with_one_emitting_call_and_result(
     assert result.tool_call_id == TOOL_CALL_ID
     assert result.content == RESULT_CONTENT
     assert assistant.response_metadata["model_call_id"] == result.response_metadata["model_call_id"] == MODEL_CALL
+    identity = _confirmed_tool_call().projection_identity
+    assert identity is not None
+    assert assistant.id == identity.projection_message_id
+
+
+@pytest.mark.parametrize("content_kind", ["reasoning", "text", "calls_only"])
+def test_split_tool_message_uses_its_declared_anchor_identity(content_kind):
+    anchor = _confirmed_tool_call()
+    companion = _confirmed_reasoning()
+    if content_kind == "text":
+        companion = replace(companion, semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+                            projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL))
+    elif content_kind == "calls_only":
+        payload = {"tool_calls": [{"id": "first-parallel-call", "name": "task", "args": {}}]}
+        companion = replace(anchor, item_id="first-parallel-item", item_sequence=4,
+                            projection_group=ProjectionGroup(0, 2, "list"),
+                            projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL),
+                            payload=payload, content_hash=content_hash(anchor.payload_kind, payload))
+    messages = project_canonical_items((companion, anchor), preserve_order=True)
+    assert len(messages) == 1
+    message, = messages
+    identity = anchor.projection_identity
+    assert identity is not None
+    assert isinstance(message, AIMessage)
+    assert message.id == identity.projection_message_id
+    assert message.response_metadata["model_call_id"] == MODEL_CALL
+    assert [call["id"] for call in message.tool_calls] == (
+        ["first-parallel-call", TOOL_CALL_ID] if content_kind == "calls_only" else [TOOL_CALL_ID]
+    )
+
+
+def test_unanchored_live_tool_message_keeps_its_original_identity():
+    reasoning = _stream_reasoning()
+    message, = project_canonical_items((reasoning, _stream_tool_call()), preserve_order=True)
+    assert message.id == reasoning.item_id
+
+
+def test_split_final_message_uses_text_anchor_identity(protected_reasoning_carrier):
+    _block, reasoning = protected_reasoning_carrier
+    anchor = replace(
+        _confirmed_tool_call(), semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind=PayloadKind.TEXT, payload="最终回答",
+        content_hash=content_hash(PayloadKind.TEXT, "最终回答"),
+    )
+    message, = project_canonical_items((reasoning, anchor), preserve_order=True)
+    identity = anchor.projection_identity
+    assert identity is not None
+    assert message.id == identity.projection_message_id
 
 
 @pytest.mark.parametrize("field,value", [

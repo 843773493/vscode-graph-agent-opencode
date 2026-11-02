@@ -62,7 +62,7 @@ def _reasoning_block_text(block_type: object, block: dict[str, Any]) -> str:
         if not isinstance(items, list):
             return ""
         return "".join(
-            extract_reasoning_summary(item.get("summary"))
+            _reasoning_block_text("reasoning", item)
             for item in items
             if isinstance(item, dict)
         )
@@ -73,17 +73,19 @@ def _reasoning_block_text(block_type: object, block: dict[str, Any]) -> str:
         return value if isinstance(value, str) else ""
     if block_type == "reasoning":
         value = block.get("reasoning")
-        if isinstance(value, str):
+        if isinstance(value, str) and value:
             return value
         raw_content = block.get("content")
         if isinstance(raw_content, list):
-            return "".join(
+            value = "".join(
                 item.get("text", "")
                 for item in raw_content
                 if isinstance(item, dict)
                 and item.get("type") in {"reasoning_text", "text"}
                 and isinstance(item.get("text"), str)
             )
+            if value:
+                return value
         return extract_reasoning_summary(block.get("summary"))
     return ""
 

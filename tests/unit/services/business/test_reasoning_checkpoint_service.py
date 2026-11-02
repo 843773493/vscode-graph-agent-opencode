@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 import json
 import sqlite3
 from contextlib import closing
@@ -26,6 +25,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import content_hash, sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
@@ -692,7 +692,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     assert state_assistant["response_metadata"]["phase"] == "final_answer"
     # design 5.2：诊断快照保留 reasoning/text carrier，展示文本由历史投影提供。
     assert state_assistant["content"] == [
-        {"type": "reasoning", "reasoning": reasoning_text},
+        {"type": "reasoning_content", "reasoning_content": reasoning_text},
         {"type": "text", "text": final_text},
     ]
 
@@ -1207,7 +1207,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
     assert [record["role"] for record in records] == ["user", "assistant", "tool", "assistant"]
     assert all("<system_reminder>" not in json.dumps(record, ensure_ascii=False) for record in records)
     assert records[-1]["content"] == [
-        {"type": "reasoning", "reasoning": final_reasoning},
+        {"type": "reasoning_content", "reasoning_content": final_reasoning},
         {"type": "text", "text": final_text},
     ]
     assert first_reasoning not in json.dumps(records[-1], ensure_ascii=False)

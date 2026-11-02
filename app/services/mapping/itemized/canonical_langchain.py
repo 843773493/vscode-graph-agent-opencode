@@ -376,8 +376,15 @@ def project_canonical_items(
                 and isinstance(messages[current_index], AIMessage)
             ):
                 current = messages[current_index]
+                # 拆分消息只在最后一个调用 anchor 声明完整消息 ID；伴随正文的
+                # item ID 不能成为合并后消息的身份。未声明身份的实时组沿用原 ID。
+                identity = item.projection_identity
                 messages[current_index] = current.model_copy(
-                    update={"tool_calls": [*current.tool_calls, *calls]}
+                    update={
+                        "id": identity.projection_message_id
+                        if identity is not None and identity.projection_message_id is not None else current.id,
+                        "tool_calls": [*current.tool_calls, *calls],
+                    }
                 )
             else:
                 message_groups[group] = len(messages)
@@ -430,5 +437,10 @@ def project_canonical_items(
                 current_content,
                 *(content if isinstance(content, list) else [content]),
             ]
-        messages[current_index] = current.model_copy(update={"content": next_content})
+        identity = item.projection_identity
+        messages[current_index] = current.model_copy(update={
+            "id": identity.projection_message_id
+            if identity is not None and identity.projection_message_id is not None else current.id,
+            "content": next_content,
+        })
     return messages

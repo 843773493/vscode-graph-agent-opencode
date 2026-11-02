@@ -44,6 +44,29 @@ def test_split_agent_content_treats_string_as_visible_text():
     assert text == "普通正文"
 
 
+@pytest.mark.parametrize("inner", [
+    {"content": [{"type": "reasoning_text", "text": " 原文一\n"},
+                 {"type": "reasoning_text", "text": "原文二 "}],
+     "summary": [{"type": "summary_text", "text": "摘要"}]},
+    {"reasoning": " 原文一\n原文二 ", "summary": []},
+])
+def test_nested_reasoning_items_use_body_before_summary(inner):
+    block = {"type": "reasoning_items", "id": "part-native", "index": 0,
+             "reasoning_items": [{"type": "reasoning", **inner}]}
+    assert split_agent_content([block]) == (" 原文一\n原文二 ", "")
+    part, = extract_agent_stream_content_parts([block])
+    assert part.text == " 原文一\n原文二 "
+
+
+@pytest.mark.parametrize("empty_body", [{"content": []}, {"reasoning": ""}])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_reasoning_without_body_still_shows_its_summary(empty_body, wrapped):
+    block = {"type": "reasoning", "summary": [{"type": "summary_text", "text": " 原摘要 "}], **empty_body}
+    if wrapped:
+        block = {"type": "reasoning_items", "reasoning_items": [block]}
+    assert split_agent_content([block]) == (" 原摘要 ", "")
+
+
 def test_split_agent_content_converts_refusal_to_visible_text():
     reasoning, text = split_agent_content([{"type": "refusal", "refusal": "无法回答"}])
 

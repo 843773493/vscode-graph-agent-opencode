@@ -16,7 +16,7 @@ from app.prompting.validation import internal_prompt_metadata
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import AttachmentRef, MessageDTO
 from app.services.business.message_display import project_message_for_display
-from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+from app.services.mapping.agent_content_mapper import split_agent_content
 from app.services.mapping.user_message_content_projection import (
     UserContentProjection,
     user_content_projection,
@@ -260,16 +260,12 @@ class MessageContentProjectionMixin:
     @staticmethod
     def _message_to_agent_state_record(message: BaseMessage) -> dict[str, object]:
         extracted = MessageContentProjectionMixin._extract_content(message)
-        content_blocks = extracted["content_blocks"]
         raw_content = getattr(message, "content", "")
         record: dict[str, object] = {
             "role": MessageContentProjectionMixin._persisted_role(message).value,
             "type": message.type,
-            "content": MessageContentProjectionMixin._json_safe(
-                raw_content
-                if isinstance(message, HumanMessage)
-                else content_blocks if content_blocks else raw_content
-            ),
+            # 原始记录保留原生布局，轻量展示不能成为恢复正文的替代品。
+            "content": MessageContentProjectionMixin._json_safe(raw_content),
         }
         tool_calls = getattr(message, "tool_calls", None) or []
         if tool_calls:
@@ -432,29 +428,7 @@ class MessageContentProjectionMixin:
                 "reasoning_items",
                 "thinking",
             }:
-                reasoning_text = (
-                    part.get("thinking") or part.get("text")
-                    if part_type == "thinking"
-                    else part.get("reasoning") or part.get("reasoning_content")
-                )
-                if not isinstance(reasoning_text, str):
-                    raw_content = part.get("content")
-                    if isinstance(raw_content, list):
-                        reasoning_text = "".join(
-                            item.get("text", "")
-                            for item in raw_content
-                            if isinstance(item, Mapping)
-                            and item.get("type") in {"reasoning_text", "text"}
-                            and isinstance(item.get("text"), str)
-                        )
-                    elif part_type == "reasoning_items":
-                        reasoning_text = extract_reasoning_summary(
-                            part.get("reasoning_items")
-                        )
-                    else:
-                        reasoning_text = ""
-                if not reasoning_text:
-                    reasoning_text = extract_reasoning_summary(part.get("summary"))
+                reasoning_text, _ = split_agent_content([part])
                 reasoning_block: dict[str, object] = {
                     "type": "reasoning",
                     "reasoning": reasoning_text,

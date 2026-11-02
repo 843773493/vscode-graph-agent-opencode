@@ -66,6 +66,7 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
 )
+from app.services.mapping.itemized.provider_history import public_message_record
 from app.services.mapping.message_content import MessageContentProjectionMixin
 
 
@@ -425,7 +426,7 @@ class MessageService(MessageContentProjectionMixin):
             session_id=session_id,
             message_count=len(records),
             jsonl="\n".join(
-                json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+                json.dumps(public_message_record(record), ensure_ascii=False, separators=(",", ":"))
                 for record in records
             ),
         )

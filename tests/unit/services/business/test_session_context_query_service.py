@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, create_autospec
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
@@ -340,8 +341,14 @@ async def test_assembly_history_projection_uses_session_thread_pair():
     plan = object()
     snapshot.as_sealed_plan.return_value = plan
     assembly_source.list_context_assemblies.return_value = (snapshot,)
+    message = AIMessage(id="msg-protected", content=[{
+        "type": "reasoning_items", "reasoning_items": [{
+            "type": "reasoning", "content": [{"type": "reasoning_text", "text": "保留正文"}],
+            "encrypted_content": "assembly-opaque-fixture",
+        }],
+    }])
     assembly_source.project_context_plan_to_history_with_diagnostics.return_value = SessionContextHistoryProjection(
-        assembly=snapshot, messages=[], losses=(), resource_activation=None,
+        assembly=snapshot, messages=[message], losses=(), resource_activation=None,
     )
     service = SessionContextQueryService(
         message_source=_FakeMessageSource(),
@@ -354,9 +361,20 @@ async def test_assembly_history_projection_uses_session_thread_pair():
         "asm_target",
     )
 
-    await service.read_context(
-        _session_request(view="assembly", assembly_ref=assembly_ref)
+    result = await service.read_context(
+        _session_request(view="assembly", assembly_ref=assembly_ref, include=["reasoning", "raw_record"])
     )
+    history = [item for item in result.items if item.kind == "message"]
+    assert len(history) == 1 and history[0].reasoning == "保留正文"
+    assert history[0].raw_record is not None
+    assert "encrypted_length" in result.model_dump_json()
+    assert "assembly-opaque-fixture" not in result.model_dump_json()
+    assert isinstance(message.content, list)
+    block = message.content[0]
+    assert isinstance(block, dict)
+    inner = block["reasoning_items"][0]
+    assert isinstance(inner, dict)
+    assert inner["encrypted_content"] == "assembly-opaque-fixture"
 
     assembly_source.list_context_assemblies.assert_called_once_with(
         "ses_target",
@@ -606,6 +624,37 @@ async def test_records_can_explicitly_include_detailed_fields(
     assert "SECRET ARG" in serialized
     assert "SECRET RESULT" in serialized
     assert result.effective_record_count == 10
+
+
+@pytest.mark.asyncio
+async def test_records_keep_native_reasoning_coordinates_but_hide_recovery_body(
+    session_context_service_factory,
+):
+    source = _FakeMessageSource()
+    source.records = [{"type": "ai", "content": [
+        {"type": "reasoning_items", "reasoning_items": [
+            {"type": "reasoning", "id": "rs-public", "content": [
+                {"type": "reasoning_text", "text": "第一段"},
+                {"type": "reasoning_text", "text": "第二段"},
+            ], "summary": [{"type": "summary_text", "text": "独立摘要"}],
+             "encrypted_content": "opaque-provider-fixture"},
+        ]},
+    ]}]
+    result = await session_context_service_factory(source).read_context(
+        _session_request(view="records", include=["reasoning", "raw_record"])
+    )
+    item, = result.items
+    assert item.reasoning == "第一段第二段"
+    assert item.raw_record is not None
+    content = item.raw_record["content"]
+    assert isinstance(content, list)
+    inner = content[0]["reasoning_items"][0]
+    assert inner["id"] == "rs-public"
+    assert inner["summary"] == [{"type": "summary_text", "text": "独立摘要"}]
+    assert inner["encrypted_length"] == len("opaque-provider-fixture")
+    assert inner["encrypted_hash"] == hashlib.sha256(b"opaque-provider-fixture").hexdigest()
+    assert "opaque-provider-fixture" not in result.model_dump_json()
+    assert source.records[0]["content"][0]["reasoning_items"][0]["encrypted_content"] == "opaque-provider-fixture"
 
 
 @pytest.mark.asyncio

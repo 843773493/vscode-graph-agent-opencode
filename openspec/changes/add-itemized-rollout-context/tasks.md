@@ -1566,3 +1566,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 放行后核物理结果为失败→成功，Provider 逻辑顺序仍为原 calls→成功结果→失败结果→Skill 来源正文；四个执行／投影结果均保留 terminal status、真实 success/failure、确认位、原 Turn／ModelCall／execution 身份。新冷 Saver 恢复两份原 assembly、来源控制状态与 ToolMessage 配对，每份 request_hash_preimage 精确匹配 model_stream 的真实 transport 产物并通过 hash 校验。
 - 受保护 `product-002` 为1 passed/39.47秒，原跨 worktree 集成独占闸门、120秒外部超时及4GiB数据段上限；新增固定矩阵入口 `integration-tool-source-closure`，注册解析通过。Ruff、真实Pyright、compileall与OpenSpec strict通过。首轮因测试同时提供无效URI和非法身份，先命中URI校验；改用正式工作区URI后保留原非法身份断言，原失败输出未覆盖。
 - 准确命令、源码指纹、raw／退出码、原件及作者审查见 `out/tests/temp/tool_source_closure_20261101/artifacts/verification.json`。此为 ASGI 产品入口和独立冷 owner，不代表 Gateway 业务代理、Backend进程重启、Web、Windows、真实Provider或完整8.3-C／8.3；团队与MCP持有延期不变，总进度111/119保持未关闭。未改前端、公共fixture、长回归驱动或共享debug。
+
+### 2026-11-02 7.5-E 拆分消息身份与原生 reasoning 的真实 Provider 闭环（部分）
+
+- 真实三文件依赖工具循环依次暴露两个产品缺陷：合并 reasoning/tool-call 时沿用伴随 item ID，未采用最后 anchor 的完整消息身份；records 又把原生内容替换为轻量展示块，丢失 Responses 内层 reasoning 正文。唯一 canonical mapper 现统一采用已声明的 anchor 身份（包括最终 text anchor），未声明身份的实时组保留原身份；诊断记录保留原生布局、顺序及内容坐标，轻量正文解析复用原流内容解析器，删除重复解析。原生正文为空时仍读取独立 summary。
+- 按 design 5.2 与 adapter 的公开保护合同，agent-state/records/assembly 不再把诊断原件重建为统一 reasoning 块；公共原始记录仅将恢复用密文与签名转为 hash/length 或存在标记，内部 checkpoint/canonical 原件不变。原 E2E 要求 API 原样返回 encrypted 的断言与规范冲突，改为严格对账公开原生 blocks、身份、正文及坐标并禁止密文；两个旧诊断快照预期也迁为已持久的原生 reasoning_content，不放宽正文、工具配对、owner 或请求 hash。
+- 新增反例在旧实现上4 failed/11 passed；最终映射、checkpoint、查询、item 合同及摘要回归278 passed/21.63秒，exit 0。records/assembly公开入口另有16 passed，包含正文、独立summary、密文hash/length与来源不变断言。Ruff、compileall和diff检查通过；Pyright整组仍exit 1，完整HEAD归档按file/AST owner/rule/message对照均为195项既有诊断，新增0。完整临时基线已删除。
+- 新增固定矩阵 `e2e-provider-tool-loop`，复用原180次Job轮询、15分钟suite期限、4GiB保护及跨worktree独占闸门。`tool-loop-003` 1 passed/169.02秒，经真实Gateway/Backend/外部Provider完成3次严格依赖读取、4次模型请求，核canonical工具配对/归属、sealed/wire hash、全部assembly与records对账；进程安全重启并改写当前文件后，旧历史及checkpoint引用不变，正式续聊复述旧回执且不重跑旧工具。该通过发生在最后空正文summary分支补修前。
+- 最终源码 `tool-loop-004` exit 1/218.19秒：模型接口返回 `system_cpu_overloaded`，回退候选返回429 `FreeUsageLimitError`，原180次轮询后Job仍running，未进入历史对账；不登记通过、不延长期限、不改凭据或盲目重试。两次通过/失败运行前后源码各自不变，原件均保留。准确命令、指纹、实际退出码、类型基线和失败诊断见 `out/tests/temp/itemized_provider_acceptance_20261102/artifacts/verification.json`，正式产品原件分别在 `out/tests/e2e/system/agent/context/test_provider_tool_loop/runs/run-ad64e5f4d2a3/` 与 `run-6ea5ed91727e/`。
+- 本片不替代完整Web conversation_lifecycle、Windows、同步真实Provider、真实Provider compaction或完整OpenSpec verify；7.5/8.3及整体111/119保持未完成，团队协作、MCP显式持有及既有性能TODO不变。未修改前端、公共fixture、长回归驱动或共享debug服务。

@@ -6,13 +6,45 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
+from collections.abc import Mapping
 from typing import Any
 
 from app.services.mapping.itemized.content_blocks import (
     direct_content_blocks,
     reasoning_content_rows,
 )
+
+
+def public_message_record(record: Mapping[str, object]) -> dict[str, object]:
+    """公开记录保留原生内容坐标，只把恢复用密文和签名转为存在证据。"""
+    result = copy.deepcopy(dict(record))
+
+    def redact(block: object) -> None:
+        if not isinstance(block, dict):
+            return
+        kind = block.get("type")
+        if kind == "reasoning_items":
+            items = block.get("reasoning_items")
+            if isinstance(items, list):
+                for item in items:
+                    redact(item)
+        if kind in {"reasoning", "redacted_thinking"}:
+            encrypted = block.pop("data" if kind == "redacted_thinking" else "encrypted_content", None)
+            if isinstance(encrypted, str) and encrypted:
+                block["encrypted_length"] = len(encrypted)
+                block["encrypted_hash"] = hashlib.sha256(encrypted.encode("utf-8")).hexdigest()
+        if kind == "thinking":
+            signature = block.pop("signature", None)
+            if isinstance(signature, str) and signature:
+                block["signature_present"] = True
+
+    content = result.get("content")
+    if isinstance(content, list):
+        for block in content:
+            redact(block)
+    return result
 
 
 def visible_text(content: Any) -> str:
@@ -177,4 +209,4 @@ def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
     return merged
 
 
-__all__ = ["reasoning_projection_rows", "visible_text"]
+__all__ = ["public_message_record", "reasoning_projection_rows", "visible_text"]

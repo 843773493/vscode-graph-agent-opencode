@@ -21,7 +21,10 @@ from app.services.business.session_context_resource import (
     session_context_read_operation,
     set_exact_returned_chars,
 )
-from app.services.mapping.itemized.provider_history import reasoning_projection_rows
+from app.services.mapping.itemized.provider_history import (
+    public_message_record,
+    reasoning_projection_rows,
+)
 from app.services.mapping.itemized.provider_history import (
     visible_text as litellm_visible_text,
 )
@@ -170,7 +173,7 @@ def project_record_items(
                 tool_summary=summary,
                 tool_calls=calls,
                 tool_results=results,
-                raw_record=record if "raw_record" in include else None,
+                raw_record=public_message_record(record) if "raw_record" in include else None,
             )
         )
     return items

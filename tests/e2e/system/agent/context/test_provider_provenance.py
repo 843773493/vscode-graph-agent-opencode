@@ -447,13 +447,10 @@ async def _assembly_history(
         assert actual_raw["type"] == expected_raw["type"]
         assert actual_raw["id"] == expected_raw["response_metadata"]["message_id"]
         assert actual_raw["response_metadata"].get("model_call_id") == expected_raw["response_metadata"].get("model_call_id")
-        # records 使用展示块，assembly 恢复冻结的 Provider carrier；逐块核原文、坐标和保护状态。
+        # 两类公开记录使用相同原生布局；密文只保留 hash/length，恢复原件另在 checkpoint 审计。
         actual_blocks = direct_content_blocks(actual_raw["content"])
         expected_blocks = direct_content_blocks(expected_raw["content"])
-        assert len(actual_blocks) == len(expected_blocks)
-        assert [block["text"] for block in actual_blocks if block["type"] == "text"] == [
-            block["text"] for block in expected_blocks if block["type"] == "text"
-        ]
+        assert actual_blocks == expected_blocks
         assert [
             (row.content_block_index, row.item_index, row.reasoning_text or "", row.summary_text or "",
              row.encrypted, row.signature_present)
@@ -463,16 +460,15 @@ async def _assembly_history(
              row.encrypted, row.signature_present)
             for row in reasoning_content_rows(expected_raw["content"])
         ]
+        assert all(row.encrypted is None for row in reasoning_content_rows(actual_raw["content"]))
         for part in expected_raw["response_metadata"].get("content_part_refs", []):
             carrier_type = actual_blocks[part["index"]]["type"]
-            # records 统一可读 reasoning 类型；redacted_thinking 保留原类型及保护状态。
+            # content_part_refs 的展示语义与原生 carrier 分离，不能反向重写原始布局。
             semantic_type = (
                 "reasoning" if carrier_type in {"reasoning_content", "reasoning_items", "thinking"} else carrier_type
             )
             assert part["type"] == semantic_type
-            assert expected_blocks[part["index"]]["type"] == part["type"]
-            assert expected_blocks[part["index"]]["id"] == part["id"]
-            assert expected_blocks[part["index"]]["index"] == part["index"]
+            assert expected_blocks[part["index"]]["type"] == carrier_type
     return messages
 
 
