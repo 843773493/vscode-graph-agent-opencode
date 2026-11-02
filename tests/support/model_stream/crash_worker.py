@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -61,6 +63,15 @@ from tests.support.session_catalog_owner import fixture_catalog_scope
 ProviderKind = Literal["chat", "responses"]
 
 
+def _observe_phase(phase: str) -> None:
+    """只记录启动阶段和时钟，便于定位尚未产生 delta 的独立 worker。"""
+    print(
+        f"model-stream-crash-worker phase={phase} monotonic={time.monotonic():.6f}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 class _ReadyDeltaSink:
     """在首个 delta 完成持久化后写入跨进程就绪标记。"""
 
@@ -83,6 +94,7 @@ class _ReadyDeltaSink:
             self._ready_path.parent.mkdir(parents=True, exist_ok=True)
             self._ready_path.write_text("ready\n", encoding="utf-8")
             self._marked = True
+            _observe_phase("first_delta_committed")
 
 
 def _model(provider: ProviderKind, endpoint: str):
@@ -134,6 +146,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
             f"sessions_root={args.sessions_root}"
         )
     resolver.initialize()
+    _observe_phase("catalog_ready")
     store = MessageStreamStore(path_resolver=resolver)
     thread_id = store._path_resolver.main_thread_id(args.session_id)
     saver = RolloutCheckpointSaver(sessions_root)
@@ -155,6 +168,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
         thread_id=thread_id,
         execution_id=str(accepted["initial_execution_id"]),
     )
+    _observe_phase("admission_ready")
     owner = MutationIntentOwner(args.session_id, thread_id)
     ingress_message = HumanMessage(content="测试后端崩溃恢复", id=ingress_id)
     ingress_message.response_metadata["turn_id"] = args.turn_id
@@ -165,6 +179,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
         job_id=job_id,
     )
     runtime = MessageStreamRuntime(writer)
+    _observe_phase("stream_opened")
     scope = TurnExecutionScope(writer.turn_stream_id)
     scope_token = set_current_turn_execution_scope(scope)
     sink_token = set_current_model_delta_sink(
@@ -219,6 +234,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
                 target_format="responses" if is_responses else "chat_completions",
                 **activation_arguments,
             )
+            _observe_phase("assembly_sealed")
             snapshot = prepared["snapshot"]
             assert saver.get_context_assembly(
                 args.session_id,
@@ -236,6 +252,7 @@ async def _run_with_catalog_owner(args: argparse.Namespace) -> None:
                 else None
             )
             await runtime.start_model(model_call_id, args.provider)
+            _observe_phase("model_started")
 
             async def consume_prepared_request() -> None:
                 with (
@@ -277,6 +294,7 @@ def main() -> None:
     parser.add_argument("--turn-id", required=True)
     parser.add_argument("--ready-path", required=True)
     args = parser.parse_args()
+    _observe_phase("main_entered")
     asyncio.run(_run(args))
 
 

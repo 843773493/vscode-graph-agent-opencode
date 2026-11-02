@@ -1612,6 +1612,12 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 最终相关Python单元104 passed／12.43秒，JS完整日志文件31 passed；Ruff／compileall通过。真实Pyright为6项旧装具诊断，生产及日志测试零诊断；按原收据恢复实际基线源码，再按规则、消息、所属声明、最窄AST及重数比较，原7项中的缺失definitions诊断已消除，新增0。全部测试使用外部期限及4GiB限制；公共日志合同补齐后的真实Gateway集成1 passed／41.02秒，沿原独占闸门核日志双错下的原执行终态及同Thread后继成功，不以日志断言替代执行终态。
 - 准确命令、源码SHA、原始输出、实际退出码、类型比较及作者结构审查见 `out/tests/temp/execution_fixture_contract_20261102/artifacts/verification.json`。不代真实Provider、Web、Windows、同步SDK、硬退出或全部7.5；111/119保持未关闭。未修改前端、共享debug、公共长回归fixture或另一会话提案。
 
+### 2026-11-02 7.5-C/E 消息流崩溃恢复与装具生命周期补核
+
+- 原失败顺序的观察运行20 passed／30.22秒，关闭导入计时后的同组合20 passed／27.50秒；均保留原首个delta等待期限，未改协议资产、SDK、真实TCP或恢复断言。当前Responses依赖导入约8.43秒，进入main后约1.01秒完成首个delta持久化；仅代表本次测量，不能倒推旧超时原因。独立worker保留阶段时钟诊断，冷启动长尾继续TODO，不因此扩展性能实现。
+- 发现原 `message_stream_context` 每场清理整个输出根，连当前节点的BOXTEAM_HOME与前一场原件一并删除。现只重置既有工作区，路径由同一 `TestRunContext` 和真实catalog resolver提供；worker就绪与stderr按run/node保存，日志独占创建，删除重复输出根和三处sessions路径拼接。最终完整两文件32 passed／40.51秒，包括Chat／Responses流中断、真实TCP关闭、工具进程回收及独立进程消失后的execution_lost冷恢复；3份原产物逐字保留、2份worker日志和14个节点配置均实际核对。保留原一次Pydantic usage序列化警告，不修改产品以消警告。
+- Ruff、compileall和两份change strict通过；完整HEAD归档与当前Pyright为22→16项既有装具诊断，按文件／规则／消息／最窄AST与重数对照无新增，不称类型全绿。命令、前后源码指纹、raw／实际退出码、导入测量、产物保留及作者结构审查见 `out/tests/temp/model_crash_readiness_20261102/artifacts/verification.json`。本片未修改生产、前端或共享debug，不代真实Provider、Gateway/Web、Windows、Goal关闭、完整operation/shutdown或7.5总门，111/119保持。
+
 ### 2026-11-02 7.5-E 真实Provider工具循环的最终源码补验（未通过）
 
 - 在同一Provider已完成九次真实调用的compaction运行后，按原 `e2e-provider-tool-loop` matrix补验，1 failed／218.66秒、exit1；180次Job轮询结束仍running，未进入本次工具配对、hash或重启验收，不计通过。准确命令与最终原件见 `out/tests/temp/provider_tool_loop_final_20261102/artifacts/verification.json` 及正式 `run-9b7f654accd9`。

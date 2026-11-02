@@ -30,6 +30,7 @@ from app.core.model_delta_context import (
     set_current_model_delta_sink,
 )
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.turn_execution_scope import (
     AgentControlInbox,
@@ -69,16 +70,13 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from app.testing.model_stream import StreamFrame, get_protocol_codec, load_scenario
+from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 ProviderKind = Literal["chat", "responses"]
 InterruptStage = Literal["reasoning", "text", "tool_call"]
 
 FIXTURE_ROOT = Path.cwd() / "tests" / "fixtures" / "model_stream"
-OUTPUT_ROOT = (
-    Path.cwd()
-    / "out/tests/integration/backend/agents/test_model_stream_interrupt"
-)
 
 
 class _GatedSSEStream(httpx.AsyncByteStream):
@@ -287,17 +285,23 @@ class _BlockDeltaBarrierStore(MessageStreamStore):
 
 
 @pytest.fixture
-def message_stream_context() -> tuple[
+def model_stream_run(request: pytest.FixtureRequest) -> TestRunContext:
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    if context.workspace_root.exists():
+        shutil.rmtree(context.workspace_root)
+    return context.prepare()
+
+
+@pytest.fixture
+def message_stream_context(model_stream_run: TestRunContext) -> tuple[
     MessageStreamStore,
-    object,
+    SessionCatalogPathResolver,
     str,
 ]:
-    if OUTPUT_ROOT.exists():
-        shutil.rmtree(OUTPUT_ROOT)
-    sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
+    sessions_root = model_stream_run.workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
-    # canonical session_id 必须是 UUIDv4 位 profile（第 13 位为 4、第 17 位属 8/9/a/b）
+    # canonical session_id 使用固定 UUIDv7，与创建日期及 main thread 身份保持一致。
     session_id = "ses_019bc29b34e276e6870ef6d46174d4da"
     seed_catalog_session_bundle(sessions_root, session_id)
     return MessageStreamStore(path_resolver=resolver), resolver, session_id
@@ -680,7 +684,7 @@ async def _consume_model(
     ],
 )
 async def test_handwritten_provider_interrupt_stops_pending_sse_read(
-    message_stream_context: tuple[MessageStreamStore, object, str],
+    message_stream_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str],
     provider: ProviderKind,
     stage: InterruptStage,
     frozen_provider_activation,
@@ -696,7 +700,7 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
     client = httpx.AsyncClient(transport=transport)
     previous_session, previous_factory = _install_litellm_client(client)
 
-    sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
+    sessions_root = resolver.sessions_root
     saver = RolloutCheckpointSaver(sessions_root)
     thread_id = store._path_resolver.main_thread_id(session_id)
     job_id = f"job_provider_interrupt_{provider}_{stage}"
@@ -882,12 +886,12 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["chat", "responses"])
 async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_result(
-    message_stream_context: tuple[MessageStreamStore, object, str],
+    message_stream_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str],
     provider: ProviderKind,
     frozen_provider_activation,
 ) -> None:
     store, resolver, session_id = message_stream_context
-    sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
+    sessions_root = resolver.sessions_root
     saver = RolloutCheckpointSaver(sessions_root)
     thread_id = store._path_resolver.main_thread_id(session_id)
     owner = MutationIntentOwner(session_id, thread_id)
@@ -1151,12 +1155,12 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["chat", "responses"])
 async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
-    message_stream_context: tuple[MessageStreamStore, object, str],
+    message_stream_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str],
     provider: ProviderKind,
     frozen_provider_activation,
 ) -> None:
     """真实 TCP 连接在 pending read 时必须被客户端主动关闭。"""
-    store, _, session_id = message_stream_context
+    store, resolver, session_id = message_stream_context
     frames = _scenario_frames(provider, "reasoning")
     codec = get_protocol_codec(_protocol(provider))
     wire_frames = tuple(codec.encode(frame) for frame in frames)
@@ -1166,7 +1170,7 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
     client = httpx.AsyncClient()
     previous_session, previous_factory = _install_litellm_client(client)
 
-    sessions_root = OUTPUT_ROOT / "workspace" / ".boxteam" / "sessions"
+    sessions_root = resolver.sessions_root
     saver = RolloutCheckpointSaver(sessions_root)
     thread_id = store._path_resolver.main_thread_id(session_id)
     job_id = f"job_provider_tcp_interrupt_{provider}"
@@ -1274,7 +1278,7 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
 
 @pytest.mark.asyncio
 async def test_interrupt_during_block_delta_persistence_closes_started_block(
-    message_stream_context: tuple[MessageStreamStore, object, str],
+    message_stream_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str],
 ) -> None:
     """delta 尚未线性化时中断，不能留下只有 block.started 的运行块。"""
     _, resolver, session_id = message_stream_context
@@ -1350,7 +1354,7 @@ async def test_interrupt_during_block_delta_persistence_closes_started_block(
 
 @pytest.mark.asyncio
 async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
-    message_stream_context: tuple[MessageStreamStore, object, str],
+    message_stream_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str],
 ) -> None:
     """真实工具子进程被打断后必须回收，结果仍投影为未知。"""
     store, resolver, session_id = message_stream_context
@@ -1446,7 +1450,8 @@ async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["chat", "responses"])
 async def test_provider_pending_read_crash_recovers_execution_lost(
-    message_stream_context: tuple[MessageStreamStore, object, str],
+    message_stream_context: tuple[MessageStreamStore, SessionCatalogPathResolver, str],
+    model_stream_run: TestRunContext,
     provider: ProviderKind,
 ) -> None:
     """Provider pending read 时进程消失，重启只能投影 execution_lost。"""
@@ -1457,13 +1462,13 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
     target_index = _target_frame_index(frames, provider=provider, stage="reasoning")
     server = _TCPGatedSSEServer(wire_frames, pause_after=target_index)
     await server.start()
-    ready_path = OUTPUT_ROOT / f"crash-worker-{provider}.ready"
-    stderr_path = OUTPUT_ROOT / f"crash-worker-{provider}.stderr.log"
+    ready_path = model_stream_run.artifacts_dir / f"crash-worker-{provider}.ready"
+    stderr_path = model_stream_run.artifacts_dir / f"crash-worker-{provider}.stderr.log"
     turn_id = f"job_provider_crash_{provider}"
     worker: asyncio.subprocess.Process | None = None
     try:
         # stderr 持续写正式产物，避免管道未消费阻塞 worker，也保留就绪超时原因。
-        with stderr_path.open("wb") as stderr:
+        with stderr_path.open("xb") as stderr:
             worker = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
