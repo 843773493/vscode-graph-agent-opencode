@@ -30,7 +30,7 @@ import { HttpRequestError } from '../../../web/src/api/http.js';
 import { CachedThreadHistory } from './cachedThreadHistory.js';
 import SessionContextForkDialog from '../../../web/src/components/overlays/SessionContextForkDialog.js';
 import { useSessionForkDialog } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
-import { requireForkTargetWorkspace } from '../../../web/src/api/workspaceIdentity.js';
+import { requireGatewayWorkspaceRoute } from '../../../web/src/api/workspaceIdentity.js';
 import { getGatewayHealth } from '../../../web/src/gatewayApi.js';
 import type { InternalDisplayProvenance } from '../../../web/src/types/backend.js';
 
@@ -58,8 +58,8 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
     invalidateSessionCatalog: () => { void content.refreshSessionResources(owner.sessionId, { force: true }); },
     onForkCreated: async (_source, result) => {
       const health = await getGatewayHealth(0);
-      const target = requireForkTargetWorkspace(state.gatewayWorkspaces, health.gateway_id, result);
-      await editors.openEditor(new ThreadInput({ routeId: target.workspace_id, workspaceId: result.session.workspace_id,
+      const target = requireGatewayWorkspaceRoute(state.gatewayWorkspaces, health.gateway_id, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id });
+      await editors.openEditor(new ThreadInput({ gatewayId: result.target_gateway_id, routeId: target.workspace_id, workspaceId: result.session.workspace_id,
         sessionId: result.session.session_id, threadId: result.thread_id, title: result.session.title }), { pinned: true });
     },
   });

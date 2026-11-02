@@ -1,10 +1,12 @@
 import type { Session, SessionMainThread } from '../../web/src/types/protocol.js';
 import type { APIResponse, GatewayWorkspace } from '../../web/src/types/backend.js';
 import { requestJson, unwrapApiDataOrNull, workspaceHeader } from '../../web/src/api/http.js';
+import { getGatewayHealth } from '../../web/src/gatewayApi.js';
+import { requireGatewayWorkspaceRoute, type WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 export { HttpRequestError as GatewayRequestError } from '../../web/src/api/http.js';
 
 export type WorkspaceTarget = GatewayWorkspace;
-export interface ThreadOwner {
+export interface ThreadOwner extends WorkspaceOwner {
   routeId: string;
   workspaceId: string;
   sessionId: string;
@@ -24,8 +26,14 @@ class GatewayClient {
     return body.data;
   }
 
-  workspaces(): Promise<{ items: WorkspaceTarget[]; active_workspace_id: string }> {
-    return this.request('/api/gateway/workspaces');
+  workspaces(checkHealth = true): Promise<{ items: WorkspaceTarget[]; active_workspace_id: string }> {
+    return this.request(`/api/gateway/workspaces?check_health=${checkHealth}`);
+  }
+
+  async resolveWorkspace(owner: WorkspaceOwner): Promise<string> {
+    // 重解只读取控制面登记，不因切换标签探测所有工作区及辅助服务。
+    const [workspaces, health] = await Promise.all([this.workspaces(false), getGatewayHealth(0)]);
+    return requireGatewayWorkspaceRoute(workspaces.items, health.gateway_id, owner).workspace_id;
   }
 
   async assertWorkspace(owner: Pick<ThreadOwner, 'routeId' | 'workspaceId'>): Promise<void> {

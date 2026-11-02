@@ -1,13 +1,25 @@
-import type { GatewayWorkspace, SessionForkResult } from "../types/backend";
+import type { GatewayWorkspace } from "../types/backend";
 
 export type GatewayWorkspaceRequestTarget = Pick<
   GatewayWorkspace,
   "workspace_id" | "backend_workspace_id" | "connection_kind"
 >;
 
-export type GatewayWorkspaceForkRoute = GatewayWorkspaceRequestTarget & {
+export type GatewayWorkspaceRoute = GatewayWorkspaceRequestTarget & {
   remote?: Pick<NonNullable<GatewayWorkspace["remote"]>, "gateway_id" | "remote_workspace_id"> | null;
 };
+
+export interface WorkspaceOwner {
+  gatewayId: string;
+  workspaceId: string;
+}
+
+export function gatewayWorkspaceOwner(workspace: GatewayWorkspaceRoute, localGatewayId: string): WorkspaceOwner {
+  const gatewayId = workspace.connection_kind === "local" ? localGatewayId : workspace.remote?.gateway_id;
+  const workspaceId = workspace.connection_kind === "local" ? workspace.backend_workspace_id : workspace.remote?.remote_workspace_id;
+  if (!gatewayId?.trim() || !workspaceId?.trim()) throw new Error("已登记路由缺少目标 Gateway／工作区身份");
+  return { gatewayId, workspaceId };
+}
 
 export function requireGatewayWorkspaceRequestTarget(
   workspaces: readonly GatewayWorkspaceRequestTarget[],
@@ -29,27 +41,24 @@ export function requireGatewayWorkspaceRequestTarget(
   return target;
 }
 
-export function requireForkTargetWorkspace(
-  workspaces: readonly GatewayWorkspaceForkRoute[],
+export function requireGatewayWorkspaceRoute(
+  workspaces: readonly GatewayWorkspaceRoute[],
   localGatewayId: string | null | undefined,
-  result: Pick<SessionForkResult, "target_gateway_id"> & {
-    session: Pick<SessionForkResult["session"], "workspace_id">;
-  },
-): GatewayWorkspaceRequestTarget {
+  owner: WorkspaceOwner,
+): GatewayWorkspaceRoute {
   if (!localGatewayId?.trim()) {
-    throw new Error("分支已创建，但 Gateway 健康回执缺少身份，无法解析目标路由");
+    throw new Error("Gateway 健康回执缺少身份，无法解析目标路由");
   }
-  const gatewayId = result.target_gateway_id;
-  const workspaceId = result.session.workspace_id;
+  const { gatewayId, workspaceId } = owner;
   if (!gatewayId?.trim() || !workspaceId?.trim()) {
-    throw new Error("分支已创建，但发布回执缺少目标 Gateway／工作区身份");
+    throw new Error("资源目标缺少 Gateway／工作区身份");
   }
   const targets = workspaces.filter((workspace) => workspace.connection_kind === "local"
     ? gatewayId === localGatewayId && workspace.backend_workspace_id === workspaceId
     : workspace.remote?.gateway_id === gatewayId && workspace.remote.remote_workspace_id === workspaceId);
   const [target] = targets;
   if (!target || targets.length !== 1) {
-    throw new Error("分支已创建，但目标 Gateway／工作区缺少唯一的已登记路由，无法打开目标线程");
+    throw new Error("目标 Gateway／工作区缺少唯一的已登记路由，无法打开资源");
   }
   return target;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import PersistentTasks from '../../../web/src/components/workspace/persistentTasks/PersistentTasks.js';
 import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmProvider.js';
-import { requireGatewayWorkspaceRequestTarget, type GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { TaskThreadTargetDTO } from '../../../web/src/api/persistentTasks.js';
 import { getGatewayHealth } from '../../../web/src/gatewayApi.js';
 import { gateway, type ThreadOwner } from '../agentApi.js';
@@ -21,10 +21,10 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
       await gateway.assertWorkspace(owner);
       const [workspaces, health] = await Promise.all([gateway.workspaces(), getGatewayHealth(0)]);
       const route = requireGatewayWorkspaceRequestTarget(workspaces.items, owner.routeId);
-      if (route.connection_kind === 'local' && route.backend_workspace_id !== owner.workspaceId) throw new Error('任务编辑器的 Gateway 路由归属已改变');
-      const gatewayId = route.connection_kind === 'local' ? health.gateway_id : workspaces.items.find(item => item.workspace_id === owner.routeId)?.remote?.gateway_id;
-      if (!gatewayId) throw new Error('任务编辑器缺少目标 Gateway 身份');
-      if (!disposed) setTarget({ route, gatewayId });
+      const workspace = workspaces.items.find(item => item.workspace_id === owner.routeId)!;
+      const identity = gatewayWorkspaceOwner(workspace, health.gateway_id);
+      if (identity.workspaceId !== owner.workspaceId) throw new Error('任务编辑器的 Gateway 路由归属已改变');
+      if (!disposed) setTarget({ route, gatewayId: identity.gatewayId });
     })().catch((cause: unknown) => { if (!disposed) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { disposed = true; };
   }, [owner]);
@@ -33,11 +33,12 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
     const path = `workspace/${encodeURIComponent(owner.workspaceId)}/resources/session/${encodeURIComponent(session_id)}/threads/${encodeURIComponent(thread_id)}`;
     if (!target || (uri !== `boxteam://${path}` && uri !== `boxteam://${encodeURIComponent(target.gatewayId)}/${path}`)) throw new Error('任务目标 Thread URI 与当前 Gateway、工作区或回执身份不匹配');
     await gateway.assertWorkspace(owner);
-    await editors.openEditor(new ThreadInput({ ...owner, sessionId: session_id, threadId: thread_id, title: thread_id }), { pinned: true });
+    await editors.openEditor(new ThreadInput({ ...owner, gatewayId: target.gatewayId, sessionId: session_id, threadId: thread_id, title: thread_id }), { pinned: true });
   };
   const openSession = async (sessionId: string) => {
+    if (!target) throw new Error('任务编辑器尚未确定目标 Gateway 身份');
     const main = await gateway.mainThread(owner.routeId, sessionId);
-    await editors.openEditor(new ThreadInput({ ...owner, sessionId, threadId: main.thread_id, title: sessionId }), { pinned: true });
+    await editors.openEditor(new ThreadInput({ ...owner, gatewayId: target.gatewayId, sessionId, threadId: main.thread_id, title: sessionId }), { pinned: true });
   };
 
   return <WarmConfirmProvider>

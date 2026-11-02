@@ -69,3 +69,5 @@ web/
 完整会话生命周期与 Section 8 唯一验收 owner 位于 `conversation_lifecycle/`；精确模型回放属于 Integration，复用正式 Workbench，不保留旧 E2E 入口。
 
 `workbench_server.test.mjs` 在独立 Node 中调用 Electron 与独立静态服务共用的真实 HTTP 代理，Gateway 使用随机本地端口替身；核对 SSE 客户端关闭、响应头返回前取消、另一连接继续收事件，以及 JSON 正文／owner／cookie／request_id 透明传输。释放观察发生在 fixture 强制清理之前，原始 stdout、stderr、命令和退出结果归本测试的正式镜像目录。只关闭自己创建的连接；不启动产品 Gateway，不将此传输边界检查作为完整聊天、WebSocket 或原生窗口验收。Node 只停用 http-proxy 已知的 DEP0060 弃用告警，其余 stderr 必须为空。
+
+`test_thread_editor_identity.py` 经正式 Workbench、真实 Gateway 和托管工作区创建 Session，再通过原版打开命令与会话导航核对稳定 Thread 身份、标签去重、分屏及刷新恢复。只有歧义场景向真实登记列表复制一条明确替身记录；未知 Gateway 与歧义均不得读取对应业务 Session。替身卸载等待在途回调结束，避免清理阶段继续处理已释放的 route；保留 request_id、页面错误、原始输出和失败截图。原版关闭空组后在当前组重开已存在资源时复用标签，不要求另建重复标签；该检查不能代替真实远端重连或 Electron 原生恢复验收。

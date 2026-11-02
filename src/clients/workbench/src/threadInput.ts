@@ -1,8 +1,8 @@
 import { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
-import { IEditorSerializer, IUntypedEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
+import { IEditorSerializer, IUntypedEditorInput, isResourceEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
 import { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import type { ThreadOwner } from './agentApi.js';
+import { gateway, type ThreadOwner } from './agentApi.js';
 import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/common/editor.js';
 import type { WebUiLayoutSettings } from '../../web/src/types/backend.js';
 
@@ -15,6 +15,23 @@ interface ThreadViewState {
   fileTreeExpandedPaths: string[];
 }
 
+type ThreadTarget = Omit<ThreadOwner, 'routeId' | 'title'>;
+interface StoredThread {
+  version: 2;
+  target: ThreadTarget;
+  title: string;
+  viewState: ThreadViewState;
+}
+
+/** 缺失归属的旧展示记录仍可关闭／移除，不向当前 Gateway 猜测请求。 */
+export class UnavailableThreadInput extends EditorInput {
+  readonly resource = undefined;
+  constructor(readonly stored: object, readonly reason: string, private readonly title: string) { super(); }
+  get typeId(): string { return ThreadInput.ID; }
+  override get editorId(): string { return ThreadInput.ID; }
+  override getName(): string { return this.title; }
+}
+
 export class ThreadInput extends EditorInput {
   static readonly ID = 'boxteam.editor.thread';
   readonly resource: URI;
@@ -24,10 +41,28 @@ export class ThreadInput extends EditorInput {
   resourceRatio = 0.42;
   filePreviewLayout: WebUiLayoutSettings = {};
   fileTreeExpandedPaths: string[] = [];
+  private resolving?: Promise<ThreadOwner>;
   constructor(readonly owner: ThreadOwner) {
     super();
-    this.resource = URI.from({ scheme: 'boxteam-thread', authority: owner.workspaceId,
-      path: `/${owner.sessionId}/${owner.threadId}`, query: new URLSearchParams({ route: owner.routeId }).toString() });
+    this.resource = URI.from({ scheme: 'boxteam-thread', authority: owner.gatewayId,
+      path: `/${owner.workspaceId}/${owner.sessionId}/${owner.threadId}` });
+  }
+  static fromResource(resource: URI, title?: string, viewState?: object): ThreadInput {
+    const [workspaceId, sessionId, threadId, extra] = resource.path.slice(1).split('/');
+    if (resource.scheme !== 'boxteam-thread' || !resource.authority || !workspaceId || !sessionId || !threadId
+      || extra !== undefined || resource.query || resource.fragment) throw new Error('Thread 编辑器资源缺少稳定 Gateway／工作区／Session／Thread 身份，或包含过时路由');
+    const input = new ThreadInput({ gatewayId: resource.authority, workspaceId, sessionId, threadId, routeId: '', title: title ?? threadId });
+    input.restoreViewState(viewState);
+    return input;
+  }
+  async resolveOwner(): Promise<ThreadOwner> {
+    if (!this.resolving) {
+      this.resolving = gateway.resolveWorkspace(this.owner).then(routeId => {
+        this.owner.routeId = routeId;
+        return this.owner;
+      }).finally(() => { this.resolving = undefined; });
+    }
+    return this.resolving;
   }
   get typeId(): string { return ThreadInput.ID; }
   override get editorId(): string { return ThreadInput.ID; }
@@ -57,20 +92,33 @@ export class ThreadInput extends EditorInput {
     return { resource: this.resource, label: this.getName(), options: { override: ThreadInput.ID, viewState: this.getViewState() } };
   }
   override matches(other: EditorInput | IUntypedEditorInput): boolean {
-    return other instanceof ThreadInput && this.resource.toString() === other.resource.toString();
+    const resource = other instanceof ThreadInput ? other.resource : isResourceEditorInput(other) ? other.resource : undefined;
+    return resource?.toString() === this.resource.toString();
   }
 }
 
 export class ThreadSerializer implements IEditorSerializer {
-  canSerialize(input: EditorInput): input is ThreadInput { return input instanceof ThreadInput && input.restorable; }
-  serialize(input: EditorInput): string | undefined {
-    return this.canSerialize(input) ? JSON.stringify({ owner: input.owner, ...input.getViewState() }) : undefined;
+  canSerialize(input: EditorInput): input is ThreadInput | UnavailableThreadInput {
+    return input instanceof UnavailableThreadInput || input instanceof ThreadInput && input.restorable;
   }
-  deserialize(_instantiation: IInstantiationService, serialized: string): ThreadInput {
-    const data = JSON.parse(serialized) as { owner: ThreadOwner; resourcesVisible: boolean; resourceTab?: ThreadResourceTab; resourceRatio?: number };
-    if (!data.owner.workspaceId || !data.owner.routeId || !data.owner.sessionId || !data.owner.threadId) throw new Error('Thread 编辑器恢复数据缺少精确 owner');
-    const input = new ThreadInput(data.owner);
-    input.restoreViewState(data);
+  serialize(input: EditorInput): string | undefined {
+    if (input instanceof UnavailableThreadInput) return JSON.stringify({ version: 2, unavailable: input.stored, reason: input.reason, title: input.getName() });
+    if (!(input instanceof ThreadInput) || !input.restorable) return undefined;
+    const { gatewayId, workspaceId, sessionId, threadId, title } = input.owner;
+    const stored: StoredThread = { version: 2, target: { gatewayId, workspaceId, sessionId, threadId }, title, viewState: input.getViewState() };
+    return JSON.stringify(stored);
+  }
+  deserialize(_instantiation: IInstantiationService, serialized: string): ThreadInput | UnavailableThreadInput {
+    const data = JSON.parse(serialized) as StoredThread & { unavailable?: object; reason?: string; owner?: ThreadOwner };
+    // TODO：仅在一次展示格式迁移时识别无版本旧记录；缺少 Gateway 身份无法安全恢复。
+    if (data.version === undefined && data.owner) return new UnavailableThreadInput(data,
+      '旧 Thread 记录缺少 Gateway 身份，无法自动恢复；请从会话导航重新打开，或关闭此记录。', data.owner.title);
+    if (data.version !== 2) throw new Error(`不支持的 Thread 编辑器恢复版本：${String(data.version)}`);
+    if (data.unavailable) return new UnavailableThreadInput(data.unavailable, data.reason ?? 'Thread 记录无法恢复', data.title);
+    if (!data.target || Object.values(data.target).some(value => typeof value !== 'string' || !value.trim())
+      || !data.target.gatewayId || !data.target.workspaceId || !data.target.sessionId || !data.target.threadId) throw new Error('Thread 编辑器恢复数据缺少精确 owner');
+    const input = new ThreadInput({ ...data.target, title: data.title, routeId: '' });
+    input.restoreViewState(data.viewState);
     return input;
   }
 }

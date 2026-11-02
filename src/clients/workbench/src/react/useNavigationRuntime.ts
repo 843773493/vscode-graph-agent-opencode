@@ -34,10 +34,10 @@ export function useNavigationRuntime(
 ) {
   const [state, setState] = useState<AppState>(() => ({ ...cloneMaps(INITIAL_APP_STATE), apiPort: 0 }));
   useEffect(() => {
-    workspaceContext.publish({ workspaces: state.gatewayWorkspaces, activeId: state.activeGatewayWorkspaceId,
+    workspaceContext.publish({ gatewayId: state.browserViewScope ?? null, workspaces: state.gatewayWorkspaces, activeId: state.activeGatewayWorkspaceId,
       settings: state.uiSettingsLoaded ? state.uiSettings : null, loading: state.isBootstrapping || state.workspaceSwitching,
       error: state.gatewayError });
-  }, [state.gatewayWorkspaces, state.activeGatewayWorkspaceId, state.uiSettings, state.uiSettingsLoaded,
+  }, [state.browserViewScope, state.gatewayWorkspaces, state.activeGatewayWorkspaceId, state.uiSettings, state.uiSettingsLoaded,
     state.isBootstrapping, state.workspaceSwitching, state.gatewayError]);
   const latestStateRef = useRef(state); latestStateRef.current = state;
   const readState = useCallback(() => latestStateRef.current, []);

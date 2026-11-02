@@ -13,7 +13,7 @@ import { appendFrontendEvent } from "../../../state/traceEvents";
 import { resetAgentStateFields } from "../../runtime/useAgentStateSnapshot";
 import { resetSessionScopedFields } from "../sessionScopedState";
 import { errorMessage } from "../../../utils/errorMessage";
-import { requireForkTargetWorkspace } from "../../../api/workspaceIdentity";
+import { requireGatewayWorkspaceRoute } from "../../../api/workspaceIdentity";
 import type { SessionLifecycleContext } from "./sessionLifecycleContext";
 import {
   currentSessionMatchesOwner,
@@ -133,8 +133,8 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
           request,
           workspaceId,
         );
-        const targetWorkspaceId = requireForkTargetWorkspace(
-          workspaceRequestTargets, health.gateway_id, result,
+        const targetWorkspaceId = requireGatewayWorkspaceRoute(
+          workspaceRequestTargets, health.gateway_id, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id },
         ).workspace_id;
         setState((prev) => {
           const next = cloneMaps(prev);

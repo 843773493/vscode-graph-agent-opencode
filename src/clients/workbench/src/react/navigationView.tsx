@@ -8,7 +8,7 @@ import { useSessionCatalogActions } from '../../../web/src/hooks/shell/useSessio
 import { useSessionInformationClipboard } from '../../../web/src/hooks/session/useSessionInformationClipboard.js';
 import { useWorkspaceInformationClipboard } from '../../../web/src/hooks/workspace/useWorkspaceInformationClipboard.js';
 import { resolveAgentSessionsPreferences } from '../../../web/src/state/uiSettings/preferences.js';
-import { requireForkTargetWorkspace } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceOwner, requireGatewayWorkspaceRoute } from '../../../web/src/api/workspaceIdentity.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { getGatewayHealth } from '../../../web/src/gatewayApi.js';
 import { getSession } from '../../../web/src/api.js';
@@ -22,6 +22,7 @@ import type { INotificationService } from '../../upstream/src/vs/platform/notifi
 import { IStorageService, WillSaveStateReason } from '../../upstream/src/vs/platform/storage/common/storage.js';
 import { ThreadInput } from '../threadInput.js';
 import { gateway } from '../agentApi.js';
+import { workspaceContext } from '../workspaceContext.js';
 import { ReactSurface } from './surface.js';
 import { productStyles } from './productStyles.js';
 import { useNavigationRuntime } from './useNavigationRuntime.js';
@@ -42,14 +43,18 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
   const openRequests = useRef(new Map<number, number>());
   const created = useCallback(async (session: Session, routeId: string | null) => {
     if (!routeId || !session.thread_id) throw new Error('新建会话回执缺少工作区路由或主 Thread');
-    await editors.openEditor(new ThreadInput({ routeId, workspaceId: session.workspace_id,
+    await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(routeId, session.workspace_id),
       sessionId: session.session_id, threadId: session.thread_id, title: session.title }), { pinned: true });
   }, [editors]);
   const notifyError = useCallback((message: string) => { notifications.error(message); }, [notifications]);
   const refreshEditors = useCallback(async (target: GatewayWorkspaceRequestTarget, signal: AbortSignal) => {
+    const snapshot = workspaceContext.getSnapshot();
+    const workspace = snapshot.workspaces.find(item => item.workspace_id === target.workspace_id);
+    if (!workspace || !snapshot.gatewayId) throw new Error('编辑器目录对账缺少工作区登记身份');
+    const owner = gatewayWorkspaceOwner(workspace, snapshot.gatewayId);
     const matchingEditors = () => editors.getEditors(EditorsOrder.SEQUENTIAL).filter((entry): entry is IEditorIdentifier & { editor: ThreadInput } =>
-      entry.editor instanceof ThreadInput && entry.editor.owner.routeId === target.workspace_id
-        && entry.editor.owner.workspaceId === target.backend_workspace_id);
+      entry.editor instanceof ThreadInput && entry.editor.owner.gatewayId === owner.gatewayId
+        && entry.editor.owner.workspaceId === owner.workspaceId);
     const sessionIds = new Set(matchingEditors().map(({ editor }) => editor.owner.sessionId));
     await Promise.all([...sessionIds].map(async sessionId => {
       let session: Session;
@@ -67,7 +72,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
         return;
       }
       signal.throwIfAborted();
-      if (session.session_id !== sessionId || session.workspace_id !== target.backend_workspace_id) {
+      if (session.session_id !== sessionId || session.workspace_id !== owner.workspaceId) {
         throw new Error(`编辑器目录对账返回了其它会话身份：${target.workspace_id}/${sessionId}`);
       }
       for (const { editor } of matchingEditors()) {
@@ -75,7 +80,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
       }
     }));
   }, [editors, storage]);
-  const activeSessionCacheKey = activeEditor instanceof ThreadInput
+  const activeSessionCacheKey = activeEditor instanceof ThreadInput && activeEditor.owner.routeId
     ? sessionScopeKey(activeEditor.owner.routeId, activeEditor.owner.sessionId) : null;
   const runtime = useNavigationRuntime(created, notifyError, refreshEditors, activeSessionCacheKey);
   const { state, setStatus, reportError, setActiveSession, clearActiveSession } = runtime;
@@ -92,7 +97,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
     const session = await setActiveSession(routeId, sessionId);
     const main = await gateway.mainThread(routeId, sessionId);
     if (openRequests.current.get(group) !== request) return;
-    await editors.openEditor(new ThreadInput({ routeId, workspaceId: session.workspace_id,
+    await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(routeId, session.workspace_id),
       sessionId, threadId: main.thread_id, title: session.title }), { pinned: options.pinned }, group);
   }, [editors, groups, setActiveSession]);
   useEffect(() => {
@@ -105,8 +110,13 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
       selection = { group, editor: input };
       setActiveEditor(input);
       openRequests.current.clear();
-      if (input instanceof ThreadInput) void setActiveSession(input.owner.routeId, input.owner.sessionId).catch(cause => reportError(String(cause)));
-      else clearActiveSession();
+      clearActiveSession();
+      if (input instanceof ThreadInput) void input.resolveOwner().then(owner => {
+        if (editors.activeEditor !== input || groups.activeGroup.id !== group || selection?.editor !== input || selection.group !== group) return;
+        return setActiveSession(owner.routeId, owner.sessionId);
+      }).catch(cause => {
+        if (editors.activeEditor === input && groups.activeGroup.id === group) reportError(String(cause));
+      });
     };
     update();
     const listener = editors.onDidActiveEditorChange(update);
@@ -122,8 +132,8 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
     readSessionSelectionIntent: () => runtime.selectionIntentRef.current, setSessionParent: runtime.setSessionParent,
     onForkCreated: async (_source, result) => {
       const health = await getGatewayHealth(0);
-      const target = requireForkTargetWorkspace(state.gatewayWorkspaces, health.gateway_id, result);
-      await editors.openEditor(new ThreadInput({ routeId: target.workspace_id, workspaceId: result.session.workspace_id,
+      const target = requireGatewayWorkspaceRoute(state.gatewayWorkspaces, health.gateway_id, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id });
+      await editors.openEditor(new ThreadInput({ gatewayId: result.target_gateway_id, routeId: target.workspace_id, workspaceId: result.session.workspace_id,
         sessionId: result.session.session_id, threadId: result.thread_id, title: result.session.title }), { pinned: true });
     },
   });

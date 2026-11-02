@@ -12,7 +12,7 @@ import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.j
 import { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
 import { IEditorOptions } from '../upstream/src/vs/platform/editor/common/editor.js';
 import { IEditorOpenContext } from '../upstream/src/vs/workbench/common/editor.js';
-import { ThreadInput } from './threadInput.js';
+import { ThreadInput, UnavailableThreadInput } from './threadInput.js';
 import { ChatSurface } from './react/chatView.js';
 import { showFileOpenMenu } from './fileOpenMenu.js';
 import './thread.css';
@@ -54,10 +54,14 @@ export class ThreadPane extends EditorPane {
     this.root.append(toolbar, this.content); parent.append(this.root);
   }
   override async setInput(input: EditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
+    this.conversation?.dispose(); this.conversation = undefined; this.current = undefined;
     await super.setInput(input, options, context, token);
+    if (token.isCancellationRequested || this.input !== input) return;
+    if (input instanceof UnavailableThreadInput) throw new Error(input.reason);
     if (!(input instanceof ThreadInput)) throw new Error('ThreadPane 只接受 ThreadInput');
-    if (token.isCancellationRequested) return;
-    this.conversation?.dispose(); this.current = input;
+    await input.resolveOwner();
+    if (token.isCancellationRequested || this.input !== input) return;
+    this.current = input;
     if (options?.viewState) input.restoreViewState({ ...input.getViewState(), ...options.viewState });
     this.root.dataset.threadId = input.owner.threadId; this.root.dataset.sessionId = input.owner.sessionId;
     this.root.dataset.workspaceId = input.owner.workspaceId;
