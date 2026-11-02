@@ -303,4 +303,10 @@
 
 - 全仓确认 PreparedDetail 仅由 detail store 的 prepare 构造；同次 prepare/publish 直接复用冻结 bytes 与 typed record，删除构造后和发布前两次反序列化、规范化与 hash 自产结果。编码和磁盘读取共用唯一 manifest 字段映射；磁盘读取、冷恢复与 read_prepared 的完整性检查保留。参考 Copilot `platform/chronicle/node/sessionStore.ts` 对 typed 内存输入直接写入的职责边界，不采用其损坏后删库行为。
 - 新场景在旧实现测得6次 RFC8785 编码，当前为2次；同时覆盖 prepare 后输入变更隔离、冷读及磁盘篡改拒绝且保留原件。detail相关126项、真实消息/Job入口及seal事务14项、activation/storage相关80项共220项通过；Ruff、compileall通过。Pyright生产零诊断，测试原有1条 possibly-unbound按文件、规则、完整消息、最窄语句AST及重数与完整HEAD archive核对无新增，临时基线已删除。
-- 原Goal首场仍在model进入5秒失败，1 failed／22.94秒；provider prepare约1.84秒完成，不能据此关闭8.2或原性能TODO。主线程profile捕获了配置JSONC重复解析，但未覆盖执行线程，尚不能把启动解析耗时归为5秒窗口根因。准确命令、源码指纹、原始输出、真实退出码及类型差集见 `out/tests/temp/detail_write_encoding_20261102/artifacts/verification.json`。本片无前端变更、新存储链或独立非作者审查。
+- 原Goal首场仍在model进入5秒失败，1 failed／22.94秒；provider prepare约1.84秒完成，不能据此关闭8.2或原性能TODO。主线程profile捕获了配置JSONC重复解析；后续复核原件确认该profile停在启动8秒屏障、尚未进入Job，不能把它作为5秒执行窗口的归因。准确命令、源码指纹、原始输出、真实退出码及类型差集见 `out/tests/temp/detail_write_encoding_20261102/artifacts/verification.json`。本片无前端变更、新存储链或独立非作者审查。
+
+### 2026-11-02 同次 rollout 操作的重复节点解析收口（8.2 性能补核）
+
+- Job后低开销线程／协程时间线确认冷编译约1.49秒、到模型准备另约2.05秒、assembly准备约1.78秒；原件在 `out/tests/temp/goal_execution_timeline_20261102/artifacts/`。前5秒观测1129次SQLite连接，其中793次Session控制库打开；这不是单一hash函数耗时。参考Copilot `platform/chronicle/node/sessionStore.ts` 的owner内复用原则，初始化与打开快照的同步操作各复用一次已验证thread节点，退出即丢弃，不跨操作缓存catalog、控制行或连接。初始化的复用作用域在writer锁取得后建立；快照的作用域在返回前退出。冻结fork来源与prepared capability仍优先，SQL owner／完整性及文件检查保持。
+- 新反例在旧实现中两个场景均因3次解析失败，当前各为1次；覆盖下一操作重新读归属并拒绝control main篡改、fork私有来源优先且不扩大授权。正式 `unit-rollout-locating` 矩阵90秒／4GiB运行223 passed／19.55秒，含正式watchdog下的来源扩展fork；真实消息／Job生成历史与seal事务14 passed／50.61秒，共237项不同场景通过。首次过宽单测命令在90秒保护下退出124，不计通过；其中直接pytest启动fork watchdog的setup拒绝已由正式矩阵补验。Ruff、compileall通过；Pyright完整HEAD archive基线14条、当前6条，按文件／规则／完整消息／最窄语句AST／重数无新增，基线副本已删除。
+- 同5秒观测控制库打开793→534、全部连接1129→879，但两次达到的执行阶段不同，不冒称等工作负载或稳定耗时收益。正常Goal首场仍在原model进入5秒失败，1 failed／25.72秒，计量场景也仍失败，不延长期限、不关闭8.2或原冷准备TODO。准确命令、源码前后指纹、原始输出、真实退出码、计量与类型差集见 `out/tests/temp/rollout_resolution_scope_20261102/artifacts/verification.json`。本片无前端改动、新持久化定位权威或独立非作者审查。

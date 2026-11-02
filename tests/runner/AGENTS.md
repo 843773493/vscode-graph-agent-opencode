@@ -1,5 +1,7 @@
 # 目录用途
 
+`unit-rollout-locating` 定向验证 rollout 连接、短操作内节点解析复用、catalog/thread 归属和 fork 来源隔离；包含需正式 fork watchdog 的来源扩展回归，固定90秒／4GiB。它不代表消息入口、Web 或完整 fork 验收。
+
 `integration-mounted-file-targets` 经真实 Gateway／共享 Backend 双挂载，验证相对／绝对／URI 输入的并发读写、非激活工作区与显式 URI 归属，以及未注册目录的唯一原生绑定和编辑。固定180秒／4GiB与原集成独占闸门，不代表Web、Windows、跨机器联邦或完整多工作区验收。
 
 `integration-debug-delete-io` 经真实Node/Inspector与导航删除owner，核停止claim读取、manifest写盘和末尾claim核验的原生等待、取消及失败恢复，并检查物理隔离后服务关闭；固定90秒／4GiB与原独占闸门，不代替驻留source同步回调、Gateway/Web、独立Backend重启、Windows或完整shutdown期限。

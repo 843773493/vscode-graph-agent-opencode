@@ -9,6 +9,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import ExitStack, contextmanager
+from typing import TYPE_CHECKING
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
@@ -30,8 +31,16 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 __all__ = ["RolloutIndexMixin"]
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+
 
 class RolloutIndexMixin:
+    if TYPE_CHECKING:
+        _host: RolloutStorage
+
     def read_lock(
         self,
         session_id: str,
@@ -66,11 +75,11 @@ class RolloutIndexMixin:
         """打开只读事务；未指定 namespace 时从同库选择已发布的 manifest。"""
         if checkpoint_ns is not None and not isinstance(checkpoint_ns, str):
             raise TypeError("rollout checkpoint_ns 必须是字符串或 null")
-        root = self._host.root(session_id, checkpoint_ns or "", thread_id=thread_id)
-        jsonl_path = root / "rollout.jsonl"
-        index_path = root / "index.sqlite"
-        file_lock = self.read_lock(session_id, thread_id, checkpoint_ns or "")
-        with ExitStack() as cleanup:
+        with self._host.fork_paths.thread_resolution_scope(), ExitStack() as cleanup:
+            root = self._host.root(session_id, checkpoint_ns or "", thread_id=thread_id)
+            jsonl_path = root / "rollout.jsonl"
+            index_path = root / "index.sqlite"
+            file_lock = self.read_lock(session_id, thread_id, checkpoint_ns or "")
             file_lock.acquire()
             cleanup.callback(file_lock.release)
             try:
@@ -274,7 +283,7 @@ class RolloutIndexMixin:
         thread_id: str,
         checkpoint_ns: str,
         *,
-        session_id: str | None = None,
+        session_id: str,
     ) -> Iterator[sqlite3.Connection]:
         """读取既有 authority；完全损坏时只报告恢复要求，不创建新库。"""
         try:

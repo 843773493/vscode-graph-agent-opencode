@@ -45,6 +45,63 @@ def test_initialization_opens_only_preflight_and_writer_connections(
             connection.execute("SELECT 1")
 
 
+@pytest.mark.parametrize("operation", ["initialize", "read_snapshot"])
+def test_rollout_operation_resolves_thread_once_and_next_call_checks_live_owner(
+    rollout: tuple[RolloutContextStore, str, str], operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, session_id, thread_id = rollout
+    store.storage.initialize(session_id, thread_id=thread_id)
+    resolver = store.storage._path_resolver
+    resolve = resolver.resolve_thread_node
+    resolved: list[tuple[str, str]] = []
+
+    def track(session: str, thread: str) -> Path:
+        resolved.append((session, thread))
+        return resolve(session, thread)
+
+    def run() -> None:
+        if operation == "initialize":
+            store.storage.initialize(session_id, thread_id=thread_id)
+        else:
+            with store.storage.open_read_snapshot(session_id, thread_id) as snapshot:
+                assert (snapshot.session_id, snapshot.thread_id) == (session_id, thread_id)
+
+    monkeypatch.setattr(resolver, "resolve_thread_node", track)
+    run()
+    assert resolved == [(session_id, thread_id)]
+    resolved.clear()
+    run()
+    assert resolved == [(session_id, thread_id)]
+    control = resolver.resolve_session_node(session_id) / "session-control.sqlite"
+    with sqlite3.connect(control) as connection:
+        connection.execute(
+            "UPDATE thread_catalog SET thread_id=? WHERE kind='main'",
+            (f"thr_{create_uuid_hex()}",),
+        )
+    with pytest.raises(RuntimeError, match="main_thread"):
+        run()
+
+
+def test_scoped_live_node_does_not_override_private_fork_source(
+    rollout: tuple[RolloutContextStore, str, str], tmp_path: Path,
+) -> None:
+    store, session_id, thread_id = rollout
+    paths = store.storage.fork_paths
+    live = paths.thread_node(session_id, thread_id)
+    captured = tmp_path / "captured-source"
+    captured.mkdir()
+    with paths.thread_resolution_scope():
+        assert paths.thread_node(session_id, thread_id) == live
+        with paths.fork_source_snapshot_scope(
+            session_id=session_id, thread_id=thread_id, captured_root=captured,
+        ):
+            assert paths.thread_node(session_id, thread_id) == captured
+            with pytest.raises(RuntimeError, match="只授予冻结 source Thread"):
+                paths.thread_node(session_id, f"thr_{create_uuid_hex()}")
+        assert paths.thread_node(session_id, thread_id) == live
+
+
 @pytest.mark.parametrize("damage", ["migrating", "reasoning"])
 def test_repeated_initialization_still_rejects_damage_before_namespace_write(
     rollout: tuple[RolloutContextStore, str, str], damage: str,

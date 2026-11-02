@@ -348,8 +348,9 @@ class RolloutMaintenanceOwner(
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        with self._host._lock(
-            thread_id, checkpoint_ns, session_id=session_id
+        with (
+            self._host._lock(thread_id, checkpoint_ns, session_id=session_id),
+            self._host.fork_paths.thread_resolution_scope(),
         ):
             root = self._host.root(
                 session_id, checkpoint_ns, thread_id=thread_id
