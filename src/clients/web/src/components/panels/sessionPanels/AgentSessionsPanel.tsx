@@ -38,12 +38,14 @@ import {
   type SessionSortMode,
 } from '../../agentSessions/agentSessionsUtils';
 import { errorMessage, isErrorReported } from "../../../utils/errorMessage";
+import type { CatalogRevealRequest } from '../../../hooks/sessionResourceExplorer/useCatalogReveal';
 
 const SessionResourceExplorer = React.lazy(
   () => import('../../agentSessions/SessionResourceExplorer'),
 );
 
 interface AgentSessionsPanelProps {
+  catalogReveal?: CatalogRevealRequest;
   apiPort: number;
   sessions: Session[];
   currentSessionId: string;
@@ -123,6 +125,7 @@ interface AgentSessionsPanelProps {
 }
 
 export default function AgentSessionsPanel({
+  catalogReveal,
   apiPort,
   sessions,
   currentSessionId,
@@ -189,6 +192,9 @@ export default function AgentSessionsPanel({
     new Set(),
   );
   const [searchQuery, setSearchQuery] = useState('');
+  useEffect(() => {
+    if (catalogReveal) { setSearchOpen(false); setSearchQuery(''); }
+  }, [catalogReveal]);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const filterMode = preferences.filterMode;
   const sortMode = preferences.sortMode;
@@ -484,6 +490,7 @@ export default function AgentSessionsPanel({
           {gatewayWorkspaces.length > 0 ? (
             <React.Suspense fallback={null}>
               <SessionResourceExplorer
+                catalogReveal={catalogReveal}
                 apiPort={apiPort}
                 workspaces={gatewayWorkspaces}
                 activeWorkspaceId={activeGatewayWorkspaceId}

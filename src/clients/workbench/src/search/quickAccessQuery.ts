@@ -15,8 +15,11 @@ import { ThreadInput } from '../threadInput.js';
 import { SearchWorkspaceContext } from './scope.js';
 
 export type NameSearchCategory = '会话' | 'Thread' | '文件';
+export type NameSearchItem = { title: string; description: string; detail: string } & (
+  { kind: 'resource'; resource: URI } | { kind: 'session'; sessionId: string } | { kind: 'folder'; nodeId: string }
+);
 export interface NameSearchPage {
-  items: { resource?: URI; sessionId?: string; title: string; description: string; detail: string }[];
+  items: NameSearchItem[];
   cursor?: string;
   limited?: string;
 }
@@ -30,9 +33,11 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
   if (category === '会话') {
     const page = await gateway.request<SessionCatalogSearchResults>(`/api/v1/session-catalog/search?${query}`,
       { signal, headers: gatewayWorkspaceRequestHeaders(target) }, target.workspace_id);
-    return { cursor: page.cursor ?? undefined, items: page.items.filter(item => item.node.kind === 'session').map(item => {
+    return { cursor: page.cursor ?? undefined, items: page.items.map((item): NameSearchItem => {
+      if (item.node.kind === 'folder') return { kind: 'folder', nodeId: item.node.node_id, title: item.node.name,
+        description: `${label} · ${item.relative_path} · ${item.node.node_id}`, detail: `文件夹 · ${item.node.node_id}` };
       if (!item.node.session_id) throw new Error('会话目录命中缺少精确 Session 身份');
-      return { sessionId: item.node.session_id, title: item.node.name, description: `${label} · ${item.relative_path} · ${item.node.session_id}`,
+      return { kind: 'session', sessionId: item.node.session_id, title: item.node.name, description: `${label} · ${item.relative_path} · ${item.node.session_id}`,
         detail: `会话 · ${item.node.session_id}` };
     }) };
   }
@@ -42,7 +47,7 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
       items: page.items.map(item => {
         if (item.workspace_id !== owner.workspaceId) throw new Error('Thread 名称查询改变了工作区归属');
         const target: ThreadOwner = { ...owner, routeId: '', sessionId: item.session_id, threadId: item.thread_id, title: item.title };
-        return { resource: new ThreadInput(target).resource, title: item.title, description: `${label} · ${item.session_title} · ${item.thread_id}`,
+        return { kind: 'resource', resource: new ThreadInput(target).resource, title: item.title, description: `${label} · ${item.session_title} · ${item.thread_id}`,
           detail: `${item.kind} Thread · ${item.session_id} / ${item.thread_id}` };
       }) };
   }
@@ -56,7 +61,7 @@ export async function searchResourceNames(category: NameSearchCategory, filter: 
     return { limited: complete.limitHit ? '文件结果达到本次上限，请缩小查询' : undefined,
       items: complete.results.map(item => {
         const relative = item.resource.path.split('/').slice(3);
-        return { resource: item.resource, title: relative.at(-1)!,
+        return { kind: 'resource', resource: item.resource, title: relative.at(-1)!,
           description: `${label} · ${relative.slice(0, -1).join('/')}`, detail: relative.join('/') };
       }) };
   } finally { context.dispose(); }

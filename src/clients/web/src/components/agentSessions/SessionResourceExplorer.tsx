@@ -32,8 +32,10 @@ import SessionResourceOverlays, {
 import { buildWorkspaceNavigationSyncKey } from "../../hooks/sessionResourceExplorer/resourceTreeSync";
 import { useSessionResourceTreeNavigation } from "./useSessionResourceTreeNavigation";
 import { errorMessage } from "../../utils/errorMessage";
+import { useCatalogReveal, type CatalogRevealRequest } from "../../hooks/sessionResourceExplorer/useCatalogReveal";
 
 interface SessionResourceExplorerProps {
+  catalogReveal?: CatalogRevealRequest;
   apiPort: number;
   workspaces: GatewayWorkspace[];
   activeWorkspaceId: string | null;
@@ -86,6 +88,7 @@ function Chevron({ expanded }: { expanded: boolean }) {
 }
 
 export default function SessionResourceExplorer({
+  catalogReveal,
   apiPort,
   workspaces,
   activeWorkspaceId,
@@ -149,6 +152,7 @@ export default function SessionResourceExplorer({
   const workspacesById = new Map(
     workspaces.map((workspace) => [workspace.workspace_id, workspace]),
   );
+  const catalogTarget = useCatalogReveal(apiPort, catalogReveal, explorer);
   const navigationNodes = explorer.navigation?.nodes ?? [];
   // 导航已加载但没有任何节点（也没有内联编辑器在创建）时，空树会看起来像坏掉了。
   // 存在 navigationError 时优先展示错误卡：此时旧快照可能恰好是空的，
@@ -558,6 +562,7 @@ export default function SessionResourceExplorer({
           <button
             type="button"
             className="session-resource-main-action"
+            ref={workspaceId === catalogTarget.workspaceId && node.node_id === catalogTarget.nodeId ? catalogTarget.reveal : undefined}
             data-session-id={!isFolder ? node.session_id : undefined}
             title={node.name}
             aria-busy={opening || undefined}

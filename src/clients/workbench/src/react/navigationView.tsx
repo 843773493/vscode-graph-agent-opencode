@@ -29,11 +29,13 @@ import { useNavigationRuntime } from './useNavigationRuntime.js';
 import { useManagedBackendConfirmation } from '../../../web/src/hooks/gatewayWorkspace/useManagedBackendConfirmation.js';
 import { sessionScopeKey } from '../../../web/src/state/session/sessionScope.js';
 import style from './navigationView.css?text';
+import type { CatalogRevealRequest } from '../../../web/src/hooks/sessionResourceExplorer/useCatalogReveal.js';
 
-function NavigationView({ editors, groups, notifications, storage, onTheme }: {
+function NavigationView({ editors, groups, notifications, storage, onTheme, catalogReveal }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
   storage: IStorageService;
   onTheme: (theme: GatewayResolvedThemeConfig) => void;
+  catalogReveal?: CatalogRevealRequest;
 }) {
   const confirm = useWarmConfirm();
   const [gatewayOpen, setGatewayOpen] = useState(false);
@@ -140,7 +142,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
   const copySession = useSessionInformationClipboard(0);
   const copyWorkspace = useWorkspaceInformationClipboard(state.gatewayWorkspaces);
   return <div className="native-session-navigation" onClickCapture={event => { gesture.current = { pinned: event.detail > 1, sideBySide: event.altKey }; }}>
-    <AgentSessionsPanel apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
+    <AgentSessionsPanel catalogReveal={catalogReveal} apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
       onSelectSession={id => { if (state.activeGatewayWorkspaceId) void openSession(state.activeGatewayWorkspaceId, id).catch(cause => reportError(String(cause))); }}
       onRenameSession={actions.openRenameDialog} onDeleteSession={actions.removeSession} onSetSessionParent={actions.changeSessionParent}
       onForkSessionContext={actions.forkSession} onStatusChange={setStatus} onError={reportError} onOpenDiagnostic={(title, detail) => setDiagnostic({ title, detail })}
@@ -184,10 +186,25 @@ function NavigationView({ editors, groups, notifications, storage, onTheme }: {
 
 export class NavigationSurface {
   private readonly surface: ReactSurface;
+  private readonly render: (request?: CatalogRevealRequest) => void;
+  private reveal?: AbortController;
   constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService) {
     this.surface = new ReactSurface(container, [...productStyles, style]);
-    this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups} notifications={notifications} storage={storage} onTheme={theme => this.surface.applyTheme(theme, notifications)} /></WarmConfirmProvider>);
+    this.render = catalogReveal => this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
+      notifications={notifications} storage={storage} catalogReveal={catalogReveal} onTheme={theme => this.surface.applyTheme(theme, notifications)} /></WarmConfirmProvider>);
+    this.render();
   }
   focus(): void { this.surface.focus('.session-resource-main-action, button'); }
-  dispose(): void { this.surface.dispose(); }
+  revealFolder(target: GatewayWorkspaceRequestTarget, nodeId: string, focus: boolean): Promise<void> {
+    this.reveal?.abort(new Error('文件夹定位已被新的导航替换'));
+    const controller = this.reveal = new AbortController();
+    return new Promise<void>((complete, fail) => {
+      controller.signal.addEventListener('abort', () => fail(controller.signal.reason), { once: true });
+      this.render({ target, nodeId, focus, signal: controller.signal, complete, fail });
+    }).finally(() => {
+      controller.abort();
+      if (this.reveal === controller) this.reveal = undefined;
+    });
+  }
+  dispose(): void { this.reveal?.abort(new Error('会话导航已关闭')); this.surface.dispose(); }
 }

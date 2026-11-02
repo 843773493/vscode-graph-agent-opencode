@@ -25,7 +25,7 @@
 
 - [x] 3.1 在原 catalog owner 补齐名称／ID／目录字段的模糊召回，保留查询与 revision 绑定的分页，folder 仅作为导航目标。
 - [x] 3.2 在原 Thread owner 补工作区范围内 main 与未打开 durable child 的有界发现，结果携带精确归属，不拉全部 Session 后在前端遍历。
-- [ ] 3.3 将 Session 候选交由 owner 解析不可变 main_thread_id，Thread 候选保持 child 身份，folder 默认动作定位原导航。
+- [x] 3.3 将 Session 候选交由 owner 解析不可变 main_thread_id，Thread 候选保持 child 身份，folder 默认动作定位原导航。
 - [ ] 3.4 验证首批之外的间隔字符缩写、同名 Session／main／child、目录 revision 变化与删除命中，区分未命中、受限及失效 cursor。
 
 ## 4. 文件 owner 与真实目录根
@@ -296,3 +296,10 @@
 - 最终真实 Gateway／正式 Workbench 构建／Chromium 场景通过（208.49 秒）：勾选未确认零查询、取消保持 A、确认仅查 A+B、C 零业务查询、三条在途请求均实际中止，释放旧响应不覆盖新结果，`?` → `%` 保留 A+B；选停止 C 不调用生命周期接口，其余两者仍可查询。原 dirty、watch、SearchView、Search Editor、保存／backup／route 恢复断言保持，页面错误为空。页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-44393c58118d/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
 - 真实类型检查包含 18 份转换源码，通过后核对 881 份产品源码指纹一致；26 项定向检查／217 条断言、Ruff、JS 语法、差异检查及 OpenSpec strict 通过。结构审查无 findings：范围选择独立于查询编排，无新增源码目录。准确命令、指纹、原输出和退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/scope-types-002.json`、`scope-browser-004.json`、`scope-final-contract-001.json`、`scope-final-static-001.json`。
 - 前次失败原件保留：类型字面量额外字段、候选身份定位、虚拟列表末尾状态定位，以及读取被取消响应正文的装具时序均按具体证据修正；未放宽身份、并发或零请求断言。8.3～8.6 尚需身份代际、状态展示、文件续页及完整错误矩阵，不因本切片部分覆盖而勾选；Electron 仍未验收。
+
+### 2026-11-02：Session／Thread／目录默认动作（3.3）
+
+- Session 接受复用原 main-thread owner，Thread 保留精确 child；catalog folder 不再被过滤，默认动作打开原会话导航，重新读取最新 breadcrumb 并复用原分支加载，等待真实按钮挂载后定位。新请求、关闭视图及过期回执释放旧定位，不创建编辑器、Thread 或执行。
+- 独立真实 Gateway／正式 Workbench 构建／Chromium 验收通过：同名 Session、main 与尚未打开的 durable child 分别可发现；Session 打开 main，child 保持身份；查询后移动 folder 会定位新祖先，侧栏关闭后重新打开，删除后的旧候选明确失败，B 的同名 folder 不被改投。8 条名称查询和 55 条 request_id 回执留存，标签数量、后端 Thread 列表及零消息／job 写请求均核验，页面错误为空。页面原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-55d121cf8b58/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 18 份实际转换源码的真实类型检查、32 项合同检查／225 条断言、Ruff、JS 语法、差异检查及 OpenSpec strict 通过。最终 E2E 用时 100.33 秒（进程总计 103.23 秒），源码指纹未变化。准确命令、指纹、原输出与退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/catalog-target-{types-002,contract-001,static-002,browser-002}.json`。结构审查无 findings，无新增源码目录或第二目录加载链。
+- 首次浏览器失败源于装具在初始化 HTTP 完成前启动 5 秒 Composer 等待；改为由点击触发并等待精确 bootstrap HTTP 回执、核 owner／status／request_id，随后仍使用原 5 秒验证 Composer。原件保留，未改产品或放宽身份断言；实际 child 初始化约 3517ms，main 约 938ms。本切片未重跑约 200 秒的完整 text_search 场景，不代表 3.4、8.3～8.6 或 Electron 已验收。

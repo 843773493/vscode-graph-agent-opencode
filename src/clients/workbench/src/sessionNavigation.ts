@@ -13,6 +13,7 @@ import { IEditorGroupsService } from '../upstream/src/vs/workbench/services/edit
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
 import { IStorageService } from '../upstream/src/vs/platform/storage/common/storage.js';
 import { NavigationSurface } from './react/navigationView.js';
+import type { GatewayWorkspaceRequestTarget } from '../../web/src/api/workspaceIdentity.js';
 
 /** 原版视图只管理布局；完整导航及菜单复用既有 React 产品。 */
 export class SessionNavigation extends ViewPane {
@@ -37,5 +38,9 @@ export class SessionNavigation extends ViewPane {
     this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage);
   }
   override focus(): void { this.surface?.focus(); }
+  revealFolder(target: GatewayWorkspaceRequestTarget, nodeId: string, focus: boolean): Promise<void> {
+    if (!this.surface) throw new Error('会话导航尚未挂载');
+    return this.surface.revealFolder(target, nodeId, focus);
+  }
   override dispose(): void { this.surface?.dispose(); super.dispose(); }
 }

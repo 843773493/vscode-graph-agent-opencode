@@ -24,7 +24,7 @@ function defaultAccess(options, history = []) {
   const groups = { groups: [], activeGroup: { id: 1 } }, editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } };
   const provider = new WorkspaceQuickAccess({ createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
     { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {}, {}, {},
-    { open() { throw new Error('delegate 不应被 URI opener 抢占'); } }, { error(error) { throw error; } }, { enabled: false });
+    { open() { throw new Error('delegate 不应被 URI opener 抢占'); } }, { error(error) { throw error; } }, { enabled: false }, {});
   const lifetime = provider.provide(picker, cancellation.token, options);
   return { picker, accepts, change(value) { picker.value = value; changes.fire(); },
     dispose() { cancellation.dispose(true); lifetime.dispose(); provider.dispose(); changes.dispose(); accepts.dispose(); } };

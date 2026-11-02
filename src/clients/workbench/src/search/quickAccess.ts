@@ -24,6 +24,7 @@ import { extractRangeFromFilter, type IAnythingQuickAccessProviderRunOptions } f
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { GroupDirection, IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IHistoryService } from '../../upstream/src/vs/workbench/services/history/common/history.js';
+import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { ISearchService } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import type { IRange } from '../../upstream/src/vs/editor/common/core/range.js';
 import { ITextModelService } from '../../upstream/src/vs/editor/common/services/resolverService.js';
@@ -39,6 +40,7 @@ import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
 import { searchResourceNames, type NameSearchCategory, type NameSearchPage } from './quickAccessQuery.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
+import type { SessionNavigation } from '../sessionNavigation.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
@@ -78,6 +80,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     @IOpenerService private readonly opener: IOpenerService,
     @INotificationService private readonly notifications: INotificationService,
     @IQuickChatService private readonly quickChat: IQuickChatService,
+    @IViewsService private readonly views: IViewsService,
   ) { super('', { canAcceptInBackground: true, noResultsPick: { id: 'empty', label: '没有匹配的资源' } }); }
 
   get defaultFilterValue() {
@@ -222,8 +225,9 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         const page = await searchResourceNames(branch.category, filter, branch.owner, resolved, resolved.name,
           controller.signal, token, this.instantiation, this.search, cursor);
         if (!alive()) return;
-        const picks = page.items.map(item => item.resource ? this.resourcePick(run, item.resource, item.description, item.title, item.detail)
-          : this.sessionPick(run, branch.owner, item.sessionId!, item.title, item.description, item.detail));
+        const picks = page.items.map(item => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail)
+          : item.kind === 'session' ? this.sessionPick(run, branch.owner, item.sessionId, item.title, item.description, item.detail)
+            : this.folderPick(branch.owner, item.nodeId, item.title, item.description, item.detail));
         const merged = new Map([...branch.picks, ...picks].map(pick => [pick.id, pick]));
         branch.picks = rankResourcePicks([...merged.values()], filter, run.cache);
         branch.status = this.pageStatus(branch.key, branch.label, page, branch.picks.length, () => queue(branch, page.cursor));
@@ -328,6 +332,17 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }],
       trigger: (_index, mods) => { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; },
       accept: (mods, event) => this.report(open(mods, event.inBackground)) };
+  }
+
+  private folderPick(owner: WorkspaceOwner, nodeId: string, label: string, description: string, detail: string): ResourcePick {
+    return { id: `folder:${searchOwnerKey(owner)}/${nodeId}`, label, description, detail,
+      iconClass: ThemeIcon.asClassName(Codicon.folder),
+      accept: (_mods, event) => this.report((async () => {
+        const target = await gateway.resolveWorkspaceTarget(owner);
+        const view = await this.views.openView<SessionNavigation>('boxteam.sessions', !event.inBackground);
+        if (!view) throw new Error('会话导航视图不可用');
+        await view.revealFolder(target, nodeId, !event.inBackground);
+      })()) };
   }
 
   private async chooseScope(run: AccessRun): Promise<void> {

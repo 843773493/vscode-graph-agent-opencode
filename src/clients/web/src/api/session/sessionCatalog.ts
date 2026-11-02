@@ -85,11 +85,12 @@ export async function getSessionCatalogBreadcrumb(
   port: number,
   workspaceTarget: GatewayWorkspaceRequestTarget,
   nodeId: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<SessionCatalogBreadcrumb> {
   const breadcrumb = unwrapApiData(await requestJson<APIResponse<SessionCatalogBreadcrumb>>(
     port,
     `/api/v1/session-catalog/breadcrumb/${encodeURIComponent(nodeId)}`,
-    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
   assertSessionCatalogNodes(breadcrumb.items, "会话目录面包屑");
   return breadcrumb;
