@@ -328,8 +328,7 @@ class InternalExecutionHistoryMixin:
             return InternalExecutionHistoryPage(entries=(), has_more=False)
 
         # 替代范围只冻结 view/execution/快照上界，不随当前页的 anchor/window 缩小。
-        # TODO: 根据分页实测优化页外替代扫描；当前只保证 Python 元数据和正文有界，
-        # 不保证 SQLite 检查行数恒定，不能为限流而缩小跨页替代范围。
+        # 同次查询展开一次替代关系并计算前一成员；不跨 snapshot 缓存或缩小页外范围。
         parameters: dict[str, object] = {
             "view_id": view_id,
             "snapshot_upper": snapshot_upper,
@@ -358,13 +357,7 @@ class InternalExecutionHistoryMixin:
             "SELECT item.item_sequence, item.item_id, execution.execution_id, "
             "execution.job_id, execution.outcome, execution.created_at, "
             "execution.updated_at, membership.logical_item_ordinal, "
-            "COALESCE((SELECT previous.created_at FROM context_view_items AS previous_member "
-            "JOIN item_catalog AS previous ON previous.item_id = previous_member.item_id "
-            "WHERE previous_member.view_id = membership.view_id "
-            "AND previous_member.visible = 1 AND previous_member.source_kind = 'display_only' "
-            "AND previous.execution_id = execution.execution_id "
-            "AND previous_member.logical_item_ordinal < membership.logical_item_ordinal "
-            "ORDER BY previous_member.logical_item_ordinal DESC LIMIT 1), execution.created_at), "
+            "COALESCE(membership.previous_created_at, execution.created_at), "
             "execution.session_id, execution.thread_id "
             "FROM carriers AS membership "
             "JOIN item_catalog AS item ON item.item_id = membership.item_id "

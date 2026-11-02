@@ -532,7 +532,7 @@ def internal_content_carrier_case(source_seal_case, request):
     return case, admission, raw, final, independent
 
 
-@pytest.mark.parametrize("internal_content_carrier_case", [300], indirect=True)
+@pytest.mark.parametrize("internal_content_carrier_case", [300, 1200], indirect=True)
 def test_internal_content_large_history_bounds_metadata_before_reading_bodies(
     internal_content_carrier_case, monkeypatch,
 ):
@@ -568,22 +568,42 @@ def test_internal_content_large_history_bounds_metadata_before_reading_bodies(
         snapshot.connection.row_factory = observe_row
         seen = []
         anchor = None
+        statements = []
+        snapshot.connection.set_trace_callback(
+            lambda sql: statements.append(sql) if sql.startswith("WITH carriers") else None
+        )
         while True:
+            progress_ticks = 0
+
+            def count_steps():
+                nonlocal progress_ticks
+                progress_ticks += 1
+                return 0
+
+            snapshot.connection.set_progress_handler(count_steps, 1000)
             started = perf_counter()
-            page = reader.read_internal_execution_history_page(
-                snapshot, chain, direction="before", anchor_logical_item_ordinal=anchor,
-                lower_logical_item_ordinal=None, upper_logical_item_ordinal=bound,
-                snapshot_upper_logical_item_ordinal=bound,
-                execution_id=admission.execution_id, limit=256,
-            )
+            try:
+                page = reader.read_internal_execution_history_page(
+                    snapshot, chain, direction="before", anchor_logical_item_ordinal=anchor,
+                    lower_logical_item_ordinal=None, upper_logical_item_ordinal=bound,
+                    snapshot_upper_logical_item_ordinal=bound,
+                    execution_id=admission.execution_id, limit=256,
+                )
+            finally:
+                snapshot.connection.set_progress_handler(None, 0)
             assert 0 < len(page.entries) <= 256
             assert max(rows_by_cursor.values()) <= 257
+            # 指令预算允许每页检查完整冻结范围，拒绝每个候选再次扫描全范围。
+            assert (progress_ticks + 1) * 1000 <= len(members) * 1000 + 100000
             print({"internal_members": len(members), "page_entries": len(page.entries),
-                   "max_cursor_rows": max(rows_by_cursor.values()), "seconds": perf_counter() - started})
+                   "max_cursor_rows": max(rows_by_cursor.values()), "seconds": perf_counter() - started,
+                   "sqlite_vm_steps_upper": (progress_ticks + 1) * 1000})
             seen[0:0] = [entry.item.item_id for entry in page.entries]
             if not page.has_more:
                 break
             anchor = page.entries[0].logical_item_ordinal
+        snapshot.connection.set_trace_callback(None)
+        print({"query_plan": snapshot.connection.execute("EXPLAIN QUERY PLAN " + statements[1]).fetchall()})
         assert len(seen) == len(set(seen)) == len(expected)
         assert set(seen) == expected
         assert seen[-1] == final.item_id
