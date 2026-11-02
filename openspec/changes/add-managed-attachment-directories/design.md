@@ -647,3 +647,7 @@ canonical sink 的追加和工具终态提交与提交后确认共用一次既�
 Turn 注册表在原 LifetimeScope 与控制状态文件都清理成功后才移除同一 scope／inbox；失败或等待者取消保留登记和同 ID 准入冲突。重入关闭复用原 LifetimeScope 的唯一在途任务，失败后仅重试未释放资源。并发等待者完成时核对原对象身份，不重复删除已由后继 Turn 使用的控制文件，不新增关闭任务表、锁或持久恢复记录。
 
 StepRunner 将原 Turn 的 release_turn_leases 绑定为返回 None 的异步清理回调，等待既有受保护 worker 执行唯一账本 writer。锁等待和持久提交不阻塞事件循环，原 active 占用提交成功后才完成该回调；失败仍按原执行出口报告，同入口重试保留原 Turn 身份。原 runtime 使用权释放顺序和外部终态判定保持。控制文件同步 I/O、其它共享账本入口、无身份接管与整个 operation／shutdown 期限仍 TODO，5.2／5.4保持未完成。
+
+### 冷恢复复用已登记资源身份（5.4 性能部分）
+
+原外部资源账本的身份登记幂等：同 ID、同 kind 返回原持久记录的隔离副本，不刷新 `updated_at` 或重写整账本；登记不是续期或运行状态观察。已有保留范围、创建来源、核实状态和精确 operation lease 不因重复登记改变，仍由原 owner 的状态发布、对账和核实后结清推进；新身份持久成功后才发布，非法输入和类型冲突继续拒绝。冷恢复不增加缓存或批量登记入口，原准备锁、worker、整批对账、版本冻结和未知占用规则保持。参考 Copilot 的 `CopilotCLITerminalLinkProvider.registerTerminal` 以原集合幂等登记；它没有本项目的持久 lease 合同，不能据此省略状态核实。同步 writer 隔离、无身份旧代接管、原生 I/O 抢占和整个 operation／shutdown 期限继续 TODO，5.2／5.4 保持未完成。

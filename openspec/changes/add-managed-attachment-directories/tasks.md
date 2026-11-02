@@ -990,3 +990,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 初始化只由首次关闭中断一次，后续关闭入口等待原 SDK task 完成清理与终态登记；复用原关闭标志与 LifetimeScope。连接取消或到期时，原取消携带的清理失败继续交给操作 owner，补全同一持久终态、保留失败句柄并阻止新连接，不新增任务表或账本。
 - 42项生命周期／目录／配置单测、2项新增真实 SDK/stdio关闭场景及10项真实 OAuth/HTTP操作回归通过；原17项连接发布回归按未变依赖复用。完整HEAD归档核实清理失败未交付也存在于旧版本；重复取消的两项负向变异在清理提前结束处失败，取消／到期的两项变异在未交付清理失败处失败。不放宽原断言或期限。五份修改Python的Pyright零诊断，Ruff／compileall与本change严格检查通过，准确命令、指纹、失败原件及验证边界见`out/tests/temp/mcp_initializing_close_20261102/artifacts/verification.json`。
 - 测试均带进程外期限／4GiB，集成沿原独占闸门。本片不代Gateway/Web、进程硬重启、Windows、不合作SDK终止或整个operation/shutdown期限；5.2／5.4和21/23继续未完成。
+
+### 2026-11-02 冷恢复复用已登记资源身份（5.4 性能部分）
+
+- 原账本的重复身份登记直接返回隔离副本，不刷新时间戳或逐项写盘；保留原范围、来源、核实状态和精确lease，新登记发布失败及kind冲突仍显式拒绝。实际状态发布、整批对账和取消结算沿原链。移除旧“refresh必写盘”故障分支，以冷／热四类状态下不写盘、不改变占用的反例取代；冷准备故障点明确改为实际整批reconcile发布，继续验证原取消、worker结算及迟到写盘cause。
+- 311项账本／并发／两类owner／冷恢复／MCP／Node Debug／创建排队单测，以及真实PTY／Chromium／HTTP冷恢复同步重试矩阵4项通过。Ruff、compileall通过；完整HEAD归档与当前同三文件Pyright均24项既有测试诊断，按文件、规则、消息、最窄语句AST及重数核对无新增，生产零诊断。全部测试带进程外期限／4GiB，集成沿原独占闸门。
+- 同负载每领域36个资源、每版3次：冷准备账本写盘37→1，完整owner恢复写盘73→37；账本写入字节Terminal 2344848→1197024、Browser 2381640→1215672。准备中位数分别151→32ms、156→28ms，完整恢复310→182ms、331→177ms。这是替身传输下的原owner子链路测量，不是实际网络或全执行时延承诺；剩余状态变化写盘未合并。参考Copilot原集合幂等登记，不省略本项目的持久占用核实。原件、准确命令、源码指纹、类型差分与范围见`out/tests/temp/resource_identity_reuse_20261102/artifacts/verification.json`。未运行Gateway/Web、Windows或进程硬重启；同步writer隔离、无身份接管、原生I/O抢占及整个operation/shutdown期限继续TODO，5.2／5.4和21/23保持未完成。

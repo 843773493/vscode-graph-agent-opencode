@@ -45,11 +45,46 @@ def test_optional_lease_expiry_reads_legacy_rows_and_round_trips_deadline(tmp_pa
     assert path.read_bytes() == before
 
 
-@pytest.fixture(params=["register", "refresh", "acquire", "release", "settle", "turn", "reconcile", "unknown"])
+@pytest.mark.parametrize("cold", [False, True])
+@pytest.mark.parametrize("status", ["running", "stopped", "unknown", "orphaned"])
+def test_repeated_registration_preserves_identity_state_and_lease_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cold: bool, status: str,
+) -> None:
+    path = tmp_path / "resources.json"
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    ledger.register_external(resource_id="terminal", kind="terminal", lifetime_scope="thread", created_by_turn_id="original")
+    lease = ledger.acquire_operation(resource_id="terminal", turn_stream_id="holder", operation_id="original")
+    ledger.update_external_state("terminal", lifetime_scope="thread", status=status, unresolved_lease_id=lease.lease_id)
+    if cold:
+        ledger = ExternalResourceLeaseLedger(state_path=path)
+    record, pending, original_bytes = ledger.get("terminal"), ledger.get_lease(lease.lease_id), path.read_bytes()
+    assert record is not None and pending is not None
+
+    def unexpected_write(_descriptor: int) -> None:
+        pytest.fail("重复登记不应写盘或刷新时间戳")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(os, "fsync", unexpected_write)
+        for register in (ledger.register, ledger.register_external):
+            repeated = register(resource_id="terminal", kind="terminal", lifetime_scope="workspace", created_by_turn_id="new")
+            assert repeated == record and repeated is not record
+            repeated.status = "changed-copy"
+            assert ledger.get("terminal") == record
+        with pytest.raises(RuntimeError, match="资源类型发生冲突"):
+            ledger.register_external(resource_id="terminal", kind="browser_context")
+        with pytest.raises(ValueError, match="未知资源生命周期范围"):
+            ledger.register(resource_id="terminal", kind="terminal", lifetime_scope="invalid")
+    assert path.read_bytes() == original_bytes
+    assert ledger.get_lease(lease.lease_id) == pending
+    restored = ExternalResourceLeaseLedger(state_path=path)
+    assert restored.get("terminal") == record and restored.get_lease(lease.lease_id) == pending
+    assert not path.with_suffix(".tmp").exists()
+
+
+@pytest.fixture(params=["register", "acquire", "release", "settle", "turn", "reconcile", "unknown"])
 async def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[ExternalResourceLeaseLedger], Awaitable[object]]]:
     mutations: dict[str, Callable[[ExternalResourceLeaseLedger], object]] = {
         "register": lambda ledger: ledger.register_external(resource_id="new", kind="terminal", lifetime_scope="workspace"),
-        "refresh": lambda ledger: ledger.register_external(resource_id="a", kind="terminal", lifetime_scope="workspace"),
         "acquire": lambda ledger: ledger.acquire_operation(resource_id="a", turn_stream_id="turn-new", operation_id="new", lease_id="new"),
         "release": lambda ledger: ledger.release("a1"),
         "settle": lambda ledger: ledger.settle("a1"),

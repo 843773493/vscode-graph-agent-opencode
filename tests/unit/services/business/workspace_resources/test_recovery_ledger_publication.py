@@ -156,7 +156,7 @@ class ColdPreparation:
     lease: ResourceLease | None
 
 
-@pytest.fixture(params=["register", "fork-receipt"])
+@pytest.fixture(params=["reconcile", "fork-receipt"])
 async def cold_preparation(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
@@ -216,7 +216,7 @@ async def cold_preparation(
         if target == path:
             writers.append(get_ident())
             candidate = json.loads(source.read_text())
-            selected = request.param == "register" or any(
+            selected = request.param == "reconcile" or any(
                 item["lease_id"] == (lease.lease_id if lease is not None else None) and item["status"] == "released"
                 for item in candidate["leases"]
             )
@@ -301,3 +301,41 @@ async def test_native_preparation_preserves_loop_original_cancellation_and_froze
     finally:
         gate.release.set()
         await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_cold_preparation_reuses_registered_identities_and_commits_one_reconciliation(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources = [str((await bundle.create("workspace"))["resource_id"]) for _ in range(4)]
+    leases = [bundle.leases.acquire_operation(resource_id=rid, turn_stream_id="old-holder", operation_id="old-operation")
+              for rid in resources]
+    bundle.leases.mark_operation_dispatched(leases[0].lease_id)
+    before = {rid: bundle.leases.get(rid) for rid in resources}
+    owner = bundle.restart()
+    path = bundle.leases._state_path
+    assert path is not None
+    publishing = Path.replace
+    writes: list[dict[str, object]] = []
+
+    def publish(source: Path, target: Path) -> Path:
+        if target == path:
+            writes.append(json.loads(source.read_text()))
+        return publishing(source, target)
+
+    with monkeypatch.context() as observe:
+        observe.setattr(Path, "replace", publish)
+        await owner.recover(())
+    assert len(writes) == 1, "冷准备只发布整批对账，不逐资源重写已登记身份"
+    assert owner._recovery._pending is not None and set(owner._recovery._pending) == set(resources)
+    cold = type(bundle.leases)(state_path=path)
+    for rid, lease in zip(resources, leases, strict=True):
+        record, previous, retained = cold.get(rid), before[rid], cold.get_lease(lease.lease_id)
+        assert record is not None and previous is not None and retained is not None
+        assert record == replace(previous, status="recovered", updated_at=record.updated_at)
+        assert retained == replace(lease, status="reconcile_required", updated_at=retained.updated_at)
+    await owner.recover(resources)
+    assert owner._recovery._pending == {} and bundle.transport.creates == len(resources)
+    assert bundle.transport.deleted == []
+    for rid in resources:
+        record = owner._store.get(rid)
+        assert record is not None and record.owner_revision == 2 and record.reconciliation_status == "reconcile_required"

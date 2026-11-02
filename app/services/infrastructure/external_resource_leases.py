@@ -112,6 +112,7 @@ class ExternalResourceLeaseLedger:
         lifetime_scope: str,
         created_by_turn_id: str | None = None,
     ) -> ResourceRecord:
+        """幂等登记身份；已有资源的状态与保留范围由实际 owner 发布。"""
         with self._write_lock:
             if not resource_id or not kind:
                 raise ValueError("lease 账本登记缺少 resource_id 或 kind")
@@ -132,7 +133,8 @@ class ExternalResourceLeaseLedger:
                         f"资源类型发生冲突: resource_id={resource_id} "
                         f"existing={record.kind} incoming={kind}"
                     )
-                record = replace(record, updated_at=self._now())
+                # 重复登记不是续期或运行观察，不重写时间戳及整个持久账本。
+                return self._copy_record(record)
             self._commit(records=(record,))
             return self._copy_record(record)
 
