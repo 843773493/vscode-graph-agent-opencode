@@ -1,65 +1,31 @@
 ## Why
 
-当前仓库的 `boxteam://` 地址存在两套并行、互不可解析的解析器：`app/services/infrastructure/resource_platform/virtual_resources/grammar.py` 的 URI grammar（资源寻址）与 `app/services/business/session_context_resource.py` 的会话上下文正则（会话定位）；且 URI 的解析/授权侧零生产调用（审计：只有 `skill_display_uri` 一个字符串构造函数被 `app/agents/skill_runtime.py:541` 使用）。skill 链路另有两处绕过 owner 的裸 `boxteam://` 拼接（`skill_runtime.py:52`、`:619`），实测被自家 grammar 以 `malformed_path` 拒绝。 **（修订注，`298ef599`+`f3bd8213`）**：该「零生产调用」已改变——`app/agents/skill_runtime.py` 的 `_layer_scope_identity` 与 `resolver.require_scope_binding` 已构成 `inline`/`workspace` 的生产解析与校验链路。
+资源关联需要稳定、明确且可跨 Gateway 解析的目标。统一资源 URI 解决身份、地址、原生文件位置混用及平行解析器问题，但此前“原生路径只能在最终访问点出现”的规则过度限制了展示、诊断与原生操作，导致调试状态拒绝合法路径、stderr 隐藏和本机诊断难以定位文件。
 
-修订前下发的**契约 v1 语法模板与仓库真实 grammar 不一致**（v1 把 `scope_id` 改成可选、漏掉 `resources` 固定段），本 change 已改用**契约修正 v2**：保留既有段序，并让 `scope_id` 对**所有** scope 都必填——把「workspace_id 必须显式」的原则扩展到所有 scope。
-
-**真实闭集已按仓库内受版本控制的事实源定稿**（取值内联如下，不引用 `out/tests/temp/**` 临时产物）：既有真实 scope 闭集（实测现状）为 `workspace`/`user`/`gateway`/`inline`（`grammar.py:18` 的 `_SCOPE_KEYWORDS` 逐字为该四个取值；`builtin` 正名与 `user` 新增均已由 `298ef599`+`f6fc990f` 落地；`_SKILL_SCOPES` 已不存在、全仓零命中）；`memory` 只在说明符闭集里出现过且已随提交 `32bc6256` 物理移除；既有真实语法 kind 闭集为 `agent-spec`/`skills`（`grammar.py:22` 的 `_RESOURCE_KINDS`），`config` 与 `session` 为本次新增。本 change 据此**定稿**词汇、scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。
-
-用户已拍板统一寻址方向：`workspace` / `user` / `gateway` / `inline` / 其它工作区 / 其它 gateway 收敛到同一套寻址；URI 解析是顶层 gateway 之间的星型网络；identity 独立于 URI；配置/skill/状态默认用虚拟地址传递，真实路径只在最后访问点出现。本 change 是这套寻址抽象、词汇、语法、kind 闭集与拒绝码的**唯一 owner**，其余 change 只引用本 change 的定义。
+2026-11-02 用户修订：资源关联与通用文件操作统一使用资源 URI；原生路径可以作为明确目标机器上的操作参数、展示信息、用户正文、诊断信息及必要的原生持久配置存在。消费者不得将其隐式解释为当前机器资源目标，也不得建立重复的权威定位关系。
 
 ## What Changes
 
-- **术语收口（2026-10-05 用户决定）**：机制统一称「统一资源寻址」，具体地址称「资源 URI」，业务身份保留 `ResourceIdentity`，底层位置保留「真实路径」。主线程按 `tasks.md` 1.1/6.6 一次迁移源码、公共字段、测试和当前规范；历史原始证据保留原件，正名不改变寻址合同。
-- **BREAKING 统一 URI 语法（定稿）**：`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`。`{gateway_authority?}` 为可选单段、承载稳定 gateway_id；`{scope_id}` 对**所有** scope 必填；`resources` 为固定保留段。现有 `boxteam://workspace/{workspace_id}/resources/skills/{name}/SKILL.md` 是该语法的特例（authority 缺省）。
-- **BREAKING scope 闭集（定稿）**：`workspace` | `user` | `gateway` | `inline`。（实测现状闭集已为 `workspace`/`user`/`gateway`/`inline`：`builtin` 正名 `inline` 与 `user` 新增均已落地，`memory` 已移出闭集）。
-  - `builtin` MUST 更名为 `inline`，向 config 域既有词汇（`app/schemas/internal_v2/config.py:20` 的 `inline`/`user`/`user_local`/`workspace`/`sqlite`）收敛。
-  - **`memory` 已确证不是 URI scope**：零生产构造方、resolver 连 scope_id 都不比对、`kind="memory"` 全仓零构造、container 未装配（原 `configs/workspace_inline.jsonc:427-433` 的 `agent.memory` 6 键配置块与 schema `$defs.agentMemory` 已随 `remove-agent-memory` 物理删除，现配置已无该块）；其 domain owner 与状态本体从未接入，故无 URI 替代 owner 的需求。解析器侧 MUST 物理移除既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources`、无 kind、恰好两段）的特例分支，并以 `unknown_scope` 类拒绝码 fail-closed 拒绝（**已由提交 32bc6256 落地**），MUST NOT 留成看似合法的 URI。
-  - **`user` 为本次新增**（权威表证明其尚不存在于 URI 闭集）。
-- **scope_id MUST 由真实身份推导、禁止硬编码**（同时修掉既有不一致；MUST 由唯一一张表规定）：`workspace`→真实 workspace_id；`gateway`→**真实 gateway_id**（现硬编码字面量 `local`）；`inline`→**真实 distribution_id**（`inline` 的 distribution_id 推导已由 `298ef599`+`f3bd8213` 装配落地，不再是零生产赋值；`gateway` 请求级注入已落地（`64ba30c8`/`53befbfc`/`9881a3b2`），不再有 `local` 字面量）；**来源均已定稿**：`inline` 由发行包 runtime manifest 的 `distribution` + `version` 推导（编码规则与缺失 fail-closed 见本 change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），`gateway` 由 `${BOXTEAM_HOME}/gateway/identity.json` 的 `load_or_create_gateway_id`（`gateway_<32hex>`）取值、由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入（见本 change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」）；`user`→`local`（显式声明为**单用户本地程序约定**，依据 AGENTS.md 无云服务/无多租户）。**不得自行发明 scope 名或 scope_id 语义。**
-- **kind 闭集（修订定稿）**：`agent-spec` | `skills` | `config` | `session` | `files` | `workspace` | `folder`。`files` 承载 workspace 源码树根及本 owner 登记的 gateway 原生目录根，`workspace`/`folder` 沿用领域导航模板；各项实施按第8、9组及2.7分别验收，原四值验收不代表新增实现。`config`（承载配置来源文件本身）与 `session`（承载会话上下文资源/会话定位，由并行 change `migrate-session-context-resource-uri` 消费）为本次新增，均在 kind 闭集登记处定稿。另注：`_RESOURCE_KINDS`（现位于 `app/core/resource_uri.py`，取值见上述七值闭集）与 `_DESCRIPTOR_KINDS`（`values.py:28`，两值 `agent-spec`/`skills`）是**两个独立闭集，不可混用**；**描述符闭集当前取值为 `agent-spec`/`skills`，原有成员 `memory` 已随提交 32bc6256 物理移除**（语法侧对两点式 `boxteam://memory/...` 以 `unknown_scope` 拒绝），故不存在「`memory` 只出现在描述符闭集、`ParsedResourceUri.kind is None`」的错配分支。
-- **正名影响评估结论（已独立核验：安全改名，无需存量迁移）**：`layer` 闭集原为 `(bundled, gateway, workspace)`（正名前 `skill_runtime.py:503`，标签表 `:427`）同步正名为 `inline`（现 `layer_order` 为 `(inline, gateway, workspace)`、`_SKILL_LAYER_LABELS` 已移除，原 `bundled`→`builtin` shim 已由 `298ef599` 物理删除）。`layer` 虽进入 `entry_identity`（`:558`）与 catalog payload（`:605`），但二者只进**内存** `ResourceRegistry`（`semantic_registry.py:20-23` 三个 dict，无任何持久化写入）；全仓唯一持久化 `display_uri` 列（`resource_activation_bindings.display_uri`，`resource_activation_schema.py:85`）的写入方 `ResourceActivationStore.persist_snapshot` 生产从不被调用（磁盘取证唯一命中是测试夹具 `tests/unit/core/test_session_control_store.py:2275` 的 `display_uri` 值；该处原为 `boxteam://memory/session/notes`，已随提交 `174b1498` 替换为 `boxteam://workspace/ws-1/resources/skills/notes/SKILL.md`。两者都不改变本结论：该夹具只进测试进程的内存对象，不写任何持久化库；且 `memory` 两点式已随提交 `32bc6256` 被 grammar 物理移除，该形态现被 fail-closed 拒绝）。故改名属**契约级调整而非数据迁移**。**真依赖 URI scope `builtin` 的位置**现落在 `grammar.py:18` 的 scope 闭集 `_SCOPE_KEYWORDS` 与 `resolver.py` 的 scope 构造校验（grammar.py 已无 `builtin` 字面量、`_SKILL_SCOPES` 已不存在）；其余 `builtin` 命中是无关同名（工具 `origin=builtin`、主题来源、`builtin_tool_registry`），MUST NOT 误改。
-- 建立**三层职责分离**并作为核心不变量：`ResourceIdentity`（不透明、稳定、无 revision、不依赖激活工作区、持久化）／`URI`（可解析、持久化、允许悬空、禁编码 revision/hash）／`real path`（资源解析时仅在原生 owner 的最终访问点临时使用，不进入模型载荷、普通 DTO 或跨 Gateway 资源投影）。物理工作区根只按稳定 Gateway target 与 `workspace_id` 绑定在原生目标 Gateway 的唯一注册表中，作为控制面启动输入；这是工作区物理根的持久化例外，完整合同由 `add-multi-workspace-backend-mounting` 定义。
-- 细化**星型解析**：`gateway_authority` 承载稳定 gateway_id；本地是 hub 可直接解析直接 spoke；是 spoke 经唯一 hub 做一次有界 transit，携带 `visited set`、`max_transit_gateways=1`、`max_gateway_hops=2` 与总 deadline；上界 MUST 是**显式策略常量**而非散落魔法数字。**解析命中只返回稳定身份与内容，不返回 locator**（`locator 是输入，不是输出`）。不可解析一律 fail-closed。
-- **拒绝码集中登记（分三套，不可混用）**：`ResourceUriGrammarError.reason_code` **现行17码快照、修订18码**（`grammar.py:25-44`，构造函数对未登记 code 直接 `raise ValueError`，未登记码不得直接使用、分段编码修订由唯一owner同步实现）、`ResourceUriResolveError` 的规范闭集 **7 个**（现有 6 个加 `unsupported_view`，专用于已识别 view 与资源 kind 不兼容；生产实现仍待任务 1.3 完成）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）是**三个独立闭集**，MUST 各列一套、标明各自适用范围与「不可混用」。其它 change 只能引用本登记处。
-- **配置来源地址与逻辑来源层由本 change 唯一裁定**：配置文件地址使用既有 `config` kind；URI 只标识可寻址来源文件，`layer` 与 `precedence` 是独立兄弟字段。具体逻辑 layer 闭集与 precedence 见 requirement「配置 layer 必须表示逻辑来源且与载体和快照分离」；SQLite 只作内部 carrier，`runtime_override` 可无 URI，`active_snapshot` / `pending_snapshot` 与 `sources[]` 分开。其他 change 只引用该定义，不新增 kind 或 URI 形态。
-- **离线配置诊断不设原生位置例外（2026-10-28 用户裁定）**：`doctor` / `diagnose` 的实际 JSONC 与 schema 文件使用同一 `config` URI，缺少真实发行或工作区身份时显式报告无法寻址，不创建身份。重复的配置根与 SQLite 物理位置不再输出；SQLite 仍仅按原有诊断分区报告状态，不伪造载体 URI，也不改变运行时配置来源的可寻址性。
-- 固化**identity 独立于 URI**：同一逻辑名出现在两个不同 scope 时是两个不同 identity；跨来源等价/覆盖是独立 concern。
-- 固化**默认寻址政策**：配置/skill/状态/资源引用默认用 URI 传递；新增持久化字段若需定位资源，一律用 `identity + URI(+ 独立 revision 字段)`，不得存 real path。工作区根例外由 `add-multi-workspace-backend-mounting` 定义的原生 Gateway workspace-root binding；它不是资源引用，不得复制到 managed group、普通 DTO 或业务记录。
-- 建立**可机械检查的 real path 不变量**：持久化例外包括上述 workspace-root binding、本 owner 登记的原生目录根绑定，以及本 spec 具名登记的 Gateway 原始诊断日志与 Browser 本地文件页面 URL；具名请求输入边界包括原生目录选择/注册和普通文件的原生路径输入。real path 不得作为资源引用进入业务持久化、普通 API 响应、联邦资源投影、解析结果或系统生成的模型载荷；路径输入只交固定目标解析与执行，中继不将其保存或转为资源数据。
-- 登记两项用户确认的具名例外：受既有管理授权保护、用户主动打开的 Gateway 原始服务日志/异常堆栈（含联邦诊断传递的同类原始日志）保留真实路径；用户明确打开的 Browser 本地文件页面保留原生 `file:` URL，允许地址栏、导航请求、相关错误、页面快照及恢复检查点保存原 URL，始终由目标机器解释。两项不扩大普通业务响应、资源引用和其它持久记录的许可，不改变普通文件相对/绝对/资源 URI 三输入与同一文件操作链路。
-- **普通文件路径输入合同（2026-10-20 用户裁定）**：相对路径、绝对路径、资源 URI 均为合法入口，内部统一解析后复用同一文件 owner。相对路径基于明确目标工作区/目录；绝对路径按目标机器原生语义解释，工作区外访问遵守既有能力和授权，不得重定向到工作区内或因 URI 化强制先注册工作区。Windows 盘符同样由目标平台解释；终端/shell 保留原生语义。该输入合同不放宽 URI 输出/持久引用政策，Gateway 管理目录入口也不限制普通文件绝对路径输入。
-- **未注册目录能力保留（2026-10-20 用户确认）**：文件树继续浏览、编辑未注册目录，保留快捷目录能力；不强制或暗中注册工作区，不伪造 workspace_id。本 owner 须补齐其规范寻址后迁移响应和快捷方式持久引用，不能靠删功能消除真实路径字段。
-- **真实路径外泄（已消除，保留为可机械复核的不变量）**：配置来源层记录曾以 `ConfigSourceLayerRecord.source_path`/`backup_path` 把真实路径落进 SQLite，配置来源列表 API 曾以 `ConfigSourceDTO.path`/`ConfigSourcesDTO.schema_path` 把真实路径写进响应体；两处已分别由 `50bffa45`（持久化改 URI）与 `76ed0089`（响应体改 URI）消除，详见 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」。
-- **迁移面为新写入与消费切换，不迁旧开发数据**：历史基线取证为157 live + 44 dev/temp库中 `boxteam://` 零命中；当时挂点为来源控制状态与activation display_uri。该盘点只描述当时状态，不作为实施后仍零落盘的条件。当前字段、生产writer和读侧按各自唯一owner核对并接通；必要时按授权清理开发中间数据，不扫描或升级旧URI实例。新增附件/工具结果旧scheme的源码消费迁移在文件工具change验收。
-- **收口四个 change**：在途 `add-context-injection-lifecycle`、并行 `migrate-session-context-resource-uri` 与 `add-multi-workspace-backend-mounting`，以及第四个 `add-workspace-persistent-resource-management`；术语、scope、scope_id 语义、kind 与拒绝码写法一致，无同义异名。
-- 命名一致性硬约束：`资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`；禁止 virtual url / VURI / 虚拟 URL 混用。
-
-- **可导航根与轻量访问（2026-10-05 修订）**：唯一 owner 登记 directory/file/domain_object、导航和操作能力及 child path 模板；技能包根可访问 SKILL.md/references/scripts，files/root 以稳定 `workspace_id` 定位到原生 Gateway 的唯一物理根绑定，URI 与解析结果不承载该根路径。结构/身份段和文件段分别校验，文件段一次 UTF-8 解码；普通导航/搜索/读取不逐文件登记长期身份或快照。Session/assembly按领域owner的引用/view访问，附件/工具结果只公布单文件模板。
-- **文件消费边界**：独立 `add-unified-resource-file-tools` 承接现有文件工具、目标端执行、冲突/补丁/失败及旧会话产物scheme迁移；本change只拥有寻址公共合同。Skill文件读取不激活，skill_load仍归context owner；send/read/wait沿原Session计划收口。
-- **已修复的路径歧义缺陷**：原 `app/agents/workspace_tool_paths.py::_absolute_to_workspace_relative()` 曾把工作区外 POSIX 绝对路径经 `path.lstrip("/")` 改投工作区内同名路径。原生输入已接入统一目标解析，旧虚拟路径转换及所有调用方随 `d7f7b94d` 物理删除；`4af8b758` 从 Linux 真实 A→SSH→C 入口核对三种输入、外部读写及故障零回退。聊天 Markdown 文件引用的字节保留与权威 URI 回执另见 tasks 2.6 的具名验收。Windows 盘符与跨系统文件 API 已由归档变更 `2026-10-28-add-unified-resource-file-tools` tasks 3.4 的 `native-windows-federation-007` 实机验收：三种输入、工作区外读写、目标原字节、source/relay 不变及停止后零回退均通过；该固定候选证据不代表当前 HEAD 的全平台回归，也不覆盖模型工具调用。UNC 共享仍未实机验证。
-
-- **Fork目标与资源复用（2026-10-13）**：在既有session kind登记Workspace Session集合、Session和Thread领域模板；source/target与创建意图、view/revision/anchor分开。定义资源目标统一检查合同，复用已有归属、retention_scope、关联、修订/hash/可用性和owner操作能力，输出引用复用、必要保活、快照迁移或明确遗漏；只补缺少的owner能力，不增加实例fork布尔属性或第二生命周期registry。跨端创建和资源副作用由领域owner执行，URI解析不授予fork权限。
+- 统一 `boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...}` grammar、真实身份来源、能力与授权边界；scope 闭集为 workspace/user/gateway/inline，scope_id 全必填，文件 child 采用规范的一次 UTF-8 解码。
+- 资源身份、资源 URI 与原生路径按字段职责分离。URI 字段继续拒绝非法 URI、错误归属和失权访问；普通正文、展示与诊断含路径本身不构成协议错误。秘密保护保持。
+- 普通文件保留相对、绝对及 URI 输入，在明确目标端统一解析并复用同一操作链路；未注册目录仍可浏览编辑，终端／shell 保留原生语义。
+- 调试状态允许目标机器原生展示路径，stderr 进入现有有界输出；可移植方案继续保留相对路径，导航与编辑仍用 URI。
+- 移除按 metadata 键名递归禁止路径的启发式；明确的资源定位字段由所属 schema／owner 校验。
+- 已知文件操作错误保留目标位置与具体原因；凭据、Provider 与内部校验等来源继续保护秘密，保留原错误归属和日志故障处理。
+- 本机 doctor／diagnose 同时报告实际 JSONC、schema、SQLite 位置及既有 URI，保持只读；取代此前仅输出 URI 的裁定。
+- Gateway 原始日志和 Browser file: URL 按各自管理授权与目标机器语义保留，不再需要因含路径登记少数例外。
+- 保持唯一资源 binding、canonical owner、历史身份、revision 独立、星型联邦解析和错误码集中登记，不恢复旧路径别名、双读或第二定位链。
 
 ## Capabilities
 
 ### New Capabilities
 
-- `virtual-resource-addressing`：统一资源寻址的三层职责分离（ResourceIdentity / URI / real path）、scope 闭集与必填 scope_id、统一 URI 语法（保留 `resources` 固定段序）与规范化、kind 闭集（含 `config`/`session`）、可选 gateway authority、星型 gateway 解析链与 policy 常量上界、**分三套集中登记的拒绝码（语法期分段编码修订闭集 + 解析授权期 7〔含专用于 view 与资源 kind 不兼容的 `unsupported_view`〕+ 联邦解析期）**、「locator 不是输出」不变量、身份与寻址的职责边界、除具名的原生 Gateway 工作区根及未注册目录根绑定外 real path 不进入资源数据面的可检查不变量、`builtin`→`inline` 正名（含 layer），以及配置来源 URI、逻辑来源 layer、precedence 与快照边界的唯一规范。
+- `virtual-resource-addressing`: 统一资源寻址、字段职责、目标机器解释、导航能力与联邦边界的唯一合同。
 
 ### Modified Capabilities
 
-（无。本 change 建立新 capability；`add-context-injection-lifecycle` 的既有 URI requirement 更新由该 change 自身的 delta 承接，采用「引用本 change」而非在本 change 内改它的 spec。）
+无；相关活跃变更引用本 capability，不复制 grammar 或职责判据。
 
 ## Impact
 
-- 新增 spec：`openspec/specs/virtual-resource-addressing/spec.md`（经本 change 的 delta 建立）。
-- 收口修改：`add-context-injection-lifecycle`（接线任务指向本 change；其残留旧词汇与 `memory` 形态已就地收口）、`migrate-session-context-resource-uri`、`add-multi-workspace-backend-mounting`、`add-workspace-persistent-resource-management`（引用本 change 的持久化引用政策）。
-- 实施期（本 change 不写生产代码，仅登记影响面）：`app/services/infrastructure/resource_platform/virtual_resources/`（语法/解析/值对象重构：`grammar.py` 的 `_SCOPE_KEYWORDS`/`_RESOURCE_KINDS`（`_SKILL_SCOPES` 已不存在）、`values.py:28` 的描述符闭集）、`app/agents/skill_runtime.py`（两处裸拼接回归 owner；`:538` 的 `bundled`→`builtin` shim 与 `:503` 的 layer 名同步正名，二者均已由 `298ef599` 物理删除，非待实施项）、`app/services/infrastructure/config/state.py` 与 `app/core/config_sources.py`（配置来源 real path → URI 兄弟字段）、`app/services/business/session_context_resource.py`（由并行 change 负责改造，本 change 只承认其归属），以及 gateway 联邦解析层（星型转发）。
-- 与并行 change 的边界：均引用本 change 的术语/scope/scope_id/kind/拒绝码定义，不得各自重新定义；本 change 只负责在寻址层承认「一个后端可挂载多个工作区、scope_id 身份必须显式」。
-- **真实路径外泄登记（已消除）**：`app/api/config.py`（`ConfigSourceDTO.path`/`ConfigSourcesDTO.schema_path`）与 `config/state.py`（`ConfigSourceLayerRecord`/`ConfigSourceJournalRecord`）的 real path 输出/持久化已由 `50bffa45`+`76ed0089` 消除（见 What Changes）。
-- **待本 change 实施阶段补齐**：`distribution_id` 与 `gateway` 的 `gateway_id` 的**来源均已由本 change 定稿**（前者为发行 manifest 的 `distribution` + `version`，见 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」；后者为 `identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入，见 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」），当前仅**尚未实现装配**（全仓零生产赋值 ≠ 来源未定）；`gateway`/`inline` 的 scope_id 由字面量 `local` 改为真实身份推导后的实测回归。 **（修订注：`distribution_id` 已由 `298ef599`+`f3bd8213` 落地装配；`gateway_id` 请求级注入已落地（`64ba30c8`/`53befbfc`/`9881a3b2`））**
-- **前端口径冲突（已登记影响项）**：`src/clients/web/src/state/session/sessionCatalogOutbox.ts:32` 的 `CatalogOutboxPartition.gatewayId` 注释逐字为「稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。」，与本 change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」中「MUST NOT 用监听端口」冲突；统一口径归 Gateway 侧（网关身份由 Gateway 按请求注入、取值由该 requirement 推导），该注释 MUST 在实施期清理。
-- 破坏性：现有资源形态与其解析实现、`skill_runtime.py:52` / `:619` 的裸拼接、`bundled`→`builtin` shim 与 layer 名一并收敛，不提供旧形式别名、双读或兼容层。
-
-未注册目录的规范引用统一使用本 owner「原生目录根绑定必须由目标 Gateway 唯一持有」：Gateway 只保存和解析控制面绑定，目标端现有文件 owner 继续执行浏览、编辑与后台恢复；不自动注册、不引入第二文件执行链。
+影响 Node Debug DTO／输出、Workspace 与资源 metadata、执行失败摘要、模型调用诊断、本机离线配置诊断及其测试。URI 格式、业务归属、权限和公开字段形状保持；doctor／diagnose 新增实际位置字段。受影响的旧路径禁止测试按新合同迁移，历史验收原件保留但不代替新规则验收。

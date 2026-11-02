@@ -20,7 +20,7 @@
 
 ### Requirement: 文件工具与 Shell 使用同一附件目录 URI
 
-附件目录及子文件 SHALL 使用统一 URI owner 登记的 workspace 模板和 child 规则。模型消息 SHALL 提供目录 URI、原件 URI及必要元信息，并提示处理结果保存到该目录的新文件或子目录。Shell 的结构化工作目录 SHALL 在目标机器解析为原生 cwd 后执行，命令正文保留操作系统路径语义；MUST NOT 扫描替换任意命令字符串中的 URI。URI 不属于 Shell 目标时 SHALL 明确拒绝，不得在中继进程或其它机器解释。普通响应和持久业务引用 MUST NOT 泄漏真实附件目录路径，既有具名管理/Browser例外不扩张到本入口。
+附件目录及子文件 SHALL 使用统一 URI owner 登记的 workspace 模板和 child 规则。模型消息 SHALL 提供目录 URI、原件 URI及必要元信息，并提示处理结果保存到该目录的新文件或子目录。Shell 的结构化工作目录 SHALL 在目标机器解析为原生 cwd 后执行，命令正文保留操作系统路径语义；MUST NOT 扫描替换任意命令字符串中的 URI。URI 不属于 Shell 目标时 SHALL 明确拒绝，不得在中继进程或其它机器解释。普通响应中的资源目标和持久业务引用 MUST 使用 URI；展示、正文、诊断和原生配置按统一 URI owner 的字段职责合同保留路径，不建立第二权威定位关系。
 
 #### Scenario: 远端 Shell 处理附件
 

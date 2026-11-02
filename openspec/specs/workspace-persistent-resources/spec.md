@@ -34,16 +34,14 @@
 - **WHEN** 用户明确要求持久化，或 Agent 工具调用显式指定 `retention_scope=workspace`
 - **THEN** owner 创建 `workspace` 范围资源并关联来源 Thread；后续 Thread unload 不会删除该资源
 
-### Requirement: 工作区持久记录必须用「资源身份 / ResourceIdentity + 资源 URI」引用资源，禁止持久化 real path
+### Requirement: 工作区持久记录按字段职责引用资源
 
-**归属与引用**：本 capability 的持久记录引用政策（含「位置一律以 `资源身份 / ResourceIdentity` + `资源 URI` 表达、禁持久化 `真实路径 / real path`、覆盖 API 响应体与模型可见载荷」）的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 URI 为默认形式」；「位置 vs 非位置」的判定（D-A2 可由 owner 身份推导者不落盘、D-A3 不可推导者用既有 API 端点、一般 owner 自身运行态字段的原生相对路径规范化及该 owner 具名登记的例外）的正名出处为该 change 的 requirement「「位置」必须有可机械判定的统一判据」。本 capability 只**具名引用**上述两条 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套判据。`作用域 / scope` 闭集与 `scope_id` 取值语义、URI 语法、kind 闭集与 `拒绝码 / rejection code` 登记同样由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。 Gateway 原始诊断日志与 Browser 本地文件页面 URL 的许可只具名引用同一 owner requirements「Gateway 原始诊断日志管理入口保留原文」和「Browser 本地文件页面 URL 保留原生语义」；本 capability 不扩张其边界，以下一般记录/运行态判据均适用于未命中该例外的字段。
-
-此处“引用外部资源的记录”指记录 owner 之外的资源/产物引用，必须继续兑现所引用的 identity + URI 政策。资源 owner 为自己创建并管理的同一资源保存的主记录不是此类 locator：终端/浏览器 owner 在调用 transport 创建实现前生成业务 `resource_id`，主记录保存该身份及关联、保留范围与生命周期事实，再以同一 ID 经既有 API/transport 控制资源。该主记录 MUST NOT 保存 real path 或 provider locator；没有登记资源 URI 模板时，操作引用按唯一寻址 owner 的 D-A3 使用既有 API 端点，MUST NOT 为主记录伪造 URI、扩展 kind 或把业务 ID 当成 URI。此边界不豁免真正的外部资源/产物引用，也不放宽 owner 运行态字段的规范化要求。
+本 capability MUST 遵循 `add-unified-virtual-resource-addressing` requirement「默认寻址政策必须以 URI 为默认形式」及「位置字段必须按业务职责明确声明和校验」。跨 owner 资源关联使用 ResourceIdentity 与资源 URI／既有领域端点；原生操作参数、展示、正文、诊断及必要原生配置允许存在，不建立第二权威定位关系。资源 owner 以原 resource_id 管理终端／浏览器主记录、关联与生命周期，没有 URI 模板时不得伪造 URI。既有原生相对 cwd 保持其可移植语义，不能据此禁止所有原生路径。
 
 #### Scenario: 持久记录只承载身份与 URI
 
 - **WHEN** owner 写入一条引用外部资源的工作区持久记录
-- **THEN** 该记录以 `资源身份 / ResourceIdentity` 与 `资源 URI` 指向资源；`真实路径 / real path` 只作为 owner 在本次 fs/进程调用栈内的局部变量出现，不进入任何持久化记录
+- **THEN** 该记录以 `资源身份 / ResourceIdentity` 与 `资源 URI` 指向资源；原生路径按所属字段职责存在，不成为重复的权威资源定位键
 
 #### Scenario: 需要位置时必须用 URI 而非文件系统路径
 
@@ -63,17 +61,17 @@
 #### Scenario: owner 自身运行态字段按相对于工作区根的原生相对路径持久化
 
 - **WHEN** 持久记录需要保存 owner 自身的运行态字段（典型为终端 shell 的当前工作目录）
-- **THEN** 该字段 MUST 按唯一寻址 owner 的判据以相对于工作区根的原生相对路径持久化，允许 `..` 保留工作区外 cwd 的原生目标，MUST NOT 落盘绝对路径或工作区根路径；该字段 MUST NOT 被当作「资源所在位置」的位置引用，也不因此豁免「位置一律以 URI 表达」；此边界只覆盖 owner 自身运行态字段，MUST NOT 扩张到任何位置表达
+- **THEN** 既有 cwd_relative 按其明确的原生相对语义持久化，允许 `..` 保留工作区外 cwd；其它原生配置和诊断按统一 URI owner 的字段职责处理，不建立第二资源定位关系
 
-#### Scenario: 检出 real path 持久化即 fail-closed
+#### Scenario: URI 关联错误与原生信息分别处理
 
-- **WHEN** 一条持久化记录、一个 API 响应体或一份模型可见载荷中出现 `真实路径 / real path`
-- **THEN** 系统 MUST 显式失败并判定为缺陷，MUST NOT 以脱敏、截断、`display_uri` 或默认值静默掩盖，MUST NOT 回退到「按路径查找」的旧语义
+- **WHEN** 一条记录中的 URI 关联非法、归属错误或失权，同时展示／诊断含原生路径
+- **THEN** URI 关联按原 owner 合同明确拒绝；不将展示／诊断路径单独视为协议错误，也不以其建立备用资源定位关系
 
 #### Scenario: 不新增第二套寻址语法
 
-- **WHEN** 实现本 capability 的持久记录引用
-- **THEN** 它 MUST 复用 `add-unified-virtual-resource-addressing` 的 URI 语法与 `作用域 / scope` 定义，MUST NOT 定义第二套 URI 语法、scope 名或 `scope_id` 取值
+- **WHEN** 实现本 capability 的持久资源关联
+- **THEN** 复用统一 URI owner 的 grammar、scope 与身份规则，不新增同义 parser 或 scope_id 约定
 
 ### Requirement: Thread unload 和删除按资源保留范围释放资源
 

@@ -137,7 +137,7 @@ Browser工具超时后的原AsyncFunction和页面reset现在由原`BrowserOpera
 | 冲突来源 | 处理决定 | 必须保留的约束 |
 | --- | --- | --- |
 | itemized 的旧内容寻址附件布局及单 blob fork 验收 | proposal/design、rollout 存储 requirement 与 fork 验收已同步目录/文件资源身份，取消相同上传强制合并；原 blob/owner-ref writer 已下线 | canonical 不保存物理 locator，历史原始身份和 frozen digest/length 不改写，fork claim/publication 原子性不降低 |
-| virtual-resource-addressing 的 kind 闭集、单文件附件模板及共享 blob 场景 | 由同一 URI owner 登记上述 workspace attachments directory/child；旧 Session URI 只保历史解析，不生成新引用 | 不新增 URI 解析器、不泄漏真实路径、普通 files/root 仍不能直接遍历 `.boxteam` |
+| virtual-resource-addressing 的 kind 闭集、单文件附件模板及共享 blob 场景 | 由同一 URI owner 登记上述 workspace attachments directory/child；旧 Session URI 只保历史解析，不生成新引用 | 不新增 URI 解析器、不以原生展示路径建立第二定位关系、普通 files/root 仍不能直接遍历 `.boxteam` |
 | unified-resource-file-tools 的旧 Session 单文件产物边界 | 附件目录/child、原件只读与 derived 导航/写入已同步其 design 和文件 requirement，工具结果仍为 Session 单文件；Shell workdir 继续由本 change 定义 | 512 像素预览、媒体投影、原件读取、文件工具权限及修订语义保持 |
 | persistent-resources 的 thread unload 即时 delete、零关联 30 分钟、workspace 永不自动过期 | 这些规则继续适用于既有 Shell/Browser；附件复用机制但采用明确的零关联 30 天策略 | 显式 detach 不等于停止、有效 operation 阻止回收、未知停止结果不伪报成功 |
 | deduplicate-execution-history-storage 的不可变内容复用及恢复/fork保护 | 可变目录不参与 digest 身份合并；已冻结历史输入仍按原 immutable asset/version 复用 | 历史 request_hash 可重建，GC 不删除 checkpoint/assembly 所需版本；不从当前目录补历史 |

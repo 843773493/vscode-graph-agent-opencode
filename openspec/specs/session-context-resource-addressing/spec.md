@@ -8,13 +8,13 @@
 
 ### Requirement: 资源引用必须遵循三层分离
 
-**归属与引用**：三层分离（`资源身份 / ResourceIdentity` / `资源 URI` / `真实路径 / real path`）的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套三层分离规范；以下 scenario 只保留会话上下文侧的验收视角。
+**归属与引用**：三层分离（`资源身份 / ResourceIdentity` / `资源 URI` / `真实路径 / real path`）的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须按字段业务用途分离」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套三层分离规范；以下 scenario 只保留会话上下文侧的验收视角。
 
 本 capability 的 `resource_identity` 与 `assembly_ref` 均复用该 owner 定义的 `ResourceIdentity`，MUST NOT 另建会话局部 identity 或专用 assembly ref 类型。
 
-#### Scenario: 持久化记录不得含 real path
+#### Scenario: 持久化资源关联使用 URI
 - **WHEN** 任意会话上下文资源被写入持久化记录或返回给模型
-- **THEN** 记录中只出现资源身份与 URI（以及独立的 revision 字段），不出现任何真实路径、绝对路径或 provider locator
+- **THEN** 记录中的资源关联使用身份与 URI（以及独立 revision）；正文与诊断可以包含原生路径，不能成为第二权威定位关系
 
 #### Scenario: 资源身份不随激活工作区变化
 - **WHEN** 同一资源在切换激活工作区前后被引用
@@ -94,13 +94,13 @@
 
 **归属与引用**：星型解析 / star-topology resolution 的唯一顺序、hub/spoke 关系、policy 常量上界（`visited set`、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）与「locator 是输入，不是输出」不变量的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「URI 解析必须是星型且以 policy 常量界定上界」。本 capability 只**具名引用**该 requirement，MUST NOT 复述其正文、MUST NOT 为会话上下文另立第二套解析顺序，也 MUST NOT 新增拒绝码。
 
-会话上下文资源的解析 MUST 复用该唯一星型顺序，MUST NOT 为会话上下文单开第二条解析路径；跨边界传输 MUST 只包含资源身份、URI、revision 与内容，MUST NOT 传输 real path。
+会话上下文资源的解析 MUST 复用该唯一星型顺序，MUST NOT 为会话上下文单开第二条解析路径；跨边界资源关联 MUST 使用身份、URI、revision 与内容；目标机器参数、展示与诊断路径按统一 URI owner 职责合同处理，不由 source 本机解析。
 
 已支持的单会话视图、会话清单与搜索 MUST 采用同一目标解析与授权链，由目标端既有查询 owner 执行。清单或搜索目标 MUST 保留真实资源引用，MUST NOT 伪造 Session ID 或回退到当前激活工作区；请求授权 MUST 绑定该资源引用与实际查询字段。
 
 #### Scenario: 跨 gateway 只回内容
 - **WHEN** URI 的 gateway authority 指向对端且对端可达
-- **THEN** 对端在本地解析该 URI，响应中只包含稳定身份、URI、revision 与内容，不含任何真实路径、provider locator 或解析 locator
+- **THEN** 对端在本地解析该 URI，响应的资源目标使用稳定身份、URI、revision 与内容，展示或诊断路径不作备用目标，不公开内部 provider locator
 
 #### Scenario: information 与搜索不外投诊断物理位置
 - **WHEN** 读取 `view=information` 或搜索 `session_information`，包括其远端与持久观察入口
@@ -124,7 +124,7 @@
 
 #### Scenario: 命中不返回 locator
 - **WHEN** 任意跨边界解析命中
-- **THEN** 响应只含稳定身份与内容，既不含 real path 也不含任何 locator 形式
+- **THEN** 响应的资源目标使用稳定身份和 URI，不要求消费者打开目标机器展示路径
 
 #### Scenario: 不可达时 fail-closed
 - **WHEN** URI 的 gateway authority 指向的对端不可达、未共享该资源或目标资源不存在
@@ -172,7 +172,7 @@
 
 #### Scenario: API 不输出配置来源真实路径
 - **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
-- **THEN** 响应体不含真实路径；URI 与其它来源字段遵循 owner 的平级字段和 nullable URI 规则
+- **THEN** URI 与其它来源字段遵循 owner 的平级字段和 nullable URI 规则，展示及诊断路径按字段职责合同保留
 
 #### Scenario: 配置来源 layer 规则单向引用唯一 owner
 - **WHEN** 会话上下文 change 描述配置来源的逻辑 layer、precedence、runtime override、物理 carrier 或 active/pending snapshot

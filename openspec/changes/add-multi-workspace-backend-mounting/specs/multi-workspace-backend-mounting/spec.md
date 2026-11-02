@@ -186,7 +186,7 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 #### Scenario: 跨 gateway 解析不返回 locator（星型解析 / star-topology resolution）
 
 - **WHEN** Gateway 经**星型解析 / star-topology resolution** 的 hub-spoke 有界 transit 解析另一个 gateway 上的工作区资源
-- **THEN** 命中结果 MUST 只包含稳定的**资源身份 / ResourceIdentity** 与内容，MUST NOT 返回或携带 locator（含本机**真实路径 / real path**）
+- **THEN** 命中结果的资源目标 MUST 使用稳定的**资源身份 / ResourceIdentity** 与 URI；原生展示或诊断路径不得被隐式用于消费者本机文件访问
 
 #### Scenario: 跨 gateway 不可解析时 fail-closed
 
@@ -202,10 +202,10 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 - **WHEN** 一条持久化记录引用某工作区资源
 - **THEN** 其含义 MUST 由记录内显式 workspace 身份决定，切换或改变进程激活态 MUST NOT 改变其解析结果（**三层分离 / three-layer separation** 不变量）
 
-#### Scenario: 真实路径 / real path 不落盘
+#### Scenario: 资源关联不另建原生路径定位关系
 
 - **WHEN** 系统写入一条引用工作区资源的业务持久化记录或返回普通 Workspace/API DTO
-- **THEN** 其中 MUST NOT 出现**真实路径 / real path**，只允许 `资源身份 / ResourceIdentity` 与`资源 URI`（必要时加独立 revision 字段）；工作区根绑定按本 capability 的控制面 requirement 单独保存
+- **THEN** 资源关联 MUST 使用 `资源身份 / ResourceIdentity` 与`资源 URI`（必要时加独立 revision 字段）；参数、展示、正文、诊断及必要原生配置按统一 URI owner 职责合同保留，工作区根绑定仍由本 capability 控制面唯一保存
 
 ### Requirement: 破坏性迁移与回滚必须有明确边界
 
@@ -231,4 +231,4 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 - **WHEN** 迁移执行到任一步骤
 - **THEN** 必须能明确说明该步是否可回滚及回滚后的状态，不可回滚点 MUST 显式标注
 
-未注册目录不是本 capability 的 mount 或工作区注册，不得伪造 workspace_id 或增加 WorkspaceTarget。其 URI、唯一原生 Gateway 控制面目录根绑定及路径持久化例外只引用 `add-unified-virtual-resource-addressing` requirement「原生目录根绑定必须由目标 Gateway 唯一持有」，不改变本 capability 的 workspace-root binding 合同。
+未注册目录不是本 capability 的 mount 或工作区注册，不得伪造 workspace_id 或增加 WorkspaceTarget。其 URI、唯一原生 Gateway 控制面目录根绑定及字段职责只引用 `add-unified-virtual-resource-addressing` requirement「原生目录根绑定必须由目标 Gateway 唯一持有」，不改变本 capability 的 workspace-root binding 合同。

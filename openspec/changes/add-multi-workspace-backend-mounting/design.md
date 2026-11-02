@@ -68,7 +68,7 @@
 
 **决策**：Gateway 仍负责为请求选择目标工作区，但目标 MUST 经 D1 的显式载体传下去，后端 MUST NOT 猜测。跨 gateway 时，**网关授权段 / gateway authority** 承载**稳定 gateway_id**；拓扑是**星型解析 / star-topology resolution**（hub-spoke，非全互联）：本机是自身联邦 hub 时可直接解析其直接 spoke；本机是 spoke 时经其唯一 hub 做**一次有界 transit**（`visited set` / `max_transit_gateways=1` / `max_gateway_hops=2` / 总 deadline）。解析命中只返回稳定的**资源身份 / ResourceIdentity** 与内容，不携带 locator（locator 是输入不是输出）。不可解析一律 fail-closed 返回结构化**拒绝码 / rejection code**。这些上界 MUST 作为**显式策略常量**，不得散落为硬编码魔法数字。
 
-**理由**：契约 v2 的 D 条已把**星型解析 / star-topology resolution** 细化为 hub-spoke 有界 transit；Gateway 的「选目标」职责与此一致——选出的目标必须以稳定**资源身份 / ResourceIdentity** 显式表达并向下传递，解析结果不得把 locator（含**真实路径 / real path**）反向带回，否则跨边界会泄漏本机路径语义。
+**理由**：契约 v2 的 D 条已把**星型解析 / star-topology resolution** 细化为 hub-spoke 有界 transit；Gateway 的「选目标」职责与此一致——选出的目标必须以稳定**资源身份 / ResourceIdentity** 显式表达并向下传递，解析结果的资源目标使用 URI，原生展示或诊断路径不能被消费者当作本机目标或第二定位关系。
 
 **Non-Goal**：本 change 不实现解析链本身（属寻址 change），只声明 Gateway 角色与传递约定同它一致。
 
@@ -150,4 +150,4 @@ Gateway自身generation proof/CAS成功前保旧共享owner/handle/完整清单�
 - 后端身份命名空间（严格 UUID）与 Gateway `gw_` 工作区 ID 是**收敛为一个**还是保留「Gateway 控制面 ID + 后端寻址 UUID」两层映射？本 change 已规定**寻址层只用后端 UUID 命名空间**，此问仅影响 Gateway 控制面是否继续保留 `gw_` 别名，属可延后决定，不改变 spec 的工作区身份定义与任务分解。
 - 已挂载工作区的**发现方式**（静态配置 / Gateway 下发 / 启动参数）不影响寻址语义，可延后到实施细节。
 
-未注册目录不是本 capability 的 mount 或工作区注册，不得伪造 workspace_id 或增加 WorkspaceTarget。其 URI、唯一原生 Gateway 控制面目录根绑定及路径持久化例外只引用 `add-unified-virtual-resource-addressing` requirement「原生目录根绑定必须由目标 Gateway 唯一持有」，不改变本 capability 的 workspace-root binding 合同。
+未注册目录不是本 capability 的 mount 或工作区注册，不得伪造 workspace_id 或增加 WorkspaceTarget。其 URI、唯一原生 Gateway 控制面目录根绑定及字段职责只引用 `add-unified-virtual-resource-addressing` requirement「原生目录根绑定必须由目标 Gateway 唯一持有」，不改变本 capability 的 workspace-root binding 合同。

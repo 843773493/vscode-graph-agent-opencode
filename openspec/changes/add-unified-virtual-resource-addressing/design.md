@@ -16,7 +16,7 @@
 
 **Goals**
 
-- 把「身份 / 地址 / 真实路径」三层分离落成**唯一 owner 与唯一实现**，并给出可机械检查的不变量。
+- 把身份、资源目标与原生信息的字段职责落成唯一 owner 与唯一实现，并在真实消费者执行可机械检查的校验。
 - 给出一套统一 URI 语法（保留 `resources` 固定段序）与规范化单一实现、**定稿**的 scope 闭集、scope_id 语义表与 kind 闭集。
 - 给出**分三套**集中登记的拒绝码（grammar 分段编码修订闭集 + resolve 7 + 联邦解析期）与其不混用约束；resolve 闭集包含 `unsupported_view`，专用于已识别的 view 与资源 kind 不兼容。
 - 给出顶层 gateway 之间**星型解析**的边界契约，并把上界做成显式 policy 常量。
@@ -33,172 +33,29 @@
 
 ## Decisions
 
-### D1：三层分离以「谁持久化 / 谁可跨边界」为切分线
+### D1：按字段职责区分身份、资源目标与原生信息
 
-- **ResourceIdentity**：持久化，无 revision，不依赖激活工作区 → 用于去重与 lineage。
-- **URI**：持久化，允许悬空，禁 revision/hash → 软件内部与模型可见载荷的默认引用形式。
-- **real path**：资源访问时仅在原生 owner 的最终 fs/sqlite 调用点及必要局部链路临时使用，不作为资源引用进入模型载荷、普通响应 DTO、解析结果或跨 Gateway 资源投影。原生目录选择/注册和普通文件原生路径是具名请求输入，不放宽输出/持久化边界。物理 workspace root 与用户显式选定的未注册目录根是两类具名控制面持久化例外，均只由原生 Gateway 持有；前者合同引用 `add-multi-workspace-backend-mounting`，后者见 D1b。原始诊断日志和 Browser 页面 URL 的两项具名例外仅按 D1c 与对应 spec requirements 生效，不改变资源引用的三层职责。
+`ResourceIdentity` 是稳定、revision-free 的业务身份；URI 是可解析且允许悬空的资源目标；原生路径是目标机器的文件系统参数或信息。资源关联和通用文件操作统一使用 URI。原生路径允许出现在明确目标的操作参数、展示、用户正文、诊断及必要的原生持久配置中，不建立第二权威定位关系。
 
-资源激活领域校验在原拒绝点组织字段与规则说明，被拒绝的值和未知字段名只附于完整异常的诊断 notes，不进入公开异常正文或 args。该纯领域链不增加日志或 I/O，原校验规则、错误码、异常类别和原因链保持；恢复层继续传播同一拒绝，不修复或重建已封存记录，policy 的原 ValueError 也遵守同一正文边界。
+声明为 URI 的字段沿唯一 grammar、owner binding、能力及授权校验；普通信息不按路径形状扫描。metadata 键名与是否可传给 open 不足以判定字段用途。旧“所有普通响应／持久记录出现 real path 即缺陷”规则由本职责合同取代，凭据与秘密保护保持。
 
-文件和会话目录继续共用原 operation ID 校验器，类型或格式拒绝只公布对应纠错说明，非法值附于原异常notes。两个状态查询的原400映射复用`report_failure`记录完整诊断，不在schema中增加日志I/O；请求体继续由原422处理器校验，不增加参数校验层。原异常类别、原因链、严格格式及合法未知ID语义保持。
+调试运行态的 script_path、working_directory、断点／调用栈 path、源码变更路径及方案摘要允许原生展示路径；导航 URL 和启动能力仍使用 URI。可移植方案的路径校验单独保留相对语义，不把运行态展示字段当作方案配置。stderr 沿原读取器进入有界 output，保留 Inspector 握手、stdout 日志点协议、单行／行数限制；动作只保存必要摘要，不复制完整日志。
 
-`display_uri` 先交中央 grammar 判定合法性；仅在 parser 拒绝后，领域层按原路径／locator／credential／旧字段形态归类错误码。内部 identity 仍使用原严格校验，不能把其字符限制套在合法文件 child 上。provenance 只验证冻结 URI，不在反序列化时用 parser 返回的规范形式替换原字节；新引用仍由既有构造入口生成，历史恢复不取得当前文件或配置。
+Workspace／Session 资源 metadata 只验证对象结构；定位字段在具体 typed schema 和 owner 明确声明。删除按 path/cwd/directory 后缀扫描的实现及调用，不留空兼容函数。真实 cwd_relative 的原生相对约束仍由其资源 owner 执行。
 
-会话文件变更的修改对象保存 files URI，冷读索引和 reviewed map 使用与写入相同的引用校验。before/after/diff 快照由 session/edit 身份在存储 owner 内重推导，不保存等价相对 locator，也不在 DTO/事件重复输出；前端继续使用已有 diff_text 与 preview。移除旧字段及全部消费者，protobuf 保留已发布编号和名称，旧落盘字段明确失败而非双读迁移。
+已知文件操作使用已核定的文件错误事实保留目标、系统码与原因；不能把任意异常全文当作可公开诊断。Provider、凭据、配置正文和内部校验输入继续按来源保护。共享失败出口保持异常身份、cause、request_id 与日志次错结算，不为展示路径引入另一错误存储链。
 
-Gateway与Workspace的active快照解码catch在原恢复标记写入之前复用`failure_detail`，last_error保存config_domain、config-active-decode阶段和原异常类别，不复制可能含位置的转换错误正文。原异常与原因链只留诊断并原样重抛，日志sink失败仍完成原恢复事务。原读取/关闭顺序、SQL、state/last_error更新边界与其它快照字段保持；冷重开不重建损坏active，外部修复字段后也不自动清除recovery_required，离线诊断继续消费同一已提交记录。
+### D1a：三种文件输入在目标端统一解释
 
-持久任务的执行结束来源读取、动作对账/准入及模型判断对账/准入/结果读取，在原异常被转为任务reason或run.error之前复用`failure_detail`。记录保留任务、运行、来源/目标URI、阶段及原异常类别，完整原异常与原因链只进入诊断；不从异常正文提取或改写路径。原失败阶段、needs_attention、check_only、revision复核、接受对账和显式恢复保持。会话生成动作在原失败结算点使用同一出口，保存任务、运行、工作区身份与generation-action阶段；保留已有generation state、已接受Job及mount_missing的pause/fail差异。脚本/模型返回的合法业务判断与用户正文继续遵守原输入合同，不用统一错误包装抹掉其语义；旧生成器导入等失败出口须分别核验，不据本片宣称全部任务出口完成。
+相对路径以显式工作区或目录为基准，绝对路径由目标机器按原生语义解释；Windows 盘符和工作区外路径不能去根后拼回工作区。三种输入复用同一文件 owner。DeepAgents 内部虚拟路径使用明确入口，不与用户绝对路径混用。终端／shell 继续原生语义。跨 Gateway 中继只传送固定目标参数，不在本机解析。
 
-会话动作的`created_from_uri`由原DTO在构造和序列化时调用唯一Session/Thread URI解析器，两个业务入口不再分别校验。原生路径、其它资源类型和附带版本query拒绝；Session、Thread、远端与悬空来源及原有NULL保持。请求沿既有DTO入口报告422，冷读损坏仍由共享HTTP出口报告500，原输入只留诊断；复制后的非法来源不能进入原SQLite定义事务。该字段仅为来源引用，不查当前catalog、不改写历史URI或生成提示正文，也不新增存储或恢复入口。
+### D1b：目录根继续由原生 Gateway 唯一绑定
 
-共享runtime wakeup在原派发catch内复用同一`failure_detail`，last_error保留Session/Thread、Job/execution/admission、dispatch generation和失败阶段，不复制异常正文。原异常在冻结的request/Gateway上下文内记录后原样重抛，finally恢复调用者上下文；原SQLite事务与generation CAS保持。恢复只消费原持久准入，回执写入失败不删除已接受的Job或创建第二份执行，终态重派只形成原Job回执。
+未注册目录使用既有 gateway/files/{directory_id} URI，原生 Gateway 唯一保存 native_root 绑定；不伪造 workspace_id 或自动注册。文件操作仍由目标机器的原 owner 执行，快捷目录、operation、watch 和跨 owner 关联保存 URI，恢复重新向目标 Gateway 取绑定。展示路径可保留，但不能在 URI 失败时成为备用定位链。
 
-Node 调试启动的原生错误在原 catch 内复用 `failure_detail`，统一输出 Session/Thread、node-debug-launch 阶段、异常类别与适用系统错误码。删除局部日志出口；日志次错附到原异常而不打断 failed 状态、start_failed 动作、manifest 与 claim 结算及原进程清理。公开文本的异常类别字段统一为该原语的 `error`，不另存一份错误状态。非原生的明确启动协议拒绝沿原合同保留，冷读及显式同方案重试仍由原 owner 执行。
+### D1c：原生日志与 Browser 页面 URL 按用途保留
 
-资源 lease 账本的原生访问和信封拒绝由原 owner 的单一抛错方法复用 `failure_detail`，阶段仍为 read／write／validate，明确字段规则保留，文件位置只附在原异常 notes。所有调用方迁齐后删除旧字符串出口与局部 logger，外部异常保留类别、系统错误码及直接 cause。结算／对账先提交后通知的顺序保持；通知 catch 复用同一原语，原有64条有界错误摘要仅记录资源身份、状态、resource-state-notify 阶段及类别。日志次错不替换原拒绝，也不让已提交的成功被当作业务失败或阻止后续资源通知；不持久化通知摘要、不重试通知、不改变资源终态或回收判定。
-
-Terminal／Browser 的外部清单身份、工作目录及创建失败回执拒绝复用 `report_failure`，删除两个局部 logger。清单拒绝保持原类别与已登记公开规则，被拒绝的完整输入只附在原异常 notes；日志失败不能发布候选清单或改变 owner／lease。创建失败回执不合法时，诊断继续携带同一个原创建异常及 cause，不以日志次错替换；原 unknown 与精确占用继续可发现，仅由正式管理停止回执核实后结清，不因存活查询、日志恢复或重启自动重放创建。
-
-ChatGPT／Codex凭据的原生访问与具名access_token／tokens拒绝复用同一 `failure_detail`，删除本地logger。原文件位置只附在原异常notes，字段规则、异常类别、直接cause及适用原生错误码保留；日志次错只公开类别并附到原异常，不替换主错、不进入Provider公开配置错误。文本采用统一出口的 `artifact=…: stage=…` 格式，适用原生错误码按实际字段公布，不额外复制缺省None；调用方不解析这段诊断文本，不保留第二格式。首次迁移、过期刷新、临时描述符归属、发布与清理双错、并发不覆盖和同入口显式重试仍由原唯一认证owner承担，不新增登录／刷新或诊断回退链。
-
-Provider可用性和选中模型的构建失败统一在工厂调用既有`execution_failure_message`／`report_failure`，删除原fallback局部logger及原文拼接。原生I/O、内部Pydantic和SQLite只发布原错误事实，保留原异常参数与直接cause；业务拒绝原说明保持。凭据owner在生成已分离说明的原抛错处通过`mark_public_failure`登记，工厂直接消费该说明，不重复记录或从文本判断安全性。首选构建失败仍终止，fallback继续按原顺序跳过不可用候选；不改模型路由、准入、Job结算或历史writer。
-
-**理由**：审计发现的真实缺陷正是资源路径泄漏（skill 目录扫描、`skillPaths.ts` 解析物理路径、catalog URI 裸拼接、`ConfigSourceLayerRecord.source_path` 落库）。资源引用以身份和 URI 表达；原生 Gateway 根绑定是目标生命周期的控制面输入，不能作为 URI、资源记录或跨 Gateway 资源投影携带。
-
-**备选**：把 revision 编进 URI（被否：revision 变化会让同一资源产生不同地址，破坏「地址稳定、revision 独立」）；把 real path 作为可选调试字段随资源记录持久化（被否：正是当前要消除的违约）。将 workspace root 复制进 managed-group 或联邦记录同样被否；只允许原生 Gateway 控制面持有具名根绑定，注册请求必须由 `add-multi-workspace-backend-mounting` 的唯一 root-binding requirement 授权后作为控制面输入送达原生 owner，中继不持久化或转为资源数据。
-
-上游模型失败从原候选路由事件及共用执行消息出口分离公开事实与完整诊断：Provider 失败标记、判定和执行消息合同统一归 `app.core.failures`，SDK 临时失败分类仍留 runtime，领域错误模块不反向依赖运行时。事件保留候选身份、模型、阶段与异常类别；Job、消息流、Trace、检查点及 LLM 请求的响应/attempt 错误沿原 owner 保存事实，完整原异常只进入诊断。所有旧导入迁齐后物理删除旧定义，不保留转发。原生 I/O 与明确本地业务错误的既有合同、仅推理响应的既有说明、候选顺序、用户取消、本地 preflight、重试次数及最终异常实例/cause 保持；上游恢复后通过原发送入口继续，旧失败记录不被新调用覆盖。
-
-执行内部的 Pydantic `ValidationError` 与 canonical 领域 `ItemSchemaError` 同样由该执行消息出口分离：公开记录只保存校验失败事实和异常类别，不复制字段名、动态字典键或 `input_value`。沿用原领域校验与拒绝，不改写原异常或另建校验器。消息转换不重复写日志，原执行出口仍记录同一异常及完整输入；日志次错只附到原异常并公开类别，不替换原失败。已标记的 Provider 校验异常继续保留 Provider 归属；原 Job、消息流及模型调用身份、canonical 顺序和已封存请求保持，同一 Thread 可由原消息入口继续。
-
-一次性 v1 历史导入的失败审计同样消费 `app.core.failures`，以既有 migration_id 定位失败；来源/目标 SessionThread、状态与回滚事实继续由原审计记录持有，系统错误码和 JSON 坐标保留。完整异常只留诊断，原实例继续抛出，包括中断；安装前隔离与安装后保留 v2、marker 验收及冷恢复顺序保持，不增加迁移 schema 或第二审计入口。
-
-rollout schema 维护迁移同样在原失败 journal 写入处使用该出口，以原 from/to version 表明失败阶段；SQLite 仍持有原迁移名、校验和与归属。原异常继续抛出，备份恢复、失败 journal 与 recovery_required 提交顺序及 SQL 资产不变；失败不能改写既有 canonical、checkpoint、assembly、view 或追加成功控制事实。
-
-固定扩展工具信封仍只调用原 `validate_model_tool_arguments`。校验失败在原 catch 中复用 `failure_detail`，将完整 Pydantic／JSON Schema 异常留诊断及直接 cause；公开 issues 只从原异常取得规则和深度，顶层参数名限标识符，保留未知字段的纠错提示，不复制输入值、嵌套字典键、非标识符键或 schema 正文。动态键可能本身就是原生路径，不能直接把 `loc` 或 `absolute_path` 当作公开错误坐标；这一格式只表达结构信息，不扫描或改写异常正文。目标零执行、固定信封的名称与调用配对、canonical 终态、后续纠正调用和 assembly 请求封存沿原链保持，不建立第二校验器或结果存储。
-
-扩展目录的共用完整 schema 摘要和封存 dispatch binding 字段转换，继续由原构造器拒绝；公开包装只附原原因的异常类别，动态键及被转换的原值留直接 cause，不在纯绑定构造中写日志。原错误类别与 `extension-catalog-unavailable`、输入和绑定不可变性、摘要 preimage、历史 hash 核验及不回退当前目录的规则保持。
-
-主题语义校验在原 validation owner 共用 `reject_theme_value`，由原 token 与背景类型／外观规则调用，不另设校验器。公开信息只含固定字段、原规则和失败事实，未知 token 名及全部原值只留 `failure_detail` 的诊断和 cause；已登记 token 的名称可作为字段坐标。目录、设置、配置快照和背景引用的消费者继续复用原解析链，原 409、request_id、失败零写入和修正后恢复保持，配置族、合并顺序、版本与主题资源身份不变。
-
-图片资源 owner 的原生存储、清单解码及字段拒绝同样复用 `failure_detail`，删除原局部 logger。公开错误保留资源身份、规则、操作、阶段、类别及适用系统码／解码坐标；原位置、原值和日志次错只附于原诊断与 cause。日志故障不能取代原拒绝、改写损坏清单或发布候选；实际读写与引用更新仍沿原 owner，在修复后由原 HTTP 入口显式重试。
-
-固定Skill目录对账与底层共享watcher的失败复用 `failure_detail`，原异常和日志次错留诊断，原生读取摘要只带目录身份/作用域、阶段、类别与适用错误码，已有业务拒绝说明保留。原快照、revision、通知及观察代次仍由同一owner发布；删除转发监听错误的重复日志及watcher启动/ready/停止的直接日志，避免日志故障阻断ready、不可用发布或释放。catalog继续消费同一accepted向量，发布后的不可用诊断复用同一出口，不能因诊断失败结束后台producer；来源修复后继续沿原通知和派生链更新，不增加重试、错误账本或第二发布链。
-
-来源拒绝的公开说明归 `observed_source` 合同所有：明确业务拒绝在构造原异常的位置登记，已有闭合的 `StableSourceReadError` 和 URI grammar 拒绝沿用其规则说明。登记保留原实例、类别、参数和原因链，不新增包装异常；目录对账只将这些受控说明交给同一个 `failure_detail`。未登记的 `RuntimeError`／`ValueError`（包括原生路径解析、枚举及下游绑定失败）只公开身份、阶段和类别，即使正文与业务拒绝使用相同前缀也不能取得原文发布许可。真实位置及原文留诊断，不做字符串扫描、截断或路径猜测；修复后仍经原来源、快照、通知和 catalog 链恢复。
-
-提示词文件的 execution readiness 同样消费该来源合同：R01／R02 的普通错误只带选中 URI、准入阶段及原异常类别；只有原构造点登记的 owner 绑定拒绝、稳定读取拒绝和唯一配置校验入口已分离正文的字段规则可以附带说明。原文件加载继续抛回同一异常并保留冻结配置，readiness 的拒绝以它为直接 cause；诊断日志故障只补次错类别，不阻断 Job 失败结算。文件修复后仍由原 reload 和消息入口恢复，已封存 assembly 不改写，不增加第二文件读取、可用性账本或模型响应实现。
-
-附件预览失败继续由原内容构造 owner 保留原件、URI 和失败标记，图片与视频共用既有 `report_failure` 诊断出口。公开说明保持原资源身份、预览阶段、异常类别和适用系统错误码，日志写入再失败只追加次错类别，完整原错与日志位置保留在诊断及原异常附注中。原消息准入、canonical 组装和模型请求封存顺序保持；不新增错误账本、预览重试或内容 writer，冷读与后继执行不能重建或改写旧预览事实。
-
-消息流持久读取拒绝在原存储 owner 共用 `report_failure`：原生原因和被拒绝的值附于原异常诊断，公开校验说明保持，日志调用抛错只追加次错类别。已捕获的校验异常保留同一实例，原生读取失败保留直接 cause；不将日志文件故障传播为资源不存在。事件、状态快照、索引、已应用事件记录和流标识沿同一链迁齐，完整恢复校验仍先于缓存发布；故障解除后重读原事实，不新增日志回退、错误账本或恢复 writer。
-
-### D1a：保留三种文件输入，在目标端统一解释
-
-普通文件入口接受相对路径、绝对路径和资源 URI，引用公共 spec「普通文件入口必须保留原生路径输入并统一目标解析」。输入分类复用同一原语：目标平台原生绝对路径优先，只有输入开头的协议形式交给唯一 URI grammar；不能将原生路径中间的 `://` 当协议。POSIX 的 `./build://debug` 和对应绝对路径按原生目录处理，URI 输入的未知协议和非法地址仍明确拒绝、不回退。先固定目标 Gateway/机器与工作区或选定目录，再在目标端按原生平台解释路径，归入同一文件 owner；中继当前目录、source 文件系统与激活工作区切换都不能改变目标。工作区内路径可转换为已有 URI；工作区外路径沿既有能力和授权处理，不能偷偷改为工作区内目标或强制先注册。Windows 盘符与路径分隔符不能先被 source 的 POSIX 规则改写。
-
-原生路径只作为请求输入及目标端临时访问值，内部持久引用、普通响应和跨 Gateway 资源投影继续采用 URI；没有现成 URI 模板的外部目标复用既有 owner/API，不增造 kind、第二解析器或第二操作链路。终端/shell 保留操作系统原生语义；Gateway 原生目录选择/注册是独立管理能力，其裁定不构成普通文件绝对路径禁令。
-
-Windows 长路径复用 `native_io_path`，只在既有目录扫描、元数据、文本发布、归档和下载传输的原生 I/O 点扩展。文件 owner 仍以逻辑路径核对归属、私有目录及暂存目录，不能把扫描返回的扩展路径用于这些比较；普通响应、operation 回执、目录键与业务记录继续使用 URI。创建成功后的列表、读取、编辑和下载必须能访问同一个长路径目标，不能把传统路径长度限制误报成文件不存在。
-
-文件导航库在原构造作用域登记SQLite关闭责任，仅在schema和owner校验全部成功后交给原文件owner。版本、缺表与归属错误使用稳定工作区身份；物理位置及损坏owner原值保留诊断。原生文件/SQLite错误保留类别、错误码和直接原因，不从错误正文猜测路径。初始化失败不发布owner、不静默重建库；修复原输入后同一服务沿原启动入口重试，schema版本与SQL资产保持原合同。
-
-文件树的未注册目录浏览、编辑与快捷目录必须保留。迁移前由本寻址 owner 补齐这类目录的规范引用，不让消费方私建 URI 模板；目录选择本身不等于工作区注册，不得借用当前 workspace_id 冒充归属。接口/快捷方式持久化的真实路径清理必须与该能力同批迁齐，验收浏览→编辑→保存快捷目录→重开全链路，核工作区注册表没有新增或变更；不能将「先注册再访问」作为替代方案。
-
-原 `_absolute_to_workspace_relative()` 曾经用 `path.lstrip("/")` 将外部绝对路径改投工作区，且混用了 DeepAgents 虚拟根；该转换及其直接、间接调用方已随 `d7f7b94d` 删除，用户输入由统一文件 owner 在目标平台解析。聊天 Markdown 只提取展示坐标并在 URL 编码前封装原目标，不解析工作区根、不解码原生路径；只有普通相对简写的真实 404 才保留既有唯一文件名查找，显式绝对路径或 URI 失败绝不改投同名文件，打开引用以内容 owner 返回的 URI 为准。验收从真实读写入口比较三种输入的实际对象，并用外部文件与工作区同名对照文件验证无误读/误写；Linux 跨 Gateway 验收见 `4af8b758`，Windows 盘符与跨系统文件 API 见归档变更 `2026-10-28-add-unified-resource-file-tools` tasks 3.4 的 `native-windows-federation-007`，已核目标端原字节及 source/relay 不变。该历史固定候选不代当前 HEAD 或模型工具验收；UNC 共享仍待实机验证，不能只测字符串 helper。
-
-源码调试方案的输入与已解析正文共用一份字段定义，但分别声明路径约束。创建／更新／导入输入允许原生路径，由既有目标工厂统一解析后构造已解析方案；普通导出、原持久 writer、冷读及 fork source 都使用同一已解析模型的构造与序列化校验，拒绝绝对位置和 file URL。冷读不能先把损坏的持久绝对位置送回工厂归一而掩盖缺陷。输入与正文仍沿同一解析、存储和恢复链，公开字段及持久格式不变，不新增 schema 版本或迁移。
-
-### D1b：未注册目录使用 Gateway files 根，控制面绑定与文件执行分离
-
-固定模板为 `boxteam://{gateway_authority?}/gateway/{gateway_id}/resources/files/{directory_id}`，directory_id 由原生 Gateway 创建稳定 UUIDv7；文件 child 使用同一 grammar。不是工作区，不借用执行路由的 workspace_id，也不注册 `WorkspaceTarget`。工作区内路径优先归为已有 workspace files/root。
-
-Gateway 在现有控制面 SQLite 中唯一保存目录 ID→原生根绑定，作为用户明确选定目录的持久控制面事实；这与工作区 mount root 是两类具名例外，不能扩为普通记录路径许可。路径归一/选择入口固定原生 Gateway/机器，依现有文件认证与目标权限解释三种输入，返回 URI/显示名/能力。远端 Gateway 经既有目标路由接受输入并在自身平台解释；source/relay 不解析、不保存根。
-
-文件树、编辑器、快捷方式、目录版本与 operation/SSE 统一消费 URI；删除 filesystem: 展示伪协议、绝对 root_path 和业务库 real_path 等旧引用。后台 staging 只记相对 owner 的稳定 operation/step 身份，源/目的文件记 URI。保留当前精确目录 revision、条件编辑、部分/未知效果、分页快照、去重和同 ID 恢复合同，不用改预期来掩盖失败。
-
-文件 operation 的执行错误及 worker 退出复用现有 `failure_detail`，公开原 operation/目标 URI、失败类别和阶段，日志次错附到原异常并只公布其类别。诊断故障不能阻止拒绝／未知效果落盘或失败信号唤醒；可核实的拒绝继续原 FIFO，未知效果仍保留 staging 并停止后继，重启沿原记录拒绝盲重放。发布、CAS、结算事务、清理及 worker 归属保持，不增加日志回退或恢复 writer。
-
-普通文件最终 I/O 边界与原生错误格式化同样复用 `failure_detail`，删除两处独立日志调用。文本、目录、下载准备和延迟传输继续经原 `file_access` 保留类别、错误码、目标 URI、阶段及直接 cause，结构化文本回执继续消费同一错误事实；日志次错附到原异常，只公开其类别。原 HTTP 分类、临时文件清理和发布后未知效果保持，不新建异常解析器、日志回退或文件执行链。
-
-Gateway 用户 profile 的文件预览与目录展开引用同样只保存文件 owner 已返回的 files URI；冷读和更新共用 DTO 校验，旧路径明确失败且保留原件。设置请求及冷读错误只报告字段与类别，不把原生输入或磁盘旧位置复制到普通响应。
-
-Gateway 只为目标端现有文件 owner 提供受认证的同机临时绑定，不执行 enumerate/read/write。首次请求与后台恢复都必须能按 URI 从原生控制面取得绑定；不能只依赖一次请求注入的缓存，也不能把根复制到业务库。实际执行继续复用 WorkspaceService/WorkspaceFileOperations；执行路由是服务归属，不改变资源归属。缺绑定明确失败，不回退当前工作区。实现同批迁齐所有直接/间接消费者后下线旧路径链，不留下 URI wrapper 与旧绝对路径两套执行。
-
-原生目录控制链的 schema 与回执校验失败复用 `failure_detail`，原始回包附在原异常诊断中，普通错误只公开 bind／resolve、response／envelope 阶段、异常类别和原校验规则／数量。日志故障只补充其类别，不能替换原拒绝或开始扫描、发布目录观察。原 loopback、认证、request_id、owner 与绝对根校验保持；修正回包后沿原请求重试，不缓存损坏绑定或增加另一根解析链。
-
-绑定及解析回执的 `uri` 在 DTO 构造和序列化时共用唯一 grammar 校验，只允许无 authority、无 child 的 Gateway files 根。复制或赋值不绕过发布校验；客户端消费该 DTO，不另留一份根形状校验。解析回执与请求根的精确归属核对仍由客户端承担，认证同机链路中的 `native_root` 临时传递合同保持。
-
-### D1c：原始诊断日志与 Browser 本地页面 URL 的具名例外
-
-2026-10-23 用户明确裁定，唯一寻址 owner 登记以下两项例外，消费者只引用对应 requirement：
-
-1. Gateway 原始诊断日志管理入口：用户主动打开、受现有管理权限保护的原始服务日志与异常堆栈可保留真实文件路径。联邦诊断传递同类原始日志沿用同一管理授权边界，不将日志文字转成资源引用、普通错误正文或解析结果。
-2. Browser 本地文件页面 URL：保留原生 `file:` 导航。用户明确打开的本地文件页面 URL 可保留在 Browser 地址栏、导航请求、相关错误、页面快照和恢复检查点，恢复时仍由冻结的目标机器按原生文件系统语义解释；中继与当前激活工作区不能改投目标。这里的恢复检查点许可只针对页面 URL，不包括 checkpoint 文件所在路径、下载/截图产物位置或其它 Browser 存储 locator。
-
-两项只豁免具名入口及列明字段，不为整个 Browser、Gateway diagnostics DTO、日志摘要、普通业务响应或其它持久记录提供路径许可，不新增 URI kind、解析器、文件操作链路或授权方式。普通文件的相对路径、绝对路径和资源 URI 继续按 D1a 在目标端统一解析并复用同一 owner。终端 cwd 的相对路径规范化合同保持。
-
-Terminal 的相对路径、原生绝对路径与目录 URI 解析共用 owner 的 `terminal_workdir` 失败出口；沿 `failure_detail` 保留原生诊断和日志次错，公开说明只带工作区身份或目标 URI、阶段、类别和系统错误码。原生路径保留 OSError 子类及 errno／winerror，URI 保持原 RuntimeError 分类；解析失败发生在资源 intent／lease／PTY 创建之前，Job 与恢复链消费同一公开异常，不另建错误扫描或脱敏链。修复用户原目录后的显式重试不改写旧执行和已封存请求。
-
-辅助服务WebSocket的访问、路由及上游失败也复用`failure_detail`保留完整诊断，关闭原因只使用固定阶段说明；不再截取原异常，避免原生位置外泄和多字节说明超过123字节。沿用1008/1011分类、既有鉴权与目标检查、取消和路由引用回收，不增加错误数据帧或重试链。
-
-已建立的联邦channel在收帧、心跳发送和未知方法处理异常处复用`failure_detail`，分别报告federation-channel-receive、federation-channel-heartbeat与federation-method阶段；原异常全文只留诊断，传输失败继续保留直接cause与cause_type。方法失败沿原错误码和correlation回包，既有FederationError及取消语义保持，后续请求仍可在原channel执行。channel关闭帧只发送已登记的稳定错误码，不截取完整说明；本地失败对象、原关闭分类与in-flight结算及任务回收保持。
-
-服务端鉴权/hello握手的拒绝沿同一规则只把稳定码发送为close reason，保留原1008分类和完整本地诊断，不把首帧原值或错误说明截取进关闭帧。失败不登记channel、不撤销或改写原凭据；修正请求后仍通过原鉴权、身份和hello链建立新连接，不以放宽验证恢复。
-
-联邦诊断查询保留本地目标预检的既有业务拒绝；远端请求与响应校验失败复用`failure_detail`，只公开阶段、异常类别、适用解析坐标与HTTP状态。原拒绝正文附在原异常诊断中，不截断或转成普通响应；原异常作为直接cause保留。原400/502、管理授权、请求ID和固定目标不变，成功响应中的原始日志仍按具名例外完整传递。
-
-会话目录搜索的首次同步与后台刷新同样只将失败事实放入工作区错误状态：沿原`failure_detail`保留目标工作区、该次同步请求ID、阶段、类别及适用HTTP/系统错误码，原异常留诊断。后台同步在创建任务前冻结原请求ID供请求与失败结算共用，不补造第二个ID；无快照仍为unavailable，有旧快照仍为stale，失败不覆盖旧快照或影响健康工作区，后续成功同步清除原错误。缓存schema与查询/排序/限制及原刷新准入保持。
-
-Gateway上下文搜索的fan-out汇总同样在原部分失败出口使用`failure_detail`处理未登记异常，删除异常正文的500字符截断；下游DTO校验输入只留诊断。`WorkspaceSessionContextAccessError`继续表示已登记、可由模型修正的访问拒绝，保留完整业务说明，统一由原响应预算决定是否收录条目。并发上限、资源身份核验、健康结果、排序、revision与cursor计算保持，不增加另一查询或错误存储链。
-
-目录浏览的本机与联邦入口复用同一失败事实出口：解析和远端请求报告 directory_browse，扫描报告 directory_scan，保留原400/403/404/502及request_id。原始异常及原因链进入诊断，不能将远端拒绝正文或本机原生位置复制到普通响应；日志再次失败仍保留原拒绝。修复后继续按原目标重试并发布原目录URI，不更改原生输入、未注册目录能力或注册表。
-
-Node 调试进程身份的 stat/boot_id 原生读取复用 failure_detail，分别报告 process_stat_read/boot_id_read，保留原异常类别、errno/winerror 与直接 cause。正常 PID 条目消失仍返回已终结，boot_id 缺失仍抛 FileNotFoundError；不改 API 分类、不回落身份来源。冷恢复的结算动作复用原 session_state，在追加前 ensure_loaded，避免未加载的方案选择和历史被 manifest writer 覆盖；不增加状态副本或恢复链。
-
-Node Inspector暂停后的局部变量读取，在原失败catch复用`failure_detail`记录Session/Thread、node-debug-variables阶段及异常类别和适用系统错误码，完整原实例留诊断；日志sink故障不阻止原状态结算。原状态锁与暂停/frame身份检查继续阻止迟到结果改写新状态，失效上下文、过期变量对象、取消及日志点说明保持既有处理。失败不重启进程或重发调试命令；后续显式继续/暂停沿同一进程与原命令链重新读取，不另存错误正文或建立恢复链。
-
-Inspector连接、远端命令拒绝及无效result在同一协议owner复用`failure_detail`，分别报告node-debug-connect、node-debug-command和node-debug-result；公开原Session/Thread、命令及整数协议错误码，原始说明和result只留诊断与cause。命令拒绝沿RuntimeError子类携带失效上下文/过期对象分类，原变量链只消费该分类，删除对公开错误文字的匹配。启动与断点消费者复用同一公开事实；原发送异常、超时、取消及pending回收顺序保持，不增加重试、连接缓存或另一启动链。
-
-Node进程的原始stderr沿读取入口逐行进入服务诊断，并附Session/Thread、方案与PID；普通失败消息只保留原退出码、握手期限或Inspector启动失败事实，不再保存诊断尾行。删除无生产消费者的stderr缓冲和Inspector原因正文副本，握手仍由原失败事件立即唤醒。stdout、日志点与断点源码快照保持原输入语义，不扫描或改写用户正文；原claim结算、持久动作和冷恢复沿同一owner执行。
-
-源码对账的失效断点清理在原catch复用`failure_detail`，记录Session/Thread、应用breakpoint_id及node-debug-breakpoint-invalidation阶段；原发送异常及完整说明只留诊断，Inspector内部可能含文件URL的breakpointId不公开。原失效标记、关联移除顺序、requires_restart及持久化保持；日志sink失败不阻断结算，重复读取不重放命令，不以动作记录声称远端断点已删除。
-
-远端托管清单与删除同样复用failure_detail，分别报告workspace_list和workspace_remove，不再从HTTP响应任意提取detail或截断正文。删除409只经既有GatewayRuntimeStateResultDTO读取blocked业务回执，保留完整组及blocker身份；无效JSON、信封、DTO或非blocked状态留诊断，普通响应保持远端409和原HTTP失败事实。拒绝不继续刷新投影或端口对账，成功重试仍沿原owner执行；旧正文helper在最后两个消费者迁齐后物理删除。
-
-验收区分正反两面：管理入口本地/联邦原始日志保留原文字且遵守既有管理授权；Browser 页面 URL 经原生导航、失败、快照、重启恢复仍指向目标端原文件；同时核普通错误/资源引用、checkpoint 文件位置、下载/截图位置不借此获得真实路径许可。规范登记本身不代替这些产品验收。
-
-Browser脚本执行在操作队列写入回执前，按原生`errno/syscall`或Node保留错误码命名空间`ERR_*`及`MODULE_NOT_FOUND`识别宿主运行时错误，复用原`browserRuntimeFailure`发布browser/page/run_code阶段及原code/status，完整原因链只留诊断。模块加载位置不属于页面URL例外；不按正文或路径形状猜测错误来源。普通脚本Error、语法错误、字符串throw、业务code和工具超时仍沿原合同，不改变操作结算、资源状态、lease或后续同页重试。
-
-联邦凭据的唯一读取owner在原文件句柄上完成权限核验与解码，按open/permissions/decode/close/validate报告阶段。普通异常保留原类别、适用系统错误码及直接cause，不复制物理位置或非法字段值；诊断关联同一request_id并保留位置，解码/字段异常可能包含凭据正文，仅保留在cause，不将其正文写日志。只有open时缺文件表示未配置，后续缺件或权限失败继续明确失败；原签发、替换、过期判断及认证拒绝状态码保持。读取失败不改变原件，所有直接和间接消费者复用同一读取链，不新增认证fallback。
-
-同一owner的发布链继续使用临时文件、私有权限、正文flush/fsync、stream关闭和os.replace，保持原JSON格式与授权规则；读写共用一个错误出口，不保留私有读取错误函数的别名。调用取得原始fd后，只有fdopen成功才将关闭责任交给stream；此前的失败仍在本次finally关闭。准备、创建临时文件、接管、权限、写入、flush、fsync、close与publish各自报告阶段。发布前失败不改原件，收尾只关闭本次尚未交付的fd并删除本次临时文件；再次失败按原顺序聚合并保留每个直接cause，stream关闭的嵌套失败保留原生context。取消身份保持，清理再次失败时连同取消保留；发布成功即交出临时文件，不再unlink已不存在的路径。修复权限后只能通过原入口显式重试，不能暗中回滚已发布授权或扫描旧临时文件。本地token/身份文件的其它错误出口仍须另核。
-
-调试方案 fork 的文件阶段复用原 rollout 存储错误出口：在 staging 检查/写入、旧 staging 清理、发布和已发布正文验证的原生 I/O 边界保留异常类别、errno/winerror 与 cause；公开文本携带 `artifact=fork_debug` 和原阶段，真实位置与原异常仅留诊断。布局拒绝沿同一出口报告，不在 API 层扫描/脱敏字符串。原文件调用顺序、manifest/configuration hash、prepared→ready→published journal、来源身份和重放规则保持；公开 fork 失败仍按原创建 owner 中止清理，不增加另一个保存链或迁移。
-
-fork source 的同一文件清单函数供捕获、冻结 marker 校验和附件冻结集合核对复用：先确认根为已有普通目录，os.walk的扫描错误立即抛出，不以默认忽略行为生成残缺清单。原生读取与元数据失败复用原storage错误出口（artifact=fork_source、stage=manifest），布局拒绝只公开原原因；位置与完整原异常保留诊断。排序、排除项、字节hash与文件集合不变，不新增清单owner或恢复reader。
-
-同一 captured marker owner 在位置检查、发布、marker/manifest/control 读取、附件检查及清理的原生 I/O 边界复用原 storage 错误出口（artifact=fork_capture、stage 为原失败阶段），保留异常类别、errno/winerror 与直接 cause，真实位置只留诊断。发布遍历的扫描错误立即抛出，目录符号链接明确拒绝；原 fsync/rename 顺序、marker 字节和 hash 保持。preparing 且尚未发布完整 marker 的私有目录仍按原 Incomplete 合同中止；已发布完整 marker 即使 journal 尚未 CAS 也只按冻结 proof 恢复，不回读 live source。发布或清理失败不能伪报成功，不新增 marker、journal、writer 或恢复链。
-
-fork typed detail 仍仅按同一冻结 SQLite 的声明与精确历史 owner 复制：文件元数据、目标目录创建、复制及原正文 hash 读取的原生失败复用 storage 出口（artifact=fork_source、stage=detail_copy），直接 cause 与真实位置留诊断；目录/文件布局拒绝只公开原原因。查询顺序、locator/owner 校验、原字节和 hash 保持；缺失正文继续交原资源 owner 判断是否必需，不在复制 helper 补造正文、改写历史或放宽发布检查。
-
-隔离 SQLite worker 继续使用原独立解释器、固定读事务与 backup，不改变 stdin、成功 manifest 或30秒预算。父进程原生调用失败复用 storage 出口（artifact=fork_source、stage=sqlite_worker），保留原异常类别、errno/winerror和直接 cause；子进程非零退出仍是原 RuntimeError，公开退出码，原 command/stdout/stderr/status 保存在 CalledProcessError cause，完整 stderr 进入诊断，不声称跨进程保留子进程的原生异常对象。超时保留 TimeoutExpired 类别、原30秒与原异常 cause（stage=sqlite_timeout），普通文本不包含解释器或文件路径；原 subprocess.run 负责终止并等待 worker 后才清理私有目录。持 rollout 锁时源页/WAL/SHM均不变，session-control 在线 reader 仍允许 SQLite 更新 SHM 读标记而不改持久页/WAL；不增加另一条复制链。
-
-同一私有目录的创建和清理在各自原生边界复用 storage 出口（stage=sqlite_private_create / sqlite_private_cleanup），原异常类别、errno/winerror与cause保持，位置只留诊断。原 TemporaryDirectory 仍唯一拥有临时目录，以显式 finally 调用原 cleanup；返回成功 manifest 前必须完成清理。非零退出在 finally 之前形成原 RuntimeError/CalledProcessError并记录stderr，使后续清理失败的原生cause/context与诊断保全两项故障；不能因清理异常丢掉worker失败证据。创建失败不启动worker，清理失败不伪报释放或成功，不增加补偿writer或第二清理链。
-
-上层 rollout 来源捕获的原失败清理不再使用 rmtree(ignore_errors=True)：仍只删除同一 captured_root，清理成功后抛回原捕获错误，清理原生失败则复用原 storage 出口（artifact=fork_source、stage=cleanup），保留异常类别、errno/winerror与直接cause，真实位置只留诊断。此前的捕获错误通过原生异常context及诊断保留；不把删除失败当作已释放，不新增重试worker或清理链，后续请求仍沿原创建owner/journal协调中止和重试。
-
-rollout 来源捕获的直接原生 I/O 复用同一 storage 错误出口（artifact=fork_source）：来源布局为 source_layout，目录创建与私有权限为 preparation，锁复制为 lock_copy，正文复制为 rollout_copy，SQLite 副本存在性为 sqlite_snapshot，JSONL 冻结为 jsonl_snapshot，control 文件读取为 control_snapshot，manifest 写入及目录 fsync 为 manifest_publish。原生异常保留类别、errno/winerror 与直接 cause，路径和完整原错留诊断；Windows ACL 原语已有的 RuntimeError 包装仅在该调用处投影，保留其原类别及启动/超时 cause，不扩大捕获范围或改动权限原语。已有 captured_root 的创建碰撞发生在当前请求取得目录所有权之前，明确报错并保留原目录与正文；后续失败仍沿原 owner 清理。仅给原生调用增加错误上下文，SQLite reader/worker、typed detail、复制顺序、锁、manifest 编码/hash、journal 和成功路径保持。
-
-冻结 artifact 的来源导出继续复用原分页与分块接口，不创建清单缓存或另一套传输实现。原 os.walk 显式传播扫描错误，并拒绝原先会被 followlinks=False 静默跳过的符号链接目录；根与每层目录必须可读，不能把扫描失败解释为空清单或缺失文件。清单元数据与分块读取的原生错误复用 storage 出口（artifact=fork_transfer、stage=export_manifest / export_chunk），保留类别、errno/winerror 与直接 cause，真实位置和完整原错留诊断。原文件顺序、128文件分页、64KiB分块、offset/长度/hash、source/target身份、marker最后接收和有界并发保持，接收与原清理/journal链不改；故障解除后新请求仍按原冻结历史完成传输及冷恢复。
-
-目标接收的原生位置检查、目录准备/open、write、flush/fsync、close及文件/整份artifact目录发布分别在本机调用处复用原storage出口（artifact=fork_transfer；stage为receive_path / receive_open / receive_write / receive_flush / receive_close / receive_publish）。显式finally只关闭原有stream，保持原有成功顺序和清理责任；写入与关闭同时失败时保留两份原异常、cause/context和诊断。上下文不跨越来源transport的await，来源连接失败或取消不能误标为本机文件错误；原网络异常对象保持。所有接收者回收完成后才沿原import/capture owner清理，原marker最后接收、目录同步、hash/offset校验、四路并发及两端journal/身份保持，不新增接收器或补偿writer。
-
-目标 rollout 暂存沿原逐文件复制和准备链路使用同一 storage 错误出口（artifact=fork_target；stage 为 staging / staging_copy / staging_cleanup / preparation_sync），保留原生类别、errno/winerror 与 cause，位置及原错只留诊断。目录创建仍在当前请求取得所有权后的清理范围之外，碰撞不得删除既有目录。复制的布局/hash拒绝不向普通错误输出内部 locator；失败清理若再失败保留两份原因。准备后的 bottom-up 文件/目录同步显式传播扫描错误，拒绝缺失根、符号链接和非普通文件，不能将漏同步当成功；保持原字节复制、SQL、hash、同步顺序及发布/journal owner，不另建安装链。
-
-Gateway pending 早期加载与后续启动失败继续走原 sources facade 和同一状态库事务，直接传递 BaseException，不能先转字符串。配置热应用与启动复用原错误事实生成器，原异常及原因链进入具名原始服务日志；持久化只消费阶段、类别与适用错误码。该错误出口归入既有 sources 模块，删除 reload_lifecycle 的旧定义并迁齐调用与故障注入位置，不新增恢复链、状态字段或 schema。日志 sink 再次失败仍沿原注记保留故障，不能妨碍 pending 的恢复态结算。
+原始日志沿现有管理授权提供，本地和联邦日志均保留排障信息及秘密保护。Browser file: 页面 URL 是明确目标机器的运行状态，可保留在地址栏、导航、相关错误、快照和检查点中。下载／截图等资源仍由其 owner 和 URI／领域引用定位；展示或诊断路径不成为第二绑定。两者不再是“允许原生路径”的特例。
 
 ### D2：保留既有段序，scope_id 全必填
 
@@ -308,7 +165,7 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 
 **备选**：为 runtime override 或 SQLite carrier 新造 kind / URI（被否：它们不是新增资源类型或来源文件）；把 layer 塞进 URI（被否：URI 只承载位置，layer 是并列语义）。
 
-离线 `doctor` / `diagnose` 不属于原始日志管理例外。诊断实际读取的 JSONC 文件而非 SQLite 中的逻辑来源：发行文件复用原 `inline` URI 构造；用户文件使用 `user_scope_id()` 与文件逻辑名，工作区文件使用只读取得的真实 UUID。schema 按实际选择的发行或用户文件归属寻址。无发行 manifest 或既有工作区身份时，`uri=null` 并报告地址错误，仍诊断原输入，不创建身份或选取其他文件。源码中的原生路径与输出 URI 分开传递，同一稳定快照同时提供元数据与合并正文，不从输出字段反构造 Path。配置根和 SQLite 位置是冗余实现信息，直接删除；原 SQLite 状态分区、只读连接与冲突诊断保持，不给 carrier 新建地址或改变 ConfigSource 合同。失败报告保留阶段、异常类别、适用错误码及配置解析坐标，不能复制可能含路径的异常原文或配置值。
+离线 doctor／diagnose 报告实际读取的 JSONC path、schema_path 和各 SQLite path，同时保留原 config URI／schema_uri 与地址错误。身份缺失时只读诊断仍显示实际位置，不创建身份或编造 URI。原生位置仅供本机排障，不修改运行时 ConfigSource 结构、不为 SQLite carrier 编造地址。原读取路径与输出信息分开，同一稳定快照供元数据与合并正文，秘密及配置正文保护、只读连接和冲突诊断保持。这取代此前删除所有本机位置的裁定。
 
 ### D10：配置来源迁移直接复用 config 侧既有平级属性模式
 
@@ -417,7 +274,7 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 - `add-workspace-persistent-resource-management`（第四个 change）持久化领域 owner 的工作区资源记录，持有稳定 `resource_id`（不存 real path）；已加「引用本 change 的 identity + URI 持久化引用政策、不复制定义」声明。
 
 
-fork 目标目录发布、恢复及最终 rollback 清理在原目标排他锁内复用既有 storage 错误出口（artifact=fork_target，stage 为 publication / publication_recovery / publication_finalize）。原生类别、errno/winerror与直接 cause 保持；安装失败后回滚再次失败时，两份原异常仍按原 cause/context 保留。真实位置及完整原错只留诊断，普通错误和创建记录不包含目标路径或内部 locator。原 target→rollback、stage→target、各次目录同步、失败还原和最终删除顺序逐项保持；恢复只消费同一 materialization 的既有目录与 journal，不增加安装/清理链或 schema。故障解除后仍沿原恢复或产品新请求读取同一历史 checkpoint、metadata、pending writes、assembly owner 与 request_hash。
+fork 目标目录发布、恢复及最终 rollback 清理在原目标排他锁内复用既有 storage 错误出口（artifact=fork_target，stage 为 publication / publication_recovery / publication_finalize）。原生类别、errno/winerror与直接 cause 保持；安装失败后回滚再次失败时，两份原异常仍按原 cause/context 保留。真实位置和具体文件原因可作为诊断信息保留，内部 locator 不成为第二资源定位关系。原 target→rollback、stage→target、各次目录同步、失败还原和最终删除顺序逐项保持；恢复只消费同一 materialization 的既有目录与 journal，不增加安装/清理链或 schema。故障解除后仍沿原恢复或产品新请求读取同一历史 checkpoint、metadata、pending writes、assembly owner 与 request_hash。
 
 工作区UUID文件的解析、读取、首次创建和绑定继续归唯一workspace_identity owner。原生resolve/stat/mkdir/open/flush与读取失败共用该owner的错误出口，并复用既有report_failure保留诊断次错；普通异常只公布逻辑artifact、阶段和原生事实，位置、原异常和日志次错正文留诊断，公开消息只追加日志失败类别。JSON/UTF-8坐标、既有拒绝类别和直接cause保持。正常缺失不记错误，O_EXCL并发冲突仍读取既有文件，后续读取失败不被外层创建阶段重复包装。fdopen成功前描述符由创建者关闭，失败或取消均收尾；关闭再次失败以原顺序保留主错和收尾错，不替换取消或发布位置。格式、初始化及绑定顺序保持，损坏文件、目录目标和冲突UUID不被默认身份覆盖；不新建身份缓存或另一writer。
 
