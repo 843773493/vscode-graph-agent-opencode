@@ -1575,3 +1575,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 新增固定矩阵 `e2e-provider-tool-loop`，复用原180次Job轮询、15分钟suite期限、4GiB保护及跨worktree独占闸门。`tool-loop-003` 1 passed/169.02秒，经真实Gateway/Backend/外部Provider完成3次严格依赖读取、4次模型请求，核canonical工具配对/归属、sealed/wire hash、全部assembly与records对账；进程安全重启并改写当前文件后，旧历史及checkpoint引用不变，正式续聊复述旧回执且不重跑旧工具。该通过发生在最后空正文summary分支补修前。
 - 最终源码 `tool-loop-004` exit 1/218.19秒：模型接口返回 `system_cpu_overloaded`，回退候选返回429 `FreeUsageLimitError`，原180次轮询后Job仍running，未进入历史对账；不登记通过、不延长期限、不改凭据或盲目重试。两次通过/失败运行前后源码各自不变，原件均保留。准确命令、指纹、实际退出码、类型基线和失败诊断见 `out/tests/temp/itemized_provider_acceptance_20261102/artifacts/verification.json`，正式产品原件分别在 `out/tests/e2e/system/agent/context/test_provider_tool_loop/runs/run-ad64e5f4d2a3/` 与 `run-6ea5ed91727e/`。
 - 本片不替代完整Web conversation_lifecycle、Windows、同步真实Provider、真实Provider compaction或完整OpenSpec verify；7.5/8.3及整体111/119保持未完成，团队协作、MCP显式持有及既有性能TODO不变。未修改前端、公共fixture、长回归驱动或共享debug服务。
+
+### 2026-11-02 7.5-E Provider 崩溃 worker 的统一 SDK 加载（部分）
+
+- 模型流两份集成测试及独立崩溃 worker 改为从既有 `app.runtime.litellm_runtime` 取得 SDK／HTTP handler，删除直接导入，不再绕过本地模型目录初始化。原真实 TCP、同步／异步 SDK、协议资产与编码、崩溃恢复断言和就绪期限保持。
+- 两文件组合22 passed／96.10秒，包含此前首个 delta 前超时的 Responses 崩溃恢复；runtime 单测13 passed。Ruff通过；Pyright仍exit1，完整HEAD归档与当前均37项，按相对文件、rule、severity、所属函数／class、完整消息及数量机械比较新增0、消失0。OpenSpec strict 54/54通过。测试均有进程外超时及4GiB保护，集成沿既有独占闸门。
+- 独立 `strace`／`importtime` 单次导入探针从20.34秒到18.57秒，基线观察到公共模型目录网络连接；该单次比较不足以隔离所有冷启动因素，不将其宣称为稳定性能收益或完整超时根因。保留启动长尾TODO及原期限。诊断注入的独立运行在pytest前exit139，单列为诊断失败，不计产品测试结果。
+- 准确命令、源码指纹、原始输出／实际退出码、类型差集与导入跟踪见 `out/tests/temp/provider_worker_readiness_20261102/artifacts/verification.json`。不代真实外部Provider、完整Web、Windows或整体7.5／8.3；111/119保持未关闭，未改生产代码、前端或共享debug服务。

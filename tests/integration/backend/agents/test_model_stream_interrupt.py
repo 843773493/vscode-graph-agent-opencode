@@ -9,12 +9,9 @@ from typing import Any, Literal
 from uuid import UUID
 
 import httpx
-import litellm
-import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
 import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
@@ -47,6 +44,11 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.litellm_runtime import (
+    AsyncHTTPHandler,
+    litellm,
+    litellm_http_handler,
+)
 from app.services.infrastructure.message_stream_store import (
     MessageStreamNotFoundError,
     MessageStreamStore,
@@ -616,7 +618,7 @@ async def _wait_for_worker_ready(
     *,
     stderr_path: Path,
 ) -> None:
-    # TODO：定位 Responses 组合回归中首个 delta 前的就绪超时，保留原期限和 stderr。
+    # TODO：继续测量首个 delta 的启动长尾；SDK 加载已统一到 runtime，保留原期限和 stderr。
     for _attempt in range(2000):
         if path.is_file():
             return

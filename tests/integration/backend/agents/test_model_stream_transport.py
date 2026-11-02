@@ -8,7 +8,6 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import httpx
-import litellm
 import pytest
 from langchain_core.messages import (
     AIMessage,
@@ -36,6 +35,7 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.litellm_runtime import litellm
 from app.runtime.model_stream import ModelStreamTransportController
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

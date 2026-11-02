@@ -23,3 +23,4 @@ model_stream/
 
 - 回放及崩溃场景的产物目录由调用测试显式传入，并遵守 `out/tests/` 镜像布局。
 - worker 只作为独立进程入口使用；Python 命令通过 `uv` 和项目虚拟环境解析。
+- SDK 与 HTTP handler 统一从 `app.runtime.litellm_runtime` 取得，避免直接 SDK 导入绕过本地目录初始化；真实 HTTP 与崩溃恢复场景仍保留原协议资产、编码及就绪断言。

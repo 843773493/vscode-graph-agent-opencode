@@ -8,11 +8,8 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
-import litellm
-import litellm.llms.custom_httpx.llm_http_handler as litellm_http_handler
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
@@ -41,6 +38,11 @@ from app.core.turn_execution_scope import (
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.litellm_runtime import (
+    AsyncHTTPHandler,
+    litellm,
+    litellm_http_handler,
+)
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
