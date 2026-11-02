@@ -2000,3 +2000,10 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 将 profile／凭据两份跨进程诊断故障装具合为 `tests.support.diagnostic_sink`，图片验收复用同一原错审计及实际 OS 日志写入拒绝。原消费者首批凭据2项通过；profile3项在业务前遭遇 HTTP 探针 TCP 自连接：读到自己的 GET 请求，随后端口占用。新 `readiness-red-001` 在原 Gateway／公共探针复现2 failed、既有 Backend 1 passed；公共探针现复用 Backend 的持有 PID 监听观察，监听和 HTTP 共用原总期限，不延长期限或重试 HTTP 拒绝。
 - 就绪修复后的 `profile-002` 为3 passed／71.12秒，保持原90秒 matrix 期限；最终 `readiness-unit-002` 为66 passed／2.71秒，`readiness-http-001` 为15 passed／32.60秒，经实际 Gateway 图片入口、Browser／Terminal 辅助进程及真实 HTTP 核同一监听链，含8组图片双错重验。较宽 harness 批次为269 passed、2 failed、28 errors，均为其它旧测试仍直接调用已变更 fixture 签名，发生在就绪链之前；不记整批通过，不放宽或反复运行这些断言，留待独立 fixture 迁移。
 - Ruff、compileall、真实 Pyright、diff check 与本 change strict 均通过；准确命令、源码前后指纹、实际退出码及红绿原件保留于 `out/tests/temp/theme_asset_failure_20261102/artifacts/verification.json`。本片只核后端公开错误和测试设施，不代替 Backend 硬重启、Web、Windows、全部普通响应或持久化总验收；2.2／7.2仍未勾选，整体51/53，前端与延期团队／MCP持有边界保持。
+
+### 2026-11-02 Node 调试状态的位置发布（2.2／7.2部分收口）
+
+- 状态的脚本／工作目录／源码变更列表、运行断点与方案摘要复用调用栈原有的源码路径校验，在构造及序列化时拒绝原生绝对位置和 file URL；构造后复制、嵌套修改及工具发布不能绕过。校验函数AST保持不变，原工作区相对值、NULL／空根与Inspector源码标签语义保持，无新增字段、proto、前端或路径解析实现。方案正文和导入仍共用输入模型，其发布／冷读闭包已明确代码TODO，不将本片宣称为全部调试持久化完成。
+- 原实现新增100个反例均失败；修复后220项发布测试、130项断点／配置／源码对账／工具／API与公开合同回归通过，后者包含descriptor结构和两份完整OpenAPI快照对照。真实Pyright零诊断，Ruff、compileall和本change strict通过。
+- 原60秒／4GiB产品matrix的2项检查通过（12.08秒），保持集成独占闸门。真实ASGI＋Node／Inspector用绝对脚本、断点和工作目录输入创建并启动；36组输出损坏保持500和同request_id，原进程身份、claim、manifest及方案不变；解除故障后同进程读取、清除／重设断点、停止和冷读原方案通过。首轮仅新增末条冷读断言错误比较了编辑前的revision，依据正式断点编辑合同改为精确比较停止时最新回执，保留失败原件。
+- 命令、源码前后SHA、原始日志、实际退出码、正式publication产物索引及作者AST自查见 `out/tests/temp/debug_state_publication_20261102/artifacts/verification.json`；一次性runner核验后删除，证据保留。不代Gateway业务网络、独立Backend硬重启、Web或Windows，2.2／7.2仍未勾、整体51/53。

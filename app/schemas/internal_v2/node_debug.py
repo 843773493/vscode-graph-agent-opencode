@@ -158,9 +158,22 @@ class NodeDebugStartRequest(BaseModel):
     )
 
 
+def _debug_source_path(value: str) -> str:
+    # 路径字段是工作区相对位置；Inspector 原生地址只在目标 owner 转换时使用。
+    if (PurePosixPath(value).is_absolute() or PureWindowsPath(value).root
+            or value.lstrip().lower().startswith(("file:/", "file:\\"))):
+        raise ValueError("调试源码引用不得包含原生位置")
+    return value
+
+
+_DebugSourcePath = Annotated[
+    str, AfterValidator(_debug_source_path), PlainSerializer(_debug_source_path),
+]
+
+
 class NodeDebugBreakpointDTO(BaseModel):
     breakpoint_id: str
-    path: str
+    path: _DebugSourcePath
     line: int = Field(ge=1)
     column: int = Field(default=1, ge=1)
     condition: str | None = None
@@ -208,14 +221,6 @@ class NodeDebugVariableDTO(BaseModel):
     scope: Literal["local", "global"] = "local"
 
 
-def _debug_source_path(value: str) -> str:
-    # 路径字段是工作区相对位置；Inspector 原生地址只在目标 owner 转换时使用。
-    if (PurePosixPath(value).is_absolute() or PureWindowsPath(value).root
-            or value.lstrip().lower().startswith(("file:/", "file:\\"))):
-        raise ValueError("调试源码引用不得包含原生位置")
-    return value
-
-
 def _inspector_source_url(value: str) -> str:
     _debug_source_path(value)
     if value.lstrip().lower().startswith("file:"):
@@ -229,9 +234,6 @@ def _inspector_source_url(value: str) -> str:
     return value
 
 
-_DebugSourcePath = Annotated[
-    str, AfterValidator(_debug_source_path), PlainSerializer(_debug_source_path),
-]
 _InspectorSourceURL = Annotated[
     str, AfterValidator(_inspector_source_url), PlainSerializer(_inspector_source_url),
 ]
@@ -319,7 +321,7 @@ class NodeDebugCapabilitiesDTO(BaseModel):
 class NodeDebugConfigurationSummaryDTO(BaseModel):
     configuration_id: str
     name: str
-    script_path: str | None = None
+    script_path: _DebugSourcePath | None = None
     launch_profile_name: str | None = None
     breakpoint_count: int = Field(default=0, ge=0)
     revision: int = Field(default=1, ge=1)
@@ -330,6 +332,8 @@ class NodeDebugConfigurationDTO(BaseModel):
     """可跨会话复制的源码调试方案，不包含会话和运行时状态。"""
 
     model_config = ConfigDict(extra="forbid")
+
+    # TODO: 方案导入仍复用此模型承接原生路径；分离目标解析输入后，迁齐方案发布和冷读校验。
 
     schema_version: Literal[1] = 1
     configuration_id: str = Field(
@@ -355,8 +359,8 @@ class NodeDebugStateDTO(BaseModel):
     active_configuration_id: str | None = None
     active_configuration_name: str | None = None
     configurations: list[NodeDebugConfigurationSummaryDTO] = Field(default_factory=list)
-    script_path: str | None = None
-    working_directory: str | None = None
+    script_path: _DebugSourcePath | None = None
+    working_directory: _DebugSourcePath | None = None
     launch_profile_name: str | None = None
     args: list[str] = Field(default_factory=list)
     pid: int | None = None
@@ -371,7 +375,7 @@ class NodeDebugStateDTO(BaseModel):
     actions: list[NodeDebugActionRecordDTO] = Field(default_factory=list)
     configuration_revision: int = Field(default=0, ge=0)
     requires_restart: bool = False
-    source_changed_paths: list[str] = Field(default_factory=list)
+    source_changed_paths: list[_DebugSourcePath] = Field(default_factory=list)
 
 
 class NodeDebugSessionManifestDTO(BaseModel):
