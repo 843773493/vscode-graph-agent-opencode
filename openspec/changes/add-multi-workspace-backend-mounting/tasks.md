@@ -317,3 +317,9 @@
 - 相同8资源负载在完整HEAD归档和当前源码各测3次：rollout初始化8→1、SQLite连接64→29、payload编码24→8，冻结耗时中位数约210→110ms。仅为该冻结子链路的实测，不外推全执行耗时或固定比例。SQL登记前的正文发布失败清理本批新文件；开始登记后保留正文，避免提交后关闭报错时删除已被引用的数据，失败／提交后报错均有定向断言。
 - 正式`unit-resource-activation-bodies`矩阵82 passed，正文／seal／GC回归160 passed，真实HTTP媒体工具循环同步／异步4 passed；原Goal关闭四终态4 passed／54.16秒，原模型进入5秒和阶段8秒期限未放宽，对应冷准备TODO已移除。合计250个不同场景通过，不把重复首场和中断组合算通过。
 - Ruff、compileall通过；完整旧源码且显式同一解释器的Pyright118→110，按文件／规则／完整消息／最窄源码AST／重数无新增，既存诊断仍保留。369项扩大组合在150秒保护下中止，不能算全绿；其首个跨owner目录快照失败在完整旧源码同样复现：只读SQLite定位产生WAL／SHM边文件，后续单独处理测试观察边界。准确命令、源码指纹、原始输出、真实退出码及测量见`out/tests/temp/activation_batch_20261102/artifacts/verification.json`。8.2完整验收仍未关闭，无前端实现或独立非作者审查。
+
+### 2026-11-02 工具定义复用与完整挂载生命周期矩阵
+
+- 参考 Copilot `extension/tools/vscode-node/toolsService.ts` 在原 owner 内复用工具定义转换，本地自定义目录同次注册只导出并校验一次 schema；hash、冻结正文与 binding 共用该定义，不缓存跨注册的可变工具或移除冷恢复校验。相同36工具负载各测3次，完整 schema 校验108→36次，目录构造中位数约457→172ms；仅代表该子链路，不外推完整执行耗时。
+- 目录发布／搜索／模型schema回归67 passed；测试类型断言调整后同场景定向1 passed，产品未再变化。正式 `integration-mounted-workspace-lifespan` 全部29 passed／148.78秒、exit0，含原Goal关闭四终态、取消结算、双工作区隔离与逆序回收；原5秒模型进入及8秒阶段期限保持。首次完整矩阵28 passed／1 failed的模型进入超时原件保留，不以本次通过抹去观察。
+- Ruff、compileall通过；完整HEAD归档与当前真实Pyright为11→10项测试诊断，按文件／规则／完整消息／最窄语句AST及重数无新增，生产零诊断。准确命令、指纹、raw、退出码、测量及类型对照见 `out/tests/temp/mounted_lifecycle_closure_20261102/artifacts/verification-custom-schema.json`。8.2仍待整体调用方及证据差集收口；附件5.2／5.4未完成，协作延期与 quick-access 暂停保持，本片无前端实现或新增独立审查。

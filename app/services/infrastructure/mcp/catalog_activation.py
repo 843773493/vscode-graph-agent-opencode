@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from typing import cast
 
 from langchain_core.tools import BaseTool
 
-from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import (
     ToolCapabilityPolicy,
     ToolMetadata,
@@ -75,10 +75,14 @@ class McpCatalogResourcePublisher:
         entries = tuple(sorted(custom_tools, key=lambda tool: tool.name))
         metadata = {tool.name: (custom_metadata or {}).get(tool.name) or metadata_for_tool(tool, origin="custom")
                     for tool in entries}
-        self._custom_definitions = {tool.name: ToolDefinition(
-            metadata[tool.name], extension_schema_hash(export_model_tool_json_schema(tool)),
-            canonical_json_bytes(definition_payload(tool, metadata[tool.name])),
-        ) for tool in entries}
+        self._custom_definitions: dict[str, ToolDefinition] = {}
+        for tool in entries:
+            # 同次注册只导出、校验一次 schema；hash、正文与绑定共用该冻结定义。
+            payload = definition_payload(tool, metadata[tool.name])
+            self._custom_definitions[tool.name] = ToolDefinition(
+                metadata[tool.name], extension_schema_hash(cast(Mapping[str, object], payload["input_schema"])),
+                canonical_json_bytes(payload),
+            )
         self._definition_ids: set[str] = set()
         self._custom_revision = payload_digest(
             [[name, definition.payload] for name, definition in self._custom_definitions.items()],
@@ -88,8 +92,8 @@ class McpCatalogResourcePublisher:
         self._custom_members = build_extension_catalog_binding(
             catalog_revision=self._custom_revision, generation=1,
             targets=(ExtensionTargetBindingInput(
-                target_id=tool.name, origin="custom", input_schema=export_model_tool_json_schema(tool),
-            ) for tool in entries),
+                target_id=name, origin="custom", input_schema=definition.input_schema,
+            ) for name, definition in self._custom_definitions.items()),
         ).members
         registry.register_descriptor(SemanticResourceDescriptor(
             resource_id=MCP_TOOL_CATALOG_RESOURCE_ID, resource_kind="mcp_tool_catalog",

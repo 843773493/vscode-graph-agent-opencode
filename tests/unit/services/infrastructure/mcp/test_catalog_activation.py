@@ -53,6 +53,7 @@ from app.services.infrastructure.mcp.catalog_activation import (
 from app.services.infrastructure.mcp.config import McpServerConfig
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
+    extension_schema_hash,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -299,7 +300,7 @@ async def test_subscription_is_released_by_runtime_scope(catalog_runtime):
     assert registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
 
 
-async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(catalog_workspace, extension_catalog_policy_resolver):
+async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(catalog_workspace, extension_catalog_policy_resolver, monkeypatch):
     owner = McpCatalogOwner(
         leases=ExternalResourceLeaseLedger(),
         raw_config={"servers": {}}, workspace_root=catalog_workspace,
@@ -310,6 +311,16 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
         return text
 
     tool = StructuredTool.from_function(custom, name="local_echo", description="本地 custom target")
+    from app.agents import model_tool_schema
+
+    checked: list[dict[str, object]] = []
+    validate_schema = model_tool_schema.model_tool_schema_validator
+
+    def validate_once(schema: dict[str, object]):
+        checked.append(schema)
+        return validate_schema(schema)
+
+    monkeypatch.setattr(model_tool_schema, "model_tool_schema_validator", validate_once)
     await owner.start()
     try:
         registry = ResourceRegistry()
@@ -328,7 +339,13 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
         assert {descriptor.facet for descriptor in registry.capture().descriptors} == {"activation", "definition"}
         definition, = (snapshot for snapshot in registry.capture().snapshots if snapshot.facet == "definition")
         assert definition.members == resource.members
-        assert definition.payload["input_schema"]["properties"]["text"]["type"] == "string"
+        payload = definition.payload
+        assert isinstance(payload, dict)
+        schema = payload["input_schema"]
+        assert isinstance(schema, dict)
+        assert schema["properties"]["text"]["type"] == "string"
+        assert checked == [schema]
+        assert extension_schema_hash(checked[0]) == resource.members[0].schema_hash
     finally:
         await owner.shutdown()
 
