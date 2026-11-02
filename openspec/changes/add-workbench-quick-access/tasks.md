@@ -41,9 +41,9 @@
 
 覆盖规范：文件搜索与文本定位必须共享实际资源目标；搜索范围必须明确且请求保持原目标。
 
-- [ ] 5.1 通过原 singleton 注册唯一项目 SearchService 和同一文件 file／text Provider，核最终 ServiceCollection 与生命周期，不依赖偶然 import 顺序。
-- [ ] 5.2 对明确业务根的 textSearchSplitSyncAsync 使用完整 owner／URI 过滤本地未保存模型，先限制再发送 progress，当前模型覆盖同文件后端旧命中，不自动保存。
-- [ ] 5.3 将业务查询显式路由到原后端文件 owner，不送浏览器文件 handle worker；原生虚拟容器仍按原服务行为处理。
+- [x] 5.1 通过原 singleton 注册唯一项目 SearchService 和同一文件 file／text Provider，核最终 ServiceCollection 与生命周期，不依赖偶然 import 顺序。
+- [x] 5.2 对明确业务根的 textSearchSplitSyncAsync 使用完整 owner／URI 过滤本地未保存模型，先限制再发送 progress，当前模型覆盖同文件后端旧命中，不自动保存。
+- [x] 5.3 将业务查询显式路由到原后端文件 owner，不送浏览器文件 handle worker；原生虚拟容器仍按原服务行为处理。
 - [ ] 5.4 在原 `%` 贡献构造入口用 child InstantiationService 创建真实原 Provider 与 QueryBuilder，每次 provide 固定发起范围，取消和 dispose 释放实际操作。
 - [ ] 5.5 限定 folderQueries、extraFileResources 与符号来源；业务 AI／语义搜索缺服务时明确未启用，不触发模型或其它根，不改全局设置。
 - [ ] 5.6 用 A／B 同路径不同 dirty 内容及 IndexedDB 同名文件验证首次结果、增量 progress、普通／仅已打开搜索均不串范围。
@@ -201,3 +201,11 @@
 - Ruff 与 schema Pyright 通过；原 owner Pyright 从 HEAD 10 条既存诊断减至 9 条，无新增。生成一致性、Buf 格式／breaking、OpenAPI 与 OpenSpec strict 通过。末次验证前导入排序问题已修复，失败原件保留。
 - TODO：目标机器 .gitignore 等 ignore 文件尚未接入，显式 respect 返回 unsupported_search_option，不以固定目录排除冒充支持；仅已打开文件、原版搜索服务／视图及 UI 查询选项仍需继续贯通。regex/wcmatch 直接依赖声明沿既有动态 metadata TODO，当前使用锁文件已有依赖，未修改用户环境。
 - 证据：`out/tests/temp/quick_access_text_options_20261102/artifacts/verification.json`。这些分层检查不代 Quick Access UI、远端 SSH 或 Electron 验收。
+
+### 2026-11-02：唯一搜索服务与本地模型隔离切片（5.1～5.3）
+
+- Workbench 创建前沿原 singleton 登记项目 RemoteSearchService 子类；同一文件 file／text Provider 连接原导航 API。只有明确业务根的正文组合使用项目分支，原生容器继续使用原服务。按完整 URI 在 findMatches／首次和后续 progress 前限制模型；零命中模型同样屏蔽同文件磁盘旧命中，不自动保存。
+- 仅已打开查询在请求前选精确文件；文件名保留完整相对路径，复用上游模式匹配。分页复用每个 owner 的路由和固定请求合同，结果上限在模型与磁盘之间合并；取消／dispose 中止实际请求并拒绝迟到及同页后续进度。后端 UTF-16 源区间与有界首行预览分开投影，不再读取正文推算位置。业务 AI 明确未启用，未支持的选项在本地进度前拒绝。
+- 最终 10 项搜索服务集成及原 Thread／文件检查合计 17 项、122 条断言通过；公共 Gateway／HTTP 客户端 65 项、153 条断言通过：真实 ServiceCollection／InstantiationService 与上游匹配／结果转换，Gateway 传输为明确 spy、文本为内存存取装具。覆盖 A／B 同路径、原生容器同名 URI、零命中覆盖、双向隔离、仅已打开、上限、分页、失败归属、取消及释放。不能据此声称真实 IndexedDB、SearchView、Quick Access UI 或 Electron 已完成，5.4～5.6 保留未勾选。
+- 真实 Gateway／Chromium Thread 身份回归和同源码正式生产构建通过。首次页面等待暴露在线模型目录刷新阻塞，原后端日志有前台等待记录；测试明确改用本地目录。第二次在启动前遇临时端口占用；接入现有端口租约保留绑定后，原五秒断言和全部打开／恢复场景通过，未终止未知进程。服务装具初次遗漏上游 Worker 服务，补齐为误入即失败的明确依赖后通过。所有失败原件保留。
+- 最终真实 Workbench 类型检查、Ruff 和 OpenSpec strict 通过；本批没有公开 DTO 或协议生成变化。证据：`out/tests/temp/quick_access_search_service_20261102/artifacts/verification.json`；正式服务及浏览器产物分别位于 `out/tests/integration/clients/web/quick_access/search_service.test/` 和 `out/tests/integration/clients/web/test_thread_editor_identity/`。

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,9 +14,23 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 构建
 )
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
+
+
+@pytest.fixture
+def thread_identity_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    port = integration_port_block_for_file(Path(request.node.path)).port(20)
+    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (port,))
+    # 保留绑定，避免浏览器／模型目录请求的自动源端口在启动前抢占。
+    lease.acquire()
+    try:
+        yield port
+    finally:
+        lease.release()
 
 
 @pytest.mark.asyncio
@@ -23,6 +38,7 @@ async def test_thread_editor_stable_owner_and_restore(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    thread_identity_gateway_port: int,
     web_workbench_assets: Path,
 ) -> None:
     del integration_workspace_config_path  # fixture 在 Gateway 启动前安装隔离工作区配置。
@@ -34,10 +50,11 @@ async def test_thread_editor_stable_owner_and_restore(
     screenshot_path = context.artifacts_dir / "thread-editor-failure.png"
     gateway = start_gateway_process(
         workspace_root=Path(integration_workspace_root_path), default_backend_url=None,
-        port=integration_port_block_for_file(Path(request.node.path)).port(20),
+        port=thread_identity_gateway_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
         artifacts_dir=context.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
+        # 本场景不调用 Provider，不让在线模型目录刷新阻塞编辑器身份验收。
+        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     try:
         command = ["bun", "tests/integration/clients/web/thread_editor_identity.mjs"]

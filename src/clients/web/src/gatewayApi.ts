@@ -45,11 +45,12 @@ import {
   unwrapApiData,
 } from "./api/http";
 
-export async function getGatewayHealth(port: number): Promise<GatewayHealth> {
+export async function getGatewayHealth(port: number, options: { signal?: AbortSignal } = {}): Promise<GatewayHealth> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayHealth>>(
       port,
       "/api/gateway/health",
+      options,
     ),
   );
 }
