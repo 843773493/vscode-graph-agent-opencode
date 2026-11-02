@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 import { verifyQuickAccessPagination } from './quick_access_pagination.mjs';
+import { verifyResourceLinks } from './quick_access_resource_links.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL, resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const otherWorkspace = process.env.BOXTEAM_CATALOG_OTHER_WORKSPACE;
@@ -154,6 +155,7 @@ try {
   result.deletedFolderRejected = true;
   await verifyQuickAccessPagination({ page, command, api, result, owner: result.owner,
     workspace: process.env.BOXTEAM_CATALOG_WORKSPACE });
+  await verifyResourceLinks({ page, command, api, result, owner: result.owner });
   result.phase = 'complete';
   expect(result.pageErrors).toEqual([]);
 } catch (error) {

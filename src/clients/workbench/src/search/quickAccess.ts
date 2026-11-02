@@ -44,6 +44,7 @@ import { queryNameBranches } from './quickAccessBranches.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
 import type { WorkspaceSearchService } from './searchService.js';
+import type { ResourceOpenOptions } from '../resourceOpener.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
@@ -160,7 +161,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (run.invalidated) return [{ id: 'identity-invalidated', label: 'Gateway 或用户身份已改变，请重新打开快速访问' }];
     if (run.options.searchRestore?.query !== run.picker.value) run.restoreId = undefined;
     const previousFilter = run.normalized;
-    const parsed = run.options.filesOnly ? undefined : extractRangeFromFilter(original, ['@']);
+    const resourceLink = /^boxteam:/i.test(original);
+    const parsed = run.options.filesOnly || resourceLink ? undefined : extractRangeFromFilter(original, ['@']);
     run.range = parsed?.range;
     const filter = parsed?.filter ?? original;
     if (run.normalized === filter && original !== filter && !run.picker.busy) return null;
@@ -172,7 +174,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const accepted = (items: Pick<ResourcePick>[]) => run.options.filter ? items.filter(run.options.filter) : items;
     const active = run.globalPick;
     const symbolSegments = original.split('@');
-    if (previousFilter && !run.options.filesOnly && active?.resource?.scheme === 'boxteam-file' && symbolSegments.length > 1
+    if (!resourceLink && previousFilter && !run.options.filesOnly && active?.resource?.scheme === 'boxteam-file' && symbolSegments.length > 1
       && (!(active.label.includes('@') || active.description?.includes('@')) || symbolSegments.length > 2)) {
       return this.symbolPicks(run, active, symbolSegments.at(-1)!.trim(), disposables, token).then(accepted)
         .catch(error => token.isCancellationRequested ? [] : [this.failure('文件符号', error)]);
@@ -185,8 +187,13 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (run.picker.quickNavigate || !filter && !run.options.filesOnly && !run.options.fileSearchDelegate) return fast;
     if (!run.options.filesOnly && !run.options.fileSearchDelegate && !run.options.handleAccept && /^[a-z][a-z0-9+.-]+:\/\//i.test(filter)) {
       return accepted([{ id: 'link:' + filter, label: '打开链接', description: filter,
-        accept: mods => this.report(this.opener.open(filter, { fromUserGesture: true, openToSide: mods.alt,
-          editorOptions: { pinned: mods.ctrlCmd }, allowContributedOpeners: true })) }]);
+        accept: (mods, event) => {
+          this.assertAccess(run);
+          const options: ResourceOpenOptions = { fromUserGesture: true, allowContributedOpeners: true,
+            boxteamTargetGroup: run.group, openToSide: mods.alt || this.openPinned() && mods.ctrlCmd,
+            editorOptions: { pinned: mods.ctrlCmd || event.inBackground || this.openPinned(), preserveFocus: event.inBackground } };
+          this.report(this.opener.open(filter, options));
+        } }]);
     }
     if (run.options.fileSearchDelegate) {
       run.picker.busy = true;

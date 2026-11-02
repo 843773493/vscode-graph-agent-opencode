@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol import openapi
+from app.protocol.schema import descriptor_pool_from_set
 from app.schemas.gateway.diagnostics import (
     DevelopmentRuntimeRestartDTO,
     GatewayDiagnosticLogDTO,
@@ -37,6 +38,30 @@ from app.schemas.gateway.workspaces import (
     GatewayServiceStatusDTO,
 )
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
+
+
+def test_resource_address_http_projection_uses_descriptor_and_fresh_message_roots(
+    gateway_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation = gateway_openapi["paths"]["/api/gateway/resource-addresses/parse"]["post"]
+    assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/GatewayResourceAddressRequest")
+    assert {"GatewayResourceAddressRequest", "GatewayResourceAddressDTO"} <= openapi.GATEWAY_HTTP_JSON_DESCRIPTORS.keys()
+    openapi.assert_gateway_http_schemas(gateway_openapi)
+
+    # 模拟本轮 proto 新增、旧 Python 绑定尚不存在的消息，不能跳过结构校验。
+    document = deepcopy(gateway_openapi)
+    file = next(file for file in http_descriptor_bundle.file if file.package == "boxteam.gateway.v1" and file.name.endswith("public.proto"))
+    name = "FutureResourceAddressDTO"
+    message = file.message_type.add(name=name)
+    message.field.add(name="uri", number=1, type=FieldDescriptorProto.TYPE_STRING)
+    document["components"]["schemas"][name] = {"type": "object", "properties": {"uri": {"type": "string"}}, "required": ["uri"]}
+    monkeypatch.setattr(openapi, "GATEWAY_HTTP_JSON_DESCRIPTORS", {**openapi.GATEWAY_HTTP_JSON_DESCRIPTORS, name: f"{file.package}.{name}"})
+    pool = descriptor_pool_from_set(http_descriptor_bundle.SerializeToString())
+    openapi.assert_gateway_http_schemas(document, pool)
+    document["components"]["schemas"][name]["properties"]["unexpected"] = {"type": "string"}
+    with pytest.raises(ValueError, match="公开结构与 proto 字段不一致"):
+        openapi.assert_gateway_http_schemas(document, pool)
 
 
 def test_gateway_directory_schema_uses_actual_routes_and_keeps_business_validation(

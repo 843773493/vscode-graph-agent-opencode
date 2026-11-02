@@ -7,6 +7,34 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class GatewayResourceAddressRequest(_message.Message):
+    __slots__ = ("uri", "local_gateway_id")
+    URI_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    uri: str
+    local_gateway_id: str
+    def __init__(self, uri: _Optional[str] = ..., local_gateway_id: _Optional[str] = ...) -> None: ...
+
+class GatewayResourceAddressDTO(_message.Message):
+    __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id")
+    URI_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    FILE_ROOT_URI_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    uri: str
+    gateway_id: str
+    scope: str
+    scope_id: str
+    kind: str
+    file_root_uri: str
+    session_id: str
+    thread_id: str
+    def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
+
 class AcquireGatewayUserRequest(_message.Message):
     __slots__ = ("client_label",)
     CLIENT_LABEL_FIELD_NUMBER: _ClassVar[int]

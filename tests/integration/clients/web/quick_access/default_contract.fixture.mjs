@@ -21,7 +21,7 @@ const root = 'boxteam://workspace/workspace-a/resources/files/root';
 const uri = name => workspaceFileUri(owner, root + '/' + name, root);
 
 /** 仅替原 Picker 事件和宿主服务；实际 Provider、取消及接受逻辑均来自生产源码。 */
-function defaultAccess(options, history = []) {
+function defaultAccess(options, history = [], opener = { open() { throw new Error('delegate 不应被 URI opener 抢占'); } }) {
   const changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
   const picker = { value: '', items: [], activeItems: [], selectedItems: [], keyMods: { alt: false, ctrlCmd: false },
     buttons: [], onDidTriggerButton: Event.None,
@@ -29,11 +29,29 @@ function defaultAccess(options, history = []) {
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
   const groups = { groups: [], activeGroup: { id: 1 } }, editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } };
   const provider = new WorkspaceQuickAccess({ createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
-    { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {}, {}, {},
-    { open() { throw new Error('delegate 不应被 URI opener 抢占'); } }, { error(error) { throw error; } }, { enabled: false }, {});
+    { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {}, {},
+    opener, { error(error) { throw error; } }, { enabled: false }, {});
   const lifetime = provider.provide(picker, cancellation.token, options);
   return { picker, accepts, change(value) { picker.value = value; changes.fire(); },
     dispose() { cancellation.dispose(true); lifetime.dispose(); provider.dispose(); changes.dispose(); accepts.dispose(); } };
+}
+
+export function uriContract() {
+  const calls = [];
+  for (const uri of [root + '/name%40target.txt', root + '/name%40target.txt#L2', 'https://example.test/file']) {
+    const f = defaultAccess({ searchOwner: owner }, [], { open(resource, options) {
+      calls.push({ uri: resource, group: options.boxteamTargetGroup, side: options.openToSide,
+        pinned: options.editorOptions.pinned, preserveFocus: options.editorOptions.preserveFocus });
+      return Promise.resolve(true);
+    } });
+    try {
+      f.change(uri);
+      f.picker.keyMods.alt = true;
+      f.picker.activeItems = f.picker.selectedItems = [f.picker.items[0]];
+      f.accepts.fire({ inBackground: true });
+    } finally { f.dispose(); }
+  }
+  return calls;
 }
 
 export async function delegateContract() {

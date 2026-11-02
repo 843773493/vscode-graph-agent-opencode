@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from google.protobuf.descriptor import Descriptor
-from google.protobuf.descriptor_pool import DescriptorPool
+from google.protobuf.descriptor_pool import Default, DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_public_pb2
@@ -18,9 +18,10 @@ from app.protocol.generated.boxteam.workspace.v2 import (
 )
 from app.protocol.schema import assert_public_schema
 
-# 同形成员直接递归核对；HTTP 根的信封合并及中断别名在具名投影中核对。
-MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS: dict[str, Descriptor] = {
-    f"MessageStream{suffix}DTO": message_stream_pb2.DESCRIPTOR.message_types_by_name[message]
+# HTTP 根登记完整消息名，在发布时从本次 descriptor 解析；新增消息不依赖旧生成绑定。
+# 信封合并及中断别名仍在原具名投影中核对。
+MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS: dict[str, str] = {
+    f"MessageStream{suffix}DTO": f"{message_stream_pb2.DESCRIPTOR.package}.{message}"
     for suffix, message in (
         ("Failure", "StreamFailure"),
         ("BlockSnapshot", "MessageBlockSnapshot"),
@@ -36,8 +37,8 @@ MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS: dict[str, Descriptor] = {
 }
 
 # 只登记已迁齐的 HTTP 公开模型，嵌套字段由 descriptor 递归校验。
-HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
-    name: public_pb2.DESCRIPTOR.message_types_by_name[name]
+HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
+    name: f"{public_pb2.DESCRIPTOR.package}.{name}"
     for name in (
         "AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultProviderUpdateRequest",
         "ResourceNavigationRequest", "ResourceNavigationResultDTO",
@@ -79,11 +80,12 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     )
 } | MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS
 
-GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
-    name: gateway_public_pb2.DESCRIPTOR.message_types_by_name[name]
+GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
+    name: f"{gateway_public_pb2.DESCRIPTOR.package}.{name}"
     for name in (
         "GatewayDirectoryListDTO", "NativeDirectoryBindRequest",
         "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
+        "GatewayResourceAddressRequest", "GatewayResourceAddressDTO",
         "GatewayManagedWorkspaceListDTO", "CreateGatewayManagedWorkspaceRequest",
         "CreateFederationManagedWorkspaceRequest",
         "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
@@ -132,7 +134,7 @@ def protobuf_message_name_for_model(model_name: str) -> str | None:
 
 
 def _assert_http_schemas(
-    document: JsonSchemaValue, descriptors: Mapping[str, Descriptor], pool: DescriptorPool | None,
+    document: JsonSchemaValue, descriptors: Mapping[str, str], pool: DescriptorPool | None,
 ) -> None:
     """两类服务共用同一结构检查，嵌套字段仍由 descriptor 递归推导。"""
     components = document["components"]
@@ -141,9 +143,9 @@ def _assert_http_schemas(
     for name in descriptors:
         if name not in schemas:
             raise ValueError(f"公开 HTTP 结构未被导出: {name}")
-    for name, descriptor in descriptors.items():
-        if pool is not None:
-            descriptor = pool.FindMessageTypeByName(descriptor.full_name)
+    descriptor_pool = pool if pool is not None else Default()
+    for name, message_name in descriptors.items():
+        descriptor = descriptor_pool.FindMessageTypeByName(message_name)
         assert_public_schema({**schemas[name], "components": components}, descriptor)
 
 

@@ -155,6 +155,13 @@
 - [ ] 15.5 为规范全部场景和 design 全功能矩阵逐项关联准确证据，区分通过、未通过及真实条件缺失；保留源码指纹、命令、原始输出、退出码和未完成阶段。
 - [ ] 15.6 交付前核无重复默认 Provider、第二搜索／动作事实源、失联调用、静默错误或清缓存式迁移，保留其他人的改动；复核 OpenSpec 并仅按已证行为勾选任务。
 
+### 2026-11-02：规范 URI 打开切片（2.2、7.4 部分）
+
+- 认证 Gateway 的只读地址投影复用唯一 URI grammar，公开 DTO 从 proto 生成并递归检查。原 Opener 重新解析稳定工作区路由；Session 沿原 owner 取得 main，child 保留精确 Thread，文本文件复用唯一文件投影。原 URI 不先按行号或符号改写；目标不可用和非法 URI 明确失败。发起组、侧边、固定与后台选项保留，校验成功前不创建侧边组。
+- `tests/e2e/clients/web/test_quick_access_catalog_targets.py` 经正式构建、真实 Gateway 和产品创建／fork 入口验证 child、Session main、侧边组、跨工作区同名文本及非法 fragment；最终 1 passed / 121.23 秒，证据：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-444f14cfbcd7/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。首次运行在端口租约阶段失败，未进入业务；保留原件，没有终止未知进程。
+- 地址解析与鉴权 16 passed；Gateway／消息流 HTTP 合同首轮 180 passed，唯一新文件根 fixture 错误修正后该组通过；Workspace 递归结构检查 9 passed；原 Provider 合同 9 passed。协议生成一致性及包含 18 份实际 sourceTransform 源码的真实类型检查通过；正式 Workbench 构建与本轮浏览器验收使用同一源码。命令、原输出与退出码位于 `out/tests/temp/quick_access_opener_20261102/artifacts/`。
+- TODO：媒体、只读来源、Diff 的完整投影及独立版本参数、原 Chat／空文件编辑器真实调用方和 Electron 产物尚未验收，2.2／7.4 保持未勾选。
+
 ### 2026-11-02：Thread 稳定身份切片（2.1）
 
 - Thread 编辑器以 Gateway／工作区／Session／Thread 构造唯一内部投影；匹配、分屏复制、关闭重开和版本 2 序列化均使用同一身份，临时 route 不进入正常恢复记录。恢复和原 resolver 重新查询当前登记，缺失／歧义拒绝，不自动连接、启动或改投活动工作区。同一输入的 Pane／导航在途解析共用 Promise，控制面重解不探测全部工作区服务。

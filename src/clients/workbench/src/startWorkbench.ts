@@ -2,6 +2,7 @@ import { create, URI, commands } from '../upstream/src/vs/workbench/workbench.we
 import { isCancellationError } from '../upstream/src/vs/base/common/errors.js';
 import { workspaceFolder } from './filesystem.js';
 import './thread.contribution.js';
+import './resourceOpener.js';
 
 export async function startWorkbench(): Promise<void> {
   function showError(error: unknown): void {

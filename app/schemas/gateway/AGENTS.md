@@ -10,6 +10,7 @@ gateway/
 ├── federation.py         联邦协议、对端和入站工作区
 ├── lifecycle.py          运行组重启、状态、阻塞项和影响范围
 ├── native_directories.py 原生目录绑定与解析
+├── resource_address.py   唯一 URI grammar 的公开地址投影
 ├── port_forwarding.py    端口转发创建、修改和列表
 ├── skill_sources.py      Gateway Skill 来源目录
 ├── ssh.py                远端 Gateway 添加与 SSH 连接选项

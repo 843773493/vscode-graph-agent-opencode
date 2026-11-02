@@ -40,6 +40,16 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+test('URI 原样交原 Opener 并冻结发起组，校验前不创建侧边组，后台接受保持原选项', async () => {
+  const calls = await exercise('uriContract');
+  expect(calls.map(call => call.uri)).toEqual([
+    'boxteam://workspace/workspace-a/resources/files/root/name%40target.txt',
+    'boxteam://workspace/workspace-a/resources/files/root/name%40target.txt#L2',
+    'https://example.test/file',
+  ]);
+  expect(calls.every(call => call.group === 1 && call.side && call.pinned && call.preserveFocus)).toBe(true);
+});
+
 test('delegate 接收空查询及 URI 查询，换查询和释放取消旧调用且忽略迟到结果', async () => {
   const result = await exercise('delegateContract');
   expect(result.initial).toEqual(['']);

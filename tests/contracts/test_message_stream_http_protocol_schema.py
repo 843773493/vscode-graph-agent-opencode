@@ -69,7 +69,7 @@ def test_snapshot_http_rejects_block_identity_field_drift(http_openapi: JsonSche
 def test_snapshot_http_checks_fresh_descriptor_members(
     http_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet, model: str,
 ) -> None:
-    descriptor = MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS[model]
+    descriptor = descriptor_pool_from_set(http_descriptor_bundle.SerializeToString()).FindMessageTypeByName(MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS[model])
     file = next(file for file in http_descriptor_bundle.file if file.name == descriptor.file.name)
     message = next(message for message in file.message_type if message.name == descriptor.name)
     message.field.add(name="new_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)
@@ -84,7 +84,7 @@ def test_snapshot_descriptor_drift_rejects_publication(
     http_descriptor_bundle: FileDescriptorSet, tmp_path: Path, model: str,
     openapi_output: Path, openapi_export: Callable[[Path, Path], None],
 ) -> None:
-    descriptor = MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS[model]
+    descriptor = descriptor_pool_from_set(http_descriptor_bundle.SerializeToString()).FindMessageTypeByName(MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS[model])
     file = next(file for file in http_descriptor_bundle.file if file.name == descriptor.file.name)
     message = next(message for message in file.message_type if message.name == descriptor.name)
     message.field.add(name="new_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)

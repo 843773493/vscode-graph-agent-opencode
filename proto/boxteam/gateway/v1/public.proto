@@ -5,6 +5,24 @@ package boxteam.gateway.v1;
 import "google/protobuf/struct.proto";
 
 // Gateway 控制面公开 DTO 的 Protobuf 初始版本；后续以本文件为协议源维护。
+
+// 只投影唯一 URI grammar；不表示资源存在、可读或已获得能力。
+message GatewayResourceAddressRequest {
+  string uri = 1;
+  // 打开发起时的 Gateway 身份；防止异步期间重连改变无 authority 引用的含义。
+  string local_gateway_id = 2;
+}
+
+message GatewayResourceAddressDTO {
+  string uri = 1;
+  string gateway_id = 2;
+  string scope = 3;
+  string scope_id = 4;
+  string kind = 5;
+  optional string file_root_uri = 6;
+  optional string session_id = 7;
+  optional string thread_id = 8;
+}
 // WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
 
 message AcquireGatewayUserRequest {

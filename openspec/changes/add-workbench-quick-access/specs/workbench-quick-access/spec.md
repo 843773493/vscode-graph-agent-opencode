@@ -239,6 +239,8 @@
 
 快速访问、资源链接和其它已有入口在访问同一规范资源目标时 MUST 遵循相同的解析、归属和能力规则。URI grammar、scope、kind、ResourceIdentity 与解析拒绝规则 MUST 引用 `add-unified-virtual-resource-addressing` 的权威合同。revision、文本位置和会话视图选择 MUST 作为原合同的独立参数，不编码进规范 URI query 或 fragment；编辑器内部定位形式 MUST NOT 成为第二套公开业务 URI 协议。
 
+客户端 SHALL 通过认证 Gateway 的只读地址投影入口消费后端唯一 grammar；该投影不证明资源存在或授予访问权限，实际打开仍由原 owner 核验。粘贴的规范 URI MUST 原样交给解析入口，不先按文件行号或符号语法改写；非法编码、query 或 fragment 明确拒绝，不回退当前工作区或系统外部打开。
+
 #### Scenario: 路由改变后重开同一资源
 
 - **WHEN** 目标稳定身份未变，但 Gateway 登记的传输路由已改变，用户从历史或链接重开

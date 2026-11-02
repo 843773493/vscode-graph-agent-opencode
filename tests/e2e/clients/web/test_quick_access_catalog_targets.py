@@ -64,6 +64,8 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
     )
     install_test_workspace_config(workspace_root=other, config_path=Path(e2e_workspace_config_path),
                                   schema_path=workspace / ".boxteam/workspace_schema.jsonc")
+    (workspace / "uri@target.txt").write_text("URI link A\n", encoding="utf-8")
+    (other / "uri@target.txt").write_text("URI link B\n", encoding="utf-8")
     result_path = context.artifacts_dir / "catalog-targets.json"
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=catalog_gateway_port,
@@ -95,6 +97,11 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert receipt["pagination"]["selectionPreserved"] is True
         assert receipt["pagination"]["stalePageCleared"] is True
         assert receipt["pagination"]["explicitBranchRestart"] is True
+        assert receipt["resourceLinks"]["childKeepsIdentity"] is True
+        assert receipt["resourceLinks"]["sessionUsesMainAndSideGroup"] is True
+        assert receipt["resourceLinks"]["fileUsesOriginalProjection"] is True
+        assert receipt["resourceLinks"]["invalidUriIsNotRewritten"] is True
+        assert receipt["resourceLinks"]["noExecution"] is True
         assert receipt["pageErrors"] == []
     finally:
         close_gateway_process(gateway)

@@ -14,6 +14,7 @@ from app.gateway.routes import (
     federation,
     health_config,
     native_directories,
+    resource_addresses,
     skill_sources,
     ui_assets,
     users,
@@ -37,6 +38,7 @@ ROUTE_MODULES = (
     workspaces_lifecycle,
     skill_sources,
     native_directories,
+    resource_addresses,
 )
 
 

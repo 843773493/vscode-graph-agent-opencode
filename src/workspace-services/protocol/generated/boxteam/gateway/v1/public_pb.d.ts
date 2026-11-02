@@ -12,6 +12,82 @@ import type { Value } from "@bufbuild/protobuf/wkt";
 export declare const file_boxteam_gateway_v1_public: GenFile;
 
 /**
+ * 只投影唯一 URI grammar；不表示资源存在、可读或已获得能力。
+ *
+ * @generated from message boxteam.gateway.v1.GatewayResourceAddressRequest
+ */
+export declare type GatewayResourceAddressRequest = Message<"boxteam.gateway.v1.GatewayResourceAddressRequest"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * 打开发起时的 Gateway 身份；防止异步期间重连改变无 authority 引用的含义。
+   *
+   * @generated from field: string local_gateway_id = 2;
+   */
+  localGatewayId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayResourceAddressRequest.
+ * Use `create(GatewayResourceAddressRequestSchema)` to create a new message.
+ */
+export declare const GatewayResourceAddressRequestSchema: GenMessage<GatewayResourceAddressRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayResourceAddressDTO
+ */
+export declare type GatewayResourceAddressDTO = Message<"boxteam.gateway.v1.GatewayResourceAddressDTO"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string scope = 3;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string scope_id = 4;
+   */
+  scopeId: string;
+
+  /**
+   * @generated from field: string kind = 5;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: optional string file_root_uri = 6;
+   */
+  fileRootUri?: string | undefined;
+
+  /**
+   * @generated from field: optional string session_id = 7;
+   */
+  sessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string thread_id = 8;
+   */
+  threadId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayResourceAddressDTO.
+ * Use `create(GatewayResourceAddressDTOSchema)` to create a new message.
+ */
+export declare const GatewayResourceAddressDTOSchema: GenMessage<GatewayResourceAddressDTO>;
+
+/**
  * @generated from message boxteam.gateway.v1.AcquireGatewayUserRequest
  */
 export declare type AcquireGatewayUserRequest = Message<"boxteam.gateway.v1.AcquireGatewayUserRequest"> & {

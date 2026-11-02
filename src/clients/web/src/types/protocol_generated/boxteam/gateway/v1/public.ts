@@ -8,6 +8,24 @@
 
 export const protobufPackage = "boxteam.gateway.v1";
 
+/** 只投影唯一 URI grammar；不表示资源存在、可读或已获得能力。 */
+export interface GatewayResourceAddressRequest {
+  uri: string;
+  /** 打开发起时的 Gateway 身份；防止异步期间重连改变无 authority 引用的含义。 */
+  local_gateway_id: string;
+}
+
+export interface GatewayResourceAddressDTO {
+  uri: string;
+  gateway_id: string;
+  scope: string;
+  scope_id: string;
+  kind: string;
+  file_root_uri?: string | undefined;
+  session_id?: string | undefined;
+  thread_id?: string | undefined;
+}
+
 export interface AcquireGatewayUserRequest {
   client_label?: string | undefined;
 }
@@ -775,6 +793,115 @@ export interface WorkspaceNavigationTreeDTO {
   revision: string;
   nodes: WorkspaceNavigationNodeDTO[];
 }
+
+function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
+  return { uri: "", local_gateway_id: "" };
+}
+
+export const GatewayResourceAddressRequest: MessageFns<GatewayResourceAddressRequest> = {
+  fromJSON(object: any): GatewayResourceAddressRequest {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      local_gateway_id: isSet(object.local_gateway_id) ? globalThis.String(object.local_gateway_id) : "",
+    };
+  },
+
+  toJSON(message: GatewayResourceAddressRequest): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.local_gateway_id !== "") {
+      obj.local_gateway_id = message.local_gateway_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayResourceAddressRequest>, I>>(base?: I): GatewayResourceAddressRequest {
+    return GatewayResourceAddressRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayResourceAddressRequest>, I>>(
+    object: I,
+  ): GatewayResourceAddressRequest {
+    const message = createBaseGatewayResourceAddressRequest();
+    message.uri = object.uri ?? "";
+    message.local_gateway_id = object.local_gateway_id ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayResourceAddressDTO(): GatewayResourceAddressDTO {
+  return {
+    uri: "",
+    gateway_id: "",
+    scope: "",
+    scope_id: "",
+    kind: "",
+    file_root_uri: undefined,
+    session_id: undefined,
+    thread_id: undefined,
+  };
+}
+
+export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = {
+  fromJSON(object: any): GatewayResourceAddressDTO {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
+      scope_id: isSet(object.scope_id) ? globalThis.String(object.scope_id) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      file_root_uri: isSet(object.file_root_uri) ? globalThis.String(object.file_root_uri) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayResourceAddressDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
+    if (message.scope_id !== "") {
+      obj.scope_id = message.scope_id;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.file_root_uri !== undefined) {
+      obj.file_root_uri = message.file_root_uri;
+    }
+    if (message.session_id !== undefined) {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayResourceAddressDTO>, I>>(base?: I): GatewayResourceAddressDTO {
+    return GatewayResourceAddressDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayResourceAddressDTO>, I>>(object: I): GatewayResourceAddressDTO {
+    const message = createBaseGatewayResourceAddressDTO();
+    message.uri = object.uri ?? "";
+    message.gateway_id = object.gateway_id ?? "";
+    message.scope = object.scope ?? "";
+    message.scope_id = object.scope_id ?? "";
+    message.kind = object.kind ?? "";
+    message.file_root_uri = object.file_root_uri ?? undefined;
+    message.session_id = object.session_id ?? undefined;
+    message.thread_id = object.thread_id ?? undefined;
+    return message;
+  },
+};
 
 function createBaseAcquireGatewayUserRequest(): AcquireGatewayUserRequest {
   return { client_label: undefined };
