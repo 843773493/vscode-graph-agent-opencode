@@ -214,3 +214,4 @@
 - `integration-web-model-call-source-freezing`经独立工作区的真实Workbench/Gateway/Backend与model_stream验证显式AGENTS model_call、工具配对后追加及安全重启冷检查；固定660秒/4GiB，沿原集成独占闸门，共用默认Turn入口的浏览器驱动。默认构建仍由公共fixture执行；不将临时复用已核正式资产的产品通过记作默认构建或整个矩阵通过。
 
 - `integration-web-mixed-source-freezing` 复用正式 Workbench 和来源冻结唯一驱动，以真实 Composer/Gateway/Backend 与 model_stream 验证 Turn AGENTS/model_call Skill 的同请求混合边界、原调用 Skill 选择及安全重启后的完整 API/UI/冷 Saver 检查；固定660秒/4GiB，沿原集成独占闸门。不改公共构建 fixture，不替代 Section8、Windows、真实 Provider 或默认构建期限的验收。
+- `integration-web-policy-source-freezing`复用同一驱动与正式构建，验证真实文件watcher发布next_job后同Turn不漂移、下个Turn采用新策略，以及安全重启后冻结API/UI/正文/hash；固定660秒/4GiB和原集成独占闸门，不代Section8、Windows或真实Provider。

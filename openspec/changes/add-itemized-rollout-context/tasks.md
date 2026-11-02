@@ -1582,3 +1582,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 两文件组合22 passed／96.10秒，包含此前首个 delta 前超时的 Responses 崩溃恢复；runtime 单测13 passed。Ruff通过；Pyright仍exit1，完整HEAD归档与当前均37项，按相对文件、rule、severity、所属函数／class、完整消息及数量机械比较新增0、消失0。OpenSpec strict 54/54通过。测试均有进程外超时及4GiB保护，集成沿既有独占闸门。
 - 独立 `strace`／`importtime` 单次导入探针从20.34秒到18.57秒，基线观察到公共模型目录网络连接；该单次比较不足以隔离所有冷启动因素，不将其宣称为稳定性能收益或完整超时根因。保留启动长尾TODO及原期限。诊断注入的独立运行在pytest前exit139，单列为诊断失败，不计产品测试结果。
 - 准确命令、源码指纹、原始输出／实际退出码、类型差集与导入跟踪见 `out/tests/temp/provider_worker_readiness_20261102/artifacts/verification.json`。不代真实外部Provider、完整Web、Windows或整体7.5／8.3；111/119保持未关闭，未改生产代码、前端或共享debug服务。
+
+### 2026-11-02 9.7 策略热更新的真实工作台与冷恢复补验（部分）
+
+- 独立测试复用来源冻结的唯一驱动、正式Workbench、真实Gateway／Backend和model_stream；首请求封存后只改隔离工作区的原配置和AGENTS，等待真实watcher及candidate applier发布next_job。原assembly在发布前后完全相等，同Turn两次调用保留完整原policy，下一Turn采用model_call且原kind overrides不变；三次请求继续核工具配对、前缀、双facet原文与request hash。
+- 正式`integration-web-policy-source-freezing`矩阵1 passed／241.42秒，外层249.34秒、exit0；包含原180秒预算内46.44秒完成的正式构建，没有临时资产替换。公开安全重启后，三份assembly完整API分页与冷读深比对一致，UI依次展开19／15／13项selection并核资源版本／provenance，冷Saver逐字段核完整策略和来源，当前C不回填历史。25,574份采样源码运行前后不变，固定660秒／4GiB与原集成独占闸门保持。
+- 两份Python真实Pyright零诊断、Ruff／compileall、Node语法、矩阵注册及两change strict通过。共用驱动仅新增显式policy参数分支，原三种参数的业务断言保持；本片未重跑其完整浏览器流程，不作全组合通过结论。命令、原始输出、源码／资产指纹及作者结构核对见`out/tests/temp/web_policy_sources_20261102/artifacts/verification.json`，正式产物位于对应测试路径的`run-d99dff522d15`。
+- 本片不修改前端、公共fixture或唯一conversation_lifecycle长驱动，不代该唯一owner的Section8总门、硬退出、Windows或真实外部Provider。团队与MCP显式持有继续延期；9.7／7.5／8.3／8.13及111/119保持未完成。

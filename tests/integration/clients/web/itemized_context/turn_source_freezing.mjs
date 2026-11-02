@@ -25,6 +25,7 @@ const boundary = requiredEnvironment("BOXTEAM_BROWSER_AGENTS_BOUNDARY");
 assert(["turn", "model_call"].includes(boundary));
 const firstReply = requiredEnvironment("BOXTEAM_BROWSER_FIRST_REPLY");
 const mixedSkill = process.env.BOXTEAM_BROWSER_MIXED_SKILL ? JSON.parse(process.env.BOXTEAM_BROWSER_MIXED_SKILL) : undefined;
+const policyUpdate = process.env.BOXTEAM_BROWSER_POLICY_UPDATE ? JSON.parse(process.env.BOXTEAM_BROWSER_POLICY_UPDATE) : undefined;
 const firstCallCount = mixedSkill ? 3 : 2;
 const interactions = JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_MODEL_CASSETTES")).map(cassette => cassette.interactions[0]);
 const resources = TestRunContext.fromTestFile(requiredEnvironment("BOXTEAM_BROWSER_TEST_OWNER"));
@@ -199,6 +200,30 @@ try {
       const eventCount = mixedSkill ? (await testControl({ action: "events" })).length : 0;
       await writeFile(agentsFile, versions[index + 1]);
       assert.equal(await readFile(agentsFile, "utf8"), versions[index + 1]);
+      if (policyUpdate) {
+        const before = await api("/api/v1/config/reload-status");
+        const frozen = await assemblies();
+        assert.equal(frozen.length, 1);
+        await writeFile(policyUpdate.path, policyUpdate.content);
+        let after;
+        await expect.poll(async () => {
+          after = await api("/api/v1/config/reload-status");
+          return after.revision !== before.revision || !after.healthy || after.restart_required;
+        }, { timeout: 30_000 }).toBe(true);
+        assert.equal(after.healthy, true);
+        assert.equal(after.restart_required, false);
+        assert.notEqual(after.revision, before.revision);
+        const changed = "/context/resource_activation/default_boundary";
+        const applied = (await api("/api/v1/config/events")).events.filter(event =>
+          event.result === "applied" && event.changed_paths.includes(changed));
+        assert.equal(applied.length, 1);
+        assert.equal(applied[0].activation_scope, "next_job");
+        assert.deepEqual(applied[0].changed_paths, [changed]);
+        assert.deepEqual(applied[0].applied_paths, [changed]);
+        assert.deepEqual(applied[0].deferred_paths, []);
+        assert.deepEqual(await assemblies(), frozen);
+        facts.policyReload = { before, after, event: applied[0] };
+      }
       if (mixedSkill) {
         await writeFile(mixedSkill.path, mixedSkill.versions[index + 1]);
         const revision = `sha256:${createHash("sha256").update(mixedSkill.versions[index + 1]).digest("hex")}`;

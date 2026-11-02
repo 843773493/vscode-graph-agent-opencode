@@ -35,6 +35,7 @@ from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.clients.web.itemized_context.test_fork_prefix_recovery import (
     prefix_runtime as prefix_runtime,  # noqa: PLC0414 — 复用装具，资源按本测试路径隔离。
@@ -85,6 +86,7 @@ async def verify_agents_source_boundary(
     agents_source: Path,
     *, boundary: Literal["turn", "model_call"],
     skill_source: Path | None = None,
+    policy_update: Path | None = None,
 ) -> None:
     base_url, workspace, replay, _ = prefix_runtime
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -126,6 +128,16 @@ async def verify_agents_source_boundary(
         frames=chat_completion_frames(response_id=f"turn-source-{index}", model="browser-chat-tool-loop-stub",
             deltas=deltas, finish_reason=finish),
     ).raw for index, (deltas, finish) in enumerate(responses)]
+    policy_change = None
+    if policy_update is not None:
+        assert boundary == "turn" and skill_source is None
+        config = read_jsonc_object(policy_update)
+        context_config = config.setdefault("context", {})
+        assert isinstance(context_config, dict)
+        policy = context_config.setdefault("resource_activation", {})
+        assert isinstance(policy, dict)
+        policy["default_boundary"] = "model_call"
+        policy_change = {"path": str(policy_update), "content": json.dumps(config, ensure_ascii=False, indent=2) + "\n"}
     environment = os.environ | replay.environment | {
         "BOXTEAM_BROWSER_BASE_URL": base_url,
         "BOXTEAM_BROWSER_ARTIFACT_ROOT": str(artifacts),
@@ -142,6 +154,7 @@ async def verify_agents_source_boundary(
             "uri": f"boxteam://workspace/{session['workspace_id']}/resources/skills/{SKILL_NAME}/SKILL.md",
             "currentAgents": MIXED_CURRENT_AGENTS,
             "versions": [skill_file_content(body) for body in SKILL_BODIES]})} if skill_source is not None else {}),
+        **({"BOXTEAM_BROWSER_POLICY_UPDATE": json.dumps(policy_change)} if policy_change is not None else {}),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
     }
     command = ["node", "tests/integration/clients/web/itemized_context/turn_source_freezing.mjs"]
@@ -203,6 +216,7 @@ async def verify_agents_source_boundary(
     receipts = []
     catalogs = []
     agent_bindings = []
+    policies = []
     with RolloutCheckpointSaver(workspace / ".boxteam/sessions") as cold:
         for ordinal, call in enumerate(calls):
             assembly_id = by_call[call]["assembly_id"]
@@ -210,11 +224,15 @@ async def verify_agents_source_boundary(
             projection = cold.project_context_plan_to_history_with_diagnostics(session_id, thread_id, snapshot.as_sealed_plan())
             activation = projection.resource_activation
             assert activation is not None
+            policies.append(activation.activation_policy.to_dict())
+            expected_boundary = "model_call" if policy_update is not None and ordinal == 2 else boundary
             agents = [item for item in activation.bindings if item.resource_kind == "workspace_agents"]
             agent_bindings.append(agents)
             others = [item for item in activation.bindings if item.resource_kind != "workspace_agents"
                       and not (skill_source is not None and item.resource_kind == "skill")]
-            assert others and all(item.effective_boundary == "turn" for item in others)
+            assert others and all(item.effective_boundary == (
+                activation.activation_policy.effective_boundary(item.resource_kind) if policy_update is not None else "turn"
+            ) for item in others)
             assert sorted(item.facet for item in agents) == ["chain", "raw-file"]
             chain = next(item for item in agents if item.facet == "chain")
             raw = next(item for item in agents if item.facet == "raw-file")
@@ -223,7 +241,7 @@ async def verify_agents_source_boundary(
             assert chain.source_lineage_ref.sources == ((raw.resource_id, raw.revision),)
             for binding in agents:
                 expected_version = version_indexes[ordinal]
-                assert (binding.revision, binding.effective_boundary) == (revisions[expected_version], boundary)
+                assert (binding.revision, binding.effective_boundary) == (revisions[expected_version], expected_boundary)
                 payload = cold.read_resource_activation_payload(activation, binding, storage_owner=(session_id, thread_id))
                 assert agents_content(payload) == AGENTS_VERSIONS[expected_version]
             public = next(item for item in facts["assemblies"] if item["assemblyId"] == assembly_id)
@@ -266,6 +284,10 @@ async def verify_agents_source_boundary(
                     assert SKILL_BODIES[len(receipts)].strip() in json.dumps(tool_tail, ensure_ascii=False)
                     receipts.append(receipt)
             frozen.append(canonical_json_bytes(activation.to_dict()).decode())
+    if policy_update is not None:
+        assert policies[0]["default_boundary"] == "turn"
+        assert policies == [policies[0], policies[0], {**policies[0], "default_boundary": "model_call"}]
+        assert facts["policyReload"]["after"]["revision"] != facts["policyReload"]["before"]["revision"]
     if skill_source is not None:
         assert len({item.revision for item in metadata[:3]}) == 1
         assert len({item.source_lineage_digest for item in metadata[:3]}) == 3

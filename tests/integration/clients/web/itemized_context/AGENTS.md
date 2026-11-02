@@ -23,4 +23,5 @@
 - `test_model_call_source_freezing.py`只在自身隔离工作区使用既有AGENTS model_call覆盖；与默认Turn入口共用`verify_agents_source_boundary`和唯一浏览器驱动。真实Composer触发工具循环，在首请求封存后改AGENTS，核配对结果之后才追加新来源、同assembly其余binding的Turn边界、下一Turn与安全重启后API/UI/冷Saver原文及请求hash；不代替策略热更新、Skill变化或Section8总验收。
 
 - `test_mixed_source_freezing.py` 使用自己的配置、Skill/AGENTS 文件、端口及正式产物目录，复用唯一来源冻结浏览器驱动；两次模型响应屏障内同时改真实来源，等待 watcher 的精确 URI/原始 SHA/available 发布后放行。两轮五次请求验证 Turn AGENTS 与 model_call Skill 独立冻结、原调用的三次 Skill 选择、metadata 语义不变而 lineage 更新；删除当前 Skill、改写 AGENTS 后，经公开安全重启检查完整 API/UI selection/provenance 及冷 Saver 正文/hash。不替代唯一 Section 8 总验收、策略热更新、Windows或真实 Provider。
+- `test_policy_source_freezing.py`复用同一驱动，经真实Composer在首模型响应屏障内改工作区配置与AGENTS；由原watcher发布next_job后才放行，核原assembly不变、同Turn保留原策略、新Turn采用model_call。安全重启后逐项核完整API/UI来源与冷Saver策略、正文和request hash，不代替唯一Section8、Windows或外部Provider。
 - 本场景先等待并通过原版按钮关闭Welcome，再执行唯一一次精确owner导航；product-006请求200但目标Tab缺席的启动导航时序仍留TODO，不把原因当作已证，也不代替初始化时序验收。新增五调用/五份UI整段400秒，原三调用仍240秒，业务内期限保持。
