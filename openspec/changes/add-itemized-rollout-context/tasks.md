@@ -1596,3 +1596,11 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 真实 Gateway／Backend 的批量工具选择复现：设置提交后，按运行 override 裁剪的 blueprint 把 `test_tool` 从管理目录移除，响应构造抛 KeyError／500，后续也无法定位并重新启用。管理 blueprint 现仅由配置、运行模式和 MCP 目录版本决定；ToolService 仍从唯一持久选择投影开关状态，实际 Thread 执行仍使用原 override，不新增目录、配置或存储链。
 - 新增禁用后列表／详情及重新启用的真实 HTTP 回归，与原存储错误、原件保护、权限、锁超时和同入口重试共 9 passed／34.42 秒。修改前定向单测失败，修复后相关批次 28 passed；同批 26 项旧执行装具失败在完整 HEAD 归档逐项复现，失败节点及 29 条错误消息一致，根因包含旧 McpCatalogPublication 缺 definitions，已留代码 TODO，不称整批全绿、不扩修该装具。
 - Ruff／compileall 通过；真实 Pyright 保留生产 4 项、旧测试 7 项诊断，与完整原版按路径、规则、消息、最窄 AST 及重数对照无新增，新增 HTTP／压缩用例零诊断。准确命令、源码、原始输出与退出码见 `out/tests/temp/provider_compaction_20261102/artifacts/verification-catalog.json`。全部检查使用外部超时和 4GiB 数据段限制，HTTP 沿原集成独占闸门；不代真实模型执行、Gateway 修复后验收、重启、Web 或完整7.5，整体111/119保持。
+
+### 2026-11-02 7.5-C/E 产品历史压缩与真实 Provider 冷恢复（部分）
+
+- 新独立专项复用原真实 Gateway／Backend 及持有型重启 fixture，经正式工具选择、Session、消息和 Job 入口生成六轮长历史，不手填 checkpoint；逐字核原十二条消息身份、正文及顺序。手动压缩先仅调度，后继执行产生缓存前缀、摘要与精确中段归档，原历史仍完整；摘要读取提示不含底层归档地址。
+- 正式 `e2e-provider-compaction` 一次完整1 passed／273.98秒，外层277.55秒、exit0；九次模型节点调用、九份不同 assembly 全部以实际 upstream wire、sealed dispatch、model-call owner 和 request_hash 逐项对账。Backend安全重启前后完整历史、消息、摘要、checkpoint／状态正文与引用、assembly及归档相同；重启后再经产品消息续聊，未重述的首轮随机回执准确返回，摘要恰好进入请求一次。Provider实际工具集只含所选两项压缩能力及规范固定的发现／调用入口，关闭工具的定义未泄入运行时。
+- 原用例及专用手填历史 helper 物理删除，保留的十六个顶层声明AST一致；剩余缓存命中专项的手填增量明确留TODO，不作为完整执行验收。Ruff／compileall与矩阵注册通过；真实Pyright仍exit1，原模块14项诊断降为10项，按规则、完整消息、最窄AST owner及重数比较无新增，新专项零诊断。作者结构审查无finding，不将其代替非作者独审或7.5-F总门。
+- 此前真实运行暴露结构化content、合法轮次内cutoff及历史详情请求上限三项测试假设错误，按现行合同修正，未放宽身份、顺序、正文或hash。第四轮已通过八次调用／十二次上游尝试的完整封存审计，随后因一次传入七个Turn ID被既有四项上限拒绝；改用原有有界历史窗口，保留失败原件与工作区归档。独立审计的导入失败和误把固定发现入口视为禁用工具另留原日志，不计产品通过。
+- 准确命令、3752项源码前后指纹、原始输出／退出码、类型及AST对照、产品审计和清理索引见 `out/tests/temp/provider_compaction_20261102/artifacts/verification-compaction.json`；最终正式原件为 `out/tests/e2e/system/agent/context/test_provider_compaction/runs/run-c5406c3c855e/`。固定900秒／4GiB及跨worktree独占闸门保持，不代Web、Windows、同步真实Provider、硬退出或全部7.5／8.3；整体111/119继续未关闭，团队与MCP显式持有仍延期，未编辑前端或共享debug服务。
