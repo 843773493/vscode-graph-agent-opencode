@@ -124,6 +124,7 @@ async def test_fuzzy_files_query_exact_mount_with_bounded_continuation(
             (directory / f"a-unrelated-{item:03}.txt").touch()
         for name in relative_names:
             (directory / name).write_text(f"mount-{index} {name}", encoding="utf-8")
+        (directory / "多行😀.txt").write_bytes(f"🧪 first NEEDLE\r\nsecond Ω owner-{index}\r\n".encode())
         references = await case.data("POST", "/api/v1/workspace/files/references", headers=selection,
                                      json={"paths": [str(directory)]})
         roots.append(references["uris"][0])
@@ -150,6 +151,25 @@ async def test_fuzzy_files_query_exact_mount_with_bounded_continuation(
             assert rejected.status_code == 400, rejected.text
             assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"]
             assert rejected.json()["detail"]["reason"] == reason
-        evidence.append({"root": root, "first": page, "following": following, "read": read})
+        content = await case.data("POST", "/api/v1/resources/navigation", headers=selection, json={
+            "uri": root, "operation": "search", "search_mode": "content", "query": r"needle\r?\nsecond Ω",
+            "search_options": {"case_mode": "insensitive", "is_regex": True, "is_multiline": True,
+                               "all_matches": True, "include_globs": ["多行*.txt"], "exclude_globs": ["a-**"]},
+        })
+        match, = content["matches"]
+        assert (match["line"], match["column"], match["end_line"], match["end_column"]) == (1, 9, 2, 9)
+        assert (match["utf16_column"], match["utf16_end_column"], match["snippet_start_utf16_column"]) == (10, 9, 1)
+        assert match["uri"].startswith(root + "/") and match["text"] == "🧪 first NEEDLE"
+        original = await case.data("POST", "/api/v1/resources/navigation", headers=selection,
+                                   json={"uri": match["uri"], "operation": "read"})
+        assert original["content"].endswith(f"owner-{index}\r\n")
+        unsupported = await case.client.post("/api/v1/resources/navigation", headers=selection, json={
+            "uri": root, "operation": "search", "query": "hit", "search_options": {"ignore_mode": "respect"},
+        })
+        assert unsupported.status_code == 400, unsupported.text
+        assert unsupported.headers["X-Request-ID"] == unsupported.json()["request_id"]
+        assert unsupported.json()["detail"]["reason"] == "unsupported_search_option"
+        evidence.append({"root": root, "first": page, "following": following, "read": read,
+                         "content": content, "original": original, "unsupported": unsupported.json()})
     case.context.write_result("passed", {"fuzzy_queries": evidence,
         "scope": "真实Gateway、共享Backend双挂载与HTTP；没有Quick Access UI、SSH或模型执行。"})

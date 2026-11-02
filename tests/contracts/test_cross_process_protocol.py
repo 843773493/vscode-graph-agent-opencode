@@ -99,6 +99,28 @@ def test_resource_read_request_and_media_result_survive_proto_wire() -> None:
     assert ResourceNavigationResultDTO.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == result
 
 
+def test_resource_search_options_and_codepoint_ranges_survive_proto_wire() -> None:
+    request = ResourceNavigationRequest(uri="boxteam://workspace/ws_test/resources/files/root",
+        operation="search", search_mode="content", query=r"needle\r?\nsecond", search_options={
+            "case_mode": "smart", "is_regex": True, "whole_word": True, "word_separators": "._",
+            "is_multiline": True, "all_matches": True, "include_globs": ["**/*.txt"],
+            "exclude_globs": ["ignored/**"], "ignore_mode": "none",
+        })
+    encoded = ParseDict(request.model_dump(mode="json", exclude_none=True), public_pb2.ResourceNavigationRequest()).SerializeToString()
+    received = public_pb2.ResourceNavigationRequest.FromString(encoded)
+    assert received.HasField("search_options")
+    assert ResourceNavigationRequest.model_validate(MessageToDict(received, preserving_proto_field_name=True)) == request
+    result = ResourceNavigationResultDTO.model_validate({
+        "node": {"uri": request.uri, "resource_shape": "directory", "operations": ["search"]},
+        "matches": [{"uri": request.uri + "/text.txt", "line": 2, "column": 8, "end_line": 3,
+                     "end_column": 9, "utf16_column": 9, "utf16_end_column": 9, "snippet_start_utf16_column": 1,
+                     "text": "🧪first NEEDLE", "snippet_start_column": 1}],
+    })
+    encoded = ParseDict(result.model_dump(mode="json", exclude_none=True), public_pb2.ResourceNavigationResultDTO()).SerializeToString()
+    received_result = public_pb2.ResourceNavigationResultDTO.FromString(encoded)
+    assert ResourceNavigationResultDTO.model_validate(MessageToDict(received_result, preserving_proto_field_name=True)) == result
+
+
 def _baseline() -> dict[str, object]:
     return cast(dict[str, object], json.loads(BASELINE_PATH.read_text(encoding="utf-8")))
 

@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import bisect
 import codecs
 import hashlib
 import json
 import math
 import mimetypes
 import os
+import re
 import stat
 import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-# TODO（依赖元数据）：wcmatch 已由固定 DeepAgents 引入；根包动态 metadata 构建失败，修复构建后登记直接依赖。
+# TODO（依赖元数据）：regex/wcmatch 已由固定依赖引入；根包动态 metadata 构建失败，修复构建后登记直接依赖。
+import regex
 from wcmatch import glob as wcglob
 
 from app.abstractions.resource_file_content import ResourceFileReader
@@ -36,6 +39,7 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
+    ResourceNavigationSearchOptions,
     ResourceNavigationStatDTO,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
@@ -64,6 +68,7 @@ _MEDIA_EXTENSIONS = {
     **dict.fromkeys((".wav", ".mp3", ".aiff", ".aac", ".ogg", ".flac"), "audio"),
     **dict.fromkeys((".pdf", ".ppt", ".pptx"), "file"),
 }
+_DEFAULT_SEARCH_OPTIONS = ResourceNavigationSearchOptions()
 
 
 def _resolve_path(path: Path) -> Path:
@@ -237,6 +242,7 @@ class ResourceNavigation:
                                              owner_id=self._workspace_id if self._workspace_root is not None else self._gateway_id)
         if parsed.session_artifact_kind is not None:
             return self._navigate_owned_file(parsed, request, gateway_id, deadline, artifact_reader or self._artifact_reader, owner_id=self._workspace_id)
+        pattern = self._text_pattern(request)
         root, children = self._root(parsed)
         path = self._contained(root, children, parsed)
         node = self._node(parsed, path, include_stat=request.operation == "describe")
@@ -268,7 +274,7 @@ class ResourceNavigation:
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
         ))
-        for index, (child_node, metadata, match) in enumerate(self._search_items(root, children, parsed, node, request, deadline), start=1):
+        for index, (child_node, metadata, match) in enumerate(self._search_items(root, children, parsed, node, request, deadline, pattern), start=1):
             prefix.update(json.dumps((child_node.uri, metadata, match.model_dump() if match is not None else None), separators=(",", ":")).encode())
             if index <= offset:
                 if index == offset:
@@ -289,6 +295,8 @@ class ResourceNavigation:
                 included = child_node.resource_shape == "file" and is_subsequence(fuzzy_query, name.casefold())
             else:
                 included = request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
+            if included and request.operation == "search" and request.search_mode != "content":
+                included = self._file_included(name, request)
             if included:
                 entry_bytes = 0 if child_node.uri in seen else len(child_node.model_dump_json().encode()) + 1
                 if match is not None:
@@ -319,6 +327,7 @@ class ResourceNavigation:
     ) -> ResourceNavigationResultDTO:
         if parsed.gateway_authority is not None or parsed.scope_id != owner_id or reader is None:
             raise ResourceUriResolveError("capability_denied", "会话产物缺少此目标的原 owner 读取能力")
+        pattern = self._text_pattern(request)
         node = ResourceNavigationNodeDTO.model_validate(resource_navigation_node(parsed, resource_shape="file"))
         if request.operation not in node.operations:
             raise ResourceUriResolveError("capability_denied", "会话产物只提供精确单文件能力，不开放私有目录")
@@ -348,7 +357,7 @@ class ResourceNavigation:
         offset, previous = self._decode_cursor(request.cursor, binding)
         if previous is not None and previous != version:
             raise ResourceFileOperationError("execution_failed", "工具结果已改变，不能使用原 cursor", reason="stale_cursor")
-        if request.file_glob is not None and not self._glob_matches(parsed.tail_segments[-1], request.file_glob):
+        if not self._file_included(parsed.tail_segments[-1], request):
             if offset:
                 raise ResourceFileOperationError("execution_failed", "工具结果 cursor 超出匹配范围", reason="stale_cursor")
             return self._response(ResourceNavigationResultDTO(node=node), request, deadline)
@@ -362,7 +371,7 @@ class ResourceNavigation:
         consumed = 0
         truncated = False
         reason = None
-        for _, _, match in self._content_matches(node, content, request, deadline, ()):
+        for _, _, match in self._content_matches(node, content, request, deadline, (), pattern):
             if match is None:
                 continue
             consumed += 1
@@ -387,9 +396,38 @@ class ResourceNavigation:
         # 保留原 glob 在各层目录匹配文件的语义；模式从不参与目标解析。
         return wcglob.globmatch(name, "**/" + pattern.lstrip("/"), flags=wcglob.GLOBSTAR | wcglob.BRACE | wcglob.DOTGLOB)
 
+    def _file_included(self, name: str, request: ResourceNavigationRequest) -> bool:
+        options = request.search_options
+        return ((request.file_glob is None or self._glob_matches(name, request.file_glob))
+                and (options is None or (
+                    (not options.include_globs or any(self._glob_matches(name, pattern) for pattern in options.include_globs))
+                    and not any(self._glob_matches(name, pattern) for pattern in options.exclude_globs))))
+
+    @staticmethod
+    def _text_pattern(request: ResourceNavigationRequest) -> regex.Pattern[str] | None:
+        options = request.search_options or _DEFAULT_SEARCH_OPTIONS
+        if options.ignore_mode == "respect":
+            # TODO：接入原文件owner的目标机器ignore规则后再开放；不把固定目录排除冒充.gitignore。
+            raise ResourceFileOperationError("execution_failed", "尚未支持读取目标目录的 ignore 文件", reason="unsupported_search_option")
+        if request.operation != "search" or request.search_mode != "content":
+            return None
+        if request.query is None:
+            raise ValueError("内容搜索缺少 query")
+        query = request.query
+        capitals = re.sub(r"\\.", "", query) if options.is_regex else query
+        sensitive = options.case_mode == "sensitive" or (options.case_mode == "smart" and capitals.lower() != capitals)
+        source = query if options.is_regex else regex.escape(query)
+        if options.whole_word:
+            word = r"\w" if options.word_separators is None else r"[^\s" + regex.escape(options.word_separators) + "]"
+            source = f"(?<!{word})(?:{source})(?!{word})"
+        try:
+            return regex.compile(source, (0 if sensitive else regex.IGNORECASE) | regex.MULTILINE)
+        except regex.error as error:
+            raise ResourceFileOperationError("execution_failed", f"内容搜索正则无效: {error}", reason="invalid_search_pattern") from error
+
     def _search_items(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
-        node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float,
+        node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ResourceNavigationMatchDTO | None]]:
         path = self._contained(root, children, parsed)
         candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, self._stat(path)),))
@@ -400,7 +438,7 @@ class ResourceNavigation:
                 continue
             target = parse_resource_uri(child.uri)
             name = "/".join(target.tail_segments[len(parsed.tail_segments):]) or target.tail_segments[-1]
-            if (request.file_glob is not None and not self._glob_matches(name, request.file_glob)) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
+            if not self._file_included(name, request) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
                 yield child, metadata, None
                 continue
             file = self._contained(root, target.tail_segments[1:], target)
@@ -419,24 +457,49 @@ class ResourceNavigation:
                 content = data.decode("utf-8")
             except UnicodeDecodeError as error:
                 raise ResourceFileOperationError("invalid_encoding", "搜索文件不是有效的 UTF-8 文本", reason="utf8") from error
-            yield from self._content_matches(child, content, request, deadline, metadata)
+            yield from self._content_matches(child, content, request, deadline, metadata, pattern)
 
     def _content_matches(
         self, child: ResourceNavigationNodeDTO, content: str, request: ResourceNavigationRequest,
-        deadline: float, metadata: tuple[int, ...],
+        deadline: float, metadata: tuple[int, ...], pattern: regex.Pattern[str] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ResourceNavigationMatchDTO | None]]:
-        found = False
-        for line_number, line in enumerate(content.splitlines(), start=1):
-            self._check_deadline(deadline)
-            column = line.find(request.query)
-            if column < 0:
-                continue
-            found = True
-            start = max(0, column - request.max_snippet_bytes // 8)
-            raw = line[start:].encode("utf-8")
-            snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
-            yield child, metadata, ResourceNavigationMatchDTO(uri=child.uri, line=line_number, column=column + 1,
-                text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
+        if pattern is None:
+            raise ValueError("内容搜索缺少已编译查询")
+        options = request.search_options or _DEFAULT_SEARCH_OPTIONS
+        starts = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", content))]
+        astral = [] if content.isascii() else [index for index, character in enumerate(content) if ord(character) > 0xFFFF]
+
+        def utf16_column(offset: int, row: int) -> int:
+            return offset - starts[row] + 1 + bisect.bisect_left(astral, offset) - bisect.bisect_left(astral, starts[row])
+
+        segments = [(0, content)] if options.is_multiline else (
+            (start, content[start:starts[index + 1] if index + 1 < len(starts) else len(content)].rstrip("\r\n"))
+            for index, start in enumerate(starts))
+        found, last_line = False, -1
+        try:
+            for offset, segment in segments:
+                self._check_deadline(deadline)
+                for hit in pattern.finditer(segment, timeout=max(0, deadline - time.monotonic())):
+                    self._check_deadline(deadline)
+                    begin, end = offset + hit.start(), offset + hit.end()
+                    row, end_row = bisect.bisect_right(starts, begin) - 1, bisect.bisect_right(starts, end) - 1
+                    if not options.all_matches and row == last_line:
+                        continue
+                    found, last_line = True, row
+                    line = content[starts[row]:starts[row + 1] if row + 1 < len(starts) else len(content)].rstrip("\r\n")
+                    column = begin - starts[row]
+                    start = max(0, column - request.max_snippet_bytes // 8)
+                    raw = line[start:].encode("utf-8")
+                    snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
+                    yield child, metadata, ResourceNavigationMatchDTO(uri=child.uri, line=row + 1, column=column + 1,
+                        end_line=end_row + 1, end_column=end - starts[end_row] + 1,
+                        utf16_column=utf16_column(begin, row), utf16_end_column=utf16_column(end, end_row),
+                        snippet_start_utf16_column=utf16_column(starts[row] + start, row),
+                        text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
+                    if not options.all_matches and not options.is_multiline:
+                        break
+        except TimeoutError as error:
+            raise ResourceFileOperationError("output_limit_exceeded", "文件内容匹配超过本次总期限", reason="deadline") from error
         if not found:
             yield child, metadata, None
     @staticmethod
@@ -546,7 +609,15 @@ class ResourceNavigation:
                 # 私有存储不作为文件树 child 发布；直接请求和别名仍在 _contained 拒绝。
                 if parsed.kind in {"files", "attachments"} and self._file_paths.is_private(child, root_uri=parsed.display_uri):
                     continue
-                if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"}:
+                if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"} and (
+                    request.search_options is None or request.search_options.ignore_mode == "default"
+                ):
+                    continue
+                name = "/".join(child_parts[len(children):])
+                if request.search_options is not None and any(
+                    self._glob_matches(name, pattern) or self._glob_matches(name + "/", pattern)
+                    for pattern in request.search_options.exclude_globs
+                ):
                     continue
                 child_path = self._contained(root, child_parts, parsed)
                 uri = resource_display_uri(

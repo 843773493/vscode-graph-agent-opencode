@@ -2772,7 +2772,7 @@ class ResourceThreadRef(_message.Message):
     def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
 
 class ResourceNavigationRequest(_message.Message):
-    __slots__ = ("uri", "operation", "query", "limit", "max_bytes", "cursor", "timeout_ms", "scan_limit", "max_response_bytes", "read_format", "line_offset", "max_lines", "search_mode", "file_glob", "max_snippet_bytes")
+    __slots__ = ("uri", "operation", "query", "limit", "max_bytes", "cursor", "timeout_ms", "scan_limit", "max_response_bytes", "read_format", "line_offset", "max_lines", "search_mode", "file_glob", "max_snippet_bytes", "search_options")
     URI_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     QUERY_FIELD_NUMBER: _ClassVar[int]
@@ -2788,6 +2788,7 @@ class ResourceNavigationRequest(_message.Message):
     SEARCH_MODE_FIELD_NUMBER: _ClassVar[int]
     FILE_GLOB_FIELD_NUMBER: _ClassVar[int]
     MAX_SNIPPET_BYTES_FIELD_NUMBER: _ClassVar[int]
+    SEARCH_OPTIONS_FIELD_NUMBER: _ClassVar[int]
     uri: str
     operation: str
     query: str
@@ -2803,7 +2804,30 @@ class ResourceNavigationRequest(_message.Message):
     search_mode: str
     file_glob: str
     max_snippet_bytes: int
-    def __init__(self, uri: _Optional[str] = ..., operation: _Optional[str] = ..., query: _Optional[str] = ..., limit: _Optional[int] = ..., max_bytes: _Optional[int] = ..., cursor: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., scan_limit: _Optional[int] = ..., max_response_bytes: _Optional[int] = ..., read_format: _Optional[str] = ..., line_offset: _Optional[int] = ..., max_lines: _Optional[int] = ..., search_mode: _Optional[str] = ..., file_glob: _Optional[str] = ..., max_snippet_bytes: _Optional[int] = ...) -> None: ...
+    search_options: ResourceNavigationSearchOptions
+    def __init__(self, uri: _Optional[str] = ..., operation: _Optional[str] = ..., query: _Optional[str] = ..., limit: _Optional[int] = ..., max_bytes: _Optional[int] = ..., cursor: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., scan_limit: _Optional[int] = ..., max_response_bytes: _Optional[int] = ..., read_format: _Optional[str] = ..., line_offset: _Optional[int] = ..., max_lines: _Optional[int] = ..., search_mode: _Optional[str] = ..., file_glob: _Optional[str] = ..., max_snippet_bytes: _Optional[int] = ..., search_options: _Optional[_Union[ResourceNavigationSearchOptions, _Mapping]] = ...) -> None: ...
+
+class ResourceNavigationSearchOptions(_message.Message):
+    __slots__ = ("case_mode", "is_regex", "whole_word", "word_separators", "is_multiline", "all_matches", "include_globs", "exclude_globs", "ignore_mode")
+    CASE_MODE_FIELD_NUMBER: _ClassVar[int]
+    IS_REGEX_FIELD_NUMBER: _ClassVar[int]
+    WHOLE_WORD_FIELD_NUMBER: _ClassVar[int]
+    WORD_SEPARATORS_FIELD_NUMBER: _ClassVar[int]
+    IS_MULTILINE_FIELD_NUMBER: _ClassVar[int]
+    ALL_MATCHES_FIELD_NUMBER: _ClassVar[int]
+    INCLUDE_GLOBS_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDE_GLOBS_FIELD_NUMBER: _ClassVar[int]
+    IGNORE_MODE_FIELD_NUMBER: _ClassVar[int]
+    case_mode: str
+    is_regex: bool
+    whole_word: bool
+    word_separators: str
+    is_multiline: bool
+    all_matches: bool
+    include_globs: _containers.RepeatedScalarFieldContainer[str]
+    exclude_globs: _containers.RepeatedScalarFieldContainer[str]
+    ignore_mode: str
+    def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ...) -> None: ...
 
 class ResourceNavigationNodeDTO(_message.Message):
     __slots__ = ("uri", "resource_shape", "operations", "child_path", "stat")
@@ -2860,20 +2884,30 @@ class ResourceNavigationResultDTO(_message.Message):
     def __init__(self, node: _Optional[_Union[ResourceNavigationNodeDTO, _Mapping]] = ..., entries: _Optional[_Iterable[_Union[ResourceNavigationNodeDTO, _Mapping]]] = ..., content: _Optional[str] = ..., truncated: _Optional[bool] = ..., next_cursor: _Optional[str] = ..., truncation_reason: _Optional[str] = ..., view: _Optional[str] = ..., content_encoding: _Optional[str] = ..., media_type: _Optional[str] = ..., mime_type: _Optional[str] = ..., line_offset: _Optional[int] = ..., matches: _Optional[_Iterable[_Union[ResourceNavigationMatchDTO, _Mapping]]] = ..., content_hash: _Optional[str] = ...) -> None: ...
 
 class ResourceNavigationMatchDTO(_message.Message):
-    __slots__ = ("uri", "line", "column", "text", "snippet_start_column", "truncated")
+    __slots__ = ("uri", "line", "column", "text", "snippet_start_column", "truncated", "end_line", "end_column", "utf16_column", "utf16_end_column", "snippet_start_utf16_column")
     URI_FIELD_NUMBER: _ClassVar[int]
     LINE_FIELD_NUMBER: _ClassVar[int]
     COLUMN_FIELD_NUMBER: _ClassVar[int]
     TEXT_FIELD_NUMBER: _ClassVar[int]
     SNIPPET_START_COLUMN_FIELD_NUMBER: _ClassVar[int]
     TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    END_LINE_FIELD_NUMBER: _ClassVar[int]
+    END_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    UTF16_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    UTF16_END_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    SNIPPET_START_UTF16_COLUMN_FIELD_NUMBER: _ClassVar[int]
     uri: str
     line: int
     column: int
     text: str
     snippet_start_column: int
     truncated: bool
-    def __init__(self, uri: _Optional[str] = ..., line: _Optional[int] = ..., column: _Optional[int] = ..., text: _Optional[str] = ..., snippet_start_column: _Optional[int] = ..., truncated: _Optional[bool] = ...) -> None: ...
+    end_line: int
+    end_column: int
+    utf16_column: int
+    utf16_end_column: int
+    snippet_start_utf16_column: int
+    def __init__(self, uri: _Optional[str] = ..., line: _Optional[int] = ..., column: _Optional[int] = ..., text: _Optional[str] = ..., snippet_start_column: _Optional[int] = ..., truncated: _Optional[bool] = ..., end_line: _Optional[int] = ..., end_column: _Optional[int] = ..., utf16_column: _Optional[int] = ..., utf16_end_column: _Optional[int] = ..., snippet_start_utf16_column: _Optional[int] = ...) -> None: ...
 
 class WorkspaceResourceDTO(_message.Message):
     __slots__ = ("resource_id", "workspace_id", "kind", "retention_scope", "source_thread", "thread_associations", "owner_revision", "status", "reconciliation_status", "unattached_since", "reclaim_at", "available_actions", "metadata", "created_at", "updated_at", "error")

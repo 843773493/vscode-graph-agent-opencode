@@ -20,6 +20,28 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 )
 
 
+class ResourceNavigationSearchOptions(BaseModel):
+    """原文件搜索的显式选项；省略时保留原导航和工具行为。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_mode: Literal["sensitive", "insensitive", "smart"] = "sensitive"
+    is_regex: bool = False
+    whole_word: bool = False
+    word_separators: str | None = None
+    is_multiline: bool = False
+    all_matches: bool = False
+    include_globs: tuple[str, ...] = Field(default=(), max_length=64)
+    exclude_globs: tuple[str, ...] = Field(default=(), max_length=64)
+    ignore_mode: Literal["default", "none", "respect"] = "default"
+
+    @model_validator(mode="after")
+    def require_nonempty_patterns(self) -> ResourceNavigationSearchOptions:
+        if any(not pattern or len(pattern) > 4096 for pattern in (*self.include_globs, *self.exclude_globs)):
+            raise ValueError("搜索路径模式须为非空字符串且不超过4096字符")
+        return self
+
+
 class ResourceNavigationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -38,6 +60,7 @@ class ResourceNavigationRequest(BaseModel):
     search_mode: Literal["path", "fuzzy", "glob", "content"] = "path"
     file_glob: str | None = Field(default=None, min_length=1)
     max_snippet_bytes: int = Field(default=2048, ge=16, le=8192)
+    search_options: ResourceNavigationSearchOptions | None = None
 
     @model_validator(mode="after")
     def require_search_query(self) -> ResourceNavigationRequest:
@@ -54,6 +77,15 @@ class ResourceNavigationRequest(BaseModel):
             raise ValueError("只有 search 接受搜索模式和文件过滤")
         if self.file_glob is not None and self.search_mode != "content":
             raise ValueError("只有内容搜索接受 file_glob")
+        if self.search_options is not None:
+            if self.operation != "search":
+                raise ValueError("只有 search 接受 search_options")
+            if self.search_mode != "content" and any((
+                self.search_options.case_mode != "sensitive", self.search_options.is_regex,
+                self.search_options.whole_word, self.search_options.word_separators is not None,
+                self.search_options.is_multiline, self.search_options.all_matches,
+            )):
+                raise ValueError("只有内容搜索接受文本匹配选项")
         return self
 
 
@@ -103,6 +135,11 @@ class ResourceNavigationMatchDTO(BaseModel):
     text: str
     snippet_start_column: int = Field(ge=1)
     truncated: bool = False
+    end_line: int | None = Field(default=None, ge=1)
+    end_column: int | None = Field(default=None, ge=1)
+    utf16_column: int | None = Field(default=None, ge=1)
+    utf16_end_column: int | None = Field(default=None, ge=1)
+    snippet_start_utf16_column: int | None = Field(default=None, ge=1)
 
 
 class ResourceNavigationResultDTO(BaseModel):

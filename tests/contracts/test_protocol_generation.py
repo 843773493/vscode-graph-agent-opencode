@@ -59,7 +59,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
         "uri": 1, "operation": 2, "query": 3, "limit": 4, "max_bytes": 5,
         "cursor": 6, "timeout_ms": 7, "scan_limit": 8, "max_response_bytes": 9,
         "read_format": 10, "line_offset": 11, "max_lines": 12,
-        "search_mode": 13, "file_glob": 14, "max_snippet_bytes": 15,
+        "search_mode": 13, "file_glob": 14, "max_snippet_bytes": 15, "search_options": 16,
     }
     request = public_pb2.ResourceNavigationRequest(
         uri="boxteam://workspace/ws-1/resources/files/root", operation="search",

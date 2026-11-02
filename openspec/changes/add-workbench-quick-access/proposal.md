@@ -27,7 +27,7 @@
 
 ### Modified Capabilities
 
-- `resource-file-operations`：实际目录／文件 describe 提供轻量 stat，工作台文件投影保存稳定归属并支持目录根拼接；原导航 search 增加有界模糊文件路径召回；正文保存继续消费原 revision／CAS。
+- `resource-file-operations`：实际目录／文件 describe 提供轻量 stat，工作台文件投影保存稳定归属并支持目录根拼接；原导航 search 增加有界模糊召回、显式文本／路径匹配选项及多行码点区间；正文保存继续消费原 revision／CAS。
 - `scalable-session-navigation`：目录名称、稳定 ID 与逻辑路径在原 owner 支持顺序字符模糊召回，分页绑定查询语义和 revision；Gateway 公开目录镜像沿用相同节点匹配规则。工作区 Thread 名称发现复用原 catalog 与 Session 控制库，显式表达预算、覆盖和续查，不依赖已打开标签。
 
 本稿新增上述交互 capability，不直接修改现行规范正文。复用既有寻址、文件操作、会话目录、上下文和持续任务合同，不重新定义其身份、状态机或权限规则。具体资源确有规范 URI 缺口时，新增模板必须在统一寻址 owner 中正式登记并同步其 delta；本稿只确定按需补齐原则，不预造模板或在前端另立协议。领域搜索缺口同样由原 owner 补齐，不另立事实源。已确认涉及 catalog／Thread 发现、文件搜索选项和根投影、消息／工具／请求／日志查询与定位、编辑器恢复及上下文引用消费者；这些是本改动的实现依赖，不能以本稿未创建各owner delta视作无需修改。确需改变原外部合同或新增 URI 模板时，在对应业务代码实施前补齐原 owner 的正式 delta 与真实类型合同；仅新增查询消费或沿用已有动作不重复定义其业务状态机。

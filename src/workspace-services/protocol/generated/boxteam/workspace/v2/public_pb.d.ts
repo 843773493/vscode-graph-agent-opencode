@@ -7315,6 +7315,11 @@ export declare type ResourceNavigationRequest = Message<"boxteam.workspace.v2.Re
    * @generated from field: uint32 max_snippet_bytes = 15;
    */
   maxSnippetBytes: number;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ResourceNavigationSearchOptions search_options = 16;
+   */
+  searchOptions?: ResourceNavigationSearchOptions | undefined;
 };
 
 /**
@@ -7322,6 +7327,68 @@ export declare type ResourceNavigationRequest = Message<"boxteam.workspace.v2.Re
  * Use `create(ResourceNavigationRequestSchema)` to create a new message.
  */
 export declare const ResourceNavigationRequestSchema: GenMessage<ResourceNavigationRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ResourceNavigationSearchOptions
+ */
+export declare type ResourceNavigationSearchOptions = Message<"boxteam.workspace.v2.ResourceNavigationSearchOptions"> & {
+  /**
+   * sensitive/insensitive/smart；省略时保留大小写敏感的原行为。
+   *
+   * @generated from field: string case_mode = 1;
+   */
+  caseMode: string;
+
+  /**
+   * @generated from field: bool is_regex = 2;
+   */
+  isRegex: boolean;
+
+  /**
+   * @generated from field: bool whole_word = 3;
+   */
+  wholeWord: boolean;
+
+  /**
+   * @generated from field: optional string word_separators = 4;
+   */
+  wordSeparators?: string | undefined;
+
+  /**
+   * @generated from field: bool is_multiline = 5;
+   */
+  isMultiline: boolean;
+
+  /**
+   * 默认仍为每行首个命中；编辑器可以显式请求全部非重叠命中。
+   *
+   * @generated from field: bool all_matches = 6;
+   */
+  allMatches: boolean;
+
+  /**
+   * @generated from field: repeated string include_globs = 7;
+   */
+  includeGlobs: string[];
+
+  /**
+   * @generated from field: repeated string exclude_globs = 8;
+   */
+  excludeGlobs: string[];
+
+  /**
+   * default 保留原固定目录忽略，none 关闭该忽略；respect 尚未支持时必须明确拒绝。
+   *
+   * @generated from field: string ignore_mode = 9;
+   */
+  ignoreMode: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationSearchOptions.
+ * Use `create(ResourceNavigationSearchOptionsSchema)` to create a new message.
+ */
+export declare const ResourceNavigationSearchOptionsSchema: GenMessage<ResourceNavigationSearchOptions>;
 
 /**
  * @generated from message boxteam.workspace.v2.ResourceNavigationNodeDTO
@@ -7500,6 +7567,35 @@ export declare type ResourceNavigationMatchDTO = Message<"boxteam.workspace.v2.R
    * @generated from field: bool truncated = 6;
    */
   truncated: boolean;
+
+  /**
+   * 一索引 Unicode 码点坐标，终点不包含。
+   *
+   * @generated from field: optional uint32 end_line = 7;
+   */
+  endLine?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 end_column = 8;
+   */
+  endColumn?: number | undefined;
+
+  /**
+   * 同一区间及片段起点的 UTF-16 列；裁剪片段不能推导被省略前缀的代理对数量。
+   *
+   * @generated from field: optional uint32 utf16_column = 9;
+   */
+  utf16Column?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 utf16_end_column = 10;
+   */
+  utf16EndColumn?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 snippet_start_utf16_column = 11;
+   */
+  snippetStartUtf16Column?: number | undefined;
 };
 
 /**

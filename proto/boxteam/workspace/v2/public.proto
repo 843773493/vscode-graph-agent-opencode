@@ -1687,6 +1687,22 @@ message ResourceNavigationRequest {
   string search_mode = 13;
   optional string file_glob = 14;
   uint32 max_snippet_bytes = 15;
+  optional ResourceNavigationSearchOptions search_options = 16;
+}
+
+message ResourceNavigationSearchOptions {
+  // sensitive/insensitive/smart；省略时保留大小写敏感的原行为。
+  string case_mode = 1;
+  bool is_regex = 2;
+  bool whole_word = 3;
+  optional string word_separators = 4;
+  bool is_multiline = 5;
+  // 默认仍为每行首个命中；编辑器可以显式请求全部非重叠命中。
+  bool all_matches = 6;
+  repeated string include_globs = 7;
+  repeated string exclude_globs = 8;
+  // default 保留原固定目录忽略，none 关闭该忽略；respect 尚未支持时必须明确拒绝。
+  string ignore_mode = 9;
 }
 
 message ResourceNavigationNodeDTO {
@@ -1729,6 +1745,13 @@ message ResourceNavigationMatchDTO {
   string text = 4;
   uint32 snippet_start_column = 5;
   bool truncated = 6;
+  // 一索引 Unicode 码点坐标，终点不包含。
+  optional uint32 end_line = 7;
+  optional uint32 end_column = 8;
+  // 同一区间及片段起点的 UTF-16 列；裁剪片段不能推导被省略前缀的代理对数量。
+  optional uint32 utf16_column = 9;
+  optional uint32 utf16_end_column = 10;
+  optional uint32 snippet_start_utf16_column = 11;
 }
 
 message WorkspaceResourceDTO {

@@ -192,3 +192,12 @@
 - 定向 Python 176 项通过，最终 7 项 fuzzy 检查通过；真实 Gateway＋共享 Backend 双挂载查询通过，覆盖首批 120 个无关文件之后的缩写、激活另一工作区仍定位原根、独立续页、模式旧 cursor 与扫描超限错误。尚不证明 Quick Access UI 或远端 SSH。
 - 公开协议批次 426 项通过，另 1 项发现上一切片 stat 字段编号断言漏迁；按已批准合同补字段及可选值往返后，该文件 9 项全部通过。模式公开字段仍是 string，生成前端只更新注释；运行时客户端类型与代码未变，复用上一切片的最终真实类型检查和生产构建。
 - Schema Pyright 零诊断；原 owner 的 10 条旧诊断与 HEAD 一致、无新增。Ruff、生成一致性、Buf 格式／breaking、OpenAPI 与 OpenSpec strict 通过。证据与失败归因：`out/tests/temp/quick_access_fuzzy_file_20261102/artifacts/verification.json`。
+
+### 2026-11-02：文件文本选项与精确坐标切片（4.3 部分）
+
+- 原导航 search 增加 typed search_options，贯通正则、大小写／smart case、整词与分隔符、多行、全部非重叠命中、include／exclude 及明确 ignore 模式。省略选项保留原敏感字面量和每行首个命中；旧匹配实现已被同一编译／遍历链替换，原精确工具产物 capability 也复用此链。模式按一次本机调用编译，正则执行消费剩余总期限。
+- 多行起止继续提供码点坐标，并由原 owner 使用完整文本同时计算 UTF-16 起止列与片段起点列。裁剪前的 emoji 不再需要客户端猜测或额外读取正文；使用稀疏代理对位置复用转换，ASCII 跳过该扫描。完整 SearchService 和客户端坐标消费尚待接入，不据此勾选 4.3 或 4.4。
+- 最终 209 项定向 Python 检查通过；真实 Gateway＋共享 Backend 双挂载再次通过，核对跨 CRLF／emoji 的正则命中、大小写、路径过滤、UTF-16 位置、精确读取与 request_id。公开合同先完成 428 项，追加 UTF-16 字段后定向协议／往返 37 项及真实公开结构导出再次通过；最终类型检查和生产构建通过。
+- Ruff 与 schema Pyright 通过；原 owner Pyright 从 HEAD 10 条既存诊断减至 9 条，无新增。生成一致性、Buf 格式／breaking、OpenAPI 与 OpenSpec strict 通过。末次验证前导入排序问题已修复，失败原件保留。
+- TODO：目标机器 .gitignore 等 ignore 文件尚未接入，显式 respect 返回 unsupported_search_option，不以固定目录排除冒充支持；仅已打开文件、原版搜索服务／视图及 UI 查询选项仍需继续贯通。regex/wcmatch 直接依赖声明沿既有动态 metadata TODO，当前使用锁文件已有依赖，未修改用户环境。
+- 证据：`out/tests/temp/quick_access_text_options_20261102/artifacts/verification.json`。这些分层检查不代 Quick Access UI、远端 SSH 或 Electron 验收。

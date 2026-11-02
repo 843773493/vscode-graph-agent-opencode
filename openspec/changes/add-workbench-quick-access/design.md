@@ -140,6 +140,8 @@ Command Center 的 `workbench.action.quickOpenWithModes` 以 `includeHelp: true`
 
 搜索选项按原版 QueryBuilder 传递：正则、大小写／smart case、整词、include／exclude、ignore、仅已打开资源及结果上限。文件 owner 必须补齐对应已展示选项的语义，或明确拒绝不支持的选项，不将 substring 接口冒充等价搜索。此范围不新增批量替换业务；已有可写文件的原版替换动作若保留，必须走同一 revision/CAS 保存合同并明确冲突，不能借搜索接入绕开写入 owner。
 
+文件导航以可选 `search_options` 表达已支持语义：case_mode、正则、整词／分隔符、多行、全部非重叠命中、include／exclude 与 ignore 模式。省略时保留敏感字面量、每行首个命中和既有固定目录排除；显式 `none` 可关闭固定排除，私有存储权限仍保持。`respect` 尚未接目标 ignore 文件时明确拒绝，并在代码保留 TODO。正则复用现有依赖中的 regex 库，编译后的模式按一次本机导航复用，每段匹配只使用剩余期限。smart case 沿原 QueryBuilder／containsUppercaseCharacter，正则转义不参与大写判定。命中 start/end 是一索引 Unicode 码点、终点不包含，片段仍为起始行的有界展示；原 owner 同时提供基于完整文本的 UTF-16 起止及片段起点列，避免从裁剪片段猜测或重复读取正文；客户端搜索 Provider 接入时负责消费明确坐标和“仅已打开”的精确目标选择，不能把后端能力直接算作完整 UI 验收。
+
 名称召回在原 `ResourceNavigationRequest.search_mode` 增加显式 `fuzzy`，按所选根内解码相对文件路径进行大小写折叠的顺序字符匹配，只返回文件，不读取正文。原 `path` 大小写敏感包含查询保持不变。结果沿原稳定遍历及 cursor 分页，前端负责组内评分；扫描节点、结果、响应字节和总 deadline 仍沿原 owner，不构造持久文件索引。异步取消释放等待方，原生阻塞 I/O 恢复后继续核对原期限，不声称可强行中断文件系统。
 
 不修改固定 upstream 子模块字节；上述贡献与搜索范围接入均使用既有受校验 transform，不将 Provider 代理到其它搜索弹窗。已有文件菜单、会话树、引用入口沿相同业务动作收口，各自默认交互保留。

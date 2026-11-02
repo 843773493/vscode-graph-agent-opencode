@@ -1701,6 +1701,22 @@ export interface ResourceNavigationRequest {
   search_mode: string;
   file_glob?: string | undefined;
   max_snippet_bytes: number;
+  search_options?: ResourceNavigationSearchOptions | undefined;
+}
+
+export interface ResourceNavigationSearchOptions {
+  /** sensitive/insensitive/smart；省略时保留大小写敏感的原行为。 */
+  case_mode: string;
+  is_regex: boolean;
+  whole_word: boolean;
+  word_separators?: string | undefined;
+  is_multiline: boolean;
+  /** 默认仍为每行首个命中；编辑器可以显式请求全部非重叠命中。 */
+  all_matches: boolean;
+  include_globs: string[];
+  exclude_globs: string[];
+  /** default 保留原固定目录忽略，none 关闭该忽略；respect 尚未支持时必须明确拒绝。 */
+  ignore_mode: string;
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -1747,6 +1763,15 @@ export interface ResourceNavigationMatchDTO {
   text: string;
   snippet_start_column: number;
   truncated: boolean;
+  /** 一索引 Unicode 码点坐标，终点不包含。 */
+  end_line?: number | undefined;
+  end_column?:
+    | number
+    | undefined;
+  /** 同一区间及片段起点的 UTF-16 列；裁剪片段不能推导被省略前缀的代理对数量。 */
+  utf16_column?: number | undefined;
+  utf16_end_column?: number | undefined;
+  snippet_start_utf16_column?: number | undefined;
 }
 
 export interface WorkspaceResourceDTO {
@@ -13666,6 +13691,7 @@ function createBaseResourceNavigationRequest(): ResourceNavigationRequest {
     search_mode: "",
     file_glob: undefined,
     max_snippet_bytes: 0,
+    search_options: undefined,
   };
 }
 
@@ -13687,6 +13713,9 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
       search_mode: isSet(object.search_mode) ? globalThis.String(object.search_mode) : "",
       file_glob: isSet(object.file_glob) ? globalThis.String(object.file_glob) : undefined,
       max_snippet_bytes: isSet(object.max_snippet_bytes) ? globalThis.Number(object.max_snippet_bytes) : 0,
+      search_options: isSet(object.search_options)
+        ? ResourceNavigationSearchOptions.fromJSON(object.search_options)
+        : undefined,
     };
   },
 
@@ -13737,6 +13766,9 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     if (message.max_snippet_bytes !== 0) {
       obj.max_snippet_bytes = Math.round(message.max_snippet_bytes);
     }
+    if (message.search_options !== undefined) {
+      obj.search_options = ResourceNavigationSearchOptions.toJSON(message.search_options);
+    }
     return obj;
   },
 
@@ -13760,6 +13792,94 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
     message.search_mode = object.search_mode ?? "";
     message.file_glob = object.file_glob ?? undefined;
     message.max_snippet_bytes = object.max_snippet_bytes ?? 0;
+    message.search_options = (object.search_options !== undefined && object.search_options !== null)
+      ? ResourceNavigationSearchOptions.fromPartial(object.search_options)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseResourceNavigationSearchOptions(): ResourceNavigationSearchOptions {
+  return {
+    case_mode: "",
+    is_regex: false,
+    whole_word: false,
+    word_separators: undefined,
+    is_multiline: false,
+    all_matches: false,
+    include_globs: [],
+    exclude_globs: [],
+    ignore_mode: "",
+  };
+}
+
+export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearchOptions> = {
+  fromJSON(object: any): ResourceNavigationSearchOptions {
+    return {
+      case_mode: isSet(object.case_mode) ? globalThis.String(object.case_mode) : "",
+      is_regex: isSet(object.is_regex) ? globalThis.Boolean(object.is_regex) : false,
+      whole_word: isSet(object.whole_word) ? globalThis.Boolean(object.whole_word) : false,
+      word_separators: isSet(object.word_separators) ? globalThis.String(object.word_separators) : undefined,
+      is_multiline: isSet(object.is_multiline) ? globalThis.Boolean(object.is_multiline) : false,
+      all_matches: isSet(object.all_matches) ? globalThis.Boolean(object.all_matches) : false,
+      include_globs: globalThis.Array.isArray(object?.include_globs)
+        ? object.include_globs.map((e: any) => globalThis.String(e))
+        : [],
+      exclude_globs: globalThis.Array.isArray(object?.exclude_globs)
+        ? object.exclude_globs.map((e: any) => globalThis.String(e))
+        : [],
+      ignore_mode: isSet(object.ignore_mode) ? globalThis.String(object.ignore_mode) : "",
+    };
+  },
+
+  toJSON(message: ResourceNavigationSearchOptions): unknown {
+    const obj: any = {};
+    if (message.case_mode !== "") {
+      obj.case_mode = message.case_mode;
+    }
+    if (message.is_regex !== false) {
+      obj.is_regex = message.is_regex;
+    }
+    if (message.whole_word !== false) {
+      obj.whole_word = message.whole_word;
+    }
+    if (message.word_separators !== undefined) {
+      obj.word_separators = message.word_separators;
+    }
+    if (message.is_multiline !== false) {
+      obj.is_multiline = message.is_multiline;
+    }
+    if (message.all_matches !== false) {
+      obj.all_matches = message.all_matches;
+    }
+    if (message.include_globs?.length) {
+      obj.include_globs = message.include_globs;
+    }
+    if (message.exclude_globs?.length) {
+      obj.exclude_globs = message.exclude_globs;
+    }
+    if (message.ignore_mode !== "") {
+      obj.ignore_mode = message.ignore_mode;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationSearchOptions>, I>>(base?: I): ResourceNavigationSearchOptions {
+    return ResourceNavigationSearchOptions.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationSearchOptions>, I>>(
+    object: I,
+  ): ResourceNavigationSearchOptions {
+    const message = createBaseResourceNavigationSearchOptions();
+    message.case_mode = object.case_mode ?? "";
+    message.is_regex = object.is_regex ?? false;
+    message.whole_word = object.whole_word ?? false;
+    message.word_separators = object.word_separators ?? undefined;
+    message.is_multiline = object.is_multiline ?? false;
+    message.all_matches = object.all_matches ?? false;
+    message.include_globs = object.include_globs?.map((e) => e) || [];
+    message.exclude_globs = object.exclude_globs?.map((e) => e) || [];
+    message.ignore_mode = object.ignore_mode ?? "";
     return message;
   },
 };
@@ -13966,7 +14086,19 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
 };
 
 function createBaseResourceNavigationMatchDTO(): ResourceNavigationMatchDTO {
-  return { uri: "", line: 0, column: 0, text: "", snippet_start_column: 0, truncated: false };
+  return {
+    uri: "",
+    line: 0,
+    column: 0,
+    text: "",
+    snippet_start_column: 0,
+    truncated: false,
+    end_line: undefined,
+    end_column: undefined,
+    utf16_column: undefined,
+    utf16_end_column: undefined,
+    snippet_start_utf16_column: undefined,
+  };
 }
 
 export const ResourceNavigationMatchDTO: MessageFns<ResourceNavigationMatchDTO> = {
@@ -13978,6 +14110,13 @@ export const ResourceNavigationMatchDTO: MessageFns<ResourceNavigationMatchDTO> 
       text: isSet(object.text) ? globalThis.String(object.text) : "",
       snippet_start_column: isSet(object.snippet_start_column) ? globalThis.Number(object.snippet_start_column) : 0,
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : false,
+      end_line: isSet(object.end_line) ? globalThis.Number(object.end_line) : undefined,
+      end_column: isSet(object.end_column) ? globalThis.Number(object.end_column) : undefined,
+      utf16_column: isSet(object.utf16_column) ? globalThis.Number(object.utf16_column) : undefined,
+      utf16_end_column: isSet(object.utf16_end_column) ? globalThis.Number(object.utf16_end_column) : undefined,
+      snippet_start_utf16_column: isSet(object.snippet_start_utf16_column)
+        ? globalThis.Number(object.snippet_start_utf16_column)
+        : undefined,
     };
   },
 
@@ -14001,6 +14140,21 @@ export const ResourceNavigationMatchDTO: MessageFns<ResourceNavigationMatchDTO> 
     if (message.truncated !== false) {
       obj.truncated = message.truncated;
     }
+    if (message.end_line !== undefined) {
+      obj.end_line = Math.round(message.end_line);
+    }
+    if (message.end_column !== undefined) {
+      obj.end_column = Math.round(message.end_column);
+    }
+    if (message.utf16_column !== undefined) {
+      obj.utf16_column = Math.round(message.utf16_column);
+    }
+    if (message.utf16_end_column !== undefined) {
+      obj.utf16_end_column = Math.round(message.utf16_end_column);
+    }
+    if (message.snippet_start_utf16_column !== undefined) {
+      obj.snippet_start_utf16_column = Math.round(message.snippet_start_utf16_column);
+    }
     return obj;
   },
 
@@ -14015,6 +14169,11 @@ export const ResourceNavigationMatchDTO: MessageFns<ResourceNavigationMatchDTO> 
     message.text = object.text ?? "";
     message.snippet_start_column = object.snippet_start_column ?? 0;
     message.truncated = object.truncated ?? false;
+    message.end_line = object.end_line ?? undefined;
+    message.end_column = object.end_column ?? undefined;
+    message.utf16_column = object.utf16_column ?? undefined;
+    message.utf16_end_column = object.utf16_end_column ?? undefined;
+    message.snippet_start_utf16_column = object.snippet_start_utf16_column ?? undefined;
     return message;
   },
 };
