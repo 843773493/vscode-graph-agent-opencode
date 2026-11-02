@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
+import { verifySearchEditors } from './search_editor.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -51,6 +52,10 @@ try {
       await new Promise((resolve, reject) => {
         const tx = db.transaction('files', 'readwrite');
         tx.objectStore('files').put(new TextEncoder().encode('virtual-disk quickscope\n'), '/Workspace/quick-scope.txt');
+        const legacy = '# Query: quickscope\n# Flags: IgnoreExcludeSettings\n\n1 result - 1 file\n\nquick-scope.txt:\n  1: legacy-display-only\n';
+        tx.objectStore('files').put(new TextEncoder().encode(legacy), '/Workspace/legacy.code-search');
+        tx.objectStore('files').put(new TextEncoder().encode('# Query: quickscope\n# BoxTeamScope: {"version":99,"kind":"native"}\n\nold results'), '/Workspace/unknown.code-search');
+        tx.objectStore('files').put(new TextEncoder().encode('# Query: quickscope\n# BoxTeamScope: {broken\n\nold results'), '/Workspace/broken.code-search');
         tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
       });
     } finally { db.close(); }
@@ -82,7 +87,7 @@ try {
   await settingsEditor.locator('.view-lines').click();
   await page.keyboard.press('ControlOrMeta+A');
   // 上游 Web 默认延时自动保存；关闭后才能检验搜索本身没有触发保存。
-  await page.keyboard.insertText('{\n  "search.useIgnoreFiles": false,\n  "files.autoSave": "off"\n}\n');
+  await page.keyboard.insertText('{\n  "search.useIgnoreFiles": false,\n  "files.autoSave": "off",\n  "search.searchEditor.defaultNumberOfContextLines": 0,\n  "search.searchEditor.reusePriorSearchConfiguration": true\n}\n');
   await command('workbench.action.files.save');
   await command('workbench.action.closeActiveEditor');
   await expect(settings).not.toBeVisible();
@@ -192,6 +197,7 @@ try {
   if (result.searches.slice(reverseRequests).some(request => request.uri !== otherOwner.root || request.route !== otherOwner.route)) throw new Error('反向 B 查询串入其它范围');
   result.reverseOwnerIsolation = true;
   await page.keyboard.press('Escape');
+  await verifySearchEditors({ page, command, result, fileUri, ownerA: result.owner, ownerB: otherOwner });
   await expect(page.locator('#startup-error')).toBeEmpty();
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';

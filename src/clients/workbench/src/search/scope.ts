@@ -43,7 +43,6 @@ export class SearchWorkspaceContext implements IWorkspaceContextService {
 
   async updateScope(scope: SearchScope): Promise<void> {
     const generation = ++this.updateGeneration;
-    if (!scope.workspaces.length) throw new Error('请先选择明确搜索工作区');
     const next = this.project(scope), previousState = this.getWorkbenchState();
     const changes = { added: next.folders, removed: this.workspace.folders, changed: [] };
     const waits: Promise<void>[] = [];

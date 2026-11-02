@@ -19,7 +19,7 @@ const product = JSON.parse(await readFile(join(upstream, 'product.json'), 'utf8'
 const upstreamPackage = JSON.parse(await readFile(join(upstream, 'package.json'), 'utf8'));
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
-const extensions = await buildExtensions(root, dist);
+const extensions = await buildExtensions(root, dist, sourceTransform(root, { ...product, version: upstreamPackage.version, commit, quality: 'stable' }, []));
 const inject = buildSourcePlugin(root, sourceTransform(root, { ...product, version: upstreamPackage.version, commit, quality: 'stable' }, extensions));
 await writeFile(join(dist, 'builtin-extensions.json'), JSON.stringify(extensions));
 const workers = [

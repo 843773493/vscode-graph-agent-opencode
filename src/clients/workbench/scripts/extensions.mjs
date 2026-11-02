@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { extensionDependencies } from './dependencies.mjs';
 
 // 在构建目录运行官方扩展脚本，绝不向固定上游子模块写入生成文件。
-export async function buildExtensions(root, dist) {
+export async function buildExtensions(root, dist, transformSource) {
   const stage = join(dist, '.build/upstream');
   const source = join(root, 'upstream');
   const sourceExtensions = join(source, 'extensions');
@@ -34,6 +34,10 @@ export async function buildExtensions(root, dist) {
       throw error;
     });
     if (!items.some(item => item.name === 'package.json')) continue;
+    if (name === 'search-result') {
+      const path = join(folder, 'src/extension.ts');
+      await writeFile(path, await transformSource(join(source, 'extensions/search-result/src/extension.ts'), await readFile(path, 'utf8')));
+    }
     let manifest = JSON.parse(await readFile(join(folder, 'package.json'), 'utf8'));
     if (manifest.main && !manifest.browser) continue;
     for (const entry of dependencies.filter(entry => entry.name === name)) {

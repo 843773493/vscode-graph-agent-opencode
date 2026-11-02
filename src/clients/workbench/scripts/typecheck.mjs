@@ -36,7 +36,8 @@ for (const path of transformedSourcePaths) {
 }
 const configuration = join(projectedRoot, 'tsconfig_typecheck.jsonc');
 // 配置位于投影的 Workbench 根，保留原 include、外部客户端与 node_modules 解析关系。
-await writeFile(configuration, JSON.stringify({ extends: join(projectedRoot, 'tsconfig.jsonc'), compilerOptions: { preserveSymlinks: true } }));
+await writeFile(configuration, JSON.stringify({ extends: join(projectedRoot, 'tsconfig.jsonc'), compilerOptions: { preserveSymlinks: true },
+  files: transformedSourcePaths.filter(path => path.startsWith('extensions/')).map(path => join(projectedRoot, 'upstream', path)) }));
 await writeFile(join(output, 'sources.json'), JSON.stringify({ commit, targets, configuration }, null, 2));
 console.log(`类型检查包含 ${targets.length} 份实际 sourceTransform 源码（${commit}）`);
 const child = spawn(join(root, 'node_modules/.bin/tsgo'), ['--project', configuration, '--noEmit', ...process.argv.slice(2)], { cwd: root, stdio: 'inherit' });

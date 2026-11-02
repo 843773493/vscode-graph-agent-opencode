@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [
@@ -10,6 +11,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts',
   'src/vs/workbench/contrib/search/browser/searchView.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
+  ...searchEditorSourcePaths,
 ];
 
 function replaceOnce(source, marker, replacement) {
@@ -97,7 +99,7 @@ try {
 }`);
       contents = `import { transferSearchContext } from ${JSON.stringify(join(root, 'src/search/scope.js'))};\n` + contents;
     }
-    return contents;
+    return transformSearchEditor(root, path, contents, replaceOnce);
   };
 }
 

@@ -54,10 +54,10 @@
 
 - [x] 6.1 在原 SearchView descriptor 选择项目子类，并在原 ViewPaneContainer.createView 以 child 创建；移动到其它容器仍保持唯一视图 ID、用户布局、全局 SearchViewModel 和 ReplaceService。
 - [ ] 6.2 将 `%` 到 SearchView 的 replaceSearchModel 与 SearchView 到 Search Editor 的两个 rawData 分支携带同一明确范围，后续修改查询不跟随导航。
-- [ ] 6.3 在原 SearchConfiguration 增加 typed、版本化 scope，贯穿 factory 三种入口、控件重建、updateConfig 和命令参数；priorConfig 只复用查询选项，不继承 scope。
-- [ ] 6.4 在同一 sourceTransform 的原 SearchEditor 查询构建处接入 protected typed hook，实际使用 input scope、child QueryBuilder、根及受限 extras；不改私有 readonly 字段，不吞构建错误。
-- [ ] 6.5 在原 Pane 贡献选择 SearchEditor 子类，setInput／clearInput、模型 await、原 searchModel 取消及异步完成均检查 input／scope 代际，复用仅匹配同 scope。
-- [ ] 6.6 让原 JSON serializer、copy、磁盘／backup header 读写保留 scope，修复固定六行 header 读取；缺 scope 的旧结果只读查看至明确选范围，未知／损坏版本明确报错。
+- [x] 6.3 在原 SearchConfiguration 增加 typed、版本化 scope，贯穿 factory 三种入口、控件重建、updateConfig 和命令参数；priorConfig 只复用查询选项，不继承 scope。
+- [x] 6.4 在同一 sourceTransform 的原 SearchEditor 查询构建处接入 protected typed hook，实际使用 input scope、child QueryBuilder、根及受限 extras；不改私有 readonly 字段，不吞构建错误。
+- [x] 6.5 在原 Pane 贡献选择 SearchEditor 子类，setInput／clearInput、模型 await、原 searchModel 取消及异步完成均检查 input／scope 代际，复用仅匹配同 scope。
+- [x] 6.6 让原 JSON serializer、copy、磁盘／backup header 读写保留 scope，修复固定六行 header 读取；缺 scope 的旧结果只读查看至明确选范围，未知／损坏版本明确报错。
 - [ ] 6.7 用两个工作区同时分屏验证再次查询、复制、保存／另存、关闭重开、backup 恢复和 route 变更，检查 query 对象与真实 HTTP 目标；不以保存字段存在替代运行时接线证明。
 
 ## 7. 默认 Provider 与模式帮助
@@ -211,3 +211,12 @@
 - 最终真实 Workbench 类型检查、Ruff 和 OpenSpec strict 通过；本批没有公开 DTO 或协议生成变化。证据：`out/tests/temp/quick_access_search_service_20261102/artifacts/verification.json`；正式服务及浏览器产物分别位于 `out/tests/integration/clients/web/quick_access/search_service.test/` 和 `out/tests/integration/clients/web/test_thread_editor_identity/`。
 
 5.6 验收：真实 Gateway／正式 Workbench 中 A、B 同路径不同 dirty 模型及 IndexedDB 同名文件，普通／仅已打开／转交／移动视图／反向 B 均保持归属；两份磁盘正文不变。产品入口切换导航并等待选中，避免测试 API 激活与界面镜像的布局恢复竞态。16 项定向检查、实际生成源码类型检查、Ruff 及 fixture 正式构建通过。命令、源码指纹与失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/isolation-verification.json`。Search Editor 与 Electron 尚未验收。
+
+
+### 2026-11-02：Search Editor 独立范围与持久化切片（6.3～6.6）
+
+- 在原配置模型保留版本化 scope，同一 sourceTransform 贯通原 factory、命令、控件更新、copy、JSON serializer 和磁盘／backup header；priorConfig 不继承范围。原 Pane 子类使用每个实例的 child QueryBuilder，实际原搜索取消、模型 await 与最终写回均核对输入／搜索代际，不改私有 readonly 上下文或吞构建错误。
+- 真实 Gateway、A/B 托管后端、正式 Workbench 与 Chromium 验证分屏独立查询、不同范围不复用、复制、另存、关闭重开及刷新恢复；实际请求只访问对应 owner，dirty 正文恢复且两份磁盘文件均未保存。保存结果经原扩展双击定位仍打开原 A 文件。旧格式显示历史正文且只读，重查明确报错且无 HTTP；经原 Quick Input 明确选择 B 后才查询 B。损坏／未知版本在原编辑器占位页显示具体错误，均未发业务搜索。
+- 实际跳转验收暴露原搜索结果模型未接入文本解析引用，词语高亮会报 unable to resolve；在原 startup contribution 登记同一结果模型的内容 Provider，由原 Input 持有解析引用并随其释放，移除直接销毁模型的旧生命周期。保留高亮、定义跳转和原结果模型，不增加正文副本。初次范围名称回退为 ID、通用错误占位隐藏原因等失败已按原件定位修复，未放宽断言。
+- 最终 14 份转换源码的真实类型检查、23 项定向检查／178 条断言、Ruff 和 fixture 正式生产构建通过；结构审查无 findings，固定 upstream 原件不变。准确命令、源码指纹、原始输出、退出码和失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/editor-verification.json`。
+- 6.2 保留未勾选：两个 rawData 分支已携带范围，但需要上下文行的重跑分支仍被现有文件 Provider 明确拒绝，尚无完整运行证据。6.7 保留未勾选：真实深度 backup 故障恢复、route 变更／复用和迟到 Pane 完成仍需专项验收；本批不证明远端 SSH 或 Electron。

@@ -93,6 +93,13 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["reverseOwnerIsolation"] is True
         assert receipt["onlyOpenIsolation"] is True
         assert receipt["unsupportedIgnoreVisible"] is True
+        assert receipt["editorViewScope"] is True
+        assert receipt["editorSplitScopes"] is True
+        assert receipt["editorSavedScope"] is True
+        assert receipt["editorReloadScopes"] is True
+        assert receipt["editorDefinitionOwner"] is True
+        assert receipt["editorLegacyScope"] is True
+        assert receipt["editorInvalidScope"] is True
         assert receipt["pageErrors"] == []
         assert (workspace / "quick-scope.txt").read_text(encoding="utf-8") == "diskword quickscope\n"
         assert (other / "quick-scope.txt").read_text(encoding="utf-8") == "foreign-disk quickscope\n"

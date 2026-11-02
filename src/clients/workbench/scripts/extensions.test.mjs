@@ -29,7 +29,7 @@ for (const ancestor of ['plain', 'tests', 'test', 'node_modules']) {
     await mkdir(join(root, 'node_modules'), { recursive: true });
     const dist = join(root, 'dist');
     await mkdir(dist);
-    const extensions = await buildExtensions(root, dist);
+    const extensions = await buildExtensions(root, dist, (_path, contents) => contents);
     expect(extensions).toEqual([{ extensionPath: 'sample', packageJSON: { name: 'sample', browser: './browser.js' },
       packageNLS: undefined }]);
     expect(await readFile(join(dist, 'extensions/sample/browser.js'), 'utf8'))
