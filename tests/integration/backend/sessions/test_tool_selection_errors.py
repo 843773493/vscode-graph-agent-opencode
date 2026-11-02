@@ -13,6 +13,43 @@ import pytest
 from tests.harness.python.run_context import TestRunContext
 
 
+async def test_disabled_builtin_stays_in_management_catalog_and_can_be_reenabled(
+    integration_client: httpx.AsyncClient, request: pytest.FixtureRequest,
+) -> None:
+    """真实目录生成与持久选择串联，禁用回执不能在提交之后因定义消失报错。"""
+    client = integration_client
+    listed = await client.get("/api/v1/tools")
+    assert listed.status_code == 200, listed.text
+    original = next(tool for tool in listed.json()["data"] if tool["tool_id"] == "test_tool")
+    assert original["execution_enabled"] is True
+    expected = {**original, "execution_enabled": False, "model_visible": False}
+    request_id = "req_disable_builtin"
+    disabled = await client.patch("/api/v1/tools/selection", json={
+        "agent_id": "default", "changes": [
+            {key: expected[key] for key in ("tool_id", "execution_enabled", "model_visible")},
+        ],
+    }, headers={"X-Request-ID": request_id})
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.headers["X-Request-ID"] == disabled.json()["request_id"] == request_id
+    assert disabled.json()["data"] == [expected]
+    after = await client.get("/api/v1/tools")
+    assert after.status_code == 200, after.text
+    assert {tool["tool_id"] for tool in after.json()["data"]} == {tool["tool_id"] for tool in listed.json()["data"]}
+    assert next(tool for tool in after.json()["data"] if tool["tool_id"] == "test_tool") == expected
+    detail = await client.get("/api/v1/tools/test_tool")
+    assert detail.status_code == 200 and detail.json()["data"] == expected, detail.text
+    enabled = await client.patch("/api/v1/tools/selection", json={
+        "agent_id": "default", "changes": [
+            {key: original[key] for key in ("tool_id", "execution_enabled", "model_visible")},
+        ],
+    })
+    assert enabled.status_code == 200 and enabled.json()["data"] == [original], enabled.text
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "disabled-builtin.json").write_text(json.dumps({
+        "before": listed.json(), "disabled": disabled.json(), "after": after.json(), "reenabled": enabled.json(),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 @pytest.fixture
 async def selection_error_target(
     integration_client: httpx.AsyncClient, integration_workspace_root_path: str,

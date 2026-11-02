@@ -1589,3 +1589,10 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 正式`integration-web-policy-source-freezing`矩阵1 passed／241.42秒，外层249.34秒、exit0；包含原180秒预算内46.44秒完成的正式构建，没有临时资产替换。公开安全重启后，三份assembly完整API分页与冷读深比对一致，UI依次展开19／15／13项selection并核资源版本／provenance，冷Saver逐字段核完整策略和来源，当前C不回填历史。25,574份采样源码运行前后不变，固定660秒／4GiB与原集成独占闸门保持。
 - 两份Python真实Pyright零诊断、Ruff／compileall、Node语法、矩阵注册及两change strict通过。共用驱动仅新增显式policy参数分支，原三种参数的业务断言保持；本片未重跑其完整浏览器流程，不作全组合通过结论。命令、原始输出、源码／资产指纹及作者结构核对见`out/tests/temp/web_policy_sources_20261102/artifacts/verification.json`，正式产物位于对应测试路径的`run-d99dff522d15`。
 - 本片不修改前端、公共fixture或唯一conversation_lifecycle长驱动，不代该唯一owner的Section8总门、硬退出、Windows或真实外部Provider。团队与MCP显式持有继续延期；9.7／7.5／8.3／8.13及111/119保持未完成。
+
+
+### 2026-11-02 8.4 工具管理目录保留已禁用定义
+
+- 真实 Gateway／Backend 的批量工具选择复现：设置提交后，按运行 override 裁剪的 blueprint 把 `test_tool` 从管理目录移除，响应构造抛 KeyError／500，后续也无法定位并重新启用。管理 blueprint 现仅由配置、运行模式和 MCP 目录版本决定；ToolService 仍从唯一持久选择投影开关状态，实际 Thread 执行仍使用原 override，不新增目录、配置或存储链。
+- 新增禁用后列表／详情及重新启用的真实 HTTP 回归，与原存储错误、原件保护、权限、锁超时和同入口重试共 9 passed／34.42 秒。修改前定向单测失败，修复后相关批次 28 passed；同批 26 项旧执行装具失败在完整 HEAD 归档逐项复现，失败节点及 29 条错误消息一致，根因包含旧 McpCatalogPublication 缺 definitions，已留代码 TODO，不称整批全绿、不扩修该装具。
+- Ruff／compileall 通过；真实 Pyright 保留生产 4 项、旧测试 7 项诊断，与完整原版按路径、规则、消息、最窄 AST 及重数对照无新增，新增 HTTP／压缩用例零诊断。准确命令、源码、原始输出与退出码见 `out/tests/temp/provider_compaction_20261102/artifacts/verification-catalog.json`。全部检查使用外部超时和 4GiB 数据段限制，HTTP 沿原集成独占闸门；不代真实模型执行、Gateway 修复后验收、重启、Web 或完整7.5，整体111/119保持。

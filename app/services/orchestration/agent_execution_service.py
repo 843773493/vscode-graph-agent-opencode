@@ -551,14 +551,15 @@ class AgentExecutionService(JobStepExecutor):
         return candidate.checkpoint_id if candidate is not None else None
 
     def _tool_face_definitions(self, agent_id: str) -> list[dict[str, Any]]:
-        """Provider 工具面定义（不含 Session/Thread 的 blueprint 投影）。
+        """管理目录的工具面定义（不含 Session/Thread 的 blueprint 投影）。
 
         缓存有正当的非会话价值：装配一个完整 deep agent 并按图抽取工具定义
         是昂贵构建产物，工具目录/选择查询会反复命中原样结果。缓存键不含
         session/thread，缓存值只是导出的纯 DTO；建立它时用的合成会话仅用于
         装配一次工具面，抽取出的定义不捕获该会话，也不携带执行状态。真实
         精确 thread generation 的 session/thread 依赖由 ThreadRuntimeBinding
-        注入；每轮 admission 由 Runner 绑定。
+        注入；每轮 admission 由 Runner 绑定。运行选择只由 ToolService 投影为
+        开关状态，不能用于裁剪管理目录，否则禁用后将无法查询和重新启用。
         """
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -572,9 +573,6 @@ class AgentExecutionService(JobStepExecutor):
         with self._config_service.use_snapshot(config_snapshot):
             resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
             config_revision = self._config_service.get_revision()
-            tool_selection = self._tool_selection_store.snapshot(resolved_agent_id)
-            execution_overrides = tool_selection.execution_overrides
-            model_visibility_overrides = tool_selection.model_visibility_overrides
             mode_getter = getattr(self._config_service, "get_agent_run_mode", None)
             run_mode = mode_getter() if callable(mode_getter) else None
             include_team_tools = (
@@ -583,8 +581,6 @@ class AgentExecutionService(JobStepExecutor):
             cache_key = (
                 resolved_agent_id,
                 config_revision,
-                tuple(sorted(execution_overrides.items())),
-                tuple(sorted(model_visibility_overrides.items())),
                 include_team_tools,
                 mcp_binding.catalog_revision,
                 mcp_binding.generation,
@@ -597,8 +593,8 @@ class AgentExecutionService(JobStepExecutor):
                 session_id=_TOOL_INSPECTION_SESSION_ID,
                 thread_id=create_prefixed_id("thr"),
                 agent_id=resolved_agent_id,
-                execution_overrides=execution_overrides,
-                model_visibility_overrides=model_visibility_overrides,
+                execution_overrides={},
+                model_visibility_overrides={},
                 preferred_provider_id=None,
                 include_team_tools=include_team_tools,
                 mcp_tools=mcp_tools,
@@ -611,7 +607,7 @@ class AgentExecutionService(JobStepExecutor):
                 extension_tools=mcp_tools,
             )
 
-        # 只保留该 agent 的当前工具面：旧配置 revision / override 组合的子项
+        # 只保留该 agent 的当前工具面：旧配置 revision 的子项
         # 不再被查询命中，留在表里只会无界增长。正在读取的调用方已持有返回值，
         # 移除旧项不影响它在途使用。
         stale_keys = [
@@ -625,5 +621,5 @@ class AgentExecutionService(JobStepExecutor):
         return definitions
 
     def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
-        """工具目录读写路径：返回 Provider 工具面定义（blueprint 投影）。"""
+        """工具管理目录：按配置导出完整定义，运行选择由 ToolService 投影。"""
         return self._tool_face_definitions(agent_id)

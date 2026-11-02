@@ -331,6 +331,7 @@ def agent_execution_dependencies(
     saver.save_resource_activation_snapshot = AsyncMock()
     def activation_factory(resource_registry):
         publisher = McpCatalogResourcePublisher(registry=resource_registry, policy_resolver=extension_catalog_policy_resolver)
+        # TODO：补齐该旧 MCP 装具的 definitions 合同；其 26 项失败在原版同样存在，不能算执行验收。
         publisher.publish(McpCatalogPublication(
             binding_ref=build_extension_catalog_binding(
                 catalog_revision=sha256_jcs([]), generation=1, targets=(),
@@ -626,7 +627,7 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
 ):
     """OpenSpec 8.4：复用的是不含 session/thread 的工具面 blueprint 投影。
 
-    同一配置 revision 反复查询命中同一份定义；配置 revision 变化则重建。
+    运行选择不能从管理目录中移除定义；同一配置 revision 复用定义，配置变化才重建。
     缓存键不含 session_id，真实 invocation 的 session/thread 依赖不在其中。
     """
     service = _build_agent_execution_service(agent_execution_dependencies)
@@ -651,10 +652,15 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
         ),
     ):
         first = service.get_available_tools("test_agent")
+        agent_execution_dependencies["tool_selection_store"].snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
+            agent_id, {"read_file": False}, {"read_file": False},
+        )
         assert service.get_available_tools("test_agent") is first  # 命中缓存
         second = service.get_available_tools("test_agent")
 
     assert build_runtime.call_count == 2  # 配置 revision 变化 → 重建
+    assert all(call.kwargs["execution_overrides"] == {} and call.kwargs["model_visibility_overrides"] == {}
+               for call in build_runtime.call_args_list)
     assert all(
         call.kwargs["workspace_file_resource_registry"]
         is agent_execution_dependencies["workspace_file_resource_registry"]
