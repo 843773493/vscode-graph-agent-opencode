@@ -70,7 +70,9 @@ interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchIn
 
 /** 原 Picker 负责交互和取消；本贡献只组织原 owner 的有界候选。 */
 export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick> {
+  static readonly PREFIX: string = '';
   private run?: AccessRun;
+  protected get category(): NameSearchCategory | undefined { return undefined; }
 
   constructor(
     @IInstantiationService private readonly instantiation: IInstantiationService,
@@ -86,7 +88,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     @INotificationService private readonly notifications: INotificationService,
     @IQuickChatService private readonly quickChat: IQuickChatService,
     @IViewsService private readonly views: IViewsService,
-  ) { super('', { canAcceptInBackground: true, noResultsPick: { id: 'empty', label: '没有匹配的资源' } }); }
+  ) { super(new.target.PREFIX, { canAcceptInBackground: true, noResultsPick: { id: 'empty', label: '没有匹配的资源' } }); }
 
   get defaultFilterValue() {
     return this.configuration.getValue<boolean>('workbench.quickOpen.preserveInput') ? DefaultQuickAccessFilterValue.LAST : undefined;
@@ -124,7 +126,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       const current = workspaceContext.getSnapshot().gatewayId;
       if (gatewayId && current && gatewayId !== current) invalidate();
     })));
-    picker.placeholder = options.placeholder ?? (options.filesOnly ? '查找文件' : `查找会话、Thread 和文件 · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
+    picker.placeholder = options.placeholder ?? (options.filesOnly ? '查找文件' : `查找${this.category ?? '会话、Thread 和文件'} · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
     if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !picker.quickNavigate) {
       const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择搜索范围' };
       picker.buttons = [...picker.buttons, button];
@@ -162,7 +164,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (run.options.searchRestore?.query !== run.picker.value) run.restoreId = undefined;
     const previousFilter = run.normalized;
     const resourceLink = /^boxteam:/i.test(original);
-    const parsed = run.options.filesOnly || resourceLink ? undefined : extractRangeFromFilter(original, ['@']);
+    const parsed = this.category || run.options.filesOnly || resourceLink ? undefined : extractRangeFromFilter(original, ['@']);
     run.range = parsed?.range;
     const filter = parsed?.filter ?? original;
     if (run.normalized === filter && original !== filter && !run.picker.busy) return null;
@@ -174,7 +176,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const accepted = (items: Pick<ResourcePick>[]) => run.options.filter ? items.filter(run.options.filter) : items;
     const active = run.globalPick;
     const symbolSegments = original.split('@');
-    if (!resourceLink && previousFilter && !run.options.filesOnly && active?.resource?.scheme === 'boxteam-file' && symbolSegments.length > 1
+    if (!this.category && !resourceLink && previousFilter && !run.options.filesOnly && active?.resource?.scheme === 'boxteam-file' && symbolSegments.length > 1
       && (!(active.label.includes('@') || active.description?.includes('@')) || symbolSegments.length > 2)) {
       return this.symbolPicks(run, active, symbolSegments.at(-1)!.trim(), disposables, token).then(accepted)
         .catch(error => token.isCancellationRequested ? [] : [this.failure('文件符号', error)]);
@@ -185,7 +187,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const fast = accepted([...extras, ...(!filter && run.options.includeHelp ? this.help(run) : []),
       ...(recent.length ? [{ type: 'separator' as const, label: '最近打开' }, ...recent] : [])]);
     if (run.picker.quickNavigate || !filter && !run.options.filesOnly && !run.options.fileSearchDelegate) return fast;
-    if (!run.options.filesOnly && !run.options.fileSearchDelegate && !run.options.handleAccept && /^[a-z][a-z0-9+.-]+:\/\//i.test(filter)) {
+    if (!this.category && !run.options.filesOnly && !run.options.fileSearchDelegate && !run.options.handleAccept && /^[a-z][a-z0-9+.-]+:\/\//i.test(filter)) {
       return accepted([{ id: 'link:' + filter, label: '打开链接', description: filter,
         accept: (mods, event) => {
           this.assertAccess(run);
@@ -207,9 +209,10 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       return fast;
     }
     if (!run.owners.length) return [...fast, { id: 'scope-error', label: run.error ?? '请先选择明确工作区' }];
-    if (this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '工作区符号未启用：当前没有可限定业务根的符号服务' });
+    if (!this.category && this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '工作区符号未启用：当前没有可限定业务根的符号服务' });
 
-    const categories: NameSearchCategory[] = run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
+    const categories: NameSearchCategory[] = this.category ? [this.category]
+      : run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
     const seen = new Set(recent.map(pick => pick.id));
     const branches = queryNameBranches(run.owners, categories, filter, disposables, token, this.instantiation, this.search, run.cache,
       (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail)
@@ -226,7 +229,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         }
         this.publish(run, accepted(items));
       }, value => { if (alive()) run.picker.busy = value; },
-      label => { if (alive()) run.picker.placeholder = `查找会话、Thread 和文件 · ${label}`; });
+      label => { if (alive()) run.picker.placeholder = `查找${this.category ?? '会话、Thread 和文件'} · ${label}`; });
     return [...fast, ...branches.map(branch => branch.status)];
   }
 
@@ -266,12 +269,13 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private recent(run: AccessRun, filter: string): ResourcePick[] {
-    if (run.options.filesOnly || this.configuration.getValue<boolean>('search.quickOpen.includeHistory') === false) return [];
+    if (this.category === '会话' || run.options.filesOnly || this.configuration.getValue<boolean>('search.quickOpen.includeHistory') === false) return [];
     const picks = new Map<string, ResourcePick>();
     for (const editor of this.history.getHistory()) {
       const resource = editor.resource;
       const owner = resource && editorResourceOwner(resource);
       if (!resource || !owner || !run.owners.some(target => sameSearchOwner(owner, target))) continue;
+      if (this.category === 'Thread' && resource.scheme !== 'boxteam-thread') continue;
       if (run.options.handleAccept && resource.scheme !== 'boxteam-file') continue;
       const description = resource.scheme === 'boxteam-file' ? `${owner.workspaceId} · ${resource.path.split('/').slice(3, -1).join('/')}`
         : isEditorInput(editor) ? editor.getDescription() : editor.description;

@@ -155,6 +155,12 @@
 - [ ] 15.5 为规范全部场景和 design 全功能矩阵逐项关联准确证据，区分通过、未通过及真实条件缺失；保留源码指纹、命令、原始输出、退出码和未完成阶段。
 - [ ] 15.6 交付前核无重复默认 Provider、第二搜索／动作事实源、失联调用、静默错误或清缓存式迁移，保留其他人的改动；复核 OpenSpec 并仅按已证行为勾选任务。
 
+### 2026-11-02：Session／Thread 专用模式（11.2 部分）
+
+- `session ` 和 `thread ` 通过原 Registry、帮助 metadata 与 Action 接入同一 Provider；分别只查询 catalog 或精确 Thread owner，范围、分页、失败、取消和打开继续使用唯一链路。Session 名称不按文件行号／符号拆分；Thread 最近记录不混入文件。
+- 真实 Gateway／正式 Workbench 验收从两个原命令打开选择器，确认 Session 打开原 main、Thread 保留 child，实际只出现一次 catalog 查询和一次 Thread 查询，均限定 A，没有额外文件查询、业务执行或页面错误：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-4e1b4ef34a25/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`；1 passed / 121.91 秒。该运行同时保留原 URI、分页和目录失效回归。
+- 9 项 Provider 合同、真实类型检查（含 18 份转换源码）、正式构建通过；原输出与退出码以 `out/tests/temp/quick_access_opener_20261102/artifacts/name-modes-*` 保留。`resource ` 的其余类别尚未接入，11.2 保持未勾选。
+
 ### 2026-11-02：规范 URI 打开切片（2.2、7.4 部分）
 
 - 认证 Gateway 的只读地址投影复用唯一 URI grammar，公开 DTO 从 proto 生成并递归检查。原 Opener 重新解析稳定工作区路由；Session 沿原 owner 取得 main，child 保留精确 Thread，文本文件复用唯一文件投影。原 URI 不先按行号或符号改写；目标不可用和非法 URI 明确失败。发起组、侧边、固定与后台选项保留，校验成功前不创建侧边组。

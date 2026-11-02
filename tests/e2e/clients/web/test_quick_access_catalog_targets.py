@@ -102,6 +102,7 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert receipt["resourceLinks"]["fileUsesOriginalProjection"] is True
         assert receipt["resourceLinks"]["invalidUriIsNotRewritten"] is True
         assert receipt["resourceLinks"]["noExecution"] is True
+        assert receipt["nameModes"]["exactOwners"] is True
         assert receipt["pageErrors"] == []
     finally:
         close_gateway_process(gateway)

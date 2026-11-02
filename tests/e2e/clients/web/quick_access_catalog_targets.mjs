@@ -156,6 +156,37 @@ try {
   await verifyQuickAccessPagination({ page, command, api, result, owner: result.owner,
     workspace: process.env.BOXTEAM_CATALOG_WORKSPACE });
   await verifyResourceLinks({ page, command, api, result, owner: result.owner });
+  result.phase = 'dedicated-name-modes';
+  const modeRequests = [];
+  const observeMode = request => {
+    const url = new URL(request.url());
+    if (['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(url.pathname)
+      || url.pathname === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'search') {
+      modeRequests.push({ path: url.pathname, route: request.headers()['x-boxteam-workspace-id'] });
+    }
+  };
+  page.on('request', observeMode);
+  try {
+    await command('boxteam.quickAccess.sessions');
+    await quick.locator('input').first().fill('session catalogexact');
+    const sessionPick = quick.locator(`[data-quick-input-id="session:${health.gateway_id}/${identity.workspace_id}/${session.session_id}"]`);
+    await expect(sessionPick).toHaveCount(1);
+    await expect(quick.locator('[data-quick-input-id^="boxteam-thread:"]')).toHaveCount(0);
+    await sessionPick.click();
+    await expect(page.locator(`.editor-group-container.active section.boxteam-thread[data-thread-id="${main.thread_id}"]`)).toBeVisible();
+    await command('boxteam.quickAccess.threads');
+    await quick.locator('input').first().fill(`thread ${fork.thread_id}`);
+    const exactChild = quick.locator(`[data-quick-input-id$="/${fork.thread_id}"]`);
+    await expect(exactChild).toHaveCount(1);
+    await expect(quick.locator('[data-quick-input-id^="session:"]')).toHaveCount(0);
+    await exactChild.click();
+    await expect(page.locator(`.editor-group-container.active section.boxteam-thread[data-thread-id="${fork.thread_id}"]`)).toBeVisible();
+    expect(modeRequests).toEqual([
+      { path: '/api/v1/session-catalog/search', route: routeA },
+      { path: '/api/v1/session-threads/search', route: routeA },
+    ]);
+    result.nameModes = { requests: modeRequests, exactOwners: true };
+  } finally { page.off('request', observeMode); }
   result.phase = 'complete';
   expect(result.pageErrors).toEqual([]);
 } catch (error) {
