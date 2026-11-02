@@ -1040,6 +1040,12 @@ def test_foreign_session_plan_is_rejected_without_io(
             ),
             provider_version="guard-contract",
         ).as_sealed_plan()
+    # 首次只读定位会建立 SQLite WAL/SHM；先验证已发布 target 的真实
+    # locator，再冻结全文件快照，后续仍逐字节比较全部文件而不忽略 WAL。
+    target_thread_node = saver._storage.storage._path_resolver.resolve_thread_node(
+        target_id, target_thread,
+    )
+    assert target_thread_node == target / "threads" / target_thread
     before = {
         str(path.relative_to(target)): path.read_bytes() if path.is_file() else None
         for path in target.rglob("*")
@@ -1110,7 +1116,7 @@ def test_foreign_session_plan_is_rejected_without_io(
         for path in target.rglob("*")
     } == before
     assert io_calls == []
-    assert not (target / "rollout/index.sqlite").exists()
+    assert not (target_thread_node / "rollout/index.sqlite").exists()
     assert saver.list_context_assemblies(source_id, source_thread) == source_assemblies
 
 
