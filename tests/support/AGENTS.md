@@ -27,6 +27,7 @@
 │       ├── view_mutations.py                隔离注入view成员索引损坏
 │       └── web_boundary_seeding.py           Web历史边界场景数据
 ├── 业务owner装配与显式替身
+│   ├── diagnostic_sink.py               跨进程日志故障开关、原错审计和真实OS写入拒绝
 │   ├── tool_test_faults.py               工具测试原异常身份与运行时注入的最小故障夹具
 │   ├── resource_owners/sessions.py        Terminal/Browser共享Session与Thread前提
 │   ├── resource_owners/terminal.py        Terminal owner及传输替身
@@ -113,7 +114,7 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 - Workspace和Gateway启动装具在创建进程前持有日志文件，任何文件打开或创建进程失败都要立即关闭已打开的文件；创建成功后由返回的进程句柄接管，关闭进程时一并关闭日志。
 - 关闭进程和各日志是独立释放动作；一个释放失败或中断时仍尝试其余动作，再用BaseExceptionGroup保留全部原始错误。全部释放成功后再注销进程句柄。
 - `processes/scope.py` 按句柄身份登记进程归属，嵌套 scope 退出后恢复外层归属；即使某个回收动作抛出中断，也先尝试回收其余已登记进程，再汇总原始错误。带标签的通用测试资源由 `tests/harness/` 的运行上下文管理。
-- 只检查 HTTP 200 的就绪等待统一由 `processes/workspace.py::wait_for_http_ok` 提供，Gateway探针通过它透传本地认证头；期限是总等待预算，连接与重试间隔使用剩余预算。HTTP 非200及进程提前退出直接暴露，不重试错误路由或鉴权拒绝。需要校验工作区身份、响应正文的后端探针保留专用合同，不降为仅检查200。
+- 只检查 HTTP 200 的就绪等待统一由 `processes/workspace.py::wait_for_http_ok` 提供，Gateway探针通过它透传本地认证头；先观察持有 PID 已在目标地址监听，避免提前连接产生TCP自连接。监听、连接与重试间隔共用剩余预算；HTTP 非200及进程提前退出直接暴露。需要校验工作区身份、响应正文的后端探针保留专用合同，并复用同一监听原语。
 - 就绪等待发现进程退出后，错误以已观察的退出码和目标为主；输出采集只使用剩余预算，采集超时保留已捕获内容及原始 cause，不能掩盖退出事实。就绪探针不越权终止仍持有管道的其他进程，清理由创建者负责。
 - `wait_for_backend_ready` 先核持有 PID 在目标回环地址的真实监听，再请求并核对响应正文的工作区 UUID，监听、连接和重试共用剩余预算；HTTP拒绝保留有界诊断正文并关闭响应，不把身份不符或异常状态轮询至超时。不能在 uvicorn lifespan 阶段反复连接尚未监听的端口，避免 TCP 自连接留下 TIME_WAIT。
 

@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -106,6 +107,16 @@ def workspace_backend_id_for_root(workspace_root: str | Path) -> str:
     return resolve_backend_workspace_id(project_root, Path(workspace_root))
 
 
+def _process_is_listening(process: subprocess.Popen[str], port: int, addresses: set[str]) -> bool:
+    """先观察本进程的监听事实，避免探针提前连接而占据服务端口。"""
+    return any(
+        connection.status == psutil.CONN_LISTEN
+        and connection.laddr.ip in addresses
+        and connection.laddr.port == port
+        for connection in psutil.Process(process.pid).net_connections(kind="tcp")
+    )
+
+
 def wait_for_backend_ready(
     port: int,
     process: subprocess.Popen[str],
@@ -127,12 +138,7 @@ def wait_for_backend_ready(
         # uvicorn 在 lifespan 完成后才监听。提前连接可能选中同一源端口，形成
         # TCP 自连接并留下 TIME_WAIT，反而阻止本次后端绑定正式测试端口。
         try:
-            listening = any(
-                connection.status == psutil.CONN_LISTEN
-                and connection.laddr.ip == "127.0.0.1"
-                and connection.laddr.port == port
-                for connection in psutil.Process(process.pid).net_connections(kind="tcp")
-            )
+            listening = _process_is_listening(process, port, {"127.0.0.1"})
         except psutil.NoSuchProcess as error:
             raise RuntimeError(f"后端进程在监听前退出: pid={process.pid}, port={port}") from error
         if not listening:
@@ -185,11 +191,17 @@ def wait_for_http_ok(
     timeout_seconds: float = TEST_READY_TIMEOUT_SECONDS,
     headers: dict[str, str] | None = None,
 ) -> None:
-    """等待本地进程开始提供 200 健康响应；HTTP 拒绝直接暴露，不当作尚未监听。"""
+    """先确认本地进程监听，再取得 200；监听和 HTTP 共用原总期限。"""
     if timeout_seconds <= 0:
         raise ValueError("HTTP 就绪期限必须大于零")
     started = time.monotonic()
     deadline = started + timeout_seconds
+    target = urlsplit(url)
+    if target.hostname is None:
+        raise ValueError(f"HTTP 就绪地址缺少目标主机: {url}")
+    port = target.port or (443 if target.scheme == "https" else 80)
+    addresses = {str(address[4][0]) for address in socket.getaddrinfo(target.hostname, port, type=socket.SOCK_STREAM)}
+    addresses.update({"0.0.0.0", "::"})
     request = Request(url, headers=headers) if headers is not None else url
     last_error: OSError | None = None
     while (remaining := deadline - time.monotonic()) > 0:
@@ -214,6 +226,16 @@ def wait_for_http_ok(
             if capture_error is not None:
                 failure.add_note("输出采集超时；以上仅包含当前已捕获的输出，进程退出码来自 poll()。")
             raise failure from capture_error
+        try:
+            listening = _process_is_listening(process, port, addresses)
+        except psutil.NoSuchProcess as error:
+            raise RuntimeError(f"测试进程在监听前退出: pid={process.pid}, url={url}") from error
+        if not listening:
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
             with urlopen(request, timeout=min(1, remaining)) as response:
                 if response.status == 200:
@@ -338,6 +360,7 @@ def start_backend_process(
             env=env,
             stdout=stdout_file,
             stderr=stderr_file,
+            text=True,
         )
         handle = BackendProcess(
             process=process,

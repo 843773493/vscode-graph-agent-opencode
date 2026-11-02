@@ -44,7 +44,7 @@ def native_path(request: pytest.FixtureRequest) -> str:
 
 @pytest.mark.parametrize("operation", ["manifest-read", "manifest-write", "image-write", "local-image-read", "image-read", "image-delete"])
 def test_asset_storage_error_keeps_raw_cause_and_recovery(
-    image_store, image_bytes, native_path, operation, tmp_path, monkeypatch, caplog,
+    image_store, image_bytes, native_path, operation, tmp_path, monkeypatch, asset_diagnostics,
 ) -> None:
     root, asset, path = image_store
     manifest = root / "ui-assets/manifest.json"
@@ -70,16 +70,20 @@ def test_asset_storage_error_keeps_raw_cause_and_recovery(
 
     with monkeypatch.context() as patch:
         patch.setattr(Path, method, fail)
-        with caplog.at_level(logging.ERROR, logger=assets.__name__), pytest.raises(PermissionError) as caught:
+        with pytest.raises(PermissionError) as caught:
             action()
     assert caught.value.__cause__ is raw_error
     assert caught.value.filename is None
     assert f"operation={operation}" in str(caught.value)
     assert "error_type=PermissionError" in str(caught.value) and f"errno={errno.EACCES}" in str(caught.value)
     assert native_path not in str(caught.value) and str(root) not in str(caught.value)
-    records = [record for record in caplog.records if record.name == assets.__name__]
+    records, sink_error = asset_diagnostics
     assert len(records) == 1 and records[0].exc_info[1] is raw_error
-    assert native_path in caplog.text
+    assert native_path in str(raw_error)
+    if sink_error is not None:
+        assert "diagnostic_sink_error=PermissionError" in str(caught.value)
+        assert str(sink_error) in "".join(raw_error.__notes__)
+        assert sink_error.filename not in str(caught.value)
     assert manifest.read_bytes() == original and path.read_bytes() == image_bytes[0]
     action()
     if operation == "image-delete":
@@ -90,7 +94,7 @@ def test_asset_storage_error_keeps_raw_cause_and_recovery(
 
 
 @pytest.mark.parametrize("kind", ["shape", "json", "utf8", "key", "identity", "digest", "original-filename", "filename", "content-type", "size", "imported-at", "references"])
-def test_manifest_failure_never_rewrites_or_exposes_native_content(image_store, native_path, kind) -> None:
+def test_manifest_failure_never_rewrites_or_exposes_native_content(image_store, native_path, kind, asset_diagnostics) -> None:
     root, asset, _ = image_store
     path = root / "ui-assets/manifest.json"
     original = path.read_bytes()
@@ -112,6 +116,12 @@ def test_manifest_failure_never_rewrites_or_exposes_native_content(image_store, 
     with pytest.raises(ValueError) as caught:
         assets.list_ui_assets(root)
     assert native_path not in str(caught.value) and str(root) not in str(caught.value)
+    records, sink_error = asset_diagnostics
+    assert len(records) == 1 and records[0].exc_info[1] is caught.value.__cause__
+    if sink_error is not None:
+        assert "diagnostic_sink_error=PermissionError" in str(caught.value)
+        assert str(sink_error) in "".join(caught.value.__cause__.__notes__)
+        assert sink_error.filename not in str(caught.value)
     assert path.read_bytes() == content
     path.write_bytes(original)
     assert assets.list_ui_assets(root)[0].asset_id == asset.asset_id

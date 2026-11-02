@@ -74,7 +74,7 @@ def test_theme_validation_survives_diagnostic_sink_failure(
 ) -> None:
     errors: list[BaseException] = []
 
-    def fail_log(_message: str, *_args: object, exc_info: BaseException) -> None:
+    def fail_log(_message: str, *_args: object, exc_info: BaseException, extra: object = None) -> None:
         errors.append(exc_info)
         raise OSError("/private/theme-log-secret")
 

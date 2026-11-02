@@ -27,7 +27,7 @@ processes/
 - `app/runtime/windows_job.py` 在挂起根进程时先绑定 Job Object；矩阵 runner 和 Windows 目标套件共用同一套进程树资源限制与退出回收。
 - `workspace.py` 与 `gateway.py` 分别拥有对应运行面的启动参数和就绪合同。
 - 创建进程前检查端口并准备日志；创建失败关闭日志，成功后由句柄接管。
-- Backend 的 HTTP 就绪探针先确认持有的 PID 已在目标回环地址监听，再请求健康接口并核对工作区；不在 uvicorn lifespan 阶段连接未监听端口，避免 TCP 自连接阻止后端绑定。等待仍共用原总期限。
+- 公共 HTTP 和 Backend 就绪探针共用持有 PID 的监听观察；Gateway、Terminal、Browser 等调用方不在服务监听前连接，避免 TCP 自连接阻止正式绑定。监听和 HTTP 等待共用原总期限，Backend 仍核目标回环地址与工作区 UUID，HTTP 拒绝继续立即暴露。
 - 更新本目录文件时同步维护 `tests/support/AGENTS.md` 的树形索引与调用方导入路径。
 
 - Backend 显式传入 `boxteam_home` 时，配置安装与子进程环境使用同一绝对目录；联邦装具与 Gateway 共用该 owner 的 HOME，不能只改环境或只迁移 Gateway 控制面。

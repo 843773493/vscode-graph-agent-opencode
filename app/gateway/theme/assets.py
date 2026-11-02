@@ -3,17 +3,16 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
-from typing import TypedDict, cast
+from typing import NoReturn, TypedDict, cast
 
 from PIL import Image
 
+from app.core.failures import failure_detail
 from app.schemas.gateway.ui_settings import GatewayUIAssetDTO
 
-logger = logging.getLogger(__name__)
 _ASSET_ID = re.compile(r"[a-f0-9]{64}")
 _THEME_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 MAX_UI_ASSET_BYTES = 20 * 1024 * 1024
@@ -59,34 +58,31 @@ def _read_manifest(gateway_root: Path) -> dict[str, _AssetRecord]:
     except OSError as error:
         raise _asset_io_error("manifest-read", error) from error
     except UnicodeDecodeError as error:
-        logger.exception("Gateway UI 资源清单编码无效")
-        raise ValueError(
-            f"Gateway UI 资源清单编码无效: encoding={error.encoding}, start={error.start}, end={error.end}"
-        ) from error
+        error.add_note(f"清单来源: {manifest_path}")
+        message = f"Gateway UI 资源清单编码无效: encoding={error.encoding}, start={error.start}, end={error.end}"
+        raise ValueError(failure_detail(error, stage="ui-asset-manifest-decode", label=message)) from error
     try:
         manifest_data = json.loads(manifest_text)
     except json.JSONDecodeError as error:
-        logger.exception("Gateway UI 资源清单 JSON 无效")
-        raise ValueError(
-            f"Gateway UI 资源清单 JSON 无效: line={error.lineno}, column={error.colno}"
-        ) from error
+        error.add_note(f"清单来源: {manifest_path}")
+        message = f"Gateway UI 资源清单 JSON 无效: line={error.lineno}, column={error.colno}"
+        raise ValueError(failure_detail(error, stage="ui-asset-manifest-decode", label=message)) from error
     if not isinstance(manifest_data, dict) or not all(
         isinstance(key, str) and isinstance(value, dict)
         for key, value in manifest_data.items()
     ):
-        logger.error("Gateway UI 资源清单格式无效: path=%s", manifest_path)
-        raise ValueError("Gateway UI 资源清单格式无效")
+        _reject_asset_value("Gateway UI 资源清单格式无效", source=manifest_path, value=manifest_data)
     for asset_id, record in manifest_data.items():
         if (not _ASSET_ID.fullmatch(asset_id) or record.get("asset_id") != asset_id
                 or record.get("sha256") != asset_id):
-            raise ValueError("Gateway UI 资源清单身份与摘要不一致")
+            _reject_asset_value("Gateway UI 资源清单身份与摘要不一致", source=manifest_path, value={asset_id: record})
         original_filename = record.get("original_filename")
         filename = record.get("filename")
         if (not isinstance(original_filename, str) or not original_filename
                 or PureWindowsPath(original_filename).name != original_filename
                 or not isinstance(filename, str)
                 or filename not in {"original.png", "original.jpg", "original.webp", "original.gif"}):
-            raise ValueError(f"Gateway UI 资源清单文件名无效: asset_id={asset_id}")
+            _reject_asset_value(f"Gateway UI 资源清单文件名无效: asset_id={asset_id}", source=manifest_path, value=record)
         content_type = record.get("content_type")
         size = record.get("size")
         imported_at = record.get("imported_at")
@@ -96,15 +92,14 @@ def _read_manifest(gateway_root: Path) -> dict[str, _AssetRecord]:
                 or not isinstance(imported_at, str)
                 or not isinstance(references, list)
                 or not all(isinstance(theme_id, str) and (theme_id == "当前 UI 设置" or _THEME_ID.fullmatch(theme_id)) for theme_id in references)):
-            logger.error("Gateway UI 资源清单元数据无效: asset_id=%s, record=%r", asset_id, record)
-            raise ValueError(f"Gateway UI 资源清单元数据无效: asset_id={asset_id}")
+            _reject_asset_value(f"Gateway UI 资源清单元数据无效: asset_id={asset_id}", source=manifest_path, value=record)
         try:
             timestamp = datetime.fromisoformat(imported_at)
         except ValueError as error:
-            logger.exception("Gateway UI 资源清单时间无效: asset_id=%s", asset_id)
-            raise ValueError(f"Gateway UI 资源清单时间无效: asset_id={asset_id}") from error
+            error.add_note(f"清单来源: {manifest_path}")
+            raise ValueError(failure_detail(error, stage="ui-asset-manifest-validate", label=f"Gateway UI 资源清单时间无效: asset_id={asset_id}")) from error
         if timestamp.tzinfo is None:
-            raise ValueError(f"Gateway UI 资源清单时间缺少时区: asset_id={asset_id}")
+            _reject_asset_value(f"Gateway UI 资源清单时间缺少时区: asset_id={asset_id}", source=manifest_path, value=record)
     return cast(dict[str, _AssetRecord], manifest_data)
 
 
@@ -163,7 +158,7 @@ def import_ui_asset(
         )
     digest = hashlib.sha256(content).hexdigest()
     manifest = _read_manifest(gateway_root)
-    asset_record = manifest.get(digest)
+    asset_record: _AssetRecord | None = manifest.get(digest)
     if asset_record is None:
         asset_dir = ui_assets_root(gateway_root) / digest
         filename = f"original{extension}"
@@ -192,8 +187,7 @@ def import_ui_asset_file(path: Path, *, gateway_root: Path) -> GatewayUIAssetDTO
     source = path.expanduser()
     try:
         if source.is_symlink():
-            logger.error("主题本地背景图片不允许使用符号链接: path=%s", source)
-            raise ValueError("主题本地背景图片不允许使用符号链接")
+            _reject_asset_value("主题本地背景图片不允许使用符号链接", source=source, value=str(path))
         resolved = source.resolve()
         if not resolved.is_file():
             raise FileNotFoundError(f"主题本地背景图片不存在: {resolved}")
@@ -299,5 +293,11 @@ def _asset_io_error(operation: str, error: OSError, *, asset_id: str | None = No
         f"Gateway UI 资源存储失败: operation={operation}, asset_id={asset_id}, "
         f"error_type={type(error).__name__}, errno={error.errno}"
     )
-    logger.exception(message)
-    return type(error)(message)
+    return type(error)(failure_detail(error, stage=f"ui-asset-{operation}", label=message))
+
+
+def _reject_asset_value(message: str, *, source: Path, value: object) -> NoReturn:
+    """规则可公开，来源和被拒绝的原值只附于同一诊断原因。"""
+    error = ValueError(message)
+    error.add_note(f"来源: {source}\n原值: {value!r}")
+    raise ValueError(failure_detail(error, stage="ui-asset-validate", label=message)) from error

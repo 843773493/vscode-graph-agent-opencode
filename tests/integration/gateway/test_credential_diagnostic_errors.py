@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
-from traceback import format_exception
 
 import httpx
 import pytest
@@ -16,6 +14,7 @@ from fastapi import FastAPI
 
 from app.gateway.credentials import FederationCredentialStore
 from tests.harness.python.run_context import TestRunContext
+from tests.support.diagnostic_sink import install_failing_diagnostic_sink
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     close_gateway_process,
@@ -32,21 +31,9 @@ def create_credential_diagnostic_failure_app() -> FastAPI:
     destination = Path(os.environ["BOXTEAM_TEST_CREDENTIAL_SINK_DESTINATION"])
     audit = Path(os.environ["BOXTEAM_TEST_CREDENTIAL_SINK_AUDIT"])
 
-    class FailingLogHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            if not control.is_file():
-                return
-            primary = record.exc_info[1] if record.exc_info is not None else None
-            with audit.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps({
-                    "message": record.getMessage(),
-                    "error_type": type(primary).__name__ if primary is not None else None,
-                    "diagnostic": "".join(format_exception(primary)) if primary is not None else None,
-                }, ensure_ascii=False) + "\n")
-            with destination.open("a", encoding="utf-8"):
-                pass
-
-    logging.getLogger("app.gateway.credentials").addHandler(FailingLogHandler(logging.ERROR))
+    install_failing_diagnostic_sink(
+        logger_names=("app.gateway.credentials",), control=control, destination=destination, audit=audit,
+    )
     return app
 
 

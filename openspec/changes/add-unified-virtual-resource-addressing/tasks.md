@@ -1990,3 +1990,13 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 新增两个可复用 matrix suite，均固定60秒／4GiB，集成保留跨 worktree 独占闸门。最终单元／资源合同260 passed（14.55秒）、API／辅助协议136 passed、工作区公开合同17 passed；较宽批次在60秒外部上限退出124，末段未完成，不能计作整批通过。拆出具名受影响检查，不延长上限或修改公共长回归 fixture。
 - 正式 Session／资源 ASGI 入口创建真实工作区外 PTY，12组复制后输出损坏均500且同request_id，原owner／lease字节及PID不变；原生清单file URL沿原规则400且不提交观察。输出恢复后同一PTY写文件成功，正式stop后原生进程已退出且占用结清。最终1 passed（22.02秒）。首次测试作者的PID类型、外部目录隔离和Browser装具遗漏分别修正，未为测试改变产品协议或增加服务回退。
 - Ruff、compileall、真实Pyright与本change strict通过；公开descriptor核对及完整OpenAPI对照通过。准确命令、源码SHA、实际退出码、红绿原件、正式产品原件与作者差异自查见 `out/tests/temp/resource_metadata_publication_20261101/artifacts/verification.json`。本片不代Gateway业务网络、Browser本地页面实际导航、独立Backend重启、Web或Windows；2.2／7.2总门仍未勾，整体51/53，前端与延期团队／MCP持有边界保持。
+
+
+### 2026-11-02 图片资源诊断与测试就绪边界（2.2／7.2部分收口）
+
+- 图片存储的反例 `red-001` 确认：原生权限错误后的日志写入故障替换主错，抛出的 sink 异常包含原生位置。原 owner 的六类 I/O、清单 JSON／UTF-8、字段及本地符号链接拒绝统一复用 `failure_detail`，删除局部 logger；原规则、类别、直接 cause、适用系统码及解码坐标保持，位置和被拒绝原值只留完整诊断。日志次错不能覆盖拒绝或改写清单，不新增文件 writer、重试或错误账本。
+- 共用正常／失败日志 fixture，原业务入口与新 ASGI 响应反例同批验证。`unit-002` 为320 passed／29.42秒；旧主题测试的 logger 替身漏接现有 `extra` 参数，证据确认实际发生的是 TypeError，已迁齐真实调用签名，不放宽原断言。类型检查同时补齐图片记录类型、HTTPError headers 与进程文本模式，最终受影响生产及新增测试 Pyright 为0 errors。
+- 真实独立 Gateway 用正式用户／访问／上传入口建立前提，实际 OS 目录冲突和清单损坏覆盖8组主错／日志双错；普通409与 request_id、原 profile／清单、原图片字节和同入口显式重试均核对。`integration-001` 为1 passed／23.82秒；新 unit／integration matrix 均固定60秒／4GiB，沿原跨 worktree 独占闸门。
+- 将 profile／凭据两份跨进程诊断故障装具合为 `tests.support.diagnostic_sink`，图片验收复用同一原错审计及实际 OS 日志写入拒绝。原消费者首批凭据2项通过；profile3项在业务前遭遇 HTTP 探针 TCP 自连接：读到自己的 GET 请求，随后端口占用。新 `readiness-red-001` 在原 Gateway／公共探针复现2 failed、既有 Backend 1 passed；公共探针现复用 Backend 的持有 PID 监听观察，监听和 HTTP 共用原总期限，不延长期限或重试 HTTP 拒绝。
+- 就绪修复后的 `profile-002` 为3 passed／71.12秒，保持原90秒 matrix 期限；最终 `readiness-unit-002` 为66 passed／2.71秒，`readiness-http-001` 为15 passed／32.60秒，经实际 Gateway 图片入口、Browser／Terminal 辅助进程及真实 HTTP 核同一监听链，含8组图片双错重验。较宽 harness 批次为269 passed、2 failed、28 errors，均为其它旧测试仍直接调用已变更 fixture 签名，发生在就绪链之前；不记整批通过，不放宽或反复运行这些断言，留待独立 fixture 迁移。
+- Ruff、compileall、真实 Pyright、diff check 与本 change strict 均通过；准确命令、源码前后指纹、实际退出码及红绿原件保留于 `out/tests/temp/theme_asset_failure_20261102/artifacts/verification.json`。本片只核后端公开错误和测试设施，不代替 Backend 硬重启、Web、Windows、全部普通响应或持久化总验收；2.2／7.2仍未勾选，整体51/53，前端与延期团队／MCP持有边界保持。

@@ -13,3 +13,4 @@
 # 规范
 
 - 使用 pytest fixture 注入隔离资源，真实 HTTP 验收放在 integration/gateway。
+- `asset_diagnostics` 在同一用例矩阵覆盖正常／失败日志，核原始异常身份及原因链；HTTP 路由测试使用真实处理器和 request_id，仅替换底层文件故障。

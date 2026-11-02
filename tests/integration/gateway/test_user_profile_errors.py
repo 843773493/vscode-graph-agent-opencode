@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import errno
 import json
-import logging
 import os
 import shutil
 from contextlib import ExitStack
 from pathlib import Path
-from traceback import format_exception
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.diagnostic_sink import install_failing_diagnostic_sink
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -85,24 +84,10 @@ def create_profile_diagnostic_failure_app() -> FastAPI:
     destination = Path(os.environ["BOXTEAM_TEST_PROFILE_SINK_DESTINATION"])
     audit = Path(os.environ["BOXTEAM_TEST_PROFILE_SINK_AUDIT"])
 
-    class FailingLogHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            if not control.is_file():
-                return
-            assert record.exc_info is not None and record.exc_info[1] is not None
-            primary = record.exc_info[1]
-            with audit.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps({
-                    "logger": record.name, "error_type": type(primary).__name__,
-                    "diagnostic": "".join(format_exception(primary)),
-                }, ensure_ascii=False) + "\n")
-            # 普通文件被当成父目录，open由本机OS真实抛出含日志位置的错误。
-            with destination.open("a", encoding="utf-8"):
-                pass
-
-    handler = FailingLogHandler(level=logging.ERROR)
-    for name in ("app.gateway.control.user_profile", "app.core.failures"):
-        logging.getLogger(name).addHandler(handler)
+    install_failing_diagnostic_sink(
+        logger_names=("app.gateway.control.user_profile", "app.core.failures"),
+        control=control, destination=destination, audit=audit,
+    )
     return app
 
 

@@ -20,6 +20,8 @@ processes/
 
 `test_http_readiness.py`核对探针的请求预算、状态和失败分类；`test_http_server_fixture_lifetime.py`核对测试端点自身的socket与线程归属，真实HTTP接线留在`tests/integration/harness/`。先区分探针行为与测试服务生命周期，避免用同一套mock冒充传输证据。
 
+公共 HTTP、Gateway 与 Backend 的定向反例须证明监听前零连接，监听和 HTTP 共用原期限；不得通过增加重试或放宽 HTTP 拒绝掩盖端口自连接。
+
 `test_model_replay_fixture_lifetime.py`只检查 HTTP/SDK 专项测试中模型服务的socket、线程和请求诊断文件；用两种模型协议验证启动与清理失败，不启动Gateway、模型执行或辅助服务，也不替代真实关闭验收。
 
 `test_http_stub_server_lifetime.py`检查通用HTTP替身的共用生命周期：三个公共入口都覆盖线程构造、启动、join超时及清理异常。仅注入server/thread替身；协议响应和真实socket释放应通过真实HTTP另验，不由清理调用记录推断。
