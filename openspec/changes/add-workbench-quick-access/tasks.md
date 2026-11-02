@@ -66,7 +66,7 @@
 
 - [x] 7.1 复用既有 sourceTransform 在原贡献登记处选择唯一空前缀及 `%` descriptor，保留原元数据；固定 commit、锚点恰好一次且失配失败，dev／预构建／build 使用同一管线。
 - [x] 7.2 基于原 PickerQuickAccessProvider 接入原 fuzzy scorer、历史和打开服务，非空按最近／Session／Thread／文件分组，组内排序与稳定去重符合配置。
-- [ ] 7.3 在 Quick Input 聚焦前捕获发起上下文，空输入历史只限已选范围，名称／描述／详情、图标、高亮和行内动作准确，不枚举全部资源填空。
+- [x] 7.3 在 Quick Input 聚焦前捕获发起上下文，空输入历史只限已选范围，名称／描述／详情、图标、高亮和行内动作准确，不枚举全部资源填空。
 - [ ] 7.4 保留 URI 粘贴、文件追加行列／符号、quickNavigate 和原 filesOnly／fileSearchDelegate、filter／additionPicks、handleAccept、按钮与 prefix 限制的真实调用语义。
 - [x] 7.5 接入 `?` 与 Command Center includeHelp 的原注册帮助、命令及选模式转接，保留发起范围与接收者，默认模式关闭递归帮助。
 - [ ] 7.6 验证空文件编辑器的 delegate／cache 生命周期与原 Chat 二级 picker 取消返回，不将原 widget 接受动作转投项目 Composer。
@@ -275,3 +275,9 @@
 - 真实 Gateway／正式 Workbench 经原设置保持浮层，将底层编辑器从 A 切到 B，经 Command Center → `?` → `%` 查询仍只访问 A，返回默认入口也只显示 A 历史且不递归帮助。原默认、dirty／watch、SearchView、Search Editor 分屏／保存／backup／route 场景继续通过；页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-a9be95922242/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
 - 11 项定向检查／126 条断言通过，原 Help 两个处理器的接收者回调保持同一对象；后者为浏览器组件装具，不冒充真实原 Chat widget 验收。18 份实际转换源码类型检查、正式页面构建、Ruff、JS 静态检查和结构审查通过；第一轮类型检查指出嵌套 options 字面量的额外属性，改为原 typed 局部变量后通过，未逃逸类型。
 - 准确命令、源码指纹、原始输出、退出码与失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/invocation-verification.json` 及相邻收据。本切片不完成 7.4／7.6、跨范围、通用 URI opener 或 Electron 的剩余验收。
+
+### 2026-11-02：列表与打开动作验收（7.3）
+
+- 真实 Gateway／正式 Workbench 页面核对 Session、Thread、文件的名称、工作区归属、详情、图标及实际命中高亮；悬停 Tooltip 和 Tab 聚焦的侧边按钮均通过。明确开启原 Quick Open 预览设置后，侧边文件显示预览标签；两次原后台接受保留输入焦点，文件固定在发起组，原组 Thread 保持可见。移除历史后原标签与后端 Session 均保留。
+- 最终页面通过（184.12 秒），原 A/B／IndexedDB、dirty／watch、SearchView、Search Editor 分屏、保存、backup 和 route 恢复断言继续通过，无页面错误。仅新增测试，复用上一切片同产品源码的真实类型检查；本轮 fixture 重新完成正式构建。JS 语法、Ruff、结构及 OpenSpec strict 检查随本边界保存。
+- 前两次失败分别是装具未先悬停便查找通常隐藏的按钮，以及未开启预览设置便断言预览；依据原列表 CSS 与原设置默认值修正，未修改产品行为或放宽归属断言。命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/list-*.json`；最终页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-0ef312a76ada/nodes/node-f4e408bf0b21/artifacts/search-result.json`。7.4／7.6、统一 URI 打开和 Electron 等仍未完成。

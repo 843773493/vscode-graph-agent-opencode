@@ -1,5 +1,6 @@
 import { expect } from 'playwright/test';
 import { readSavedSettings } from './settings.mjs';
+import { verifyResourceOpenActions, verifyResourcePresentation } from './default_interactions.mjs';
 
 /** 名称状态通过产品创建入口生成；查询、打开及迟到结果均经过真实 Gateway。 */
 export async function verifyDefaultAccess({ page, command, api, result, fileUri, ownerA, ownerB }) {
@@ -56,11 +57,13 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     const first = requests.filter(request => request.query === 'quickdiscover' || request.body?.query === 'quickdiscover');
     expect(first.length).toBeGreaterThanOrEqual(3);
     expect(first.every(request => request.route === ownerA.route)).toBe(true);
+    result.defaultListPresentation = await verifyResourcePresentation({ quick, sessionId: sessionA.session_id });
     const row = quick.locator('[data-quick-input-id]').filter({ hasText: `会话 · ${sessionA.session_id}` });
     await expect(row).toHaveCount(1);
     await row.click();
     await expect(quick).not.toBeVisible();
     await expect(page.getByRole('tab', { name: /quickdiscover A 会话/ })).toBeVisible();
+    await verifyResourceOpenActions({ page, command, api, result, owner: ownerA, session: sessionA });
     await command('workbench.action.quickOpen', 'quickdiscover-file.txt:2:3');
     const file = quick.getByRole('option', { name: /^quickdiscover-file\.txt / });
     await expect(file).toHaveCount(1);

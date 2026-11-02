@@ -127,6 +127,11 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["defaultQuickAccess"]["emptyHasNoQueries"] is True
         assert receipt["defaultQuickAccess"]["helpHasNoQueries"] is True
         assert receipt["defaultQuickAccess"]["helpKeepsInvocation"] is True
+        assert len(receipt["defaultListPresentation"]) == 3
+        assert receipt["defaultOpenActions"] == {
+            "keyboardSideButton": True, "sidePreview": True, "continuousBackground": True,
+            "backgroundPinned": True, "sourceGroupPreserved": True, "historyRemovalKeepsTabAndSession": True,
+        }
         assert receipt["editorLatePaneIsolation"] is True
         assert receipt["editorRouteRecovery"]["original"] != receipt["editorRouteRecovery"]["current"]
         assert receipt["pageErrors"] == []
