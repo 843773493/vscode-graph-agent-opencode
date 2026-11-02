@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from dataclasses import dataclass
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -13,7 +12,9 @@ from tests.integration.harness import test_workspace_readiness as workspace_case
 
 @dataclass
 class EndpointLifetime:
-    fixture: Generator[tuple[int, list[tuple[str, str | None]]], None, None]
+    fixture: Generator[
+        tuple[int, gateway_case._GatewayHealthResponse | workspace_case._HealthResponse], None, None,
+    ]
     server: Mock
     thread: Mock
     cleanups: list[str]
@@ -33,8 +34,7 @@ def endpoint_lifetime(
     server.server_close.side_effect = lambda: cleanups.append("socket-close")
     monkeypatch.setattr(module, "HTTPServer", Mock(return_value=server))
     monkeypatch.setattr(module, "Thread", Mock(return_value=thread))
-    parameter = 200 if module is gateway_case else (200, {"workspace_id": workspace_case.EXPECTED_WORKSPACE_ID})
-    fixture = module.health_endpoint.__wrapped__(SimpleNamespace(param=parameter))
+    fixture = module.health_server._get_wrapped_function()()
     return EndpointLifetime(fixture, server, thread, cleanups)
 
 
@@ -61,7 +61,8 @@ def test_endpoint_close_checks_thread_exit_and_releases_socket(
 ) -> None:
     state = endpoint_lifetime
     state.thread.is_alive.return_value = thread_alive
-    assert next(state.fixture) == (18000, [])
+    port, response = next(state.fixture)
+    assert port == 18000 and response.observed_requests == []
 
     if thread_alive:
         with pytest.raises(AssertionError, match="HTTP 服务线程未停止"):

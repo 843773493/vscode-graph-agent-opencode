@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TextIO
+from typing import Literal, TextIO
 from unittest.mock import Mock
 
 import pytest
@@ -141,7 +141,7 @@ def test_auxiliary_stderr_open_failure_releases_stdout(
     error = OSError("模拟错误日志打开失败")
     real_open = open
 
-    def open_log(path: Path, mode: str, *, encoding: str) -> TextIO:
+    def open_log(path: Path, mode: Literal["w"], *, encoding: str) -> TextIO:
         if path.name.endswith(".stderr.log"):
             raise error
         stream = real_open(path, mode, encoding=encoding)
@@ -210,7 +210,7 @@ def auxiliary_log_close_failure(
     real_open = open
 
     @contextmanager
-    def open_log(path: Path, mode: str, *, encoding: str) -> Iterator[TextIO]:
+    def open_log(path: Path, mode: Literal["w"], *, encoding: str) -> Iterator[TextIO]:
         with real_open(path, mode, encoding=encoding) as stream:
             streams.append(stream)
             try:
@@ -362,14 +362,14 @@ async def test_manual_browser_startup_failure_closes_terminal_frontend(
 ) -> None:
     request = Mock(spec=pytest.FixtureRequest)
     request.node.fspath = Path(manual_browser_case.__file__)
+    request.node.path = Path(__file__)
     terminal = Mock(spec=terminal_frontend.TerminalFrontendProcess)
     close_terminal = Mock()
     startup_error = RuntimeError("模拟 Browser 前端启动失败")
     monkeypatch.setattr(manual_browser_case.shutil, "which", lambda _name: "chromium")
-    monkeypatch.setattr(
-        manual_browser_case.subprocess, "run",
-        Mock(return_value=subprocess.CompletedProcess(["bun", "run", "build"], 0, "", "")),
-    )
+    monkeypatch.setattr(manual_browser_case.subprocess, "run", Mock(
+        side_effect=AssertionError("生命周期单测不得执行外部命令或构建工作台"),
+    ))
     monkeypatch.setattr(
         manual_browser_case, "start_terminal_frontend_process", Mock(return_value=terminal),
     )
@@ -381,6 +381,7 @@ async def test_manual_browser_startup_failure_closes_terminal_frontend(
     with pytest.raises(RuntimeError) as failure:
         await manual_browser_case.test_manual_browser_creation_attaches_and_accepts_first_navigation(
             request=request, integration_workspace_root_path=str(tmp_path / "workspace"),
+            web_workbench_assets=tmp_path / "unused-workbench-assets",
         )
 
     assert failure.value is startup_error

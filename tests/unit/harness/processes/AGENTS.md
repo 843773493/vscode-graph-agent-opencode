@@ -44,5 +44,7 @@ processes/
 
 - 通过 pytest fixture 注入依赖；沿用上层 conftest 的输出路径与资源作用域，不另建一套运行上下文。
 - 验证进程、stdout、stderr 等独立资源均得到释放；测试兜底前先检查被测装具的清理结果。
+- 直接驱动 pytest 生成器装具时使用当前 pytest 的 `_get_wrapped_function()`，显式传入装具依赖；持有 `close`／`throw` 的对象声明为 `Generator`。HTTP线程生命周期驱动 `health_server`，逐次响应配置归 `health_endpoint`，不得混用两者。
+- 只验证启动失败的 Web 装具调用方显式传入未消费的资源目录，并阻止意外外部命令；不要伪造构建成功，也不要为生命周期单测构建工作台。产物上下文使用当前单测路径。
 - 中断与普通异常都必须保留原始对象；清理失败不能掩盖启动失败，也不能跳过其余资源。
 - 产物镜像当前测试路径写入 `out/tests/unit/harness/processes/<测试名>/`；历史结果保留在原路径，不混作新运行证据。

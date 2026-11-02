@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,7 +31,7 @@ from tests.integration.workspace_services.browser import (
 
 @dataclass
 class DualTerminalStartup:
-    fixture: Iterator[list[tuple[str, int, Path]]]
+    fixture: Generator[list[tuple[str, int, Path]], None, None]
     processes: list[Mock]
     backend_spawn: Mock
     frontend_spawn: Mock
@@ -52,7 +52,7 @@ def dual_terminal_startup(
     monkeypatch.setattr(addressing_case, "TestRunContext", SimpleNamespace(
         from_test_file=Mock(return_value=context),
     ))
-    monkeypatch.setattr(addressing_case, "prepare_default_test_workspace", Mock())
+    monkeypatch.setattr(addressing_case, "prepare_test_workspace", Mock())
     monkeypatch.setattr(addressing_case, "load_or_create_workspace_id", lambda root: f"workspace-{root.name}")
     monkeypatch.setattr(addressing_case.shutil, "which", lambda _name: "node")
     backend_spawn = Mock(side_effect=[processes[0], processes[2]])
@@ -69,7 +69,7 @@ def dual_terminal_startup(
     monkeypatch.setattr(addressing_case, "terminate_process", terminate)
     request = Mock()
     request.node.path = Path(__file__)
-    fixture = addressing_case.terminal_mounts.__wrapped__(request, 18000)
+    fixture = addressing_case.terminal_mounts._get_wrapped_function()(request=request, e2e_backend_port=18000)
     return DualTerminalStartup(
         fixture, processes, backend_spawn, frontend_spawn, readiness, terminate, frontend_results,
     )
@@ -151,6 +151,7 @@ def test_backend_readiness_failure_cleans_owned_process_and_preserves_errors(
             )
 
     if cleanup_fails:
+        assert isinstance(failure.value, BaseExceptionGroup)
         assert failure.value.exceptions == (startup_error, cleanup_error)
     else:
         assert failure.value is startup_error
@@ -185,7 +186,9 @@ def test_terminal_frontend_spawn_failure_closes_started_backend(
     monkeypatch.setattr(persistent_case, "ensure_local_port_available", Mock())
     monkeypatch.setattr(persistent_case, "start_terminal_backend", Mock(return_value=process))
     monkeypatch.setattr(persistent_case, "terminate_process", terminate)
-    fixture = persistent_case.terminal_manager_processes.__wrapped__((18040, 18041), str(tmp_path))
+    fixture = persistent_case.terminal_manager_processes._get_wrapped_function()(
+        terminal_manager_env=(18040, 18041), e2e_workspace_root_path=str(tmp_path),
+    )
 
     with pytest.raises(RuntimeError, match="前端创建失败"):
         next(fixture)
@@ -201,7 +204,11 @@ def test_terminal_spawn_failure_closes_started_browser(
     monkeypatch.setattr(browser_case, "start_browser_manager_processes", Mock(return_value=browser))
     monkeypatch.setattr(browser_case, "close_browser_manager_processes", close_browser)
     monkeypatch.setattr(browser_case, "start_terminal_backend", Mock(side_effect=RuntimeError("终端创建失败")))
-    fixture = browser_case.browser_manager_processes.__wrapped__((18040, 18041), str(tmp_path))
+    fixture = browser_case.browser_manager_processes._get_wrapped_function()(
+        browser_manager_env=(18040, 18041),
+        integration_workspace_root_path=str(tmp_path),
+        browser_manager_artifacts=tmp_path / "artifacts",
+    )
 
     with pytest.raises(RuntimeError, match="终端创建失败"):
         next(fixture)
@@ -234,7 +241,9 @@ def test_windows_fixture_releases_created_processes_and_logs(
     response = MagicMock()
     response.__enter__.return_value.read.return_value = json.dumps({"workspace_id": "workspace-fixture"}).encode()
     monkeypatch.setattr(windows_case, "urlopen", Mock(return_value=response))
-    fixture = windows_case.windows_terminal_backend.__wrapped__(str(tmp_path), 18000)
+    fixture = windows_case.windows_terminal_backend._get_wrapped_function()(
+        e2e_workspace_root_path=str(tmp_path), e2e_backend_port=18000,
+    )
 
     if stage == "complete":
         result = next(fixture)
@@ -254,7 +263,7 @@ def test_windows_fixture_releases_created_processes_and_logs(
 @pytest.fixture
 def page_server_startup(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Iterator[str], Mock, Mock, list[str]]:
+) -> tuple[Generator[str, None, None], Mock, Mock, list[str]]:
     server, thread = Mock(), Mock()
     cleanups: list[str] = []
     server.shutdown.side_effect = lambda: cleanups.append("shutdown")
@@ -264,13 +273,13 @@ def page_server_startup(
     monkeypatch.setattr(performance_case, "threading", SimpleNamespace(Thread=Mock(return_value=thread)))
     monkeypatch.setattr(performance_case, "integration_port_block_for_file", lambda _path: SimpleNamespace(port=lambda _offset: 18062))
     request = SimpleNamespace(node=SimpleNamespace(fspath=performance_case.__file__))
-    fixture = performance_case.dynamic_page_server.__wrapped__(request)
+    fixture = performance_case.dynamic_page_server._get_wrapped_function()(request=request)
     return fixture, server, thread, cleanups
 
 
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_page_server_thread_start_failure_releases_bound_socket(
-    page_server_startup: tuple[Iterator[str], Mock, Mock, list[str]], interrupted: bool,
+    page_server_startup: tuple[Generator[str, None, None], Mock, Mock, list[str]], interrupted: bool,
 ) -> None:
     fixture, server, thread, cleanups = page_server_startup
     error = KeyboardInterrupt("线程启动中断") if interrupted else RuntimeError("线程启动失败")
@@ -288,7 +297,7 @@ def test_page_server_thread_start_failure_releases_bound_socket(
 @pytest.mark.parametrize("stage", ["none", "shutdown", "join", "socket-close"])
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_page_server_teardown_attempts_all_owned_cleanup_and_keeps_body_error(
-    page_server_startup: tuple[Iterator[str], Mock, Mock, list[str]], stage: str, interrupted: bool,
+    page_server_startup: tuple[Generator[str, None, None], Mock, Mock, list[str]], stage: str, interrupted: bool,
 ) -> None:
     fixture, server, thread, cleanups = page_server_startup
     body_error = LookupError("页面服务使用失败")

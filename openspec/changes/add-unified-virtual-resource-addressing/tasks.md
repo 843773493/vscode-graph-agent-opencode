@@ -2007,3 +2007,9 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 原实现新增100个反例均失败；修复后220项发布测试、130项断点／配置／源码对账／工具／API与公开合同回归通过，后者包含descriptor结构和两份完整OpenAPI快照对照。真实Pyright零诊断，Ruff、compileall和本change strict通过。
 - 原60秒／4GiB产品matrix的2项检查通过（12.08秒），保持集成独占闸门。真实ASGI＋Node／Inspector用绝对脚本、断点和工作目录输入创建并启动；36组输出损坏保持500和同request_id，原进程身份、claim、manifest及方案不变；解除故障后同进程读取、清除／重设断点、停止和冷读原方案通过。首轮仅新增末条冷读断言错误比较了编辑前的revision，依据正式断点编辑合同改为精确比较停止时最新回执，保留失败原件。
 - 命令、源码前后SHA、原始日志、实际退出码、正式publication产物索引及作者AST自查见 `out/tests/temp/debug_state_publication_20261102/artifacts/verification.json`；一次性runner核验后删除，证据保留。不代Gateway业务网络、独立Backend硬重启、Web或Windows，2.2／7.2仍未勾、整体51/53。
+
+### 2026-11-02 进程单测的 fixture 调用闭包（验收设施修复）
+
+- 将上一片 `readiness-unit-001` 的2 failed／28 errors定位到的三份单测迁齐现有依赖：使用当前工作区准备入口、显式传入Browser日志与未消费的Workbench资源目录，HTTP生命周期测试驱动持有线程的 `health_server`。原清理顺序、异常实例与错误链断言保留，未修改产品或公共长回归fixture；生命周期场景禁止意外外部命令，不伪造构建成功，输出归当前单测路径。
+- 三文件109项与进程装具整组299项通过；随后迁用当前pytest的装具解包方法、修正生成器／文本模式类型并补异常组类型断言，Pyright从13项到0，受影响109项复验通过，其余190项源码不变复用整组证据，不重复累计。Ruff／compileall通过，全部检查保持60秒／4GiB进程外保护，不启动真实服务或浏览器。
+- 原红版直接复用已保留的失败日志，不无变化重跑；逐次命令、源码前后SHA、原始输出、实际退出码与审查索引见 `out/tests/temp/harness_fixture_calls_20261102/artifacts/verification.json`。本片只修验收设施，不新增业务完成勾选。
