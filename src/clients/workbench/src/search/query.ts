@@ -25,7 +25,7 @@ export function patterns(expression?: glob.IExpression): string[] {
 }
 
 export function fileOptions(query: ICommonQueryProps<URI>, folder: IFolderQuery): ResourceNavigationSearchOptions {
-  // TODO：原文件 owner 补齐目标 ignore 文件及其余显式选项前，先拒绝，不能悄悄弱化查询。
+  // TODO：其余显式选项仍需迁齐目标 owner；未支持时不能悄悄弱化查询。
   if (query.ignoreGlobCase || folder.ignoreGlobCase) throw new Error('业务文件搜索尚未支持忽略 glob 大小写');
   if (folder.fileEncoding && !/^utf-?8$/i.test(folder.fileEncoding)) throw new Error('业务文件搜索只支持 UTF-8');
   if (folder.ignoreSymlinks) throw new Error('业务文件搜索尚未支持忽略符号链接');
@@ -51,8 +51,7 @@ export function validateQuery(query: ICommonQueryProps<URI>): void {
   }
   for (const folder of query.folderQueries) {
     workspaceFileSource(folder.folder);
-    const options = fileOptions(query, folder);
-    if (options.ignore_mode === 'respect') throw new Error('尚未支持读取目标目录的 ignore 文件，请关闭该选项后搜索');
+    fileOptions(query, folder);
   }
   for (const resource of query.extraFileResources ?? []) {
     workspaceFileSource(resource);

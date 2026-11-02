@@ -132,19 +132,15 @@ async def test_ignore_mode_preserves_default_and_explicit_none(navigation_case):
 
 
 @pytest.mark.parametrize("synchronous", [False, True])
-@pytest.mark.parametrize("query,options,reason", [
-    ("[", {"is_regex": True}, "invalid_search_pattern"),
-    ("hit", {"ignore_mode": "respect"}, "unsupported_search_option"),
-])
-async def test_unsupported_or_invalid_search_fails_even_for_empty_directory(navigation_case, synchronous, query, options, reason):
+async def test_invalid_regex_fails_even_for_empty_directory(navigation_case, synchronous):
     owner, _, uri = navigation_case
-    request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query=query, search_options=options)
+    request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="[", search_options={"is_regex": True})
     with pytest.raises(ResourceFileOperationError) as failure:
         if synchronous:
             owner.navigate_sync(request, local_gateway_id=GATEWAY_ID)
         else:
             await owner.navigate(request, local_gateway_id=GATEWAY_ID)
-    assert failure.value.reason == reason
+    assert failure.value.reason == "invalid_search_pattern"
 
 
 @pytest.mark.parametrize("synchronous", [False, True])

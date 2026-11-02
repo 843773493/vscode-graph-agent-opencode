@@ -357,6 +357,10 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         (root / "scripts/non-text.bin").write_bytes(b"\xff")
         (root / "scripts/media %.PNG").write_bytes(b"\xff" + f"media-owner-{name}".encode() * 300)
         (root / "scripts/read-range.txt").write_bytes(b"\xef\xbb\xbfalpha\r\nbeta\r\ngamma\n")
+        (root / "ignore-scope").mkdir()
+        (root / "ignore-scope/.gitignore").write_text("hidden.txt\n" if name == "b" else "visible.txt\n")
+        for filename in ("hidden.txt", "visible.txt"):
+            (root / "ignore-scope" / filename).write_text(f"remoteignore owner-{name}\n")
         for index in range(257):
             (root / f"references/deep/bulk-needle-{index:03}.txt").write_text(f"未追踪 owner-{name}\n")
 
@@ -470,6 +474,16 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
             {"uri": root_uri + "/scripts/read-range.txt", "line": 1, "text": "\ufeffalpha", "truncated": False},
             {"uri": root_uri + "/scripts/read-range.txt", "line": 3, "text": "gamma", "truncated": False},
         ]
+        # 中继 A 与目标 B 的同名规则相反，必须由 B 的原 owner 解释。
+        ignored = await navigate(root_uri + "/ignore-scope", "search", route=route,
+            search_mode="content", query="remoteignore", search_options={"ignore_mode": "respect"})
+        assert [match["uri"] for match in ignored["matches"]] == [root_uri + "/ignore-scope/visible.txt"]
+        assert ignored["matches"][0]["text"] == "remoteignore owner-b"
+        unignored = await navigate(root_uri + "/ignore-scope", "search", route=route,
+            search_mode="content", query="remoteignore", search_options={"ignore_mode": "none"})
+        assert {match["uri"] for match in unignored["matches"]} == {
+            root_uri + "/ignore-scope/hidden.txt", root_uri + "/ignore-scope/visible.txt",
+        }
         bulk = await navigate(root_uri, "search", route=route, query="bulk-needle", limit=7)
         assert len(bulk["entries"]) == 7 and bulk["truncated"]
         assert all(node["resource_shape"] == "file" for node in bulk["entries"])

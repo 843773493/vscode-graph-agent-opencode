@@ -7377,7 +7377,7 @@ export declare type ResourceNavigationSearchOptions = Message<"boxteam.workspace
   excludeGlobs: string[];
 
   /**
-   * default 保留原固定目录忽略，none 关闭该忽略；respect 尚未支持时必须明确拒绝。
+   * default 保留原固定目录忽略，none 关闭；respect 读取所选根以内的 .gitignore/.ignore。
    *
    * @generated from field: string ignore_mode = 9;
    */

@@ -30,6 +30,41 @@ async function withTransport(callback, requestHandler = async (_path, options) =
 }
 
 describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传输为显式替身）', () => {
+  test('respect 交目标 owner 处理；已打开模型不额外读取磁盘规则且保留 owner 过滤', async () => {
+    const a = model(uri(ownerA, 'ignored.txt'), 'needle unsaved'), b = model(uri(ownerB, 'ignored.txt'), 'needle foreign');
+    const f = fixture([a, b]);
+    try {
+      await withTransport(async ({ requests }) => {
+        const options = query({ folderQueries: [{ folder: uri(ownerA), disregardIgnoreFiles: false }] });
+        const result = await f.search.textSearch(options);
+        expect(result.results.map(item => item.resource.toString())).toEqual([a.uri.toString()]);
+        expect(b.calls).toBe(0);
+        expect(requests.mock.calls).toHaveLength(1);
+        const body = JSON.parse(requests.mock.calls[0][1].body);
+        expect(body.uri).toBe(root(ownerA));
+        expect(body.search_options.ignore_mode).toBe('respect');
+        const count = requests.mock.calls.length;
+        const onlyOpen = await f.search.textSearch({ ...options, onlyOpenEditors: true });
+        expect(onlyOpen.results.map(item => item.resource.toString())).toEqual([a.uri.toString()]);
+        expect(requests.mock.calls).toHaveLength(count);
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('未支持的父目录和全局规则在模型 progress 及 HTTP 之前明确拒绝', () => {
+    const local = model(uri(ownerA, 'same.txt'), 'needle');
+    const f = fixture([local]);
+    try {
+      const progress = [];
+      for (const option of [{ disregardParentIgnoreFiles: false }, { disregardGlobalIgnoreFiles: false }]) {
+        expect(() => f.search.textSearchSplitSyncAsync(query({ folderQueries: [{ folder: uri(ownerA), ...option }] }),
+          undefined, item => progress.push(item))).toThrow('全局或父目录 ignore');
+      }
+      expect(local.calls).toBe(0);
+      expect(progress).toEqual([]);
+    } finally { f.instantiation.dispose(); }
+  });
+
   test('最终 ServiceCollection 唯一实现，首次及异步 progress 不扫描 B 或 IndexedDB，同文件模型覆盖磁盘', async () => {
     const a = model(uri(ownerA, 'same.txt'), '🧪 needle A'), b = model(uri(ownerB, 'same.txt'), 'needle B');
     const native = model(URI.parse('workbench:/same.txt'), 'needle IndexedDB');

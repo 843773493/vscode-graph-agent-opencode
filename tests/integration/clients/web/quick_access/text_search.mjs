@@ -72,12 +72,16 @@ try {
   result.initialization = [health, workspaces, workspace, roots].map(body => ({ requestId: body.request_id }));
   result.owner = { gatewayId: health.data.gateway_id, workspaceId: workspace.data.workspace_id, route, root: roots.data.workspace_uri };
 
-  result.phase = 'explicit-ignore-rejection';
-  await command('workbench.action.quickOpen', '%quickscope');
+  result.phase = 'default-target-ignore-rules';
+  await command('workbench.action.quickOpen', '%ignorescopeonly');
   const quick = page.locator('.quick-input-widget');
   await expect(quick).toBeVisible();
-  await expect(quick).toContainText('ignore 文件');
-  result.unsupportedIgnoreVisible = true;
+  await expect(quick).toContainText('visible ignorescopeonly');
+  await expect(quick).not.toContainText('hidden ignorescopeonly');
+  const ignoredRequests = result.searches.filter(request => request.query === 'ignorescopeonly');
+  expect(ignoredRequests.length).toBeGreaterThan(0);
+  expect(ignoredRequests.every(request => request.search_options.ignore_mode === 'respect')).toBe(true);
+  result.defaultIgnoreRules = true;
   await page.keyboard.press('Escape');
 
   result.phase = 'configure-through-original-settings-editor';
@@ -92,6 +96,17 @@ try {
   await command('workbench.action.files.save');
   await command('workbench.action.closeActiveEditor');
   await expect(settings).not.toBeVisible();
+
+  result.phase = 'explicitly-disabled-ignore-rules';
+  const beforeDisabled = result.searches.length;
+  await command('workbench.action.quickOpen', '%ignorescopeonly');
+  await expect(quick).toContainText('visible ignorescopeonly');
+  await expect(quick).toContainText('hidden ignorescopeonly');
+  const unignoredRequests = result.searches.slice(beforeDisabled).filter(request => request.query === 'ignorescopeonly');
+  expect(unignoredRequests.length).toBeGreaterThan(0);
+  expect(unignoredRequests.every(request => request.search_options.ignore_mode === 'none')).toBe(true);
+  result.disabledIgnoreRules = true;
+  await page.keyboard.press('Escape');
 
   result.phase = 'other-owner-and-native-fixtures';
   const other = registered.data.items.find(item => item.name === '搜索隔离 B');

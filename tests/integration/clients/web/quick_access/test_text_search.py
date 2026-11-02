@@ -65,6 +65,9 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
     (other / "quick-scope.txt").write_text("foreign-disk quickscope\n", encoding="utf-8")
     (workspace / "context-lines.txt").write_text("A context before\ncontextbranchonly\ncontextbranchonly\nA context after", encoding="utf-8")
     (other / "context-lines.txt").write_text("B context before\ncontextbranchonly\nB context after", encoding="utf-8")
+    (workspace / ".gitignore").write_text("ignored-search.txt\n", encoding="utf-8")
+    (workspace / "ignored-search.txt").write_text("hidden ignorescopeonly\n", encoding="utf-8")
+    (workspace / "allowed-search.txt").write_text("visible ignorescopeonly\n", encoding="utf-8")
     result_path = context.artifacts_dir / "search-result.json"
     screenshot_path = context.artifacts_dir / "search-failure.png"
     gateway = start_gateway_process(
@@ -94,7 +97,8 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["crossWorkspaceIsolation"] is True
         assert receipt["reverseOwnerIsolation"] is True
         assert receipt["onlyOpenIsolation"] is True
-        assert receipt["unsupportedIgnoreVisible"] is True
+        assert receipt["defaultIgnoreRules"] is True
+        assert receipt["disabledIgnoreRules"] is True
         assert receipt["editorViewScope"] is True
         assert receipt["editorSplitScopes"] is True
         assert receipt["editorSavedScope"] is True

@@ -1715,7 +1715,7 @@ export interface ResourceNavigationSearchOptions {
   all_matches: boolean;
   include_globs: string[];
   exclude_globs: string[];
-  /** default 保留原固定目录忽略，none 关闭该忽略；respect 尚未支持时必须明确拒绝。 */
+  /** default 保留原固定目录忽略，none 关闭；respect 读取所选根以内的 .gitignore/.ignore。 */
   ignore_mode: string;
   /** 每个命中区间前后各取 0～100 行，正文仍受原片段及响应字节预算约束。 */
   context_lines: number;

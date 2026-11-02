@@ -34,7 +34,7 @@
 
 - [x] 4.1 改透唯一文件内部投影，使规范目录根支持真实 stat／describe、joinPath、相对路径及往返定位；旧叶子 query 投影的全部消费者一起迁移，不新增搜索 scheme。
 - [x] 4.2 在原文件搜索 owner 接入有界模糊文件名／路径查询，保留 cancel、cursor、扫描／字节／时间限制和截断说明。
-- [ ] 4.3 补齐原界面已展示的正则、大小写／smart case、整词、include／exclude、ignore、仅已打开和结果上限语义；尚不支持的选项明确拒绝，不静默按 substring 执行。
+- [x] 4.3 补齐原界面已展示的正则、大小写／smart case、整词、include／exclude、ignore、仅已打开和结果上限语义；尚不支持的选项明确拒绝，不静默按 substring 执行。
 - [ ] 4.4 验证真实目录不存在、只读、非文本、Unicode／多行位置和查询选项；保留文件保存的 revision／CAS 冲突合同，不引入新的批量替换业务。
 
 ## 5. 原版文件搜索服务
@@ -199,7 +199,7 @@
 - 多行起止继续提供码点坐标，并由原 owner 使用完整文本同时计算 UTF-16 起止列与片段起点列。裁剪前的 emoji 不再需要客户端猜测或额外读取正文；使用稀疏代理对位置复用转换，ASCII 跳过该扫描。完整 SearchService 和客户端坐标消费尚待接入，不据此勾选 4.3 或 4.4。
 - 最终 209 项定向 Python 检查通过；真实 Gateway＋共享 Backend 双挂载再次通过，核对跨 CRLF／emoji 的正则命中、大小写、路径过滤、UTF-16 位置、精确读取与 request_id。公开合同先完成 428 项，追加 UTF-16 字段后定向协议／往返 37 项及真实公开结构导出再次通过；最终类型检查和生产构建通过。
 - Ruff 与 schema Pyright 通过；原 owner Pyright 从 HEAD 10 条既存诊断减至 9 条，无新增。生成一致性、Buf 格式／breaking、OpenAPI 与 OpenSpec strict 通过。末次验证前导入排序问题已修复，失败原件保留。
-- TODO：目标机器 .gitignore 等 ignore 文件尚未接入，显式 respect 返回 unsupported_search_option，不以固定目录排除冒充支持；仅已打开文件、原版搜索服务／视图及 UI 查询选项仍需继续贯通。regex/wcmatch 直接依赖声明沿既有动态 metadata TODO，当前使用锁文件已有依赖，未修改用户环境。
+- 此切片当时未接目标 ignore 文件及客户端搜索；后续唯一服务、上下文和目标 ignore 切片已迁齐。regex/wcmatch 直接依赖也已在修复 metadata 包发现后登记，未升级其锁定版本。
 - 证据：`out/tests/temp/quick_access_text_options_20261102/artifacts/verification.json`。这些分层检查不代 Quick Access UI、远端 SSH 或 Electron 验收。
 
 ### 2026-11-02：唯一搜索服务与本地模型隔离切片（5.1～5.3）
@@ -228,3 +228,14 @@
 - 后端及协议定向 321 项、搜索服务 12 项／70 条断言、14 份实际转换源码类型检查、Ruff、正式生产构建、生成一致性和 Buf 格式／依赖／真实提交 breaking 均通过。首次类型检查遗漏默认值、Ruff 局部命名和真实页面恢复范围失败的原件保留，按具体原因修复后复验。
 - 真实工作区 HTTP 两项及跨 Gateway／localhost SSH 定向一项通过，后者经连接入口和目标 Workspace 两条原路由核对上下文 URI、CRLF／BOM 行号和 request_id。迁齐此前 stat／完整坐标的旧断言，并修复该场景残留的旧装具模块导入及已移除的 artifacts_dir 构造参数；产物直接复用现行 harness 的逐节点目录，不增加兼容装具。原失败与最终通过分别保留在 context-http-*、context-federation-* 收据中。
 - 准确命令、源码指纹与退出码：`out/tests/temp/quick_access_scoped_query_20261102/artifacts/context-*.json`；最终真实页面：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-00bb9f01ab54/nodes/node-f4e408bf0b21/artifacts/search-result.json`。4.3 的目标 ignore 文件及 6.7 的深度恢复／route 专项仍未完成，不将其或 SSH／Electron 标记为已验收。
+
+
+### 2026-11-02：目标机器 ignore 与完整搜索选项切片（4.3）
+
+- 同一文件 owner 以 pathspec 解释所选根以内的 `.gitignore`／`.ignore`；支持继承、锚定、否定和 `.ignore` 优先级，目录在递归／正文读取前剪枝。显式文件与已打开模型沿原上游行为，不为磁盘规则增加请求或第二套 TS 引擎；父目录／全局 ignore 仍在 progress 和 HTTP 前明确拒绝。
+- 规则累计读取受原 max_bytes／deadline 约束，每目录只读一次；stat 与缺失事实进入原 cursor 前缀，隐藏规则被改写、创建或删除同样使旧页失效，不新增全文 hash。提取共同有界读取，文件 read／search／规则共用同一 I/O 链。
+- 修复 setuptools 扫描 JS 依赖的 metadata 故障，明确 Python 包范围；只新增 pathspec，登记已有 regex／wcmatch 直接依赖，没有升级既有包。proto 注释与生成产物同步，无字段、配置版本或数据库变化。
+- 334 项后端／协议检查通过；23 项工作台服务／范围／持久格式用例通过（22 项首次通过，再补拒绝断言后服务文件 14 项通过，沿用其它 9 项）。真实类型检查含 14 份 sourceTransform、正式 Workbench 构建、Chromium 原页面通过，默认 respect 隐藏文件、原设置关闭后 none 显示文件；A/B dirty、IndexedDB、仅已打开、SearchView、Search Editor 和上下文原断言保持。
+- 真实跨 Gateway 与 localhost SSH 定向用例通过：A/B 同名规则相反，两个真实路由均按 B 规则搜索，关闭 ignore 返回两个文件。前三项 Web／HTTP 验收在组合运行中已通过，组合在最后一项触发 240 秒外部超时；保留退出码 124，仅重跑未完成的远端用例并通过（42.36 秒），本次孤立 SSH 进程已按运行 ID 清理。
+- Ruff、Buf format、生成一致性与相对 77fcd4379 的 breaking 检查、OpenSpec strict 通过。结构审查无 findings：规则模块只负责纯匹配，I/O 仍归文件 owner；触达源码目录各 12／10 个文件，导航 757 行仍为单一有界只读链。
+- 准确命令、源码指纹、原输出和退出码：`out/tests/temp/quick_access_scoped_query_20261102/artifacts/ignore-*.json`；页面：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-5c568eae5d7f/nodes/node-f4e408bf0b21/artifacts/search-result.json`。4.4、6.7 以及 Electron 仍需各自完整验收。

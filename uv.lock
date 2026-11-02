@@ -263,6 +263,7 @@ dependencies = [
     { name = "langgraph-checkpoint" },
     { name = "litellm" },
     { name = "mcp" },
+    { name = "pathspec" },
     { name = "pillow" },
     { name = "portalocker", extra = ["win32"] },
     { name = "protobuf" },
@@ -274,11 +275,13 @@ dependencies = [
     { name = "python-multipart" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "referencing" },
+    { name = "regex" },
     { name = "rfc8785" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uuid-utils" },
     { name = "uvicorn" },
     { name = "watchfiles" },
+    { name = "wcmatch" },
     { name = "websockets" },
 ]
 
@@ -311,6 +314,7 @@ requires-dist = [
     { name = "langgraph-checkpoint", specifier = ">=4.3.0" },
     { name = "litellm", specifier = ">=1.100.0" },
     { name = "mcp", specifier = ">=1.27,<2" },
+    { name = "pathspec", specifier = ">=1.1.1,<2" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "portalocker", extras = ["win32"], specifier = ">=4.4.1" },
     { name = "protobuf", specifier = ">=7.36.2,<8" },
@@ -323,11 +327,13 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=312" },
     { name = "referencing", specifier = ">=0.28.4" },
+    { name = "regex", specifier = ">=2026.5.9" },
     { name = "rfc8785", specifier = ">=0.1.4,<1" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
     { name = "uuid-utils", specifier = ">=0.16" },
     { name = "uvicorn", specifier = ">=0.27.0" },
     { name = "watchfiles", specifier = ">=1.0.0" },
+    { name = "wcmatch", specifier = ">=10.1" },
     { name = "websockets", specifier = ">=16.0" },
 ]
 provides-extras = ["dev"]
@@ -2341,6 +2347,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d7/f1/e7a6dd94a8d4a5626c03e4e99c87f241ba9e350cd9e6d75123f992427270/packaging-26.2.tar.gz", hash = "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661", size = 228134, upload-time = "2026-04-24T20:15:23.917Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e", size = 100195, upload-time = "2026-04-24T20:15:22.081Z" },
+]
+
+[[package]]
+name = "pathspec"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
 ]
 
 [[package]]

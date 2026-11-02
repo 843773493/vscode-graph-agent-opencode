@@ -73,7 +73,7 @@ export function sourceTransform(root, productConfiguration, extensions) {
       contents = replaceOnce(contents, declaration, `${declaration}\npublic ownSearchContext(context: IDisposable): void { this._register(context); }`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts')) {
-      // 由原 QueryBuilder 消费用户的 search.useIgnoreFiles，未支持的 respect 仍明确拒绝。
+      // 由原 QueryBuilder 消费用户的 search.useIgnoreFiles，交目标文件 owner 解释规则。
       contents = replaceOnce(contents, '\tdisregardIgnoreFiles: false,\n', '');
       const transfer = `\t\tthis._viewsService.openView(VIEW_ID, false);
 \t\tconst viewlet: SearchView | undefined = this._viewsService.getActiveViewWithId(VIEW_ID) as SearchView;

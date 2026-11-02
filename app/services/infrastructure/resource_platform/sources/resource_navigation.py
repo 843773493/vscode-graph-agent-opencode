@@ -15,9 +15,8 @@ import stat
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
-# TODO（依赖元数据）：regex/wcmatch 已由固定依赖引入；根包动态 metadata 构建失败，修复构建后登记直接依赖。
 import regex
 from wcmatch import glob as wcglob
 
@@ -41,6 +40,10 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationResultDTO,
     ResourceNavigationSearchOptions,
     ResourceNavigationStatDTO,
+)
+from app.services.infrastructure.resource_platform.sources.resource_search_ignore import (
+    IgnorePatternError,
+    IgnoreScope,
 )
 from app.services.infrastructure.resource_platform.sources.resource_text_search import (
     ContentMatch,
@@ -73,6 +76,11 @@ _MEDIA_EXTENSIONS = {
     **dict.fromkeys((".pdf", ".ppt", ".pptx"), "file"),
 }
 _DEFAULT_SEARCH_OPTIONS = ResourceNavigationSearchOptions()
+
+
+class FileObservation(NamedTuple):
+    stat: tuple[int, ...]
+    ignore: tuple[int, ...] = ()
 
 
 def _resolve_path(path: Path) -> Path:
@@ -381,7 +389,7 @@ class ResourceNavigation:
         consumed = 0
         truncated = False
         reason = None
-        for _, _, hit in self._content_matches(node, content, request, deadline, (), pattern):
+        for _, _, hit in self._content_matches(node, content, request, deadline, FileObservation(()), pattern):
             if hit is None:
                 continue
             consumed += 1
@@ -420,9 +428,6 @@ class ResourceNavigation:
     @staticmethod
     def _text_pattern(request: ResourceNavigationRequest) -> regex.Pattern[str] | None:
         options = request.search_options or _DEFAULT_SEARCH_OPTIONS
-        if options.ignore_mode == "respect":
-            # TODO：接入原文件owner的目标机器ignore规则后再开放；不把固定目录排除冒充.gitignore。
-            raise ResourceFileOperationError("execution_failed", "尚未支持读取目标目录的 ignore 文件", reason="unsupported_search_option")
         if request.operation != "search" or request.search_mode != "content":
             return None
         if request.query is None:
@@ -442,9 +447,9 @@ class ResourceNavigation:
     def _search_items(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ContentMatch | None]]:
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, ContentMatch | None]]:
         path = self._contained(root, children, parsed)
-        candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, self._stat(path)),))
+        candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
         for child, metadata in candidates:
             self._check_deadline(deadline)
             if request.operation != "search" or request.search_mode != "content" or child.resource_shape != "file":
@@ -456,11 +461,7 @@ class ResourceNavigation:
                 yield child, metadata, None
                 continue
             file = self._contained(root, target.tail_segments[1:], target)
-            with file.open("rb") as stream:
-                data = stream.read(request.max_bytes + 1)
-            self._check_deadline(deadline)
-            if self._stat(file) != metadata:
-                raise ResourceFileOperationError("execution_failed", "文件在搜索期间改变，请重新读取", reason="file_changed")
+            data = self._read_bytes(file, request.max_bytes, deadline, before=metadata.stat)
             # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
             if b"\0" in data:
                 yield child, metadata, None
@@ -475,8 +476,8 @@ class ResourceNavigation:
 
     def _content_matches(
         self, child: ResourceNavigationNodeDTO, content: str, request: ResourceNavigationRequest,
-        deadline: float, metadata: tuple[int, ...], pattern: regex.Pattern[str] | None,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ContentMatch | None]]:
+        deadline: float, metadata: FileObservation, pattern: regex.Pattern[str] | None,
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, ContentMatch | None]]:
         if pattern is None:
             raise ValueError("内容搜索缺少已编译查询")
         found = False
@@ -499,16 +500,20 @@ class ResourceNavigation:
         request: ResourceNavigationRequest, deadline: float,
     ) -> ResourceNavigationResultDTO:
         # 字节预算覆盖跳过的行；不为读取登记身份、快照或 activation。
-        before = self._stat(path)
-        with path.open("rb") as stream:
-            data = stream.read(request.max_bytes + 1)
-        self._check_deadline(deadline)
-        if self._stat(path) != before:
-            raise ResourceFileOperationError("execution_failed", "文件在读取期间改变，请重新读取", reason="file_changed")
+        data = self._read_bytes(path, request.max_bytes, deadline)
         filename = parse_resource_uri(node.uri).tail_segments[-1]
         media_type = _MEDIA_EXTENSIONS.get(Path(filename).suffix.lower()) if request.read_format == "auto" else None
         mime_type = mimetypes.guess_type("file" + Path(filename).suffix)[0] or "application/octet-stream"
         return self._read_content(data, node, request, deadline, media_type=media_type, mime_type=mime_type)
+
+    def _read_bytes(self, path: Path, maximum: int, deadline: float, *, before: tuple[int, ...] | None = None) -> bytes:
+        observed = before if before is not None else self._stat(path)
+        with path.open("rb") as stream:
+            data = stream.read(maximum + 1)
+        self._check_deadline(deadline)
+        if self._stat(path) != observed:
+            raise ResourceFileOperationError("execution_failed", "文件在读取期间改变，请重新读取", reason="file_changed")
+        return data
 
     def _read_content(
         self, data: bytes, node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float,
@@ -567,17 +572,43 @@ class ResourceNavigation:
     def _walk(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         request: ResourceNavigationRequest, deadline: float,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...]]]:
-        pending = [children]
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation]]:
+        pending: list[tuple[tuple[str, ...], IgnoreScope | None]] = [(children, None)]
         visited: set[Path] = set()
         scanned = 0
+        remaining_ignore_bytes = request.max_bytes
+
+        def read_ignore(parts: tuple[str, ...]) -> tuple[str, tuple[int, ...]] | None:
+            nonlocal remaining_ignore_bytes
+            candidate = root.joinpath(*parts)
+            if not candidate.exists() and not candidate.is_symlink():
+                return None
+            self._check_deadline(deadline)
+            file = self._contained(root, parts, parsed)
+            before = self._stat(file)
+            if not stat.S_ISREG(before[2]):
+                raise ResourceFileOperationError("execution_failed", "ignore 规则不是普通文件", reason="invalid_ignore_file")
+            data = self._read_bytes(file, remaining_ignore_bytes, deadline, before=before)
+            if len(data) > remaining_ignore_bytes:
+                raise ResourceFileOperationError("output_limit_exceeded", "ignore 规则累计读取超过 max_bytes", reason="ignore_byte_limit")
+            remaining_ignore_bytes -= len(data)
+            try:
+                return data.decode("utf-8-sig"), before
+            except UnicodeDecodeError as error:
+                raise ResourceFileOperationError("invalid_encoding", "ignore 规则不是有效 UTF-8", reason="ignore_utf8") from error
+
         while pending:
             self._check_deadline(deadline)
-            relative = pending.pop()
+            relative, scope = pending.pop()
             directory = self._contained(root, relative, parsed)
             if directory in visited:
                 continue
             visited.add(directory)
+            if request.operation == "search" and request.search_options is not None and request.search_options.ignore_mode == "respect":
+                try:
+                    scope = IgnoreScope.load(relative, scope, read_ignore)
+                except IgnorePatternError as error:
+                    raise ResourceFileOperationError("execution_failed", str(error), reason="invalid_ignore_pattern") from error
             before = directory.stat().st_mtime_ns
             bounded_children: list[Path] = []
             # Path.iterdir 在部分 Python 版本会先调用 listdir；scandir 才真正逐项消费。
@@ -606,6 +637,8 @@ class ResourceNavigation:
                     for pattern in request.search_options.exclude_globs
                 ):
                     continue
+                if scope is not None and scope.excludes(child_parts, child.is_dir()):
+                    continue
                 child_path = self._contained(root, child_parts, parsed)
                 uri = resource_display_uri(
                     scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
@@ -613,9 +646,9 @@ class ResourceNavigation:
                 )
                 child_node = self._node(parse_resource_uri(uri), child_path)
                 # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
-                yield child_node, self._stat(child_path)
+                yield child_node, FileObservation(self._stat(child_path), scope.version if scope is not None else ())
                 if request.operation == "search" and child_node.resource_shape == "directory":
-                    pending.append(child_parts)
+                    pending.append((child_parts, scope))
             if request.operation == "list":
                 break
 

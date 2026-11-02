@@ -44,12 +44,21 @@ dependencies = [
     "portalocker[win32]>=4.4.1",
     "pywin32>=312; sys_platform == 'win32'",
     "jsonpointer>=3.1.1,<4",
+    "pathspec>=1.1.1,<2",
+    "regex>=2026.5.9",
+    "wcmatch>=10.1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
 ]
+
+# Python metadata 不扫描 JS 依赖、固定上游或测试产物。
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app", "app.*", "configs", "configs.*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
