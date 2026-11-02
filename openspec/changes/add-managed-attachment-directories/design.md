@@ -655,3 +655,9 @@ StepRunner 将原 Turn 的 release_turn_leases 绑定为返回 None 的异步清
 ### MCP 冷资格回收的原账本与目录锁（5.4 部分收口）
 
 启动等待原 `reconcile_lost_handles` 异步入口，先在调用者循环清理原内存引用和定时器，再以一个既有受保护 worker 扫描 MCP 记录的未结算占用、释放失去 handle 的 prepared／execution 资格。沿原账本的批量查询避免逐连接重复扫描；该冷账本阶段不持目录 publication 锁，不新增缓存、恢复表、writer 或 SDK 执行入口。成功后才进入原状态对账与 SDK session 创建，原连接仍可为 orphaned，资格释放不表示远端操作停止。取消等原 worker 结算，首次消息和迟到错误保留；写入失败保留此前成功，显式重试沿原占用状态跳过已释放项。相同实例的残留 handle close 仍沿原循环和原锁，不能将本片解释为该同步写入、运行中其它资格入口或整个 shutdown 的期限已经解决；5.2／5.4 继续未完成。
+
+### Node 调试关闭的准入与 owner 排空（5.4 部分收口）
+
+服务关闭首先撤销新操作准入；已在等待 Session gate 的调用在返回后再次检查，不能迟到启动。已经进入的操作按精确 owner 登记至原 gate 完整退出，关闭为各 owner 独立等待该批操作，再在原 owner 锁内读取最终 runtime 并调用唯一进程停止链，覆盖尚未物化 runtime 的启动窗口。单个 owner 等待不阻断其它 owner 的停止；待核实终态显式失败，不将 `reconcile_required` 视为已关闭。
+
+各 owner 共用本次默认 30 秒观察窗口；到期保留原关闭任务、runtime、claim 和 lease，并按 owner 报告未完成项。取消只结束本次观察，重叠等待复用原任务；原任务失败结算后显式重试，已成功项不重复执行。每个等待者冻结自己的任务集合，后来的重试不能替换先前应收到的原错误；同批已失败项和超时项同时保留。不新增持久账本或进程终止实现。同步驻留 source、原生 I/O 抢占、无身份旧代接管及整个 Backend／operation 的硬期限仍 TODO，5.2／5.4保持未完成。

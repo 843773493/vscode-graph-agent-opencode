@@ -8,13 +8,13 @@ _session_state、_session_store），不反向依赖顶层 service.py。
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 from app.core.shielded_cleanup import run_sync_shielded
 
 if TYPE_CHECKING:
-    import asyncio
-
     from app.services.infrastructure.node_debug.process.claim_runtime import (
         NodeDebugClaimRuntime,
     )
@@ -32,6 +32,9 @@ if TYPE_CHECKING:
         NodeDebugOwner,
     )
 
+logger = logging.getLogger(__name__)
+NODE_DEBUG_CLOSE_WAIT_SECONDS = 30.0
+
 
 class NodeDebugLifecycleEntryMixin:
     """关停/排空入口链路的方法族（由 NodeDebugService 继承）。"""
@@ -42,19 +45,67 @@ class NodeDebugLifecycleEntryMixin:
     _lifecycle: NodeDebugProcessLifecycle
     _claim_runtime: NodeDebugClaimRuntime
     _session_state: NodeDebugSessionState
+    _closing: bool
+    _admitted_operations: dict[NodeDebugOwner, set[asyncio.Future[None]]]
+    _close_tasks: dict[NodeDebugOwner, asyncio.Task[None]]
 
     if TYPE_CHECKING:
         def _owner_lock(self, owner: NodeDebugOwner) -> asyncio.Lock: ...
 
     async def close(self) -> None:
-        async with self._runtimes_lock:
-            runtimes = tuple(self._runtimes.values())
-        for runtime in runtimes:
-            # 关停也走 per-owner 临界区：与并发 start/stop 串行化，避免关闭期间
-            # 仍有启动序列在为同一 owner spawn 新进程。先释放 _runtimes_lock 再取
-            # owner 锁，保持"_owner_lock → _runtimes_lock"的单向锁序。
-            async with self._owner_lock((runtime.session_id, runtime.thread_id)):
-                await self._lifecycle.stop_runtime(runtime)
+        """关闭准入并独立排空各 owner；观察到期不取消原关闭任务。"""
+        self._closing = True
+        owners = dict.fromkeys((*self._runtimes, *self._admitted_operations, *self._close_tasks))
+        for owner in owners:
+            task = self._close_tasks.get(owner)
+            if task is None or (task.done() and (task.cancelled() or task.exception() is not None)):
+                task = asyncio.create_task(
+                    self._close_owner(owner), name=f"node-debug-close:{owner[0]}:{owner[1]}",
+                )
+                self._close_tasks[owner] = task
+                task.add_done_callback(self._observe_close)
+        if not self._close_tasks:
+            return
+        tasks = tuple(self._close_tasks.values())
+        done, pending = await asyncio.wait(tasks, timeout=NODE_DEBUG_CLOSE_WAIT_SECONDS)
+        errors: list[BaseException] = []
+        for task in tasks:
+            if task in done:
+                try:
+                    task.result()
+                except BaseException as error:  # noqa: BLE001 - 整批保留原任务的失败与取消。
+                    errors.append(error)
+        if pending:
+            errors.append(TimeoutError(
+                "Node 调试关闭等待超时，原任务及未核实资源仍保留: "
+                f"tasks={sorted(task.get_name() for task in pending)}"
+            ))
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Node 调试关闭未收敛", errors)
+
+    async def _close_owner(self, owner: NodeDebugOwner) -> None:
+        # 已准入操作可能尚未物化 runtime；等待其 Session gate 退出后再读取最终实例。
+        operations = tuple(self._admitted_operations.get(owner, ()))
+        if operations:
+            await asyncio.wait(operations)
+        async with self._owner_lock(owner):
+            runtime = self._runtimes.get(owner)
+            if runtime is not None:
+                outcome = await self._lifecycle.stop_runtime(runtime)
+                if outcome == "reconcile_required":
+                    raise RuntimeError(
+                        "关闭 Node 调试服务未能核实进程终态: "
+                        f"session_id={owner[0]}, thread_id={owner[1]}"
+                    )
+        # TODO(5.4)：原生I/O不可抢占；本次预算只限制观察，不保证整个进程退出。
+
+    @staticmethod
+    def _observe_close(task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("Node 调试关闭任务失败: task=%s", task.get_name(),
+                         exc_info=(type(error), error, error.__traceback__))
 
     async def drain_session(self, session_id: str) -> None:
         """删除物理隔离前排空该 Session 的全部 catalog 调试 owner。

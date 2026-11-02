@@ -140,6 +140,9 @@ class NodeDebugService(
             append_runtime_debug_action, max_actions=MAX_NODE_DEBUG_ACTIONS
         )
         self._runtimes: dict[NodeDebugOwner, NodeDebugRuntime] = {}
+        self._closing = False
+        self._admitted_operations: dict[NodeDebugOwner, set[asyncio.Future[None]]] = {}
+        self._close_tasks: dict[NodeDebugOwner, asyncio.Task[None]] = {}
         #: per-owner 启动临界区：串行化“核实旧 claim → durable 登记 → spawn → 握手”。
         #: 条目数与 ``_runtimes`` 同量级（每个被触达过的 owner 一把锁）；不做回收，
         #: 以免丢弃仍被并发任务持有的锁。
@@ -312,14 +315,32 @@ class NodeDebugService(
         thread_id: str | None,
     ) -> AsyncIterator[NodeDebugOwner]:
         """整个调试 mutation 期间持有 Session 生命周期准入。"""
-        async with self._session_admission.admit(session_id, thread_id) as admitted:
-            owner = admitted.key
-            # 冷恢复也会等待持久提交；与同 owner 的启动、停止及其它恢复串行。
-            # 活跃 runtime 的只读快照仍能在进程停止等待期间推进。
-            if self._runtimes.get(owner) is None:
-                async with self._owner_lock(owner):
-                    await self._lifecycle.reconcile_persisted_claim(owner)
-            yield owner
+        if self._closing:
+            raise RuntimeError("Node 调试服务正在关闭，拒绝新操作")
+        completed: asyncio.Future[None] | None = None
+        owner: NodeDebugOwner | None = None
+        try:
+            async with self._session_admission.admit(session_id, thread_id) as admitted:
+                # Session gate 等待期间也可能开始关闭；副作用前重新核准入。
+                if self._closing:
+                    raise RuntimeError("Node 调试服务正在关闭，拒绝新操作")
+                owner = admitted.key
+                completed = asyncio.get_running_loop().create_future()
+                self._admitted_operations.setdefault(owner, set()).add(completed)
+                # 冷恢复也会等待持久提交；与同 owner 的启动、停止及其它恢复串行。
+                # 活跃 runtime 的只读快照仍能在进程停止等待期间推进。
+                if self._runtimes.get(owner) is None:
+                    async with self._owner_lock(owner):
+                        await self._lifecycle.reconcile_persisted_claim(owner)
+                yield owner
+        finally:
+            # Session gate 与取消收尾均已结算，关闭任务才能核实该 owner 最终的 runtime。
+            if completed is not None and owner is not None:
+                completed.set_result(None)
+                operations = self._admitted_operations[owner]
+                operations.remove(completed)
+                if not operations:
+                    del self._admitted_operations[owner]
 
     def residency_blockers(
         self, session_id: str, thread_id: str

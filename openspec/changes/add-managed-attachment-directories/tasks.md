@@ -1002,3 +1002,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 启动唯一调用方直接await原恢复入口。内存handle与asyncio定时器在原循环清理，冷账本资格扫描／释放由同一受保护worker结算，不持目录publication锁；复用原批量占用查询，保留实际invocation及其它领域占用。取消不继续连接准入，首次取消及迟到写盘cause保持；部分成功不回滚，同入口重试不重写已释放资格，不新增账本、writer、缓存或执行入口。
 - 最终93项账本／MCP生命周期／替换／目录／worker单测通过，含8个首项／次项写入、成功／失败、正常／重复取消场景。完整HEAD归档加全部候选补丁后，恢复事件循环写盘和持publication锁写盘的两项负向变异分别在原生发布屏障与目录读取处失败。现有真实Gateway／Backend／SDK HTTP审批恢复矩阵通过：由model_stream及正式消息／审批入口生成prepared与execution资格，强杀Backend后旧决定拒绝、原资格释放但原连接仍orphaned，新执行使用新连接且只派发被批准调用，历史请求hash保持。线程归属复核后最终版本补验1项通过（91.13s）；不把两次同场景相加。
 - 三份修改Python的Ruff、compileall及Pyright零诊断，严格规范检查通过；唯一owner调用只增await、其余生产方法和原测试函数AST不变。初轮新增测试误判未启动目录应返回空集合、使用派发前lease副本的失败原件保留。准确保护命令、源码指纹、退出码、变异与作者范围审查见`out/tests/temp/mcp_startup_recovery_20261102/artifacts/verification.json`。所有测试有进程外期限／4GiB，产品集成沿原独占闸门。本片不代Web、真实Provider、Windows、同实例残留close及运行中资格writer的锁隔离、原生I/O抢占或整个operation/shutdown期限；5.2／5.4和21/23保持未完成。
+
+### 2026-11-02 Node 调试关闭准入与独立 owner 排空（5.4 部分）
+
+- 服务关闭封锁新准入，已在等待Session gate的调用返回后再次核对；已进入操作登记至gate完整退出。各owner独立等待原操作，再在原owner锁内读取最终runtime并停止，覆盖尚未物化的启动；待核实终态明确失败。重叠关闭复用原任务，取消／30秒观察到期不取消真实清理，失败结算后显式重试，成功项不重放。每个等待者冻结原任务集合，后继重试不替换其原错误，同批失败与超时一并报告。
+- 新增7项单测覆盖启动窗口、真实owner锁等待、准入封锁、取消／超时／未知终态、部分失败及重叠重试；Node调试397项、驻留管理30项、新增关闭与Backend生命周期18项分别通过（含重复用例，不相加宣称独立场景数）。两项ASGI调试API／真实Node与Inspector验收通过，核原PID消失、claim／lease结清、原方案冷读和新代重启；完整旧HEAD归档的启动窗口反例在关闭提前成功处按预期失败。未手填产品运行历史。
+- Ruff、compileall、四文件Pyright零诊断及本change严格校验通过；作者AST／目录审查没有新增结构问题，不称独立审查。初轮合并回归触及90秒外部上限，且期间仅新增一条单测，未计作通过；拆分后保留各自完整退出码及耗时。准确命令、源码指纹、原始输出、归档反例与范围见`out/tests/temp/node_debug_shutdown_20261102/artifacts/verification.json`。全部测试带进程外期限／4GiB，集成沿原独占闸门；未运行Gateway／Web、独立Backend硬重启或Windows。驻留source同步I/O、无身份旧代接管、原生I/O抢占及整个operation／shutdown硬期限仍TODO，5.2／5.4和21/23保持未完成；quick-access继续暂停，未修改共享debug。
