@@ -82,7 +82,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
     <WorkspaceFileReferenceProvider apiPort={0} workspaceId={owner.routeId} onOpen={(file, reference) => {
       const root = resourceFileRootUri(file.path);
       if (!root) throw new Error('消息引用文件缺少后端资源根 URI');
-      void editors.openEditor({ resource: workspaceFileUri(owner, file, root), options: {
+      void editors.openEditor({ resource: workspaceFileUri(owner, file.path, root), options: {
         selection: reference.selection ? { startLineNumber: reference.selection.startLine, startColumn: reference.selection.startColumn ?? 1,
           endLineNumber: reference.selection.endLine, endColumn: 1 } : undefined,
       } }).catch((cause: unknown) => onError(`打开消息引用文件失败：${String(cause)}`));

@@ -1707,7 +1707,17 @@ export interface ResourceNavigationNodeDTO {
   uri: string;
   resource_shape: string;
   operations: string[];
-  child_path?: string | undefined;
+  child_path?:
+    | string
+    | undefined;
+  /** 实际文件系统观察值；不读取正文，不充当保存时的 CAS revision。 */
+  stat?: ResourceNavigationStatDTO | undefined;
+}
+
+export interface ResourceNavigationStatDTO {
+  size: number;
+  modified_at_ms: number;
+  changed_at_ms: number;
 }
 
 export interface ResourceNavigationResultDTO {
@@ -13755,7 +13765,7 @@ export const ResourceNavigationRequest: MessageFns<ResourceNavigationRequest> = 
 };
 
 function createBaseResourceNavigationNodeDTO(): ResourceNavigationNodeDTO {
-  return { uri: "", resource_shape: "", operations: [], child_path: undefined };
+  return { uri: "", resource_shape: "", operations: [], child_path: undefined, stat: undefined };
 }
 
 export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = {
@@ -13767,6 +13777,7 @@ export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = 
         ? object.operations.map((e: any) => globalThis.String(e))
         : [],
       child_path: isSet(object.child_path) ? globalThis.String(object.child_path) : undefined,
+      stat: isSet(object.stat) ? ResourceNavigationStatDTO.fromJSON(object.stat) : undefined,
     };
   },
 
@@ -13784,6 +13795,9 @@ export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = 
     if (message.child_path !== undefined) {
       obj.child_path = message.child_path;
     }
+    if (message.stat !== undefined) {
+      obj.stat = ResourceNavigationStatDTO.toJSON(message.stat);
+    }
     return obj;
   },
 
@@ -13796,6 +13810,48 @@ export const ResourceNavigationNodeDTO: MessageFns<ResourceNavigationNodeDTO> = 
     message.resource_shape = object.resource_shape ?? "";
     message.operations = object.operations?.map((e) => e) || [];
     message.child_path = object.child_path ?? undefined;
+    message.stat = (object.stat !== undefined && object.stat !== null)
+      ? ResourceNavigationStatDTO.fromPartial(object.stat)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseResourceNavigationStatDTO(): ResourceNavigationStatDTO {
+  return { size: 0, modified_at_ms: 0, changed_at_ms: 0 };
+}
+
+export const ResourceNavigationStatDTO: MessageFns<ResourceNavigationStatDTO> = {
+  fromJSON(object: any): ResourceNavigationStatDTO {
+    return {
+      size: isSet(object.size) ? globalThis.Number(object.size) : 0,
+      modified_at_ms: isSet(object.modified_at_ms) ? globalThis.Number(object.modified_at_ms) : 0,
+      changed_at_ms: isSet(object.changed_at_ms) ? globalThis.Number(object.changed_at_ms) : 0,
+    };
+  },
+
+  toJSON(message: ResourceNavigationStatDTO): unknown {
+    const obj: any = {};
+    if (message.size !== 0) {
+      obj.size = Math.round(message.size);
+    }
+    if (message.modified_at_ms !== 0) {
+      obj.modified_at_ms = message.modified_at_ms;
+    }
+    if (message.changed_at_ms !== 0) {
+      obj.changed_at_ms = message.changed_at_ms;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationStatDTO>, I>>(base?: I): ResourceNavigationStatDTO {
+    return ResourceNavigationStatDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationStatDTO>, I>>(object: I): ResourceNavigationStatDTO {
+    const message = createBaseResourceNavigationStatDTO();
+    message.size = object.size ?? 0;
+    message.modified_at_ms = object.modified_at_ms ?? 0;
+    message.changed_at_ms = object.changed_at_ms ?? 0;
     return message;
   },
 };

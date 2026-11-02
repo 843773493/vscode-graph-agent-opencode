@@ -35,6 +35,7 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
+    ResourceNavigationStatDTO,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -237,7 +238,7 @@ class ResourceNavigation:
             return self._navigate_owned_file(parsed, request, gateway_id, deadline, artifact_reader or self._artifact_reader, owner_id=self._workspace_id)
         root, children = self._root(parsed)
         path = self._contained(root, children, parsed)
-        node = self._node(parsed, path)
+        node = self._node(parsed, path, include_stat=request.operation == "describe")
         if request.operation not in node.operations:
             raise ResourceUriResolveError("capability_denied", "资源不允许所请求的导航操作")
         if request.operation == "describe":
@@ -647,9 +648,15 @@ class ResourceNavigation:
         return path
 
     @staticmethod
-    def _node(parsed: ParsedResourceUri, path: Path) -> ResourceNavigationNodeDTO:
-        mode = path.stat().st_mode
+    def _node(parsed: ParsedResourceUri, path: Path, *, include_stat: bool = False) -> ResourceNavigationNodeDTO:
+        metadata = path.stat()
+        mode = metadata.st_mode
         if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
             raise ResourceUriResolveError("capability_denied", "资源只公布普通文件与目录")
         node = resource_navigation_node(parsed, resource_shape="directory" if stat.S_ISDIR(mode) else "file")
-        return ResourceNavigationNodeDTO.model_validate(node)
+        result = ResourceNavigationNodeDTO.model_validate(node)
+        if include_stat:
+            return result.model_copy(update={"stat": ResourceNavigationStatDTO(size=metadata.st_size,
+                modified_at_ms=metadata.st_mtime_ns / 1_000_000,
+                changed_at_ms=metadata.st_ctime_ns / 1_000_000)})
+        return result

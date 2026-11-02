@@ -581,3 +581,36 @@ async def test_artifact_media_uses_owner_mime_and_cannot_bypass_explicit_capabil
     with pytest.raises(ResourceFileOperationError) as encoding:
         await owner.navigate(ResourceNavigationRequest(uri=uri, operation="read"), local_gateway_id=GATEWAY_ID)
     assert encoding.value.code == "invalid_encoding"
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.asyncio
+async def test_describe_reports_real_stat_without_reading_binary_content(
+    navigation_case, synchronous, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, workspace, uri = navigation_case
+    binary = workspace / "二进制 %.bin"
+    binary.write_bytes(b"\xff\x00\x80")
+
+    def reject_content_read(*_args, **_kwargs):
+        pytest.fail("describe 不应读取正文")
+
+    monkeypatch.setattr(owner, "_read", reject_content_read)
+    for path, address, shape in ((workspace, uri, "directory"),
+                                 (binary, uri + "/%E4%BA%8C%E8%BF%9B%E5%88%B6%20%25.bin", "file")):
+        request = ResourceNavigationRequest(uri=address, operation="describe")
+        result = owner.navigate_sync(request, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+        metadata = path.stat()
+        assert result.node.resource_shape == shape
+        assert result.node.stat is not None
+        assert result.node.stat.size == metadata.st_size
+        assert result.node.stat.modified_at_ms == metadata.st_mtime_ns / 1_000_000
+        assert result.node.stat.changed_at_ms == metadata.st_ctime_ns / 1_000_000
+        assert result.content is None and result.content_hash is None
+        assert ResourceNavigationResultDTO.model_validate_json(result.model_dump_json()).node.stat == result.node.stat
+    missing = ResourceNavigationRequest(uri=uri + "/missing-directory", operation="describe")
+    with pytest.raises(ResourceUriResolveError, match="资源不存在"):
+        if synchronous:
+            owner.navigate_sync(missing, local_gateway_id=GATEWAY_ID)
+        else:
+            await owner.navigate(missing, local_gateway_id=GATEWAY_ID)

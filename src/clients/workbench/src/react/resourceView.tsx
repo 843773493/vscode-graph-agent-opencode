@@ -136,7 +136,7 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
           const file = await revealWorkspaceFileEntry(0, path, owner.routeId);
           const root = resourceFileRootUri(file.path);
           if (!root) throw new Error('调试源码定位响应缺少后端文件根 URI');
-          await editors.openEditor({ resource: workspaceFileUri(owner, file, root) });
+          await editors.openEditor({ resource: workspaceFileUri(owner, file.path, root) });
         }} onStatusChange={reportResourceStatus} />}
       resourcePanel={<><ResourcePanel inlinePreview resources={resourceItems} loading={state.sessionResourcesLoading} error={state.sessionResourcesError}
         loadedAt={state.sessionResourcesLoadedAt} sessionId={owner.sessionId} workspaceId={owner.routeId} mainThread={thread}

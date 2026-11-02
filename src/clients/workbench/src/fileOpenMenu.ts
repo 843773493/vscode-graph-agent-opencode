@@ -14,7 +14,7 @@ export function showFileOpenMenu(path: string, anchor: { x: number; y: number },
   instantiation: IInstantiationService, group: IEditorGroup): void {
   const root = resourceFileRootUri(path);
   if (!root) throw new Error('文件缺少后端资源根 URI');
-  const resource = workspaceFileUri(owner, { path }, root);
+  const resource = workspaceFileUri(owner, path, root);
   const actions = [
     new Action('boxteam.file.open', '在编辑器中打开', '', true,
       () => editors.openEditor({ resource, options: { pinned: true } }, group.id)),

@@ -74,6 +74,16 @@ NavigationResourceURI = Annotated[
 ]
 
 
+class ResourceNavigationStatDTO(BaseModel):
+    """目标文件系统的轻量观察值；不表示内容版本或快照。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    size: int = Field(ge=0)
+    modified_at_ms: float
+    changed_at_ms: float
+
+
 class ResourceNavigationNodeDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True, hide_input_in_errors=True)
 
@@ -81,6 +91,7 @@ class ResourceNavigationNodeDTO(BaseModel):
     resource_shape: ResourceShape
     operations: tuple[ResourceNavigationOperation, ...]
     child_path: Literal["file_segments"] | None = None
+    stat: ResourceNavigationStatDTO | None = None
 
 
 class ResourceNavigationMatchDTO(BaseModel):

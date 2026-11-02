@@ -1694,6 +1694,14 @@ message ResourceNavigationNodeDTO {
   string resource_shape = 2;
   repeated string operations = 3;
   optional string child_path = 4;
+  // 实际文件系统观察值；不读取正文，不充当保存时的 CAS revision。
+  optional ResourceNavigationStatDTO stat = 5;
+}
+
+message ResourceNavigationStatDTO {
+  uint64 size = 1;
+  double modified_at_ms = 2;
+  double changed_at_ms = 3;
 }
 
 message ResourceNavigationResultDTO {

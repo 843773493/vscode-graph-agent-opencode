@@ -2806,16 +2806,28 @@ class ResourceNavigationRequest(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., operation: _Optional[str] = ..., query: _Optional[str] = ..., limit: _Optional[int] = ..., max_bytes: _Optional[int] = ..., cursor: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., scan_limit: _Optional[int] = ..., max_response_bytes: _Optional[int] = ..., read_format: _Optional[str] = ..., line_offset: _Optional[int] = ..., max_lines: _Optional[int] = ..., search_mode: _Optional[str] = ..., file_glob: _Optional[str] = ..., max_snippet_bytes: _Optional[int] = ...) -> None: ...
 
 class ResourceNavigationNodeDTO(_message.Message):
-    __slots__ = ("uri", "resource_shape", "operations", "child_path")
+    __slots__ = ("uri", "resource_shape", "operations", "child_path", "stat")
     URI_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_SHAPE_FIELD_NUMBER: _ClassVar[int]
     OPERATIONS_FIELD_NUMBER: _ClassVar[int]
     CHILD_PATH_FIELD_NUMBER: _ClassVar[int]
+    STAT_FIELD_NUMBER: _ClassVar[int]
     uri: str
     resource_shape: str
     operations: _containers.RepeatedScalarFieldContainer[str]
     child_path: str
-    def __init__(self, uri: _Optional[str] = ..., resource_shape: _Optional[str] = ..., operations: _Optional[_Iterable[str]] = ..., child_path: _Optional[str] = ...) -> None: ...
+    stat: ResourceNavigationStatDTO
+    def __init__(self, uri: _Optional[str] = ..., resource_shape: _Optional[str] = ..., operations: _Optional[_Iterable[str]] = ..., child_path: _Optional[str] = ..., stat: _Optional[_Union[ResourceNavigationStatDTO, _Mapping]] = ...) -> None: ...
+
+class ResourceNavigationStatDTO(_message.Message):
+    __slots__ = ("size", "modified_at_ms", "changed_at_ms")
+    SIZE_FIELD_NUMBER: _ClassVar[int]
+    MODIFIED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    CHANGED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    size: int
+    modified_at_ms: float
+    changed_at_ms: float
+    def __init__(self, size: _Optional[int] = ..., modified_at_ms: _Optional[float] = ..., changed_at_ms: _Optional[float] = ...) -> None: ...
 
 class ResourceNavigationResultDTO(_message.Message):
     __slots__ = ("node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view", "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash")

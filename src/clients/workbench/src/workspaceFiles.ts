@@ -3,21 +3,29 @@ import { Event, Emitter } from '../upstream/src/vs/base/common/event.js';
 import { toDisposable, IDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult } from '../upstream/src/vs/platform/files/common/files.js';
 import type { WorkspaceFileContentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import { gateway, GatewayRequestError, ThreadOwner } from './agentApi.js';
+import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import { gateway, GatewayRequestError } from './agentApi.js';
 
 const scheme = 'boxteam-file';
-// 查询部分冻结 Gateway route 和后端资源 URI；path 只负责标签、面包屑显示。
-export function workspaceFileUri(owner: ThreadOwner, file: Pick<WorkspaceFileContentDTO, 'path'>, rootPath: string): URI {
-  if (!file.path.startsWith(rootPath + '/')) throw new Error('文件不属于后端返回的文件根');
-  return URI.from({ scheme, authority: owner.workspaceId, path: decodeURIComponent(file.path.slice(rootPath.length)),
-    query: new URLSearchParams({ route: owner.routeId, path: file.path }).toString() });
+/** 根引用作为不透明路径段保存；子路径可直接使用原版 joinPath／relativePath。 */
+export function workspaceFileUri(owner: WorkspaceOwner, path: string, rootPath: string): URI {
+  if (path !== rootPath && !path.startsWith(rootPath + '/')) throw new Error('文件不属于后端返回的文件根');
+  if (!owner.gatewayId || !owner.workspaceId) throw new Error('文件编辑器缺少稳定 Gateway／工作区身份');
+  return URI.from({ scheme, authority: owner.gatewayId,
+    path: `/${owner.workspaceId}/${encodeURIComponent(rootPath)}${decodeURIComponent(path.slice(rootPath.length))}` });
 }
 
-function fileSource(resource: URI): { routeId: string; workspaceId: string; path: string } {
-  const query = new URLSearchParams(resource.query);
-  const routeId = query.get('route'), path = query.get('path');
-  if (!resource.authority || !routeId || !path) throw createFileSystemProviderError('文件 URI 缺少工作区路由或后端资源路径', FileSystemProviderErrorCode.FileNotFound);
-  return { routeId, workspaceId: resource.authority, path };
+export function workspaceFileSource(resource: URI): WorkspaceOwner & { path: string; root: string } {
+  const [, workspaceId, encodedRoot, ...children] = resource.path.split('/');
+  if (resource.scheme !== scheme || !resource.authority || !workspaceId || !encodedRoot || resource.query || resource.fragment) {
+    throw new Error('文件编辑器资源缺少稳定身份，或包含旧临时路由；请从原文件入口重新打开');
+  }
+  // 仅反转编辑器投影；公开 URI grammar、根权限和真实目标仍由后端唯一 owner 校验。
+  const root = decodeURIComponent(encodedRoot);
+  return { gatewayId: resource.authority, workspaceId, root,
+    path: root + (children.length ? '/' + children.map(segment => encodeURIComponent(segment)
+      .replace(/[!'()*]/g, character => '%' + character.charCodeAt(0).toString(16).toUpperCase())).join('/') : '') };
 }
 
 class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
@@ -30,26 +38,34 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
   // 仅保留文本模型实际读取的版本；stat/watch 不得推进写入基线。
   private readonly revisions = new Map<string, string>();
 
-  private async request<T>(resource: URI, options: RequestInit = {}): Promise<T> {
-    const source = fileSource(resource);
-    await gateway.assertWorkspace(source);
-    const query = new URLSearchParams({ scope: 'workspace', path: source.path });
-    try { return await gateway.request<T>(`/api/v1/workspace/files/content?${query}`, options, source.routeId); }
+  private async request<T>(resource: URI, endpoint: string, options: RequestInit = {}): Promise<T> {
+    const source = workspaceFileSource(resource);
+    const routeId = await gateway.resolveWorkspace(source);
+    try { return await gateway.request<T>(endpoint, options, routeId); }
     catch (error) {
       if (error instanceof GatewayRequestError && error.status === 404) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotFound);
+      if (error instanceof GatewayRequestError && error.status === 403) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.NoPermissions);
       throw error;
     }
   }
-  private async content(resource: URI): Promise<WorkspaceFileContentDTO> {
-    const file = await this.request<WorkspaceFileContentDTO>(resource);
-    if (file.path !== fileSource(resource).path || !/^[0-9a-f]{64}$/.test(file.revision)) throw new Error('文件响应的资源 URI 或 revision 不匹配');
+  private async content(resource: URI, options: RequestInit = {}): Promise<WorkspaceFileContentDTO> {
+    const source = workspaceFileSource(resource);
+    const query = new URLSearchParams({ scope: 'workspace', path: source.path });
+    const file = await this.request<WorkspaceFileContentDTO>(resource, `/api/v1/workspace/files/content?${query}`, options);
+    if (file.path !== source.path || !/^[0-9a-f]{64}$/.test(file.revision)) throw new Error('文件响应的资源 URI 或 revision 不匹配');
     return file;
   }
   async stat(resource: URI): Promise<IStat> {
-    const file = await this.content(resource);
-    const mtime = Date.parse(file.modified_at ?? '');
-    if (!Number.isFinite(mtime)) throw new Error('后端文件缺少有效的 modified_at');
-    return { type: FileType.File, ctime: mtime, mtime, size: file.size };
+    const source = workspaceFileSource(resource);
+    const result = await this.request<ResourceNavigationResultDTO>(resource, '/api/v1/resources/navigation', {
+      method: 'POST', body: JSON.stringify({ uri: source.path, operation: 'describe' }),
+    });
+    const { node } = result;
+    if (!node || node.uri !== source.path || !node.stat || !['file', 'directory'].includes(node.resource_shape)) {
+      throw new Error('后端文件描述缺少配对的资源身份或真实 stat');
+    }
+    return { type: node.resource_shape === 'directory' ? FileType.Directory : FileType.File,
+      ctime: node.stat.changed_at_ms, mtime: node.stat.modified_at_ms, size: node.stat.size };
   }
   async readFile(resource: URI): Promise<Uint8Array> {
     const file = await this.content(resource);
@@ -60,8 +76,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
     const expectedRevision = this.revisions.get(resource.toString());
     if (!expectedRevision) throw new Error('保存前必须先读取后端文件，不能跳过 revision 校验');
     try {
-      const file = await this.request<WorkspaceFileContentDTO>(resource, { method: 'PUT', body: JSON.stringify({ content: new TextDecoder('utf-8', { fatal: true }).decode(bytes), expected_revision: expectedRevision }) });
-      if (file.path !== fileSource(resource).path || !/^[0-9a-f]{64}$/.test(file.revision)) throw new Error('文件保存响应的资源 URI 或 revision 不匹配');
+      const file = await this.content(resource, { method: 'PUT', body: JSON.stringify({ content: new TextDecoder('utf-8', { fatal: true }).decode(bytes), expected_revision: expectedRevision }) });
       this.revisions.set(resource.toString(), file.revision);
       this.changes.fire([{ resource, type: FileChangeType.UPDATED }]);
     } catch (error) {

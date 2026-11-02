@@ -32,7 +32,7 @@
 
 覆盖规范：文件搜索与文本定位必须共享实际资源目标。
 
-- [ ] 4.1 改透唯一文件内部投影，使规范目录根支持真实 stat／describe、joinPath、相对路径及往返定位；旧叶子 query 投影的全部消费者一起迁移，不新增搜索 scheme。
+- [x] 4.1 改透唯一文件内部投影，使规范目录根支持真实 stat／describe、joinPath、相对路径及往返定位；旧叶子 query 投影的全部消费者一起迁移，不新增搜索 scheme。
 - [ ] 4.2 在原文件搜索 owner 接入有界模糊文件名／路径查询，保留 cancel、cursor、扫描／字节／时间限制和截断说明。
 - [ ] 4.3 补齐原界面已展示的正则、大小写／smart case、整词、include／exclude、ignore、仅已打开和结果上限语义；尚不支持的选项明确拒绝，不静默按 substring 执行。
 - [ ] 4.4 验证真实目录不存在、只读、非文本、Unicode／多行位置和查询选项；保留文件保存的 revision／CAS 冲突合同，不引入新的批量替换业务。
@@ -178,3 +178,10 @@
 - 新模块 Pyright 零诊断，SessionService 19 条既存诊断与 HEAD 一致、无新增；Ruff 排除原 API 12 条 B008 后通过，另保存原件对比。生成一致性、Buf 格式／breaking、公开 descriptor／OpenAPI、真实 Workbench TypeScript 及生产构建均通过。
 - 新集成装配初期遗漏游客登录、Gateway 回调地址和 native 辅助服务，并误用 source point 字段；逐项按原输出修复，未更改产品来迁就测试。端口曾被瞬时连接占用，改用既有进程租约提前预留本文件服务端口。失败原件与最终通过均保留。
 - 证据：`out/tests/temp/quick_access_discovery_20261102/artifacts/`；正式产品查询原件位于 `out/tests/integration/gateway/test_thread_name_search/`。Provider 尚未消费本查询，3.3／3.4 及整体 Quick Access 验收仍未完成。
+
+### 2026-11-02：文件根与轻量 stat 切片（4.1）
+
+- 唯一文件投影保存稳定 Gateway／工作区归属及不透明规范根，迁齐所有旧叶子 query 消费者；根及特殊字符支持原版 joinPath／relativePath／序列化往返。每次操作解析当前已登记 route，旧临时 route 记录明确不可恢复。describe 只返回真实类型、size／mtime／ctime，不读正文或计算 hash；保存仍使用实际读取的 revision／CAS，stat 不推进基线。
+- Python 168 项、客户端 3 项／37 断言、公开合同 391 项通过，真实 Workbench 类型检查与生产构建通过；生成一致性、Buf 格式／breaking、OpenAPI 和 OpenSpec strict 通过。真实 Gateway／Chromium 完整聊天工具循环保留文件树预览、原版编辑器打开／保存及多 Thread 的原断言并通过。
+- 目录根由真实 FileService／provider＋显式 Gateway 传输 spy 和后端真实文件系统 describe 分层验证，尚不证明 SearchService 或完整搜索 UI；特殊字符最终修正由定向客户端、最终类型检查与构建覆盖。Pyright 10 条旧诊断与 HEAD 一致，无新增。列表 stat 最初触及原响应预算，收敛为 describe 专用后通过，未放宽预算。
+- 准确命令、源码指纹、原输出、失败归因与结构审查：`out/tests/temp/quick_access_file_root_20261102/artifacts/verification.json`。2.2／2.4／4.4 等剩余完整任务保持未勾选。

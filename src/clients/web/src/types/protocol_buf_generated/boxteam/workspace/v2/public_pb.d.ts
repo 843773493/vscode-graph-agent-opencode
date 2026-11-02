@@ -7346,6 +7346,13 @@ export declare type ResourceNavigationNodeDTO = Message<"boxteam.workspace.v2.Re
    * @generated from field: optional string child_path = 4;
    */
   childPath?: string | undefined;
+
+  /**
+   * 实际文件系统观察值；不读取正文，不充当保存时的 CAS revision。
+   *
+   * @generated from field: optional boxteam.workspace.v2.ResourceNavigationStatDTO stat = 5;
+   */
+  stat?: ResourceNavigationStatDTO | undefined;
 };
 
 /**
@@ -7353,6 +7360,32 @@ export declare type ResourceNavigationNodeDTO = Message<"boxteam.workspace.v2.Re
  * Use `create(ResourceNavigationNodeDTOSchema)` to create a new message.
  */
 export declare const ResourceNavigationNodeDTOSchema: GenMessage<ResourceNavigationNodeDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ResourceNavigationStatDTO
+ */
+export declare type ResourceNavigationStatDTO = Message<"boxteam.workspace.v2.ResourceNavigationStatDTO"> & {
+  /**
+   * @generated from field: uint64 size = 1;
+   */
+  size: bigint;
+
+  /**
+   * @generated from field: double modified_at_ms = 2;
+   */
+  modifiedAtMs: number;
+
+  /**
+   * @generated from field: double changed_at_ms = 3;
+   */
+  changedAtMs: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationStatDTO.
+ * Use `create(ResourceNavigationStatDTOSchema)` to create a new message.
+ */
+export declare const ResourceNavigationStatDTOSchema: GenMessage<ResourceNavigationStatDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ResourceNavigationResultDTO
