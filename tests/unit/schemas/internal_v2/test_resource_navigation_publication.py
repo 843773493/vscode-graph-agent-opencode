@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from pydantic_core import PydanticSerializationError
 
 from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationContextDTO,
     ResourceNavigationMatchDTO,
     ResourceNavigationNodeDTO,
     ResourceNavigationResultDTO,
@@ -17,14 +18,14 @@ from app.schemas.internal_v2.resource_navigation import (
 URI = "boxteam://workspace/navigation-publication/resources/files/root/%E4%B8%AD%E6%96%87%20file.txt"
 NATIVE = ["/private/navigation-publication", r"C:\private\navigation-publication",
           r"\\target\private\navigation-publication", "file:///private/navigation-publication"]
-Field = Literal["node", "entries", "matches"]
+Field = Literal["node", "entries", "matches", "contexts"]
 
 
 @pytest.fixture
 def navigation_result() -> ResourceNavigationResultDTO:
     node = ResourceNavigationNodeDTO(uri=URI, resource_shape="file", operations=("describe", "read"))
     match = ResourceNavigationMatchDTO(uri=URI, line=1, column=1, text=NATIVE[0], snippet_start_column=1)
-    return ResourceNavigationResultDTO(node=node, entries=(node,), matches=(match,), content=NATIVE[0])
+    return ResourceNavigationResultDTO(node=node, entries=(node,), matches=(match,), contexts=(ResourceNavigationContextDTO(uri=URI, line=2, text=NATIVE[0]),), content=NATIVE[0])
 
 
 def copied_reference(result: ResourceNavigationResultDTO, field: Field, value: str) -> ResourceNavigationResultDTO:
@@ -34,7 +35,7 @@ def copied_reference(result: ResourceNavigationResultDTO, field: Field, value: s
     return result.model_copy(update={field: (items[0].model_copy(update={"uri": value}),)})
 
 
-@pytest.mark.parametrize("field", ["node", "entries", "matches"])
+@pytest.mark.parametrize("field", ["node", "entries", "matches", "contexts"])
 @pytest.mark.parametrize("native", NATIVE)
 @pytest.mark.parametrize("mode", ["python", "json", "json-text"])
 def test_copied_navigation_reference_is_rejected_at_publication(
@@ -57,6 +58,7 @@ def test_both_navigation_reference_types_reject_native_construction(native: str)
     for model, payload in (
         (ResourceNavigationNodeDTO, {"resource_shape": "file", "operations": ("read",)}),
         (ResourceNavigationMatchDTO, {"line": 1, "column": 1, "text": native, "snippet_start_column": 1}),
+        (ResourceNavigationContextDTO, {"line": 2, "text": native}),
     ):
         with pytest.raises(ValidationError, match="导航资源引用必须是资源 URI") as error:
             model.model_validate({"uri": native, **payload})
@@ -68,7 +70,7 @@ def test_both_navigation_reference_types_reject_native_construction(native: str)
 def test_legal_dangling_and_encoded_references_preserve_bytes(
     navigation_result: ResourceNavigationResultDTO, uri: str,
 ) -> None:
-    for field in ("node", "entries", "matches"):
+    for field in ("node", "entries", "matches", "contexts"):
         copied = copied_reference(navigation_result, field, uri)
         dumped = copied.model_dump(mode="json")
         entry = dumped[field] if field == "node" else dumped[field][0]

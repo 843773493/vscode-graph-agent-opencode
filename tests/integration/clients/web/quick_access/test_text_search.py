@@ -63,6 +63,8 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         )
     (workspace / "quick-scope.txt").write_text("diskword quickscope\n", encoding="utf-8")
     (other / "quick-scope.txt").write_text("foreign-disk quickscope\n", encoding="utf-8")
+    (workspace / "context-lines.txt").write_text("A context before\ncontextbranchonly\ncontextbranchonly\nA context after", encoding="utf-8")
+    (other / "context-lines.txt").write_text("B context before\ncontextbranchonly\nB context after", encoding="utf-8")
     result_path = context.artifacts_dir / "search-result.json"
     screenshot_path = context.artifacts_dir / "search-failure.png"
     gateway = start_gateway_process(
@@ -100,6 +102,8 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["editorDefinitionOwner"] is True
         assert receipt["editorLegacyScope"] is True
         assert receipt["editorInvalidScope"] is True
+        assert receipt["editorDirtyContext"] is True
+        assert receipt["editorAutomaticContextRerun"] is True
         assert receipt["pageErrors"] == []
         assert (workspace / "quick-scope.txt").read_text(encoding="utf-8") == "diskword quickscope\n"
         assert (other / "quick-scope.txt").read_text(encoding="utf-8") == "foreign-disk quickscope\n"

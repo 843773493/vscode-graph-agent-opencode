@@ -2808,7 +2808,7 @@ class ResourceNavigationRequest(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., operation: _Optional[str] = ..., query: _Optional[str] = ..., limit: _Optional[int] = ..., max_bytes: _Optional[int] = ..., cursor: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., scan_limit: _Optional[int] = ..., max_response_bytes: _Optional[int] = ..., read_format: _Optional[str] = ..., line_offset: _Optional[int] = ..., max_lines: _Optional[int] = ..., search_mode: _Optional[str] = ..., file_glob: _Optional[str] = ..., max_snippet_bytes: _Optional[int] = ..., search_options: _Optional[_Union[ResourceNavigationSearchOptions, _Mapping]] = ...) -> None: ...
 
 class ResourceNavigationSearchOptions(_message.Message):
-    __slots__ = ("case_mode", "is_regex", "whole_word", "word_separators", "is_multiline", "all_matches", "include_globs", "exclude_globs", "ignore_mode")
+    __slots__ = ("case_mode", "is_regex", "whole_word", "word_separators", "is_multiline", "all_matches", "include_globs", "exclude_globs", "ignore_mode", "context_lines")
     CASE_MODE_FIELD_NUMBER: _ClassVar[int]
     IS_REGEX_FIELD_NUMBER: _ClassVar[int]
     WHOLE_WORD_FIELD_NUMBER: _ClassVar[int]
@@ -2818,6 +2818,7 @@ class ResourceNavigationSearchOptions(_message.Message):
     INCLUDE_GLOBS_FIELD_NUMBER: _ClassVar[int]
     EXCLUDE_GLOBS_FIELD_NUMBER: _ClassVar[int]
     IGNORE_MODE_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_LINES_FIELD_NUMBER: _ClassVar[int]
     case_mode: str
     is_regex: bool
     whole_word: bool
@@ -2827,7 +2828,8 @@ class ResourceNavigationSearchOptions(_message.Message):
     include_globs: _containers.RepeatedScalarFieldContainer[str]
     exclude_globs: _containers.RepeatedScalarFieldContainer[str]
     ignore_mode: str
-    def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ...) -> None: ...
+    context_lines: int
+    def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ..., context_lines: _Optional[int] = ...) -> None: ...
 
 class ResourceNavigationNodeDTO(_message.Message):
     __slots__ = ("uri", "resource_shape", "operations", "child_path", "stat")
@@ -2854,7 +2856,7 @@ class ResourceNavigationStatDTO(_message.Message):
     def __init__(self, size: _Optional[int] = ..., modified_at_ms: _Optional[float] = ..., changed_at_ms: _Optional[float] = ...) -> None: ...
 
 class ResourceNavigationResultDTO(_message.Message):
-    __slots__ = ("node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view", "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash")
+    __slots__ = ("node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view", "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash", "contexts")
     NODE_FIELD_NUMBER: _ClassVar[int]
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
     CONTENT_FIELD_NUMBER: _ClassVar[int]
@@ -2868,6 +2870,7 @@ class ResourceNavigationResultDTO(_message.Message):
     LINE_OFFSET_FIELD_NUMBER: _ClassVar[int]
     MATCHES_FIELD_NUMBER: _ClassVar[int]
     CONTENT_HASH_FIELD_NUMBER: _ClassVar[int]
+    CONTEXTS_FIELD_NUMBER: _ClassVar[int]
     node: ResourceNavigationNodeDTO
     entries: _containers.RepeatedCompositeFieldContainer[ResourceNavigationNodeDTO]
     content: str
@@ -2881,7 +2884,20 @@ class ResourceNavigationResultDTO(_message.Message):
     line_offset: int
     matches: _containers.RepeatedCompositeFieldContainer[ResourceNavigationMatchDTO]
     content_hash: str
-    def __init__(self, node: _Optional[_Union[ResourceNavigationNodeDTO, _Mapping]] = ..., entries: _Optional[_Iterable[_Union[ResourceNavigationNodeDTO, _Mapping]]] = ..., content: _Optional[str] = ..., truncated: _Optional[bool] = ..., next_cursor: _Optional[str] = ..., truncation_reason: _Optional[str] = ..., view: _Optional[str] = ..., content_encoding: _Optional[str] = ..., media_type: _Optional[str] = ..., mime_type: _Optional[str] = ..., line_offset: _Optional[int] = ..., matches: _Optional[_Iterable[_Union[ResourceNavigationMatchDTO, _Mapping]]] = ..., content_hash: _Optional[str] = ...) -> None: ...
+    contexts: _containers.RepeatedCompositeFieldContainer[ResourceNavigationContextDTO]
+    def __init__(self, node: _Optional[_Union[ResourceNavigationNodeDTO, _Mapping]] = ..., entries: _Optional[_Iterable[_Union[ResourceNavigationNodeDTO, _Mapping]]] = ..., content: _Optional[str] = ..., truncated: _Optional[bool] = ..., next_cursor: _Optional[str] = ..., truncation_reason: _Optional[str] = ..., view: _Optional[str] = ..., content_encoding: _Optional[str] = ..., media_type: _Optional[str] = ..., mime_type: _Optional[str] = ..., line_offset: _Optional[int] = ..., matches: _Optional[_Iterable[_Union[ResourceNavigationMatchDTO, _Mapping]]] = ..., content_hash: _Optional[str] = ..., contexts: _Optional[_Iterable[_Union[ResourceNavigationContextDTO, _Mapping]]] = ...) -> None: ...
+
+class ResourceNavigationContextDTO(_message.Message):
+    __slots__ = ("uri", "line", "text", "truncated")
+    URI_FIELD_NUMBER: _ClassVar[int]
+    LINE_FIELD_NUMBER: _ClassVar[int]
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    uri: str
+    line: int
+    text: str
+    truncated: bool
+    def __init__(self, uri: _Optional[str] = ..., line: _Optional[int] = ..., text: _Optional[str] = ..., truncated: _Optional[bool] = ...) -> None: ...
 
 class ResourceNavigationMatchDTO(_message.Message):
     __slots__ = ("uri", "line", "column", "text", "snippet_start_column", "truncated", "end_line", "end_column", "utf16_column", "utf16_end_column", "snippet_start_utf16_column")

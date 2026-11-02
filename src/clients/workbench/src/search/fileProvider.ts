@@ -7,7 +7,7 @@ import { relativePath } from '../../upstream/src/vs/base/common/resources.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { DEFAULT_MAX_SEARCH_RESULTS, IFileMatch, IFileQuery, IFolderQuery, isFilePatternMatch, ISearchComplete, ISearchProgressItem, ISearchResultProvider, ITextQuery, ITextSearchMatch, QueryType, TextSearchCompleteMessageType } from '../../upstream/src/vs/workbench/services/search/common/search.js';
-import type { ResourceNavigationMatchDTO, ResourceNavigationResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { ResourceNavigationContextDTO, ResourceNavigationMatchDTO, ResourceNavigationResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway } from '../agentApi.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
 import { fileOptions, openResources, resourceInQuery, validateQuery, validateTextQuery } from './query.js';
@@ -62,6 +62,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     // 沿原导航的十秒预算限制整个查询；续页不重新获得完整等待期限。
     const timer = setTimeout(() => { timedOut = true; source.cancel(); }, 10000);
     const results = new Map<string, IFileMatch>();
+    const contexts = new Map<string, Map<number, ResourceNavigationContextDTO>>();
     const messages: ISearchComplete['messages'] = [];
     let count = 0, limitHit = false;
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
@@ -89,6 +90,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           case_mode: query.contentPattern.isCaseSensitive ? 'sensitive' : 'insensitive',
           is_regex: !!query.contentPattern.isRegExp, whole_word: !!query.contentPattern.isWordMatch,
           word_separators: query.contentPattern.wordSeparators, is_multiline: !!query.contentPattern.isMultiline, all_matches: true,
+          context_lines: query.surroundingContext ?? 0,
         });
         // 固定每一目标的请求合同，分页 cursor 绑定包括 limit 在内的全部选项。
         const request = { uri: owner.path, operation: 'search', query: query.type === QueryType.Text ? query.contentPattern.pattern : query.onlyOpenEditors ? '**/*' : query.filePattern || '**/*',
@@ -121,12 +123,45 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             results.set(resource.toString(), match);
             onProgress?.({ resource, results: row.hit ? [textMatch(row.hit)] : undefined });
           }
+          for (const line of page.contexts) {
+            if (source.token.isCancellationRequested) throw new CancellationError();
+            const resource = workspaceFileUri(owner, line.uri, owner.root);
+            if (query.onlyOpenEditors && resource.toString() !== target.toString()) throw new Error('精确文件搜索返回了其它文件的上下文');
+            if (!resourceInQuery(resource, { ...query, folderQueries: [folder] })) throw new Error('文件搜索上下文越过本次目录或过滤范围');
+            if (models.has(resource)) continue;
+            const lines = contexts.get(resource.toString()) ?? new Map<number, ResourceNavigationContextDTO>();
+            lines.set(line.line, line);
+            contexts.set(resource.toString(), lines);
+          }
           cursor = page.next_cursor;
           if (page.truncated && !cursor) {
             limitHit = true;
             messages.push({ type: TextSearchCompleteMessageType.Warning, text: `文件搜索受限：${page.truncation_reason ?? '未知预算'}（${owner.path}）` });
           }
         } while (cursor && !limitHit);
+      }
+      if (source.token.isCancellationRequested) throw new CancellationError();
+      if (query.type === QueryType.Text && query.surroundingContext) {
+        for (const [key, file] of results) {
+          const ranges = file.results!.flatMap(match => 'rangeLocations' in match ? match.rangeLocations.map(location => location.source) : [])
+            .sort((a, b) => a.startLineNumber - b.startLineNumber);
+          let next = 0, previousEnd = -1;
+          // 完成后按最终接受的命中去重；跨页命中和上限哨兵不能留下重复或无关上下文。
+          for (const line of [...(contexts.get(key)?.values() ?? [])].sort((a, b) => a.line - b.line)) {
+            if (source.token.isCancellationRequested) throw new CancellationError();
+            const row = line.line - 1;
+            while (next < ranges.length && ranges[next].endLineNumber < row) {
+              previousEnd = Math.max(previousEnd, ranges[next++].endLineNumber);
+            }
+            if (next < ranges.length && ranges[next].startLineNumber <= row) continue;
+            if (!(previousEnd >= 0 && row - previousEnd <= query.surroundingContext)
+              && !(next < ranges.length && ranges[next].startLineNumber - row <= query.surroundingContext)) continue;
+            const context = { lineNumber: line.line, text: line.text + (line.truncated ? '…' : '') };
+            file.results!.push(context);
+            onProgress?.({ resource: file.resource, results: [context] });
+            if (line.truncated) messages.push({ type: TextSearchCompleteMessageType.Warning, text: `搜索上下文行已截断：${line.uri}:${line.line}` });
+          }
+        }
       }
       if (source.token.isCancellationRequested) throw new CancellationError();
       return { results: [...results.values()], messages, limitHit };

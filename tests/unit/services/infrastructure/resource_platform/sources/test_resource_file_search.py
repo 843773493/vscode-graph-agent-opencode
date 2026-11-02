@@ -165,3 +165,79 @@ async def test_regex_work_uses_remaining_owner_deadline(navigation_case, synchro
 def test_unimplemented_or_invalid_options_are_not_silently_dropped(extra):
     with pytest.raises(ValidationError):
         ResourceNavigationRequest(uri="not-yet-resolved", operation="search", search_mode="content", query="hit", search_options=extra)
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("context_lines", [0, 1, 100])
+async def test_context_lines_share_read_and_deduplicate_overlapping_windows(navigation_case, monkeypatch, synchronous, context_lines):
+    owner, workspace, uri = navigation_case
+    file = workspace / "text.txt"
+    file.write_bytes("🧪before\r\nhit hit\r\nbetween\r\nhit\r\nafter".encode())
+    reads = []
+    read = type(file).open
+
+    def observe(path, *args, **kwargs):
+        if path == file:
+            reads.append(args)
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(file), "open", observe)
+    request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="hit",
+        search_options={"all_matches": True, "context_lines": context_lines})
+    page = owner.navigate_sync(request, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+    assert len(reads) == 1 and len(page.matches) == 3
+    expected = [] if context_lines == 0 else [(1, "🧪before"), (3, "between"), (5, "after")]
+    if context_lines == 100:
+        expected = [(1, "🧪before"), (3, "between"), (4, "hit"), (5, "after"), (2, "hit hit")]
+    assert [(line.line, line.text) for line in page.contexts] == expected
+    assert all(line.uri == uri + "/text.txt" and not line.truncated for line in page.contexts)
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_multiline_context_surrounds_whole_match_and_clips_utf8(artifact_case, synchronous):
+    owner, uri, read, state = artifact_case
+    state["data"] = ("😀" * 5 + "\r\nhit\r\nNEXT\r\nafter").encode()
+    request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query=r"hit\r\nNEXT",
+        max_snippet_bytes=16, search_options={"is_regex": True, "is_multiline": True, "context_lines": 100})
+    page = (owner.navigate_sync(request, local_gateway_id=GATEWAY_ID, artifact_reader=read) if synchronous
+            else await owner.navigate(request, local_gateway_id=GATEWAY_ID, artifact_reader=read))
+    assert [(line.line, line.text, line.truncated) for line in page.contexts] == [(1, "😀" * 4, True), (4, "after", False)]
+    assert (page.matches[0].line, page.matches[0].end_line) == (2, 3)
+    assert state["reads"] == [(uri, request.max_bytes)]
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_context_pagination_budget_and_cursor_options(navigation_case, synchronous):
+    owner, workspace, uri = navigation_case
+    (workspace / "text.txt").write_text("before\nhit\nbetween\nhit\nafter")
+    request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="hit", limit=1,
+        search_options={"context_lines": 1}, max_response_bytes=2400)
+    first = owner.navigate_sync(request, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+    assert first.truncated and first.next_cursor
+    assert [line.line for line in first.contexts] == [1, 3]
+    assert len(first.model_dump_json().encode()) <= request.max_response_bytes
+    continued = request.model_copy(update={"cursor": first.next_cursor})
+    second = owner.navigate_sync(continued, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(continued, local_gateway_id=GATEWAY_ID)
+    assert not second.truncated and [line.line for line in second.contexts] == [3, 5]
+    changed = continued.model_copy(update={"search_options": request.search_options.model_copy(update={"context_lines": 0})})
+    with pytest.raises(ResourceFileOperationError) as failure:
+        if synchronous:
+            owner.navigate_sync(changed, local_gateway_id=GATEWAY_ID)
+        else:
+            await owner.navigate(changed, local_gateway_id=GATEWAY_ID)
+    assert failure.value.reason == "invalid_cursor"
+    (workspace / "text.txt").write_text("a" * 3000 + "\nhit\n" + "b" * 3000)
+    bounded = request.model_copy(update={"max_response_bytes": 2000})
+    with pytest.raises(ResourceFileOperationError) as failure:
+        if synchronous:
+            owner.navigate_sync(bounded, local_gateway_id=GATEWAY_ID)
+        else:
+            await owner.navigate(bounded, local_gateway_id=GATEWAY_ID)
+    assert failure.value.reason == "response_byte_limit"
+
+
+@pytest.mark.parametrize("options,mode", [({"context_lines": -1}, "content"), ({"context_lines": 101}, "content"),
+                                        ({"context_lines": 1.5}, "content"), ({"context_lines": 1}, "fuzzy")])
+def test_context_rejects_invalid_count_or_nontext_mode(options, mode):
+    with pytest.raises(ValidationError):
+        ResourceNavigationRequest(uri="not-yet-resolved", operation="search", search_mode=mode, query="hit", search_options=options)

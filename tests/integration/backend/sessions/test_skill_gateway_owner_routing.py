@@ -24,8 +24,8 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _completed,
     _prepare_workspace,
 )
-from tests.support import communication_federation
 from tests.support.api_helpers import create_session
+from tests.support.communication import federation
 from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
@@ -196,7 +196,7 @@ class SkillGatewayCase:
 async def skill_gateways(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
     base = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     run_node = base.runtime_root_for_node(request.node.nodeid).relative_to(base.output_root)
-    context = replace(base, workspace_root=base.workspace_root / run_node, artifacts_dir=base.artifacts_dir / run_node).prepare()
+    context = replace(base, workspace_root=base.workspace_root / run_node).prepare()
     ports = integration_port_block_for_file(context.test_file)
     barrier = getattr(request, "param", None)
     observation_environment = {"BOXTEAM_TEST_SKILL_OBSERVATION_DIR": str(context.artifacts_dir / "skill-request-identity")}
@@ -204,12 +204,12 @@ async def skill_gateways(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     if barrier is not None:
         environment.update({"BOXTEAM_TEST_COMMUNICATION_BARRIER_DIR": str(context.artifacts_dir),
                             "BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE": barrier})
-    start_gateway = communication_federation.start_gateway_process
+    start_gateway = federation.start_gateway_process
 
     def observed_gateway(**kwargs):
         return start_gateway(**kwargs, asgi_app=OBSERVATION_APP)
 
-    monkeypatch.setattr(communication_federation, "start_gateway_process", observed_gateway)
+    monkeypatch.setattr(federation, "start_gateway_process", observed_gateway)
     with model_stream_replay(
         context.artifacts_dir, runtime_root=base.runtime_root_for_node(request.node.nodeid),
         business_assertion="gateway-skill-owner-routing-and-cold-recovery",
@@ -407,11 +407,11 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
             return body
         data = body["data"]
         assert set(data) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view",
-                             "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash"}
+                             "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash", "contexts"}
         assert data["view"] == "live"
         assert data["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=target.gateway_id).display_uri
         for node in (data["node"], *data["entries"]):
-            assert set(node) == {"uri", "resource_shape", "operations", "child_path"}
+            assert set(node) == {"uri", "resource_shape", "operations", "child_path", "stat"}
             assert node["uri"].startswith(root_uri)
         if route == "workspace":
             row, = [row for row in case.observations()
@@ -421,7 +421,10 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
 
     for route in ("connection", "workspace"):
         root = await navigate(root_uri, "describe", route=route)
-        assert root["node"] == {"uri": root_uri, "resource_shape": "directory", "operations": ["describe", "list", "search"], "child_path": "file_segments"}
+        assert root["node"]["stat"]["size"] >= 0
+        assert set(root["node"]["stat"]) == {"size", "modified_at_ms", "changed_at_ms"}
+        assert root["node"] == {"uri": root_uri, "resource_shape": "directory", "operations": ["describe", "list", "search"],
+                                "child_path": "file_segments", "stat": root["node"]["stat"]}
         listed = await navigate(root_uri, "list", route=route)
         entries = {node["uri"].rsplit("/", 1)[1]: node for node in listed["entries"]}
         skill_uri = entries["SKILL.md"]["uri"]
@@ -430,6 +433,7 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         assert searched["matches"] == [{
             "uri": skill_uri, "line": 5, "column": 1, "text": "private-skill-owner-b",
             "snippet_start_column": 1, "truncated": False,
+            "end_line": 5, "end_column": 22, "utf16_column": 1, "utf16_end_column": 22, "snippet_start_utf16_column": 1,
         }]
         assert (await navigate(skill_uri, "read", route=route))["content"] == case.snapshots["b"]["entries"][0]["content"]
         explicit = resource_display_uri(scope="gateway", scope_id=target.gateway_id, kind="skills",
@@ -459,6 +463,13 @@ async def test_remote_skill_navigation_is_lightweight_encoded_and_fixed_to_owner
         ranged = await navigate(root_uri + "/scripts/read-range.txt", "read", route=route, line_offset=2, max_lines=1)
         assert ranged["content"] == "beta\r\n" and ranged["line_offset"] == 2
         assert ranged["truncated"] and ranged["truncation_reason"] == "line_limit"
+        searched_context = await navigate(root_uri + "/scripts/read-range.txt", "search", route=route,
+            search_mode="content", query="beta", search_options={"context_lines": 1})
+        assert searched_context["matches"][0]["line"] == 2
+        assert searched_context["contexts"] == [
+            {"uri": root_uri + "/scripts/read-range.txt", "line": 1, "text": "\ufeffalpha", "truncated": False},
+            {"uri": root_uri + "/scripts/read-range.txt", "line": 3, "text": "gamma", "truncated": False},
+        ]
         bulk = await navigate(root_uri, "search", route=route, query="bulk-needle", limit=7)
         assert len(bulk["entries"]) == 7 and bulk["truncated"]
         assert all(node["resource_shape"] == "file" for node in bulk["entries"])

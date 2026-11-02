@@ -38,7 +38,7 @@ export function fileOptions(query: ICommonQueryProps<URI>, folder: IFolderQuery)
     if (exclude.folder && !isEqual(exclude.folder, folder.folder)) throw new Error('业务文件搜索尚未支持子目录限定的 exclude 模式');
     return patterns(exclude.pattern);
   });
-  return { case_mode: 'sensitive', is_regex: false, whole_word: false, is_multiline: false, all_matches: false,
+  return { case_mode: 'sensitive', is_regex: false, whole_word: false, is_multiline: false, all_matches: false, context_lines: 0,
     include_globs: [...globalIncludes, ...folderIncludes], exclude_globs: [...patterns(query.excludePattern), ...excludes],
     ignore_mode: folder.disregardIgnoreFiles === undefined ? 'default' : folder.disregardIgnoreFiles ? 'none' : 'respect' };
 }
@@ -64,7 +64,9 @@ export function validateQuery(query: ICommonQueryProps<URI>): void {
 
 export function validateTextQuery(query: ITextQuery): void {
   validateQuery(query);
-  if (query.surroundingContext) throw new Error('业务文件搜索尚未支持前后文行');
+  if (query.surroundingContext !== undefined && (!Number.isSafeInteger(query.surroundingContext) || query.surroundingContext < 0 || query.surroundingContext > 100)) {
+    throw new Error('搜索前后文行数必须是 0～100 的整数');
+  }
   if (!query.contentPattern.pattern) throw new Error('文件内容搜索不能为空');
   if (query.maxFileSize !== undefined && (!Number.isSafeInteger(query.maxFileSize) || query.maxFileSize < 1 || query.maxFileSize > 33554432)) {
     throw new Error('业务文件搜索的文件读取上限必须在 1～33554432 字节内');

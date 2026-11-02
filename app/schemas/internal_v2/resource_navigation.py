@@ -34,6 +34,7 @@ class ResourceNavigationSearchOptions(BaseModel):
     include_globs: tuple[str, ...] = Field(default=(), max_length=64)
     exclude_globs: tuple[str, ...] = Field(default=(), max_length=64)
     ignore_mode: Literal["default", "none", "respect"] = "default"
+    context_lines: int = Field(default=0, ge=0, le=100)
 
     @model_validator(mode="after")
     def require_nonempty_patterns(self) -> ResourceNavigationSearchOptions:
@@ -84,6 +85,7 @@ class ResourceNavigationRequest(BaseModel):
                 self.search_options.case_mode != "sensitive", self.search_options.is_regex,
                 self.search_options.whole_word, self.search_options.word_separators is not None,
                 self.search_options.is_multiline, self.search_options.all_matches,
+                self.search_options.context_lines,
             )):
                 raise ValueError("只有内容搜索接受文本匹配选项")
         return self
@@ -142,6 +144,17 @@ class ResourceNavigationMatchDTO(BaseModel):
     snippet_start_utf16_column: int | None = Field(default=None, ge=1)
 
 
+class ResourceNavigationContextDTO(BaseModel):
+    """同一读取中的上下文行，不充当额外匹配或独立内容版本。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    uri: NavigationResourceURI
+    line: int = Field(ge=1)
+    text: str
+    truncated: bool = False
+
+
 class ResourceNavigationResultDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -158,3 +171,4 @@ class ResourceNavigationResultDTO(BaseModel):
     line_offset: int | None = None
     matches: tuple[ResourceNavigationMatchDTO, ...] = ()
     content_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    contexts: tuple[ResourceNavigationContextDTO, ...] = ()

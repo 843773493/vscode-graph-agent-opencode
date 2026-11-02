@@ -1717,6 +1717,8 @@ export interface ResourceNavigationSearchOptions {
   exclude_globs: string[];
   /** default 保留原固定目录忽略，none 关闭该忽略；respect 尚未支持时必须明确拒绝。 */
   ignore_mode: string;
+  /** 每个命中区间前后各取 0～100 行，正文仍受原片段及响应字节预算约束。 */
+  context_lines: number;
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -1753,7 +1755,18 @@ export interface ResourceNavigationResultDTO {
   line_offset?: number | undefined;
   matches: ResourceNavigationMatchDTO[];
   /** 完整原始文件字节的 sha256；字节窗口未读全时缺省，不是展示片段的版本。 */
-  content_hash?: string | undefined;
+  content_hash?:
+    | string
+    | undefined;
+  /** 与命中来自同一次读取；每页按资源及行号去重，不计入匹配条数。 */
+  contexts: ResourceNavigationContextDTO[];
+}
+
+export interface ResourceNavigationContextDTO {
+  uri: string;
+  line: number;
+  text: string;
+  truncated: boolean;
 }
 
 export interface ResourceNavigationMatchDTO {
@@ -13810,6 +13823,7 @@ function createBaseResourceNavigationSearchOptions(): ResourceNavigationSearchOp
     include_globs: [],
     exclude_globs: [],
     ignore_mode: "",
+    context_lines: 0,
   };
 }
 
@@ -13829,6 +13843,7 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
         ? object.exclude_globs.map((e: any) => globalThis.String(e))
         : [],
       ignore_mode: isSet(object.ignore_mode) ? globalThis.String(object.ignore_mode) : "",
+      context_lines: isSet(object.context_lines) ? globalThis.Number(object.context_lines) : 0,
     };
   },
 
@@ -13861,6 +13876,9 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     if (message.ignore_mode !== "") {
       obj.ignore_mode = message.ignore_mode;
     }
+    if (message.context_lines !== 0) {
+      obj.context_lines = Math.round(message.context_lines);
+    }
     return obj;
   },
 
@@ -13880,6 +13898,7 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     message.include_globs = object.include_globs?.map((e) => e) || [];
     message.exclude_globs = object.exclude_globs?.map((e) => e) || [];
     message.ignore_mode = object.ignore_mode ?? "";
+    message.context_lines = object.context_lines ?? 0;
     return message;
   },
 };
@@ -13991,6 +14010,7 @@ function createBaseResourceNavigationResultDTO(): ResourceNavigationResultDTO {
     line_offset: undefined,
     matches: [],
     content_hash: undefined,
+    contexts: [],
   };
 }
 
@@ -14014,6 +14034,9 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
         ? object.matches.map((e: any) => ResourceNavigationMatchDTO.fromJSON(e))
         : [],
       content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : undefined,
+      contexts: globalThis.Array.isArray(object?.contexts)
+        ? object.contexts.map((e: any) => ResourceNavigationContextDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -14058,6 +14081,9 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     if (message.content_hash !== undefined) {
       obj.content_hash = message.content_hash;
     }
+    if (message.contexts?.length) {
+      obj.contexts = message.contexts.map((e) => ResourceNavigationContextDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -14081,6 +14107,51 @@ export const ResourceNavigationResultDTO: MessageFns<ResourceNavigationResultDTO
     message.line_offset = object.line_offset ?? undefined;
     message.matches = object.matches?.map((e) => ResourceNavigationMatchDTO.fromPartial(e)) || [];
     message.content_hash = object.content_hash ?? undefined;
+    message.contexts = object.contexts?.map((e) => ResourceNavigationContextDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseResourceNavigationContextDTO(): ResourceNavigationContextDTO {
+  return { uri: "", line: 0, text: "", truncated: false };
+}
+
+export const ResourceNavigationContextDTO: MessageFns<ResourceNavigationContextDTO> = {
+  fromJSON(object: any): ResourceNavigationContextDTO {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      line: isSet(object.line) ? globalThis.Number(object.line) : 0,
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+      truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : false,
+    };
+  },
+
+  toJSON(message: ResourceNavigationContextDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.line !== 0) {
+      obj.line = Math.round(message.line);
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    if (message.truncated !== false) {
+      obj.truncated = message.truncated;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceNavigationContextDTO>, I>>(base?: I): ResourceNavigationContextDTO {
+    return ResourceNavigationContextDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceNavigationContextDTO>, I>>(object: I): ResourceNavigationContextDTO {
+    const message = createBaseResourceNavigationContextDTO();
+    message.uri = object.uri ?? "";
+    message.line = object.line ?? 0;
+    message.text = object.text ?? "";
+    message.truncated = object.truncated ?? false;
     return message;
   },
 };

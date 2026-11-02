@@ -6,7 +6,7 @@ import type { IViewletViewOptions } from '../../upstream/src/vs/workbench/browse
 import type { IViewDescriptor } from '../../upstream/src/vs/workbench/common/views.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { VIEW_ID } from '../../upstream/src/vs/workbench/services/search/common/search.js';
-import { SearchWorkspaceContext, type SearchScope } from './scope.js';
+import { SearchWorkspaceContext } from './scope.js';
 import { captureSearchOwner, loadSearchScope } from './target.js';
 import type { ScopedSearchView } from './searchView.js';
 
@@ -15,12 +15,11 @@ export function createSearchView(instantiation: IInstantiationService, descripto
   const arguments_ = [...(descriptor.ctorDescriptor.staticArguments ?? []), options];
   if (descriptor.id !== VIEW_ID) return instantiation.createInstance(descriptor.ctorDescriptor.ctor, ...arguments_);
   const controller = new AbortController();
-  // 捕获是同步的；错误也进入同一原视图的范围说明，不回退浏览器虚拟根。
-  let load: () => Promise<SearchScope>;
-  try {
+  // 恢复布局可以早于工作区初始化；首次查询才同步捕获目标，后续由同一视图固定范围。
+  const load = async () => {
     const owner = instantiation.invokeFunction(accessor => captureSearchOwner(accessor.get(IEditorService)));
-    load = () => loadSearchScope(owner, controller.signal);
-  } catch (error) { load = () => Promise.reject(error); }
+    return loadSearchScope(owner, controller.signal);
+  };
   const context = new SearchWorkspaceContext();
   const child = context.ownChild(instantiation.createChild(new ServiceCollection([IWorkspaceContextService, context])));
   // 同一 transform 的原 VIEW_ID 描述符已选择 ScopedSearchView，并纳入生成源码类型检查。

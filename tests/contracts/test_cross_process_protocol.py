@@ -104,7 +104,7 @@ def test_resource_search_options_and_codepoint_ranges_survive_proto_wire() -> No
         operation="search", search_mode="content", query=r"needle\r?\nsecond", search_options={
             "case_mode": "smart", "is_regex": True, "whole_word": True, "word_separators": "._",
             "is_multiline": True, "all_matches": True, "include_globs": ["**/*.txt"],
-            "exclude_globs": ["ignored/**"], "ignore_mode": "none",
+            "exclude_globs": ["ignored/**"], "ignore_mode": "none", "context_lines": 100,
         })
     encoded = ParseDict(request.model_dump(mode="json", exclude_none=True), public_pb2.ResourceNavigationRequest()).SerializeToString()
     received = public_pb2.ResourceNavigationRequest.FromString(encoded)
@@ -115,6 +115,7 @@ def test_resource_search_options_and_codepoint_ranges_survive_proto_wire() -> No
         "matches": [{"uri": request.uri + "/text.txt", "line": 2, "column": 8, "end_line": 3,
                      "end_column": 9, "utf16_column": 9, "utf16_end_column": 9, "snippet_start_utf16_column": 1,
                      "text": "🧪first NEEDLE", "snippet_start_column": 1}],
+        "contexts": [{"uri": request.uri + "/text.txt", "line": 1, "text": "上下文 🧪", "truncated": True}],
     })
     encoded = ParseDict(result.model_dump(mode="json", exclude_none=True), public_pb2.ResourceNavigationResultDTO()).SerializeToString()
     received_result = public_pb2.ResourceNavigationResultDTO.FromString(encoded)

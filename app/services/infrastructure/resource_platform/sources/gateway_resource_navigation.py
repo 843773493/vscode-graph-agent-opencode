@@ -102,12 +102,13 @@ def qualify_navigation_result(
             tail_segments=tail, gateway_authority=gateway_id)
 
     file_uris = {node.uri for node in result.entries if node.resource_shape == "file"}
-    if any(match.uri not in file_uris for match in result.matches):
+    if any(match.uri not in file_uris for match in (*result.matches, *result.contexts)):
         raise FederationError(FEDERATION_MALFORMED_FRAME, "搜索匹配没有对应的文件节点")
     return result.model_copy(update={
         "node": result.node.model_copy(update={"uri": qualify_uri(result.node.uri, child=False)}),
         "entries": tuple(node.model_copy(update={"uri": qualify_uri(node.uri, child=True)}) for node in result.entries),
         "matches": tuple(match.model_copy(update={"uri": qualify_uri(match.uri, child=True)}) for match in result.matches),
+        "contexts": tuple(line.model_copy(update={"uri": qualify_uri(line.uri, child=True)}) for line in result.contexts),
     })
 
 

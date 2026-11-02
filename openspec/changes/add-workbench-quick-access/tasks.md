@@ -53,7 +53,7 @@
 覆盖规范：搜索编辑器必须按输入持久保存明确范围。
 
 - [x] 6.1 在原 SearchView descriptor 选择项目子类，并在原 ViewPaneContainer.createView 以 child 创建；移动到其它容器仍保持唯一视图 ID、用户布局、全局 SearchViewModel 和 ReplaceService。
-- [ ] 6.2 将 `%` 到 SearchView 的 replaceSearchModel 与 SearchView 到 Search Editor 的两个 rawData 分支携带同一明确范围，后续修改查询不跟随导航。
+- [x] 6.2 将 `%` 到 SearchView 的 replaceSearchModel 与 SearchView 到 Search Editor 的两个 rawData 分支携带同一明确范围，后续修改查询不跟随导航。
 - [x] 6.3 在原 SearchConfiguration 增加 typed、版本化 scope，贯穿 factory 三种入口、控件重建、updateConfig 和命令参数；priorConfig 只复用查询选项，不继承 scope。
 - [x] 6.4 在同一 sourceTransform 的原 SearchEditor 查询构建处接入 protected typed hook，实际使用 input scope、child QueryBuilder、根及受限 extras；不改私有 readonly 字段，不吞构建错误。
 - [x] 6.5 在原 Pane 贡献选择 SearchEditor 子类，setInput／clearInput、模型 await、原 searchModel 取消及异步完成均检查 input／scope 代际，复用仅匹配同 scope。
@@ -220,3 +220,11 @@
 - 实际跳转验收暴露原搜索结果模型未接入文本解析引用，词语高亮会报 unable to resolve；在原 startup contribution 登记同一结果模型的内容 Provider，由原 Input 持有解析引用并随其释放，移除直接销毁模型的旧生命周期。保留高亮、定义跳转和原结果模型，不增加正文副本。初次范围名称回退为 ID、通用错误占位隐藏原因等失败已按原件定位修复，未放宽断言。
 - 最终 14 份转换源码的真实类型检查、23 项定向检查／178 条断言、Ruff 和 fixture 正式生产构建通过；结构审查无 findings，固定 upstream 原件不变。准确命令、源码指纹、原始输出、退出码和失败原件见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/editor-verification.json`。
 - 6.2 保留未勾选：两个 rawData 分支已携带范围，但需要上下文行的重跑分支仍被现有文件 Provider 明确拒绝，尚无完整运行证据。6.7 保留未勾选：真实深度 backup 故障恢复、route 变更／复用和迟到 Pane 完成仍需专项验收；本批不证明远端 SSH 或 Electron。
+
+### 2026-11-02：同次读取上下文与完整转交切片（6.2）
+
+- 原导航 search 增加 0～100 行上下文，文件及精确工具产物沿同一匹配器、读取、分页及预算返回有类型的行；上下文每页去重，不占命中数，仍计入响应字节。客户端按最终接受的命中合并跨页上下文，剔除命中行、上限之外的无关行及已被本地模型接管的旧正文，截断可见；未增加逐命中读文件或第二搜索链。
+- 真实 Gateway／Chromium 验证 contextLines=0 原结果转交时无额外搜索、contextLines=1 对未打开磁盘文件自动重查，以及 dirty 模型上下文、相邻命中去重。保留既有分屏、复制、保存恢复、旧格式只读和 A/B／IndexedDB 隔离断言，实际 HTTP 仍指向 A；两份磁盘正文均未保存。恢复布局过早捕获无范围错误已修复为首次查询同步捕获，后续查询范围继续固定。
+- 后端及协议定向 321 项、搜索服务 12 项／70 条断言、14 份实际转换源码类型检查、Ruff、正式生产构建、生成一致性和 Buf 格式／依赖／真实提交 breaking 均通过。首次类型检查遗漏默认值、Ruff 局部命名和真实页面恢复范围失败的原件保留，按具体原因修复后复验。
+- 真实工作区 HTTP 两项及跨 Gateway／localhost SSH 定向一项通过，后者经连接入口和目标 Workspace 两条原路由核对上下文 URI、CRLF／BOM 行号和 request_id。迁齐此前 stat／完整坐标的旧断言，并修复该场景残留的旧装具模块导入及已移除的 artifacts_dir 构造参数；产物直接复用现行 harness 的逐节点目录，不增加兼容装具。原失败与最终通过分别保留在 context-http-*、context-federation-* 收据中。
+- 准确命令、源码指纹与退出码：`out/tests/temp/quick_access_scoped_query_20261102/artifacts/context-*.json`；最终真实页面：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-00bb9f01ab54/nodes/node-f4e408bf0b21/artifacts/search-result.json`。4.3 的目标 ignore 文件及 6.7 的深度恢复／route 专项仍未完成，不将其或 SSH／Electron 标记为已验收。

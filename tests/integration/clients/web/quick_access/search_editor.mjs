@@ -14,12 +14,14 @@ export async function verifySearchEditors({ page, command, result, fileUri, owne
   };
 
   result.phase = 'search-editor-from-transferred-view';
+  const beforeTransfer = result.searches.length;
   await command('search.action.openInEditor');
   const editors = page.locator('.search-editor');
   await expect(editors).toHaveCount(1);
   const a = editors.first();
   await expect(a.locator('.boxteam-search-scope')).toContainText('home');
   await expect(lines(a)).toContainText('dirtyword');
+  expect(result.searches.slice(beforeTransfer)).toEqual([]);
   await query(a, 'quickscope', 'dirtyword quickscope', ownerA);
   await expect(lines(a)).not.toContainText('foreign-buffer');
   await expect(lines(a)).not.toContainText('virtual-buffer');

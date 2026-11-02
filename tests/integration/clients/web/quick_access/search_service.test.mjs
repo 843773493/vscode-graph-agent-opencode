@@ -20,7 +20,7 @@ const uri = (owner, name = '') => workspaceFileUri(owner, root(owner) + (name ? 
 const query = (extra = {}) => ({ type: 2, folderQueries: [{ folder: uri(ownerA) }], contentPattern: { pattern: 'needle', isCaseSensitive: true }, ...extra });
 const hit = (path, column = 1) => ({ uri: path, line: 1, column, end_line: 1, end_column: column + 6,
   utf16_column: column, utf16_end_column: column + 6, snippet_start_utf16_column: 1, text: 'needle', snippet_start_column: 1, truncated: false });
-const page = (path, hits = [], extra = {}) => ({ node: { uri: path }, entries: [], matches: hits, truncated: false, ...extra });
+const page = (path, hits = [], extra = {}) => ({ node: { uri: path }, entries: [], matches: hits, contexts: [], truncated: false, ...extra });
 
 async function withTransport(callback, requestHandler = async (_path, options) => page(JSON.parse(options.body).uri)) {
   const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async owner => 'route-' + owner.gatewayId);
@@ -100,7 +100,9 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
         const before = requests.mock.calls.length;
         await expect(f.search.aiTextSearch({ ...query(), type: 3, contentPattern: 'needle' })).rejects.toThrow('未启用');
         expect(() => f.search.textSearchSplitSyncAsync(query({ extraFileResources: [URI.parse('workbench:/same.txt')] }), undefined, item => progress.push(item))).toThrow('不能混入');
-        expect(() => f.search.textSearchSplitSyncAsync(query({ surroundingContext: 2 }), undefined, item => progress.push(item))).toThrow('前后文');
+        for (const surroundingContext of [-1, 1.5, 101, NaN]) {
+          expect(() => f.search.textSearchSplitSyncAsync(query({ surroundingContext }), undefined, item => progress.push(item))).toThrow('前后文');
+        }
         expect(requests.mock.calls.length).toBe(before); expect(progress).toHaveLength(1);
       }, async (_path, options) => page(JSON.parse(options.body).uri, [hit(root(ownerA) + '/disk.txt')]));
     } finally { f.instantiation.dispose(); }
@@ -119,7 +121,7 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
           const bodies = requests.mock.calls.map(call => JSON.parse(call[1].body));
           expect(bodies.map(body => body.cursor)).toEqual([undefined, 'next-page']);
           expect(bodies[0].search_options).toEqual({ case_mode: 'insensitive', is_regex: true, whole_word: true,
-            word_separators: ' /', is_multiline: true, all_matches: true, include_globs: ['*.txt'], exclude_globs: ['**/hidden/**'], ignore_mode: 'default' });
+            word_separators: ' /', is_multiline: true, all_matches: true, context_lines: 0, include_globs: ['*.txt'], exclude_globs: ['**/hidden/**'], ignore_mode: 'default' });
           expect(bodies[1].limit).toBe(bodies[0].limit);
           const files = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'dp' });
           expect(files.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'deep.txt').toString()]);
@@ -150,6 +152,59 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
         }, async () => { entered(); return await new Promise(resolve => { release = resolve; }); });
       } finally { token.dispose(); if (mode !== 'dispose') f.instantiation.dispose(); }
     }
+  });
+
+  test('跨页上下文按最终命中去重，上限哨兵和 dirty 文件的磁盘上下文不进入结果', async () => {
+    const dirty = model(uri(ownerA, 'dirty.txt'), 'dirty before\nneedle\ndirty after');
+    const f = fixture([dirty]);
+    const path = root(ownerA) + '/disk.txt';
+    const match = line => ({ ...hit(path), line, end_line: line });
+    const context = (line, text = `disk context ${line}`, extra = {}) => ({ uri: path, line, text, truncated: false, ...extra });
+    try {
+      await withTransport(async ({ requests }) => {
+        const progress = [];
+        const result = await f.search.textSearch(query({ maxResults: 3, surroundingContext: 1 }), undefined, item => progress.push(item));
+        expect(result.limitHit).toBe(true);
+        const disk = result.results.find(item => item.resource.toString() === uri(ownerA, 'disk.txt').toString());
+        expect(disk.results.filter(item => 'lineNumber' in item)).toEqual([
+          { lineNumber: 1, text: 'disk context 1' }, { lineNumber: 4, text: 'clipped…' },
+        ]);
+        const local = result.results.find(item => item.resource.toString() === dirty.uri.toString());
+        expect(local.results.filter(item => 'lineNumber' in item)).toEqual([
+          { lineNumber: 1, text: 'dirty before' }, { lineNumber: 3, text: 'dirty after' },
+        ]);
+        expect(JSON.stringify(progress)).not.toContain('stale disk');
+        expect(result.messages.some(message => message.text.includes('上下文行已截断'))).toBe(true);
+        expect(requests.mock.calls.map(call => JSON.parse(call[1].body).search_options.context_lines)).toEqual([1, 1]);
+        expect(requests.mock.calls.every(call => call[0] === '/api/v1/resources/navigation')).toBe(true);
+      }, async (_path, options) => {
+        const body = JSON.parse(options.body);
+        return body.cursor ? page(body.uri, [match(3), match(10)], { contexts: [context(2), context(4, 'clipped', { truncated: true }), context(9), context(11)] })
+          : page(body.uri, [match(2), hit(root(ownerA) + '/dirty.txt')], { truncated: true, next_cursor: 'next', contexts: [
+            context(1), context(3), context(1, 'stale disk', { uri: root(ownerA) + '/dirty.txt' }),
+          ] });
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('只有上下文中的越界 URI 也拒绝；上下文 progress 取消后不再投递', async () => {
+    const f = fixture([]), token = new CancellationTokenSource();
+    try {
+      await withTransport(async () => {
+        await expect(f.search.textSearch(query({ surroundingContext: 1 }))).rejects.toThrow();
+      }, async (_path, options) => page(JSON.parse(options.body).uri, [hit(root(ownerA) + '/disk.txt')], {
+        contexts: [{ uri: root(ownerB) + '/disk.txt', line: 2, text: 'foreign', truncated: false }],
+      }));
+      await withTransport(async () => {
+        const contexts = [];
+        await expect(f.search.textSearch(query({ surroundingContext: 2 }), token.token, item => {
+          if (item.results?.some(result => 'lineNumber' in result)) { contexts.push(item); token.cancel(); }
+        })).rejects.toThrow();
+        expect(contexts).toHaveLength(1);
+      }, async (_path, options) => page(JSON.parse(options.body).uri, [hit(root(ownerA) + '/disk.txt')], {
+        contexts: [2, 3].map(line => ({ uri: root(ownerA) + '/disk.txt', line, text: 'context', truncated: false })),
+      }));
+    } finally { token.dispose(); f.instantiation.dispose(); }
   });
 
   test('非业务根沿原服务，失败保留原错误；片段与多行 UTF-16 区间互不混用', async () => {

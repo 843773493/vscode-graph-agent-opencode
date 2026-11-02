@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import bisect
 import codecs
 import hashlib
 import json
@@ -35,12 +34,17 @@ from app.core.resource_uri import (
     resource_display_uri,
 )
 from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationContextDTO,
     ResourceNavigationMatchDTO,
     ResourceNavigationNodeDTO,
     ResourceNavigationRequest,
     ResourceNavigationResultDTO,
     ResourceNavigationSearchOptions,
     ResourceNavigationStatDTO,
+)
+from app.services.infrastructure.resource_platform.sources.resource_text_search import (
+    ContentMatch,
+    content_matches,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -268,13 +272,15 @@ class ResourceNavigation:
         consumed, consumed_prefix = 0, prefix.hexdigest()
         entries: list[ResourceNavigationNodeDTO] = []
         matches: list[ResourceNavigationMatchDTO] = []
+        contexts: dict[tuple[str, int], ResourceNavigationContextDTO] = {}
         seen: set[str] = set()
         fuzzy_query = request.query.casefold() if request.search_mode == "fuzzy" and request.query is not None else ""
         # 预留固定长度的续页及截断字段，序列化后的实际正文仍在 _response 核验。
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
         ))
-        for index, (child_node, metadata, match) in enumerate(self._search_items(root, children, parsed, node, request, deadline, pattern), start=1):
+        for index, (child_node, metadata, hit) in enumerate(self._search_items(root, children, parsed, node, request, deadline, pattern), start=1):
+            match = hit.match if hit is not None else None
             prefix.update(json.dumps((child_node.uri, metadata, match.model_dump() if match is not None else None), separators=(",", ":")).encode())
             if index <= offset:
                 if index == offset:
@@ -298,9 +304,11 @@ class ResourceNavigation:
             if included and request.operation == "search" and request.search_mode != "content":
                 included = self._file_included(name, request)
             if included:
+                additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts} if hit is not None else {}
                 entry_bytes = 0 if child_node.uri in seen else len(child_node.model_dump_json().encode()) + 1
                 if match is not None:
                     entry_bytes += len(match.model_dump_json().encode()) + 1
+                entry_bytes += sum(len(line.model_dump_json().encode()) + 1 for line in additions.values())
                 reason = "entry_limit" if (len(matches) if request.search_mode == "content" else len(entries)) == request.limit else (
                     "response_byte_limit" if response_bytes + entry_bytes > request.max_response_bytes else None
                 )
@@ -308,18 +316,19 @@ class ResourceNavigation:
                     if not entries:
                         raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
                     cursor = self._encode_cursor(binding, consumed, consumed_prefix)
-                    return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches),
+                    return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()),
                         truncated=True, next_cursor=cursor, truncation_reason=reason), request, deadline)
                 if child_node.uri not in seen:
                     entries.append(child_node)
                     seen.add(child_node.uri)
                 if match is not None:
                     matches.append(match)
+                contexts.update(additions)
                 response_bytes += entry_bytes
             consumed, consumed_prefix = index, prefix.hexdigest()
         if not prefix_checked:
             raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
-        return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches)), request, deadline)
+        return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values())), request, deadline)
 
     def _navigate_owned_file(
         self, parsed: ParsedResourceUri, request: ResourceNavigationRequest, gateway_id: str,
@@ -368,26 +377,31 @@ class ResourceNavigation:
         except UnicodeDecodeError as error:
             raise ResourceFileOperationError("invalid_encoding", "工具结果不是有效 UTF-8 文本", reason="utf8") from error
         matches = []
+        contexts: dict[tuple[str, int], ResourceNavigationContextDTO] = {}
         consumed = 0
         truncated = False
         reason = None
-        for _, _, match in self._content_matches(node, content, request, deadline, (), pattern):
-            if match is None:
+        for _, _, hit in self._content_matches(node, content, request, deadline, (), pattern):
+            if hit is None:
                 continue
             consumed += 1
             if consumed <= offset:
                 continue
-            candidate = ResourceNavigationResultDTO(node=node, entries=(node,), matches=(*matches, match), truncated=True,
+            additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts}
+            candidate = ResourceNavigationResultDTO(node=node, entries=(node,), matches=(*matches, hit.match),
+                contexts=(*contexts.values(), *additions.values()), truncated=True,
                 next_cursor=self._encode_cursor(binding, consumed, version), truncation_reason="response_byte_limit", view="live")
             if len(matches) >= request.limit or self._size(candidate) > request.max_response_bytes:
                 truncated, reason = True, "entry_limit" if len(matches) >= request.limit else "response_byte_limit"
                 break
-            matches.append(match)
+            matches.append(hit.match)
+            contexts.update(additions)
         if truncated and not matches:
             raise ResourceFileOperationError("output_limit_exceeded", "预算不足以容纳一条工具结果匹配", reason="response_byte_limit")
         if consumed < offset:
             raise ResourceFileOperationError("execution_failed", "工具结果 cursor 超出匹配范围", reason="stale_cursor")
         return self._response(ResourceNavigationResultDTO(node=node, entries=(node,) if matches else (), matches=tuple(matches),
+            contexts=tuple(contexts.values()),
             view="live", truncated=truncated, truncation_reason=reason,
             next_cursor=self._encode_cursor(binding, offset + len(matches), version) if truncated else None), request, deadline)
 
@@ -428,7 +442,7 @@ class ResourceNavigation:
     def _search_items(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ResourceNavigationMatchDTO | None]]:
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ContentMatch | None]]:
         path = self._contained(root, children, parsed)
         candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, self._stat(path)),))
         for child, metadata in candidates:
@@ -462,46 +476,19 @@ class ResourceNavigation:
     def _content_matches(
         self, child: ResourceNavigationNodeDTO, content: str, request: ResourceNavigationRequest,
         deadline: float, metadata: tuple[int, ...], pattern: regex.Pattern[str] | None,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ResourceNavigationMatchDTO | None]]:
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, tuple[int, ...], ContentMatch | None]]:
         if pattern is None:
             raise ValueError("内容搜索缺少已编译查询")
-        options = request.search_options or _DEFAULT_SEARCH_OPTIONS
-        starts = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", content))]
-        astral = [] if content.isascii() else [index for index, character in enumerate(content) if ord(character) > 0xFFFF]
-
-        def utf16_column(offset: int, row: int) -> int:
-            return offset - starts[row] + 1 + bisect.bisect_left(astral, offset) - bisect.bisect_left(astral, starts[row])
-
-        segments = [(0, content)] if options.is_multiline else (
-            (start, content[start:starts[index + 1] if index + 1 < len(starts) else len(content)].rstrip("\r\n"))
-            for index, start in enumerate(starts))
-        found, last_line = False, -1
+        found = False
         try:
-            for offset, segment in segments:
-                self._check_deadline(deadline)
-                for hit in pattern.finditer(segment, timeout=max(0, deadline - time.monotonic())):
-                    self._check_deadline(deadline)
-                    begin, end = offset + hit.start(), offset + hit.end()
-                    row, end_row = bisect.bisect_right(starts, begin) - 1, bisect.bisect_right(starts, end) - 1
-                    if not options.all_matches and row == last_line:
-                        continue
-                    found, last_line = True, row
-                    line = content[starts[row]:starts[row + 1] if row + 1 < len(starts) else len(content)].rstrip("\r\n")
-                    column = begin - starts[row]
-                    start = max(0, column - request.max_snippet_bytes // 8)
-                    raw = line[start:].encode("utf-8")
-                    snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
-                    yield child, metadata, ResourceNavigationMatchDTO(uri=child.uri, line=row + 1, column=column + 1,
-                        end_line=end_row + 1, end_column=end - starts[end_row] + 1,
-                        utf16_column=utf16_column(begin, row), utf16_end_column=utf16_column(end, end_row),
-                        snippet_start_utf16_column=utf16_column(starts[row] + start, row),
-                        text=snippet, snippet_start_column=start + 1, truncated=start > 0 or len(raw) > request.max_snippet_bytes)
-                    if not options.all_matches and not options.is_multiline:
-                        break
+            for hit in content_matches(child.uri, content, request, deadline, pattern, time.monotonic):
+                found = True
+                yield child, metadata, hit
         except TimeoutError as error:
             raise ResourceFileOperationError("output_limit_exceeded", "文件内容匹配超过本次总期限", reason="deadline") from error
         if not found:
             yield child, metadata, None
+
     @staticmethod
     def _stat(path: Path) -> tuple[int, ...]:
         metadata = path.stat()

@@ -138,16 +138,19 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 for forbidden in (str(workspace), str(home), "local-dev-token"):
                     assert forbidden not in response.text
                 assert set(response.json()["data"]) == {"node", "entries", "content", "truncated", "next_cursor", "truncation_reason", "view",
-                                                        "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash"}
+                                                        "content_encoding", "media_type", "mime_type", "line_offset", "matches", "content_hash", "contexts"}
                 assert response.json()["data"]["view"] == "live"
                 assert response.json()["data"]["node"]["uri"] == parse_resource_uri(uri, local_gateway_id=gateway_id).display_uri
                 for node in (response.json()["data"]["node"], *response.json()["data"]["entries"]):
-                    assert set(node) == {"uri", "resource_shape", "operations", "child_path"}
+                    assert set(node) == {"uri", "resource_shape", "operations", "child_path", "stat"}
                 return response.json()["data"]
 
             files_root = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root",))
             root = await navigate(files_root, "describe")
-            assert root["node"] == {"uri": files_root, "resource_shape": "directory", "operations": ["describe", "list", "search"], "child_path": "file_segments"}
+            assert root["node"]["stat"]["size"] == workspace.stat().st_size
+            assert root["content_hash"] is None
+            assert root["node"] == {"uri": files_root, "resource_shape": "directory", "operations": ["describe", "list", "search"],
+                                    "child_path": "file_segments", "stat": root["node"]["stat"]}
             tree = await navigate(files_root, "list")
             assert all(not node["uri"].endswith("/.boxteam") for node in tree["entries"])
             dot = next(node["uri"] for node in tree["entries"] if node["uri"].endswith("/.github"))

@@ -446,14 +446,16 @@ def test_search_match_uris_are_qualified_and_must_belong_to_returned_files() -> 
         "node": {"uri": uri, "resource_shape": "file", "operations": ["describe", "read", "search"]},
         "entries": [{"uri": uri, "resource_shape": "file", "operations": ["read", "search"]}],
         "matches": [{"uri": uri, "line": 3, "column": 7, "text": "needle", "snippet_start_column": 7}],
+        "contexts": [{"uri": uri, "line": 2, "text": "before"}],
     })
     qualified = qualify_navigation_result(result, uri=uri, gateway_id="gateway_target")
     expected = uri.replace("boxteam://", "boxteam://gateway_target/")
-    assert qualified.node.uri == qualified.entries[0].uri == qualified.matches[0].uri == expected
-    bad_match = result.matches[0].model_copy(update={"uri": uri.replace("file.txt", "unreturned.txt")})
-    with pytest.raises(FederationError) as failure:
-        qualify_navigation_result(result.model_copy(update={"matches": (bad_match,)}), uri=uri, gateway_id="gateway_target")
-    assert failure.value.code == "federation-malformed-frame"
+    assert qualified.node.uri == qualified.entries[0].uri == qualified.matches[0].uri == qualified.contexts[0].uri == expected
+    for member in ("matches", "contexts"):
+        bad = getattr(result, member)[0].model_copy(update={"uri": uri.replace("file.txt", "unreturned.txt")})
+        with pytest.raises(FederationError) as failure:
+            qualify_navigation_result(result.model_copy(update={member: (bad,)}), uri=uri, gateway_id="gateway_target")
+        assert failure.value.code == "federation-malformed-frame"
 
 
 @pytest.mark.parametrize("bad", ["uri", "entry", "match", "windows", "unc", "shape", "extra"])

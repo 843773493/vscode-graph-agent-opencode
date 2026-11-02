@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { verifySearchEditors } from './search_editor.mjs';
+import { verifySearchContext } from './search_context.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -198,6 +199,7 @@ try {
   result.reverseOwnerIsolation = true;
   await page.keyboard.press('Escape');
   await verifySearchEditors({ page, command, result, fileUri, ownerA: result.owner, ownerB: otherOwner });
+  await verifySearchContext({ page, command, result, fileUri, owner: result.owner });
   await expect(page.locator('#startup-error')).toBeEmpty();
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';

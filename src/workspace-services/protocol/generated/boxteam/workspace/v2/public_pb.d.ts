@@ -7382,6 +7382,13 @@ export declare type ResourceNavigationSearchOptions = Message<"boxteam.workspace
    * @generated from field: string ignore_mode = 9;
    */
   ignoreMode: string;
+
+  /**
+   * 每个命中区间前后各取 0～100 行，正文仍受原片段及响应字节预算约束。
+   *
+   * @generated from field: uint32 context_lines = 10;
+   */
+  contextLines: number;
 };
 
 /**
@@ -7526,6 +7533,13 @@ export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.
    * @generated from field: optional string content_hash = 13;
    */
   contentHash?: string | undefined;
+
+  /**
+   * 与命中来自同一次读取；每页按资源及行号去重，不计入匹配条数。
+   *
+   * @generated from field: repeated boxteam.workspace.v2.ResourceNavigationContextDTO contexts = 14;
+   */
+  contexts: ResourceNavigationContextDTO[];
 };
 
 /**
@@ -7533,6 +7547,37 @@ export declare type ResourceNavigationResultDTO = Message<"boxteam.workspace.v2.
  * Use `create(ResourceNavigationResultDTOSchema)` to create a new message.
  */
 export declare const ResourceNavigationResultDTOSchema: GenMessage<ResourceNavigationResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ResourceNavigationContextDTO
+ */
+export declare type ResourceNavigationContextDTO = Message<"boxteam.workspace.v2.ResourceNavigationContextDTO"> & {
+  /**
+   * @generated from field: string uri = 1;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: uint32 line = 2;
+   */
+  line: number;
+
+  /**
+   * @generated from field: string text = 3;
+   */
+  text: string;
+
+  /**
+   * @generated from field: bool truncated = 4;
+   */
+  truncated: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceNavigationContextDTO.
+ * Use `create(ResourceNavigationContextDTOSchema)` to create a new message.
+ */
+export declare const ResourceNavigationContextDTOSchema: GenMessage<ResourceNavigationContextDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.ResourceNavigationMatchDTO
