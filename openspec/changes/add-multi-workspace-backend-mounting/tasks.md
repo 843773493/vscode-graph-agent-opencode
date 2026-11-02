@@ -292,3 +292,9 @@
 - 线程／协程观察表明，资源冻结反复经过完整 rollout 初始化和 catalog 路径解析。本次将同次初始化的建表、reasoning 结构与发布状态检查并入原 writer；保留已有 authority 的只读预检和每次完整结构／canonical 检查，不跨调用缓存可变事实。冷建库连接4→1、已有库4→2；原写锁复用时不再求值被丢弃的路径和锁实例。三个只转发／另开连接的旧方法及全部调用方已物理移除，无schema变更。
 - 新连接预算反例在旧实现1 failed／2 passed，当前新增三场通过；定位、损坏、结构、恢复、context source、fork保留和工具协议相关两批共296 passed。Ruff／compileall通过；完整HEAD归档的生产Pyright6项，当前5项，按文件／规则／完整消息／语句AST／重数比较无新增，新测试零诊断。
 - 原Goal首场仍在model进入5秒失败，1 failed／23.88秒；这次provider prepare已完成，但未进入关闭验收，不关闭8.2或原性能TODO，不延长期限。Copilot参考为conversationStore按生命周期复用状态；其无本项目sealed恢复合同，不能据此移除完整性校验。准确命令、指纹、原始输出、退出码与类型差集见 `out/tests/temp/rollout_initialization_20261102/artifacts/verification.json`；观察采样原件见 `out/tests/temp/goal_prepare_profile_20261102/artifacts/`。本片无前端改动、新writer、跨调用缓存或独立非作者审查。
+
+### 2026-11-02 辅助服务重复加载证书收口（8.2 性能补核）
+
+- 线程采样发现后台Terminal监控逐次创建HTTPX客户端时反复同步加载默认CA。参考Copilot `platform/networking/node/nodeFetchFetcher.ts` 的Lazy共享dispatcher，本片只复用HTTPX默认、trust_env=False的TLS信任上下文；请求仍沿原超时、socket关闭与错误链，不缓存响应、不增加连接池owner，不需迁移既有调用方的关闭责任。首次初始化失败不进入缓存。
+- 新真实TCP场景覆盖两个客户端六次普通请求、分别取消已发送请求后的EOF、再请求及workspace／resource owner头；共十次请求只加载一次证书，CERT_REQUIRED和主机名校验保持开启，不冒称完成HTTPS握手验收。场景1 passed／2.49秒，现有客户端／API错误与协议回归144 passed；最终类型修订后的场景另有原始运行收据。Ruff、compileall、四文件Pyright零诊断。
+- 原Goal首场仍在model进入5秒失败，1 failed／22.60秒，provider prepare已完成；不能从单次总耗时下降推断稳定收益，不关闭8.2或原冷准备TODO，不改期限。准确命令、源码指纹、原始输出、真实退出码和正式传输产物见 `out/tests/temp/auxiliary_http_tls_20261102/artifacts/verification.json`。本片无前端改动、新资源账本或独立非作者审查。

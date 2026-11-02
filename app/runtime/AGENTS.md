@@ -22,6 +22,8 @@ app/runtime/
 │   ├── native_command.py      共用监督器入口与有界标准流收集
 │   ├── posix_job.py           独立期限、每进程数据段限额及进程组回收
 │   └── windows_job.py         Windows Job Object整树内存、期限及退出回收
+├── 辅助服务传输
+│   └── http_tls.py            复用默认TLS信任上下文，不持有请求或连接
 └── 可替换运行时端口
     └── runtime_ports.py      后端启动时注入的时钟端口
 ```

@@ -13,6 +13,7 @@ from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
 )
+from app.runtime.http_tls import auxiliary_service_tls_context
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_TERMINAL_BACKEND_URL = "http://127.0.0.1:8012"
@@ -237,6 +238,7 @@ class TerminalManagerClient:
             # 单次传输共用总预算，取消时关闭 socket，不遗留线程池请求。
             async with asyncio.timeout(DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS), AsyncClient(
                 timeout=DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS, trust_env=False, follow_redirects=True,
+                verify=auxiliary_service_tls_context(),
             ) as client:
                 response = await client.request(
                     method, f"{self._resolve_backend_url()}{path}", content=body,

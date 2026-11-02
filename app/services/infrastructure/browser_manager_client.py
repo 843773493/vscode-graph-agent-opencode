@@ -11,6 +11,7 @@ from app.abstractions.workspace_resources import ResourceTransportGrantRejected
 from app.core.failures import mark_public_failure
 from app.core.workspace_identity import validate_workspace_id
 from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
+from app.runtime.http_tls import auxiliary_service_tls_context
 from app.services.infrastructure.config_service import ConfigService
 
 DEFAULT_BROWSER_BACKEND_URL = "http://127.0.0.1:8015"
@@ -206,6 +207,7 @@ class BrowserManagerClient:
             # 传输截止只表示回执未知，不能据此宣称服务端操作已经终止。
             async with asyncio.timeout(timeout_seconds), AsyncClient(
                 timeout=timeout_seconds, trust_env=False, follow_redirects=True,
+                verify=auxiliary_service_tls_context(),
             ) as client:
                 response = await client.request(
                     method, f"{self._resolve_backend_url()}{path}", content=body,
