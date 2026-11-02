@@ -17,5 +17,6 @@
 ## 规范
 
 - 测试应覆盖资源创建、使用、取消和关闭的状态转换。
+- `test_turn_scope_registry.py` 覆盖注册身份、并发关闭、失败重试及控制文件回收；取消信号与控制命令流程留在 `test_turn_execution_scope.py`。
 - 通过 pytest fixture 隔离并发状态，避免依赖测试运行顺序。
 - 临时产物写入 `out/tests/unit/core/execution/`。

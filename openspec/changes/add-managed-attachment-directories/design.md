@@ -641,3 +641,9 @@ canonical sink 的追加和工具终态提交与提交后确认共用一次既�
 ### Node Debug 冷恢复的原生核实与审计（5.4 部分收口）
 
 冷 owner 的原 claim 读取、恢复决策所需的操作系统身份访问、停止后的身份轮询及恢复审计沿既有受保护 worker 结算；原 owner 临界区覆盖排队、执行和取消等待。审计仍由原 SessionState 与 SessionStore 写入，不增加第二份状态或 writer。每次普通／强制信号在同一 worker 内先重新核对 PID 与原起始身份，再连续派发；等待期间 PID 已复用、消失或身份不可比时，不把上一次观察作为停止新实例的依据。活跃 runtime 最终 OS 核实也沿同一 worker。已有轮询期限与异常分类保持，原生 I/O 抢占、其它入口的同步读取／写入及整个关闭总期限仍 TODO。
+
+### Turn 收尾的原注册身份与账本写入（5.4 部分收口）
+
+Turn 注册表在原 LifetimeScope 与控制状态文件都清理成功后才移除同一 scope／inbox；失败或等待者取消保留登记和同 ID 准入冲突。重入关闭复用原 LifetimeScope 的唯一在途任务，失败后仅重试未释放资源。并发等待者完成时核对原对象身份，不重复删除已由后继 Turn 使用的控制文件，不新增关闭任务表、锁或持久恢复记录。
+
+StepRunner 将原 Turn 的 release_turn_leases 绑定为返回 None 的异步清理回调，等待既有受保护 worker 执行唯一账本 writer。锁等待和持久提交不阻塞事件循环，原 active 占用提交成功后才完成该回调；失败仍按原执行出口报告，同入口重试保留原 Turn 身份。原 runtime 使用权释放顺序和外部终态判定保持。控制文件同步 I/O、其它共享账本入口、无身份接管与整个 operation／shutdown 期限仍 TODO，5.2／5.4保持未完成。

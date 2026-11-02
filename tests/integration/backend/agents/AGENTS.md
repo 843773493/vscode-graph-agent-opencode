@@ -19,3 +19,4 @@
 - 不能仅根据调用次数或预设顺序判定 Skill 加载成功。
 - `test_compaction_history_failure.py` 通过正常工具选择和消息入口验证归档不可读、归档写入失败及真实日志次错，核对 canonical 结果、活动专属失败、模型调用配对、冷事件读取与同会话恢复；复用原 model_stream，不手填归档或执行状态，不代 Gateway、真实 HTTP 或重启验收。
 - `test_chatgpt_auth_errors.py`经真实凭据owner、模型工厂、Agent服务和ASGI API核验读取／结构／迁移／刷新发布失败及同入口恢复；日志故障通过隔离目录中的真实OS写入拒绝注入。`integration-chatgpt-auth-errors`保持60秒/4GiB，原件、精确Provider归属、request_id和凭据不入日志均须核对，不代真实OAuth网络、Gateway、独立Backend或Web验收。
+- `test_turn_cleanup.py`经真实消息入口、Job、模型协议和 Turn 注册表验证原账本持锁写入等待及失败重试；辅助 lease 由测试显式准备，核对原 scope／inbox、事件循环响应、持久占用和同 Thread 后继执行，不代原生资源终止、Gateway、网络或硬重启验收。

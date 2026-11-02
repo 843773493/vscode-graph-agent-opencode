@@ -39,7 +39,7 @@ from app.core.model_delta_context import (
 from app.core.phase_observer import observe_phase
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_thread_context import session_thread_owner_scope
-from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.turn_execution_scope import (
     AgentControlInbox,
     AgentLoopControlCoordinator,
@@ -553,11 +553,13 @@ class StepRunner:
                 ).run(control_loop_stop_event)
             )
             if message_stream_writer is not None and self.ports.external_resource_leases is not None:
-                turn_scope.register_cleanup(
-                    lambda: self.ports.external_resource_leases.release_turn_leases(
-                        message_stream_writer.turn_stream_id
-                    )
-                )
+                release_turn_leases = self.ports.external_resource_leases.release_turn_leases
+                turn_stream_id = message_stream_writer.turn_stream_id
+
+                async def release_turn_occupancy() -> None:
+                    await run_sync_shielded(release_turn_leases, turn_stream_id)
+
+                turn_scope.register_cleanup(release_turn_occupancy)
             message_delta_token = set_current_model_delta_sink(message_stream_runtime)
             final_text = ""
             latest_model_content_blocks: tuple[dict[str, object], ...] = ()

@@ -188,6 +188,16 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 原管理命令、授权、Browser动作、Thread/Session释放或回收的管理lease正在排队或写盘，而入口取消、到期或返回业务错误
 - **THEN** 唯一异步管理lease入口持原资源锁及适用Thread holder等待原worker结算；排队取消不迟到取得占用，已开始的获取由原调用结算并释放精确lease，不继续派发。连续工具传入的原lease不重新取得或代为释放。错误收尾中的重复取消保留原业务错误，正常释放取消保留首次取消及迟到写盘cause；释放失败保留原active占用，不重发业务动作，不假报已释放。事件循环可继续调度，不承诺原生I/O可抢占、共享账本写入可并行或整个operation/shutdown已有硬期限
 
+#### Scenario: Turn 清理失败或关闭等待者取消
+
+- **WHEN** Turn 原 scope 的资源回调或控制状态文件删除失败，或等待关闭的调用者取消
+- **THEN** 原注册表保留同一 scope 和控制 inbox，拒绝同 ID 重建；原 LifetimeScope 继续持有在途清理，重入关闭等待同一次执行，失败后只重试未释放资源，不重做已成功回调。原资源及控制文件均成功清理后才移除登记；并发关闭的迟到等待者不得清除随后建立的新 scope、inbox 或控制文件
+
+#### Scenario: Turn 原账本释放等待写盘
+
+- **WHEN** 真实消息执行已进入 Turn 收尾，但原外部资源账本仍在等待 writer 锁、写盘或交付写入错误
+- **THEN** Turn 沿原 LifetimeScope 等待受保护 worker 执行唯一 release_turn_leases，事件循环仍可处理无关请求。原占用持久成功后才结清该回调；失败保留原 scope、inbox 和未释放占用供同入口重试，仍只释放本 Turn 的 active 占用，不据此宣称外部资源已终止。控制文件其它同步 I/O、原生 I/O 抢占和整个 shutdown 期限继续按未完成任务验收
+
 #### Scenario: 资源记录原生写入尚未结算
 
 - **WHEN** Terminal或Browser记录的序列化、fsync或replace在线程池排队或执行，另一个资源请求写入或原调用被取消

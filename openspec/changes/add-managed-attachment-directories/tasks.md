@@ -974,3 +974,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 新增Terminal/Browser×created/running四个反例在修复前全部失败；最终共享创建、两类owner、冷恢复与回执诊断224项单测通过。真实Node/HTTP/Chromium两处启动屏障下强杀Python，再以独立进程冷恢复，两项通过，核原Thread、冻结版本、精确lease结算、原context只关闭一次及拒绝重放创建。既有四个原生创建场景在native-002中通过，但该组新场景失败，整组不记绿；修正新测试对原intent默认reconcile_required的误判后，新两项在native-004通过。另补启动已完成仅回执丢失的Terminal/Browser两项真实硬退出回归通过，沿原stop/delete而非cancel-creation。
 - 首次补跑被既有450文件端口容量拦在setup；独立提交`836d75046`删除固定层级配额，两层共用567个完整100端口块，当前518文件互不重叠，13项端口与46项装具回归及静态检查通过。其它原失败包括测试误判unknown/verified、一次瞬时EADDRINUSE和新增测试的类型/导入问题，原件保留；未修改宿主端口配置或杀未知进程。
 - 三份修改Python的Ruff、compileall及真实Pyright零诊断通过；严格OpenSpec、准确保护命令、源码指纹、原始输出、退出码和作者结构核对见`out/tests/temp/browser_creation_recovery_20261102/artifacts/verification.json`。所有测试有进程外期限/4GiB，集成沿原独占闸门；本片是Python owner子进程硬退出，不代完整Backend/Gateway/Web/Node硬重启或Windows。无原context身份旧代接管、原生I/O抢占和整个operation/shutdown期限继续TODO，5.2/5.4与21/23保持未完成。
+
+
+### 2026-11-02 Turn 收尾保留原注册与异步账本写入（5.4 部分）
+
+- 原注册表在 LifetimeScope 和控制文件均清理成功后才移除同一对象；失败、等待者取消及并发关闭保留原身份和未完成资源，迟到等待者不删除后继登记或文件。StepRunner 等待既有受保护 worker 执行唯一 release_turn_leases，不增加任务表、writer 或账本，原 runtime 使用权释放及外部终态规则保持。
+- 修复前四个注册表反例失败；完整 HEAD 归档加全部候选补丁后，移除身份核对的负向变异在后继登记丢失处失败。最终核心／账本223项、正式执行收尾矩阵245项通过；测试拆分后22项补验通过且迁移函数AST完全相同。真实消息入口、Job、模型协议和原注册表的慢写／失败两场景通过，核原writer持锁期间API响应、失败身份保留、同入口重试、原占用持久结算、peer占用不变及同Thread后继执行。辅助lease由测试明确准备，不冒称原生资源终止验收。
+- Ruff、compileall、核心及测试Pyright零诊断、OpenSpec严格54/54通过；runner全文件仍有21项类型诊断，完整HEAD同文件有24项，按规则、消息与源码行核对无新增并移除3项原回调诊断。初轮错路径、矩阵装具前提、新测试传参和首次归档补丁未应用导致未选中测试的原件保留；准确命令、源码指纹、退出码、作者结构审查及范围说明见`out/tests/temp/turn_scope_cleanup_20261102/artifacts/verification.json`。全部测试有进程外期限／4GiB，集成沿原独占闸门；控制文件同步I/O、MCP共享锁、无身份旧代接管、原生I/O抢占和整个operation/shutdown期限继续TODO，5.2／5.4及21/23保持未完成。

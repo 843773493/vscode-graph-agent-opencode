@@ -13,7 +13,6 @@ from app.core.turn_execution_scope import (
     ScopeCancelledError,
     TurnControlCoordinator,
     TurnExecutionScope,
-    TurnExecutionScopeRegistry,
 )
 
 
@@ -139,27 +138,6 @@ def test_control_inbox_persists_intent_but_does_not_auto_replay_after_restart(
     assert [item.status for item in rejected] == ["rejected"]
 
 
-@pytest.mark.asyncio
-async def test_control_inbox_state_is_reaped_on_turn_close(tmp_path: Path) -> None:
-    """Turn 收敛即确定性删除控制状态文件，不随 Turn 数无限堆积。"""
-    state_path = tmp_path / "control.json"
-    registry = TurnExecutionScopeRegistry()
-    registry.create("stream_1")
-    inbox = AgentControlInbox("stream_1", session_id="ses_1", state_path=state_path)
-    inbox.accept(
-        command_id="cmd_1",
-        kind="interrupt",
-        idempotency_key="idem_1",
-    )
-    registry.register_inbox("stream_1", inbox)
-    assert state_path.is_file()
-
-    await registry.close("stream_1")
-
-    assert not state_path.exists()
-    assert registry.get_inbox("stream_1") is None
-
-
 def test_control_inbox_rejects_state_file_from_another_session(tmp_path: Path) -> None:
     """控制状态文件自述的 session_id 与请求归属不符时 fail closed。"""
     state_path = tmp_path / "control.json"
@@ -210,7 +188,8 @@ async def test_agent_loop_control_coordinator_rejects_late_non_interrupt_control
     result = await coordinator.process(command)
 
     assert result["status"] == "rejected"
-    assert inbox.get(command.command_id).status == "rejected"
+    stored = inbox.get(command.command_id)
+    assert stored is not None and stored.status == "rejected"
     writer.commit.assert_not_awaited()
     await scope.close()
 
@@ -236,7 +215,8 @@ async def test_agent_loop_control_coordinator_linearizes_interrupt_once() -> Non
 
     assert result["type"] == "interrupt.requested"
     assert scope.cancellation_signal.reason == "user_requested"
-    assert inbox.get(command.command_id).status == "consumed"
+    stored = inbox.get(command.command_id)
+    assert stored is not None and stored.status == "consumed"
     assert writer.commit.await_count == 1
     await scope.close()
 
@@ -271,7 +251,8 @@ async def test_interrupt_prepares_owner_before_cancel_and_concurrent_loop_consum
     await asyncio.gather(direct, loop)
     assert accepted == ["original-request"]
     assert scope.cancellation_signal.reason == "user_requested"
-    assert inbox.get(command.command_id).status == "consumed"
+    stored = inbox.get(command.command_id)
+    assert stored is not None and stored.status == "consumed"
     writer.commit.assert_awaited_once()
     await scope.close()
 
@@ -286,7 +267,8 @@ async def test_rejected_interrupt_never_prepares_owner_or_cancels() -> None:
     )
     assert not accepted
     assert not scope.cancellation_signal.is_cancelled
-    assert inbox.get("late").status == "rejected"
+    stored = inbox.get("late")
+    assert stored is not None and stored.status == "rejected"
     await scope.close()
 
 
@@ -305,7 +287,8 @@ async def test_accepted_interrupt_cancels_and_settles_even_if_owner_publication_
         )
     assert caught.value is failure
     assert scope.cancellation_signal.reason == "user_requested"
-    assert inbox.get("accepted").status == "consumed"
+    stored = inbox.get("accepted")
+    assert stored is not None and stored.status == "consumed"
     queued = await inbox.next()
     assert (await AgentLoopControlCoordinator(scope, inbox, writer).process(queued))["status"] == "consumed"
     writer.commit.assert_awaited_once()
@@ -320,7 +303,8 @@ async def test_stale_queued_interrupt_cannot_rewrite_consumed_status() -> None:
     queued = await inbox.next()
     result = await AgentLoopControlCoordinator(scope, inbox, writer).process(queued)
     assert result["status"] == "consumed"
-    assert inbox.get("cmd").status == "consumed"
+    stored = inbox.get("cmd")
+    assert stored is not None and stored.status == "consumed"
     writer.commit.assert_awaited_once()
     with pytest.raises(RuntimeError, match="终态不可改写"):
         inbox.mark("cmd", "rejected")

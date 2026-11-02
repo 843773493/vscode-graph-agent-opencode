@@ -326,14 +326,17 @@ class TurnExecutionScopeRegistry:
         return await scope.cancel(reason)
 
     async def close(self, turn_stream_id: str) -> None:
-        scope = self._scopes.pop(turn_stream_id, None)
-        inbox = self._inboxes.pop(turn_stream_id, None)
+        scope = self._scopes.get(turn_stream_id)
+        inbox = self._inboxes.get(turn_stream_id)
         if scope is not None:
             await scope.close()
-        # Turn 结束即确定性回收控制状态文件：控制意图只在 Turn 生命周期内
-        # 有意义，Turn 收敛后不再重放，避免控制事实在会话节点内无限堆积。
-        if inbox is not None:
+        # 清理失败或观察者取消时保留原登记；并发关闭的迟到等待者不得删除新一代。
+        if inbox is not None and self._inboxes.get(turn_stream_id) is inbox:
+            # TODO(5.4)：控制文件的同步读写与删除仍需沿原 inbox 生命周期统一迁移。
             inbox.discard_state()
+            del self._inboxes[turn_stream_id]
+        if scope is not None and self._scopes.get(turn_stream_id) is scope:
+            del self._scopes[turn_stream_id]
 
     def active_ids(self) -> tuple[str, ...]:
         return tuple(self._scopes)
