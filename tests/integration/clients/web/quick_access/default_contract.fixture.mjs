@@ -18,6 +18,7 @@ const uri = name => workspaceFileUri(owner, root + '/' + name, root);
 function defaultAccess(options, history = []) {
   const changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
   const picker = { value: '', items: [], activeItems: [], selectedItems: [], keyMods: { alt: false, ctrlCmd: false },
+    buttons: [], onDidTriggerButton: Event.None,
     onDidHide: Event.None, onDidChangeActive: Event.None, onDidChangeValue: changes.event, onDidAccept: accepts.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
   const groups = { groups: [], activeGroup: { id: 1 } }, editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } };
@@ -89,11 +90,15 @@ export async function symbolContract() {
     lifetime.push(provider.provide(picker, token.token, { searchOwnerError: '原 Gateway 身份失效' }));
     await new Promise(resolve => setTimeout(resolve, 250));
     const errorLabel = picker.items[0].label;
+    lifetime.pop().dispose();
+    lifetime.push(provider.provide(picker, token.token, { searchOwners: [owner, { ...owner, workspaceId: 'workspace-b' }] }));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const multiLabel = picker.items[0].label, multiPlaceholder = picker.placeholder;
     const scopedCalls = [...calls];
     lifetime.pop().dispose();
     lifetime.push(provider.provide(picker, token.token));
     await queried.promise;
-    return { scopedLabel, errorLabel, scopedCalls, nativeCalls: calls };
+    return { scopedLabel, errorLabel, multiLabel, multiPlaceholder, scopedCalls, nativeCalls: calls };
   } finally {
     token.dispose(true);
     lifetime.forEach(item => item.dispose());

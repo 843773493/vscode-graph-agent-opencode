@@ -73,6 +73,8 @@ test('业务符号在调用全局 Provider 前明确拒绝，身份错误不改�
   const result = await exercise('symbolContract');
   expect(result.scopedLabel).toContain('工作区符号未启用');
   expect(result.errorLabel).toContain('原 Gateway 身份失效');
+  expect(result.multiLabel).toContain('工作区符号未启用');
+  expect(result.multiPlaceholder).toBe('工作区符号 · workspace-a、workspace-b');
   expect(result.scopedCalls).toEqual([]);
   expect(result.nativeCalls).toEqual(['needle']);
 }, 10000);

@@ -75,8 +75,8 @@
 
 覆盖规范：搜索语义和异步边界必须真实；加载必须渐进反馈并避免更新误选；每个查询分支必须独立表达完成与受限状态；续页必须绑定原查询并保持选择目标。
 
-- [ ] 8.1 用原 Quick Input 提供已登记范围集合选择，明确显示当前范围；取消保持原查询，确认才发起新范围查询，选择停止目标不自动连接／启动／激活。
-- [ ] 8.2 单目标经 Gateway 显式路由，多目标对所选 owner 有界并发；若使用原 Gateway catalog 聚合，先补其显式目标过滤，不调用全范围后隐藏 C。
+- [x] 8.1 用原 Quick Input 提供已登记范围集合选择，明确显示当前范围；取消保持原查询，确认才发起新范围查询，选择停止目标不自动连接／启动／激活。
+- [x] 8.2 单目标经 Gateway 显式路由，多目标对所选 owner 有界并发；若使用原 Gateway catalog 聚合，先补其显式目标过滤，不调用全范围后隐藏 C。
 - [ ] 8.3 按查询／范围／类别／身份代际取消排队和请求、废弃迟到响应；服务端继续工作时仍受原预算和总 deadline 约束。
 - [ ] 8.4 为每个工作区／owner 展示 busy、完成、受限、失败、取消和新鲜度，快结果先出，重试只针对失败读分支，全部失败不伪报无匹配。
 - [ ] 8.5 使用每个 owner 独立 cursor 和明确续查，绑定原查询及 revision；合并保持有效活动目标和滚动，失效时不把 Enter 应用到新占行对象。
@@ -288,3 +288,11 @@
 - 26 项定向检查／212 条断言通过，覆盖根与 extras、AI 拒绝、等待越过原 200ms debounce 后全局符号 Provider 零调用，以及原生符号调用仍到达真实注册表。真实 Gateway／正式构建／Chromium 完整场景通过（181.25 秒），`#` 保留 B 身份且没有领域查询，原 A/B、dirty、watch、SearchView、Search Editor、backup 和 route 断言保持。复用同产品源码指纹的 18 份转换源码真实类型检查；本次构建由正式 fixture 完成。
 - 合同浏览器装具改以本地静态服务加载同一编译产物，去掉每例经控制通道传输数 MB base64；相同 26 项从 20.94 秒降至 4.74 秒，没有放宽期限或断言。原列表复用时隐藏但保留旧 detail，展示测试现先按候选身份限制再核文案，仍要求唯一目标。端口 TIME_WAIT 导致的启动失败与前两次定位失败原件保留；确认端口重新可绑定后再跑通过，未终止未知进程。
 - 准确命令、源码指纹、原始输出和退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/symbols-*.json`，最终为 `symbols-contract-004.json`、`symbols-browser-004.json`；文本定位其余模式与 Electron 尚未独立验收，不勾选 10.2 或桌面任务。
+
+### 2026-11-02：明确多工作区范围（8.1、8.2）
+
+- 普通混合入口复用原 Quick Input 多选已登记工作区，展示 Gateway、稳定工作区身份及运行状态；确认才查询，取消恢复原查询和活动候选身份。只选择调用方、delegate 和 quickNavigate 保持原合同，不增加范围按钮。模式转接保留用户明确选择的集合，发起编辑器归属另行保留。
+- 所选 owner 共享一次路由读取，使用原 Limiter 将业务分支及根请求限制为三路并发；按类别交错调度，取消同时释放在途与排队分支。停止目标只展示不可查询，不调用启动、连接、激活或注册。Session 打开使用命中分支的 owner，最近记录仅包含明确选定集合。
+- 最终真实 Gateway／正式 Workbench 构建／Chromium 场景通过（208.49 秒）：勾选未确认零查询、取消保持 A、确认仅查 A+B、C 零业务查询、三条在途请求均实际中止，释放旧响应不覆盖新结果，`?` → `%` 保留 A+B；选停止 C 不调用生命周期接口，其余两者仍可查询。原 dirty、watch、SearchView、Search Editor、保存／backup／route 恢复断言保持，页面错误为空。页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-44393c58118d/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
+- 真实类型检查包含 18 份转换源码，通过后核对 881 份产品源码指纹一致；26 项定向检查／217 条断言、Ruff、JS 语法、差异检查及 OpenSpec strict 通过。结构审查无 findings：范围选择独立于查询编排，无新增源码目录。准确命令、指纹、原输出和退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/scope-types-002.json`、`scope-browser-004.json`、`scope-final-contract-001.json`、`scope-final-static-001.json`。
+- 前次失败原件保留：类型字面量额外字段、候选身份定位、虚拟列表末尾状态定位，以及读取被取消响应正文的装具时序均按具体证据修正；未放宽身份、并发或零请求断言。8.3～8.6 尚需身份代际、状态展示、文件续页及完整错误矩阵，不因本切片部分覆盖而勾选；Electron 仍未验收。

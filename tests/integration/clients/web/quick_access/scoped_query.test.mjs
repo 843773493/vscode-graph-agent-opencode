@@ -56,6 +56,11 @@ describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
     expect(continued.providerOptions.searchOwnerError).toBe('发起身份已失效');
     expect(continued.providerOptions.searchOwner).toBeUndefined();
     expect(fresh.providerOptions.searchOwnerError).toBeUndefined();
+    const selected = [owner, other];
+    const multi = m.prepareSearchInvocation({ providerOptions: { searchOwners: selected } }, { activeEditor: undefined });
+    expect(multi.providerOptions.searchOwners).toBe(selected);
+    expect(multi.providerOptions.searchOwner).toBeUndefined();
+    expect(multi.providerOptions.searchOwnerError).toBeUndefined();
   });
 
   test('预览恢复等待关闭时可释放 Provider，迟到恢复不清除下一次定位状态', async () => {

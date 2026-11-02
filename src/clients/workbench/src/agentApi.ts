@@ -36,8 +36,13 @@ class GatewayClient {
 
   async resolveWorkspaceTarget(owner: WorkspaceOwner, signal?: AbortSignal): Promise<WorkspaceTarget> {
     // 重解只读取控制面登记，不因切换标签探测所有工作区及辅助服务。
+    const routes = await this.workspaceRoutes(signal);
+    return requireGatewayWorkspaceRoute(routes.items, routes.gatewayId, owner);
+  }
+
+  async workspaceRoutes(signal?: AbortSignal): Promise<{ items: WorkspaceTarget[]; gatewayId: string }> {
     const [workspaces, health] = await Promise.all([this.workspaces(false, signal), getGatewayHealth(0, { signal })]);
-    return requireGatewayWorkspaceRoute(workspaces.items, health.gateway_id, owner);
+    return { items: workspaces.items, gatewayId: health.gateway_id };
   }
 
   async assertWorkspace(owner: Pick<ThreadOwner, 'routeId' | 'workspaceId'>): Promise<void> {

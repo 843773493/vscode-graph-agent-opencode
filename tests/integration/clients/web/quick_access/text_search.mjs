@@ -7,6 +7,7 @@ import { verifySearchContext } from './search_context.mjs';
 import { verifySearchRecovery } from './search_recovery.mjs';
 import { verifyFileWatch } from './file_watch.mjs';
 import { verifyDefaultAccess } from './default_access.mjs';
+import { verifyDefaultScope } from './default_scope.mjs';
 import { writeWorkspaceSettings } from './settings.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
@@ -122,6 +123,9 @@ try {
   const fileUri = (owner, filename = 'quick-scope.txt') => page.evaluate(({ owner, filename }) => globalThis.workbench.URI.from({ scheme: 'boxteam-file', authority: owner.gatewayId,
     path: `/${owner.workspaceId}/${encodeURIComponent(owner.root)}/${filename}` }).toString(), { owner, filename });
   await verifyDefaultAccess({ page, command, api, result, fileUri, ownerA: result.owner, ownerB: otherOwner });
+  const scopeSearchStart = result.searches.length;
+  await verifyDefaultScope({ page, command, api, result, fileUri, ownerA: result.owner, ownerB: otherOwner, stoppedWorkspace: replacementWorkspace });
+  const scopeSearchEnd = result.searches.length;
   await verifyFileWatch({ page, command, result, workspace: workspacePath, resource: await fileUri(result.owner, 'watch-contract.txt'), owner: result.owner });
   const edit = async (resource, original, value) => {
     await command('_workbench.open', resource, [undefined, { pinned: true }]);
@@ -203,7 +207,9 @@ try {
   await expect(page.locator('.part.panel .search-view').getByRole('tree')).toHaveAttribute('aria-label', /Search: dirtyword/);
   await expect(page.locator('.part.panel .search-view')).toContainText('dirtyword');
   result.movedViewRerun = true;
-  if (result.searches.filter(request => request.search_mode === 'content').some(request => request.uri !== result.owner.root || request.route !== route)) throw new Error('文件搜索访问了未选择的目录或路由');
+  // 新增的 A+B 查询由范围场景独立核验；原 A 单范围断言仍覆盖其全部原有请求。
+  if (result.searches.filter((_, index) => index < scopeSearchStart || index >= scopeSearchEnd)
+    .filter(request => request.search_mode === 'content').some(request => request.uri !== result.owner.root || request.route !== route)) throw new Error('文件搜索访问了未选择的目录或路由');
   result.phase = 'reverse-owner-isolation';
   await command('_workbench.open', await fileUri(otherOwner), [undefined, { pinned: true }]);
   const reverseRequests = result.searches.length;

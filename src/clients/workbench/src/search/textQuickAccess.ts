@@ -48,17 +48,18 @@ export class WorkspaceTextQuickAccess extends Disposable implements IQuickAccess
     picker.busy = true;
     const fail = (error: unknown) => {
       if (cancellation.token.isCancellationRequested) return;
+      controller.abort();
       picker.busy = false;
       picker.items = searchFailure(error);
     };
     // 同步捕获发生在原 Controller 的 picker.show() 之前。
-    let owner: ReturnType<typeof captureSearchOwner>;
+    let owners: readonly ReturnType<typeof captureSearchOwner>[];
     try {
-      if (options?.searchOwnerError) throw new Error(options.searchOwnerError);
-      owner = options?.searchOwner ?? captureSearchOwner(this.editors);
+      if (options?.searchOwnerError && !options.searchOwners) throw new Error(options.searchOwnerError);
+      owners = options?.searchOwners ?? [options?.searchOwner ?? captureSearchOwner(this.editors)];
     }
     catch (error) { fail(error); return operation; }
-    void loadSearchScope(owner, controller.signal).then(scope => {
+    void loadSearchScope(owners, controller.signal).then(scope => {
       if (cancellation.token.isCancellationRequested) return;
       const context = operation.add(new SearchWorkspaceContext(scope));
       const child = context.ownChild(this.instantiation.createChild(new ServiceCollection([IWorkspaceContextService, context])));

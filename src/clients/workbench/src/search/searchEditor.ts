@@ -31,7 +31,7 @@ export function captureNewSearchEditorScope(editors: IEditorService, supplied?: 
     if (existing) return Promise.resolve(existing);
   }
   const owner = captureSearchOwner(editors);
-  return loadSearchScope(owner, new AbortController().signal).then(scope => ({ ...scope, kind: 'workspace' }));
+  return loadSearchScope([owner], new AbortController().signal).then(scope => ({ ...scope, kind: 'workspace' }));
 }
 
 /** 原 Pane／Input／模型不变；每个 Pane 的 QueryBuilder 只观察这个输入的范围。 */
@@ -173,9 +173,9 @@ export class ScopedSearchEditor extends SearchEditor {
     data.resultsModel.setValue('');
     input.setMatchRanges([]);
     input.setDirty(true);
-    let scopes: SearchScope[];
+    let selectedScope: SearchScope;
     try {
-      scopes = await Promise.all(selected.map(item => loadSearchScope(item.target, controller.signal)));
+      selectedScope = await loadSearchScope(selected.map(item => item.target), controller.signal);
     } catch (error) {
       controller.abort();
       if (this.input !== input || generation !== this.inputGeneration || scopeGeneration !== this.scopeGeneration) return;
@@ -184,7 +184,7 @@ export class ScopedSearchEditor extends SearchEditor {
       throw error;
     }
     if (this.input !== input || generation !== this.inputGeneration || scopeGeneration !== this.scopeGeneration) return;
-    const scope: SearchEditorScope = { version: 1, kind: 'workspace', workspaces: scopes.flatMap(item => item.workspaces) };
+    const scope: SearchEditorScope = { ...selectedScope, kind: 'workspace' };
     this.setSearchConfig({ scope });
     await this.pendingScope;
     if (this.scopeFailure) throw this.scopeFailure;

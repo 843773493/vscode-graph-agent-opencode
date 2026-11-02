@@ -18,7 +18,7 @@ export function createSearchView(instantiation: IInstantiationService, descripto
   // 恢复布局可以早于工作区初始化；首次查询才同步捕获目标，后续由同一视图固定范围。
   const load = async () => {
     const owner = instantiation.invokeFunction(accessor => captureSearchOwner(accessor.get(IEditorService)));
-    return loadSearchScope(owner, controller.signal);
+    return loadSearchScope([owner], controller.signal);
   };
   const context = new SearchWorkspaceContext();
   const child = context.ownChild(instantiation.createChild(new ServiceCollection([IWorkspaceContextService, context])));

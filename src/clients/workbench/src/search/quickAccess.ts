@@ -1,4 +1,4 @@
-import { timeout } from '../../upstream/src/vs/base/common/async.js';
+import { Limiter, raceCancellation, timeout } from '../../upstream/src/vs/base/common/async.js';
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
 import type { FuzzyScorerCache } from '../../upstream/src/vs/base/common/fuzzyScorer.js';
@@ -32,16 +32,18 @@ import { GotoSymbolQuickAccessProvider } from '../../upstream/src/vs/workbench/c
 import { getCodeEditor } from '../../upstream/src/vs/editor/browser/editorBrowser.js';
 import { IQuickChatService } from '../../upstream/src/vs/workbench/contrib/chat/browser/chat.js';
 import { ASK_QUICK_QUESTION_ACTION_ID } from '../../upstream/src/vs/workbench/contrib/chat/browser/actions/chatQuickInputActions.js';
-import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { requireGatewayWorkspaceRoute, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
 import { ThreadInput } from '../threadInput.js';
 import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
 import { searchResourceNames, type NameSearchCategory, type NameSearchPage } from './quickAccessQuery.js';
+import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
   owner?: WorkspaceOwner;
+  owners: readonly WorkspaceOwner[];
   error?: string;
   group: number;
   editorState: PickerEditorState;
@@ -51,8 +53,13 @@ interface AccessRun {
   cache: FuzzyScorerCache;
   symbols?: GotoSymbolQuickAccessProvider;
   globalPick?: ResourcePick;
+  restoreId?: string;
+  publishing?: boolean;
 }
-interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchInvocationOptions {}
+interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchInvocationOptions {
+  searchGroup?: number;
+  searchRestore?: { query: string; activeId?: string };
+}
 
 /** 原 Picker 负责交互和取消；本贡献只组织原 owner 的有界候选。 */
 export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick> {
@@ -79,22 +86,31 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   override provide(picker: AccessRun['picker'], token: CancellationToken, options: AccessOptions = {}) {
     const lifetime = new DisposableStore(), editorState = lifetime.add(this.instantiation.createInstance(PickerEditorState));
-    const run: AccessRun = { picker, group: this.groups.activeGroup.id, editorState, options, cache: {} };
+    const run: AccessRun = { picker, group: options.searchGroup ?? this.groups.activeGroup.id, owners: [], editorState, options, cache: {},
+      restoreId: options.searchRestore?.query === picker.value ? options.searchRestore.activeId : undefined };
     // Controller 在 provide 之后才 show，不能等异步请求后再读取焦点。
     if (!options.fileSearchDelegate) {
       try {
-        if (options.searchOwnerError) throw new Error(options.searchOwnerError);
-        run.owner = options.searchOwner ?? captureSearchOwner(this.editors);
+        if (options.searchOwnerError && !options.searchOwners) throw new Error(options.searchOwnerError);
+        run.owner = options.searchOwner ?? (options.searchOwners ? undefined : captureSearchOwner(this.editors));
+        run.owners = options.searchOwners ?? (run.owner ? [run.owner] : []);
       }
       catch (error) { run.error = String(error); }
     }
     this.run = run;
-    picker.placeholder = options.placeholder ?? (options.filesOnly ? '查找文件' : `查找会话、Thread 和文件 · ${run.owner?.workspaceId ?? '请选择工作区'}`);
+    picker.placeholder = options.placeholder ?? (options.filesOnly ? '查找文件' : `查找会话、Thread 和文件 · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
+    if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !picker.quickNavigate) {
+      const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择搜索范围' };
+      picker.buttons = [...picker.buttons, button];
+      lifetime.add(picker.onDidTriggerButton(selected => { if (selected === button) this.report(this.chooseScope(run)); }));
+      lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(item => item !== button); }));
+    }
     lifetime.add(picker.onDidHide(event => {
       if (event.reason === QuickInputHideReason.Gesture) this.report(editorState.restore());
     }));
     lifetime.add(picker.onDidChangeActive(() => {
       const control = getCodeEditor(this.editors.activeTextEditorControl), pick = picker.activeItems[0];
+      if (!run.publishing && pick?.accept) run.restoreId = undefined;
       if (control) run.symbols?.clearDecorations(control);
       if (!pick?.range) { if (pick?.resource) run.globalPick = pick; return; }
       if (!control || control.getModel()?.uri.toString() !== pick.resource?.toString()) return;
@@ -106,12 +122,17 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       if (control) run.symbols?.clearDecorations(control);
     }));
     lifetime.add(toDisposable(() => { if (this.run === run) this.run = undefined; }));
-    lifetime.add(super.provide(picker, token, options));
+    run.publishing = true;
+    try {
+      lifetime.add(super.provide(picker, token, options));
+      if (run.restoreId) picker.activeItems = picker.items.filter((item): item is ResourcePick => item.type !== 'separator' && item.id === run.restoreId);
+    } finally { run.publishing = false; }
     return lifetime;
   }
 
   protected override _getPicks(original: string, disposables: DisposableStore, token: CancellationToken) {
     const run = this.run!;
+    if (run.options.searchRestore?.query !== run.picker.value) run.restoreId = undefined;
     const previousFilter = run.normalized;
     const parsed = run.options.filesOnly ? undefined : extractRangeFromFilter(original, ['@']);
     run.range = parsed?.range;
@@ -152,53 +173,70 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         .finally(() => { if (alive()) run.picker.busy = false; });
       return fast;
     }
-    if (!run.owner) return [...fast, { id: 'scope-error', label: run.error ?? '请先选择明确工作区' }];
+    if (!run.owners.length) return [...fast, { id: 'scope-error', label: run.error ?? '请先选择明确工作区' }];
     if (this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '工作区符号未启用：当前没有可限定业务根的符号服务' });
 
     const categories: NameSearchCategory[] = run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
-    const branches = new Map<NameSearchCategory, { picks: ResourcePick[]; status: ResourcePick }>();
+    const branches = categories.flatMap(category => run.owners.map(owner => ({ owner, category,
+      key: `${searchOwnerKey(owner)}/${category}`, picks: [] as ResourcePick[],
+      label: run.owners.length === 1 ? category : `${owner.workspaceId} · ${category}`,
+      status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${owner.workspaceId} · ${category} · 正在查询` } as ResourcePick })));
     const seen = new Set(recent.map(pick => pick.id));
-    for (const category of categories) branches.set(category, { picks: [], status: { id: `status-${category}`, label: `${category} · 正在查询` } });
     const render = () => {
       if (!alive()) return;
       const items = [...fast];
       for (const category of categories) {
-        const branch = branches.get(category)!;
-        items.push({ type: 'separator', label: category }, ...branch.picks.filter(pick => !seen.has(pick.id)), branch.status);
+        items.push({ type: 'separator', label: category });
+        for (const branch of branches.filter(branch => branch.category === category)) {
+          items.push(...branch.picks.filter(pick => !seen.has(pick.id)), branch.status);
+        }
       }
       this.publish(run, accepted(items));
     };
     run.picker.busy = true;
-    let target: ReturnType<typeof gateway.resolveWorkspaceTarget> | undefined;
-    const resolveTarget = () => target ??= timeout(200, token).then(() => gateway.resolveWorkspaceTarget(run.owner!, controller.signal)).then(target => {
+    let routes: ReturnType<typeof gateway.workspaceRoutes> | undefined;
+    const labels = new Map(run.owners.map(owner => [searchOwnerKey(owner), owner.workspaceId]));
+    const resolveTarget = async (owner: WorkspaceOwner) => {
+      const snapshot = await (routes ??= timeout(200, token).then(() => gateway.workspaceRoutes(controller.signal)));
+      const target = requireGatewayWorkspaceRoute(snapshot.items, snapshot.gatewayId, owner);
       if (target.status !== 'ready') throw new Error(`工作区 ${target.name} 当前不可查询（${target.status}），请明确启动或连接`);
-      if (alive()) run.picker.placeholder = `查找会话、Thread 和文件 · ${target.name}`;
+      labels.set(searchOwnerKey(owner), target.name);
+      if (alive()) run.picker.placeholder = `查找会话、Thread 和文件 · ${[...labels.values()].join('、')}`;
       return target;
-    }).catch(error => { target = undefined; throw error; });
-    let pending = 0;
-    const load = async (category: NameSearchCategory, cursor?: string) => {
-      const branch = branches.get(category)!;
-      pending++; run.picker.busy = true;
-      branch.status = { id: `status-${category}`, label: `${category} · 正在查询` }; render();
+    };
+    const limiter = disposables.add(new Limiter<void>(3));
+    disposables.add(limiter.onDrained(() => { if (alive()) run.picker.busy = false; }));
+    const queue = async (branch: typeof branches[number], cursor?: string) => {
+      if (!alive()) return;
+      run.picker.busy = true;
+      // 释放 Limiter 会丢弃排队任务；等待者仍随原 Picker token 及时结算。
+      await raceCancellation(limiter.queue(() => load(branch, cursor)), token);
+    };
+    const load = async (branch: typeof branches[number], cursor?: string) => {
+      if (!alive()) return;
+      branch.status = { id: `status-${branch.key}`, label: `${branch.label} · 正在查询` }; render();
       try {
-        const resolved = await resolveTarget();
-        const page = await searchResourceNames(category, filter, run.owner!, resolved, resolved.name,
+        const resolved = await resolveTarget(branch.owner);
+        if (!alive()) return;
+        branch.label = run.owners.length === 1 ? branch.category : `${resolved.name} · ${branch.category}`;
+        const page = await searchResourceNames(branch.category, filter, branch.owner, resolved, resolved.name,
           controller.signal, token, this.instantiation, this.search, cursor);
         if (!alive()) return;
         const picks = page.items.map(item => item.resource ? this.resourcePick(run, item.resource, item.description, item.title, item.detail)
-          : this.sessionPick(run, item.sessionId!, item.title, item.description, item.detail));
+          : this.sessionPick(run, branch.owner, item.sessionId!, item.title, item.description, item.detail));
         const merged = new Map([...branch.picks, ...picks].map(pick => [pick.id, pick]));
         branch.picks = rankResourcePicks([...merged.values()], filter, run.cache);
-        branch.status = this.pageStatus(category, page, branch.picks.length, () => load(category, page.cursor));
+        branch.status = this.pageStatus(branch.key, branch.label, page, branch.picks.length, () => queue(branch, page.cursor));
       } catch (error) {
         if (!alive()) return;
-        branch.status = { ...this.failure(category, error), buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: '重试此查询' }],
-          trigger: async () => { target = undefined; await load(category, cursor); return TriggerAction.NO_ACTION; } };
-      } finally { pending--; if (alive()) { run.picker.busy = pending > 0; render(); } }
+        branch.status = { ...this.failure(branch.label, error), id: `status-${branch.key}`,
+          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: '重试此查询' }],
+          trigger: async () => { routes = undefined; await queue(branch, cursor); return TriggerAction.NO_ACTION; } };
+      } finally { render(); }
     };
-    for (const category of categories) void load(category);
+    for (const branch of branches) this.report(queue(branch));
     // TODO：文件原 SearchService 的续页披露仍需接入；达到上限时明确要求缩小查询。
-    return [...fast, ...categories.map(category => branches.get(category)!.status)];
+    return [...fast, ...branches.map(branch => branch.status)];
   }
 
   private failure(category: string, error: unknown): ResourcePick {
@@ -221,8 +259,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     });
   }
 
-  private pageStatus(category: string, page: NameSearchPage, count: number, more: () => Promise<void>): ResourcePick {
-    return { id: `status-${category}`, label: `${category} · ${page.limited ?? (page.cursor ? '还有更多结果' : count ? '本次查询完成' : '没有匹配的资源')}`,
+  private pageStatus(key: string, category: string, page: NameSearchPage, count: number, more: () => Promise<void>): ResourcePick {
+    return { id: `status-${key}`, label: `${category} · ${page.limited ?? (page.cursor ? '还有更多结果' : count ? '本次查询完成' : '没有匹配的资源')}`,
       ...(page.cursor ? { buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.more), tooltip: '继续查询此类别' }],
         trigger: async () => { await more(); return TriggerAction.NO_ACTION; } } : {}) };
   }
@@ -230,11 +268,15 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   private publish(run: AccessRun, items: Pick<ResourcePick>[]): void {
     const active = run.picker.activeItems[0], keep = run.picker.keepScrollPosition;
     const targets = items.filter((item): item is ResourcePick => item.type !== 'separator' && !!item.accept);
-    run.picker.keepScrollPosition = true;
-    run.picker.items = items;
-    // 状态行不阻塞首个候选；已选目标消失时清空确认，不能改投新占行对象。
-    run.picker.activeItems = active?.accept ? targets.filter(item => item.id === active.id) : targets.slice(0, 1);
-    run.picker.keepScrollPosition = keep;
+    run.publishing = true;
+    try {
+      run.picker.keepScrollPosition = true;
+      run.picker.items = items;
+      // 恢复按身份等待原目标；目标消失时清空确认，不能改投新占行对象。
+      const activeId = run.restoreId ?? (active?.accept ? active.id : undefined);
+      run.picker.activeItems = activeId ? targets.filter(item => item.id === activeId) : targets.slice(0, 1);
+      if (run.picker.activeItems.some(item => item.id === run.restoreId)) run.restoreId = undefined;
+    } finally { run.picker.keepScrollPosition = keep; run.publishing = false; }
   }
 
   private recent(run: AccessRun, filter: string): ResourcePick[] {
@@ -242,9 +284,10 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const picks = new Map<string, ResourcePick>();
     for (const editor of this.history.getHistory()) {
       const resource = editor.resource;
-      if (!resource || !run.owner || !sameSearchOwner(editorResourceOwner(resource), run.owner)) continue;
+      const owner = resource && editorResourceOwner(resource);
+      if (!resource || !owner || !run.owners.some(target => sameSearchOwner(owner, target))) continue;
       if (run.options.handleAccept && resource.scheme !== 'boxteam-file') continue;
-      const description = resource.scheme === 'boxteam-file' ? `${run.owner.workspaceId} · ${resource.path.split('/').slice(3, -1).join('/')}`
+      const description = resource.scheme === 'boxteam-file' ? `${owner.workspaceId} · ${resource.path.split('/').slice(3, -1).join('/')}`
         : isEditorInput(editor) ? editor.getDescription() : editor.description;
       const pick = this.resourcePick(run, resource, description,
         isEditorInput(editor) ? editor.getName() : editor.label, undefined, editor);
@@ -273,18 +316,32 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     };
   }
 
-  private sessionPick(run: AccessRun, sessionId: string, title: string, description: string, detail: string): ResourcePick {
+  private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, title: string, description: string, detail: string): ResourcePick {
     const open = async (mods: IKeyMods, background: boolean, side = false) => {
       const group = this.targetGroup(run, mods, side);
-      const routeId = await gateway.resolveWorkspace(run.owner!);
+      const routeId = await gateway.resolveWorkspace(owner);
       const main = await gateway.mainThread(routeId, sessionId);
-      await this.open(run, new ThreadInput({ ...run.owner!, routeId, sessionId, threadId: main.thread_id, title }), mods, background, false, group);
+      await this.open(run, new ThreadInput({ ...owner, routeId, sessionId, threadId: main.thread_id, title }), mods, background, false, group);
     };
-    return { id: `session:${run.owner!.gatewayId}/${run.owner!.workspaceId}/${sessionId}`, label: title, description, detail,
+    return { id: `session:${searchOwnerKey(owner)}/${sessionId}`, label: title, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.commentDiscussion),
       buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }],
       trigger: (_index, mods) => { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; },
       accept: (mods, event) => this.report(open(mods, event.inBackground)) };
+  }
+
+  private async chooseScope(run: AccessRun): Promise<void> {
+    const query = run.picker.value, activeId = run.picker.activeItems[0]?.id;
+    let selected: WorkspaceOwner[] | undefined;
+    try { selected = await chooseSearchOwners(this.quickInput, run.owners); }
+    finally {
+      // 新的独立 Quick Input 已经打开时，不抢回焦点或改写其查询。
+      if (!this.quickInput.currentQuickInput) {
+        const providerOptions: AccessOptions = { ...run.options, searchGroup: run.group, searchOwners: selected ?? run.owners,
+          searchRestore: selected ? undefined : { query, activeId } };
+        this.quickInput.quickAccess.show(query, { preserveValue: true, providerOptions });
+      }
+    }
   }
 
   private targetGroup(run: AccessRun, mods: IKeyMods, side = false): number {
