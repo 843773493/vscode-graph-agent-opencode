@@ -25,7 +25,7 @@
 
 ### Requirement: 工作区物理根必须绑定到唯一原生 Gateway
 
-每个本地托管或显式注册到本机的工作区物理根 MUST 只持久化在负责该原生 target 的唯一 Gateway 控制面 registry 中，并按 Gateway target ID 与 Backend `workspace_id` 绑定。该 binding 是 Gateway 重启和 Backend 冷启动的唯一根路径来源；Managed Backend group MUST 只保存成员 target ID、Backend `workspace_id` 与 generation，不复制物理根；Backend 的 generation-local runtime registry MAY 在进程生命周期内持有启动所得的根，但 MUST NOT 作为持久化 authority 或恢复来源。
+每个本地托管或显式注册到本机的工作区物理根绑定 MUST 由负责该原生 target 的唯一 Gateway 控制面 registry 持久管理，并按 Gateway target ID 与 Backend `workspace_id` 绑定。该 binding 是 Gateway 重启和 Backend 冷启动的唯一根路径来源；Managed Backend group MUST 只保存成员 target ID、Backend `workspace_id` 与 generation，不复制物理根作为启动定位字段；Backend 的 generation-local runtime registry MAY 在进程生命周期内持有启动所得的根，但 MUST NOT 作为持久化 authority 或恢复来源。
 
 用户授权的任意外部工作区注册与冷启动 MUST 保留。本机管理请求使用现有本地 managed token；该 token 代表本 Gateway 的管理权限，允许在本机注册、替换或移除 root binding。不得为此另建 RBAC、权限注册表或路径 ACL。
 
@@ -33,9 +33,9 @@
 
 `permissions.federation.default_effect="allow"` 对既有 `discovery|send|read|wait|reply|transit` 通信能力的含义与默认值 MUST 保持不变，但 MUST NOT 授予 `managed_workspace_admin`；只有命中以该 peer `principal_ref` 为主体的显式 `effect="allow"` 规则才能授予它。peer 配对成功或拥有 discovery/read 等通信权限 MUST NOT 推导管理权限。发往 relay 的请求 MUST 由 relay 透明转送，relay MUST NOT 替目标 Gateway 作出授权决定或把本地规则当作目标授权。未获授权的远端操作 MUST 在写入前返回 HTTP 403，且不得修改 root binding registry、managed Backend group 合同、成员集合或 generation。
 
-注册请求携带用户提供的物理根时，原生 Gateway owner MUST 按上述权限合同核验后才写入唯一 binding；中继 Gateway MUST NOT 持久化该根或把它加入联邦资源 projection。物理根 MUST NOT 编码进 URI，也 MUST NOT 由扫描、默认路径、同名路径或其它推测产生。读取/解析资源的权限 MUST NOT 推导创建、替换或移除 root binding 的授权。
+注册请求携带用户提供的物理根时，原生 Gateway owner MUST 按上述权限合同核验后才写入唯一 binding；中继 Gateway MUST NOT 保存第二份根绑定或把该根作为联邦资源 projection 的定位依据。物理根 MUST NOT 编码进 URI，也 MUST NOT 由扫描、默认路径、同名路径或其它推测产生。读取/解析资源的权限 MUST NOT 推导创建、替换或移除 root binding 的授权。
 
-workspace runtime API、普通 Workspace DTO、解析结果、模型载荷和跨 Gateway 资源投影 MUST NOT 暴露物理根。启动或解析时若 binding 缺失、target 对应的 Backend `workspace_id` 不匹配，系统 MUST 显式失败，MUST NOT adopt 部分 mount、回退到其它根或扫描磁盘。
+workspace runtime API、普通 Workspace DTO、解析结果、模型载荷和跨 Gateway 资源投影中的资源关联 MUST 使用稳定身份与资源 URI；明确目标机器的参数、展示、正文、诊断及必要原生配置 MAY 包含物理路径，但 MUST NOT 被消费者用作本机资源目标或第二份根绑定。启动或解析时若 binding 缺失、target 对应的 Backend `workspace_id` 不匹配，系统 MUST 显式失败，MUST NOT adopt 部分 mount、回退到其它根或扫描磁盘。
 
 #### Scenario: 本地 managed token 授权本 Gateway 管理
 
@@ -57,10 +57,10 @@ workspace runtime API、普通 Workspace DTO、解析结果、模型载荷和跨
 - **WHEN** Gateway 冷启动或恢复一个 managed Backend generation
 - **THEN** 它 MUST 按完整成员身份从唯一 registry 取得每个 root binding 并启动完整 mount 集；任何 binding 缺失或 Backend UUID 不匹配都 MUST 显式失败，MUST NOT 扫描磁盘、猜测或部分启动
 
-#### Scenario: 文件资源解析不返回物理根
+#### Scenario: 文件资源解析保留 URI 定位
 
 - **WHEN** 用户经 URI 解析或读取 workspace `files/root`
-- **THEN** 原生 owner 在本地用绑定根执行访问，但 resolver、API、模型载荷和跨 Gateway projection 只包含 URI/身份/内容/操作结果，不包含物理 root
+- **THEN** 原生 owner 在目标机器用唯一绑定根执行访问，resolver、API、模型载荷和跨 Gateway projection 的资源目标使用 URI／身份；内容、展示或诊断含原生路径本身不构成协议错误，也不改变资源定位或授权
 
 ### Requirement: workspace 身份必须由显式寻址载体承载
 
@@ -195,7 +195,7 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 
 ### Requirement: 持久化数据不得以「当前激活工作区」为前提
 
-新增或迁移的业务持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，MUST 遵守**三层分离 / three-layer separation**：记录只承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（及独立 revision 字段），其含义 MUST 只由记录内显式的 workspace 身份决定，与写入时或读取时的进程激活态无关。工作区物理根的持久化例外仅为本 capability requirement「工作区物理根必须绑定到唯一原生 Gateway」的原生 Gateway control-plane registry；它不得出现在普通 API/Workspace DTO、解析结果、模型载荷或联邦资源投影。
+新增或迁移的业务持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，MUST 遵守**三层分离 / three-layer separation**：资源关联字段承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（及独立 revision 字段），其含义 MUST 只由记录内显式的 workspace 身份决定，与写入时或读取时的进程激活态无关。参数、展示、正文、诊断及必要原生持久配置中的路径 MUST 按统一寻址 owner 的字段职责合同处理，不得隐式形成消费者本机资源目标或第二份权威定位关系。工作区物理根绑定 MUST 仍由本 capability requirement「工作区物理根必须绑定到唯一原生 Gateway」的原生 Gateway control-plane registry 唯一管理；凭据与秘密继续遵守既有保护规则。
 
 #### Scenario: 记录自带工作区身份
 

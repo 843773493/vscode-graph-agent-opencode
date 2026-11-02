@@ -31,7 +31,7 @@
 
 - **实施合同**：本 change 的 proposal、specs、design 和 tasks 共同约束实现，并按具名引用与 `add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」互为对称收口。
 - **本轮已收口**：`add-workspace-persistent-resource-management` 的 `proposal.md`/`design.md`/`tasks.md` 与 `specs/workspace-persistent-resources/spec.md` 中「当前工作区」「`${workspace_abs_path}`」的单工作区前提已改为指向本 change 的显式 `workspace_id` 身份与已挂载工作区注册表（该 change 当时空闲，无并发编辑冲突）。
-- **受影响系统**：`app/container.py`（单根装配 → 多工作区 runtime 注册表）、`app/core/path_utils.py`（解析器与工作区路径 owner）、`app/main.py`（挂载和生命周期）、`app/api/**`（workspace 身份载体，普通 Workspace DTO 不暴露物理根）、`app/core/sqlite_state.py` 的 `SQLiteProcessOwnership`、`app/services/**` 中按工作区构造的服务/注册表/总线、Gateway 唯一 root registry 与 workspace proxy（目标显式传递；root 不进入资源投影）、现有 `permissions.federation` schema/policy owner 及其全部注册调用方、OpenAPI 快照及相关测试。
+- **受影响系统**：`app/container.py`（单根装配 → 多工作区 runtime 注册表）、`app/core/path_utils.py`（解析器与工作区路径 owner）、`app/main.py`（挂载和生命周期）、`app/api/**`（workspace 身份载体，资源关联使用 URI，原生路径按字段职责处理）、`app/core/sqlite_state.py` 的 `SQLiteProcessOwnership`、`app/services/**` 中按工作区构造的服务/注册表/总线、Gateway 唯一 root registry 与 workspace proxy（目标显式传递；投影不建立第二份根绑定）、现有 `permissions.federation` schema/policy owner 及其全部注册调用方、OpenAPI 快照及相关测试。
 - **破坏性**：既有「一个后端进程一个工作区」的部署形态、只描述单工作区前提的**非 URI** 持久化字段、以「当前激活工作区」为隐含前提的客户端调用一并收敛；不提供旧形态兼容层或双读。
 - **不涉及旧开发数据迁移**：原零 URI 取证属于历史基线；A01 `16f09ee7` 已将真实 activation freeze/seal/restore 接入生产，不能再用“无装配、seal 恒为空”推断当前状态。本 change 按用户清理授权完成显式身份的新写字段与单一读路径，不从旧数据反推默认工作区或当前来源。
 - **契约依赖**：URI 语法、scope 闭合集、`scope_id` 取值语义与拒绝码登记由「统一资源寻址」change 独占，本 change 只引用其权威表；会话上下文资源的承载由「会话上下文 URI 统一改造」change 负责。

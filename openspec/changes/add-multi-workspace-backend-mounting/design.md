@@ -50,11 +50,13 @@
 
 ### D3: Gateway 唯一持有物理根绑定，后端注册表只是运行时挂载视图
 
-**决策**：负责原生 target 的 Gateway 唯一 registry 按稳定 Gateway target ID 与 Backend `workspace_id` 保存物理 workspace-root binding，并将其作为 Backend 启动输入。Backend 的已挂载工作区 registry 是当前 generation 的运行时 mount view，可在进程内持有实际根供显式 `workspace_id` 查找，但不持久化根、不拥有其来源，也不形成第二份 root registry。Managed Backend group 只记录 target/backend 身份与 generation；Gateway 路由、group membership 与根绑定按稳定身份关联。
+**决策**：负责原生 target 的 Gateway 唯一 registry 按稳定 Gateway target ID 与 Backend `workspace_id` 保存物理 workspace-root binding，并将其作为 Backend 启动输入。Backend 的已挂载工作区 registry 是当前 generation 的运行时 mount view，可在进程内持有实际根供显式 `workspace_id` 查找，但不持久化第二份根绑定、不拥有其来源，也不形成第二份 root registry。Managed Backend group 只记录 target/backend 身份与 generation；Gateway 路由、group membership 与根绑定按稳定身份关联。
+
+这里约束的是根绑定的权威来源与恢复用途。明确目标机器的原生操作参数、展示、正文、诊断及必要原生配置按统一寻址 owner 的字段职责合同保留；其中出现根路径不单独构成协议错误，消费者不能将其升级为第二份根绑定或隐式在本机访问。
 
 **授权设计**：本机变更使用现有本地 managed token，该 token 已代表本 Gateway 的管理权限。远端变更由原生目标 Gateway 最终判权：复用现有 `permissions.federation` / `FederationPolicyStore`，从认证 peer gateway_id 派生 `principal_ref_for_gateway(authenticated_peer.gateway_id)`，要求针对该 principal 的显式 `managed_workspace_admin` allow。授权属于接收请求的目标 Gateway，不按 workspace_id 或路径分配，因此首次创建时不需要已有 workspace_id。pair、read/discovery 等通信权限和 `default_effect="allow"` 都不授予此管理能力；保留其对现有核心通信操作的默认语义。schema、policy 规范化/snapshot/evaluator 与所有注册、替换、移除 callers 在同一批迁齐；不增加 RBAC、权限 registry 或路径 ACL。Relay 只转送，不作最终授权；目标 policy 拒绝时原生 Gateway 返回 403 且不写入 root/group 状态。
 
-**理由**：Gateway registry 是 workspace target 生命周期的控制面权威；Backend 只接收已登记的明确启动输入。现有本地管理 token 和联邦 policy 分别提供本机与远端管理授权，远端用户提供的 target root 只有经原生 owner 授权后才能进入唯一 registry；relay 不复制根。从资源读取权限不能推出注册授权。这样保留外部工作区注册与冷启动，同时避免 Gateway group 或 Backend 进程重启时产生第二份持久化根事实。Gateway 仍不读取工作区 `.boxteam/` 业务数据。
+**理由**：Gateway registry 是 workspace target 生命周期的控制面权威；Backend 只接收已登记的明确启动输入。现有本地管理 token 和联邦 policy 分别提供本机与远端管理授权，远端用户提供的 target root 只有经原生 owner 授权后才能进入唯一 registry；relay 不复制根绑定。从资源读取权限不能推出注册授权。这样保留外部工作区注册与冷启动，同时避免 Gateway group 或 Backend 进程重启时产生第二份持久化根事实。Gateway 仍不读取工作区 `.boxteam/` 业务数据。
 
 ### D4: 路径解析器与 SQLite 连接按 workspace_id 分区
 
