@@ -192,14 +192,17 @@ class McpServerRuntime:
 
     def request_close(self) -> None:
         """同一发布屏障内同步撤销准入，SDK 关闭仍由原 task 完成。"""
+        if self._closing:
+            return
         self._closing = True
         self._stop.set()
+        # 初始化只中断一次；后续关闭入口等待同一 task，不能再次打断 SDK 清理。
+        if self._task is not None and not self._ready.is_set():
+            self._task.cancel()
 
     async def close(self) -> None:
         self.request_close()
         if self._task is not None:
-            if not self._ready.is_set():
-                self._task.cancel()
             try:
                 await asyncio.shield(self._task)
             except asyncio.CancelledError:

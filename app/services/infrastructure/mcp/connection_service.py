@@ -200,13 +200,18 @@ class McpConnectionService:
                     self._advance(identity, status="verifying", stage="disconnect")
                     await self._owner.disconnect_server(operation.server_id, admit=partial(self._admit, identity))
                 self._advance(identity, status="succeeded", stage="complete")
-        except TimeoutError:
+        except (TimeoutError, asyncio.CancelledError) as error:
             current = self._store.get(identity)
-            self._advance(identity, status="expired", stage=current.stage, error_code="deadline_exceeded")
-        except asyncio.CancelledError:
-            current = self._store.get(identity)
-            self._advance(identity, status="cancelled", stage=current.stage, error_code="operation_cancelled")
-            raise
+            cancelled = isinstance(error, asyncio.CancelledError)
+            self._advance(identity, status="cancelled" if cancelled else "expired", stage=current.stage,
+                error_code="operation_cancelled" if cancelled else "deadline_exceeded")
+            # 原 owner 用取消的 cause 交付清理失败；asyncio.timeout 会再包一层。
+            cancellation = error if cancelled else error.__cause__
+            if isinstance(cancellation, asyncio.CancelledError) and cancellation.__cause__ is not None:
+                self._store.record_cleanup_failure(identity, type(cancellation.__cause__).__name__)
+                raise RuntimeError("MCP 连接操作清理未完成，请检查该操作状态") from error
+            if cancelled:
+                raise
         except Exception as error:  # noqa: BLE001 - 操作边界只保存安全类型与阶段，不复制 OAuth 或 Server 自由正文。
             current = self._store.get(identity)
             if current.status in {"cancelled", "expired"}:

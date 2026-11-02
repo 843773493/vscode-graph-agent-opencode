@@ -982,3 +982,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原注册表在 LifetimeScope 和控制文件均清理成功后才移除同一对象；失败、等待者取消及并发关闭保留原身份和未完成资源，迟到等待者不删除后继登记或文件。StepRunner 等待既有受保护 worker 执行唯一 release_turn_leases，不增加任务表、writer 或账本，原 runtime 使用权释放及外部终态规则保持。
 - 修复前四个注册表反例失败；完整 HEAD 归档加全部候选补丁后，移除身份核对的负向变异在后继登记丢失处失败。最终核心／账本223项、正式执行收尾矩阵245项通过；测试拆分后22项补验通过且迁移函数AST完全相同。真实消息入口、Job、模型协议和原注册表的慢写／失败两场景通过，核原writer持锁期间API响应、失败身份保留、同入口重试、原占用持久结算、peer占用不变及同Thread后继执行。辅助lease由测试明确准备，不冒称原生资源终止验收。
 - Ruff、compileall、核心及测试Pyright零诊断、OpenSpec严格54/54通过；runner全文件仍有21项类型诊断，完整HEAD同文件有24项，按规则、消息与源码行核对无新增并移除3项原回调诊断。初轮错路径、矩阵装具前提、新测试传参和首次归档补丁未应用导致未选中测试的原件保留；准确命令、源码指纹、退出码、作者结构审查及范围说明见`out/tests/temp/turn_scope_cleanup_20261102/artifacts/verification.json`。全部测试有进程外期限／4GiB，集成沿原独占闸门；控制文件同步I/O、MCP共享锁、无身份旧代接管、原生I/O抢占和整个operation/shutdown期限继续TODO，5.2／5.4及21/23保持未完成。
+
+### 2026-11-02 MCP 初始化关闭与清理错误交付（5.4 部分）
+
+- 初始化只由首次关闭中断一次，后续关闭入口等待原 SDK task 完成清理与终态登记；复用原关闭标志与 LifetimeScope。连接取消或到期时，原取消携带的清理失败继续交给操作 owner，补全同一持久终态、保留失败句柄并阻止新连接，不新增任务表或账本。
+- 42项生命周期／目录／配置单测、2项新增真实 SDK/stdio关闭场景及10项真实 OAuth/HTTP操作回归通过；原17项连接发布回归按未变依赖复用。完整HEAD归档核实清理失败未交付也存在于旧版本；重复取消的两项负向变异在清理提前结束处失败，取消／到期的两项变异在未交付清理失败处失败。不放宽原断言或期限。五份修改Python的Pyright零诊断，Ruff／compileall与本change严格检查通过，准确命令、指纹、失败原件及验证边界见`out/tests/temp/mcp_initializing_close_20261102/artifacts/verification.json`。
+- 测试均带进程外期限／4GiB，集成沿原独占闸门。本片不代Gateway/Web、进程硬重启、Windows、不合作SDK终止或整个operation/shutdown期限；5.2／5.4和21/23继续未完成。

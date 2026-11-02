@@ -243,8 +243,9 @@ async def test_cancel_request_interruption_preserves_original_cleanup(
         assert not owner.get_tool_ids() and endpoint.exchanges == 0
 
 
+@pytest.mark.parametrize("outcome", ["cancelled", "expired"])
 async def test_failed_cleanup_retains_handle_and_blocks_new_connection(
-    oauth_endpoint_factory, connection_case, monkeypatch: pytest.MonkeyPatch,
+    oauth_endpoint_factory, connection_case, monkeypatch: pytest.MonkeyPatch, outcome: str,
 ):
     original = connection_service.production_mcp_session_factory
 
@@ -261,14 +262,18 @@ async def test_failed_cleanup_retains_handle_and_blocks_new_connection(
         service, owner, store = await case.__aenter__()
         try:
             monkeypatch.setattr(connection_service, "production_mcp_session_factory", failing)
+            if outcome == "expired":
+                monkeypatch.setattr(connection_service, "_OPERATION_TIMEOUT_SECONDS", 1.0)
             await service.submit(McpConnectionRequestDTO(operation_id="failed-cleanup", server_id="secure", action="connect"))
             await observe(service, "failed-cleanup", "waiting_user")
+            if outcome == "expired":
+                await observe(service, "failed-cleanup", "expired")
             with pytest.raises(RuntimeError, match="清理未完成"):
                 await service.cancel("failed-cleanup")
             await asyncio.sleep(0)  # 已完成回调不能删除失败句柄。
             assert service._tasks["failed-cleanup"].done()
             operation = McpConnectionOperationStore(store).get("failed-cleanup")
-            assert operation.status == "cancelled" and operation.stage == "cleanup"
+            assert operation.status == outcome and operation.stage == "cleanup"
             assert "private-cleanup-marker" not in operation.model_dump_json()
             with pytest.raises(PermissionError, match="清理"):
                 await service.submit(McpConnectionRequestDTO(operation_id="after-failed-cleanup", server_id="secure", action="connect"))

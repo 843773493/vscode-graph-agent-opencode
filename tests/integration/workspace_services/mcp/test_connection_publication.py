@@ -6,10 +6,12 @@ import asyncio
 import errno
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, get_ident
 
+import psutil
 import pytest
 
 from app.core.lifecycle import LifetimeScope
@@ -103,6 +105,67 @@ async def test_close_during_registration_never_publishes_readiness(
         assert gate.cold_status() == "stopped"
     finally:
         gate.release.set()
+        await asyncio.gather(opening, *([] if closing is None else [closing]), return_exceptions=True)
+        await owner.shutdown()
+
+
+@pytest.mark.parametrize("request_close_first", [False, True])
+async def test_start_cancel_and_scope_close_wait_for_same_sdk_cleanup(
+    schema_server_case: SchemaServerCase, publication_gate: PublicationGate,
+    monkeypatch: pytest.MonkeyPatch, request_close_first: bool,
+) -> None:
+    case, gate = schema_server_case, publication_gate
+    owner = case.owner
+    factory = owner._session_factory
+    cleanup_entered, cleanup_release = asyncio.Event(), asyncio.Event()
+    sdk_tasks: list[asyncio.Task[object]] = []
+
+    @asynccontextmanager
+    async def observe_cleanup(server, on_change):
+        async with factory(server, on_change) as session:
+            task = asyncio.current_task()
+            assert task is not None
+            sdk_tasks.append(task)
+            try:
+                yield session
+            finally:
+                cleanup_entered.set()
+                await cleanup_release.wait()
+
+    monkeypatch.setattr(owner, "_session_factory", observe_cleanup)
+    gate.arm(owner)
+    opening = asyncio.create_task(owner.start())
+    closing = None
+    try:
+        await asyncio.wait_for(gate.entered.wait(), 6)
+        runtime = owner._runtimes["schema"]
+        processes = [child for child in psutil.Process().children()
+                     if str(case.definitions) in child.cmdline()]
+        assert len(processes) == 1
+        process = processes[0]
+        opening.cancel("原启动取消")
+        gate.release.set()
+        await asyncio.wait_for(cleanup_entered.wait(), 6)
+        if request_close_first:
+            runtime.request_close()
+        closing = asyncio.create_task(runtime.scope.close())
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(closing), 0.05)
+        assert not opening.done() and not runtime.scope.is_closed
+        assert runtime._task is not None and sdk_tasks == [runtime._task]
+        assert not runtime._task.done() and process.is_running()
+        assert gate.cold_status() == "running" and not owner.started
+        cleanup_release.set()
+        await asyncio.wait_for(closing, 6)
+        with pytest.raises(asyncio.CancelledError, match="原启动取消"):
+            await asyncio.wait_for(opening, 6)
+        assert runtime._task.done() and runtime.scope.is_closed
+        assert not process.is_running()
+        assert gate.cold_status() == "stopped" and not case.received()
+        assert owner._session_scope is None
+    finally:
+        gate.release.set()
+        cleanup_release.set()
         await asyncio.gather(opening, *([] if closing is None else [closing]), return_exceptions=True)
         await owner.shutdown()
 

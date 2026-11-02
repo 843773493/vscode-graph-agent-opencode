@@ -27,6 +27,9 @@ def lifecycle_factory():
             self.fail_connect = False
             self.fail_close = False
             self.crash = asyncio.Event()
+            self.block_cleanup = False
+            self.cleanup_entered = asyncio.Event()
+            self.cleanup_release = asyncio.Event()
 
         def __call__(self, server, on_change):
             original = super().__call__(server, on_change)
@@ -54,6 +57,9 @@ def lifecycle_factory():
                         if self.fail_close:
                             raise RuntimeError("private close failure")
                 finally:
+                    if self.block_cleanup:
+                        self.cleanup_entered.set()
+                        await self.cleanup_release.wait()
                     current = asyncio.current_task()
                     assert current is not None
                     self.closed[server.server_id] = current
@@ -160,6 +166,37 @@ async def test_cancel_start_drains_initializing_server(lifecycle_owner, lifecycl
     assert lifecycle_factory.closed == lifecycle_factory.entered
     assert lifecycle_owner._session_scope is None
     assert not lifecycle_owner.started
+
+
+@pytest.mark.parametrize("request_close_first", [False, True])
+async def test_scope_close_does_not_cancel_initializing_session_cleanup_twice(
+    lifecycle_owner, lifecycle_factory, request_close_first,
+):
+    owner, factory = lifecycle_owner, lifecycle_factory
+    factory.block_connect = factory.block_cleanup = True
+    startup = asyncio.create_task(owner.start())
+    await asyncio.wait_for(factory.connecting.wait(), 2)
+    runtime = owner._runtimes["alpha"]
+    startup.cancel("启动等待者取消")
+    await asyncio.wait_for(factory.cleanup_entered.wait(), 2)
+    if request_close_first:
+        runtime.request_close()
+    closing = asyncio.create_task(runtime.scope.close())
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(closing), 0.05)
+        assert not startup.done()
+        assert runtime._task is factory.entered["alpha"]
+        assert not runtime._task.done()
+        assert not factory.closed
+    finally:
+        factory.cleanup_release.set()
+        await asyncio.wait_for(closing, 2)
+        with pytest.raises(asyncio.CancelledError, match="启动等待者取消"):
+            await asyncio.wait_for(startup, 2)
+    assert factory.closed == factory.entered
+    assert owner._session_scope is None
+    assert not owner.started
 
 
 async def test_startup_and_cleanup_failures_keep_both_causes(lifecycle_owner, lifecycle_factory):
