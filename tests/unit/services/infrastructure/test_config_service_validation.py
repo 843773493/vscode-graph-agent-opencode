@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import commentjson
 import jsonschema
 import pytest
 
 import app.services.infrastructure.config_service.config_source_layers as source_layers
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.runtime import read_jsonc_object
 
 
@@ -19,6 +21,51 @@ def validation_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     schema.write_bytes(Path("configs/workspace_schema.jsonc").read_bytes())
     monkeypatch.setattr(source_layers, "get_user_workspace_schema_path", lambda: tmp_path / "absent.jsonc")
     return inline, schema, tmp_path
+
+
+@pytest.mark.parametrize("stored", [False, True])
+@pytest.mark.parametrize("schema_reference", ["user_schema.jsonc", "missing.jsonc", "https://example.test/schema"])
+def test_candidate_parses_each_source_once_and_preserves_schema_precedence(
+    validation_files,
+    monkeypatch: pytest.MonkeyPatch,
+    stored: bool,
+    schema_reference: str,
+) -> None:
+    inline, schema, directory = validation_files
+    user_schema = directory / "user_schema.jsonc"
+    user_schema.write_bytes(schema.read_bytes())
+    user = directory / "workspace.jsonc"
+    user_text = json.dumps({"$schema": schema_reference})
+    user.write_text(user_text)
+    # local 层的合并结果不能取代 user／inline 原始来源的 schema 选择。
+    (directory / "workspace_local.jsonc").write_text(json.dumps({"$schema": "local_schema.jsonc"}))
+    (directory / "local_schema.jsonc").write_text(json.dumps({"not": {}}))
+    parsed: list[str] = []
+    original_loads = commentjson.loads
+
+    def loads(text, *args, **kwargs):
+        parsed.append(text)
+        return original_loads(text, *args, **kwargs)
+
+    monkeypatch.setattr(commentjson, "loads", loads)
+    root = directory / "workspace"
+    store = WorkspaceStateStore(workspace_root=root) if stored else None
+    try:
+        service = ConfigService(
+            config_dir=directory,
+            inline_config_path=inline,
+            config_path=user,
+            workspace_root=root,
+            workspace_state_store=store,
+        )
+        snapshot = service.get_snapshot()
+        expected = user_schema if not stored and schema_reference == user_schema.name else schema
+        assert snapshot.schema_path == expected
+        assert parsed.count(inline.read_text()) == 1
+        assert parsed.count(user_text) == 1
+    finally:
+        if store is not None:
+            store.close()
 
 
 def test_missing_schema_reports_resolution_failure_without_native_paths(validation_files) -> None:

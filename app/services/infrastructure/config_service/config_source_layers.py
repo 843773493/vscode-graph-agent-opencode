@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -46,30 +47,29 @@ from configs.runtime import (
 
 
 class ConfigSourceLayersMixin:
-    def _resolve_schema_path(self) -> Path:
+    def _resolve_schema_path(
+        self,
+        *,
+        source_configs: Mapping[Path, Mapping[str, object]] | None = None,
+    ) -> Path:
         config_path = self._get_workspace_config_path()
-        if self._workspace_state_store is None and config_path.is_file():
-            schema_reference = read_jsonc_object(config_path).get("$schema")
+        candidates = [self._inline_config_path]
+        if self._workspace_state_store is None:
+            candidates.insert(0, config_path)
+        for path in candidates:
+            if not path.is_file():
+                continue
+            # 候选构建复用本次已解析的原始来源，不从合并后的 $schema 推断归属。
+            config = source_configs.get(path) if source_configs is not None else None
+            if config is None:
+                config = read_jsonc_object(path)
+            schema_reference = config.get("$schema")
             if (
                 isinstance(schema_reference, str)
                 and schema_reference
                 and "://" not in schema_reference
             ):
-                referenced_path = (config_path.parent / schema_reference).resolve()
-                if referenced_path.is_file():
-                    return referenced_path
-        if self._inline_config_path.is_file():
-            schema_reference = read_jsonc_object(
-                self._inline_config_path
-            ).get("$schema")
-            if (
-                isinstance(schema_reference, str)
-                and schema_reference
-                and "://" not in schema_reference
-            ):
-                referenced_path = (
-                    self._inline_config_path.parent / schema_reference
-                ).resolve()
+                referenced_path = (path.parent / schema_reference).resolve()
                 if referenced_path.is_file():
                     return referenced_path
         configured_schema = self._config_dir / "workspace_schema.jsonc"
@@ -117,6 +117,7 @@ class ConfigSourceLayersMixin:
             ),
         ]
         config = self._read_config_source(self._inline_config_path)
+        source_configs = {self._inline_config_path: config}
         user_override = self._read_shared_override(
             config_key="workspace_mutable_override",
             path=config_path,
@@ -128,6 +129,7 @@ class ConfigSourceLayersMixin:
             )
         )
         if user_override is not None:
+            source_configs[config_path] = user_override
             config = merge_json_objects(
                 config,
                 user_override,
@@ -154,7 +156,7 @@ class ConfigSourceLayersMixin:
 
         schema_path: Path | None = None
         if self._workspace_root is not None:
-            schema_path = self._resolve_schema_path()
+            schema_path = self._resolve_schema_path(source_configs=source_configs)
             migrate_legacy_workspace_configuration(
                 workspace_root=self._workspace_root,
                 workspace_schema_path=schema_path,
@@ -184,7 +186,7 @@ class ConfigSourceLayersMixin:
             )
         self._validate_agent_tool_policies(config)
         if schema_path is None:
-            schema_path = self._resolve_schema_path()
+            schema_path = self._resolve_schema_path(source_configs=source_configs)
         return config, tuple(source_paths), tuple(source_details), schema_path
 
     def _runtime_override_source(self) -> ConfigSource:
