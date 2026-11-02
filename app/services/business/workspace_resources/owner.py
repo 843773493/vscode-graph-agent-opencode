@@ -166,6 +166,9 @@ class WorkspaceResourceOwner:
                     )
 
                 records = tuple(record for record in self._store.all() if matches(record))
+                # 冷恢复仍核实完整外部清单；没有匹配的权威资源时，无需再次查询外设。
+                if not records:
+                    return []
                 await self.recover(record.resource_id for record in records)
                 # 一次清单请求不占任何资源锁；只在合并各自观察时短暂持有对应锁。
                 records = tuple(self._require_owned_resource_record(record.resource_id) for record in records)

@@ -44,6 +44,51 @@ def deadlines(monkeypatch: pytest.MonkeyPatch) -> list[asyncio.Timeout]:
     return contexts
 
 
+@pytest.mark.parametrize("registered", [False, True], ids=["empty-owner", "unmatched-session"])
+async def test_empty_listing_preserves_cold_check_without_repeating_transport(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+    monkeypatch: pytest.MonkeyPatch, registered: bool,
+) -> None:
+    resource = await bundle.create("workspace") if registered else None
+    owner = bundle.restart()
+    listing = bundle.transport.list_resources
+    calls = []
+
+    async def observed() -> list[dict[str, object]]:
+        calls.append(True)
+        return await listing()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bundle.transport, "list_resources", observed)
+        for _ in range(4):
+            assert await owner.list_resources(session_id="ses_without_resources" if registered else None) == []
+        # 首次冷恢复仍验证远端身份并同步原资源，后续空结果由原owner确定。
+        assert len(calls) == 1
+        if resource is not None:
+            current, = await owner.list_resources()
+            assert current["resource_id"] == resource["resource_id"]
+            assert current["owner_revision"] == resource["owner_revision"] + 1
+            assert current["reconciliation_status"] == "verified"
+            assert len(calls) == 2
+
+
+async def test_empty_owner_does_not_mask_initial_transport_failure(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = bundle.restart()
+    failure = ConnectionError("首次资源清单未取得回执")
+
+    async def failed() -> list[dict[str, object]]:
+        raise failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bundle.transport, "list_resources", failed)
+        with pytest.raises(ConnectionError) as caught:
+            await owner.list_resources()
+        assert caught.value is failure and owner._recovery._pending is None
+    assert await owner.list_resources() == []
+
+
 @pytest.mark.parametrize("ending", ["deadline", "cancel"])
 async def test_interrupted_recovery_keeps_completed_errors_and_original_pending_versions(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture, deadlines: list[asyncio.Timeout],
