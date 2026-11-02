@@ -48,7 +48,7 @@ from tests.support.sealed_request_audit import audit_sealed_requests
 
 
 @pytest.mark.parametrize("text_only", [False, True], ids=["native", "text_only"])
-async def test_native_io_failure_converges_without_publishing_file_locations(
+async def test_native_io_failure_converges_with_known_file_diagnostics(
     runtime_case: RuntimeCase,
     cold_message_stream_client: httpx.AsyncClient,
     caplog: pytest.LogCaptureFixture,
@@ -109,13 +109,14 @@ async def test_native_io_failure_converges_without_publishing_file_locations(
     assert frozen["failure"]["code"] == "execution_error"
     assert model_failure["payload"]["error_code"] == "execution_error"
     expected = f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
+    if not text_only:
+        expected += f", reason={error.strerror}, filename={str(location)!r}"
     assert (await container.job_service.get(job.job_id)).error_message == expected
     assert {failure["error"] for failure in failures} == {expected}
     assert frozen["failure"]["message"] == model_failure["payload"]["message"] == expected
     public = json.dumps({"job_error": job.error_message, "job_events": failures,
                          "snapshot": frozen, "events": records}, ensure_ascii=False)
-    assert str(location) not in public
-    assert location.name not in public
+    assert (location.name in public) is (not text_only)
     assert str(location) in caplog.text
     assert any(record.exc_info and record.exc_info[1] is errors[0] for record in caplog.records)
 
@@ -131,7 +132,7 @@ async def test_native_io_failure_converges_without_publishing_file_locations(
     logs = [json.loads(path.read_text(encoding="utf-8")) for path in log_root.glob("*.json")]
     failure_log, = [log for log in logs if log["job_id"] == job.job_id]
     assert failure_log["response"]["error"] == expected
-    assert location.name not in json.dumps(failure_log, ensure_ascii=False)
+    assert (location.name in json.dumps(failure_log, ensure_ascii=False)) is (not text_only)
 
     # 同一 thread 经产品入口继续，旧失败及 canonical 前缀仍可冷读且不被改写。
     case.response_chunks = None

@@ -66,10 +66,11 @@ def test_owner_diagnostic_logger_keeps_context_and_original_error(
     ConnectionError(r"本机连接失败: \\server\private\execution.sqlite"),
     TimeoutError(110, "本机读取超时", "/private/execution.sqlite"),
 ])
-def test_system_io_failure_keeps_native_facts_without_filename(error: OSError) -> None:
-    assert execution_failure_message(error) == (
-        f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
-    )
+def test_system_io_failure_exposes_only_known_file_target_and_reason(error: OSError) -> None:
+    expected = f"执行系统 I/O 失败: error={type(error).__name__}, errno={error.errno}"
+    if error.filename is not None:
+        expected += f", reason={error.strerror}, filename={error.filename!r}"
+    assert execution_failure_message(error) == expected
 
 
 @pytest.mark.parametrize("sink_fails", [False, True], ids=["log-ok", "log-failed"])
@@ -241,3 +242,14 @@ def test_provider_canonical_validation_keeps_provider_ownership(
     assert message == "模型执行失败: stage=execution-provider, error=ItemSchemaError"
     record, = caplog.records
     assert record.exc_info is not None and record.exc_info[1] is error
+
+
+@pytest.mark.parametrize("target", ["/private/file.txt", r"C:\project\file.txt", r"\\target\share\file.txt"])
+def test_known_file_error_keeps_target_but_provider_error_keeps_secret_boundary(target: str) -> None:
+    error = PermissionError(13, "Permission denied", target)
+    message = execution_failure_message(error)
+    assert repr(target) in message and "Permission denied" in message and "errno=13" in message
+    assert error.filename == target and error.errno == 13
+    # 相同异常一旦来自 Provider，不能将上游任意文件／响应当作本地文件诊断公开。
+    mark_provider_failure(error)
+    assert execution_failure_message(error) == "模型执行失败: stage=execution-provider, error=PermissionError, errno=13"

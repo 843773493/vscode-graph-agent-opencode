@@ -165,7 +165,7 @@ hard rebase不修改已有 canonical item identity、正文或因果顺序，也
 
 本节的消息分组、模型解释和版本生效边界已同步到 specs，新增实现与验收列入 tasks 第 9 节。标签语法、配置键及内部存储映射仍可继续细化，不能据此将现有实现或历史验收视为已满足新增合同。
 
-- **统一来源表达与模型提示。** system root 和 user 来源更新均以统一来源块表达，说明来源身份、名称、类型、版本、操作含义、完整正文或 diff 格式，以及追踪模式和原有信任资格。集中 CSM 提示解释这些消息与真实用户任务的区别、diff 增删语义及同一来源新旧版本的替代关系；来源更新不影响其它来源，不改变既有优先级，也不因统一包装而提升信任资格。模型可见结构不包含物理路径、内部 locator 或凭据。
+- **统一来源表达与模型提示。** system root 和 user 来源更新均以统一来源块表达，说明来源身份、名称、类型、版本、操作含义、完整正文或 diff 格式，以及追踪模式和原有信任资格。集中 CSM 提示解释这些消息与真实用户任务的区别、diff 增删语义及同一来源新旧版本的替代关系；来源更新不影响其它来源，不改变既有优先级，也不因统一包装而提升信任资格。资源引用 envelope 使用 URI，不发布内部 locator 或凭据；正文与诊断允许出现原生路径，消费者不得据此建立隐式本机定位。
 - **默认聚合本批 user 来源。** compiler 在 seal 前将同一模型调用待追加的 CSM 来源批次按确定性顺序编成一条 `user` 消息，每个来源仍保留独立身份、revision、操作和提交追踪。Workspace 上下文配置保留切换为逐来源独立消息的参数，便于快速切换与对比测试；两种分组方式复用同一封装和生命周期链路。分组不跨越真实用户输入或工具协议事实，不吸收旧 sealed 消息；Provider adapter 只消费已封存分组，配置切换仅影响后续尚未封存批次。逻辑 item 仍是处理基础，聚合消息保留所含 item 的引用和顺序，各来源绑定分别记录封存时的 tracking 状态，不将多个 item 的状态压成一个消息级状态；具体映射随后细化。
 - **单次显式刷新与生效关系。** 再次 `skill_load(name)` 可加载本次激活边界冻结的已发布版本，无需先 untrack 或卸载，也不另加重复的 reload 参数；同来源同版本仍有效时复用正文，版本变化时追加刷新并明确新版取代旧版。snapshot 与 tracked 是互斥加载模式，每次以请求 mode 为准；省略 mode 使用 snapshot，并停止该名称已有追踪，显式 tracked 则建立或保持追踪。同版本复用正文仍须完成模式切换，并在回执中反映实际追踪状态。同名来源身份变化需明确来源切换和替代范围；加载与追踪状态变更共同成功，失败保留原有效状态。“最新版”仍受既有激活边界约束，不转为调用时读盘。旧 sealed 内容保留供历史复现，与当前生效版本区分；untrack 只停止追踪和自动恢复，不撤销正文。snapshot 被 rewind 移除或压缩未保留时不自动恢复，本轮不增加 unload。
 
@@ -332,7 +332,7 @@ boxteam://inline/{distribution_id}/resources/skills/{skill_name}/SKILL.md
 
 同一资源同时具有四种不能混用的标识/定位：模型可见且可安全展示的`display_uri`；来源registry内稳定的`source_id`；语义Registry内稳定、跨rename/locator变化保持不变的`resource_id`；实际owner私有的`provider_locator`（绝对路径、Gateway内部snapshot引用、credential ref等；provider locator 举例中的 memory key 已随 remove-agent-memory 回收，不再存在）。有真实地址时`display_uri`表达逻辑scope/kind/name；内部聚合无地址时按统一寻址owner requirement「内部语义聚合资源不得伪造 URI」保留必填字段的null，不替代内部identity、授权凭据、dedupe key或业务幂等键。URI不携带revision；精确revision/hash/snapshot_ref由activation/assembly provenance另存。解析必须通过`VirtualResourceResolver.resolve(uri, operation, ResolutionContext)`得到绑定相应owner与capabilities的typed handle（只有语义来源/激活操作必须同时具有resource_id/source_id/语义revision/snapshot_ref，轻量文件读取不逐文件注册），不能percent-decode后直接join到文件系统。
 
-规范parser引用统一寻址owner的分段合同：结构/身份段不解码，只有已公布文件child段percent decode恰好一次，拒绝userinfo、credential、未知query/fragment、控制字符、反斜杠、空segment、`.`/`..`、编码歧义和越界scope。核心功能的policy默认允许不等于取消这些identity/integrity约束。每次实际operation仍按当前principal、workspace/gateway binding、resource capability和activation snapshot校验；URI本身不授予读取、激活、监视或跨workspace权限。provider locator、内部handle、credential和绝对路径不得进入模型prompt、普通工具结果、history projection、日志或URI。
+规范parser引用统一寻址owner的分段合同：结构/身份段不解码，只有已公布文件child段percent decode恰好一次，拒绝userinfo、credential、未知query/fragment、控制字符、反斜杠、空segment、`.`/`..`、编码歧义和越界scope。核心功能的policy默认允许不等于取消这些identity/integrity约束。每次实际operation仍按当前principal、workspace/gateway binding、resource capability和activation snapshot校验；URI本身不授予读取、激活、监视或跨workspace权限。provider locator与内部handle不得替代公开资源引用，credential继续遵守秘密保护。原生路径能否出现按统一寻址owner的字段职责合同判断，普通正文与诊断不因含有绝对路径而失败，也不得被消费者隐式解释为本机资源目标。
 
 `skill_load`保持name-only：模型输入`name + mode`，软件在当前冻结的SkillCatalogSnapshot中把name解析为精确resource handle。成功结果和context item envelope可以返回`display_uri`说明来源，但`source_uri`属于ResourceProvenance而不是Skill metadata；name/description仍是唯一模型可见metadata。通用`read_file`可以按统一寻址owner公布的directory/file能力读取workspace或Skill包文件URI，结果只是有界文件内容，不建立source/activation/tracking、不写来源控制，也不作为冻结Skill snapshot。目录读取和文件操作合同引用`add-unified-resource-file-tools`；只有skill_load使用上述冻结来源激活合同。领域对象及只读根的限制继续由各owner校验，旧.boxteam挂载与路径白名单不恢复。
 

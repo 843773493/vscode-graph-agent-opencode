@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import json
 import sqlite3
 
 import pytest
@@ -96,6 +95,10 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
         if isinstance(native_error, sqlite3.Error)
         else f"执行系统 I/O 失败: error={type(native_error).__name__}, errno={native_error.errno}"
     )
+    if isinstance(native_error, OSError) and native_error.errno is not None and native_error.filename is not None:
+        expected += f", reason={native_error.strerror}, filename={native_error.filename!r}"
+        if native_error.filename2 is not None:
+            expected += f", filename2={native_error.filename2!r}"
     if sink_fails:
         expected += ", diagnostic_sink_error=NotADirectoryError"
         assert len(diagnostic_sink.errors) == 1 and diagnostic_sink.errors[0].errno == errno.ENOTDIR
@@ -104,5 +107,5 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
     assert (await service.get(job.job_id)).error_message == expected
     failed, = [event["payload"] for event in bus.events if event["event_type"] == EventType.JOB_FAILED]
     assert failed == {"session_id": session_id, "error": expected}
-    assert "private" not in json.dumps(failed)
+    assert ("private" in expected) == (isinstance(native_error, OSError) and native_error.filename is not None)
     assert any(record.exc_info and record.exc_info[1] is native_error for record in caplog.records)

@@ -1,4 +1,4 @@
-"""Inspector 源码引用在构造及复制后发布时仍须拒绝原生位置。"""
+"""调试展示路径允许原生值，资源导航和可移植方案仍按各自合同校验。"""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def test_mutated_configuration_refuses_publication(
 @pytest.mark.parametrize("field", ["script_path", "working_directory", "source_changed_paths",
                                  "breakpoints", "configurations"])
 @pytest.mark.parametrize("native", NATIVE)
-def test_state_construction_refuses_native_source(
+def test_state_construction_preserves_native_display_path(
     state: NodeDebugStateDTO, field: str, native: str,
 ) -> None:
     payload = state.model_dump()
@@ -113,15 +113,14 @@ def test_state_construction_refuses_native_source(
         payload[field] = [{**state.configurations[0].model_dump(), "script_path": native}]
     else:
         payload[field] = [native] if field == "source_changed_paths" else native
-    with pytest.raises(ValidationError):
-        NodeDebugStateDTO.model_validate(payload)
+    assert NodeDebugStateDTO.model_validate(payload).model_dump() == payload
 
 
 @pytest.mark.parametrize("field", ["script_path", "working_directory", "source_changed_paths",
                                  "breakpoints", "configurations"])
 @pytest.mark.parametrize("native", NATIVE)
 @pytest.mark.parametrize("mode", ["python", "json", "json-text", "tool"])
-def test_mutated_state_refuses_publication(
+def test_mutated_state_preserves_native_display_path(
     state: NodeDebugStateDTO, field: str, native: str, mode: Mode,
 ) -> None:
     before = state.model_dump_json()
@@ -132,14 +131,14 @@ def test_mutated_state_refuses_publication(
         damaged.configurations[0] = damaged.configurations[0].model_copy(update={"script_path": native})
     else:
         damaged = damaged.model_copy(update={field: [native] if field == "source_changed_paths" else native})
-    with pytest.raises(PydanticSerializationError) as failure:
-        if mode == "tool":
-            _success("调试状态", damaged)
-        elif mode == "json-text":
-            damaged.model_dump_json()
-        else:
-            damaged.model_dump(mode=mode)
-    assert native not in str(failure.value)
+    if mode == "tool":
+        published = _success("调试状态", damaged)
+        assert native in published or native.replace("\\", "\\\\") in published
+    elif mode == "json-text":
+        assert NodeDebugStateDTO.model_validate_json(damaged.model_dump_json()) == damaged
+    else:
+        payload = damaged.model_dump(mode=mode)
+        assert NodeDebugStateDTO.model_validate(payload) == damaged
     assert state.model_dump_json() == before
 
 
@@ -154,7 +153,7 @@ def test_state_relative_paths_keep_wire_and_nullable_root(state: NodeDebugStateD
         assert NodeDebugStateDTO.model_validate_json(copy.model_dump_json()) == copy
 
 
-@pytest.mark.parametrize("field", ["url", "path"])
+@pytest.mark.parametrize("field", ["url"])
 @pytest.mark.parametrize("native", NATIVE)
 def test_frame_construction_refuses_native_source(field: str, native: str) -> None:
     payload = {"call_frame_id": "frame", "function_name": "f", "url": FILE,
@@ -163,7 +162,7 @@ def test_frame_construction_refuses_native_source(field: str, native: str) -> No
         NodeDebugStackFrameDTO.model_validate(payload)
 
 
-@pytest.mark.parametrize("field", ["url", "path"])
+@pytest.mark.parametrize("field", ["url"])
 @pytest.mark.parametrize("native", NATIVE)
 @pytest.mark.parametrize("container", ["frame", "call_stack", "last_stopped_frame"])
 @pytest.mark.parametrize("mode", ["python", "json", "json-text", "tool"])
@@ -220,3 +219,19 @@ def test_source_url_rejects_wrong_domain_or_noncanonical_address(state: NodeDebu
         NodeDebugStackFrameDTO.model_validate({**state.call_stack[0].model_dump(), "url": url})
     with pytest.raises(PydanticSerializationError):
         state.call_stack[0].model_copy(update={"url": url}).model_dump_json()
+
+
+@pytest.mark.parametrize("native", NATIVE)
+@pytest.mark.parametrize("container", ["call_stack", "last_stopped_frame"])
+def test_frame_display_path_keeps_native_value_with_uri_navigation(
+    state: NodeDebugStateDTO, native: str, container: str,
+) -> None:
+    frame = state.call_stack[0].model_copy(update={"path": native})
+    candidate = state.model_copy(deep=True)
+    if container == "call_stack":
+        candidate.call_stack[0] = frame
+    else:
+        candidate.last_stopped_frame = frame
+    restored = NodeDebugStateDTO.model_validate_json(candidate.model_dump_json())
+    published = restored.call_stack[0] if container == "call_stack" else restored.last_stopped_frame
+    assert published is not None and published.path == native and published.url == FILE

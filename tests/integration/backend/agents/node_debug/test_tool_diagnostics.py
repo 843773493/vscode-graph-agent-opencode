@@ -86,12 +86,6 @@ async def test_debug_tool_native_failure_keeps_canonical_action_and_same_thread_
     resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
     thread_root = resolver.resolve_thread_node(session, thread)
     root = thread_root / "rollout"
-    expected_message = (
-        f"执行系统 I/O 失败: error=NotADirectoryError, errno={errno.ENOTDIR}"
-    )
-    if log_fails:
-        expected_message += ", diagnostic_sink_error=NotADirectoryError"
-
     for index in range(2):
         wire_id = f"debug-breakpoint-{index}"
         call, followup = await case.plan(
@@ -130,6 +124,12 @@ async def test_debug_tool_native_failure_keeps_canonical_action_and_same_thread_
         assert action["tool_name"] == "add_breakpoint" and action["actor"] == "ai"
         assert action["extension_catalog_binding"]["target_id"] == tool["name"]
         if index == 0:
+            expected_message = (
+                f"执行系统 I/O 失败: error=NotADirectoryError, errno={errno.ENOTDIR}, "
+                f"reason={causes[0].strerror}, filename={str(blocker / 'entry.mjs')!r}"
+            )
+            if log_fails:
+                expected_message += ", diagnostic_sink_error=NotADirectoryError"
             assert result["ok"] is False
             assert result["error"] == {
                 "code": "DEBUG_TOOL_FAILED",
@@ -213,15 +213,15 @@ async def test_debug_tool_native_failure_keeps_canonical_action_and_same_thread_
         )
         assembly.validate_hashes()
     public = json.dumps([results, case.requests()], ensure_ascii=False)
-    assert "debug-tool-secret" not in public and "diagnostic-log-secret" not in public
+    assert "debug-tool-secret" in public and "diagnostic-log-secret" not in public
     with storage._connect(thread, session_id=session, read_only=True) as connection:
         persisted = "\n".join(connection.iterdump())
     assert (
-        "debug-tool-secret" not in persisted
+        "debug-tool-secret" in persisted
         and "diagnostic-log-secret" not in persisted
     )
     content = (thread_root / "debug/node/manifest.json").read_text(encoding="utf-8")
-    assert "debug-tool-secret" not in content and "diagnostic-log-secret" not in content
+    assert "debug-tool-secret" in content and "diagnostic-log-secret" not in content
     manifest = json.loads(content)
     for result in results:
         (action,) = [

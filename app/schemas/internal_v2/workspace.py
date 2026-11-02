@@ -6,8 +6,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SerializerFunctionWrapHandler,
-    model_serializer,
 )
 
 from app.schemas.internal_v2.workspace_file_operations import (
@@ -16,18 +14,10 @@ from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
     WorkspaceFileURI,
 )
-from app.schemas.public_metadata import reject_metadata_real_paths
 
 
 class _WorkspaceMetadataDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-    # 沿用 DTO 字段生成序列化 schema，保留公开字段与 required 合同。
-    @model_serializer(mode="wrap")
-    def serialize_metadata(self, handler: SerializerFunctionWrapHandler):
-        payload = handler(self)
-        reject_metadata_real_paths(payload)
-        return payload
 
 
 class WorkspaceDTO(_WorkspaceMetadataDTO):

@@ -1,4 +1,4 @@
-"""调试工具共用失败事实，原生诊断不进入结果和动作正文。"""
+"""调试工具保留已知文件失败目标与原因，凭据和内部诊断仍受保护。"""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def failure_case(request: pytest.FixtureRequest, sqlite_failure: sqlite3.Operati
         return (
             FileNotFoundError(errno.ENOENT, "调试文件不可用", location),
             "INVALID_DEBUG_ARGUMENT",
-            "执行系统 I/O 失败: error=FileNotFoundError, errno=2",
+            f"执行系统 I/O 失败: error=FileNotFoundError, errno=2, reason=调试文件不可用, filename={location!r}",
         )
     if request.param == "permission":
         return (
@@ -45,7 +45,8 @@ def failure_case(request: pytest.FixtureRequest, sqlite_failure: sqlite3.Operati
                 errno.EACCES, "调试文件不可读", r"C:\private\debug-tool-secret"
             ),
             "DEBUG_TOOL_FAILED",
-            "执行系统 I/O 失败: error=PermissionError, errno=13",
+            "执行系统 I/O 失败: error=PermissionError, errno=13, reason=调试文件不可读, filename="
+            + repr(r"C:\private\debug-tool-secret"),
         )
     if request.param == "rename":
         return (
@@ -57,7 +58,8 @@ def failure_case(request: pytest.FixtureRequest, sqlite_failure: sqlite3.Operati
                 r"D:\private\debug-tool-secret",
             ),
             "DEBUG_TOOL_FAILED",
-            "执行系统 I/O 失败: error=OSError, errno=18",
+            f"执行系统 I/O 失败: error=OSError, errno=18, reason=调试文件移动失败, filename={location!r}, filename2="
+            + repr(r"D:\private\debug-tool-secret"),
         )
     if request.param == "timeout":
         return TimeoutError("调试命令等待超时"), "DEBUG_TOOL_FAILED", "调试命令等待超时"
@@ -126,9 +128,8 @@ async def test_debug_tool_failure_keeps_action_and_result_consistent(
         result="error",
         message=message,
     )
-    assert "debug-tool-secret" not in json.dumps(
-        result
-    ) and "diagnostic-log-secret" not in json.dumps(result) and "sqlite-execution-private" not in json.dumps(result)
+    assert ("debug-tool-secret" in result["error"]["message"]) == (isinstance(original, OSError) and original.filename is not None)
+    assert "diagnostic-log-secret" not in json.dumps(result) and "sqlite-execution-private" not in json.dumps(result)
     assert any(
         record.exc_info and record.exc_info[1] is original for record in caplog.records
     )

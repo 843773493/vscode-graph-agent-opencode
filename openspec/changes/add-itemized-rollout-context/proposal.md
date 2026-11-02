@@ -92,7 +92,7 @@
 - 影响 Goal、team board、member/task schema 与资源生命周期：Goal 只由 main thread 承载，team 状态改为 Session 内引用 child thread；ThreadRuntime residency owner判断idle并关闭其进程内scope，durable history和跨Turn外部资源不因scope关闭而改变。`LifetimeScope`、共享watch和外部资源lease账本由`add-context-injection-lifecycle`独占定义，本change只消费其合同。
 - 影响主窗口与右侧侧边栏的数据归属：主会话区继续展示 Session main thread，右侧侧边栏承载当前 Session 的 child-thread 列表、状态、历史和直接对话，不把 child 原始历史合并进 main conversation。
 - 不改变 provider SDK 的事实来源，也不把 OpenAI `OutputItem` 直接作为全局领域模型；provider response item、canonical context item 和 LangChain message 是三个不同层次。
-- 不把provider locator、绝对路径、network endpoint、credential或内部resource handle写入JSONL、普通history、模型上下文或request log；安全display URI属于provenance projection，不能反写storage identity。
+- 不把provider locator、network endpoint、credential或内部resource handle作为资源引用写入JSONL、普通history、模型上下文或request log；正文、展示、诊断中的原生路径按统一 URI owner 的字段职责合同保留；安全display URI属于provenance projection，不能反写storage identity。
 
 ## Verification boundary
 

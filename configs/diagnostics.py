@@ -129,6 +129,7 @@ def _inspect_jsonc_source(
 ) -> tuple[dict[str, object], dict[str, object] | None]:
     result: dict[str, object] = {
         **address,
+        "path": str(path.absolute()),
         "layer": layer,
         "precedence": precedence,
         "source_key": source_key,
@@ -176,6 +177,7 @@ def _jsonc_domain_diagnostic(
     )
     result: dict[str, object] = {
         "schema_uri": schema_address["uri"],
+        "schema_path": str(schema_path.absolute()),
         "schema_address_error": schema_address["address_error"],
         "sources": sources,
         "effective": effective_result,
@@ -286,6 +288,7 @@ def _read_rows(
 def _read_sqlite_diagnostic(*, path: Path) -> dict[str, object]:
     resolved_path = path.expanduser().resolve()
     result: dict[str, object] = {
+        "path": str(resolved_path),
         "available": resolved_path.is_file(),
         "read_only": True,
         "schema_version": None,

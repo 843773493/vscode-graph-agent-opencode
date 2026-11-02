@@ -83,16 +83,6 @@ class NodeDebugRuntimeObserver:
                 runtime.inspector.inspector_url = match.group(1)
                 runtime.inspector.inspector_ready.set()
                 continue
-            if stream_name == "stderr" and text:
-                # 原始诊断只进入服务日志；状态与持久动作不复制可能含真实路径的堆栈。
-                if INSPECTOR_FAILURE_PATTERN.search(text) is not None:
-                    runtime.inspector.inspector_failed.set()
-                logger.warning(
-                    "Node stderr: session_id=%s, thread_id=%s, configuration_id=%s, pid=%s；%s",
-                    runtime.session_id, runtime.thread_id, runtime.configuration_id,
-                    process.pid, text,
-                )
-                continue
             if stream_name == "stdout" and text:
                 logpoint_error = parse_logpoint_error(text)
                 if logpoint_error is not None:
@@ -113,9 +103,23 @@ class NodeDebugRuntimeObserver:
                     logpoint_output = parse_logpoint_output(text)
                     if logpoint_output is not None:
                         text = f"[日志点] {logpoint_output}"
+            if text:
                 async with runtime.state_lock:
                     runtime.output.append(text)
                     del runtime.output[: -self._max_output_lines]
+            if stream_name == "stderr" and text:
+                if INSPECTOR_FAILURE_PATTERN.search(text) is not None:
+                    runtime.inspector.inspector_failed.set()
+                try:
+                    logger.warning(
+                        "Node stderr: session_id=%s, thread_id=%s, configuration_id=%s, pid=%s；%s",
+                        runtime.session_id, runtime.thread_id, runtime.configuration_id,
+                        process.pid, text,
+                    )
+                except Exception as error:  # noqa: BLE001 — 输出已保留，日志次错不能中断读取和原进程结算。
+                    async with runtime.state_lock:
+                        runtime.output.append(f"[诊断日志输出失败] {type(error).__name__}: {error}")
+                        del runtime.output[: -self._max_output_lines]
 
     async def monitor_process(self, runtime: NodeDebugRuntime) -> None:
         process = runtime.process
@@ -137,7 +141,7 @@ class NodeDebugRuntimeObserver:
     def terminal_error_message(
         runtime: NodeDebugRuntime, return_code: int
     ) -> str | None:
-        """失败退出公开退出码，原始 stderr 已由读取入口写入诊断。"""
+        """失败摘要保留退出码，具体 stderr 由读取入口放入有界输出。"""
         if runtime.logpoint_error_message is not None:
             return runtime.logpoint_error_message
         if return_code == 0:

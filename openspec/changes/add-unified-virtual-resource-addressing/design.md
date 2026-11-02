@@ -115,15 +115,15 @@ Workspace／Session 资源 metadata 只验证对象结构；定位字段在具�
 
 **备选**：二者含义不同（被否：产生两个等价地址，持久化记录因写法不同失去可比性）。
 
-### D6：星型解析在 gateway 层收敛，边界只传逻辑事实，上界是 policy 常量
+### D6：星型解析在 gateway 层收敛，资源关联使用 URI，上界是 policy 常量
 
 链路：本地 parse（fail-closed）→ 本机按 workspace registry 解析 / 对端按联邦关系转发（hub 直连直接 spoke；spoke 经唯一 hub 一次有界 transit）→ 不可达/未共享/未找到一律 fail-closed。
 
 **理由**：只有实际持有资源的进程能做权威解析；转发方不得猜测路径。把 `visited set`/`max_transit_gateways`/`max_gateway_hops`/总 deadline 做成显式 policy 常量，是因为拓扑会变，解析器不应因拓扑调整而重写。星型（最多一次中继）与仓库既有联邦拓扑一致。
 
-**不变量**：`locator 是输入，不是输出`。
+**不变量**：owner 私有 locator 不成为消费者的定位依据，跨边界资源目标仍使用 URI；原生参数、展示与诊断按 D1 的字段职责处理。
 
-普通文件原生路径可按 D1a 作为固定目标的具名请求输入转送；中继不解析、不持久化，也不得将其返回为资源引用。资源 URI 及目标授权仍使用本唯一 owner，不能因支持原生路径另建跨 Gateway 执行链。
+普通文件原生路径可按 D1a 作为固定目标的具名请求输入转送；中继不在本机解析，不保存为第二绑定，也不得将其返回为资源引用。资源 URI 及目标授权仍使用本唯一 owner，不能因支持原生路径另建跨 Gateway 执行链。
 
 **备选**：转发方缓存并本地解析对端资源（被否：第二份事实源）；对端返回 real path 由本机访问（被否：跨边界传资源 locator，且远端路径在本机无意义）；把上界写死在解析器里（被否：拓扑变化即改代码）。经目标 Gateway 按 `add-multi-workspace-backend-mounting` 唯一 root-binding requirement 授权的 workspace registration 是独立控制面输入，可把用户提供的 root 交给原生 Gateway owner；relay 只转送，不授权、不持久化该输入，它不进入资源解析或跨 Gateway projection。
 

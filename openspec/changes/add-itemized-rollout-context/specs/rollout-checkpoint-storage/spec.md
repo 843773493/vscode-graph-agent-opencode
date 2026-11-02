@@ -290,7 +290,7 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 
 ### Requirement: 附件目录与历史冻结输入必须由原 owner 分工保存
 
-上传正文 SHALL 由 `managed-attachment-directories` 定义的工作区目录 owner 保存，每次独立上传拥有稳定目录身份、冻结 UTC 日期和受检 locator；相同 digest 只证明具体文件字节一致，MUST NOT 合并可变目录或复活已回收目录。目录 catalog 是 live 原件、预览、精确 Thread 关联、ingest/fork claim、期限和可用性的唯一权威；canonical item、模型、API 和跨端传输只使用规范资源 URI，MUST NOT 保存真实路径。文件 child、访问授权和旧历史来源解析分别消费唯一 URI owner 及原附件 owner，不从 digest 猜测消费 Thread 或跨端 alias。
+上传正文 SHALL 由 `managed-attachment-directories` 定义的工作区目录 owner 保存，每次独立上传拥有稳定目录身份、冻结 UTC 日期和受检 locator；相同 digest 只证明具体文件字节一致，MUST NOT 合并可变目录或复活已回收目录。目录 catalog 是 live 原件、预览、精确 Thread 关联、ingest/fork claim、期限和可用性的唯一权威；canonical item、模型、API 和跨端传输中的资源关联 MUST 使用规范 URI；正文、展示和诊断按统一 URI owner 的字段职责保留原生信息，不建立第二定位关系。文件 child、访问授权和旧历史来源解析分别消费唯一 URI owner 及原附件 owner，不从 digest 猜测消费 Thread 或跨端 alias。
 
 上传 SHALL 先冻结消息 ID，在 topology shared → 单 Session gate 内核对 catalog、Thread 与 lifecycle generation 并建立原 durable attachment pin，再以稳定 operation identity 建立目录 ingest，冻结 pin/preimage、独立目录身份、staging 和最终 locator。正文写入与 durability 由原 holder 保护，在 Session gate 外完成；发布前重新取得短 gate，核对原 pin/fence/Thread，在同一附件 catalog 事务发布目录、文件版本、关联和 ingest。pin 与附件 catalog 是显式跨库 saga，MUST NOT 假设两个 SQLite 原子提交；同 operation 不同输入冲突，旧终态 intent 不重开，未登记文件不扫盘吸收。
 

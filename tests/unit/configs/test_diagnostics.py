@@ -71,7 +71,7 @@ def invoke_diagnostic(
 
 
 @pytest.mark.parametrize("action", ["doctor", "diagnose"])
-def test_cli_diagnostic_uses_file_uris_and_original_read_only_state(
+def test_cli_diagnostic_reports_actual_files_and_uris_read_only(
     tmp_path: Path,
     diagnostic_home: Path,
     invoke_diagnostic: Callable,
@@ -141,8 +141,16 @@ def test_cli_diagnostic_uses_file_uris_and_original_read_only_state(
             ) == (scope, scope_id, "config", (name,))
             assert source["presence"] == "present"
             assert source["address_error"] is None
-            assert "path" not in source
-        assert "path" not in output[domain]["sqlite"]
+            expected_path = (
+                Path.cwd() / "configs" / f"{domain}_inline.jsonc" if scope == "inline"
+                else workspace / ".boxteam" / "workspace.jsonc" if scope == "workspace"
+                else config_root / f"{name}.jsonc"
+            )
+            assert source["path"] == str(expected_path.resolve())
+        assert jsonc["schema_path"] == str((config_root / f"{domain}_schema.jsonc").resolve())
+        database = (diagnostic_home / "state" / "gateway" / "gateway.sqlite" if domain == "gateway"
+                    else workspace / ".boxteam" / "state" / "workspace.sqlite")
+        assert output[domain]["sqlite"]["path"] == str(database.resolve())
     assert output["gateway"]["sqlite"]["available"] is True
     assert output["action"] == "diagnose"
     assert output["read_only"] is True
@@ -160,7 +168,7 @@ def test_cli_diagnostic_uses_file_uris_and_original_read_only_state(
     database = diagnostic_home / "state" / "gateway" / "gateway.sqlite"
     assert added <= {Path(f"{database}-wal"), Path(f"{database}-shm")}
     assert all(not after[path][0] for path in added if path.name.endswith("-wal"))
-    assert str(tmp_path) not in json.dumps(output)
+    assert output["workspace"]["source_owner"]["path"] == str((config_root / "workspace-source.sqlite").resolve())
 
 
 @pytest.mark.parametrize("missing", [True, False])
@@ -199,7 +207,9 @@ def test_cli_diagnostic_reports_unavailable_identity_without_creating_or_replaci
     )
     assert not diagnostic_home.exists()
     assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
-    assert str(tmp_path) not in json.dumps(output) + stderr
+    assert output["workspace"]["jsonc"]["sources"][-1]["path"] == str((workspace / ".boxteam/workspace.jsonc").resolve())
+    assert "stage=diagnostic_log" in stderr
+    assert ("error=FileNotFoundError" if missing else "error=ValueError") in stderr
 
 
 @pytest.mark.parametrize(
@@ -255,7 +265,7 @@ def test_cli_diagnostic_failures_do_not_echo_native_input_and_can_retry(
 
 @pytest.mark.parametrize("action", ["doctor", "diagnose"])
 @pytest.mark.parametrize("initialized", [True, False])
-def test_real_cli_process_keeps_both_output_streams_free_of_native_locations(
+def test_real_cli_process_reports_actual_locations_without_initializing_target(
     tmp_path: Path,
     diagnostic_home: Path,
     action: str,
@@ -287,8 +297,11 @@ def test_real_cli_process_keeps_both_output_streams_free_of_native_locations(
     report = json.loads(completed.stdout)
     assert report["read_only"] is True
     assert report["gateway"]["jsonc"]["effective"]["valid"] is True
-    assert str(tmp_path) not in completed.stdout + completed.stderr
-    assert str(Path.cwd()) not in completed.stdout + completed.stderr
+    assert report["gateway"]["jsonc"]["sources"][0]["path"] == str((Path.cwd() / "configs/gateway_inline.jsonc").resolve())
+    assert report["workspace"]["jsonc"]["sources"][-1]["path"] == str((tmp_path / "workspace/.boxteam/workspace.jsonc").resolve())
+    assert completed.stderr == (
+        "" if initialized else "ERROR: logger=app.core.failures, stage=diagnostic_log, error=FileNotFoundError, errno=2\n"
+    )
     assert not diagnostic_home.exists()
 
 
@@ -341,7 +354,7 @@ def test_diagnostic_native_read_failure_keeps_errno_and_does_not_report_absence(
     failed = output["gateway"]["jsonc"]["sources"][1]
     assert failed["presence"] is None
     assert "stage=read, error=PermissionError, errno=13" in failed["parse_error"]
-    assert all(str(source) not in value for value in _strings(output))
+    assert failed["path"] == str(source.resolve())
     assert str(source) not in stderr
     assert original_read(source) == b"{}"
     monkeypatch.setattr(Path, "read_bytes", original_read)
@@ -424,3 +437,22 @@ def test_real_cli_preserves_rejection_of_unrelated_migration_options(
     assert completed.returncode == 2
     assert "只用于 migrate-runtime-config" in completed.stderr
     assert not diagnostic_home.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="本例验证 POSIX 符号链接环")
+def test_diagnostic_reports_source_path_even_when_symlink_target_cannot_resolve(
+    diagnostic_home: Path, invoke_diagnostic: Callable,
+) -> None:
+    source = diagnostic_home / "config/gateway.jsonc"
+    source.parent.mkdir(parents=True)
+    source.symlink_to(source.name)
+    output, _ = invoke_diagnostic("doctor")
+    failed = output["gateway"]["jsonc"]["sources"][1]
+    assert failed["path"] == str(source.absolute())
+    assert failed["parse_error"] == "stage=read, error=RuntimeError"
+    assert source.is_symlink() and source.readlink() == Path(source.name)
+    source.unlink()
+    source.write_text("{}", encoding="utf-8")
+    retried, _ = invoke_diagnostic("doctor")
+    assert retried["gateway"]["jsonc"]["effective"]["valid"] is True
+    assert retried["gateway"]["jsonc"]["sources"][1]["path"] == failed["path"]

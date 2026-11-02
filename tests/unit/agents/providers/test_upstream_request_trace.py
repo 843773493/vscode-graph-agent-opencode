@@ -58,15 +58,15 @@ def assert_provider_failure_facts(caplog: pytest.LogCaptureFixture) -> Callable[
     return check
 
 
-def test_native_io_attempt_error_keeps_system_reason_without_file_locations() -> None:
+def test_native_io_attempt_error_keeps_known_file_target_and_reason() -> None:
     token = begin_upstream_capture()
     record_upstream_request(request={"model": "test"}, model="test", provider="openai",
                             api_base=None, call_type="completion", dispatch_ref=None)
     error = FileNotFoundError(2, "missing at /private/model-input", "/private/model-input")
     record_upstream_error(error)
     attempts = end_upstream_capture(token)
-    assert attempts[0]["error"] == "执行系统 I/O 失败: error=FileNotFoundError, errno=2"
-    assert "/private" not in str(attempts)
+    assert attempts[0]["error"] == "执行系统 I/O 失败: error=FileNotFoundError, errno=2, reason=missing at /private/model-input, filename='/private/model-input'"
+    assert "/private/model-input" in attempts[0]["error"]
     assert error.filename == "/private/model-input"
 
 

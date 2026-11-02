@@ -158,22 +158,22 @@ class NodeDebugStartRequest(BaseModel):
     )
 
 
-def _debug_source_path(value: str) -> str:
-    # 路径字段是工作区相对位置；Inspector 原生地址只在目标 owner 转换时使用。
+def _portable_source_path(value: str) -> str:
+    # 可移植方案保留相对源码位置；运行态展示字段不复用此约束。
     if (PurePosixPath(value).is_absolute() or PureWindowsPath(value).root
             or value.lstrip().lower().startswith(("file:/", "file:\\"))):
-        raise ValueError("调试源码引用不得包含原生位置")
+        raise ValueError("可移植调试方案必须使用相对源码路径")
     return value
 
 
-_DebugSourcePath = Annotated[
-    str, AfterValidator(_debug_source_path), PlainSerializer(_debug_source_path),
+_PortableSourcePath = Annotated[
+    str, AfterValidator(_portable_source_path), PlainSerializer(_portable_source_path),
 ]
 
 
 class NodeDebugBreakpointDTO(BaseModel):
     breakpoint_id: str
-    path: _DebugSourcePath
+    path: str
     line: int = Field(ge=1)
     column: int = Field(default=1, ge=1)
     condition: str | None = None
@@ -216,7 +216,7 @@ class NodeDebugConfigurationBreakpointInput(BaseModel):
 class NodeDebugConfigurationBreakpointDTO(NodeDebugConfigurationBreakpointInput):
     """可移植方案中的断点，不包含 Inspector 安装和命中状态。"""
 
-    path: _DebugSourcePath
+    path: _PortableSourcePath
 
 
 class NodeDebugVariableDTO(BaseModel):
@@ -228,7 +228,8 @@ class NodeDebugVariableDTO(BaseModel):
 
 
 def _inspector_source_url(value: str) -> str:
-    _debug_source_path(value)
+    # 导航 URL 的文件目标必须是 URI，不能让展示路径成为第二定位链。
+    _portable_source_path(value)
     if value.lstrip().lower().startswith("file:"):
         raise ValueError("Inspector 文件源码必须先转换为资源 URI")
     if value.lstrip().lower().startswith("boxteam:"):
@@ -249,7 +250,7 @@ class NodeDebugStackFrameDTO(BaseModel):
     call_frame_id: str
     function_name: str
     url: _InspectorSourceURL
-    path: _DebugSourcePath | None = None
+    path: str | None = None
     line: int = Field(ge=1)
     column: int = Field(ge=1)
     scope_names: list[str] = Field(default_factory=list)
@@ -327,7 +328,7 @@ class NodeDebugCapabilitiesDTO(BaseModel):
 class NodeDebugConfigurationSummaryDTO(BaseModel):
     configuration_id: str
     name: str
-    script_path: _DebugSourcePath | None = None
+    script_path: str | None = None
     launch_profile_name: str | None = None
     breakpoint_count: int = Field(default=0, ge=0)
     revision: int = Field(default=1, ge=1)
@@ -365,8 +366,8 @@ class NodeDebugConfigurationInput(_NodeDebugConfigurationFields[NodeDebugConfigu
 class NodeDebugConfigurationDTO(_NodeDebugConfigurationFields[NodeDebugConfigurationBreakpointDTO]):
     """可跨会话复制的源码调试方案，不包含会话和运行时状态。"""
 
-    script_path: _DebugSourcePath | None = None
-    working_directory: _DebugSourcePath = ""
+    script_path: _PortableSourcePath | None = None
+    working_directory: _PortableSourcePath = ""
 
 
 class NodeDebugStateDTO(BaseModel):
@@ -377,8 +378,8 @@ class NodeDebugStateDTO(BaseModel):
     active_configuration_id: str | None = None
     active_configuration_name: str | None = None
     configurations: list[NodeDebugConfigurationSummaryDTO] = Field(default_factory=list)
-    script_path: _DebugSourcePath | None = None
-    working_directory: _DebugSourcePath | None = None
+    script_path: str | None = None
+    working_directory: str | None = None
     launch_profile_name: str | None = None
     args: list[str] = Field(default_factory=list)
     pid: int | None = None
@@ -393,7 +394,7 @@ class NodeDebugStateDTO(BaseModel):
     actions: list[NodeDebugActionRecordDTO] = Field(default_factory=list)
     configuration_revision: int = Field(default=0, ge=0)
     requires_restart: bool = False
-    source_changed_paths: list[_DebugSourcePath] = Field(default_factory=list)
+    source_changed_paths: list[str] = Field(default_factory=list)
 
 
 class NodeDebugSessionManifestDTO(BaseModel):

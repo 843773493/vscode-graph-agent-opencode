@@ -102,9 +102,9 @@
 - **WHEN** URI 的 gateway authority 指向对端且对端可达
 - **THEN** 对端在本地解析该 URI，响应的资源目标使用稳定身份、URI、revision 与内容，展示或诊断路径不作备用目标，不公开内部 provider locator
 
-#### Scenario: information 与搜索不外投诊断物理位置
+#### Scenario: information 与搜索不重复维护路径定位
 - **WHEN** 读取 `view=information` 或搜索 `session_information`，包括其远端与持久观察入口
-- **THEN** 唯一 information owner 保留会话、工作区身份、名称和诊断状态，并下线软件生成的 `workspace.root_path`、`storage_path` 真实定位字段；API、工具、搜索与冻结载荷共同消费该输出，不以中继层过滤或仅检查 URI envelope 替代 owner 收口
+- **THEN** 唯一 information owner 保留会话、工作区身份、名称和诊断状态，已下线的 `workspace.root_path`、`storage_path` 不恢复为重复定位字段；API、工具、搜索与冻结载荷共同消费该输出，展示或诊断中的原生路径不作备用资源目标
 
 #### Scenario: 远端会话清单使用真实资源目标
 - **WHEN** 调用方读取已共享的远端工作区或 Gateway 会话清单
@@ -138,7 +138,7 @@
 
 **归属与引用**：持久化资源引用政策的正名 normative 定义见 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 URI 为默认形式」。本 capability 只**具名引用**该 requirement，MUST NOT 复述正文、MUST NOT 另立第二套持久化引用政策；会话上下文侧的落点由以下 scenario 验收。
 
-#### Scenario: 字段不含 real path
+#### Scenario: 持久资源引用不以原生路径定位
 - **WHEN** 会话上下文资源引用被写入持久化记录
 - **THEN** 该字段由资源身份、URI 与独立 revision 组成，不含任何真实路径
 

@@ -1,4 +1,4 @@
-"""真实调试状态发布拒绝原生位置，失败不改变进程和持久调试事实。"""
+"""真实调试展示保留原生位置，导航 URI 继续校验且不改变进程和持久事实。"""
 
 from __future__ import annotations
 
@@ -100,13 +100,28 @@ async def test_paused_sources_reject_mutation_and_allow_same_process_retry(
                 # 只损坏原 owner 生成后的输出，不代建暂停、配置或进程事实。
                 patch.setattr(NodeDebugService, "get_state", damaged_state)
                 rejected = await client.get("/api/v1/debug/node", params=owner)
-            assert rejected.status_code == 500, rejected.text
-            assert rejected.json()["data"] is None
             assert rejected.json()["request_id"] == rejected.headers["X-Request-ID"]
-            assert "PydanticSerializationError" in rejected.text and native not in rejected.text
             assert len(snapshots) == 1
-            with pytest.raises(PydanticSerializationError):
-                _success("调试状态", snapshots[0])
+            if field == "url":
+                assert rejected.status_code == 500, rejected.text
+                assert rejected.json()["data"] is None
+                assert "PydanticSerializationError" in rejected.text and native not in rejected.text
+                with pytest.raises(PydanticSerializationError):
+                    _success("调试状态", snapshots[0])
+            else:
+                assert rejected.status_code == 200, rejected.text
+                published = rejected.json()["data"]
+                tool_state = json.loads(_success("调试状态", snapshots[0]))["state"]
+                if container == "state":
+                    expected = [native] if field == "source_changed_paths" else native
+                    assert published[field] == tool_state[field] == expected
+                elif container == "last_stopped_frame":
+                    assert published[container][field] == tool_state[container][field] == native
+                    assert published[container]["url"] == data[container]["url"]
+                else:
+                    assert published[container][0][field] == tool_state[container][0][field] == native
+                    if container == "call_stack":
+                        assert published[container][0]["url"] == data[container][0]["url"]
             assert probe_process_identity(pid) == identity
             assert store.read_manifest_payload(**owner)[0] == manifest_before
             assert store.read_launch_claim(**owner) == claim_before

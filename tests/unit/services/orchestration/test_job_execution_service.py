@@ -142,7 +142,7 @@ async def test_auto_title_io_failure_preserves_execution_and_original_diagnostic
     assert job.status == JobStatus.completed and len(executor.calls) == 1
     failure, = [event["payload"] for event in service._bus.events if event["event_type"] == EventType.ERROR]
     assert failure == {
-        "error": f"会话自动命名失败: 执行系统 I/O 失败: error=FileNotFoundError, errno={error.errno}"
+        "error": f"会话自动命名失败: 执行系统 I/O 失败: error=FileNotFoundError, errno={error.errno}, reason={error.strerror}, filename={str(missing)!r}"
                  + (", diagnostic_sink_error=NotADirectoryError" if sink_fails else ""),
         "phase": "session_auto_title",
     }

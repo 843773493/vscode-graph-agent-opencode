@@ -1,4 +1,4 @@
-"""真实 PTY 的公开位置拒绝不改变资源事实，修复输出后继续使用同一进程。"""
+"""真实 PTY 展示元数据允许原生路径，显式 runtime cwd 合同仍由 owner 校验。"""
 
 from __future__ import annotations
 
@@ -88,18 +88,24 @@ async def test_resource_publication_failure_keeps_same_pty_and_owner_facts(
             native: str = native,
         ) -> SessionResourceDTO:
             result = original_mapping(mapper, terminal, available_actions=available_actions)
-            result.metadata["cwd_relative"] = native
+            result.metadata["log_path"] = native
             return result
 
         with monkeypatch.context() as patch:
-            # 只损坏原入口产生后的输出，不代建 PTY、Session、关联或 lease。
+            # 只补充原入口产生后的展示信息，不代建 PTY、Session、关联或 lease。
             patch.setattr(WorkspaceResourceDTO, "from_owner", classmethod(damaged_projection))
             patch.setattr(SessionResourceMapper, "terminal_to_resource", damaged_mapping)
             for route in routes:
                 rejected = await client.get(route, headers={"X-Request-ID": "resource-publication-rejected"})
-                assert rejected.status_code == 500, rejected.text
+                assert rejected.status_code == 200, rejected.text
+                published = rejected.json()["data"]
+                if route == detail:
+                    assert published["metadata"]["nested"]["checkpoint_path"] == native
+                elif route == session_list:
+                    assert next(item for item in published["items"] if item["resource_id"] == rid)["metadata"]["log_path"] == native
+                else:
+                    assert next(item for item in published["items"] if item["resource_id"] == rid)["metadata"]["nested"]["checkpoint_path"] == native
                 assert rejected.json()["request_id"] == rejected.headers["X-Request-ID"] == "resource-publication-rejected"
-                assert rejected.json()["data"] is None and native not in rejected.text
                 failures.append({"route": route, "response": rejected.json()})
                 os.kill(pid, 0)
                 assert owner._store.path.read_bytes() == facts and ledger_path.read_bytes() == leases

@@ -1,13 +1,12 @@
-"""资源元数据的结构化位置在构造及复制后发布时使用同一校验。"""
+"""资源展示元数据允许原生路径；真实定位由具体字段和 owner 校验。"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import PurePosixPath
 from typing import Literal
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from pydantic_core import PydanticSerializationError
 
 from app.schemas.internal_v2.session_resource import (
@@ -23,7 +22,7 @@ from tests.support.resource_owners.sessions import SESSION_A, THREAD_A, WORKSPAC
 
 Resource = WorkspaceResourceDTO | SessionResourceDTO
 FILE_URI = f"boxteam://workspace/{WORKSPACE_ID}/resources/files/root/entry.txt"
-INVALID = [
+DISPLAY_METADATA = [
     {"nested": {"paths": ["/private/resource-secret"]}},
     {"checkpoint_path": r"C:\private\resource-secret"},
     {"storage_directory": r"\\target\private\resource-secret"},
@@ -33,8 +32,8 @@ INVALID = [
     {"cwd_relative": "C:resource-secret"},
     {"cwd_relative": FILE_URI},
     {"cwd_relative": ["relative"]},
-    {"checkpoint_path": PurePosixPath("/private/resource-secret")},
-    {"paths": ("/private/resource-secret",)},
+    {"paths": ["/private/resource-secret"]},
+    {"log_path": "/tmp/build.log"},
 ]
 
 
@@ -51,15 +50,15 @@ def resource(request: pytest.FixtureRequest) -> Resource:
         "created_at": stamp, "updated_at": stamp, "error": None})
 
 
-@pytest.mark.parametrize("metadata", INVALID)
-def test_resource_metadata_rejects_native_locations_at_construction(resource: Resource, metadata: dict[str, object]) -> None:
-    with pytest.raises(ValidationError):
-        type(resource).model_validate({**resource.model_dump(), "metadata": metadata})
+@pytest.mark.parametrize("metadata", DISPLAY_METADATA)
+def test_resource_metadata_preserves_native_display_paths_at_construction(resource: Resource, metadata: dict[str, object]) -> None:
+    candidate = type(resource).model_validate({**resource.model_dump(), "metadata": metadata})
+    assert candidate.model_dump()["metadata"] == metadata
 
 
-@pytest.mark.parametrize("metadata", INVALID)
+@pytest.mark.parametrize("metadata", DISPLAY_METADATA)
 @pytest.mark.parametrize("mode", ["python", "json", "json-text"])
-def test_nested_mutation_cannot_bypass_resource_publication(
+def test_nested_display_paths_survive_resource_publication(
     resource: Resource, metadata: dict[str, object], mode: Literal["python", "json", "json-text"],
 ) -> None:
     original = resource.model_dump_json()
@@ -70,11 +69,11 @@ def test_nested_mutation_cannot_bypass_resource_publication(
         if isinstance(candidate, WorkspaceResourceDTO)
         else SessionResourceListDTO(session_id=SESSION_A, items=[candidate])
     )
-    with pytest.raises(PydanticSerializationError):
-        if mode == "json-text":
-            envelope.model_dump_json()
-        else:
-            envelope.model_dump(mode=mode)
+    if mode == "json-text":
+        payload = type(envelope).model_validate_json(envelope.model_dump_json()).model_dump()
+    else:
+        payload = envelope.model_dump(mode=mode)
+    assert payload["items"][0]["metadata"] == metadata
     assert resource.model_dump_json() == original
 
 

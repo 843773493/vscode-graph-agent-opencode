@@ -50,7 +50,7 @@ app/core/
 - `shielded_cleanup.py`：同步 worker 结算前保留调用方准入；线程桥接以结果值传递原异常，再在原异步任务抛出，保留异常身份、cause 与 notes，避免标准库重建 TimeoutError 等异常。正常返回的异常对象仍为返回值；取消继续等待 worker 结算。
 - `background_task_contracts.py`：精确Thread后台任务、版本化恢复描述、步骤checkpoint与邮箱消费identity的纯typed合同；不导入编排、handler实现或重型abstractions聚合出口。运行实体与执行策略分别由既有registry和服务owner承担。
 - `thread_residency_contracts.py`：residency blocker及其source port的纯合同，供core registry与编排owner共同消费；不计算idle策略、创建runtime或反向导入`app/services/orchestration/`。
-- `failures.py`：公开错误事实与完整原始日志的唯一共享原语；持有不依赖 SDK 的 Provider 失败标记与执行消息合同，原生 I/O、SQLite、内部 Pydantic／canonical 领域校验及上游异常正文不进入普通记录，明确的本地业务说明保持原合同。SQLite 只生成原异常类别和适用错误码，内部校验只生成错误类别，原执行出口仍记录同一异常及被拒绝的完整字段／输入；不重复写诊断。通用出口只处理阶段、标签与异常类别／系统错误码，不判断业务状态，不复制异常正文或 notes；日志 sink 失败附在原异常上，原失败结算继续。SDK 临时失败分类仍由 runtime owner 负责。
+- `failures.py`：公开错误事实与完整原始日志的唯一共享原语；持有不依赖 SDK 的 Provider 失败标记与执行消息合同，已知文件 I/O 的目标与原因可以进入执行诊断；SQLite、内部 Pydantic／canonical 领域校验及上游异常正文继续按来源保护，明确的本地业务说明保持原合同。SQLite 只生成原异常类别和适用错误码，内部校验只生成错误类别，原执行出口仍记录同一异常及被拒绝的完整字段／输入；不重复写诊断。通用出口只处理阶段、标签与异常类别／系统错误码，不判断业务状态，不复制异常正文或 notes；日志 sink 失败附在原异常上，原失败结算继续。SDK 临时失败分类仍由 runtime owner 负责。
 - `sqlite_state.py` 的运行时拒绝复用 `failure_detail`；路径、VFS、进程锁与 schema 规则的原原因保留位置及日志次错，普通错误保留逻辑 artifact、阶段、SQLite 版本与系统码。不得为日志故障改变锁、连接或迁移顺序，也不补建损坏账本声明的表。
 - `resource_uri.py`：资源 URI 的唯一纯 grammar、值对象与构造器，供 domain、Gateway 和 infrastructure 直接消费。只校验逻辑地址，不访问 catalog、正文、文件系统或网络；资源绑定、revision、能力和联邦策略仍归各自 owner。旧 `resource_platform/virtual_resources/grammar.py` 下线，不增加重导出 shim 或第二解析器。
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/
@@ -90,6 +90,6 @@ app/core/
 - 工作区目录初始化只处理当前显式工作区，不产生与该工作区无关的全局副作用。
 - 禁止业务调用方把 session ID 直接拼到 `.boxteam/sessions/` 后定位会话；会话路径必须由权威索引解析，并校验对应物理目录。
 - 存储操作必须先检查目标、不得覆盖新数据；无法可靠归属的数据应移入 `.boxteam/orphaned/` 并保留可诊断信息。
-- 失败时抛出包含稳定 owner、逻辑资源与操作阶段的明确异常；真实路径仅供原生 owner 内部访问，不进入普通响应或业务回执，不得返回虚假默认路径。
+- 失败时抛出包含稳定 owner、逻辑资源与操作阶段的明确异常；原生参数、展示与诊断位置按目标机器和字段职责保留，不得作为第二权威定位关系或虚假默认路径。
 - `distribution_identity.py` 唯一读取发行 manifest 并推导 inline 身份；拒绝只公布逻辑 artifact、阶段、字段与规则，安装位置及非法原值保留诊断。原生访问保留错误类别/错误码与原因，失败不修改输入或缓存默认身份。
 - `workspace_identity.py` 独占工作区UUID文件的读取、首次创建和显式绑定；普通失败仅公布`workspace_identity`逻辑artifact、阶段、UUID或错误事实，位置及原异常留诊断。保持原生错误类别/错误码/直接cause和解码坐标，正常缺失与并发已创建仍沿原流程处理，不重建损坏身份、不覆盖并发文件，不重复包装读取失败。

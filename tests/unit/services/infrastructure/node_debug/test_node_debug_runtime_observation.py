@@ -195,7 +195,7 @@ async def test_read_stream_ignores_stderr_logpoint_and_caps_output(
         _FakeProcess(0, stderr=["__BOXTEAM_NODE_LOGPOINT__x=1"]),
     )
     await observer.read_stream(stderr_runtime, "stderr")
-    assert stderr_runtime.output == []
+    assert stderr_runtime.output == ["__BOXTEAM_NODE_LOGPOINT__x=1"]
     assert stderr_runtime.logpoint_error_message is None
 
 
@@ -229,8 +229,9 @@ async def test_read_stream_logs_stderr_and_flags_inspector_failure(
     assert "Starting inspector on 127.0.0.1:9229 failed: address already in use" in caplog.text
     assert "Debugger attached." in caplog.text
     assert runtime.session_id in caplog.text and runtime.thread_id in caplog.text
-    # stderr 只进原始服务诊断，不得混入程序 stdout 输出。
-    assert runtime.output == []
+    assert runtime.output == [
+        "Starting inspector on 127.0.0.1:9229 failed: address already in use", "Debugger attached.",
+    ]
 
 
 @pytest.mark.asyncio
@@ -245,14 +246,14 @@ async def test_stderr_diagnostics_preserve_every_line_in_order(
                 if record.name == "app.services.infrastructure.node_debug.process.observation"]
     assert len(messages) == len(lines)
     assert [message.rsplit("；", 1)[1] for message in messages] == lines
-    assert runtime.output == [] and runtime.error_message is None
+    assert runtime.output == lines[-100:] and runtime.error_message is None
 
 
 @pytest.mark.asyncio
 async def test_terminal_error_message_never_empty_on_failure(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """非零退出公开退出码，原始堆栈只留诊断；零退出才是 None。"""
+    """非零退出保留简要摘要，原始堆栈可在有界输出排错；零退出才是 None。"""
     observer = _observer(_Recorder())
     private = f"at {tmp_path}/private.mjs:1:1"
     runtime = _runtime(tmp_path, _FakeProcess(3, stderr=["Error: boom", private]))
@@ -260,6 +261,7 @@ async def test_terminal_error_message_never_empty_on_failure(
     assert observer.terminal_error_message(runtime, 0) is None
     failed = observer.terminal_error_message(runtime, 3)
     assert failed == "Node 调试进程退出，退出码: 3"
+    assert runtime.output == ["Error: boom", private]
     assert "Error: boom" in caplog.text and private in caplog.text
 
     bare = _runtime(tmp_path)
@@ -337,3 +339,22 @@ def test_paused_at_breakpoint_matrix(tmp_path: Path) -> None:
         _rt([_breakpoint("node-bp-4", path="other.mjs")], call_stack=[frame])
     ) is False
     assert observer.paused_at_breakpoint(_rt([plain])) is False
+
+
+@pytest.mark.asyncio
+async def test_stderr_log_failure_keeps_output_and_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocker = tmp_path / "blocked-log"
+    blocker.write_text("不能作为日志目录", encoding="utf-8")
+    def failed_log(*_args: object, **_kwargs: object) -> None:
+        (blocker / "service.log").write_text("stderr", encoding="utf-8")
+    monkeypatch.setattr("app.services.infrastructure.node_debug.process.observation.logger.warning", failed_log)
+    lines = ["Cannot find module '/home/alice/project/missing.js'", "after-failure"]
+    runtime = _runtime(tmp_path, _FakeProcess(1, stderr=lines))
+    recorder = _Recorder()
+    observer = _observer(recorder)
+    await observer.read_stream(runtime, "stderr")
+    assert runtime.output[::2] == lines
+    assert all(line.startswith("[诊断日志输出失败] NotADirectoryError:") for line in runtime.output[1::2])
+    assert recorder.actions == []

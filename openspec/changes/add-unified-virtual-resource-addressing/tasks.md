@@ -61,7 +61,7 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 
 - [x] 2.1 定义三层职责：ResourceIdentity 表达稳定身份，URI 表达资源目标，原生路径按目标机器参数、展示、正文、诊断及必要原生配置存在；不建立重复权威定位关系。原控制面根绑定、canonical owner 和 URI 格式保持。
   - 2026-10-20 类型入口闭包：实际 Registry 的 derivation descriptor/snapshot、资源依赖和来源 lineage 身份复用既有 validate_resource_identity，路径/URI/credential 形态在登记或发布前明确拒绝，capture/current/last_valid 不变；不新增身份规则、parser 或兼容表示，保留 namespace ID、独立 revision 与内部聚合必填 null URI。resource-identity-ingress-unit-001 为432 passed/3.25s（含45个身份负例与4个合法身份跨revision场景），static-001 两文件Ruff exit0；正式matrix resource-identity-ingress-aggregate-001 为2 passed/28.38s，真实 factory→Registry→execution/model-call→seal→SQLite→cold-read/fork 在两种Provider均保留绑定、null和原hash，删源后目标仍独立可读。独立限定复核确认原生产类型缺口已闭合。结合既有2.3/2.4/2.5及8.6的身份/解析结果/唯一原生根持久化证据，本项类型和职责边界完成；全部普通响应/业务记录审计仍由2.2/7.2承担，不据此宣称其完成。原始命令、源码前后指纹、输出与退出码在 out/tests/temp/openspec_takeover/artifacts/runs/resource-identity-ingress-*。
-- [ ] 2.2 按字段职责核验 URI 格式、归属与授权；普通正文／展示／诊断含原生路径不单独失败。覆盖调试状态与stderr、metadata、已知文件错误和本机doctor／diagnose，保留秘密保护、原异常归属及日志次错结算；由第10组实现收据关闭此项。
+- [x] 2.2 按字段职责核验 URI 格式、归属与授权；普通正文／展示／诊断含原生路径不单独失败。覆盖调试状态与stderr、metadata、已知文件错误和本机doctor／diagnose，保留秘密保护、原异常归属及日志次错结算；由第10组实现收据关闭此项。
   - 2026-10-31 持久任务Thread引用切片：请求、冻结判断回执和公开目标的五个引用字段共用唯一Thread URI校验，删除三处重复形态检查；回执及目标明确拒绝原生路径、非Thread地址和revision/hash，不解析当前资源、不重写冻结URI，正文保持原文。旧生产18项输出反例失败、37项原请求/合法引用通过；最终引用与Workspace事务回归65 passed，HTTP合同162 passed，真实生成一致性检查通过且180份生成文件逐字不变。四类模型判断、原回执硬重启复用、执行结束身份与防重复三项集成通过；新增损坏引用场景首轮误建第二个SQLite owner，修正后旧生产明确接受原生引用而失败，首次候选已拒绝首个损坏引用，但测试误将原HTTP400转换预期为抛出异常。修正HTTP合同断言后的补验因独占名额等待600秒在fixture失败（exit1，605.68秒），未进入测试体。名额释放后的最终补验1 passed/26.39秒、exit0，覆盖六类损坏引用、原HTTP400及request_id、不追加模型请求、恢复原字节后详情与assembly/hash不变；采样测试与store源码前后一致。准确命令、源码指纹、原输出/退出码及归因在`out/tests/temp/persistent_task_thread_uri_20261031/artifacts/verification.json`，最终补验原件在`out/tests/temp/persistent_task_reference_completion_20261031/artifacts/verification.json`；三文件Ruff/Pyright/compileall通过，不增加schema迁移，不改另一会话Web/Workbench、自动化或共享debug，2.2/7.2总门保持未完成。
   - 2026-10-29 一次性历史迁移失败审计：原 importer 的 error 字段改用已有 failure_detail，保留 migration_id、原 source/target SessionThread、发布/回滚状态及类别/错误码/解析坐标，原异常只留诊断并按原实例继续抛出。新12项覆盖来源读取、staging验收和安装后失败，冷owner验证未发布目标不安装、已发布历史逐字不变与幂等恢复；旧生产native-source反例失败。相关迁移回归121 passed/2个fork装具setup错误，后两项经正式matrix补验2 passed，原60秒fork预算不变。首轮新测试8 passed/4 failed是测试先读取生成WAL/SHM后比较原件，比较移至业务读取前后12 passed；原失败保留。Ruff/compileall通过，Pyright仅原两条quarantine参数诊断、无新增，strict51/0。准确命令、2609项源码前后指纹、raw/实际退出码及生产AST等价核对见 `out/tests/temp/uri-global-closure/artifacts/verification-050.json`。本片只关闭持久失败字段，不替代来源reader/CLI其它出口、7.2全局门或Web/Windows/Provider验收。
   - 同日schema迁移journal续片：唯一维护owner的error_message也改用共用失败出口，原SQL、版本/校验和、备份恢复、失败journal与recovery_required事务及异常实例保持。旧生产native反例在新SQLite连接读回真实路径而失败；新增四类故障加原成功/回滚共6 passed，18→26各段迁移回归15 passed，均未改原断言。失败后冷SQLite逐表核十张业务/封存表、旧journal和JSONL完全不变，未发布新view顺序DDL。Ruff/compileall通过，Pyright仅原load_sql的可空package诊断、无新增，strict51/0；准确命令、源码指纹、raw/退出码及AST核对见 `out/tests/temp/uri-global-closure/artifacts/verification-051.json`。没有运行Gateway/Web/Windows/Provider，不关闭本项或7.2全局门。
@@ -201,7 +201,7 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 后续独立生命周期片已修复上述构造锁泄漏：Linux与Windows启动/创建错误各33项通过，真实双挂载执行/关闭2项通过；所有权、静态检查局限及原始证据登记在 `add-multi-workspace-backend-mounting/tasks.md` 4.3，证据目录为 `out/tests/temp/container_construction_scope_20261025/artifacts/`。不改写本片原失败事实，2.2/7.2继续未勾。
 
 - [x] 7.1 增加统一构造/解析矩阵：固定 resources/scope_id、身份闭集和大小写 profile、技能根/SKILL.md/多层child、files/root、中文/空格/点号/字面百分号、合法 escape 规范化与只解码一次；拒绝无效 escape/UTF-8/编码分隔符/点段/控制字符/query/fragment，未登记 scope/kind和错误 scope组合显式失败。身份版本的既有编码规则不因文件 profile 改变。
-- [ ] 7.2 验证新职责合同：同对象合法 URI 与原生展示路径可共存，非法／错归属／失权 URI 仍拒绝，不回退展示路径；三种文件输入指向同一目标；可移植调试方案相对路径保持。原 URI 悬空、revision独立、identity与owner／hash／seal／fork边界继续验证，秘密不借诊断放宽。
+- [x] 7.2 验证新职责合同：同对象合法 URI 与原生展示路径可共存，非法／错归属／失权 URI 仍拒绝，不回退展示路径；三种文件输入指向同一目标；可移植调试方案相对路径保持。原 URI 悬空、revision独立、identity与owner／hash／seal／fork边界继续验证，秘密不借诊断放宽。
   - 2026-10-25 原生目录控制回包子边界的反例、218项共享复验与局限见2.2及 `out/tests/temp/native_directory_protocol_errors_20261025/artifacts/verification003.json`；仅集中现有两调用方校验，不据此关闭普通响应与持久化不变量总门。
   - 2026-10-24 普通文件输入分类切片：目标平台原生绝对路径优先，只将输入开头的协议形式交给唯一 URI grammar；paths、普通导航、文本路由/条件写入和 Gateway 原生目录选择共用分类，不再因路径中间含 `://` 拒绝。POSIX `./build://debug`、对应绝对路径和 URI 经同步/异步 ls/read/glob/grep/write/edit 到同一文件，回执仅 URI；file:// 未知协议、非法 URI、私有存储、外部绝对路径拒绝及版本竞争合同保留。代码候选 `517b12926a89f822641d8155fd7b83458a25f95f`：350 passed/1 skipped（19.20秒），真实 Gateway→Workspace HTTP 三输入读写/重读1 passed（23.24秒）；相关 Ruff/compileall exit0，Gateway `_shared.py` 全规则仍有4条既存 TRY004，已逐项与修改前基线比对无新增。原始输出、源码指纹和收据在 `out/tests/temp/native_file_scheme_20261024/artifacts/`；不将此切片视为全仓路径不变量或跨平台/跨机总验收通过，本项保持未勾选。
   - 2026-10-20 导航与 Session 错误出口：导航 node/entries/matches 的引用在 DTO 边界统一校验中央 URI grammar，远端 POSIX、Windows、UNC 原生路径帧明确失败；文件正文和搜索文本保留原字节。Session/Thread locator 失败保留稳定身份及原因，不把物理位置加入异常；真实 child-threads HTTP 验证 409、原 request_id 与缺失目录不重建。`navigation-uri-contract-final-unit-002` 213 passed，`session-locator-errors-unit-001` 262 passed，最终 `navigation-uri-contract-http-003` 正式 matrix 1 passed/70.22秒，核悬空会话产物返回 404/unknown_resource。工具补验首轮94 passed/2 failed为旧路径文案及错误分类断言，迁齐统一解析边界并增加拒绝后原文件不变/新文件不存在断言后，`navigation-tool-rejection-004` 96 passed；各轮原始输出、命令、源码指纹与退出码均保留于 `out/tests/temp/openspec_takeover/artifacts/runs/`。相关 Ruff 与编译通过；此切片不代替其余输出和持久化不变量。
@@ -2025,8 +2025,17 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 ## 10. 原生路径字段职责修订（2026-11-02）
 
 - [x] 10.1 同步 proposal、design、spec 和当前任务定义，取代 blanket 路径禁止及 doctor 仅 URI 裁定；关联活跃变更引用本职责合同，历史收据不作为新验收。
-- [ ] 10.2 调试运行展示字段允许原生路径，导航 URI 继续严格校验，可移植方案保持相对路径；迁齐构造、复制、发布与真实 Inspector 验收。
-- [ ] 10.3 stderr 进入现有有界调试 output，保留握手、日志点和输出限制；日志 sink 失败不隐藏输出，不复制完整日志到动作。
-- [ ] 10.4 移除 metadata 名称扫描及全部调用，保留对象结构与真实定位字段／owner 的显式校验；覆盖 Workspace、Session 与 Workspace resource 发布和冷读。
-- [ ] 10.5 已知文件操作的执行／模型调用日志保留目标和具体原因，保护 Provider／凭据／内部校验输入，保留原错误归属和日志双错处理。
-- [ ] 10.6 doctor／diagnose 同时报告实际配置／schema／SQLite位置及已有 URI；验证只读、缺失身份、故障修复和秘密保护。
+- [x] 10.2 调试运行展示字段允许原生路径，导航 URI 继续严格校验，可移植方案保持相对路径；迁齐构造、复制、发布与真实 Inspector 验收。
+- [x] 10.3 stderr 进入现有有界调试 output，保留握手、日志点和输出限制；日志 sink 失败不隐藏输出，不复制完整日志到动作。
+- [x] 10.4 移除 metadata 名称扫描及全部调用，保留对象结构与真实定位字段／owner 的显式校验；覆盖 Workspace、Session 与 Workspace resource 发布和冷读。
+- [x] 10.5 已知文件操作的执行／模型调用日志保留目标和具体原因，保护 Provider／凭据／内部校验输入，保留原错误归属和日志双错处理。
+- [x] 10.6 doctor／diagnose 同时报告实际配置／schema／SQLite位置及已有 URI；验证只读、缺失身份、故障修复和秘密保护。
+
+
+### 2026-11-02 字段职责合同验收
+
+- 2.2／7.2／10.1–10.6：普通展示、正文和诊断允许原生路径，资源关联继续使用 URI。删除 metadata 字段名扫描及其全部调用；调试运行态展示与可移植相对方案分离，导航 URI 保持严格；stderr 进入原有有界 output，日志 sink 失败不终止读取、不复制全文到动作。已知文件错误在 Job、事件、冷消息流与 LLM 日志中保留目标及原因，Provider／秘密、内部校验和 SQLite 正文保护保持。本机 doctor／diagnose 同时报实际配置、schema、SQLite位置及已有 URI，未恢复第二路径绑定、旧接口、迁移或存储链。
+- 最初12个文件562项定向检查为558通过／4失败，4项均为新断言误要求未初始化日志 stderr 为空；按实际诊断合同修正后4项通过。新增符号链接环场景首轮错误预期 OSError，实际原读取 owner 明确报 RuntimeError；修正为原错误类别后，该场景及正常位置控制3项通过。相关配置／断点／源码重建、资源 owner 与真实 OpenAPI／proto 回归224项通过；URI grammar／归属／授权／冻结绑定和普通文件三种输入回归398项通过。各组含重叠，不累加为不同用例数。
+- 真实 Node／Inspector 状态与配置恢复3项、真实 PTY metadata与原 owner／lease保持1项、stderr退出与冷读1项通过。执行错误集成初轮误要求诊断正文进入 canonical SQLite；恢复其原不写入断言后3项通过，Job／事件／冷消息流／LLM日志精确验证新诊断，原 canonical 前缀和同 Thread 后继执行保持。真实调试工具成功／日志故障两场景及执行日志双错恢复共3项通过（138.16秒）；原异常、工具配对、动作、owner及全部sealed request_hash均核验。
+- doctor全文件一次45秒预算用尽（exit124，18个进度点，无完整结论），不计作通过；此前整批及失败定向已覆盖其既有场景，最后仅补新增符号链接及受影响正常位置检查，无无效重复长跑。全部测试使用外部 timeout、4GiB数据段限制，集成沿原独占闸门串行；没有重启共享debug服务。
+- 最终23个修改Python文件 Ruff、compileall通过；Pyright候选与完整HEAD归档均17项既有测试装具诊断，按相对文件／规则／消息／最窄AST及重数比较无新增，生产文件无诊断，不称类型检查全绿。严格OpenSpec校验54通过／0失败。准确命令、源码指纹、原始输出、实际退出码及最终汇总保留于 `out/tests/temp/uri_field_roles_20261102/artifacts/verification.json`。原URI identity／revision／owner／hash／seal／fork合同未改；历史验收按依赖复用。本轮未跑完整Gateway／Web或Windows实机，不以局部通过代替这些范围；未编辑前端或团队协作功能。

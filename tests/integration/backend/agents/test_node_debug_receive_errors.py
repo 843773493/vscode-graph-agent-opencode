@@ -94,8 +94,10 @@ async def test_native_stderr_stack_stays_in_diagnostics_after_exit_and_cold_read
     assert data["pid"] == before["pid"] and probe_process_identity(data["pid"]) is None
     assert data["error_message"] == "Node 调试进程退出，退出码: 7"
     assert data["breakpoints"][0]["source_line"] == "const failure = new Error('native-stderr-failure');"
-    assert str(root) not in failed.text
-    assert "Error: native-stderr-failure" not in failed.text
+    assert "Error: native-stderr-failure" in data["output"]
+    assert any(f"{script}:2:" in line for line in data["output"])
+    assert len(data["output"]) <= 100
+    assert all("Error: native-stderr-failure" not in action["message"] for action in data["actions"])
     assert f"{script}:2:" in caplog.text and "Error: native-stderr-failure" in caplog.text
     assert owner["session_id"] in caplog.text and owner["thread_id"] in caplog.text
     manifest_bytes, manifest = store.read_manifest_payload(**owner)

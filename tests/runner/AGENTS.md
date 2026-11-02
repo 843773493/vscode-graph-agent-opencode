@@ -2,7 +2,7 @@
 
 `unit-gateway-asset-diagnostics` 与 `integration-gateway-asset-diagnostics` 分别核图片 owner 的原错／日志双故障和真实 Gateway HTTP、OS 拒绝及同入口重试；均固定60秒／4GiB。集成复用原独占闸门与共享日志故障装具，不代替 Backend 重启、Web 或 Windows 验收。
 
-`integration-debug-source-publication` 经真实调试 ASGI、Node/Inspector 和同一暂停进程，核对调用栈／最后停止帧、状态脚本／工作目录／源码变更列表、运行断点和方案摘要的原生位置发布拒绝、调试工具序列化、原持久事实及同进程重试；保留绝对路径启动输入，固定60秒／4GiB与集成独占闸门，不代 Gateway/Web、Backend 进程重启或 Windows 实机。
+`integration-debug-source-publication` 经真实调试 ASGI、Node/Inspector 和同一暂停进程，核对调用栈／最后停止帧、状态脚本／工作目录／源码变更列表、运行断点和方案摘要的原生展示路径保留及导航 URI 拒绝、调试工具序列化、原持久事实及同进程重试；保留绝对路径启动输入，固定60秒／4GiB与集成独占闸门，不代 Gateway/Web、Backend 进程重启或 Windows 实机。
 
 同套件的方案正文场景经正式创建／导入入口生成记录，核绝对路径目标解析、脚本与断点分别定位、导出／原writer拒绝以及冷读故障解除后的原bytes与manifest；不为该场景启动Node或构建工作台。
 

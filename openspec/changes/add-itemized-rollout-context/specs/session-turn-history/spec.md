@@ -134,7 +134,7 @@ Web 主窗口的主聊天区域 SHALL 提供用户可操作的“跳到指定轮
 
 历史内部projector SHALL 从sealed `ContextAssemblySnapshot`读取并校验`ResourceActivationSnapshotRef`和`ResourceProvenanceRef`的稳定resource identity、snapshot kind/parent、policy revision/hash、effective boundary、captured generation、安全`display_uri`、resource kind/scope/facet、revision、length/hash marker、availability、activation ordinal与assembly identity。普通summary/detail响应只返回策略允许的safe display字段和opaque typed provenance ref，raw `resource_id`仅可进入受信诊断，不得作为普通客户端locator暴露。Resource activation snapshot、Skill metadata/activation、AGENTS、配置、团队状态和其它request-only contribution不是canonical Turn member，不得计入用户可见`item_count`、`elapsed_ms`、thinking/tool/compaction展开顺序或final response；只有真实canonical item按权威`turn_item_projection.logical_item_ordinal`参与这些统计。
 
-默认历史不得返回资源正文、内部 `provider_locator`、绝对路径、network credential、memory key 或可反推出它们的调试字段。获得授权的详情请求可以通过 typed resource reference 读取当时 sealed body；即使当前 ResourceRegistry 已发布新 revision、虚拟 URI 改映射或原始文件消失，也只能读取持久化 snapshot/ref，不能查询当前资源来重建历史。live、终态 history、刷新恢复和跨设备 history MUST 使用同一 committed resource ref identity；前端不得从提示文本、`read` 工具调用、URI 字符串或 DOM 节点推断、去重或补造 provenance。
+默认历史不得返回受保护资源正文、内部 `provider_locator`、network credential、memory key 或可反推出它们的调试字段；普通正文、展示及诊断中的原生路径按统一 URI owner 的字段职责合同处理。获得授权的详情请求可以通过 typed resource reference 读取当时 sealed body；即使当前 ResourceRegistry 已发布新 revision、虚拟 URI 改映射或原始文件消失，也只能读取持久化 snapshot/ref，不能查询当前资源来重建历史。live、终态 history、刷新恢复和跨设备 history MUST 使用同一 committed resource ref identity；前端不得从提示文本、`read` 工具调用、URI 字符串或 DOM 节点推断、去重或补造 provenance。
 
 #### Scenario: 零可展开 Item 的 Turn 仍可带资源 provenance
 
@@ -149,7 +149,7 @@ Web 主窗口的主聊天区域 SHALL 提供用户可操作的“跳到指定轮
 #### Scenario: 历史详情隐藏物理来源
 
 - **WHEN** 授权用户展开来自 workspace、Gateway 或 inline 来源的 resource provenance（`memory` 已确证不是 URI scope，不作为来源命名空间出现）
-- **THEN** 响应只返回对应命名空间的 `boxteam://` display URI 和策略允许的 manifest；绝对路径、provider locator、credential、memory key 及旧 `/.boxteam/...` 路径均不出现在 API、SSE 或 DOM
+- **THEN** 响应只返回对应命名空间的 `boxteam://` display URI 和策略允许的 manifest；资源目标不使用绝对路径、provider locator、credential、memory key 或旧 `/.boxteam/...` 作为备用引用；API、SSE 或 DOM 中的展示、正文及诊断路径不单独构成协议错误
 
 #### Scenario: 旧 path-based 投影不能恢复
 

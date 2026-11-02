@@ -43,7 +43,7 @@ async def test_failure_before_execution_is_logged_and_publishes_only_system_reas
         checkpoint_ns="", publish=publish, logger=logging.getLogger(__name__),
     )
     publish.assert_awaited_once_with(EventType.ERROR, {
-        "error": f"执行系统 I/O 失败: error=FileNotFoundError, errno={error.errno}",
+        "error": f"执行系统 I/O 失败: error=FileNotFoundError, errno={error.errno}, reason={error.strerror}, filename={str(missing)!r}",
         "phase": "agent_execution",
     })
     assert str(missing) in caplog.text
@@ -72,7 +72,7 @@ async def test_diagnostic_failure_does_not_interrupt_original_step_settlement(
     )
     assert len(diagnostic_sink.errors) == 1 and diagnostic_sink.errors[0].errno == errno.ENOTDIR
     assert any(str(diagnostic_sink.errors[0]) in note for note in original.__notes__)
-    message = "执行系统 I/O 失败: error=OSError, errno=5, diagnostic_sink_error=NotADirectoryError"
+    message = "执行系统 I/O 失败: error=OSError, errno=5, reason=执行读取失败, filename='/private/execution-secret', diagnostic_sink_error=NotADirectoryError"
     if boundary == "interrupted":
         runtime.finalize_interruption_facts.assert_awaited_once_with()
         writer.close_interrupted.assert_awaited_once_with("interrupt")

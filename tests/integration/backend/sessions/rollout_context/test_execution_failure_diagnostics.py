@@ -51,7 +51,8 @@ async def test_failed_diagnostic_preserves_execution_terminal_and_same_thread_su
     failed_job = await _job(case, job_id, expected="failed")
     assert len(observations) == 1 and case.call_count(session_id, thread_id) == 1
     assert failed_job["error_message"] == (
-        "执行系统 I/O 失败: error=OSError, errno=5, diagnostic_sink_error=NotADirectoryError"
+        "执行系统 I/O 失败: error=OSError, errno=5, reason=原执行读取失败, "
+        "filename='/private/execution-secret', diagnostic_sink_error=NotADirectoryError"
     )
     assert diagnostic_sink.errors and all(error.errno == errno.ENOTDIR for error in diagnostic_sink.errors)
     assert all(record.exc_info and record.exc_info[1] is original for record in diagnostic_sink.records)
@@ -109,7 +110,7 @@ async def test_failed_diagnostic_preserves_execution_terminal_and_same_thread_su
         assert assembly.request_hash_preimage == normalize_wire_request(case.request(assembly.model_call_id))
         assembly.validate_hashes()
     public = json.dumps([failed_job, frozen_stream, result.payload, case.requests()], ensure_ascii=False)
-    assert "execution-secret" not in public and "diagnostic-log-secret" not in public
+    assert "execution-secret" in public and "diagnostic-log-secret" not in public
     with storage._connect(thread_id, session_id=session_id, read_only=True) as connection:
         persisted = "\n".join(connection.iterdump())
     assert "execution-secret" not in persisted and "diagnostic-log-secret" not in persisted

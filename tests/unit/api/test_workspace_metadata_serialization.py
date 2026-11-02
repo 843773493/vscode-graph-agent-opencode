@@ -66,9 +66,9 @@ def test_metadata_api_preserves_paths_in_user_text_and_commands(metadata_client:
 
 @pytest.mark.parametrize("endpoint,method", [("/api/v1/workspace", "get"), ("/api/v1/workspace/context", "get_context")])
 @pytest.mark.parametrize("path", ["/private/workspace", r"C:\Users\owner\workspace", r"\\host\share\workspace"])
-def test_metadata_api_fails_before_serializing_nested_real_path(metadata_client: TestClient, metadata_owner: SimpleNamespace, endpoint: str, method: str, path: str) -> None:
+def test_metadata_api_preserves_nested_native_display_path(metadata_client: TestClient, metadata_owner: SimpleNamespace, endpoint: str, method: str, path: str) -> None:
     getattr(metadata_owner, method).return_value.git["nested"] = {"locations": [path]}
     response = metadata_client.get(endpoint)
-    assert response.status_code == 500
-    assert path not in response.text
-    assert "workspace-unit" not in response.text
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["git"]["nested"] == {"locations": [path]}
+    assert response.json()["data"]["workspace_id"] == "workspace-unit"

@@ -556,12 +556,12 @@ URI 解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 无 aut
 
 跨边界 transit MUST 携带 `visited set`、`max_transit_gateways`、`max_gateway_hops` 与**总 deadline**，且这些上界 MUST 是**显式策略常量**（集中定义），MUST NOT 硬编码为散落的魔法数字；拓扑变化时 MUST 改策略而非重写解析器。
 
-**解析命中只返回稳定身份与内容，不返回、不携带 locator**：`locator 是输入，不是输出` 是本 capability 可机械检查的不变量。
+解析命中的资源目标使用稳定身份与 URI，不把 owner 私有 locator 返回为消费者的定位依据；内容、展示与诊断按各字段职责传递。
 
-#### Scenario: 跨 gateway 只传逻辑事实
+#### Scenario: 跨 gateway 不建立原生路径定位关系
 
 - **WHEN** 解析请求跨过 gateway 边界
-- **THEN** 边界两侧只传递 identity、URI、revision 与资源内容，MUST NOT 传递 real path、provider locator 或 credential
+- **THEN** 资源关联传递 identity、URI、revision 与资源内容，不返回 provider locator 或 credential 作为定位依据；明确目标机器的参数、展示与诊断可以包含原生路径，中继与消费者不据此访问本机同名资源
 
 #### Scenario: hub 可直接解析直接 spoke
 
@@ -667,12 +667,12 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 **来源控制与activation迁移 MUST 表达为必要字段、新写入与读侧切换**，由各自唯一owner核对当前schema与真实producer，不以URI仍未落盘为准入条件。旧开发中间数据按已授权策略清理，MUST NOT 为其增加扫描升级、兼容双读或URI alias。新的URI持久化仍遵守本requirement的身份/地址/位置边界；附件和工具结果旧scheme的生成、读取及投影按 `add-unified-resource-file-tools` 的消费合同完整迁移，不因此扫描旧业务数据。
 
-#### Scenario: 新增持久化字段不得存 real path
+#### Scenario: 新增持久资源引用使用 URI
 
 - **WHEN** 一个 change 或实现需要新增一个用于定位资源的持久化字段
 - **THEN** 它存 identity 与 URI（必要时加独立 revision 字段），不存 real path、不存 provider locator
 
-#### Scenario: 模型可见载荷只带 URI
+#### Scenario: 模型可见资源目标使用 URI
 
 - **WHEN** 可寻址资源引用进入模型可见的 prompt、工具结果或历史投影
 - **THEN** 资源目标携带 URI 与独立 revision 标识，不将 provider locator 或 credential 当作引用；正文与诊断中的原生路径本身不构成错误
@@ -785,16 +785,16 @@ config `layer` MUST 只表示逻辑配置来源，其闭集与 `precedence` 唯�
 
 ### Requirement: 既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段
 
-系统 MUST 消除 real path 持久化违约：配置来源层记录（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord`/`ConfigSourceJournalRecord`）MUST NOT 携带 `source_path`/`backup_path` 一类真实路径字段；配置来源列表 API 响应体（`GET /api/v1/config/sources`，经 `app/api/config.py` 的 `ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path`）MUST NOT 输出真实路径。**该违约已由 `50bffa45`（持久化侧：`source_path`/`backup_path` 物理删除、改 `uri: str | None`）与 `76ed0089`（响应体侧：`path` 与 `schema_path` 均改配置来源 URI）消除**；本节保留为可机械复核的不变量，实施期若回退即缺陷。
+配置来源层记录（`app/services/infrastructure/config/state.py` 的 `ConfigSourceLayerRecord`/`ConfigSourceJournalRecord`）与来源列表 API（`GET /api/v1/config/sources`）MUST 使用资源 URI 表达来源关联。已移除的 `source_path`/`backup_path` 及 API `path`/`schema_path` 定位字段 MUST NOT 恢复为第二套权威定位关系。该迁移由 `50bffa45` 与 `76ed0089` 完成；本机诊断可以同时报告实际文件位置，展示与诊断中的路径按本 capability 的字段职责合同处理。
 
 迁移 MUST **直接复用 config 侧既有的平级属性模式**（`app/core/config_sources.py:16` 的 `ConfigSource` 已是 `path` + `layer` + `precedence` 平级，且 `layer_revision`/`layer_digest`/`source_generation` 已是兄弟字段），即「把 `path` 换成 `uri`，其余 sibling 字段原样保留」。MUST NOT 另发明第二套表示。
 
-#### Scenario: 配置来源不再持久化 real path
+#### Scenario: 配置来源持久引用使用 URI
 
 - **WHEN** 一条配置来源被写入持久化记录
-- **THEN** 记录中承载 URI 而非 real path；real path 只在读取该来源内容时于调用栈内出现
+- **THEN** 来源关联使用 URI，不恢复原生路径定位字段；必要的原生配置与诊断位置不参与资源绑定
 
-#### Scenario: API 不输出配置来源真实路径
+#### Scenario: API 来源定位保持 URI 合同
 
 - **WHEN** 客户端请求配置来源列表（`GET /api/v1/config/sources`）
 - **THEN** 资源来源使用 URI 与兄弟字段（layer/precedence/layer_revision/layer_digest/source_generation 等），已移除的 path/schema_path 定位字段不恢复；本机诊断的展示位置按其独立职责报告
