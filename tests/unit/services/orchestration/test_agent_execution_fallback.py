@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import StateSnapshot
 
 from app.abstractions.tool_selection import ToolSelectionSnapshot
 from app.abstractions.turn_terminal_status import ToolResultCompletion
@@ -96,6 +97,17 @@ from tests.support.mcp.session_doubles import (
 pytestmark = pytest.mark.usefixtures("workspace_scope")
 
 _SKILL_CATALOG_RESOURCE_ID = "skill-entry:workspace:catalog:catalog"
+
+
+@pytest.fixture
+def stream_agent() -> MagicMock:
+    """普通事件流终结时显式返回无审批中断的图状态。"""
+    agent = MagicMock()
+    agent.aget_state = AsyncMock(return_value=StateSnapshot(
+        values={}, next=(), config={}, metadata=None, created_at=None,
+        parent_config=None, tasks=(), interrupts=(),
+    ))
+    return agent
 
 
 class _AcceptedUserInputStore:
@@ -331,12 +343,11 @@ def agent_execution_dependencies(
     saver.save_resource_activation_snapshot = AsyncMock()
     def activation_factory(resource_registry):
         publisher = McpCatalogResourcePublisher(registry=resource_registry, policy_resolver=extension_catalog_policy_resolver)
-        # TODO：补齐该旧 MCP 装具的 definitions 合同；其 26 项失败在原版同样存在，不能算执行验收。
         publisher.publish(McpCatalogPublication(
             binding_ref=build_extension_catalog_binding(
                 catalog_revision=sha256_jcs([]), generation=1, targets=(),
             ),
-            descriptors=(), tools={}, status="available",
+            descriptors=(), tools={}, definitions={}, status="available",
         ))
         skill_catalog_payload = {"entries": []}
         resource_registry.publish(ResourceSnapshot(
@@ -1014,7 +1025,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
 
 
 @pytest.mark.asyncio
-async def test_primary_success_no_fallback(agent_execution_dependencies):
+async def test_primary_success_no_fallback(stream_agent, agent_execution_dependencies):
     """测试：主模型成功时，不使用 fallback。"""
     deps = agent_execution_dependencies
     deps["tool_selection_store"].snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
@@ -1040,7 +1051,7 @@ async def test_primary_success_no_fallback(agent_execution_dependencies):
                 "metadata": stream_metadata(),
             }
 
-        mock_agent = MagicMock()
+        mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
@@ -1064,7 +1075,7 @@ async def test_primary_success_no_fallback(agent_execution_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_reasoning_stream_not_mixed_into_final_text(agent_execution_dependencies):
+async def test_reasoning_stream_not_mixed_into_final_text(stream_agent, agent_execution_dependencies):
     """reasoning 流只参与最终聚合，不应污染正式回复或旧实时事件。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
@@ -1124,7 +1135,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(agent_execution_depend
                 "metadata": stream_metadata(),
             }
 
-        mock_agent = MagicMock()
+        mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
@@ -1149,6 +1160,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(agent_execution_depend
 
 @pytest.mark.asyncio
 async def test_model_event_stream_does_not_recreate_legacy_text_events(
+    stream_agent,
     agent_execution_dependencies,
 ):
     """模型事件流不应重新创建消息流已经替代的旧文本事件。"""
@@ -1185,7 +1197,7 @@ async def test_model_event_stream_does_not_recreate_legacy_text_events(
                 "metadata": stream_metadata(),
             }
 
-        mock_agent = MagicMock()
+        mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
@@ -1209,7 +1221,7 @@ async def test_model_event_stream_does_not_recreate_legacy_text_events(
 
 
 @pytest.mark.asyncio
-async def test_reasoning_only_response_retries_with_system_reminder(agent_execution_dependencies):
+async def test_reasoning_only_response_retries_with_system_reminder(stream_agent, agent_execution_dependencies):
     """reasoning-only 空响应应继续请求模型产生工具调用或最终正文。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
@@ -1277,7 +1289,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(agent_execut
                 "metadata": stream_metadata(),
             }
 
-        mock_agent = MagicMock()
+        mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
@@ -1398,6 +1410,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
 
 @pytest.mark.asyncio
 async def test_standard_content_blocks_stream_split_reasoning_and_text(
+    stream_agent,
     agent_execution_dependencies,
 ):
     """标准 content blocks 流应拆分为 reasoning/text 两种事件。"""
@@ -1441,7 +1454,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
                 "metadata": stream_metadata(),
             }
 
-        mock_agent = MagicMock()
+        mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
 
@@ -1466,6 +1479,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
 
 @pytest.mark.asyncio
 async def test_tool_events_use_tool_start_input_and_tool_message_content(
+    stream_agent,
     agent_execution_dependencies,
 ):
     """工具卡片应使用 on_tool_start 的完整参数和 ToolMessage.content。"""
@@ -1593,7 +1607,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
                 "metadata": event_metadata,
             }
 
-        mock_agent = MagicMock()
+        mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_agent.get_graph = None
         mock_build.return_value = mock_agent
@@ -1656,6 +1670,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
 
 @pytest.mark.asyncio
 async def test_execution_builds_single_agent_runtime_without_model_override(
+    stream_agent,
     agent_execution_dependencies,
 ):
     """成功 fake Agent 流验证单次 runtime 构建且不传模型覆盖参数。"""
@@ -1668,7 +1683,7 @@ async def test_execution_builds_single_agent_runtime_without_model_override(
         with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
 
             def create_mock_agent(*args, **kwargs):
-                mock_agent = MagicMock()
+                mock_agent = stream_agent
 
                 async def mock_events(*args, **kwargs):
                     yield {
@@ -1731,7 +1746,7 @@ async def test_agent_runtime_build_exception_propagates(agent_execution_dependen
 
 
 @pytest.mark.asyncio
-async def test_successful_agent_stream_publishes_agent_start_once(agent_execution_dependencies):
+async def test_successful_agent_stream_publishes_agent_start_once(stream_agent, agent_execution_dependencies):
     """成功 fake Agent 流只发布一次 agent_start。"""
     deps = agent_execution_dependencies
     service = _build_agent_execution_service(deps)
@@ -1742,7 +1757,7 @@ async def test_successful_agent_stream_publishes_agent_start_once(agent_executio
         with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
 
             def create_mock_agent(*args, **kwargs):
-                mock_agent = MagicMock()
+                mock_agent = stream_agent
 
                 async def mock_events(*args, **kwargs):
                     yield {
@@ -2221,11 +2236,14 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
     (failure_record,) = [
         record
         for record in caplog.records
-        if record.getMessage() == (
-            "[agent_execution_service] step failed: session_id=ses_execution_error "
-            "thread_id=thr_test job_id=job_execution_error turn_id=turn_job_execution_error"
-        )
+        if record.name == "app.services.orchestration.execution_step.runner"
+        and record.getMessage() == "上游异常；完整诊断见异常链"
     ]
+    assert (failure_record.session_id, failure_record.thread_id, failure_record.job_id,
+            failure_record.turn_id, failure_record.execution_id) == (
+        "ses_execution_error", "thr_test", "job_execution_error",
+        "turn_job_execution_error", "execution_test",
+    )
     assert failure_record.exc_info is not None
     error_type, logged_error, error_traceback = failure_record.exc_info
     assert error_type is RuntimeError

@@ -193,7 +193,13 @@ async def handle_step_failure(
     logger: logging.Logger,
 ) -> None:
     """区分确定业务失败与取消/失联，收敛同一 v2 execution 终态。"""
-    failure_message = report_failure(error, detail=execution_failure_message(error))
+    failure_message = report_failure(
+        error, detail=execution_failure_message(error), diagnostic_logger=logger,
+        extra={
+            "session_id": session_id, "thread_id": thread_id, "job_id": job_id,
+            "turn_id": turn_id, "execution_id": execution_id,
+        },
+    )
     if execution_id is None:
         await publish(EventType.ERROR, {"error": failure_message, "phase": "agent_execution"})
         return

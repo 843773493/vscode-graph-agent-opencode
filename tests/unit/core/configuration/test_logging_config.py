@@ -104,7 +104,7 @@ def test_real_logging_entry_has_process_identity_and_no_invented_owner(
     assert "logger=app.test" in rendered
     assert "中文 DEBUG 正文\n第二行\n" in rendered
     assert not any(f"{field}=" in rendered for field in (
-        "workspace_id", "session_id", "thread_id", "request_id",
+        "workspace_id", "session_id", "thread_id", "request_id", "job_id", "turn_id", "execution_id",
     ))
 
 
@@ -137,12 +137,16 @@ def test_context_and_exception_keep_original_stack_without_leaking_request_scope
             raise RuntimeError("原始异常 中文")
         except RuntimeError:
             logging.getLogger("app.test").exception(
-                "请求失败", extra={"workspace_id": "workspace-real", "thread_id": "thread-real"},
+                "请求失败", extra={
+                    "workspace_id": "workspace-real", "thread_id": "thread-real",
+                    "job_id": "job-real", "turn_id": "turn-real", "execution_id": "execution-real",
+                },
             )
     finally:
         reset_current_request_id(token)
     output = stream.getvalue()
-    assert 'workspace_id="workspace-real" thread_id="thread-real" request_id="req-real"' in output
+    assert ('workspace_id="workspace-real" thread_id="thread-real" request_id="req-real" '
+            'job_id="job-real" turn_id="turn-real" execution_id="execution-real"') in output
     assert "Traceback (most recent call last):" in output
     assert "test_logging_config.py" in output
     assert "RuntimeError: 原始异常 中文" in output

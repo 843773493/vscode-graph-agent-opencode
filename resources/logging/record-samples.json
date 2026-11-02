@@ -13,12 +13,15 @@
         "session_id": null,
         "thread_id": "thread-one",
         "request_id": "request-\"one",
+        "job_id": "job-one",
+        "turn_id": "turn-one",
+        "execution_id": "execution-one",
         "ignored": "不得出现"
       },
       "exception": "Error: 原始故障\n    at fixture:21"
     },
-    "pretty": "2026-10-26T01:02:03.456Z [WARNING] service=terminal pid=123 runtime_instance_id=runtime-one logger=terminal.session workspace_id=\"workspace-示例\" thread_id=\"thread-one\" request_id=\"request-\\\"one\" 中文 DEBUG 正文\n第二行 {message}\nError: 原始故障\n    at fixture:21",
-    "compact": "timestamp=2026-10-26T01:02:03.456Z level=warning service=terminal pid=123 runtime_instance_id=runtime-one logger=terminal.session workspace_id=\"workspace-示例\" thread_id=\"thread-one\" request_id=\"request-\\\"one\" message=中文 DEBUG 正文\n第二行 {message}\nError: 原始故障\n    at fixture:21"
+    "pretty": "2026-10-26T01:02:03.456Z [WARNING] service=terminal pid=123 runtime_instance_id=runtime-one logger=terminal.session workspace_id=\"workspace-示例\" thread_id=\"thread-one\" request_id=\"request-\\\"one\" job_id=\"job-one\" turn_id=\"turn-one\" execution_id=\"execution-one\" 中文 DEBUG 正文\n第二行 {message}\nError: 原始故障\n    at fixture:21",
+    "compact": "timestamp=2026-10-26T01:02:03.456Z level=warning service=terminal pid=123 runtime_instance_id=runtime-one logger=terminal.session workspace_id=\"workspace-示例\" thread_id=\"thread-one\" request_id=\"request-\\\"one\" job_id=\"job-one\" turn_id=\"turn-one\" execution_id=\"execution-one\" message=中文 DEBUG 正文\n第二行 {message}\nError: 原始故障\n    at fixture:21"
   },
   {
     "record": {

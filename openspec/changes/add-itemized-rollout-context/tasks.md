@@ -1604,3 +1604,16 @@ pending 恢复的硬错误重试已闭合（2026-10-22）：进程内装载阶�
 - 原用例及专用手填历史 helper 物理删除，保留的十六个顶层声明AST一致；剩余缓存命中专项的手填增量明确留TODO，不作为完整执行验收。Ruff／compileall与矩阵注册通过；真实Pyright仍exit1，原模块14项诊断降为10项，按规则、完整消息、最窄AST owner及重数比较无新增，新专项零诊断。作者结构审查无finding，不将其代替非作者独审或7.5-F总门。
 - 此前真实运行暴露结构化content、合法轮次内cutoff及历史详情请求上限三项测试假设错误，按现行合同修正，未放宽身份、顺序、正文或hash。第四轮已通过八次调用／十二次上游尝试的完整封存审计，随后因一次传入七个Turn ID被既有四项上限拒绝；改用原有有界历史窗口，保留失败原件与工作区归档。独立审计的导入失败和误把固定发现入口视为禁用工具另留原日志，不计产品通过。
 - 准确命令、3752项源码前后指纹、原始输出／退出码、类型及AST对照、产品审计和清理索引见 `out/tests/temp/provider_compaction_20261102/artifacts/verification-compaction.json`；最终正式原件为 `out/tests/e2e/system/agent/context/test_provider_compaction/runs/run-c5406c3c855e/`。固定900秒／4GiB及跨worktree独占闸门保持，不代Web、Windows、同步真实Provider、硬退出或全部7.5／8.3；整体111/119继续未关闭，团队与MCP显式持有仍延期，未编辑前端或共享debug服务。
+
+### 2026-11-02 7.5-E 编排装具合同与执行失败日志归属（部分）
+
+- 迁齐旧编排装具的空 MCP publication `definitions` 与异步审批状态读取合同，八个普通成功流共用明确无中断的 `StateSnapshot` fixture；删除过时TODO，不改变原业务断言。只补publication后的9 failed／23 passed证实剩余失败来自八处不可await的裸mock和一条过时日志断言；补齐后该文件32 passed。
+- 原执行失败沿统一 `report_failure` 出口记录原异常和traceback，现同时传入原owner logger及Session／Thread／Job／Turn／execution身份。实际格式器复核发现后三个字段被公共合同过滤，原真实日志入口及共享样本的3个反例均失败；扩展既有可选context字段后，Python／JS沿同一只读合同输出，不新增logger、日志文件或错误结算链。无上下文时仍不伪造身份，未知字段仍不输出。
+- 最终相关Python单元104 passed／12.43秒，JS完整日志文件31 passed；Ruff／compileall通过。真实Pyright为6项旧装具诊断，生产及日志测试零诊断；按原收据恢复实际基线源码，再按规则、消息、所属声明、最窄AST及重数比较，原7项中的缺失definitions诊断已消除，新增0。全部测试使用外部期限及4GiB限制；公共日志合同补齐后的真实Gateway集成1 passed／41.02秒，沿原独占闸门核日志双错下的原执行终态及同Thread后继成功，不以日志断言替代执行终态。
+- 准确命令、源码SHA、原始输出、实际退出码、类型比较及作者结构审查见 `out/tests/temp/execution_fixture_contract_20261102/artifacts/verification.json`。不代真实Provider、Web、Windows、同步SDK、硬退出或全部7.5；111/119保持未关闭。未修改前端、共享debug、公共长回归fixture或另一会话提案。
+
+### 2026-11-02 7.5-E 真实Provider工具循环的最终源码补验（未通过）
+
+- 在同一Provider已完成九次真实调用的compaction运行后，按原 `e2e-provider-tool-loop` matrix补验，1 failed／218.66秒、exit1；180次Job轮询结束仍running，未进入本次工具配对、hash或重启验收，不计通过。准确命令与最终原件见 `out/tests/temp/provider_tool_loop_final_20261102/artifacts/verification.json` 及正式 `run-9b7f654accd9`。
+- 五份持久模型调用日志共七次上游尝试：第二次节点调用的backup_3在45秒内未建立Responses事件流，primary回退429 `FreeUsageLimitError`，backup_2返回字符串 `max_lines="none"` 被原工具合同拒绝；后续backup_3纠正参数并继续读完第二、第三份文件，最终回复调用在途时达到原轮询期限，teardown取消。明确区分开流／回退耗时、真实参数纠错与测试清理，不断言所有调用均上游过载。
+- 启动后源码采样已注明采样时点；运行期仅修改不被该E2E引用的unit测试，生产变更发生于退出后。Backend原始日志、五份模型日志、canonical JSONL及一致SQLite副本另行保留并登记SHA，防止后续同名工作区覆盖原件。**TODO：**在有新上游状态或源码证据时补最终工具循环验收；不延长既有等待门槛、不无证据重跑，不将旧版本通过外推为最终源码通过。整体7.5／111/119仍未关闭。
