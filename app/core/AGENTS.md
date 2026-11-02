@@ -21,7 +21,7 @@ app/core/
 │   ├── turn_execution_scope.py / cancelable_stream.py
 │   └── session_interrupt_state.py / history_loading.py / checkpoint_config.py
 ├── 标识、内容与协议基础
-│   ├── identifier.py / hashing.py / bounded_json.py
+│   ├── identifier.py / hashing.py / bounded_json.py / fuzzy.py
 │   ├── resource_uri.py
 │   └── exceptions.py / failures.py
 ├── 并发、生命周期与后台工作

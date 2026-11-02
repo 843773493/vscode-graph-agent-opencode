@@ -23,7 +23,7 @@
 
 覆盖规范：项目目标和既有业务动作必须逐类接入。
 
-- [ ] 3.1 在原 catalog owner 补齐名称／ID／目录字段的模糊召回，保留查询与 revision 绑定的分页，folder 仅作为导航目标。
+- [x] 3.1 在原 catalog owner 补齐名称／ID／目录字段的模糊召回，保留查询与 revision 绑定的分页，folder 仅作为导航目标。
 - [ ] 3.2 在原 Thread owner 补工作区范围内 main 与未打开 durable child 的有界发现，结果携带精确归属，不拉全部 Session 后在前端遍历。
 - [ ] 3.3 将 Session 候选交由 owner 解析不可变 main_thread_id，Thread 候选保持 child 身份，folder 默认动作定位原导航。
 - [ ] 3.4 验证首批之外的间隔字符缩写、同名 Session／main／child、目录 revision 变化与删除命中，区分未命中、受限及失效 cursor。
@@ -163,3 +163,10 @@
 - 原完整聊天工具循环回归通过，保留封存请求、文件保存、main／child 并行隔离、迟到导航和删除后刷新恢复的原断言。首次新增测试错误要求重开在已有资源之外再复制标签，按上游 HistoryService 的实际行为修正；随后修复替身回调清理竞态并重新通过。两次失败原件均保留。
 - 类型检查原并行模式触及 4 GiB 外部保护；使用编译器单线程及局部 GC 预算后，在相同硬限制内约 50 秒完成。未调整用户环境或放宽内存上限。
 - 命令、源码指纹、退出码与原输出：`out/tests/temp/quick_access_thread_20261102/artifacts/`；真实页面产物：`out/tests/integration/clients/web/test_thread_editor_identity/`、`out/tests/integration/clients/web/test_basic_chat_tool_loop/`。Electron 原生及剩余快速访问能力尚未验收，相关任务继续未勾选。
+
+### 2026-11-02：目录模糊召回切片（3.1）
+
+- 原 catalog 搜索及 Gateway 公开目录镜像共用顺序字符匹配和搜索键投影，名称、ID、逻辑路径及冻结 UTC 创建位置分别匹配。搜索键按原快照复用，保留排序、top-K、total 与 revision；旧子串语义的游标明确失效。导航 folder 不创建 Session 或 Thread。
+- 定向 Python 56 项通过，覆盖首屏之外缩写、Unicode、逻辑路径、独立字段、分页、查询变化、重命名与删除；真实 Gateway 集成通过原后端创建／移动及在线、重启后离线镜像搜索，核对 request_id、归属、stale 状态及物理 locator 不输出。次工作区仍是既有明确 HTTP 替身，本项不证明新 Quick Access Provider 已接入。
+- Pyright 零诊断，OpenSpec strict 通过。完整 Ruff 检查仅剩 HEAD 原有的 TRY004 两条和 ISC004 一条；新增导入格式已修正，排除这两项既存规则后检查通过，未改变既有异常合同。
+- 原始命令、源码指纹、退出码和审查收据保留于 `out/tests/temp/quick_access_catalog_20261102/artifacts/`；真实集成产物位于 `out/tests/integration/gateway/test_session_catalog_search/`。本批无前端及公开 DTO 变化，未重复 Workbench 构建。

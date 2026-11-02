@@ -27,7 +27,7 @@ catalog revision
     ├── nodes_by_id                  breadcrumb 查父链；也把页内节点 ID 映射回 DTO
     ├── visible_node_ids             O(1) 校验分页父节点是否可见
     ├── child_node_ids_by_parent     每次快照按 folder/name/id 排序一次；请求只切当前页
-    └── folded_search_terms          与可见节点同序，复用名称、ID、物理 locator 的 casefold 结果
+    └── folded_search_terms          按稳定 ID 复用名称、ID、逻辑目录和冻结 UTC 创建位置的 casefold 结果
         └── search                   大目录首屏用 top-K 取页但全量计算 total；游标页完整排序并校验 offset
 ```
 

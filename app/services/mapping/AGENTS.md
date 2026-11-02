@@ -12,7 +12,8 @@ mapping/
 │   ├── user_message_content_projection.py   canonical用户正文 → 展示正文与附件元数据
 │   └── turn_response_parts.py               canonical Rollout → 历史/live共用响应部件
 ├── 会话资源
-│   └── session_resource_mapper.py           会话资源记录 → 资源DTO
+│   ├── session_resource_mapper.py           会话资源记录 → 资源DTO
+│   └── session_catalog_search.py             公开 catalog 节点 → 后端与 Gateway 共用搜索键
 ├── 运行事件
 │   ├── observation_event_mapper.py          业务事件 → SSE与Proto观测
 │   └── trace_event_mapper.py                Trace事件 → Trace DTO

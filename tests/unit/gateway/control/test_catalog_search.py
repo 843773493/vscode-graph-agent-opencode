@@ -81,6 +81,8 @@ def test_catalog_cache_round_trip_preserves_logical_search_without_locators(
     assert loaded is not None
     for query in (
         "needle",
+        "ndl",
+        "报/标n",
         "session-needle",
         "2026/10/20",
         "2026/10/20/session-needle",
@@ -88,7 +90,7 @@ def test_catalog_cache_round_trip_preserves_logical_search_without_locators(
         matches = catalog_service._search_snapshot(target, loaded, query, limit=10)
         expected_ids = (
             ["folder-needle", "session-needle"]
-            if query == "needle"
+            if query in {"needle", "ndl"}
             else ["session-needle"]
         )
         assert [item.node_id for item in matches] == expected_ids
@@ -101,6 +103,8 @@ def test_catalog_cache_round_trip_preserves_logical_search_without_locators(
     assert (
         catalog_service._search_snapshot(target, loaded, "2026/10/21", limit=10) == []
     )
+    assert catalog_service._search_snapshot(target, loaded, "目标session", limit=10) == []
+    assert catalog_service._search_snapshot(target, loaded, "neld", limit=10) == []
 
 
 def test_catalog_search_limits_matches_after_stable_name_sort(

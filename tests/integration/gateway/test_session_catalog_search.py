@@ -82,6 +82,18 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                 if item["node_id"] == primary_session_id
             )
             assert "storage_relative_path" not in primary_session
+            # 真实业务入口先建立历史归属；缩写查询必须在原 owner 完成召回。
+            fuzzy_response = await client.get(
+                "/api/v1/session-catalog/search", params={"query": "SCNP", "limit": 1},
+            )
+            assert fuzzy_response.status_code == 200, fuzzy_response.text
+            assert fuzzy_response.headers["X-Request-ID"] == fuzzy_response.json()["request_id"]
+            assert [item["node"]["session_id"] for item in fuzzy_response.json()["data"]["items"]] == [primary_session_id]
+            path_response = await client.get(
+                "/api/v1/session-catalog/search", params={"query": "主区报/SCNP", "limit": 1},
+            )
+            assert path_response.status_code == 200, path_response.text
+            assert [item["node"]["session_id"] for item in path_response.json()["data"]["items"]] == [primary_session_id]
             resolver = get_session_path_resolver(
                 primary_workspace / ".boxteam/sessions"
             )
@@ -183,6 +195,15 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                 )
                 assert aggregate_response.status_code == 200, aggregate_response.text
                 aggregate = aggregate_response.json()["data"]
+                fuzzy_aggregate = await client.get(
+                    "/api/gateway/session-catalog/search",
+                    params={"query": "scn", "limit_per_workspace": 10},
+                )
+                assert fuzzy_aggregate.status_code == 200, fuzzy_aggregate.text
+                assert fuzzy_aggregate.headers["X-Request-ID"] == fuzzy_aggregate.json()["request_id"]
+                assert {item["session_id"] for item in fuzzy_aggregate.json()["data"]["items"]} == {
+                    primary_session_id, secondary_session_id,
+                }
                 assert aggregate["total"] == 2
                 assert {item["workspace_id"] for item in aggregate["items"]} == {
                     primary_workspace_id,
@@ -321,6 +342,14 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             assert "storage_relative_path" not in offline_response.text
             assert primary_storage_relative_path not in offline_response.text
             assert secondary_session_storage not in offline_response.text
+            fuzzy_offline = await client.get(
+                "/api/gateway/session-catalog/search",
+                params={"query": "scn", "limit_per_workspace": 10},
+            )
+            assert fuzzy_offline.status_code == 200, fuzzy_offline.text
+            fuzzy_data = fuzzy_offline.json()["data"]
+            assert {item["session_id"] for item in fuzzy_data["items"]} == {primary_session_id, secondary_session_id}
+            assert next(item for item in fuzzy_data["workspaces"] if item["workspace_id"] == secondary_workspace_id)["status"] == "stale"
             status_by_workspace = {
                 item["workspace_id"]: item for item in offline["workspaces"]
             }

@@ -7,12 +7,14 @@ import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cached_property
 from heapq import nsmallest
 from pathlib import Path
 
 import httpx
 
 from app.core.failures import failure_detail
+from app.core.fuzzy import is_subsequence
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
@@ -29,6 +31,10 @@ from app.schemas.gateway_control import (
     WorkspaceNavigationNodeDTO,
 )
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
+from app.services.mapping.session_catalog_search import (
+    CatalogSearchTerms,
+    catalog_search_terms,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +43,15 @@ logger = logging.getLogger(__name__)
 _SYNC_LOCK_SHARDS = 64
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _CatalogSnapshot:
     revision: str
     updated_at: datetime
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
+
+    @cached_property
+    def folded_search_terms(self) -> dict[str, CatalogSearchTerms]:
+        return catalog_search_terms(self.nodes_by_id)
 
 
 class GatewaySessionCatalogSearchService:
@@ -218,9 +228,9 @@ class GatewaySessionCatalogSearchService:
             ]
         ]:
             for node in tree.nodes:
-                if (
-                    node.kind != "workspace_folder"
-                    or query not in (f"{node.name} {node.node_id}").casefold()
+                if node.kind != "workspace_folder" or not any(
+                    is_subsequence(query, term.casefold())
+                    for term in (node.name, node.node_id)
                 ):
                     continue
                 breadcrumb = []
@@ -359,7 +369,7 @@ class GatewaySessionCatalogSearchService:
                     error=message,
                 )
         matches = self._search_snapshot(target, snapshot, query, limit=limit)
-        if query in target.name.casefold():
+        if is_subsequence(query, target.name.casefold()):
             matches.insert(
                 0,
                 GatewaySessionSearchMatchDTO(
@@ -445,13 +455,10 @@ class GatewaySessionCatalogSearchService:
     ) -> list[GatewaySessionSearchMatchDTO]:
         def iter_matching_nodes() -> Iterator[SessionCatalogNodeDTO]:
             for node in snapshot.nodes_by_id.values():
-                text = f"{node.name} {node.node_id} {node.session_id or ''}"
-                # 日期查询只消费已有创建时间，不缓存或输出物理 locator。
-                if node.created_at is not None and node.session_id is not None:
-                    text += (
-                        f" {node.created_at.astimezone(UTC):%Y/%m/%d}/{node.session_id}"
-                    )
-                if query in text.casefold():
+                if any(
+                    is_subsequence(query, term)
+                    for term in snapshot.folded_search_terms[node.node_id]
+                ):
                     yield node
 
         def sort_key(node: SessionCatalogNodeDTO) -> tuple[str, str]:

@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from heapq import nsmallest
 
+from app.core.fuzzy import is_subsequence
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
@@ -23,6 +24,10 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultsDTO,
 )
 from app.services.business.session_service import SessionService
+from app.services.mapping.session_catalog_search import (
+    CatalogSearchTerms,
+    catalog_search_terms,
+)
 
 _SEARCH_TOP_K_MIN_NODE_COUNT = 2_000
 _SEARCH_TOP_K_MIN_SCAN_RATIO = 16
@@ -33,8 +38,7 @@ class _SessionCatalogReadSnapshot:
     catalog_revision: int
     revision: str
     nodes: list[SessionCatalogNodeDTO]
-    # 与 nodes 同序：名称、节点 ID、物理存储相对路径均已 casefold。
-    folded_search_terms: tuple[tuple[str, str, str], ...]
+    folded_search_terms: dict[str, CatalogSearchTerms]
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
     visible_node_ids: frozenset[str]
     child_node_ids_by_parent: dict[str | None, tuple[str, ...]]
@@ -165,24 +169,19 @@ class SessionCatalogReadService:
         snapshot = await self._snapshot()
         # 搜索的 cursor 作用域是查询词：把目录分页或其它查询词的 cursor 拿来翻本
         # 次搜索，会让 offset 落到错误匹配集的中间，静默跳项。
-        scope = f"search\n{normalized_query}"
+        scope = f"search:subsequence-v1\n{normalized_query}"
         match_count = 0
 
         def matching_nodes() -> Iterator[
             tuple[tuple[str, str, str], SessionCatalogNodeDTO]
         ]:
             nonlocal match_count
-            for (folded_name, folded_node_id, folded_storage_path), node in zip(
-                snapshot.folded_search_terms, snapshot.nodes, strict=True
-            ):
-                if (
-                    normalized_query not in folded_name
-                    and normalized_query not in folded_node_id
-                    and normalized_query not in folded_storage_path
-                ):
+            for node in snapshot.nodes:
+                terms = snapshot.folded_search_terms[node.node_id]
+                if not any(is_subsequence(normalized_query, term) for term in terms):
                     continue
                 match_count += 1
-                yield (folded_name, folded_storage_path, node.node_id), node
+                yield (terms[0], terms[3], node.node_id), node
 
         if (
             cursor is None
@@ -313,23 +312,11 @@ class SessionCatalogReadService:
         self._validate_parent_graph(list(all_nodes_by_id.values()), all_nodes_by_id)
         revision = self._revision(nodes)
         child_node_ids_by_parent = self._index_sorted_child_ids(nodes)
-        session_storage_paths = {
-            node.node_id: node.storage_relative_path
-            for node in visible_catalog_nodes
-            if isinstance(node, SessionCatalogSessionProjection)
-        }
         snapshot = _SessionCatalogReadSnapshot(
             catalog_revision=catalog_revision,
             revision=revision,
             nodes=nodes,
-            folded_search_terms=tuple(
-                (
-                    node.name.casefold(),
-                    node.node_id.casefold(),
-                    session_storage_paths.get(node.node_id, "").casefold(),
-                )
-                for node in nodes
-            ),
+            folded_search_terms=catalog_search_terms(nodes_by_id),
             nodes_by_id=all_nodes_by_id,
             visible_node_ids=frozenset(node.node_id for node in nodes),
             child_node_ids_by_parent=child_node_ids_by_parent,

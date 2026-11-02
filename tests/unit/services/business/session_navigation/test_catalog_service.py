@@ -750,7 +750,7 @@ async def test_search_cursor_offset_uses_filtered_match_count(tmp_path: Path) ->
         first.total,
         first.revision,
         first.catalog_revision,
-        "search\nalpha",
+        "search:subsequence-v1\nalpha",
     )
     with pytest.raises(ValueError, match="offset 超出当前列表范围"):
         await catalog.search(query="alpha", limit=1, cursor=out_of_range_cursor)
