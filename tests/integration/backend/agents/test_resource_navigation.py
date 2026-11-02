@@ -75,6 +75,8 @@ def navigation_files(integration_workspace_root_path: str, integration_config_pa
         (root / "scripts/run.py").write_text("print('导航')\n")
         (root / "%2e%2e.txt").write_text("字面百分号\n")
     (workspace / "src/中文 文件.v2.md").write_text("工作区源码 Ω\n")
+    (workspace / "src/nontext.bin").write_bytes(b"\xff\x00\x80")
+    (workspace / "src/position-contract.txt").write_bytes("😀head\r\n🧪first NEEDLE\r\nsecond Ω tail\r\n".encode())
     (workspace / "AGENTS.md").write_text("工作区规范\n")
     untracked = workspace / "src/navigation-untracked"
     untracked.mkdir()
@@ -151,6 +153,26 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             assert root["content_hash"] is None
             assert root["node"] == {"uri": files_root, "resource_shape": "directory", "operations": ["describe", "list", "search"],
                                     "child_path": "file_segments", "stat": root["node"]["stat"]}
+            binary_uri = files_root + "/src/nontext.bin"
+            binary_stat = await navigate(binary_uri, "describe")
+            assert binary_stat["node"]["resource_shape"] == "file"
+            assert binary_stat["node"]["stat"]["size"] == 3
+            assert binary_stat["content"] is None and binary_stat["content_hash"] is None
+            # 未知二进制类型不能伪装文本；auto 只分派原 owner 已支持的媒体。
+            for read_format in ("text", "auto"):
+                nontext = await client.post(path, json={"uri": binary_uri, "operation": "read", "read_format": read_format})
+                assert nontext.status_code == 400, nontext.text
+                assert nontext.json()["detail"]["code"] == "invalid_encoding"
+                assert nontext.headers["X-Request-ID"] == nontext.json()["request_id"]
+            position_uri = files_root + "/src/position-contract.txt"
+            positions = await navigate(files_root + "/src", "search", search_mode="content", query=r"needle\r?\nsecond Ω",
+                search_options={"is_regex": True, "is_multiline": True, "case_mode": "insensitive",
+                                "include_globs": ["position-*.txt"], "all_matches": True}, max_snippet_bytes=16)
+            match, = positions["matches"]
+            assert match["uri"] == position_uri
+            assert (match["line"], match["column"], match["end_line"], match["end_column"]) == (2, 8, 3, 9)
+            assert (match["utf16_column"], match["utf16_end_column"], match["snippet_start_utf16_column"]) == (9, 9, 7)
+            assert match["text"] == "t NEEDLE" and match["snippet_start_column"] == 6
             tree = await navigate(files_root, "list")
             assert all(not node["uri"].endswith("/.boxteam") for node in tree["entries"])
             dot = next(node["uri"] for node in tree["entries"] if node["uri"].endswith("/.github"))
@@ -177,6 +199,10 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             assert (workspace / "src/中文 文件.v2.md").read_bytes() == saved_raw
             assert saved.json()["data"]["content"] == saved_raw.decode()
             assert saved.json()["data"]["revision"] == hashlib.sha256(saved_raw).hexdigest()
+            # 后续 stat 可观察新正文，不能替用户旧草稿推进 CAS 基线。
+            changed_stat = await navigate(file_uri, "describe")
+            assert changed_stat["node"]["stat"]["size"] == len(saved_raw)
+            assert changed_stat["content"] is None and changed_stat["content_hash"] is None
             stale = await client.put("/api/v1/workspace/files/content", params={"path": file_uri}, json={
                 "content": "过时草稿不得覆盖", "expected_revision": original_revision,
             })
@@ -217,6 +243,13 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             agents = await navigate(agents_uri, "read")
             assert agents["content"] == "工作区规范\n"
             assert agents["node"]["operations"] == ["describe", "read"] and agents["node"]["child_path"] is None
+            readonly = await client.put("/api/v1/workspace/files/content", params={"path": agents_uri}, json={
+                "content": "不得通过普通文件入口改写只读来源", "expected_revision": agents["content_hash"].removeprefix("sha256:"),
+            })
+            assert readonly.status_code == 400, readonly.text
+            assert "文件入口必须指向" in readonly.text
+            assert readonly.headers["X-Request-ID"] == readonly.json()["request_id"]
+            assert (workspace / "AGENTS.md").read_text() == "工作区规范\n"
 
             for scope, scope_id in (("workspace", workspace_id), ("gateway", gateway_id), ("inline", "source-development-0_0_2")):
                 name = "demo" if scope != "inline" else "coding"
@@ -257,11 +290,14 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 (agents_uri + "/child", "read", "malformed_path"),
                 (files_root + "/src/%2e%2e", "list", "dot_segment"),
                 (files_root + "/missing.txt", "read", "unknown_resource"),
+                (files_root + "/missing-directory", "describe", "unknown_resource"),
+                (files_root + "/missing-directory", "search", "unknown_resource"),
                 (files_root + "/src/%E4%B8%AD%E6%96%87%20%E6%96%87%E4%BB%B6.v2.md/child", "read", "capability_denied"),
                 (files_root + "/src/中文.md", "read", "non_ascii_rejected"),
                 (resource_display_uri(scope="workspace", scope_id=workspace_id, kind="session", tail_segments=("sess-test", "checkpoints")), "list", "capability_denied"),
             ):
-                response = await client.post(path, json={"uri": uri, "operation": operation})
+                response = await client.post(path, json={"uri": uri, "operation": operation,
+                    **({"query": "needle"} if operation == "search" else {})})
                 assert response.status_code in {400, 403, 404}, response.text
                 assert response.json()["detail"]["code"] == code
             # 精确产物经原领域 owner 读取；合法悬空 URI 明确未找到，不变成私有目录能力。

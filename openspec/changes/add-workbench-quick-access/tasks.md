@@ -35,7 +35,7 @@
 - [x] 4.1 改透唯一文件内部投影，使规范目录根支持真实 stat／describe、joinPath、相对路径及往返定位；旧叶子 query 投影的全部消费者一起迁移，不新增搜索 scheme。
 - [x] 4.2 在原文件搜索 owner 接入有界模糊文件名／路径查询，保留 cancel、cursor、扫描／字节／时间限制和截断说明。
 - [x] 4.3 补齐原界面已展示的正则、大小写／smart case、整词、include／exclude、ignore、仅已打开和结果上限语义；尚不支持的选项明确拒绝，不静默按 substring 执行。
-- [ ] 4.4 验证真实目录不存在、只读、非文本、Unicode／多行位置和查询选项；保留文件保存的 revision／CAS 冲突合同，不引入新的批量替换业务。
+- [x] 4.4 验证真实目录不存在、只读、非文本、Unicode／多行位置和查询选项；保留文件保存的 revision／CAS 冲突合同，不引入新的批量替换业务。
 
 ## 5. 原版文件搜索服务
 
@@ -246,3 +246,9 @@
 - 正式移除 B 后搬迁隔离装具，由 C 占用旧路径及 route：B 重查明确报错且零文件搜索 HTTP。再经管理入口注册原 B，新 route 保留稳定 workspace ID；再次查询及刷新恢复均只访问新 route 和原规范根，不显示 C 正文。保留此前复制、另存、关闭重开、dirty 模型、上下文及 A/B/IndexedDB 原断言。
 - 最终真实 Gateway／正式 Workbench 构建／Chromium 场景通过（156.85 秒），Ruff、JS 语法及 OpenSpec strict 通过。仅新增测试，无产品代码变化，复用上一切片真实类型检查。结构审查无 findings：专用 helper 约 150 行，无新增源码目录。
 - 三次失败均为验收装具问题：删除遗漏 runtime group 前置条件、正文输入焦点错误、将注册摘要当作完整工作区 DTO；分别按原输出修正，未放宽身份、正文或零请求断言。准确命令、指纹、失败原件及退出码位于 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/recovery-*.json`；最终页面原件位于 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-9421a9a007bb/nodes/node-f4e408bf0b21/artifacts/search-result.json`。本项不证明 Electron 或剩余 Quick Access 功能。
+
+### 2026-11-02：文件边界与坐标验收（4.4）
+
+- 在原真实 Gateway／受管 Backend 场景补齐缺失目录的 describe／有效 search、未知二进制的无正文 stat 与明确编码错误、只读 agent-spec 拒绝普通文件写入且原件不变。根内 include、大小写不敏感多行正则、CRLF／emoji 的码点与 UTF-16 完整区间均核真实 HTTP 回执；保存后 describe 只返回 stat，旧 revision 仍以 409 拒绝，保留原 request_id。
+- 真实 HTTP 场景通过（67.76 秒）；原版 FileService 定向 3 项／37 断言通过，确认目录／二进制 stat、稳定投影及 route 变化后的 CAS 基线。复用前两切片的查询选项、dirty 模型和真实页面证据，无产品变化，不重复前端构建／类型检查。Ruff、差异检查及 OpenSpec strict 通过；原文件 522 行，新增断言仍属同一导航场景，无结构 findings。
+- 首两次失败来自测试误把未知 `.bin` 当成受支持媒体；按既有合同同时核 text／auto 都明确拒绝，未扩展媒体能力。第三次缺失目录搜索漏传必需 query，修正有效请求后通过。原输出、源码指纹、命令及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/file-boundary-*.json`；真实回执保留在 `out/tests/integration/backend/agents/test_resource_navigation/artifacts/navigation-receipts.json`。这不代替尚未实施的统一 opener 或 Electron 验收。
