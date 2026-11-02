@@ -49,4 +49,3 @@ export function searchEditorHeaderLines(model: ITextModel): string[] {
   }
   return lines;
 }
-
