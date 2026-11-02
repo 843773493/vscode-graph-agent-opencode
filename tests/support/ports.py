@@ -5,25 +5,24 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 TEST_FILE_PORT_BLOCK_SIZE = 100
-E2E_PORT_MAX_FILES = 100
-INTEGRATION_PORT_START = 8800
-INTEGRATION_PORT_MAX_FILES = 450
-INTEGRATION_PORT_END = (
-    INTEGRATION_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * INTEGRATION_PORT_MAX_FILES - 1
-)
-E2E_PORT_START = INTEGRATION_PORT_END + 1
-E2E_PORT_END = E2E_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * E2E_PORT_MAX_FILES - 1
+TEST_FILE_PORT_START = 8800
+TEST_FILE_PORT_MAX_FILES = (65536 - TEST_FILE_PORT_START) // TEST_FILE_PORT_BLOCK_SIZE
+TEST_FILE_PORT_END = TEST_FILE_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * TEST_FILE_PORT_MAX_FILES - 1
 
 
 @lru_cache(maxsize=16)
 def _test_file_indexes_for_tests_root(
     tests_root: Path,
 ) -> tuple[int, Mapping[Path, int]]:
-    """缓存测试文件数量与首次排序序号，供重复端口查询使用。"""
-    test_files = sorted(path.resolve() for path in tests_root.rglob("test_*.py"))
+    """两层共享一次文件快照，集成在前、E2E在后，不预留固定层级配额。"""
+    test_files = [
+        path.resolve()
+        for layer in ("integration", "e2e")
+        for path in sorted((tests_root / layer).rglob("test_*.py"))
+    ]
     first_index_by_path: dict[Path, int] = {}
     for index, test_file in enumerate(test_files):
         first_index_by_path.setdefault(test_file, index)
@@ -36,7 +35,7 @@ class TestFilePortBlock:
 
     __test__: ClassVar[bool] = False
     test_file: Path
-    # index 是所属测试层全部文件按解析后绝对路径排序的零基序号。
+    # index 是共享文件快照中的零基序号，先integration、后e2e，各层按路径排序。
     index: int
     start: int
     # start 和 end 均包含在端口块内；offset 从 start 起算。
@@ -58,13 +57,13 @@ class TestFilePortBlock:
 def port_block_for_file(
     test_file_path: Path,
     *,
-    test_layer: str,
-    port_start: int,
-    max_files: int,
+    test_layer: Literal["integration", "e2e"],
     tests_root: Path,
 ) -> TestFilePortBlock:
     resolved_tests_root = tests_root.resolve()
     resolved_file = test_file_path.resolve()
+    if not resolved_file.is_relative_to(resolved_tests_root / test_layer):
+        raise ValueError(f"{test_layer} 测试文件不在指定测试层: {resolved_file}")
     test_file_count, first_index_by_path = _test_file_indexes_for_tests_root(
         resolved_tests_root
     )
@@ -72,13 +71,13 @@ def port_block_for_file(
     if index is None:
         raise ValueError(f"未能为 {test_layer} 测试文件分配端口块: {resolved_file}")
 
-    if index >= max_files:
+    if test_file_count > TEST_FILE_PORT_MAX_FILES:
         raise RuntimeError(
-            f"{test_layer} 测试文件数量超过端口块容量: "
-            f"count={test_file_count}, max={max_files}"
+            "integration/e2e 测试文件总数超过端口块容量: "
+            f"count={test_file_count}, max={TEST_FILE_PORT_MAX_FILES}"
         )
 
-    start = port_start + index * TEST_FILE_PORT_BLOCK_SIZE
+    start = TEST_FILE_PORT_START + index * TEST_FILE_PORT_BLOCK_SIZE
     return TestFilePortBlock(
         test_file=resolved_file,
         index=index,
@@ -95,12 +94,10 @@ def e2e_port_block_for_file(
     return port_block_for_file(
         test_file_path,
         test_layer="e2e",
-        port_start=E2E_PORT_START,
-        max_files=E2E_PORT_MAX_FILES,
         tests_root=(
             tests_root.resolve()
             if tests_root is not None
-            else Path.cwd().resolve() / "tests" / "e2e"
+            else Path.cwd().resolve() / "tests"
         ),
     )
 
@@ -109,7 +106,5 @@ def integration_port_block_for_file(test_file_path: Path) -> TestFilePortBlock:
     return port_block_for_file(
         test_file_path,
         test_layer="integration",
-        port_start=INTEGRATION_PORT_START,
-        max_files=INTEGRATION_PORT_MAX_FILES,
-        tests_root=Path.cwd().resolve() / "tests" / "integration",
+        tests_root=Path.cwd().resolve() / "tests",
     )
