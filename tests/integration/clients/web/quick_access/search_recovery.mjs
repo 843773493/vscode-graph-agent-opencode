@@ -1,0 +1,148 @@
+import { rename } from 'node:fs/promises';
+import { expect } from 'playwright/test';
+
+/** 只读检查原工作副本 backup；内容与配置均由原编辑器生成。 */
+async function readBackups(page) {
+  return page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('vscode-web-db', 3);
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    try {
+      const store = db.transaction('vscode-userdata-store').objectStore('vscode-userdata-store');
+      const read = request => new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+      });
+      const [keys, values] = await Promise.all([read(store.getAllKeys()), read(store.getAll())]);
+      return keys.flatMap((key, index) => String(key).includes('/Backups/') && String(key).includes('/search-editor/')
+        ? [{ key, text: new TextDecoder().decode(values[index]) }] : []);
+    } finally { db.close(); }
+  });
+}
+
+/** 真实备份、迟到 Pane 及真实控制面路由变更；不改写 Input 或伪造业务回执。 */
+export async function verifySearchRecovery({ page, command, api, result, fileUri, ownerA, ownerB, oldRoot, replacementRoot }) {
+  const groups = page.locator('.editor-group-container');
+  const a = groups.first().locator('.search-editor'), b = groups.nth(1).locator('.search-editor');
+  const lines = editor => editor.locator('.monaco-editor .view-lines');
+  const input = editor => editor.getByRole('textbox', { name: 'Search: Type Search Term and press Enter to search', exact: true });
+  const rerun = async (editor, query, expected, owner) => {
+    const before = result.searches.length;
+    await input(editor).fill(query);
+    await input(editor).press('Enter');
+    await expect.poll(() => result.searches.slice(before).some(request => request.query === query)).toBe(true);
+    await expect(lines(editor)).toContainText(expected);
+    const requests = result.searches.slice(before);
+    expect(requests.every(request => request.route === owner.route && request.uri === owner.root)).toBe(true);
+  };
+
+  result.phase = 'unsaved-search-result-backups';
+  for (const [editor, marker] of [[a, 'backup-only-A 🧪'], [b, 'backup-only-B 🧪']]) {
+    const originalQuery = await input(editor).inputValue();
+    const body = editor.locator('.monaco-editor [role="textbox"]');
+    await body.focus();
+    await expect(body).toBeFocused();
+    await body.press('ControlOrMeta+End');
+    await body.press('Enter');
+    await body.pressSequentially(marker);
+    await expect(input(editor)).toHaveValue(originalQuery);
+    await expect(lines(editor)).toContainText(marker);
+  }
+  let backups;
+  await expect.poll(async () => {
+    backups = await readBackups(page);
+    return ['backup-only-A 🧪', 'backup-only-B 🧪'].every(marker => backups.some(backup => backup.text.includes(marker)));
+  }).toBe(true);
+  result.editorBackupFacts = [ownerA, ownerB].map((owner, index) => {
+    const backup = backups.find(backup => backup.text.includes(`backup-only-${index === 0 ? 'A' : 'B'} 🧪`));
+    const metadata = JSON.parse(backup.text.split('\n').find(line => line.startsWith('# BoxTeamScope: ')).slice('# BoxTeamScope: '.length));
+    expect(metadata.workspaces.map(target => [target.gatewayId, target.workspaceId, target.rootUri])).toEqual([
+      [owner.gatewayId, owner.workspaceId, owner.root],
+    ]);
+    return { key: backup.key, scope: metadata };
+  });
+  await command('boxteam.flushViewState');
+  const beforeRestore = result.searches.length;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(a.locator('.boxteam-search-scope')).toContainText('home');
+  await expect(b.locator('.boxteam-search-scope')).toContainText('搜索隔离 B');
+  await expect(lines(a)).toContainText('backup-only-A 🧪');
+  await expect(lines(b)).toContainText('backup-only-B 🧪');
+  // 未保存的自定义正文仅存在原 backup，恢复不能靠重新搜索生成。
+  expect(result.searches.slice(beforeRestore)).toEqual([]);
+  result.editorDeepBackupRecovery = true;
+  await rerun(a, 'dirtyword', 'dirtyword quickscope', ownerA);
+  await rerun(b, 'foreign-buffer', 'foreign-buffer quickscope', ownerB);
+
+  result.phase = 'late-search-pane-does-not-rebind-current-input';
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let delayed = false;
+  const pattern = '**/api/gateway/workspaces?check_health=false';
+  const delay = async route => {
+    const response = await route.fetch();
+    if (!delayed) { delayed = true; await gate; }
+    await route.fulfill({ response });
+  };
+  await page.route(pattern, delay);
+  try {
+    // 已保存 A 在 B 所在组重开；只延迟真实控制面回执，保留其正文和请求身份。
+    await page.evaluate(() => {
+      globalThis.lateSearchOpen = { done: false };
+      void globalThis.workbench.commands.executeCommand('_workbench.open', 'workbench:/Workspace/saved-A.code-search',
+        [1, { pinned: true }]).then(() => { globalThis.lateSearchOpen = { done: true }; },
+        error => { globalThis.lateSearchOpen = { done: true, error: String(error) }; });
+    });
+    await expect.poll(() => delayed).toBe(true);
+    await command('_workbench.open', await fileUri(ownerB), [1, { pinned: true }]);
+    await command('search.action.openEditor', { query: 'foreign-buffer', location: 'reuse', triggerSearch: true,
+      contextLines: 0, useExcludeSettingsAndIgnoreFiles: false, onlyOpenEditors: false });
+    await expect(b.locator('.boxteam-search-scope')).toContainText('搜索隔离 B');
+    await expect(lines(b)).toContainText('foreign-buffer quickscope');
+    release();
+    await expect.poll(() => page.evaluate(() => globalThis.lateSearchOpen)).toEqual({ done: true });
+    await rerun(b, 'quickscope', 'foreign-buffer quickscope', ownerB);
+    await expect(lines(b)).not.toContainText('dirtyword');
+    result.editorLatePaneIsolation = true;
+  } finally { release(); await page.unroute(pattern, delay); }
+
+  result.phase = 'original-route-reused-by-different-owner';
+  // 停止并移除原注册后才搬迁隔离装具；新旧 route 都经正式管理入口登记。
+  const registered = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(target => target.workspace_id === ownerB.route);
+  await api(`/api/gateway/managed-workspaces/${ownerB.route}?force=true`, { method: 'DELETE', body: JSON.stringify({
+    expected_backend_generation: registered.backend_generation, expected_workspace_ids: registered.affected_workspace_ids,
+  }) });
+  const relocatedRoot = oldRoot + '-relocated';
+  await rename(oldRoot, relocatedRoot);
+  await rename(replacementRoot, oldRoot);
+  await api('/api/gateway/managed-workspaces', { method: 'POST',
+    body: JSON.stringify({ root_path: oldRoot, name: '替代工作区 C' }) });
+  // 管理回执只给注册摘要，稳定身份必须从正式工作区 DTO 取得。
+  const replacement = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(target => target.name === '替代工作区 C');
+  expect(replacement.workspace_id).toBe(ownerB.route);
+  expect(replacement.backend_workspace_id).toEqual(expect.any(String));
+  expect(replacement.backend_workspace_id).not.toBe(ownerB.workspaceId);
+  const beforeMissing = result.searches.length;
+  await input(b).fill('quickscope');
+  await input(b).press('Enter');
+  await expect(page.locator('.notifications-toasts')).toContainText('缺少唯一的已登记路由');
+  expect(result.searches.slice(beforeMissing)).toEqual([]);
+
+  result.phase = 'stable-owner-resolves-new-route';
+  await api('/api/gateway/managed-workspaces', { method: 'POST',
+    body: JSON.stringify({ root_path: relocatedRoot, name: '迁移后的搜索隔离 B' }) });
+  const relocated = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(target => target.name === '迁移后的搜索隔离 B');
+  expect(relocated.workspace_id).not.toBe(ownerB.route);
+  expect(relocated.backend_workspace_id).toBe(ownerB.workspaceId);
+  const moved = { ...ownerB, route: relocated.workspace_id };
+  await rerun(b, 'quickscope', 'foreign-buffer quickscope', moved);
+  await expect(lines(b)).not.toContainText('replacement-C');
+  await command('boxteam.flushViewState');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(b.locator('.boxteam-search-scope')).toContainText('迁移后的搜索隔离 B');
+  await rerun(a, 'dirtyword', 'dirtyword quickscope', ownerA);
+  await rerun(b, 'quickscope', 'foreign-buffer quickscope', moved);
+  await expect(lines(b)).not.toContainText('replacement-C');
+  result.editorRouteRecovery = { original: ownerB.route, replacementOwner: replacement.backend_workspace_id,
+    current: moved.route, stableOwner: moved.workspaceId };
+}

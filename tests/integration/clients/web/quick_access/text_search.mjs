@@ -4,12 +4,14 @@ import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { verifySearchEditors } from './search_editor.mjs';
 import { verifySearchContext } from './search_context.mjs';
+import { verifySearchRecovery } from './search_recovery.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshotPath = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 const otherWorkspace = process.env.BOXTEAM_SEARCH_OTHER_WORKSPACE;
-if (!baseUrl || !resultPath || !screenshotPath || !otherWorkspace) throw new Error('文件快速搜索缺少运行参数');
+const replacementWorkspace = process.env.BOXTEAM_SEARCH_REPLACEMENT_WORKSPACE;
+if (!baseUrl || !resultPath || !screenshotPath || !otherWorkspace || !replacementWorkspace) throw new Error('文件快速搜索缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_text_search.py');
 const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], initialization: [],
   boundary: '真实 Gateway、托管后端与正式 Workbench；无业务 HTTP 替身，源文件为隔离装具' };
@@ -215,6 +217,8 @@ try {
   await page.keyboard.press('Escape');
   await verifySearchEditors({ page, command, result, fileUri, ownerA: result.owner, ownerB: otherOwner });
   await verifySearchContext({ page, command, result, fileUri, owner: result.owner });
+  await verifySearchRecovery({ page, command, api, result, fileUri, ownerA: result.owner, ownerB: otherOwner,
+    oldRoot: otherWorkspace, replacementRoot: replacementWorkspace });
   await expect(page.locator('#startup-error')).toBeEmpty();
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';

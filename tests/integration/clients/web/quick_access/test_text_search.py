@@ -50,19 +50,21 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspaces = Path(integration_workspace_root_path)
     template = context.project_root / "tests/fixtures/workspaces/default_test_workspace"
-    workspace, other = [
+    workspace, other, replacement = [
         prepare_default_test_workspace(workspace_root=workspaces / name, template_root=template)
-        for name in ("A", "B")
+        for name in ("A", "B", "C")
     ]
-    # B 是全新工作区，稳定身份由正式注册／启动入口生成。
+    # B/C 是全新工作区，稳定身份由正式注册／启动入口生成。
     (other / ".boxteam/workspace-identity.json").unlink()
-    for target in (workspace, other):
+    (replacement / ".boxteam/workspace-identity.json").unlink()
+    for target in (workspace, other, replacement):
         install_test_workspace_config(
             workspace_root=target, config_path=Path(integration_workspace_config_path),
             schema_path=workspaces / ".boxteam/workspace_schema.jsonc",
         )
     (workspace / "quick-scope.txt").write_text("diskword quickscope\n", encoding="utf-8")
     (other / "quick-scope.txt").write_text("foreign-disk quickscope\n", encoding="utf-8")
+    (replacement / "quick-scope.txt").write_text("replacement-C quickscope\n", encoding="utf-8")
     (workspace / "context-lines.txt").write_text("A context before\ncontextbranchonly\ncontextbranchonly\nA context after", encoding="utf-8")
     (other / "context-lines.txt").write_text("B context before\ncontextbranchonly\nB context after", encoding="utf-8")
     (workspace / ".gitignore").write_text("ignored-search.txt\n", encoding="utf-8")
@@ -83,8 +85,9 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                      "BOXTEAM_SEARCH_OTHER_WORKSPACE": str(other),
+                     "BOXTEAM_SEARCH_REPLACEMENT_WORKSPACE": str(replacement),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
-                capture_output=True, text=True, timeout=150, check=False,
+                capture_output=True, text=True, timeout=210, check=False,
             )
         (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout)
         (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr)
@@ -108,8 +111,12 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["editorInvalidScope"] is True
         assert receipt["editorDirtyContext"] is True
         assert receipt["editorAutomaticContextRerun"] is True
+        assert receipt["editorDeepBackupRecovery"] is True
+        assert receipt["editorLatePaneIsolation"] is True
+        assert receipt["editorRouteRecovery"]["original"] != receipt["editorRouteRecovery"]["current"]
         assert receipt["pageErrors"] == []
         assert (workspace / "quick-scope.txt").read_text(encoding="utf-8") == "diskword quickscope\n"
-        assert (other / "quick-scope.txt").read_text(encoding="utf-8") == "foreign-disk quickscope\n"
+        assert (other / "quick-scope.txt").read_text(encoding="utf-8") == "replacement-C quickscope\n"
+        assert (other.with_name(other.name + "-relocated") / "quick-scope.txt").read_text(encoding="utf-8") == "foreign-disk quickscope\n"
     finally:
         close_gateway_process(gateway)

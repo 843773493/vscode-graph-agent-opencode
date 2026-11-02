@@ -58,7 +58,7 @@
 - [x] 6.4 在同一 sourceTransform 的原 SearchEditor 查询构建处接入 protected typed hook，实际使用 input scope、child QueryBuilder、根及受限 extras；不改私有 readonly 字段，不吞构建错误。
 - [x] 6.5 在原 Pane 贡献选择 SearchEditor 子类，setInput／clearInput、模型 await、原 searchModel 取消及异步完成均检查 input／scope 代际，复用仅匹配同 scope。
 - [x] 6.6 让原 JSON serializer、copy、磁盘／backup header 读写保留 scope，修复固定六行 header 读取；缺 scope 的旧结果只读查看至明确选范围，未知／损坏版本明确报错。
-- [ ] 6.7 用两个工作区同时分屏验证再次查询、复制、保存／另存、关闭重开、backup 恢复和 route 变更，检查 query 对象与真实 HTTP 目标；不以保存字段存在替代运行时接线证明。
+- [x] 6.7 用两个工作区同时分屏验证再次查询、复制、保存／另存、关闭重开、backup 恢复和 route 变更，检查 query 对象与真实 HTTP 目标；不以保存字段存在替代运行时接线证明。
 
 ## 7. 默认 Provider 与模式帮助
 
@@ -239,3 +239,10 @@
 - 真实跨 Gateway 与 localhost SSH 定向用例通过：A/B 同名规则相反，两个真实路由均按 B 规则搜索，关闭 ignore 返回两个文件。前三项 Web／HTTP 验收在组合运行中已通过，组合在最后一项触发 240 秒外部超时；保留退出码 124，仅重跑未完成的远端用例并通过（42.36 秒），本次孤立 SSH 进程已按运行 ID 清理。
 - Ruff、Buf format、生成一致性与相对 77fcd4379 的 breaking 检查、OpenSpec strict 通过。结构审查无 findings：规则模块只负责纯匹配，I/O 仍归文件 owner；触达源码目录各 12／10 个文件，导航 757 行仍为单一有界只读链。
 - 准确命令、源码指纹、原输出和退出码：`out/tests/temp/quick_access_scoped_query_20261102/artifacts/ignore-*.json`；页面：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-5c568eae5d7f/nodes/node-f4e408bf0b21/artifacts/search-result.json`。4.4、6.7 以及 Electron 仍需各自完整验收。
+
+### 2026-11-02：Search Editor 深度恢复与路由变更验收（6.7）
+
+- 沿原 Monaco 输入写入 A/B 独有未保存结果，只读核对原 IndexedDB backup 的正文及范围；刷新后正文原样恢复且没有自动搜索。延迟真实控制面回执期间替换另一组的 Input，放行后查询仍属于 B。
+- 正式移除 B 后搬迁隔离装具，由 C 占用旧路径及 route：B 重查明确报错且零文件搜索 HTTP。再经管理入口注册原 B，新 route 保留稳定 workspace ID；再次查询及刷新恢复均只访问新 route 和原规范根，不显示 C 正文。保留此前复制、另存、关闭重开、dirty 模型、上下文及 A/B/IndexedDB 原断言。
+- 最终真实 Gateway／正式 Workbench 构建／Chromium 场景通过（156.85 秒），Ruff、JS 语法及 OpenSpec strict 通过。仅新增测试，无产品代码变化，复用上一切片真实类型检查。结构审查无 findings：专用 helper 约 150 行，无新增源码目录。
+- 三次失败均为验收装具问题：删除遗漏 runtime group 前置条件、正文输入焦点错误、将注册摘要当作完整工作区 DTO；分别按原输出修正，未放宽身份、正文或零请求断言。准确命令、指纹、失败原件及退出码位于 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/recovery-*.json`；最终页面原件位于 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-9421a9a007bb/nodes/node-f4e408bf0b21/artifacts/search-result.json`。本项不证明 Electron 或剩余 Quick Access 功能。
