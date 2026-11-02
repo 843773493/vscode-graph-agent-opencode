@@ -286,3 +286,9 @@
 - 回放 owner 顺序重建与真实 HTTP／冷进程模型目录更新两场景2 passed／20.68秒；后者仍验证同步下载零调用、延迟采用与离线缓存，不删除真实网络验证。该结果不能证明 Goal 的模型进入期限已满足：原四参数关闭测试仍4 failed／66.12秒，全部止于内层 `model_entered.wait()` 的5秒期限，尚未执行 Goal 终态／catalog 关闭断言。原外层8秒与内层5秒、性能TODO及8.2未勾状态保持，不继续无新证据重跑。
 - 原观察性诊断进程exit139，未产生pytest终态；仅采纳崩溃前明确的同步HTTP栈，不将其作为业务验收或推断崩溃原因。准确命令、原件、源码指纹与类型对照见 `out/tests/temp/replay_runtime_20261102/artifacts/verification.json`，诊断原件保留于 `out/tests/temp/goal_model_entry_20261102/artifacts/`。本片不代完整关闭期限、附件未知操作、Windows、Web或真实Provider验收。
 - 最终导入顺序整理后，原回放 owner 场景1 passed／7.20秒；Ruff、compileall和本change strict通过。完整HEAD归档与当前Pyright均5项既有装具诊断，按文件、规则、完整消息、最窄语句AST及重数对账无新增，不称类型全绿。作者结构自查只改原fixture和原测试的导入，未新增目录、模块或生命周期owner；归档副本已回收，原始检查输出保留。
+
+### 2026-11-02 rollout 初始化的重复连接收口（8.2 性能补核）
+
+- 线程／协程观察表明，资源冻结反复经过完整 rollout 初始化和 catalog 路径解析。本次将同次初始化的建表、reasoning 结构与发布状态检查并入原 writer；保留已有 authority 的只读预检和每次完整结构／canonical 检查，不跨调用缓存可变事实。冷建库连接4→1、已有库4→2；原写锁复用时不再求值被丢弃的路径和锁实例。三个只转发／另开连接的旧方法及全部调用方已物理移除，无schema变更。
+- 新连接预算反例在旧实现1 failed／2 passed，当前新增三场通过；定位、损坏、结构、恢复、context source、fork保留和工具协议相关两批共296 passed。Ruff／compileall通过；完整HEAD归档的生产Pyright6项，当前5项，按文件／规则／完整消息／语句AST／重数比较无新增，新测试零诊断。
+- 原Goal首场仍在model进入5秒失败，1 failed／23.88秒；这次provider prepare已完成，但未进入关闭验收，不关闭8.2或原性能TODO，不延长期限。Copilot参考为conversationStore按生命周期复用状态；其无本项目sealed恢复合同，不能据此移除完整性校验。准确命令、指纹、原始输出、退出码与类型差集见 `out/tests/temp/rollout_initialization_20261102/artifacts/verification.json`；观察采样原件见 `out/tests/temp/goal_prepare_profile_20261102/artifacts/`。本片无前端改动、新writer、跨调用缓存或独立非作者审查。

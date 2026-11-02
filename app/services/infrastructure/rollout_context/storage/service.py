@@ -142,14 +142,13 @@ class RolloutStorage(
         owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
         with self._locks_guard:
             key = (session_id, owner_thread_id)
-            return self._locks.setdefault(
-                key,
-                _RolloutOperationLock(
+            if key not in self._locks:
+                self._locks[key] = _RolloutOperationLock(
                     self.root(session_id, checkpoint_ns, thread_id=owner_thread_id).parent
                     / ".rollout.write.lock",
                     timeout_seconds=_ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
-                ),
-            )
+                )
+            return self._locks[key]
 
 
     def root(
@@ -348,9 +347,6 @@ class RolloutStorage(
 
     def initialize(self, session_id: str, checkpoint_ns: str='', *, thread_id: str | None=None, validate_jsonl_items: bool=True) -> RolloutManifest:
         return self._maintenance_owner.initialize(session_id, checkpoint_ns, thread_id=thread_id, validate_jsonl_items=validate_jsonl_items)
-
-    def _reject_unpublished_migration(self, thread_id: str, checkpoint_ns: str, *, session_id: str) -> None:
-        return self._maintenance_owner._reject_unpublished_migration(thread_id, checkpoint_ns, session_id=session_id)
 
     def _rollout_id(
         self, session_id: str, *, thread_id: str, checkpoint_ns: str

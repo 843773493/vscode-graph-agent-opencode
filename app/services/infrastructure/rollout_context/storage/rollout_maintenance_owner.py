@@ -335,18 +335,6 @@ class RolloutMaintenanceOwner(
                     connection.commit()
                 raise
 
-    def _initialize_schema(
-        self,
-        thread_id: str,
-        checkpoint_ns: str,
-        *,
-        session_id: str,
-    ) -> None:
-        with self._host._connect(
-            thread_id, checkpoint_ns, session_id=session_id
-        ) as connection:
-            initialize_rollout_schema(connection, initialize_activation=self._host._initialize_activation)
-
     def initialize(
         self,
         session_id: str,
@@ -501,23 +489,22 @@ class RolloutMaintenanceOwner(
                     raise _storage_failure(path, RuntimeError("rollout.jsonl 不是安全普通文件"), "jsonl_initialization", artifact="rollout_jsonl")
                 if not path.exists():
                     path.touch()
-            # 已有 authoritative meta 的索引只能验证；当前 schema 仅在首次 bootstrap 创建。
-            if needs_schema:
-                self._initialize_schema(
-                    thread_id, checkpoint_ns, session_id=session_id
-                )
-            self._host._validate_reasoning_projection_schema(
-                thread_id, checkpoint_ns, session_id=session_id
-            )
-            self._reject_unpublished_migration(
-                thread_id, checkpoint_ns, session_id=session_id
-            )
             with self._host._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
+                # 同次初始化复用 writer；既有 authority 仍先经过只读预检，
+                # 不跨调用缓存结构、发布状态或 canonical 正文的校验结果。
+                if needs_schema:
+                    initialize_rollout_schema(connection, initialize_activation=self._host._initialize_activation)
+                self._host._validate_reasoning_projection_connection(connection)
                 meta = connection.execute(
-                    "SELECT * FROM database_meta WHERE singleton_id = 1"
+                    "SELECT database_state FROM database_meta WHERE singleton_id = 1"
                 ).fetchone()
+                if meta is not None and meta[0] == "migrating":
+                    raise RuntimeError(
+                        "rollout-publication-incomplete: target 尚未原子发布；"
+                        "保留原始 JSONL/SQLite，必须由对应的发布流程恢复"
+                    )
                 if meta is None:
                     rollout_id = self._host._rollout_id(
                         session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns
@@ -657,26 +644,3 @@ class RolloutMaintenanceOwner(
                     connection,
                     checkpoint_ns,
                 )
-
-    def _reject_unpublished_migration(
-        self,
-        thread_id: str,
-        checkpoint_ns: str,
-        *,
-        session_id: str,
-    ) -> None:
-        """正常 runtime 不清空未发布半成品；恢复只由对应的发布流程执行。"""
-        with self._host._connect(
-            thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            row = connection.execute(
-                "SELECT database_state FROM database_meta WHERE singleton_id = 1"
-            ).fetchone()
-        if row is not None and row[0] == "migrating":
-            raise RuntimeError(
-                "rollout-publication-incomplete: target 尚未原子发布；"
-                "保留原始 JSONL/SQLite，必须由对应的发布流程恢复"
-            )

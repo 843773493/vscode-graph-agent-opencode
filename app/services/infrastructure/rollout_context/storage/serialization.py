@@ -60,21 +60,6 @@ class RolloutSerializationMixin:
         serializer, blob = serde.dumps_typed(value)
         return serializer, blob, len(blob), _hash_bytes(blob)
 
-    def _validate_reasoning_projection_schema(
-        self,
-        thread_id: str,
-        checkpoint_ns: str,
-        *,
-        session_id: str | None = None,
-    ) -> None:
-        with self._connect(
-            thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            self._validate_reasoning_projection_connection(connection)
-
     @staticmethod
     def _validate_reasoning_projection_connection(
         connection: sqlite3.Connection,
