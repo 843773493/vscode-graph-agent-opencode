@@ -8,6 +8,10 @@ import { ThreadInput } from '../threadInput.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import type { SearchScope } from './scope.js';
+import type { IQuickAccessProviderRunOptions } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
+
+/** 同一次模式转接保留发起归属，不重新采样后来获得焦点的编辑器。 */
+export interface SearchInvocationOptions extends IQuickAccessProviderRunOptions { searchOwner?: WorkspaceOwner }
 
 /** 必须在 Quick Input 获得焦点前同步读取；异步查根期间不重新采样活动目标。 */
 export function captureSearchOwner(editors: IEditorService): WorkspaceOwner {

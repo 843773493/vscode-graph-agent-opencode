@@ -3,12 +3,12 @@ import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '..
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { ServiceCollection } from '../../upstream/src/vs/platform/instantiation/common/serviceCollection.js';
-import { DefaultQuickAccessFilterValue, IQuickAccessProvider, IQuickAccessProviderDescriptor, IQuickAccessProviderRunOptions } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
+import { DefaultQuickAccessFilterValue, IQuickAccessProvider, IQuickAccessProviderDescriptor } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
 import { TextSearchQuickAccess } from '../../upstream/src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { SearchWorkspaceContext } from './scope.js';
-import { captureSearchOwner, loadSearchScope } from './target.js';
+import { captureSearchOwner, loadSearchScope, type SearchInvocationOptions } from './target.js';
 
 function searchFailure(error: unknown) { return [{ label: `文件搜索失败：${error instanceof Error ? error.message : String(error)}` }]; }
 
@@ -39,7 +39,7 @@ export class WorkspaceTextQuickAccess extends Disposable implements IQuickAccess
     return this.configuration.getValue<boolean>('search.quickAccess.preserveInput') ? DefaultQuickAccessFilterValue.LAST : undefined;
   }
 
-  provide(picker: Parameters<TextSearchQuickAccess['provide']>[0], token: CancellationToken, options?: IQuickAccessProviderRunOptions) {
+  provide(picker: Parameters<TextSearchQuickAccess['provide']>[0], token: CancellationToken, options?: SearchInvocationOptions) {
     const operation = new DisposableStore();
     this.current.value = operation;
     const cancellation = new CancellationTokenSource(token), controller = new AbortController();
@@ -53,7 +53,7 @@ export class WorkspaceTextQuickAccess extends Disposable implements IQuickAccess
     };
     // 同步捕获发生在原 Controller 的 picker.show() 之前。
     let owner: ReturnType<typeof captureSearchOwner>;
-    try { owner = captureSearchOwner(this.editors); }
+    try { owner = options?.searchOwner ?? captureSearchOwner(this.editors); }
     catch (error) { fail(error); return operation; }
     void loadSearchScope(owner, controller.signal).then(scope => {
       if (cancellation.token.isCancellationRequested) return;

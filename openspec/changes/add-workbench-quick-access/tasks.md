@@ -64,8 +64,8 @@
 
 覆盖规范：默认入口必须统一组织资源并明确工作区范围；输入必须直接可用并解释当前模式和匹配；列表必须分层展示并保持动作可辨认；原入口调用方式必须保持兼容语义而不增加重复入口。
 
-- [ ] 7.1 复用既有 sourceTransform 在原贡献登记处选择唯一空前缀及 `%` descriptor，保留原元数据；固定 commit、锚点恰好一次且失配失败，dev／预构建／build 使用同一管线。
-- [ ] 7.2 基于原 PickerQuickAccessProvider 接入原 fuzzy scorer、历史和打开服务，非空按最近／Session／Thread／文件分组，组内排序与稳定去重符合配置。
+- [x] 7.1 复用既有 sourceTransform 在原贡献登记处选择唯一空前缀及 `%` descriptor，保留原元数据；固定 commit、锚点恰好一次且失配失败，dev／预构建／build 使用同一管线。
+- [x] 7.2 基于原 PickerQuickAccessProvider 接入原 fuzzy scorer、历史和打开服务，非空按最近／Session／Thread／文件分组，组内排序与稳定去重符合配置。
 - [ ] 7.3 在 Quick Input 聚焦前捕获发起上下文，空输入历史只限已选范围，名称／描述／详情、图标、高亮和行内动作准确，不枚举全部资源填空。
 - [ ] 7.4 保留 URI 粘贴、文件追加行列／符号、quickNavigate 和原 filesOnly／fileSearchDelegate、filter／additionPicks、handleAccept、按钮与 prefix 限制的真实调用语义。
 - [ ] 7.5 接入 `?` 与 Command Center includeHelp 的原注册帮助、命令及选模式转接，保留发起范围与接收者，默认模式关闭递归帮助。
@@ -258,3 +258,12 @@
 - 删除每个编辑器文件每五秒读取完整正文的轮询，复用原共享 watcher／SSE。相同完整根共用订阅，事件先按规范根及实际监听目标限制，父目录删除及溢出仍通知原 FileService；最后释放才取消，路由解析晚到不再建立订阅，流错误沿原 watch 错误通道暴露。通知不读取正文、不更新 revision／CAS。参考 `reference_repo/vscode/extensions/copilot/src/platform/filesystem/vscode/fileSystemServiceImpl.ts` 的原文件 watcher 接入。
 - FileService 定向 5 项／51 断言、真实类型检查（含 14 份转换源码）、Ruff、JS 语法通过。真实 Gateway／正式 Workbench 构建／Chromium 完整场景通过（162.79 秒）：空闲六秒正文 GET 增量为零，外部真实文件修改自动显示，dirty 草稿保存由原 FileService 明确拒绝且磁盘不被覆盖；原后端 CAS 单测及原双工作区／备份／路由恢复断言保持。结构审查无 findings：产品及服务测试各约 155 行，页面 helper 约 50 行，无新源码目录。
 - 首次类型检查的闭包收窄、单测误比较 URI 内部缓存、页面装具目录变量被接口对象遮蔽均按原输出修正，未放宽身份或冲突断言。命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/file-watch-*.json`；最终页面为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-191eb29762e2/nodes/node-f4e408bf0b21/artifacts/search-result.json`。不增加任务勾选，不代表默认 Quick Access 或 Electron 已实现。
+
+
+### 2026-11-02：默认名称入口（7.1、7.2）
+
+- 原贡献仅登记一次项目默认 Provider，仍用原 Picker、fuzzy scorer、历史、打开与编辑器组；按最近／Session／Thread／文件固定分组。空输入不发名称或正文查询，关闭历史后不枚举补空。各类别渐进发布，使用稳定目标保持活动项；Session 接受时由原 owner 解析 main，Thread 保留精确身份。
+- 真实 Gateway／正式 Workbench 页面通过：A／B 查询目标隔离、延迟真实 Thread 响应时其余分支先到、未打开 main 的 ID 发现、键盘打开文件的 2:3 位置和多层路径、无匹配不扩搜、Command Center 帮助不查询、真实设置关闭历史。原 dirty、watch、IndexedDB 隔离、SearchView、Search Editor 分屏／保存／backup／route 场景全部继续通过；最终页面为 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-a5f66c4a83d6/nodes/node-f4e408bf0b21/artifacts/search-result.json`。
+- 原 PickerEditorState 在 hide/dispose 与异步 restore 交错时读取被清空的状态；同一转换内改为 await 前消费局部状态，时序测试证明 dispose 可恢复，旧恢复不清掉下一次定位状态。固定 16 份源码的全部锚点、上游原件和真实类型检查通过。
+- 9 项定向检查／100 条断言通过。delegate／filter／补充项／handleAccept 在浏览器组件装具中验证空查询、URI 查询、取消／迟到响应、后台标志和原接收者；宿主与 Picker 事件是明确替身，不代替空文件编辑器或原 Chat 二级流程的完整验收，7.4／7.6 仍未勾选。普通页面通过后仅补齐 delegate 空输入分支，其余页面分支等价，定向检查与最终构建覆盖该增量。
+- 设置验收失败原件确认旧装具逐键插入触发自动补括号，生成无效 JSON；现以真实剪贴板粘贴和保存，并只读实际存储核对完整 JSON，未绕过设置 owner。JS 静态检查、Ruff、差异检查通过；准确命令、源码指纹、原输出、退出码及保留的失败原件位于 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/default-access-*.json`。多范围、通用 URI opener、完整帮助转接、正文和 Electron 等剩余场景继续未完成。

@@ -124,6 +124,8 @@
 
 默认入口的分支也须完整接入：层级 URI 交 Opener；普通名称由领域 owner 查询；文件名追加行列使用原 `extractRangeFromFilter` 和 selection；文件候选追加 `@` 使用原 `GotoSymbolQuickAccessProvider.getSymbolPicks` 与预览恢复服务，名称本身含 `@` 时沿原转义／识别规则；quickNavigate 只导航相应历史，不发领域全量查询。只有业务资源支持的分支才提供相关动作，不对 Thread 名称套用文本行列解析。原 `filesOnly`、只选择调用方继续得到其声明的资源类别，不因替换默认 Provider 混入 Session。原运行参数不是可以删除的旧接口：`emptyFileEditorSearch` 实际依赖 `filesOnly`、`fileSearchDelegate`、`includeOpenToSideButton` 及自身接受／焦点恢复；必须执行调用方提供的 delegate，保持其范围、cacheKey、lifetime 和清理，不能只对项目普通结果过滤。`chatContextActions` 仍使用 `filter`、`additionPicks`、`handleAccept` 及 enabledProviderPrefixes：补充项按原评分／高亮进入列表，过滤按调用合同应用，接受交还调用方并保留 background 标志及关闭时机，异步二级选择取消后返回原 picker。`additionPicks` 虽标 deprecated 仍有生产调用，不视为死代码；若后续改参数，必须先迁齐这些消费者再移除。原生 Chat 的显式调用继续服务其原 widget，与项目 Composer 的引用入口分别尊重各自接收者，不因默认 Provider 替换而互相投递。
 
+原 `PickerEditorState.restore` 与浮层 hide/dispose 存在 await 交错：本次恢复在等待关闭 transient editor 前捕获并消费状态，之后只使用局部捕获，避免释放后读取空状态，也避免旧恢复清空下一次预览。此修正同样通过唯一 sourceTransform 接入，保留原服务和视图状态，不复制恢复器。普通空输入只显示历史；`filesOnly` 和 delegate 属于原显式文件调用，空查询仍按其合同交给原查询／delegate，不套用默认混合入口的空输入规则。
+
 Command Center 的 `workbench.action.quickOpenWithModes` 以 `includeHelp: true`、`from: commandCenter` 调用默认 Provider，这是普通 `?` 之外的真实入口。空输入时将原 Registry 中当前上下文可用、具有 commandCenterOrder 的 help entries 作为快速模式候选，项目已启用入口也提供相应 help metadata；沿用顺序、标签、快捷键及无障碍描述，不等待后端资源查询。非空输入不把这些帮助当作资源结果。选择模式后保留原 provider options／preserveValue 语义和本次发起上下文，使用 Registry 的原前缀切换；返回默认模式时关闭 includeHelp 的递归。范围和接收者沿同一次交互传递，不因模式重开重新取后来的焦点；原生 Quick Chat 等附加候选仅在其真实服务可用时沿原行为提供。
 
 #### 文件搜索根与原版搜索视图

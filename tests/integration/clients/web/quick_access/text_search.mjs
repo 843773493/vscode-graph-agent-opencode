@@ -6,6 +6,8 @@ import { verifySearchEditors } from './search_editor.mjs';
 import { verifySearchContext } from './search_context.mjs';
 import { verifySearchRecovery } from './search_recovery.mjs';
 import { verifyFileWatch } from './file_watch.mjs';
+import { verifyDefaultAccess } from './default_access.mjs';
+import { writeWorkspaceSettings } from './settings.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -89,17 +91,9 @@ try {
   await page.keyboard.press('Escape');
 
   result.phase = 'configure-through-original-settings-editor';
-  await command('workbench.action.openWorkspaceSettingsFile');
-  const settings = page.getByRole('dialog', { name: /settings\.json$/ });
-  const settingsEditor = settings.locator('.monaco-editor');
-  await expect(settingsEditor.locator('.view-lines')).toBeVisible();
-  await settingsEditor.locator('.view-lines').click();
-  await page.keyboard.press('ControlOrMeta+A');
   // 上游 Web 默认延时自动保存；关闭后才能检验搜索本身没有触发保存。
-  await page.keyboard.insertText('{\n  "search.useIgnoreFiles": false,\n  "files.autoSave": "off",\n  "search.searchEditor.defaultNumberOfContextLines": 0,\n  "search.searchEditor.reusePriorSearchConfiguration": true\n}\n');
-  await command('workbench.action.files.save');
-  await command('workbench.action.closeActiveEditor');
-  await expect(settings).not.toBeVisible();
+  await writeWorkspaceSettings({ page, command }, { 'search.useIgnoreFiles': false, 'files.autoSave': 'off',
+    'search.searchEditor.defaultNumberOfContextLines': 0, 'search.searchEditor.reusePriorSearchConfiguration': true });
 
   result.phase = 'explicitly-disabled-ignore-rules';
   const beforeDisabled = result.searches.length;
@@ -125,6 +119,7 @@ try {
   result.otherOwner = otherOwner;
   const fileUri = (owner, filename = 'quick-scope.txt') => page.evaluate(({ owner, filename }) => globalThis.workbench.URI.from({ scheme: 'boxteam-file', authority: owner.gatewayId,
     path: `/${owner.workspaceId}/${encodeURIComponent(owner.root)}/${filename}` }).toString(), { owner, filename });
+  await verifyDefaultAccess({ page, command, api, result, fileUri, ownerA: result.owner, ownerB: otherOwner });
   await verifyFileWatch({ page, command, result, workspace: workspacePath, resource: await fileUri(result.owner, 'watch-contract.txt'), owner: result.owner });
   const edit = async (resource, original, value) => {
     await command('_workbench.open', resource, [undefined, { pinned: true }]);
@@ -206,7 +201,7 @@ try {
   await expect(page.locator('.part.panel .search-view').getByRole('tree')).toHaveAttribute('aria-label', /Search: dirtyword/);
   await expect(page.locator('.part.panel .search-view')).toContainText('dirtyword');
   result.movedViewRerun = true;
-  if (result.searches.some(request => request.uri !== result.owner.root || request.route !== route)) throw new Error('文件搜索访问了未选择的目录或路由');
+  if (result.searches.filter(request => request.search_mode === 'content').some(request => request.uri !== result.owner.root || request.route !== route)) throw new Error('文件搜索访问了未选择的目录或路由');
   result.phase = 'reverse-owner-isolation';
   await command('_workbench.open', await fileUri(otherOwner), [undefined, { pinned: true }]);
   const reverseRequests = result.searches.length;
@@ -229,7 +224,8 @@ try {
 } catch (error) {
   failure = error;
   if (page) await page.screenshot({ path: screenshotPath }).catch(screenshotError => { failure = new AggregateError([failure, screenshotError], '搜索验收与截图失败'); });
-  await writeFile(resultPath, JSON.stringify({ ...result, error: String(failure) }, null, 2)).catch(writeError => { failure = new AggregateError([failure, writeError], '搜索验收与收据失败'); });
+  const startupError = page ? await page.locator('#startup-error').textContent().catch(() => null) : null;
+  await writeFile(resultPath, JSON.stringify({ ...result, error: String(failure), startupError }, null, 2)).catch(writeError => { failure = new AggregateError([failure, writeError], '搜索验收与收据失败'); });
 } finally {
   try { await run.close(); } catch (error) { failure = failure ? new AggregateError([failure, error], '搜索验收与清理失败') : error; }
   if (failure) throw failure;

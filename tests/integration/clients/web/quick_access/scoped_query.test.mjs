@@ -33,6 +33,31 @@ function fixture(context = new m.SearchWorkspaceContext(scope), groupService = {
 }
 
 describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
+  test('预览恢复等待关闭时可释放 Provider，迟到恢复不清除下一次定位状态', async () => {
+    for (const dispose of [true, false]) {
+      let release;
+      const closed = new Promise(resolve => { release = resolve; });
+      const original = { id: 'original' }, next = { id: 'next' }, restored = [];
+      const preview = { isDirty: () => false };
+      const group = { isTransient: editor => editor === preview, closeEditor: () => closed,
+        openEditor: async editor => { restored.push(editor.id); } };
+      const editors = { activeEditorPane: { input: original, group, getControl: () => undefined },
+        openEditor: async () => ({ input: preview, group }) };
+      const state = new m.PickerEditorState(editors, { groups: [group] });
+      state.set();
+      await state.openTransientEditor({ resource: m.URI.parse('workbench:/preview') });
+      const restoring = state.restore();
+      if (dispose) state.dispose();
+      else { editors.activeEditorPane.input = next; state.set(); }
+      release();
+      await restoring;
+      expect(restored).toEqual(['original']);
+      await state.restore();
+      expect(restored).toEqual(dispose ? ['original'] : ['original', 'next']);
+      state.dispose();
+    }
+  });
+
   test('固定提交及每个锚点缺失、重复均失败，实际上游原件保持不变', async () => {
     expect(() => sourceTransform(workbench, { commit: 'other' }, [])).toThrow('上游版本');
     for (const path of transformedSourcePaths) {

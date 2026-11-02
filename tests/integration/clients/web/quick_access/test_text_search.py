@@ -65,6 +65,10 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
     (workspace / "quick-scope.txt").write_text("diskword quickscope\n", encoding="utf-8")
     (workspace / "watch-contract.txt").write_text("watch initial\n", encoding="utf-8")
     (other / "quick-scope.txt").write_text("foreign-disk quickscope\n", encoding="utf-8")
+    (workspace / "quickdiscover-file.txt").write_text("discover A line one\nabcdef\n", encoding="utf-8")
+    (other / "quickdiscover-file.txt").write_text("discover B line one\nuvwxyz\n", encoding="utf-8")
+    (workspace / "quickdiscover-dir").mkdir()
+    (workspace / "quickdiscover-dir/deep-file.txt").write_text("nested discover A\n", encoding="utf-8")
     (replacement / "quick-scope.txt").write_text("replacement-C quickscope\n", encoding="utf-8")
     (workspace / "context-lines.txt").write_text("A context before\ncontextbranchonly\ncontextbranchonly\nA context after", encoding="utf-8")
     (other / "context-lines.txt").write_text("B context before\ncontextbranchonly\nB context after", encoding="utf-8")
@@ -117,6 +121,9 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["fileWatch"]["idleContentReads"] == 0
         assert receipt["fileWatch"]["externalUpdate"] is True
         assert receipt["fileWatch"]["dirtyConflict"] is True
+        assert receipt["defaultQuickAccess"]["progressive"] is True
+        assert receipt["defaultQuickAccess"]["emptyHasNoQueries"] is True
+        assert receipt["defaultQuickAccess"]["helpHasNoQueries"] is True
         assert receipt["editorLatePaneIsolation"] is True
         assert receipt["editorRouteRecovery"]["original"] != receipt["editorRouteRecovery"]["current"]
         assert receipt["pageErrors"] == []
