@@ -189,6 +189,71 @@ test("Browser冷创建意图不能用空context假报关闭或删除", async () 
   expect(cold.runtimePool.snapshot()).toMatchObject({ connected: false, context_count: 0 });
 });
 
+for (const releaseFailure of [false, true]) {
+  test(`管理取消原创建等待context关闭及原收尾${releaseFailure ? "，保留关闭首错" : "，不重复派发"}`, async () => {
+    const pageEntered = Promise.withResolvers(), pageResult = Promise.withResolvers();
+    const releaseEntered = Promise.withResolvers(), releaseResult = Promise.withResolvers();
+    const pageError = new Error("原创建页面因context关闭而失败");
+    const releaseError = new Error("原context关闭回执失败");
+    let acquisitions = 0, releases = 0;
+    const context = { newPage: async () => { pageEntered.resolve(); return await pageResult.promise; } };
+    const manager = createBrowserManagerWithStateWriter(null, { runtimePool: {
+      acquireContext: async () => { acquisitions += 1; return { browser: {}, context, chromiumInstanceGeneration: 1 }; },
+      releaseContext: async (actual) => {
+        expect(actual).toBe(context);
+        const attempt = ++releases;
+        pageResult.reject(pageError);
+        releaseEntered.resolve();
+        await releaseResult.promise;
+        if (releaseFailure && attempt === 1) throw releaseError;
+      },
+    } });
+    const options = createOptions();
+    const creating = manager.create(options).catch(error => error);
+    await pageEntered.promise;
+    // 错误版本只观察，不能取消当前创建。
+    expect((await manager.cancelCreation(options.browserId, 2)).resource.status).toBe("created");
+    expect(releases).toBe(0);
+    let settled = 0;
+    const cancel = () => manager.cancelCreation(options.browserId, 1).then(
+      receipt => { settled += 1; return receipt; }, error => { settled += 1; return error; },
+    );
+    const first = cancel(), second = cancel();
+    try {
+      expect(await Promise.race([releaseEntered.promise.then(() => "closing"), first.then(() => "receipt")])).toBe("closing");
+      expect(settled).toBe(0);
+      const [pending] = JSON.parse(readFileSync(manager.stateStore.stateFile, "utf8")).browsers;
+      expect(pending.reconciliation_status).toBe("unknown");
+    } finally {
+      releaseResult.resolve();
+      pageResult.reject(pageError);
+      await creating;
+    }
+    const [left, right] = await Promise.all([first, second]);
+    const original = await creating;
+    expect(original.creationReceipt).toMatchObject({ outcome: "failed", resource: {
+      browser_id: options.browserId, status: "failed", reconciliation_status: "verified",
+    } });
+    if (releaseFailure) {
+      expect(left).toBeInstanceOf(AggregateError);
+      expect(left.errors[0].cause).toBe(releaseError);
+      expect(right).toBe(left);
+    } else {
+      expect(left).toEqual(right);
+      expect(left).toMatchObject({ outcome: "present", resource: { status: "failed", reconciliation_status: "verified" } });
+    }
+    expect(acquisitions).toBe(1);
+    expect(releases).toBe(releaseFailure ? 2 : 1);
+    expect(manager.get(options.browserId).context).toBeNull();
+    expect(manager.get(options.browserId).startupPromise).toBeNull();
+    expect((await manager.cancelCreation(options.browserId, 1)).resource.status).toBe("failed");
+    expect(acquisitions).toBe(1);
+    const [final] = JSON.parse(readFileSync(manager.stateStore.stateFile, "utf8")).browsers;
+    expect(final).toMatchObject({ browser_id: options.browserId, transport_owner_revision: 1,
+      status: "failed", reconciliation_status: "verified" });
+  });
+}
+
 describe("浏览器创建准入", () => {
   test("工作区逻辑浏览器达到硬上限时明确拒绝新建", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined, {

@@ -127,6 +127,9 @@ export class BrowserSession extends EventEmitter {
     this.transports = new Map();
     this.transportOwnerRevision = record.transport_owner_revision;
     this.creationCancellationPending = false;
+    this.startupPromise = null;
+    this.startupCancellationPromise = null;
+    this.startupCancellationRequested = false;
     this.pendingDialog = null;
     this.pendingFileChooser = null;
     this.refSelectors = new Map();
@@ -929,10 +932,57 @@ export class BrowserSession extends EventEmitter {
   }
 
   async start() {
+    // 原创建只执行一次；管理取消必须等待它取得迟到context并完成原失败收尾。
+    this.startupPromise ??= this.startRuntime();
+    try {
+      return await this.startupPromise;
+    } finally {
+      this.startupPromise = null;
+    }
+  }
+
+  assertStartupNotCancelled() {
+    if (!this.startupCancellationRequested) return;
+    const error = new Error(`Browser创建已由管理操作取消: browser_id=${this.id}`);
+    error.code = "browser_creation_cancelled";
+    error.statusCode = 409;
+    throw error;
+  }
+
+  async cancelStartup() {
+    if (!this.startupPromise) {
+      // TODO（5.2）：冷记录没有原执行/context身份，不能据空句柄签发终态证明。
+      throw new Error(`Browser原创建执行不可用，仍须核实: browser_id=${this.id}`);
+    }
+    this.startupCancellationRequested = true;
+    this.closingRequested = true;
+    this.startupCancellationPromise ??= (async () => {
+      const [released, started] = await Promise.allSettled([
+        this.runResourceTransition(() => this.releaseRuntime()), this.startupPromise,
+      ]);
+      if (released.status === "rejected") {
+        if (started.status === "rejected") {
+          throw new AggregateError([released.reason, started.reason],
+            `Browser取消创建与原创建收尾失败: browser_id=${this.id}`, { cause: released.reason });
+        }
+        throw released.reason;
+      }
+      if (started.status === "rejected" && started.reason.creationReceipt?.outcome === "failed"
+        && this.record.status === "failed" && this.record.reconciliation_status === "verified") {
+        return this.snapshot();
+      }
+      if (started.status === "rejected") throw started.reason;
+      throw new Error(`Browser取消创建未取得原执行的停止证明: browser_id=${this.id}`);
+    })();
+    return await this.startupCancellationPromise;
+  }
+
+  async startRuntime() {
     if (this.browser) {
       return this.snapshot();
     }
     try {
+      this.assertStartupNotCancelled();
       const deviceOptions = browserDeviceContextOptions(
         this.record.device_profile,
         this.record.device_orientation,
@@ -943,6 +993,7 @@ export class BrowserSession extends EventEmitter {
         ...deviceOptions,
         ignoreHTTPSErrors: true,
       });
+      this.assertStartupNotCancelled();
       const initialPage = await this.createRuntimePage(this.id);
       await this.registerPage(initialPage, { pageId: this.id, activate: true });
       if (!deviceOptions.isMobile) {
@@ -960,12 +1011,14 @@ export class BrowserSession extends EventEmitter {
       }
       this.deviceEmulationApplied = true;
       await this.applyDeviceEmulation(this.pageEntries.get(this.id));
+      this.assertStartupNotCancelled();
       this.bindContextPageEvents();
       this.record.status = "running";
       this.record.resource_state = "background";
       this.record.runtime_generation = this.chromiumInstanceGeneration;
       this.record.started_at = this.record.started_at || nowIso();
       await this.goto(this.record.url || "about:blank");
+      this.assertStartupNotCancelled();
       this.record.reconciliation_status = "verified";
       return this.snapshot();
     } catch (error) {

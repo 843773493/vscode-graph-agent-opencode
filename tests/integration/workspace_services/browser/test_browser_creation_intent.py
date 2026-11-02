@@ -43,7 +43,8 @@ def browser_service(
         )
         preload = control / "context-receipt-barrier.mjs"
         preload.write_text("""
-import { writeFile, access } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -54,20 +55,39 @@ if (path.basename(process.argv[1] || '') === 'backend.js') {
   if (!control || !root) throw new Error('Browser创建屏障缺少显式控制目录或项目根');
   const { BrowserRuntimePool } = await import(pathToFileURL(path.join(root,
     'src/workspace-services/browser/server/resources/browserRuntimePool.js')));
+  const { BrowserSession } = await import(pathToFileURL(path.join(root,
+    'src/workspace-services/browser/server/browserSession.js')));
+  const stage = () => existsSync(path.join(control, 'stage'))
+    ? readFileSync(path.join(control, 'stage'), 'utf8') : 'acquire';
+  const pause = async () => {
+    while (!existsSync(path.join(control, 'release'))) await delay(10);
+  };
+  const observe = async (browser, contexts, generation) => {
+    await writeFile(path.join(control, 'arrived.json'), JSON.stringify({
+      connected: browser.isConnected(), contexts, generation, version: browser.version(),
+    }));
+  };
   const acquire = BrowserRuntimePool.prototype.acquireContext;
   BrowserRuntimePool.prototype.acquireContext = async function (options) {
     const runtime = await acquire.call(this, options);
-    // 只暂扣真实context回执；不代填Session、磁盘记录或终态。
-    await writeFile(path.join(control, 'arrived.json'), JSON.stringify({
-      connected: runtime.browser.isConnected(), contexts: this.contexts.size,
-      generation: runtime.chromiumInstanceGeneration, version: runtime.browser.version(),
-    }));
-    while (true) {
-      try { await access(path.join(control, 'release')); break; }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-      await delay(10);
+    const contextIndex = this.contexts.size;
+    runtime.context.on('close', () => appendFileSync(path.join(control, 'closed.jsonl'),
+      JSON.stringify({ context_index: contextIndex }) + '\\n'));
+    // 只暂扣真实context或注册回执，不代填Session、磁盘记录或终态。
+    if (stage() === 'acquire') {
+      await observe(runtime.browser, this.contexts.size, runtime.chromiumInstanceGeneration);
+      await pause();
     }
     return runtime;
+  };
+  const register = BrowserSession.prototype._registerPage;
+  BrowserSession.prototype._registerPage = async function (page, options) {
+    const entry = await register.call(this, page, options);
+    if (stage() === 'registered') {
+      await observe(this.browser, this.manager.runtimePool.contexts.size, this.chromiumInstanceGeneration);
+      await pause();
+    }
+    return entry;
   };
 }
 """, encoding="utf-8")
@@ -222,3 +242,87 @@ async def test_context_before_receipt_keeps_original_intent_after_hard_restart(b
                     restarted.backend_process.kill()
                     await asyncio.to_thread(restarted.backend_process.wait, timeout=5)
                 close_browser_manager_processes(restarted)
+
+
+@pytest.mark.parametrize("stage", ["acquire", "registered"])
+async def test_cancel_creation_waits_for_original_context_and_terminal_receipt(
+    browser_service: BrowserService, stage: str,
+) -> None:
+    handle, root, control, run, _native = browser_service
+    (control / "stage").write_text(stage)
+    (control / "release").touch()
+    workspace_id = load_or_create_workspace_id(root)
+    target_id, peer_id = f"browser_{uuid4().hex}", f"browser_{uuid4().hex}"
+    headers = {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-browser"}
+    state_file = root / ".boxteam/browser-manager/browsers.json"
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{handle.backend_port}", headers=headers, trust_env=False, timeout=15,
+    ) as client:
+        peer = await client.post("/api/browsers", json={
+            "browser_id": peer_id, "workspace_id": workspace_id, "owner_revision": 1, "url": "about:blank",
+        })
+        assert peer.status_code == 200, peer.text
+        (control / "release").unlink()
+        (control / "arrived.json").unlink()
+        creating = asyncio.create_task(client.post("/api/browsers", json={
+            "browser_id": target_id, "workspace_id": workspace_id, "owner_revision": 7, "url": "about:blank",
+        }))
+        cancelling = None
+        try:
+            async with asyncio.timeout(8):
+                while not (control / "arrived.json").exists():
+                    await asyncio.sleep(0.02)
+            observed = json.loads((control / "arrived.json").read_text())
+            assert observed["connected"] is True and observed["contexts"] == 2
+            wrong = await client.post(f"/api/browsers/{target_id}/cancel-creation", json={"owner_revision": 8})
+            assert wrong.status_code == 200 and wrong.json()["data"]["outcome"] == "present", wrong.text
+            assert wrong.json()["data"]["resource"]["transport_owner_revision"] == 7
+            assert not (control / "closed.jsonl").exists() and not creating.done()
+            synced = await client.post(f"/api/browsers/{target_id}/owner-revision", json={
+                "owner_revision": 8, "for_stop": True,
+            })
+            assert synced.status_code == 200, synced.text
+            cancelling = asyncio.create_task(client.post(f"/api/browsers/{target_id}/cancel-creation", json={"owner_revision": 8}))
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(cancelling), 0.1)
+            pending = await client.get(f"/api/browsers/{target_id}")
+            assert pending.status_code == 200, pending.text
+            assert pending.json()["data"]["reconciliation_status"] == "unknown"
+            peer_run = await client.post(f"/api/browsers/{peer_id}/run", json={"code": "return 42;"})
+            assert peer_run.status_code == 200, peer_run.text
+            assert not creating.done() and not cancelling.done()
+            (control / "release").touch()
+            cancelled, original = await asyncio.gather(cancelling, creating)
+            assert cancelled.status_code == 200, cancelled.text
+            receipt = cancelled.json()["data"]
+            assert (receipt["resource_id"], receipt["workspace_id"], receipt["owner_revision"], receipt["outcome"]) == (
+                target_id, workspace_id, 8, "present",
+            )
+            assert receipt["resource"]["status"] == "failed" and receipt["resource"]["reconciliation_status"] == "verified"
+            assert receipt["resource"]["transport_owner_revision"] == 8
+            assert original.status_code == (409 if stage == "acquire" else 500), original.text
+            if stage == "acquire":
+                assert original.json()["code"] == "browser_creation_cancelled"
+            failure = original.json()["creation_receipt"]
+            assert failure["resource_id"] == target_id and failure["owner_revision"] == 8 and failure["outcome"] == "failed"
+            assert failure["resource"]["status"] == "failed" and failure["resource"]["reconciliation_status"] == "verified"
+            assert [json.loads(line) for line in (control / "closed.jsonl").read_text().splitlines()] == [{"context_index": 2}]
+            health = (await client.get("/health")).json()
+            assert health["browser_runtime"]["context_count"] == 1
+            target = next(item for item in json.loads(state_file.read_bytes())["browsers"] if item["browser_id"] == target_id)
+            assert target["status"] == "failed" and target["reconciliation_status"] == "verified"
+            assert target["transport_owner_revision"] == 8
+            # 取消完成后走同一管理停止；原context只关闭一次，peer始终保持可用。
+            repeated = await client.post(f"/api/browsers/{target_id}/cancel-creation", json={"owner_revision": 8})
+            assert repeated.status_code == 200 and repeated.json()["data"]["outcome"] == "present", repeated.text
+            closed = await client.post(f"/api/browsers/{target_id}/close", json={})
+            assert closed.status_code == 200 and closed.json()["data"]["browser"]["status"] == "closed", closed.text
+            assert (await client.post(f"/api/browsers/{peer_id}/run", json={"code": "return 43;"})).status_code == 200
+            assert len((control / "closed.jsonl").read_text().splitlines()) == 1
+            run.write_result("passed", {"stage": stage, "observed": observed, "cancelled": receipt,
+                "creation_failure": failure, "persisted": target, "health": health,
+                "scope": "真实Node/HTTP/Chromium；原context/注册回执屏障、管理版本同步及取消，不代Python lease、Backend重启、Gateway/Web或Windows"})
+        finally:
+            (control / "release").touch()
+            await asyncio.gather(*[task for task in (creating, cancelling) if task is not None], return_exceptions=True)
+            await client.post(f"/api/browsers/{peer_id}/close", json={})

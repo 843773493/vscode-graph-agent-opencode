@@ -82,6 +82,8 @@ Manager 的状态文件保存只有一个写入者：同轮请求合并，写入
 
 Manager先沿该writer发布created/unknown，再调用原Session.start；首次导航完成后才标verified并完成原最终保存。意图保存失败时，原调用尚未派发start，沿原failStartup/close链保存failed/verified后才签not_created；收尾失败保留unknown、原错误链与无回执。created状态的close/delete在设置closingRequested前明确409，不能用空context伪报停止或关闭后续交互准入；原创建继续由原Promise持有，原失败仍通过failStartup收尾。冷创建的无身份接管继续按5.2保留TODO，不新增另一套恢复账本。
 
+管理cancel-creation仅在匹配当前版本且Session仍持原startupPromise时取消已登记创建：关闭新操作准入、沿原资源转换队列释放context，并等待原创建检查取消后完成failStartup/close及持久终态。重复取消等待同一Promise，原创建结算后清除在途引用，不保留其快照作为状态源。已有context只返回present，未取得原执行或终态证明时不能签not_created；冷无身份记录继续unknown。直接close/delete的created拒绝边界保持，整个operation/shutdown期限另行核实。
+
 Session的`toRecord()`显式组装恢复事实，供Manager写入状态文件；文档与操作序号、传输授权版本及最近运行时代际取当前宿主事实。`snapshot()`仍负责对外完整展示，其中设备配置列表、参与者、当前页面、保护派生和逐连接流统计不再为保存而计算或写入。恢复事实保留设备覆盖、下载身份、操作结果和生命周期时间；实时连接数在恢复后从当前句柄取得，不能用磁盘上的观察值恢复连接。
 
 StateStore的`BrowserStateWriteSnapshot`只承载Manager本轮恢复记录，与页面检查点和展示快照分开；`stateFilePayload`补充权威工作区身份与文件schema。顶层`updated_at`在Manager开始组装本轮快照、逐条读取`toRecord()`之前生成，不是各资源的更新时间，也不表示写盘完成；类型直接引用Session的记录返回值，不复制一套字段定义。

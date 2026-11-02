@@ -98,6 +98,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 冷 owner 的原创建仍为 creating／unknown，用户通过既有 stop 管理入口发起新的 operation
 - **THEN** 原生 owner 的取消创建入口核对资源、工作区及冻结版本，在原资源记录及原 writer 中持久发布不可重新创建的取消事实；排队或迟到的同 ID 创建包括更高版本均不得越过该事实。只有发布成功后才返回绑定该 intent 的 not_created 回执，Python 核对后沿原 owner 关闭 intent、解除关联并结清原精确占用。已有原生记录只能返回 present 及真实快照，后续仍走原停止链，不能将空 PID／context 当成未创建证明。原 operation 身份不得发起接管，取消发布失败或回执未知保留 unknown 与原 lease；未发布的候选普通快照也不能成为核实证明。取消事实跨原生 owner 重启保留，不进入普通终态历史配额裁剪，不新增账本或自动重放创建
 
+#### Scenario: 原生 owner 仍持有原创建执行时取消
+
+- **WHEN** Python owner 已失去创建回执，新管理 operation 取消已登记的 Browser，且当前原生 owner 仍持有该资源的原创建 Promise
+- **THEN** 只有匹配当前整数版本才发起取消；撤销新操作准入、释放已取得的独立 context，并等待同一原创建取得迟到 context、完成原失败收尾及终态写盘。重复取消等待同一执行，无关 Browser 继续可用；只有原执行已拒绝且持久状态为 failed／verified 才返回 present 及完整快照，不能签 not_created 或重放创建。释放或收尾失败保留原错误，尚未核实的状态及占用不得结清，后续沿原停止链重试；即使原失败收尾随后成功，也不得吞掉取消释放的首错。原生 owner 重启后没有该执行或 context 身份的记录仍不可据空句柄核实停止
+
 #### Scenario: 停止派发前 Backend 硬退出
 
 - **WHEN** 管理停止已登记原 operation lease 并完成撤权，但尚未向外部 owner 派发停止时 Backend 硬退出

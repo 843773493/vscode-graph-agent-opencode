@@ -299,6 +299,11 @@ export class BrowserManager {
       throw new Error("Browser取消创建缺少有效身份或版本");
     }
     let session = this.browsersById.get(id);
+    if (session?.transportOwnerRevision === ownerRevision && session.startupPromise
+      && session.record.reconciliation_status !== "verified"
+      && ["created", "running"].includes(session.status)) {
+      await session.cancelStartup();
+    }
     if (session && (session.record.release_reason !== "creation_cancelled" || session.transportOwnerRevision !== ownerRevision)) {
       return { resource_id: id, workspace_id: this.workspaceId, owner_revision: ownerRevision,
         outcome: "present", resource: session.snapshot() };

@@ -2,6 +2,8 @@
 
 存放 Browser Manager 使用测试页面服务、受控网络条件或其他替身边界的集成测试。
 
+`test_browser_creation_intent.py`的创建取消场景经真实Node／HTTP／Chromium，分别暂扣context交付和已完成页面注册的原回执，核管理版本、原创建与取消共同结算、磁盘failed/verified、真实context只关闭一次及peer继续执行。原close/delete拒绝与SIGKILL后无身份unknown场景保持；临时preload仅观察和暂停原回执，不改写业务事实。定向pytest须用进程外超时／4GiB和原集成闸门；不代Python lease、Backend／Gateway／Web重启或Windows验收。
+
 ```text
 browser/
 ├── test_browser_custom_tools.py        代理工具与Browser Manager接线

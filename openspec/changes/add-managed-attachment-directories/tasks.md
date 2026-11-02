@@ -960,3 +960,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 真实 Node／Inspector 和 ASGI 导航删除的完整九场景通过（47.07秒），覆盖停止 claim 读取、manifest 写盘及最终 claim 核验的等待／取消／失败恢复，核 peer 可用、gate／fence、locator、原进程身份、同 operation 结算、隔离原件及后续服务关闭。受影响的 claim 发布和 catalog 排空18项回归通过（91.72秒）；本次归属单测14项通过（2.77秒）。首轮新 matrix 的 final 屏障误拦驻留 source 同步回调，修正故障点识别后完整九项通过；原24项组合回归曾被外部期限终止（exit124），不计作整组通过，后续只补本片受影响的18项。
 - 修改的两个生产文件及新集成测试 Pyright 零诊断，Ruff／compileall及 OpenSpec strict 54/54通过。纳入旧归属单测文件的检查仍有48项类型诊断；在相同当前生产依赖下检查 HEAD 的原测试，逐字归一结果相同，无新增，不称全部类型检查为绿。准确命令、源码指纹、原始输出、实际退出码及类型对照见 `out/tests/temp/debug_delete_io_20261102/artifacts/verification.json`。
 - 驻留 source 同步观察仍可能读盘，已在原回调保留 TODO；其它同步调试入口、原生 I/O 抢占、不合作取消及完整 operation／shutdown 期限仍未完成。此片不代 Gateway／Web、独立 Backend 硬重启或 Windows 验收，5.2／5.4与21/23保持未完成；未改前端、公共fixture或共享debug。
+
+
+### 2026-11-02 Browser 原创建执行的管理取消（5.2 部分）
+
+- 原 Node 仍持有创建 Promise 时，匹配当前版本的 cancel-creation 关闭准入、沿原资源转换释放 context，并等待迟到 context 及原 failStartup/close 的终态写盘。重复取消共用原执行，已取得 context 只返回 present；原创建结束后清除在途引用。释放首错不被随后成功的失败收尾吞掉，无原执行的冷记录继续 unknown，不新增启动链或账本。
+- 最终相关 Browser 单测189项及真实 Node/HTTP/Chromium 创建全文件4项通过；真实场景覆盖 context 交付前、页面注册后两处回执等待、管理版本推进、原创建与取消共同结算、磁盘 failed/verified、context 仅关闭一次及 peer 继续执行。原 Python owner 消费者59项回归通过，其生产依赖未变，复用原结果。完整 HEAD archive 加全部候选补丁后，仅移除 Manager 新取消分支的两项负向变异均在“立即回执而未进入关闭”处失败，未超时。
+- Ruff、真实 Pyright 零诊断、Node 语法和本 change 严格检查通过；误用不存在的 uv pyright 命令与首轮测试 run 参数写错的失败原件保留。准确命令、源码指纹、退出码、正式产物和作者结构审查见 `out/tests/temp/browser_startup_cancel_20261102/artifacts/verification.json`。全部测试有进程外期限/4GiB，集成沿原独占闸门；不代 Python lease、Backend 硬重启、Gateway/Web、Windows、无原执行接管或整个 operation/shutdown 期限。5.2/5.4及21/23仍未完成。
