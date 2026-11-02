@@ -520,9 +520,9 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
 
     task = asyncio.create_task(run_lifespan())
     try:
-        await asyncio.wait_for(lifespan_ready.wait(), 8)
-        # TODO：基线 29c7ec96 在模型进入前同样超过此期限；测量 assembly 准备长尾后再处理，保留原期限断言。
-        await asyncio.wait_for(ready.wait(), 8)
+        await _wait_for_lifespan_phase(task, lifespan_ready)
+        # TODO：继续测量 SDK／assembly 冷准备；已暴露内层模型进入的 5 秒超时，保留原期限。
+        await _wait_for_lifespan_phase(task, ready)
         close_requested.set()
         await asyncio.wait_for(goal_entered.wait(), 5)
         await asyncio.wait_for(asyncio.shield(jobs[0].task), 5)
@@ -551,6 +551,22 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
     assert controller.transport.call_count == 1
     assert list(controller.transport.hit_counts.values()) == [1]
     assert_closed(mounted_case)
+
+
+async def _wait_for_lifespan_phase(task: asyncio.Task[None], ready: asyncio.Event) -> None:
+    notified = asyncio.create_task(ready.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            (task, notified), timeout=8, return_when=asyncio.FIRST_COMPLETED,
+        )
+        if task in done:
+            await task
+            raise AssertionError("lifespan 在测试屏障就绪前结束")
+        if notified not in done:
+            raise TimeoutError("lifespan 测试屏障在 8 秒内未就绪")
+    finally:
+        notified.cancel()
+        await asyncio.gather(notified, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -612,8 +628,8 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
 
     task = asyncio.create_task(run_lifespan())
     try:
-        await asyncio.wait_for(lifespan_ready.wait(), 8)
-        await asyncio.wait_for(ready.wait(), 8)
+        await _wait_for_lifespan_phase(task, lifespan_ready)
+        await _wait_for_lifespan_phase(task, ready)
         assert await asyncio.to_thread(entered.wait, 5)
         close_requested.set()
         with pytest.raises(TimeoutError):

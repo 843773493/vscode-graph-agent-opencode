@@ -272,3 +272,10 @@
 - 现有完整组管理Web场景在独立Gateway启动绑定`40920`时遭遇端口占用（errno98），1 setup error／69.26秒，未进入浏览器步骤；原stderr明确完成启动后绑定失败并沿原lifespan回收。未修改公共fixture、另一会话驱动或前端，也未终止未知端口owner。此失败不计产品通过，8.2仍待当前完整客户端／固定候选闭包；4.3另行保持未完成。原四项Goal的8秒ready屏障及附件未知操作／总关闭期限TODO不重复运行、不计通过。
 - 命令、源码指纹、原始输出、实际退出码、caller差集和具名审查范围见 `out/tests/temp/mounted_audit_20261101/artifacts/verification.json`。首版审计脚本误以历史已下线模块仍是文件，失败原件保留；修正为登记原路径状态及新owner后审计通过，不改变产品。未重跑旧Windows／重启证据，不归档另一会话的Workbench变更。
 - 同日端口已释放后补验原完整组管理场景：1 passed／235.23秒，480秒／4GiB与独占闸门保持，未改fixture、驱动或产品。真实Workbench／Gateway／Backend覆盖取消零POST、完整组成员确认、安全阻塞、force与旧SSE退出、陈旧generation拒绝、成员退出及最后成员删除；原公开错误与具名诊断按request_id对账，零页面JS错误。4339个采样源码含主仓src，构建前至运行结束指纹不变，上游gitlink内部除外，正式构建main.js另留SHA。准确命令、构建收据及正式产物索引见同目录`verification-web.json`，首次端口失败原件继续保留。此项只补当前完整组Web交互，不代原Goal关闭四场景或所有间接调用／runtime验收，8.2及4.3仍未勾，不将另一会话未提交的前端纳入本方提交。
+
+### 2026-11-02 Goal 关闭测试的原始就绪失败可见性（8.2 部分）
+
+- 两组后台 lifespan 场景改为同时等待原任务与 ready 事件；后台提前失败时直接传播原异常，正常提前结束明确报错，8秒屏障期限不变，自己的事件 waiter 始终回收。不改产品、执行期限或终态／写入／关闭断言。
+- Goal 首场在原内层 `model_entered.wait()` 的5秒期限失败，现直接显示该调用栈；1 failed／26.39秒，其余三个参数未运行。此前外层8秒超时不能单独证明 assembly 性能原因，本轮也未将其证明为 Goal 终态写入失败；保留 SDK／assembly 冷准备的测量TODO，不延长期限、不继续无证据重跑。
+- 相邻执行前取消／终态writer正常与失败重试两场景2 passed／32.63秒。Ruff、compileall通过；真实Pyright仍exit1，完整HEAD归档与当前12项诊断按文件／AST owner／rule／severity／完整消息及数量逐项相同，无新增。作者AST核对仅两组测试的屏障调用与一个本文件helper变化，无生产链路或新目录；原文件916→932行仍属同一挂载生命周期场景owner，未为行数引入跨文件fixture依赖。
+- 命令、源码指纹、原始输出／实际退出码与类型差集见 `out/tests/temp/mounted_goal_readiness_20261102/artifacts/verification.json`；测试沿进程外60秒／4GiB与原集成独占闸门。8.2仍未完成，不代全部四参数、完整关闭期限、Web或Windows验收。
