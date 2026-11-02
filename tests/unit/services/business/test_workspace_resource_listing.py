@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -15,6 +16,48 @@ from tests.unit.services.business.test_workspace_resource_command_deadline impor
 from tests.unit.services.business.test_workspace_resource_locking import (
     bundle as bundle,  # noqa: PLC0414
 )
+
+
+@pytest.mark.parametrize("entry", ["detail", "list"])
+async def test_unchanged_observations_skip_disk_writes_but_publish_real_changes(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    owner = bundle.owner
+    assert owner is not None
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    original_fsync = os.fsync
+    writes: list[int] = []
+
+    def fsync(fd: int) -> None:
+        writes.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+
+    async def observe() -> dict[str, object]:
+        if entry == "detail":
+            return await owner.get_resource(rid)
+        return next(row for row in await owner.list_resources() if row["resource_id"] == rid)
+
+    before = owner._store.path.read_bytes()
+    for _ in range(3):
+        assert (await observe())["status"] == "running"
+    assert writes == [], "相同运行观察不应重复fsync整个owner快照或lease账本"
+    assert owner._store.path.read_bytes() == before
+
+    await bundle.transport.stop_resource(rid)
+    stopped = "terminated" if isinstance(bundle, TerminalOwnerFixture) else "closed"
+    assert (await observe())["status"] == stopped
+    assert writes, "真实终态必须持久化，不能只更新内存投影"
+    assert owner._store.path.read_bytes() != before
+    cold = type(owner._store)(workspace_root=bundle.root, workspace_id=owner.workspace_id, kind=owner.kind)
+    restored = cold.get(rid)
+    assert restored is not None and restored.status == stopped
+    writes.clear()
+    assert (await observe())["status"] == stopped
+    assert writes == []
 
 
 async def test_slow_list_keeps_independent_queries_available(

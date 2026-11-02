@@ -431,13 +431,13 @@ async def test_cancel_during_failure_record_publication_keeps_original_batch_err
     async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
         await sync(resource_id, revision, for_stop=for_stop)
         if resource_id == ids[0]:
+            # 从真实同步失败开始拦下一次写盘，不依赖冷准备的冗余写入次数。
+            install(1)
             raise original
         blocked.set()
         await asyncio.Future()
 
     monkeypatch.setattr(resource_owner.transport, "sync_owner_revision", syncing)
-    # 两次冷准备写入后，第三次写入是首项原错误的 unknown 记录。
-    install(3)
     recovering = asyncio.create_task(owner.recover(ids))
     try:
         await asyncio.wait_for(entered.wait(), 2)

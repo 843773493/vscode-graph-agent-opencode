@@ -193,6 +193,10 @@ class ResourceRecordStore:
         if not records:
             return
         async with self._write_lock:
+            # 相同观察已由原读写入口核验；不重复排队worker或重写整份快照。
+            if all(self._records.get(record.resource_id) == record for record in records):
+                return
+
             def publish() -> None:
                 candidate = {**self._records, **{record.resource_id: deepcopy(record) for record in records}}
                 for record in candidate.values():
