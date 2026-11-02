@@ -124,6 +124,28 @@ export interface ChildThreadListDTO {
   teams: TeamBoardDTO[];
 }
 
+/** 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。 */
+export interface SessionThreadSearchResultDTO {
+  workspace_id: string;
+  session_id: string;
+  thread_id: string;
+  thread_uri: string;
+  kind: string;
+  title: string;
+  session_title: string;
+  created_at: string | undefined;
+}
+
+export interface SessionThreadSearchResultsDTO {
+  catalog_revision: number;
+  items: SessionThreadSearchResultDTO[];
+  cursor?: string | undefined;
+  complete: boolean;
+  limited_reason?: string | undefined;
+  scanned_sessions: number;
+  scanned_threads: number;
+}
+
 export interface ChildThreadSummaryDTO {
   thread_id: string;
   created_at: string | undefined;
@@ -3757,6 +3779,150 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
     message.items = object.items?.map((e) => ChildThreadSummaryDTO.fromPartial(e)) || [];
     message.total = object.total ?? 0;
     message.teams = object.teams?.map((e) => TeamBoardDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSessionThreadSearchResultDTO(): SessionThreadSearchResultDTO {
+  return {
+    workspace_id: "",
+    session_id: "",
+    thread_id: "",
+    thread_uri: "",
+    kind: "",
+    title: "",
+    session_title: "",
+    created_at: undefined,
+  };
+}
+
+export const SessionThreadSearchResultDTO: MessageFns<SessionThreadSearchResultDTO> = {
+  fromJSON(object: any): SessionThreadSearchResultDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      thread_uri: isSet(object.thread_uri) ? globalThis.String(object.thread_uri) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      session_title: isSet(object.session_title) ? globalThis.String(object.session_title) : "",
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+    };
+  },
+
+  toJSON(message: SessionThreadSearchResultDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.thread_uri !== "") {
+      obj.thread_uri = message.thread_uri;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.session_title !== "") {
+      obj.session_title = message.session_title;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionThreadSearchResultDTO>, I>>(base?: I): SessionThreadSearchResultDTO {
+    return SessionThreadSearchResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionThreadSearchResultDTO>, I>>(object: I): SessionThreadSearchResultDTO {
+    const message = createBaseSessionThreadSearchResultDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.thread_uri = object.thread_uri ?? "";
+    message.kind = object.kind ?? "";
+    message.title = object.title ?? "";
+    message.session_title = object.session_title ?? "";
+    message.created_at = object.created_at ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionThreadSearchResultsDTO(): SessionThreadSearchResultsDTO {
+  return {
+    catalog_revision: 0,
+    items: [],
+    cursor: undefined,
+    complete: false,
+    limited_reason: undefined,
+    scanned_sessions: 0,
+    scanned_threads: 0,
+  };
+}
+
+export const SessionThreadSearchResultsDTO: MessageFns<SessionThreadSearchResultsDTO> = {
+  fromJSON(object: any): SessionThreadSearchResultsDTO {
+    return {
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => SessionThreadSearchResultDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
+      scanned_sessions: isSet(object.scanned_sessions) ? globalThis.Number(object.scanned_sessions) : 0,
+      scanned_threads: isSet(object.scanned_threads) ? globalThis.Number(object.scanned_threads) : 0,
+    };
+  },
+
+  toJSON(message: SessionThreadSearchResultsDTO): unknown {
+    const obj: any = {};
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => SessionThreadSearchResultDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.limited_reason !== undefined) {
+      obj.limited_reason = message.limited_reason;
+    }
+    if (message.scanned_sessions !== 0) {
+      obj.scanned_sessions = Math.round(message.scanned_sessions);
+    }
+    if (message.scanned_threads !== 0) {
+      obj.scanned_threads = Math.round(message.scanned_threads);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionThreadSearchResultsDTO>, I>>(base?: I): SessionThreadSearchResultsDTO {
+    return SessionThreadSearchResultsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionThreadSearchResultsDTO>, I>>(
+    object: I,
+  ): SessionThreadSearchResultsDTO {
+    const message = createBaseSessionThreadSearchResultsDTO();
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.items = object.items?.map((e) => SessionThreadSearchResultDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.complete = object.complete ?? false;
+    message.limited_reason = object.limited_reason ?? undefined;
+    message.scanned_sessions = object.scanned_sessions ?? 0;
+    message.scanned_threads = object.scanned_threads ?? 0;
     return message;
   },
 };

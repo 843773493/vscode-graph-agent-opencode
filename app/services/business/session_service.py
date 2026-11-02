@@ -24,6 +24,10 @@ from app.core.session_catalog_store.contracts import (
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
+from app.core.session_control_thread_catalog.search import (
+    ThreadNameRow,
+    read_thread_name_page,
+)
 from app.core.session_creation import ForkCompletionProof, SessionCreationService
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
@@ -490,6 +494,31 @@ class SessionService:
             items=items,
             total=len(items),
         )
+
+    async def thread_name_page(
+        self, session_id: str, *, after_thread_id: str | None, limit: int,
+        expected_revision: int | None,
+    ) -> tuple[int, list[ThreadNameRow], bool]:
+        """读取 main/durable child 名称；准入覆盖受保护 worker 的全部句柄。"""
+        async with self.session_read_admission(session_id):
+            return await run_sync_shielded(
+                self._thread_name_page, session_id, after_thread_id, limit, expected_revision,
+            )
+
+    def _thread_name_page(
+        self, session_id: str, after_thread_id: str | None, limit: int, expected_revision: int | None,
+    ) -> tuple[int, list[ThreadNameRow], bool]:
+        node = self._path_resolver.get_node(session_id)
+        if not isinstance(node, SessionCatalogSessionProjection):
+            raise NotFoundError({"session_id": session_id})
+        database = self._path_resolver.resolve_session_node(session_id) / CONTROL_DATABASE_NAME
+        with closing(SessionControlStore(database, read_only=True)) as control, control.read_transaction():
+            control.verify_matches_catalog_main_thread(node.main_thread_id)
+            revision = control.get_thread_catalog_revision()
+            if expected_revision is not None and expected_revision != revision:
+                raise ValueError(f"Thread 目录已更新，请重新查询: session_id={session_id}")
+            rows, has_more = read_thread_name_page(control.connection, after_thread_id=after_thread_id, limit=limit)
+        return revision, rows, has_more
 
     async def create(self, session: SessionCreateRequest) -> SessionDTO:
         return await self._create(

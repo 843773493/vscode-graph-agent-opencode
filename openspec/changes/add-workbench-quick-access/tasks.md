@@ -24,7 +24,7 @@
 覆盖规范：项目目标和既有业务动作必须逐类接入。
 
 - [x] 3.1 在原 catalog owner 补齐名称／ID／目录字段的模糊召回，保留查询与 revision 绑定的分页，folder 仅作为导航目标。
-- [ ] 3.2 在原 Thread owner 补工作区范围内 main 与未打开 durable child 的有界发现，结果携带精确归属，不拉全部 Session 后在前端遍历。
+- [x] 3.2 在原 Thread owner 补工作区范围内 main 与未打开 durable child 的有界发现，结果携带精确归属，不拉全部 Session 后在前端遍历。
 - [ ] 3.3 将 Session 候选交由 owner 解析不可变 main_thread_id，Thread 候选保持 child 身份，folder 默认动作定位原导航。
 - [ ] 3.4 验证首批之外的间隔字符缩写、同名 Session／main／child、目录 revision 变化与删除命中，区分未命中、受限及失效 cursor。
 
@@ -170,3 +170,11 @@
 - 定向 Python 56 项通过，覆盖首屏之外缩写、Unicode、逻辑路径、独立字段、分页、查询变化、重命名与删除；真实 Gateway 集成通过原后端创建／移动及在线、重启后离线镜像搜索，核对 request_id、归属、stale 状态及物理 locator 不输出。次工作区仍是既有明确 HTTP 替身，本项不证明新 Quick Access Provider 已接入。
 - Pyright 零诊断，OpenSpec strict 通过。完整 Ruff 检查仅剩 HEAD 原有的 TRY004 两条和 ISC004 一条；新增导入格式已修正，排除这两项既存规则后检查通过，未改变既有异常合同。
 - 原始命令、源码指纹、退出码和审查收据保留于 `out/tests/temp/quick_access_catalog_20261102/artifacts/`；真实集成产物位于 `out/tests/integration/gateway/test_session_catalog_search/`。本批无前端及公开 DTO 变化，未重复 Workbench 构建。
+
+### 2026-11-02：Thread 有界发现切片（3.2）
+
+- 新名称查询复用原 catalog 可见快照、Session 生命周期读准入和控制库只读事务；main 取冻结指针，child 取既有发布记录及标题。不加载 cold runtime、不读正文、不新增表或 schema 版本。每页明确目录／行数／结果／调度时间预算及独立 cursor，不承诺跨控制库同一时刻快照。
+- 定向 Python 206 项、客户端 13 项通过；真实 Gateway 集成经产品创建、执行及 fork 建立同名 main／未打开 child／另一 Session main，验证后端重启续页、精确 URI、原 request_id、无额外模型调用，以及新 child 使当前分支旧 cursor 返回 409。
+- 新模块 Pyright 零诊断，SessionService 19 条既存诊断与 HEAD 一致、无新增；Ruff 排除原 API 12 条 B008 后通过，另保存原件对比。生成一致性、Buf 格式／breaking、公开 descriptor／OpenAPI、真实 Workbench TypeScript 及生产构建均通过。
+- 新集成装配初期遗漏游客登录、Gateway 回调地址和 native 辅助服务，并误用 source point 字段；逐项按原输出修复，未更改产品来迁就测试。端口曾被瞬时连接占用，改用既有进程租约提前预留本文件服务端口。失败原件与最终通过均保留。
+- 证据：`out/tests/temp/quick_access_discovery_20261102/artifacts/`；正式产品查询原件位于 `out/tests/integration/gateway/test_thread_name_search/`。Provider 尚未消费本查询，3.3／3.4 及整体 Quick Access 验收仍未完成。

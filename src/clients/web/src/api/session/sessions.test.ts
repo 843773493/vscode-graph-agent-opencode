@@ -6,6 +6,7 @@ import {
   getSessionMainThread,
   listChildThreads,
   listSessions,
+  searchSessionThreads,
 } from "./sessions";
 import {
   installSessionApiFetchMock,
@@ -22,6 +23,40 @@ function installFetchMock(
 
 afterEach(() => {
   unwrapSessionApiFetch();
+});
+
+describe("工作区 Thread 名称查询", () => {
+  test("显式目标、独立游标与取消信号经原客户端传输", async () => {
+    const controller = new AbortController();
+    let requestInit: RequestInit | undefined;
+    let requestUrl = "";
+    const page = { items: [], complete: false, cursor: "next+page", limited_reason: "scan_limit",
+      catalog_revision: 7, scanned_sessions: 2, scanned_threads: 12 };
+    installFetchMock((init, url) => {
+      requestInit = init; requestUrl = url;
+      return Response.json({ data: page, request_id: "req-thread-search" });
+    });
+    const result = await searchSessionThreads(48310,
+      { workspace_id: "route-A", backend_workspace_id: "backend-A", connection_kind: "local" },
+      "sparse🧪", { limit: 3, cursor: "prior+/=", signal: controller.signal });
+    expect(result).toEqual(page);
+    const url = new URL(requestUrl);
+    expect(url.pathname).toBe("/api/v1/session-threads/search");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ query: "sparse🧪", limit: "3", cursor: "prior+/=" });
+    const headers = new Headers(requestInit?.headers);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe("route-A");
+    expect(headers.get("X-BoxTeam-Backend-Workspace-Id")).toBe("backend-A");
+    expect(requestInit?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test("旧游标冲突保持原错误且不重放查询", async () => {
+    let calls = 0;
+    installFetchMock(() => { calls++; return Response.json({ detail: "Thread 目录已更新" }, { status: 409 }); });
+    await expect(searchSessionThreads(48310,
+      { workspace_id: "route-A", backend_workspace_id: "backend-A", connection_kind: "local" },
+      "needle", { cursor: "stale" })).rejects.toBeInstanceOf(HttpRequestError);
+    expect(calls).toBe(1);
+  });
 });
 
 describe("main thread API", () => {

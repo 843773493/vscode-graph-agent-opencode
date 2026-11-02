@@ -6,6 +6,7 @@
 
 - 可以维护 `thread_catalog.py` 中 `ThreadCatalogMixin` 的 thread catalog/fence 方法族（`_require_thread_catalog_graph_binding_columns`、`initialize_main_thread`、`get_thread_graph_binding`、`initialize_fence`、`cas_fence_transition`、`get_main_thread`、`get_fence`、`verify_matches_catalog_main_thread`、`get_published_child_thread_locator`、`get_thread_catalog_revision`、`list_child_thread_rows`）。
 - 可以维护本模块自有的 `thread_catalog`/`lifecycle_fence` DDL 常量、`ChildThreadRow` 投影与 `validate_thread_relative_locator` 校验器。
+- `search.py` 在调用方的同库读事务中按稳定 Thread ID 有界投影 main/已发布 child 名称；只连接既有创建记录与成员冻结标题，不写入或复制这些账本，不读取执行历史或创建运行态。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/` 下。
 
 # 不可修改内容

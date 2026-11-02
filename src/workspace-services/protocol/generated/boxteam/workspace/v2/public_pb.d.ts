@@ -507,6 +507,105 @@ export declare type ChildThreadListDTO = Message<"boxteam.workspace.v2.ChildThre
 export declare const ChildThreadListDTOSchema: GenMessage<ChildThreadListDTO>;
 
 /**
+ * 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。
+ *
+ * @generated from message boxteam.workspace.v2.SessionThreadSearchResultDTO
+ */
+export declare type SessionThreadSearchResultDTO = Message<"boxteam.workspace.v2.SessionThreadSearchResultDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 3;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string thread_uri = 4;
+   */
+  threadUri: string;
+
+  /**
+   * @generated from field: string kind = 5;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string title = 6;
+   */
+  title: string;
+
+  /**
+   * @generated from field: string session_title = 7;
+   */
+  sessionTitle: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 8;
+   */
+  createdAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionThreadSearchResultDTO.
+ * Use `create(SessionThreadSearchResultDTOSchema)` to create a new message.
+ */
+export declare const SessionThreadSearchResultDTOSchema: GenMessage<SessionThreadSearchResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionThreadSearchResultsDTO
+ */
+export declare type SessionThreadSearchResultsDTO = Message<"boxteam.workspace.v2.SessionThreadSearchResultsDTO"> & {
+  /**
+   * @generated from field: int64 catalog_revision = 1;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionThreadSearchResultDTO items = 2;
+   */
+  items: SessionThreadSearchResultDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 3;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: bool complete = 4;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: optional string limited_reason = 5;
+   */
+  limitedReason?: string | undefined;
+
+  /**
+   * @generated from field: int64 scanned_sessions = 6;
+   */
+  scannedSessions: bigint;
+
+  /**
+   * @generated from field: int64 scanned_threads = 7;
+   */
+  scannedThreads: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionThreadSearchResultsDTO.
+ * Use `create(SessionThreadSearchResultsDTOSchema)` to create a new message.
+ */
+export declare const SessionThreadSearchResultsDTOSchema: GenMessage<SessionThreadSearchResultsDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.ChildThreadSummaryDTO
  */
 export declare type ChildThreadSummaryDTO = Message<"boxteam.workspace.v2.ChildThreadSummaryDTO"> & {

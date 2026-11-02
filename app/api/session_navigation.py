@@ -9,6 +9,7 @@ from app.api.deps import (
     get_request_id,
     get_session_catalog_service,
     get_session_generation_service,
+    get_session_service,
     verify_local_token,
 )
 from app.api.errors import (
@@ -16,6 +17,7 @@ from app.api.errors import (
     not_found_http_error,
     state_conflict_http_error,
 )
+from app.core.exceptions import NotFoundError
 from app.core.failures import report_failure
 from app.core.trace_middleware import (
     require_current_gateway_id,
@@ -42,6 +44,9 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationStatusPageDTO,
     NavigationSnapshotDTO,
 )
+from app.schemas.internal_v2.session_navigation.thread_search import (
+    SessionThreadSearchResultsDTO,
+)
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.operations_service import (
@@ -52,8 +57,34 @@ from app.services.business.session_navigation.queue_store import (
     NavigationMutationConflictError,
     NavigationQueueOwnerError,
 )
+from app.services.business.session_navigation.thread_search import (
+    search_session_threads,
+)
+from app.services.business.session_service import SessionService
 
 router = APIRouter(tags=["session-navigation"])
+
+
+@router.get("/session-threads/search", response_model=APIResponse[SessionThreadSearchResultsDTO])
+async def search_workspace_threads(
+    query: Annotated[str, Query(min_length=1, max_length=512)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    catalog: Annotated[SessionCatalogService, Depends(get_session_catalog_service)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(max_length=4096)] = None,
+):
+    try:
+        result = await search_session_threads(
+            catalog, sessions, gateway_id=require_current_gateway_id("Thread 名称查询"),
+            query=query, limit=limit, cursor=cursor,
+        )
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except (ValueError, RuntimeError, TimeoutError) as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 def _navigation_scope(service: SessionCatalogService) -> NavigationAuthScope:

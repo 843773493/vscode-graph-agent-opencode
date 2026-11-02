@@ -179,6 +179,8 @@ scope 跟随原 Input 的 configuration model，原 JSON serializer 的 config �
 
 ### 默认结果排序与入口名称
 
+Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，由原 Session owner 在生命周期读准入内读取同一控制库事务中的 main／published child 名称。每次最多检查 64 个目录节点、512 条 Thread、返回 100 个匹配；分支调度预算为 1 秒，单次准入与同步 I/O 仍沿用原 owner 的期限和受保护 worker 结算规则，不宣称任意 I/O 都能在 1 秒强行中断。child 用稳定 ID keyset 续查，不随页数重复 OFFSET 扫描；不建立新表或正文索引。cursor 固定 Gateway／workspace、规范化查询、catalog revision 与当前控制库原插入型 Thread revision；当前分支新增 child 拒绝旧 cursor。各 Session 分支是各自读取时的快照，不假称跨库同一时刻；已完成分支后续发布的新 child 需要重新查询。完成、结果条数、扫描和时间预算分别披露；有 cursor 的空页表示尚未覆盖完成，消费者不得展示成全量无匹配。
+
 - 空输入只显示所选范围内的“最近打开”，遵循原版历史顺序及移除动作；历史关闭时不枚举全工作区资源来填空。`edt` 系列保持原版跨组编辑器导航用途，不被默认资源搜索范围改造成另一套列表。
 - 非空输入按“最近打开 → 会话 → Thread → 文件”固定组序展示；`search.quickOpen.includeHistory` 控制是否有历史组，`history.filterSortOrder` 控制其相关性／最近顺序。其它组采用原模糊评分，分数相同时以稳定名称／归属键排序；晚到结果不能以总分重排其它组或抢走活动目标。
 - 同一类型、同一 owner 身份的候选只出现一次，最近记录优先占位；同一 Thread 的多个组副本在默认资源搜索合并为目标，精确选择某组使用原 `edt` 系列。Session 与 main Thread 保留不同领域对象和动作，不因打开后相同就互相删除；child 永不并入 main。正文中不同 owner／不同位置的命中不按片段相同去重。

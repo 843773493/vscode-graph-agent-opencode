@@ -61,6 +61,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
         "SessionForkRequest", "SessionForkSourcePointDTO", "SessionForkResultDTO",
         "SessionForkTransferRequest", "SessionForkTransferResultDTO",
         "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
+        "SessionThreadSearchResultsDTO",
         "SessionTurnBootstrapDTO", "TurnHistoryLoadRequest", "TurnHistoryPageDTO",
         "SessionChangesetListDTO", "SessionChangesetDTO", "SessionFileReviewRequest", "SessionFileReviewResultDTO",
         "SessionContextReadRequest", "SessionContextReadResultDTO", "SessionContextSearchRequest", "SessionContextSearchResultDTO",

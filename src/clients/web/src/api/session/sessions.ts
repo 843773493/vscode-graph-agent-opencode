@@ -22,8 +22,24 @@ import {
 } from "../http";
 
 import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
+import type { SessionThreadSearchResultsDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 export const DEFAULT_SESSION_TITLE = "新会话";
+
+/** 在显式工作区渐进查询 main 与尚未打开的 durable child，不读取消息正文。 */
+export async function searchSessionThreads(
+  port: number,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
+  query: string,
+  options: { limit?: number; cursor?: string | null; signal?: AbortSignal } = {},
+): Promise<SessionThreadSearchResultsDTO> {
+  const params = new URLSearchParams({ query, limit: String(options.limit ?? 50) });
+  if (options.cursor) params.set("cursor", options.cursor);
+  return unwrapApiData(await requestJson<APIResponse<SessionThreadSearchResultsDTO>>(
+    port, `/api/v1/session-threads/search?${params}`,
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
+  ));
+}
 
 function parseChildThreadList(value: unknown): ChildThreadList {
   if (!value || typeof value !== "object") {

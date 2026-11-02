@@ -20,3 +20,22 @@
 #### Scenario: 离线镜像保留相同匹配语义
 - **WHEN** 已同步的工作区离线，用户使用同一间隔字符缩写搜索
 - **THEN** Gateway 从该工作区原公开导出的目录镜像取得相同归属的候选，并明确标记 stale，不伪报实时查询成功
+
+## ADDED Requirements
+
+### Requirement: 工作区 Thread 发现由原 owner 有界提供
+工作区后端 SHALL 提供 main 与已发布 durable child 的名称／稳定 ID 查询，结果携带工作区、Session、精确 Thread 身份、名称、类型及原寻址 owner 生成的规范 Thread URI。main 身份 SHALL 来自 catalog 冻结指针；child 可见性与名称 SHALL 消费 Session 控制库中原 thread catalog、创建记录及成员冻结标题。查询 MUST NOT 扫描磁盘、加载执行运行态、读取消息正文或要求客户端先拉取全部 Session。Folder MUST NOT 被投影为 Thread。
+
+查询 SHALL 使用相同的顺序字符匹配，在后端限定每次目录扫描、Thread 行数、结果条数及分支调度时间预算，区分完成、结果上限、扫描上限和时间预算。未覆盖部分 SHALL 提供显式续查 cursor，不将预算耗尽报告为全量无匹配。cursor SHALL 绑定 Gateway、工作区、规范化查询、工作区 catalog revision 和当前正在分页的 Session thread catalog revision；范围、查询或这些版本变化 MUST 明确拒绝旧 cursor。跨 Session 控制库的渐进读取不声称是同一时刻的全工作区快照；已完成分支随后发布的新 child 由重新查询获取。
+
+#### Scenario: 未打开的同名 child 与 main 均能发现
+- **WHEN** 产品入口在同一 Session 发布一个尚未打开且与 main 同名的 fork child，另一 Session 也有同名 main
+- **THEN** 名称查询及续页返回三个不同 owner 的候选，child 保留精确身份，查询不触发模型调用或执行恢复
+
+#### Scenario: 后端重启后继续名称查询
+- **WHEN** 首次查询已经返回 cursor，而目录和当前 Session Thread 版本在后端重启前后保持不变
+- **THEN** 相同范围和查询可以继续取得剩余候选，不依赖前端已打开标签或进程内搜索缓存
+
+#### Scenario: 预算耗尽与旧游标可区分
+- **WHEN** 查询达到扫描或时间预算，或当前正在分页的 Session 新增了 durable child
+- **THEN** 前者返回未完成状态、原因及续查 cursor，后者明确拒绝旧 cursor；均不返回虚假的全量无匹配

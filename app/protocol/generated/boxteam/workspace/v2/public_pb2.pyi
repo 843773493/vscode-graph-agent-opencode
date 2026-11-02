@@ -201,6 +201,44 @@ class ChildThreadListDTO(_message.Message):
     teams: _containers.RepeatedCompositeFieldContainer[TeamBoardDTO]
     def __init__(self, parent_session_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[ChildThreadSummaryDTO, _Mapping]]] = ..., total: _Optional[int] = ..., teams: _Optional[_Iterable[_Union[TeamBoardDTO, _Mapping]]] = ...) -> None: ...
 
+class SessionThreadSearchResultDTO(_message.Message):
+    __slots__ = ("workspace_id", "session_id", "thread_id", "thread_uri", "kind", "title", "session_title", "created_at")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_URI_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    TITLE_FIELD_NUMBER: _ClassVar[int]
+    SESSION_TITLE_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    session_id: str
+    thread_id: str
+    thread_uri: str
+    kind: str
+    title: str
+    session_title: str
+    created_at: _timestamp_pb2.Timestamp
+    def __init__(self, workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., thread_uri: _Optional[str] = ..., kind: _Optional[str] = ..., title: _Optional[str] = ..., session_title: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+
+class SessionThreadSearchResultsDTO(_message.Message):
+    __slots__ = ("catalog_revision", "items", "cursor", "complete", "limited_reason", "scanned_sessions", "scanned_threads")
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    LIMITED_REASON_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_SESSIONS_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_THREADS_FIELD_NUMBER: _ClassVar[int]
+    catalog_revision: int
+    items: _containers.RepeatedCompositeFieldContainer[SessionThreadSearchResultDTO]
+    cursor: str
+    complete: bool
+    limited_reason: str
+    scanned_sessions: int
+    scanned_threads: int
+    def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionThreadSearchResultDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_sessions: _Optional[int] = ..., scanned_threads: _Optional[int] = ...) -> None: ...
+
 class ChildThreadSummaryDTO(_message.Message):
     __slots__ = ("thread_id", "created_at", "delegation_id", "role", "subagent_type", "title", "collaboration_state", "admission_state", "status", "runtime", "report_execution_id", "report_status")
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
