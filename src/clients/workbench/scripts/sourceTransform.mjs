@@ -91,7 +91,10 @@ export function sourceTransform(root, productConfiguration, extensions) {
         'quickAccessRegistry.registerQuickAccessProvider(selectDefaultSearchDescriptor({\n\tctor: AnythingQuickAccessProvider,');
       contents = replaceOnce(contents, '\n});\n\nquickAccessRegistry.registerQuickAccessProvider({\n\tctor: SymbolsQuickAccessProvider,',
         '\n}));\n\nquickAccessRegistry.registerQuickAccessProvider({\n\tctor: SymbolsQuickAccessProvider,');
-      contents = `import { selectDefaultSearchDescriptor } from ${JSON.stringify(join(root, 'src/search/quickAccess.js'))};\n` + contents;
+      contents = replaceOnce(contents, 'quickAccessRegistry.registerQuickAccessProvider({\n\tctor: SymbolsQuickAccessProvider,',
+        'quickAccessRegistry.registerQuickAccessProvider(selectSymbolSearchDescriptor({\n\tctor: SymbolsQuickAccessProvider,');
+      contents = replaceOnce(contents, "commandId: 'workbench.action.showAllSymbols' }]\n});", "commandId: 'workbench.action.showAllSymbols' }]\n}));");
+      contents = `import { selectDefaultSearchDescriptor } from ${JSON.stringify(join(root, 'src/search/quickAccess.js'))};\nimport { selectSymbolSearchDescriptor } from ${JSON.stringify(join(root, 'src/search/symbolsQuickAccess.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/workbench/browser/parts/views/viewPaneContainer.ts')) {
       contents = replaceOnce(contents, 'return this.instantiationService.createInstance(viewDescriptor.ctorDescriptor.ctor, ...(viewDescriptor.ctorDescriptor.staticArguments || []), options);',

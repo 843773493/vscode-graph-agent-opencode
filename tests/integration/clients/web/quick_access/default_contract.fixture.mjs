@@ -7,6 +7,8 @@ import { workspaceFileUri } from '../../../../../src/clients/workbench/src/works
 import { HelpQuickAccessProvider } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/browser/helpQuickAccess.js';
 import { Registry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/registry/common/platform.js';
 import { Extensions } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickAccess.js';
+import { WorkspaceSymbolsQuickAccess } from '../../../../../src/clients/workbench/src/search/symbolsQuickAccess.js';
+import { WorkspaceSymbolProviderRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/common/search.js';
 
 const owner = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const root = 'boxteam://workspace/workspace-a/resources/files/root';
@@ -68,6 +70,35 @@ export function selectContract() {
     observed.received = received;
     return observed;
   } finally { f.dispose(); }
+}
+
+export async function symbolContract() {
+  const calls = [], queried = Promise.withResolvers();
+  const registration = WorkspaceSymbolProviderRegistry.register({ provideWorkspaceSymbols(query) { calls.push(query); queried.resolve(); return []; } });
+  const provider = new WorkspaceSymbolsQuickAccess({}, {}, {}, { getValue: () => ({}) }, {}, {});
+  const changes = new Emitter(), accepts = new Emitter(), token = new CancellationTokenSource();
+  const picker = { value: '#needle', items: [], activeItems: [], keyMods: { alt: false, ctrlCmd: false },
+    onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None };
+  const lifetime = [];
+  try {
+    lifetime.push(provider.provide(picker, token.token, { searchOwner: owner }));
+    // 原全局查询有 200ms debounce；等待越过该边界，不能在它尚未执行时宣称未查询。
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const scopedLabel = picker.items[0].label;
+    lifetime.pop().dispose();
+    lifetime.push(provider.provide(picker, token.token, { searchOwnerError: '原 Gateway 身份失效' }));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const errorLabel = picker.items[0].label;
+    const scopedCalls = [...calls];
+    lifetime.pop().dispose();
+    lifetime.push(provider.provide(picker, token.token));
+    await queried.promise;
+    return { scopedLabel, errorLabel, scopedCalls, nativeCalls: calls };
+  } finally {
+    token.dispose(true);
+    lifetime.forEach(item => item.dispose());
+    provider.dispose(); registration.dispose(); changes.dispose(); accepts.dispose();
+  }
 }
 
 export function helpContract() {

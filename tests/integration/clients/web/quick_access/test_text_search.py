@@ -128,6 +128,7 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["defaultQuickAccess"]["helpHasNoQueries"] is True
         assert receipt["defaultQuickAccess"]["helpKeepsInvocation"] is True
         assert len(receipt["defaultListPresentation"]) == 3
+        assert receipt["workspaceSymbolsUnavailable"] is True
         assert receipt["defaultOpenActions"] == {
             "keyboardSideButton": True, "sidePreview": True, "continuousBackground": True,
             "backgroundPinned": True, "sourceGroupPreserved": True, "historyRemovalKeepsTabAndSession": True,

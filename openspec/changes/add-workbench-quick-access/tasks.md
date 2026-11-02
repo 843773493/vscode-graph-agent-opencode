@@ -45,7 +45,7 @@
 - [x] 5.2 对明确业务根的 textSearchSplitSyncAsync 使用完整 owner／URI 过滤本地未保存模型，先限制再发送 progress，当前模型覆盖同文件后端旧命中，不自动保存。
 - [x] 5.3 将业务查询显式路由到原后端文件 owner，不送浏览器文件 handle worker；原生虚拟容器仍按原服务行为处理。
 - [x] 5.4 在原 `%` 贡献构造入口用 child InstantiationService 创建真实原 Provider 与 QueryBuilder，每次 provide 固定发起范围，取消和 dispose 释放实际操作。
-- [ ] 5.5 限定 folderQueries、extraFileResources 与符号来源；业务 AI／语义搜索缺服务时明确未启用，不触发模型或其它根，不改全局设置。
+- [x] 5.5 限定 folderQueries、extraFileResources 与符号来源；业务 AI／语义搜索缺服务时明确未启用，不触发模型或其它根，不改全局设置。
 - [x] 5.6 用 A／B 同路径不同 dirty 内容及 IndexedDB 同名文件验证首次结果、增量 progress、普通／仅已打开搜索均不串范围。
 
 ## 6. 原搜索视图与 Search Editor
@@ -281,3 +281,10 @@
 - 真实 Gateway／正式 Workbench 页面核对 Session、Thread、文件的名称、工作区归属、详情、图标及实际命中高亮；悬停 Tooltip 和 Tab 聚焦的侧边按钮均通过。明确开启原 Quick Open 预览设置后，侧边文件显示预览标签；两次原后台接受保留输入焦点，文件固定在发起组，原组 Thread 保持可见。移除历史后原标签与后端 Session 均保留。
 - 最终页面通过（184.12 秒），原 A/B／IndexedDB、dirty／watch、SearchView、Search Editor 分屏、保存、backup 和 route 恢复断言继续通过，无页面错误。仅新增测试，复用上一切片同产品源码的真实类型检查；本轮 fixture 重新完成正式构建。JS 语法、Ruff、结构及 OpenSpec strict 检查随本边界保存。
 - 前两次失败分别是装具未先悬停便查找通常隐藏的按钮，以及未开启预览设置便断言预览；依据原列表 CSS 与原设置默认值修正，未修改产品行为或放宽归属断言。命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/list-*.json`；最终页面原件：`out/tests/integration/clients/web/quick_access/test_text_search/runs/run-0ef312a76ada/nodes/node-f4e408bf0b21/artifacts/search-result.json`。7.4／7.6、统一 URI 打开和 Electron 等仍未完成。
+
+### 2026-11-02：符号来源与搜索边界（5.5）
+
+- 原 `#` 登记只选择项目符号子类，复用原 Picker 的 provide、过滤及释放；明确业务 owner 或发起身份错误时，在全局符号查询之前返回未启用或原错误。原生无业务范围调用继续使用原符号服务，文件内符号不受影响。默认入口开启 includeSymbols 时明确提示当前缺少可限定业务根的服务；未增加全局设置改写。
+- 26 项定向检查／212 条断言通过，覆盖根与 extras、AI 拒绝、等待越过原 200ms debounce 后全局符号 Provider 零调用，以及原生符号调用仍到达真实注册表。真实 Gateway／正式构建／Chromium 完整场景通过（181.25 秒），`#` 保留 B 身份且没有领域查询，原 A/B、dirty、watch、SearchView、Search Editor、backup 和 route 断言保持。复用同产品源码指纹的 18 份转换源码真实类型检查；本次构建由正式 fixture 完成。
+- 合同浏览器装具改以本地静态服务加载同一编译产物，去掉每例经控制通道传输数 MB base64；相同 26 项从 20.94 秒降至 4.74 秒，没有放宽期限或断言。原列表复用时隐藏但保留旧 detail，展示测试现先按候选身份限制再核文案，仍要求唯一目标。端口 TIME_WAIT 导致的启动失败与前两次定位失败原件保留；确认端口重新可绑定后再跑通过，未终止未知进程。
+- 准确命令、源码指纹、原始输出和退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/symbols-*.json`，最终为 `symbols-contract-004.json`、`symbols-browser-004.json`；文本定位其余模式与 Electron 尚未独立验收，不勾选 10.2 或桌面任务。

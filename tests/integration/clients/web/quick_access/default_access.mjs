@@ -54,11 +54,13 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expect(quick).toContainText('Thread · 本次查询完成');
     await expect(quick).toContainText('文件 · 本次查询完成');
     await expect(quick).toContainText('quickdiscover-file.txt');
+    await expect(quick).toContainText('工作区符号未启用');
     const first = requests.filter(request => request.query === 'quickdiscover' || request.body?.query === 'quickdiscover');
     expect(first.length).toBeGreaterThanOrEqual(3);
     expect(first.every(request => request.route === ownerA.route)).toBe(true);
     result.defaultListPresentation = await verifyResourcePresentation({ quick, sessionId: sessionA.session_id });
-    const row = quick.locator('[data-quick-input-id]').filter({ hasText: `会话 · ${sessionA.session_id}` });
+    const row = quick.locator('[data-quick-input-id^="session:"]')
+      .filter({ hasText: `会话 · ${sessionA.session_id}` });
     await expect(row).toHaveCount(1);
     await row.click();
     await expect(quick).not.toBeVisible();
@@ -108,6 +110,13 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expect(quick).toContainText('文件 · 没有匹配的资源');
     expect(requests.slice(beforeMissing).every(request => request.route === ownerB.route)).toBe(true);
     await page.keyboard.press('Escape');
+    const beforeSymbols = requests.length;
+    await command('workbench.action.quickOpen', '#quickdiscover');
+    await expect(input).toHaveAttribute('placeholder', `工作区符号 · ${ownerB.workspaceId}`);
+    await expect(quick).toContainText('工作区符号未启用');
+    expect(requests.length).toBe(beforeSymbols);
+    await page.keyboard.press('Escape');
+    result.workspaceSymbolsUnavailable = true;
     const beforeHelp = requests.length;
     await command('workbench.action.quickOpenWithModes');
     await expect(quick).toBeVisible();

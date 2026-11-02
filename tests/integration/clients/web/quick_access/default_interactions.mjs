@@ -2,9 +2,10 @@ import { expect } from 'playwright/test';
 
 /** 检查原列表的实际展示，不以 Provider 返回字段代替渲染证据。 */
 export async function verifyResourcePresentation({ quick, sessionId }) {
-  const session = quick.locator('[data-quick-input-id]').filter({ hasText: `会话 · ${sessionId}` });
-  const thread = quick.locator('[data-quick-input-id]').filter({ hasText: `main Thread · ${sessionId} /` });
-  const file = quick.locator('[data-quick-input-id]').filter({ hasText: 'quickdiscover-file.txt' });
+  // 原列表复用节点时只隐藏旧 detail；先按真实候选身份限定，避免匹配隐藏旧文案。
+  const session = quick.locator('[data-quick-input-id^="session:"]').filter({ hasText: `会话 · ${sessionId}` });
+  const thread = quick.locator('[data-quick-input-id^="boxteam-thread:"]').filter({ hasText: `main Thread · ${sessionId} /` });
+  const file = quick.locator('[data-quick-input-id^="boxteam-file:"]').filter({ hasText: 'quickdiscover-file.txt' });
   const rows = [session, thread, file];
   for (const [index, row] of rows.entries()) {
     await expect(row).toHaveCount(1);
