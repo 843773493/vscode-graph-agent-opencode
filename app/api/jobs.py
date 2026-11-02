@@ -171,7 +171,7 @@ async def submit_tool_approvals(
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     try:
-        result = approvals.submit(job_id, payload)
+        result = await approvals.submit(job_id, payload)
     except ValidationError:
         raise
     except ValueError as error:

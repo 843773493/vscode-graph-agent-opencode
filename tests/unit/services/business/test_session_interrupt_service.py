@@ -141,7 +141,7 @@ async def test_reminder_failure_still_cancels_frozen_job_and_registered_scope(re
     )
     registry = TurnExecutionScopeRegistry()
     scope = registry.create(writer.turn_stream_id) if registration != "none" else None
-    inbox = AgentControlInbox(writer.turn_stream_id)
+    inbox = await AgentControlInbox.open(writer.turn_stream_id)
     if registration == "inbox":
         registry.register_inbox(writer.turn_stream_id, inbox)
     service = SessionInterruptService(

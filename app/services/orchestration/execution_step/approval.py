@@ -120,27 +120,30 @@ class ToolApprovalService:
         finally:
             del self._waiting[job_id]
 
-    def submit(self, job_id: str, request: ToolApprovalSubmitRequest) -> ToolApprovalCommandDTO:
+    async def submit(self, job_id: str, request: ToolApprovalSubmitRequest) -> ToolApprovalCommandDTO:
         waiting = self._waiting.get(job_id)
         if waiting is None:
             raise ValueError("当前 Job 没有可恢复的活动工具审批")
-        self._resume(waiting, request)
-        payload = {"job_id": job_id, **request.model_dump(mode="json")}
-        existing = waiting.inbox.get(request.command_id)
-        if existing is not None and (existing.kind != "approval.result" or existing.payload != payload):
-            raise ValueError("审批 command_id 已绑定不同决定")
-        if any(command.kind == "approval.result" and command.payload.get("checkpoint_id") == request.checkpoint_id
-               and command.command_id != request.command_id and command.status != "rejected"
-               for command in waiting.inbox.snapshot()):
-            raise ValueError("原检查点已接受另一份审批决定")
-        command = waiting.inbox.accept(
-            command_id=request.command_id, kind="approval.result",
-            idempotency_key=f"approval:{request.command_id}", payload=payload,
-        )
-        return ToolApprovalCommandDTO(
-            command_id=command.command_id, checkpoint_id=request.checkpoint_id,
-            status=cast(LiteralCommandStatus, command.status),
-        )
+        async with waiting.inbox.control_lock:
+            if self._waiting.get(job_id) is not waiting or waiting.response.done() or waiting.inbox.is_closed:
+                raise ValueError("当前 Job 没有可恢复的活动工具审批")
+            self._resume(waiting, request)
+            payload = {"job_id": job_id, **request.model_dump(mode="json")}
+            existing = waiting.inbox.get(request.command_id)
+            if existing is not None and (existing.kind != "approval.result" or existing.payload != payload):
+                raise ValueError("审批 command_id 已绑定不同决定")
+            if any(command.kind == "approval.result" and command.payload.get("checkpoint_id") == request.checkpoint_id
+                   and command.command_id != request.command_id and command.status != "rejected"
+                   for command in waiting.inbox.snapshot()):
+                raise ValueError("原检查点已接受另一份审批决定")
+            command = await waiting.inbox.accept(
+                command_id=request.command_id, kind="approval.result",
+                idempotency_key=f"approval:{request.command_id}", payload=payload,
+            )
+            return ToolApprovalCommandDTO(
+                command_id=command.command_id, checkpoint_id=request.checkpoint_id,
+                status=cast(LiteralCommandStatus, command.status),
+            )
 
     async def process(self, command: AgentControlCommand) -> dict[str, object]:
         job_id = command.payload.get("job_id")
@@ -150,12 +153,15 @@ class ToolApprovalService:
         request = ToolApprovalSubmitRequest.model_validate({key: value for key, value in command.payload.items() if key != "job_id"})
         resume = self._resume(waiting, request)
         try:
-            waiting.inbox.mark(command.command_id, "consumed")
+            await waiting.inbox.mark(command.command_id, "consumed")
         except Exception as error:
             # inbox 落盘失败必须交还原执行，不能留下无限等待或先执行工具。
-            waiting.response.set_exception(error)
+            if not waiting.response.done():
+                waiting.response.set_exception(error)
             raise
-        waiting.response.set_result(resume)
+        # 写盘等待期间原执行可以取消；已结束的等待者不能改写原提交或失败结果。
+        if not waiting.response.done():
+            waiting.response.set_result(resume)
         return {"status": "consumed"}
 
     @staticmethod

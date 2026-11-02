@@ -13,6 +13,7 @@ from typing import Protocol
 
 from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeHandle, LifetimeScope
+from app.core.shielded_cleanup import run_sync_shielded
 
 
 class ScopeCancelledError(RuntimeError):
@@ -332,9 +333,9 @@ class TurnExecutionScopeRegistry:
             await scope.close()
         # 清理失败或观察者取消时保留原登记；并发关闭的迟到等待者不得删除新一代。
         if inbox is not None and self._inboxes.get(turn_stream_id) is inbox:
-            # TODO(5.4)：控制文件的同步读写与删除仍需沿原 inbox 生命周期统一迁移。
-            inbox.discard_state()
-            del self._inboxes[turn_stream_id]
+            await inbox.close()
+            if self._inboxes.get(turn_stream_id) is inbox:
+                del self._inboxes[turn_stream_id]
         if scope is not None and self._scopes.get(turn_stream_id) is scope:
             del self._scopes[turn_stream_id]
 
@@ -379,10 +380,24 @@ class AgentControlInbox:
         self._next_seq = 0
         self._commands: dict[str, AgentControlCommand] = {}
         self._pending: asyncio.Queue[AgentControlCommand] = asyncio.Queue()
-        self.interrupt_lock = asyncio.Lock()
-        self._load()
+        self.control_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
+        self._closed = False
+        self._discarded = False
 
-    def accept(
+    @classmethod
+    async def open(
+        cls, turn_stream_id: str, *, session_id: str | None = None, state_path: Path | None = None,
+    ) -> AgentControlInbox:
+        inbox = cls(turn_stream_id, session_id=session_id, state_path=state_path)
+        await run_sync_shielded(inbox._load)
+        return inbox
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    async def accept(
         self,
         *,
         command_id: str,
@@ -390,58 +405,58 @@ class AgentControlInbox:
         idempotency_key: str,
         payload: dict[str, object] | None = None,
     ) -> AgentControlCommand:
-        if not command_id or not idempotency_key:
-            raise ValueError("控制命令必须包含 command_id 和 idempotency_key")
-        if kind not in self._KINDS:
-            raise ValueError(f"未知 Agent 控制命令: kind={kind}")
-        existing = next(
-            (
-                command
-                for command in self._commands.values()
-                if command.idempotency_key == idempotency_key
-            ),
-            None,
-        )
-        if existing is not None:
-            return existing
-        command = AgentControlCommand(
-            command_id=command_id,
-            kind=kind,
-            turn_stream_id=self.turn_stream_id,
-            idempotency_key=idempotency_key,
-            payload=dict(payload or {}),
-            control_seq=self._next_seq + 1,
-        )
-        # 控制日志落盘后才发布内存；写入失败仍可按原幂等键重试。
-        self._persist(command)
-        self._commands[command_id] = command
-        self._next_seq = command.control_seq
-        self._pending.put_nowait(command)
-        return command
+        async with self._write_lock:
+            self._require_open()
+            if not command_id or not idempotency_key:
+                raise ValueError("控制命令必须包含 command_id 和 idempotency_key")
+            if kind not in self._KINDS:
+                raise ValueError(f"未知 Agent 控制命令: kind={kind}")
+            existing = next(
+                (
+                    command
+                    for command in self._commands.values()
+                    if command.idempotency_key == idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+            command = AgentControlCommand(
+                command_id=command_id,
+                kind=kind,
+                turn_stream_id=self.turn_stream_id,
+                idempotency_key=idempotency_key,
+                payload=dict(payload or {}),
+                control_seq=self._next_seq + 1,
+            )
+            # 控制日志落盘后才发布内存；写入失败仍可按原幂等键重试。
+            await self._commit(command, enqueue=True)
+            return command
 
     async def next(self) -> AgentControlCommand:
         return await self._pending.get()
 
-    def mark(self, command_id: str, status: str) -> AgentControlCommand:
-        if status not in {"accepted", "consumed", "rejected"}:
-            raise ValueError(f"未知控制命令状态: status={status}")
-        command = self._commands.get(command_id)
-        if command is None:
-            raise KeyError(f"控制命令不存在: command_id={command_id}")
-        if command.status != "accepted" and command.status != status:
-            raise RuntimeError(f"控制命令终态不可改写: command_id={command_id} {command.status}->{status}")
-        updated = AgentControlCommand(
-            command_id=command.command_id,
-            kind=command.kind,
-            turn_stream_id=command.turn_stream_id,
-            idempotency_key=command.idempotency_key,
-            payload=dict(command.payload),
-            control_seq=command.control_seq,
-            status=status,
-        )
-        self._persist(updated)
-        self._commands[command_id] = updated
-        return updated
+    async def mark(self, command_id: str, status: str) -> AgentControlCommand:
+        async with self._write_lock:
+            self._require_open()
+            if status not in {"accepted", "consumed", "rejected"}:
+                raise ValueError(f"未知控制命令状态: status={status}")
+            command = self._commands.get(command_id)
+            if command is None:
+                raise KeyError(f"控制命令不存在: command_id={command_id}")
+            if command.status != "accepted" and command.status != status:
+                raise RuntimeError(f"控制命令终态不可改写: command_id={command_id} {command.status}->{status}")
+            updated = AgentControlCommand(
+                command_id=command.command_id,
+                kind=command.kind,
+                turn_stream_id=command.turn_stream_id,
+                idempotency_key=command.idempotency_key,
+                payload=dict(command.payload),
+                control_seq=command.control_seq,
+                status=status,
+            )
+            await self._commit(updated, enqueue=False)
+            return updated
 
     def get(self, command_id: str) -> AgentControlCommand | None:
         return self._commands.get(command_id)
@@ -449,7 +464,47 @@ class AgentControlInbox:
     def snapshot(self) -> list[AgentControlCommand]:
         return sorted(self._commands.values(), key=lambda command: command.control_seq)
 
-    def discard_state(self) -> None:
+    async def _commit(self, command: AgentControlCommand, *, enqueue: bool) -> None:
+        committed = False
+
+        def persist() -> None:
+            nonlocal committed
+            self._persist(command)
+            committed = True
+
+        try:
+            await run_sync_shielded(persist)
+        finally:
+            # 取消仍须发布已持久提交的原意图；队列只由事件循环修改。
+            if committed:
+                self._commands[command.command_id] = command
+                self._next_seq = max(self._next_seq, command.control_seq)
+                if enqueue:
+                    self._pending.put_nowait(command)
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError(f"Turn 控制 inbox 已关闭: turn_stream_id={self.turn_stream_id}")
+
+    async def close(self) -> None:
+        async with self.control_lock, self._write_lock:
+            self._closed = True
+            if self._discarded:
+                return
+            discarded = False
+
+            def discard() -> None:
+                nonlocal discarded
+                self._discard_state()
+                discarded = True
+
+            try:
+                await run_sync_shielded(discard)
+            finally:
+                if discarded:
+                    self._discarded = True
+
+    def _discard_state(self) -> None:
         """Turn 收敛后确定性删除控制状态文件；无持久状态时为空操作。"""
         if self._state_path is None:
             return
@@ -554,8 +609,13 @@ class TurnControlCoordinator:
         on_accepted: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         # 直接提交与 AgentLoop 消费同一条命令，必须串行核对最新状态。
-        async with self.inbox.interrupt_lock:
-            command = self.inbox.accept(
+        async with self.inbox.control_lock:
+            if self.inbox.is_closed:
+                return {
+                    "type": "interrupt.rejected", "status": "rejected",
+                    "command_id": command_id, "reason": "turn_not_active",
+                }
+            command = await self.inbox.accept(
                 command_id=command_id,
                 kind="interrupt",
                 idempotency_key=idempotency_key,
@@ -565,7 +625,7 @@ class TurnControlCoordinator:
                 return {"status": command.status, "command_id": command.command_id}
             stopped = self.scope.is_closed or self.scope.cancellation_signal.is_cancelled
             if stopped and await self.writer.get_event(command.command_id) is None:
-                self.inbox.mark(command.command_id, "rejected")
+                await self.inbox.mark(command.command_id, "rejected")
                 return {
                     "type": "interrupt.rejected", "status": "rejected",
                     "command_id": command.command_id, "reason": "turn_not_active",
@@ -579,11 +639,11 @@ class TurnControlCoordinator:
                 event_id=command.command_id,
             )
             if event["type"] == "interrupt.rejected":
-                self.inbox.mark(command.command_id, "rejected")
+                await self.inbox.mark(command.command_id, "rejected")
                 return {**event, "command_id": command.command_id}
             if stopped:
                 # 原中断已提交并完成取消，只补控制日志终态，不重放 owner 副作用。
-                self.inbox.mark(command.command_id, "consumed")
+                await self.inbox.mark(command.command_id, "consumed")
                 return {**event, "command_id": command.command_id}
             # 接受事实已提交；发布或 hook 失败也必须完成取消，并保留原始异常。
             try:
@@ -593,7 +653,7 @@ class TurnControlCoordinator:
                 try:
                     await self.scope.cancel(reason)
                 finally:
-                    self.inbox.mark(command.command_id, "consumed")
+                    await self.inbox.mark(command.command_id, "consumed")
             return {**event, "command_id": command.command_id}
 
 
@@ -623,7 +683,7 @@ class AgentLoopControlCoordinator:
         if current.status != "accepted":
             return {"status": current.status, "command_id": current.command_id}
         if self.scope.is_closed or self.scope.cancellation_signal.is_cancelled:
-            self.inbox.mark(command.command_id, "rejected")
+            await self.inbox.mark(command.command_id, "rejected")
             return {
                 "status": "rejected", "command_id": command.command_id,
                 "reason": "turn_not_active",
@@ -638,11 +698,11 @@ class AgentLoopControlCoordinator:
             if terminal is None:
                 raise RuntimeError("Agent 控制 handler 丢失了原命令")
             if terminal.status != status:
-                self.inbox.mark(command.command_id, str(status))
+                await self.inbox.mark(command.command_id, str(status))
             return {**result, "command_id": command.command_id}
         # 这些命令必须由明确的业务 handler 消费；没有 handler 时宁可拒绝，
         # 不能假设审批/资源结果已经安全生效。
-        self.inbox.mark(command.command_id, "rejected")
+        await self.inbox.mark(command.command_id, "rejected")
         return {
             "status": "rejected",
             "command_id": command.command_id,

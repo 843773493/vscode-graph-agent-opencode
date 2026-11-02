@@ -15,14 +15,14 @@ from app.core.turn_execution_scope import (
 
 
 @pytest.fixture
-def registered_turn(
+async def registered_turn(
     tmp_path: Path,
 ) -> tuple[TurnExecutionScopeRegistry, TurnExecutionScope, AgentControlInbox, Path]:
     registry = TurnExecutionScopeRegistry()
     scope = registry.create("stream_1")
     state_path = tmp_path / "control.json"
-    inbox = AgentControlInbox("stream_1", session_id="ses_1", state_path=state_path)
-    inbox.accept(command_id="cmd_1", kind="interrupt", idempotency_key="idem_1")
+    inbox = await AgentControlInbox.open("stream_1", session_id="ses_1", state_path=state_path)
+    await inbox.accept(command_id="cmd_1", kind="interrupt", idempotency_key="idem_1")
     registry.register_inbox("stream_1", inbox)
     return registry, scope, inbox, state_path
 
@@ -33,8 +33,8 @@ async def test_control_inbox_state_is_reaped_on_turn_close(tmp_path: Path) -> No
     state_path = tmp_path / "control.json"
     registry = TurnExecutionScopeRegistry()
     registry.create("stream_1")
-    inbox = AgentControlInbox("stream_1", session_id="ses_1", state_path=state_path)
-    inbox.accept(
+    inbox = await AgentControlInbox.open("stream_1", session_id="ses_1", state_path=state_path)
+    await inbox.accept(
         command_id="cmd_1",
         kind="interrupt",
         idempotency_key="idem_1",
@@ -198,8 +198,8 @@ async def test_late_close_waiter_cannot_remove_replacement_turn_or_control_file(
     async def close_and_replace() -> tuple[TurnExecutionScope, AgentControlInbox]:
         await registry.close("stream_1")
         replacement = registry.create("stream_1")
-        inbox = AgentControlInbox("stream_1", session_id="ses_1", state_path=state_path)
-        inbox.accept(command_id="new", kind="interrupt", idempotency_key="new")
+        inbox = await AgentControlInbox.open("stream_1", session_id="ses_1", state_path=state_path)
+        await inbox.accept(command_id="new", kind="interrupt", idempotency_key="new")
         registry.register_inbox("stream_1", inbox)
         return replacement, inbox
 
@@ -213,7 +213,7 @@ async def test_late_close_waiter_cannot_remove_replacement_turn_or_control_file(
     assert registry.get("stream_1") is replacement
     assert registry.get_inbox("stream_1") is replacement_inbox
     assert not replacement.is_closed
-    assert [command.command_id for command in AgentControlInbox(
+    assert [command.command_id for command in (await AgentControlInbox.open(
         "stream_1", session_id="ses_1", state_path=state_path,
-    ).snapshot()] == ["new"]
+    )).snapshot()] == ["new"]
     await registry.close("stream_1")

@@ -613,23 +613,22 @@ async def _wait_for_event_on_disk(
 async def _wait_for_worker_ready(
     path: Path,
     worker: asyncio.subprocess.Process,
+    *,
+    stderr_path: Path,
 ) -> None:
+    # TODO：定位 Responses 组合回归中首个 delta 前的就绪超时，保留原期限和 stderr。
     for _attempt in range(2000):
         if path.is_file():
             return
         if worker.returncode is not None:
-            stderr = ""
-            if worker.stderr is not None:
-                stderr = (await worker.stderr.read()).decode(
-                    "utf-8",
-                    errors="replace",
-                )
-            raise AssertionError(
-                "crash worker 提前退出: "
-                f"returncode={worker.returncode}, stderr={stderr}"
-            )
+            break
         await asyncio.sleep(0.01)
-    raise AssertionError(f"等待跨进程就绪标记超时: {path}")
+    reason = "等待跨进程就绪标记超时" if worker.returncode is None else "crash worker 提前退出"
+    stderr = stderr_path.read_text(encoding="utf-8", errors="replace")[-12000:]
+    raise AssertionError(
+        f"{reason}: ready_path={path}, returncode={worker.returncode}, "
+        f"stderr_path={stderr_path}, stderr={stderr}"
+    )
 
 
 def _event_payload(event: Mapping[str, object]) -> Mapping[str, object]:
@@ -772,14 +771,14 @@ async def test_handwritten_provider_interrupt_stops_pending_sse_read(
         await asyncio.wait_for(upstream.read_waiting.wait(), timeout=2)
         assert upstream.yielded_frame_count == target_index + 1
 
-        inbox = AgentControlInbox(writer.turn_stream_id)
+        inbox = await AgentControlInbox.open(writer.turn_stream_id)
         coordinator = AgentLoopControlCoordinator(
             scope=scope,
             inbox=inbox,
             writer=writer,
         )
         command_id = f"interrupt_{provider}_{stage}"
-        command = inbox.accept(
+        command = await inbox.accept(
             command_id=command_id,
             kind="interrupt",
             idempotency_key=command_id,
@@ -1068,13 +1067,13 @@ async def test_handwritten_provider_tool_execution_interrupt_projects_unknown_re
 
         tool_task = asyncio.create_task(wait_for_tool_cancellation())
         command_id = f"interrupt_{provider}_tool_execution"
-        inbox = AgentControlInbox(writer.turn_stream_id)
+        inbox = await AgentControlInbox.open(writer.turn_stream_id)
         coordinator = AgentLoopControlCoordinator(
             scope=scope,
             inbox=inbox,
             writer=writer,
         )
-        command = inbox.accept(
+        command = await inbox.accept(
             command_id=command_id,
             kind="interrupt",
             idempotency_key=command_id,
@@ -1237,13 +1236,13 @@ async def test_handwritten_provider_interrupt_closes_real_tcp_sse_connection(
         assert server.sent_frame_count == target_index + 1
         assert server.connection_count == 1
 
-        inbox = AgentControlInbox(writer.turn_stream_id)
+        inbox = await AgentControlInbox.open(writer.turn_stream_id)
         coordinator = AgentLoopControlCoordinator(
             scope=scope,
             inbox=inbox,
             writer=writer,
         )
-        command = inbox.accept(
+        command = await inbox.accept(
             command_id=f"tcp_interrupt_{provider}",
             kind="interrupt",
             idempotency_key=f"tcp_interrupt_{provider}",
@@ -1304,13 +1303,13 @@ async def test_interrupt_during_block_delta_persistence_closes_started_block(
     )
     await asyncio.wait_for(store.delta_commit_started.wait(), timeout=2)
 
-    inbox = AgentControlInbox(writer.turn_stream_id)
+    inbox = await AgentControlInbox.open(writer.turn_stream_id)
     coordinator = AgentLoopControlCoordinator(
         scope=scope,
         inbox=inbox,
         writer=writer,
     )
-    command = inbox.accept(
+    command = await inbox.accept(
         command_id="interrupt_block_delta_race",
         kind="interrupt",
         idempotency_key="interrupt_block_delta_race",
@@ -1387,13 +1386,13 @@ async def test_tool_interrupt_reaps_real_subprocess_and_projects_unknown_result(
         await asyncio.sleep(0.05)
         assert process.returncode is None
 
-        inbox = AgentControlInbox(writer.turn_stream_id)
+        inbox = await AgentControlInbox.open(writer.turn_stream_id)
         coordinator = AgentLoopControlCoordinator(
             scope=scope,
             inbox=inbox,
             writer=writer,
         )
-        command = inbox.accept(
+        command = await inbox.accept(
             command_id="interrupt_real_subprocess",
             kind="interrupt",
             idempotency_key="interrupt_real_subprocess",
@@ -1457,11 +1456,13 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
     server = _TCPGatedSSEServer(wire_frames, pause_after=target_index)
     await server.start()
     ready_path = OUTPUT_ROOT / f"crash-worker-{provider}.ready"
+    stderr_path = OUTPUT_ROOT / f"crash-worker-{provider}.stderr.log"
     turn_id = f"job_provider_crash_{provider}"
     worker: asyncio.subprocess.Process | None = None
     try:
-        worker = await asyncio.create_subprocess_exec(
-            *[
+        # stderr 持续写正式产物，避免管道未消费阻塞 worker，也保留就绪超时原因。
+        with stderr_path.open("wb") as stderr:
+            worker = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
                 "tests.support.model_stream.crash_worker",
@@ -1477,12 +1478,11 @@ async def test_provider_pending_read_crash_recovers_execution_lost(
                 turn_id,
                 "--ready-path",
                 str(ready_path),
-            ],
-            cwd=Path.cwd(),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await _wait_for_worker_ready(ready_path, worker)
+                cwd=Path.cwd(),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=stderr,
+            )
+        await _wait_for_worker_ready(ready_path, worker, stderr_path=stderr_path)
         await asyncio.wait_for(server.target_sent.wait(), timeout=2)
         assert worker.returncode is None
 

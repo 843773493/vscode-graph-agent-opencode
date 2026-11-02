@@ -540,7 +540,7 @@ class StepRunner:
                 else admission.execution_id
             )
             turn_scope_token = set_current_turn_execution_scope(turn_scope)
-            control_inbox = AgentControlInbox(
+            control_inbox = await AgentControlInbox.open(
                 turn_scope.turn_stream_id, session_id=session_id,
                 state_path=self.ports.control_inbox_state_path(session_id, turn_scope.turn_stream_id),
             )

@@ -101,15 +101,15 @@ async def test_late_cancel_hook_is_owned_and_drained_on_close(hook_kind: str) ->
     assert scope.lifetime_scope.snapshot().task_count == 0
 
 
-def test_control_inbox_is_idempotent_and_ordered() -> None:
-    inbox = AgentControlInbox("stream_1")
-    first = inbox.accept(
+async def test_control_inbox_is_idempotent_and_ordered() -> None:
+    inbox = await AgentControlInbox.open("stream_1")
+    first = await inbox.accept(
         command_id="cmd_1",
         kind="interrupt",
         idempotency_key="idem_1",
         payload={"reason": "user_requested"},
     )
-    duplicate = inbox.accept(
+    duplicate = await inbox.accept(
         command_id="cmd_2",
         kind="interrupt",
         idempotency_key="idem_1",
@@ -119,40 +119,40 @@ def test_control_inbox_is_idempotent_and_ordered() -> None:
     assert inbox.snapshot() == [first]
 
 
-def test_control_inbox_persists_intent_but_does_not_auto_replay_after_restart(
+async def test_control_inbox_persists_intent_but_does_not_auto_replay_after_restart(
     tmp_path: Path,
 ) -> None:
     state_path = tmp_path / "control.json"
-    inbox = AgentControlInbox("stream_1", state_path=state_path)
-    command = inbox.accept(
+    inbox = await AgentControlInbox.open("stream_1", state_path=state_path)
+    command = await inbox.accept(
         command_id="cmd_1",
         kind="resource.operation.result",
         idempotency_key="idem_1",
     )
 
-    restarted = AgentControlInbox("stream_1", state_path=state_path)
+    restarted = await AgentControlInbox.open("stream_1", state_path=state_path)
     assert restarted.snapshot() == [command]
     assert restarted._pending.empty()
-    restarted.mark("cmd_1", "rejected")
-    rejected = AgentControlInbox("stream_1", state_path=state_path).snapshot()
+    await restarted.mark("cmd_1", "rejected")
+    rejected = (await AgentControlInbox.open("stream_1", state_path=state_path)).snapshot()
     assert [item.status for item in rejected] == ["rejected"]
 
 
-def test_control_inbox_rejects_state_file_from_another_session(tmp_path: Path) -> None:
+async def test_control_inbox_rejects_state_file_from_another_session(tmp_path: Path) -> None:
     """控制状态文件自述的 session_id 与请求归属不符时 fail closed。"""
     state_path = tmp_path / "control.json"
-    AgentControlInbox(
+    await (await AgentControlInbox.open(
         "stream_1",
         session_id="ses_owner",
         state_path=state_path,
-    ).accept(
+    )).accept(
         command_id="cmd_1",
         kind="interrupt",
         idempotency_key="idem_1",
     )
 
     with pytest.raises(RuntimeError, match="session_id 不匹配"):
-        AgentControlInbox(
+        await AgentControlInbox.open(
             "stream_1",
             session_id="ses_other",
             state_path=state_path,
@@ -161,24 +161,24 @@ def test_control_inbox_rejects_state_file_from_another_session(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_control_inbox_consumed_state_is_explicit() -> None:
-    inbox = AgentControlInbox("stream_1")
-    inbox.accept(
+    inbox = await AgentControlInbox.open("stream_1")
+    await inbox.accept(
         command_id="cmd_1",
         kind="resume",
         idempotency_key="idem_1",
     )
     command = await asyncio.wait_for(inbox.next(), timeout=1)
-    consumed = inbox.mark(command.command_id, "consumed")
+    consumed = await inbox.mark(command.command_id, "consumed")
     assert consumed.status == "consumed"
 
 
 @pytest.mark.asyncio
 async def test_agent_loop_control_coordinator_rejects_late_non_interrupt_control() -> None:
     scope = TurnExecutionScope("stream_1")
-    inbox = AgentControlInbox("stream_1")
+    inbox = await AgentControlInbox.open("stream_1")
     writer = AsyncMock()
     coordinator = AgentLoopControlCoordinator(scope, inbox, writer)
-    command = inbox.accept(
+    command = await inbox.accept(
         command_id="cmd_steer",
         kind="steer",
         idempotency_key="idem_steer",
@@ -197,14 +197,14 @@ async def test_agent_loop_control_coordinator_rejects_late_non_interrupt_control
 @pytest.mark.asyncio
 async def test_agent_loop_control_coordinator_linearizes_interrupt_once() -> None:
     scope = TurnExecutionScope("stream_1")
-    inbox = AgentControlInbox("stream_1")
+    inbox = await AgentControlInbox.open("stream_1")
     writer = AsyncMock()
     writer.commit.return_value = {
         "type": "interrupt.requested",
         "event_seq": 1,
     }
     coordinator = AgentLoopControlCoordinator(scope, inbox, writer)
-    command = inbox.accept(
+    command = await inbox.accept(
         command_id="cmd_interrupt",
         kind="interrupt",
         idempotency_key="idem_interrupt",
@@ -223,7 +223,7 @@ async def test_agent_loop_control_coordinator_linearizes_interrupt_once() -> Non
 
 @pytest.mark.asyncio
 async def test_interrupt_prepares_owner_before_cancel_and_concurrent_loop_consumption() -> None:
-    scope, inbox = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1")
+    scope, inbox = TurnExecutionScope("stream_1"), await AgentControlInbox.open("stream_1")
     writer, accepted = AsyncMock(), []
     writing, release = asyncio.Event(), asyncio.Event()
 
@@ -259,7 +259,7 @@ async def test_interrupt_prepares_owner_before_cancel_and_concurrent_loop_consum
 
 @pytest.mark.asyncio
 async def test_rejected_interrupt_never_prepares_owner_or_cancels() -> None:
-    scope, inbox, writer = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1"), AsyncMock()
+    scope, inbox, writer = TurnExecutionScope("stream_1"), await AgentControlInbox.open("stream_1"), AsyncMock()
     accepted = []
     writer.commit.return_value = {"type": "interrupt.rejected"}
     await TurnControlCoordinator(scope, inbox, writer).submit_interrupt(
@@ -274,7 +274,7 @@ async def test_rejected_interrupt_never_prepares_owner_or_cancels() -> None:
 
 @pytest.mark.asyncio
 async def test_accepted_interrupt_cancels_and_settles_even_if_owner_publication_fails() -> None:
-    scope, inbox, writer = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1"), AsyncMock()
+    scope, inbox, writer = TurnExecutionScope("stream_1"), await AgentControlInbox.open("stream_1"), AsyncMock()
     writer.commit.return_value = {"type": "interrupt.requested"}
     failure = RuntimeError("reminder 写入失败")
 
@@ -297,7 +297,7 @@ async def test_accepted_interrupt_cancels_and_settles_even_if_owner_publication_
 
 @pytest.mark.asyncio
 async def test_stale_queued_interrupt_cannot_rewrite_consumed_status() -> None:
-    scope, inbox, writer = TurnExecutionScope("stream_1"), AgentControlInbox("stream_1"), AsyncMock()
+    scope, inbox, writer = TurnExecutionScope("stream_1"), await AgentControlInbox.open("stream_1"), AsyncMock()
     writer.commit.return_value = {"type": "interrupt.requested"}
     await TurnControlCoordinator(scope, inbox, writer).submit_interrupt(command_id="cmd", idempotency_key="cmd")
     queued = await inbox.next()
@@ -307,5 +307,5 @@ async def test_stale_queued_interrupt_cannot_rewrite_consumed_status() -> None:
     assert stored is not None and stored.status == "consumed"
     writer.commit.assert_awaited_once()
     with pytest.raises(RuntimeError, match="终态不可改写"):
-        inbox.mark("cmd", "rejected")
+        await inbox.mark("cmd", "rejected")
     await scope.close()

@@ -199,15 +199,15 @@ async def test_control_race_accepts_interrupt_once_and_rejects_steer(
     store, _, session_id, _ = runtime_context
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_control_race")
     scope = TurnExecutionScope(writer.turn_stream_id)
-    inbox = AgentControlInbox(writer.turn_stream_id)
+    inbox = await AgentControlInbox.open(writer.turn_stream_id)
     coordinator = AgentLoopControlCoordinator(scope, inbox, writer)
-    interrupt = inbox.accept(
+    interrupt = await inbox.accept(
         command_id="cmd_interrupt",
         kind="interrupt",
         idempotency_key="idem_interrupt",
         payload={"reason": "user_requested"},
     )
-    steer = inbox.accept(
+    steer = await inbox.accept(
         command_id="cmd_steer",
         kind="steer",
         idempotency_key="idem_steer",
@@ -240,7 +240,7 @@ async def test_failed_control_acceptance_retries_once_before_interrupting_real_s
     scope = TurnExecutionScope(writer.turn_stream_id)
     state_path = resource_state_path.with_name("control.json")
     state_path.unlink(missing_ok=True)
-    inbox = AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=state_path)
+    inbox = await AgentControlInbox.open(writer.turn_stream_id, session_id=session_id, state_path=state_path)
     coordinator = TurnControlCoordinator(scope, inbox, writer)
     cancellations: list[str] = []
     scope.register_abort(cancellations.append)
@@ -280,7 +280,7 @@ async def test_failed_control_acceptance_retries_once_before_interrupting_real_s
         assert queued.control_seq == 1
         assert inbox._pending.empty()
         assert await AgentLoopControlCoordinator(scope, inbox, writer).process(queued) == duplicate
-        restored = AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=state_path)
+        restored = await AgentControlInbox.open(writer.turn_stream_id, session_id=session_id, state_path=state_path)
         assert restored.snapshot() == inbox.snapshot()
         assert [command.status for command in restored.snapshot()] == ["consumed"]
         assert restored._pending.empty()
@@ -319,7 +319,7 @@ async def test_interrupt_settlement_retry_uses_committed_event_without_repeating
     scope = TurnExecutionScope(writer.turn_stream_id)
     path = resource_state_path.with_name("control-settlement.json")
     path.unlink(missing_ok=True)
-    inbox = AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=path)
+    inbox = await AgentControlInbox.open(writer.turn_stream_id, session_id=session_id, state_path=path)
     coordinator = TurnControlCoordinator(scope, inbox, writer)
     cancellations: list[str] = []
     callbacks: list[str] = []
@@ -346,7 +346,7 @@ async def test_interrupt_settlement_retry_uses_committed_event_without_repeating
         assert cancellations == ["user_requested"]
         assert callbacks == ["accepted"]
         assert [command.status for command in inbox.snapshot()] == ["accepted"]
-        assert AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=path).snapshot() == inbox.snapshot()
+        assert (await AgentControlInbox.open(writer.turn_stream_id, session_id=session_id, state_path=path)).snapshot() == inbox.snapshot()
         events = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
         committed, = [event for event in events if event["type"] == "interrupt.requested"]
         if close_scope:
@@ -375,7 +375,7 @@ async def test_interrupt_settlement_retry_uses_committed_event_without_repeating
         observed["payload"]["reason"] = "changed_copy"
         assert await writer.get_event("cmd_settle") == committed
         assert [command.status for command in inbox.snapshot()] == ["consumed"]
-        assert AgentControlInbox(writer.turn_stream_id, session_id=session_id, state_path=path).snapshot() == inbox.snapshot()
+        assert (await AgentControlInbox.open(writer.turn_stream_id, session_id=session_id, state_path=path)).snapshot() == inbox.snapshot()
         assert await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == events
         late = await coordinator.submit_interrupt(command_id="late", idempotency_key="late")
         assert late["type"] == "interrupt.rejected"
