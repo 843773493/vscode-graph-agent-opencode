@@ -56,6 +56,8 @@ browser/
 
 ## 可修改内容
 
+`test_browser_operation_admission.py`经真实Session／ASGI资源API和Node／Chromium／HTTP验证动作等待原锁时准入到期、peer独立操作、原文件／lease不变和同入口重试；另核原`run`经受控网络完成后保持页面身份及表单结果。suite `integration-browser-operation-admission`固定90秒／4GiB，沿原集成闸门；准入后越过30秒预算的行为由单测推进时钟核对，不代Gateway／Web、Windows或整个shutdown验收。
+
 - 浏览器资源、性能、帧治理和失败恢复集成场景。
 
 ## 不可修改内容

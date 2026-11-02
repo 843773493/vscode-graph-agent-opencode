@@ -130,6 +130,8 @@ Browser工具超时后的原AsyncFunction和页面reset现在由原`BrowserOpera
 
 管理命令的等待边界由原 `WorkspaceResourceOwner.command` 唯一协调：入口一次30秒覆盖冷恢复、Thread准入、资源锁、撤权与正式回执，阶段不重新计时。到期取消并排空本调用的协作式等待；尚未派发的管理动作不补造unknown或管理lease，已提交的冷恢复事实保留，派发未核实则沿原异常链保存unknown和本次精确占用。外部已经停止但回执丢失时，新管理请求只核实原终态，不重新停止；底层TimeoutError和调用方取消保持原归属。HTTP继续采用既有503及原始request_id合同，不增第二命令链或操作账本。该预算不包括整个模型工具operation，也不承诺同步阻塞可抢占或任意不合作执行可强制终止，后续5.2/5.4仍须验收。
 
+Browser 的 HTTP／Session 恢复动作沿 `BrowserResourceOwner.perform` 使用一次30秒准入预算，覆盖冷恢复、Thread准入、原资源锁、身份／版本／关联校验及原管理lease获取。成功准入后退出预算，原holder、锁和lease继续覆盖唯一`BrowserOperations.call_locked`动作及收尾；保留传输和`run.timeoutMs`的既有执行期限。到期只取消本次准入，不派发迟到动作、不补造unknown或第二份占用；已提交恢复事实保留，底层TimeoutError与原取消保持归属。原生写盘仍须原worker结算，此预算不证明整个动作或shutdown已有硬期限。
+
 ## Conflict Review
 
 本 change 是附件目录修订的后继 owner。以下旧 change 的既有验收只证明对应基线；目录主链已在本变更迁齐，尚未完成的 Web/平台和关闭期限验收继续保留。合入/归档顺序为先落现有基础 change，再应用本 change；不得在最后归档旧 change 时覆盖本修订。

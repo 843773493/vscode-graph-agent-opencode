@@ -446,6 +446,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Terminal或Browser的单次工具方法等待所选资源冷恢复或原资源锁
 - **THEN** 冷恢复、资源锁、校验及取得原lease共用入口取得的一次30秒协作式预算，阶段不重置；到期排空本次等待并明确报告operation、holder及资源身份。保留已提交恢复版本和已有精确占用，尚未派发不补造unknown或新lease，不释放其它调用的锁，解锁后不后台补做；底层TimeoutError与调用者取消保持归属，显式重试仍沿原owner。成功准入后原锁继续覆盖真实工具执行，准入预算退出，不将后续执行误判为准入超时；Thread准入、同步阻塞、不合作取消、整个工具operation及shutdown的完整期限仍属5.4后续验收
 
+#### Scenario: Browser 管理动作准入与执行期限分离
+
+- **WHEN** HTTP或Session恢复入口的Browser动作等待冷恢复、Thread准入、原资源锁或管理lease获取
+- **THEN** 这些准入阶段共用入口一次30秒协作式预算，阶段不重置；到期明确失败、排空本次等待且不迟到派发，不补造unknown或新占用，已提交恢复事实保持。身份、版本及关联在取得原锁后核验，成功准入后退出预算，原holder、锁和lease继续覆盖原动作及收尾；传输及`run.timeoutMs`的既有执行期限保持，不能将准入预算套到长脚本正文。底层TimeoutError及调用方取消保持原归属，无关资源可独立操作；原生写盘、不合作取消及整个operation／shutdown期限继续按5.4验收
+
 #### Scenario: 单次 operation 的部分占用无法释放
 
 - **WHEN** Terminal 或 Browser operation 关闭时，一个资源锁尚被占用或其原 lease 释放写盘失败

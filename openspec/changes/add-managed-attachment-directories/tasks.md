@@ -941,3 +941,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 删除先查ID再逐目录重查的读取，候选、单目录读取和deleting回执共用原locator校验。1／32个独立真实上传的候选查询从2／33次SELECT降为1次，不改变删除前事务复核、30天期限或原holder；没有schema变化或新SQLite语法依赖。未开始删除的目录与缺失目录均明确拒绝并回滚，缺失目录不再误抛AttributeError；重复tombstone收尾保留原时间。
 - 修改前新增4项中3项失败、正常对照通过；修复后相关单元回归113 passed/22.46秒。现有正式产品矩阵 `integration-attachment-retention-measurements` 2 passed/35.59秒，经真实消息执行／卸载形成1／32目录、冷owner恢复和到期GC，核真实原件、独立身份、原期限、tombstone、重复GC及canonical字节不变。全部测试有进程外期限／4GiB，集成沿原独占闸门；不承诺端到端速度比例。
 - Ruff、两个修改源码文件的真实Pyright零诊断、compileall和本change严格检查通过，消除catalog此前三项Optional诊断。准确命令、源码指纹、原始输出／退出码、查询量反例与作者审查见 `out/tests/temp/gc_catalog_snapshot_20261101/artifacts/verification.json`。本片不证明无原生身份的旧代接管、原生I/O抢占、整个operation/shutdown期限或Windows，5.2／5.4及21/23继续未完成；未改前端、公共fixture、长回归驱动或共享debug。
+
+### 2026-11-02 Browser 管理动作的单次准入预算（5.4 部分）
+
+- `BrowserResourceOwner.perform`在原入口一次取得30秒准入预算，覆盖冷恢复、Thread准入、原资源锁、身份／版本／关联核验和原管理lease获取；合并原私有分支，不保留第二入口。成功后退出预算，原holder、锁和lease继续覆盖同一回执链；HTTP／Session恢复消费者及`run.timeoutMs`的既有执行期限保持。到期不派发迟到动作，不补造unknown；已提交恢复、底层TimeoutError及原取消保持归属。原生worker须结算，仍不承诺整个动作可强制终止。
+- 两项新用例在旧产品复现无界等待；修复后相关主回归92 passed，类型标注补强后14项新增场景和15项原Browser owner回归合计29 passed（与前批有重叠）。覆盖恢复／准入／锁等待、取消、跨阶段同预算、冷恢复版本保留、无Thread的workspace入口、动作超过准入预算但保持原锁／lease，以及底层超时身份。正式Session／ASGI动作API及真实Node／Chromium／HTTP两场景分别通过，核503／request_id、peer操作、原记录／lease字节、页面身份、原脚本表单副作用及同入口重试。矩阵首跑为1 passed／1 failed，失败是新测试先持资源锁再等待同锁冷恢复造成的自锁；调整测试持锁时序后锁场景定向1 passed，不重复未变的run场景，不称首轮矩阵全绿。独立suite `integration-browser-operation-admission`固定90秒／4GiB，沿原集成闸门。
+- 修改的三份Python文件Ruff、真实Pyright零诊断；命令、指纹、原始输出／实际退出码及失败归因保留在 `out/tests/temp/browser_management_admission_20261102/artifacts/verification.json`。不代表真实等待30秒、Gateway／Web、Windows、无原生身份旧代接管或完整operation／shutdown门，5.2／5.4和21/23继续未完成；未改前端或公共fixture。
