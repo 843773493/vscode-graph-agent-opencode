@@ -996,3 +996,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 原账本的重复身份登记直接返回隔离副本，不刷新时间戳或逐项写盘；保留原范围、来源、核实状态和精确lease，新登记发布失败及kind冲突仍显式拒绝。实际状态发布、整批对账和取消结算沿原链。移除旧“refresh必写盘”故障分支，以冷／热四类状态下不写盘、不改变占用的反例取代；冷准备故障点明确改为实际整批reconcile发布，继续验证原取消、worker结算及迟到写盘cause。
 - 311项账本／并发／两类owner／冷恢复／MCP／Node Debug／创建排队单测，以及真实PTY／Chromium／HTTP冷恢复同步重试矩阵4项通过。Ruff、compileall通过；完整HEAD归档与当前同三文件Pyright均24项既有测试诊断，按文件、规则、消息、最窄语句AST及重数核对无新增，生产零诊断。全部测试带进程外期限／4GiB，集成沿原独占闸门。
 - 同负载每领域36个资源、每版3次：冷准备账本写盘37→1，完整owner恢复写盘73→37；账本写入字节Terminal 2344848→1197024、Browser 2381640→1215672。准备中位数分别151→32ms、156→28ms，完整恢复310→182ms、331→177ms。这是替身传输下的原owner子链路测量，不是实际网络或全执行时延承诺；剩余状态变化写盘未合并。参考Copilot原集合幂等登记，不省略本项目的持久占用核实。原件、准确命令、源码指纹、类型差分与范围见`out/tests/temp/resource_identity_reuse_20261102/artifacts/verification.json`。未运行Gateway/Web、Windows或进程硬重启；同步writer隔离、无身份接管、原生I/O抢占及整个operation/shutdown期限继续TODO，5.2／5.4和21/23保持未完成。
+
+### 2026-11-02 MCP 冷启动旧资格回收的 worker 与发布锁（5.4 部分）
+
+- 启动唯一调用方直接await原恢复入口。内存handle与asyncio定时器在原循环清理，冷账本资格扫描／释放由同一受保护worker结算，不持目录publication锁；复用原批量占用查询，保留实际invocation及其它领域占用。取消不继续连接准入，首次取消及迟到写盘cause保持；部分成功不回滚，同入口重试不重写已释放资格，不新增账本、writer、缓存或执行入口。
+- 最终93项账本／MCP生命周期／替换／目录／worker单测通过，含8个首项／次项写入、成功／失败、正常／重复取消场景。完整HEAD归档加全部候选补丁后，恢复事件循环写盘和持publication锁写盘的两项负向变异分别在原生发布屏障与目录读取处失败。现有真实Gateway／Backend／SDK HTTP审批恢复矩阵通过：由model_stream及正式消息／审批入口生成prepared与execution资格，强杀Backend后旧决定拒绝、原资格释放但原连接仍orphaned，新执行使用新连接且只派发被批准调用，历史请求hash保持。线程归属复核后最终版本补验1项通过（91.13s）；不把两次同场景相加。
+- 三份修改Python的Ruff、compileall及Pyright零诊断，严格规范检查通过；唯一owner调用只增await、其余生产方法和原测试函数AST不变。初轮新增测试误判未启动目录应返回空集合、使用派发前lease副本的失败原件保留。准确保护命令、源码指纹、退出码、变异与作者范围审查见`out/tests/temp/mcp_startup_recovery_20261102/artifacts/verification.json`。所有测试有进程外期限／4GiB，产品集成沿原独占闸门。本片不代Web、真实Provider、Windows、同实例残留close及运行中资格writer的锁隔离、原生I/O抢占或整个operation/shutdown期限；5.2／5.4和21/23保持未完成。

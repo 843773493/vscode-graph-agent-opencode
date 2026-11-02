@@ -310,7 +310,7 @@ class McpCatalogOwner:
     async def start(self) -> None:
         if self._started or self._session_scope is not None:
             raise RuntimeError("McpCatalogOwner 不允许重复启动")
-        self.execution_handles.reconcile_lost_handles()
+        await self.execution_handles.reconcile_lost_handles()
         # 只保留已核实关闭的旧连接；旧 socket 与未完成操作不能随新连接复活。
         await self._leases.reconcile({
             record.resource_id: "stopped"

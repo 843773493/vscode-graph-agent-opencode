@@ -363,6 +363,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** 启动、显式重连或配置替换已经建立真实 SDK session，但原资源登记或关闭状态仍在线程池排队或写盘
 - **THEN** 每个 Server 的原 session task 串行等待同一账本登记，再发布就绪；SDK 上下文仍由原 task 退出，终态写盘结算后该 task 才结束。worker 不持目录 publication 锁，原取消和重复取消不能遗弃登记或 SDK 清理；关闭完成后不得又迟到发布 running，关闭中的候选也不得发布就绪。写盘失败保留最后持久状态和原错误，运行中断线后的终态写入次错立即交原 owner 报告，start／close 继续返回失败，不新增账本或重放连接。模型封存资格、调用占用的其它同步访问、原生 I/O 抢占和整个 shutdown 期限仍按任务 5.4 的未完成边界验收
 
+#### Scenario: MCP 冷启动旧资格释放尚未结算
+
+- **WHEN** 原 Owner 启动核对失去内存 handle 的 MCP 资格，而唯一账本写入仍在线程池排队或执行
+- **THEN** 启动等待同一受保护 worker 完成 MCP 记录的一次占用扫描及资格释放，不在冷账本写入期间持目录 publication 锁或阻塞事件循环；SDK 新连接在其成功后才准入。只释放原 prepared／execution 资格，真实 invocation 和其它领域占用不据此结清；原内存 handle 与 asyncio 定时器仍由原循环清理。取消等待已开始的回收结算，重复取消保留首次消息与迟到存储 cause，随后不继续建立连接；写入失败不回滚此前提交，显式重试只处理仍未结算的原资格。同实例 close、其它同步资格写入及整个 operation／shutdown 期限仍按任务 5.4 验收
+
 #### Scenario: Canonical 结果提交与原占用确认尚未结算
 
 - **WHEN** canonical 追加或工具终态提交、提交后的 MCP 资格确认或后台消息消费确认仍在写盘，调用者收到取消

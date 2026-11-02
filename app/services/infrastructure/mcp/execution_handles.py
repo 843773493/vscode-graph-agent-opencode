@@ -13,6 +13,7 @@ from langchain_core.messages import ToolCall
 from langchain_core.tools import BaseTool
 
 from app.core.lifecycle import LifetimeScope
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import (
     provider_tool_call_id,
@@ -75,14 +76,30 @@ class McpExecutionHandles:
     def start(self) -> None:
         self._loop = asyncio.get_running_loop()
 
-    def reconcile_lost_handles(self) -> None:
+    async def reconcile_lost_handles(self) -> None:
         """重启失去原 handle，只撤销未来资格；实际外部操作继续独立对账。"""
-        with self._lock:
-            self.close()
-            for resource in self._leases.records_by_kind("mcp_connection"):
-                for lease in self._leases.leases_for_resource(resource.resource_id):
+        # 原内存清理可能撤销asyncio定时器，仍在调用方事件循环执行。
+        self.close()
+
+        def reconcile() -> None:
+            # 冷账本回收不持目录publication锁。
+            resource_ids = [resource.resource_id for resource in self._leases.records_by_kind("mcp_connection")]
+            for leases in self._leases.leases_for_resources(resource_ids).values():
+                for lease in leases:
                     if lease.lease_id.startswith(("mcp-prepared:v1:", "mcp-execution:v1:")):
                         self._leases.release(lease.lease_id)
+
+        # 取消等同一原writer结算，不能把已提交的资格释放当作外部操作停止。
+        # TODO(5.4)：同实例close仍可能持publication锁写盘，完整关闭期限须单独收口。
+        preparing = asyncio.create_task(run_sync_shielded(reconcile))
+        try:
+            await asyncio.shield(preparing)
+        except asyncio.CancelledError as original:
+            try:
+                await run_cleanup_shielded(lambda: preparing)
+            except BaseException as failure:
+                raise original from failure
+            raise
 
     def _register_qualification(
         self, key: ReservationKey, reservation: _Reservation, *, prefix: str,

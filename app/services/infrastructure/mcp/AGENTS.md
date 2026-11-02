@@ -21,6 +21,7 @@
 - 扩展 dispatch binding（ExtensionDispatchBindingRef）从已封存的目录 payload/members 派生；targets 是 members 的只读视图，不保存第二份权威映射。
 - MCP 可执行 typed member 的 revision 保存 Owner 实例与连接代际组成的精确 connection_ref；已验证定义在断开／SDK 再授权时由同一 publication 保留，以 `mcp-catalog-only:v1:disconnected|authorization_required` 表达目录专用成员，不进入执行 targets。定义正文与 readiness 同批冻结，目录语义 revision 独立保存，搜索 cursor 同时约束 readiness；不建立目录缓存或借其它会话重建当前事实。Agent 运行时只经 Owner 解析执行目标，不捕获初始 MCP 工具，也不按同名同 schema 迁投新连接。
 - `execution_handles.py` 属于原目录 Owner，只保留精确连接的短期对象引用；模型发送前经冻结 activation 登记有界资格，响应后保留实际输出的信封调用，既有 HITL edit 仍可选择原封存目录内的目标。期限由同一 MCP 配置族的 `supervision.sealed_call_timeout_seconds` 控制，不在重试中续期。
+- 启动直接等待原异步冷资格回收；内存handle和asyncio定时器仍在原循环清理，旧MCP账本扫描与资格释放进入同一受保护worker且不持目录publication锁。只撤销失去handle的prepared/execution资格，不结清真实invocation或其它领域占用。取消等原写入结算并保留首次取消与迟到cause；失败保留先前提交，同入口重试不重写已释放资格。同实例close及其它同步资格writer的锁隔离仍TODO。
 - MCP 执行目标沿 `execution_handles.execution_target` 核对原资格并占用唯一 ExternalResourceLeaseLedger；typed resource-use 来自受信调用上下文。SDK 确认结果后才释放，未知操作保留 reconcile_required，资格到期／连接关闭与远端副作用分别核实，禁止自动重放同一 operation。
 - 配置候选只在原 Owner 内准备，使用其每 Server 子 scope；配置 shadow 只回收未提交候选，不能在后续无关配置更新时关闭 active 连接。HTTP 先建后换；旧 stdio 停止前经原配置 recorder 写 journal，并同步撤销准入，等待原 task 关闭后再启动候选。无法保留旧运行态的失败沿原配置 owner 报 recovery_required。
 - `retirement.py` 是原 Owner 的退役排空组件，只保留 runtime 引用并读取原账本；正常替换保留已有资格，禁用／移除同时撤销更早代际的新准入。排空和关闭各自使用原封存资格秒数作为上限；关闭 socket 不结清结果未知操作。

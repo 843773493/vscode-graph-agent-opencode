@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from pathlib import Path
+from threading import Event, get_ident
 
 import pytest
 
@@ -16,6 +20,7 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
+    ResourceLease,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.extension_catalog import (
@@ -407,3 +412,152 @@ async def test_unexecuted_qualification_does_not_survive_connection_restart(leas
     retained = cold.get_lease(qualification.lease_id)
     assert retained is not None and retained.status == "released"
     assert not cold.leases_for_turn(resource_use.holder_id)
+
+
+@dataclass
+class StartupRecoveryWrite:
+    owner: McpCatalogOwner
+    ledger: ExternalResourceLeaseLedger
+    path: Path
+    factory: FakeMcpSessionFactory
+    leases: tuple[ResourceLease, ...]
+    blocked_index: int
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
+    release: Event = field(default_factory=Event)
+    threads: list[int] = field(default_factory=list)
+    failure: OSError | None = None
+
+
+@pytest.fixture
+async def startup_recovery_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+) -> AsyncIterator[StartupRecoveryWrite]:
+    path = tmp_path / "resources.json"
+    ledger = ExternalResourceLeaseLedger(state_path=path)
+    # 局部启动恢复合同直接经唯一账本准备占用，不冒称真实模型或进程崩溃验收。
+    for resource_id, kind in (("old-mcp", "mcp_connection"), ("peer-terminal", "terminal")):
+        ledger.register_external(resource_id=resource_id, kind=kind, lifetime_scope="workspace")
+    pending = tuple(ledger.acquire_operation(
+        resource_id=resource_id, turn_stream_id=lease_id, operation_id=lease_id, lease_id=lease_id,
+    ) for resource_id, lease_id in (("old-mcp", "mcp-prepared:v1:prepared"),
+                                   ("old-mcp", "mcp-execution:v1:execution"),
+                                   ("old-mcp", "mcp-invocation:v1:unknown"),
+                                   ("peer-terminal", "mcp-prepared:v1:peer")))
+    ledger.mark_operation_dispatched(pending[2].lease_id)
+    dispatched = ledger.get_lease(pending[2].lease_id)
+    assert dispatched is not None and dispatched.status == "dispatching"
+    pending = (pending[0], pending[1], dispatched, pending[3])
+    factory = FakeMcpSessionFactory({"mini": ["echo"]})
+    owner = McpCatalogOwner(
+        raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "fixture"}}},
+        workspace_root=tmp_path, event_service=EventChannelService(), leases=ledger, session_factory=factory,
+    )
+    case = StartupRecoveryWrite(owner, ledger, path, factory, pending, request.param)
+    publishing, loop = Path.replace, asyncio.get_running_loop()
+    close_handles, loop_thread = owner.execution_handles.close, get_ident()
+
+    def close_on_loop() -> None:
+        assert get_ident() == loop_thread, "asyncio定时器及内存handle清理应留在原事件循环"
+        close_handles()
+
+    def publish(source: Path, target: Path) -> Path:
+        if target == path:
+            candidate = json.loads(source.read_text())
+            if any(item["lease_id"] == pending[case.blocked_index].lease_id and item["status"] == "released"
+                   for item in candidate["leases"]) and not case.entered.is_set():
+                case.threads.append(get_ident())
+                loop.call_soon_threadsafe(case.entered.set)
+                if not case.release.wait(4):
+                    raise TimeoutError("测试未放行原MCP冷恢复写入，事件循环可能被阻塞")
+                if case.failure is not None:
+                    raise case.failure
+        return publishing(source, target)
+
+    with monkeypatch.context() as observe:
+        observe.setattr(Path, "replace", publish)
+        observe.setattr(owner.execution_handles, "close", close_on_loop)
+        try:
+            yield case
+        finally:
+            case.release.set()
+    await owner.shutdown()
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("write_fails", [False, True])
+@pytest.mark.parametrize("startup_recovery_write", [0, 1], indirect=True)
+async def test_cold_startup_settles_original_writer_before_admission_or_cancellation(
+    startup_recovery_write: StartupRecoveryWrite, cancel: bool, write_fails: bool,
+) -> None:
+    case = startup_recovery_write
+    original_bytes = case.path.read_bytes()
+    case.failure = OSError(28, "原MCP启动资格释放失败", str(case.path)) if write_fails else None
+    startup = asyncio.create_task(case.owner.start())
+    try:
+        await asyncio.wait_for(case.entered.wait(), 2)
+        before = case.path.read_bytes()
+        prior_commit = case.ledger.get_lease(case.leases[0].lease_id)
+        assert prior_commit is not None
+        if case.blocked_index == 0:
+            assert before == original_bytes and prior_commit == case.leases[0]
+        else:
+            assert prior_commit.status == "released" and before != original_bytes
+        assert case.threads and all(thread != get_ident() for thread in case.threads)
+        # 真实目录读取取得同一publication锁；慢账本写入不能占住它。
+        with pytest.raises(RuntimeError, match="尚未启动"):
+            case.owner.get_tool_ids()
+        assert not startup.done() and not case.owner.started and case.factory.sessions == {}
+        assert case.path.read_bytes() == before
+        if cancel:
+            startup.cancel("原MCP启动恢复取消")
+            for _ in range(5):
+                await asyncio.sleep(0)
+            startup.cancel("重复取消不得遗弃原回收")
+            await asyncio.sleep(0)
+            assert not startup.done() and case.path.read_bytes() == before and case.factory.sessions == {}
+        case.release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await startup
+            assert caught.value.args == ("原MCP启动恢复取消",)
+            failure = caught.value.__cause__
+        elif write_fails:
+            with pytest.raises(OSError) as caught_failure:
+                await startup
+            failure = caught_failure.value
+        else:
+            await startup
+            failure = None
+        if write_fails:
+            assert isinstance(failure, OSError) and failure.__cause__ is case.failure
+            assert case.path.read_bytes() == before
+        else:
+            assert failure is None
+        cold = ExternalResourceLeaseLedger(state_path=case.path)
+        for index, lease in enumerate(case.leases):
+            retained = cold.get_lease(lease.lease_id)
+            assert retained is not None
+            status = ("released" if index < case.blocked_index or index < 2 and not write_fails else lease.status)
+            if not cancel and not write_fails and index == 2:
+                status = "reconcile_required"
+            assert retained == replace(lease, status=status, updated_at=retained.updated_at)
+        if cancel or write_fails:
+            assert not case.owner.started and case.factory.sessions == {} and case.owner._session_scope is None
+            case.failure = None
+            await case.owner.start()
+        assert case.owner.started and case.owner.get_tool_ids() == {"mcp__mini__echo"}
+        assert len(case.factory.sessions) == 1
+        cold = ExternalResourceLeaseLedger(state_path=case.path)
+        for lease in case.leases[:2]:
+            retained = cold.get_lease(lease.lease_id)
+            assert retained is not None and retained.status == "released"
+        if case.blocked_index == 1:
+            assert cold.get_lease(case.leases[0].lease_id) == prior_commit, "显式重试不重写已成功的资格释放"
+        unknown = cold.get_lease(case.leases[2].lease_id)
+        assert unknown is not None and unknown.status == "reconcile_required"
+        assert cold.get_lease(case.leases[3].lease_id) == case.leases[3]
+        resource = cold.get("old-mcp")
+        assert resource is not None and resource.status == "orphaned"
+    finally:
+        case.release.set()
+        await asyncio.gather(startup, return_exceptions=True)

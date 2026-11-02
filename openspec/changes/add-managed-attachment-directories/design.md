@@ -651,3 +651,7 @@ StepRunner 将原 Turn 的 release_turn_leases 绑定为返回 None 的异步清
 ### 冷恢复复用已登记资源身份（5.4 性能部分）
 
 原外部资源账本的身份登记幂等：同 ID、同 kind 返回原持久记录的隔离副本，不刷新 `updated_at` 或重写整账本；登记不是续期或运行状态观察。已有保留范围、创建来源、核实状态和精确 operation lease 不因重复登记改变，仍由原 owner 的状态发布、对账和核实后结清推进；新身份持久成功后才发布，非法输入和类型冲突继续拒绝。冷恢复不增加缓存或批量登记入口，原准备锁、worker、整批对账、版本冻结和未知占用规则保持。参考 Copilot 的 `CopilotCLITerminalLinkProvider.registerTerminal` 以原集合幂等登记；它没有本项目的持久 lease 合同，不能据此省略状态核实。同步 writer 隔离、无身份旧代接管、原生 I/O 抢占和整个 operation／shutdown 期限继续 TODO，5.2／5.4 保持未完成。
+
+### MCP 冷资格回收的原账本与目录锁（5.4 部分收口）
+
+启动等待原 `reconcile_lost_handles` 异步入口，先在调用者循环清理原内存引用和定时器，再以一个既有受保护 worker 扫描 MCP 记录的未结算占用、释放失去 handle 的 prepared／execution 资格。沿原账本的批量查询避免逐连接重复扫描；该冷账本阶段不持目录 publication 锁，不新增缓存、恢复表、writer 或 SDK 执行入口。成功后才进入原状态对账与 SDK session 创建，原连接仍可为 orphaned，资格释放不表示远端操作停止。取消等原 worker 结算，首次消息和迟到错误保留；写入失败保留此前成功，显式重试沿原占用状态跳过已释放项。相同实例的残留 handle close 仍沿原循环和原锁，不能将本片解释为该同步写入、运行中其它资格入口或整个 shutdown 的期限已经解决；5.2／5.4 继续未完成。
