@@ -521,7 +521,6 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
     task = asyncio.create_task(run_lifespan())
     try:
         await _wait_for_lifespan_phase(task, lifespan_ready)
-        # TODO：继续测量 SDK／assembly 冷准备；已暴露内层模型进入的 5 秒超时，保留原期限。
         await _wait_for_lifespan_phase(task, ready)
         close_requested.set()
         await asyncio.wait_for(goal_entered.wait(), 5)

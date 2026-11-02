@@ -1,5 +1,7 @@
 # 目录用途
 
+`unit-resource-activation-bodies` 定向验证资源正文批量冻结、manifest 原子登记、提交结果未知时正文保留、冷读取／保留依赖及 MCP member 的 fork／恢复；沿正式 fork watchdog，固定90秒／4GiB。它不代表真实 Agent／Gateway／Web 或完整生命周期验收。
+
 `unit-rollout-locating` 定向验证 rollout 连接、短操作内节点解析复用、catalog/thread 归属和 fork 来源隔离；包含需正式 fork watchdog 的来源扩展回归，固定90秒／4GiB。它不代表消息入口、Web 或完整 fork 验收。
 
 `integration-mounted-file-targets` 经真实 Gateway／共享 Backend 双挂载，验证相对／绝对／URI 输入的并发读写、非激活工作区与显式 URI 归属，以及未注册目录的唯一原生绑定和编辑。固定180秒／4GiB与原集成独占闸门，不代表Web、Windows、跨机器联邦或完整多工作区验收。

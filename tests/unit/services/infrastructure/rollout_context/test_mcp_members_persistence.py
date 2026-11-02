@@ -74,7 +74,7 @@ async def test_gc_removes_unreferenced_historical_detail_from_target_node_only(
         detail=body,
         retention_days=1,
     )
-    saver._storage.assemblies.register_context_plan_detail(record)
+    saver._storage.assemblies.register_context_plan_details((record,))
     source_node = storage._path_resolver.resolve_thread_node(
         source_session_id, source_thread_id
     )

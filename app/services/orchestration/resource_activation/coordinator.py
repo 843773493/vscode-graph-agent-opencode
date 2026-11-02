@@ -22,7 +22,7 @@ from typing import Final
 
 from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.execution_admission import ExecutionAdmission
-from app.domain.itemized.hashing import canonical_json_bytes_and_hash, sha256_jcs
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
@@ -308,30 +308,27 @@ class ResourceActivationCoordinator:
             model_call_id=model_call_id,
         )
         new_bindings: list[ResourceProvenanceRef] = list(reuse_parent_bindings)
-        ordinal = len(reuse_parent_bindings)
-        for item in sorted(snapshots, key=lambda entry: entry.resource_id):
-            boundary = policy.effective_boundary(item.resource_kind)
-            if snapshot_kind == "execution" and boundary != "turn":
-                continue
-            if snapshot_kind == "model_call" and boundary != "model_call":
-                continue
+        boundary = "turn" if snapshot_kind == "execution" else "model_call"
+        selected = tuple(
+            item for item in sorted(snapshots, key=lambda entry: entry.resource_id)
+            if policy.effective_boundary(item.resource_kind) == boundary
+        )
+        for item in selected:
             if not item.available:
                 raise ResourceActivationError(
                     "resource-unavailable",
                     f"required resource 不可用: {item.resource_id}",
                 )
-            detail_ref = self._body_store.write_resource_body(
-                owner_session_id=owner_session_id,
-                owner_thread_id=owner_thread_id,
-                activation_snapshot_id=snapshot_id,
-                resource_id=item.resource_id,
-                activation_ordinal=ordinal,
-                payload=item.payload,
-                checkpoint_ns=checkpoint_ns,
-            )
-            canonical_payload_bytes, payload_hash = canonical_json_bytes_and_hash(
-                item.payload
-            )
+        bodies = self._body_store.write_resource_bodies(
+            owner_session_id=owner_session_id,
+            owner_thread_id=owner_thread_id,
+            activation_snapshot_id=snapshot_id,
+            payloads=tuple(item.payload for item in selected),
+            checkpoint_ns=checkpoint_ns,
+        )
+        for ordinal, (item, (detail_ref, payload_hash, content_length)) in enumerate(
+            zip(selected, bodies, strict=True), start=len(reuse_parent_bindings),
+        ):
             lineage = SourceLineageRef(
                 lineage_id=f"lineage:{item.resource_id}",
                 derivation_version="resource-derivation:v1",
@@ -346,7 +343,7 @@ class ResourceActivationCoordinator:
                     facet=item.facet,
                     revision=item.revision,
                     availability="available",
-                    content_length=len(canonical_payload_bytes),
+                    content_length=content_length,
                     content_hash=payload_hash,
                     source_lineage_ref=lineage,
                     source_lineage_digest=lineage.digest,
@@ -357,7 +354,6 @@ class ResourceActivationCoordinator:
                     members=item.members,
                 )
             )
-            ordinal += 1
         return ResourceActivationSnapshotRef(
             activation_snapshot_id=snapshot_id,
             snapshot_kind=snapshot_kind,

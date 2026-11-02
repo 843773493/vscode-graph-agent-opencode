@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
@@ -142,15 +143,13 @@ def test_payload_is_required_protected_and_uses_canonical_hash_and_length(
     storage, body_store, thread_id = activation_body_store
     payload = {"name": "demo", "content": ["first", "second"]}
 
-    detail_ref = body_store.write_resource_body(
+    detail_ref = body_store.write_resource_bodies(
         owner_session_id=SESSION_ID,
         owner_thread_id=thread_id,
         activation_snapshot_id=SNAPSHOT_ID,
-        checkpoint_ns="",
-        payload=payload,
-        resource_id="skill:body-owner",
-        activation_ordinal=0,
-    )
+        checkpoint_ns='',
+        payloads=(payload,),
+    )[0][0]
 
     record = detail_record_from_mapping(
         storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
@@ -184,15 +183,13 @@ def test_payload_read_rejects_resource_ordinal_and_hash_conflicts(
 ) -> None:
     storage, body_store, thread_id = activation_body_store
     payload = {"name": "demo"}
-    detail_ref = body_store.write_resource_body(
+    detail_ref = body_store.write_resource_bodies(
         owner_session_id=SESSION_ID,
         owner_thread_id=thread_id,
         activation_snapshot_id=SNAPSHOT_ID,
-        checkpoint_ns="",
-        payload=payload,
-        resource_id="skill:body-owner",
-        activation_ordinal=0,
-    )
+        checkpoint_ns='',
+        payloads=(payload,),
+    )[0][0]
     record = detail_record_from_mapping(
         storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     )
@@ -216,15 +213,13 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
 ) -> None:
     storage, body_store, thread_id = activation_body_store
     payload = {"name": "demo"}
-    detail_ref = body_store.write_resource_body(
+    detail_ref = body_store.write_resource_bodies(
         owner_session_id=SESSION_ID,
         owner_thread_id=thread_id,
         activation_snapshot_id=SNAPSHOT_ID,
-        checkpoint_ns="",
-        payload=payload,
-        resource_id="skill:body-owner",
-        activation_ordinal=0,
-    )
+        checkpoint_ns='',
+        payloads=(payload,),
+    )[0][0]
     record = detail_record_from_mapping(
         storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=detail_ref)
     )
@@ -268,11 +263,13 @@ def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspac
     storage.storage.initialize(SESSION_ID, validate_jsonl_items=False)
     body_store = ResourceActivationBodyStore(storage, ContextPlanDetailStore(sessions_root))
     payload = {"secret": "exact activation body"}
-    ref = body_store.write_resource_body(
-        owner_session_id=SESSION_ID, owner_thread_id=bundle.main_thread_id,
-        activation_snapshot_id=SNAPSHOT_ID, checkpoint_ns="",
-        payload=payload, resource_id="skill:body-owner", activation_ordinal=0,
-    )
+    ref = body_store.write_resource_bodies(
+        owner_session_id=SESSION_ID,
+        owner_thread_id=bundle.main_thread_id,
+        activation_snapshot_id=SNAPSHOT_ID,
+        checkpoint_ns='',
+        payloads=(payload,),
+    )[0][0]
     record = detail_record_from_mapping(storage.assemblies.get_context_plan_detail(
         SESSION_ID, bundle.main_thread_id, detail_ref=ref,
     ))
@@ -285,15 +282,16 @@ def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspac
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload_count", [1, 8])
 async def test_coordinator_freezes_through_protected_body_port(
-    activation_body_store,
+    activation_body_store, payload_count: int, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _storage, body_store, thread_id = activation_body_store
-    payload = {"content": "published immutable skill"}
+    storage, body_store, thread_id = activation_body_store
+    payloads = [{"content": f"published immutable skill {index}"} for index in range(payload_count)]
     registry = ResourceRegistry()
-    registry.publish(
-        ResourceSnapshot(
-            resource_id="skill:body-owner",
+    for index, payload in enumerate(payloads):
+        registry.publish(ResourceSnapshot(
+            resource_id=f"skill:body-owner-{index}",
             resource_kind="skills",
             facet="activation",
             display_uri="boxteam://workspace/test/resources/skills/body-owner/SKILL.md",
@@ -301,9 +299,23 @@ async def test_coordinator_freezes_through_protected_body_port(
             payload=payload,
             source_lineage=(("source-1", "source-revision-1"),),
             generation=1,
-        )
-    )
+        ))
     saved: list[ResourceActivationSnapshotRef] = []
+    initialized = []
+    statements: list[str] = []
+    initialize, connect = storage.storage.initialize, storage.storage._connect
+
+    def track_initialize(*args, **kwargs):
+        initialized.append((args, kwargs))
+        return initialize(*args, **kwargs)
+
+    def track_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(storage.storage, "initialize", track_initialize)
+    monkeypatch.setattr(storage.storage, "_connect", track_connect)
 
     class SnapshotSaver:
         context_owner_namespace = staticmethod(ContextOwnerMixin.context_owner_namespace)
@@ -343,12 +355,93 @@ async def test_coordinator_freezes_through_protected_body_port(
         policy=policy,
     )
     assert saved == [frozen]
-    assert frozen.bindings[0].content_hash == sha256_jcs(payload)
-    assert (
-        body_store.read_payload(
-            snapshot=frozen, binding=frozen.bindings[0], storage_owner=(SESSION_ID, thread_id),
+    assert len(initialized) == 1
+    assert statements.count("BEGIN IMMEDIATE") == 1
+    assert [binding.activation_ordinal for binding in frozen.bindings] == list(range(payload_count))
+    assert [binding.resource_id for binding in frozen.bindings] == [
+        f"skill:body-owner-{index}" for index in range(payload_count)
+    ]
+    for binding, payload in zip(frozen.bindings, payloads, strict=True):
+        assert binding.content_hash == sha256_jcs(payload)
+        assert binding.content_length == len(canonical_json_bytes(payload))
+        assert body_store.read_payload(
+            snapshot=frozen, binding=binding, storage_owner=(SESSION_ID, thread_id),
         ) == payload
+
+
+@pytest.mark.parametrize("failure_stage", ["publish", "register", "after_commit"])
+def test_batch_failure_keeps_existing_data_and_preserves_bodies_after_registration_starts(
+    activation_body_store, monkeypatch: pytest.MonkeyPatch, failure_stage: str,
+) -> None:
+    storage, body_store, thread_id = activation_body_store
+    published = []
+    detail_store = body_store._detail_store
+    publish = detail_store.publish
+    register = storage.assemblies._register_context_plan_detail
+    register_batch = storage.assemblies.register_context_plan_details
+    registered = []
+    original = detail_store.write(
+        session_id=SESSION_ID, thread_id=thread_id, assembly_id=SNAPSHOT_ID,
+        detail_kind=PAYLOAD_DETAIL_KIND, retention_class=PAYLOAD_RETENTION_CLASS,
+        visibility="internal", detail={"original": "keep"}, required=True, sensitive=True,
     )
+    storage.assemblies.register_context_plan_details((original,))
+    original_path = detail_store._files.path(original.detail_ref)
+    assert original_path is not None
+    original_bytes = original_path.read_bytes()
+    index_path = storage.storage.index_path(SESSION_ID, thread_id=thread_id)
+    with sqlite3.connect(index_path) as connection:
+        original_manifests = connection.execute(
+            "SELECT * FROM context_plan_details ORDER BY detail_ref"
+        ).fetchall()
+
+    def track_publish(prepared):
+        if failure_stage == "publish" and published:
+            raise RuntimeError("batch publish failed")
+        paths = publish(prepared)
+        published.extend(paths)
+        return paths
+
+    def track_register(connection, record, **owner):
+        if failure_stage == "register" and registered:
+            raise RuntimeError("batch register failed")
+        registered.append(record)
+        return register(connection, record, **owner)
+
+    def fail_after_commit(records):
+        register_batch(records)
+        raise RuntimeError("batch after_commit failed")
+
+    monkeypatch.setattr(detail_store, "publish", track_publish)
+    monkeypatch.setattr(storage.assemblies, "_register_context_plan_detail", track_register)
+    if failure_stage == "after_commit":
+        monkeypatch.setattr(storage.assemblies, "register_context_plan_details", fail_after_commit)
+    with pytest.raises(RuntimeError, match=f"batch {failure_stage} failed"):
+        body_store.write_resource_bodies(
+            owner_session_id=SESSION_ID, owner_thread_id=thread_id,
+            activation_snapshot_id=SNAPSHOT_ID, checkpoint_ns="",
+            payloads=({"new": 1}, {"new": 2}),
+        )
+    assert len(published) == (1 if failure_stage == "publish" else 2)
+    assert all(path.exists() == (failure_stage != "publish") for path in published)
+    assert original_path.read_bytes() == original_bytes
+    with sqlite3.connect(index_path) as connection:
+        current = connection.execute(
+            "SELECT * FROM context_plan_details ORDER BY detail_ref"
+        ).fetchall()
+    if failure_stage == "after_commit":
+        assert len(current) == len(original_manifests) + 2
+        assert all(row in current for row in original_manifests)
+        for record, payload in zip(registered, ({"new": 1}, {"new": 2}), strict=True):
+            manifest = detail_record_from_mapping(storage.assemblies.get_context_plan_detail(
+                SESSION_ID, thread_id, detail_ref=record.detail_ref,
+            ))
+            assert manifest == record
+            assert detail_store.read(
+                session_id=SESSION_ID, thread_id=thread_id, record=record, include_sensitive=True,
+            )["detail"] == payload
+    else:
+        assert current == original_manifests
 
 
 def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
@@ -367,11 +460,13 @@ def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
     )
     payload = {"members": [member.to_dict()], "guidance": "catalog guidance"}
     source_id = "execution:members-source"
-    detail_ref = body_store.write_resource_body(
-        owner_session_id=SESSION_ID, owner_thread_id=thread_id,
-        activation_snapshot_id=source_id, resource_id="skill:body-owner",
-        activation_ordinal=0, payload=payload, checkpoint_ns="",
-    )
+    detail_ref = body_store.write_resource_bodies(
+        owner_session_id=SESSION_ID,
+        owner_thread_id=thread_id,
+        activation_snapshot_id=source_id,
+        payloads=(payload,),
+        checkpoint_ns='',
+    )[0][0]
     base, binding = _snapshot_with_detail(detail_ref, payload, thread_id)
     binding = replace(binding, members=(member,))
     first = replace(

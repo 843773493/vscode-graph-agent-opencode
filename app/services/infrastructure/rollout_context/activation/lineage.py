@@ -103,7 +103,7 @@ class ActivationLineageBodyStore:
             sensitive=True,
             checkpoint_ns=checkpoint_ns,
         )
-        self._storage.assemblies.register_context_plan_detail(record)
+        self._storage.assemblies.register_context_plan_details((record,))
         return record.detail_ref
 
     def read_lineage_manifest(

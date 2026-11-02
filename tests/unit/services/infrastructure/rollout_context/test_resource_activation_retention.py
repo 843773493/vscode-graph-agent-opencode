@@ -94,15 +94,13 @@ def _activation_snapshot(
 ) -> ResourceActivationSnapshotRef:
     """写入逐资源正文 detail 并返回引用它的 turn snapshot。"""
     snapshot_id = f"execution:{binding.session_id}:{binding.thread_id}:{execution_id}"
-    body_ref = ResourceActivationBodyStore(saver._storage, saver._detail_store).write_resource_body(
+    body_ref = ResourceActivationBodyStore(saver._storage, saver._detail_store).write_resource_bodies(
         owner_session_id=binding.session_id,
         owner_thread_id=binding.thread_id,
         activation_snapshot_id=snapshot_id,
-        resource_id="skill:demo",
-        activation_ordinal=0,
-        payload={"payload": "resource-body"},
-        checkpoint_ns="",
-    )
+        payloads=({'payload': 'resource-body'},),
+        checkpoint_ns='',
+    )[0][0]
     body_record = detail_record_from_mapping(
         saver._storage.assemblies.get_context_plan_detail(
             binding.session_id, binding.thread_id, detail_ref=body_ref,

@@ -310,3 +310,10 @@
 - Job后低开销线程／协程时间线确认冷编译约1.49秒、到模型准备另约2.05秒、assembly准备约1.78秒；原件在 `out/tests/temp/goal_execution_timeline_20261102/artifacts/`。前5秒观测1129次SQLite连接，其中793次Session控制库打开；这不是单一hash函数耗时。参考Copilot `platform/chronicle/node/sessionStore.ts` 的owner内复用原则，初始化与打开快照的同步操作各复用一次已验证thread节点，退出即丢弃，不跨操作缓存catalog、控制行或连接。初始化的复用作用域在writer锁取得后建立；快照的作用域在返回前退出。冻结fork来源与prepared capability仍优先，SQL owner／完整性及文件检查保持。
 - 新反例在旧实现中两个场景均因3次解析失败，当前各为1次；覆盖下一操作重新读归属并拒绝control main篡改、fork私有来源优先且不扩大授权。正式 `unit-rollout-locating` 矩阵90秒／4GiB运行223 passed／19.55秒，含正式watchdog下的来源扩展fork；真实消息／Job生成历史与seal事务14 passed／50.61秒，共237项不同场景通过。首次过宽单测命令在90秒保护下退出124，不计通过；其中直接pytest启动fork watchdog的setup拒绝已由正式矩阵补验。Ruff、compileall通过；Pyright完整HEAD archive基线14条、当前6条，按文件／规则／完整消息／最窄语句AST／重数无新增，基线副本已删除。
 - 同5秒观测控制库打开793→534、全部连接1129→879，但两次达到的执行阶段不同，不冒称等工作负载或稳定耗时收益。正常Goal首场仍在原model进入5秒失败，1 failed／25.72秒，计量场景也仍失败，不延长期限、不关闭8.2或原冷准备TODO。准确命令、源码前后指纹、原始输出、真实退出码、计量与类型差集见 `out/tests/temp/rollout_resolution_scope_20261102/artifacts/verification.json`。本片无前端改动、新持久化定位权威或独立非作者审查。
+
+### 2026-11-02 资源正文批量冻结与 Goal 冷准备验收
+
+- 参考 Copilot `platform/chronicle/node/sessionStore.ts` 的 owner 生命周期内复用初始化边界，将一次 activation 的正文 manifest 合并为同 owner 的一个 SQLite 事务；原单条外部登记端口及全部调用方已迁齐并删除。正文 store 返回同次冻结生成的引用、hash 与长度，Coordinator 不重复编码自身刚写入的 payload；冷读取、封存和恢复校验保留。
+- 相同8资源负载在完整HEAD归档和当前源码各测3次：rollout初始化8→1、SQLite连接64→29、payload编码24→8，冻结耗时中位数约210→110ms。仅为该冻结子链路的实测，不外推全执行耗时或固定比例。SQL登记前的正文发布失败清理本批新文件；开始登记后保留正文，避免提交后关闭报错时删除已被引用的数据，失败／提交后报错均有定向断言。
+- 正式`unit-resource-activation-bodies`矩阵82 passed，正文／seal／GC回归160 passed，真实HTTP媒体工具循环同步／异步4 passed；原Goal关闭四终态4 passed／54.16秒，原模型进入5秒和阶段8秒期限未放宽，对应冷准备TODO已移除。合计250个不同场景通过，不把重复首场和中断组合算通过。
+- Ruff、compileall通过；完整旧源码且显式同一解释器的Pyright118→110，按文件／规则／完整消息／最窄源码AST／重数无新增，既存诊断仍保留。369项扩大组合在150秒保护下中止，不能算全绿；其首个跨owner目录快照失败在完整旧源码同样复现：只读SQLite定位产生WAL／SHM边文件，后续单独处理测试观察边界。准确命令、源码指纹、原始输出、真实退出码及测量见`out/tests/temp/activation_batch_20261102/artifacts/verification.json`。8.2完整验收仍未关闭，无前端实现或独立非作者审查。

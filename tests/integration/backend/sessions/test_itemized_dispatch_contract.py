@@ -1066,7 +1066,7 @@ def test_foreign_session_plan_is_rejected_without_io(
                 (
                     "get_context_assembly",
                     "get_context_plan_detail",
-                    "register_context_plan_detail",
+                    "register_context_plan_details",
                 ),
             ),
             (saver._storage.storage, ("read_items",)),

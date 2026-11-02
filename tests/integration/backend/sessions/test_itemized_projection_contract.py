@@ -1083,7 +1083,7 @@ def test_gc_tombstone_survives_file_delete_failure_and_restart(
         source_revision="orphan-v1",
         retention_days=0,
     )
-    saver._storage.assemblies.register_context_plan_detail(record)
+    saver._storage.assemblies.register_context_plan_details((record,))
     target = session / record.relative_path
     original_unlink = Path.unlink
 

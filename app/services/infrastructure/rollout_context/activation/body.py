@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.hashing import canonical_json_bytes_and_hash
@@ -51,50 +53,39 @@ class ResourceActivationBodyStore:
         self._storage = storage
         self._detail_store = detail_store
 
-    def write_resource_body(
+    def write_resource_bodies(
         self,
         *,
         owner_session_id: str,
         owner_thread_id: str,
         activation_snapshot_id: str,
-        resource_id: str,
-        activation_ordinal: int,
-        payload: object,
+        payloads: Sequence[object],
         checkpoint_ns: str,
-    ) -> DetailRef:
-        """写入必需的 精确正文，返回供 activation catalog 登记的真实 typed ref。"""
-
-        canonical_payload_bytes, content_hash = canonical_json_bytes_and_hash(payload)
-        content_length = len(canonical_payload_bytes)
-        record = self._detail_store.write(
-            session_id=owner_session_id,
-            thread_id=owner_thread_id,
-            assembly_id=activation_snapshot_id,
-            detail_kind=PAYLOAD_DETAIL_KIND,
-            retention_class=PAYLOAD_RETENTION_CLASS,
-            visibility="internal",
-            detail=payload,
-            required=True,
-            sensitive=True,
-            checkpoint_ns=checkpoint_ns,
-        )
-        record.detail_ref.require_owner(
-            owner_session_id, owner_thread_id, activation_snapshot_id
-        )
-        if (
-            record.detail_kind != PAYLOAD_DETAIL_KIND
-            or record.retention_class != PAYLOAD_RETENTION_CLASS
-            or record.required is not True
-            or record.sensitive is not True
-            or record.source_revision != content_hash
-            or record.length != content_length
-        ):
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
-                "activation payload detail manifest 与 canonical 正文不一致",
-            )
-        self._storage.assemblies.register_context_plan_detail(record)
-        return record.detail_ref
+    ) -> tuple[tuple[DetailRef, str, int], ...]:
+        """批量发布冻结正文；同次构造的 hash/长度直接交给 activation binding。"""
+        records: list[DetailRecord] = []
+        with ExitStack() as rollback:
+            for payload in payloads:
+                prepared = self._detail_store.prepare(
+                    session_id=owner_session_id,
+                    thread_id=owner_thread_id,
+                    assembly_id=activation_snapshot_id,
+                    detail_kind=PAYLOAD_DETAIL_KIND,
+                    retention_class=PAYLOAD_RETENTION_CLASS,
+                    visibility="internal",
+                    detail=payload,
+                    required=True,
+                    sensitive=True,
+                    checkpoint_ns=checkpoint_ns,
+                )
+                paths = self._detail_store.publish(prepared)
+                rollback.callback(self._detail_store.discard_published, paths)
+                records.append(prepared.record)
+            # SQL 提交后的关闭也可能报错；进入登记后保留正文，不能因
+            # 提交结果未知而删除已经被 catalog 引用的文件。
+            rollback.pop_all()
+            self._storage.assemblies.register_context_plan_details(records)
+        return tuple((record.detail_ref, record.source_revision, record.length) for record in records)
 
     def read_payload(
         self,

@@ -323,7 +323,7 @@ def _candidate(
         detail=contributions[0].body,
         source_revision=contributions[0].source_revision,
     )
-    case.saver._storage.assemblies.register_context_plan_detail(detail)
+    case.saver._storage.assemblies.register_context_plan_details((detail,))
     return ContextPlanComposer().assembly(
         plan=registered.draft,
         assembly_id=assembly_id,

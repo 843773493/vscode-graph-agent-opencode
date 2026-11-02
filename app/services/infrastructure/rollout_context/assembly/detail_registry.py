@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.core.atomic_fs import native_io_path
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -47,6 +48,11 @@ _COLUMNS = (
     "source_revision", "content_length", "protection",
     "availability", "required", "sensitive", "status", "created_at", "expires_at",
 )
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
 
 
 def _detail_mapping(row: tuple[object, ...]) -> dict[str, object]:
@@ -119,6 +125,9 @@ def validate_assembly_details(
 
 
 class DetailRegistryMixin(DetailRetentionMixin):
+    if TYPE_CHECKING:
+        _storage: RolloutStorage
+
     @staticmethod
     def check_fork_target_resources(
         connection: sqlite3.Connection, source: ResourceTargetFacts, target: ResourceTargetContext,
@@ -149,8 +158,11 @@ class DetailRegistryMixin(DetailRetentionMixin):
                 if path.is_symlink() or not path.is_file():
                     raise FileNotFoundError(f"context_required_resource_unavailable: 冻结 detail 正文缺失: {ref}")
 
-    def register_context_plan_detail(self, detail: DetailRecord) -> None:
-        """独立 detail 写入端口；seal 使用显式的同 connection 端口。"""
+    def register_context_plan_details(self, details: Sequence[DetailRecord]) -> None:
+        """同一 owner 的正文 manifest 共用一次初始化和发布事务。"""
+        if not details:
+            return
+        detail = details[0]
         if not isinstance(detail, DetailRecord):
             raise TypeError("detail registry 只接受完整 DetailRecord")
         ref = detail.detail_ref
@@ -164,10 +176,11 @@ class DetailRegistryMixin(DetailRetentionMixin):
                 ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
             ) as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                self._register_context_plan_detail(
-                    connection, detail, session_id=ref.session_id,
-                    thread_id=ref.thread_id, checkpoint_ns=detail.checkpoint_ns,
-                )
+                for record in details:
+                    self._register_context_plan_detail(
+                        connection, record, session_id=ref.session_id,
+                        thread_id=ref.thread_id, checkpoint_ns=detail.checkpoint_ns,
+                    )
                 connection.commit()
 
     def _register_context_plan_detail(

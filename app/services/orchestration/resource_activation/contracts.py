@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
 from typing import Protocol
 
@@ -93,17 +93,17 @@ class ResourceActivationBodyStore(Protocol):
     URI、网络或 memory provider。返回 target-local typed :class:`DetailRef`。
     """
 
-    def write_resource_body(
+    def write_resource_bodies(
         self,
         *,
         owner_session_id: str,
         owner_thread_id: str,
         activation_snapshot_id: str,
-        resource_id: str,
-        activation_ordinal: int,
-        payload: object,
+        payloads: Sequence[object],
         checkpoint_ns: str,
-    ) -> DetailRef: ...
+    ) -> tuple[tuple[DetailRef, str, int], ...]:
+        """按输入顺序返回正文引用、实际持久正文的 hash 和长度。"""
+        ...
 
 
 class ResourceActivationSnapshotSaver(Protocol):

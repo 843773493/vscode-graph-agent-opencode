@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import traceback
+from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
@@ -30,7 +31,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     UserExecutionIdentity,
 )
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
@@ -212,40 +213,35 @@ class _ActivationBodyStore:
         self.written: list[tuple[str, int, object, DetailRef]] = []
         self._issued: set[tuple[str, str]] = set()
 
-    def write_resource_body(
+    def write_resource_bodies(
         self,
         *,
         owner_session_id: str,
         owner_thread_id: str,
         activation_snapshot_id: str,
-        resource_id: str,
-        activation_ordinal: int,
-        payload: object,
+        payloads: Sequence[object],
         checkpoint_ns: str,
-    ) -> DetailRef:
-        expected = self._expected.get(resource_id)
-        if expected is None:
-            raise AssertionError(f"activation 发布了未登记资源: {resource_id}")
-        if (activation_ordinal, payload) != expected:
-            raise AssertionError(
-                f"activation body 与真实 {resource_id} 发布不一致: "
-                f"ordinal={activation_ordinal} payload={payload!r}"
-            )
+    ) -> tuple[tuple[DetailRef, str, int], ...]:
+        expected = sorted(self._expected.items(), key=lambda item: item[1][0])
+        assert list(payloads) == [payload for _resource, (_ordinal, payload) in expected]
         if not all((owner_session_id, owner_thread_id, activation_snapshot_id)):
             raise AssertionError("activation body 缺少完整 session/thread/snapshot owner")
         if checkpoint_ns != "":
             raise AssertionError(f"activation body checkpoint namespace 不匹配: {checkpoint_ns!r}")
-        identity = (activation_snapshot_id, resource_id)
-        if identity in self._issued:
-            raise AssertionError(f"activation body identity 重复: {identity}")
-        detail_id = f"resource-body-{activation_ordinal}-{resource_id.replace(':', '-') }"
-        reference = DetailRef(
-            owner_session_id, owner_thread_id, activation_snapshot_id, detail_id,
-        )
-        reference.require_owner(owner_session_id, owner_thread_id, activation_snapshot_id)
-        self._issued.add(identity)
-        self.written.append((resource_id, activation_ordinal, payload, reference))
-        return reference
+        bodies = []
+        for resource_id, (activation_ordinal, payload) in expected:
+            identity = (activation_snapshot_id, resource_id)
+            if identity in self._issued:
+                raise AssertionError(f"activation body identity 重复: {identity}")
+            detail_id = f"resource-body-{activation_ordinal}-{resource_id.replace(':', '-') }"
+            reference = DetailRef(
+                owner_session_id, owner_thread_id, activation_snapshot_id, detail_id,
+            )
+            reference.require_owner(owner_session_id, owner_thread_id, activation_snapshot_id)
+            self._issued.add(identity)
+            self.written.append((resource_id, activation_ordinal, payload, reference))
+            bodies.append((reference, sha256_jcs(payload), len(canonical_json_bytes(payload))))
+        return tuple(bodies)
 
 
 @pytest.fixture

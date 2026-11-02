@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Sequence
 from dataclasses import replace
 
 import pytest
@@ -76,32 +77,32 @@ class _FakeBodyStore:
     """只接受内存 payload；记录写入顺序，不做任何源读取。"""
 
     def __init__(self) -> None:
-        self.written: list[tuple[str, int]] = []
+        self.written: list[DetailRef] = []
         self.payloads: list[object] = []
 
-    def write_resource_body(
+    def write_resource_bodies(
         self,
         *,
         owner_session_id: str,
         owner_thread_id: str,
         activation_snapshot_id: str,
-        resource_id: str,
-        activation_ordinal: int,
-        payload: object,
+        payloads: Sequence[object],
         checkpoint_ns: str,
-    ) -> DetailRef:
+    ) -> tuple[tuple[DetailRef, str, int], ...]:
         assert owner_session_id
         assert activation_snapshot_id
         assert checkpoint_ns == "" or isinstance(checkpoint_ns, str)
-        assert payload is not None
-        self.written.append((resource_id, activation_ordinal))
-        self.payloads.append(payload)
-        return DetailRef(
-            owner_session_id,
-            owner_thread_id,
-            activation_snapshot_id,
-            f"body-{resource_id}-{activation_ordinal}",
-        )
+        bodies = []
+        for payload in payloads:
+            assert payload is not None
+            reference = DetailRef(
+                owner_session_id, owner_thread_id, activation_snapshot_id,
+                f"body-{len(self.written)}",
+            )
+            self.written.append(reference)
+            self.payloads.append(payload)
+            bodies.append((reference, sha256_jcs(payload), len(canonical_json_bytes(payload))))
+        return tuple(bodies)
 
 
 def _snapshot(
@@ -487,11 +488,15 @@ async def test_seal_path_creates_no_source_io() -> None:
         admission=_admission("turn-1"),
         policy=policy,
     )
-    await coordinator.commit_model_call(await coordinator.capture_model_call(
+    model_call = await coordinator.commit_model_call(await coordinator.capture_model_call(
         parent=turn, model_call_id="call-1", policy=policy
     ))
     # 每个新 binding 恰有一次正文写入，顺序与 activation_ordinal 一致。
-    assert body_store.written == [("skill:demo", 0), ("mcp:catalog", 1)]
+    assert [(binding.resource_id, binding.activation_ordinal) for binding in model_call.bindings] == [
+        ("skill:demo", 0), ("mcp:catalog", 1),
+    ]
+    assert [binding.detail_ref for binding in model_call.bindings] == body_store.written
+    assert body_store.payloads == [{"skill": 1}, {"mcp": 1}]
     assert all(binding.detail_ref is not None for binding in turn.bindings)
     assert all(binding.snapshot_ref is None for binding in turn.bindings)
 
