@@ -298,3 +298,9 @@
 - 线程采样发现后台Terminal监控逐次创建HTTPX客户端时反复同步加载默认CA。参考Copilot `platform/networking/node/nodeFetchFetcher.ts` 的Lazy共享dispatcher，本片只复用HTTPX默认、trust_env=False的TLS信任上下文；请求仍沿原超时、socket关闭与错误链，不缓存响应、不增加连接池owner，不需迁移既有调用方的关闭责任。首次初始化失败不进入缓存。
 - 新真实TCP场景覆盖两个客户端六次普通请求、分别取消已发送请求后的EOF、再请求及workspace／resource owner头；共十次请求只加载一次证书，CERT_REQUIRED和主机名校验保持开启，不冒称完成HTTPS握手验收。场景1 passed／2.49秒，现有客户端／API错误与协议回归144 passed；最终类型修订后的场景另有原始运行收据。Ruff、compileall、四文件Pyright零诊断。
 - 原Goal首场仍在model进入5秒失败，1 failed／22.60秒，provider prepare已完成；不能从单次总耗时下降推断稳定收益，不关闭8.2或原冷准备TODO，不改期限。准确命令、源码指纹、原始输出、真实退出码和正式传输产物见 `out/tests/temp/auxiliary_http_tls_20261102/artifacts/verification.json`。本片无前端改动、新资源账本或独立非作者审查。
+
+### 2026-11-02 detail 发布重复编码收口（8.2 性能补核）
+
+- 全仓确认 PreparedDetail 仅由 detail store 的 prepare 构造；同次 prepare/publish 直接复用冻结 bytes 与 typed record，删除构造后和发布前两次反序列化、规范化与 hash 自产结果。编码和磁盘读取共用唯一 manifest 字段映射；磁盘读取、冷恢复与 read_prepared 的完整性检查保留。参考 Copilot `platform/chronicle/node/sessionStore.ts` 对 typed 内存输入直接写入的职责边界，不采用其损坏后删库行为。
+- 新场景在旧实现测得6次 RFC8785 编码，当前为2次；同时覆盖 prepare 后输入变更隔离、冷读及磁盘篡改拒绝且保留原件。detail相关126项、真实消息/Job入口及seal事务14项、activation/storage相关80项共220项通过；Ruff、compileall通过。Pyright生产零诊断，测试原有1条 possibly-unbound按文件、规则、完整消息、最窄语句AST及重数与完整HEAD archive核对无新增，临时基线已删除。
+- 原Goal首场仍在model进入5秒失败，1 failed／22.94秒；provider prepare约1.84秒完成，不能据此关闭8.2或原性能TODO。主线程profile捕获了配置JSONC重复解析，但未覆盖执行线程，尚不能把启动解析耗时归为5秒窗口根因。准确命令、源码指纹、原始输出、真实退出码及类型差集见 `out/tests/temp/detail_write_encoding_20261102/artifacts/verification.json`。本片无前端变更、新存储链或独立非作者审查。

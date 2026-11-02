@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized import hashing
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
@@ -114,6 +115,39 @@ def test_detail_store_round_trip_uses_session_relative_assembly_path(
         )["detail"]
         == detail
     )
+
+
+def test_prepared_detail_encodes_once_and_cold_read_still_rejects_tampering(
+    detail_store, detail_arguments, detail_sessions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nested = ["初始值"]
+    body = {"text": "冻结正文 Ω" * 4096, "nested": nested}
+    original = {"text": body["text"], "nested": ["初始值"]}
+    encode = hashing.rfc8785.dumps
+    encoded = []
+
+    def count(value):
+        encoded.append(value)
+        return encode(value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(hashing.rfc8785, "dumps", count)
+        prepared = detail_store.prepare(**{**detail_arguments, "detail": body})
+        nested[0] = "prepare之后的内存变化"
+        target, = detail_store.publish(prepared)
+    # 正文和envelope分别编码一次，publish不重新解码、规范化或hash。
+    assert len(encoded) == 2
+    assert target.read_bytes() == prepared.raw
+    cold = ContextPlanDetailStore(detail_sessions)
+    owner = {"session_id": prepared.record.session_id, "thread_id": prepared.record.thread_id}
+    assert cold.read(**owner, record=prepared.record)["detail"] == original
+    damaged = json.loads(prepared.raw)
+    damaged["detail"]["nested"][0] = "磁盘篡改"
+    damaged_bytes = encode(damaged)
+    target.write_bytes(damaged_bytes)
+    with pytest.raises(DetailUnavailableError, match="hash/length 不一致"):
+        cold.read(**owner, record=prepared.record)
+    assert target.read_bytes() == damaged_bytes
 
 
 

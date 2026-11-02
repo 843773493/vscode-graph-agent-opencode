@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import json
 
-from app.domain.itemized.hashing import (
-    canonical_json_bytes,
-    canonical_json_bytes_and_hash,
-)
+from app.domain.itemized.hashing import canonical_json_bytes_and_hash
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
@@ -54,27 +51,25 @@ def build_detail_payload(
     checkpoint_ns: str,
 ) -> tuple[bytes, DetailRecord]:
     """唯一 exact 正文 envelope owner；不读取旧开发格式。"""
-    raw = canonical_json_bytes(
-        {
-            "format_version": 3,
-            "detail_ref": detail_ref.to_dict(),
-            "detail_kind": detail_kind,
-            "retention_class": retention_class,
-            "visibility": visibility,
-            "detail": stored_detail,
-            "source_revision": source_revision,
-            "length": length,
-            "detail_content_hash": detail_content_hash,
-            "required": required,
-            "sensitive": sensitive,
-            "protection": protection,
-            "created_at": created_at,
-            "expires_at": expires_at,
-            "checkpoint_ns": checkpoint_ns,
-        }
-    )
-    _payload, record = parse_detail_payload(raw, detail_ref=detail_ref)
-    return raw, record
+    value = {
+        "format_version": 3,
+        "detail_ref": detail_ref.to_dict(),
+        "detail_kind": detail_kind,
+        "retention_class": retention_class,
+        "visibility": visibility,
+        "detail": stored_detail,
+        "source_revision": source_revision,
+        "length": length,
+        "detail_content_hash": detail_content_hash,
+        "required": required,
+        "sensitive": sensitive,
+        "protection": protection,
+        "created_at": created_at,
+        "expires_at": expires_at,
+        "checkpoint_ns": checkpoint_ns,
+    }
+    raw, envelope_hash = canonical_json_bytes_and_hash(value)
+    return raw, _record_from_payload(value, detail_ref, envelope_hash)
 
 
 def parse_detail_payload(
@@ -105,7 +100,21 @@ def parse_detail_payload(
         )
     if not isinstance(value["created_at"], str) or not value["created_at"]:
         raise DetailUnavailableError("assembly detail created_at 非法")
-    record = DetailRecord(
+    record = _record_from_payload(value, ref, envelope_hash)
+    canonical_detail_bytes, detail_hash = canonical_json_bytes_and_hash(
+        value["detail"]
+    )
+    if (
+        value["detail_content_hash"] != detail_hash
+        or len(canonical_detail_bytes) != record.length
+    ):
+        raise DetailUnavailableError("assembly detail content manifest hash/length 不一致")
+    return value, record
+
+
+def _record_from_payload(value, ref: DetailRef, envelope_hash: str) -> DetailRecord:
+    """编码与读取共用typed manifest构造；字段约束由DetailRecord持有。"""
+    return DetailRecord(
         session_id=ref.session_id,
         thread_id=ref.thread_id,
         assembly_id=ref.assembly_id,
@@ -125,16 +134,5 @@ def parse_detail_payload(
         protection=value["protection"],
         availability="available",
     )
-    canonical_detail_bytes, detail_hash = canonical_json_bytes_and_hash(
-        value["detail"]
-    )
-    if (
-        value["detail_content_hash"] != detail_hash
-        or len(canonical_detail_bytes) != record.length
-    ):
-        raise DetailUnavailableError("assembly detail content manifest hash/length 不一致")
-    return value, record
-
-
 
 __all__ = ["build_detail_payload", "parse_detail_payload"]

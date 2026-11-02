@@ -127,9 +127,7 @@ class ContextPlanDetailStore:
         if not isinstance(prepared, PreparedDetail):
             raise TypeError("detail publish 必须使用 PreparedDetail")
         ref = prepared.record.detail_ref
-        _value, record = parse_detail_payload(prepared.raw, detail_ref=ref)
-        if record != prepared.record:
-            raise DetailUnavailableError("source-mismatch: prepared detail manifest 不一致")
+        # prepare已冻结不可变bytes与record；同次发布不再反序列化并hash自身输出。
         return (self._files.publish(ref, prepared.raw, creation_record=creation_record),)
 
     @staticmethod
