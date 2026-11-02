@@ -201,7 +201,7 @@ class NodeDebugClaimRuntime:
     async def mark_claim_running(self, runtime: NodeDebugRuntime) -> None:
         # 进程monitor也通过原state_lock结清，不能越过尚未发布的同实例占用。
         async with runtime.state_lock:
-            claim = self.claim_for_runtime(runtime)
+            claim = await run_sync_shielded(self.claim_for_runtime, runtime)
             if claim is None:
                 return
             if claim.phase != "running":
@@ -226,7 +226,7 @@ class NodeDebugClaimRuntime:
                 )
 
             # 原owner准入与锁持续覆盖worker结算；取消不能留下晚于停止发布的活跃占用。
-            # TODO(5.4)：同步读取、原生I/O抢占与整个启动/关闭期限仍须分别收口。
+            # TODO(5.4)：其它同步读取、原生I/O抢占与整个启动/关闭期限仍须分别收口。
             pending = asyncio.create_task(run_sync_shielded(register))
             try:
                 await asyncio.shield(pending)
@@ -253,7 +253,8 @@ class NodeDebugClaimRuntime:
         reason: str | None = None,
     ) -> None:
         async with runtime.state_lock:
-            claim = self.claim_for_runtime(runtime)
+            # 原state_lock覆盖读取排队及结算，进程监控不能越过尚未核定的同实例阶段。
+            claim = await run_sync_shielded(self.claim_for_runtime, runtime)
             if claim is None or claim.phase == "settled":
                 return
             if phase == "reconcile_required":
@@ -295,6 +296,7 @@ class NodeDebugClaimRuntime:
     def _sync_residency_blocker(self, claim: NodeDebugLaunchClaimDTO) -> None:
         if self._residency_tracker is None:
             return
+        # TODO(5.4)：tracker同步观察会回调各source，Node调试source仍可能读盘；其准入合同须另行迁齐。
         blocker_key = f"node_debug_claim:{claim.process_instance_id}"
         reason = _NODE_DEBUG_BLOCKER_REASON.get(claim.phase)
         if reason is None:

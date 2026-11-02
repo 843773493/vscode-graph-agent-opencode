@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-debug-delete-io` 经真实Node/Inspector与导航删除owner，核停止claim读取、manifest写盘和末尾claim核验的原生等待、取消及失败恢复，并检查物理隔离后服务关闭；固定90秒／4GiB与原独占闸门，不代替驻留source同步回调、Gateway/Web、独立Backend重启、Windows或完整shutdown期限。
+
 `integration-activity-prune` 经真实双 Workspace 生命周期、SQLite 写锁及线程池排队，验证启动裁剪、关闭观察取消／到期和原裁剪结算后的冷读；固定90秒／4GiB并沿集成独占闸门，不代表原生 I/O 强制终止、进程硬退出、Gateway/Web 或 Windows 验收。
 
 `unit-gateway-asset-diagnostics` 与 `integration-gateway-asset-diagnostics` 分别核图片 owner 的原错／日志双故障和真实 Gateway HTTP、OS 拒绝及同入口重试；均固定60秒／4GiB。集成复用原独占闸门与共享日志故障装具，不代替 Backend 重启、Web 或 Windows 验收。

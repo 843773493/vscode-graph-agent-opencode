@@ -13,8 +13,23 @@ from typing import TYPE_CHECKING
 from app.core.shielded_cleanup import run_sync_shielded
 
 if TYPE_CHECKING:
+    import asyncio
+
+    from app.services.infrastructure.node_debug.process.claim_runtime import (
+        NodeDebugClaimRuntime,
+    )
+    from app.services.infrastructure.node_debug.process.process_lifecycle import (
+        NodeDebugProcessLifecycle,
+    )
+    from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+    from app.services.infrastructure.node_debug.session.session_state import (
+        NodeDebugSessionState,
+    )
     from app.services.infrastructure.node_debug.session.session_store import (
         NodeDebugSessionStore,
+    )
+    from app.services.infrastructure.node_debug.session.thread_owner import (
+        NodeDebugOwner,
     )
 
 
@@ -22,6 +37,14 @@ class NodeDebugLifecycleEntryMixin:
     """关停/排空入口链路的方法族（由 NodeDebugService 继承）。"""
 
     _session_store: NodeDebugSessionStore | None
+    _runtimes: dict[NodeDebugOwner, NodeDebugRuntime]
+    _runtimes_lock: asyncio.Lock
+    _lifecycle: NodeDebugProcessLifecycle
+    _claim_runtime: NodeDebugClaimRuntime
+    _session_state: NodeDebugSessionState
+
+    if TYPE_CHECKING:
+        def _owner_lock(self, owner: NodeDebugOwner) -> asyncio.Lock: ...
 
     async def close(self) -> None:
         async with self._runtimes_lock:
@@ -51,7 +74,7 @@ class NodeDebugLifecycleEntryMixin:
             )
         # 连接的打开、读取、关闭和路径核对留在同一 worker；取消也先结算再释放删除 gate。
         owners = await run_sync_shielded(self._session_store.session_thread_owners, session_id)
-        # TODO(5.4)：后续 claim/manifest 的同步访问及整次排空期限仍须单独收口。
+        # TODO(5.4)：原生I/O抢占、不合作取消及整次排空期限仍须单独核实。
         for owner in owners:
             async with self._owner_lock(owner):
                 runtime = self._runtimes.get(owner)
@@ -71,8 +94,9 @@ class NodeDebugLifecycleEntryMixin:
                         runtime.error_message = None
                     # 与 Web/API stop 入口保持同一 authoritative manifest 语义；
                     # 物理 rename 发生在本回调返回之后。
-                    self._session_state.persist_runtime_state(
-                        owner[0], owner[1], runtime
+                    # 进程监控已排空；Session删除gate与owner锁覆盖原同步投影及写盘。
+                    await run_sync_shielded(
+                        self._session_state.persist_runtime_state, owner[0], owner[1], runtime
                     )
 
                 # runtime 缺失时按 durable claim 恢复合同定点核实旧实例；若
@@ -85,7 +109,7 @@ class NodeDebugLifecycleEntryMixin:
                         f"session_id={owner[0]}, thread_id={owner[1]}, "
                         f"reason={decision.reason}"
                     )
-                claim = self._claim_runtime.active_claim(*owner)
+                claim = await run_sync_shielded(self._claim_runtime.active_claim, *owner)
                 if claim is not None:
                     raise RuntimeError(
                         "删除 Session 前仍存在未结清的 Node 调试 claim，"
@@ -93,3 +117,7 @@ class NodeDebugLifecycleEntryMixin:
                         f"session_id={owner[0]}, thread_id={owner[1]}, "
                         f"phase={claim.phase}"
                     )
+                if runtime is not None:
+                    # 删除后catalog不再定位该节点；只有全部结清才能移除已停止投影。
+                    async with self._runtimes_lock:
+                        del self._runtimes[owner]

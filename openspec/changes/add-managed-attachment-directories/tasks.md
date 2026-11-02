@@ -953,3 +953,10 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 - 启动和每小时活动裁剪复用原`prune`与`run_sync_shielded`，SQLite DELETE／线程池排队不再占住事件循环；原周期任务持有worker直到结算，关闭观察到期或取消不提前关闭数据库、释放维护锁或重复裁剪。启动仍须取得原结果才继续；没有新增存储、任务账本、期限或兼容入口。
 - 真实SQLite写锁红测复现事件循环阻塞；首批第二项因前项红测清理未重入而受污染，修正测试清理后，独立启动红测以原线程身份及8秒原生屏障再次复现。修复后独立矩阵`integration-activity-prune` 5 passed／36.49秒，覆盖两种等待、两种观察中断及启动回执，核诊断request_id、原owner／locator／维护锁、只裁剪一次及冷读保留窗口；固定90秒／4GiB，沿原集成闸门。33项相关单测和3项原存储关闭集成分别通过。扩展的15项关闭回归在120秒保护下退出124，仅输出7个通过标记，整组未完成；不重复已完成部分，另选未执行的上述3项通过，不将整组记绿。
 - Ruff／compileall及OpenSpec strict 54/54通过。真实Pyright的4项JobServiceProtocol方法缺失与完整HEAD归档一致，无新增诊断；初次`uv run pyright`未找到命令，随后沿既有`bun x pyright --pythonpath .venv/bin/python`入口核验。命令、源码指纹、原始输出、退出码与失败归因见 `out/tests/temp/activity_prune_20261102/artifacts/verification.json`。其它同步活动读写、原生I/O抢占、执行关闭长尾及整个进程退出期限仍TODO，5.2／5.4和21/23保持未完成；未改前端、公共fixture或共享debug。
+
+### 2026-11-02 Node 调试停止与删除排空的原生状态访问（5.4 部分）
+
+- running／停止阶段沿原 claim 读取器进入受保护 worker，原 state_lock 覆盖排队及结算；删除停止进程后，原 manifest 投影写入及最终 active claim 核验同样由 worker 完成。原 Session 删除 gate 与 owner 锁保持，全部结清才从原 runtime 集合移除该 owner，避免物理隔离后服务关闭再次定位已删除 Session；失败及取消保留原 runtime 供同一 operation 恢复，没有增加 writer、账本或恢复链。
+- 真实 Node／Inspector 和 ASGI 导航删除的完整九场景通过（47.07秒），覆盖停止 claim 读取、manifest 写盘及最终 claim 核验的等待／取消／失败恢复，核 peer 可用、gate／fence、locator、原进程身份、同 operation 结算、隔离原件及后续服务关闭。受影响的 claim 发布和 catalog 排空18项回归通过（91.72秒）；本次归属单测14项通过（2.77秒）。首轮新 matrix 的 final 屏障误拦驻留 source 同步回调，修正故障点识别后完整九项通过；原24项组合回归曾被外部期限终止（exit124），不计作整组通过，后续只补本片受影响的18项。
+- 修改的两个生产文件及新集成测试 Pyright 零诊断，Ruff／compileall及 OpenSpec strict 54/54通过。纳入旧归属单测文件的检查仍有48项类型诊断；在相同当前生产依赖下检查 HEAD 的原测试，逐字归一结果相同，无新增，不称全部类型检查为绿。准确命令、源码指纹、原始输出、实际退出码及类型对照见 `out/tests/temp/debug_delete_io_20261102/artifacts/verification.json`。
+- 驻留 source 同步观察仍可能读盘，已在原回调保留 TODO；其它同步调试入口、原生 I/O 抢占、不合作取消及完整 operation／shutdown 期限仍未完成。此片不代 Gateway／Web、独立 Backend 硬重启或 Windows 验收，5.2／5.4与21/23保持未完成；未改前端、公共fixture或共享debug。

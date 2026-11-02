@@ -737,6 +737,7 @@ async def test_drain_session_stops_all_catalog_thread_runtimes_before_delete(
     assert all(runtime.status == "exited" for runtime in runtimes.values())
     assert all(runtime.error_message is None for runtime in runtimes.values())
     assert foreign_runtime.status == "running"
+    assert service._runtimes == {foreign_owner: foreign_runtime}
 
 
 @pytest.mark.asyncio

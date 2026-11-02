@@ -657,6 +657,11 @@ fork SHALL 沿用统一资源目标检查及现有 journal/claim/publication，�
 - **WHEN** Session 删除在 Node 调试排空前等待原 Thread catalog 查询或连接关闭，且调用方继续等待或取消原导航 worker
 - **THEN** 原存储 owner 在同一受保护 worker 中结清只读访问及连接，事件循环和无关 Session 继续可用。读取未结算时原删除 gate、locator、Session 原件与未完成进度保持，不停止 runtime、不推进 fence或物理隔离；取消结算后仍由原 operation ID 恢复并完成删除，原连接只关闭一次。缺失、非普通文件、符号链接、空库或不支持 schema 的 catalog 明确拒绝且不初始化、修复或改写原件，不扫描猜测 owner
 
+#### Scenario: Node 调试停止与删除排空等待原生状态访问
+
+- **WHEN** 活体调试实例登记running或停止阶段时读取claim，或Session删除在进程停止后等待原manifest写入及最后一次active claim核验，期间导航worker被取消或原存储返回失败
+- **THEN** 原state_lock／owner锁和Session删除gate覆盖受保护worker排队及结算，未结算时不推进fence、物理隔离或drained进度；取消及迟到原错仍交回原调用，同一删除operation可在故障解除后恢复。只有原进程、持久投影及claim全部核实完成才从原runtime集合移除该owner，后续服务关闭不再定位已删除Session；失败、取消或未核实终态不得提前移除。原process instance、方案及动作历史保持，不新增账本或重放启动；驻留source同步回调、其它读写及完整shutdown期限仍单独验收
+
 #### Scenario: Node 调试冷恢复等待原生核实和审计
 
 - **WHEN** 冷 owner 恢复等待原 claim、操作系统身份读取或恢复审计落盘，调用者继续等待或取消；或停止等待结束后 PID 对应实例发生变化
