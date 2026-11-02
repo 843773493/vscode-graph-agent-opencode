@@ -1683,7 +1683,7 @@ message ResourceNavigationRequest {
   string read_format = 10;
   optional uint32 line_offset = 11;
   optional uint32 max_lines = 12;
-  // path 为文件名包含查询；glob 与 content 分别匹配路径模式和文本行。
+  // path 保留包含查询；fuzzy 为根内相对文件路径的大小写折叠顺序字符召回；glob/content 匹配路径模式/文本行。
   string search_mode = 13;
   optional string file_glob = 14;
   uint32 max_snippet_bytes = 15;

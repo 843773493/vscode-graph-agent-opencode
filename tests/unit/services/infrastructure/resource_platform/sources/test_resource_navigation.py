@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import errno
 import hashlib
@@ -227,12 +228,117 @@ async def test_recursive_search_pages_consume_nonmatching_entries_once(navigatio
     assert not empty.entries and not empty.truncated and empty.next_cursor is None
 
 
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_fuzzy_file_recall_pages_relative_unicode_paths_without_reading(navigation_case, monkeypatch, synchronous):
+    owner, workspace, uri = navigation_case
+    for index in range(120):
+        (workspace / f"a-unrelated-{index:03}.txt").touch()
+    names = ("z-source/MemoryComponent.ts", "z-source/MyController.ts", "z-source/目录中文🧪结果.txt")
+    (workspace / "z-source").mkdir()
+    for name in names:
+        (workspace / name).write_bytes(b"\xff\x00binary body must not be read")
+    # 目录名包含缩写也不能成为文件候选；工作区ID不参与匹配。
+    (workspace / "mct").mkdir()
+    expected = {resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="files",
+        tail_segments=("root", *name.split("/"))) for name in names[:2]}
+
+    def no_body(*args, **kwargs):
+        pytest.fail("名称搜索不得打开文件正文")
+
+    async def navigate(request):
+        return owner.navigate_sync(request, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="fuzzy", query="MCT", limit=1)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", no_body)
+        seen, cursor = [], None
+        for _ in range(3):
+            page = await navigate(query.model_copy(update={"cursor": cursor}))
+            assert not page.matches and all(node.resource_shape == "file" for node in page.entries)
+            seen.extend(node.uri for node in page.entries)
+            cursor = page.next_cursor
+            if not page.truncated:
+                assert cursor is None
+                break
+            assert page.truncation_reason == "entry_limit" and cursor
+        else:
+            pytest.fail("模糊搜索续页未收敛")
+        assert len(seen) == len(set(seen)) == 2 and set(seen) == expected
+        unicode = await navigate(query.model_copy(update={"query": "目中🧪果", "limit": 100}))
+        assert [entry.uri for entry in unicode.entries] == [resource_display_uri(
+            scope="workspace", scope_id=WORKSPACE_ID, kind="files", tail_segments=("root", *names[2].split("/")))]
+        for text in (WORKSPACE_ID, "root/z", "tnenopmoC"):
+            empty = await navigate(query.model_copy(update={"query": text}))
+            assert not empty.entries and not empty.truncated
+        legacy = await navigate(query.model_copy(update={"search_mode": "path"}))
+        assert not legacy.entries  # 原大小写敏感包含语义保持。
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_fuzzy_cursor_keeps_query_and_changed_prefix_contract(navigation_case, synchronous):
+    owner, workspace, uri = navigation_case
+    for name in ("alpha-one.txt", "alpha-two.txt", "alpha-three.txt"):
+        (workspace / name).write_text(name)
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="fuzzy", query="aot", limit=1)
+
+    async def navigate(request):
+        return owner.navigate_sync(request, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+
+    page = await navigate(query)
+    assert page.truncated and page.next_cursor
+    for changed in ({"query": "at"}, {"search_mode": "path"}):
+        with pytest.raises(ResourceFileOperationError) as failure:
+            await navigate(query.model_copy(update={"cursor": page.next_cursor, **changed}))
+        assert failure.value.reason == "invalid_cursor"
+    (workspace / "alpha-one.txt").write_text("changed prefix")
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await navigate(query.model_copy(update={"cursor": page.next_cursor}))
+    assert failure.value.reason == "stale_cursor"
+
+
+async def test_fuzzy_cancellation_releases_caller_and_worker_keeps_original_deadline(navigation_case, monkeypatch):
+    owner, _, uri = navigation_case
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original = owner._navigate_local
+    failures = []
+
+    def blocked(*args):
+        entered.set()
+        try:
+            assert release.wait(2), "测试必须释放文件导航worker"
+            return original(*args)
+        except ResourceFileOperationError as error:
+            failures.append(error.reason)
+            raise
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(owner, "_navigate_local", blocked)
+    clock = [0.0]
+    monkeypatch.setattr(resource_navigation, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    task = asyncio.create_task(owner.navigate(ResourceNavigationRequest(
+        uri=uri, operation="search", search_mode="fuzzy", query="a", timeout_ms=1000), local_gateway_id=GATEWAY_ID))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not finished.is_set()
+    finally:
+        clock[0] = 2.0
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 1)
+    assert failures == ["deadline"]
+
+
 @pytest.mark.asyncio
-async def test_response_budget_counts_encoded_nodes_and_can_continue(navigation_case) -> None:
+@pytest.mark.parametrize("operation", ["list", "search"])
+async def test_response_budget_counts_encoded_nodes_and_can_continue(navigation_case, operation) -> None:
     owner, workspace, uri = navigation_case
     for index in range(7):
         (workspace / f"{index}-中文 空格 %.txt").write_text("bounded")
-    query = ResourceNavigationRequest(uri=uri, operation="list", max_response_bytes=1200)
+    query = ResourceNavigationRequest(uri=uri, operation=operation, max_response_bytes=1200,
+        **({"search_mode": "fuzzy", "query": "txt"} if operation == "search" else {}))
     seen, cursor = [], None
     while True:
         page = await owner.navigate(query.model_copy(update={"cursor": cursor}), local_gateway_id=GATEWAY_ID)
@@ -265,7 +371,8 @@ async def test_read_bounds_json_escaping_and_utf8_without_claiming_complete(navi
 
 
 @pytest.mark.asyncio
-async def test_scan_budget_stops_enumeration_before_sorting_all_files(navigation_case, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("search_mode", ["path", "fuzzy"])
+async def test_scan_budget_stops_enumeration_before_sorting_all_files(navigation_case, monkeypatch: pytest.MonkeyPatch, search_mode) -> None:
     owner, workspace, uri = navigation_case
     for index in range(30):
         (workspace / f"{index}.txt").touch()
@@ -288,21 +395,22 @@ async def test_scan_budget_stops_enumeration_before_sorting_all_files(navigation
 
     monkeypatch.setattr(resource_navigation, "os", SimpleNamespace(scandir=counted))
     with pytest.raises(ResourceFileOperationError) as failure:
-        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", query="missing", scan_limit=3), local_gateway_id=GATEWAY_ID)
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode=search_mode, query="missing", scan_limit=3), local_gateway_id=GATEWAY_ID)
     assert (failure.value.code, failure.value.reason) == ("output_limit_exceeded", "scan_limit")
     assert len(observed) == 4
     assert closed == [True]
 
 
 @pytest.mark.asyncio
-async def test_one_deadline_covers_root_resolution_and_recursive_scan(navigation_case, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("search_mode", ["path", "fuzzy"])
+async def test_one_deadline_covers_root_resolution_and_recursive_scan(navigation_case, monkeypatch: pytest.MonkeyPatch, search_mode) -> None:
     owner, workspace, uri = navigation_case
     (workspace / "sub").mkdir()
     (workspace / "sub/a.txt").touch()
     ticks = iter([0.0, 0.0, 0.0, 0.0, 0.01, 0.01])
     monkeypatch.setattr(resource_navigation, "time", SimpleNamespace(monotonic=lambda: next(ticks, 0.01)))
     with pytest.raises(ResourceFileOperationError) as failure:
-        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", query="a", timeout_ms=1), local_gateway_id=GATEWAY_ID)
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode=search_mode, query="a", timeout_ms=1), local_gateway_id=GATEWAY_ID)
     assert (failure.value.code, failure.value.reason) == ("output_limit_exceeded", "deadline")
 
 

@@ -35,7 +35,7 @@ class ResourceNavigationRequest(BaseModel):
     read_format: Literal["text", "auto"] = "text"
     line_offset: int | None = Field(default=None, ge=1)
     max_lines: int | None = Field(default=None, ge=1)
-    search_mode: Literal["path", "glob", "content"] = "path"
+    search_mode: Literal["path", "fuzzy", "glob", "content"] = "path"
     file_glob: str | None = Field(default=None, min_length=1)
     max_snippet_bytes: int = Field(default=2048, ge=16, le=8192)
 

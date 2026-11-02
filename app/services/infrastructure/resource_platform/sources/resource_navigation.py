@@ -23,6 +23,7 @@ from app.abstractions.resource_file_content import ResourceFileReader
 from app.core.distribution_identity import load_distribution_id
 from app.core.exceptions import ForbiddenError
 from app.core.failures import public_failure_message
+from app.core.fuzzy import is_subsequence
 from app.core.path_utils import is_resource_uri_input
 from app.core.resource_uri import (
     ParsedResourceUri,
@@ -262,6 +263,7 @@ class ResourceNavigation:
         entries: list[ResourceNavigationNodeDTO] = []
         matches: list[ResourceNavigationMatchDTO] = []
         seen: set[str] = set()
+        fuzzy_query = request.query.casefold() if request.search_mode == "fuzzy" and request.query is not None else ""
         # 预留固定长度的续页及截断字段，序列化后的实际正文仍在 _response 核验。
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
@@ -283,6 +285,8 @@ class ResourceNavigation:
                 included = match is not None
             elif request.search_mode == "glob":
                 included = child_node.resource_shape == "file" and self._glob_matches(name, request.query)
+            elif request.search_mode == "fuzzy":
+                included = child_node.resource_shape == "file" and is_subsequence(fuzzy_query, name.casefold())
             else:
                 included = request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
             if included:

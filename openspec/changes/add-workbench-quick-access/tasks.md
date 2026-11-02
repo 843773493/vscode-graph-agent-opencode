@@ -33,7 +33,7 @@
 覆盖规范：文件搜索与文本定位必须共享实际资源目标。
 
 - [x] 4.1 改透唯一文件内部投影，使规范目录根支持真实 stat／describe、joinPath、相对路径及往返定位；旧叶子 query 投影的全部消费者一起迁移，不新增搜索 scheme。
-- [ ] 4.2 在原文件搜索 owner 接入有界模糊文件名／路径查询，保留 cancel、cursor、扫描／字节／时间限制和截断说明。
+- [x] 4.2 在原文件搜索 owner 接入有界模糊文件名／路径查询，保留 cancel、cursor、扫描／字节／时间限制和截断说明。
 - [ ] 4.3 补齐原界面已展示的正则、大小写／smart case、整词、include／exclude、ignore、仅已打开和结果上限语义；尚不支持的选项明确拒绝，不静默按 substring 执行。
 - [ ] 4.4 验证真实目录不存在、只读、非文本、Unicode／多行位置和查询选项；保留文件保存的 revision／CAS 冲突合同，不引入新的批量替换业务。
 
@@ -185,3 +185,10 @@
 - Python 168 项、客户端 3 项／37 断言、公开合同 391 项通过，真实 Workbench 类型检查与生产构建通过；生成一致性、Buf 格式／breaking、OpenAPI 和 OpenSpec strict 通过。真实 Gateway／Chromium 完整聊天工具循环保留文件树预览、原版编辑器打开／保存及多 Thread 的原断言并通过。
 - 目录根由真实 FileService／provider＋显式 Gateway 传输 spy 和后端真实文件系统 describe 分层验证，尚不证明 SearchService 或完整搜索 UI；特殊字符最终修正由定向客户端、最终类型检查与构建覆盖。Pyright 10 条旧诊断与 HEAD 一致，无新增。列表 stat 最初触及原响应预算，收敛为 describe 专用后通过，未放宽预算。
 - 准确命令、源码指纹、原输出、失败归因与结构审查：`out/tests/temp/quick_access_file_root_20261102/artifacts/verification.json`。2.2／2.4／4.4 等剩余完整任务保持未勾选。
+
+### 2026-11-02：有界文件模糊召回切片（4.2）
+
+- 同一导航 search 新增显式 fuzzy，按根内解码相对文件路径作大小写折叠顺序字符召回，只返回文件，不读正文；旧 path／glob／content 语义保持。共用原扫描、分页和预算，不加索引或第二查询链。取消释放调用方等待，原只读 worker 恢复后核对同一 deadline。
+- 定向 Python 176 项通过，最终 7 项 fuzzy 检查通过；真实 Gateway＋共享 Backend 双挂载查询通过，覆盖首批 120 个无关文件之后的缩写、激活另一工作区仍定位原根、独立续页、模式旧 cursor 与扫描超限错误。尚不证明 Quick Access UI 或远端 SSH。
+- 公开协议批次 426 项通过，另 1 项发现上一切片 stat 字段编号断言漏迁；按已批准合同补字段及可选值往返后，该文件 9 项全部通过。模式公开字段仍是 string，生成前端只更新注释；运行时客户端类型与代码未变，复用上一切片的最终真实类型检查和生产构建。
+- Schema Pyright 零诊断；原 owner 的 10 条旧诊断与 HEAD 一致、无新增。Ruff、生成一致性、Buf 格式／breaking、OpenAPI 与 OpenSpec strict 通过。证据与失败归因：`out/tests/temp/quick_access_fuzzy_file_20261102/artifacts/verification.json`。

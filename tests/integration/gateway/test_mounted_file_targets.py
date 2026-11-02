@@ -107,3 +107,49 @@ async def test_three_file_inputs_keep_mount_owner_and_external_native_target(
     assert {item["workspace_id"] for item in listed["items"]} == set(gateway_ids)
     assert {item["backend_generation"] for item in listed["items"]} == {joined["backend_generation"]}
     assert [target.read_text(encoding="utf-8") for target in targets] == contents
+
+
+async def test_fuzzy_files_query_exact_mount_with_bounded_continuation(
+    shared_backend_case: SharedBackendCase,
+) -> None:
+    case = shared_backend_case
+    primary, secondary, _ = await _join_group(case)
+    selections = [{"X-BoxTeam-Workspace-Id": route} for route in (primary, secondary)]
+    roots = []
+    relative_names = ("z-source/MemoryComponent.ts", "z-source/MyController.ts")
+    for index, (workspace, selection) in enumerate(zip(case.roots, selections, strict=True)):
+        directory = workspace / "fuzzy-query"
+        (directory / "z-source").mkdir(parents=True)
+        for item in range(120):
+            (directory / f"a-unrelated-{item:03}.txt").touch()
+        for name in relative_names:
+            (directory / name).write_text(f"mount-{index} {name}", encoding="utf-8")
+        references = await case.data("POST", "/api/v1/workspace/files/references", headers=selection,
+                                     json={"paths": [str(directory)]})
+        roots.append(references["uris"][0])
+    assert roots[0] != roots[1]
+    await case.data("POST", f"/api/gateway/workspaces/{secondary}/activate")
+    evidence = []
+    for index, (root, selection) in enumerate(zip(roots, selections, strict=True)):
+        payload = {"uri": root, "operation": "search", "search_mode": "fuzzy", "query": "MCT", "limit": 1}
+        page = await case.data("POST", "/api/v1/resources/navigation", headers=selection, json=payload)
+        assert page["truncated"] and page["truncation_reason"] == "entry_limit" and page["next_cursor"]
+        first_uri = page["entries"][0]["uri"]
+        assert first_uri.startswith(root + "/") and not page["matches"]
+        following = await case.data("POST", "/api/v1/resources/navigation", headers=selection,
+                                    json={**payload, "cursor": page["next_cursor"]})
+        found = [first_uri, *(node["uri"] for node in following["entries"])]
+        assert not following["truncated"] and following["next_cursor"] is None
+        assert set(found) == {root + "/" + name for name in relative_names}
+        read = await case.data("POST", "/api/v1/resources/navigation", headers=selection,
+                               json={"uri": first_uri, "operation": "read"})
+        assert read["content"].startswith(f"mount-{index} ")
+        for changed, reason in (({"search_mode": "path"}, "invalid_cursor"), ({"scan_limit": 3}, "scan_limit")):
+            rejected = await case.client.post("/api/v1/resources/navigation", headers=selection,
+                json={**payload, **({"cursor": page["next_cursor"]} if reason == "invalid_cursor" else {}), **changed})
+            assert rejected.status_code == 400, rejected.text
+            assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"]
+            assert rejected.json()["detail"]["reason"] == reason
+        evidence.append({"root": root, "first": page, "following": following, "read": read})
+    case.context.write_result("passed", {"fuzzy_queries": evidence,
+        "scope": "真实Gateway、共享Backend双挂载与HTTP；没有Quick Access UI、SSH或模型执行。"})

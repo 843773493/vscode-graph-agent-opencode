@@ -63,7 +63,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
     }
     request = public_pb2.ResourceNavigationRequest(
         uri="boxteam://workspace/ws-1/resources/files/root", operation="search",
-        query="中文 文档", limit=7, max_bytes=1024,
+        query="中文 文档", search_mode="fuzzy", limit=7, max_bytes=1024,
         cursor="opaque-cursor", timeout_ms=1500, scan_limit=200, max_response_bytes=8192,
     )
     decoded_request = type(request).FromString(request.SerializeToString())
@@ -74,7 +74,7 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
 
     node_fields = public_pb2.ResourceNavigationNodeDTO.DESCRIPTOR.fields_by_name
     assert {name: field.number for name, field in node_fields.items()} == {
-        "uri": 1, "resource_shape": 2, "operations": 3, "child_path": 4,
+        "uri": 1, "resource_shape": 2, "operations": 3, "child_path": 4, "stat": 5,
     }
     root = public_pb2.ResourceNavigationNodeDTO(
         uri=decoded_request.uri, resource_shape="directory",
@@ -82,6 +82,14 @@ def test_resource_navigation_wire_keeps_bounded_request_and_lightweight_nodes() 
     )
     decoded_root = type(root).FromString(root.SerializeToString())
     assert decoded_root == root and decoded_root.HasField("child_path")
+    assert not decoded_root.HasField("stat")
+    described_root = public_pb2.ResourceNavigationNodeDTO()
+    described_root.CopyFrom(root)
+    described_root.stat.CopyFrom(public_pb2.ResourceNavigationStatDTO(
+        size=4096, modified_at_ms=1700000000123.25, changed_at_ms=1700000000456.5,
+    ))
+    decoded_described = type(root).FromString(described_root.SerializeToString())
+    assert decoded_described.HasField("stat") and decoded_described == described_root
     file = public_pb2.ResourceNavigationNodeDTO(
         uri=root.uri + "/SKILL.md", resource_shape="file", operations=["describe", "read"],
     )

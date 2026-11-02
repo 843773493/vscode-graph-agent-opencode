@@ -1697,7 +1697,7 @@ export interface ResourceNavigationRequest {
   max_lines?:
     | number
     | undefined;
-  /** path 为文件名包含查询；glob 与 content 分别匹配路径模式和文本行。 */
+  /** path 保留包含查询；fuzzy 为根内相对文件路径的大小写折叠顺序字符召回；glob/content 匹配路径模式/文本行。 */
   search_mode: string;
   file_glob?: string | undefined;
   max_snippet_bytes: number;
