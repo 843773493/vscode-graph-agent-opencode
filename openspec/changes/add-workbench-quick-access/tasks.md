@@ -26,7 +26,7 @@
 - [x] 3.1 在原 catalog owner 补齐名称／ID／目录字段的模糊召回，保留查询与 revision 绑定的分页，folder 仅作为导航目标。
 - [x] 3.2 在原 Thread owner 补工作区范围内 main 与未打开 durable child 的有界发现，结果携带精确归属，不拉全部 Session 后在前端遍历。
 - [x] 3.3 将 Session 候选交由 owner 解析不可变 main_thread_id，Thread 候选保持 child 身份，folder 默认动作定位原导航。
-- [ ] 3.4 验证首批之外的间隔字符缩写、同名 Session／main／child、目录 revision 变化与删除命中，区分未命中、受限及失效 cursor。
+- [x] 3.4 验证首批之外的间隔字符缩写、同名 Session／main／child、目录 revision 变化与删除命中，区分未命中、受限及失效 cursor。
 
 ## 4. 文件 owner 与真实目录根
 
@@ -358,3 +358,9 @@
 - 正式 Workbench 构建／真实 Gateway／Chromium 完整页面通过（133.03 秒）：同名 A/B AGENTS、原只读编辑器实际键入不改正文、导航仍为 A 时来源 B 的默认查询与历史只属 B、Skill 关闭重开再次读 B；来源写请求及模型执行均为空。既有 main／child、目录、独立分页／旧 cursor、图片解码、HTTP Range、BOM 保存及专用模式断言继续通过，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-ce073bea8d92/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
 - 失败原件保留：首轮误断言原生 EditContext 不提供的 `aria-readonly`，现按固定上游 `screenReaderSupport.ts` 检查 `aria-autocomplete=none`，并保留实际键入、完整正文不变及无写请求断言；后续补齐选择器关闭／输入确认，消除连续调用保留旧输入的测试时序。读取断言改为消费唯一解析入口返回的规范 URI，保留精确 Gateway／工作区核验；原 POST 观察流是只读订阅，不能按 HTTP 方法将其误计为业务写入。没有放宽目标归属或执行副作用断言。
 - 准确命令、源码指纹、原始输出及退出码位于 `out/tests/temp/quick_access_sources_20261103/artifacts/`。页面冻结构建后仅修正 `IResourceEditorInput` 的 type import 声明位置；同一 esbuild 转换结果逐字相等，证明运行时代码未变，见 `type-import-runtime.json`。最终真实类型检查、Ruff、AST／结构、差异与 OpenSpec strict 检查随本边界保存。未运行无关的全仓测试；配置来源、非 Workspace 来源、Diff、音视频隔离宿主和 Electron 仍未完成，2.2／2.5 保持未勾选。
+
+### 2026-11-03：目录与 Thread 发现验收（3.4）
+
+- 沿原真实 Gateway／Workbench 场景，通过产品入口创建 55 个 Session，记录真实首屏 50 个身份，再从未返回的目标中构造间隔缩写。实际 `pgcg050` 经 Ctrl+P 同时返回第 51 个目标的精确 Session 与 main Thread，证明召回先于分页；没有在首批结果内做前端补偿。
+- 由产品创建入口推进 catalog revision 后，原 Session cursor 的真实续页返回 409、对应旧候选撤下；显式重查不携旧 cursor，重新得到首屏。另用唯一不存在的查询，核实际 items／total 为零、cursor 为空及原 UI 完整零匹配提示；沿用原首屏受限／续页状态、同名 main／child、目录删除后拒绝打开的断言。
+- 5 项原 owner 定向检查通过；正式构建／完整页面回归通过（128.55 秒），包含上一切片的只读来源、图片／保存与全部既有目录／Thread 场景，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-c87af2742f79/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。本批仅改验收，复用同产品源码的最终真实类型检查；Ruff、JS AST、结构、差异与 OpenSpec strict 均随本边界保存。准确命令、源码指纹、原输出与退出码见同一临时证据目录的 `discovery-*.json`；未扩跑无关全仓测试或声称 Electron 通过。

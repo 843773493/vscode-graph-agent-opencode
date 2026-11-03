@@ -27,6 +27,7 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
       expect(body.request_id).toBe(response.headers()['x-request-id']);
       responses.push({ path: url.pathname, query, status: response.status(), requestId: body.request_id,
         count: body.data?.entries?.length ?? body.data?.items?.length,
+        identities: body.data?.items?.map(item => item.node?.node_id ?? item.thread_id),
         cursor: body.data?.next_cursor ?? body.data?.cursor, elapsedMs: request.timing().responseEnd,
         bytes: (await request.sizes()).responseBodySize });
     })().catch(error => errors.push(String(error))));
@@ -104,9 +105,9 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
 
     result.phase = 'catalog-and-thread-independent-cursors';
     // 关键目录及 Thread 状态由真实创建入口产生，不预写 catalog／控制库。
-    for (let index = 0; index < 55; index++) {
-      await api('/api/v1/sessions', owner.routeA, { title: `pagingcatalog 会话 ${String(index).padStart(3, '0')}` });
-    }
+    const sessions = [];
+    for (let index = 0; index < 55; index++) sessions.push(
+      await api('/api/v1/sessions', owner.routeA, { title: `pagingcatalog 会话 ${String(index).padStart(3, '0')}` }));
     await command('workbench.action.quickOpen', 'pagingcatalog');
     await expect(quick).toContainText('pagingcatalog 会话');
     await expect.poll(() => requests.filter(item => item.query === 'pagingcatalog').length).toBe(3);
@@ -143,6 +144,78 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
     result.pagination.explicitIndependentPages = true;
     result.pagination.visibleRows = await quick.locator('.monaco-list-row').count();
     await page.keyboard.press('Escape');
+
+    result.phase = 'fuzzy-catalog-recall-outside-first-page';
+    const catalogPath = '/api/v1/session-catalog/search', threadPath = '/api/v1/session-threads/search';
+    const firstIds = responses.find(item => item.query === 'pagingcatalog' && item.path === catalogPath).identities;
+    expect(firstIds).toHaveLength(50);
+    const outside = sessions.findIndex(session => !firstIds.includes(session.session_id));
+    expect(outside).toBeGreaterThanOrEqual(0);
+    const target = sessions[outside], query = `pgcg${String(outside).padStart(3, '0')}`;
+    const waitSearch = (path, filter, cursor) => page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === path && url.searchParams.get('query') === filter
+        && Boolean(url.searchParams.get('cursor')) === cursor
+        && response.request().headers()['x-boxteam-workspace-id'] === owner.routeA;
+    });
+    const fuzzy = await Promise.all([waitSearch(catalogPath, query, false), waitSearch(threadPath, query, false),
+      command('workbench.action.quickOpen', query)]);
+    const fuzzyReceipts = [];
+    for (const response of fuzzy.slice(0, 2)) {
+      const body = await response.json();
+      expect(response.status()).toBe(200);
+      expect(body.request_id).toBe(response.headers()['x-request-id']);
+      expect(body.data.items.map(item => item.node?.session_id ?? item.session_id)).toEqual([target.session_id]);
+      fuzzyReceipts.push({ path: new URL(response.url()).pathname, requestId: body.request_id });
+    }
+    await expect(quick.locator(`[data-quick-input-id="session:${key}/${target.session_id}"]`)).toHaveCount(1);
+    const main = await api(`/api/v1/sessions/${target.session_id}/main-thread`, owner.routeA);
+    await expect(quick.locator(`[data-quick-input-id$="/${main.thread_id}"]`)).toHaveCount(1);
+    await page.keyboard.press('Escape');
+
+    result.phase = 'catalog-stale-cursor-clears-only-own-branch';
+    const [firstPage] = await Promise.all([waitSearch(catalogPath, 'pagingcatalog', false),
+      command('workbench.action.quickOpen', 'pagingcatalog')]);
+    const firstBody = await firstPage.json();
+    expect(firstBody.data.total).toBe(55);
+    expect(firstBody.data.cursor).toBeTruthy();
+    // 产品创建入口推进 catalog revision，原 cursor 必须拒绝，不能拼入新的目录快照。
+    await api('/api/v1/sessions', owner.routeA, { title: 'catalog cursor revision trigger' });
+    await revealStatus('会话');
+    await status('会话').hover();
+    const [stale] = await Promise.all([waitSearch(catalogPath, 'pagingcatalog', true),
+      status('会话').getByRole('button', { name: '继续查询此类别', exact: true }).click()]);
+    const staleBody = await stale.json();
+    expect(stale.status()).toBe(409);
+    expect(staleBody.request_id).toBe(stale.headers()['x-request-id']);
+    await expect(status('会话')).toContainText('查询失败');
+    await expect(quick.locator('[data-quick-input-id^="session:"]')).toHaveCount(0);
+    await status('会话').hover();
+    const [restarted] = await Promise.all([waitSearch(catalogPath, 'pagingcatalog', false),
+      status('会话').getByRole('button', { name: '重新查询此类别', exact: true }).click()]);
+    expect(restarted.status()).toBe(200);
+    const restartedBody = await restarted.json();
+    expect(restartedBody.request_id).toBe(restarted.headers()['x-request-id']);
+    expect(restartedBody.data.items).toHaveLength(50);
+    await page.keyboard.press('Escape');
+
+    result.phase = 'catalog-complete-empty-is-not-limited';
+    const absent = 'catalog_absent_' + crypto.randomUUID().replaceAll('-', '');
+    const [empty] = await Promise.all([waitSearch(catalogPath, absent, false),
+      command('workbench.action.quickOpen', 'session ' + absent)]);
+    const emptyBody = await empty.json();
+    expect(empty.status()).toBe(200);
+    expect(emptyBody.request_id).toBe(empty.headers()['x-request-id']);
+    expect(emptyBody.data.items).toEqual([]);
+    expect(emptyBody.data.total).toBe(0);
+    expect(emptyBody.data.cursor).toBeNull();
+    await expect(status('会话')).toContainText('没有匹配的资源');
+    result.discovery = { outsideFirstPage: true, exactSessionAndMain: true, query, target: target.session_id, fuzzyReceipts,
+      staleCatalogCursor: { status: stale.status(), requestId: staleBody.request_id },
+      restartedFromFirstPage: restarted.status() === 200, completeEmpty: true };
+    await page.keyboard.press('Escape');
+    await Promise.all(reads);
+    expect(errors).toEqual([]);
   } finally {
     page.off('request', observe);
     page.off('requestfinished', completed);

@@ -108,6 +108,11 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert receipt["pagination"]["selectionPreserved"] is True
         assert receipt["pagination"]["stalePageCleared"] is True
         assert receipt["pagination"]["explicitBranchRestart"] is True
+        assert receipt["discovery"]["outsideFirstPage"] is True
+        assert receipt["discovery"]["exactSessionAndMain"] is True
+        assert receipt["discovery"]["staleCatalogCursor"]["status"] == 409
+        assert receipt["discovery"]["restartedFromFirstPage"] is True
+        assert receipt["discovery"]["completeEmpty"] is True
         assert receipt["resourceLinks"]["childKeepsIdentity"] is True
         assert receipt["resourceLinks"]["sessionUsesMainAndSideGroup"] is True
         assert receipt["resourceLinks"]["fileUsesOriginalProjection"] is True
