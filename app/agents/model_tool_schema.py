@@ -83,7 +83,9 @@ def validate_model_tool_arguments(
         )
     tool_call_schema = getattr(tool, "tool_call_schema", None)
     if isinstance(tool_call_schema, dict):
-        model_tool_schema_validator(export_model_tool_json_schema(tool)).validate(arguments)
+        # 直接规范化后做一次元校验；先调用导出入口再构造 validator 会重复检查同一 schema。
+        parameters = json.loads(canonical_json_bytes(tool_call_schema))
+        model_tool_schema_validator(parameters).validate(arguments)
         return dict(arguments)
 
     # LangChain 的公开 subset model 不继承原模型的 extra 配置，但不得因此

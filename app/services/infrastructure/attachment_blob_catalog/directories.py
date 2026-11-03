@@ -7,6 +7,7 @@ import os
 import shutil
 import stat
 from pathlib import Path
+from typing import BinaryIO
 
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.file_permissions import restrict_private_path_access
@@ -18,7 +19,8 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 )
 
 
-def file_version(path: Path, relative_path: str) -> DirectorySnapshotFile:
+def _read_file_version(path: Path, relative_path: str, *, copy_to: BinaryIO | None = None) -> DirectorySnapshotFile:
+    """读取同一版本并计算摘要；复制时直接使用这次读取，保留前后 stat 检查。"""
     path = native_io_path(path)
     before = path.stat(follow_symlinks=False)
     if not stat.S_ISREG(before.st_mode):
@@ -29,6 +31,8 @@ def file_version(path: Path, relative_path: str) -> DirectorySnapshotFile:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
             length += len(chunk)
+            if copy_to is not None:
+                copy_to.write(chunk)
     after = path.stat(follow_symlinks=False)
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
         raise RuntimeError("附件文件在冻结期间发生变化，不能发布混合版本")
@@ -37,7 +41,7 @@ def file_version(path: Path, relative_path: str) -> DirectorySnapshotFile:
 
 def verify_content(content: bytes | Path, digest: str, length: int, attachment_id: str) -> None:
     if isinstance(content, Path):
-        actual = file_version(content, content.name)
+        actual = _read_file_version(content, content.name)
         actual_digest, actual_length = actual.digest, actual.length
     else:
         actual_digest, actual_length = "sha256:" + hashlib.sha256(content).hexdigest(), len(content)
@@ -61,7 +65,7 @@ def directory_manifest(root: Path) -> tuple[tuple[DirectorySnapshotFile, ...], t
         for name in sorted(file_names):
             relative = (directory / name).relative_to(root).as_posix()
             path = resolve_attachment_file(root, tuple(relative.split("/")))
-            files.append(file_version(path, relative))
+            files.append(_read_file_version(path, relative))
     return tuple(sorted(files, key=lambda file: file.relative_path)), tuple(sorted(directories))
 
 
@@ -79,16 +83,18 @@ def copy_directory_files(source: Path, target: Path, files: tuple[DirectorySnaps
     for file in files:
         original = resolve_attachment_file(source, tuple(file.relative_path.split("/")))
         destination = resolve_attachment_file(target, tuple(file.relative_path.split("/")))
-        verify_content(original, file.digest, file.length, file.relative_path)
         if destination.exists():
-            verify_content(destination, file.digest, file.length, file.relative_path)
+            verify_content(original, file.digest, file.length, file.relative_path)
             continue
-        with original.open("rb") as reader, destination.open("xb") as writer:
+        with destination.open("xb") as writer:
             restrict_private_path_access(destination, descriptor=writer.fileno())
-            shutil.copyfileobj(reader, writer, length=1024 * 1024)
+            # 复制中核对冻结源，避免先完整 hash 再把源文件重读一遍。
+            actual = _read_file_version(original, file.relative_path, copy_to=writer)
+            if actual != file:
+                raise RuntimeError(f"附件正文与冻结版本不一致：attachment_id={file.relative_path}, expected={file.digest}/{file.length}, actual={actual.digest}/{actual.length}")
             writer.flush()
             os.fsync(writer.fileno())
-        verify_content(destination, file.digest, file.length, file.relative_path)
+    # 统一在最终清单中复验所有成品正文、目录和多余节点；每个目标文件只读一次。
     if directory_manifest(target) != (files, directories):
         raise RuntimeError("附件目录复制结果与冻结清单不一致")
     for directory in sorted(directories, key=lambda value: value.count("/"), reverse=True):

@@ -131,7 +131,7 @@ def test_browser_observer_exposes_missing_content_without_repair(assembly_contro
     assert connection.execute("SELECT * FROM assembly_content_nodes ORDER BY node_id").fetchall() == before
 
 
-@pytest.mark.parametrize("damage", ["missing", "hash", "owner"])
+@pytest.mark.parametrize("damage", ["missing", "hash", "owner", "noncanonical"])
 def test_shared_node_damage_fails_without_repair(shared_assemblies, damage):
     saver, session, thread, connection, _manager, first, _second, _before = shared_assemblies
     raw = connection.execute("SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (first.assembly_id,)).fetchone()[0]
@@ -140,6 +140,8 @@ def test_shared_node_damage_fails_without_repair(shared_assemblies, damage):
         connection.execute("DELETE FROM assembly_content_nodes WHERE node_id=?", (key,))
     elif damage == "hash":
         connection.execute("UPDATE assembly_content_nodes SET body_json='{}' WHERE node_id=?", (key,))
+    elif damage == "noncanonical":
+        connection.execute("UPDATE assembly_content_nodes SET body_json=' ' || body_json WHERE node_id=?", (key,))
     else:
         connection.execute("UPDATE assembly_content_nodes SET thread_id='other-owner' WHERE node_id=?", (key,))
     connection.commit()

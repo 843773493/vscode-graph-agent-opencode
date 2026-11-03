@@ -7,7 +7,11 @@ import sqlite3
 from copy import deepcopy
 from pathlib import Path
 
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    canonical_json_bytes_and_hash,
+    sha256_jcs,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     read_local_scopes,
     require_historical_scope,
@@ -105,8 +109,9 @@ class _AssemblyContentStore:
             })
 
     def _put(self, node: dict[str, object]) -> dict[str, str]:
-        raw = canonical_json_bytes(node).decode("utf-8")
-        key = sha256_jcs(node)
+        # 保存的正文与摘要共用一次 JCS 编码，避免对每个 DAG 节点重复遍历。
+        encoded, key = canonical_json_bytes_and_hash(node)
+        raw = encoded.decode("utf-8")
         if key not in self.nodes:
             self.connection.execute(
                 "INSERT INTO assembly_content_nodes(session_id,thread_id,node_id,body_json) VALUES (?,?,?,?) "
@@ -146,8 +151,11 @@ class _AssemblyContentStore:
             if row is None:
                 raise ValueError(f"source-mismatch: assembly content 缺失: {self.assembly_owner}/{key}")
             node = json.loads(row[0])
-            if (not isinstance(node, dict) or sha256_jcs(node) != key
-                    or canonical_json_bytes(node).decode("utf-8") != row[0]):
+            if not isinstance(node, dict):
+                raise ValueError(f"source-mismatch: assembly content hash 不一致: {key}")
+            # 冷读仍核对 hash 和规范字节；二者使用同次编码，不省略任何损坏检查。
+            encoded, actual_key = canonical_json_bytes_and_hash(node)
+            if actual_key != key or encoded.decode("utf-8") != row[0]:
                 raise ValueError(f"source-mismatch: assembly content hash 不一致: {key}")
             self.nodes[key] = node
         return self.nodes[key]

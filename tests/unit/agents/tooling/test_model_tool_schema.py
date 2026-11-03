@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 import pytest
+from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
@@ -141,6 +142,33 @@ def test_schema_export_isolated_from_dictionary_owner() -> None:
     exported = export_model_tool_json_schema(target)
     exported["$defs"]["value"]["enum"].append("mutated")
     assert schema["$defs"]["value"]["enum"] == ["a", "b"]
+
+
+def test_dictionary_arguments_check_schema_once_and_observe_definition_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = {
+        "type": "object", "$defs": {"value": {"type": "string"}},
+        "properties": {"value": {"$ref": "#/$defs/value"}}, "required": ["value"],
+    }
+    target = StructuredTool(name="changing", description="可更新的字典契约", args_schema=schema,
+                            func=lambda **arguments: arguments)
+    checked = []
+    check_schema = Draft202012Validator.check_schema
+
+    def track(parameters):
+        checked.append(parameters)
+        check_schema(parameters)
+
+    monkeypatch.setattr(Draft202012Validator, "check_schema", staticmethod(track))
+    assert validate_model_tool_arguments(target, {"value": "ready"}) == {"value": "ready"}
+    assert len(checked) == 1
+    target.args_schema["$defs"]["value"]["type"] = "integer"
+    with pytest.raises(JsonSchemaValidationError):
+        validate_model_tool_arguments(target, {"value": "ready"})
+    assert len(checked) == 2
+    assert validate_model_tool_arguments(target, {"value": 2}) == {"value": 2}
+    assert len(checked) == 3
 
 
 @pytest.mark.parametrize("extra", ["forbid", "allow", "ignore"])

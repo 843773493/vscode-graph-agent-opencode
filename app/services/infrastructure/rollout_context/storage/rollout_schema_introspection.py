@@ -309,6 +309,9 @@ class RolloutSchemaIntrospectionMixin:
         validate_jsonl_items: bool = True,
     ) -> None:
         """校验 committed offset 的单一权威和 storage commit 链。"""
+        # TODO(性能): 初始化与普通快照仍全扫历史 commit/catalog，完整初始化还重验全部正文。
+        # 改为恢复时全量审计、在线增量校验前，须保留后续外部改写检测及校验失败不截断尾部的行为；
+        # 不能仅按 last_commit_id 复用结果，也不能通过关闭正文检查掩盖这个热点。
         columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(database_meta)")
         }

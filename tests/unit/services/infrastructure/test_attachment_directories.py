@@ -85,3 +85,100 @@ def test_long_capture_preserves_manifest_protection_and_cleanup(tmp_path: Path) 
     finally:
         remove_directory(source)
         remove_directory(target)
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_frozen_copy_reads_each_source_and_target_once(
+    attachment_directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    existing: bool,
+) -> None:
+    source, target = attachment_directory, tmp_path / "target"
+    manifest = directory_manifest(source)
+    if existing:
+        copy_directory_files(source, target, *manifest)
+    paths = (source / "original/content", target / "original/content")
+    reads: list[Path] = []
+    original_open = Path.open
+
+    def track(path: Path, mode="r", *args, **kwargs):
+        if mode == "rb" and path in paths:
+            reads.append(path)
+        return original_open(path, mode, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", track)
+        copy_directory_files(source, target, *manifest)
+    assert reads.count(paths[0]) == reads.count(paths[1]) == 1
+    assert directory_manifest(target) == manifest
+
+
+@pytest.mark.parametrize("damage", ["source", "fresh_source", "target", "extra_file", "extra_directory"])
+def test_frozen_copy_rejects_changed_content_and_extra_nodes(
+    attachment_directory: Path, tmp_path: Path, damage: str,
+) -> None:
+    source, target = attachment_directory, tmp_path / "target"
+    manifest = directory_manifest(source)
+    if damage != "fresh_source":
+        copy_directory_files(source, target, *manifest)
+    if damage in {"source", "fresh_source", "target"}:
+        root = target if damage == "target" else source
+        content = root / "original/content"
+        content.write_bytes(b"x" * content.stat().st_size)
+    elif damage == "extra_file":
+        (target / "unexpected").write_bytes(b"unexpected")
+    else:
+        (target / "unexpected").mkdir()
+    before = (target / "original/content").read_bytes() if damage != "fresh_source" else None
+    with pytest.raises(RuntimeError, match="冻结版本不一致|复制结果与冻结清单不一致"):
+        copy_directory_files(source, target, *manifest)
+    if before is not None:
+        assert (target / "original/content").read_bytes() == before
+
+
+def test_frozen_copy_rejects_source_changes_during_read(
+    attachment_directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, target = attachment_directory, tmp_path / "target"
+    manifest = directory_manifest(source)
+    content = source / "original/content"
+    original_open = Path.open
+    changed = False
+
+    def mutate_during_read(path: Path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        if path == content and mode == "rb":
+            read = stream.read
+
+            def read_then_mutate(size=-1):
+                nonlocal changed
+                chunk = read(size)
+                if chunk and not changed:
+                    changed = True
+                    with original_open(content, "ab") as writer:
+                        writer.write(b"changed-during-copy")
+                return chunk
+
+            stream.read = read_then_mutate
+        return stream
+
+    monkeypatch.setattr(Path, "open", mutate_during_read)
+    with pytest.raises(RuntimeError, match="冻结期间发生变化"):
+        copy_directory_files(source, target, *manifest)
+    assert changed
+
+
+def test_frozen_copy_still_verifies_destination_after_sync(
+    attachment_directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, target = attachment_directory, tmp_path / "target"
+    manifest = directory_manifest(source)
+    fsync = os.fsync
+
+    def damage_after_sync(descriptor: int) -> None:
+        fsync(descriptor)
+        with (target / "original/content").open("r+b") as writer:
+            writer.write(b"corrupt")
+
+    monkeypatch.setattr(os, "fsync", damage_after_sync)
+    with pytest.raises(RuntimeError, match="复制结果与冻结清单不一致"):
+        copy_directory_files(source, target, *manifest)
