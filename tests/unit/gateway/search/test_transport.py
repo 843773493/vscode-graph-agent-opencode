@@ -76,7 +76,8 @@ class SearchHTTP:
             provider_id="session-catalog", workspace_id=payload["workspace_id"] if self.mode != "wrong-owner" else "wrong",
             category=payload["category"], operation=payload["operation"], contract_version=1,
             state="limited", limited_reason="result_limit",
-            catalog=SessionCatalogSearchResultsDTO(revision="r1", catalog_revision=1, cursor=f"{payload['workspace_id']}-cursor"),
+            catalog=SessionCatalogSearchResultsDTO(revision="r1", catalog_revision=1,
+                cursor="续点🙂" * 2000 if self.mode == "long-cursor" else f"{payload['workspace_id']}-cursor"),
         )
         body = APIResponse(data=page, request_id=request_id).model_dump(mode="json")
         return httpx.Response(200, headers=headers, json=body)
@@ -203,6 +204,40 @@ async def test_zero_quota_and_missing_auth_do_not_read_owner(search_http: Search
     search_http.client.headers.pop("X-Local-Token")
     assert (await search_http.search()).status_code == 401
     assert not search_http.requests
+
+
+async def test_output_budget_includes_repeated_cursors_and_retry_keeps_original_position(
+    search_http: SearchHTTP, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    search_http.mode = "long-cursor"
+    continuations = [{"branch": {"owner": owner, "category": "catalog"}, "cursor": "previous-position"} for owner in OWNERS[:2]]
+    resolved = await search_http.client.post("/api/gateway/search/resolve", json={"mode": "selected", "owners": OWNERS[:2]})
+    assert resolved.status_code == 200
+    scope = {"mode": "resume", "scope": resolved.json()["data"]["scope"]}
+    with monkeypatch.context() as limits:
+        limits.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", 45000)
+        response = await search_http.search(scope=scope, continuations=continuations)
+    limited = events(response)
+    assert len(response.content) <= 45000
+    assert not any(event.type == "page" for event in limited)
+    summary = limited[-1].summary
+    assert summary is not None
+    assert all(branch.state == "limited" and branch.code == "output_bytes" and branch.cursor == "previous-position"
+               for branch in summary.branches)
+    retried = events(await search_http.search(scope=scope, continuations=continuations))
+    assert len([event for event in retried if event.type == "page"]) == 2
+    assert all(json.loads(request.content)["cursor"] == "previous-position" for request in search_http.requests)
+    retry_summary = retried[-1].summary
+    assert retry_summary is not None
+    assert all(branch.cursor == "续点🙂" * 2000 for branch in retry_summary.branches)
+
+
+async def test_control_budget_rejected_before_http_dispatch(search_http: SearchHTTP, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", 1024)
+    response = await search_http.search()
+    assert response.status_code == 413 and not search_http.requests
+    assert response.json()["detail"]["code"] == "output_bytes"
+    assert response.headers["X-Request-ID"] == "req_search"
 
 
 @pytest.fixture

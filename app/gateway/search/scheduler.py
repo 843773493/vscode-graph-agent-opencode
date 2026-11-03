@@ -58,6 +58,15 @@ class SearchPage:
 SearchPageQuery = Callable[[SearchJob], Awaitable[SearchPage]]
 
 
+def output_limited(job: SearchJob) -> FederatedSearchBranchDTO:
+    """未交付整页时保留输入续点，不能跳过本页的任何命中。"""
+    return FederatedSearchBranchDTO(
+        branch=job.key, state="limited", code="output_bytes",
+        message="搜索流输出达到字节上限，请缩小范围或页大小后继续原分支",
+        retryable=True, cursor=job.request.cursor, allocated_results=job.request.limit,
+    )
+
+
 def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolutionDTO) -> list[SearchJob]:
     """按类别、冻结范围顺序公平预留配额；不先读大页再丢尾部。"""
     owners = {branch.owner: branch for branch in scope.branches}
@@ -95,10 +104,14 @@ def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolu
 async def search_events(
     jobs: list[SearchJob], scope: GatewaySearchScopeResolutionDTO, *,
     request_id: str, query: SearchPageQuery, budget: NameSearchBudget,
+    publish: Callable[[FederatedSearchEventDTO], bool] = lambda _: True,
 ) -> AsyncGenerator[FederatedSearchEventDTO, None]:
     """最多并发三个整页；消费暂停时不补新任务，缓冲最多三个已分配页。"""
     sequence = 1
-    yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="scope", scope=scope)
+    event = FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="scope", scope=scope)
+    if not publish(event):
+        raise RuntimeError("搜索流未预留范围事件的输出预算")
+    yield event
     # 期限从 HTTP 准入前确定；即使消费者迟迟不取下一事件，也不能重新给 owner 十五秒。
     pending: dict[asyncio.Task[SearchPage], int] = {}
     statuses: dict[int, FederatedSearchBranchDTO] = {}
@@ -113,6 +126,15 @@ async def search_events(
             branch=job.key, allocated_results=job.request.limit, state=state, code=code, message=message,
             retryable=retryable, provider_id=provider_id, cursor=cursor, returned_results=returned_results,
         )
+
+    def terminal(index: int) -> FederatedSearchEventDTO:
+        event = FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="branch", branch=statuses[index])
+        if not publish(event):
+            statuses[index] = output_limited(jobs[index])
+            event = event.model_copy(update={"branch": statuses[index]})
+            if not publish(event):
+                raise RuntimeError("搜索流未预留分支终态的输出预算")
+        return event
 
     async def execute(job: SearchJob) -> SearchPage:
         budget.check()
@@ -145,7 +167,7 @@ async def search_events(
                     pending[asyncio.create_task(execute(job))] = index
                     continue
                 sequence += 1
-                yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="branch", branch=statuses[index])
+                yield terminal(index)
             if not pending:
                 continue
             remaining = max(0, budget.deadline - monotonic())
@@ -185,15 +207,22 @@ async def search_events(
                     statuses[index] = status(job, state=page.state, provider_id=page.provider_id,
                                              code=page.limited_reason, cursor=page.cursor,
                                              returned_results=count)
-                    sequence += 1
-                    yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="page", branch=statuses[index], page=page, source=reply.source)
+                    event = FederatedSearchEventDTO(sequence=sequence + 1, request_id=request_id, type="page", branch=statuses[index], page=page, source=reply.source)
+                    if publish(event):
+                        sequence += 1
+                        yield event
+                    else:
+                        statuses[index] = output_limited(job)
                 sequence += 1
-                yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="branch", branch=statuses[index])
+                yield terminal(index)
         sequence += 1
         ordered = [statuses[index] for index in range(len(jobs))]
-        yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="end", summary=FederatedSearchSummaryDTO(
+        event = FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="end", summary=FederatedSearchSummaryDTO(
             state="complete" if all(item.state == "complete" for item in ordered) else "incomplete",
             branches=ordered, returned_results=sum(item.returned_results for item in ordered),
         ))
+        if not publish(event):
+            raise RuntimeError("搜索流未预留整体终态的输出预算")
+        yield event
     finally:
         await run_cleanup_shielded(settle)

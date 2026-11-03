@@ -606,3 +606,29 @@
 - 原件：`out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-24e6c5652161/nodes/node-1a9400b31e52/artifacts/file-cache.json`。正式构建退出0、37.58秒，main SHA256=`ca208f890bf4c64d1cfea66c5bcb4baf0732c8a156925cc2c2c7e386c1dbaa61`；重跑前逐项核750份前端源码指纹后复用该构建，未重复打包。Python核心及装具Pyright零诊断、Ruff及AST／结构复核通过；原API的27条B008与HEAD逐项相同。两份OpenAPI快照仅补原raw说明／304，公开结构不变，生成一致性检查通过。
 - 初轮装具误用工作区准备参数，未进入产品；后续固定“每次打开恰好一个请求”的装具假设与原watcher建连再验证不符，按真实网络区分首次和暖读，所有暖读均须304及零正文。额外再验证的性能处理留给下一切片，不把本次零正文收益表述为已减少请求次数。扩大原错误映射检查在既有符号链接文案断言失败（原期待Path traversal detected，现原解析器返回文件路径超出当前目标目录的访问能力）；该测试及解析链与HEAD一致，未为通过改动。失败原件保留，准确命令／指纹／原始输出／退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/raw-cache-*`。
 - 本边界只完成17.2；原Webview／Electron回环及打包重启、route复用／断连／淘汰／配额、watcher完整失效场景仍需17.3～17.7分别验证，保持未勾选。
+
+### 2026-11-03：初次文件监听不触发重复读取
+
+- 初次 watcher 建连不发布伪造的 UPDATED；流重建与 overflow 仍使已连接根重新核实，真实编辑／删除继续交原 FileService。同根引用共享及 B 工作区独立连接由两项真实 Provider 定向检查覆盖，传输和路由是明确装具边界。
+- 正式 Workbench＋真实 Gateway＋Chromium 验收通过（85.64秒）：首次、暖读及 B 同路径各一次读取，暖读304且零正文，图片保持打开时真实外部改写使宽度更新；原授权、删除、Range及保存CAS断言保持，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-d1440063483e/nodes/node-1a9400b31e52/artifacts/file-cache.json`。构建38.20秒、退出0；含19份转换源码的既有真实类型检查与当前输入指纹一致。
+- 代码与定向检查提交为 `b3eb43072`。命令、源码差异及原始输出保留在 `out/tests/temp/quick_access_watch_20261103/artifacts/`；此前类型／Provider检查在 `out/tests/temp/quick_access_provider_20261103/artifacts/file-watch-*`。
+
+### 2026-11-03：构建静态资源再验证（分层缓存部分）
+
+- 唯一构建从实际 esbuild 输出生成 `immutable-assets.json`，Gateway 与 Electron 共用服务器只对清单内内容地址发布长期 immutable；入口、main、Worker及未登记文件再验证，不按扩展名或貌似hash的名字猜测。共用服务器沿原 VS Code serveFile 使用stat观察值ETag，支持304与HEAD，不重读正文计算hash；缺失JS／Worker不再回退成首页，OAuth回调保持no-store。
+- 13项Gateway静态检查、4项真实Node服务器检查（71条断言）通过，覆盖新旧validator、升级正文、缺失Worker、未登记同形文件、OAuth及既有代理取消／隔离。Pyright零诊断、Ruff、ESM语法和差异检查通过。首次静态批次在已通过测试后找不到uv环境中的pyright；改用工具环境并显式指定项目解释器后通过，失败原件保留。本批仅修改构建／server脚本，没有改变tsconfig输入，复用已核指纹一致的真实类型检查。
+- 正式构建46.95秒、退出0，main SHA256仍为 `2b67d6240978a26be812e8c4b23752ed1f026b9bd82bd7f2dbf48d3ac7846b1c`；真实Gateway＋Workbench＋Chromium通过（98.83秒），index、main、真实editor Worker及生成SVG的HTTP条件读取均304／零正文，各自缓存头正确，缺失Worker404，原图片／文本／CAS及零页面错误保持。原件：`out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-52c8c3737747/nodes/node-1a9400b31e52/artifacts/file-cache.json`。
+- 准确命令、源码指纹、原始输出及退出码：`out/tests/temp/quick_access_static_20261103/artifacts/verification.json`。本批没有完成打包Electron重启、Vite HMR回归或固定版本Webview隔离宿主验收；完整分层缓存和第17组相关任务继续保持未勾选。
+
+### 2026-11-03：Linux 打包 Electron 原图片缓存（17.5、17.7 部分）
+
+- 扩展原便携 Electron 集成验收，三次从真实 ASAR 启动，沿原图片编辑器和相同 Gateway／工作区读取隔离 PNG。首次200传69字节，暖读及同 profile 正常退出重启后304均零正文；独立 profile 首次200传69字节。没有手动 flush、renderer Node 或文件系统 IPC，保留原聊天、文件保存、未发送草稿、先显历史后同步、只读保护、正常退出和 profile 隔离断言。
+- 正式矩阵 `bun run test:matrix -- --suite=integration-electron-packaged-workbench` 通过：1 passed in 178.29s，退出0；pageErrors、storageErrors、proxyErrors均为空。原件：`out/tests/integration/clients/electron/test_packaged_workbench/runs/run-c0cda837a8b3/nodes/node-95670caeaac1/artifacts/native-result.json`；归档SHA256=`547255d1f5a5ca58ed10aa29c74c67e60b76e2ef6d5fc399dad144c00ab42878`。
+- Node语法和Ruff通过；Pyright仅报告原有 interactions 的 object 索引诊断，HEAD快照复核得到同一诊断，没有新增。命令、原始输出、退出码及四份源码指纹见`out/tests/temp/quick_access_native_cache_20261103/artifacts/`。普通图片的证据不覆盖Webview，淘汰／配额等其余场景尚未齐，17.5／17.7完整任务保持未勾选。
+
+### 2026-11-03：联邦搜索统一输出预算（16.17 部分）
+
+- 接收领域页与业务流输出各8 MiB；输出在唯一SSE编码边界按UTF-8实际字节计量，包含scope、整页、游标、诊断、分支终态及汇总。编码器只暂存下一帧，正文不为计量重复编码；提前预留逐分支终态和最终汇总，不重复序列化全量待结算状态。纯传输心跳不计业务事件输出。
+- 整页不能交付时，唯一调度核心返回limited/output_bytes，保留输入cursor及零交付计数；不得跳过本页命中。原范围与续点自身无法容纳时，在任何分发前返回413/output_bytes。原3并发、完整页、慢消费不补队、总期限、安全结算与唯一终态保持。
+- 35项不同定向检查均已有通过证据，覆盖精确字节上限／多一字节、Unicode／转义游标、状态与汇总预留、超大诊断、零配额、旧续点重试及每候选页只编码一次。首次34通过／1失败是新装具遗漏resume冻结范围，按原请求合同补齐后该用例与新增边界检查通过，未放宽cursor／顺序／结果要求。Ruff通过；产品核心及新测试Pyright零诊断，原transport测试的27条Optional诊断与HEAD逐项同文，无新增，原件保留。
+- 真实Gateway＋双Backend验收通过（54.36秒）：只A、A+B、all含停止C、名称／多文件根／正文区间和上下文、Gateway重启原续点、单分支版本冲突与独立重试保持；每个实际响应记录下载字节并核8 MiB上限。准确命令、源码指纹、失败与通过输出和网络原件位置见`out/tests/temp/quick_access_output_20261103/artifacts/verification.json`。本批不改前端输入或公开DTO结构，未重复Workbench构建／Web／Electron交互；完整16.17及其余跨运行面验收仍按清单推进。

@@ -18,9 +18,9 @@ from app.schemas.internal_v2.search import (
 
 MAX_SEARCH_BRANCHES = 128
 SEARCH_CONCURRENCY = 3
-# 接收领域页和控制状态分别有硬上限；状态不占名称命中数。
-# TODO：16.17 补齐包含控制状态的统一输出字节计量，以及正文／文件的独立计数单位。
+# 接收整页与编码输出各有总预算；输出包括 scope、游标、状态及 SSE 帧，状态不占命中数。
 MAX_SEARCH_PAGE_BYTES = 8 * 1024 * 1024
+MAX_SEARCH_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_SEARCH_ERROR_CHARS = 4096
 
 

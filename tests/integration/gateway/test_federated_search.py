@@ -12,6 +12,7 @@ import pytest
 
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.schemas.search_federation import MAX_SEARCH_OUTPUT_BYTES
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2EProcessLease
@@ -131,7 +132,8 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
                             events.append(event)
                 assert events[0]["type"] == "scope" and events[-1]["type"] == "end"
                 assert [event["sequence"] for event in events] == list(range(1, len(events) + 1))
-                observations.append({"request": payload, "events": events})
+                assert response.num_bytes_downloaded <= MAX_SEARCH_OUTPUT_BYTES
+                observations.append({"request": payload, "events": events, "output_bytes": response.num_bytes_downloaded})
                 return events
 
             query = {"category": "catalog", "query": "ShSe", "limit": 1}
