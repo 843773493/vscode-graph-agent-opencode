@@ -10,6 +10,7 @@
 - `gateway_config_events/`：Gateway 全局 config event outbox 与 consumer/relay 投递账本垂直链路（`GatewayConfigEventMixin`）。
 - `gateway_runtime_generation/`：Gateway runtime generation 生命周期与健康证明垂直链路（`GatewayRuntimeGenerationMixin`）。
 - `workspace_discovery.py`：按原 registry／navigation 元数据提供有界工作区发现；返回稳定后端 owner 与独立路由 ID，不探测健康、启动目标或读取工作区数据。
+- 联邦搜索范围与跨目标查询编排归 `../search/`，不在目录镜像或控制面路由中另建调度器。
 
 # 可修改内容
 

@@ -24,6 +24,7 @@ from app.core.path_utils import (
 )
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.gateway.config import GatewayConfigReloadService
+from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.user_access import (
     USER_ACCESS_COOKIE_NAME,
     UserAccessContext,
@@ -200,6 +201,13 @@ def get_registry(request: Request) -> GatewayWorkspaceRegistry:
     if not isinstance(registry, GatewayWorkspaceRegistry):
         raise RuntimeError("Gateway registry 尚未初始化")
     return registry
+
+
+def get_workspace_navigation_store(request: Request) -> WorkspaceNavigationStore:
+    value = getattr(request.app.state, "workspace_navigation_store", None)
+    if not isinstance(value, WorkspaceNavigationStore):
+        raise RuntimeError("Gateway 工作区导航存储尚未初始化")  # noqa: TRY004 - 初始化时序错误。
+    return value
 
 
 def get_gateway_config_reload_service(

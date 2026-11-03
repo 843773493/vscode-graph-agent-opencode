@@ -32,7 +32,7 @@ from app.gateway.federation.errors import (
 )
 from app.gateway.federation.grants import ResourceNavigationGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry.owners import workspace_owner
 from app.gateway.server.workspace_proxy import (
     _proxy_workspace_request,
     _registry,
@@ -59,15 +59,6 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 )
 
 router = APIRouter()
-
-
-def _workspace_owner_gateway_id(registry: GatewayWorkspaceRegistry, target: WorkspaceTarget, gateway_id: str) -> str:
-    if target.connection_kind != "remote_gateway":
-        return gateway_id
-    connection_id = target.remote_gateway_connection_id
-    if connection_id is None:
-        raise RuntimeError("远程导航 Workspace 缺少 Gateway 连接身份")
-    return registry.remote_gateway_connection(connection_id).remote_gateway_id
 
 
 async def _navigate(
@@ -111,13 +102,13 @@ async def _navigate_target(
                     raise ResourceUriResolveError("scope_mismatch", "导航 URI 与目标 Gateway 不一致")
             if owner_gateway_id is not None:
                 targets = [target for target in targets
-                           if _workspace_owner_gateway_id(registry, target, gateway_id) == owner_gateway_id]
+                           if workspace_owner(target, registry, gateway_id).gateway_id == owner_gateway_id]
                 if not targets:
                     raise ResourceUriResolveError("scope_mismatch", "导航 URI 与固定 Workspace 路由不一致")
             if len(targets) != 1:
                 raise FederationError(FEDERATION_TARGET_AMBIGUOUS, "多个 Gateway route 指向同一导航 workspace")
             workspace_target = targets[0]
-            owner_gateway_id = _workspace_owner_gateway_id(registry, workspace_target, gateway_id)
+            owner_gateway_id = workspace_owner(workspace_target, registry, gateway_id).gateway_id
             if resource.gateway_authority not in {None, owner_gateway_id} or (resource.scope == "workspace" and resource.scope_id != backend_workspace_id):
                 raise ResourceUriResolveError("scope_mismatch", "导航 URI 与固定 Workspace 路由不一致")
             if workspace_target.connection_kind != "remote_gateway":

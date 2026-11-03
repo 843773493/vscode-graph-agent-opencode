@@ -852,6 +852,54 @@ class GatewayWorkspaceDiscoveryResultsDTO(_message.Message):
     complete: bool
     def __init__(self, gateway_id: _Optional[str] = ..., query: _Optional[str] = ..., resolved_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayWorkspaceDiscoveryHitDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ...) -> None: ...
 
+class GatewaySearchScopeDTO(_message.Message):
+    __slots__ = ("version", "gateway_id", "resolved_at", "mode", "owners")
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    RESOLVED_AT_FIELD_NUMBER: _ClassVar[int]
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    OWNERS_FIELD_NUMBER: _ClassVar[int]
+    version: int
+    gateway_id: str
+    resolved_at: _timestamp_pb2.Timestamp
+    mode: str
+    owners: _containers.RepeatedCompositeFieldContainer[GatewaySearchWorkspaceOwnerDTO]
+    def __init__(self, version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., resolved_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., mode: _Optional[str] = ..., owners: _Optional[_Iterable[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]]] = ...) -> None: ...
+
+class GatewaySearchScopeRequest(_message.Message):
+    __slots__ = ("mode", "origin", "owners", "scope")
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    ORIGIN_FIELD_NUMBER: _ClassVar[int]
+    OWNERS_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    mode: str
+    origin: GatewaySearchWorkspaceOwnerDTO
+    owners: _containers.RepeatedCompositeFieldContainer[GatewaySearchWorkspaceOwnerDTO]
+    scope: GatewaySearchScopeDTO
+    def __init__(self, mode: _Optional[str] = ..., origin: _Optional[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., owners: _Optional[_Iterable[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]]] = ..., scope: _Optional[_Union[GatewaySearchScopeDTO, _Mapping]] = ...) -> None: ...
+
+class GatewaySearchScopeBranchDTO(_message.Message):
+    __slots__ = ("owner", "target_id", "state", "code", "message")
+    OWNER_FIELD_NUMBER: _ClassVar[int]
+    TARGET_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    owner: GatewaySearchWorkspaceOwnerDTO
+    target_id: str
+    state: str
+    code: str
+    message: str
+    def __init__(self, owner: _Optional[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., target_id: _Optional[str] = ..., state: _Optional[str] = ..., code: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+
+class GatewaySearchScopeResolutionDTO(_message.Message):
+    __slots__ = ("scope", "branches")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    BRANCHES_FIELD_NUMBER: _ClassVar[int]
+    scope: GatewaySearchScopeDTO
+    branches: _containers.RepeatedCompositeFieldContainer[GatewaySearchScopeBranchDTO]
+    def __init__(self, scope: _Optional[_Union[GatewaySearchScopeDTO, _Mapping]] = ..., branches: _Optional[_Iterable[_Union[GatewaySearchScopeBranchDTO, _Mapping]]] = ...) -> None: ...
+
 class GatewaySessionSearchWorkspaceStatusDTO(_message.Message):
     __slots__ = ("workspace_id", "workspace_name", "status", "error")
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]

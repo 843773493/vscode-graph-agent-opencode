@@ -9,9 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.fuzzy import is_subsequence
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.registry.owners import workspace_owner
 from app.schemas.gateway.search import (
-    GatewaySearchWorkspaceOwnerDTO,
     GatewayWorkspaceDiscoveryHitDTO,
     GatewayWorkspaceDiscoveryResultsDTO,
 )
@@ -29,21 +29,6 @@ class _DiscoveryCursor(BaseModel):
     registry_revision: int
     navigation_revision: str
     offset: int = Field(ge=0)
-
-
-def _workspace_owner(
-    target: WorkspaceTarget, registry: GatewayWorkspaceRegistry, gateway_id: str,
-) -> GatewaySearchWorkspaceOwnerDTO:
-    if target.backend_workspace_id is None:
-        raise ValueError(f"已登记目标缺少工作区身份: {target.workspace_id}")
-    if target.connection_kind == "remote_gateway":
-        if target.remote_gateway_connection_id is None:
-            raise ValueError(f"已登记远端目标缺少所属身份: {target.workspace_id}")
-        connection = registry.remote_gateway_connection(target.remote_gateway_connection_id)
-        return GatewaySearchWorkspaceOwnerDTO(
-            gateway_id=connection.remote_gateway_id, workspace_id=target.backend_workspace_id,
-        )
-    return GatewaySearchWorkspaceOwnerDTO(gateway_id=gateway_id, workspace_id=target.backend_workspace_id)
 
 
 def discover_workspaces(
@@ -93,8 +78,9 @@ def discover_workspaces(
         frontier.extend((child, ids, names) for child in reversed(children.get(node.node_id, [])))
         if node.kind != "workspace_ref":
             continue
+        assert node.workspace_id is not None  # 导航 owner 保证 workspace_ref 携带目标 ID。
         target = by_target[node.workspace_id]
-        owner = _workspace_owner(target, registry, gateway_id)
+        owner = workspace_owner(target, registry, gateway_id)
         if normalized and not any(is_subsequence(normalized, term.casefold()) for term in (
             target.name, target.workspace_id, owner.workspace_id, "/".join(names),
         )):

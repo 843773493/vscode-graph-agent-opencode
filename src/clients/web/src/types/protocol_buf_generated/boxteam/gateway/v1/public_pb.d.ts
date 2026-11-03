@@ -2161,6 +2161,132 @@ export declare type GatewayWorkspaceDiscoveryResultsDTO = Message<"boxteam.gatew
 export declare const GatewayWorkspaceDiscoveryResultsDTOSchema: GenMessage<GatewayWorkspaceDiscoveryResultsDTO>;
 
 /**
+ * 只冻结实际范围，不保存路由别名、凭据或全域 cursor；续查仍由各 owner 核验原页。
+ *
+ * @generated from message boxteam.gateway.v1.GatewaySearchScopeDTO
+ */
+export declare type GatewaySearchScopeDTO = Message<"boxteam.gateway.v1.GatewaySearchScopeDTO"> & {
+  /**
+   * @generated from field: int64 version = 1;
+   */
+  version: bigint;
+
+  /**
+   * @generated from field: string gateway_id = 2;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp resolved_at = 3;
+   */
+  resolvedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string mode = 4;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owners = 5;
+   */
+  owners: GatewaySearchWorkspaceOwnerDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewaySearchScopeDTO.
+ * Use `create(GatewaySearchScopeDTOSchema)` to create a new message.
+ */
+export declare const GatewaySearchScopeDTOSchema: GenMessage<GatewaySearchScopeDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewaySearchScopeRequest
+ */
+export declare type GatewaySearchScopeRequest = Message<"boxteam.gateway.v1.GatewaySearchScopeRequest"> & {
+  /**
+   * @generated from field: string mode = 1;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO origin = 2;
+   */
+  origin?: GatewaySearchWorkspaceOwnerDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owners = 3;
+   */
+  owners: GatewaySearchWorkspaceOwnerDTO[];
+
+  /**
+   * @generated from field: optional boxteam.gateway.v1.GatewaySearchScopeDTO scope = 4;
+   */
+  scope?: GatewaySearchScopeDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewaySearchScopeRequest.
+ * Use `create(GatewaySearchScopeRequestSchema)` to create a new message.
+ */
+export declare const GatewaySearchScopeRequestSchema: GenMessage<GatewaySearchScopeRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewaySearchScopeBranchDTO
+ */
+export declare type GatewaySearchScopeBranchDTO = Message<"boxteam.gateway.v1.GatewaySearchScopeBranchDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+   */
+  owner?: GatewaySearchWorkspaceOwnerDTO | undefined;
+
+  /**
+   * @generated from field: optional string target_id = 2;
+   */
+  targetId?: string | undefined;
+
+  /**
+   * @generated from field: string state = 3;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string code = 4;
+   */
+  code?: string | undefined;
+
+  /**
+   * @generated from field: optional string message = 5;
+   */
+  message?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewaySearchScopeBranchDTO.
+ * Use `create(GatewaySearchScopeBranchDTOSchema)` to create a new message.
+ */
+export declare const GatewaySearchScopeBranchDTOSchema: GenMessage<GatewaySearchScopeBranchDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewaySearchScopeResolutionDTO
+ */
+export declare type GatewaySearchScopeResolutionDTO = Message<"boxteam.gateway.v1.GatewaySearchScopeResolutionDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v1.GatewaySearchScopeDTO scope = 1;
+   */
+  scope?: GatewaySearchScopeDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v1.GatewaySearchScopeBranchDTO branches = 2;
+   */
+  branches: GatewaySearchScopeBranchDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewaySearchScopeResolutionDTO.
+ * Use `create(GatewaySearchScopeResolutionDTOSchema)` to create a new message.
+ */
+export declare const GatewaySearchScopeResolutionDTOSchema: GenMessage<GatewaySearchScopeResolutionDTO>;
+
+/**
  * @generated from message boxteam.gateway.v1.GatewaySessionSearchWorkspaceStatusDTO
  */
 export declare type GatewaySessionSearchWorkspaceStatusDTO = Message<"boxteam.gateway.v1.GatewaySessionSearchWorkspaceStatusDTO"> & {

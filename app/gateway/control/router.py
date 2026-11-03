@@ -19,6 +19,7 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.diagnostics import collect_gateway_diagnostics
 from app.gateway.federation import request_remote_gateway_management
 from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.routes._shared import get_registry, get_workspace_navigation_store
 from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
 from app.schemas.gateway.search import GatewayWorkspaceDiscoveryResultsDTO
 from app.schemas.gateway_control import (
@@ -34,20 +35,6 @@ from app.schemas.gateway_control import (
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter(prefix="/api/gateway", tags=["gateway-control"])
-
-
-def _registry(request: Request) -> GatewayWorkspaceRegistry:
-    value = getattr(request.app.state, "registry", None)
-    if not isinstance(value, GatewayWorkspaceRegistry):
-        raise RuntimeError("Gateway registry 尚未初始化")
-    return value
-
-
-def _navigation_store(request: Request) -> WorkspaceNavigationStore:
-    value = getattr(request.app.state, "workspace_navigation_store", None)
-    if not isinstance(value, WorkspaceNavigationStore):
-        raise RuntimeError("Gateway 工作区导航存储尚未初始化")
-    return value
 
 
 def _catalog_search(request: Request) -> GatewaySessionCatalogSearchService:
@@ -92,7 +79,7 @@ async def get_gateway_diagnostics(
     tail_lines: int = Query(default=300, ge=20, le=1000),
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     if gateway_connection_id is None:
         try:
@@ -206,8 +193,8 @@ async def discover_gateway_workspaces(
     request: Request,
     _: Annotated[str, Depends(verify_gateway_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    registry: Annotated[GatewayWorkspaceRegistry, Depends(_registry)],
-    store: Annotated[WorkspaceNavigationStore, Depends(_navigation_store)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+    store: Annotated[WorkspaceNavigationStore, Depends(get_workspace_navigation_store)],
     query: Annotated[str, Query(max_length=512)] = "",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[str | None, Query(max_length=8192)] = None,
@@ -229,8 +216,8 @@ async def discover_gateway_workspaces(
 async def list_workspace_navigation(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
-    store: WorkspaceNavigationStore = Depends(_navigation_store),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    store: WorkspaceNavigationStore = Depends(get_workspace_navigation_store),
 ):
     return APIResponse(
         data=store.list_tree(registry.targets()),
@@ -246,8 +233,8 @@ async def create_workspace_folder(
     payload: WorkspaceFolderCreateRequest,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
-    store: WorkspaceNavigationStore = Depends(_navigation_store),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    store: WorkspaceNavigationStore = Depends(get_workspace_navigation_store),
 ):
     try:
         result = store.create_folder(payload, registry.targets())
@@ -265,8 +252,8 @@ async def update_workspace_navigation_node(
     payload: WorkspaceNavigationNodeUpdateRequest,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
-    store: WorkspaceNavigationStore = Depends(_navigation_store),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    store: WorkspaceNavigationStore = Depends(get_workspace_navigation_store),
 ):
     try:
         result = store.update_node(node_id, payload, registry.targets())
@@ -285,8 +272,8 @@ async def reorder_workspace_navigation(
     payload: WorkspaceNavigationReorderRequest,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
-    store: WorkspaceNavigationStore = Depends(_navigation_store),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    store: WorkspaceNavigationStore = Depends(get_workspace_navigation_store),
 ):
     try:
         result = store.reorder(payload, registry.targets())
@@ -303,8 +290,8 @@ async def place_workspace_navigation_node(
     payload: WorkspaceNavigationPlacementRequest,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
-    store: WorkspaceNavigationStore = Depends(_navigation_store),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    store: WorkspaceNavigationStore = Depends(get_workspace_navigation_store),
 ):
     try:
         result = store.place(payload, registry.targets())
@@ -324,8 +311,8 @@ async def delete_workspace_folder(
     recursive: bool = Query(default=False),
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
-    store: WorkspaceNavigationStore = Depends(_navigation_store),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    store: WorkspaceNavigationStore = Depends(get_workspace_navigation_store),
 ):
     try:
         result = store.delete_folder(
@@ -348,8 +335,8 @@ async def get_workspace_navigation_breadcrumb(
     node_id: str,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
-    registry: GatewayWorkspaceRegistry = Depends(_registry),
-    store: WorkspaceNavigationStore = Depends(_navigation_store),
+    registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    store: WorkspaceNavigationStore = Depends(get_workspace_navigation_store),
 ):
     try:
         result = store.breadcrumb(node_id, registry.targets())
@@ -363,7 +350,7 @@ async def migrate_session_generators(
     request: Request,
     _: Annotated[str, Depends(verify_gateway_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    registry: Annotated[GatewayWorkspaceRegistry, Depends(_registry)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     api: Annotated[GatewayResourceCatalogService, Depends(_resource_catalog)],
     preview: Annotated[bool, Query()] = True,
 ):

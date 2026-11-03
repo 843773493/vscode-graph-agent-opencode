@@ -8,6 +8,7 @@
 - `persistence.py`：registry 快照持久化（`_load`/`_save`）与 commit observer。
 - `crud.py`：目标增删改、排序、激活、重命名与父子关系。
 - `routes.py`：路由租约、引用计数与代理目标解析。
+- `owners.py`：资源导航、控制面发现与联邦搜索共用的稳定 Gateway／workspace 归属；不把 route 别名当 owner。
 - `runtime.py`：托管运行时生命周期与 runtime/workspace/remote generation。
 - `remote.py`：远端 Gateway 连接与 retired runtime 清理。
 - `projection.py`：remote projection cursor、snapshot 与 batch。

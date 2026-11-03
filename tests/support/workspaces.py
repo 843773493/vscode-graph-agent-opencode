@@ -83,15 +83,19 @@ def prepare_default_test_workspace(
     workspace_root: Path,
     template_root: Path,
     shared_skill_root: Path | None = None,
+    fresh_identity: bool = False,
 ) -> Path:
-    """完整复制只读模板，创建文件级隔离工作区。"""
+    """完整复制只读模板；独立多工作区可显式舍弃模板身份，由产品创建新 UUID。"""
 
-    return prepare_test_workspace(
+    workspace = prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
         template_items=None,
         shared_skill_root=shared_skill_root,
     )
+    if fresh_identity:
+        (workspace / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
+    return workspace
 
 
 def install_test_workspace_config(

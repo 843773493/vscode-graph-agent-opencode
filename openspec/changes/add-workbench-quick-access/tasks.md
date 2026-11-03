@@ -169,7 +169,7 @@
 - [x] 16.1 清点 Gateway catalog 全范围查询／镜像匹配、旧 React 资源导航、Workbench 多目标分支、原文件 SearchService、Agent 工具及测试的全部直接／间接消费者，确定唯一两级调用链与删除清单。
 - [ ] 16.2 在原协议 owner 定义 Provider 能力、类型化领域命中联合及联邦范围／分支／增量／结束信封，同步 OpenAPI／proto／生成客户端与真实类型检查；只共享生命周期，不引入全局业务对象或索引库。
 - [ ] 16.3 在工作区 SearchService 注册原 catalog／Thread／文件／消息／工具结果／请求／Trace Provider，按类别＋操作／模式唯一分派，支持能力／版本发现、精确 scope、选项拒绝及原分页／位置；冲突报错，缺 Provider 不永久等待。注册句柄可释放，禁止新准入、取消并等待在途安全结算后释放资源，不能切换 Provider 或发布迟到命中；原领域接口复用同一查询，不复制扫描器或强制 Searchable 基类。
-- [ ] 16.4 在 Gateway 实现发起上下文、显式集合与 all 的范围解析，返回稳定集合／时间／顺序；无上下文、空集合、未知或越权 ID 明确拒绝，续页冻结范围，登记变动不静默增删目标，停止目标不启动。
+- [x] 16.4 在 Gateway 实现发起上下文、显式集合与 all 的范围解析，返回稳定集合／时间／顺序；无上下文、空集合、未知或越权 ID 明确拒绝，续页冻结范围，登记变动不静默增删目标，停止目标不启动。
 - [x] 16.5 复用 Gateway 控制面提供有界工作区名称／ID／导航发现，使“相关工作区 → 明确集合 → 会话树／Thread／正文”可由 UI／工具组合；直接集合及 all 查询不以项目名称相关性预筛。
 - [ ] 16.6 在 Gateway 实现唯一跨目标有界队列；核心使用取消／进度／最终完成 typed 合同，SSE 仅作网络编码。统一剩余期限、实际路由、单次 fan-out 相同 request_id 及新读取新 ID、分支重试和部分失败；首批及时、后续有界批次／缓冲、结算前 flush、唯一终态，慢消费不无限积累，Provider 无 SSE 依赖，不新增持久搜索会话或广播搜索结果。
 - [ ] 16.7 提供冻结范围和 owner 独立 cursor 的类型化续查，保留原数据版本与来源；支持无进程内搜索状态的重启续查、单分支失效／重试，不伪造全域 revision／总数／快照。
@@ -461,3 +461,12 @@
 - 13 项产品 Gateway ASGI 集成检查、49 项协议／鉴权检查通过，覆盖停止目标、空查询有界浏览、名称／ID／导航召回、嵌套移动、无匹配、独立分页、登记／导航／查询／Gateway 改变的旧 cursor、远端断开和扫描上限；这些是 ASGI 与控制面验收，不是实网联邦或真实浏览器证明。首轮远端 fixture 缺 connection_id，在产品拒绝处修正，原件保留。最终 handler 沿原控制面的异步入口同步取得元数据快照，避免另在线程读写导航产生新竞争。
 - Proto 与 Python／JS／TS 绑定、真实 OpenAPI 递归结构校验已同步；Buf 格式、真实提交 breaking 与生成一致性通过。首轮一致性失败仅因新增 owner 身份注释后未重生成，重生成后通过。真实类型检查含 18 份转换源码；最终生成文件相对该检查只增加同一条注释，已按原源码 SHA-256 反证，运行时绑定字节不变。最终正式 Workbench 构建通过（69.40 秒），使用独立输出，没有覆盖开发服务产物；保留版本与正文指纹后清理临时 dist。
 - 新源码与测试 Ruff／AST 通过，control/router 的 21 条原诊断经 HEAD 比较无新增；结构复核无新增 findings，未增加源码子目录或工作区存储。OpenSpec strict 与差异检查通过。准确命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/workspace-discovery-*`；原诊断探针的工作区、BOXTEAM_HOME、脚本和 PNG 已清理，仅保留 JSON／raw 证据。
+
+### 2026-11-03：Gateway 显式范围冻结与重启重解（16.4）
+
+- `/api/gateway/search/resolve` 复用唯一 resolver，支持明确 origin、非空集合、all 及无状态 resume；最多 64 个目标，all 沿导航顺序保留停止／断开登记，超限整体拒绝。范围只保存稳定 owner、模式、解析时间和版本；重解不换投被复用的 route、不吸收新登记，不探测健康或取得租约。registered 只证明登记存在。此入口为可选预览，实际联邦调度将内部复用，不要求额外网络往返。
+- 稳定 owner 投影统一到 registry，原导航与发现消费者全部迁移；control 路由复用原共享 registry／navigation 依赖，删除同义 helper。Proto、Python／JS／TS 绑定和真实 OpenAPI 递归检查同步。77 项最终范围／协议／鉴权／路由检查、65 项原资源导航／导航存储回归及 13 项发现检查通过。
+- 真实独立 Gateway／Backend 集成通过（1 passed / 33.68 秒）：冻结 A+B，重启前删除 B、让 C 复用其 route，resume 仍保留 B 失效，新 all 才包含 C；核对请求 ID、响应头／体一致、停止目标文件不变及无 sessions 创建。登记数据只作为控制面测试输入，不预造执行历史；该场景不证明实际联邦正文或领域 cursor 续页。初次失败分别来自不完整 managed owner 合同与模板 UUID 冲突；补齐合法输入，并复用新增 fresh_identity fixture 让产品生成隔离 UUID，源模板及默认行为不变。
+- 删除路由测试的固定接口总数、整份 OpenAPI hash 及子进程，保留唯一登记与通配代理前置顺序断言，公开结构由 descriptor 合同检查承担。已只读对照 Copilot 的 jsonBody／endpoints 测试行为与结构断言；没有删除产品内容完整性校验，也未运行参考仓库测试。旧总数断言失败原件保留。
+- 最终真实 Workbench 类型检查（18 份转换源码）、独立正式构建、协议生成一致性、Buf 格式／lint／基于 `7a87c0e13` 的 breaking 检查通过。新核心／路由 Pyright 零诊断；扩大到原 resource_navigation 后的两条 min/key Optional 诊断与 HEAD 原件完全相同，未扩修。Ruff 原 25 条、现 23 条，无新增；AST 与差异检查通过。构建 dist 和临时 baseline 探针已删除，保留日志、JSON 收据及构建 manifest。
+- 准确命令、源码指纹、退出码及失败原件：`out/tests/temp/quick_access_provider_20261103/artifacts/scope-*`；真实请求原件：`out/tests/integration/gateway/test_search_scope/runs/run-52e435172ca2/nodes/node-1557f17028b3/artifacts/scope-network.json`。未修改 UI 行为，未重复浏览器／Electron验收。实际 fan-out、增量流、独立领域 cursor 及原调用方迁移尚未完成，16.2／16.6／16.7／16.13／16.14 保持未勾选。

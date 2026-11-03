@@ -19,6 +19,7 @@ app/gateway/
 │   ├── gateway_config_events/                   配置事件投递账本
 │   └── gateway_runtime_generation/              运行配置代次和健康证明
 ├── federation/                                  Gateway 间身份、授权、通道与 RPC
+├── search/                                      联邦搜索范围、跨目标查询编排及稳定归属
 ├── config/                                      Gateway 配置读取、校验和热重载
 ├── theme/                                       Gateway 控制面的主题和图片资源
 └── 根层模块                                     鉴权、凭据、SSH、设备连接、代理等横切能力
@@ -53,7 +54,7 @@ app/gateway/
 
 # 规范
 
-- Gateway 只做路由、目标生命周期和透明转发。
+- Gateway 负责路由、目标生命周期、透明转发及联邦搜索的范围／跨目标查询编排；领域匹配和索引仍归工作区原 owner。
 - Gateway 自有控制面持久化数据位于 `${BOXTEAM_HOME:-~/.boxteams}/state/gateway/`；产品诊断日志按共享合同归 `${BOXTEAM_HOME:-~/.boxteams}/state/logs/`。
 - `workspaces.json` 必须保存重启后重建目标所需的来源信息；SSH 工作区须保存主机、端口、用户、远端路径和私钥路径等重连参数，临时 `backend_url` 不能作为重连权威来源。
 - 注册表写入必须原子替换并限制为当前用户可读写；私钥文件内容不得复制进注册表。

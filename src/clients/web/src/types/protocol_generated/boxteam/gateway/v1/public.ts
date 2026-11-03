@@ -506,6 +506,35 @@ export interface GatewayWorkspaceDiscoveryResultsDTO {
   complete: boolean;
 }
 
+/** 只冻结实际范围，不保存路由别名、凭据或全域 cursor；续查仍由各 owner 核验原页。 */
+export interface GatewaySearchScopeDTO {
+  version: number;
+  gateway_id: string;
+  resolved_at: string | undefined;
+  mode: string;
+  owners: GatewaySearchWorkspaceOwnerDTO[];
+}
+
+export interface GatewaySearchScopeRequest {
+  mode: string;
+  origin?: GatewaySearchWorkspaceOwnerDTO | undefined;
+  owners: GatewaySearchWorkspaceOwnerDTO[];
+  scope?: GatewaySearchScopeDTO | undefined;
+}
+
+export interface GatewaySearchScopeBranchDTO {
+  owner: GatewaySearchWorkspaceOwnerDTO | undefined;
+  target_id?: string | undefined;
+  state: string;
+  code?: string | undefined;
+  message?: string | undefined;
+}
+
+export interface GatewaySearchScopeResolutionDTO {
+  scope: GatewaySearchScopeDTO | undefined;
+  branches: GatewaySearchScopeBranchDTO[];
+}
+
 export interface GatewaySessionSearchWorkspaceStatusDTO {
   workspace_id: string;
   workspace_name: string;
@@ -4190,6 +4219,198 @@ export const GatewayWorkspaceDiscoveryResultsDTO: MessageFns<GatewayWorkspaceDis
     message.items = object.items?.map((e) => GatewayWorkspaceDiscoveryHitDTO.fromPartial(e)) || [];
     message.cursor = object.cursor ?? undefined;
     message.complete = object.complete ?? false;
+    return message;
+  },
+};
+
+function createBaseGatewaySearchScopeDTO(): GatewaySearchScopeDTO {
+  return { version: 0, gateway_id: "", resolved_at: undefined, mode: "", owners: [] };
+}
+
+export const GatewaySearchScopeDTO: MessageFns<GatewaySearchScopeDTO> = {
+  fromJSON(object: any): GatewaySearchScopeDTO {
+    return {
+      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      resolved_at: isSet(object.resolved_at) ? globalThis.String(object.resolved_at) : undefined,
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      owners: globalThis.Array.isArray(object?.owners)
+        ? object.owners.map((e: any) => GatewaySearchWorkspaceOwnerDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewaySearchScopeDTO): unknown {
+    const obj: any = {};
+    if (message.version !== 0) {
+      obj.version = Math.round(message.version);
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.resolved_at !== undefined) {
+      obj.resolved_at = message.resolved_at;
+    }
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.owners?.length) {
+      obj.owners = message.owners.map((e) => GatewaySearchWorkspaceOwnerDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewaySearchScopeDTO>, I>>(base?: I): GatewaySearchScopeDTO {
+    return GatewaySearchScopeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewaySearchScopeDTO>, I>>(object: I): GatewaySearchScopeDTO {
+    const message = createBaseGatewaySearchScopeDTO();
+    message.version = object.version ?? 0;
+    message.gateway_id = object.gateway_id ?? "";
+    message.resolved_at = object.resolved_at ?? undefined;
+    message.mode = object.mode ?? "";
+    message.owners = object.owners?.map((e) => GatewaySearchWorkspaceOwnerDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseGatewaySearchScopeRequest(): GatewaySearchScopeRequest {
+  return { mode: "", origin: undefined, owners: [], scope: undefined };
+}
+
+export const GatewaySearchScopeRequest: MessageFns<GatewaySearchScopeRequest> = {
+  fromJSON(object: any): GatewaySearchScopeRequest {
+    return {
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      origin: isSet(object.origin) ? GatewaySearchWorkspaceOwnerDTO.fromJSON(object.origin) : undefined,
+      owners: globalThis.Array.isArray(object?.owners)
+        ? object.owners.map((e: any) => GatewaySearchWorkspaceOwnerDTO.fromJSON(e))
+        : [],
+      scope: isSet(object.scope) ? GatewaySearchScopeDTO.fromJSON(object.scope) : undefined,
+    };
+  },
+
+  toJSON(message: GatewaySearchScopeRequest): unknown {
+    const obj: any = {};
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.origin !== undefined) {
+      obj.origin = GatewaySearchWorkspaceOwnerDTO.toJSON(message.origin);
+    }
+    if (message.owners?.length) {
+      obj.owners = message.owners.map((e) => GatewaySearchWorkspaceOwnerDTO.toJSON(e));
+    }
+    if (message.scope !== undefined) {
+      obj.scope = GatewaySearchScopeDTO.toJSON(message.scope);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewaySearchScopeRequest>, I>>(base?: I): GatewaySearchScopeRequest {
+    return GatewaySearchScopeRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewaySearchScopeRequest>, I>>(object: I): GatewaySearchScopeRequest {
+    const message = createBaseGatewaySearchScopeRequest();
+    message.mode = object.mode ?? "";
+    message.origin = (object.origin !== undefined && object.origin !== null)
+      ? GatewaySearchWorkspaceOwnerDTO.fromPartial(object.origin)
+      : undefined;
+    message.owners = object.owners?.map((e) => GatewaySearchWorkspaceOwnerDTO.fromPartial(e)) || [];
+    message.scope = (object.scope !== undefined && object.scope !== null)
+      ? GatewaySearchScopeDTO.fromPartial(object.scope)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGatewaySearchScopeBranchDTO(): GatewaySearchScopeBranchDTO {
+  return { owner: undefined, target_id: undefined, state: "", code: undefined, message: undefined };
+}
+
+export const GatewaySearchScopeBranchDTO: MessageFns<GatewaySearchScopeBranchDTO> = {
+  fromJSON(object: any): GatewaySearchScopeBranchDTO {
+    return {
+      owner: isSet(object.owner) ? GatewaySearchWorkspaceOwnerDTO.fromJSON(object.owner) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.String(object.target_id) : undefined,
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      code: isSet(object.code) ? globalThis.String(object.code) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
+    };
+  },
+
+  toJSON(message: GatewaySearchScopeBranchDTO): unknown {
+    const obj: any = {};
+    if (message.owner !== undefined) {
+      obj.owner = GatewaySearchWorkspaceOwnerDTO.toJSON(message.owner);
+    }
+    if (message.target_id !== undefined) {
+      obj.target_id = message.target_id;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.code !== undefined) {
+      obj.code = message.code;
+    }
+    if (message.message !== undefined) {
+      obj.message = message.message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewaySearchScopeBranchDTO>, I>>(base?: I): GatewaySearchScopeBranchDTO {
+    return GatewaySearchScopeBranchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewaySearchScopeBranchDTO>, I>>(object: I): GatewaySearchScopeBranchDTO {
+    const message = createBaseGatewaySearchScopeBranchDTO();
+    message.owner = (object.owner !== undefined && object.owner !== null)
+      ? GatewaySearchWorkspaceOwnerDTO.fromPartial(object.owner)
+      : undefined;
+    message.target_id = object.target_id ?? undefined;
+    message.state = object.state ?? "";
+    message.code = object.code ?? undefined;
+    message.message = object.message ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewaySearchScopeResolutionDTO(): GatewaySearchScopeResolutionDTO {
+  return { scope: undefined, branches: [] };
+}
+
+export const GatewaySearchScopeResolutionDTO: MessageFns<GatewaySearchScopeResolutionDTO> = {
+  fromJSON(object: any): GatewaySearchScopeResolutionDTO {
+    return {
+      scope: isSet(object.scope) ? GatewaySearchScopeDTO.fromJSON(object.scope) : undefined,
+      branches: globalThis.Array.isArray(object?.branches)
+        ? object.branches.map((e: any) => GatewaySearchScopeBranchDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewaySearchScopeResolutionDTO): unknown {
+    const obj: any = {};
+    if (message.scope !== undefined) {
+      obj.scope = GatewaySearchScopeDTO.toJSON(message.scope);
+    }
+    if (message.branches?.length) {
+      obj.branches = message.branches.map((e) => GatewaySearchScopeBranchDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewaySearchScopeResolutionDTO>, I>>(base?: I): GatewaySearchScopeResolutionDTO {
+    return GatewaySearchScopeResolutionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewaySearchScopeResolutionDTO>, I>>(
+    object: I,
+  ): GatewaySearchScopeResolutionDTO {
+    const message = createBaseGatewaySearchScopeResolutionDTO();
+    message.scope = (object.scope !== undefined && object.scope !== null)
+      ? GatewaySearchScopeDTO.fromPartial(object.scope)
+      : undefined;
+    message.branches = object.branches?.map((e) => GatewaySearchScopeBranchDTO.fromPartial(e)) || [];
     return message;
   },
 };
