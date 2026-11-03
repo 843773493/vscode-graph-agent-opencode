@@ -164,8 +164,8 @@ class GatewayContextQueryService:
         self,
         request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO:
-        # TODO(quick-access 16.12): 将 effective_context 等原来源迁入领域 Provider，
-        # 再迁齐独立 owner cursor 及消费者并删除此聚合；资源搜索工具不得调用本链。
+        # TODO(quick-access 16.12): 将剩余消费者迁到已登记的 context/content Provider，
+        # 保留独立 owner cursor 后删除此聚合；资源搜索工具不得调用本链。
         resource = _require_gateway_inventory(
             resource_identity=request.resource_identity,
             uri=request.uri,

@@ -18,11 +18,6 @@ from app.abstractions.session_resources import (
     SessionResourceMessageProtocol,
 )
 from app.abstractions.session_subagent import SessionSubagentProtocol
-from app.abstractions.session_target import (
-    SessionTarget,
-    SessionTargetResolutionError,
-    SessionTargetResolverProtocol,
-)
 from app.abstractions.team import TeamCoordinationProtocol, TeamStoreProtocol
 
 __all__ = [
@@ -38,9 +33,6 @@ __all__ = [
     "SessionOrchestratorProtocol",
     "SessionResourceMessageProtocol",
     "SessionSubagentProtocol",
-    "SessionTarget",
-    "SessionTargetResolutionError",
-    "SessionTargetResolverProtocol",
     "TeamCoordinationProtocol",
     "TeamStoreProtocol",
     "WorkspaceSessionContextClientProtocol",

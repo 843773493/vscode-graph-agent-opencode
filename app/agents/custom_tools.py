@@ -23,7 +23,6 @@ from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
 )
-from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.agents.model_tool_schema import get_model_tool_schema
 from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -52,7 +51,6 @@ class CustomToolFactoryContext:
     terminal_resource_owner: TerminalResourceOwner
     browser_resource_owner: BrowserResourceOwner
     invocation_context: ToolInvocationContext
-    session_target_resolver: SessionTargetResolverProtocol | None = None
     session_communication_service: SessionCommunicationProtocol | None = None
     tool_options: Mapping[str, object] = field(default_factory=dict)
     node_debug_service: NodeDebugService | None = None
@@ -152,7 +150,6 @@ def build_custom_tool_bundle(
     terminal_resource_owner: TerminalResourceOwner,
     browser_resource_owner: BrowserResourceOwner,
     invocation_context: ToolInvocationContext,
-    session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_communication_service: SessionCommunicationProtocol | None = None,
     node_debug_service: NodeDebugService | None = None,
     mcp_connection_service: McpConnectionService | None = None,
@@ -173,7 +170,6 @@ def build_custom_tool_bundle(
         terminal_resource_owner=terminal_resource_owner,
         browser_resource_owner=browser_resource_owner,
         invocation_context=invocation_context,
-        session_target_resolver=session_target_resolver,
         session_communication_service=session_communication_service,
         node_debug_service=node_debug_service,
         mcp_connection_service=mcp_connection_service,

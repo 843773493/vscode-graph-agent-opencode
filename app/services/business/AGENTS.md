@@ -26,7 +26,7 @@
 │   ├── reasoning_checkpoint_service.py          推理检查点
 │   └── system_reminder_checkpoint_service.py    系统提醒检查点
 ├── 会话状态与资源
-│   ├── session_service.py / session_target_resolver.py
+│   ├── session_service.py
 │   ├── session_information_service.py / session_goal_service.py
 │   ├── session_interrupt_service.py
 │   ├── session_changes_logic.py / session_changes_service.py

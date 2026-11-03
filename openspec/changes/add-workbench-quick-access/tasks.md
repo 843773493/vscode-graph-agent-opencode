@@ -654,3 +654,9 @@
 - 143 项 Provider、原上下文、联邦调度及公开协议定向检查通过。真实 Gateway＋Backend 通过产品入口生成执行历史后核新旧查询完整页一致、按原身份及版本精确读取、后端重启后原续点继续、来源变化明确拒绝旧续点；1 passed／62.42 秒。首次读取失败为测试未绑定请求身份，已按原请求作用域补齐；另一次装具启动前端口占用的失败原件保留，确认端口空闲后通过，未终止未知进程。
 - Ruff、9 份核心／测试 Pyright、协议生成一致性、Buf format／lint／基于 `7c9b2c27a` 的 breaking、OpenSpec strict、真实 Workbench 类型检查（19 份转换源码）和正式 Web 构建通过。准确命令、源码指纹、原始输出及退出码保留在 `out/tests/temp/context_provider_20261103/artifacts/`；正式网络原件归 `out/tests/integration/gateway/test_context_resource_search/`。
 - 本批没有改变 Quick Input／Electron 交互，不重复浏览器和打包 Electron 验收。旧 `search_context` 跨目标聚合及相关消费者迁移仍未完成，16.12／16.15 保持未勾选。
+
+### 2026-11-03：删除无消费者的目标解析链（16.16 部分）
+
+- 全仓核对确认旧 SessionTargetResolver 只有定义、自身测试和无效依赖注入，生产工具早已通过结构化 URI 及原通信／联邦 owner 处理目标。删除解析器、协议／DTO、包导出、容器装配、runtime／工厂参数及专属测试，迁齐其它测试装具和目录职责；不为死链路新增联邦搜索包装。现行 FederationRpcService 的 exact-ID、权限、歧义、期限与通道行为保持原入口。
+- 88 项定向回归通过、5 项真实外部模型用例按原条件跳过；覆盖 Agent 工厂、工具装配、runtime、上下文工具与完整 federation transit 文件。真实 Gateway＋Backend 通过产品消息执行、上下文精确读取及重启续页，1 passed／57.13 秒。Ruff、差异检查通过；核心五文件 Pyright 的 7 条诊断与 `e28ce7de1` 基线逐条同文，没有新增，未把该检查称为零诊断。
+- 命令、源码指纹、原始输出、退出码及类型诊断对比保留在 `out/tests/temp/quick_access_dead_target_20261103/artifacts/`。本批没有改变前端或公开协议，复用前一切片的真实类型与构建；不重复 Web／Electron 交互。旧 Gateway 上下文聚合仍有实际工具与 relay 消费者，继续由 16.12 追踪；16.16 完整项保持未勾选。

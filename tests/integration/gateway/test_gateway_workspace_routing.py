@@ -64,7 +64,6 @@ from app.services.business.session_context_resource import (
     session_resource_uri,
 )
 from app.services.business.session_service import SessionService
-from app.services.business.session_target_resolver import SessionTargetResolver
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
@@ -676,10 +675,6 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             ),
             session_context_query_service=local_query,
             workspace_session_context_client=context_client,
-            session_target_resolver=SessionTargetResolver(
-                session_service=local_sessions,
-                workspace_session_context_client=context_client,
-            ),
         )
         read_tool = create_read_context_tool(context)
         search_tool = create_search_context_tool(context)

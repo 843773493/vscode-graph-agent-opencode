@@ -17,7 +17,6 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.resource_file_content import ResourceFileContent
 from app.abstractions.session_context import WorkspaceSessionContextClientProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
-from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
@@ -89,7 +88,6 @@ from app.services.business.session_service import SessionService
 from app.services.business.session_skill_tracking_service import (
     SessionSkillTrackingService,
 )
-from app.services.business.session_target_resolver import SessionTargetResolver
 from app.services.business.session_turn_history import (
     SessionTurnHistoryService,
 )
@@ -232,7 +230,6 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         browser_resource_owner: BrowserResourceOwner,
         session_context_query_service: SessionContextQueryService,
         workspace_session_context_client: WorkspaceSessionContextClientProtocol,
-        session_target_resolver: SessionTargetResolverProtocol,
         mcp_catalog_owner: McpCatalogOwner,
         mcp_connection_service: McpConnectionService,
         resource_navigation: ResourceNavigation,
@@ -245,7 +242,6 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._browser_resource_owner = browser_resource_owner
         self._session_context_query_service = session_context_query_service
         self._workspace_session_context_client = workspace_session_context_client
-        self._session_target_resolver = session_target_resolver
         self._mcp_catalog_owner = mcp_catalog_owner
         self._mcp_connection_service = mcp_connection_service
         self._resource_navigation = resource_navigation
@@ -294,9 +290,6 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self,
     ) -> WorkspaceSessionContextClientProtocol:
         return self._workspace_session_context_client
-
-    def get_session_target_resolver(self) -> SessionTargetResolverProtocol:
-        return self._session_target_resolver
 
     def set_session_communication_service(
         self,
@@ -753,10 +746,6 @@ def _build_app_container(
         assembly_source=checkpointer,
         workspace_id=workspace_id,
     )
-    session_target_resolver = SessionTargetResolver(
-        session_service=session_service,
-        workspace_session_context_client=workspace_session_context_client,
-    )
     thread_creation_factory = OwnerThreadCreationFactory(
         sessions_root=resolved_sessions_root,
         workspace_id=workspace_id,
@@ -840,7 +829,6 @@ def _build_app_container(
         browser_resource_owner=browser_resource_owner,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
-        session_target_resolver=session_target_resolver,
         mcp_catalog_owner=mcp_catalog_owner,
         resource_navigation=resource_navigation,
         mcp_connection_service=mcp_connection_service,

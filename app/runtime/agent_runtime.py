@@ -13,7 +13,6 @@ from app.abstractions.session_context import (
 )
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
-from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.policy import (
@@ -86,8 +85,6 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_workspace_session_context_client(
         self,
     ) -> WorkspaceSessionContextClientProtocol: ...
-
-    def get_session_target_resolver(self) -> SessionTargetResolverProtocol: ...
 
     def get_session_communication_service(
         self,
@@ -166,7 +163,6 @@ def build_session_agent_runtime(
         workspace_session_context_client=(
             dependency_provider.get_workspace_session_context_client()
         ),
-        session_target_resolver=dependency_provider.get_session_target_resolver(),
         session_communication_service=(
             dependency_provider.get_session_communication_service()
         ),

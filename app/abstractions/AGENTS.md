@@ -13,8 +13,7 @@ app/abstractions/
 │   ├── session_context.py          上下文查询、修订与 fork 传输
 │   ├── session_orchestrator.py     会话编排调用端口
 │   ├── session_resources.py        会话资源读取端口
-│   ├── session_subagent.py         子 Agent 与 owner thread 创建端口
-│   └── session_target.py           会话目标解析端口
+│   └── session_subagent.py         子 Agent 与 owner thread 创建端口
 ├── 执行与消息边界
 │   ├── background_message_bus.py   后台任务消息收发
 │   ├── job_event_bus.py            Job 事件发布与订阅

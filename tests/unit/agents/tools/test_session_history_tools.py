@@ -12,7 +12,6 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
-from app.abstractions.session_target import SessionTarget
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
@@ -85,20 +84,11 @@ class WorkspaceProbe:
         return SessionContextSearchResultDTO(**request.model_dump(include={"resource_identity", "uri", "scope", "query", "match_mode"}), revision="remote-search")
 
 
-class ResolverProbe:
-    def __init__(self):
-        self.calls = []
-
-    async def resolve_session(self, session_id, *, backend_workspace_id):
-        self.calls.append((session_id, backend_workspace_id))
-        return SessionTarget(session_id=session_id, workspace_id="gw_target")
-
-
 @pytest.fixture
 def history_context(communication_probe, communication_invocation):
     return SimpleNamespace(
         session_id=SOURCE_SESSION, session_context_query_service=QueryProbe(),
-        workspace_session_context_client=WorkspaceProbe(), session_target_resolver=ResolverProbe(),
+        workspace_session_context_client=WorkspaceProbe(),
         session_communication_service=communication_probe, invocation_context=communication_invocation,
     )
 
@@ -113,21 +103,18 @@ async def test_session_read_uses_durable_communication_owner(history_context, co
     assert call["thread_id"] == history_context.invocation_context.thread_binding.thread_id
     assert call["source_call_id"] == history_context.invocation_context.require_operation_id("read")
     assert history_context.session_context_query_service.calls == []
-    assert history_context.session_target_resolver.calls == []
 
 
 async def test_search_preserves_resource_identity_without_gateway_route_mapping(history_context):
     arguments = {**_session_input(REMOTE_WORKSPACE), "query": "ALPHA"}
     result = json.loads(await create_search_context_tool(history_context).ainvoke(arguments))
     assert result["revision"] == "remote-search" and result["uri"] == arguments["uri"]
-    assert history_context.session_target_resolver.calls == []
     route, request = history_context.workspace_session_context_client.calls[0]
     assert route == "resource-search" and request.uri == arguments["uri"]
     assert request.resource_identity == arguments["resource_identity"]
 
 
 async def test_local_search_keeps_current_workspace_query(history_context):
-    history_context.session_target_resolver = None
     result = json.loads(await create_search_context_tool(history_context).ainvoke({**_session_input(), "query": "ALPHA"}))
     assert result["revision"] == "local-search"
     assert history_context.session_context_query_service.calls[0][0] == "search"
@@ -187,7 +174,7 @@ async def test_context_identity_rejection_keeps_path_out_of_model_result_and_all
     assert result.text == "ResourceIdentity resource_identity 不得携带路径/URI/credential 形态"
     assert identity not in result.text and "private" not in result.model_dump_json()
     assert communication_probe.calls == history_context.session_context_query_service.calls == []
-    assert history_context.workspace_session_context_client.calls == history_context.session_target_resolver.calls == []
+    assert history_context.workspace_session_context_client.calls == []
     assert invalid == {**valid, "resource_identity": identity}
     errors = [record.exc_info[1] for record in caplog.records if record.exc_info]
     assert len(errors) == 1 and isinstance(errors[0], ValueError)
@@ -292,7 +279,7 @@ async def test_context_tools_reject_unknown_arguments_before_owner_and_allow_cor
         issue, = rejected_error.value.errors()
         assert (issue["loc"], issue["type"], issue["input"]) == ((unknown_key,), "extra_forbidden", arguments[unknown_key])
     assert communication_probe.calls == history_context.session_context_query_service.calls == []
-    assert history_context.workspace_session_context_client.calls == history_context.session_target_resolver.calls == []
+    assert history_context.workspace_session_context_client.calls == []
     assert arguments == {**valid, unknown_key: "不得被静默忽略"}
 
     call["id"] = "corrected-context-arguments"
@@ -344,4 +331,3 @@ async def test_remote_workspace_inventory_uses_resource_relay(history_context, a
     assert request.uri == arguments["uri"]
     assert request.resource_identity == arguments["resource_identity"]
     assert history_context.session_context_query_service.calls == []
-    assert history_context.session_target_resolver.calls == []

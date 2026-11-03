@@ -24,7 +24,6 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextClientProtocol,
 )
 from app.abstractions.session_subagent import SessionSubagentProtocol
-from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_tools import build_default_tools
@@ -425,7 +424,6 @@ def create_my_deep_agent(
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
     | None = None,
-    session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_communication_service: SessionCommunicationProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     mcp_catalog_owner: McpCatalogOwner | None = None,
@@ -662,7 +660,6 @@ def create_my_deep_agent(
             job_service=job_service,
             session_context_query_service=session_context_query_service,
             workspace_session_context_client=workspace_session_context_client,
-            session_target_resolver=session_target_resolver,
             session_communication_service=session_communication_service,
             session_orchestrator=session_orchestrator,
             config_service=config_service,
@@ -1106,7 +1103,6 @@ def create_runtime_deep_agent_for_session(
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
     | None = None,
-    session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_communication_service: SessionCommunicationProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     mcp_catalog_owner: McpCatalogOwner | None = None,
@@ -1207,7 +1203,6 @@ def create_runtime_deep_agent_for_session(
         node_debug_service=node_debug_service,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
-        session_target_resolver=session_target_resolver,
         session_communication_service=session_communication_service,
         mcp_tools=mcp_tools,
         mcp_catalog_owner=mcp_catalog_owner,
