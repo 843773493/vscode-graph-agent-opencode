@@ -11,11 +11,7 @@ import { WorkspaceSymbolsQuickAccess } from '../../../../../src/clients/workbenc
 import { WorkspaceSymbolProviderRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/common/search.js';
 import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
-import { querySearchBranches } from '../../../../../src/clients/workbench/src/search/quickAccessBranches.js';
-import { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
-import { HttpRequestError } from '../../../../../src/clients/web/src/api/http.js';
-import { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
-export { contentBranchContract } from './content_branches.fixture.mjs';
+export { contentBranchContract, nameBranchContract } from './federated_branches.fixture.mjs';
 
 const owner = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const root = 'boxteam://workspace/workspace-a/resources/files/root';
@@ -104,59 +100,6 @@ export async function identityContract() {
   // 已释放 Provider 不再订阅失效通知。
   invalidateGatewayUserSession(0);
   return results;
-}
-
-export async function branchContract(mode) {
-  const originalRoutes = gateway.workspaceRoutes, originalRequest = gateway.request, originalTimer = globalThis.setTimeout;
-  const token = new CancellationTokenSource(), lifetime = new DisposableStore();
-  const calls = [], updates = [], drained = Promise.withResolvers(), entered = Promise.withResolvers();
-  const owners = Array.from({ length: mode === 'retry' ? 2 : 4 }, (_, index) => ({ ...owner, workspaceId: `workspace-${index}` }));
-  gateway.workspaceRoutes = async () => ({ gatewayId: owner.gatewayId, items: owners.map((target, index) => ({
-    workspace_id: `route-${index}`, backend_workspace_id: target.workspaceId, connection_kind: 'local', status: 'ready', name: `owner-${index}`,
-  })) });
-  gateway.request = async (_path, options, route) => {
-    const call = { route, signal: options.signal, deadline: Number(options.headers['X-BoxTeam-Name-Search-Deadline']) };
-    calls.push(call);
-    if (mode === 'retry') {
-      if (route === 'route-0' && calls.filter(item => item.route === route).length === 1) {
-        throw new HttpRequestError(503, 'Unavailable', '原 owner 读取失败', _path, 'request-failure');
-      }
-      options.onResponse('request-' + route);
-      return { items: [{ node: { kind: 'session', session_id: route, name: 'needle-' + route }, relative_path: route }] };
-    }
-    if (calls.length === 3) entered.resolve();
-    // 故意不合作的传输替身，用于证明迟到结果不会越过代际；产品 HTTP 自己响应 signal。
-    return await new Promise(resolve => { call.release = resolve; });
-  };
-  if (mode === 'timeout') globalThis.setTimeout = (handler, ms, ...args) => originalTimer(handler, ms === 15000 ? 450 : ms, ...args);
-  let busy = false;
-  try {
-    const branches = querySearchBranches(owners, ['会话'], 'needle', lifetime, token.token, {}, {}, {},
-      item => ({ id: item.sessionId, label: item.title, accept() {} }),
-      branches => updates.push(branches.map(branch => ({ count: branch.picks.length, label: branch.status.label }))),
-      value => { busy = value; if (!value) drained.resolve(); }, () => {});
-    if (mode === 'retry') {
-      await drained.promise;
-      const failed = branches[0].status, successful = branches[1].picks[0];
-      await failed.trigger();
-      return { counts: owners.map((_, index) => calls.filter(call => call.route === `route-${index}`).length),
-        error: failed.label, errorDetail: failed.detail, successDetail: branches[1].status.detail,
-        deadlines: calls.map(call => call.deadline),
-        preserved: branches[1].picks[0] === successful, picks: branches.map(branch => branch.picks.map(pick => pick.id)), busy };
-    }
-    await entered.promise;
-    const before = calls.length;
-    if (mode === 'cancel') { token.cancel(); lifetime.dispose(); }
-    else await drained.promise;
-    await Promise.resolve(); await Promise.resolve();
-    const beforeLate = JSON.stringify(updates);
-    for (const call of calls) call.release({ items: [{ node: { kind: 'session', session_id: 'late', name: 'needle-late' }, relative_path: 'late' }] });
-    await new Promise(resolve => originalTimer(resolve, 10));
-    return { before, after: calls.length, aborted: calls.every(call => call.signal.aborted), unchanged: JSON.stringify(updates) === beforeLate,
-      busy, labels: branches.map(branch => branch.status.label), picks: branches.flatMap(branch => branch.picks) };
-  } finally {
-    token.dispose(true); lifetime.dispose(); gateway.workspaceRoutes = originalRoutes; gateway.request = originalRequest; globalThis.setTimeout = originalTimer;
-  }
 }
 
 export function selectContract() {

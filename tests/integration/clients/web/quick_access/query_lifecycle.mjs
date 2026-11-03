@@ -1,13 +1,14 @@
 import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
+import { searchRequest, searchReceipt, searchFault } from './federation_observation.mjs';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 if (!base || !output || !process.env.BOXTEAM_QUERY_WORKSPACE_B || !process.env.BOXTEAM_QUERY_WORKSPACE_C) throw new Error('查询验收缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_query_lifecycle.py');
 const result = { classification: 'Integration', phase: 'prepare', requests: [], receipts: [], cancelled: [], pageErrors: [], forbiddenWrites: [],
-  boundary: '正式 Workbench、真实 Gateway 和隔离 A/B/C；Session 由产品 API 创建；显式注入 503、401 和延迟真实响应，不替代模型或业务状态' };
+  boundary: '正式 Workbench、真实 Gateway 和隔离 A/B/C；Session 由产品 API 创建；指定 Gateway 出站分支注入失败或延迟真实响应；401 只在浏览器 HTTP 边界注入，不替代匹配／调度／SSE 或业务状态' };
 let page, failure;
 const responseReads = [], responseErrors = [];
 try {
@@ -18,26 +19,18 @@ try {
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
-  const isSearch = request => ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(new URL(request.url()).pathname)
-    || new URL(request.url()).pathname === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'search';
-  const queryOf = request => new URL(request.url()).searchParams.get('query') ?? request.postDataJSON()?.query;
   page.on('request', request => {
-    if (isSearch(request)) result.requests.push({ path: new URL(request.url()).pathname, query: queryOf(request),
-      route: request.headers()['x-boxteam-workspace-id'], issuedAt: Date.now() / 1000,
-      deadline: request.headers()['x-boxteam-name-search-deadline'] ?? request.headers()['x-boxteam-resource-navigation-deadline'] });
+    const observed = searchRequest(request);
+    if (observed) result.requests.push(observed);
     if (request.method() !== 'GET' && /\/(messages|jobs)(\/|$)/.test(new URL(request.url()).pathname)) result.forbiddenWrites.push(request.url());
   });
   page.on('requestfailed', request => {
-    if (isSearch(request)) result.cancelled.push({ query: queryOf(request), error: request.failure()?.errorText });
+    const observed = searchRequest(request);
+    if (observed) result.cancelled.push({ path: observed.path, query: observed.query, error: request.failure()?.errorText });
   });
   page.on('requestfinished', request => {
-    if (!isSearch(request)) return;
-    responseReads.push((async () => {
-      const response = await request.response(), body = await response.json();
-      expect(body.request_id).toBeTruthy();
-      expect(body.request_id).toBe(response.headers()['x-request-id']);
-      result.receipts.push({ path: new URL(request.url()).pathname, query: queryOf(request), status: response.status(), requestId: body.request_id });
-    })().catch(error => responseErrors.push(String(error))));
+    if (!searchRequest(request)) return;
+    responseReads.push(searchReceipt(request).then(receipt => result.receipts.push(receipt)).catch(error => responseErrors.push(String(error))));
   });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
@@ -106,13 +99,15 @@ try {
   };
   await command('workbench.action.quickOpen', 'branchscope');
   await expectStatus(a, '文件', '本次查询完成');
-  expect(queries('branchscope').every(item => item.route === routeA)).toBe(true);
+  expect(queries('branchscope').filter(item => item.path === '/api/gateway/search').map(item => item.owners)).toEqual([[a.backend_workspace_id]]);
+  expect(queries('branchscope').filter(item => item.path !== '/api/gateway/search').every(item => item.route === routeA)).toBe(true);
   await choose([b]);
   await expectStatus(b, '文件', '本次查询完成');
   await expectStatus(b, 'Thread', '本次查询完成');
   await inactive();
-  expect(new Set(queries('branchscope').map(item => item.route))).toEqual(new Set(owners.map(item => item.workspace_id)));
-  expect(queries('branchscope').every(item => Number(item.deadline) > item.issuedAt && Number(item.deadline) <= item.issuedAt + 15)).toBe(true);
+  expect(queries('branchscope').filter(item => item.path === '/api/gateway/search').map(item => item.owners)).toEqual([[a.backend_workspace_id], owners.map(item => item.backend_workspace_id)]);
+  expect(new Set(queries('branchscope').filter(item => item.path !== '/api/gateway/search').map(item => item.route))).toEqual(new Set(owners.map(item => item.workspace_id)));
+  expect(queries('branchscope').filter(item => item.query).every(item => Number(item.deadline) > item.issuedAt && Number(item.deadline) <= item.issuedAt + 15)).toBe(true);
   result.serverBudget = true;
   for (const target of owners) for (const category of ['会话', 'Thread', '文件']) {
     await expectStatus(target, category, 'request_id:');
@@ -120,105 +115,108 @@ try {
   }
   result.onlySelectedOwners = true;
 
-  const pattern = '**/api/v1/**';
-  const delayQuery = async (query, path) => {
-    const gate = Promise.withResolvers(), pending = new Set(), blocked = [];
-    const handler = async route => {
-      const request = route.request();
-      if (!isSearch(request) || queryOf(request) !== query || path && new URL(request.url()).pathname !== path) { await route.continue(); return; }
-      const task = (async () => {
-        const response = await route.fetch();
-        blocked.push({ path: new URL(request.url()).pathname, route: request.headers()['x-boxteam-workspace-id'] });
-        await gate.promise;
-        await route.fulfill({ response });
-      })();
-      pending.add(task);
-      try { await task; } finally { pending.delete(task); }
-    };
-    await page.route(pattern, handler);
-    return { blocked, async release() { gate.resolve(); await Promise.all([...pending]); await page.unroute(pattern, handler); } };
-  };
-  result.phase = 'cancel-queued-and-late';
-  const cancellation = await delayQuery('slowcancel');
-  try {
-    await input.fill('slowcancel');
-    await expect.poll(() => cancellation.blocked.length).toBe(3);
-    expect(queries('slowcancel')).toHaveLength(3);
-    await input.fill('branchscope');
-    await expectStatus(b, '文件', '本次查询完成');
-    await inactive();
-  } finally { await cancellation.release(); }
-  await expect.poll(() => result.cancelled.filter(item => item.query === 'slowcancel').length).toBe(3);
-  expect(queries('slowcancel')).toHaveLength(3);
+  result.phase = 'cancel-gateway-queue';
+  await searchFault(page, 'slowcancel', 'delay');
+  await input.fill('slowcancel');
+  await expect.poll(async () => (await searchFault(page, 'slowcancel')).reads.filter(read => read.received).length).toBe(3);
+  expect(queries('slowcancel').filter(item => item.path === '/api/gateway/search')).toHaveLength(1);
+  await input.fill('branchscope');
+  await expectStatus(b, '文件', '本次查询完成');
+  await inactive();
+  await expect.poll(async () => (await searchFault(page, 'slowcancel')).reads.filter(read => read.cancelled && read.settled).length).toBe(3);
+  result.cancelledReads = (await searchFault(page, 'slowcancel')).reads;
+  expect(result.cancelledReads).toHaveLength(3); // 第四个名称分支未越过 Gateway 队列。
+  await searchFault(page, 'slowcancel', 'release');
+  await expect.poll(() => result.cancelled.filter(item => item.path === '/api/gateway/search' && item.query === 'slowcancel').length).toBe(1);
   await expect(quick).not.toContainText('slowcancel');
   result.cancelledQueueAndLateResponses = true;
 
-  result.phase = 'real-timeout-and-late';
-  const delayed = await delayQuery('branchscope', '/api/v1/session-catalog/search');
+  result.phase = 'real-timeout-and-other-branches';
+  await searchFault(page, 'branchscope', 'delay', ['catalog']);
   try {
-    await input.fill('branchscope');
-    // 相同输入不重复发送。
     const before = queries('branchscope').length;
+    await input.fill('branchscope');
     await page.waitForTimeout(250);
     expect(queries('branchscope').length).toBe(before);
     await input.fill('branchscope A');
     await expectStatus(a, '文件', '没有匹配的资源');
     await input.fill('branchscope');
-    await expect.poll(() => delayed.blocked.length).toBe(2);
+    await expect.poll(async () => (await searchFault(page, 'branchscope')).reads.filter(read => read.category === 'catalog' && read.received).length).toBe(2);
     await expectStatus(b, 'Thread', '本次查询完成');
+    await expectStatus(a, '文件', '本次查询完成');
+    // 文件已结束，但两个 catalog 仍等待，不能提前隐藏总 busy。
+    await expect(quick.locator('.monaco-progress-container.active')).toHaveCount(1);
     await expectStatus(a, '会话', '查询超时', { timeout: 18_000 });
     await expectStatus(b, '会话', '查询超时');
     await expectStatus(b, '文件', '本次查询完成');
     await inactive();
-  } finally { await delayed.release(); }
+    await expect.poll(async () => (await searchFault(page, 'branchscope')).reads.filter(read => read.category === 'catalog' && read.cancelled).length).toBe(2);
+    result.timeoutReads = (await searchFault(page, 'branchscope')).reads;
+  } finally { await searchFault(page, 'branchscope', 'release'); }
   await expectStatus(a, '会话', '查询超时');
   result.timeoutKeepsOtherBranches = true;
 
   result.phase = 'all-failed-and-single-branch-retry';
-  const fail = async route => {
-    if (!isSearch(route.request()) || queryOf(route.request()) !== 'allfailure') { await route.continue(); return; }
-    await route.fulfill({ status: 503, contentType: 'application/json', headers: { 'X-Request-ID': 'req-injected-failure' },
-      body: JSON.stringify({ request_id: 'req-injected-failure', detail: '显式测试故障：owner 读取失败' }) });
+  await searchFault(page, 'allfailure', 'fail');
+  const pattern = '**/api/v1/resources/navigation';
+  const failFile = async route => {
+    if (searchRequest(route.request())?.query !== 'allfailure') { await route.continue(); return; }
+    await route.fulfill({ status: 503, contentType: 'application/json', headers: { 'X-Request-ID': 'req-injected-file-failure' },
+      body: JSON.stringify({ request_id: 'req-injected-file-failure', detail: '显式测试故障：owner 读取失败' }) });
   };
-  await page.route(pattern, fail);
+  await page.route(pattern, failFile);
   try {
     await input.fill('allfailure');
     for (const target of owners) for (const category of ['会话', 'Thread', '文件']) {
       await expectStatus(target, category, '查询失败');
-      await expectStatus(target, category, 'req-injected-failure');
+      await expectStatus(target, category, 'request_id:');
     }
     await inactive();
+    result.failedReads = (await searchFault(page, 'allfailure')).reads;
+    expect(result.failedReads).toHaveLength(4);
+    expect(new Set(result.failedReads.map(read => read.request_id)).size).toBe(1);
+    for (const target of owners) for (const category of ['会话', 'Thread']) await expectStatus(target, category, result.failedReads[0].request_id);
     await expect(quick).not.toContainText('没有匹配的资源');
     result.allFailuresRemainFailures = true;
-  } finally { await page.unroute(pattern, fail); }
+  } finally { await page.unroute(pattern, failFile); await searchFault(page, 'allfailure', 'release'); }
   const beforeRetry = result.requests.length;
   await (await showStatus(a, 'Thread')).hover();
-  await status(a, 'Thread').getByRole('button', { name: '重试此查询', exact: true }).click();
+  await status(a, 'Thread').getByRole('button', { name: '重新查询此类别', exact: true }).click();
   await expectStatus(a, 'Thread', '本次查询完成');
   await expectStatus(b, 'Thread', '查询失败');
+  await expectStatus(b, 'Thread', result.failedReads[0].request_id);
   await inactive();
   const retried = result.requests.slice(beforeRetry);
-  expect(retried.map(({ path, query, route }) => ({ path, query, route }))).toEqual([
-    { path: '/api/v1/session-threads/search', query: 'allfailure', route: routeA },
-  ]);
+  expect(retried).toHaveLength(1);
+  expect(retried[0].path).toBe('/api/gateway/search');
+  expect(retried[0].query).toBe('allfailure');
+  expect(retried[0].body.scope.mode).toBe('resume');
+  expect(retried[0].body.continuations).toEqual([{ branch: { owner: { gateway_id: health.gateway_id, workspace_id: a.backend_workspace_id }, category: 'thread', operation: 'name' } }]);
   expect(Number(retried[0].deadline)).toBeGreaterThan(retried[0].issuedAt);
   expect(Number(retried[0].deadline)).toBeLessThanOrEqual(retried[0].issuedAt + 15);
+  result.retriedReads = (await searchFault(page, 'allfailure')).reads;
+  expect(result.retriedReads).toHaveLength(5);
+  expect(result.retriedReads.at(-1).workspace_id).toBe(a.backend_workspace_id);
+  expect(result.retriedReads.at(-1).category).toBe('thread');
+  expect(result.retriedReads.at(-1).request_id).not.toBe(result.failedReads[0].request_id);
   result.retryOnlyFailedBranch = true;
 
   result.phase = 'offline-scope';
   await choose([c]);
-  await expectStatus(c, '会话', '当前不可查询');
+  await expectStatus(c, '会话', '查询失败');
   await inactive();
   expect(result.requests.every(item => item.route !== c.workspace_id)).toBe(true);
+  expect((await searchFault(page, 'allfailure')).reads.every(read => read.workspace_id !== c.backend_workspace_id)).toBe(true);
   result.offlineHasNoBusinessQuery = true;
 
   result.phase = 'identity-recovery-revokes-picks';
   const expire = async route => {
-    if (!isSearch(route.request()) || queryOf(route.request()) !== 'identityfail') { await route.continue(); return; }
+    if (searchRequest(route.request())?.query !== 'identityfail') { await route.continue(); return; }
     await route.fulfill({ status: 401, contentType: 'application/json', headers: { 'X-Request-ID': 'req-injected-identity' },
       body: JSON.stringify({ request_id: 'req-injected-identity', detail: { code: 'user_session_required' } }) });
   };
-  await page.route(pattern, expire);
+  const identityPattern = '**/api/gateway/search';
+  await page.route(identityPattern, expire);
   try {
     await input.fill('identityfail');
     await expect(quick).toContainText('Gateway 或用户身份已改变，请重新打开快速访问');
@@ -229,10 +227,11 @@ try {
     expect(result.requests).toHaveLength(before);
     expect(await quick.locator('[data-quick-input-id^="boxteam-"]').count()).toBe(0);
     result.identityRevokesCandidates = true;
-  } finally { await page.unroute(pattern, expire); }
+  } finally { await page.unroute(identityPattern, expire); }
   await page.keyboard.press('Escape');
   await Promise.all(responseReads);
   expect(responseErrors).toEqual([]);
+  expect(result.requests.filter(item => ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(item.path) && item.query !== 'budgetcontract')).toEqual([]);
   expect(result.forbiddenWrites).toEqual([]);
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';

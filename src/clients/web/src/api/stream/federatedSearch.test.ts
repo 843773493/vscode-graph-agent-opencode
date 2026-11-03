@@ -116,6 +116,9 @@ test("总期限包含正文读取，心跳不能延长期限", async () => {
   const outcome = streamFederatedSearch(49_355, input, { signal: new AbortController().signal, onEvent() {} }).catch(error => error);
   await until(() => backend.calls.length === 1);
   backend.send("scope", { scope: resolution() });
-  expect((await outcome).message).toBe("搜索总期限已到");
+  const error = await outcome;
+  expect(error).toBeInstanceOf(DOMException);
+  expect(error.name).toBe("TimeoutError");
+  expect(error.message).toBe("搜索总期限已到");
   expect(backend.cancelled).toBe(true);
 });

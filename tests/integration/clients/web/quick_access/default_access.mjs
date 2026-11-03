@@ -1,4 +1,5 @@
 import { expect } from 'playwright/test';
+import { searchRequest, searchFault } from './federation_observation.mjs';
 import { readSavedSettings } from './settings.mjs';
 import { expectLastSearchStatus, verifyResourceOpenActions, verifyResourcePresentation } from './default_interactions.mjs';
 
@@ -8,32 +9,17 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
   const requests = [];
   result.defaultQuickAccess = { requests };
   const observe = request => {
-    const url = new URL(request.url());
-    if (['/api/v1/session-catalog/search', '/api/v1/session-threads/search', '/api/v1/resources/navigation'].includes(url.pathname)) {
-      const body = request.method() === 'POST' ? request.postDataJSON() : undefined;
-      if (url.pathname === '/api/v1/resources/navigation' && body?.operation !== 'search') return;
-      requests.push({ path: url.pathname, route: request.headers()['x-boxteam-workspace-id'], query: url.searchParams.get('query'),
-        body });
-    }
+    const observed = searchRequest(request);
+    if (observed) requests.push(observed);
   };
+  const belongs = (request, owner) => request.path === '/api/gateway/search'
+    ? request.owners.length === 1 && request.owners[0] === owner.workspaceId : request.route === owner.route;
   page.on('request', observe);
   const create = async owner => (await api('/api/v1/sessions', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': owner.route },
     body: JSON.stringify({ title: `quickdiscover ${owner === ownerA ? 'A' : 'B'} 会话` }) })).data;
   const sessionA = await create(ownerA), sessionB = await create(ownerB);
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
-  let release;
-  const blocked = new Promise(resolve => { release = resolve; });
-  let intercepted = false;
-  const delay = async route => {
-    const request = route.request();
-    if (request.headers()['x-boxteam-workspace-id'] !== ownerA.route || new URL(request.url()).searchParams.get('query') !== 'quickdiscover') {
-      await route.continue(); return;
-    }
-    const response = await route.fetch();
-    intercepted = true;
-    await blocked;
-    await route.fulfill({ response });
-  };
+  await searchFault(page, 'quickdiscover', 'delay', ['thread']);
   try {
     await command('_workbench.open', await fileUri(ownerA), [undefined, { pinned: true }]);
     const beforeEmpty = requests.length;
@@ -43,21 +29,20 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expect(quick).toContainText('最近打开');
     await page.waitForTimeout(300);
     expect(requests.length).toBe(beforeEmpty);
-    await page.route('**/api/v1/session-threads/search?**', delay);
     await input.fill('quickdiscover');
     await expect(quick).toContainText('quickdiscover A 会话');
-    await expect.poll(() => intercepted).toBe(true);
+    await expect.poll(async () => (await searchFault(page, 'quickdiscover')).reads.filter(read => read.category === 'thread' && read.received).length).toBe(1);
     await expect(quick).toContainText('Thread · 正在查询');
     await expect(quick).not.toContainText('quickdiscover B 会话');
     // 真实 Thread 查询的响应被延迟；会话与文件分支不被它阻塞。
-    release();
+    await searchFault(page, 'quickdiscover', 'release');
     await expect(quick).toContainText('Thread · 本次查询完成');
     await expectLastSearchStatus({ page, quick, label: '文件 · 本次查询完成' });
     await expect(quick).toContainText('quickdiscover-file.txt');
     await expect(quick).toContainText('工作区符号未启用');
     const first = requests.filter(request => request.query === 'quickdiscover' || request.body?.query === 'quickdiscover');
-    expect(first.length).toBeGreaterThanOrEqual(3);
-    expect(first.every(request => request.route === ownerA.route)).toBe(true);
+    expect(first.length).toBeGreaterThanOrEqual(2);
+    expect(first.every(request => belongs(request, ownerA))).toBe(true);
     result.defaultListPresentation = await verifyResourcePresentation({ quick, sessionId: sessionA.session_id });
     const row = quick.locator('[data-quick-input-id^="session:"]')
       .filter({ hasText: `会话 · ${sessionA.session_id}` });
@@ -100,15 +85,15 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expectLastSearchStatus({ page, quick, label: '文件 · 本次查询完成' });
     await expect(quick).not.toContainText('quickdiscover A 会话');
     const second = requests.slice(beforeB).filter(request => request.query === 'quickdiscover' || request.body?.query === 'quickdiscover');
-    expect(second.length).toBeGreaterThanOrEqual(3);
-    expect(second.every(request => request.route === ownerB.route)).toBe(true);
+    expect(second.length).toBeGreaterThanOrEqual(2);
+    expect(second.every(request => belongs(request, ownerB))).toBe(true);
     await page.keyboard.press('Escape');
     const beforeMissing = requests.length;
     await command('workbench.action.quickOpen', 'quick-no-match-unique');
     await expect(quick).toContainText('会话 · 没有匹配的资源');
     await expect(quick).toContainText('Thread · 没有匹配的资源');
     await expectLastSearchStatus({ page, quick, label: '文件 · 没有匹配的资源' });
-    expect(requests.slice(beforeMissing).every(request => request.route === ownerB.route)).toBe(true);
+    expect(requests.slice(beforeMissing).every(request => belongs(request, ownerB))).toBe(true);
     await page.keyboard.press('Escape');
     const beforeSymbols = requests.length;
     await command('workbench.action.quickOpen', '#quickdiscover');
@@ -167,12 +152,12 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await page.waitForTimeout(300);
     expect(requests.length).toBe(beforeDisabledHistory);
     await page.keyboard.press('Escape');
+    expect(requests.filter(request => ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(request.path))).toEqual([]);
     result.defaultQuickAccess = { sessionA: sessionA.session_id, sessionB: sessionB.session_id, requests, emptyHasNoQueries: true,
       progressive: true, scopeA: first, scopeB: second, helpHasNoQueries: true, disabledHistoryHasNoQueries: true,
       helpKeepsInvocation: true, fileSelection: '2:3', nestedPath: true, threadId: main.thread_id };
   } finally {
-    release();
-    await page.unroute('**/api/v1/session-threads/search?**', delay);
+    await searchFault(page, 'quickdiscover', 'release');
     page.off('request', observe);
     // 只读实际保存内容，为配置发布失败保留诊断，不替产品写入配置。
     result.savedSettings = await readSavedSettings(page);

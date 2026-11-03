@@ -22,7 +22,7 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
   options.signal.addEventListener("abort", cancel, { once: true });
   if (options.signal.aborted) cancel();
   const deadline = Math.min(request.deadline_at ?? Infinity, (Date.now() + DEFAULT_API_REQUEST_TIMEOUT_MS) / 1000);
-  const timer = setTimeout(() => abort.abort(new Error("搜索总期限已到")), Math.max(0, deadline * 1000 - Date.now()));
+  const timer = setTimeout(() => abort.abort(new DOMException("搜索总期限已到", "TimeoutError")), Math.max(0, deadline * 1000 - Date.now()));
   let response: Response | undefined;
   try {
     response = await requestGatewayResponse(port, "/api/gateway/search", {
@@ -92,6 +92,9 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
     abort.signal.throwIfAborted();
     if (!summary) throw new Error("搜索连接已结束，但未收到完整终态");
     return summary;
+  } catch (error) {
+    if (abort.signal.aborted) throw abort.signal.reason;
+    throw error;
   } finally {
     clearTimeout(timer);
     options.signal.removeEventListener("abort", cancel);

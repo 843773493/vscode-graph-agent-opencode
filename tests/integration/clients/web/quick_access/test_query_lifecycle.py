@@ -55,6 +55,7 @@ async def test_query_branches_cancel_expire_and_retry_only_their_selected_owner(
         (target / "branchscope-file.txt").write_text(target.name + " query lifecycle\n", encoding="utf-8")
     gateway = start_gateway_process(
         workspace_root=workspaces[0], default_backend_url=None, port=query_gateway_port,
+        asgi_app="tests.integration.clients.web.quick_access.query_gateway_fixture:app",
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )

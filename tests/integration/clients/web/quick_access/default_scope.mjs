@@ -1,4 +1,5 @@
 import { expect } from 'playwright/test';
+import { searchRequest, searchReceipt, searchFault } from './federation_observation.mjs';
 import { expectLastSearchStatus } from './default_interactions.mjs';
 
 /** 范围勾选和确认走原 Quick Input；关键状态经真实 Gateway 管理入口生成。 */
@@ -15,28 +16,20 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
   const requests = [], responses = [], lifecycle = [], responseReads = [], responseErrors = [], cancelled = [];
   result.defaultScope = { requests, responses, lifecycle, responseErrors, cancelled };
   const observe = request => {
-    const url = new URL(request.url()), route = request.headers()['x-boxteam-workspace-id'];
+    const url = new URL(request.url());
     if (request.method() !== 'GET' && /^\/api\/gateway\/(?:managed-workspaces|workspaces|ssh-connections|gateway-connections)(?:\/|$)/.test(url.pathname)) {
       lifecycle.push({ path: url.pathname, method: request.method() });
     }
-    if (['/api/v1/session-catalog/search', '/api/v1/session-threads/search', '/api/v1/workspace/files/roots'].includes(url.pathname)
-      || url.pathname === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'search') {
-      requests.push({ path: url.pathname, route, query: url.searchParams.get('query') ?? request.postDataJSON()?.query });
-    }
+    const observed = searchRequest(request);
+    if (observed) requests.push(observed);
   };
   const observeResponse = request => {
-    if (!['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(new URL(request.url()).pathname)) return;
-    responseReads.push((async () => {
-      const response = await request.response();
-      if (!response) throw new Error(`完成的查询缺少 HTTP 响应：${request.url()}`);
-      const body = await response.json();
-      responses.push({ status: response.status(), header: response.headers()['x-request-id'], requestId: body.request_id });
-    })().catch(error => responseErrors.push(String(error))));
+    if (new URL(request.url()).pathname !== '/api/gateway/search') return;
+    responseReads.push(searchReceipt(request).then(receipt => responses.push(receipt)).catch(error => responseErrors.push(String(error))));
   };
   const observeCancellation = request => {
-    if (new URL(request.url()).searchParams.get('query') === 'quick-concurrency') {
-      cancelled.push({ path: new URL(request.url()).pathname, reason: request.failure()?.errorText });
-    }
+    const observed = searchRequest(request);
+    if (observed?.query === 'quick-concurrency') cancelled.push({ path: observed.path, reason: request.failure()?.errorText });
   };
   page.on('request', observe);
   // 取消的请求可能发出 response 后丢弃正文；只对成功传完的请求核验正文信封。
@@ -71,7 +64,8 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await lastStatus('文件 · 本次查询完成');
     await expect(quick).not.toContainText('quickdiscover B 会话');
     await expect(quick.locator('.monaco-list-row.focused [data-quick-input-id]')).toHaveAttribute('data-quick-input-id', activeId);
-    expect(queryRequests(beforeCancel).every(item => item.route === ownerA.route)).toBe(true);
+    expect(queryRequests(beforeCancel).every(item => item.path === '/api/gateway/search'
+      ? item.owners.length === 1 && item.owners[0] === ownerA.workspaceId : item.route === ownerA.route)).toBe(true);
 
     await choose();
     const beforeConfirm = requests.length;
@@ -82,42 +76,32 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await expect(quick).toContainText('quickdiscover B 会话');
     await lastStatus('搜索隔离 B · 文件 · 本次查询完成');
     const both = queryRequests(beforeConfirm);
-    expect([...new Set(both.map(item => item.route))].sort()).toEqual([ownerA.route, ownerB.route].sort());
+    expect(both.filter(item => item.path === '/api/gateway/search').map(item => item.owners)).toEqual([[ownerA.workspaceId, ownerB.workspaceId]]);
+    expect([...new Set(both.filter(item => item.path !== '/api/gateway/search').map(item => item.route))].sort()).toEqual([ownerA.route, ownerB.route].sort());
     expect(requests.every(item => item.route !== registered.workspace_id)).toBe(true);
     await expect(input).toHaveAttribute('placeholder', /home.*搜索隔离 B/);
 
-    // 只延迟原服务的真实响应；三个运行分支占满预算时，其余分支仍在本地排队。
-    const gate = Promise.withResolvers(), released = Promise.withResolvers(), blocked = [];
-    let finished = 0;
-    const pattern = '**/api/v1/session-*/search?**';
-    const delay = async route => {
-      if (new URL(route.request().url()).searchParams.get('query') !== 'quick-concurrency') { await route.continue(); return; }
-      const response = await route.fetch();
-      blocked.push(route.request().headers()['x-boxteam-workspace-id']);
-      await gate.promise;
-      await route.fulfill({ response });
-      if (++finished === 3) released.resolve();
-    };
-    await page.route(pattern, delay);
+    // Gateway 出站故障点持有三个已完成的真实领域响应，第四分支仍在后端队列。
+    await searchFault(page, 'quick-concurrency', 'delay');
     try {
       await input.fill('quick-concurrency');
-      await expect.poll(() => blocked.length).toBe(3);
-      await page.waitForTimeout(250);
+      await expect.poll(async () => (await searchFault(page, 'quick-concurrency')).reads.filter(read => read.received).length).toBe(3);
+      const blocked = (await searchFault(page, 'quick-concurrency')).reads;
       expect(blocked).toHaveLength(3);
-      expect(new Set(blocked)).toEqual(new Set([ownerA.route, ownerB.route]));
+      expect(new Set(blocked.map(read => read.workspace_id))).toEqual(new Set([ownerA.workspaceId, ownerB.workspaceId]));
       await input.fill('quickdiscover');
       await expect(quick).toContainText('quickdiscover A 会话');
       await expect(quick).toContainText('quickdiscover B 会话');
       await lastStatus('搜索隔离 B · 文件 · 本次查询完成');
-      gate.resolve();
-      await released.promise;
-      await page.waitForTimeout(250);
-      expect(requests.filter(item => item.query === 'quick-concurrency')).toHaveLength(3);
-      await expect.poll(() => cancelled.length).toBe(3);
+      await expect.poll(async () => (await searchFault(page, 'quick-concurrency')).reads.filter(read => read.cancelled && read.settled).length).toBe(3);
+      expect((await searchFault(page, 'quick-concurrency')).reads).toHaveLength(3);
+      expect(requests.filter(item => item.path === '/api/gateway/search' && item.query === 'quick-concurrency')).toHaveLength(1);
+      await expect.poll(() => cancelled.filter(item => item.path === '/api/gateway/search').length).toBe(1);
       expect(cancelled.every(item => /ERR_ABORTED/.test(item.reason))).toBe(true);
+      result.defaultScope.cancelledReads = (await searchFault(page, 'quick-concurrency')).reads;
       await expect(quick).toContainText('quickdiscover A 会话');
       await expect(quick).toContainText('quickdiscover B 会话');
-    } finally { gate.resolve(); await page.unroute(pattern, delay); }
+    } finally { await searchFault(page, 'quick-concurrency', 'release'); }
 
     // 原帮助及正文模式保留用户明确的集合，不能重新捕获当前活动文件的单一 owner。
     await input.fill('?');
@@ -152,7 +136,7 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     expect(responseErrors).toEqual([]);
     expect(responses.every(item => item.status === 200 && item.requestId && item.requestId === item.header)).toBe(true);
     result.defaultScope = { requests, responses, lifecycle, responseErrors, cancelled, cancelKeepsQueryAndSelection: true, explicitAB: true,
-      helpKeepsScopes: true, boundedQueueCancelled: true, stoppedHasNoBusinessRequests: true, stoppedRoute: registered.workspace_id };
+      helpKeepsScopes: true, cancelledReads: result.defaultScope.cancelledReads, boundedQueueCancelled: true, stoppedHasNoBusinessRequests: true, stoppedRoute: registered.workspace_id };
   } finally {
     page.off('request', observe);
     page.off('requestfinished', observeResponse);

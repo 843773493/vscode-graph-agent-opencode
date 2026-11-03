@@ -73,7 +73,6 @@ export {
   getSessionMainThread,
   listChildThreads,
   listSessions,
-  searchSessionThreads,
   updateSession,
   updateSessionAgent,
   updateSessionProvider,

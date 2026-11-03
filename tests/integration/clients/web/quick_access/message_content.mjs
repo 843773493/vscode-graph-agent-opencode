@@ -9,7 +9,7 @@ import { testControl } from '../../../../support/e2e_control/browser_client.mjs'
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 if (!base || !output) throw new Error('消息正文验收缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_message_content.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], around: [], queries: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], nameSearches: [], around: [], queries: [],
   boundary: '真实 Gateway／正式 Workbench；消息和 fork 经产品 API 创建；model_stream 精确回放，不预写历史或缓存' };
 let page, failure;
 try {
@@ -28,8 +28,13 @@ try {
       queries.set(request, observation);
       result.queries.push(observation);
     }
-    if (['/api/gateway/search', '/api/v1/sessions/history/search', '/api/v1/search'].includes(path)) result.searches.push({ path, body: request.postDataJSON(),
-      route: request.headers()['x-boxteam-workspace-id'], deadline: request.headers()['x-boxteam-content-search-deadline'] });
+    if (['/api/gateway/search', '/api/v1/sessions/history/search', '/api/v1/search'].includes(path)) {
+      const body = request.postDataJSON();
+      const observed = { path, body, route: request.headers()['x-boxteam-workspace-id'], deadline: request.headers()['x-boxteam-content-search-deadline'] };
+      // 默认入口现在也使用联邦请求；按领域操作分别观察，继续捕获旧正文直连接口。
+      const destination = path === '/api/gateway/search' && body.queries.every(query => query.operation === 'name') ? result.nameSearches : result.searches;
+      destination.push(observed);
+    }
     if (/\/threads\/[^/]+\/history$/.test(path) && request.postDataJSON()?.direction === 'around') {
       result.around.push({ path, body: request.postDataJSON(), route: request.headers()['x-boxteam-workspace-id'] });
     }
@@ -90,6 +95,11 @@ try {
   await page.keyboard.press('Escape');
   await command('workbench.action.quickOpen', 'content ' + query);
   await expect(quick).toContainText('会话消息');
+  expect(result.nameSearches).toHaveLength(1);
+  expect(result.nameSearches[0].body.scope).toEqual({ mode: 'selected', owners: [{ gateway_id: health.gateway_id, workspace_id: target.backend_workspace_id }] });
+  expect(result.nameSearches[0].body.queries.map(({ category, operation, match_mode }) => ({ category, operation, match_mode }))).toEqual([
+    { category: 'catalog', operation: 'name', match_mode: 'fuzzy' }, { category: 'thread', operation: 'name', match_mode: 'fuzzy' },
+  ]);
   expect(result.searches).toHaveLength(0);
   result.unselectedHasNoContentQuery = true;
   await quick.locator('[data-quick-input-id="content-category-message"]').click();

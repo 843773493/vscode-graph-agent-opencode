@@ -110,39 +110,47 @@ test('身份屏障或 Gateway 改变立即取消、撤下旧结果，继续输�
   }
 });
 
-test('三个运行分支占满并发时取消，第四个排队分支不发送，迟到结果不发布', async () => {
-  const result = await exercise('branchContract', 'cancel');
-  expect(result.before).toBe(3);
-  expect(result.after).toBe(3);
-  expect(result.aborted).toBe(true);
-  expect(result.unchanged).toBe(true);
-  expect(result.picks).toEqual([]);
-});
-
-test('总期限覆盖排队及不合作等待，所有分支超时后结束 busy 且迟到结果不覆盖错误', async () => {
-  const result = await exercise('branchContract', 'timeout');
-  expect(result.before).toBe(3);
-  expect(result.after).toBe(3);
-  expect(result.aborted).toBe(true);
-  expect(result.busy).toBe(false);
-  expect(result.unchanged).toBe(true);
-  expect(result.picks).toEqual([]);
-  expect(result.labels).toHaveLength(4);
-  expect(result.labels.every(label => label.includes('查询超时'))).toBe(true);
-});
-
-test('独立错误保存 request_id，重试只读取失败分支且保留另一 owner 的结果和新鲜度', async () => {
-  const result = await exercise('branchContract', 'retry');
-  expect(result.counts).toEqual([2, 1]);
-  expect(result.error).toContain('原 owner 读取失败');
-  expect(result.errorDetail).toBe('request_id: request-failure');
-  expect(result.successDetail).toContain('不代表全局快照');
-  expect(result.successDetail).toContain('request-route-1');
-  expect(result.deadlines.every(deadline => Number.isFinite(deadline) && deadline > Date.now() / 1000)).toBe(true);
-  expect(result.preserved).toBe(true);
-  expect(result.picks).toEqual([['route-0'], ['route-1']]);
-  expect(result.busy).toBe(false);
-});
+for (const category of ['会话', 'Thread']) {
+  test(`${category} 名称复用同一联邦请求、fuzzy 高亮与独立续页重试，不产生路由预检`, async () => {
+    const result = await exercise('nameBranchContract', { mode: 'retry', category });
+    expect(result.requests).toHaveLength(3);
+    expect(result.paths.every(path => ['/api/gateway/auth/local-credential', '/api/gateway/search'].includes(path))).toBe(true);
+    expect(result.requests[0].scope.owners.map(owner => owner.workspace_id)).toEqual(['A', 'B']);
+    expect(result.requests[0].queries).toEqual([{ category: category === '会话' ? 'catalog' : 'thread', operation: 'name',
+      contract_version: 1, query: 'needle', match_mode: 'fuzzy', limit: 50 }]);
+    for (const request of result.requests.slice(1)) {
+      expect(request.scope.mode).toBe('resume');
+      expect(request.scope.scope.owners).toEqual(result.requests[0].scope.owners);
+      expect(request.continuations).toHaveLength(1);
+    }
+    expect(result.requests[1].continuations[0].cursor).toBe('A-original-cursor');
+    expect(result.requests[1].continuations[0].branch.owner.workspace_id).toBe('A');
+    expect(result.requests[2].continuations[0].branch.owner.workspace_id).toBe('B');
+    expect(result.requests[2].continuations[0].cursor).toBeUndefined();
+    expect(result.pendingPreserved).toBe(true);
+    expect(result.partialFailure).toContain('B 原始读取失败');
+    // 同名跨 owner 保留，folder 不被误作 Session，child 不改投 main；同分排序沿原 scorer。
+    expect(result.picks).toEqual(category === '会话' ? [
+      ['A/folder/needle Folder 2', 'A/folder/needle Folder 4', 'A/session/needle Session 2', 'A/session/needle Session 4'],
+      ['B/folder/needle Folder 2', 'B/session/needle Session 2'],
+    ] : [['A/resource/needle Child 2', 'A/resource/needle Child 4'], ['B/resource/needle Child 2']]);
+    expect(result.highlights.flat().every(highlights => highlights.label.length > 0)).toBe(true);
+    expect(result.busy).toBe(false);
+    expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);
+  });
+  test(`${category} 名称取消释放 Gateway reader，迟到展示被撤销`, async () => {
+    const result = await exercise('nameBranchContract', { mode: 'cancel', category });
+    expect(result.cancelled).toBe(true);
+    expect(result.unchanged).toBe(true);
+    expect(result.calls).toBe(1);
+  });
+  test(`${category} 不合作传输在取消后才交付正文，原结果仍不发布`, async () => {
+    const result = await exercise('nameBranchContract', { mode: 'late', category });
+    expect(result.cancelled).toBe(true);
+    expect(result.unchanged).toBe(true);
+    expect(result.calls).toBe(1);
+  });
+}
 
 test('补充项仍经 filter，handleAccept 保留原接收者与后台标志，历史不混入 Thread', async () => {
   const result = await exercise('selectContract');

@@ -178,7 +178,7 @@
 - [ ] 16.9 将可打开／引用命中的规范 URI 设为默认输出，复用统一寻址 owner 及稳定身份、位置／版本；验证同资源多位置、重命名／移动、route 重用、无 URI 的命令／进度，不把 URI 当所有索引记录主键。
 - [ ] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
 - [ ] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。
-  - 消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端，移除这三类的前端跨目标调度和直连 wrapper；名称、目录镜像及文件多范围迁移仍未完成，不据此勾选整项。
+  - Session／Thread 名称以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端，移除这些类别的前端跨目标调度和直连 wrapper，名称保留原 fuzzy 排名与高亮；目录镜像及文件多范围迁移仍未完成，不据此勾选整项。
 - [ ] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
 - [ ] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
 - [ ] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
@@ -521,3 +521,12 @@
 - 浏览器原件：`out/tests/integration/clients/web/quick_access/test_request_content/runs/run-a2161d0940ff/nodes/node-c6204ad2127e/artifacts/request-content.json`；正式构建退出0，44.60秒，main SHA256=`dcb165dca7a4540df19a84bccc498aa4db22d7078a16805d4db6eefb6cfed815`。浏览器之后只优化Python续点并保持原UTF-8解码，最终76项覆盖该批次；前端、协议及构建源码指纹未变，复用上述构建和真实类型检查，不为后端修改重复长构建。
 - 含18份实际sourceTransform源码的Workbench真实类型检查、核心Pyright零诊断、Ruff（沿用sessions.py既有B008排除）、生成一致性、Buf格式／lint／基于7dc15718b的breaking、OpenSpec严格校验和差异空白检查通过。首次TS检查发现原卡片的必填JSON业务类型与Proto可选Struct差异，API沿原业务类型收紧；首次Python类型命令误用不存在的uv入口，随后使用原Bun Pyright，不改变环境。命令、源码指纹、原始输出和退出码保留于`out/tests/temp/quick_access_provider_20261103/artifacts/llm-*`。
 - 9.1／9.6～9.8仍未整体完成：Trace／运行日志owner、完整类别与其它运行面验收继续保留；也不以此切片勾选16组全部Provider或前端联邦迁移。
+
+### 2026-11-03：Session／Thread 名称复用唯一联邦流（16.11 部分）
+
+- Session／folder 与精确 main／child 名称迁到原正文使用的同一 Gateway 流客户端，一次提交所选 owner；保留原 fuzzy 排名、高亮、分组和接受动作。删除名称直连实现、`searchSessionThreads` 及其全部客户端导出／调用，文件仍沿原文件链待完整迁移，没有同类别双查或失败回退。默认入口合并两组 busy，任一组未完成时不提前结束加载；总期限通过标准 TimeoutError 判别。
+- 39项客户端／真实 Provider 合同检查通过，覆盖名称独立续页、单分支重试、fuzzy 高亮、取消及不合作传输的迟到结果。24项 Gateway 调度／传输检查及真实 query_lifecycle 场景通过；它们所在旧批次的 text_search 曾失败，未把该批次整体记为通过。query_lifecycle 原件为 `out/tests/integration/clients/web/quick_access/test_query_lifecycle/runs/run-4571af6cc515/nodes/node-6c413386faf0/artifacts/query-lifecycle.json`，含明确 A／A+B、三并发取消结算、超时／全部失败、单分支重试新 request_id、停止 C 零业务读取及身份失效。
+- 最终正式 Gateway＋Workbench＋Chromium 两项综合验收通过（377.77秒，共用一次41.24秒构建，运行期间源码未变）。消息／工具场景经产品消息和 fork 入口生成关键状态：默认入口一次名称请求、未选正文零查询，五次正文请求均沿 Gateway；未打开 child、超长原文 emoji、同 Pane 另一处命中、原 owner 409及完整工具输出定位通过，pageErrors为空。文件场景保留 A+B范围、停止 C状态、取消与原活动项、原打开动作、dirty model负命中、SearchView／Search Editor转交／分屏／保存／备份／route重用等全部原断言。
+- 浏览器原件分别为 `out/tests/integration/clients/web/quick_access/test_message_content/runs/run-bd26d8722db7/nodes/node-2c00fa0318ba/artifacts/message-content.json` 和 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-bd26d8722db7/nodes/node-f4e408bf0b21/artifacts/search-result.json`。构建 main SHA256=`4dcd424d5da92cb36edc55400d008141ada2b63b70035051be1daad2ef52bb13`。故障装具仅延迟真实 Gateway 出站领域响应或注入具名网络失败，不替换调度／匹配／SSE；名称与正文请求分别观察，继续捕获旧直连入口。
+- 原滚动断言失败经隔离实页探针确认：delta=1000的五次 wheel 各只推进50px，poll退避在原五秒内只走到350px，末尾状态用原版首尾命令仍可到达。装具改为在原滚动条上有界连续滚动并核首尾位置；未延长期限、放宽状态或替换产品列表。原始失败、瞬时端口占用及探针准备失败保留于 `names-scroll-probe-*`／`names-federation-browser-final-01`；诊断 JSON及对照截图保留在 `out/tests/temp/quick_access_names_scroll_20261103/artifacts/`，临时工作区与运行态已删除。
+- 含18份实际sourceTransform源码的真实类型检查、Pyright零诊断、Ruff、20份ESM语法检查与差异检查通过；最终产品源码逐文件对照类型检查指纹无变化，复用其结果。准确命令、源码指纹、原始输出和退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/names-federation-*`，最终两项浏览器收据为 `names-federation-browser-final-02`。目录镜像、文件多范围及其配额／缓存、其余Provider和Electron仍未完成，16.11保持未勾选。

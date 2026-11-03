@@ -12,8 +12,8 @@ import { requireGatewayWorkspaceRoute, type WorkspaceOwner } from '../../../web/
 import { gateway } from '../agentApi.js';
 import { searchOwnerKey } from './quickAccessScope.js';
 import { rankResourcePicks, type ResourcePick } from './quickAccessPicks.js';
-import { searchQuickAccessResources, type NameSearchCategory, type SearchCategory, type ResourceSearchItem } from './quickAccessQuery.js';
-import { isContentSearchCategory, queryContentSearchBranches } from './quickAccessContent.js';
+import { searchQuickAccessFiles, type SearchCategory, type ResourceSearchItem } from './quickAccessQuery.js';
+import { isContentSearchCategory, queryFederatedSearchBranches, type FederatedSearchCategory } from './quickAccessFederation.js';
 import type { WorkspaceSearchService } from './searchService.js';
 import type { FuzzyScorerCache } from '../../upstream/src/vs/base/common/fuzzyScorer.js';
 
@@ -27,22 +27,36 @@ export interface SearchBranch<Category extends SearchCategory = SearchCategory> 
   status: ResourcePick;
 }
 
-/** 每次输入只有一组分支；原 Limiter、取消 token 和 HTTP 屏障共同约束实际请求。 */
+/** 各领域保持同一输入代际；名称与正文只消费 Gateway 联邦调度。 */
 export function querySearchBranches(owners: readonly WorkspaceOwner[], categories: SearchCategory[], filter: string,
   disposables: DisposableStore, token: CancellationToken, instantiation: IInstantiationService, search: WorkspaceSearchService,
   cache: FuzzyScorerCache, map: (item: ResourceSearchItem, owner: WorkspaceOwner) => ResourcePick,
   progress: (branches: SearchBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void): SearchBranch[] {
-  if (categories.every(isContentSearchCategory)) return queryContentSearchBranches(owners, categories, filter,
-    disposables, token, map, progress, busy, scopeLabel);
-  const names = categories.filter((category): category is NameSearchCategory => !isContentSearchCategory(category));
-  if (names.length !== categories.length) throw new Error('名称与正文查询须分别选择模式');
+  if (categories.some(isContentSearchCategory) && !categories.every(isContentSearchCategory)) throw new Error('名称与正文查询须分别选择模式');
+  let federated: SearchBranch[] = [], files: SearchBranch[] = [];
+  let federatedBusy = false, filesBusy = false;
+  const refresh = () => progress([...federated, ...files]);
+  const selected = categories.filter((category): category is FederatedSearchCategory => category !== '文件');
+  if (selected.length) federated = queryFederatedSearchBranches(owners, selected, filter, disposables, token, cache, map,
+    branches => { federated = branches; refresh(); }, value => { federatedBusy = value; busy(federatedBusy || filesBusy); }, scopeLabel);
+  if (categories.includes('文件')) files = queryFileSearchBranches(owners, filter, disposables, token, instantiation, search, cache, map,
+    branches => { files = branches; refresh(); }, value => { filesBusy = value; busy(federatedBusy || filesBusy); }, scopeLabel);
+  return [...federated, ...files];
+}
+
+/** 文件多根配额和原 QueryBuilder 尚须一并迁移；此队列不再查询名称或正文。 */
+function queryFileSearchBranches(owners: readonly WorkspaceOwner[], filter: string,
+  disposables: DisposableStore, token: CancellationToken, instantiation: IInstantiationService, search: WorkspaceSearchService,
+  cache: FuzzyScorerCache, map: (item: ResourceSearchItem, owner: WorkspaceOwner) => ResourcePick,
+  progress: (branches: SearchBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void): SearchBranch[] {
   const controller = new AbortController();
   disposables.add(toDisposable(() => controller.abort()));
   disposables.add(token.onCancellationRequested(() => controller.abort()));
   const alive = () => !controller.signal.aborted && !token.isCancellationRequested;
-  const branches: SearchBranch<NameSearchCategory>[] = names.flatMap(category => owners.map(owner => ({ owner, category,
+  const category = '文件';
+  const branches: SearchBranch<'文件'>[] = owners.map(owner => ({ owner, category,
     key: `${searchOwnerKey(owner)}/${category}`, label: owners.length === 1 ? category : `${owner.workspaceId} · ${category}`,
-    picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${owner.workspaceId} · ${category} · 正在查询` } })));
+    picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${owner.workspaceId} · ${category} · 正在查询` } }));
   const limiter = disposables.add(new Limiter<void>(3));
   let routes: ReturnType<typeof gateway.workspaceRoutes> | undefined;
   const labels = new Map(owners.map(owner => [searchOwnerKey(owner), owner.workspaceId]));
@@ -54,7 +68,7 @@ export function querySearchBranches(owners: readonly WorkspaceOwner[], categorie
     if (alive()) scopeLabel([...labels.values()].join('、'));
     return target;
   };
-  const queue = async (branch: SearchBranch<NameSearchCategory>, cursor?: string): Promise<void> => {
+  const queue = async (branch: SearchBranch<'文件'>, cursor?: string): Promise<void> => {
     if (!alive() || branch.pending) return;
     branch.pending = true;
     const source = new CancellationTokenSource(token), abort = new AbortController();
@@ -74,7 +88,7 @@ export function querySearchBranches(owners: readonly WorkspaceOwner[], categorie
         const target = await awaitWithAbort(resolveTarget(branch.owner), abort.signal);
         if (source.token.isCancellationRequested || !alive()) return;
         branch.label = owners.length === 1 ? branch.category : `${target.name} · ${branch.category}`;
-        const page = await searchQuickAccessResources(branch.category, filter, branch.owner, target, target.name,
+        const page = await searchQuickAccessFiles(filter, branch.owner, target, target.name,
           abort.signal, source.token, instantiation, search, cursor, deadlineAt);
         if (source.token.isCancellationRequested || !alive()) return;
         const merged = new Map([...branch.picks, ...page.items.map(item => map(item, branch.owner))].map(pick => [pick.id, pick]));

@@ -81,6 +81,7 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
     screenshot_path = context.artifacts_dir / "search-failure.png"
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=search_gateway_port,
+        asgi_app="tests.integration.clients.web.quick_access.query_gateway_fixture:app",
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
