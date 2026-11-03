@@ -406,3 +406,12 @@
 - 工作区 catalog 与 Gateway 派生镜像共用同一个字段召回及稳定键迭代器；镜像同名项先沿原 owner 的冻结创建位置再按 ID 取首屏，避免相同查询的首屏分歧。保留有界 top-K、原分页、期限检查、目录同步与健康职责，没有新增索引或兼容链路。
 - 55 项目录／镜像检查与 10 项模糊查询／期限检查通过；新增反向日期／ID 顺序的同名回归。期限测试的故障注入点随实际 owner 平移，原超时和匹配计数断言不变；首轮失败原件保留。新改源码 Ruff 与 AST 通过，Gateway 文件既有两条 TRY004、一条 ISC004 经 HEAD 对比确认无新增；OpenSpec strict 与差异检查通过。未改公开类型或前端，未重复构建或声称真实页面／联邦验收通过。
 - 准确命令、启动源码指纹、原输出及退出码：`out/tests/temp/quick_access_sources_20261103/artifacts/catalog-match-{owner-1,fuzzy-budget-1,fuzzy-budget-2,static-1,spec-1}.json`／`.raw`。结构复核沿原 mapping／catalog owner 减少重复，无新增目录和新的职责层。
+
+
+### 2026-11-03：Gateway 工作区元数据发现（16.5）
+
+- 新增 `/api/gateway/search/workspaces`，仅沿原 registry／navigation 按名称、路由 ID、稳定后端 UUID 与逻辑导航路径模糊发现。返回具体 Gateway／workspace owner、独立 target_id、导航 breadcrumb、控制面来源和时间；没有健康请求、连接／启动／激活或领域正文读取。每页最多 200 项，最多观察一条额外命中判断续页；登记／导航扫描上限为 10,000，超限明确拒绝，不构造全量命中或声称精确总数。
+- 无状态 owner cursor 绑定 Gateway、规范查询、registry revision 与 navigation revision；续页不依赖进程内搜索状态。原导航顺序保持，较早节点移动到较晚父节点后也正确展开。远端返回所属 Gateway 与稳定 backend UUID，不将远端路由别名当作资源身份。元数据发现可独立调用，不强迫明确集合／all 的领域查询先按工作区名称过滤；领域调度、联邦 SSE、工具与 UI 消费仍按未完成的 16.2～16.4、16.6～16.16 推进。
+- 13 项产品 Gateway ASGI 集成检查、49 项协议／鉴权检查通过，覆盖停止目标、空查询有界浏览、名称／ID／导航召回、嵌套移动、无匹配、独立分页、登记／导航／查询／Gateway 改变的旧 cursor、远端断开和扫描上限；这些是 ASGI 与控制面验收，不是实网联邦或真实浏览器证明。首轮远端 fixture 缺 connection_id，在产品拒绝处修正，原件保留。最终 handler 沿原控制面的异步入口同步取得元数据快照，避免另在线程读写导航产生新竞争。
+- Proto 与 Python／JS／TS 绑定、真实 OpenAPI 递归结构校验已同步；Buf 格式、真实提交 breaking 与生成一致性通过。首轮一致性失败仅因新增 owner 身份注释后未重生成，重生成后通过。真实类型检查含 18 份转换源码；最终生成文件相对该检查只增加同一条注释，已按原源码 SHA-256 反证，运行时绑定字节不变。最终正式 Workbench 构建通过（69.40 秒），使用独立输出，没有覆盖开发服务产物；保留版本与正文指纹后清理临时 dist。
+- 新源码与测试 Ruff／AST 通过，control/router 的 21 条原诊断经 HEAD 比较无新增；结构复核无新增 findings，未增加源码子目录或工作区存储。OpenSpec strict 与差异检查通过。准确命令、源码指纹、原输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/workspace-discovery-*`；原诊断探针的工作区、BOXTEAM_HOME、脚本和 PNG 已清理，仅保留 JSON／raw 证据。

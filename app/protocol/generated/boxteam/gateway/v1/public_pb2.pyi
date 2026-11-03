@@ -1,4 +1,7 @@
+import datetime
+
 from google.protobuf import struct_pb2 as _struct_pb2
+from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -806,6 +809,48 @@ class GatewaySessionSearchResultsDTO(_message.Message):
     workspaces: _containers.RepeatedCompositeFieldContainer[GatewaySessionSearchWorkspaceStatusDTO]
     total: int
     def __init__(self, items: _Optional[_Iterable[_Union[GatewaySessionSearchMatchDTO, _Mapping]]] = ..., workspaces: _Optional[_Iterable[_Union[GatewaySessionSearchWorkspaceStatusDTO, _Mapping]]] = ..., total: _Optional[int] = ...) -> None: ...
+
+class GatewaySearchWorkspaceOwnerDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...
+
+class GatewayWorkspaceDiscoveryHitDTO(_message.Message):
+    __slots__ = ("owner", "target_id", "name", "navigation_node_id", "breadcrumb_node_ids", "breadcrumb_names")
+    OWNER_FIELD_NUMBER: _ClassVar[int]
+    TARGET_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    NAVIGATION_NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    BREADCRUMB_NODE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BREADCRUMB_NAMES_FIELD_NUMBER: _ClassVar[int]
+    owner: GatewaySearchWorkspaceOwnerDTO
+    target_id: str
+    name: str
+    navigation_node_id: str
+    breadcrumb_node_ids: _containers.RepeatedScalarFieldContainer[str]
+    breadcrumb_names: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, owner: _Optional[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., target_id: _Optional[str] = ..., name: _Optional[str] = ..., navigation_node_id: _Optional[str] = ..., breadcrumb_node_ids: _Optional[_Iterable[str]] = ..., breadcrumb_names: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class GatewayWorkspaceDiscoveryResultsDTO(_message.Message):
+    __slots__ = ("gateway_id", "query", "resolved_at", "source", "items", "cursor", "complete")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    QUERY_FIELD_NUMBER: _ClassVar[int]
+    RESOLVED_AT_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    query: str
+    resolved_at: _timestamp_pb2.Timestamp
+    source: str
+    items: _containers.RepeatedCompositeFieldContainer[GatewayWorkspaceDiscoveryHitDTO]
+    cursor: str
+    complete: bool
+    def __init__(self, gateway_id: _Optional[str] = ..., query: _Optional[str] = ..., resolved_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayWorkspaceDiscoveryHitDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ...) -> None: ...
 
 class GatewaySessionSearchWorkspaceStatusDTO(_message.Message):
     __slots__ = ("workspace_id", "workspace_name", "status", "error")

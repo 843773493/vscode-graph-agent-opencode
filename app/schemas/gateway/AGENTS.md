@@ -11,6 +11,7 @@ gateway/
 ├── lifecycle.py          运行组重启、状态、阻塞项和影响范围
 ├── native_directories.py 原生目录绑定与解析
 ├── resource_address.py   唯一 URI grammar 的公开地址投影
+├── search.py             联邦搜索的工作区元数据发现与稳定归属
 ├── port_forwarding.py    端口转发创建、修改和列表
 ├── skill_sources.py      Gateway Skill 来源目录
 ├── ssh.py                远端 Gateway 添加与 SSH 连接选项

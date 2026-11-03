@@ -3,6 +3,7 @@ syntax = "proto3";
 package boxteam.gateway.v1;
 
 import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 
 // Gateway 控制面公开 DTO 的 Protobuf 初始版本；后续以本文件为协议源维护。
 
@@ -477,6 +478,32 @@ message GatewaySessionSearchResultsDTO {
   repeated GatewaySessionSearchMatchDTO items = 1;
   repeated GatewaySessionSearchWorkspaceStatusDTO workspaces = 2;
   optional int64 total = 3;
+}
+
+// 只来自控制面登记与导航；不表示工作区在线或其领域正文已经查询。
+message GatewaySearchWorkspaceOwnerDTO {
+  string gateway_id = 1;
+  // 稳定后端 UUID；target_id 与远端 route 均不参与 owner 身份。
+  string workspace_id = 2;
+}
+
+message GatewayWorkspaceDiscoveryHitDTO {
+  GatewaySearchWorkspaceOwnerDTO owner = 1;
+  string target_id = 2;
+  string name = 3;
+  string navigation_node_id = 4;
+  repeated string breadcrumb_node_ids = 5;
+  repeated string breadcrumb_names = 6;
+}
+
+message GatewayWorkspaceDiscoveryResultsDTO {
+  string gateway_id = 1;
+  string query = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+  string source = 4;
+  repeated GatewayWorkspaceDiscoveryHitDTO items = 5;
+  optional string cursor = 6;
+  bool complete = 7;
 }
 
 message GatewaySessionSearchWorkspaceStatusDTO {

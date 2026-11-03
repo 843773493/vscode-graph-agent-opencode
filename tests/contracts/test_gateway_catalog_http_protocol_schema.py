@@ -23,6 +23,7 @@ from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
     ("/api/gateway/inbound-access", "GatewayInboundAccessListDTO"),
     ("/api/gateway/resources", "GatewayResourceListDTO"),
     ("/api/gateway/session-catalog/search", "GatewaySessionSearchResultsDTO"),
+    ("/api/gateway/search/workspaces", "GatewayWorkspaceDiscoveryResultsDTO"),
 ])
 def test_catalog_schema_follows_actual_response_roots(gateway_openapi: JsonSchemaValue, path: str, model: str) -> None:
     original = deepcopy(gateway_openapi)
@@ -36,6 +37,7 @@ def test_catalog_schema_follows_actual_response_roots(gateway_openapi: JsonSchem
 
 @pytest.mark.parametrize("name", [
     "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO", "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
+    "GatewayWorkspaceDiscoveryResultsDTO",
 ])
 def test_catalog_schema_requires_exported_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
     del gateway_openapi["components"]["schemas"][name]
@@ -57,6 +59,8 @@ def test_catalog_schema_requires_exported_roots(gateway_openapi: JsonSchemaValue
     ("GatewaySessionSearchResultsDTO", "total", {"type": "string"}),
     ("GatewaySessionSearchMatchDTO", "breadcrumb_node_ids", {"type": "object"}),
     ("GatewaySessionSearchWorkspaceStatusDTO", "error", {"type": "integer"}),
+    ("GatewayWorkspaceDiscoveryResultsDTO", "complete", {"type": "string"}),
+    ("GatewaySearchWorkspaceOwnerDTO", "workspace_id", {"type": "integer"}),
 ])
 def test_catalog_schema_rejects_nested_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -71,6 +75,7 @@ def test_catalog_schema_rejects_nested_shape_drift(
     "GatewayInboundAccessListDTO", "GatewayInboundPeerDTO", "GatewayInboundWorkspaceDTO",
     "GatewayResourceListDTO", "GatewayResourceDTO", "GatewayResourceScopeErrorDTO",
     "GatewaySessionSearchResultsDTO", "GatewaySessionSearchMatchDTO", "GatewaySessionSearchWorkspaceStatusDTO",
+    "GatewayWorkspaceDiscoveryResultsDTO", "GatewayWorkspaceDiscoveryHitDTO", "GatewaySearchWorkspaceOwnerDTO",
 ])
 def test_catalog_schema_uses_candidate_descriptor_for_all_members(
     gateway_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet, model: str,

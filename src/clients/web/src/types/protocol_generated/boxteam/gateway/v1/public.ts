@@ -480,6 +480,32 @@ export interface GatewaySessionSearchResultsDTO {
   total?: number | undefined;
 }
 
+/** 只来自控制面登记与导航；不表示工作区在线或其领域正文已经查询。 */
+export interface GatewaySearchWorkspaceOwnerDTO {
+  gateway_id: string;
+  /** 稳定后端 UUID；target_id 与远端 route 均不参与 owner 身份。 */
+  workspace_id: string;
+}
+
+export interface GatewayWorkspaceDiscoveryHitDTO {
+  owner: GatewaySearchWorkspaceOwnerDTO | undefined;
+  target_id: string;
+  name: string;
+  navigation_node_id: string;
+  breadcrumb_node_ids: string[];
+  breadcrumb_names: string[];
+}
+
+export interface GatewayWorkspaceDiscoveryResultsDTO {
+  gateway_id: string;
+  query: string;
+  resolved_at: string | undefined;
+  source: string;
+  items: GatewayWorkspaceDiscoveryHitDTO[];
+  cursor?: string | undefined;
+  complete: boolean;
+}
+
 export interface GatewaySessionSearchWorkspaceStatusDTO {
   workspace_id: string;
   workspace_name: string;
@@ -3986,6 +4012,184 @@ export const GatewaySessionSearchResultsDTO: MessageFns<GatewaySessionSearchResu
     message.items = object.items?.map((e) => GatewaySessionSearchMatchDTO.fromPartial(e)) || [];
     message.workspaces = object.workspaces?.map((e) => GatewaySessionSearchWorkspaceStatusDTO.fromPartial(e)) || [];
     message.total = object.total ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewaySearchWorkspaceOwnerDTO(): GatewaySearchWorkspaceOwnerDTO {
+  return { gateway_id: "", workspace_id: "" };
+}
+
+export const GatewaySearchWorkspaceOwnerDTO: MessageFns<GatewaySearchWorkspaceOwnerDTO> = {
+  fromJSON(object: any): GatewaySearchWorkspaceOwnerDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+    };
+  },
+
+  toJSON(message: GatewaySearchWorkspaceOwnerDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewaySearchWorkspaceOwnerDTO>, I>>(base?: I): GatewaySearchWorkspaceOwnerDTO {
+    return GatewaySearchWorkspaceOwnerDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewaySearchWorkspaceOwnerDTO>, I>>(
+    object: I,
+  ): GatewaySearchWorkspaceOwnerDTO {
+    const message = createBaseGatewaySearchWorkspaceOwnerDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayWorkspaceDiscoveryHitDTO(): GatewayWorkspaceDiscoveryHitDTO {
+  return {
+    owner: undefined,
+    target_id: "",
+    name: "",
+    navigation_node_id: "",
+    breadcrumb_node_ids: [],
+    breadcrumb_names: [],
+  };
+}
+
+export const GatewayWorkspaceDiscoveryHitDTO: MessageFns<GatewayWorkspaceDiscoveryHitDTO> = {
+  fromJSON(object: any): GatewayWorkspaceDiscoveryHitDTO {
+    return {
+      owner: isSet(object.owner) ? GatewaySearchWorkspaceOwnerDTO.fromJSON(object.owner) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.String(object.target_id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      navigation_node_id: isSet(object.navigation_node_id) ? globalThis.String(object.navigation_node_id) : "",
+      breadcrumb_node_ids: globalThis.Array.isArray(object?.breadcrumb_node_ids)
+        ? object.breadcrumb_node_ids.map((e: any) => globalThis.String(e))
+        : [],
+      breadcrumb_names: globalThis.Array.isArray(object?.breadcrumb_names)
+        ? object.breadcrumb_names.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewayWorkspaceDiscoveryHitDTO): unknown {
+    const obj: any = {};
+    if (message.owner !== undefined) {
+      obj.owner = GatewaySearchWorkspaceOwnerDTO.toJSON(message.owner);
+    }
+    if (message.target_id !== "") {
+      obj.target_id = message.target_id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.navigation_node_id !== "") {
+      obj.navigation_node_id = message.navigation_node_id;
+    }
+    if (message.breadcrumb_node_ids?.length) {
+      obj.breadcrumb_node_ids = message.breadcrumb_node_ids;
+    }
+    if (message.breadcrumb_names?.length) {
+      obj.breadcrumb_names = message.breadcrumb_names;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayWorkspaceDiscoveryHitDTO>, I>>(base?: I): GatewayWorkspaceDiscoveryHitDTO {
+    return GatewayWorkspaceDiscoveryHitDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayWorkspaceDiscoveryHitDTO>, I>>(
+    object: I,
+  ): GatewayWorkspaceDiscoveryHitDTO {
+    const message = createBaseGatewayWorkspaceDiscoveryHitDTO();
+    message.owner = (object.owner !== undefined && object.owner !== null)
+      ? GatewaySearchWorkspaceOwnerDTO.fromPartial(object.owner)
+      : undefined;
+    message.target_id = object.target_id ?? "";
+    message.name = object.name ?? "";
+    message.navigation_node_id = object.navigation_node_id ?? "";
+    message.breadcrumb_node_ids = object.breadcrumb_node_ids?.map((e) => e) || [];
+    message.breadcrumb_names = object.breadcrumb_names?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseGatewayWorkspaceDiscoveryResultsDTO(): GatewayWorkspaceDiscoveryResultsDTO {
+  return {
+    gateway_id: "",
+    query: "",
+    resolved_at: undefined,
+    source: "",
+    items: [],
+    cursor: undefined,
+    complete: false,
+  };
+}
+
+export const GatewayWorkspaceDiscoveryResultsDTO: MessageFns<GatewayWorkspaceDiscoveryResultsDTO> = {
+  fromJSON(object: any): GatewayWorkspaceDiscoveryResultsDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      query: isSet(object.query) ? globalThis.String(object.query) : "",
+      resolved_at: isSet(object.resolved_at) ? globalThis.String(object.resolved_at) : undefined,
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => GatewayWorkspaceDiscoveryHitDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+    };
+  },
+
+  toJSON(message: GatewayWorkspaceDiscoveryResultsDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.query !== "") {
+      obj.query = message.query;
+    }
+    if (message.resolved_at !== undefined) {
+      obj.resolved_at = message.resolved_at;
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => GatewayWorkspaceDiscoveryHitDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayWorkspaceDiscoveryResultsDTO>, I>>(
+    base?: I,
+  ): GatewayWorkspaceDiscoveryResultsDTO {
+    return GatewayWorkspaceDiscoveryResultsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayWorkspaceDiscoveryResultsDTO>, I>>(
+    object: I,
+  ): GatewayWorkspaceDiscoveryResultsDTO {
+    const message = createBaseGatewayWorkspaceDiscoveryResultsDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.query = object.query ?? "";
+    message.resolved_at = object.resolved_at ?? undefined;
+    message.source = object.source ?? "";
+    message.items = object.items?.map((e) => GatewayWorkspaceDiscoveryHitDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.complete = object.complete ?? false;
     return message;
   },
 };

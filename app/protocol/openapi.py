@@ -102,6 +102,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "FederationProtocolManifestDTO", "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO",
         "GatewayWorkspaceListDTO", "GatewayRuntimeStateResultDTO", "GatewayRuntimeRestartResultDTO",
         "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
+        "GatewayWorkspaceDiscoveryResultsDTO",
         "AddLocalWorkspaceRequest", "UpdateGatewayWorkspaceRequest", "ReorderGatewayWorkspacesRequest",
         "ActivateGatewayWorkspaceResultDTO", "WorkspaceFolderCreateRequest", "WorkspaceNavigationNodeUpdateRequest",
         "WorkspaceNavigationPlacementRequest", "WorkspaceNavigationReorderRequest",

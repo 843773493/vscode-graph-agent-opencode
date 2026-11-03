@@ -14,11 +14,13 @@ from app.gateway.control.catalog_search import GatewaySessionCatalogSearchServic
 from app.gateway.control.generator_import import import_session_generators
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
+from app.gateway.control.workspace_discovery import discover_workspaces
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.diagnostics import collect_gateway_diagnostics
 from app.gateway.federation import request_remote_gateway_management
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
+from app.schemas.gateway.search import GatewayWorkspaceDiscoveryResultsDTO
 from app.schemas.gateway_control import (
     GatewayResourceListDTO,
     GatewaySessionSearchResultsDTO,
@@ -196,6 +198,27 @@ async def search_all_workspace_sessions(
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/search/workspaces", response_model=APIResponse[GatewayWorkspaceDiscoveryResultsDTO])
+async def discover_gateway_workspaces(
+    request: Request,
+    _: Annotated[str, Depends(verify_gateway_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(_registry)],
+    store: Annotated[WorkspaceNavigationStore, Depends(_navigation_store)],
+    query: Annotated[str, Query(max_length=512)] = "",
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Annotated[str | None, Query(max_length=8192)] = None,
+):
+    try:
+        result = discover_workspaces(
+            registry, store, gateway_id=request.app.state.gateway_id,
+            query=query, limit=limit, cursor=cursor,
+        )
+    except (ValueError, LookupError) as error:
+        raise HTTPException(409, detail={"owner": "workspace_discovery", "message": str(error)}) from error
     return APIResponse(data=result, request_id=request_id)
 
 

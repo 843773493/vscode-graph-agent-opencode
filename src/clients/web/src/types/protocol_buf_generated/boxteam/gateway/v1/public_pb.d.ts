@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
-import type { Value } from "@bufbuild/protobuf/wkt";
+import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
 
 /**
  * Describes the file boxteam/gateway/v1/public.proto.
@@ -2047,6 +2047,118 @@ export declare type GatewaySessionSearchResultsDTO = Message<"boxteam.gateway.v1
  * Use `create(GatewaySessionSearchResultsDTOSchema)` to create a new message.
  */
 export declare const GatewaySessionSearchResultsDTOSchema: GenMessage<GatewaySessionSearchResultsDTO>;
+
+/**
+ * 只来自控制面登记与导航；不表示工作区在线或其领域正文已经查询。
+ *
+ * @generated from message boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO
+ */
+export declare type GatewaySearchWorkspaceOwnerDTO = Message<"boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * 稳定后端 UUID；target_id 与远端 route 均不参与 owner 身份。
+   *
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO.
+ * Use `create(GatewaySearchWorkspaceOwnerDTOSchema)` to create a new message.
+ */
+export declare const GatewaySearchWorkspaceOwnerDTOSchema: GenMessage<GatewaySearchWorkspaceOwnerDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayWorkspaceDiscoveryHitDTO
+ */
+export declare type GatewayWorkspaceDiscoveryHitDTO = Message<"boxteam.gateway.v1.GatewayWorkspaceDiscoveryHitDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+   */
+  owner?: GatewaySearchWorkspaceOwnerDTO | undefined;
+
+  /**
+   * @generated from field: string target_id = 2;
+   */
+  targetId: string;
+
+  /**
+   * @generated from field: string name = 3;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string navigation_node_id = 4;
+   */
+  navigationNodeId: string;
+
+  /**
+   * @generated from field: repeated string breadcrumb_node_ids = 5;
+   */
+  breadcrumbNodeIds: string[];
+
+  /**
+   * @generated from field: repeated string breadcrumb_names = 6;
+   */
+  breadcrumbNames: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayWorkspaceDiscoveryHitDTO.
+ * Use `create(GatewayWorkspaceDiscoveryHitDTOSchema)` to create a new message.
+ */
+export declare const GatewayWorkspaceDiscoveryHitDTOSchema: GenMessage<GatewayWorkspaceDiscoveryHitDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayWorkspaceDiscoveryResultsDTO
+ */
+export declare type GatewayWorkspaceDiscoveryResultsDTO = Message<"boxteam.gateway.v1.GatewayWorkspaceDiscoveryResultsDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string query = 2;
+   */
+  query: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp resolved_at = 3;
+   */
+  resolvedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string source = 4;
+   */
+  source: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v1.GatewayWorkspaceDiscoveryHitDTO items = 5;
+   */
+  items: GatewayWorkspaceDiscoveryHitDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 6;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: bool complete = 7;
+   */
+  complete: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayWorkspaceDiscoveryResultsDTO.
+ * Use `create(GatewayWorkspaceDiscoveryResultsDTOSchema)` to create a new message.
+ */
+export declare const GatewayWorkspaceDiscoveryResultsDTOSchema: GenMessage<GatewayWorkspaceDiscoveryResultsDTO>;
 
 /**
  * @generated from message boxteam.gateway.v1.GatewaySessionSearchWorkspaceStatusDTO
