@@ -181,7 +181,7 @@
   - Session／Thread 名称、文件多根以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端；删除前端跨目标查询队列、文件直连 wrapper 及非标准 fileSearchPage。保留原根元数据读取、QueryBuilder 局部选项和 fuzzy 排名／高亮，普通搜索自动续原 cursor，Quick Access 明确单分支继续。旧 React 目录搜索／镜像已迁齐；canonical 重叠根和其余缓存合同仍未完成，不据此勾选整项。
 - [x] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
 - [x] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
-- [ ] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
+- [x] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
 - [ ] 16.15 在真实 Web 和 Electron 产品入口定向回归多范围搜索、原文件 dirty model／Search Editor、历史和动作；另在关闭浏览器后验证工具／脚本查全部会话树及真实 `search_context`。树验收覆盖 A/B 同名 folder 与 Session 不合并、各自根／父链／breadcrumb 及独立 cursor 正确；上下文验收对应 16.12 的原来源、身份、预算和版本语义，保存范围及原始结果证据。静态检查、类型检查、构建和受影响用例按第 15 组要求保护执行，不默认全套重跑。
 - [ ] 16.16 复核删除清单、原调用方／测试迁移、无双重调度／重复匹配／第二事实源；同步实际 Gateway 职责说明与相关 AGENTS.md，在实现完成时登记准确证据，不把本次规范扩展当实现完成。
 - [ ] 16.17 定义资源数／正文匹配区间／上下文与状态字节的计量、全请求与 owner 配额及公平准入，分发前分配页预算；未调度分支明确可继续，页尾被截断时不得推进越过未交付命中的 cursor。验证刚好上限／多一条、重复根、0 配额、原 IFileQuery 0 哨兵转换、exists 探测，不混同无界查询或完整覆盖。
@@ -724,3 +724,10 @@
 - 真实Gateway／Workbench／Chromium经产品消息及model_stream生成关键日志，原详情定位、同Pane第二位置、过期引用及零整批读取保持；另经原API核400与409诊断，由正式Python搜索SDK核原分支和汇总一致、零页、零交付及旧cursor保留。1 passed／95.67秒，pageErrors=[]，共享正式构建39.41秒、退出0；原件为out/tests/integration/clients/web/quick_access/test_request_content/runs/run-be62f0c9233b/。
 - 真实类型对照完整git archive基线，7条既存诊断同文、无新增；Ruff原sessions.py的27条B008与基线同文，其余触及文件零诊断。OpenSpec strict、ESM语法及差异检查通过。无产品前端／DTO变化，不重复生成或Electron。首次页面检查在原首次鼠标点击的动画稳定性等待阶段失败，未进入新诊断；首次接受改为明确核活动身份后走真实Enter及reduced motion，保留后续鼠标与全部定位断言，不将其称为产品缺陷修复。
 - 首轮缺HTTP处理器、类型注册签名、初次静态快照基线及页面失败原件均保留，最终使用完整基线。准确命令、源码指纹、原始结果与实际退出码见out/tests/temp/request_log_errors_20261103/artifacts/verification.json。其余owner和信息／警告合同继续由16.18追踪，保持整项未勾选。
+
+
+### 2026-11-03：联邦生命周期验收收齐（16.14）
+
+- 真实双 Backend＋Gateway 验收1项通过（48.23秒）：不支持匹配模式与合同版本均保留原400和明确代码、零页／零交付；关闭本装具自有A/B后端并保留登记URL，两分支真实ConnectError、原cursor与独立重试信息不丢失，汇总incomplete，不伪报完整无匹配。同名Session与相同正文片段的跨owner结果均保留；纯查询前后原catalog快照（含顺序、版本及水位）完全一致。既有重启续页、单分支revision冲突、部分失败、同request_id与真实序列化断言继续通过。
+- 快慢分支、排队期限、取消／断流与迟到页安全结算复用同源码的57项调度／transport／输出定向证据：out/tests/temp/search_transport_reasons_20261103/artifacts/verification.json；真实Workbench的快慢、取消、全部失败与独立重试沿out/tests/temp/file_coverage_20261103/artifacts/verification.json（2项／179.54秒），其中出站故障为显式装具，不称全部为原生网络故障。本批新增连接拒绝使用真实TCP。
+- Ruff与本实网测试Pyright均零诊断；OpenSpec strict通过。准确命令、指纹、退出码与正式原件：out/tests/temp/search_lifecycle_20261103/artifacts/verification.json。首次启动前端口冲突原件保留，未终止未知进程，确认端口空闲后通过；补齐同片段断言后最终重跑通过。产品源码未变，未重复Web构建／Electron；完整Quick Access及其余16组任务仍按各自范围追踪。

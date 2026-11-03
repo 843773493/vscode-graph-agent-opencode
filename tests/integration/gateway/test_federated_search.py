@@ -125,6 +125,16 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
                 client.headers["X-BoxTeam-Workspace-Id"] = route
                 sessions[route] = [await create_session(client, f"Shared Search {index}") for index in range(3)]
 
+            async def navigation() -> dict[str, object]:
+                snapshots = {}
+                for route in (route_a, "route_b"):
+                    response = await client.get("/api/v1/session-catalog/snapshot", headers={"X-BoxTeam-Workspace-Id": route})
+                    response.raise_for_status()
+                    snapshots[route] = response.json()["data"]
+                return snapshots
+
+            original_navigation = await navigation()
+
             async def search(payload: dict, request_id: str) -> list[dict]:
                 async with client.stream("POST", "/api/gateway/search", json=payload, headers={"X-Request-ID": request_id}) as response:
                     assert response.status_code == 200, (await response.aread()).decode()
@@ -151,8 +161,28 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             pages = [event for event in both if event["type"] == "page"]
             assert len(pages) == 2
             assert {event["page"]["workspace_id"] for event in pages} == {owners[route_a]["workspace_id"], owners["route_b"]["workspace_id"]}
+            assert {event["page"]["catalog"]["items"][0]["node"]["session_id"] for event in pages} == {
+                sessions[route_a][0], sessions["route_b"][0],
+            }
             b_page = next(event for event in pages if event["page"]["workspace_id"] == owners["route_b"]["workspace_id"])
             frozen = both[0]["scope"]["scope"]
+
+            for request_id, change, code in (
+                ("req_federation_unsupported_mode", {"match_mode": "literal"}, "unsupported_option"),
+                ("req_federation_unsupported_version", {"contract_version": 2}, "unsupported_version"),
+            ):
+                unsupported = await search({"scope": {"mode": "selected", "owners": frozen["owners"]},
+                                            "queries": [{**query, **change}]}, request_id)
+                summary = unsupported[-1]["summary"]
+                assert summary["state"] == "incomplete" and summary["returned_results"] == 0
+                assert len(summary["branches"]) == 2
+                for failure in summary["branches"]:
+                    assert failure["state"] == "failed" and failure["code"] == code and failure["http_status"] == 400
+                    assert failure["cursor"] is None and failure["returned_results"] == 0
+                assert not any(event["type"] == "page" for event in unsupported)
+            current_navigation = await navigation()
+            assert current_navigation == original_navigation
+            observations.append({"navigation_before": original_navigation, "navigation_after": current_navigation})
 
             roots = {}
             for route in (route_a, "route_b"):
@@ -180,6 +210,19 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert markdown["page"]["files"]["entries"][0]["uri"].endswith("/needle-c.md")
             file_resume = next(event for event in file_pages if event["branch"]["branch"]["owner"] == owners["route_b"])
             assert file_resume["branch"]["cursor"]
+
+            shared_content = await search({"scope": {"mode": "selected", "owners": frozen["owners"]}, "queries": [{
+                "category": "file", "operation": "content", "query": "needle", "match_mode": "literal", "limit": 1,
+                "file_targets": [{"owner": owners[route], "target": {"uri": roots[route] + "/search-one",
+                    "search_options": {"include_globs": ["*.txt"],
+                        "excluded_resource_uris": [roots[route] + "/search-one/covered.txt"]}}} for route in (route_a, "route_b")],
+            }]}, "req_federation_same_content")
+            shared_pages = [event["page"]["files"] for event in shared_content if event["type"] == "page"]
+            assert len(shared_pages) == 2 and shared_content[-1]["summary"]["returned_results"] == 2
+            shared_hits = [page["matches"][0] for page in shared_pages]
+            assert len({hit["uri"] for hit in shared_hits}) == 2
+            assert {hit["line"] for hit in shared_hits} == {1}
+            assert {hit["text"] for hit in shared_hits} == {"🧪 needle"}
 
             # 同一文件的两处正文分别计量；上下文不消耗配额，覆盖的非法 UTF-8 正文不读取。
             content_root = roots[route_a] + "/search-one"
@@ -333,6 +376,21 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert failure["cursor"] == b_page["branch"]["cursor"] and failure["returned_results"] == 0
             assert [page["branch"]["branch"]["owner"] for page in disconnected if page["type"] == "page"] == [owners[route_a]]
             assert [event["branch"] for event in disconnected if event["type"] == "branch" and event["branch"]["state"] == "failed"] == [failure]
+
+            await asyncio.to_thread(close_backend_process, network.backends[0])
+            unavailable = await search({"scope": {"mode": "resume", "scope": frozen}, "queries": [query],
+                "continuations": [{"branch": page["branch"]["branch"], "cursor": page["branch"]["cursor"]} for page in pages]},
+                "req_federation_all_connections_refused")
+            summary = unavailable[-1]["summary"]
+            assert summary["state"] == "incomplete" and summary["returned_results"] == 0
+            assert len(summary["branches"]) == 2 and not any(event["type"] == "page" for event in unavailable)
+            for branch in summary["branches"]:
+                page = next(page for page in pages if page["branch"]["branch"] == branch["branch"])
+                assert branch["state"] == "failed" and branch["code"] == "target_unavailable"
+                assert branch["reason"] == "ConnectError" and branch["error_owner"] == "search_transport"
+                assert branch["http_status"] is None and branch["retryable"]
+                assert branch["returned_results"] == 0 and branch["cursor"] == page["branch"]["cursor"]
+            assert [event["branch"] for event in unavailable if event["type"] == "branch" and event["branch"]["state"] == "failed"] == summary["branches"]
     finally:
         (network.artifacts / "federation-network.json").write_text(json.dumps(observations, ensure_ascii=False, indent=2) + "\n")
         if gateway is not None:
