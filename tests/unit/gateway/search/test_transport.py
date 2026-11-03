@@ -64,8 +64,15 @@ class SearchHTTP:
         headers = {"X-Request-ID": request_id, "Content-Type": "application/json"}
         if self.mode == "paused":
             return httpx.Response(200, headers=headers, stream=self.paused)
-        if self.mode == "error":
+        if self.mode in {"error", "wrong-error-id"}:
+            if self.mode == "wrong-error-id":
+                headers["X-Request-ID"] = "another-request"
             return httpx.Response(409, headers=headers, json={"detail": {"code": "owner_rejected", "message": "cursor 已过期"}})
+        if self.mode == "provider-read-error":
+            return httpx.Response(500, headers=headers, json={"detail": {
+                "owner": "search_provider", "code": "provider_read_failed", "provider_id": "session-catalog",
+                "category": "catalog", "operation": "name", "message": "原目录 SQLite 无法读取: errno=13",
+            }})
         if self.mode == "offline":
             raise httpx.ConnectError("目标断开", request=request)
         if self.mode == "wrong-id":
@@ -163,7 +170,7 @@ async def test_unknown_owner_rejected_before_any_dispatch(search_http: SearchHTT
 
 
 @pytest.mark.parametrize("mode,code", [("wrong-id", "invalid_response"), ("wrong-owner", "invalid_response"),
-                                       ("large", "delivery_limit"), ("error", "owner_rejected")])
+                                       ("large", "delivery_limit"), ("error", "owner_rejected"), ("wrong-error-id", "invalid_response")])
 async def test_failed_branch_has_no_page_or_advanced_cursor(search_http: SearchHTTP, mode: str, code: str) -> None:
     search_http.mode = mode
     result = events(await search_http.search(OWNERS[:1]))
@@ -171,6 +178,25 @@ async def test_failed_branch_has_no_page_or_advanced_cursor(search_http: SearchH
     assert result[-1].summary.branches[0].code == code
     assert result[-1].summary.branches[0].cursor is None
     assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+
+
+async def test_provider_read_error_keeps_identity_cause_and_original_continuation(search_http: SearchHTTP) -> None:
+    first = events(await search_http.search(OWNERS[:1]))
+    scope = first[0].scope
+    branch = first[-1].summary
+    assert scope is not None and branch is not None
+    previous = branch.branches[0]
+    search_http.mode = "provider-read-error"
+    result = events(await search_http.search(scope={"mode": "resume", "scope": scope.scope.model_dump(mode="json")},
+        continuations=[{"branch": previous.branch.model_dump(mode="json"), "cursor": previous.cursor}]))
+    summary = result[-1].summary
+    assert summary is not None
+    failure, = summary.branches
+    assert failure.state == "failed" and failure.code == "provider_read_failed"
+    assert failure.provider_id == "session-catalog" and failure.message == "原目录 SQLite 无法读取: errno=13"
+    assert failure.cursor == previous.cursor and failure.retryable
+    assert failure.returned_results == summary.returned_results == 0
+    assert not any(event.type == "page" for event in result)
 
 
 async def test_route_invalidation_closes_body_before_releasing_reference(search_http: SearchHTTP) -> None:

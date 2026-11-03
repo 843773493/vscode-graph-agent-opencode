@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api import search
 from app.api.deps import get_workspace_search_service, verify_local_token
 from app.core.trace_middleware import TraceMiddleware
+from app.schemas.internal_v2.search import SearchProviderCapabilityDTO
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
@@ -44,3 +45,36 @@ def test_domain_failures_keep_original_http_ownership(search_api, category, erro
     if code is not None:
         assert response.json()["detail"]["code"] == code
         assert response.headers["X-Request-ID"] == "req-search-failure"
+
+
+@pytest.fixture
+def provider_search_api(search_api):
+    client, query = search_api
+    service = WorkspaceSearchService("ws")
+    service.register(SearchProviderCapabilityDTO(
+        provider_id="llm-request-log", category="llm_request", operations=("content",), contract_version=1,
+        supported_options=("query",), position_kind="request_log_codepoint", max_results=100,
+        cache_policy="none", match_modes=("literal",),
+    ), query)
+    client.app.dependency_overrides[get_workspace_search_service] = lambda: service
+    return client, query
+
+
+@pytest.mark.parametrize("error,status,code", [
+    (PermissionError(13, "Permission denied", "/target/project/request.json"), 500, "provider_read_failed"),
+    (TimeoutError("期限已到"), 409, "deadline"),
+])
+def test_registered_provider_failure_is_serialized_with_real_owner(provider_search_api, error, status, code):
+    client, query = provider_search_api
+    query.side_effect = error
+    response = client.post("/api/v1/search", json={
+        "workspace_id": "ws", "category": "llm_request", "operation": "content", "match_mode": "literal", "query": "needle",
+    })
+    assert response.status_code == status and response.headers["X-Request-ID"] == "req-search-failure"
+    detail = response.json()["detail"]
+    assert detail["code"] == code
+    if code == "provider_read_failed":
+        assert detail["owner"] == "search_provider" and detail["provider_id"] == "llm-request-log"
+        assert detail["category"] == "llm_request" and detail["operation"] == "content"
+        assert "/target/project/request.json" in detail["message"]
+    query.assert_awaited_once()

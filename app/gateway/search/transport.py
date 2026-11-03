@@ -112,10 +112,10 @@ class SearchTransport:
                     if len(body) + len(chunk) > job.max_bytes:
                         raise SearchBranchError("delivery_limit", "领域响应超过本次字节配额，请缩小页大小后重试原页", retryable=True)
                     body.extend(chunk)
-                if response.status_code != 200:
-                    self._raise_owner_error(response.status_code, body)
                 if response.headers.get("X-Request-ID") != self.request_id:
                     raise SearchBranchError("invalid_response", "领域响应丢失本次 request_id")
+                if response.status_code != 200:
+                    self._raise_owner_error(response.status_code, body)
                 envelope = APIResponse[WorkspaceSearchResultDTO].model_validate_json(body)
                 if envelope.code != 0 or envelope.request_id != self.request_id or envelope.data is None:
                     raise SearchBranchError("invalid_response", "领域响应的 request_id 或数据不符")
@@ -143,4 +143,6 @@ class SearchTransport:
             code, message = "owner_http_error", f"领域请求返回 HTTP {status}，响应没有合法错误详情"
         if len(message) > MAX_SEARCH_ERROR_CHARS:
             message = message[:MAX_SEARCH_ERROR_CHARS] + "…（详情超过搜索响应上限，请按 request_id 查看原诊断）"
-        raise SearchBranchError(code, message, retryable=status >= 500 or code in {"deadline", "owner_rejected"})
+        provider_id = detail.get("provider_id") if isinstance(detail, dict) and detail.get("owner") == "search_provider" else None
+        raise SearchBranchError(code, message, retryable=status >= 500 or code in {"deadline", "owner_rejected"},
+                                provider_id=provider_id if isinstance(provider_id, str) else None)

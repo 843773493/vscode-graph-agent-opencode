@@ -3,13 +3,14 @@
 import asyncio
 import json
 from collections.abc import Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app.core.session_catalog_store import SessionCatalogStore
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.search_federation import MAX_SEARCH_OUTPUT_BYTES
@@ -244,6 +245,38 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert sum(len(event["page"]["catalog"]["items"]) for event in full if event["type"] == "page") == 6
             assert full[-1]["summary"]["returned_results"] == 6
             assert not (network.stopped / ".boxteam/sessions").exists()
+
+            # 只改变产品已创建 Session 的目录权限，不伪造日志或搜索回执。
+            sessions_root = network.workspace / ".boxteam/sessions"
+            with closing(SessionCatalogStore(network.workspace / ".boxteam/navigation/session-catalog.sqlite", sessions_root)) as catalog:
+                node = catalog.get_node(sessions[route_a][0])
+                assert node.storage_relative_locator is not None
+                directory = catalog.resolve_session_locator(node.storage_relative_locator) / "logs/llm_requests"
+            directory.mkdir(parents=True, exist_ok=True)
+            mode = directory.stat().st_mode & 0o7777
+            log_query = {"category": "llm_request", "operation": "content", "match_mode": "literal", "query": "query-only"}
+            directory.chmod(0)
+            try:
+                response = await client.post("/api/v1/search", json={"workspace_id": owners[route_a]["workspace_id"], **log_query},
+                    headers={"X-BoxTeam-Workspace-Id": route_a, "X-Request-ID": "req_provider_native_io"})
+                assert response.status_code == 500, response.text
+                assert response.headers["X-Request-ID"] == "req_provider_native_io"
+                detail = response.json()["detail"]
+                assert detail["owner"] == "search_provider" and detail["provider_id"] == "llm-request-log"
+                assert detail["code"] == "provider_read_failed" and str(directory) in detail["message"]
+                failed_logs = await search({"scope": {"mode": "selected", "owners": [owners[route_a], owners["route_b"]]},
+                                           "queries": [log_query]}, "req_federation_native_io")
+                failed = next(branch for branch in failed_logs[-1]["summary"]["branches"] if branch["branch"]["owner"] == owners[route_a])
+                assert failed["state"] == "failed" and failed["code"] == "provider_read_failed"
+                assert failed["provider_id"] == "llm-request-log" and str(directory) in failed["message"]
+                assert failed["cursor"] is None and failed["returned_results"] == 0 and failed["retryable"]
+                assert [page["branch"]["branch"]["owner"] for page in failed_logs if page["type"] == "page"] == [owners["route_b"]]
+            finally:
+                directory.chmod(mode)
+            repaired = await search({"scope": {"mode": "resume", "scope": failed_logs[0]["scope"]["scope"]},
+                "queries": [log_query], "continuations": [{"branch": failed["branch"], "cursor": failed["cursor"]}]}, "req_federation_native_io_retry")
+            assert repaired[-1]["summary"]["state"] == "complete"
+            assert [branch["branch"]["owner"] for branch in repaired[-1]["summary"]["branches"]] == [owners[route_a]]
     finally:
         (network.artifacts / "federation-network.json").write_text(json.dumps(observations, ensure_ascii=False, indent=2) + "\n")
         if gateway is not None:

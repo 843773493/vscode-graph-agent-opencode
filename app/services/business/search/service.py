@@ -1,9 +1,11 @@
 """工作区唯一搜索分派；不拥有领域数据或跨目标队列。"""
 
 import asyncio
+import sqlite3
 from collections.abc import Awaitable, Callable, Coroutine
 from time import time
 
+from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.schemas.internal_v2.search import (
     SearchProviderCapabilityDTO,
@@ -20,6 +22,25 @@ class SearchContractError(ValueError):
     def __init__(self, code: str, detail: str) -> None:
         super().__init__(detail)
         self.code = code
+
+
+class SearchProviderReadError(RuntimeError):
+    """只有已分派 Provider 的读取错误带其归属；原异常和完整诊断仍保留。"""
+
+    def __init__(self, capability: SearchProviderCapabilityDTO, operation: str, error: OSError | sqlite3.Error) -> None:
+        self.provider_id = capability.provider_id
+        self.category = capability.category
+        self.operation = operation
+        detail = failure_detail(error, stage=f"search:{self.provider_id}/{operation}", label="搜索 Provider 读取失败")
+        if isinstance(error, OSError) and error.errno is not None and error.filename is not None:
+            detail += f", reason={error.strerror}, filename={error.filename!r}"
+            if error.filename2 is not None:
+                detail += f", filename2={error.filename2!r}"
+        super().__init__(detail)
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": "search_provider", "code": "provider_read_failed", "provider_id": self.provider_id,
+                "category": self.category, "operation": self.operation, "message": str(self)}
 
 
 class SearchRegistration:
@@ -138,6 +159,11 @@ class WorkspaceSearchService:
             if not registration.active:
                 raise SearchContractError("provider_unavailable", f"搜索 Provider 已注销: {capability.provider_id}") from None
             raise
+        except TimeoutError:
+            # TimeoutError 也是 OSError；原期限不能被改标为读取失败。
+            raise
+        except (OSError, sqlite3.Error) as error:
+            raise SearchProviderReadError(capability, request.operation, error) from error
         finally:
             registration.tasks.discard(task)
 

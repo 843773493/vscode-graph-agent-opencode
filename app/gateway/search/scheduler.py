@@ -34,10 +34,11 @@ from app.services.business.session_navigation.name_search_budget import NameSear
 
 
 class SearchBranchError(ValueError):
-    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+    def __init__(self, code: str, message: str, *, retryable: bool = False, provider_id: str | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.provider_id = provider_id
 
 
 @dataclass(frozen=True)
@@ -202,7 +203,7 @@ async def search_events(
                     statuses[index] = status(job, state="failed", code="deadline", message=str(error), retryable=True, cursor=job.request.cursor)
                 except SearchBranchError as error:
                     statuses[index] = status(job, state="failed", code=error.code, message=str(error),
-                                             retryable=error.retryable, cursor=job.request.cursor)
+                                             retryable=error.retryable, provider_id=error.provider_id, cursor=job.request.cursor)
                 else:
                     statuses[index] = status(job, state=page.state, provider_id=page.provider_id,
                                              code=page.limited_reason, cursor=page.cursor,

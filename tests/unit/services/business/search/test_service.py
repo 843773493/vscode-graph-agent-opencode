@@ -1,6 +1,7 @@
 """注册、能力与安全结算；领域匹配另由原 owner 证明。"""
 
 import asyncio
+import sqlite3
 import threading
 from collections.abc import Iterator
 from unittest.mock import AsyncMock
@@ -16,6 +17,7 @@ from app.schemas.internal_v2.search import (
 from app.schemas.internal_v2.session_navigation import SessionCatalogSearchResultsDTO
 from app.services.business.search.service import (
     SearchContractError,
+    SearchProviderReadError,
     WorkspaceSearchService,
 )
 
@@ -102,6 +104,35 @@ async def test_zero_quota_is_limited_and_does_not_scan(
     assert result.state == "limited" and result.limited_reason == "output_limit"
     assert result.catalog is result.threads is None
     query.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [PermissionError(13, "Permission denied", "/target/project/log.json"),
+                                    sqlite3.DatabaseError("SQL 内部正文不应作为公开说明")])
+async def test_read_failure_keeps_registered_owner_and_original_cause(
+    service: WorkspaceSearchService, search_request: WorkspaceSearchRequest, query: AsyncMock, error: Exception,
+) -> None:
+    query.side_effect = error
+    with pytest.raises(SearchProviderReadError) as caught:
+        await service.search(search_request)
+    assert caught.value.__cause__ is error
+    detail = caught.value.detail()
+    assert detail["owner"] == "search_provider" and detail["code"] == "provider_read_failed"
+    assert (detail["provider_id"], detail["category"], detail["operation"]) == ("test-catalog", "catalog", "name")
+    if isinstance(error, OSError):
+        assert error.filename is not None
+        assert error.filename in detail["message"] and "Permission denied" in detail["message"]
+    else:
+        assert str(error) not in detail["message"]
+
+
+@pytest.mark.parametrize("error", [TimeoutError("期限已到"), RuntimeError("内部实现错误")])
+async def test_deadline_and_programming_error_keep_original_identity(
+    service: WorkspaceSearchService, search_request: WorkspaceSearchRequest, query: AsyncMock, error: BaseException,
+) -> None:
+    query.side_effect = error
+    with pytest.raises(type(error)) as caught:
+        await service.search(search_request)
+    assert caught.value is error
 
 
 @pytest.fixture

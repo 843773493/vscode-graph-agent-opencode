@@ -632,3 +632,10 @@
 - 整页不能交付时，唯一调度核心返回limited/output_bytes，保留输入cursor及零交付计数；不得跳过本页命中。原范围与续点自身无法容纳时，在任何分发前返回413/output_bytes。原3并发、完整页、慢消费不补队、总期限、安全结算与唯一终态保持。
 - 35项不同定向检查均已有通过证据，覆盖精确字节上限／多一字节、Unicode／转义游标、状态与汇总预留、超大诊断、零配额、旧续点重试及每候选页只编码一次。首次34通过／1失败是新装具遗漏resume冻结范围，按原请求合同补齐后该用例与新增边界检查通过，未放宽cursor／顺序／结果要求。Ruff通过；产品核心及新测试Pyright零诊断，原transport测试的27条Optional诊断与HEAD逐项同文，无新增，原件保留。
 - 真实Gateway＋双Backend验收通过（54.36秒）：只A、A+B、all含停止C、名称／多文件根／正文区间和上下文、Gateway重启原续点、单分支版本冲突与独立重试保持；每个实际响应记录下载字节并核8 MiB上限。准确命令、源码指纹、失败与通过输出和网络原件位置见`out/tests/temp/quick_access_output_20261103/artifacts/verification.json`。本批不改前端输入或公开DTO结构，未重复Workbench构建／Web／Electron交互；完整16.17及其余跨运行面验收仍按清单推进。
+
+### 2026-11-03：搜索读取失败归属（16.18 部分）
+
+- 原工作区SearchService在已分派Provider边界将原生I/O／SQLite读取失败登记为search_provider/provider_read_failed，附provider_id、类别和操作，保留原cause与完整诊断。明确文件错误的目标机器位置及原因可用于排障；不把任意异常正文或SQL正文普遍公开。TimeoutError先于OSError处理，原期限、取消、领域错误及内部编程错误仍走原出口。
+- 原API返回500具名详情，Gateway转为对应failed分支并保留provider_id、原cursor、零交付计数及显式重试。错误响应同样核原request_id，异请求错误不能附到当前分支；无通用“文件失败”回退。网络错误与信息／警告合同仍以代码TODO追踪。
+- 60项定向检查通过（1.78秒），含真实注册Service＋ASGI、原异常因果、SQLite正文保护、期限／取消／注销回归、错误ID拒绝、原续点及输出预算。核心Pyright零诊断，Ruff、OpenSpec strict及差异检查通过。
+- 真实Gateway＋双Backend验收通过（48.41秒）：通过产品创建Session，再只撤销隔离日志目录权限，工作区API确实500、归属llm-request-log且包含原目标位置；联邦A明确失败、B完整零匹配，恢复权限后只重试原A分支成功。没有替换查询响应或准备执行历史，原名称／文件／重启续点／版本冲突等验收保持。命令、源码指纹及原件位置：`out/tests/temp/quick_access_read_failure_20261103/artifacts/verification.json`。本批无客户端或公开DTO字段变化，未重复Web／Electron；16.18完整合同仍未齐，不据此勾选。
