@@ -1,6 +1,7 @@
 import { expect } from 'playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { verifySourceDocuments } from './quick_access_source_documents.mjs';
 
 /** 规范链接经过真实原 Opener，关键状态仍由本场景的产品 API 创建。 */
 export async function verifyResourceLinks({ page, command, api, result, owner }) {
@@ -19,7 +20,9 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
   };
   page.on('response', observeBytes);
   const open = async (uri, expected = 200, modifiers = []) => {
+    await expect(quick).not.toBeVisible();
     await command('workbench.action.quickOpen', uri);
+    await expect(quick.locator('input').first()).toHaveValue(uri);
     const [response] = await Promise.all([
       page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/resource-addresses/parse'
         && response.request().postDataJSON()?.uri === uri),
@@ -107,6 +110,11 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
     expect(savedBytes.subarray(3).toString()).toBe('BOM saved');
     links.textSavePreservesBom = true;
     expect(links.byteReads.every(read => read.route === owner.routeA && read.requestId)).toBe(true);
+
+    await verifySourceDocuments({ page, command, api, result, owner, open });
+    // 恢复 A 的文件编辑器，后续专用模式继续验证原发起工作区。
+    await open(fileUri);
+    await expect(page.locator('.editor-group-container.active .view-lines')).toContainText('URI link A');
 
     result.phase = 'invalid-canonical-uri';
     const tabs = await page.locator('.tabs-container .tab').count();

@@ -6,6 +6,7 @@ import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { ThreadInput } from '../threadInput.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { changeFileSource } from '../changeFiles.js';
+import { sourceDocumentSource } from '../sourceDocuments.js';
 import type { IRange } from '../../upstream/src/vs/editor/common/core/range.js';
 
 export interface ResourcePick extends IAnythingQuickPickItem { id: string; range?: { selection: IRange; decoration: IRange } }
@@ -15,6 +16,7 @@ export function editorResourceOwner(resource: URI): WorkspaceOwner | undefined {
   if (resource.scheme === 'boxteam-thread') return ThreadInput.fromResource(resource).owner;
   if (resource.scheme === 'boxteam-file') return workspaceFileSource(resource);
   if (resource.scheme === 'boxteam-change') return changeFileSource(resource).owner;
+  if (resource.scheme === 'boxteam-source') return sourceDocumentSource(resource);
   return undefined;
 }
 

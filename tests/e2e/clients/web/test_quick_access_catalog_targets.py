@@ -70,6 +70,13 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
     (workspace / "uri-image.png").write_bytes(base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6GDIAAAAASUVORK5CYII="))
     (workspace / "uri-bom.txt").write_bytes(b"\xef\xbb\xbfBOM original\r\n")
+    for target, label in ((workspace, "A"), (other, "B")):
+        (target / "AGENTS.md").write_text(f"# source AGENTS {label}\n", encoding="utf-8")
+        skill = target / ".boxteam/skills/quick-source"
+        skill.mkdir(parents=True, exist_ok=True)
+        (skill / "SKILL.md").write_text(
+            f"---\nname: quick-source\ndescription: 只读来源验收\n---\n# source Skill {label}\n", encoding="utf-8",
+        )
     result_path = context.artifacts_dir / "catalog-targets.json"
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=catalog_gateway_port,
@@ -108,6 +115,11 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert receipt["resourceLinks"]["noExecution"] is True
         assert receipt["resourceLinks"]["imageDecoded"] is True
         assert receipt["resourceLinks"]["textSavePreservesBom"] is True
+        assert receipt["sourceDocuments"]["readonly"] is True
+        assert receipt["sourceDocuments"]["exactOwners"] is True
+        assert receipt["sourceDocuments"]["historyIsolated"] is True
+        assert receipt["sourceDocuments"]["reopenReadsOwner"] is True
+        assert receipt["sourceDocuments"]["noMutationOrExecution"] is True
         assert receipt["nameModes"]["exactOwners"] is True
         assert receipt["pageErrors"] == []
     finally:

@@ -172,7 +172,9 @@ scope 跟随原 Input 的 configuration model，原 JSON serializer 的 config �
 
 候选至少应能表达资源类别、名称、归属与可用动作。需要作为资源引用或重新打开的对象，已有规范 URI 时直接复用，确有缺口时由统一寻址 owner 正式登记；没有此类需要的命令、导航动作或瞬时状态不普遍补 URI。可用 Thread URI 加结构化位置准确表达的定位不再额外创造消息／轮次地址。身份、URI、文本 selection、Thread 视图／轮次选择、revision／hash、当前传输 route 分别按已有合同传递。本稿不是新 DTO 定义。
 
-`boxteam-thread/file/change` 是现有原版编辑器集成的定位形式，不作为用户复制或跨 owner 保存的第二套业务 URI 协议。规范目标到这些编辑器输入使用唯一投影；Thread 身份取原 owner 的 `(workspace_id, session_id, thread_id)`，跨 Gateway 传输另保留其权威 Gateway 归属。重连、改名和历史重开按稳定身份重新解析当前已登记路由；编辑器匹配／历史去重不比较临时 route 或标题。重解失败明确不可用，不退回当前活动路由；多条路由无法唯一确认时要求明确选择，不自动创建连接。文件身份同样包含根及完整相对资源位置，不能仅比较显示路径。原版候选 URI 比较去重只是展示处理，不代替领域身份、权限或幂等判断。
+`boxteam-thread/file/change/source` 是原版编辑器集成的内部定位形式，不作为用户复制或跨 owner 保存的第二套业务 URI 协议。规范目标到这些编辑器输入使用唯一投影；Thread 身份取原 owner 的 `(workspace_id, session_id, thread_id)`，跨 Gateway 传输另保留其权威 Gateway 归属。重连、改名和历史重开按稳定身份重新解析当前已登记路由；编辑器匹配／历史去重不比较临时 route 或标题。重解失败明确不可用，不退回当前活动路由；多条路由无法唯一确认时要求明确选择，不自动创建连接。文件身份同样包含根及完整相对资源位置，不能仅比较显示路径。原版候选 URI 比较去重只是展示处理，不代替领域身份、权限或幂等判断。
+
+工作区 AGENTS／Skill 来源的内部文档投影保留 Gateway／工作区身份、不透明规范引用和展示文件名，沿原资源导航读取。原 `ITextModelService` 内容 Provider 与 `TextResourceEditorModel` 管理只读正文及引用释放；不为来源伪造文件 stat 或登记普通文件 writer。统一 Opener 在建组前取得同一模型引用，以一次路由重解与读取完成核验，交原编辑器接管后释放预读引用；历史与默认搜索范围也消费该投影归属。非文本或截断内容明确拒绝作为完整文档打开。其它来源按原 owner 的实际读取能力接入，不借此绕过配置或附件领域。
 
 原 Opener 的项目贡献将原始规范 URI 交给认证 Gateway 的 `/api/gateway/resource-addresses/parse`，由 `app.core.resource_uri` 唯一 grammar 投影规范引用、Gateway／scope／kind 和已有 Session／Thread／文件根字段。此只读入口不探测文件、不确认资源存在、不产生访问能力，也不启动目标；公开结构由 Gateway proto 描述。客户端不重复模板解析，在实际打开时重新解析已登记工作区路由，并交原 Session／Thread／文件 owner 核验；不支持的资源形态明确报告。Quick Access 传原始 URI，不先应用文件行号或符号后缀识别，位置继续作为独立 editor options；发起组和后台／侧边选项在异步解析前冻结。
 

@@ -350,3 +350,11 @@
 - 准确命令、源码指纹、退出码和失败原件见 `out/tests/temp/quick_access_media_20261102/artifacts/` 的 provider、types、browser 和 static 收据；正式页面产物按对应 tests 路径保留。
 
 - 最终 noble 版本正式构建／真实 Gateway／Chromium 通过（117.51 秒），源码指纹保持一致：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-cb96bf4a6595/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。图片真实解码、原 HTTP Range、BOM 编辑保存和全部既有目录／child／分页断言通过，页面错误为空。前一轮尾部模式测试从最近历史提前接受同一 child，导致查询被取消；现等待精确 owner／query 的真实 HTTP 回执后再接受，原请求数、归属和零额外文件查询断言全部保留。原件见 browser-3，最终见 browser-4；没有产品查询语义变化。
+
+### 2026-11-03：只读工作区来源（2.2、2.5 部分）
+
+- 工作区 AGENTS／Skill 的规范链接进入同一原 Opener，正文沿原资源导航读取，由原内容 Provider／只读文本模型展示和释放；不伪造 stat、不增加文件 writer，也不把非文本或截断内容冒充完整文档。内部投影保留稳定 Gateway／工作区及不透明规范引用；最近记录与默认查询范围同步消费该归属，关闭后重开重新读取 owner。
+- 参照 `reference_repo/vscode/extensions/copilot/src/platform/workspace/vscode/workspaceServiceImpl.ts` 的原文档服务复用，以及原 Workbench 模型引用生命周期，来源先经 resolver 取得模型引用，再创建编辑器组；移除 Opener 的重复路由读取，不另建路由／正文缓存。读取失败不建组，打开成功或失败均释放预读引用。13 项定向检查／106 条断言通过，覆盖原 FileService 回归、停机拒绝、完整正文、归属错误、截断与媒体拒绝，以及模型引用释放。
+- 正式 Workbench 构建／真实 Gateway／Chromium 完整页面通过（133.03 秒）：同名 A/B AGENTS、原只读编辑器实际键入不改正文、导航仍为 A 时来源 B 的默认查询与历史只属 B、Skill 关闭重开再次读 B；来源写请求及模型执行均为空。既有 main／child、目录、独立分页／旧 cursor、图片解码、HTTP Range、BOM 保存及专用模式断言继续通过，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-ce073bea8d92/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
+- 失败原件保留：首轮误断言原生 EditContext 不提供的 `aria-readonly`，现按固定上游 `screenReaderSupport.ts` 检查 `aria-autocomplete=none`，并保留实际键入、完整正文不变及无写请求断言；后续补齐选择器关闭／输入确认，消除连续调用保留旧输入的测试时序。读取断言改为消费唯一解析入口返回的规范 URI，保留精确 Gateway／工作区核验；原 POST 观察流是只读订阅，不能按 HTTP 方法将其误计为业务写入。没有放宽目标归属或执行副作用断言。
+- 准确命令、源码指纹、原始输出及退出码位于 `out/tests/temp/quick_access_sources_20261103/artifacts/`。页面冻结构建后仅修正 `IResourceEditorInput` 的 type import 声明位置；同一 esbuild 转换结果逐字相等，证明运行时代码未变，见 `type-import-runtime.json`。最终真实类型检查、Ruff、AST／结构、差异与 OpenSpec strict 检查随本边界保存。未运行无关的全仓测试；配置来源、非 Workspace 来源、Diff、音视频隔离宿主和 Electron 仍未完成，2.2／2.5 保持未勾选。

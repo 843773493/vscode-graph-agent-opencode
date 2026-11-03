@@ -9,6 +9,7 @@ import { changeFileSource } from '../changeFiles.js';
 import { ThreadInput } from '../threadInput.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
+import { sourceDocumentSource } from '../sourceDocuments.js';
 import type { SearchScope } from './scope.js';
 import type { AnythingQuickAccessProviderRunOptions, IQuickAccessOptions } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 
@@ -42,6 +43,10 @@ export function captureSearchOwner(editors: IEditorService): WorkspaceOwner {
   }
   if (resource?.scheme === 'boxteam-change') {
     const { gatewayId, workspaceId } = changeFileSource(resource).owner;
+    return { gatewayId, workspaceId };
+  }
+  if (resource?.scheme === 'boxteam-source') {
+    const { gatewayId, workspaceId } = sourceDocumentSource(resource);
     return { gatewayId, workspaceId };
   }
   const snapshot = workspaceContext.getSnapshot();
