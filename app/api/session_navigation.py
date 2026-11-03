@@ -51,6 +51,7 @@ from app.schemas.internal_v2.session_navigation.thread_search import (
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.catalog_query import CatalogCursorError
 from app.services.business.session_navigation.name_search_budget import (
     NAME_SEARCH_DEADLINE_HEADER,
 )
@@ -264,6 +265,8 @@ async def list_session_catalog_children(
         )
     except KeyError as error:
         raise not_found_http_error(error) from error
+    except CatalogCursorError as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
     except ValidationError:
         raise
     except (TypeError, ValueError, RuntimeError) as error:
@@ -287,6 +290,8 @@ async def list_session_catalog_roots(
             limit=limit,
             cursor=cursor,
         )
+    except CatalogCursorError as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
     except ValidationError:
         raise
     except (TypeError, ValueError, RuntimeError) as error:
@@ -362,6 +367,8 @@ async def search_session_catalog(
         ))
         result = page.catalog
         assert result is not None
+    except CatalogCursorError as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
     except ValidationError:
         raise
     except (TypeError, ValueError, RuntimeError, TimeoutError) as error:

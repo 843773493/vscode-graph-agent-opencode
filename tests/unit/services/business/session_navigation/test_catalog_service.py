@@ -40,8 +40,9 @@ async def test_catalog_public_projections_hide_locator_but_keep_path_search(
     resolver = service.path_resolver
     session_id = canonical("公开位置边界")
     session_bundle_factory(sessions_root, session_id)
+    # 固定目录 ID，避免随机 ID 恰好模糊命中年份，使日期查询产生合法的额外结果。
     folder = resolver.catalog_store.create_folder(
-        create_prefixed_id("ses"), resolver.workspace_id, None, "逻辑目录",
+        canonical("公开目录"), resolver.workspace_id, None, "逻辑目录",
     )
     _relocate(resolver, session_id, folder.node_id)
     catalog = SessionCatalogService(session_service=service)

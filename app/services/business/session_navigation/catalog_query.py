@@ -6,6 +6,7 @@ import base64
 import json
 from collections.abc import Callable, Iterator
 from heapq import nsmallest
+from typing import Literal
 
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogNodeDTO,
@@ -20,6 +21,22 @@ from app.services.mapping.session_catalog_search import (
 
 _SEARCH_TOP_K_MIN_NODE_COUNT = 2_000
 _SEARCH_TOP_K_MIN_SCAN_RATIO = 16
+
+
+class CatalogCursorError(ValueError):
+    """目录 owner 在原校验点区分无效输入与已过期的目录版本。"""
+
+    def __init__(
+        self,
+        reason: Literal["format", "payload", "revision", "catalog_revision", "scope", "offset", "offset_out_of_range"],
+        message: str,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.code = "stale_catalog_cursor" if reason in {"revision", "catalog_revision"} else "invalid_catalog_cursor"
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": "session_catalog", "code": self.code, "reason": self.reason, "message": str(self)}
 
 
 def search_catalog(
@@ -172,21 +189,23 @@ def decode_catalog_cursor(
         return 0
     try:
         payload = json.loads(
-            base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+            base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True).decode("utf-8")
         )
-    except (ValueError, json.JSONDecodeError) as error:
-        raise ValueError("会话目录 cursor 无效") from error
+    except ValueError as error:
+        raise CatalogCursorError("format", "会话目录 cursor 无效") from error
     if not isinstance(payload, dict):
-        raise TypeError("会话目录 cursor 格式无效")
+        raise CatalogCursorError("payload", "会话目录 cursor 格式无效")
+    if not isinstance(payload.get("revision"), str) or type(payload.get("catalog_revision")) is not int:
+        raise CatalogCursorError("payload", "会话目录 cursor 版本字段无效")
     if payload.get("revision") != revision:
-        raise ValueError("会话目录已更新，请从第一页重新加载")
+        raise CatalogCursorError("revision", "会话目录已更新，请从第一页重新加载")
     if payload.get("catalog_revision") != catalog_revision:
-        raise ValueError("会话目录已更新，请从第一页重新加载")
+        raise CatalogCursorError("catalog_revision", "会话目录已更新，请从第一页重新加载")
     if payload.get("scope") != scope:
-        raise ValueError("会话目录 cursor 与当前列表不匹配，请从第一页重新加载")
+        raise CatalogCursorError("scope", "会话目录 cursor 与当前列表不匹配，请从第一页重新加载")
     offset = payload.get("offset")
     if type(offset) is not int or offset < 0:
-        raise ValueError("会话目录 cursor offset 无效")
+        raise CatalogCursorError("offset", "会话目录 cursor offset 无效")
     if offset >= collection_size:
-        raise ValueError("会话目录 cursor offset 超出当前列表范围")
+        raise CatalogCursorError("offset_out_of_range", "会话目录 cursor offset 超出当前列表范围")
     return offset

@@ -5,6 +5,8 @@
 
 工作区后端与 Gateway 的在线／离线目录镜像 SHALL 使用相同的节点字段及匹配规则。镜像只消费原 catalog 的公开导出，保留新鲜度与错误状态，不直接读取工作区存储。既有创建日期查询可继续依据冻结 UTC 创建 metadata 匹配，物理 locator 不因此成为公开字段或第二套权威定位关系。
 
+原 catalog 游标 owner SHALL 区分 `invalid_catalog_cursor`（编码／载荷、查询或列表作用域、offset 不合法）与 `stale_catalog_cursor`（内容 revision 或 catalog revision 变化）。工作区目录搜索、children／roots 及统一搜索 SHALL 保留既有 HTTP 409，并携带 `owner=session_catalog`、原校验点的 `reason` 和可读原因。Gateway SHALL 沿原字段传递诊断及输入 cursor，失败不交付页或推进续点；离线镜像使用同一校验，不伪造 HTTP 状态，不把错误重新解释为零匹配。
+
 Gateway 跨工作区目录搜索 SHALL 接入统一联邦查询合同，支持明确目标集合或显式当前 Gateway 全部工作区，并在分发前冻结实际范围；单工作区或 A+B MUST NOT 调用全部范围后隐藏其它命中。在线目录匹配 SHALL 交原工作区名称 Provider；已有离线镜像可作为同一合同的派生来源，沿同一领域匹配实现表达更新时间与 stale，不保留 Gateway 独立演化的名称搜索器。工作区名及 Gateway 导航文件夹发现仍由其控制面 owner 处理，不依赖工作区正文或会话镜像。
 
 工作区 catalog 与 Thread 名称查询 SHALL 接受可选的 `X-BoxTeam-Name-Search-Deadline` 有限 UTC 秒时间戳；省略时仍受既有 JSON 请求的十五秒总期限限制，提供时取剩余期限与该上限的较小值，不能借远期时间戳扩大服务端预算。客户端排队、路由和读取共用原期限，Gateway 透传而不续期。期限 SHALL 覆盖冷快照逐行读取、投影、匹配、分页及 Thread 准入等待；过期请求不得开始扫描，耗尽后明确失败，不发布半份快照或伪报完整无匹配。原生阻塞 I/O 与已取得的受保护 worker 仍按原 owner 结算后释放，不宣称可以强行中断系统调用。

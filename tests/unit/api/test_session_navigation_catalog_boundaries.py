@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from app.api import session_navigation as nav
 from app.schemas.internal_v2.search import WorkspaceSearchRequest
+from app.services.business.session_navigation.catalog_query import CatalogCursorError
 
 
 class _FailingCatalogService:
@@ -56,7 +57,8 @@ async def test_children_maps_unknown_parent_node_to_404() -> None:
 @pytest.mark.asyncio
 async def test_children_maps_malformed_cursor_shape_to_409() -> None:
     """cursor 载荷不是对象时是客户端输入错误，不能泄漏成 500。"""
-    service = _FailingCatalogService(TypeError("会话目录 cursor 格式无效"))
+    error = CatalogCursorError("payload", "会话目录 cursor 格式无效")
+    service = _FailingCatalogService(error)
 
     with pytest.raises(HTTPException) as captured:
         await nav.list_session_catalog_children(
@@ -68,11 +70,13 @@ async def test_children_maps_malformed_cursor_shape_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
+    assert captured.value.detail == error.detail()
 
 
 @pytest.mark.asyncio
 async def test_roots_maps_malformed_cursor_shape_to_409() -> None:
-    service = _FailingCatalogService(TypeError("会话目录 cursor 格式无效"))
+    error = CatalogCursorError("payload", "会话目录 cursor 格式无效")
+    service = _FailingCatalogService(error)
 
     with pytest.raises(HTTPException) as captured:
         await nav.list_session_catalog_roots(
@@ -83,11 +87,13 @@ async def test_roots_maps_malformed_cursor_shape_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
+    assert captured.value.detail == error.detail()
 
 
 @pytest.mark.asyncio
 async def test_search_maps_malformed_cursor_shape_to_409() -> None:
-    service = _FailingCatalogService(TypeError("会话目录 cursor 格式无效"))
+    error = CatalogCursorError("payload", "会话目录 cursor 格式无效")
+    service = _FailingCatalogService(error)
 
     with pytest.raises(HTTPException) as captured:
         await nav.search_session_catalog(
@@ -99,15 +105,13 @@ async def test_search_maps_malformed_cursor_shape_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
+    assert captured.value.detail == error.detail()
 
 
 @pytest.mark.asyncio
 async def test_children_maps_stale_catalog_cursor_to_409() -> None:
-    service = _FailingCatalogService(
-        ValueError(
-            "会话目录已更新，请从第一页重新加载"
-        )
-    )
+    error = CatalogCursorError("revision", "会话目录已更新，请从第一页重新加载")
+    service = _FailingCatalogService(error)
 
     with pytest.raises(HTTPException) as captured:
         await nav.list_session_catalog_children(
@@ -119,4 +123,4 @@ async def test_children_maps_stale_catalog_cursor_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
-    assert "请从第一页重新加载" in captured.value.detail
+    assert captured.value.detail == error.detail()

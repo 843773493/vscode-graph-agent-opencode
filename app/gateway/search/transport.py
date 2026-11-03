@@ -20,6 +20,7 @@ from app.schemas.search_federation import (
     MAX_SEARCH_ERROR_CHARS,
     FederatedSearchSourceDTO,
 )
+from app.services.business.session_navigation.catalog_query import CatalogCursorError
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ class SearchTransport:
             )
         except LookupError as error:
             raise SearchBranchError("target_unavailable", f"{unavailable}；{error}", retryable=True) from error
+        except CatalogCursorError as error:
+            raise SearchBranchError(error.code, str(error), retryable=True,
+                                    error_owner="session_catalog", reason=error.reason) from error
         except (ValueError, TypeError) as error:
             raise SearchBranchError("owner_rejected", str(error)) from error
         result = WorkspaceSearchResultDTO(
@@ -154,7 +158,9 @@ class SearchTransport:
         provider_id = detail.get("provider_id") if isinstance(detail, dict) and detail.get("owner") == "search_provider" else None
         owner = detail.get("owner") if isinstance(detail, dict) else None
         reason = detail.get("reason") if isinstance(detail, dict) else None
-        raise SearchBranchError(code, message, retryable=status >= 500 or code in {"deadline", "owner_rejected"},
+        raise SearchBranchError(code, message, retryable=status >= 500 or code in {
+                                    "deadline", "owner_rejected", "invalid_catalog_cursor", "stale_catalog_cursor",
+                                },
                                 provider_id=provider_id if isinstance(provider_id, str) else None,
                                 error_owner=owner if isinstance(owner, str) else None,
                                 reason=reason if isinstance(reason, str) else None, http_status=status)

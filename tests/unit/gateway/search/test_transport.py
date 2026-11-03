@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -380,6 +380,28 @@ async def test_mirror_is_opt_in_and_online_always_uses_owner(search_http: Search
     assert live.page.catalog.revision == "r1"
 
 
+@pytest.mark.parametrize("stale", [False, True])
+async def test_mirror_cursor_rejection_keeps_original_owner_without_http_status(
+    search_http: SearchHTTP, mirrored_owner: _CatalogSnapshot, stale: bool,
+) -> None:
+    search_http.mode = "offline"
+    query = {"category": "catalog", "query": "needle", "limit": 1, "allow_catalog_mirror": True}
+    first = events(await search_http.search(OWNERS[:1], queries=[query]))
+    page, = [event for event in first if event.type == "page"]
+    assert first[0].scope is not None and page.branch is not None
+    assert search_http.mirror is not None
+    search_http.mirror._snapshots[mirrored_owner.owner] = replace(mirrored_owner, revision="mirror-v2") if stale else mirrored_owner
+    cursor = page.branch.cursor if stale else "%%%"
+    rejected = events(await search_http.search(scope={"mode": "resume", "scope": first[0].scope.scope.model_dump(mode="json")},
+        queries=[query], continuations=[{"branch": page.branch.branch.model_dump(mode="json"), "cursor": cursor}]))
+    assert rejected[-1].summary is not None
+    failure, = rejected[-1].summary.branches
+    assert failure.state == "failed" and failure.code == ("stale_catalog_cursor" if stale else "invalid_catalog_cursor")
+    assert failure.error_owner == "session_catalog" and failure.reason == ("revision" if stale else "format")
+    assert failure.http_status is None and failure.retryable and failure.cursor == cursor and failure.returned_results == 0
+    assert not any(event.type == "page" for event in rejected)
+
+
 async def test_mirror_never_masks_owner_rejection_or_route_reuse(search_http: SearchHTTP, mirrored_owner: _CatalogSnapshot) -> None:
     query = {"category": "catalog", "query": "needle", "allow_catalog_mirror": True}
     search_http.mode = "error"
@@ -388,7 +410,6 @@ async def test_mirror_never_masks_owner_rejection_or_route_reuse(search_http: Se
     assert not any(event.type == "page" for event in rejected)
     search_http.mode = "offline"
     old = search_http.registry.resolve("route_0")
-    from dataclasses import replace
     search_http.registry.upsert(replace(old, backend_workspace_id="00000000-0000-4000-8000-000000000099"))
     response = await search_http.search(OWNERS[:1], queries=[query])
     assert response.status_code == 404 and response.json()["detail"]["code"] == "owner_unavailable"

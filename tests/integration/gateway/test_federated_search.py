@@ -184,6 +184,26 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert current_navigation == original_navigation
             observations.append({"navigation_before": original_navigation, "navigation_after": current_navigation})
 
+            for suffix in ("search", "children", "roots"):
+                response = await client.get(f"/api/v1/session-catalog/{suffix}",
+                    params={"query": "ShSe", "cursor": "MTIz"}, headers={"X-BoxTeam-Workspace-Id": route_a})
+                assert response.status_code == 409, response.text
+                detail = response.json()["detail"]
+                assert (detail["owner"], detail["code"], detail["reason"]) == (
+                    "session_catalog", "invalid_catalog_cursor", "payload")
+            for request_id, invalid_cursor, reason in (
+                ("req_federation_catalog_format", "%%%", "format"),
+                ("req_federation_catalog_scope", a_page["branch"]["cursor"], "scope"),
+            ):
+                invalid = await search({"scope": {"mode": "resume", "scope": frozen},
+                    "queries": [{**query, "query": "Shared"}],
+                    "continuations": [{"branch": a_page["branch"]["branch"], "cursor": invalid_cursor}]}, request_id)
+                rejected, = invalid[-1]["summary"]["branches"]
+                assert (rejected["code"], rejected["reason"], rejected["error_owner"], rejected["http_status"]) == (
+                    "invalid_catalog_cursor", reason, "session_catalog", 409)
+                assert rejected["cursor"] == invalid_cursor and rejected["returned_results"] == 0 and rejected["retryable"]
+                assert not any(event["type"] == "page" for event in invalid)
+
             roots = {}
             for route in (route_a, "route_b"):
                 response = await client.get("/api/v1/workspace/files/roots", headers={"X-BoxTeam-Workspace-Id": route})
@@ -313,7 +333,9 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert a_continued["branch"]["branch"]["owner"] == owners[route_a]
             assert a_continued["page"]["catalog"]["items"][0]["node"]["session_id"] == sessions[route_a][1]
             failed = next(item for item in invalidated[-1]["summary"]["branches"] if item["branch"]["owner"] == owners["route_b"])
-            assert failed["state"] == "failed" and failed["code"] == "owner_rejected"
+            assert failed["state"] == "failed" and failed["code"] == "stale_catalog_cursor"
+            assert failed["error_owner"] == "session_catalog" and failed["http_status"] == 409
+            assert failed["reason"] == "revision" and failed["retryable"]
             assert failed["cursor"] == b_page["branch"]["cursor"]
             retried = await search({"scope": {"mode": "resume", "scope": frozen}, "queries": [query],
                                     "continuations": [{"branch": b_page["branch"]["branch"]}]}, "req_federation_retry")

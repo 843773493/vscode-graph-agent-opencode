@@ -731,3 +731,11 @@
 - 真实双 Backend＋Gateway 验收1项通过（48.23秒）：不支持匹配模式与合同版本均保留原400和明确代码、零页／零交付；关闭本装具自有A/B后端并保留登记URL，两分支真实ConnectError、原cursor与独立重试信息不丢失，汇总incomplete，不伪报完整无匹配。同名Session与相同正文片段的跨owner结果均保留；纯查询前后原catalog快照（含顺序、版本及水位）完全一致。既有重启续页、单分支revision冲突、部分失败、同request_id与真实序列化断言继续通过。
 - 快慢分支、排队期限、取消／断流与迟到页安全结算复用同源码的57项调度／transport／输出定向证据：out/tests/temp/search_transport_reasons_20261103/artifacts/verification.json；真实Workbench的快慢、取消、全部失败与独立重试沿out/tests/temp/file_coverage_20261103/artifacts/verification.json（2项／179.54秒），其中出站故障为显式装具，不称全部为原生网络故障。本批新增连接拒绝使用真实TCP。
 - Ruff与本实网测试Pyright均零诊断；OpenSpec strict通过。准确命令、指纹、退出码与正式原件：out/tests/temp/search_lifecycle_20261103/artifacts/verification.json。首次启动前端口冲突原件保留，未终止未知进程，确认端口空闲后通过；补齐同片段断言后最终重跑通过。产品源码未变，未重复Web构建／Electron；完整Quick Access及其余16组任务仍按各自范围追踪。
+
+
+### 2026-11-03：目录游标保留原校验原因（16.18 部分）
+
+- 原catalog_query的唯一游标校验器改用CatalogCursorError；编码／payload、scope、offset无效与内容／catalog版本变化区分invalid_catalog_cursor和stale_catalog_cursor，由原校验点产生reason。原目录搜索、children／roots与统一Provider仍为409，保留owner=session_catalog、原消息及request_id。在线联邦与离线镜像保留输入cursor和零交付，镜像不伪造HTTP状态；不新增存储、hash或第二分类器。
+- 119项定向检查通过（20.57秒），最终API断言补跑5项；原navigation operations和Provider回归通过，完整数量见related.log。真实双Backend＋Gateway1项通过（48.36秒）：经产品创建目录历史，实际校验损坏cursor、跨查询续点及单owner目录变化，状态／原因／原cursor／零页与独立重试均正确。
+- 一条既有日期搜索测试曾因随机folder ID按合法模糊规则命中年份而失败，现固定该测试ID，保留原唯一命中断言；原ID与归因见fixture-collision.json。完整HEAD基线该轮通过，不将其表述为必现产品回归。Pyright39条和Ruff11条均与完整基线逐条同文、无新增；产品四文件与新增游标测试零诊断。OpenSpec strict及差异检查通过。
+- 命令、指纹、原始结果与退出码：out/tests/temp/catalog_search_errors_20261103/artifacts/verification.json；完整基线解包及tar已删除，诊断原件保留。本批无前端／公开DTO字段变化，不重复生成、Workbench类型或Electron；发现旧catalog targets浏览器验收仍观察旧HTTP入口，下一切片迁齐观察器再执行页面验收。其余owner与信息／警告仍由16.18追踪，保持未勾选。
