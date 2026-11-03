@@ -708,3 +708,10 @@
 - Gateway停止后沿原registry owner准备真实目录／UUID的离线D并复用B旧route，重启后沿原all范围续查：保留A/B/C身份、时间和顺序，只有A真正分发并取得第二条Session，B明确owner_unavailable、零交付且保留原cursor；D不替代B，只有新all才包含D。C/D没有创建Session业务目录。离线准备不作为管理UI新增目标的验收。
 - 受保护矩阵最终1 passed／50.49秒，退出0；两后端全部access日志按request_id核对实际分发，控制面发现与前置拒绝均零后端HTTP读取。Ruff通过、测试Pyright零诊断、OpenSpec strict及差异检查通过。无产品源码／公开DTO变化，未重复Web构建或Web／Electron、Windows canonical验收。
 - 首轮测试将D指向不存在目录和虚构UUID，Gateway启动实际拒绝；已修正测试输入，没有放宽产品校验。失败与通过原件、准确命令及源码指纹保留于out/tests/temp/search_scope_changes_20261103/artifacts/verification.json，最终正式原件为out/tests/integration/gateway/test_search_scope_changes/runs/run-34a886b96831/。联合既有范围和实际网络证据勾选16.13，其余未闭环项保持。
+
+
+### 2026-11-03：网络故障保留原传输原因（16.18 部分）
+
+- 联邦搜索沿既有error_owner／reason字段传递search_transport及httpx原异常类型，区分连接／读取／写入／池超时、连接／读写故障、远端／本地协议、代理与解码等原因。保留原deadline／target_unavailable代码、异常因果、详情、输入cursor和重试，不伪造HTTP状态或Provider身份，不从自然语言推断原因，不增加第二错误分类链。
+- 57项定向检查通过（2.18秒）；每类传输异常均核原续点、零页、零交付、分支终态等于汇总、路由引用释放及原分支重试。真实Gateway＋双Backend通过（49.93秒）：关闭本装具B后端但保留登记URL，真实连接拒绝返回ConnectError／search_transport，A仍返回原页面。没有替换该网络响应或终止未知进程。
+- Ruff通过；核心与实网测试Pyright零诊断，原transport测试29条诊断与HEAD原件逐条同文，没有新增。OpenSpec strict及差异检查通过。命令、源码指纹、原始结果、实际退出码及正式产物见out/tests/temp/search_transport_reasons_20261103/artifacts/verification.json。本批无公开DTO或前端源码变化，不重复生成、Web构建或Electron；原owner其余异常与信息／警告合同仍未齐，16.18保持未勾选。

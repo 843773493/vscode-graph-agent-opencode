@@ -124,9 +124,11 @@ class SearchTransport:
                     raise SearchBranchError("invalid_response", "领域响应的 request_id 或数据不符")
                 return envelope.data
         except httpx.TimeoutException as error:
-            raise SearchBranchError("deadline", f"领域查询超时: {type(error).__name__}", retryable=True) from error
+            raise SearchBranchError("deadline", f"领域查询超时: {type(error).__name__}: {error}", retryable=True,
+                                    error_owner="search_transport", reason=type(error).__name__) from error
         except httpx.RequestError as error:
-            raise SearchBranchError("target_unavailable", f"领域请求失败: {error}", retryable=True) from error
+            raise SearchBranchError("target_unavailable", f"领域请求失败: {error}", retryable=True,
+                                    error_owner="search_transport", reason=type(error).__name__) from error
         except ValidationError as error:
             detail = str(error.errors(include_input=False, include_url=False))[:MAX_SEARCH_ERROR_CHARS]
             message = report_failure(error, diagnostic_logger=logger, detail=(

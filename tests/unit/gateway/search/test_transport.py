@@ -56,9 +56,12 @@ class SearchHTTP:
     mode: str = "normal"
     paused: PausedBody = field(default_factory=PausedBody)
     mirror: GatewaySessionCatalogSearchService | None = None
+    network_error: type[httpx.RequestError] | None = None
 
     async def receive(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        if self.network_error is not None:
+            raise self.network_error("原网络故障详情", request=request)
         payload = json.loads(request.content)
         request_id = request.headers["X-Request-ID"]
         headers = {"X-Request-ID": request_id, "Content-Type": "application/json"}
@@ -234,6 +237,44 @@ async def test_plain_http_rejection_keeps_actual_status_without_invented_owner(s
     assert failure.code == "owner_http_error" and failure.http_status == status
     assert failure.error_owner is None and failure.reason is None
     assert not failure.retryable
+
+
+@pytest.mark.parametrize("error_type,code", [
+    (httpx.ConnectTimeout, "deadline"), (httpx.ReadTimeout, "deadline"),
+    (httpx.WriteTimeout, "deadline"), (httpx.PoolTimeout, "deadline"),
+    (httpx.ConnectError, "target_unavailable"), (httpx.ReadError, "target_unavailable"),
+    (httpx.WriteError, "target_unavailable"), (httpx.CloseError, "target_unavailable"),
+    (httpx.RemoteProtocolError, "target_unavailable"), (httpx.LocalProtocolError, "target_unavailable"),
+    (httpx.ProxyError, "target_unavailable"), (httpx.UnsupportedProtocol, "target_unavailable"),
+    (httpx.DecodingError, "target_unavailable"), (httpx.TooManyRedirects, "target_unavailable"),
+])
+async def test_network_failure_preserves_transport_reason_and_original_cursor(
+    search_http: SearchHTTP, error_type: type[httpx.RequestError], code: str,
+) -> None:
+    original = events(await search_http.search(OWNERS[:1]))
+    scope, summary = original[0].scope, original[-1].summary
+    assert scope is not None and summary is not None
+    previous, = summary.branches
+    search_http.network_error = error_type
+    result = events(await search_http.search(scope={"mode": "resume", "scope": scope.scope.model_dump(mode="json")},
+        continuations=[{"branch": previous.branch.model_dump(mode="json"), "cursor": previous.cursor}]))
+    summary = result[-1].summary
+    assert summary is not None
+    failure, = summary.branches
+    assert failure.code == code and failure.state == "failed" and failure.retryable
+    assert failure.error_owner == "search_transport" and failure.reason == error_type.__name__
+    assert failure.http_status is None and failure.provider_id is None
+    assert failure.message is not None and "原网络故障详情" in failure.message
+    assert failure.cursor == previous.cursor and failure.returned_results == summary.returned_results == 0
+    assert [event.branch for event in result if event.type == "branch"] == [failure]
+    assert not any(event.type == "page" for event in result)
+    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+    search_http.network_error = None
+    retried = events(await search_http.search(scope={"mode": "resume", "scope": scope.scope.model_dump(mode="json")},
+        continuations=[{"branch": previous.branch.model_dump(mode="json"), "cursor": failure.cursor}]))
+    page, = [event.page for event in retried if event.type == "page"]
+    assert page is not None and page.provider_id == "session-catalog"
+    assert json.loads(search_http.requests[-1].content)["cursor"] == previous.cursor
 
 
 async def test_route_invalidation_closes_body_before_releasing_reference(search_http: SearchHTTP) -> None:

@@ -25,6 +25,7 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.processes.workspace import (
+    BackendProcess,
     close_backend_process,
     start_backend_process,
     workspace_backend_id_for_root,
@@ -44,6 +45,7 @@ class Network:
     gateway_port: int
     backend_port: int
     artifacts: Path
+    backends: list[BackendProcess]
 
     def start(self):
         return start_gateway_process(
@@ -73,7 +75,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     ports = integration_port_block_for_file(Path(request.node.path))
     monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
     lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 1, 20)))
-    fixture = Network(workspace, secondary, stopped, runtime / "gateway-home", ports.port(20), ports.port(0), context.artifacts_dir)
+    fixture = Network(workspace, secondary, stopped, runtime / "gateway-home", ports.port(20), ports.port(0), context.artifacts_dir, [])
     # 本机目录控制链和 Gateway 使用同一原生身份；独立 HOME 会产生互不相认的本机令牌。
     credential = fixture.gateway_home / "state/gateway/credentials/local-token"
     credential.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +88,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
             backend = start_backend_process(workspace_root=str(root), port=ports.port(index), log_name=f"backend-{index}",
                                             boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts)
             cleanup.callback(close_backend_process, backend)
+            fixture.backends.append(backend)
         # 外部后端登记是查询输入，目录历史不通过磁盘写入或 mock 准备。
         gateway_root = fixture.gateway_home / "state/gateway"
         state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
@@ -317,6 +320,19 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
                 "queries": [log_query], "continuations": [{"branch": failed["branch"], "cursor": failed["cursor"]}]}, "req_federation_native_io_retry")
             assert repaired[-1]["summary"]["state"] == "complete"
             assert [branch["branch"]["owner"] for branch in repaired[-1]["summary"]["branches"]] == [owners[route_a]]
+
+            # 关闭本装具自己的 B 后端，保留原登记 URL，验证真实连接拒绝而非离线状态替身。
+            await asyncio.to_thread(close_backend_process, network.backends[1])
+            disconnected = await search({"scope": {"mode": "resume", "scope": frozen}, "queries": [query],
+                "continuations": [{"branch": page["branch"]["branch"], "cursor": page["branch"]["cursor"]
+                                  if page is b_page else None} for page in pages]}, "req_federation_connection_refused")
+            failure, = [branch for branch in disconnected[-1]["summary"]["branches"] if branch["state"] == "failed"]
+            assert failure["branch"]["owner"] == owners["route_b"]
+            assert failure["code"] == "target_unavailable" and failure["error_owner"] == "search_transport"
+            assert failure["reason"] == "ConnectError" and failure["http_status"] is None and failure["retryable"]
+            assert failure["cursor"] == b_page["branch"]["cursor"] and failure["returned_results"] == 0
+            assert [page["branch"]["branch"]["owner"] for page in disconnected if page["type"] == "page"] == [owners[route_a]]
+            assert [event["branch"] for event in disconnected if event["type"] == "branch" and event["branch"]["state"] == "failed"] == [failure]
     finally:
         (network.artifacts / "federation-network.json").write_text(json.dumps(observations, ensure_ascii=False, indent=2) + "\n")
         if gateway is not None:
