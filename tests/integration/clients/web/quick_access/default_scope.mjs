@@ -1,5 +1,6 @@
 import { expect } from 'playwright/test';
-import { searchRequest, searchReceipt, searchFault } from './federation_observation.mjs';
+import { searchRequest, searchReceipt } from '../../../../support/workbench/search-observation.mjs';
+import { searchFault } from './query_faults.mjs';
 import { expectLastSearchStatus } from './default_interactions.mjs';
 
 /** 范围勾选和确认走原 Quick Input；关键状态经真实 Gateway 管理入口生成。 */

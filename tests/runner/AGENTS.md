@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-web-search-coverage` 共用一次正式 Workbench 构建，先验出站故障装具的查询生命周期，再运行无替身文件覆盖 E2E；按较低证据层登记组合套件，原场景分别保留 Integration／E2E 分类与镜像产物。固定600秒／4GiB，沿集成独占闸门；不代表 Windows canonical 或完整 Quick Access 验收。
+
 `unit-resource-activation-bodies` 定向验证资源正文批量冻结、manifest 原子登记、提交结果未知时正文保留、冷读取／保留依赖及 MCP member 的 fork／恢复；沿正式 fork watchdog，固定90秒／4GiB。它不代表真实 Agent／Gateway／Web 或完整生命周期验收。
 
 `unit-rollout-locating` 定向验证 rollout 连接、短操作内节点解析复用、catalog/thread 归属和 fork 来源隔离；包含需正式 fork watchdog 的来源扩展回归，固定90秒／4GiB。它不代表消息入口、Web 或完整 fork 验收。

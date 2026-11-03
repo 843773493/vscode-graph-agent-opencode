@@ -1,6 +1,6 @@
 import { rename } from 'node:fs/promises';
 import { expect } from 'playwright/test';
-import { searchFault } from './federation_observation.mjs';
+import { searchFault } from './query_faults.mjs';
 
 /** 只读检查原工作副本 backup；内容与配置均由原编辑器生成。 */
 async function readBackups(page) {

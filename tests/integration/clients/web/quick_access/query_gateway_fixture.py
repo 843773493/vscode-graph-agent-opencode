@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from app.gateway.auth import verify_gateway_token
 from app.gateway.main import app
-from app.gateway.routes import search
+from app.gateway.search import service as search
 from app.gateway.search.scheduler import SearchBranchError, SearchJob
 from app.gateway.search.transport import SearchTransport
 from app.schemas.internal_v2.search import WorkspaceSearchResultDTO

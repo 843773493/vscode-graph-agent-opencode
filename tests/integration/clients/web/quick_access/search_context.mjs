@@ -1,5 +1,5 @@
 import { expect } from 'playwright/test';
-import { writeWorkspaceSettings } from './settings.mjs';
+import { writeWorkspaceSettings } from '../../../../support/workbench/settings.mjs';
 
 /** 原控件与 Gateway 请求共同证明上下文来源，以及 rawData 的自动重查分支。 */
 export async function verifySearchContext({ page, command, result, fileUri, owner }) {

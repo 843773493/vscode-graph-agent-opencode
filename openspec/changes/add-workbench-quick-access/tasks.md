@@ -674,3 +674,11 @@
 - 单元／公开合同批次 675 passed；最终 RPC／真实 WebSocket 授权与 relay／client 批次 51 passed，最后日志处理批次 17 passed。产品入口生成历史后，逐项比较原上下文页、重启后续查，并分别通过模型调用 search_resources 和 search_context：1 passed。下游非法 URI／类型的九组分支隔离、恢复及原日志：1 passed。原跨工作区工具、版本过期、错误归属与后端停止分支：1 passed／47.09 秒；旧查询装具的 new_versions 和错误格式断言同步现行合同，不放宽产品校验。
 - 协议生成一致性及 Buf breaking、真实 Workbench 类型检查（19 份转换源码）和正式 Web 构建通过。Ruff 无新增诊断；核心 Pyright 保留四条已核对的既存诊断，lifespan 保留两条既存 BLE001。原件、源码指纹及当前收尾命令记录在 `out/tests/temp/context_federation_20261103/artifacts/`；早期失败按原件保留。Docker 离线消费者已迁移，未运行 Docker E2E；本批没有改变 UI 交互，不替代 16.15 的完整 Web／Electron 产品验收。
 - 联合此前无浏览器 origin／selected／all、控制面发现后查树、Gateway 重启续页、停止目标和真实模型工具证据，勾选 16.12。16.15、16.16 及其它未闭环项继续保留，不以本边界宣称整个 Quick Access 完成。
+
+
+### 2026-11-03：未保存模型覆盖与小配额实网验收（16.19、16.17 部分）
+
+- 新增无替身文件覆盖 E2E，通过正式 Workbench 原编辑器删去 A 查询词且不保存，只选 A 时屏蔽旧磁盘命中并返回另外两文件；明确选择 A+B 后每分支首批一项，保留 B 同路径及 A 独立尾页。覆盖身份在实际请求中按 owner 分区，未发送模型正文；改变排除集合后原 cursor 明确返回 invalid_cursor。两工作区磁盘原文不变。
+- 原查询生命周期故障装具迁到真实 SearchTransport 装配模块，继续核取消、总期限、独立失败与重试、停止目标零业务读取及身份失效。设置和搜索观察迁为 tests/support/workbench 唯一共享辅助，故障控制保留 Integration 专用；无替身场景归 tests/e2e/clients/web，不以故障装具证明真实服务故障。
+- 正式受保护矩阵 integration-web-search-coverage 通过：2 passed／179.54 秒，退出0；共享正式构建42.37秒、退出0。文件覆盖原件为 out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-be80e412f5e3/；后端原日志逐 request_id 核实际分发 A、A+B、A。Ruff、两文件Pyright零诊断、六个真实浏览器驱动的ESM编译和差异检查通过。本批未改产品源码，复用前一边界的真实类型与正式Web构建证据。
+- 首次失败是命令helper返回复杂对象，第二次是测试未关闭原picker的干净预览；均以原件归因后修正装具，未改产品配额或放宽隔离／续页断言。早期及最终命令、源码指纹、原始输出和退出码见 out/tests/temp/file_coverage_20261103/artifacts/verification.json。Windows canonical及大小写发布和其它选项／运行面仍未齐，16.19及完整16.17保持未勾选。

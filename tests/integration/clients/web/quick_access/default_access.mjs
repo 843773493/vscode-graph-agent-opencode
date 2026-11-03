@@ -1,6 +1,7 @@
 import { expect } from 'playwright/test';
-import { searchRequest, searchFault } from './federation_observation.mjs';
-import { readSavedSettings } from './settings.mjs';
+import { searchRequest } from '../../../../support/workbench/search-observation.mjs';
+import { searchFault } from './query_faults.mjs';
+import { readSavedSettings } from '../../../../support/workbench/settings.mjs';
 import { expectLastSearchStatus, verifyResourceOpenActions, verifyResourcePresentation } from './default_interactions.mjs';
 
 /** 名称状态通过产品创建入口生成；查询、打开及迟到结果均经过真实 Gateway。 */

@@ -1,7 +1,8 @@
 import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
-import { searchRequest, searchReceipt, searchFault } from './federation_observation.mjs';
+import { searchRequest, searchReceipt } from '../../../../support/workbench/search-observation.mjs';
+import { searchFault } from './query_faults.mjs';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;

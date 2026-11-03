@@ -8,8 +8,8 @@ import { verifySearchRecovery } from './search_recovery.mjs';
 import { verifyFileWatch } from './file_watch.mjs';
 import { verifyDefaultAccess } from './default_access.mjs';
 import { verifyDefaultScope } from './default_scope.mjs';
-import { fileSearchRequests } from './federation_observation.mjs';
-import { writeWorkspaceSettings } from './settings.mjs';
+import { fileSearchRequests } from '../../../../support/workbench/search-observation.mjs';
+import { writeWorkspaceSettings } from '../../../../support/workbench/settings.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;

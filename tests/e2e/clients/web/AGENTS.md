@@ -47,3 +47,5 @@ clients/web/
 - `test_quick_access_file_cache.py` 使用真实 Gateway、两个托管后端和原图片编辑器；只准备普通文件并通过实际外部文件改写触发更新。CDP记录实际条件头、网络200／304／206和正文传输量，不能以浏览器合成的fetch200或图片可见代替缓存证明。原watcher可能在建连后再验证，每次暖读都必须304及零正文；认证、错误owner、删除、原保存CAS及两个HTTP寻址载体继续按真实产品验证，不用响应替身或预写缓存。
 
 - Section 8 精确模型回放的唯一 owner 已迁至 `tests/integration/clients/web/conversation_lifecycle/`；完整 E2E suite 不再要求 Section 8 focus。
+
+- `test_quick_access_file_coverage.py` 经正式 Workbench、真实 Gateway 和 A/B 后端验证未保存模型的负命中覆盖、小配额分支及原 cursor。通过原命令关闭上一轮干净预览，保留 dirty 正文；核磁盘未保存、实际请求排除集与后端 request_id 分发，不以 UI 不显示 B 代替零读取证明。搜索／设置观察复用 `tests/support/workbench/`，不使用网络或业务替身。

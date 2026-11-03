@@ -2,8 +2,8 @@ import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
-import { fileSearchRequests, searchReceipt } from './federation_observation.mjs';
-import { writeWorkspaceSettings } from './settings.mjs';
+import { fileSearchRequests, searchReceipt } from '../../../../support/workbench/search-observation.mjs';
+import { writeWorkspaceSettings } from '../../../../support/workbench/settings.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
