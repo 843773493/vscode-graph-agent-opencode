@@ -217,6 +217,7 @@ export interface WorkspaceSearchResultDTO {
   catalog: SessionCatalogSearchResultsDTO | undefined;
   threads: SessionThreadSearchResultsDTO | undefined;
   messages: WorkspaceMessageSearchResultsDTO | undefined;
+  llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | undefined;
 }
 
 export interface SessionThreadSearchResultDTO {
@@ -406,6 +407,47 @@ export interface LLMRequestLogRecordDTO {
   request?: { [key: string]: any } | undefined;
   response?: { [key: string]: any } | undefined;
   upstream?: { [key: string]: any } | undefined;
+}
+
+export interface LLMRequestLogReferenceDTO {
+  session_id: string;
+  file_name: string;
+  content_version: string;
+  start_codepoint: number;
+  end_codepoint: number;
+}
+
+export interface LLMRequestLogMatchDTO {
+  reference: LLMRequestLogReferenceDTO | undefined;
+  timestamp: number;
+  preview: string;
+  preview_start_codepoint: number;
+}
+
+export interface LLMRequestLogLocationDTO {
+  reference: LLMRequestLogReferenceDTO | undefined;
+  record:
+    | LLMRequestLogRecordDTO
+    | undefined;
+  /** request、response、upstream 的固定顺序、两空格缩进 JSON；位置采用 Unicode 码点。 */
+  text: string;
+}
+
+export interface WorkspaceLLMRequestLogMatchDTO {
+  session_uri: string;
+  session_title: string;
+  match: LLMRequestLogMatchDTO | undefined;
+}
+
+export interface WorkspaceLLMRequestLogSearchResultsDTO {
+  catalog_revision: number;
+  items: WorkspaceLLMRequestLogMatchDTO[];
+  cursor?: string | undefined;
+  complete: boolean;
+  limited_reason?: string | undefined;
+  scanned_nodes: number;
+  scanned_records: number;
+  scanned_bytes: number;
 }
 
 export interface McpServerDTO {
@@ -4564,6 +4606,7 @@ function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
     catalog: undefined,
     threads: undefined,
     messages: undefined,
+    llm_requests: undefined,
   };
 }
 
@@ -4580,6 +4623,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       catalog: isSet(object.catalog) ? SessionCatalogSearchResultsDTO.fromJSON(object.catalog) : undefined,
       threads: isSet(object.threads) ? SessionThreadSearchResultsDTO.fromJSON(object.threads) : undefined,
       messages: isSet(object.messages) ? WorkspaceMessageSearchResultsDTO.fromJSON(object.messages) : undefined,
+      llm_requests: isSet(object.llm_requests)
+        ? WorkspaceLLMRequestLogSearchResultsDTO.fromJSON(object.llm_requests)
+        : undefined,
     };
   },
 
@@ -4615,6 +4661,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
     if (message.messages !== undefined) {
       obj.messages = WorkspaceMessageSearchResultsDTO.toJSON(message.messages);
     }
+    if (message.llm_requests !== undefined) {
+      obj.llm_requests = WorkspaceLLMRequestLogSearchResultsDTO.toJSON(message.llm_requests);
+    }
     return obj;
   },
 
@@ -4638,6 +4687,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       : undefined;
     message.messages = (object.messages !== undefined && object.messages !== null)
       ? WorkspaceMessageSearchResultsDTO.fromPartial(object.messages)
+      : undefined;
+    message.llm_requests = (object.llm_requests !== undefined && object.llm_requests !== null)
+      ? WorkspaceLLMRequestLogSearchResultsDTO.fromPartial(object.llm_requests)
       : undefined;
     return message;
   },
@@ -5849,6 +5901,268 @@ export const LLMRequestLogRecordDTO: MessageFns<LLMRequestLogRecordDTO> = {
     message.request = object.request ?? undefined;
     message.response = object.response ?? undefined;
     message.upstream = object.upstream ?? undefined;
+    return message;
+  },
+};
+
+function createBaseLLMRequestLogReferenceDTO(): LLMRequestLogReferenceDTO {
+  return { session_id: "", file_name: "", content_version: "", start_codepoint: 0, end_codepoint: 0 };
+}
+
+export const LLMRequestLogReferenceDTO: MessageFns<LLMRequestLogReferenceDTO> = {
+  fromJSON(object: any): LLMRequestLogReferenceDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      file_name: isSet(object.file_name) ? globalThis.String(object.file_name) : "",
+      content_version: isSet(object.content_version) ? globalThis.String(object.content_version) : "",
+      start_codepoint: isSet(object.start_codepoint) ? globalThis.Number(object.start_codepoint) : 0,
+      end_codepoint: isSet(object.end_codepoint) ? globalThis.Number(object.end_codepoint) : 0,
+    };
+  },
+
+  toJSON(message: LLMRequestLogReferenceDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.file_name !== "") {
+      obj.file_name = message.file_name;
+    }
+    if (message.content_version !== "") {
+      obj.content_version = message.content_version;
+    }
+    if (message.start_codepoint !== 0) {
+      obj.start_codepoint = Math.round(message.start_codepoint);
+    }
+    if (message.end_codepoint !== 0) {
+      obj.end_codepoint = Math.round(message.end_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LLMRequestLogReferenceDTO>, I>>(base?: I): LLMRequestLogReferenceDTO {
+    return LLMRequestLogReferenceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LLMRequestLogReferenceDTO>, I>>(object: I): LLMRequestLogReferenceDTO {
+    const message = createBaseLLMRequestLogReferenceDTO();
+    message.session_id = object.session_id ?? "";
+    message.file_name = object.file_name ?? "";
+    message.content_version = object.content_version ?? "";
+    message.start_codepoint = object.start_codepoint ?? 0;
+    message.end_codepoint = object.end_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseLLMRequestLogMatchDTO(): LLMRequestLogMatchDTO {
+  return { reference: undefined, timestamp: 0, preview: "", preview_start_codepoint: 0 };
+}
+
+export const LLMRequestLogMatchDTO: MessageFns<LLMRequestLogMatchDTO> = {
+  fromJSON(object: any): LLMRequestLogMatchDTO {
+    return {
+      reference: isSet(object.reference) ? LLMRequestLogReferenceDTO.fromJSON(object.reference) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      preview: isSet(object.preview) ? globalThis.String(object.preview) : "",
+      preview_start_codepoint: isSet(object.preview_start_codepoint)
+        ? globalThis.Number(object.preview_start_codepoint)
+        : 0,
+    };
+  },
+
+  toJSON(message: LLMRequestLogMatchDTO): unknown {
+    const obj: any = {};
+    if (message.reference !== undefined) {
+      obj.reference = LLMRequestLogReferenceDTO.toJSON(message.reference);
+    }
+    if (message.timestamp !== 0) {
+      obj.timestamp = Math.round(message.timestamp);
+    }
+    if (message.preview !== "") {
+      obj.preview = message.preview;
+    }
+    if (message.preview_start_codepoint !== 0) {
+      obj.preview_start_codepoint = Math.round(message.preview_start_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LLMRequestLogMatchDTO>, I>>(base?: I): LLMRequestLogMatchDTO {
+    return LLMRequestLogMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LLMRequestLogMatchDTO>, I>>(object: I): LLMRequestLogMatchDTO {
+    const message = createBaseLLMRequestLogMatchDTO();
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? LLMRequestLogReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.timestamp = object.timestamp ?? 0;
+    message.preview = object.preview ?? "";
+    message.preview_start_codepoint = object.preview_start_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseLLMRequestLogLocationDTO(): LLMRequestLogLocationDTO {
+  return { reference: undefined, record: undefined, text: "" };
+}
+
+export const LLMRequestLogLocationDTO: MessageFns<LLMRequestLogLocationDTO> = {
+  fromJSON(object: any): LLMRequestLogLocationDTO {
+    return {
+      reference: isSet(object.reference) ? LLMRequestLogReferenceDTO.fromJSON(object.reference) : undefined,
+      record: isSet(object.record) ? LLMRequestLogRecordDTO.fromJSON(object.record) : undefined,
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+    };
+  },
+
+  toJSON(message: LLMRequestLogLocationDTO): unknown {
+    const obj: any = {};
+    if (message.reference !== undefined) {
+      obj.reference = LLMRequestLogReferenceDTO.toJSON(message.reference);
+    }
+    if (message.record !== undefined) {
+      obj.record = LLMRequestLogRecordDTO.toJSON(message.record);
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LLMRequestLogLocationDTO>, I>>(base?: I): LLMRequestLogLocationDTO {
+    return LLMRequestLogLocationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LLMRequestLogLocationDTO>, I>>(object: I): LLMRequestLogLocationDTO {
+    const message = createBaseLLMRequestLogLocationDTO();
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? LLMRequestLogReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.record = (object.record !== undefined && object.record !== null)
+      ? LLMRequestLogRecordDTO.fromPartial(object.record)
+      : undefined;
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceLLMRequestLogMatchDTO(): WorkspaceLLMRequestLogMatchDTO {
+  return { session_uri: "", session_title: "", match: undefined };
+}
+
+export const WorkspaceLLMRequestLogMatchDTO: MessageFns<WorkspaceLLMRequestLogMatchDTO> = {
+  fromJSON(object: any): WorkspaceLLMRequestLogMatchDTO {
+    return {
+      session_uri: isSet(object.session_uri) ? globalThis.String(object.session_uri) : "",
+      session_title: isSet(object.session_title) ? globalThis.String(object.session_title) : "",
+      match: isSet(object.match) ? LLMRequestLogMatchDTO.fromJSON(object.match) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceLLMRequestLogMatchDTO): unknown {
+    const obj: any = {};
+    if (message.session_uri !== "") {
+      obj.session_uri = message.session_uri;
+    }
+    if (message.session_title !== "") {
+      obj.session_title = message.session_title;
+    }
+    if (message.match !== undefined) {
+      obj.match = LLMRequestLogMatchDTO.toJSON(message.match);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceLLMRequestLogMatchDTO>, I>>(base?: I): WorkspaceLLMRequestLogMatchDTO {
+    return WorkspaceLLMRequestLogMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceLLMRequestLogMatchDTO>, I>>(
+    object: I,
+  ): WorkspaceLLMRequestLogMatchDTO {
+    const message = createBaseWorkspaceLLMRequestLogMatchDTO();
+    message.session_uri = object.session_uri ?? "";
+    message.session_title = object.session_title ?? "";
+    message.match = (object.match !== undefined && object.match !== null)
+      ? LLMRequestLogMatchDTO.fromPartial(object.match)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceLLMRequestLogSearchResultsDTO(): WorkspaceLLMRequestLogSearchResultsDTO {
+  return {
+    catalog_revision: 0,
+    items: [],
+    cursor: undefined,
+    complete: false,
+    limited_reason: undefined,
+    scanned_nodes: 0,
+    scanned_records: 0,
+    scanned_bytes: 0,
+  };
+}
+
+export const WorkspaceLLMRequestLogSearchResultsDTO: MessageFns<WorkspaceLLMRequestLogSearchResultsDTO> = {
+  fromJSON(object: any): WorkspaceLLMRequestLogSearchResultsDTO {
+    return {
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => WorkspaceLLMRequestLogMatchDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
+      scanned_nodes: isSet(object.scanned_nodes) ? globalThis.Number(object.scanned_nodes) : 0,
+      scanned_records: isSet(object.scanned_records) ? globalThis.Number(object.scanned_records) : 0,
+      scanned_bytes: isSet(object.scanned_bytes) ? globalThis.Number(object.scanned_bytes) : 0,
+    };
+  },
+
+  toJSON(message: WorkspaceLLMRequestLogSearchResultsDTO): unknown {
+    const obj: any = {};
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => WorkspaceLLMRequestLogMatchDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.limited_reason !== undefined) {
+      obj.limited_reason = message.limited_reason;
+    }
+    if (message.scanned_nodes !== 0) {
+      obj.scanned_nodes = Math.round(message.scanned_nodes);
+    }
+    if (message.scanned_records !== 0) {
+      obj.scanned_records = Math.round(message.scanned_records);
+    }
+    if (message.scanned_bytes !== 0) {
+      obj.scanned_bytes = Math.round(message.scanned_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceLLMRequestLogSearchResultsDTO>, I>>(
+    base?: I,
+  ): WorkspaceLLMRequestLogSearchResultsDTO {
+    return WorkspaceLLMRequestLogSearchResultsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceLLMRequestLogSearchResultsDTO>, I>>(
+    object: I,
+  ): WorkspaceLLMRequestLogSearchResultsDTO {
+    const message = createBaseWorkspaceLLMRequestLogSearchResultsDTO();
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.items = object.items?.map((e) => WorkspaceLLMRequestLogMatchDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.complete = object.complete ?? false;
+    message.limited_reason = object.limited_reason ?? undefined;
+    message.scanned_nodes = object.scanned_nodes ?? 0;
+    message.scanned_records = object.scanned_records ?? 0;
+    message.scanned_bytes = object.scanned_bytes ?? 0;
     return message;
   },
 };

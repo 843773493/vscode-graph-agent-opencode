@@ -219,6 +219,7 @@ message WorkspaceSearchResultDTO {
   SessionCatalogSearchResultsDTO catalog = 8;
   SessionThreadSearchResultsDTO threads = 9;
   WorkspaceMessageSearchResultsDTO messages = 10;
+  WorkspaceLLMRequestLogSearchResultsDTO llm_requests = 11;
 }
 
 message SessionThreadSearchResultDTO {
@@ -407,6 +408,45 @@ message LLMRequestLogRecordDTO {
   optional google.protobuf.Struct request = 6;
   optional google.protobuf.Struct response = 7;
   optional google.protobuf.Struct upstream = 8;
+}
+
+message LLMRequestLogReferenceDTO {
+  string session_id = 1;
+  string file_name = 2;
+  string content_version = 3;
+  int32 start_codepoint = 4;
+  int32 end_codepoint = 5;
+}
+
+message LLMRequestLogMatchDTO {
+  LLMRequestLogReferenceDTO reference = 1;
+  int64 timestamp = 2;
+  string preview = 3;
+  int32 preview_start_codepoint = 4;
+}
+
+message LLMRequestLogLocationDTO {
+  LLMRequestLogReferenceDTO reference = 1;
+  LLMRequestLogRecordDTO record = 2;
+  // request、response、upstream 的固定顺序、两空格缩进 JSON；位置采用 Unicode 码点。
+  string text = 3;
+}
+
+message WorkspaceLLMRequestLogMatchDTO {
+  string session_uri = 1;
+  string session_title = 2;
+  LLMRequestLogMatchDTO match = 3;
+}
+
+message WorkspaceLLMRequestLogSearchResultsDTO {
+  int64 catalog_revision = 1;
+  repeated WorkspaceLLMRequestLogMatchDTO items = 2;
+  optional string cursor = 3;
+  bool complete = 4;
+  optional string limited_reason = 5;
+  int32 scanned_nodes = 6;
+  int32 scanned_records = 7;
+  int64 scanned_bytes = 8;
 }
 
 message McpServerDTO {

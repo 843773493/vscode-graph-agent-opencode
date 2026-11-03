@@ -57,6 +57,7 @@ from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.business.search.providers import (
     register_history_search,
+    register_llm_request_search,
     register_navigation_search,
 )
 from app.services.business.search.service import WorkspaceSearchService
@@ -1128,6 +1129,7 @@ def _build_app_container(
         resolved_sessions_root,
         path_resolver=session_path_resolver,
     )
+    register_llm_request_search(workspace_search_service, session_catalog_service, session_service, llm_request_log_service)
     log_service = LogService(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
     tool_test_service = ToolTestService(
         config_service=config_service,

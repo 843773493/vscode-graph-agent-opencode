@@ -16,10 +16,11 @@ import { ThreadInput, UnavailableThreadInput } from './threadInput.js';
 import { ChatSurface } from './react/chatView.js';
 import { showFileOpenMenu } from './fileOpenMenu.js';
 import './thread.css';
-import type { TurnMessageMatchDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
 export interface ThreadEditorOptions extends IEditorOptions {
   boxteamMessage?: TurnMessageMatchDTO;
+  boxteamRequestLog?: LLMRequestLogMatchDTO;
 }
 
 /** 原版只管理编辑器生命周期，完整会话产品由既有 React 组件呈现。 */
@@ -76,6 +77,7 @@ export class ThreadPane extends EditorPane {
     }, (path, anchor) => showFileOpenMenu(path, anchor, input.owner,
       this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications);
     if (options?.boxteamMessage) this.conversation.revealMessage(options.boxteamMessage);
+    if (options?.boxteamRequestLog) this.conversation.revealRequestLog(options.boxteamRequestLog);
   }
   override setOptions(options: ThreadEditorOptions | undefined): void {
     super.setOptions(options);
@@ -86,6 +88,7 @@ export class ThreadPane extends EditorPane {
       this.conversation?.update();
     }
     if (options?.boxteamMessage) this.conversation?.revealMessage(options.boxteamMessage);
+    if (options?.boxteamRequestLog) this.conversation?.revealRequestLog(options.boxteamRequestLog);
   }
   protected override setEditorVisible(visible: boolean): void {
     super.setEditorVisible(visible); this.conversation?.setVisible(visible);

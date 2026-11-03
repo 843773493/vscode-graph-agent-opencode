@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useLayoutEffect, useRef } from "react";
+import type { RequestLogNavigation } from "../../../hooks/runtime/useRequestLogNavigation";
 import { formatDateTime } from "../../../utils/format";
 import {
   buildRequestLogKeyFlowFromOrderedLogs,
@@ -92,6 +93,8 @@ const RequestLogKeyFlowSummary = React.memo(function RequestLogKeyFlowSummary({
 });
 
 export default function RequestLogPanel({
+  navigation,
+  onCloseNavigation,
   logs,
   loading,
   error,
@@ -101,6 +104,8 @@ export default function RequestLogPanel({
   active,
   onRetryRequestLogs,
 }: {
+  navigation?: RequestLogNavigation;
+  onCloseNavigation?: () => void;
   logs: LLMRequestLogRecord[];
   loading: boolean;
   error: string | null;
@@ -128,6 +133,7 @@ export default function RequestLogPanel({
   });
   const renderedLogs = displayLogs.slice(firstVisibleIndex);
   const hasOlderLogs = firstVisibleIndex > 0;
+  if (navigation) return <LocatedRequestLog key={`${navigation.match.reference?.file_name}/${navigation.match.reference?.start_codepoint}`} navigation={navigation} onClose={onCloseNavigation} />;
   // 请求视图是逐次审计模型输入、输出和请求组成来源的入口。
   // 大体积 Prompt、工具 schema 与 JSON 必须按层级懒展开；不要恢复成默认渲染全部内容，
   // 否则历史中的大量 text_delta 会创建过多 DOM，并再次拖慢会话切换和滚动。
@@ -188,4 +194,29 @@ export default function RequestLogPanel({
       ) : null}
     </section>
   );
+}
+
+
+function LocatedRequestLog({ navigation, onClose }: { navigation: RequestLogNavigation; onClose?: () => void }) {
+  const mark = useRef<HTMLElement>(null);
+  const location = navigation.location;
+  useLayoutEffect(() => { mark.current?.scrollIntoView({ block: "center" }); }, [location]);
+  const source = useMemo(() => {
+    if (!location?.reference) return null;
+    const characters = Array.from(location.text);
+    const { start_codepoint: start, end_codepoint: end } = location.reference;
+    return { before: characters.slice(Math.max(0, start - 1000), start).join(""),
+      match: characters.slice(start, end).join(""), after: characters.slice(end, end + 1000).join(""),
+      hasBefore: start > 1000, hasAfter: end + 1000 < characters.length };
+  }, [location]);
+  return <section className="panel-view request-log-panel" aria-label="请求日志搜索定位">
+    <div className="panel-header"><span>会话级 LLM 请求记录 · {navigation.match.reference?.file_name}</span>
+      <button type="button" onClick={onClose}>关闭请求定位</button></div>
+    {navigation.error ? <div className="empty-state error-state" role="alert">请求日志命中无法打开：{navigation.error}</div>
+      : location && source ? <div className="panel-list">
+        <section aria-label="请求日志命中原文"><p>命中原文（Unicode 码点 {location.reference!.start_codepoint}–{location.reference!.end_codepoint}；相邻上下文最多各 1000 字符）</p>
+          <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>
+        <RequestLogCard key={location.record!.file_name} log={location.record!} initiallyOpen />
+      </div> : <div className="empty-state" role="status">正在核验并读取命中的请求记录…</div>}
+  </section>;
 }

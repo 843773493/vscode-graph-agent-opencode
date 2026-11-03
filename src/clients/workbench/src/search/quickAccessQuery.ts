@@ -7,7 +7,7 @@ import { QueryBuilder } from '../../upstream/src/vs/workbench/services/search/co
 import type { WorkspaceSearchService } from './searchService.js';
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import type { SessionCatalogSearchResults } from '../../../web/src/types/backend.js';
-import type { WorkspaceMessageSearchResultsDTO, TurnMessageMatchDTO, WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { WorkspaceMessageSearchResultsDTO, TurnMessageMatchDTO, WorkspaceFileRootsDTO, WorkspaceSearchResultDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
 import { searchWorkspaceHistoryMessages } from '../../../web/src/api/session/sessionTurnHistory.js';
 import { searchSessionThreads } from '../../../web/src/api/session/sessions.js';
@@ -16,10 +16,10 @@ import { ThreadInput } from '../threadInput.js';
 import { SearchWorkspaceContext } from './scope.js';
 
 export type NameSearchCategory = '会话' | 'Thread' | '文件';
-export type ContentSearchCategory = '会话消息' | '工具结果';
+export type ContentSearchCategory = '会话消息' | '工具结果' | 'LLM 请求记录';
 export type SearchCategory = NameSearchCategory | ContentSearchCategory;
 export type ResourceSearchItem = { title: string; description: string; detail: string } & (
-  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO } | { kind: 'session'; sessionId: string } | { kind: 'folder'; nodeId: string }
+  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO } | { kind: 'session'; sessionId: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string }
 );
 export interface ResourceSearchPage {
   items: ResourceSearchItem[];
@@ -48,6 +48,24 @@ export async function searchQuickAccessResources(category: SearchCategory, filte
         return { kind: 'resource', resource: input.resource, message: match,
           title: thread.title, description: match.preview.replace(/\s+/g, ' '),
           detail: `${label} · ${thread.session_title} · ${match.role === 'tool' ? `工具结果 ${match.tool_name} · ${match.tool_call_id}` : match.role === 'user' ? '用户消息' : '助手消息'} · ${thread.session_id} / ${thread.thread_id} · ${match.turn_id}` };
+      }) };
+  }
+
+  if (category === 'LLM 请求记录') {
+    const result = await gateway.request<WorkspaceSearchResultDTO>('/api/v1/search', {
+      method: 'POST', signal, onResponse, headers: gatewayWorkspaceRequestHeaders(target),
+      body: JSON.stringify({ workspace_id: owner.workspaceId, category: 'llm_request', operation: 'content',
+        query: filter, match_mode: 'literal', limit: 50, cursor, deadline_at: deadlineAt === undefined ? undefined : deadlineAt / 1000 }),
+    }, target.workspace_id);
+    const page = result.llm_requests;
+    if (!page || result.workspace_id !== owner.workspaceId) throw new Error('请求日志搜索缺少原 owner 的结果');
+    return { cursor: page.cursor, requestIds,
+      limited: page.complete ? undefined : `本次请求日志覆盖受限（${page.limited_reason}）`,
+      items: page.items.map(item => {
+        if (!item.match?.reference || !item.session_uri) throw new Error('请求日志命中缺少 Session 资源或记录位置');
+        return { kind: 'session', sessionId: item.match.reference.session_id, requestLog: item.match,
+          title: item.session_title, description: item.match.preview.replace(/\s+/g, ' '),
+          detail: `${label} · 会话级 LLM 请求记录 · ${item.match.reference.session_id} · ${item.match.reference.file_name}` };
       }) };
   }
 

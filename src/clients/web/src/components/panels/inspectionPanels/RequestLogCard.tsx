@@ -273,11 +273,13 @@ function UpstreamExchangeCard({ log }: { log: LLMRequestLogRecord }) {
 const RequestLogCard = React.memo(function RequestLogCard({
   log,
   chronologicalIndex,
+  initiallyOpen = false,
 }: {
   log: LLMRequestLogRecord;
-  chronologicalIndex: number;
+  chronologicalIndex?: number;
+  initiallyOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const display = useMemo(() => buildRequestLogDisplay(log), [log]);
   const replay = useMemo(() => buildRequestReplayDisplay(log), [log]);
   const timestamp = formatDateTime(new Date(log.timestamp).toISOString());
@@ -293,7 +295,7 @@ const RequestLogCard = React.memo(function RequestLogCard({
         onClick={() => setOpen((current) => !current)}
       >
         <span className="request-log-card-heading">
-          <span className="panel-index">第 {chronologicalIndex + 1} 次</span>
+          <span className="panel-index">{chronologicalIndex === undefined ? log.file_name : `第 ${chronologicalIndex + 1} 次`}</span>
           <span className="panel-type">{display.model}</span>
           {timestamp ? <span>{timestamp}</span> : null}
         </span>

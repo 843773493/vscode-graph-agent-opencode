@@ -93,7 +93,7 @@
 - [x] 9.3 在原 canonical history owner 实现 main／child 消息正文有界查询和按命中加载，未打开及未加载页可定位，不查询前端缓存冒充完整历史。
   - 已实现精确 Thread 及工作区范围的 canonical 正文查询、共享预算、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支发现未打开 child 并保持冷历史不物化；React 原文定位及真实 Gateway／Workbench 页面验收已完成，详见本文件消息正文切片证据。
 - [x] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
-- [ ] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
+- [x] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
 - [ ] 9.6 在原 Trace／运行日志 owner 实现分类正文查询及记录定位，区分工作区与 Gateway 日志，不越过明确范围与权限。
 - [ ] 9.7 将命中通过精确 owner、目标组与请求代际交给 React 虚拟列表／原详情加载，等待缺页与实际挂载后定位，失效记录明确报错而不回顶部。
 - [ ] 9.8 用各类独有词、未打开 child、未加载工具／日志、多行与 emoji、截断片段及已删除记录验证真实 owner 查询和位置，未选类别没有请求。
@@ -500,3 +500,14 @@
 - 真实 Gateway＋Backend 验收通过（1 passed / 74.44秒）：经产品消息入口执行真实工具和助手回复，再通过产品fork生成child；显式两类联邦正文查询，核准确计数、独立cursor、精确归属；Backend重启后沿原cursor续至child，并经原around取得正确完整原文。整个查询／恢复没有新增模型或工具执行，所有事件与响应头沿本次request_id。原件：`out/tests/integration/gateway/test_thread_name_search/runs/run-25b159247ad7/nodes/node-d071f7f9468a/artifacts/thread-discovery-actual.json`。
 - Ruff、核心Pyright、公开结构、生成一致性、Buf格式／lint／基于`39f3d0aa7`的breaking均通过；含18份sourceTransform源码的真实类型检查与正式Web构建通过。结构审查没有新增findings；既有容器／大目录风险未扩修，生成目录不按手写结构审查。临时dist已删除，原始命令、源码指纹与退出码保留于`out/tests/temp/quick_access_provider_20261103/artifacts/content-*`。最初误用未安装的Python pyright入口，随后使用仓库既有Bun Pyright，未改环境。
 - 16.2／16.3仍未整体完成：文件、请求与日志Provider及其调用方待迁，前端多目标队列、镜像和工具迁移仍在原任务追踪；这次没有勾选未完成的整组验收，也不把实网正文证明称为Web交互证明。
+
+
+### 2026-11-03：Session 级 LLM 请求正文与精确记录定位（9.5）
+
+- `llm_request/content` 注册到唯一工作区 SearchService，由原 catalog／Session 读准入限定来源，原 LLMRequestLogService 读取已保留文件；列表、搜索和精确读取共享解码。保持现有 Session 归属、原日志裁剪，不猜 Thread、不建立正文副本或索引。新增公开字段沿 Workspace proto、Pydantic／OpenAPI、生成绑定迁齐，并在原 product-runtime-logging owner 补正式 delta。
+- 明确 JSON 文本／Unicode 码点位置、64节点／128记录／8MiB／一秒正文调度／总期限、1MiB单条和512目录文件上限；cursor绑定Gateway、工作区、查询、catalog revision、当前目录版本与页内正文版本。已读正文无后续匹配时直接越过该记录，末条穷尽直接完成，避免已知空尾页请求和重复读取。原记录删除、同长度改写、跨Session及非法文件名明确拒绝，预算与无法推进的超限分别披露。
+- `content ` 明确选择请求类别后才查询，命中经原main解析打开所属Session的原请求视图，独立位置由ThreadEditorOptions传递；只读取命中的一条日志，复用原RequestLogCard及懒展开，在所属Pane临时显示已核验原文附近上下文和高亮。关闭／换命中取消旧读取并释放正文，不进入聊天或持久视图缓存，不调用整批日志loader。
+- 最终后端／Provider／真实ASGI／联邦调度定向检查76项通过；原请求面板和API24项通过。真实Gateway＋正式Workbench＋Chromium验收1项通过（109.60秒）：关键日志经真实消息执行入口和现有model_stream回放生成；未选类别零查询、只请求llm_request、精确原记录、同Pane另一处emoji命中与可见滚动、原owner拒绝旧版本、整批日志读取为零、pageErrors为空。这里只用参数替换验证旧版本拒绝，没有伪造定位响应；实际删除／改写由原owner及真实ASGI定向检查验证。
+- 浏览器原件：`out/tests/integration/clients/web/quick_access/test_request_content/runs/run-a2161d0940ff/nodes/node-c6204ad2127e/artifacts/request-content.json`；正式构建退出0，44.60秒，main SHA256=`dcb165dca7a4540df19a84bccc498aa4db22d7078a16805d4db6eefb6cfed815`。浏览器之后只优化Python续点并保持原UTF-8解码，最终76项覆盖该批次；前端、协议及构建源码指纹未变，复用上述构建和真实类型检查，不为后端修改重复长构建。
+- 含18份实际sourceTransform源码的Workbench真实类型检查、核心Pyright零诊断、Ruff（沿用sessions.py既有B008排除）、生成一致性、Buf格式／lint／基于7dc15718b的breaking、OpenSpec严格校验和差异空白检查通过。首次TS检查发现原卡片的必填JSON业务类型与Proto可选Struct差异，API沿原业务类型收紧；首次Python类型命令误用不存在的uv入口，随后使用原Bun Pyright，不改变环境。命令、源码指纹、原始输出和退出码保留于`out/tests/temp/quick_access_provider_20261103/artifacts/llm-*`。
+- 9.1／9.6～9.8仍未整体完成：Trace／运行日志owner、完整类别与其它运行面验收继续保留；也不以此切片勾选16组全部Provider或前端联邦迁移。

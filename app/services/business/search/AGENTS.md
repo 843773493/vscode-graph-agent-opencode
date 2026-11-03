@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-能力注册、请求准入与取消结算，以及调用既有领域查询的 Provider。
+能力注册、请求准入与取消结算，以及调用既有领域查询的 Provider。`llm_requests.py` 在原 catalog／Session 读准入内限定日志来源，正文读取、版本和位置仍归原 LLMRequestLogService。
 
 # 不可修改内容
 

@@ -927,6 +927,11 @@ export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.Wor
    * @generated from field: boxteam.workspace.v2.WorkspaceMessageSearchResultsDTO messages = 10;
    */
   messages?: WorkspaceMessageSearchResultsDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceLLMRequestLogSearchResultsDTO llm_requests = 11;
+   */
+  llmRequests?: WorkspaceLLMRequestLogSearchResultsDTO | undefined;
 };
 
 /**
@@ -1769,6 +1774,178 @@ export declare type LLMRequestLogRecordDTO = Message<"boxteam.workspace.v2.LLMRe
  * Use `create(LLMRequestLogRecordDTOSchema)` to create a new message.
  */
 export declare const LLMRequestLogRecordDTOSchema: GenMessage<LLMRequestLogRecordDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LLMRequestLogReferenceDTO
+ */
+export declare type LLMRequestLogReferenceDTO = Message<"boxteam.workspace.v2.LLMRequestLogReferenceDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string file_name = 2;
+   */
+  fileName: string;
+
+  /**
+   * @generated from field: string content_version = 3;
+   */
+  contentVersion: string;
+
+  /**
+   * @generated from field: int32 start_codepoint = 4;
+   */
+  startCodepoint: number;
+
+  /**
+   * @generated from field: int32 end_codepoint = 5;
+   */
+  endCodepoint: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LLMRequestLogReferenceDTO.
+ * Use `create(LLMRequestLogReferenceDTOSchema)` to create a new message.
+ */
+export declare const LLMRequestLogReferenceDTOSchema: GenMessage<LLMRequestLogReferenceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LLMRequestLogMatchDTO
+ */
+export declare type LLMRequestLogMatchDTO = Message<"boxteam.workspace.v2.LLMRequestLogMatchDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.LLMRequestLogReferenceDTO reference = 1;
+   */
+  reference?: LLMRequestLogReferenceDTO | undefined;
+
+  /**
+   * @generated from field: int64 timestamp = 2;
+   */
+  timestamp: bigint;
+
+  /**
+   * @generated from field: string preview = 3;
+   */
+  preview: string;
+
+  /**
+   * @generated from field: int32 preview_start_codepoint = 4;
+   */
+  previewStartCodepoint: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LLMRequestLogMatchDTO.
+ * Use `create(LLMRequestLogMatchDTOSchema)` to create a new message.
+ */
+export declare const LLMRequestLogMatchDTOSchema: GenMessage<LLMRequestLogMatchDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.LLMRequestLogLocationDTO
+ */
+export declare type LLMRequestLogLocationDTO = Message<"boxteam.workspace.v2.LLMRequestLogLocationDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.LLMRequestLogReferenceDTO reference = 1;
+   */
+  reference?: LLMRequestLogReferenceDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.LLMRequestLogRecordDTO record = 2;
+   */
+  record?: LLMRequestLogRecordDTO | undefined;
+
+  /**
+   * request、response、upstream 的固定顺序、两空格缩进 JSON；位置采用 Unicode 码点。
+   *
+   * @generated from field: string text = 3;
+   */
+  text: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LLMRequestLogLocationDTO.
+ * Use `create(LLMRequestLogLocationDTOSchema)` to create a new message.
+ */
+export declare const LLMRequestLogLocationDTOSchema: GenMessage<LLMRequestLogLocationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceLLMRequestLogMatchDTO
+ */
+export declare type WorkspaceLLMRequestLogMatchDTO = Message<"boxteam.workspace.v2.WorkspaceLLMRequestLogMatchDTO"> & {
+  /**
+   * @generated from field: string session_uri = 1;
+   */
+  sessionUri: string;
+
+  /**
+   * @generated from field: string session_title = 2;
+   */
+  sessionTitle: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.LLMRequestLogMatchDTO match = 3;
+   */
+  match?: LLMRequestLogMatchDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceLLMRequestLogMatchDTO.
+ * Use `create(WorkspaceLLMRequestLogMatchDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceLLMRequestLogMatchDTOSchema: GenMessage<WorkspaceLLMRequestLogMatchDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceLLMRequestLogSearchResultsDTO
+ */
+export declare type WorkspaceLLMRequestLogSearchResultsDTO = Message<"boxteam.workspace.v2.WorkspaceLLMRequestLogSearchResultsDTO"> & {
+  /**
+   * @generated from field: int64 catalog_revision = 1;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceLLMRequestLogMatchDTO items = 2;
+   */
+  items: WorkspaceLLMRequestLogMatchDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 3;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: bool complete = 4;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: optional string limited_reason = 5;
+   */
+  limitedReason?: string | undefined;
+
+  /**
+   * @generated from field: int32 scanned_nodes = 6;
+   */
+  scannedNodes: number;
+
+  /**
+   * @generated from field: int32 scanned_records = 7;
+   */
+  scannedRecords: number;
+
+  /**
+   * @generated from field: int64 scanned_bytes = 8;
+   */
+  scannedBytes: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceLLMRequestLogSearchResultsDTO.
+ * Use `create(WorkspaceLLMRequestLogSearchResultsDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceLLMRequestLogSearchResultsDTOSchema: GenMessage<WorkspaceLLMRequestLogSearchResultsDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.McpServerDTO

@@ -12,6 +12,7 @@ import type {
   MessageRunRequest,
   DeliveryPolicy,
 } from "../../types/backend";
+import type { LLMRequestLogReferenceDTO, LLMRequestLogLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   normalizePageResult,
@@ -22,6 +23,17 @@ import {
 } from "../http";
 
 export const DEFAULT_AGENT_ID = "default";
+
+export type LocatedLLMRequestLog = Omit<LLMRequestLogLocationDTO, "record"> & { record: LLMRequestLogRecord };
+
+export async function locateLLMRequestLog(
+  apiPort: number, reference: LLMRequestLogReferenceDTO, workspaceId: string, signal?: AbortSignal,
+): Promise<LocatedLLMRequestLog> {
+  return unwrapApiData(await requestJson<APIResponse<LocatedLLMRequestLog>>(
+    apiPort, `/api/v1/sessions/${encodeURIComponent(reference.session_id)}/llm-request-logs/locate`,
+    { method: "POST", body: JSON.stringify(reference), headers: workspaceHeader(workspaceId), signal, timeoutMs: 10_000 },
+  ));
+}
 
 const AGENT_STATE_TIMEOUT_MS = 10000;
 const SESSION_HISTORY_TIMEOUT_MS = 10000;

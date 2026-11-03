@@ -4,6 +4,9 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
+from app.schemas.internal_v2.llm_request_log import (
+    WorkspaceLLMRequestLogSearchResultsDTO,
+)
 from app.schemas.internal_v2.session_navigation import SessionCatalogSearchResultsDTO
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultsDTO,
@@ -57,10 +60,11 @@ class WorkspaceSearchResultDTO(BaseModel):
     catalog: SessionCatalogSearchResultsDTO | None = None
     threads: SessionThreadSearchResultsDTO | None = None
     messages: WorkspaceMessageSearchResultsDTO | None = None
+    llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | None = None
 
     @property
-    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | None:
-        return self.catalog or self.threads or self.messages
+    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | None:
+        return self.catalog or self.threads or self.messages or self.llm_requests
 
     @model_validator(mode="after")
     def validate_domain_result(self) -> Self:
@@ -71,7 +75,7 @@ class WorkspaceSearchResultDTO(BaseModel):
                 raise ValueError("零输出配额不得返回领域结果")
             return self
         expected = {"catalog": self.catalog, "thread": self.threads,
-                    "message": self.messages, "tool_result": self.messages}.get(self.category)
-        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages)) == 1:
+                    "message": self.messages, "tool_result": self.messages, "llm_request": self.llm_requests}.get(self.category)
+        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages, self.llm_requests)) == 1:
             return self
         raise ValueError("搜索类别与领域结果不一致")

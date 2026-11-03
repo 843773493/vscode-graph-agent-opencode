@@ -46,7 +46,7 @@ import type { SessionNavigation } from '../sessionNavigation.js';
 import type { WorkspaceSearchService } from './searchService.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
 import type { ThreadEditorOptions } from '../threadPane.js';
-import type { TurnMessageMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
@@ -227,7 +227,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         .finally(() => { if (alive()) run.picker.busy = false; });
       return fast;
     }
-    if (this.contentMode && !filter) return [{ id: 'content-query-empty', label: '输入要搜索的消息正文（区分大小写的字面量）' }];
+    if (this.contentMode && !filter) return [{ id: 'content-query-empty', label: '输入要搜索的正文（区分大小写的字面量）' }];
     if (!run.owners.length) return [...fast, { id: 'scope-error', label: run.error ?? '请先选择明确工作区' }];
     if (!this.contentMode && !this.category && this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '工作区符号未启用：当前没有可限定业务根的符号服务' });
 
@@ -236,7 +236,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const seen = new Set(recent.map(pick => pick.id));
     const branches = querySearchBranches(run.owners, categories, filter, disposables, token, this.instantiation, this.search, run.cache,
       (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message)
-        : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail)
+        : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail, item.requestLog)
           : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
       branches => {
         if (!alive()) return;
@@ -260,12 +260,13 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       const providerOptions: AccessOptions = { ...run.options, contentCategory: category, searchOwners: run.owners, searchGroup: run.group };
       this.quickInput.quickAccess.show(prefix + filter, { preserveValue: true, providerOptions });
     };
-    // TODO：LLM 请求及 Trace／运行日志尚待各自 owner 的正文查询与定位切片。
+    // TODO：Trace／运行日志尚待各自 owner 的正文查询与定位切片。
     return [
       { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child', accept: () => select('content ', '会话消息') },
       { id: 'content-category-tool', label: '工具结果', description: 'canonical 结果及不可变完整输出 · 不重放工具', accept: () => select('content ', '工具结果') },
       { id: 'content-category-file', label: '文件', description: '转到 % 文件内容搜索，保留所选工作区', accept: () => select('%') },
-      ...['LLM 请求记录', 'Trace／运行日志'].map(label => ({ id: `content-category-pending-${label}`, label: `${label} · 尚未接入` })),
+      { id: 'content-category-request', label: 'LLM 请求记录', description: 'Session 级原请求／响应 · 精确记录定位', accept: () => select('content ', 'LLM 请求记录') },
+      { id: 'content-category-pending-logs', label: 'Trace／运行日志 · 尚未接入' },
     ];
   }
 
@@ -342,15 +343,15 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     };
   }
 
-  private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, title: string, description: string, detail: string): ResourcePick {
+  private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, title: string, description: string, detail: string, requestLog?: LLMRequestLogMatchDTO): ResourcePick {
     const open = async (mods: IKeyMods, background: boolean, side = false) => {
       this.assertAccess(run);
       const group = this.targetGroup(run, mods, side);
       const routeId = await gateway.resolveWorkspace(owner);
       const main = await gateway.mainThread(routeId, sessionId);
-      await this.open(run, new ThreadInput({ ...owner, routeId, sessionId, threadId: main.thread_id, title }), mods, background, false, group);
+      await this.open(run, new ThreadInput({ ...owner, routeId, sessionId, threadId: main.thread_id, title }), mods, background, false, group, undefined, requestLog);
     };
-    return { id: `session:${searchOwnerKey(owner)}/${sessionId}`, label: title, description, detail,
+    return { id: requestLog ? `request:${searchOwnerKey(owner)}/${sessionId}/${requestLog.reference!.file_name}/${requestLog.reference!.start_codepoint}` : `session:${searchOwnerKey(owner)}/${sessionId}`, label: title, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.commentDiscussion),
       buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }],
       trigger: (_index, mods) => { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; },
@@ -402,11 +403,11 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (run.invalidated) throw new Error('Gateway 或用户身份已改变，请重新选择目标');
   }
 
-  private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, group = this.targetGroup(run, mods, side), selection?: IRange): Promise<void> {
+  private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, group = this.targetGroup(run, mods, side), selection?: IRange, requestLog?: LLMRequestLogMatchDTO): Promise<void> {
     this.assertAccess(run);
     const options = { pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background,
       selection: editor.resource?.scheme === 'boxteam-thread' ? undefined : selection ?? run.range };
-    if (isEditorInput(editor)) await this.editors.openEditor(editor, options, group);
+    if (isEditorInput(editor)) await this.editors.openEditor(editor, requestLog ? { ...options, boxteamRequestLog: requestLog } as ThreadEditorOptions : options, group);
     else await this.editors.openEditor({ ...editor, options: { ...editor.options, ...options } }, group);
   }
 

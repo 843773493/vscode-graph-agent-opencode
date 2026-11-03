@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRequestLogNavigation } from '../../../web/src/hooks/runtime/useRequestLogNavigation.js';
 import ContentViewSlots from '../../../web/src/components/shell/ContentViewSlots.js';
 import PendingQueueBar from '../../../web/src/components/chat/pending/PendingQueueBar.js';
 import Composer from '../../../web/src/components/composer/Composer.js';
@@ -33,13 +34,14 @@ import { useSessionForkDialog } from '../../../web/src/hooks/shell/useSessionFor
 import { requireGatewayWorkspaceRoute } from '../../../web/src/api/workspaceIdentity.js';
 import { getGatewayHealth } from '../../../web/src/gatewayApi.js';
 import type { InternalDisplayProvenance } from '../../../web/src/types/backend.js';
-import type { TurnMessageMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
-function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, messageNavigation }: {
+function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, messageNavigation, requestLogNavigation }: {
   input: ThreadInput; seed: ThreadSessionSeed; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void;
   onFileOpenMenu: FileOpenMenuHandler;
   onError: (message: string) => void;
   messageNavigation?: TurnMessageMatchDTO;
+  requestLogNavigation?: LLMRequestLogMatchDTO;
 }) {
   const owner = input.owner;
   const [attachment, setAttachment] = useState<AttachmentRef | null>(null);
@@ -53,6 +55,10 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
   }, [owner, editors]);
   const runtime = useThreadSessionRuntime({ owner, seed, active, onSessionCreated, onError });
   const { timeline, history, actions, state, content } = runtime;
+  const [dismissedRequest, setDismissedRequest] = useState<LLMRequestLogMatchDTO>();
+  const selectedRequest = requestLogNavigation !== dismissedRequest ? requestLogNavigation : undefined;
+  const requestNavigation = useRequestLogNavigation(0, owner.routeId, owner.sessionId, selectedRequest);
+  const contentView = requestNavigation ? 'requests' : state.contentView;
   const fork = useSessionForkDialog({ apiPort: 0,
     sessionsByWorkspace: new Map([[owner.routeId, state.currentSession ? [state.currentSession] : []]]),
     forkSessionContext: runtime.lifecycle.forkSessionContext,
@@ -90,11 +96,11 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
       } }).catch((cause: unknown) => onError(`打开消息引用文件失败：${String(cause)}`));
     }}>
     <div className="native-thread-layout"><div className="native-thread-conversation" style={{ flexGrow: input.resourcesVisible ? 1 - resourceRatio : 1 }}>
-      {state.contentView === 'agent' || state.contentView === 'requests' ? <div className="native-inspection-scope" role="note">
-        {state.contentView === 'agent' ? '会话主线程上下文' : '会话级 LLM 请求记录'} · {state.currentSession?.title ?? owner.title}
+      {contentView === 'agent' || contentView === 'requests' ? <div className="native-inspection-scope" role="note">
+        {contentView === 'agent' ? '会话主线程上下文' : '会话级 LLM 请求记录'} · {state.currentSession?.title ?? owner.title}
       </div> : null}
       <ContentViewSlots error={null} isBootstrapping={false} onRetryGatewayState={async () => { history.refreshTurnHistory(); }}
-        contentView={state.contentView} apiPort={0} workspaceId={owner.routeId}
+        contentView={contentView} apiPort={0} workspaceId={owner.routeId}
         session={state.currentSession} sessionId={owner.sessionId} hasActiveSession activeSessionCacheKey={runtime.scopeKey}
         expandedDetails={state.expandDetails}
         agentStateJsonl={state.agentStateJsonl} agentStateMessageCount={state.agentStateMessageCount}
@@ -103,6 +109,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
         onLoadOlderTraceHistory={runtime.traces.loadOlder} onRetryTraceHistory={runtime.traces.refresh}
         requestLogs={state.llmRequestLogs} requestLogsLoading={state.llmRequestLogsLoading}
         requestLogsError={state.llmRequestLogsError} requestLogsLoadedAt={state.llmRequestLogsLoadedAt}
+        requestLogNavigation={requestNavigation} onCloseRequestLogNavigation={() => setDismissedRequest(requestLogNavigation)}
         onRetryRequestLogs={() => { void content.refreshLLMRequestLogs(owner.sessionId); }}
         conversations={runtime.conversations} activeTurnTimeline={timeline}
         changesHint={null} changesHintLoading={false} activeChangeset={state.activeChangeset}
@@ -150,7 +157,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
   </ComposerContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, messageNavigation }: { input: ThreadInput; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; messageNavigation?: TurnMessageMatchDTO }) {
+function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, messageNavigation, requestLogNavigation }: { input: ThreadInput; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; messageNavigation?: TurnMessageMatchDTO; requestLogNavigation?: LLMRequestLogMatchDTO }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,7 +202,7 @@ function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, o
   }, [owner, attempt]);
   const retry = () => setAttempt(value => value + 1);
   return <>{cacheError ? <p role="alert">{cacheError}</p> : null}
-    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} onTheme={onTheme} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} messageNavigation={messageNavigation} />
+    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} onTheme={onTheme} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} messageNavigation={messageNavigation} requestLogNavigation={requestLogNavigation} />
       : cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? `会话同步失败：${error}` : null} onRetry={retry} />
         : error ? <p role="alert">会话初始化失败：{error}</p> : <p role="status">正在恢复会话…</p>}</>;
 }
@@ -204,6 +211,7 @@ export class ChatSurface {
   private readonly surface: ReactSurface;
   private active: boolean;
   private messageNavigation?: TurnMessageMatchDTO;
+  private requestLogNavigation?: LLMRequestLogMatchDTO;
   constructor(container: HTMLElement, private readonly input: ThreadInput, private readonly editors: IEditorService, visible: boolean,
     private readonly onPresentationChange: () => void, private readonly onFileOpenMenu: FileOpenMenuHandler,
     private readonly notifications: INotificationService) {
@@ -211,12 +219,13 @@ export class ChatSurface {
     this.active = visible; this.render();
   }
   update(): void { this.render(); }
-  revealMessage(message: TurnMessageMatchDTO): void { this.messageNavigation = { ...message }; this.render(); }
+  revealMessage(message: TurnMessageMatchDTO): void { this.requestLogNavigation = undefined; this.messageNavigation = { ...message }; this.render(); }
+  revealRequestLog(match: LLMRequestLogMatchDTO): void { this.messageNavigation = undefined; this.requestLogNavigation = { ...match }; this.render(); }
   setVisible(visible: boolean): void { this.active = visible; this.render(); }
   focus(): void { this.surface.focus('textarea'); }
   dispose(): void { this.surface.dispose(); }
   private readonly onUpdate = () => { this.onPresentationChange(); this.render(); };
   private readonly onTheme = (theme: GatewayResolvedThemeConfig) => this.surface.applyTheme(theme, this.notifications);
   private readonly onError = (message: string) => this.notifications.error(`${this.input.owner.title} (${this.input.owner.sessionId}/${this.input.owner.threadId})：${message}`);
-  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} active={this.active} onTheme={this.onTheme} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} messageNavigation={this.messageNavigation} />); }
+  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} active={this.active} onTheme={this.onTheme} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} messageNavigation={this.messageNavigation} requestLogNavigation={this.requestLogNavigation} />); }
 }

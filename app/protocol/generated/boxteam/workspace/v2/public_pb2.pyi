@@ -344,7 +344,7 @@ class WorkspaceSearchRequest(_message.Message):
     def __init__(self, workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., cursor: _Optional[str] = ..., deadline_at: _Optional[float] = ...) -> None: ...
 
 class WorkspaceSearchResultDTO(_message.Message):
-    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages")
+    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages", "llm_requests")
     PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
@@ -355,6 +355,7 @@ class WorkspaceSearchResultDTO(_message.Message):
     CATALOG_FIELD_NUMBER: _ClassVar[int]
     THREADS_FIELD_NUMBER: _ClassVar[int]
     MESSAGES_FIELD_NUMBER: _ClassVar[int]
+    LLM_REQUESTS_FIELD_NUMBER: _ClassVar[int]
     provider_id: str
     workspace_id: str
     category: str
@@ -365,7 +366,8 @@ class WorkspaceSearchResultDTO(_message.Message):
     catalog: SessionCatalogSearchResultsDTO
     threads: SessionThreadSearchResultsDTO
     messages: WorkspaceMessageSearchResultsDTO
-    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ...) -> None: ...
+    llm_requests: WorkspaceLLMRequestLogSearchResultsDTO
+    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ..., llm_requests: _Optional[_Union[WorkspaceLLMRequestLogSearchResultsDTO, _Mapping]] = ...) -> None: ...
 
 class SessionThreadSearchResultDTO(_message.Message):
     __slots__ = ("workspace_id", "session_id", "thread_id", "thread_uri", "kind", "title", "session_title", "created_at")
@@ -690,6 +692,72 @@ class LLMRequestLogRecordDTO(_message.Message):
     response: _struct_pb2.Struct
     upstream: _struct_pb2.Struct
     def __init__(self, session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., timestamp: _Optional[int] = ..., file_name: _Optional[str] = ..., request: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., response: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., upstream: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class LLMRequestLogReferenceDTO(_message.Message):
+    __slots__ = ("session_id", "file_name", "content_version", "start_codepoint", "end_codepoint")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    FILE_NAME_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    START_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    END_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    file_name: str
+    content_version: str
+    start_codepoint: int
+    end_codepoint: int
+    def __init__(self, session_id: _Optional[str] = ..., file_name: _Optional[str] = ..., content_version: _Optional[str] = ..., start_codepoint: _Optional[int] = ..., end_codepoint: _Optional[int] = ...) -> None: ...
+
+class LLMRequestLogMatchDTO(_message.Message):
+    __slots__ = ("reference", "timestamp", "preview", "preview_start_codepoint")
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    PREVIEW_FIELD_NUMBER: _ClassVar[int]
+    PREVIEW_START_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    reference: LLMRequestLogReferenceDTO
+    timestamp: int
+    preview: str
+    preview_start_codepoint: int
+    def __init__(self, reference: _Optional[_Union[LLMRequestLogReferenceDTO, _Mapping]] = ..., timestamp: _Optional[int] = ..., preview: _Optional[str] = ..., preview_start_codepoint: _Optional[int] = ...) -> None: ...
+
+class LLMRequestLogLocationDTO(_message.Message):
+    __slots__ = ("reference", "record", "text")
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    RECORD_FIELD_NUMBER: _ClassVar[int]
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    reference: LLMRequestLogReferenceDTO
+    record: LLMRequestLogRecordDTO
+    text: str
+    def __init__(self, reference: _Optional[_Union[LLMRequestLogReferenceDTO, _Mapping]] = ..., record: _Optional[_Union[LLMRequestLogRecordDTO, _Mapping]] = ..., text: _Optional[str] = ...) -> None: ...
+
+class WorkspaceLLMRequestLogMatchDTO(_message.Message):
+    __slots__ = ("session_uri", "session_title", "match")
+    SESSION_URI_FIELD_NUMBER: _ClassVar[int]
+    SESSION_TITLE_FIELD_NUMBER: _ClassVar[int]
+    MATCH_FIELD_NUMBER: _ClassVar[int]
+    session_uri: str
+    session_title: str
+    match: LLMRequestLogMatchDTO
+    def __init__(self, session_uri: _Optional[str] = ..., session_title: _Optional[str] = ..., match: _Optional[_Union[LLMRequestLogMatchDTO, _Mapping]] = ...) -> None: ...
+
+class WorkspaceLLMRequestLogSearchResultsDTO(_message.Message):
+    __slots__ = ("catalog_revision", "items", "cursor", "complete", "limited_reason", "scanned_nodes", "scanned_records", "scanned_bytes")
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    LIMITED_REASON_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_NODES_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_RECORDS_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_BYTES_FIELD_NUMBER: _ClassVar[int]
+    catalog_revision: int
+    items: _containers.RepeatedCompositeFieldContainer[WorkspaceLLMRequestLogMatchDTO]
+    cursor: str
+    complete: bool
+    limited_reason: str
+    scanned_nodes: int
+    scanned_records: int
+    scanned_bytes: int
+    def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceLLMRequestLogMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_nodes: _Optional[int] = ..., scanned_records: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
 class McpServerDTO(_message.Message):
     __slots__ = ("server_id", "transport", "enabled", "status", "tools")

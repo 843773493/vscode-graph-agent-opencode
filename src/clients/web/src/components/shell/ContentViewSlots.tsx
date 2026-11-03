@@ -1,3 +1,4 @@
+import type { RequestLogNavigation } from "../../hooks/runtime/useRequestLogNavigation";
 import type { SessionViewState } from "../../state/sessionViewState";
 import {
   lazy,
@@ -77,6 +78,8 @@ interface ContentViewSlotsProps extends Pick<
   activeTraceHistory: SessionTraceHistoryState | null;
   onLoadOlderTraceHistory: () => Promise<number>;
   onRetryTraceHistory: () => Promise<void>;
+  requestLogNavigation?: RequestLogNavigation;
+  onCloseRequestLogNavigation?: () => void;
   requestLogs: LLMRequestLogRecord[];
   requestLogsLoading: boolean;
   requestLogsError: string | null;
@@ -150,6 +153,8 @@ export default function ContentViewSlots({
   activeTraceHistory,
   onLoadOlderTraceHistory,
   onRetryTraceHistory,
+  requestLogNavigation,
+  onCloseRequestLogNavigation,
   requestLogs,
   requestLogsLoading,
   requestLogsError,
@@ -243,6 +248,7 @@ export default function ContentViewSlots({
       </ContentViewSlot>
       <ContentViewSlot visible={contentView === "requests"} mountAfterFirstVisit>
         <RequestLogPanel
+          navigation={requestLogNavigation} onCloseNavigation={onCloseRequestLogNavigation}
           logs={requestLogs}
           loading={requestLogsLoading}
           error={requestLogsError}

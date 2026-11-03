@@ -387,6 +387,8 @@ Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，�
 
 工具结果使用上述两个历史搜索入口的显式 `category=tool_result`，省略仍为 `message`，引用和两级 cursor 都绑定类别。同一 Turn／ModelCall／规范 provider call ID 的 stream 与 checkpoint 载体择一，与原 activity 归并一样取 `item_sequence` 最早的可见载体；两者落盘先后不固定，不能按载体类型猜测详情身份。跨 ModelCall 的同裸调用 ID 不合并。位置与响应继续用原 canonical item 身份，不建立工具搜索表。内联正文沿原投影读取；已截断工具结果只沿 canonical `artifact.tool_output` 读取同一 ToolOutputStore 的完整版本，JSONL 与完整输出字节共同消费原 8 MiB 预算，完整输出不预读 stat、不重复读取。读取时核对既有字节量和 `content_sha256`，以免旧位置被应用到被改写的外部正文；这是原不可变版本核对，不增加每键资源请求。
 
+LLM 请求日志保持 Session 级原归属，以 `llm_request/content` 注册到同一工作区 SearchService；不猜测历史 Thread。原日志 owner 对 request、response、upstream 按固定字段顺序、两空格缩进、Unicode JSON 形成搜索文本，采用相同字面量／码点合同。每页最多检查 64 个 catalog 节点、128 条记录、8 MiB 正文及一秒正文调度预算，服从请求总期限；单条硬上限 1 MiB，每个目录最多枚举 512 个 JSON 文件。cursor 绑定 Gateway／工作区／原查询／catalog revision、当前日志目录元数据版本与页内正文版本。原 Session URI 和独立记录引用分别承担资源寻址和位置；接受后只读一个文件，核验正文版本再复用原 RequestLogCard，临时展示命中附近原文，不触发整批日志 loader，不写入聊天或缓存。当前正文已知不再匹配时，续点直接移到下一条记录，最后一条已穷尽即完成，不为已知空尾页重复请求。单项／目录超限不提供无法推进的 cursor，删除或留存裁剪明确失效。
+
 工具定位复用 `anchor_message`／`located_message`，around 在同一 snapshot 定点补取相应 ModelCall 限定调用的原工具详情。React 按 canonical item_id 找到原 ToolRow，展开其活动区与结果行后临时展示完整原文；mark 实际挂载通知原定位调度，原生 `scrollIntoView` 先揭示限高工具详情内的命中，再对齐外层虚拟列表。不得按同名工具或裸 call ID 猜测行。完整输出删除或改写明确转为 `stale_turn_reference`；权限与其它存储错误保留原错误归属。查询及打开均不触发模型或工具重放，关闭定位释放原文。
 
 HTTP JSON 沿原 `requestJson` 统一在完整下载后解析，保留原非法响应诊断和下载取消；物理删除按体积切换到新 Worker 的分支。参考 Copilot 的普通 JSON 读取，并在真实 Chromium 对代表载荷测量：346,991 B 的同步解析为 0.4～3.6 ms、新 Worker 为 10.9～19.6 ms；8,882,087 B 分别为 12.2～26 ms 和 86.3～112.5 ms。该测量不代表原 around 响应或全链路收益。同步解析执行期间不可被取消，解析开始前仍优先检查取消；不保留第二解析实现。

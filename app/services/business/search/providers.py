@@ -8,6 +8,7 @@ from app.schemas.internal_v2.search import (
     WorkspaceSearchResultDTO,
 )
 from app.schemas.internal_v2.turn_search import TurnMessageSearchRequest
+from app.services.business.search.llm_requests import search_workspace_llm_requests
 from app.services.business.search.service import (
     SearchContractError,
     WorkspaceSearchService,
@@ -23,6 +24,7 @@ from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_history.workspace_search import (
     search_workspace_messages,
 )
+from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 
 
 def register_navigation_search(
@@ -90,3 +92,24 @@ def register_history_search(
             supported_options=("query", "match_mode", "limit", "cursor", "deadline_at"),
             position_kind="canonical_codepoint", max_results=100, cache_policy="none", match_modes=("literal",),
         ), content_search)
+
+
+def register_llm_request_search(
+    service: WorkspaceSearchService, catalog: SessionCatalogReadService, sessions: SessionService,
+    logs: LLMRequestLogService,
+) -> None:
+    async def content_search(request: WorkspaceSearchRequest, gateway_id: str | None) -> WorkspaceSearchResultDTO:
+        if gateway_id is None:
+            raise SearchContractError("owner_mismatch", "请求日志搜索缺少已认证 Gateway 身份")
+        page = await search_workspace_llm_requests(catalog, sessions, logs, request, gateway_id=gateway_id)
+        return WorkspaceSearchResultDTO(
+            provider_id="llm-request-log", workspace_id=service.workspace_id, category="llm_request",
+            operation="content", contract_version=1, state="complete" if page.complete else "limited",
+            limited_reason=page.limited_reason, llm_requests=page,
+        )
+
+    service.register(SearchProviderCapabilityDTO(
+        provider_id="llm-request-log", category="llm_request", operations=("content",), contract_version=1,
+        supported_options=("query", "match_mode", "limit", "cursor", "deadline_at"),
+        position_kind="request_log_codepoint", max_results=100, cache_policy="none", match_modes=("literal",),
+    ), content_search)

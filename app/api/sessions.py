@@ -45,6 +45,7 @@ from app.api.sse_heartbeat import (
 from app.core.exceptions import NotFoundError
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.shielded_cleanup import run_sync_shielded
 from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
@@ -53,7 +54,11 @@ from app.schemas.internal_v2.goal import (
     SessionGoalDTO,
     SessionGoalSetRequest,
 )
-from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
+from app.schemas.internal_v2.llm_request_log import (
+    LLMRequestLogLocationDTO,
+    LLMRequestLogRecordDTO,
+    LLMRequestLogReferenceDTO,
+)
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
     ChildThreadRuntimeDTO,
@@ -113,7 +118,10 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.services.infrastructure.llm_request_log_service import (
+    LLMRequestLogReferenceError,
+    LLMRequestLogService,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -552,6 +560,29 @@ async def list_session_llm_request_logs(
         result = llm_request_log_service.list_session_logs(session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/{session_id}/llm-request-logs/locate", response_model=APIResponse[LLMRequestLogLocationDTO])
+async def locate_session_llm_request_log(
+    session_id: CanonicalSessionId,
+    reference: LLMRequestLogReferenceDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    logs: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+):
+    if reference.session_id != session_id:
+        raise HTTPException(status_code=400, detail={"code": "owner_mismatch", "message": "请求日志引用不属于目标 Session"})
+    try:
+        async with sessions.session_read_admission(session_id):
+            result = await run_sync_shielded(logs.locate, reference)
+    except LLMRequestLogReferenceError as error:
+        raise HTTPException(status_code=409, detail={"code": "stale_request_log_reference", "message": str(error)}) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
