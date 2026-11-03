@@ -271,7 +271,7 @@ async def lifespan(app: FastAPI):
             registry=registry,
             http_client=app.state.http_client,
             cache_dir=_gateway_root() / "indexes" / "session-catalogs",
-            navigation_store=app.state.workspace_navigation_store,
+            gateway_id=gateway_id,
             refresh_interval_seconds=(
                 gateway_config.session_catalog_refresh_interval_seconds
             ),

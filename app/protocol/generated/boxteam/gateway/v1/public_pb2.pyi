@@ -778,38 +778,6 @@ class GatewayServiceStatusDTO(_message.Message):
     error: str
     def __init__(self, status: _Optional[str] = ..., health_path: _Optional[str] = ..., local_url: _Optional[str] = ..., local_port: _Optional[int] = ..., remote_host: _Optional[str] = ..., remote_port: _Optional[int] = ..., error: _Optional[str] = ...) -> None: ...
 
-class GatewaySessionSearchMatchDTO(_message.Message):
-    __slots__ = ("workspace_id", "workspace_name", "node_id", "node_kind", "name", "session_id", "relative_path", "breadcrumb_names", "breadcrumb_node_ids")
-    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
-    WORKSPACE_NAME_FIELD_NUMBER: _ClassVar[int]
-    NODE_ID_FIELD_NUMBER: _ClassVar[int]
-    NODE_KIND_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    RELATIVE_PATH_FIELD_NUMBER: _ClassVar[int]
-    BREADCRUMB_NAMES_FIELD_NUMBER: _ClassVar[int]
-    BREADCRUMB_NODE_IDS_FIELD_NUMBER: _ClassVar[int]
-    workspace_id: str
-    workspace_name: str
-    node_id: str
-    node_kind: str
-    name: str
-    session_id: str
-    relative_path: str
-    breadcrumb_names: _containers.RepeatedScalarFieldContainer[str]
-    breadcrumb_node_ids: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, workspace_id: _Optional[str] = ..., workspace_name: _Optional[str] = ..., node_id: _Optional[str] = ..., node_kind: _Optional[str] = ..., name: _Optional[str] = ..., session_id: _Optional[str] = ..., relative_path: _Optional[str] = ..., breadcrumb_names: _Optional[_Iterable[str]] = ..., breadcrumb_node_ids: _Optional[_Iterable[str]] = ...) -> None: ...
-
-class GatewaySessionSearchResultsDTO(_message.Message):
-    __slots__ = ("items", "workspaces", "total")
-    ITEMS_FIELD_NUMBER: _ClassVar[int]
-    WORKSPACES_FIELD_NUMBER: _ClassVar[int]
-    TOTAL_FIELD_NUMBER: _ClassVar[int]
-    items: _containers.RepeatedCompositeFieldContainer[GatewaySessionSearchMatchDTO]
-    workspaces: _containers.RepeatedCompositeFieldContainer[GatewaySessionSearchWorkspaceStatusDTO]
-    total: int
-    def __init__(self, items: _Optional[_Iterable[_Union[GatewaySessionSearchMatchDTO, _Mapping]]] = ..., workspaces: _Optional[_Iterable[_Union[GatewaySessionSearchWorkspaceStatusDTO, _Mapping]]] = ..., total: _Optional[int] = ...) -> None: ...
-
 class GatewaySearchWorkspaceOwnerDTO(_message.Message):
     __slots__ = ("gateway_id", "workspace_id")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
@@ -834,8 +802,20 @@ class GatewayWorkspaceDiscoveryHitDTO(_message.Message):
     breadcrumb_names: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, owner: _Optional[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., target_id: _Optional[str] = ..., name: _Optional[str] = ..., navigation_node_id: _Optional[str] = ..., breadcrumb_node_ids: _Optional[_Iterable[str]] = ..., breadcrumb_names: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class GatewayNavigationFolderDiscoveryHitDTO(_message.Message):
+    __slots__ = ("name", "navigation_node_id", "breadcrumb_node_ids", "breadcrumb_names")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    NAVIGATION_NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    BREADCRUMB_NODE_IDS_FIELD_NUMBER: _ClassVar[int]
+    BREADCRUMB_NAMES_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    navigation_node_id: str
+    breadcrumb_node_ids: _containers.RepeatedScalarFieldContainer[str]
+    breadcrumb_names: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, name: _Optional[str] = ..., navigation_node_id: _Optional[str] = ..., breadcrumb_node_ids: _Optional[_Iterable[str]] = ..., breadcrumb_names: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class GatewayWorkspaceDiscoveryResultsDTO(_message.Message):
-    __slots__ = ("gateway_id", "query", "resolved_at", "source", "items", "cursor", "complete")
+    __slots__ = ("gateway_id", "query", "resolved_at", "source", "items", "cursor", "complete", "folders")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     QUERY_FIELD_NUMBER: _ClassVar[int]
     RESOLVED_AT_FIELD_NUMBER: _ClassVar[int]
@@ -843,6 +823,7 @@ class GatewayWorkspaceDiscoveryResultsDTO(_message.Message):
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    FOLDERS_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     query: str
     resolved_at: _timestamp_pb2.Timestamp
@@ -850,7 +831,8 @@ class GatewayWorkspaceDiscoveryResultsDTO(_message.Message):
     items: _containers.RepeatedCompositeFieldContainer[GatewayWorkspaceDiscoveryHitDTO]
     cursor: str
     complete: bool
-    def __init__(self, gateway_id: _Optional[str] = ..., query: _Optional[str] = ..., resolved_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayWorkspaceDiscoveryHitDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ...) -> None: ...
+    folders: _containers.RepeatedCompositeFieldContainer[GatewayNavigationFolderDiscoveryHitDTO]
+    def __init__(self, gateway_id: _Optional[str] = ..., query: _Optional[str] = ..., resolved_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayWorkspaceDiscoveryHitDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., folders: _Optional[_Iterable[_Union[GatewayNavigationFolderDiscoveryHitDTO, _Mapping]]] = ...) -> None: ...
 
 class GatewaySearchScopeDTO(_message.Message):
     __slots__ = ("version", "gateway_id", "resolved_at", "mode", "owners")
@@ -899,18 +881,6 @@ class GatewaySearchScopeResolutionDTO(_message.Message):
     scope: GatewaySearchScopeDTO
     branches: _containers.RepeatedCompositeFieldContainer[GatewaySearchScopeBranchDTO]
     def __init__(self, scope: _Optional[_Union[GatewaySearchScopeDTO, _Mapping]] = ..., branches: _Optional[_Iterable[_Union[GatewaySearchScopeBranchDTO, _Mapping]]] = ...) -> None: ...
-
-class GatewaySessionSearchWorkspaceStatusDTO(_message.Message):
-    __slots__ = ("workspace_id", "workspace_name", "status", "error")
-    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
-    WORKSPACE_NAME_FIELD_NUMBER: _ClassVar[int]
-    STATUS_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    workspace_id: str
-    workspace_name: str
-    status: str
-    error: str
-    def __init__(self, workspace_id: _Optional[str] = ..., workspace_name: _Optional[str] = ..., status: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
 
 class GatewayThemeBackgroundDTO(_message.Message):
     __slots__ = ("type", "url", "asset_id", "position", "size", "repeat", "appearance", "overlay")

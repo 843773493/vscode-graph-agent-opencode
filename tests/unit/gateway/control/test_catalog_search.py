@@ -15,13 +15,11 @@ from app.gateway.control.catalog_search import (
     _CatalogSnapshot,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.schemas.gateway_control import (
-    WorkspaceNavigationNodeDTO,
-    WorkspaceNavigationTreeDTO,
-)
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
+
+OWNER = GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_catalog_test", workspace_id="00000000-0000-4000-8000-000000000001")
 
 
 @pytest.fixture
@@ -33,9 +31,7 @@ def catalog_service(tmp_path: Path) -> GatewaySessionCatalogSearchService:
         ),
         http_client=_FailingHttpClient(),  # type: ignore[arg-type]
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
 
 
@@ -59,24 +55,30 @@ def catalog_snapshot() -> _CatalogSnapshot:
         created_at=datetime.fromisoformat("2026-10-21T00:30:00+08:00"),
     )
     return _CatalogSnapshot(
-        revision="revision-one",
+        owner=OWNER, catalog_revision=7, revision="revision-one",
         updated_at=datetime.now(UTC),
         nodes_by_id={node.node_id: node for node in (folder, session)},
     )
+
+
+def _mirror(service: GatewaySessionCatalogSearchService, snapshot: _CatalogSnapshot, query: str, *, limit: int):
+    service._snapshots[snapshot.owner] = snapshot
+    page, updated_at = service.search_mirror(snapshot.owner, query=query, limit=limit, cursor=None, deadline_at=None)
+    assert updated_at == snapshot.updated_at
+    return page.items
 
 
 def test_catalog_cache_round_trip_preserves_logical_search_without_locators(
     catalog_service: GatewaySessionCatalogSearchService,
     catalog_snapshot: _CatalogSnapshot,
 ) -> None:
-    target = _offline_target()
-    catalog_service._save_snapshot(target.workspace_id, catalog_snapshot)
-    path = catalog_service._cache_path(target.workspace_id)
+    catalog_service._save_snapshot(catalog_snapshot)
+    path = catalog_service._cache_path(OWNER)
     raw = path.read_text()
-    assert json.loads(raw)["schema_version"] == 2
+    assert json.loads(raw)["schema_version"] == 3
     assert "storage_relative_path" not in raw
-    assert target.root_path not in raw
-    loaded = catalog_service._load_snapshot(target.workspace_id)
+    assert _offline_target().root_path not in raw
+    loaded = catalog_service._load_snapshot(OWNER)
     assert loaded == catalog_snapshot
     assert loaded is not None
     for query in (
@@ -87,30 +89,29 @@ def test_catalog_cache_round_trip_preserves_logical_search_without_locators(
         "2026/10/20",
         "2026/10/20/session-needle",
     ):
-        matches = catalog_service._search_snapshot(target, loaded, query, limit=10)
+        matches = _mirror(catalog_service, loaded, query, limit=10)
         expected_ids = (
             ["folder-needle", "session-needle"]
             if query in {"needle", "ndl"}
             else ["session-needle"]
         )
-        assert [item.node_id for item in matches] == expected_ids
+        assert [item.node.node_id for item in matches] == expected_ids
         for item in matches:
             assert "storage_relative_path" not in item.model_dump()
-        session = next(item for item in matches if item.node_id == "session-needle")
+        session = next(item for item in matches if item.node.node_id == "session-needle")
         assert session.relative_path == "报告/目标 Needle"
-        assert session.breadcrumb_node_ids == ["folder-needle", "session-needle"]
+        assert [item.node_id for item in session.breadcrumb] == ["folder-needle", "session-needle"]
         assert "2026/10/20" not in session.model_dump_json()
     assert (
-        catalog_service._search_snapshot(target, loaded, "2026/10/21", limit=10) == []
+        _mirror(catalog_service, loaded, "2026/10/21", limit=10) == []
     )
-    assert catalog_service._search_snapshot(target, loaded, "目标session", limit=10) == []
-    assert catalog_service._search_snapshot(target, loaded, "neld", limit=10) == []
+    assert _mirror(catalog_service, loaded, "目标session", limit=10) == []
+    assert _mirror(catalog_service, loaded, "neld", limit=10) == []
 
 
 def test_catalog_search_limits_matches_after_stable_name_sort(
     catalog_service: GatewaySessionCatalogSearchService,
 ) -> None:
-    target = _offline_target()
     nodes = [
         SessionCatalogNodeDTO(
             node_id="node-z",
@@ -132,24 +133,16 @@ def test_catalog_search_limits_matches_after_stable_name_sort(
         ),
     ]
     snapshot = _CatalogSnapshot(
-        revision="revision-one",
+        owner=OWNER, catalog_revision=7, revision="revision-one",
         updated_at=datetime.now(UTC),
         nodes_by_id={node.node_id: node for node in nodes},
     )
 
-    matches = catalog_service._search_snapshot(target, snapshot, "needle", limit=2)
+    matches = _mirror(catalog_service, snapshot, "needle", limit=2)
 
-    assert [item.node_id for item in matches] == ["node-a", "node-b"]
-    assert catalog_service._search_snapshot(target, snapshot, "needle", limit=0) == []
-    assert [
-        item.node_id
-        for item in catalog_service._search_snapshot(
-            target,
-            snapshot,
-            "needle",
-            limit=-1,
-        )
-    ] == ["node-a", "node-b"]
+    assert [item.node.node_id for item in matches] == ["node-a", "node-b"]
+    assert _mirror(catalog_service, snapshot, "needle", limit=0) == []
+
 
 
 def test_mirror_search_uses_owner_creation_key_before_id_for_same_name(
@@ -167,75 +160,21 @@ def test_mirror_search_uses_owner_creation_key_before_id_for_same_name(
         )
     ]
     snapshot = _CatalogSnapshot(
-        revision="same-name", updated_at=datetime.now(UTC),
+        owner=OWNER, catalog_revision=7, revision="same-name", updated_at=datetime.now(UTC),
         nodes_by_id={node.node_id: node for node in nodes},
     )
-    matches = catalog_service._search_snapshot(_offline_target(), snapshot, "sndl", limit=1)
-    assert [item.node_id for item in matches] == ["session-z"]
+    matches = _mirror(catalog_service, snapshot, "sndl", limit=1)
+    assert [item.node.node_id for item in matches] == ["session-z"]
 
 
-def test_workspace_folder_search_uses_stable_path_sort_and_limit(
-    catalog_service: GatewaySessionCatalogSearchService,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    nodes = [
-        WorkspaceNavigationNodeDTO(
-            node_id="folder-b",
-            kind="workspace_folder",
-            name="Beta needle",
-        ),
-        WorkspaceNavigationNodeDTO(
-            node_id="folder-child",
-            kind="workspace_folder",
-            name="Needle child",
-            parent_node_id="folder-a",
-        ),
-        WorkspaceNavigationNodeDTO(
-            node_id="folder-z",
-            kind="workspace_folder",
-            name="Alpha needle",
-        ),
-        WorkspaceNavigationNodeDTO(
-            node_id="folder-a",
-            kind="workspace_folder",
-            name="alpha NEEDLE",
-        ),
-    ]
-    tree = WorkspaceNavigationTreeDTO(revision="test", nodes=nodes)
-    monkeypatch.setattr(
-        catalog_service._navigation_store,
-        "list_tree",
-        lambda _targets: tree,
-    )
-
-    matches = catalog_service._search_workspace_folders("needle", limit=3)
-
-    assert [item.node_id for item in matches] == [
-        "folder-a",
-        "folder-z",
-        "folder-child",
-    ]
-    assert [item.relative_path for item in matches] == [
-        "alpha NEEDLE",
-        "Alpha needle",
-        "alpha NEEDLE/Needle child",
-    ]
-    assert catalog_service._search_workspace_folders("needle", limit=0) == []
-    assert [
-        item.node_id
-        for item in catalog_service._search_workspace_folders("needle", limit=-1)
-    ] == ["folder-a", "folder-z", "folder-child"]
-
-
-@pytest.mark.parametrize("schema_version", [1, 2])
+@pytest.mark.parametrize("schema_version", [1, 2, 3])
 def test_catalog_cache_rejects_old_locator_without_rewriting_or_echoing_it(
     catalog_service: GatewaySessionCatalogSearchService,
     catalog_snapshot: _CatalogSnapshot,
     schema_version: int,
 ) -> None:
-    target = _offline_target()
-    catalog_service._save_snapshot(target.workspace_id, catalog_snapshot)
-    path = catalog_service._cache_path(target.workspace_id)
+    catalog_service._save_snapshot(catalog_snapshot)
+    path = catalog_service._cache_path(OWNER)
     payload = json.loads(path.read_text())
     payload["schema_version"] = schema_version
     locator = "2026/10/20/private-legacy-session"
@@ -243,10 +182,10 @@ def test_catalog_cache_rejects_old_locator_without_rewriting_or_echoing_it(
     path.write_text(json.dumps(payload))
     before = path.read_bytes()
     with pytest.raises((RuntimeError, ValidationError)) as caught:
-        catalog_service._load_snapshot(target.workspace_id)
+        catalog_service._load_snapshot(OWNER)
     assert locator not in str(caught.value)
     assert str(path) not in str(caught.value)
-    if schema_version == 1:
+    if schema_version != 3:
         assert "版本不兼容" in str(caught.value)
     else:
         assert "storage_relative_path" in str(caught.value)
@@ -259,9 +198,9 @@ async def test_catalog_sync_rejects_legacy_export_and_preserves_existing_snapsho
     catalog_snapshot: _CatalogSnapshot,
 ) -> None:
     target = replace(_offline_target(), backend_url="http://workspace.invalid")
-    catalog_service._save_snapshot(target.workspace_id, catalog_snapshot)
-    catalog_service._snapshots[target.workspace_id] = catalog_snapshot
-    path = catalog_service._cache_path(target.workspace_id)
+    catalog_service._save_snapshot(catalog_snapshot)
+    catalog_service._snapshots[OWNER] = catalog_snapshot
+    path = catalog_service._cache_path(OWNER)
     before = path.read_bytes()
     nodes = [
         node.model_dump(mode="json") for node in catalog_snapshot.nodes_by_id.values()
@@ -271,7 +210,7 @@ async def test_catalog_sync_rejects_legacy_export_and_preserves_existing_snapsho
     transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
-            json={"data": {"revision": "bad-revision", "items": nodes}},
+            json={"data": {"revision": "bad-revision", "catalog_revision": 7, "items": nodes}},
         )
     )
     async with httpx.AsyncClient(transport=transport) as client:
@@ -280,8 +219,7 @@ async def test_catalog_sync_rejects_legacy_export_and_preserves_existing_snapsho
             await catalog_service._sync_workspace(target, request_id="req-test")
     assert locator not in str(caught.value)
     assert path.read_bytes() == before
-    assert catalog_service._snapshots[target.workspace_id] is catalog_snapshot
-    assert target.workspace_id not in catalog_service._fresh_workspace_ids
+    assert catalog_service._snapshots[OWNER] is catalog_snapshot
 
 
 class _FailingHttpClient:
@@ -300,9 +238,7 @@ def test_catalog_runtime_config_updates_next_sync_and_wakes_loop(
         registry=registry,
         http_client=_FailingHttpClient(),  # type: ignore[arg-type]
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
 
     service.update_runtime_config(
@@ -343,9 +279,7 @@ async def test_catalog_sync_skips_local_workspace_without_backend_url(
         registry=registry,
         http_client=_FailingHttpClient(),  # type: ignore[arg-type]
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
 
     await service._sync_all()
@@ -355,37 +289,9 @@ async def test_catalog_sync_skips_local_workspace_without_backend_url(
     )
 
 
-@pytest.mark.asyncio
-async def test_catalog_search_reports_unconnected_workspace_without_malformed_url(
-    tmp_path: Path,
-) -> None:
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json",
-        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-    )
-    target = _offline_target()
-    registry.upsert(target)
-    service = GatewaySessionCatalogSearchService(
-        registry=registry,
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
-    )
-
-    result = await service.search(
-        "未连接",
-        limit_per_workspace=10,
-        request_id="req_catalog_test",
-    )
-
-    assert result.items == []
-    assert result.workspaces[0].status == "unavailable"
-    assert result.workspaces[0].error == (
-        f"会话目录同步失败: workspace_id={target.workspace_id}, request_id=req_catalog_test: "
-        "stage=session_catalog_sync, error=RuntimeError"
-    )
+def test_missing_mirror_does_not_sync(catalog_service: GatewaySessionCatalogSearchService) -> None:
+    with pytest.raises(LookupError, match="没有可用目录镜像"):
+        catalog_service.search_mirror(OWNER, query="needle", limit=10, cursor=None, deadline_at=None)
 
 
 def test_catalog_sync_lock_pool_is_bounded_and_stable(tmp_path: Path) -> None:
@@ -403,9 +309,7 @@ def test_catalog_sync_lock_pool_is_bounded_and_stable(tmp_path: Path) -> None:
         registry=registry,
         http_client=_FailingHttpClient(),  # type: ignore[arg-type]
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
 
     assert service._sync_lock_for("ws-a") is service._sync_lock_for("ws-a")
@@ -432,33 +336,19 @@ async def test_catalog_caches_are_pruned_when_workspaces_are_removed(
         registry=registry,
         http_client=_FailingHttpClient(),  # type: ignore[arg-type]
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
 
+    # 直接准备同规模残留缓存；此处验证回收，不用6000次注册表写入替测试准备历史。
     for index in range(3000):
         workspace_id = f"ws_pruned_{index}"
-        target = WorkspaceTarget(
-            workspace_id=workspace_id,
-            name=workspace_id,
-            root_path=f"/tmp/{workspace_id}",
-            backend_url="",
-            connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
-            managed=True,
-        )
-        registry.upsert(target)
-        service._snapshots[workspace_id] = object()  # type: ignore[assignment]
-        service._fresh_workspace_ids.add(workspace_id)
+        service._snapshots[GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_catalog_test", workspace_id=workspace_id)] = object()  # type: ignore[assignment]
         service._workspace_errors[workspace_id] = "boom"
-        registry.remove(workspace_id)
 
     # 上一轮每工作区已留残留；同步一轮后必须全部回收（没有任何存活工作区）。
     await service._sync_all()
 
     assert service._snapshots == {}
-    assert service._fresh_workspace_ids == set()
     assert service._workspace_errors == {}
 
 
@@ -484,17 +374,15 @@ async def test_catalog_caches_are_retained_for_live_workspaces(tmp_path: Path) -
         registry=registry,
         http_client=_FailingHttpClient(),  # type: ignore[arg-type]
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
-    service._snapshots["ws_live"] = object()  # type: ignore[assignment]
+    service._snapshots[OWNER] = object()  # type: ignore[assignment]
     service._workspace_errors["ws_live"] = "旧错误先占位"
 
     await service._sync_all()
 
     # 存活工作区的快照保留；其 error 由本轮同步结果覆盖（无 backend_url → 记错误）。
-    assert "ws_live" in service._snapshots
+    assert OWNER in service._snapshots
     assert service._workspace_errors["ws_live"] == (
         f"工作区后端尚未连接: {live.workspace_id}"
     )
@@ -513,7 +401,7 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     target = replace(_offline_target(), backend_url="http://failed.test")
-    healthy = replace(target, workspace_id="healthy", backend_url="http://healthy.test")
+    healthy = replace(target, workspace_id="healthy", backend_workspace_id="00000000-0000-4000-8000-000000000002", backend_url="http://healthy.test")
     for item in (target, healthy):
         catalog_service._registry.upsert(item)
     calls: list[httpx.Request] = []
@@ -530,15 +418,15 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
             if failure == "http":
                 return httpx.Response(503, extensions={"reason_phrase": native_path.encode()})
             if failure == "validation":
-                return httpx.Response(200, json={"data": {"revision": "bad", "items": [
+                return httpx.Response(200, json={"data": {"revision": "bad", "catalog_revision": 7, "items": [
                     {**nodes[0], "node_revision": native_path},
                 ]}})
-        return httpx.Response(200, json={"data": {"revision": catalog_snapshot.revision, "items": nodes}})
+        return httpx.Response(200, json={"data": {"revision": catalog_snapshot.revision, "catalog_revision": 7, "items": nodes}})
 
     original_write = catalog_search.atomic_write_json
 
     def write(path: Path, payload: dict[str, object]) -> None:
-        if failed and failure == "cache" and path == catalog_service._cache_path(target.workspace_id):
+        if failed and failure == "cache" and path == catalog_service._cache_path(OWNER):
             raise cache_error
         original_write(path, payload)
 
@@ -549,50 +437,45 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
             await catalog_service._sync_all()
         else:
             await catalog_service._sync_workspace(healthy, request_id="req_healthy_seed")
-        path = catalog_service._cache_path(target.workspace_id)
+        path = catalog_service._cache_path(OWNER)
         previous_bytes = path.read_bytes() if path.exists() else None
-        previous_snapshot = catalog_service._snapshots.get(target.workspace_id)
+        previous_snapshot = catalog_service._snapshots.get(OWNER)
         calls.clear()
         failed = True
+        await catalog_service._sync_all()
+        message = catalog_service._workspace_errors[target.workspace_id]
         if entry == "refresh":
-            await catalog_service._sync_all()
-        result = await catalog_service.search("needle", limit_per_workspace=10, request_id="req_catalog_failure")
-        statuses = {status.workspace_id: status for status in result.workspaces}
-        status = statuses[target.workspace_id]
-        assert status.status == ("stale" if entry == "refresh" else "unavailable")
-        assert statuses[healthy.workspace_id].status == "available"
-        assert "catalog-search-marker" not in result.model_dump_json()
-        assert status.error is not None and "stage=session_catalog_sync" in status.error
-        assert target.workspace_id in status.error
-        assert catalog_service._workspace_errors[target.workspace_id] == status.error
+            page, _ = catalog_service.search_mirror(OWNER, query="needle", limit=10, cursor=None, deadline_at=None)
+            assert page.items
+        else:
+            with pytest.raises(LookupError):
+                catalog_service.search_mirror(OWNER, query="needle", limit=10, cursor=None, deadline_at=None)
+        assert healthy.workspace_id not in catalog_service._workspace_errors
+        assert "catalog-search-marker" not in message
+        assert "stage=session_catalog_sync" in message and target.workspace_id in message
         diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
         assert diagnostic.exc_info is not None
         original = diagnostic.exc_info[1]
         assert original is not None
         failed_request, = [request for request in calls if request.url.host == "failed.test"]
         assert failed_request.headers["X-Request-ID"] in diagnostic.getMessage()
-        assert all(request.headers["X-BoxTeam-Workspace-Id"] == target.backend_workspace_id for request in calls)
+        expected_owners = {"failed.test": target.backend_workspace_id, "healthy.test": healthy.backend_workspace_id}
+        assert all(request.headers["X-BoxTeam-Workspace-Id"] == expected_owners[request.url.host] for request in calls)
         if failure == "transport":
             assert original is native_error
         elif failure == "cache":
             assert original is cache_error
-            assert "errno=13" in status.error
+            assert "errno=13" in message
         elif failure == "validation":
             assert isinstance(original, ValidationError) and original.errors()[0]["input"] == native_path
         else:
             assert isinstance(original, httpx.HTTPStatusError) and original.response.status_code == 503
-            assert "status=503" in status.error
+            assert "status=503" in message
         if failure != "validation":
             assert "catalog-search-marker" in caplog.text
         assert (path.read_bytes() if path.exists() else None) == previous_bytes
-        assert catalog_service._snapshots.get(target.workspace_id) is previous_snapshot
-        assert {item.workspace_id for item in result.items} == (
-            {healthy.workspace_id, target.workspace_id} if entry == "refresh" else {healthy.workspace_id}
-        )
-
+        assert catalog_service._snapshots.get(OWNER) is previous_snapshot
         failed = False
         await catalog_service._sync_all()
-        recovered = await catalog_service.search("needle", limit_per_workspace=10, request_id="req_catalog_recovered")
-        assert all(status.status == "available" and status.error is None for status in recovered.workspaces)
-        assert {item.workspace_id for item in recovered.items} == {healthy.workspace_id, target.workspace_id}
         assert catalog_service._workspace_errors == {}
+        assert catalog_service._snapshots[OWNER].owner == OWNER

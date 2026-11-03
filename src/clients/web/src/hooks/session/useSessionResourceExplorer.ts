@@ -1,3 +1,4 @@
+import { searchCatalogView, type CatalogSearchView } from "../../api/gateway/catalogSearch";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   getSessionCatalogBreadcrumb,
@@ -12,10 +13,8 @@ import {
   getWorkspaceNavigation,
   placeWorkspaceNavigationNode,
   renameWorkspaceNavigationFolder,
-  searchGatewaySessionCatalog,
 } from "../../gatewayApi";
 import type {
-  GatewaySessionSearchResults,
   GatewayUserAccess,
   SessionCatalogExport,
   SessionCatalogNode,
@@ -66,10 +65,10 @@ export interface ProjectedCatalogBranchState extends Omit<CatalogBranchState, "i
   locally_removed_node_ids: string[];
 }
 
-const emptySearch: GatewaySessionSearchResults = {
+const emptySearch: CatalogSearchView = {
   items: [],
   workspaces: [],
-  total: 0,
+  limited: false,
 };
 
 const CATALOG_RETRY_LIMIT = 3;
@@ -1555,12 +1554,8 @@ export function useSessionResourceExplorer({
     const timer = window.setTimeout(() => {
       setSearching(true);
       setSearchError(null);
-      void searchGatewaySessionCatalog(apiPort, normalized, controller.signal)
-        .then((result) => {
-          if (!controller.signal.aborted) {
-            setSearchResults(result);
-          }
-        })
+      setSearchResults(emptySearch);
+      void searchCatalogView(apiPort, normalized, navigation, controller.signal, setSearchResults)
         .catch((error: unknown) => {
           if (!controller.signal.aborted) {
             setSearchError(errorMessage(error));
@@ -1576,7 +1571,7 @@ export function useSessionResourceExplorer({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [apiPort, catalogViewVersion, searchOpen, searchQuery]);
+  }, [apiPort, catalogViewVersion, navigation, searchOpen, searchQuery]);
 
   useEffect(() => {
     if (!activeWorkspaceId || !currentSessionId || !navigation) {

@@ -8,7 +8,8 @@
 session_navigation/
 ├── __init__.py                 对外导出 SessionCatalogService
 ├── service.py                  mutation、生命周期与读服务装配
-├── read_service.py             catalog 快照、投影、分页、搜索、breadcrumb 与 cursor
+├── read_service.py             catalog 快照、投影与树读取
+├── catalog_query.py            在线与 Gateway 镜像共用的匹配、分页、breadcrumb 与原 cursor
 ├── thread_search.py            原 SessionThread owner 名称查询、扫描预算与显式续查
 ├── name_search_budget.py       catalog／Thread 名称查询的同一端到端期限
 ├── executor.py                 mutation operation 执行与提交

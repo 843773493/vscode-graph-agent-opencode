@@ -73,6 +73,11 @@ export declare type FederatedSearchQueryDTO = Message<"boxteam.search.v1.Federat
    * @generated from field: repeated boxteam.search.v1.FederatedFileSearchTargetDTO file_targets = 7;
    */
   fileTargets: FederatedFileSearchTargetDTO[];
+
+  /**
+   * @generated from field: optional bool allow_catalog_mirror = 8;
+   */
+  allowCatalogMirror?: boolean | undefined;
 };
 
 /**
@@ -257,6 +262,37 @@ export declare type FederatedSearchSummaryDTO = Message<"boxteam.search.v1.Feder
 export declare const FederatedSearchSummaryDTOSchema: GenMessage<FederatedSearchSummaryDTO>;
 
 /**
+ * @generated from message boxteam.search.v1.FederatedSearchSourceDTO
+ */
+export declare type FederatedSearchSourceDTO = Message<"boxteam.search.v1.FederatedSearchSourceDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: optional string updated_at = 2;
+   */
+  updatedAt?: string | undefined;
+
+  /**
+   * @generated from field: bool stale = 3;
+   */
+  stale: boolean;
+
+  /**
+   * @generated from field: optional string unavailable_reason = 4;
+   */
+  unavailableReason?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.search.v1.FederatedSearchSourceDTO.
+ * Use `create(FederatedSearchSourceDTOSchema)` to create a new message.
+ */
+export declare const FederatedSearchSourceDTOSchema: GenMessage<FederatedSearchSourceDTO>;
+
+/**
  * @generated from message boxteam.search.v1.FederatedSearchEventDTO
  */
 export declare type FederatedSearchEventDTO = Message<"boxteam.search.v1.FederatedSearchEventDTO"> & {
@@ -294,6 +330,11 @@ export declare type FederatedSearchEventDTO = Message<"boxteam.search.v1.Federat
    * @generated from field: boxteam.search.v1.FederatedSearchSummaryDTO summary = 7;
    */
   summary?: FederatedSearchSummaryDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.search.v1.FederatedSearchSourceDTO source = 8;
+   */
+  source?: FederatedSearchSourceDTO | undefined;
 };
 
 /**

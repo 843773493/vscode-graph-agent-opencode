@@ -291,7 +291,8 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
         assert all(item["workspaceId"] == workspace_id for item in read_proof["heldRequests"])
         search_proof = read_proof["search"]
         assert search_proof["requestId"]
-        assert search_proof["workspaceId"] == workspace_id
+        assert search_proof["workspaceId"] == session_owner["workspace_id"]
+        assert search_proof["targetId"] == workspace_id
         assert search_proof["sessionId"] == unopened_session_id
         assert search_proof["unreadBeforeEditorOpened"] is True
         access = await _verify_access_contract(f"http://127.0.0.1:{gateway.port}")

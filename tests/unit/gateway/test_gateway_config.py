@@ -21,7 +21,6 @@ from app.gateway.config import (
 from app.gateway.config.sources import _gateway_persisted_source_details
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes.health_config import gateway_config_sources
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
@@ -112,9 +111,7 @@ async def test_gateway_runtime_apply_rolls_back_consumers_on_partial_failure(
         registry=registry,
         http_client=SimpleNamespace(),  # 仅测试配置提交，不启动目录请求
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
     initial = GatewayConfig(
         payload={"logging": {"runtime": {"level": "info", "pretty": True}}},
@@ -156,9 +153,7 @@ def test_gateway_runtime_consumer_generation_is_unique_for_same_config(
         registry=registry,
         http_client=SimpleNamespace(),
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
     app = SimpleNamespace(
         state=SimpleNamespace(
@@ -187,9 +182,7 @@ def test_gateway_runtime_consumer_health_proof_carries_fencing_digest(
         registry=registry,
         http_client=SimpleNamespace(),
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
     catalog._task = SimpleNamespace(done=lambda: False)  # type: ignore[assignment]
     app = SimpleNamespace(
@@ -221,9 +214,7 @@ def test_gateway_pending_proof_collects_all_runtime_consumer_digests(
         registry=registry,
         http_client=SimpleNamespace(),
         cache_dir=tmp_path / "indexes",
-        navigation_store=WorkspaceNavigationStore(
-            storage_path=tmp_path / "navigation.json"
-        ),
+        gateway_id="gateway_catalog_test",
     )
     catalog._task = SimpleNamespace(done=lambda: False)  # type: ignore[assignment]
     controller = GatewayWorkspaceRuntimeController(

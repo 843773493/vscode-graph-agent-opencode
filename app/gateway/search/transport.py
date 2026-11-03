@@ -8,28 +8,70 @@ import httpx
 from pydantic import ValidationError
 
 from app.core.shielded_cleanup import run_cleanup_shielded
+from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.registry.owners import workspace_owner
-from app.gateway.search.scheduler import SearchBranchError, SearchJob
+from app.gateway.search.scheduler import SearchBranchError, SearchJob, SearchPage
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
-from app.schemas.search_federation import MAX_SEARCH_ERROR_CHARS
+from app.schemas.search_federation import (
+    MAX_SEARCH_ERROR_CHARS,
+    FederatedSearchSourceDTO,
+)
 
 
 class SearchTransport:
-    def __init__(self, registry: GatewayWorkspaceRegistry, client: httpx.AsyncClient, *, gateway_id: str, request_id: str) -> None:
+    def __init__(self, registry: GatewayWorkspaceRegistry, client: httpx.AsyncClient, *, gateway_id: str, request_id: str,
+                 catalog_mirror: GatewaySessionCatalogSearchService | None = None) -> None:
         self.registry = registry
         self.client = client
         self.gateway_id = gateway_id
         self.request_id = request_id
+        self.catalog_mirror = catalog_mirror
 
-    async def query(self, job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(self, job: SearchJob) -> SearchPage:
         target_id = job.scope_branch.target_id
         if target_id is None or not self.registry.has_target(target_id):
             raise SearchBranchError("owner_unavailable", "搜索目标已移除", retryable=True)
         target = self.registry.resolve(target_id)
         if workspace_owner(target, self.registry, self.gateway_id) != job.key.owner:
             raise SearchBranchError("owner_unavailable", "登记路由的稳定归属已经改变", retryable=True)
+        try:
+            return SearchPage(await self._query_owner(job))
+        except SearchBranchError as error:
+            if error.code != "target_unavailable" or not job.allow_catalog_mirror:
+                raise
+            return self._query_mirror(job, error)
+
+    def _query_mirror(self, job: SearchJob, unavailable: SearchBranchError) -> SearchPage:
+        if self.catalog_mirror is None:
+            raise unavailable
+        try:
+            page, updated_at = self.catalog_mirror.search_mirror(
+                job.key.owner, query=job.request.query, limit=job.request.limit,
+                cursor=job.request.cursor, deadline_at=job.request.deadline_at,
+            )
+        except LookupError as error:
+            raise SearchBranchError("target_unavailable", f"{unavailable}；{error}", retryable=True) from error
+        except (ValueError, TypeError) as error:
+            raise SearchBranchError("owner_rejected", str(error)) from error
+        result = WorkspaceSearchResultDTO(
+            provider_id="session-catalog", workspace_id=job.key.owner.workspace_id,
+            category="catalog", operation="name", contract_version=1,
+            state="limited" if page.cursor else "complete", limited_reason="result_limit" if page.cursor else None,
+            catalog=page,
+        )
+        # 镜像没有网络接收边界，在此限制完整领域页，不截断后推进原 cursor。
+        if len(result.model_dump_json().encode()) > job.max_bytes:
+            raise SearchBranchError("delivery_limit", "目录镜像页超过本次字节配额，请缩小页大小", retryable=True)
+        return SearchPage(result, FederatedSearchSourceDTO(
+            kind="gateway_catalog_mirror", updated_at=updated_at, stale=True, unavailable_reason=str(unavailable),
+        ))
+
+    async def _query_owner(self, job: SearchJob) -> WorkspaceSearchResultDTO:
+        target_id = job.scope_branch.target_id
+        assert target_id is not None
+        target = self.registry.resolve(target_id)
         try:
             url = self.registry.resolve_service_url(target_id, "workspace_api")
         except LookupError as error:

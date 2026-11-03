@@ -1,5 +1,6 @@
 """跨目标搜索的请求与传输生命周期；领域页保持原 owner 的公开类型。"""
 
+from datetime import datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
@@ -40,9 +41,12 @@ class FederatedSearchQueryDTO(BaseModel):
     match_mode: str = Field(default="fuzzy", min_length=1, max_length=64)
     limit: int = Field(default=50, ge=0, le=500)
     file_targets: tuple[FederatedFileSearchTargetDTO, ...] = Field(default=(), max_length=MAX_SEARCH_BRANCHES)
+    allow_catalog_mirror: bool = False
 
     @model_validator(mode="after")
     def validate_file_targets(self) -> Self:
+        if self.allow_catalog_mirror and (self.category, self.operation, self.contract_version, self.match_mode) != ("catalog", "name", 1, "fuzzy"):
+            raise ValueError("离线目录镜像只支持 catalog/name v1 fuzzy 合同")
         if self.file_targets and self.category != "file":
             raise ValueError("只有文件搜索接受目录根集合")
         keys = [(item.owner, item.target.uri) for item in self.file_targets]
@@ -114,6 +118,22 @@ class FederatedSearchSummaryDTO(BaseModel):
     returned_results: int = Field(ge=0)
 
 
+class FederatedSearchSourceDTO(BaseModel):
+    kind: Literal["owner", "gateway_catalog_mirror"] = "owner"
+    updated_at: datetime | None = None
+    stale: bool = False
+    unavailable_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> Self:
+        if self.kind == "gateway_catalog_mirror":
+            if not self.stale or self.updated_at is None or self.updated_at.tzinfo is None or not self.unavailable_reason:
+                raise ValueError("离线镜像必须披露更新时间、stale 和原目标不可用原因")
+        elif self.stale or self.updated_at is not None or self.unavailable_reason is not None:
+            raise ValueError("在线 owner 不接受镜像状态")
+        return self
+
+
 class FederatedSearchEventDTO(BaseModel):
     sequence: int = Field(ge=1)
     request_id: str
@@ -122,6 +142,7 @@ class FederatedSearchEventDTO(BaseModel):
     branch: FederatedSearchBranchDTO | None = None
     page: WorkspaceSearchResultDTO | None = None
     summary: FederatedSearchSummaryDTO | None = None
+    source: FederatedSearchSourceDTO | None = None
 
     @model_validator(mode="after")
     def validate_payload(self) -> Self:
@@ -130,4 +151,6 @@ class FederatedSearchEventDTO(BaseModel):
                     "branch": (False, True, False, False), "end": (False, False, False, True)}
         if actual != expected[self.type]:
             raise ValueError("搜索事件类型与 payload 不符")
+        if self.source is not None and self.type != "page":
+            raise ValueError("只有搜索页携带来源信息")
         return self

@@ -462,24 +462,6 @@ export interface GatewayServiceStatusDTO {
   error?: string | undefined;
 }
 
-export interface GatewaySessionSearchMatchDTO {
-  workspace_id: string;
-  workspace_name: string;
-  node_id: string;
-  node_kind: string;
-  name: string;
-  session_id?: string | undefined;
-  relative_path: string;
-  breadcrumb_names: string[];
-  breadcrumb_node_ids: string[];
-}
-
-export interface GatewaySessionSearchResultsDTO {
-  items: GatewaySessionSearchMatchDTO[];
-  workspaces: GatewaySessionSearchWorkspaceStatusDTO[];
-  total?: number | undefined;
-}
-
 /** 只来自控制面登记与导航；不表示工作区在线或其领域正文已经查询。 */
 export interface GatewaySearchWorkspaceOwnerDTO {
   gateway_id: string;
@@ -496,6 +478,13 @@ export interface GatewayWorkspaceDiscoveryHitDTO {
   breadcrumb_names: string[];
 }
 
+export interface GatewayNavigationFolderDiscoveryHitDTO {
+  name: string;
+  navigation_node_id: string;
+  breadcrumb_node_ids: string[];
+  breadcrumb_names: string[];
+}
+
 export interface GatewayWorkspaceDiscoveryResultsDTO {
   gateway_id: string;
   query: string;
@@ -504,6 +493,7 @@ export interface GatewayWorkspaceDiscoveryResultsDTO {
   items: GatewayWorkspaceDiscoveryHitDTO[];
   cursor?: string | undefined;
   complete: boolean;
+  folders: GatewayNavigationFolderDiscoveryHitDTO[];
 }
 
 /** 只冻结实际范围，不保存路由别名、凭据或全域 cursor；续查仍由各 owner 核验原页。 */
@@ -533,13 +523,6 @@ export interface GatewaySearchScopeBranchDTO {
 export interface GatewaySearchScopeResolutionDTO {
   scope: GatewaySearchScopeDTO | undefined;
   branches: GatewaySearchScopeBranchDTO[];
-}
-
-export interface GatewaySessionSearchWorkspaceStatusDTO {
-  workspace_id: string;
-  workspace_name: string;
-  status: string;
-  error?: string | undefined;
 }
 
 export interface GatewayThemeBackgroundDTO {
@@ -3917,134 +3900,6 @@ export const GatewayServiceStatusDTO: MessageFns<GatewayServiceStatusDTO> = {
   },
 };
 
-function createBaseGatewaySessionSearchMatchDTO(): GatewaySessionSearchMatchDTO {
-  return {
-    workspace_id: "",
-    workspace_name: "",
-    node_id: "",
-    node_kind: "",
-    name: "",
-    session_id: undefined,
-    relative_path: "",
-    breadcrumb_names: [],
-    breadcrumb_node_ids: [],
-  };
-}
-
-export const GatewaySessionSearchMatchDTO: MessageFns<GatewaySessionSearchMatchDTO> = {
-  fromJSON(object: any): GatewaySessionSearchMatchDTO {
-    return {
-      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
-      workspace_name: isSet(object.workspace_name) ? globalThis.String(object.workspace_name) : "",
-      node_id: isSet(object.node_id) ? globalThis.String(object.node_id) : "",
-      node_kind: isSet(object.node_kind) ? globalThis.String(object.node_kind) : "",
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
-      relative_path: isSet(object.relative_path) ? globalThis.String(object.relative_path) : "",
-      breadcrumb_names: globalThis.Array.isArray(object?.breadcrumb_names)
-        ? object.breadcrumb_names.map((e: any) => globalThis.String(e))
-        : [],
-      breadcrumb_node_ids: globalThis.Array.isArray(object?.breadcrumb_node_ids)
-        ? object.breadcrumb_node_ids.map((e: any) => globalThis.String(e))
-        : [],
-    };
-  },
-
-  toJSON(message: GatewaySessionSearchMatchDTO): unknown {
-    const obj: any = {};
-    if (message.workspace_id !== "") {
-      obj.workspace_id = message.workspace_id;
-    }
-    if (message.workspace_name !== "") {
-      obj.workspace_name = message.workspace_name;
-    }
-    if (message.node_id !== "") {
-      obj.node_id = message.node_id;
-    }
-    if (message.node_kind !== "") {
-      obj.node_kind = message.node_kind;
-    }
-    if (message.name !== "") {
-      obj.name = message.name;
-    }
-    if (message.session_id !== undefined) {
-      obj.session_id = message.session_id;
-    }
-    if (message.relative_path !== "") {
-      obj.relative_path = message.relative_path;
-    }
-    if (message.breadcrumb_names?.length) {
-      obj.breadcrumb_names = message.breadcrumb_names;
-    }
-    if (message.breadcrumb_node_ids?.length) {
-      obj.breadcrumb_node_ids = message.breadcrumb_node_ids;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewaySessionSearchMatchDTO>, I>>(base?: I): GatewaySessionSearchMatchDTO {
-    return GatewaySessionSearchMatchDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewaySessionSearchMatchDTO>, I>>(object: I): GatewaySessionSearchMatchDTO {
-    const message = createBaseGatewaySessionSearchMatchDTO();
-    message.workspace_id = object.workspace_id ?? "";
-    message.workspace_name = object.workspace_name ?? "";
-    message.node_id = object.node_id ?? "";
-    message.node_kind = object.node_kind ?? "";
-    message.name = object.name ?? "";
-    message.session_id = object.session_id ?? undefined;
-    message.relative_path = object.relative_path ?? "";
-    message.breadcrumb_names = object.breadcrumb_names?.map((e) => e) || [];
-    message.breadcrumb_node_ids = object.breadcrumb_node_ids?.map((e) => e) || [];
-    return message;
-  },
-};
-
-function createBaseGatewaySessionSearchResultsDTO(): GatewaySessionSearchResultsDTO {
-  return { items: [], workspaces: [], total: undefined };
-}
-
-export const GatewaySessionSearchResultsDTO: MessageFns<GatewaySessionSearchResultsDTO> = {
-  fromJSON(object: any): GatewaySessionSearchResultsDTO {
-    return {
-      items: globalThis.Array.isArray(object?.items)
-        ? object.items.map((e: any) => GatewaySessionSearchMatchDTO.fromJSON(e))
-        : [],
-      workspaces: globalThis.Array.isArray(object?.workspaces)
-        ? object.workspaces.map((e: any) => GatewaySessionSearchWorkspaceStatusDTO.fromJSON(e))
-        : [],
-      total: isSet(object.total) ? globalThis.Number(object.total) : undefined,
-    };
-  },
-
-  toJSON(message: GatewaySessionSearchResultsDTO): unknown {
-    const obj: any = {};
-    if (message.items?.length) {
-      obj.items = message.items.map((e) => GatewaySessionSearchMatchDTO.toJSON(e));
-    }
-    if (message.workspaces?.length) {
-      obj.workspaces = message.workspaces.map((e) => GatewaySessionSearchWorkspaceStatusDTO.toJSON(e));
-    }
-    if (message.total !== undefined) {
-      obj.total = Math.round(message.total);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewaySessionSearchResultsDTO>, I>>(base?: I): GatewaySessionSearchResultsDTO {
-    return GatewaySessionSearchResultsDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewaySessionSearchResultsDTO>, I>>(
-    object: I,
-  ): GatewaySessionSearchResultsDTO {
-    const message = createBaseGatewaySessionSearchResultsDTO();
-    message.items = object.items?.map((e) => GatewaySessionSearchMatchDTO.fromPartial(e)) || [];
-    message.workspaces = object.workspaces?.map((e) => GatewaySessionSearchWorkspaceStatusDTO.fromPartial(e)) || [];
-    message.total = object.total ?? undefined;
-    return message;
-  },
-};
-
 function createBaseGatewaySearchWorkspaceOwnerDTO(): GatewaySearchWorkspaceOwnerDTO {
   return { gateway_id: "", workspace_id: "" };
 }
@@ -4150,6 +4005,58 @@ export const GatewayWorkspaceDiscoveryHitDTO: MessageFns<GatewayWorkspaceDiscove
   },
 };
 
+function createBaseGatewayNavigationFolderDiscoveryHitDTO(): GatewayNavigationFolderDiscoveryHitDTO {
+  return { name: "", navigation_node_id: "", breadcrumb_node_ids: [], breadcrumb_names: [] };
+}
+
+export const GatewayNavigationFolderDiscoveryHitDTO: MessageFns<GatewayNavigationFolderDiscoveryHitDTO> = {
+  fromJSON(object: any): GatewayNavigationFolderDiscoveryHitDTO {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      navigation_node_id: isSet(object.navigation_node_id) ? globalThis.String(object.navigation_node_id) : "",
+      breadcrumb_node_ids: globalThis.Array.isArray(object?.breadcrumb_node_ids)
+        ? object.breadcrumb_node_ids.map((e: any) => globalThis.String(e))
+        : [],
+      breadcrumb_names: globalThis.Array.isArray(object?.breadcrumb_names)
+        ? object.breadcrumb_names.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewayNavigationFolderDiscoveryHitDTO): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.navigation_node_id !== "") {
+      obj.navigation_node_id = message.navigation_node_id;
+    }
+    if (message.breadcrumb_node_ids?.length) {
+      obj.breadcrumb_node_ids = message.breadcrumb_node_ids;
+    }
+    if (message.breadcrumb_names?.length) {
+      obj.breadcrumb_names = message.breadcrumb_names;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayNavigationFolderDiscoveryHitDTO>, I>>(
+    base?: I,
+  ): GatewayNavigationFolderDiscoveryHitDTO {
+    return GatewayNavigationFolderDiscoveryHitDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayNavigationFolderDiscoveryHitDTO>, I>>(
+    object: I,
+  ): GatewayNavigationFolderDiscoveryHitDTO {
+    const message = createBaseGatewayNavigationFolderDiscoveryHitDTO();
+    message.name = object.name ?? "";
+    message.navigation_node_id = object.navigation_node_id ?? "";
+    message.breadcrumb_node_ids = object.breadcrumb_node_ids?.map((e) => e) || [];
+    message.breadcrumb_names = object.breadcrumb_names?.map((e) => e) || [];
+    return message;
+  },
+};
+
 function createBaseGatewayWorkspaceDiscoveryResultsDTO(): GatewayWorkspaceDiscoveryResultsDTO {
   return {
     gateway_id: "",
@@ -4159,6 +4066,7 @@ function createBaseGatewayWorkspaceDiscoveryResultsDTO(): GatewayWorkspaceDiscov
     items: [],
     cursor: undefined,
     complete: false,
+    folders: [],
   };
 }
 
@@ -4174,6 +4082,9 @@ export const GatewayWorkspaceDiscoveryResultsDTO: MessageFns<GatewayWorkspaceDis
         : [],
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
       complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      folders: globalThis.Array.isArray(object?.folders)
+        ? object.folders.map((e: any) => GatewayNavigationFolderDiscoveryHitDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -4200,6 +4111,9 @@ export const GatewayWorkspaceDiscoveryResultsDTO: MessageFns<GatewayWorkspaceDis
     if (message.complete !== false) {
       obj.complete = message.complete;
     }
+    if (message.folders?.length) {
+      obj.folders = message.folders.map((e) => GatewayNavigationFolderDiscoveryHitDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -4219,6 +4133,7 @@ export const GatewayWorkspaceDiscoveryResultsDTO: MessageFns<GatewayWorkspaceDis
     message.items = object.items?.map((e) => GatewayWorkspaceDiscoveryHitDTO.fromPartial(e)) || [];
     message.cursor = object.cursor ?? undefined;
     message.complete = object.complete ?? false;
+    message.folders = object.folders?.map((e) => GatewayNavigationFolderDiscoveryHitDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -4411,54 +4326,6 @@ export const GatewaySearchScopeResolutionDTO: MessageFns<GatewaySearchScopeResol
       ? GatewaySearchScopeDTO.fromPartial(object.scope)
       : undefined;
     message.branches = object.branches?.map((e) => GatewaySearchScopeBranchDTO.fromPartial(e)) || [];
-    return message;
-  },
-};
-
-function createBaseGatewaySessionSearchWorkspaceStatusDTO(): GatewaySessionSearchWorkspaceStatusDTO {
-  return { workspace_id: "", workspace_name: "", status: "", error: undefined };
-}
-
-export const GatewaySessionSearchWorkspaceStatusDTO: MessageFns<GatewaySessionSearchWorkspaceStatusDTO> = {
-  fromJSON(object: any): GatewaySessionSearchWorkspaceStatusDTO {
-    return {
-      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
-      workspace_name: isSet(object.workspace_name) ? globalThis.String(object.workspace_name) : "",
-      status: isSet(object.status) ? globalThis.String(object.status) : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
-    };
-  },
-
-  toJSON(message: GatewaySessionSearchWorkspaceStatusDTO): unknown {
-    const obj: any = {};
-    if (message.workspace_id !== "") {
-      obj.workspace_id = message.workspace_id;
-    }
-    if (message.workspace_name !== "") {
-      obj.workspace_name = message.workspace_name;
-    }
-    if (message.status !== "") {
-      obj.status = message.status;
-    }
-    if (message.error !== undefined) {
-      obj.error = message.error;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewaySessionSearchWorkspaceStatusDTO>, I>>(
-    base?: I,
-  ): GatewaySessionSearchWorkspaceStatusDTO {
-    return GatewaySessionSearchWorkspaceStatusDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewaySessionSearchWorkspaceStatusDTO>, I>>(
-    object: I,
-  ): GatewaySessionSearchWorkspaceStatusDTO {
-    const message = createBaseGatewaySessionSearchWorkspaceStatusDTO();
-    message.workspace_id = object.workspace_id ?? "";
-    message.workspace_name = object.workspace_name ?? "";
-    message.status = object.status ?? "";
-    message.error = object.error ?? undefined;
     return message;
   },
 };

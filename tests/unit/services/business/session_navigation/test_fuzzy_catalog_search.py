@@ -5,6 +5,7 @@ import pytest
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_creation_service, get_session_path_resolver
 from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.catalog_query import encode_catalog_cursor
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.unit.services.business.session_service_test_support import (
@@ -63,7 +64,7 @@ async def test_fuzzy_directory_recall_precedes_paging_and_preserves_cursors(
     )
     with pytest.raises(ValueError, match="cursor 与当前列表不匹配"):
         await catalog.search(query="zr/am", limit=1, cursor=first.cursor)
-    legacy_cursor = catalog._encode_cursor(
+    legacy_cursor = encode_catalog_cursor(
         1, first.revision, first.catalog_revision, "search\nzr/ad"
     )
     with pytest.raises(ValueError, match="cursor 与当前列表不匹配"):

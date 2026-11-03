@@ -1967,88 +1967,6 @@ export declare type GatewayServiceStatusDTO = Message<"boxteam.gateway.v1.Gatewa
 export declare const GatewayServiceStatusDTOSchema: GenMessage<GatewayServiceStatusDTO>;
 
 /**
- * @generated from message boxteam.gateway.v1.GatewaySessionSearchMatchDTO
- */
-export declare type GatewaySessionSearchMatchDTO = Message<"boxteam.gateway.v1.GatewaySessionSearchMatchDTO"> & {
-  /**
-   * @generated from field: string workspace_id = 1;
-   */
-  workspaceId: string;
-
-  /**
-   * @generated from field: string workspace_name = 2;
-   */
-  workspaceName: string;
-
-  /**
-   * @generated from field: string node_id = 3;
-   */
-  nodeId: string;
-
-  /**
-   * @generated from field: string node_kind = 4;
-   */
-  nodeKind: string;
-
-  /**
-   * @generated from field: string name = 5;
-   */
-  name: string;
-
-  /**
-   * @generated from field: optional string session_id = 6;
-   */
-  sessionId?: string | undefined;
-
-  /**
-   * @generated from field: string relative_path = 7;
-   */
-  relativePath: string;
-
-  /**
-   * @generated from field: repeated string breadcrumb_names = 9;
-   */
-  breadcrumbNames: string[];
-
-  /**
-   * @generated from field: repeated string breadcrumb_node_ids = 10;
-   */
-  breadcrumbNodeIds: string[];
-};
-
-/**
- * Describes the message boxteam.gateway.v1.GatewaySessionSearchMatchDTO.
- * Use `create(GatewaySessionSearchMatchDTOSchema)` to create a new message.
- */
-export declare const GatewaySessionSearchMatchDTOSchema: GenMessage<GatewaySessionSearchMatchDTO>;
-
-/**
- * @generated from message boxteam.gateway.v1.GatewaySessionSearchResultsDTO
- */
-export declare type GatewaySessionSearchResultsDTO = Message<"boxteam.gateway.v1.GatewaySessionSearchResultsDTO"> & {
-  /**
-   * @generated from field: repeated boxteam.gateway.v1.GatewaySessionSearchMatchDTO items = 1;
-   */
-  items: GatewaySessionSearchMatchDTO[];
-
-  /**
-   * @generated from field: repeated boxteam.gateway.v1.GatewaySessionSearchWorkspaceStatusDTO workspaces = 2;
-   */
-  workspaces: GatewaySessionSearchWorkspaceStatusDTO[];
-
-  /**
-   * @generated from field: optional int64 total = 3;
-   */
-  total?: bigint | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v1.GatewaySessionSearchResultsDTO.
- * Use `create(GatewaySessionSearchResultsDTOSchema)` to create a new message.
- */
-export declare const GatewaySessionSearchResultsDTOSchema: GenMessage<GatewaySessionSearchResultsDTO>;
-
-/**
  * 只来自控制面登记与导航；不表示工作区在线或其领域正文已经查询。
  *
  * @generated from message boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO
@@ -2115,6 +2033,37 @@ export declare type GatewayWorkspaceDiscoveryHitDTO = Message<"boxteam.gateway.v
 export declare const GatewayWorkspaceDiscoveryHitDTOSchema: GenMessage<GatewayWorkspaceDiscoveryHitDTO>;
 
 /**
+ * @generated from message boxteam.gateway.v1.GatewayNavigationFolderDiscoveryHitDTO
+ */
+export declare type GatewayNavigationFolderDiscoveryHitDTO = Message<"boxteam.gateway.v1.GatewayNavigationFolderDiscoveryHitDTO"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string navigation_node_id = 2;
+   */
+  navigationNodeId: string;
+
+  /**
+   * @generated from field: repeated string breadcrumb_node_ids = 3;
+   */
+  breadcrumbNodeIds: string[];
+
+  /**
+   * @generated from field: repeated string breadcrumb_names = 4;
+   */
+  breadcrumbNames: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayNavigationFolderDiscoveryHitDTO.
+ * Use `create(GatewayNavigationFolderDiscoveryHitDTOSchema)` to create a new message.
+ */
+export declare const GatewayNavigationFolderDiscoveryHitDTOSchema: GenMessage<GatewayNavigationFolderDiscoveryHitDTO>;
+
+/**
  * @generated from message boxteam.gateway.v1.GatewayWorkspaceDiscoveryResultsDTO
  */
 export declare type GatewayWorkspaceDiscoveryResultsDTO = Message<"boxteam.gateway.v1.GatewayWorkspaceDiscoveryResultsDTO"> & {
@@ -2152,6 +2101,11 @@ export declare type GatewayWorkspaceDiscoveryResultsDTO = Message<"boxteam.gatew
    * @generated from field: bool complete = 7;
    */
   complete: boolean;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v1.GatewayNavigationFolderDiscoveryHitDTO folders = 8;
+   */
+  folders: GatewayNavigationFolderDiscoveryHitDTO[];
 };
 
 /**
@@ -2285,37 +2239,6 @@ export declare type GatewaySearchScopeResolutionDTO = Message<"boxteam.gateway.v
  * Use `create(GatewaySearchScopeResolutionDTOSchema)` to create a new message.
  */
 export declare const GatewaySearchScopeResolutionDTOSchema: GenMessage<GatewaySearchScopeResolutionDTO>;
-
-/**
- * @generated from message boxteam.gateway.v1.GatewaySessionSearchWorkspaceStatusDTO
- */
-export declare type GatewaySessionSearchWorkspaceStatusDTO = Message<"boxteam.gateway.v1.GatewaySessionSearchWorkspaceStatusDTO"> & {
-  /**
-   * @generated from field: string workspace_id = 1;
-   */
-  workspaceId: string;
-
-  /**
-   * @generated from field: string workspace_name = 2;
-   */
-  workspaceName: string;
-
-  /**
-   * @generated from field: string status = 3;
-   */
-  status: string;
-
-  /**
-   * @generated from field: optional string error = 4;
-   */
-  error?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v1.GatewaySessionSearchWorkspaceStatusDTO.
- * Use `create(GatewaySessionSearchWorkspaceStatusDTOSchema)` to create a new message.
- */
-export declare const GatewaySessionSearchWorkspaceStatusDTOSchema: GenMessage<GatewaySessionSearchWorkspaceStatusDTO>;
 
 /**
  * @generated from message boxteam.gateway.v1.GatewayThemeBackgroundDTO

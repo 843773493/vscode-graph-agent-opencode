@@ -19,6 +19,7 @@ message FederatedSearchQueryDTO {
   int32 limit = 6;
   // 显式多根保留各自选项；省略时只查所选工作区的默认根。
   repeated FederatedFileSearchTargetDTO file_targets = 7;
+  optional bool allow_catalog_mirror = 8;
 }
 
 message FederatedSearchBranchKeyDTO {
@@ -60,6 +61,13 @@ message FederatedSearchSummaryDTO {
   int32 returned_results = 4;
 }
 
+message FederatedSearchSourceDTO {
+  string kind = 1;
+  optional string updated_at = 2;
+  bool stale = 3;
+  optional string unavailable_reason = 4;
+}
+
 message FederatedSearchEventDTO {
   int32 sequence = 1;
   string request_id = 2;
@@ -68,4 +76,5 @@ message FederatedSearchEventDTO {
   FederatedSearchBranchDTO branch = 5;
   boxteam.workspace.v2.WorkspaceSearchResultDTO page = 6;
   FederatedSearchSummaryDTO summary = 7;
+  FederatedSearchSourceDTO source = 8;
 }

@@ -81,7 +81,10 @@ async def search(
         raise HTTPException(error.status_code, detail={"code": error.code, "message": str(error)}) from error
     except TimeoutError as error:
         raise HTTPException(409, detail={"code": "deadline", "message": str(error)}) from error
-    transport = SearchTransport(registry, _http_client(request), gateway_id=request.app.state.gateway_id, request_id=request_id)
+    transport = SearchTransport(
+        registry, _http_client(request), gateway_id=request.app.state.gateway_id, request_id=request_id,
+        catalog_mirror=getattr(request.app.state, "session_catalog_search_service", None),
+    )
 
     async def frames():
         events = search_events(jobs, scope, request_id=request_id, query=transport.query, budget=budget)

@@ -16,6 +16,7 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.catalog_query import encode_catalog_cursor
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.canonical_id_at import uuid7_hex_from_name
@@ -400,14 +401,16 @@ async def test_deep_search_builds_breadcrumbs_only_for_returned_page(
         parent_id = folder.node_id
     catalog = SessionCatalogService(session_service=session_service)
     breadcrumb_calls = 0
-    original = SessionCatalogService._breadcrumb_items
+    from app.services.business.session_navigation import catalog_query
+
+    original = catalog_query.catalog_breadcrumb
 
     def count_breadcrumbs(node, nodes_by_id, *, check):
         nonlocal breadcrumb_calls
         breadcrumb_calls += 1
         return original(node, nodes_by_id, check=check)
 
-    monkeypatch.setattr(catalog, "_breadcrumb_items", count_breadcrumbs)
+    monkeypatch.setattr(catalog_query, "catalog_breadcrumb", count_breadcrumbs)
 
     result = await catalog.search(query="needle", limit=2, cursor=None)
 
@@ -721,7 +724,7 @@ async def test_children_cursor_rejects_boolean_and_out_of_range_offsets(
     catalog = SessionCatalogService(session_service=session_service)
     first = await catalog.list_children(parent_node_id=None, limit=1, cursor=None)
 
-    boolean_cursor = catalog._encode_cursor(
+    boolean_cursor = encode_catalog_cursor(
         True, first.revision, first.catalog_revision, None
     )
     with pytest.raises(ValueError, match="cursor offset 无效"):
@@ -729,7 +732,7 @@ async def test_children_cursor_rejects_boolean_and_out_of_range_offsets(
             parent_node_id=None, limit=1, cursor=boolean_cursor
         )
 
-    out_of_range_cursor = catalog._encode_cursor(
+    out_of_range_cursor = encode_catalog_cursor(
         first.total, first.revision, first.catalog_revision, None
     )
     with pytest.raises(ValueError, match="offset 超出当前列表范围"):
@@ -746,7 +749,7 @@ async def test_search_cursor_offset_uses_filtered_match_count(tmp_path: Path) ->
     catalog = SessionCatalogService(session_service=session_service)
     first = await catalog.search(query="alpha", limit=1, cursor=None)
 
-    out_of_range_cursor = catalog._encode_cursor(
+    out_of_range_cursor = encode_catalog_cursor(
         first.total,
         first.revision,
         first.catalog_revision,

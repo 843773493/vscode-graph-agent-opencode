@@ -12,6 +12,7 @@ from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.registry.owners import workspace_owner
 from app.schemas.gateway.search import (
+    GatewayNavigationFolderDiscoveryHitDTO,
     GatewayWorkspaceDiscoveryHitDTO,
     GatewayWorkspaceDiscoveryResultsDTO,
 )
@@ -29,6 +30,7 @@ class _DiscoveryCursor(BaseModel):
     registry_revision: int
     navigation_revision: str
     offset: int = Field(ge=0)
+    include_folders: bool = False
 
 
 def discover_workspaces(
@@ -39,6 +41,7 @@ def discover_workspaces(
     query: str,
     limit: int,
     cursor: str | None,
+    include_folders: bool = False,
 ) -> GatewayWorkspaceDiscoveryResultsDTO:
     """按原导航顺序返回匹配工作区；空查询可有界浏览登记，不能读取领域正文。"""
     normalized = query.strip().casefold()
@@ -51,6 +54,7 @@ def discover_workspaces(
     state = _DiscoveryCursor(
         gateway_id=gateway_id, query=normalized, registry_revision=registry.registry_revision,
         navigation_revision=tree.revision, offset=0,
+        include_folders=include_folders,
     )
     if cursor is not None:
         try:
@@ -70,28 +74,33 @@ def discover_workspaces(
     frontier: list[tuple[WorkspaceNavigationNodeDTO, list[str], list[str]]] = [
         (node, [], []) for node in reversed(children.get(None, []))
     ]
-    matches: list[GatewayWorkspaceDiscoveryHitDTO] = []
+    matches: list[GatewayWorkspaceDiscoveryHitDTO | GatewayNavigationFolderDiscoveryHitDTO] = []
     skipped = 0
     while frontier:
         node, parent_ids, parent_names = frontier.pop()
         ids, names = [*parent_ids, node.node_id], [*parent_names, node.name]
         frontier.extend((child, ids, names) for child in reversed(children.get(node.node_id, [])))
-        if node.kind != "workspace_ref":
+        if node.kind != "workspace_ref" and not include_folders:
             continue
-        assert node.workspace_id is not None  # 导航 owner 保证 workspace_ref 携带目标 ID。
-        target = by_target[node.workspace_id]
-        owner = workspace_owner(target, registry, gateway_id)
-        if normalized and not any(is_subsequence(normalized, term.casefold()) for term in (
-            target.name, target.workspace_id, owner.workspace_id, "/".join(names),
-        )):
+        target = by_target[node.workspace_id] if node.workspace_id is not None else None
+        owner = workspace_owner(target, registry, gateway_id) if target is not None else None
+        terms = (node.name, node.node_id, "/".join(names))
+        if target is not None and owner is not None:
+            terms += (target.workspace_id, owner.workspace_id)
+        if normalized and not any(is_subsequence(normalized, term.casefold()) for term in terms):
             continue
         if skipped < state.offset:
             skipped += 1
             continue
-        matches.append(GatewayWorkspaceDiscoveryHitDTO(
-            owner=owner, target_id=target.workspace_id, name=target.name,
-            navigation_node_id=node.node_id, breadcrumb_node_ids=ids, breadcrumb_names=names,
-        ))
+        if target is not None and owner is not None:
+            matches.append(GatewayWorkspaceDiscoveryHitDTO(
+                owner=owner, target_id=target.workspace_id, name=target.name,
+                navigation_node_id=node.node_id, breadcrumb_node_ids=ids, breadcrumb_names=names,
+            ))
+        else:
+            matches.append(GatewayNavigationFolderDiscoveryHitDTO(
+                name=node.name, navigation_node_id=node.node_id, breadcrumb_node_ids=ids, breadcrumb_names=names,
+            ))
         # 多观察一个命中即可说明有下一页，不构造全部工作区候选或伪造精确总数。
         if len(matches) > limit:
             break
@@ -101,7 +110,9 @@ def discover_workspaces(
     next_offset = state.offset + len(page)
     complete = len(matches) <= limit
     return GatewayWorkspaceDiscoveryResultsDTO(
-        gateway_id=gateway_id, query=query, resolved_at=datetime.now(UTC), items=page, complete=complete,
+        gateway_id=gateway_id, query=query, resolved_at=datetime.now(UTC),
+        items=[hit for hit in page if isinstance(hit, GatewayWorkspaceDiscoveryHitDTO)],
+        folders=[hit for hit in page if isinstance(hit, GatewayNavigationFolderDiscoveryHitDTO)], complete=complete,
         cursor=None if complete else base64.urlsafe_b64encode(
             state.model_copy(update={"offset": next_offset}).model_dump_json().encode(),
         ).decode().rstrip("="),

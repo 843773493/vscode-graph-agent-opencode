@@ -176,9 +176,9 @@
 - [x] 16.7 提供冻结范围和 owner 独立 cursor 的类型化续查，保留原数据版本与来源；支持无进程内搜索状态的重启续查、单分支失效／重试，不伪造全域 revision／总数／快照。
 - [ ] 16.8 固定 Gateway 默认稳定类别／范围／owner 查询顺序及显式可比较相关性模式／版本；Quick Access 对已返回候选复用原上游 fuzzy scorer／MRU，不在后端重写上游评分，不为重排增加远端读取。保留正文分组及 Gateway／catalog 导航权威顺序，不混排不可比裸分数或宣称部分页为全域 top K。
 - [ ] 16.9 将可打开／引用命中的规范 URI 设为默认输出，复用统一寻址 owner 及稳定身份、位置／版本；验证同资源多位置、重命名／移动、route 重用、无 URI 的命令／进度，不把 URI 当所有索引记录主键。
-- [ ] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
+- [x] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
 - [ ] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。
-  - Session／Thread 名称、文件多根以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端；删除前端跨目标查询队列、文件直连 wrapper 及非标准 fileSearchPage。保留原根元数据读取、QueryBuilder 局部选项和 fuzzy 排名／高亮，普通搜索自动续原 cursor，Quick Access 明确单分支继续。旧 React 目录搜索／镜像、canonical 重叠根和其余缓存合同仍未完成，不据此勾选整项。
+  - Session／Thread 名称、文件多根以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端；删除前端跨目标查询队列、文件直连 wrapper 及非标准 fileSearchPage。保留原根元数据读取、QueryBuilder 局部选项和 fuzzy 排名／高亮，普通搜索自动续原 cursor，Quick Access 明确单分支继续。旧 React 目录搜索／镜像已迁齐；canonical 重叠根和其余缓存合同仍未完成，不据此勾选整项。
 - [ ] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
 - [ ] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
 - [ ] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
@@ -548,3 +548,15 @@
 - 真实Gateway＋正式Workbench＋Chromium：模型覆盖1项通过，A+B小配额中A旧磁盘命中被屏蔽，B同路径和A其它文件仍能取得，停止C零查询，未保存草稿不写盘；完整搜索／恢复及生命周期最终补跑2项通过（296.37秒）。覆盖分屏、SearchView／Search Editor转交、保存／备份恢复、迟到Pane、route复用拒绝旧owner且出站零分发、原owner新route恢复，以及取消、超时、全部失败、单分支重试、身份失效；页面错误为空。后两项共用一次正式构建，与模型覆盖使用相同main SHA256=`9bdad91dbae0444bcd9a39e96bf90ff03d4584801fae6409867a072be5eb8666`。
 - 页面端口统一复用本目录fixture，在各测试自己的端口块内选择并持续保留空闲绑定，保存探测收据；实跑已跳过被占用的44420，没有终止未知进程。原浏览器失败分别是端口准备冲突、旧直连路由断言及误读错误信封，均保留原件；迁移为稳定owner、404/detail.code及原request_id断言，并保留原结果／身份／期限要求，产品源码未因这些装具修复变化。
 - 准确命令、源码指纹、输出及退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/files-workbench-*`。模型覆盖原件为`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-ebf949b1bbb4/`；最终其它两项原件分别为`test_text_search/runs/run-d6cbe3a8b4f2/`、`test_query_lifecycle/runs/run-d6cbe3a8b4f2/`。未重复已经通过的模型覆盖，未运行Electron验收；16.11／16.17／16.19等完整任务保持未勾选，旧React目录／镜像、工具／脚本、统一输出字节及其余缓存合同继续推进。
+
+
+### 2026-11-03：目录在线与离线镜像统一联邦（16.10）
+
+- 原 catalog owner 统一提供匹配、排序、breadcrumb 与原 cursor，在线 Provider 和 Gateway 镜像共用，不复制领域页。联邦查询显式允许离线目录镜像，默认只查询在线 owner；目标不可达时才读同一稳定 owner 的现有镜像，page 事件披露来源、更新时间、stale 和原失败原因。权限／版本拒绝、期限及路由失效不借镜像掩盖，查询不触发同步或启动。owner-v3 缓存保存两种原 catalog 版本并隔离临时 route 复用，保留原后台同步、配置与健康证明。
+- 旧 React 目录搜索复用唯一联邦流并增量显示，工作区和导航文件夹沿原控制面 discovery 的有界分页；达到配额明确受限。命中点击按稳定 owner 重新解析路由后交原动作。已物理移除旧 Gateway 聚合 API、三份公开 DTO、客户端、全目标 gather 及独立镜像匹配／投影；原工作区领域入口继续复用原 catalog owner。
+- 140项 owner／目录／调度／实际 ASGI／公开结构检查、68项生命周期／配置／鉴权检查、45项既有客户端检查和新增2项目录投影检查通过。空查询准入顺序保留后补跑23项目录检查通过；计数有重叠，不相加为独立测试总数。3000条残留缓存回收规模保持，移除装具准备中无关的6000次注册表写入，不把此变化称为产品性能收益。
+- 两个真实 Backend＋Gateway 验收通过（51.39秒）：目录和 Session 经产品创建／移动入口生成；在线联邦页等于原 owner 页，B停止后沿原cursor取得下一页且披露镜像，禁止镜像时明确失败，Gateway重启后仍保持原页和时间，A继续在线。原件：`out/tests/integration/gateway/test_session_catalog_search/runs/run-ad69031adcec/nodes/node-f4aa71827e4a/artifacts/catalog-federation-network.json`。
+- 正式 Gateway＋Workbench＋Chromium 验收通过（161.86秒），保留目录搜索、未打开Session未读标记、精确归属、真实视图恢复、浏览器隔离和页面零错误；搜索请求核唯一联邦入口，scope中的route与稳定workspace分别校验。原件：`out/tests/integration/clients/web/test_browser_view_sessions/runs/run-bb348770384e/nodes/node-a68d18cdcbd3/artifacts/browser-view-sessions-result.json`。同批正式构建退出0，40.72秒，79扩展，main SHA256=`87c17bcc47e550daf2466cc1793c26ea1bc0e2a2192df0ebf2af40af2495d38a`。浏览器期间仅补回后端空查询前置校验，后续23项及最终Pyright覆盖；前端产物未变。
+- 真实类型检查含18份实际转换源码通过，620份当前前端产品源码与收据一致；核心Pyright零诊断，24份Python文件Ruff通过，lifespan两条既存BLE001与HEAD逐项一致；Python／TS AST及目录结构审查无新增findings，既有大组件和大测试目录风险未扩修。生成一致性、OpenAPI导出和Buf lint通过。基于真实提交`f3045c2c5`的breaking仅报告已授权下线的三份GatewaySessionSearch DTO删除，保留失败原件，没有为通过恢复兼容类型。
+- 首轮实网装具重复登记默认工作区造成启动拒绝，沿原默认登记修正；首轮浏览器产品交互已完成，但Python仍把稳定workspace当route，现分别校验两种身份后通过。新增客户端装具补齐真实节点state，未放宽归属、顺序、期限或结果断言。初轮长批外部超时、主动终止的排查批及所有失败原件保留，不作为全批通过。准确命令、源码指纹、日志及退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/catalog-*`。
+- 16.11、16.12、16.17、16.19及剩余Provider／工具／Electron等完整任务仍未完成；本边界只勾选16.10，不把Web实证推广为其它运行面验收。

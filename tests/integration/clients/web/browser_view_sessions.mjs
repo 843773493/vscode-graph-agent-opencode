@@ -305,27 +305,36 @@ try {
     await pageB.getByRole("button", { name: "搜索会话", exact: true }).click();
     const searchReady = pageB.waitForResponse(response => {
       const url = new URL(response.url());
-      return response.request().method() === "GET" && url.pathname === "/api/gateway/session-catalog/search"
-        && url.searchParams.get("query") === unopenedSessionId;
+      return response.request().method() === "POST" && url.pathname === "/api/gateway/search"
+        && response.request().postDataJSON().queries.some(query => query.category === "catalog" && query.query === unopenedSessionId);
     });
     await pageB.getByRole("searchbox", { name: "查找会话", exact: true }).fill(unopenedSessionId);
     const searchResponse = await searchReady;
     assert.equal(searchResponse.status(), 200, await searchResponse.text());
-    const searchPayload = await searchResponse.json();
+    const searchEvents = (await searchResponse.text()).split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
+    const searchPayload = searchEvents.at(-1);
     assert.ok(searchPayload.request_id);
     assert.equal(searchResponse.headers()["x-request-id"], searchPayload.request_id);
-    assert.equal(searchPayload.data.items.length, 1, "精确 Session ID 必须只返回所属会话");
-    const found = searchPayload.data.items[0];
-    assert.equal(found.workspace_id, workspaceId);
+    assert.ok(searchEvents.every(event => event.request_id === searchPayload.request_id));
+    const catalogPages = searchEvents.filter(event => event.type === "page" && event.page.category === "catalog");
+    const foundItems = catalogPages.flatMap(event => event.page.catalog.items.map(item => ({
+      ...item.node, workspace_id: event.branch.branch.owner.workspace_id,
+    })));
+    assert.equal(foundItems.length, 1, "精确 Session ID 必须只返回所属会话");
+    const found = foundItems[0];
+    assert.equal(found.workspace_id, owner.workspace_id);
     assert.equal(found.session_id, unopenedSessionId);
-    assert.equal(found.node_kind, "session");
+    assert.equal(found.kind, "session");
     const searchResult = pageB.getByRole("region", { name: "跨工作区搜索结果", exact: true })
       .getByRole("button").filter({ has: pageB.locator("strong", { hasText: found.name }) });
     await expect(searchResult).toHaveCount(1);
     await expect(searchResult.getByRole("status", { name: "会话有未读结果", exact: true })).toBeVisible();
     await expect(threadB.getByTestId("composer-input")).toBeVisible();
     await expect(pageB.locator(`section.boxteam-thread[data-session-id="${unopenedSessionId}"]`)).toHaveCount(0);
-    unreadReadProof.search = { requestId: searchPayload.request_id, workspaceId: found.workspace_id,
+    const searchedOwner = searchEvents.find(event => event.type === "scope").scope.branches
+      .find(branch => branch.owner.workspace_id === found.workspace_id);
+    assert.equal(searchedOwner.target_id, workspaceId);
+    unreadReadProof.search = { requestId: searchPayload.request_id, workspaceId: found.workspace_id, targetId: searchedOwner.target_id,
       sessionId: found.session_id, unreadBeforeEditorOpened: true };
     const responseReady = pageB.waitForResponse(response => matchesRead(new URL(response.url()))
       && response.request().method() === "GET" && response.request().headers()["x-boxteam-workspace-id"] === workspaceId);

@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic, time
 from typing import Literal
 
@@ -27,6 +27,7 @@ from app.schemas.search_federation import (
     FederatedSearchEventDTO,
     FederatedSearchQueryDTO,
     FederatedSearchRequest,
+    FederatedSearchSourceDTO,
     FederatedSearchSummaryDTO,
 )
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
@@ -45,9 +46,16 @@ class SearchJob:
     scope_branch: GatewaySearchScopeBranchDTO
     request: WorkspaceSearchRequest
     max_bytes: int
+    allow_catalog_mirror: bool = False
 
 
-SearchPageQuery = Callable[[SearchJob], Awaitable[WorkspaceSearchResultDTO]]
+@dataclass(frozen=True)
+class SearchPage:
+    result: WorkspaceSearchResultDTO
+    source: FederatedSearchSourceDTO = field(default_factory=FederatedSearchSourceDTO)
+
+
+SearchPageQuery = Callable[[SearchJob], Awaitable[SearchPage]]
 
 
 def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolutionDTO) -> list[SearchJob]:
@@ -75,8 +83,9 @@ def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolu
     per_branch, remainder = divmod(request.max_results, len(entries))
     return [SearchJob(
         key=key, scope_branch=owners[key.owner], max_bytes=MAX_SEARCH_PAGE_BYTES // len(entries),
+        allow_catalog_mirror=query.allow_catalog_mirror,
         request=WorkspaceSearchRequest(
-            workspace_id=key.owner.workspace_id, **query.model_dump(exclude={"limit", "file_targets"}), file=target,
+            workspace_id=key.owner.workspace_id, **query.model_dump(exclude={"limit", "file_targets", "allow_catalog_mirror"}), file=target,
             limit=min(query.limit, per_branch + int(index < remainder)), cursor=selected.get(key),
             deadline_at=request.deadline_at,
         ),
@@ -91,7 +100,7 @@ async def search_events(
     sequence = 1
     yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="scope", scope=scope)
     # 期限从 HTTP 准入前确定；即使消费者迟迟不取下一事件，也不能重新给 owner 十五秒。
-    pending: dict[asyncio.Task[WorkspaceSearchResultDTO], int] = {}
+    pending: dict[asyncio.Task[SearchPage], int] = {}
     statuses: dict[int, FederatedSearchBranchDTO] = {}
     next_index = 0
 
@@ -105,10 +114,11 @@ async def search_events(
             retryable=retryable, provider_id=provider_id, cursor=cursor, returned_results=returned_results,
         )
 
-    async def execute(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def execute(job: SearchJob) -> SearchPage:
         budget.check()
         return await query(SearchJob(
             key=job.key, scope_branch=job.scope_branch, max_bytes=job.max_bytes,
+            allow_catalog_mirror=job.allow_catalog_mirror,
             request=job.request.model_copy(update={"deadline_at": time() + budget.remaining()}),
         ))
 
@@ -148,7 +158,8 @@ async def search_events(
                 job = jobs[index]
                 page: WorkspaceSearchResultDTO | None = None
                 try:
-                    page = task.result()
+                    reply = task.result()
+                    page = reply.result
                     budget.check()
                     if (page.workspace_id, page.category, page.operation, page.contract_version) != (
                         job.key.owner.workspace_id, job.key.category, job.key.operation, job.request.contract_version,
@@ -175,7 +186,7 @@ async def search_events(
                                              code=page.limited_reason, cursor=page.cursor,
                                              returned_results=count)
                     sequence += 1
-                    yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="page", branch=statuses[index], page=page)
+                    yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="page", branch=statuses[index], page=page, source=reply.source)
                 sequence += 1
                 yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="branch", branch=statuses[index])
         sequence += 1

@@ -1,3 +1,4 @@
+import { resolveCatalogSearchTarget } from "../../api/gateway/catalogSearch";
 import { useState, type ReactNode } from "react";
 import { useSessionResourceExplorer } from "../../hooks/session/useSessionResourceExplorer";
 import type {
@@ -863,14 +864,16 @@ export default function SessionResourceExplorer({
                 onStatusChange(`已定位工作区文件夹 ${item.relative_path}`);
                 return;
               }
-              if (item.node_kind === "workspace") {
-                void onActivateWorkspace(item.workspace_id)
-                  .catch((error) => handleError("打开搜索到的工作区失败", error));
-                return;
-              }
-              void explorer.revealSearchResult(item.workspace_id, item.breadcrumb_node_ids, item.node_kind)
-                .then(() => item.session_id ? onSelectSession(item.workspace_id, item.session_id) : undefined)
-                .catch((error) => handleError("定位搜索结果失败", error));
+              if (!item.owner) throw new Error("目录结果缺少稳定 owner");
+              const nodeKind = item.node_kind;
+              void resolveCatalogSearchTarget(apiPort, item.owner).then(async (route) => {
+                if (nodeKind === "workspace") {
+                  await onActivateWorkspace(route);
+                } else {
+                  await explorer.revealSearchResult(route, item.breadcrumb_node_ids, nodeKind);
+                  if (item.session_id) await onSelectSession(route, item.session_id);
+                }
+              }).catch((error) => handleError("定位搜索结果失败", error));
             }}
           >
             <strong>{item.name}</strong>
@@ -887,10 +890,11 @@ export default function SessionResourceExplorer({
             ) : null}
           </button>
         ))}
-        {explorer.searchResults.workspaces.some((workspace) => workspace.status !== "available") ? (
+        {explorer.searchResults.limited ? <div className="session-resource-state">搜索达到结果上限，请缩小查询范围。</div> : null}
+        {explorer.searchResults.workspaces.some((workspace) => workspace.status === "stale" || workspace.status === "unavailable") ? (
           <details className="session-resource-offline-summary">
             <summary>部分工作区结果来自缓存或不可用</summary>
-            {explorer.searchResults.workspaces.filter((workspace) => workspace.status !== "available").map((workspace) => <div key={workspace.workspace_id}>{workspace.workspace_name}（{workspace.status === "stale" ? "缓存结果" : "不可搜索"}）: {workspace.error}</div>)}
+            {explorer.searchResults.workspaces.filter((workspace) => workspace.status === "stale" || workspace.status === "unavailable").map((workspace) => <div key={workspace.workspace_id}>{workspace.workspace_name}（{workspace.status === "stale" ? "缓存结果" : "不可搜索"}）: {workspace.error}{workspace.source?.updated_at ? `；目录镜像更新于 ${workspace.source.updated_at}` : ""}</div>)}
           </details>
         ) : null}
       </section>

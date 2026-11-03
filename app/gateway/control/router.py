@@ -10,7 +10,6 @@ from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
-from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.generator_import import import_session_generators
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
@@ -24,7 +23,6 @@ from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
 from app.schemas.gateway.search import GatewayWorkspaceDiscoveryResultsDTO
 from app.schemas.gateway_control import (
     GatewayResourceListDTO,
-    GatewaySessionSearchResultsDTO,
     WorkspaceFolderCreateRequest,
     WorkspaceNavigationBreadcrumbDTO,
     WorkspaceNavigationNodeUpdateRequest,
@@ -35,13 +33,6 @@ from app.schemas.gateway_control import (
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter(prefix="/api/gateway", tags=["gateway-control"])
-
-
-def _catalog_search(request: Request) -> GatewaySessionCatalogSearchService:
-    value = getattr(request.app.state, "session_catalog_search_service", None)
-    if not isinstance(value, GatewaySessionCatalogSearchService):
-        raise RuntimeError("Gateway 跨工作区会话搜索服务尚未初始化")
-    return value
 
 
 def _resource_catalog(request: Request) -> GatewayResourceCatalogService:
@@ -164,30 +155,6 @@ async def get_gateway_diagnostics(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get(
-    "/session-catalog/search",
-    response_model=APIResponse[GatewaySessionSearchResultsDTO],
-)
-async def search_all_workspace_sessions(
-    query: str,
-    limit_per_workspace: int = 50,
-    _: str = Depends(verify_gateway_token),
-    request_id: str = Depends(get_request_id),
-    service: GatewaySessionCatalogSearchService = Depends(_catalog_search),
-):
-    if not 1 <= limit_per_workspace <= 200:
-        raise HTTPException(status_code=400, detail="limit_per_workspace 必须在 1..200")
-    try:
-        result = await service.search(
-            query,
-            limit_per_workspace=limit_per_workspace,
-            request_id=request_id,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
 @router.get("/search/workspaces", response_model=APIResponse[GatewayWorkspaceDiscoveryResultsDTO])
 async def discover_gateway_workspaces(
     request: Request,
@@ -198,11 +165,12 @@ async def discover_gateway_workspaces(
     query: Annotated[str, Query(max_length=512)] = "",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[str | None, Query(max_length=8192)] = None,
+    include_folders: bool = False,
 ):
     try:
         result = discover_workspaces(
             registry, store, gateway_id=request.app.state.gateway_id,
-            query=query, limit=limit, cursor=cursor,
+            query=query, limit=limit, cursor=cursor, include_folders=include_folders,
         )
     except (ValueError, LookupError) as error:
         raise HTTPException(409, detail={"owner": "workspace_discovery", "message": str(error)}) from error

@@ -106,7 +106,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "GatewayConfigPendingHealthProofRequest", "GatewayConfigPendingDiscardRequest",
         "FederationProtocolManifestDTO", "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO",
         "GatewayWorkspaceListDTO", "GatewayRuntimeStateResultDTO", "GatewayRuntimeRestartResultDTO",
-        "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
+        "GatewayResourceListDTO",
         "GatewayWorkspaceDiscoveryResultsDTO",
         "GatewaySearchScopeRequest", "GatewaySearchScopeResolutionDTO",
         "AddLocalWorkspaceRequest", "UpdateGatewayWorkspaceRequest", "ReorderGatewayWorkspacesRequest",

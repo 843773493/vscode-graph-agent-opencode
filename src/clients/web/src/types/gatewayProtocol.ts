@@ -234,11 +234,6 @@ export type WebUIWorkspaceFileTreeSettingsDTO = OptionalFields<GatewayProtocol.W
 export type GatewayResourceDTO = OptionalFields<GatewayProtocol.GatewayResourceDTO>;
 export type GatewayResourceListDTO = OptionalFields<GatewayProtocol.GatewayResourceListDTO>;
 export type GatewayResourceScopeErrorDTO = OptionalFields<GatewayProtocol.GatewayResourceScopeErrorDTO>;
-export type GatewaySessionSearchMatchDTO = Omit<OptionalFields<GatewayProtocol.GatewaySessionSearchMatchDTO>, "node_kind"> & {
-  node_kind: "workspace_folder" | "workspace" | "folder" | "session";
-};
-export type GatewaySessionSearchResultsDTO = OptionalFields<GatewayProtocol.GatewaySessionSearchResultsDTO>;
-export type GatewaySessionSearchWorkspaceStatusDTO = OptionalFields<GatewayProtocol.GatewaySessionSearchWorkspaceStatusDTO>;
 export type WorkspaceNavigationNodeDTO = Omit<OptionalFields<GatewayProtocol.WorkspaceNavigationNodeDTO>, "kind" | "parent_node_id" | "workspace_id"> & {
   kind: "workspace_folder" | "workspace_ref";
   parent_node_id?: string | null;

@@ -14,7 +14,6 @@ from pydantic.json_schema import JsonSchemaValue
 from app.protocol import openapi
 from app.protocol.schema import descriptor_pool_from_set
 from app.schemas.gateway.federation import FederationWorkspaceDTO
-from app.schemas.gateway_control import GatewaySessionSearchWorkspaceStatusDTO
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 
@@ -22,7 +21,6 @@ from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
     ("/api/gateway/federation/workspaces", "FederationWorkspaceListDTO"),
     ("/api/gateway/inbound-access", "GatewayInboundAccessListDTO"),
     ("/api/gateway/resources", "GatewayResourceListDTO"),
-    ("/api/gateway/session-catalog/search", "GatewaySessionSearchResultsDTO"),
     ("/api/gateway/search/workspaces", "GatewayWorkspaceDiscoveryResultsDTO"),
 ])
 def test_catalog_schema_follows_actual_response_roots(gateway_openapi: JsonSchemaValue, path: str, model: str) -> None:
@@ -36,7 +34,7 @@ def test_catalog_schema_follows_actual_response_roots(gateway_openapi: JsonSchem
 
 
 @pytest.mark.parametrize("name", [
-    "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO", "GatewayResourceListDTO", "GatewaySessionSearchResultsDTO",
+    "FederationWorkspaceListDTO", "GatewayInboundAccessListDTO", "GatewayResourceListDTO",
     "GatewayWorkspaceDiscoveryResultsDTO",
 ])
 def test_catalog_schema_requires_exported_roots(gateway_openapi: JsonSchemaValue, name: str) -> None:
@@ -56,9 +54,6 @@ def test_catalog_schema_requires_exported_roots(gateway_openapi: JsonSchemaValue
     ("GatewayResourceDTO", "workspace_id", {"type": "integer"}),
     ("GatewayResourceDTO", "resource", {"type": "array"}),
     ("GatewayResourceScopeErrorDTO", "message", {"type": "integer"}),
-    ("GatewaySessionSearchResultsDTO", "total", {"type": "string"}),
-    ("GatewaySessionSearchMatchDTO", "breadcrumb_node_ids", {"type": "object"}),
-    ("GatewaySessionSearchWorkspaceStatusDTO", "error", {"type": "integer"}),
     ("GatewayWorkspaceDiscoveryResultsDTO", "complete", {"type": "string"}),
     ("GatewaySearchWorkspaceOwnerDTO", "workspace_id", {"type": "integer"}),
 ])
@@ -74,7 +69,6 @@ def test_catalog_schema_rejects_nested_shape_drift(
     "FederationWorkspaceListDTO", "FederationWorkspaceDTO",
     "GatewayInboundAccessListDTO", "GatewayInboundPeerDTO", "GatewayInboundWorkspaceDTO",
     "GatewayResourceListDTO", "GatewayResourceDTO", "GatewayResourceScopeErrorDTO",
-    "GatewaySessionSearchResultsDTO", "GatewaySessionSearchMatchDTO", "GatewaySessionSearchWorkspaceStatusDTO",
     "GatewayWorkspaceDiscoveryResultsDTO", "GatewayWorkspaceDiscoveryHitDTO", "GatewaySearchWorkspaceOwnerDTO",
 ])
 def test_catalog_schema_uses_candidate_descriptor_for_all_members(
@@ -121,7 +115,3 @@ def test_catalog_structure_checks_preserve_business_constraints(gateway_openapi:
     ):
         with pytest.raises(ValidationError):
             FederationWorkspaceDTO.model_validate(invalid)
-    with pytest.raises(ValidationError):
-        GatewaySessionSearchWorkspaceStatusDTO.model_validate({
-            "workspace_id": "route", "workspace_name": "工作区", "status": "ready",
-        })

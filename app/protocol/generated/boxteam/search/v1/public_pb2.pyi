@@ -17,7 +17,7 @@ class FederatedFileSearchTargetDTO(_message.Message):
     def __init__(self, owner: _Optional[_Union[_public_pb2.GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., target: _Optional[_Union[_public_pb2_1.WorkspaceFileSearchTargetDTO, _Mapping]] = ...) -> None: ...
 
 class FederatedSearchQueryDTO(_message.Message):
-    __slots__ = ("category", "operation", "contract_version", "query", "match_mode", "limit", "file_targets")
+    __slots__ = ("category", "operation", "contract_version", "query", "match_mode", "limit", "file_targets", "allow_catalog_mirror")
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -25,6 +25,7 @@ class FederatedSearchQueryDTO(_message.Message):
     MATCH_MODE_FIELD_NUMBER: _ClassVar[int]
     LIMIT_FIELD_NUMBER: _ClassVar[int]
     FILE_TARGETS_FIELD_NUMBER: _ClassVar[int]
+    ALLOW_CATALOG_MIRROR_FIELD_NUMBER: _ClassVar[int]
     category: str
     operation: str
     contract_version: int
@@ -32,7 +33,8 @@ class FederatedSearchQueryDTO(_message.Message):
     match_mode: str
     limit: int
     file_targets: _containers.RepeatedCompositeFieldContainer[FederatedFileSearchTargetDTO]
-    def __init__(self, category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., file_targets: _Optional[_Iterable[_Union[FederatedFileSearchTargetDTO, _Mapping]]] = ...) -> None: ...
+    allow_catalog_mirror: bool
+    def __init__(self, category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., file_targets: _Optional[_Iterable[_Union[FederatedFileSearchTargetDTO, _Mapping]]] = ..., allow_catalog_mirror: _Optional[bool] = ...) -> None: ...
 
 class FederatedSearchBranchKeyDTO(_message.Message):
     __slots__ = ("owner", "category", "operation", "resource_uri")
@@ -102,8 +104,20 @@ class FederatedSearchSummaryDTO(_message.Message):
     returned_results: int
     def __init__(self, state: _Optional[str] = ..., order: _Optional[str] = ..., branches: _Optional[_Iterable[_Union[FederatedSearchBranchDTO, _Mapping]]] = ..., returned_results: _Optional[int] = ...) -> None: ...
 
+class FederatedSearchSourceDTO(_message.Message):
+    __slots__ = ("kind", "updated_at", "stale", "unavailable_reason")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
+    STALE_FIELD_NUMBER: _ClassVar[int]
+    UNAVAILABLE_REASON_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    updated_at: str
+    stale: bool
+    unavailable_reason: str
+    def __init__(self, kind: _Optional[str] = ..., updated_at: _Optional[str] = ..., stale: _Optional[bool] = ..., unavailable_reason: _Optional[str] = ...) -> None: ...
+
 class FederatedSearchEventDTO(_message.Message):
-    __slots__ = ("sequence", "request_id", "type", "scope", "branch", "page", "summary")
+    __slots__ = ("sequence", "request_id", "type", "scope", "branch", "page", "summary", "source")
     SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -111,6 +125,7 @@ class FederatedSearchEventDTO(_message.Message):
     BRANCH_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
     sequence: int
     request_id: str
     type: str
@@ -118,4 +133,5 @@ class FederatedSearchEventDTO(_message.Message):
     branch: FederatedSearchBranchDTO
     page: _public_pb2_1.WorkspaceSearchResultDTO
     summary: FederatedSearchSummaryDTO
-    def __init__(self, sequence: _Optional[int] = ..., request_id: _Optional[str] = ..., type: _Optional[str] = ..., scope: _Optional[_Union[_public_pb2.GatewaySearchScopeResolutionDTO, _Mapping]] = ..., branch: _Optional[_Union[FederatedSearchBranchDTO, _Mapping]] = ..., page: _Optional[_Union[_public_pb2_1.WorkspaceSearchResultDTO, _Mapping]] = ..., summary: _Optional[_Union[FederatedSearchSummaryDTO, _Mapping]] = ...) -> None: ...
+    source: FederatedSearchSourceDTO
+    def __init__(self, sequence: _Optional[int] = ..., request_id: _Optional[str] = ..., type: _Optional[str] = ..., scope: _Optional[_Union[_public_pb2.GatewaySearchScopeResolutionDTO, _Mapping]] = ..., branch: _Optional[_Union[FederatedSearchBranchDTO, _Mapping]] = ..., page: _Optional[_Union[_public_pb2_1.WorkspaceSearchResultDTO, _Mapping]] = ..., summary: _Optional[_Union[FederatedSearchSummaryDTO, _Mapping]] = ..., source: _Optional[_Union[FederatedSearchSourceDTO, _Mapping]] = ...) -> None: ...

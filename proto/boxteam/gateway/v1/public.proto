@@ -459,27 +459,6 @@ message GatewayServiceStatusDTO {
   optional string error = 7;
 }
 
-message GatewaySessionSearchMatchDTO {
-  reserved 8;
-  reserved "storage_relative_path";
-
-  string workspace_id = 1;
-  string workspace_name = 2;
-  string node_id = 3;
-  string node_kind = 4;
-  string name = 5;
-  optional string session_id = 6;
-  string relative_path = 7;
-  repeated string breadcrumb_names = 9;
-  repeated string breadcrumb_node_ids = 10;
-}
-
-message GatewaySessionSearchResultsDTO {
-  repeated GatewaySessionSearchMatchDTO items = 1;
-  repeated GatewaySessionSearchWorkspaceStatusDTO workspaces = 2;
-  optional int64 total = 3;
-}
-
 // 只来自控制面登记与导航；不表示工作区在线或其领域正文已经查询。
 message GatewaySearchWorkspaceOwnerDTO {
   string gateway_id = 1;
@@ -496,6 +475,13 @@ message GatewayWorkspaceDiscoveryHitDTO {
   repeated string breadcrumb_names = 6;
 }
 
+message GatewayNavigationFolderDiscoveryHitDTO {
+  string name = 1;
+  string navigation_node_id = 2;
+  repeated string breadcrumb_node_ids = 3;
+  repeated string breadcrumb_names = 4;
+}
+
 message GatewayWorkspaceDiscoveryResultsDTO {
   string gateway_id = 1;
   string query = 2;
@@ -504,6 +490,7 @@ message GatewayWorkspaceDiscoveryResultsDTO {
   repeated GatewayWorkspaceDiscoveryHitDTO items = 5;
   optional string cursor = 6;
   bool complete = 7;
+  repeated GatewayNavigationFolderDiscoveryHitDTO folders = 8;
 }
 
 // 只冻结实际范围，不保存路由别名、凭据或全域 cursor；续查仍由各 owner 核验原页。
@@ -533,13 +520,6 @@ message GatewaySearchScopeBranchDTO {
 message GatewaySearchScopeResolutionDTO {
   GatewaySearchScopeDTO scope = 1;
   repeated GatewaySearchScopeBranchDTO branches = 2;
-}
-
-message GatewaySessionSearchWorkspaceStatusDTO {
-  string workspace_id = 1;
-  string workspace_name = 2;
-  string status = 3;
-  optional string error = 4;
 }
 
 message GatewayThemeBackgroundDTO {

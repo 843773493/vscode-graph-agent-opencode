@@ -4,37 +4,33 @@ import asyncio
 import hashlib
 import logging
 import zlib
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cached_property
-from heapq import nsmallest
 from pathlib import Path
 
 import httpx
 
 from app.core.failures import failure_detail
-from app.core.fuzzy import is_subsequence
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
-from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.credentials import FederationCredentialStore
-from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry.owners import workspace_owner
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
-from app.schemas.gateway_control import (
-    GatewaySessionSearchMatchDTO,
-    GatewaySessionSearchResultsDTO,
-    GatewaySessionSearchWorkspaceStatusDTO,
-    WorkspaceNavigationNodeDTO,
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
+from app.schemas.internal_v2.session_navigation import (
+    SessionCatalogExportDTO,
+    SessionCatalogNodeDTO,
+    SessionCatalogSearchResultsDTO,
 )
-from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
+from app.services.business.session_navigation.catalog_query import search_catalog
+from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 from app.services.mapping.session_catalog_search import (
     CatalogSearchTerms,
     catalog_search_terms,
-    iter_catalog_matches,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +42,8 @@ _SYNC_LOCK_SHARDS = 64
 
 @dataclass(frozen=True)
 class _CatalogSnapshot:
+    owner: GatewaySearchWorkspaceOwnerDTO
+    catalog_revision: int
     revision: str
     updated_at: datetime
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
@@ -62,7 +60,7 @@ class GatewaySessionCatalogSearchService:
         registry: GatewayWorkspaceRegistry,
         http_client: httpx.AsyncClient,
         cache_dir: Path,
-        navigation_store: WorkspaceNavigationStore,
+        gateway_id: str,
         refresh_interval_seconds: float = 30,
         max_concurrency: int = 8,
         request_timeout_seconds: float = 30,
@@ -70,12 +68,11 @@ class GatewaySessionCatalogSearchService:
         self._registry = registry
         self._http_client = http_client
         self._cache_dir = cache_dir
-        self._navigation_store = navigation_store
+        self._gateway_id = gateway_id
         self._refresh_interval_seconds = refresh_interval_seconds
         self._max_concurrency = max_concurrency
         self._request_timeout_seconds = request_timeout_seconds
-        self._snapshots: dict[str, _CatalogSnapshot] = {}
-        self._fresh_workspace_ids: set[str] = set()
+        self._snapshots: dict[GatewaySearchWorkspaceOwnerDTO, _CatalogSnapshot] = {}
         self._workspace_errors: dict[str, str] = {}
         self._sync_locks: tuple[asyncio.Lock, ...] = tuple(
             asyncio.Lock() for _ in range(_SYNC_LOCK_SHARDS)
@@ -148,9 +145,10 @@ class GatewaySessionCatalogSearchService:
         if self._task is not None:
             raise RuntimeError("Gateway 会话目录索引同步器已经启动")
         for target in self._registry.targets():
-            snapshot = self._load_snapshot(target.workspace_id)
+            owner = workspace_owner(target, self._registry, self._gateway_id)
+            snapshot = self._load_snapshot(owner)
             if snapshot is not None:
-                self._snapshots[target.workspace_id] = snapshot
+                self._snapshots[owner] = snapshot
         self._stop_event.clear()
         self._wake_event.clear()
         self._task = asyncio.create_task(
@@ -171,112 +169,21 @@ class GatewaySessionCatalogSearchService:
             pass
         self._task = None
 
-    async def search(
-        self,
-        query: str,
-        *,
-        limit_per_workspace: int,
-        request_id: str,
-    ) -> GatewaySessionSearchResultsDTO:
-        normalized = query.strip().casefold()
-        if not normalized:
-            raise ValueError("跨工作区会话搜索词不能为空")
-        results = await asyncio.gather(
-            *(
-                self._search_workspace(
-                    target,
-                    normalized,
-                    limit=limit_per_workspace,
-                    request_id=request_id,
-                )
-                for target in self._registry.targets()
-            )
+    def search_mirror(
+        self, owner: GatewaySearchWorkspaceOwnerDTO, *, query: str, limit: int,
+        cursor: str | None, deadline_at: float | None,
+    ) -> tuple[SessionCatalogSearchResultsDTO, datetime]:
+        """只读已同步的同一 owner 镜像，不触发同步、连接或启动。"""
+        snapshot = self._snapshots.get(owner)
+        if snapshot is None:
+            raise LookupError(f"工作区没有可用目录镜像: {owner.gateway_id}/{owner.workspace_id}")
+        page = search_catalog(
+            nodes=list(snapshot.nodes_by_id.values()), nodes_by_id=snapshot.nodes_by_id,
+            folded_search_terms=snapshot.folded_search_terms,
+            revision=snapshot.revision, catalog_revision=snapshot.catalog_revision,
+            query=query, limit=limit, cursor=cursor, budget=NameSearchBudget.create(deadline_at),
         )
-        items = [item for matches, _status in results for item in matches]
-        items.extend(
-            self._search_workspace_folders(
-                normalized,
-                limit=limit_per_workspace,
-            )
-        )
-        items.sort(
-            key=lambda item: (
-                item.workspace_name.casefold(),
-                item.relative_path.casefold(),
-            )
-        )
-        return GatewaySessionSearchResultsDTO(
-            items=items,
-            workspaces=[status for _matches, status in results],
-            total=len(items),
-        )
-
-    def _search_workspace_folders(
-        self,
-        query: str,
-        *,
-        limit: int,
-    ) -> list[GatewaySessionSearchMatchDTO]:
-        tree = self._navigation_store.list_tree(self._registry.targets())
-        nodes_by_id = {node.node_id: node for node in tree.nodes}
-
-        def iter_matching_folders() -> Iterator[
-            tuple[
-                tuple[str, str],
-                WorkspaceNavigationNodeDTO,
-                str,
-                list[WorkspaceNavigationNodeDTO],
-            ]
-        ]:
-            for node in tree.nodes:
-                if node.kind != "workspace_folder" or not any(
-                    is_subsequence(query, term.casefold())
-                    for term in (node.name, node.node_id)
-                ):
-                    continue
-                breadcrumb = []
-                current = node
-                visited: set[str] = set()
-                while current is not None:
-                    if current.node_id in visited:
-                        raise RuntimeError(
-                            f"Gateway 工作区目录包含循环: {current.node_id}"
-                        )
-                    visited.add(current.node_id)
-                    breadcrumb.append(current)
-                    current = (
-                        nodes_by_id.get(current.parent_node_id)
-                        if current.parent_node_id is not None
-                        else None
-                    )
-                breadcrumb.reverse()
-                relative_path = "/".join(item.name for item in breadcrumb)
-                yield (
-                    (relative_path.casefold(), node.node_id),
-                    node,
-                    relative_path,
-                    breadcrumb,
-                )
-
-        candidates = iter_matching_folders()
-        selected_folders = (
-            sorted(candidates, key=lambda candidate: candidate[0])[:limit]
-            if limit < 0
-            else nsmallest(limit, candidates, key=lambda candidate: candidate[0])
-        )
-        return [
-            GatewaySessionSearchMatchDTO(
-                workspace_id="gateway-navigation",
-                workspace_name="工作区目录",
-                node_id=node.node_id,
-                node_kind="workspace_folder",
-                name=node.name,
-                relative_path=relative_path,
-                breadcrumb_names=[item.name for item in breadcrumb],
-                breadcrumb_node_ids=[item.node_id for item in breadcrumb],
-            )
-            for _sort_key, node, relative_path, breadcrumb in selected_folders
-        ]
+        return page, snapshot.updated_at
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -305,16 +212,15 @@ class GatewaySessionCatalogSearchService:
         # 若只增不减，长驻进程内存会随历史工作区无界增长（快照含全部会话节点）。
         # 每轮同步以权威 registry 存活集为界回收，用集合差而非再扫一遍 targets。
         live_workspace_ids = {target.workspace_id for target in targets}
-        for workspace_id in set(self._snapshots) - live_workspace_ids:
-            self._snapshots.pop(workspace_id, None)
-        self._fresh_workspace_ids &= live_workspace_ids
+        live_owners = {workspace_owner(target, self._registry, self._gateway_id) for target in targets}
+        for owner in self._snapshots.keys() - live_owners:
+            self._snapshots.pop(owner)
         for workspace_id in set(self._workspace_errors) - live_workspace_ids:
             self._workspace_errors.pop(workspace_id, None)
         for target in targets:
             if target.connection_kind != "remote_gateway" and not target.backend_url.strip():
                 message = f"工作区后端尚未连接: {target.workspace_id}"
                 self._workspace_errors[target.workspace_id] = message
-                self._fresh_workspace_ids.discard(target.workspace_id)
                 logger.info(
                     "跳过尚未连接工作区的会话目录同步: workspace_id=%s",
                     target.workspace_id,
@@ -336,67 +242,6 @@ class GatewaySessionCatalogSearchService:
                     label=(f"会话目录同步失败: workspace_id={target.workspace_id}, request_id={request_id}"
                            + (f", status={result.response.status_code}" if isinstance(result, httpx.HTTPStatusError) else "")),
                 )
-                self._fresh_workspace_ids.discard(target.workspace_id)
-
-    async def _search_workspace(
-        self,
-        target: WorkspaceTarget,
-        query: str,
-        *,
-        limit: int,
-        request_id: str,
-    ) -> tuple[
-        list[GatewaySessionSearchMatchDTO],
-        GatewaySessionSearchWorkspaceStatusDTO,
-    ]:
-        snapshot = self._snapshots.get(target.workspace_id)
-        if snapshot is None:
-            try:
-                snapshot = await self._sync_workspace(
-                    target,
-                    request_id=request_id,
-                )
-            except (httpx.HTTPError, LookupError, ValueError, RuntimeError) as error:
-                message = failure_detail(
-                    error, stage="session_catalog_sync",
-                    label=(f"会话目录同步失败: workspace_id={target.workspace_id}, request_id={request_id}"
-                           + (f", status={error.response.status_code}" if isinstance(error, httpx.HTTPStatusError) else "")),
-                )
-                self._workspace_errors[target.workspace_id] = message
-                return [], GatewaySessionSearchWorkspaceStatusDTO(
-                    workspace_id=target.workspace_id,
-                    workspace_name=target.name,
-                    status="unavailable",
-                    error=message,
-                )
-        matches = self._search_snapshot(target, snapshot, query, limit=limit)
-        if is_subsequence(query, target.name.casefold()):
-            matches.insert(
-                0,
-                GatewaySessionSearchMatchDTO(
-                    workspace_id=target.workspace_id,
-                    workspace_name=target.name,
-                    node_id=f"workspace:{target.workspace_id}",
-                    node_kind="workspace",
-                    name=target.name,
-                    relative_path=target.name,
-                ),
-            )
-        if target.workspace_id in self._fresh_workspace_ids:
-            status = "available"
-            error_message = None
-        else:
-            status = "stale"
-            error_message = self._workspace_errors.get(
-                target.workspace_id,
-                f"使用 {snapshot.updated_at.isoformat()} 的本地持久化索引",
-            )
-        return matches, GatewaySessionSearchWorkspaceStatusDTO(
-            workspace_id=target.workspace_id,
-            workspace_name=target.name,
-            status=status,
-            error=error_message,
-        )
 
     async def _sync_workspace(
         self,
@@ -406,6 +251,7 @@ class GatewaySessionCatalogSearchService:
     ) -> _CatalogSnapshot:
         lock = self._sync_lock_for(target.workspace_id)
         async with lock:
+            owner = workspace_owner(target, self._registry, self._gateway_id)
             url, headers = self._target_request(target, request_id=request_id)
             response = await self._http_client.get(
                 url,
@@ -413,29 +259,19 @@ class GatewaySessionCatalogSearchService:
                 timeout=self._request_timeout_seconds,
             )
             response.raise_for_status()
-            body = response.json()
-            data = body.get("data") if isinstance(body, dict) else None
-            raw_items = data.get("items") if isinstance(data, dict) else None
-            revision = data.get("revision") if isinstance(data, dict) else None
-            if not isinstance(raw_items, list) or not isinstance(revision, str):
-                raise RuntimeError(
-                    "工作区目录导出响应缺少 data.revision/items: "
-                    f"workspace_id={target.workspace_id}"
-                )
-            nodes = [SessionCatalogNodeDTO.model_validate(item) for item in raw_items]
-            nodes_by_id = {node.node_id: node for node in nodes}
-            if len(nodes_by_id) != len(nodes):
-                raise RuntimeError(
-                    f"工作区目录导出包含重复 node_id: {target.workspace_id}"
-                )
+            exported = SessionCatalogExportDTO.model_validate(response.json()["data"])
+            nodes_by_id = {node.node_id: node for node in exported.items}
+            if len(nodes_by_id) != len(exported.items):
+                raise RuntimeError(f"工作区目录导出包含重复 node_id: {target.workspace_id}")
+            if (not self._registry.has_target(target.workspace_id)
+                or workspace_owner(self._registry.resolve(target.workspace_id), self._registry, self._gateway_id) != owner):
+                raise RuntimeError(f"会话目录同步期间登记归属已改变: {target.workspace_id}")
             snapshot = _CatalogSnapshot(
-                revision=revision,
-                updated_at=datetime.now(UTC),
-                nodes_by_id=nodes_by_id,
+                owner=owner, catalog_revision=exported.catalog_revision, revision=exported.revision,
+                updated_at=datetime.now(UTC), nodes_by_id=nodes_by_id,
             )
-            self._save_snapshot(target.workspace_id, snapshot)
-            self._snapshots[target.workspace_id] = snapshot
-            self._fresh_workspace_ids.add(target.workspace_id)
+            self._save_snapshot(snapshot)
+            self._snapshots[owner] = snapshot
             self._workspace_errors.pop(target.workspace_id, None)
             return snapshot
 
@@ -446,120 +282,44 @@ class GatewaySessionCatalogSearchService:
         shard = zlib.crc32(workspace_id.encode("utf-8")) % len(self._sync_locks)
         return self._sync_locks[shard]
 
-    @staticmethod
-    def _search_snapshot(
-        target: WorkspaceTarget,
-        snapshot: _CatalogSnapshot,
-        query: str,
-        *,
-        limit: int,
-    ) -> list[GatewaySessionSearchMatchDTO]:
-        candidates = iter_catalog_matches(
-            snapshot.nodes_by_id.values(), snapshot.folded_search_terms, query,
-        )
-        # 路由只接受 1..200；保留内部负 limit 原有的切片语义。
-        selected_nodes = (
-            sorted(candidates, key=lambda match: match[0])[:limit]
-            if limit < 0
-            else nsmallest(limit, candidates, key=lambda match: match[0])
-        )
-        return [
-            GatewaySessionCatalogSearchService._map_match(
-                target,
-                node,
-                snapshot.nodes_by_id,
-            )
-            for _key, node in selected_nodes
-        ]
-
-    @staticmethod
-    def _map_match(
-        target: WorkspaceTarget,
-        node: SessionCatalogNodeDTO,
-        nodes_by_id: dict[str, SessionCatalogNodeDTO],
-    ) -> GatewaySessionSearchMatchDTO:
-        breadcrumb: list[SessionCatalogNodeDTO] = []
-        current: SessionCatalogNodeDTO | None = node
-        visited: set[str] = set()
-        while current is not None:
-            if current.node_id in visited:
-                raise RuntimeError(
-                    f"工作区会话目录包含循环关系: {target.workspace_id}/{current.node_id}"
-                )
-            visited.add(current.node_id)
-            breadcrumb.append(current)
-            if current.parent_node_id is None:
-                current = None
-                continue
-            parent = nodes_by_id.get(current.parent_node_id)
-            if parent is None:
-                raise RuntimeError(
-                    "工作区会话目录父节点不存在: "
-                    f"workspace_id={target.workspace_id}, "
-                    f"node_id={current.node_id}, parent_id={current.parent_node_id}"
-                )
-            current = parent
-        breadcrumb.reverse()
-        names = [item.name for item in breadcrumb]
-        node_ids = [item.node_id for item in breadcrumb]
-        return GatewaySessionSearchMatchDTO(
-            workspace_id=target.workspace_id,
-            workspace_name=target.name,
-            node_id=node.node_id,
-            node_kind=node.kind,
-            name=node.name,
-            session_id=node.session_id,
-            relative_path="/".join(names),
-            breadcrumb_names=names,
-            breadcrumb_node_ids=node_ids,
-        )
-
-    def _load_snapshot(self, workspace_id: str) -> _CatalogSnapshot | None:
-        path = self._cache_path(workspace_id)
+    def _load_snapshot(self, owner: GatewaySearchWorkspaceOwnerDTO) -> _CatalogSnapshot | None:
+        path = self._cache_path(owner)
         if not path.exists():
             return None
         payload = read_json_object(path, default={})
-        if payload.get("schema_version") != 2:
-            raise RuntimeError(f"Gateway 会话目录缓存版本不兼容，请移除派生缓存后重建: workspace_id={workspace_id}")
-        if payload.get("workspace_id") != workspace_id:
-            raise RuntimeError(f"Gateway 会话目录索引 workspace_id 不匹配: workspace_id={workspace_id}")
-        revision = payload.get("revision")
-        updated_at = payload.get("updated_at")
-        raw_items = payload.get("items")
-        if (
-            not isinstance(revision, str)
-            or not isinstance(updated_at, str)
-            or not isinstance(raw_items, list)
-        ):
-            raise RuntimeError(f"Gateway 会话目录索引格式无效: workspace_id={workspace_id}")
-        nodes = [SessionCatalogNodeDTO.model_validate(item) for item in raw_items]
-        nodes_by_id = {node.node_id: node for node in nodes}
-        if len(nodes_by_id) != len(nodes):
-            raise RuntimeError(f"Gateway 会话目录索引包含重复 node_id: workspace_id={workspace_id}")
+        if payload.get("schema_version") != 3:
+            raise RuntimeError(f"Gateway 会话目录缓存版本不兼容: owner={owner}")
+        if GatewaySearchWorkspaceOwnerDTO.model_validate(payload["owner"]) != owner:
+            raise RuntimeError(f"Gateway 会话目录缓存归属不匹配: owner={owner}")
+        exported = SessionCatalogExportDTO.model_validate({
+            key: payload[key] for key in ("revision", "catalog_revision", "items")
+        })
+        nodes_by_id = {node.node_id: node for node in exported.items}
+        if len(nodes_by_id) != len(exported.items):
+            raise RuntimeError(f"Gateway 会话目录索引包含重复 node_id: owner={owner}")
+        raw_updated_at = payload.get("updated_at")
+        if not isinstance(raw_updated_at, str):
+            raise TypeError("Gateway 会话目录缓存缺少更新时间")
+        updated_at = datetime.fromisoformat(raw_updated_at)
+        if updated_at.tzinfo is None:
+            raise ValueError("Gateway 会话目录缓存时间必须包含时区")
         return _CatalogSnapshot(
-            revision=revision,
-            updated_at=datetime.fromisoformat(updated_at),
-            nodes_by_id=nodes_by_id,
+            owner=owner, catalog_revision=exported.catalog_revision, revision=exported.revision,
+            updated_at=updated_at, nodes_by_id=nodes_by_id,
         )
 
-    def _save_snapshot(self, workspace_id: str, snapshot: _CatalogSnapshot) -> None:
-        atomic_write_json(
-            self._cache_path(workspace_id),
-            {
-                "schema_version": 2,
-                "workspace_id": workspace_id,
-                "revision": snapshot.revision,
-                "updated_at": snapshot.updated_at.isoformat(),
-                "items": [
-                    node.model_dump(mode="json")
-                    for node in snapshot.nodes_by_id.values()
-                ],
-            },
-        )
+    def _save_snapshot(self, snapshot: _CatalogSnapshot) -> None:
+        atomic_write_json(self._cache_path(snapshot.owner), {
+            "schema_version": 3, "owner": snapshot.owner.model_dump(),
+            "catalog_revision": snapshot.catalog_revision, "revision": snapshot.revision,
+            "updated_at": snapshot.updated_at.isoformat(),
+            "items": [node.model_dump(mode="json") for node in snapshot.nodes_by_id.values()],
+        })
 
-    def _cache_path(self, workspace_id: str) -> Path:
-        digest = hashlib.sha256(workspace_id.encode("utf-8")).hexdigest()
-        return self._cache_dir / f"{digest}.json"
+    def _cache_path(self, owner: GatewaySearchWorkspaceOwnerDTO) -> Path:
+        digest = hashlib.sha256(f"{owner.gateway_id}\n{owner.workspace_id}".encode()).hexdigest()
+        # 旧 route-keyed v2 为可丢弃派生数据；新格式单独归目录，不双读或迁移业务数据。
+        return self._cache_dir / "owner-v3" / f"{digest}.json"
 
     def _target_request(
         self,
@@ -579,12 +339,12 @@ class GatewaySessionCatalogSearchService:
                 storage_path=get_gateway_root() / "credentials" / "federation.json"
             ).get(target.remote_gateway_connection_id)
             return (
-                f"{self._registry.remote_gateway_url(target.remote_gateway_connection_id)}"
-                "/api/v1/session-catalog/export",
+                (f"{self._registry.remote_gateway_url(target.remote_gateway_connection_id)}"
+                 "/api/v1/session-catalog/export"),
                 {
                     "X-BoxTeam-Workspace-Id": target.remote_workspace_id,
                     "X-BoxTeam-Federation-Token": credential.token,
-                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+                    "X-BoxTeam-Gateway-Id": self._gateway_id,
                     "X-Request-ID": request_id,
                 },
             )
@@ -599,7 +359,7 @@ class GatewaySessionCatalogSearchService:
             {
                 "X-Local-Token": LOCAL_TOKEN,
                 "X-BoxTeam-Workspace-Id": target.backend_workspace_id,
-                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+                "X-BoxTeam-Gateway-Id": self._gateway_id,
                 "X-Request-ID": request_id,
             },
         )

@@ -78,6 +78,8 @@ class SessionCatalogSearchResultsDTO(BaseModel):
 
 
 class SessionCatalogExportDTO(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
     catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)

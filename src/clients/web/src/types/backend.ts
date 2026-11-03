@@ -258,9 +258,6 @@ import type {
   GatewayResourceDTO,
   GatewayResourceListDTO,
   GatewayResourceScopeErrorDTO,
-  GatewaySessionSearchMatchDTO,
-  GatewaySessionSearchResultsDTO,
-  GatewaySessionSearchWorkspaceStatusDTO,
   WorkspaceNavigationNodeDTO,
   WorkspaceFolderCreateRequest as GeneratedWorkspaceFolderCreateRequest,
   WorkspaceNavigationNodeUpdateRequest as GeneratedWorkspaceNavigationNodeUpdateRequest,
@@ -682,19 +679,6 @@ export type SessionCatalogSearchResults = Omit<CatalogJsonFields<SessionCatalogS
 
 export type SessionCatalogExport = Omit<SessionCatalogExportDTO, "items"> & {
   items: SessionCatalogNode[];
-};
-
-export type GatewaySessionSearchMatch = DeepRequired<GatewaySessionSearchMatchDTO>;
-
-export type GatewaySessionSearchWorkspaceStatus =
-  DeepRequired<GatewaySessionSearchWorkspaceStatusDTO>;
-
-export type GatewaySessionSearchResults = Omit<
-  DeepRequired<GatewaySessionSearchResultsDTO>,
-  "items" | "workspaces"
-> & {
-  items: GatewaySessionSearchMatch[];
-  workspaces: GatewaySessionSearchWorkspaceStatus[];
 };
 
 export type SshConnectionOption = SshConnectionOptionDTO;

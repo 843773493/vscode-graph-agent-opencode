@@ -9,7 +9,6 @@ import {
   listGatewayUiAssets,
   listGatewayWorkspaces,
   removeGatewayWorkspace,
-  searchGatewaySessionCatalog,
   uploadGatewayUiAsset,
 } from "../../gatewayApi";
 import { createSessionConnection } from "../gateway/sessionConnections";
@@ -71,7 +70,6 @@ describe("Gateway API 超时常量收敛", () => {
   test("三处读取接口的超时都等于 DEFAULT_API_REQUEST_TIMEOUT_MS", async () => {
     const cases: Array<[string, () => Promise<unknown>]> = [
       ["diagnostics", () => getGatewayDiagnostics(49_970)],
-      ["session-catalog search", () => searchGatewaySessionCatalog(49_971, "q")],
     ];
     for (const [label, run] of cases) {
       stubFailingFetch();

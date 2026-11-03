@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -11,13 +12,21 @@ import pytest
 from fastapi import FastAPI
 
 from app.core.trace_middleware import TraceMiddleware
+from app.gateway.control.catalog_search import (
+    GatewaySessionCatalogSearchService,
+    _CatalogSnapshot,
+)
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry.owners import workspace_owner
 from app.gateway.routes.search import router
 from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
-from app.schemas.internal_v2.session_navigation import SessionCatalogSearchResultsDTO
+from app.schemas.internal_v2.session_navigation import (
+    SessionCatalogNodeDTO,
+    SessionCatalogSearchResultsDTO,
+)
 from app.schemas.search_federation import FederatedSearchEventDTO
 
 GATEWAY = "gateway_search_transport"
@@ -46,6 +55,7 @@ class SearchHTTP:
     requests: list[httpx.Request] = field(default_factory=list)
     mode: str = "normal"
     paused: PausedBody = field(default_factory=PausedBody)
+    mirror: GatewaySessionCatalogSearchService | None = None
 
     async def receive(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -56,6 +66,8 @@ class SearchHTTP:
             return httpx.Response(200, headers=headers, stream=self.paused)
         if self.mode == "error":
             return httpx.Response(409, headers=headers, json={"detail": {"code": "owner_rejected", "message": "cursor 已过期"}})
+        if self.mode == "offline":
+            raise httpx.ConnectError("目标断开", request=request)
         if self.mode == "wrong-id":
             headers["X-Request-ID"] = "another-request"
         if self.mode == "large":
@@ -99,6 +111,10 @@ async def search_http(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
         fixture = SearchHTTP(client, registry)
         async with httpx.AsyncClient(transport=httpx.MockTransport(fixture.receive)) as upstream:
             application.state.http_client = upstream
+            fixture.mirror = GatewaySessionCatalogSearchService(
+                registry=registry, http_client=upstream, cache_dir=tmp_path / "mirrors", gateway_id=GATEWAY,
+            )
+            application.state.session_catalog_search_service = fixture.mirror
             try:
                 yield fixture
             finally:
@@ -187,3 +203,52 @@ async def test_zero_quota_and_missing_auth_do_not_read_owner(search_http: Search
     search_http.client.headers.pop("X-Local-Token")
     assert (await search_http.search()).status_code == 401
     assert not search_http.requests
+
+
+@pytest.fixture
+def mirrored_owner(search_http: SearchHTTP) -> _CatalogSnapshot:
+    assert search_http.mirror is not None
+    owner = workspace_owner(search_http.registry.resolve("route_0"), search_http.registry, GATEWAY)
+    nodes = [SessionCatalogNodeDTO(node_id=f"folder-{index}", kind="folder", name=f"needle {index}", node_revision=1)
+             for index in range(3)]
+    snapshot = _CatalogSnapshot(owner=owner, revision="mirror-v1", catalog_revision=7,
+                                updated_at=datetime.now(UTC), nodes_by_id={node.node_id: node for node in nodes})
+    search_http.mirror._snapshots[owner] = snapshot
+    return snapshot
+
+
+async def test_mirror_is_opt_in_and_online_always_uses_owner(search_http: SearchHTTP, mirrored_owner: _CatalogSnapshot) -> None:
+    search_http.mode = "offline"
+    failed = events(await search_http.search(OWNERS[:1]))
+    assert failed[-1].summary.branches[0].code == "target_unavailable"
+    assert not any(event.type == "page" for event in failed)
+    query = {"category": "catalog", "query": "needle", "limit": 1, "allow_catalog_mirror": True}
+    offline = events(await search_http.search(OWNERS[:1], queries=[query]))
+    page, = [event for event in offline if event.type == "page"]
+    assert page.source.kind == "gateway_catalog_mirror" and page.source.stale
+    assert page.source.updated_at == mirrored_owner.updated_at and "目标断开" in page.source.unavailable_reason
+    assert page.page.catalog.catalog_revision == 7
+    cursor = page.page.catalog.cursor
+    resumed = events(await search_http.search(scope={"mode": "resume", "scope": offline[0].scope.scope.model_dump(mode="json")},
+        queries=[query], continuations=[{"branch": page.branch.branch.model_dump(mode="json"), "cursor": cursor}]))
+    next_page, = [event for event in resumed if event.type == "page"]
+    assert next_page.page.catalog.items[0].node.node_id == "folder-1"
+    search_http.mode = "normal"
+    online = events(await search_http.search(OWNERS[:1], queries=[query]))
+    live, = [event for event in online if event.type == "page"]
+    assert live.source.kind == "owner" and not live.source.stale
+    assert live.page.catalog.revision == "r1"
+
+
+async def test_mirror_never_masks_owner_rejection_or_route_reuse(search_http: SearchHTTP, mirrored_owner: _CatalogSnapshot) -> None:
+    query = {"category": "catalog", "query": "needle", "allow_catalog_mirror": True}
+    search_http.mode = "error"
+    rejected = events(await search_http.search(OWNERS[:1], queries=[query]))
+    assert rejected[-1].summary.branches[0].code == "owner_rejected"
+    assert not any(event.type == "page" for event in rejected)
+    search_http.mode = "offline"
+    old = search_http.registry.resolve("route_0")
+    from dataclasses import replace
+    search_http.registry.upsert(replace(old, backend_workspace_id="00000000-0000-4000-8000-000000000099"))
+    response = await search_http.search(OWNERS[:1], queries=[query])
+    assert response.status_code == 404 and response.json()["detail"]["code"] == "owner_unavailable"

@@ -107,28 +107,3 @@ class GatewayResourceDTO(BaseModel):
 class GatewayResourceListDTO(BaseModel):
     items: list[GatewayResourceDTO] = Field(default_factory=list)
     errors: list[GatewayResourceScopeErrorDTO] = Field(default_factory=list)
-
-
-class GatewaySessionSearchMatchDTO(BaseModel):
-    workspace_id: str
-    workspace_name: str
-    node_id: str
-    node_kind: Literal["workspace_folder", "workspace", "folder", "session"]
-    name: str
-    session_id: str | None = None
-    relative_path: str
-    breadcrumb_names: list[str] = Field(default_factory=list)
-    breadcrumb_node_ids: list[str] = Field(default_factory=list)
-
-
-class GatewaySessionSearchWorkspaceStatusDTO(BaseModel):
-    workspace_id: str
-    workspace_name: str
-    status: Literal["available", "stale", "unavailable"]
-    error: str | None = None
-
-
-class GatewaySessionSearchResultsDTO(BaseModel):
-    items: list[GatewaySessionSearchMatchDTO] = Field(default_factory=list)
-    workspaces: list[GatewaySessionSearchWorkspaceStatusDTO] = Field(default_factory=list)
-    total: int = 0

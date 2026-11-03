@@ -11,6 +11,7 @@ from app.core.resource_uri import thread_resource_uri
 from app.gateway.search.scheduler import (
     SearchBranchError,
     SearchJob,
+    SearchPage,
     plan_search,
     search_events,
 )
@@ -58,8 +59,8 @@ async def test_file_page_counts_domain_units_and_rejects_wrong_root(scope: Gatew
                      "file_targets": [{"owner": scope.scope.owners[0], "target": {"uri": root}}]}]})
     jobs = plan_search(request, scope)
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
-        return WorkspaceSearchResultDTO(
+    async def query(job: SearchJob) -> SearchPage:
+        return SearchPage(WorkspaceSearchResultDTO(
             provider_id="files", workspace_id=job.key.owner.workspace_id, category="file", operation=operation,
             contract_version=1, state="limited", limited_reason="result_limit", files=ResourceNavigationResultDTO.model_validate({
                 "node": {"uri": root, "resource_shape": "directory", "operations": ["search"]},
@@ -68,15 +69,15 @@ async def test_file_page_counts_domain_units_and_rejects_wrong_root(scope: Gatew
                 "contexts": [{"uri": root + "/a.txt", "line": 2, "text": "context"}], "truncated": True, "next_cursor": "original-root-cursor",
                 "truncation_reason": "entry_limit",
             }),
-        )
+        ))
 
     events = [event async for event in search_events(jobs, scope, request_id="files", query=query, budget=NameSearchBudget.create(None))]
     branch, = events[-1].summary.branches
     assert branch.returned_results == 1 and branch.cursor == "original-root-cursor"
 
-    async def wrong_root(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def wrong_root(job: SearchJob) -> SearchPage:
         result = await query(job)
-        result.files = result.files.model_copy(update={"node": result.files.node.model_copy(update={"uri": root + "/wrong"})})
+        result.result.files = result.result.files.model_copy(update={"node": result.result.files.node.model_copy(update={"uri": root + "/wrong"})})
         return result
 
     invalid = [event async for event in search_events(jobs, scope, request_id="wrong-root", query=wrong_root, budget=NameSearchBudget.create(None))]
@@ -101,13 +102,13 @@ def request_body(scope: GatewaySearchScopeResolutionDTO) -> FederatedSearchReque
     })
 
 
-def page(job: SearchJob, *, cursor: str | None = None) -> WorkspaceSearchResultDTO:
-    return WorkspaceSearchResultDTO(
+def page(job: SearchJob, *, cursor: str | None = None) -> SearchPage:
+    return SearchPage(WorkspaceSearchResultDTO(
         provider_id="catalog", workspace_id=job.key.owner.workspace_id,
         category=job.key.category, operation=job.key.operation, contract_version=1,
         state="limited" if cursor else "complete", limited_reason="result_limit" if cursor else None,
         catalog=SessionCatalogSearchResultsDTO(revision="r1", catalog_revision=1, cursor=cursor),
-    )
+    ))
 
 
 async def test_fast_page_precedes_slow_branch_and_terminal_is_unique(
@@ -116,7 +117,7 @@ async def test_fast_page_precedes_slow_branch_and_terminal_is_unique(
     release = asyncio.Event()
     entered: list[str] = []
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(job: SearchJob) -> SearchPage:
         entered.append(job.key.owner.workspace_id)
         if job.key.owner.workspace_id == "ws-0":
             await release.wait()
@@ -154,7 +155,7 @@ async def test_deadline_includes_queue_and_waits_for_cancelled_owner_cleanup(
     entered: list[str] = []
     cleaned: list[str] = []
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(job: SearchJob) -> SearchPage:
         entered.append(job.key.owner.workspace_id)
         try:
             await asyncio.Event().wait()
@@ -180,7 +181,7 @@ async def test_closing_stream_cancels_inflight_and_does_not_dispatch_queue(
     settled = asyncio.Event()
     entered = []
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(job: SearchJob) -> SearchPage:
         entered.append(job.key.owner.workspace_id)
         if job.key.owner.workspace_id == "ws-0":
             return page(job)
@@ -207,7 +208,7 @@ async def test_allocation_precedes_dispatch_and_zero_never_calls_owner(
     assert [job.request.limit for job in jobs] == expected
     seen = []
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(job: SearchJob) -> SearchPage:
         seen.append(job.request.limit)
         return page(job)
 
@@ -246,7 +247,7 @@ async def test_owner_ignoring_deadline_cancellation_cannot_publish_late_page(
     job = plan_search(request_body, scope)[0]
     job = replace(job, request=job.request.model_copy(update={"cursor": "original-cursor"}))
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(job: SearchJob) -> SearchPage:
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -264,12 +265,12 @@ async def test_invalid_page_never_publishes_or_advances_cursor(
 ) -> None:
     job = plan_search(request_body, scope)[0]
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(job: SearchJob) -> SearchPage:
         result = page(job, cursor="must-not-advance")
         if corruption == "owner":
-            result.workspace_id = "another-workspace"
+            result.result.workspace_id = "another-workspace"
         else:
-            result.catalog.items = [SessionCatalogSearchResultDTO.model_validate({
+            result.result.catalog.items = [SessionCatalogSearchResultDTO.model_validate({
                 "node": {"node_id": str(index), "kind": "folder", "name": "needle", "node_revision": 1},
                 "relative_path": "needle",
             }) for index in range(job.request.limit + 1)]
@@ -292,7 +293,7 @@ async def test_content_page_counts_domain_hits_and_preserves_owner_continuation(
     }]})
     job = plan_search(request, scope)[0]
 
-    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+    async def query(job: SearchJob) -> SearchPage:
         hit = {"thread": {
             "workspace_id": job.key.owner.workspace_id, "session_id": "session", "thread_id": "child",
             "thread_uri": thread_resource_uri(job.key.owner.workspace_id, "session", "child", gateway_authority="gw"),
@@ -308,10 +309,10 @@ async def test_content_page_counts_domain_hits_and_preserves_owner_continuation(
             "cursor": "original-history-position", "complete": False, "limited_reason": "byte_limit",
             "scanned_sessions": 1, "scanned_threads": 1, "scanned_items": 1, "scanned_bytes": 100,
         })
-        return WorkspaceSearchResultDTO(
+        return SearchPage(WorkspaceSearchResultDTO(
             provider_id=f"canonical-{category}", workspace_id=job.key.owner.workspace_id, category=category,
             operation="content", contract_version=1, state="limited", limited_reason="byte_limit", messages=domain,
-        )
+        ))
 
     events = [event async for event in search_events([job], scope, request_id="body", query=query, budget=NameSearchBudget.create(None))]
     branch, = events[-1].summary.branches

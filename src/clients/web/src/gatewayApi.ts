@@ -24,7 +24,6 @@ import type {
   GatewayThemeCatalog,
   GatewayUiAsset,
   GatewayUiAssetList,
-  GatewaySessionSearchResults,
   WorkspaceNavigationTree,
   CreateGatewayPortForwardRequest,
   ChangeGatewayPortForwardLocalPortRequest,
@@ -278,21 +277,6 @@ export async function placeWorkspaceNavigationNode(
         method: "PUT",
         body: JSON.stringify(payload),
       },
-    ),
-  );
-}
-
-export async function searchGatewaySessionCatalog(
-  port: number,
-  query: string,
-  signal?: AbortSignal,
-): Promise<GatewaySessionSearchResults> {
-  const params = new URLSearchParams({ query, limit_per_workspace: "50" });
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewaySessionSearchResults>>(
-      port,
-      `/api/gateway/session-catalog/search?${params.toString()}`,
-      { timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS, signal },
     ),
   );
 }

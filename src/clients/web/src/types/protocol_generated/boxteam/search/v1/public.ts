@@ -28,6 +28,7 @@ export interface FederatedSearchQueryDTO {
   limit: number;
   /** 显式多根保留各自选项；省略时只查所选工作区的默认根。 */
   file_targets: FederatedFileSearchTargetDTO[];
+  allow_catalog_mirror?: boolean | undefined;
 }
 
 export interface FederatedSearchBranchKeyDTO {
@@ -69,6 +70,13 @@ export interface FederatedSearchSummaryDTO {
   returned_results: number;
 }
 
+export interface FederatedSearchSourceDTO {
+  kind: string;
+  updated_at?: string | undefined;
+  stale: boolean;
+  unavailable_reason?: string | undefined;
+}
+
 export interface FederatedSearchEventDTO {
   sequence: number;
   request_id: string;
@@ -77,6 +85,7 @@ export interface FederatedSearchEventDTO {
   branch: FederatedSearchBranchDTO | undefined;
   page: WorkspaceSearchResultDTO | undefined;
   summary: FederatedSearchSummaryDTO | undefined;
+  source: FederatedSearchSourceDTO | undefined;
 }
 
 function createBaseFederatedFileSearchTargetDTO(): FederatedFileSearchTargetDTO {
@@ -118,7 +127,16 @@ export const FederatedFileSearchTargetDTO: MessageFns<FederatedFileSearchTargetD
 };
 
 function createBaseFederatedSearchQueryDTO(): FederatedSearchQueryDTO {
-  return { category: "", operation: "", contract_version: 0, query: "", match_mode: "", limit: 0, file_targets: [] };
+  return {
+    category: "",
+    operation: "",
+    contract_version: 0,
+    query: "",
+    match_mode: "",
+    limit: 0,
+    file_targets: [],
+    allow_catalog_mirror: undefined,
+  };
 }
 
 export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
@@ -133,6 +151,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
       file_targets: globalThis.Array.isArray(object?.file_targets)
         ? object.file_targets.map((e: any) => FederatedFileSearchTargetDTO.fromJSON(e))
         : [],
+      allow_catalog_mirror: isSet(object.allow_catalog_mirror)
+        ? globalThis.Boolean(object.allow_catalog_mirror)
+        : undefined,
     };
   },
 
@@ -159,6 +180,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     if (message.file_targets?.length) {
       obj.file_targets = message.file_targets.map((e) => FederatedFileSearchTargetDTO.toJSON(e));
     }
+    if (message.allow_catalog_mirror !== undefined) {
+      obj.allow_catalog_mirror = message.allow_catalog_mirror;
+    }
     return obj;
   },
 
@@ -174,6 +198,7 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     message.match_mode = object.match_mode ?? "";
     message.limit = object.limit ?? 0;
     message.file_targets = object.file_targets?.map((e) => FederatedFileSearchTargetDTO.fromPartial(e)) || [];
+    message.allow_catalog_mirror = object.allow_catalog_mirror ?? undefined;
     return message;
   },
 };
@@ -444,6 +469,50 @@ export const FederatedSearchSummaryDTO: MessageFns<FederatedSearchSummaryDTO> = 
   },
 };
 
+function createBaseFederatedSearchSourceDTO(): FederatedSearchSourceDTO {
+  return { kind: "", updated_at: undefined, stale: false, unavailable_reason: undefined };
+}
+
+export const FederatedSearchSourceDTO: MessageFns<FederatedSearchSourceDTO> = {
+  fromJSON(object: any): FederatedSearchSourceDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      stale: isSet(object.stale) ? globalThis.Boolean(object.stale) : false,
+      unavailable_reason: isSet(object.unavailable_reason) ? globalThis.String(object.unavailable_reason) : undefined,
+    };
+  },
+
+  toJSON(message: FederatedSearchSourceDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.stale !== false) {
+      obj.stale = message.stale;
+    }
+    if (message.unavailable_reason !== undefined) {
+      obj.unavailable_reason = message.unavailable_reason;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FederatedSearchSourceDTO>, I>>(base?: I): FederatedSearchSourceDTO {
+    return FederatedSearchSourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FederatedSearchSourceDTO>, I>>(object: I): FederatedSearchSourceDTO {
+    const message = createBaseFederatedSearchSourceDTO();
+    message.kind = object.kind ?? "";
+    message.updated_at = object.updated_at ?? undefined;
+    message.stale = object.stale ?? false;
+    message.unavailable_reason = object.unavailable_reason ?? undefined;
+    return message;
+  },
+};
+
 function createBaseFederatedSearchEventDTO(): FederatedSearchEventDTO {
   return {
     sequence: 0,
@@ -453,6 +522,7 @@ function createBaseFederatedSearchEventDTO(): FederatedSearchEventDTO {
     branch: undefined,
     page: undefined,
     summary: undefined,
+    source: undefined,
   };
 }
 
@@ -466,6 +536,7 @@ export const FederatedSearchEventDTO: MessageFns<FederatedSearchEventDTO> = {
       branch: isSet(object.branch) ? FederatedSearchBranchDTO.fromJSON(object.branch) : undefined,
       page: isSet(object.page) ? WorkspaceSearchResultDTO.fromJSON(object.page) : undefined,
       summary: isSet(object.summary) ? FederatedSearchSummaryDTO.fromJSON(object.summary) : undefined,
+      source: isSet(object.source) ? FederatedSearchSourceDTO.fromJSON(object.source) : undefined,
     };
   },
 
@@ -492,6 +563,9 @@ export const FederatedSearchEventDTO: MessageFns<FederatedSearchEventDTO> = {
     if (message.summary !== undefined) {
       obj.summary = FederatedSearchSummaryDTO.toJSON(message.summary);
     }
+    if (message.source !== undefined) {
+      obj.source = FederatedSearchSourceDTO.toJSON(message.source);
+    }
     return obj;
   },
 
@@ -514,6 +588,9 @@ export const FederatedSearchEventDTO: MessageFns<FederatedSearchEventDTO> = {
       : undefined;
     message.summary = (object.summary !== undefined && object.summary !== null)
       ? FederatedSearchSummaryDTO.fromPartial(object.summary)
+      : undefined;
+    message.source = (object.source !== undefined && object.source !== null)
+      ? FederatedSearchSourceDTO.fromPartial(object.source)
       : undefined;
     return message;
   },

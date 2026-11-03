@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from heapq import nsmallest
 
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
@@ -19,19 +17,20 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogExportDTO,
     SessionCatalogNodeDTO,
     SessionCatalogPageDTO,
-    SessionCatalogSearchResultDTO,
     SessionCatalogSearchResultsDTO,
+)
+from app.services.business.session_navigation.catalog_query import (
+    catalog_breadcrumb,
+    decode_catalog_cursor,
+    encode_catalog_cursor,
+    search_catalog,
 )
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 from app.services.business.session_service import SessionService
 from app.services.mapping.session_catalog_search import (
     CatalogSearchTerms,
     catalog_search_terms,
-    iter_catalog_matches,
 )
-
-_SEARCH_TOP_K_MIN_NODE_COUNT = 2_000
-_SEARCH_TOP_K_MIN_SCAN_RATIO = 16
 
 
 @dataclass(frozen=True)
@@ -92,7 +91,7 @@ class SessionCatalogReadService:
         # cursor 绑定发牌时的分页作用域（父节点）：同一个 revision 下把某个父节点的
         # cursor 拿去翻另一个父节点的页，会让 offset 落到错误切片的中间，静默跳项。
         scope = parent_node_id
-        offset = self._decode_cursor(
+        offset = decode_catalog_cursor(
             cursor,
             snapshot.revision,
             snapshot.catalog_revision,
@@ -137,7 +136,7 @@ class SessionCatalogReadService:
             parent_node_id=parent_node_id,
             items=page,
             cursor=(
-                self._encode_cursor(
+                encode_catalog_cursor(
                     next_offset, revision, catalog_revision, cursor_scope
                 )
                 if next_offset < total
@@ -154,98 +153,21 @@ class SessionCatalogReadService:
         return SessionCatalogBreadcrumbDTO(
             revision=snapshot.revision,
             catalog_revision=snapshot.catalog_revision,
-            items=self._breadcrumb_items(node, snapshot.nodes_by_id),
+            items=catalog_breadcrumb(node, snapshot.nodes_by_id),
         )
 
     async def search(
-        self,
-        *,
-        query: str,
-        limit: int,
-        cursor: str | None,
-        deadline_at: float | None = None,
+        self, *, query: str, limit: int, cursor: str | None, deadline_at: float | None = None,
     ) -> SessionCatalogSearchResultsDTO:
-        normalized_query = query.strip().casefold()
-        if not normalized_query:
+        if not query.strip():
             raise ValueError("会话目录搜索词不能为空")
         budget = NameSearchBudget.create(deadline_at)
         snapshot = await self._snapshot(check=budget.check)
-        # 搜索的 cursor 作用域是查询词：把目录分页或其它查询词的 cursor 拿来翻本
-        # 次搜索，会让 offset 落到错误匹配集的中间，静默跳项。
-        scope = f"search:subsequence-v1\n{normalized_query}"
-        match_count = 0
-
-        def matching_nodes() -> Iterator[
-            tuple[tuple[str, str, str], SessionCatalogNodeDTO]
-        ]:
-            nonlocal match_count
-            for match in iter_catalog_matches(
-                snapshot.nodes, snapshot.folded_search_terms, normalized_query,
-                check=budget.check,
-            ):
-                match_count += 1
-                yield match
-
-        if (
-            cursor is None
-            and limit > 0
-            and len(snapshot.nodes)
-            > max(_SEARCH_TOP_K_MIN_NODE_COUNT, limit * _SEARCH_TOP_K_MIN_SCAN_RATIO)
-        ):
-            # 大目录首屏只保留排序最靠前的一页，仍扫描全目录以准确报告 total。
-            page_matches = nsmallest(
-                limit,
-                matching_nodes(),
-                key=lambda match: match[0],
-            )
-            offset = 0
-        else:
-            matches = list(matching_nodes())
-            matches.sort(key=lambda match: match[0])
-            offset = (
-                0
-                if cursor is None
-                else self._decode_cursor(
-                    cursor,
-                    snapshot.revision,
-                    snapshot.catalog_revision,
-                    scope,
-                    collection_size=match_count,
-                )
-            )
-            page_matches = matches[offset : offset + limit]
-
-        budget.check()
-        page_nodes = [node for _, node in page_matches]
-        results: list[SessionCatalogSearchResultDTO] = []
-        for node in page_nodes:
-            budget.check()
-            breadcrumb = self._breadcrumb_items(node, snapshot.nodes_by_id, check=budget.check)
-            display_path = "/".join(item.name for item in breadcrumb)
-            results.append(
-                SessionCatalogSearchResultDTO(
-                    node=node,
-                    breadcrumb=breadcrumb,
-                    relative_path=display_path,
-                )
-            )
-        next_offset = offset + len(results)
-        budget.check()
-        return SessionCatalogSearchResultsDTO(
-            revision=snapshot.revision,
-            catalog_revision=snapshot.catalog_revision,
-            items=results,
-            cursor=(
-                self._encode_cursor(
-                    next_offset,
-                    snapshot.revision,
-                    snapshot.catalog_revision,
-                    scope,
-                )
-                if next_offset < match_count
-                else None
-            ),
-            total=match_count,
+        return search_catalog(
+            nodes=snapshot.nodes, nodes_by_id=snapshot.nodes_by_id,
+            folded_search_terms=snapshot.folded_search_terms,
+            revision=snapshot.revision, catalog_revision=snapshot.catalog_revision,
+            query=query, limit=limit, cursor=cursor, budget=budget,
         )
 
     async def export_index(self, *, check: Callable[[], None] = lambda: None) -> SessionCatalogExportDTO:
@@ -485,34 +407,6 @@ class SessionCatalogReadService:
         }
 
     @staticmethod
-    def _breadcrumb_items(
-        node: SessionCatalogNodeDTO,
-        nodes_by_id: dict[str, SessionCatalogNodeDTO],
-        *, check: Callable[[], None] = lambda: None,
-    ) -> list[SessionCatalogNodeDTO]:
-        items: list[SessionCatalogNodeDTO] = []
-        visited: set[str] = set()
-        current: SessionCatalogNodeDTO | None = node
-        while current is not None:
-            check()
-            if current.node_id in visited:
-                raise RuntimeError(f"会话物理目录包含循环关系: {current.node_id}")
-            visited.add(current.node_id)
-            items.append(current)
-            if current.parent_node_id is None:
-                current = None
-                continue
-            parent = nodes_by_id.get(current.parent_node_id)
-            if parent is None:
-                raise RuntimeError(
-                    "会话物理目录父节点不存在: "
-                    f"node_id={current.node_id}, parent={current.parent_node_id}"
-                )
-            current = parent
-        items.reverse()
-        return items
-
-    @staticmethod
     def _revision(nodes: list[SessionCatalogNodeDTO], *, check: Callable[[], None] = lambda: None) -> str:
         projected = []
         for node in sorted(nodes, key=lambda item: item.node_id):
@@ -526,59 +420,3 @@ class SessionCatalogReadService:
         ).encode("utf-8")
         check()
         return hashlib.sha256(encoded).hexdigest()
-
-    @staticmethod
-    def _encode_cursor(
-        offset: int,
-        revision: str,
-        catalog_revision: int,
-        scope: str | None,
-    ) -> str:
-        """签发 cursor：绑定 hash、navigation revision 与分页作用域。
-
-        ``scope`` 是发牌时的分页上下文（list_children 为 ``parent_node_id``、
-        search 为查询词）：同一 revision 下把 A 列表的 cursor 交给 B 列表，offset
-        会落在 B 自身切片的中间，静默跳项且不报错。navigation revision 使其它节点变更
-        也能使旧 cursor 失效；字符串 revision 仅是内容 hash，不充当 CAS 值。
-        """
-        payload = json.dumps(
-            {
-                "offset": offset,
-                "revision": revision,
-                "catalog_revision": catalog_revision,
-                "scope": scope,
-            }
-        ).encode("utf-8")
-        return base64.urlsafe_b64encode(payload).decode("ascii")
-
-    @staticmethod
-    def _decode_cursor(
-        cursor: str | None,
-        revision: str,
-        catalog_revision: int,
-        scope: str | None,
-        *,
-        collection_size: int,
-    ) -> int:
-        if cursor is None:
-            return 0
-        try:
-            payload = json.loads(
-                base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
-            )
-        except (ValueError, json.JSONDecodeError) as error:
-            raise ValueError("会话目录 cursor 无效") from error
-        if not isinstance(payload, dict):
-            raise TypeError("会话目录 cursor 格式无效")
-        if payload.get("revision") != revision:
-            raise ValueError("会话目录已更新，请从第一页重新加载")
-        if payload.get("catalog_revision") != catalog_revision:
-            raise ValueError("会话目录已更新，请从第一页重新加载")
-        if payload.get("scope") != scope:
-            raise ValueError("会话目录 cursor 与当前列表不匹配，请从第一页重新加载")
-        offset = payload.get("offset")
-        if type(offset) is not int or offset < 0:
-            raise ValueError("会话目录 cursor offset 无效")
-        if offset >= collection_size:
-            raise ValueError("会话目录 cursor offset 超出当前列表范围")
-        return offset

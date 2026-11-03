@@ -8,7 +8,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 MAX_SEARCH_WORKSPACES = 64
 
 
-class GatewaySearchWorkspaceOwnerDTO(BaseModel):
+class GatewaySearchWorkspaceOwnerDTO(BaseModel, frozen=True):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     gateway_id: str = Field(min_length=1)
@@ -24,12 +24,20 @@ class GatewayWorkspaceDiscoveryHitDTO(BaseModel):
     breadcrumb_names: list[str]
 
 
+class GatewayNavigationFolderDiscoveryHitDTO(BaseModel):
+    name: str
+    navigation_node_id: str
+    breadcrumb_node_ids: list[str]
+    breadcrumb_names: list[str]
+
+
 class GatewayWorkspaceDiscoveryResultsDTO(BaseModel):
     gateway_id: str
     query: str
     resolved_at: datetime
     source: Literal["registry"] = "registry"
     items: list[GatewayWorkspaceDiscoveryHitDTO] = Field(default_factory=list)
+    folders: list[GatewayNavigationFolderDiscoveryHitDTO] = Field(default_factory=list)
     cursor: str | None = None
     complete: bool
 

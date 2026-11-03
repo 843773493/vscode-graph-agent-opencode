@@ -215,3 +215,24 @@ def test_empty_gateway_and_unauthorized_request_are_explicit(scope: ScopeFixture
     assert response.json()["detail"]["code"] == "empty_scope"
     response = scope.client.post("/api/gateway/search/resolve", json={"mode": "all"}, headers={"X-Local-Token": "wrong"})
     assert response.status_code == 401
+
+
+def test_control_folder_discovery_keeps_its_own_paging_scope(scope: ScopeFixture) -> None:
+    first = scope.client.post("/api/gateway/workspace-navigation/folders", json={"name": "Needle parent"})
+    assert first.status_code == 200, first.text
+    parent = next(node for node in first.json()["data"]["nodes"] if node["name"] == "Needle parent")
+    second = scope.client.post("/api/gateway/workspace-navigation/folders", json={"name": "Needle child", "parent_node_id": parent["node_id"]})
+    assert second.status_code == 200, second.text
+    params = {"query": "ndl", "include_folders": True, "limit": 1}
+    response = scope.client.get("/api/gateway/search/workspaces", params=params)
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert not data["items"] and len(data["folders"]) == 1 and not data["complete"]
+    assert data["folders"][0]["navigation_node_id"] == parent["node_id"]
+    followup = scope.client.get("/api/gateway/search/workspaces", params={**params, "cursor": data["cursor"]})
+    assert followup.status_code == 200, followup.text
+    child = followup.json()["data"]
+    assert child["complete"] and child["folders"][0]["breadcrumb_names"] == ["Needle parent", "Needle child"]
+    mismatch = scope.client.get("/api/gateway/search/workspaces", params={**params, "include_folders": False, "cursor": data["cursor"]})
+    assert mismatch.status_code == 409
+    assert scope.query({"mode": "all"})["scope"]["owners"] == OWNERS[:2]
