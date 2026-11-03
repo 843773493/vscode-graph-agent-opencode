@@ -1,6 +1,7 @@
 import { expect } from 'playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { searchRequest, searchReceipt } from '../../../support/workbench/search-observation.mjs';
 
 /** 实际 Opener／原只读编辑器／历史；源文件只是产品读取的输入，不预造业务状态。 */
 export async function verifySourceDocuments({ page, command, api, result, owner, open }) {
@@ -10,11 +11,11 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
     const path = new URL(request.url()).pathname;
     const body = request.method() === 'POST' && path === '/api/v1/resources/navigation' ? request.postDataJSON() : undefined;
     if (body?.operation === 'read') reads.push({ ...body, route: request.headers()['x-boxteam-workspace-id'] });
-    if (body?.operation === 'search' || ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(path)) {
-      queries.push({ path, route: request.headers()['x-boxteam-workspace-id'] });
-    }
+    const observed = searchRequest(request);
+    if (observed?.path === '/api/gateway/search' || body?.operation === 'search'
+      || ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(path)) queries.push(observed);
     // 原工作区观察流用 POST 建立只读订阅；其余非 GET 请求仍逐一检查。
-    if (!['GET', 'HEAD'].includes(request.method()) && !['/api/gateway/resource-addresses/parse', '/api/v1/resources/navigation',
+    if (!['GET', 'HEAD'].includes(request.method()) && !['/api/gateway/search', '/api/gateway/resource-addresses/parse', '/api/v1/resources/navigation',
       '/api/v1/workspace/observations/stream'].includes(path)) {
       writes.push({ path, method: request.method() });
     }
@@ -51,20 +52,22 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
 
     result.phase = 'source-owner-search-and-history';
     const quick = page.locator('.quick-input-widget');
-    const completed = page.waitForResponse(response => {
-      const url = new URL(response.url());
-      return url.pathname === '/api/v1/session-catalog/search' && url.searchParams.get('query') === 'AGENTS'
-        && response.request().headers()['x-boxteam-workspace-id'] === owner.routeB;
+    const completed = page.waitForRequest(request => {
+      const observed = searchRequest(request);
+      return observed?.path === '/api/gateway/search' && observed.query === 'AGENTS' && observed.categories.includes('catalog')
+        && observed.owners.length === 1 && observed.owners[0] === other.workspace_id;
     });
     await command('workbench.action.quickOpen', 'AGENTS');
-    expect((await completed).status()).toBe(200);
+    const receipt = await searchReceipt(await completed);
+    expect(receipt.status).toBe(200);
+    expect(receipt.summary.state).toBe('complete');
     const history = quick.locator('[data-quick-input-id^="boxteam-source:"]');
     await expect(history).toHaveCount(1);
     await history.click();
     await expect(quick).not.toBeVisible();
     await expectSource('source AGENTS B');
     expect(queries.length).toBeGreaterThan(0);
-    expect(queries.every(query => query.route === owner.routeB)).toBe(true);
+    expect(queries.every(query => query.path === '/api/gateway/search' && query.owners.length === 1 && query.owners[0] === other.workspace_id)).toBe(true);
 
     result.phase = 'skill-readonly-and-source-reopen';
     const skill = await open(skillB);

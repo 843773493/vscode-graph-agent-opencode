@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+import { searchRequest, searchReceipt } from '../../../support/workbench/search-observation.mjs';
 import { verifyQuickAccessPagination } from './quick_access_pagination.mjs';
 import { verifyResourceLinks } from './quick_access_resource_links.mjs';
 
@@ -56,9 +57,8 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
     const url = new URL(request.url());
-    if (['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(url.pathname)) {
-      result.searches.push({ path: url.pathname, query: url.searchParams.get('query'), route: request.headers()['x-boxteam-workspace-id'] });
-    }
+    const observed = searchRequest(request);
+    if (observed) result.searches.push(observed);
     if (request.method() !== 'GET' && /\/(messages|jobs)(\/|$)/.test(url.pathname)) result.forbidden.push(url.pathname);
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
@@ -135,7 +135,8 @@ try {
   await expect(row.getByRole('button', { name: 'catalogfolder 同名目录', exact: true })).toBeFocused();
   await expect(page.getByTestId(`catalog-node-${routeA}-${parentNew}`).locator('..')).toHaveAttribute('aria-expanded', 'true');
   expect(await page.locator('.tabs-container .tab').count()).toBe(tabsBefore);
-  expect(result.searches.every(request => request.route === routeA)).toBe(true);
+  expect(result.searches.every(request => request.path === '/api/gateway/search'
+    ? request.owners.length === 1 && request.owners[0] === identity.workspace_id : request.route === routeA)).toBe(true);
   expect(result.forbidden).toEqual([]);
   expect((await api(`/api/v1/sessions/${session.session_id}/child-threads`, routeA)).items.map(item => item.thread_id)).toEqual(childrenBefore);
   result.folderUsesFreshNavigation = true;
@@ -159,31 +160,30 @@ try {
   result.phase = 'dedicated-name-modes';
   const modeRequests = [];
   const modeReceipts = [];
-  const queryMode = async (value, endpoint, query) => {
-    const [response] = await Promise.all([
-      page.waitForResponse(response => {
-        const url = new URL(response.url());
-        return url.pathname === endpoint && url.searchParams.get('query') === query
-          && response.request().headers()['x-boxteam-workspace-id'] === routeA;
+  const queryMode = async (value, category, query) => {
+    const [request] = await Promise.all([
+      page.waitForRequest(request => {
+        const observed = searchRequest(request);
+        return observed?.path === '/api/gateway/search' && observed.query === query
+          && observed.categories.length === 1 && observed.categories[0] === category
+          && observed.owners.length === 1 && observed.owners[0] === identity.workspace_id;
       }),
       quick.locator('input').first().fill(value),
     ]);
-    const body = await response.json();
-    expect(response.status()).toBe(200);
-    expect(body.request_id).toBe(response.headers()['x-request-id']);
-    modeReceipts.push({ path: endpoint, query, requestId: body.request_id });
+    const receipt = await searchReceipt(request);
+    expect(receipt.status).toBe(200);
+    expect(receipt.summary.branches.map(branch => branch.branch.category)).toEqual([category]);
+    expect(receipt.summary.state).toBe('complete');
+    modeReceipts.push({ category, query, requestId: receipt.requestId });
   };
   const observeMode = request => {
-    const url = new URL(request.url());
-    if (['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(url.pathname)
-      || url.pathname === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'search') {
-      modeRequests.push({ path: url.pathname, route: request.headers()['x-boxteam-workspace-id'] });
-    }
+    const observed = searchRequest(request);
+    if (observed?.path === '/api/gateway/search') modeRequests.push({ path: observed.path, categories: observed.categories, owners: observed.owners });
   };
   page.on('request', observeMode);
   try {
     await command('boxteam.quickAccess.sessions');
-    await queryMode('session catalogexact', '/api/v1/session-catalog/search', 'catalogexact');
+    await queryMode('session catalogexact', 'catalog', 'catalogexact');
     const sessionPick = quick.locator(`[data-quick-input-id="session:${health.gateway_id}/${identity.workspace_id}/${session.session_id}"]`);
     await expect(sessionPick).toHaveCount(1);
     await expect(quick.locator('[data-quick-input-id^="boxteam-thread:"]')).toHaveCount(0);
@@ -191,15 +191,15 @@ try {
     await expect(page.locator(`.editor-group-container.active section.boxteam-thread[data-thread-id="${main.thread_id}"]`)).toBeVisible();
     await command('boxteam.quickAccess.threads');
     // 最近历史也可包含同一 child；等本次查询回执后再接受，不能用旧历史替代查询验收。
-    await queryMode(`thread ${fork.thread_id}`, '/api/v1/session-threads/search', fork.thread_id);
+    await queryMode(`thread ${fork.thread_id}`, 'thread', fork.thread_id);
     const exactChild = quick.locator(`[data-quick-input-id$="/${fork.thread_id}"]`);
     await expect(exactChild).toHaveCount(1);
     await expect(quick.locator('[data-quick-input-id^="session:"]')).toHaveCount(0);
     await exactChild.click();
     await expect(page.locator(`.editor-group-container.active section.boxteam-thread[data-thread-id="${fork.thread_id}"]`)).toBeVisible();
     expect(modeRequests).toEqual([
-      { path: '/api/v1/session-catalog/search', route: routeA },
-      { path: '/api/v1/session-threads/search', route: routeA },
+      { path: '/api/gateway/search', categories: ['catalog'], owners: [identity.workspace_id] },
+      { path: '/api/gateway/search', categories: ['thread'], owners: [identity.workspace_id] },
     ]);
     result.nameModes = { requests: modeRequests, receipts: modeReceipts, exactOwners: true };
   } finally { page.off('request', observeMode); }

@@ -76,8 +76,8 @@ class SearchHTTP:
                 "owner": "search_provider", "code": "provider_read_failed", "provider_id": "session-catalog",
                 "category": "catalog", "operation": "name", "message": "原目录 SQLite 无法读取: errno=13",
             }})
-        if self.mode in {"file-query-error", "file-cursor-error"}:
-            reason = "invalid_search_pattern" if self.mode == "file-query-error" else "invalid_cursor"
+        if self.mode in {"file-query-error", "file-cursor-error", "file-stale-cursor"}:
+            reason = {"file-query-error": "invalid_search_pattern", "file-cursor-error": "invalid_cursor", "file-stale-cursor": "stale_cursor"}[self.mode]
             return httpx.Response(400, headers=headers, json={"detail": {
                 "owner": "resource_file_operations", "code": "execution_failed", "reason": reason,
                 "message": "文件查询被原 owner 拒绝",
@@ -214,7 +214,8 @@ async def test_provider_read_error_keeps_identity_cause_and_original_continuatio
     assert not any(event.type == "page" for event in result)
 
 
-@pytest.mark.parametrize("mode,reason", [("file-query-error", "invalid_search_pattern"), ("file-cursor-error", "invalid_cursor")])
+@pytest.mark.parametrize("mode,reason", [("file-query-error", "invalid_search_pattern"), ("file-cursor-error", "invalid_cursor"),
+                                         ("file-stale-cursor", "stale_cursor")])
 async def test_original_domain_reason_distinguishes_same_failure_code(search_http: SearchHTTP, mode: str, reason: str) -> None:
     search_http.mode = mode
     result = events(await search_http.search(OWNERS[:1]))
@@ -224,6 +225,7 @@ async def test_original_domain_reason_distinguishes_same_failure_code(search_htt
     assert failure.code == "execution_failed" and failure.reason == reason
     assert failure.error_owner == "resource_file_operations" and failure.http_status == 400
     assert failure.state == "failed" and failure.returned_results == summary.returned_results == 0
+    assert failure.retryable is (reason in {"invalid_cursor", "stale_cursor"})
     terminal, = [event.branch for event in result if event.type == "branch"]
     assert terminal == failure
 

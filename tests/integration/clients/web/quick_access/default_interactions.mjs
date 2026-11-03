@@ -1,27 +1,15 @@
 import { expect } from 'playwright/test';
+import { scrollQuickInput } from '../../../../support/workbench/quick-input.mjs';
 
 /** 用真实滚轮访问末尾状态，避免滚动条鼠标按下清空列表焦点。 */
 export async function expectLastSearchStatus({ page, quick, label }) {
   const list = quick.getByRole('listbox');
-  const scroll = async end => {
-    // 只在原滚动条上滚动，不悬停候选或按下鼠标改变活动项。
-    const track = await list.locator('.scrollbar.vertical').boundingBox();
-    if (!track) throw new Error('快速访问滚动条尚未显示，无法滚动状态');
-    await page.mouse.move(track.x + track.width / 2, track.y + track.height / 2);
-    // 原版把一次大 wheel 归一为一个步长；有界连续滚动，不能靠 poll 退避逐步走完整张列表。
-    for (let step = 0; step < 20; step++) {
-      const thumb = await list.locator('.scrollbar.vertical .slider').boundingBox();
-      if (!thumb || (end ? track.y + track.height - thumb.y - thumb.height : thumb.y - track.y) < 1) break;
-      await page.mouse.wheel(0, end ? 1000 : -1000);
-      await page.evaluate(() => new Promise(requestAnimationFrame));
-    }
-  };
   await expect.poll(async () => {
-    await scroll(true);
+    await scrollQuickInput(page, quick, true);
     return list.innerText();
   }).toContain(label);
   await expect.poll(async () => {
-    await scroll(false);
+    await scrollQuickInput(page, quick, false);
     const thumb = await list.locator('.scrollbar.vertical .slider').boundingBox();
     const track = await list.locator('.scrollbar.vertical').boundingBox();
     return !thumb || thumb.y - track.y < 1;

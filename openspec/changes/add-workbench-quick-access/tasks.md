@@ -739,3 +739,12 @@
 - 119项定向检查通过（20.57秒），最终API断言补跑5项；原navigation operations和Provider回归通过，完整数量见related.log。真实双Backend＋Gateway1项通过（48.36秒）：经产品创建目录历史，实际校验损坏cursor、跨查询续点及单owner目录变化，状态／原因／原cursor／零页与独立重试均正确。
 - 一条既有日期搜索测试曾因随机folder ID按合法模糊规则命中年份而失败，现固定该测试ID，保留原唯一命中断言；原ID与归因见fixture-collision.json。完整HEAD基线该轮通过，不将其表述为必现产品回归。Pyright39条和Ruff11条均与完整基线逐条同文、无新增；产品四文件与新增游标测试零诊断。OpenSpec strict及差异检查通过。
 - 命令、指纹、原始结果与退出码：out/tests/temp/catalog_search_errors_20261103/artifacts/verification.json；完整基线解包及tar已删除，诊断原件保留。本批无前端／公开DTO字段变化，不重复生成、Workbench类型或Electron；发现旧catalog targets浏览器验收仍观察旧HTTP入口，下一切片迁齐观察器再执行页面验收。其余owner与信息／警告仍由16.18追踪，保持未勾选。
+
+### 2026-11-03：目录页面统一观察联邦回执与文件过期重查（16.11、16.18 部分）
+
+- 目录／Thread 专用模式、独立分页和只读来源历史的浏览器观察器迁到现有联邦回执工具，复用唯一 SSE 解码；真实 HTTP 请求数与领域分支数分别计量，仍核精确 owner、原 request_id、50＋5 独立页、首屏外模糊召回及失效 cursor 的 code／reason／HTTP 状态。原文件滚轮操作提升到实际共用的 support，不复制一份滚动实现。
+- 真实页面复现文件游标过期后缺少重查按钮：Gateway 已保留原文件错误，却将其标为不可重试。沿唯一诊断出口允许 invalid_cursor／stale_cursor 显式重查原分支；非法正则、401／403 保持原拒绝语义。无新查询器、自动重放或错误文本解析。
+- 38 项传输检查通过。Ruff、浏览器驱动语法和测试 Python 类型检查通过；传输产品文件零类型诊断，传输测试既有29条与上一切片原件逐条同文，无新增。OpenSpec strict 与差异检查通过。本批无前端产品源码或公开DTO字段变化，不重复生成、Workbench类型或Electron；正式页面使用本轮真实构建（38.27秒、退出零）。
+- 完整目录浏览器场景最终 1 passed / 139.24秒，真实 Gateway＋托管后端＋正式 Workbench＋Chromium，无业务替身；Session／fork child／目录和55个分页 Session 均由产品入口创建。文件活动项保持、失效候选清除后Enter不误开、显式单分支重查、目录revision的409／stale_catalog_cursor／revision、main与child、跨工作区只读来源、图片／Range／BOM保存和非法URI断言均保留，pageErrors=[]。
+- 前五轮原件保留：原滚动步数不足、上述真实不可重试缺陷、旧状态文案、按钮须悬停及失效候选移除后的虚拟列表重新定位；按实际上游交互修正驱动，未延长业务期限或放宽身份／冲突断言。首次传输单测中的断言放置错误亦保留原件，修正后38项通过。
+- 准确命令、源码指纹、原始结果、类型基线比较和退出码：out/tests/temp/quick_access_catalog_acceptance_20261103/artifacts/verification.json；最终页面原件：out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-2e8daea77b1f/。其余owner及信息／警告仍由16.18追踪，整项保持未勾选。

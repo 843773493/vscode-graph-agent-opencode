@@ -111,6 +111,8 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert receipt["discovery"]["outsideFirstPage"] is True
         assert receipt["discovery"]["exactSessionAndMain"] is True
         assert receipt["discovery"]["staleCatalogCursor"]["status"] == 409
+        assert receipt["discovery"]["staleCatalogCursor"]["code"] == "stale_catalog_cursor"
+        assert receipt["discovery"]["staleCatalogCursor"]["reason"] == "revision"
         assert receipt["discovery"]["restartedFromFirstPage"] is True
         assert receipt["discovery"]["completeEmpty"] is True
         assert receipt["resourceLinks"]["childKeepsIdentity"] is True
