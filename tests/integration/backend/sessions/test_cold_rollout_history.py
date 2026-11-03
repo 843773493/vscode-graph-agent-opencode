@@ -25,6 +25,7 @@ from app.api.deps import (
     get_job_service,
     get_message_service,
     get_request_id,
+    get_session_catalog_service,
     get_session_orchestrator,
     get_session_service,
     get_session_turn_history_service,
@@ -70,6 +71,7 @@ async def history_client(runtime_case: RuntimeCase) -> AsyncIterator[httpx.Async
     application.dependency_overrides[get_job_service] = lambda: container.job_service
     application.dependency_overrides[get_event_service] = lambda: container.event_service
     application.dependency_overrides[get_session_service] = lambda: container.session_service
+    application.dependency_overrides[get_session_catalog_service] = lambda: container.session_catalog_service
     application.dependency_overrides[get_message_service] = lambda: container.message_service
     application.dependency_overrides[get_session_orchestrator] = lambda: container.session_orchestrator
     application.dependency_overrides[get_session_turn_replay_service] = lambda: container.session_turn_replay_service

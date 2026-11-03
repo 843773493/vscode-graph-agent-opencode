@@ -89,7 +89,7 @@
 - [ ] 9.1 接入 `content ` 的类别选择与按 owner 分支组织，默认 Ctrl+P 不扫描正文；仅选类别发请求，`%` 固定文件并复用同一文件条件。
 - [ ] 9.2 文件类复用第 4／5 组的唯一搜索链，提供有界片段和独立文本位置，不另建正文文件扫描器。
 - [ ] 9.3 在原 canonical history owner 实现 main／child 消息正文有界查询和按命中加载，未打开及未加载页可定位，不查询前端缓存冒充完整历史。
-  - 已实现精确 Thread 的 canonical 正文查询、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支与 React 定位尚未完成，本项继续保持未勾选。
+  - 已实现精确 Thread 及工作区范围的 canonical 正文查询、共享预算、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支发现未打开 child 并保持冷历史不物化；React 定位尚未完成，本项继续保持未勾选。
 - [ ] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
 - [ ] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
 - [ ] 9.6 在原 Trace／运行日志 owner 实现分类正文查询及记录定位，区分工作区与 Gateway 日志，不越过明确范围与权限。
@@ -365,3 +365,9 @@
 - 沿原真实 Gateway／Workbench 场景，通过产品入口创建 55 个 Session，记录真实首屏 50 个身份，再从未返回的目标中构造间隔缩写。实际 `pgcg050` 经 Ctrl+P 同时返回第 51 个目标的精确 Session 与 main Thread，证明召回先于分页；没有在首批结果内做前端补偿。
 - 由产品创建入口推进 catalog revision 后，原 Session cursor 的真实续页返回 409、对应旧候选撤下；显式重查不携旧 cursor，重新得到首屏。另用唯一不存在的查询，核实际 items／total 为零、cursor 为空及原 UI 完整零匹配提示；沿用原首屏受限／续页状态、同名 main／child、目录删除后拒绝打开的断言。
 - 5 项原 owner 定向检查通过；正式构建／完整页面回归通过（128.55 秒），包含上一切片的只读来源、图片／保存与全部既有目录／Thread 场景，页面错误为空。原件：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-c87af2742f79/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。本批仅改验收，复用同产品源码的最终真实类型检查；Ruff、JS AST、结构、差异与 OpenSpec strict 均随本边界保存。准确命令、源码指纹、原输出与退出码见同一临时证据目录的 `discovery-*.json`；未扩跑无关全仓测试或声称 Electron 通过。
+
+### 2026-11-03：工作区消息正文有界发现
+
+- 原历史 owner 由 catalog／SessionThread 只读接口发现 main 和 published child，沿同一 canonical 搜索取得正文；每页最多 64 个目录位置、16 个 Thread，所有 Thread 共用 256 条正文／8 MiB／1 秒调度预算，准入沿原 15 秒总期限。cursor 保存当前目录、Thread revision、keyset 和原历史位置，不新增表、schema 版本或正文索引。
+- 工作区真实消息入口验证 3 项通过；补充跨 Thread 共用正文预算与既有名称期限回归 9 项通过。覆盖 child 未打开仍可发现、长正文／emoji、原 around 定位、冷历史不物化、空页续查、当前 Thread／catalog／历史变化冲突与过期期限。API 客户端 5 项、真实类型检查（18 份转换源码）、正式工作台构建、协议一致性、OpenAPI、Ruff 与 strict 通过。
+- 首次失败来自测试装具在历史生成阶段绑定查询 Gateway，触发不相关 Skill 控制面；改为仅本次搜索请求绑定认证上下文，生成历史沿既有装具。准确命令、源码指纹、失败原件及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/workspace-message-*.json`／`.raw`。React 接线及真实浏览器正文搜索尚未完成，9.3／9.7 保持未勾选。

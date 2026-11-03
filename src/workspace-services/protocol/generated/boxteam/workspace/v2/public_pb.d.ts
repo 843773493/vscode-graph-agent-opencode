@@ -9721,6 +9721,83 @@ export declare type TurnMessageSearchResultsDTO = Message<"boxteam.workspace.v2.
 export declare const TurnMessageSearchResultsDTOSchema: GenMessage<TurnMessageSearchResultsDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.WorkspaceMessageMatchDTO
+ */
+export declare type WorkspaceMessageMatchDTO = Message<"boxteam.workspace.v2.WorkspaceMessageMatchDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionThreadSearchResultDTO thread = 1;
+   */
+  thread?: SessionThreadSearchResultDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TurnMessageMatchDTO match = 2;
+   */
+  match?: TurnMessageMatchDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceMessageMatchDTO.
+ * Use `create(WorkspaceMessageMatchDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceMessageMatchDTOSchema: GenMessage<WorkspaceMessageMatchDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceMessageSearchResultsDTO
+ */
+export declare type WorkspaceMessageSearchResultsDTO = Message<"boxteam.workspace.v2.WorkspaceMessageSearchResultsDTO"> & {
+  /**
+   * @generated from field: int64 catalog_revision = 1;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceMessageMatchDTO items = 2;
+   */
+  items: WorkspaceMessageMatchDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 3;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: bool complete = 4;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: optional string limited_reason = 5;
+   */
+  limitedReason?: string | undefined;
+
+  /**
+   * @generated from field: int64 scanned_sessions = 6;
+   */
+  scannedSessions: bigint;
+
+  /**
+   * @generated from field: int64 scanned_threads = 7;
+   */
+  scannedThreads: bigint;
+
+  /**
+   * @generated from field: int64 scanned_items = 8;
+   */
+  scannedItems: bigint;
+
+  /**
+   * @generated from field: int64 scanned_bytes = 9;
+   */
+  scannedBytes: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceMessageSearchResultsDTO.
+ * Use `create(WorkspaceMessageSearchResultsDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceMessageSearchResultsDTOSchema: GenMessage<WorkspaceMessageSearchResultsDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.TurnHistoryLoadRequest
  */
 export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnHistoryLoadRequest"> & {

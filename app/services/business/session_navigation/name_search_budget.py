@@ -1,4 +1,4 @@
-"""名称查询共用端到端期限；Thread 的单页调度预算仍由原 owner 管理。"""
+"""工作区发现查询共用端到端期限；单页调度预算仍由各正文／名称 owner 管理。"""
 
 import math
 import time
@@ -18,7 +18,7 @@ class NameSearchBudget:
         deadline = now + _QUERY_SECONDS
         if deadline_at is not None:
             if not math.isfinite(deadline_at):
-                raise ValueError("名称查询执行期限必须为有限 UTC 时间戳")
+                raise ValueError("查询执行期限必须为有限 UTC 时间戳")
             deadline = min(deadline, now + deadline_at - time.time())
         budget = cls(deadline)
         budget.check()
@@ -26,7 +26,7 @@ class NameSearchBudget:
 
     def check(self) -> None:
         if time.monotonic() >= self.deadline:
-            raise TimeoutError("名称查询超过本次总执行期限，请重新查询")
+            raise TimeoutError("查询超过本次总执行期限，请重新查询")
 
     def remaining(self) -> float:
         self.check()

@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+from dataclasses import dataclass
 from time import monotonic
 from typing import Literal
 
@@ -31,6 +32,19 @@ MAX_SEARCH_ITEMS = 256
 MAX_SEARCH_BYTES = 8 * 1024 * 1024
 SEARCH_SECONDS = 1.0
 PREVIEW_CODEPOINTS = 240
+
+
+@dataclass
+class MessageSearchBudget:
+    """多个 Thread 共用一次正文读取预算；单 Thread 入口使用相同上限。"""
+
+    deadline: float
+    scanned_items: int = 0
+    scanned_bytes: int = 0
+
+    @classmethod
+    def create(cls) -> "MessageSearchBudget":
+        return cls(deadline=monotonic() + SEARCH_SECONDS)
 
 
 class _MessageCursor(BaseModel):
@@ -86,8 +100,10 @@ def _searchable_text(item: CanonicalItemRecord) -> str:
 
 def search_messages(
     reader: RolloutContextReader, indexed: IndexedHistory, request: TurnMessageSearchRequest,
+    *, budget: MessageSearchBudget | None = None,
 ) -> TurnMessageSearchResultsDTO:
-    deadline = monotonic() + SEARCH_SECONDS
+    budget = budget or MessageSearchBudget.create()
+    deadline = budget.deadline
     state = _cursor(indexed, request)
     items: list[TurnMessageMatchDTO] = []
     scanned_items = scanned_bytes = 0
@@ -103,7 +119,7 @@ def search_messages(
         except TimeoutError:
             reason = "deadline"
     for ordinal, item_id, turn_id, length in rows:
-        if scanned_items >= MAX_SEARCH_ITEMS:
+        if budget.scanned_items >= MAX_SEARCH_ITEMS:
             reason = "scan_limit"
             break
         if monotonic() >= deadline:
@@ -112,12 +128,14 @@ def search_messages(
         if length > MAX_SEARCH_BYTES:
             reason = "item_size_limit"
             break
-        if scanned_bytes + length > MAX_SEARCH_BYTES:
+        if budget.scanned_bytes + length > MAX_SEARCH_BYTES:
             reason = "byte_limit"
             break
         # 先按 catalog locator 计费，再沿原 canonical reader 核验并读取正文。
         scanned_items += 1
         scanned_bytes += length
+        budget.scanned_items += 1
+        budget.scanned_bytes += length
         item, = reader.read_canonical_items(indexed.snapshot, item_ids=[item_id])
         text = _searchable_text(item)
         offset = state.text_offset if ordinal == state.ordinal else 0

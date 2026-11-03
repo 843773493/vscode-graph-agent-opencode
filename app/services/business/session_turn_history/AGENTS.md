@@ -2,6 +2,8 @@
 
 `session_turn_history/` 负责把会话语义事件投影为完整 Job Turn，并编排有界 bootstrap、分页、详情与懒迁移。
 
+`workspace_search.py` 在原 catalog／SessionThread 归属内编排有界消息正文查询，所有 Thread 共用原 canonical reader 的正文预算，不扫描目录或创建第二份正文。
+
 ## 可修改内容
 
 - 可以修改 Turn 语义投影规则、读取服务和显式迁移编排。

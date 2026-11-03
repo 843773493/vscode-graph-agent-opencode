@@ -2277,6 +2277,23 @@ export interface TurnMessageSearchResultsDTO {
   scanned_bytes: number;
 }
 
+export interface WorkspaceMessageMatchDTO {
+  thread: SessionThreadSearchResultDTO | undefined;
+  match: TurnMessageMatchDTO | undefined;
+}
+
+export interface WorkspaceMessageSearchResultsDTO {
+  catalog_revision: number;
+  items: WorkspaceMessageMatchDTO[];
+  cursor?: string | undefined;
+  complete: boolean;
+  limited_reason?: string | undefined;
+  scanned_sessions: number;
+  scanned_threads: number;
+  scanned_items: number;
+  scanned_bytes: number;
+}
+
 export interface TurnHistoryLoadRequest {
   direction?: string | undefined;
   cursor?: string | undefined;
@@ -17237,6 +17254,129 @@ export const TurnMessageSearchResultsDTO: MessageFns<TurnMessageSearchResultsDTO
     message.cursor = object.cursor ?? undefined;
     message.complete = object.complete ?? false;
     message.limited_reason = object.limited_reason ?? undefined;
+    message.scanned_items = object.scanned_items ?? 0;
+    message.scanned_bytes = object.scanned_bytes ?? 0;
+    return message;
+  },
+};
+
+function createBaseWorkspaceMessageMatchDTO(): WorkspaceMessageMatchDTO {
+  return { thread: undefined, match: undefined };
+}
+
+export const WorkspaceMessageMatchDTO: MessageFns<WorkspaceMessageMatchDTO> = {
+  fromJSON(object: any): WorkspaceMessageMatchDTO {
+    return {
+      thread: isSet(object.thread) ? SessionThreadSearchResultDTO.fromJSON(object.thread) : undefined,
+      match: isSet(object.match) ? TurnMessageMatchDTO.fromJSON(object.match) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceMessageMatchDTO): unknown {
+    const obj: any = {};
+    if (message.thread !== undefined) {
+      obj.thread = SessionThreadSearchResultDTO.toJSON(message.thread);
+    }
+    if (message.match !== undefined) {
+      obj.match = TurnMessageMatchDTO.toJSON(message.match);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceMessageMatchDTO>, I>>(base?: I): WorkspaceMessageMatchDTO {
+    return WorkspaceMessageMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceMessageMatchDTO>, I>>(object: I): WorkspaceMessageMatchDTO {
+    const message = createBaseWorkspaceMessageMatchDTO();
+    message.thread = (object.thread !== undefined && object.thread !== null)
+      ? SessionThreadSearchResultDTO.fromPartial(object.thread)
+      : undefined;
+    message.match = (object.match !== undefined && object.match !== null)
+      ? TurnMessageMatchDTO.fromPartial(object.match)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceMessageSearchResultsDTO(): WorkspaceMessageSearchResultsDTO {
+  return {
+    catalog_revision: 0,
+    items: [],
+    cursor: undefined,
+    complete: false,
+    limited_reason: undefined,
+    scanned_sessions: 0,
+    scanned_threads: 0,
+    scanned_items: 0,
+    scanned_bytes: 0,
+  };
+}
+
+export const WorkspaceMessageSearchResultsDTO: MessageFns<WorkspaceMessageSearchResultsDTO> = {
+  fromJSON(object: any): WorkspaceMessageSearchResultsDTO {
+    return {
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => WorkspaceMessageMatchDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
+      scanned_sessions: isSet(object.scanned_sessions) ? globalThis.Number(object.scanned_sessions) : 0,
+      scanned_threads: isSet(object.scanned_threads) ? globalThis.Number(object.scanned_threads) : 0,
+      scanned_items: isSet(object.scanned_items) ? globalThis.Number(object.scanned_items) : 0,
+      scanned_bytes: isSet(object.scanned_bytes) ? globalThis.Number(object.scanned_bytes) : 0,
+    };
+  },
+
+  toJSON(message: WorkspaceMessageSearchResultsDTO): unknown {
+    const obj: any = {};
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => WorkspaceMessageMatchDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.limited_reason !== undefined) {
+      obj.limited_reason = message.limited_reason;
+    }
+    if (message.scanned_sessions !== 0) {
+      obj.scanned_sessions = Math.round(message.scanned_sessions);
+    }
+    if (message.scanned_threads !== 0) {
+      obj.scanned_threads = Math.round(message.scanned_threads);
+    }
+    if (message.scanned_items !== 0) {
+      obj.scanned_items = Math.round(message.scanned_items);
+    }
+    if (message.scanned_bytes !== 0) {
+      obj.scanned_bytes = Math.round(message.scanned_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceMessageSearchResultsDTO>, I>>(
+    base?: I,
+  ): WorkspaceMessageSearchResultsDTO {
+    return WorkspaceMessageSearchResultsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceMessageSearchResultsDTO>, I>>(
+    object: I,
+  ): WorkspaceMessageSearchResultsDTO {
+    const message = createBaseWorkspaceMessageSearchResultsDTO();
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.items = object.items?.map((e) => WorkspaceMessageMatchDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.complete = object.complete ?? false;
+    message.limited_reason = object.limited_reason ?? undefined;
+    message.scanned_sessions = object.scanned_sessions ?? 0;
+    message.scanned_threads = object.scanned_threads ?? 0;
     message.scanned_items = object.scanned_items ?? 0;
     message.scanned_bytes = object.scanned_bytes ?? 0;
     return message;

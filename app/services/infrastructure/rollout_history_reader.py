@@ -38,6 +38,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 from app.services.infrastructure.rollout_history.message_search import (
+    MessageSearchBudget,
     search_messages,
     verify_message_reference,
 )
@@ -92,6 +93,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
 
     def search_messages(
         self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,
+        *, budget: MessageSearchBudget | None = None,
     ) -> TurnMessageSearchResultsDTO:
         indexed = self._snapshots.read(session_id, thread_id)
         if indexed is None:
@@ -102,7 +104,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 complete=True, limited_reason=None, scanned_items=0, scanned_bytes=0,
             )
         try:
-            return search_messages(self._context_reader, indexed, request)
+            return search_messages(self._context_reader, indexed, request, budget=budget)
         finally:
             indexed.snapshot.close()
 

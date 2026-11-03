@@ -3717,6 +3717,36 @@ class TurnMessageSearchResultsDTO(_message.Message):
     scanned_bytes: int
     def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[TurnMessageMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_items: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
+class WorkspaceMessageMatchDTO(_message.Message):
+    __slots__ = ("thread", "match")
+    THREAD_FIELD_NUMBER: _ClassVar[int]
+    MATCH_FIELD_NUMBER: _ClassVar[int]
+    thread: SessionThreadSearchResultDTO
+    match: TurnMessageMatchDTO
+    def __init__(self, thread: _Optional[_Union[SessionThreadSearchResultDTO, _Mapping]] = ..., match: _Optional[_Union[TurnMessageMatchDTO, _Mapping]] = ...) -> None: ...
+
+class WorkspaceMessageSearchResultsDTO(_message.Message):
+    __slots__ = ("catalog_revision", "items", "cursor", "complete", "limited_reason", "scanned_sessions", "scanned_threads", "scanned_items", "scanned_bytes")
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    LIMITED_REASON_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_SESSIONS_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_THREADS_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_ITEMS_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_BYTES_FIELD_NUMBER: _ClassVar[int]
+    catalog_revision: int
+    items: _containers.RepeatedCompositeFieldContainer[WorkspaceMessageMatchDTO]
+    cursor: str
+    complete: bool
+    limited_reason: str
+    scanned_sessions: int
+    scanned_threads: int
+    scanned_items: int
+    scanned_bytes: int
+    def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceMessageMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_sessions: _Optional[int] = ..., scanned_threads: _Optional[int] = ..., scanned_items: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
+
 class TurnHistoryLoadRequest(_message.Message):
     __slots__ = ("direction", "cursor", "anchor_turn_id", "turn_ids", "turns", "before_turns", "after_turns", "include", "execution_id", "tool_call_ids", "anchor_message")
     DIRECTION_FIELD_NUMBER: _ClassVar[int]

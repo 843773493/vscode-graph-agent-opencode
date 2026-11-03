@@ -19,6 +19,9 @@ from app.schemas.internal_v2.turn_search import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_history.message_search import (
+    MessageSearchBudget,
+)
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.turn_history.trace_cursor import bind_trace_cursor
 
@@ -136,12 +139,12 @@ class SessionTurnHistoryService:
 
     async def search_messages(
         self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,
+        *, budget: MessageSearchBudget | None = None,
     ) -> TurnMessageSearchResultsDTO:
-        # TODO(quick-access 9.3/9.7)：工作区正文分支和 React 精确定位继续消费此入口及原 around reader。
         async with self._session_service.session_read_admission(session_id):
             thread_id = await self._session_service.resolve_thread(session_id, thread_id)
             async with self._checkpointer.history_read_lease(session_id, thread_id):
-                return self._checkpointer.search_history_messages(session_id, thread_id, request)
+                return self._checkpointer.search_history_messages(session_id, thread_id, request, budget=budget)
 
 
 __all__ = ["SessionTurnHistoryService"]

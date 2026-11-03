@@ -122,6 +122,9 @@ from app.services.infrastructure.rollout_context.runtime.reconciliation import (
 from app.services.infrastructure.rollout_context.store import (
     RolloutContextStore,
 )
+from app.services.infrastructure.rollout_history.message_search import (
+    MessageSearchBudget,
+)
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
@@ -506,8 +509,9 @@ class RolloutCheckpointSaver(
 
     def search_history_messages(
         self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,
+        *, budget: MessageSearchBudget | None = None,
     ) -> TurnMessageSearchResultsDTO:
-        return self._history_reader.search_messages(session_id, thread_id, request)
+        return self._history_reader.search_messages(session_id, thread_id, request, budget=budget)
 
     def get_next_version(self, current: str | None, channel: None) -> str:
         if current is None:

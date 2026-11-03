@@ -4,6 +4,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.internal_v2.session_navigation.thread_search import (
+    SessionThreadSearchResultDTO,
+)
+
 
 class TurnMessageSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -46,5 +50,22 @@ class TurnMessageSearchResultsDTO(BaseModel):
     cursor: str | None
     complete: bool
     limited_reason: Literal["result_limit", "scan_limit", "byte_limit", "deadline", "item_size_limit"] | None
+    scanned_items: int = Field(ge=0)
+    scanned_bytes: int = Field(ge=0)
+
+
+class WorkspaceMessageMatchDTO(BaseModel):
+    thread: SessionThreadSearchResultDTO
+    match: TurnMessageMatchDTO
+
+
+class WorkspaceMessageSearchResultsDTO(BaseModel):
+    catalog_revision: int
+    items: list[WorkspaceMessageMatchDTO]
+    cursor: str | None
+    complete: bool
+    limited_reason: Literal["result_limit", "scan_limit", "thread_limit", "byte_limit", "deadline", "item_size_limit"] | None
+    scanned_sessions: int = Field(ge=0)
+    scanned_threads: int = Field(ge=0)
     scanned_items: int = Field(ge=0)
     scanned_bytes: int = Field(ge=0)

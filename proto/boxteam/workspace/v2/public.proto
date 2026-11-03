@@ -2238,6 +2238,23 @@ message TurnMessageSearchResultsDTO {
   int64 scanned_bytes = 8;
 }
 
+message WorkspaceMessageMatchDTO {
+  SessionThreadSearchResultDTO thread = 1;
+  TurnMessageMatchDTO match = 2;
+}
+
+message WorkspaceMessageSearchResultsDTO {
+  int64 catalog_revision = 1;
+  repeated WorkspaceMessageMatchDTO items = 2;
+  optional string cursor = 3;
+  bool complete = 4;
+  optional string limited_reason = 5;
+  int64 scanned_sessions = 6;
+  int64 scanned_threads = 7;
+  int64 scanned_items = 8;
+  int64 scanned_bytes = 9;
+}
+
 message TurnHistoryLoadRequest {
   optional string direction = 1;
   optional string cursor = 2;

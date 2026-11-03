@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
     get_request_id,
+    get_session_catalog_service,
+    get_session_service,
     get_session_turn_history_service,
     verify_local_token,
 )
@@ -19,6 +21,7 @@ from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
 from app.core.history_loading import parse_history_loading_header
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.trace_middleware import require_current_gateway_id
 from app.domain.itemized.errors import ItemSchemaError
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse
@@ -31,8 +34,14 @@ from app.schemas.internal_v2.turn import (
 from app.schemas.internal_v2.turn_search import (
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
+    WorkspaceMessageSearchResultsDTO,
 )
+from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_service import SessionService
 from app.services.business.session_turn_history import SessionTurnHistoryService
+from app.services.business.session_turn_history.workspace_search import (
+    search_workspace_messages,
+)
 from app.services.infrastructure.turn_history import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
@@ -40,6 +49,33 @@ from app.services.infrastructure.turn_history import (
 )
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+@router.post(
+    "/history/search", response_model=APIResponse[WorkspaceMessageSearchResultsDTO],
+    summary="有界查询当前工作区 main／child 的可见消息正文",
+)
+async def search_workspace_history_messages(
+    payload: TurnMessageSearchRequest,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    catalog: Annotated[SessionCatalogService, Depends(get_session_catalog_service)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+    history: Annotated[SessionTurnHistoryService, Depends(get_session_turn_history_service)],
+    deadline_at: Annotated[FiniteFloat | None, Header(alias="X-BoxTeam-Content-Search-Deadline")] = None,
+):
+    try:
+        result = await search_workspace_messages(catalog, sessions, history, payload,
+            gateway_id=require_current_gateway_id("工作区消息搜索"), deadline_at=deadline_at)
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except InvalidTurnCursorError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (StaleTurnCursorError, StaleTurnReferenceError) as error:
+        raise HTTPException(status_code=409, detail=error.detail.model_dump(mode="json")) from error
+    except (ValueError, TimeoutError, SessionDeletionPendingError) as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(

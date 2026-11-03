@@ -3,6 +3,7 @@ import {
   getSessionTurnBootstrap,
   loadSessionHistory,
   searchThreadHistoryMessages,
+  searchWorkspaceHistoryMessages,
   StaleTurnCursorHttpError,
 } from "./sessionTurnHistory";
 import { HttpRequestError } from "../http";
@@ -23,6 +24,20 @@ afterEach(() => {
 });
 
 describe("Turn 历史 API client", () => {
+  test("工作区正文查询透传独立 cursor、范围和剩余期限，不遍历 Session", async () => {
+    const seen: Array<{ path: string; body: unknown; workspace: string | null; deadline: string | null }> = [];
+    installSessionApiFetchMock(({ path, init }) => {
+      const headers = new Headers(init?.headers);
+      seen.push({ path, body: JSON.parse(String(init?.body)), workspace: headers.get("X-BoxTeam-Workspace-Id"),
+        deadline: headers.get("X-BoxTeam-Content-Search-Deadline") });
+      return apiResponse({ catalog_revision: 1, items: [], cursor: null, complete: true, limited_reason: null,
+        scanned_sessions: 0, scanned_threads: 0, scanned_items: 0, scanned_bytes: 0 });
+    });
+    await searchWorkspaceHistoryMessages(49_219, { query: "😀词", cursor: "owner-cursor", limit: 3 },
+      "workspace-owner", undefined, 123_456);
+    expect(seen).toEqual([{ path: "/api/v1/sessions/history/search", body: { query: "😀词", cursor: "owner-cursor", limit: 3 },
+      workspace: "workspace-owner", deadline: "123.456" }]);
+  });
   test("正文查询固定精确 Thread，定位沿原 around 请求传递独立引用", async () => {
     const requests: Array<{ path: string; body: unknown; workspace: string | null }> = [];
     const reference = { item_id: "item-1", content_hash: "a".repeat(64), start_codepoint: 2, end_codepoint: 5 };
