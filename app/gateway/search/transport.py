@@ -161,6 +161,7 @@ class SearchTransport:
         raise SearchBranchError(code, message, retryable=status >= 500 or code in {
                                     "deadline", "owner_rejected", "invalid_catalog_cursor", "stale_catalog_cursor",
                                     "invalid_thread_cursor", "stale_thread_cursor", "stale_thread_catalog",
+                                    "invalid_turn_cursor", "stale_turn_cursor", "stale_message_search_cursor",
                                 } or (owner == "resource_file_operations" and reason in {"invalid_cursor", "stale_cursor"}),
                                 provider_id=provider_id if isinstance(provider_id, str) else None,
                                 error_owner=owner if isinstance(owner, str) else None,

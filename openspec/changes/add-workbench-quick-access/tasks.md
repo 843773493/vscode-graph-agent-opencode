@@ -755,3 +755,11 @@
 - 267项定向测试通过（7.75秒），覆盖控制库、名称查询预算、Thread游标形态、两条API及传输。Ruff11条及Pyright19条与完整HEAD基线按未变行映射逐条相同，无新增；最终网络测试文件Ruff与Pyright均零诊断。OpenSpec strict及差异检查通过。
 - 真实双Backend＋Gateway网络场景1项通过（51.82秒）：产品入口创建Session并发布两个fork child，非法续点与跨查询在直接API／联邦中具名拒绝；A发布新child使旧Thread版本失效，B仍可续页，显式重查只调度A。原全范围、离线／重启、文件续点、权限及真实连接拒绝断言保留。
 - 首轮500原件保留，原因是测试装具未启动fork资源枚举所需的终端服务；沿既有终端／浏览器进程装具、独占端口及MountedWorkspace补齐真实服务，来源请求明确full_rollout_copy，未伪造child或历史。准确命令、指纹、原始结果、基线比较和退出码：out/tests/temp/thread_search_errors_20261103/artifacts/verification.json。临时完整基线及tar已删除，诊断原件保留；本批无前端或DTO字段变化，不重复Web构建／Electron。16.18其余owner及信息／警告尚未收齐，保持未勾选。
+
+### 2026-11-03：工作区消息续点具名拒绝与真实恢复回归（16.18 部分）
+
+- 工作区 canonical 消息／工具结果续点按原校验点区分非法形态、Gateway／workspace归属、查询、类别、目录位置与catalog revision；非法续点继续invalid_turn_cursor／400，目录版本冲突改为stale_message_search_cursor／409。原历史搜索与统一Provider返回相同workspace_message_search归属和原因；Thread发布版本仍消费原stale_thread_catalog，Thread内历史仍由原历史owner核验。Gateway保留实际状态、输入续点、零交付和显式原分支重查，不自动重放。
+- 92项API／历史失败边界／传输定向测试通过（6.98秒）；4项后端消息入口与编译图集成、1项真实Gateway＋Backend＋统一model_stream回放集成全部通过（合计152.89秒）。覆盖损坏形态、跨owner／查询／类别及越界、共享正文／Thread预算、Unicode位置、未打开child、冷历史零物化、真实执行推进历史版本、fork发布版本、catalog变化、重启后消息／工具续页和原around定位；查询未新增模型调用。
+- 原网络测试能力清单迁齐已注册file名称／正文、LLM请求与context，以类别＋操作核全部匹配模式，不通过覆盖同类别键丢掉文件操作。真实消息及工具续点的400／409、原因、原cursor、分支重试和request_id均留原件，显式重查只请求原分支。
+- Ruff零诊断；Pyright三条与完整HEAD基线按未改行逐条相同，产品及API测试零新增诊断。初轮测试装具缺生产HTTP异常处理器的失败保留；API单测接入原处理器，简化历史ASGI装具只证明领域详情，完整请求ID由真实Gateway场景证明，未改共享fixture。OpenSpec strict和差异检查通过。
+- 准确命令、源码指纹、原始结果、实际退出码、基线比较及正式网络回执位置：out/tests/temp/message_search_errors_20261103/artifacts/verification.json。临时完整基线及tar已删除；本批无前端／公开DTO字段变化，不重复生成或Web／Electron构建。其余具名owner和信息／警告仍由16.18追踪，整项保持未勾选。

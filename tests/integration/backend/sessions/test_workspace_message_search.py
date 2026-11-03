@@ -1,6 +1,8 @@
 """工作区消息查询经真实消息入口建立历史，核未打开 child、共享预算及失效。"""
 
 import asyncio
+import base64
+import json
 import time
 
 import httpx
@@ -67,10 +69,26 @@ async def test_unified_provider_preserves_literal_body_cursor_and_original_error
     assert following.status_code == direct_following.status_code == 200
     assert following.json()["data"]["messages"] == direct_following.json()["data"]
     assert following.json()["data"]["messages"]["items"][0]["match"]["reference"]["start_codepoint"] > page["items"][0]["match"]["reference"]["start_codepoint"]
-    wrong = await query(query="其它词", cursor=page["cursor"])
-    assert wrong.status_code == 400 and wrong.json()["detail"]["code"] == "invalid_turn_cursor", wrong.text
-    wrong_category = await query(category="tool_result", cursor=page["cursor"])
-    assert wrong_category.status_code == 400 and wrong_category.json()["detail"]["code"] == "invalid_turn_cursor"
+    original = json.loads(base64.urlsafe_b64decode(page["cursor"] + "=" * (-len(page["cursor"]) % 4)))
+    invalid_positions = []
+    for changes, reason in (({"workspace_id": "another-workspace"}, "owner_mismatch"),
+                            ({"gateway_id": "another-gateway"}, "owner_mismatch"),
+                            ({"node_offset": 1000000}, "position_out_of_bounds")):
+        cursor = base64.urlsafe_b64encode(json.dumps({**original, **changes}).encode()).decode().rstrip("=")
+        invalid_positions.append(({"cursor": cursor}, reason))
+    for change, reason in [*invalid_positions,
+                           ({"query": "其它词", "cursor": page["cursor"]}, "query_mismatch"),
+                           ({"category": "tool_result", "cursor": page["cursor"]}, "category_mismatch"),
+                           ({"cursor": "not-base64!"}, "malformed"),
+                           ({"cursor": "MTIz"}, "malformed"),
+                           ({"cursor": "e30"}, "malformed")]:
+        wrong = await query(**change)
+        assert wrong.status_code == 400, wrong.text
+        detail = wrong.json()["detail"]
+        assert (detail["owner"], detail["code"], detail["reason"]) == (
+            "workspace_message_search", "invalid_turn_cursor", reason)
+        direct = await workspace_query(json={"query": payload["query"], "limit": 1, **change})
+        assert direct.status_code == 400 and direct.json()["detail"] == detail, direct.text
     whitespace = await query(query=" ")
     assert whitespace.status_code == 200, whitespace.text
     assert whitespace.json()["data"]["messages"]["items"]
@@ -218,8 +236,12 @@ async def test_workspace_search_rejects_changed_query_thread_catalog_and_history
     await _child(runtime_case, session_id, creation_key="workspace-search-new-child")
     changed = await workspace_query(json={**query, "cursor": cursor})
     assert changed.status_code == 409 and "Thread 目录已更新" in changed.text, changed.text
+    assert (changed.json()["detail"]["owner"], changed.json()["detail"]["code"], changed.json()["detail"]["reason"]) == (
+        "session_thread_catalog", "stale_thread_catalog", "thread_revision")
     fresh = await workspace_query(json=query)
     cursor = fresh.json()["data"]["cursor"]
     await _session(runtime_case.runner)
     changed = await workspace_query(json={**query, "cursor": cursor})
     assert changed.status_code == 409 and "目录已更新" in changed.text, changed.text
+    assert (changed.json()["detail"]["owner"], changed.json()["detail"]["code"], changed.json()["detail"]["reason"]) == (
+        "workspace_message_search", "stale_message_search_cursor", "catalog_revision")

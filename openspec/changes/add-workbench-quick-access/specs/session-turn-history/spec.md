@@ -22,6 +22,8 @@
 
 续页 SHALL 固定 Gateway、workspace、查询、catalog revision、当前 Session 的 Thread 目录版本和当前历史位置。各 Thread 是其实际读取时的快照，不承诺跨库同一时刻；已完成分支新增消息需重新查询。目录或当前历史失效 SHALL 返回冲突，不能丢弃旧 cursor 后悄悄重查。
 
+工作区消息／工具结果续点的校验 SHALL 携带 `owner=workspace_message_search`、原详细消息和实际校验点的 `reason`，区分 `malformed`、`owner_mismatch`、`query_mismatch`、`category_mismatch`、`position_out_of_bounds` 与 `catalog_revision`。非法形态、归属、查询、类别或位置沿用 HTTP 400 及 `invalid_turn_cursor`；catalog revision 变化返回 HTTP 409 `stale_message_search_cursor`。当前 Session 的 Thread 发布版本冲突沿用 `session_thread_catalog` 的 `stale_thread_catalog`；Thread 内历史失效继续由原历史 owner 发布。原工作区历史入口与统一搜索 SHALL 返回相同领域详情和本次 request_id；Gateway 保留实际状态、输入续点及零交付，并允许显式重查原分支，不自动重放或解析消息文字。
+
 #### Scenario: 未打开 child 的工作区查询
 
 - **WHEN** 用户在所选工作区查询只有未打开 child 才有的正文

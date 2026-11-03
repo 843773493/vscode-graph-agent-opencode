@@ -4,6 +4,8 @@
 
 `workspace_search.py` 在原 catalog／SessionThread 归属内编排有界消息正文查询，所有 Thread 共用原 canonical reader 的正文预算，不扫描目录或创建第二份正文。
 
+工作区发现续点由同一`WorkspaceMessageSearchCursorError`保留形态、归属、查询、类别、目录版本及位置原因；Thread发布版本与Thread内历史冲突仍消费各自原owner异常，不合并为通用读取失败。
+
 ## 可修改内容
 
 - 可以修改 Turn 语义投影规则、读取服务和显式迁移编排。

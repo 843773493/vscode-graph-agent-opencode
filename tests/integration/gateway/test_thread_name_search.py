@@ -118,9 +118,14 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             workspace_id = capabilities.json()["data"]["workspace_id"]
             assert {(item["category"], operation) for item in capabilities.json()["data"]["providers"] for operation in item["operations"]} == {
                 ("catalog", "name"), ("thread", "name"), ("message", "content"), ("tool_result", "content"),
+                ("file", "name"), ("file", "content"), ("llm_request", "content"), ("context", "content"),
             }
-            assert {item["category"]: item["match_modes"] for item in capabilities.json()["data"]["providers"]} == {
-                "catalog": ["fuzzy"], "thread": ["fuzzy"], "message": ["literal"], "tool_result": ["literal"],
+            assert {(item["category"], operation): item["match_modes"] for item in capabilities.json()["data"]["providers"]
+                    for operation in item["operations"]} == {
+                ("catalog", "name"): ["fuzzy"], ("thread", "name"): ["fuzzy"],
+                ("message", "content"): ["literal"], ("tool_result", "content"): ["literal"],
+                ("file", "name"): ["path", "fuzzy", "glob"], ("file", "content"): ["literal", "regex"],
+                ("llm_request", "content"): ["literal"], ("context", "content"): ["literal", "regex"],
             }
             payload = {"workspace_id": workspace_id, "category": "thread", "query": "SDN🧪", "limit": 1}
             unified = await client.post("/api/v1/search", json=payload)
@@ -150,15 +155,16 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             queries = [{"category": category, "operation": "content", "match_mode": "literal", "query": text, "limit": 1}
                        for category, text in (("message", "canonical-source-for-thread-discovery"), ("tool_result", "4568"))]
 
-            async def federated(payload: dict, request_id: str) -> list[dict]:
+            async def federated(payload: dict, request_id: str, *, expected_results: int = 2) -> list[dict]:
                 async with client.stream("POST", "/api/gateway/search", json=payload, headers={"X-Request-ID": request_id}) as response:
                     assert response.status_code == 200, (await response.aread()).decode()
                     assert response.headers["X-Request-ID"] == request_id
                     events = [json.loads(line.removeprefix("data: ")) async for line in response.aiter_lines() if line.startswith("data: ")]
                 assert all(event["request_id"] == request_id for event in events)
                 assert events[0]["type"] == "scope" and events[-1]["type"] == "end"
-                assert events[-1]["summary"]["returned_results"] == 2
-                assert {item["branch"]["category"] for item in events[-1]["summary"]["branches"]} == {"message", "tool_result"}
+                assert events[-1]["summary"]["returned_results"] == expected_results
+                assert {item["branch"]["category"] for item in events[-1]["summary"]["branches"]} == {
+                    query["category"] for query in payload["queries"]}
                 return events
 
             body_first = await federated({
@@ -172,6 +178,33 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
                 hit, = event["page"]["messages"]["items"]
                 assert hit["thread"]["session_id"] == session and hit["thread"]["kind"] == "main"
                 assert hit["match"]["reference"]["category"] == event["page"]["category"]
+
+            message_page = next(event for event in body_pages if event["page"]["category"] == "message")
+            tool_page = next(event for event in body_pages if event["page"]["category"] == "tool_result")
+            body_scope = {"mode": "resume", "scope": body_first[0]["scope"]["scope"]}
+            rejections = []
+            for query, branch, cursor, reason in (
+                (queries[0], message_page["branch"]["branch"], "MTIz", "malformed"),
+                ({**queries[0], "query": "another-query"}, message_page["branch"]["branch"], message_page["branch"]["cursor"], "query_mismatch"),
+                ({**queries[0], "category": "tool_result"}, tool_page["branch"]["branch"], message_page["branch"]["cursor"], "category_mismatch"),
+            ):
+                direct = await client.post("/api/v1/search", json={"workspace_id": workspace_id, **query, "cursor": cursor})
+                assert direct.status_code == 400, direct.text
+                detail = direct.json()["detail"]
+                assert (detail["owner"], detail["code"], detail["reason"]) == (
+                    "workspace_message_search", "invalid_turn_cursor", reason)
+                assert direct.headers["X-Request-ID"] == direct.json()["request_id"]
+                legacy = await client.post("/api/v1/sessions/history/search", json={
+                    "query": query["query"], "category": query["category"], "limit": 1, "cursor": cursor})
+                assert legacy.status_code == 400 and legacy.json()["detail"] == detail, legacy.text
+                rejected = await federated({"scope": body_scope, "queries": [query],
+                    "continuations": [{"branch": branch, "cursor": cursor}]}, "req_body_" + reason, expected_results=0)
+                failure, = rejected[-1]["summary"]["branches"]
+                assert (failure["code"], failure["error_owner"], failure["reason"], failure["http_status"]) == (
+                    "invalid_turn_cursor", "workspace_message_search", reason, 400)
+                assert failure["cursor"] == cursor and failure["retryable"]
+                assert not any(event["type"] == "page" for event in rejected)
+                rejections.append(rejected)
 
             async def search(cursor: str | None = None) -> httpx.Response:
                 response = await client.get(
@@ -237,6 +270,25 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             assert stale.status_code == 409 and "Thread 目录已更新" in stale.text, (
                 stale.text
             )
+            stale_body = await federated({"scope": body_scope, "queries": [queries[0]],
+                "continuations": [{"branch": message_page["branch"]["branch"], "cursor": message_page["branch"]["cursor"]}]},
+                "req_body_thread_changed", expected_results=0)
+            thread_failure, = stale_body[-1]["summary"]["branches"]
+            assert (thread_failure["code"], thread_failure["error_owner"], thread_failure["reason"], thread_failure["http_status"]) == (
+                "stale_thread_catalog", "session_thread_catalog", "thread_revision", 409)
+            assert thread_failure["cursor"] == message_page["branch"]["cursor"] and thread_failure["retryable"]
+            await create_session(client, "Catalog revision changed after message search")
+            stale_catalog = await federated({"scope": body_scope, "queries": [queries[0]],
+                "continuations": [{"branch": message_page["branch"]["branch"], "cursor": message_page["branch"]["cursor"]}]},
+                "req_body_catalog_changed", expected_results=0)
+            catalog_failure, = stale_catalog[-1]["summary"]["branches"]
+            assert (catalog_failure["code"], catalog_failure["error_owner"], catalog_failure["reason"], catalog_failure["http_status"]) == (
+                "stale_message_search_cursor", "workspace_message_search", "catalog_revision", 409)
+            assert catalog_failure["cursor"] == message_page["branch"]["cursor"] and catalog_failure["retryable"]
+            retried = await federated({"scope": body_scope, "queries": [queries[0]],
+                "continuations": [{"branch": message_page["branch"]["branch"]}]}, "req_body_explicit_retry", expected_results=1)
+            assert all(branch["state"] != "failed" for branch in retried[-1]["summary"]["branches"])
+            assert len(case.requests()) == calls_before
             case.write_actual(
                 "thread-discovery",
                 {
@@ -248,6 +300,10 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
                     "model_calls": calls_before,
                     "body_first": body_first,
                     "body_resumed": body_resumed,
+                    "cursor_rejections": rejections,
+                    "stale_body": stale_body,
+                    "stale_catalog": stale_catalog,
+                    "retried": retried,
                 },
             )
     finally:

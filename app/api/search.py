@@ -39,6 +39,9 @@ from app.services.business.session_navigation.catalog_query import CatalogCursor
 from app.services.business.session_navigation.thread_search import (
     ThreadSearchCursorError,
 )
+from app.services.business.session_turn_history.workspace_search import (
+    WorkspaceMessageSearchCursorError,
+)
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
@@ -77,6 +80,9 @@ async def search_workspace(
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
     except (CatalogCursorError, ThreadSearchCursorError, ThreadCatalogRevisionChangedError) as error:
         raise HTTPException(status_code=409, detail=error.detail()) from error
+    except WorkspaceMessageSearchCursorError as error:
+        raise HTTPException(status_code=400 if error.code == "invalid_turn_cursor" else 409,
+                            detail=error.detail()) from error
     except LLMRequestLogError as error:
         raise HTTPException(status_code=400 if error.code == "invalid_request_log_cursor" else 409,
                             detail=error.detail()) from error

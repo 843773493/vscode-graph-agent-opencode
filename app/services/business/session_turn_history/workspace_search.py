@@ -2,11 +2,10 @@
 
 import asyncio
 import base64
-import binascii
 from time import monotonic
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.resource_uri import thread_resource_uri
 from app.schemas.internal_v2.session_navigation.thread_search import (
@@ -26,10 +25,21 @@ from app.services.business.session_turn_history.service import SessionTurnHistor
 from app.services.infrastructure.rollout_history.message_search import (
     MessageSearchBudget,
 )
-from app.services.infrastructure.turn_history.models import InvalidTurnCursorError
 
 MAX_SCANNED_NODES = 64
 MAX_SCANNED_THREADS = 16
+
+
+class WorkspaceMessageSearchCursorError(ValueError):
+    """工作区发现续点的拒绝；Thread 内历史游标仍由原历史 owner 核验。"""
+
+    def __init__(self, reason: Literal["malformed", "owner_mismatch", "query_mismatch", "category_mismatch", "position_out_of_bounds", "catalog_revision"], message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.code = "stale_message_search_cursor" if reason == "catalog_revision" else "invalid_turn_cursor"
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": "workspace_message_search", "code": self.code, "reason": self.reason, "message": str(self)}
 
 
 class _WorkspaceMessageCursor(BaseModel):
@@ -63,16 +73,19 @@ async def search_workspace_messages(
         try:
             raw = base64.b64decode(request.cursor + "=" * (-len(request.cursor) % 4), altchars=b"-_", validate=True)
             previous = _WorkspaceMessageCursor.model_validate_json(raw)
-        except (ValueError, binascii.Error, ValidationError) as error:
-            raise InvalidTurnCursorError("工作区消息搜索 cursor 格式无效") from error
-        if any(getattr(previous, field) != getattr(state, field)
-               for field in ("gateway_id", "workspace_id", "query", "category")):
-            raise InvalidTurnCursorError("工作区消息搜索 cursor 不属于本次 owner 或查询")
+        except ValueError as error:
+            raise WorkspaceMessageSearchCursorError("malformed", "工作区消息搜索 cursor 格式无效") from error
+        if (previous.gateway_id, previous.workspace_id) != (state.gateway_id, state.workspace_id):
+            raise WorkspaceMessageSearchCursorError("owner_mismatch", "工作区消息搜索 cursor 不属于本次 owner")
+        if previous.query != state.query:
+            raise WorkspaceMessageSearchCursorError("query_mismatch", "工作区消息搜索 cursor 不属于本次查询")
+        if previous.category != state.category:
+            raise WorkspaceMessageSearchCursorError("category_mismatch", "工作区消息搜索 cursor 不属于本次类别")
         if previous.catalog_revision != state.catalog_revision:
-            raise ValueError("工作区消息搜索目录已更新，请重新查询")
+            raise WorkspaceMessageSearchCursorError("catalog_revision", "工作区消息搜索目录已更新，请重新查询")
         state = previous
     if state.node_offset > len(snapshot.items):
-        raise InvalidTurnCursorError("工作区消息搜索 cursor 目录位置越界")
+        raise WorkspaceMessageSearchCursorError("position_out_of_bounds", "工作区消息搜索 cursor 目录位置越界")
     items: list[WorkspaceMessageMatchDTO] = []
     scanned_sessions: set[str] = set()
     scanned_nodes = scanned_threads = 0
@@ -127,7 +140,7 @@ async def search_workspace_messages(
         state.node_offset += 1
         state.after_thread_id = state.thread_revision = state.history_cursor = None
     if sessions.path_resolver.revision != snapshot.catalog_revision:
-        raise ValueError("工作区消息搜索期间目录已更新，请重新查询")
+        raise WorkspaceMessageSearchCursorError("catalog_revision", "工作区消息搜索期间目录已更新，请重新查询")
     admission.check()
     complete = state.node_offset == len(snapshot.items)
     return WorkspaceMessageSearchResultsDTO(

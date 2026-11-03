@@ -19,6 +19,9 @@ from app.api.errors import (
 from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
 from app.core.history_loading import parse_history_loading_header
+from app.core.session_control_thread_catalog.search import (
+    ThreadCatalogRevisionChangedError,
+)
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.trace_middleware import require_current_gateway_id
 from app.domain.itemized.errors import ItemSchemaError
@@ -38,6 +41,9 @@ from app.schemas.internal_v2.turn_search import (
 )
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_turn_history import SessionTurnHistoryService
+from app.services.business.session_turn_history.workspace_search import (
+    WorkspaceMessageSearchCursorError,
+)
 from app.services.infrastructure.turn_history import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
@@ -65,6 +71,11 @@ async def search_workspace_history_messages(
         ), gateway_id=require_current_gateway_id("工作区消息搜索"))
     except NotFoundError as error:
         raise not_found_http_error(error) from error
+    except WorkspaceMessageSearchCursorError as error:
+        raise HTTPException(status_code=400 if error.code == "invalid_turn_cursor" else 409,
+                            detail=error.detail()) from error
+    except ThreadCatalogRevisionChangedError as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
     except InvalidTurnCursorError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (StaleTurnCursorError, StaleTurnReferenceError) as error:

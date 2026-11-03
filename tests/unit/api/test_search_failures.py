@@ -3,10 +3,10 @@
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.api import search, session_navigation
+from app.api import search, session_navigation, session_turns
 from app.api.deps import get_workspace_search_service, verify_local_token
 from app.core.session_control_thread_catalog.search import (
     ThreadCatalogRevisionChangedError,
@@ -17,6 +17,9 @@ from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_navigation.thread_search import (
     ThreadSearchCursorError,
 )
+from app.services.business.session_turn_history.workspace_search import (
+    WorkspaceMessageSearchCursorError,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )
@@ -24,12 +27,16 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 
 @pytest.fixture
 def search_api():
+    from app.main import app as workspace_app
+
     query = AsyncMock()
     service = Mock(spec=WorkspaceSearchService, search=query, workspace_id="ws")
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
+    application.add_exception_handler(HTTPException, workspace_app.exception_handlers[HTTPException])
     application.include_router(search.router, prefix="/api/v1")
     application.include_router(session_navigation.router, prefix="/api/v1")
+    application.include_router(session_turns.router, prefix="/api/v1")
     application.dependency_overrides[verify_local_token] = lambda: "test-search-token"
     application.dependency_overrides[get_workspace_search_service] = lambda: service
     with TestClient(application, raise_server_exceptions=False,
@@ -67,6 +74,25 @@ def test_thread_cursor_rejections_keep_named_owner_on_both_routes(search_api, en
                 if endpoint == "/api/v1/search" else client.get(endpoint, params={"query": "needle"}))
     assert response.status_code == 409
     assert response.headers["X-Request-ID"] == "req-search-failure"
+    assert response.json()["detail"] == error.detail()
+    query.assert_awaited_once()
+
+
+@pytest.mark.parametrize("error,status", [
+    (WorkspaceMessageSearchCursorError("malformed", "原消息续点格式无效"), 400),
+    (WorkspaceMessageSearchCursorError("catalog_revision", "原消息目录已更新"), 409),
+    (ThreadCatalogRevisionChangedError("session-exact", 1, 2), 409),
+])
+@pytest.mark.parametrize("endpoint", ["/api/v1/search", "/api/v1/sessions/history/search"])
+def test_workspace_message_cursor_keeps_same_detail_on_both_routes(search_api, endpoint, error, status):
+    client, query = search_api
+    query.side_effect = error
+    payload = {"query": "needle", "cursor": "original-cursor"}
+    if endpoint == "/api/v1/search":
+        payload.update(workspace_id="ws", category="message", operation="content", match_mode="literal")
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == status
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req-search-failure"
     assert response.json()["detail"] == error.detail()
     query.assert_awaited_once()
 
