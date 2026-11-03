@@ -42,13 +42,17 @@ from app.agents.providers.wire_finalize import chat_wire_profile, responses_wire
 from app.agents.sealed_assembly_dispatch import (
     read_sealed_assembly_dispatch,
     sealed_assembly_dispatch_scope,
+    validate_sealed_assembly_dispatch,
 )
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.execution_admission_context import current_execution_admission
+from app.core.execution_admission_context import (
+    current_execution_admission,
+    execution_admission_scope,
+)
 from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_catalog_components
 from app.core.session_control_store import SessionControlStore
@@ -1851,6 +1855,68 @@ async def toolset_dispatch_case(
     case.controller, case.request = controller, read_request
     case.artifacts, case.dispatch = replay.artifacts.parent, dispatch
     return case
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_dispatch_scope_reuses_validation_and_keeps_copies_admission_and_wire_isolated(
+    toolset_dispatch_case, target_format, monkeypatch,
+):
+    case = toolset_dispatch_case
+    snapshot = await case.dispatch("scope-validation-reuse")
+    dispatch = case.dispatches[-1]
+    reference = dispatch.reference
+    frozen_wire = canonical_json_bytes(snapshot.request_hash_preimage)
+    validations = []
+    validate = type(reference).validate_snapshot
+
+    def observe(value, candidate):
+        validations.append(candidate.assembly_id)
+        validate(value, candidate)
+
+    monkeypatch.setattr(type(reference), "validate_snapshot", observe)
+    profile = responses_wire_profile(case.model) if target_format == "responses" else chat_wire_profile(case.model)
+    with (
+        dispatch_execution_scope(case.saver, case.session, case.turn),
+        sealed_assembly_dispatch_scope(
+            reference, snapshot, resource_refs=dispatch.resource_refs,
+            native_projection=dispatch.native_projection,
+        ),
+    ):
+        # 输入和每次返回的嵌套容器都不能修改 scope 私有封存正文。
+        snapshot.request_hash_preimage["tools"].clear()
+        first = read_sealed_assembly_dispatch(invocation_purpose="agent")
+        assert canonical_json_bytes(first.snapshot.request_hash_preimage) == frozen_wire
+        first.snapshot.request_hash_preimage["tools"].clear()
+        if first.native_projection is not None:
+            first.native_projection["request"]["tools"].clear()
+        second = read_sealed_assembly_dispatch(invocation_purpose="agent")
+        assert canonical_json_bytes(second.snapshot.request_hash_preimage) == frozen_wire
+        if second.native_projection is not None:
+            assert second.native_projection["request"]["tools"]
+        admission = current_execution_admission(langgraph_thread_id=case.thread)
+        with (
+            execution_admission_scope(replace(admission, execution_id="foreign-execution"), langgraph_thread_id=case.thread),
+            pytest.raises(ValueError, match="reference 与当前 execution 不一致"),
+        ):
+            read_sealed_assembly_dispatch(invocation_purpose="agent")
+        wire = json.loads(frozen_wire)
+        validate_sealed_assembly_dispatch(invocation_purpose="agent", profile=profile, wire_request=wire)
+        wire["tools"].clear()
+        with pytest.raises(ValueError, match="实际 Provider wire"):
+            validate_sealed_assembly_dispatch(invocation_purpose="agent", profile=profile, wire_request=wire)
+        assert validations == [snapshot.assembly_id]
+    with (
+        dispatch_execution_scope(case.saver, case.session, case.turn),
+        pytest.raises(ValueError, match="sealed assembly hash/manifest 非法"),
+        sealed_assembly_dispatch_scope(
+            reference, replace(second.snapshot, request_hash=sha256_jcs({"tampered": True})),
+            resource_refs=dispatch.resource_refs, native_projection=dispatch.native_projection,
+        ),
+    ):
+        raise AssertionError("篡改的 snapshot 不得进入 scope")
+    assert case.controller.transport.call_count == 1
+    assert read_sealed_assembly_dispatch(invocation_purpose="tool_test") is None
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import threading
 from typing import Any, cast
 
+from cachetools import LRUCache
 from jsonschema import Draft202012Validator, validators
 from jsonschema.protocols import Validator
 from langchain_core.tools import BaseTool, StructuredTool
@@ -12,6 +15,9 @@ from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT202012
 
 from app.domain.itemized.hashing import canonical_json_bytes
+
+_SCHEMA_VALIDATION_CACHE: LRUCache[tuple[type[Validator], bytes], bool] = LRUCache(maxsize=256)
+_SCHEMA_VALIDATION_LOCK = threading.Lock()
 
 
 class CallBoundStructuredTool(StructuredTool):
@@ -29,6 +35,9 @@ class CallBoundStructuredTool(StructuredTool):
 
 def model_tool_schema_validator(schema: dict[str, Any]) -> Validator:
     """校验公开契约及本地引用；禁止隐式联网或未知方言降级。"""
+    # 每次读取当前完整定义并隔离嵌套容器，避免调用方修改 validator/schema 后污染后续校验。
+    encoded = canonical_json_bytes(schema)
+    schema = json.loads(encoded)
     dialect = schema.get("$schema", Draft202012Validator.META_SCHEMA["$id"])
     if not isinstance(dialect, str):
         raise TypeError("工具 JSON Schema 的 $schema 必须是 URI 字符串")
@@ -36,24 +45,32 @@ def model_tool_schema_validator(schema: dict[str, Any]) -> Validator:
     validator_type = validators.validator_for({"$schema": dialect}, default=Draft202012Validator)
     if dialect.rstrip("#") != validator_type.META_SCHEMA.get("$id", validator_type.META_SCHEMA.get("id", "")).rstrip("#"):
         raise ValueError(f"工具 JSON Schema 方言不受支持: {schema.get('$schema')!r}")
-    validator_type.check_schema(schema)
+    # 只保留精确内容的成功回执；不缓存可变 schema、validator 或参数验证结果。
+    key = (validator_type, hashlib.sha256(encoded).digest())
+    with _SCHEMA_VALIDATION_LOCK:
+        checked = _SCHEMA_VALIDATION_CACHE.get(key, False)
+    if not checked:
+        validator_type.check_schema(schema)
     resource = Resource.from_contents(schema, default_specification=DRAFT202012)
     registry = Registry().with_resource("", resource)
-    pending = [(resource, registry.resolver().in_subresource(resource))]
-    while pending:
-        current, resolver = pending.pop()
-        if isinstance(current.contents, dict):
-            for keyword in ("$ref", "$dynamicRef", "$recursiveRef"):
-                reference = current.contents.get(keyword)
-                if reference is None:
-                    continue
-                if not isinstance(reference, str) or (reference and not reference.startswith("#")):
-                    raise ValueError(f"工具 JSON Schema 只支持本地引用: {keyword}={reference!r}")
-                try:
-                    resolver.lookup(reference)
-                except Unresolvable as error:
-                    raise ValueError(f"工具 JSON Schema 本地引用无法解析: {reference!r}") from error
-        pending.extend((child, resolver.in_subresource(child)) for child in current.subresources())
+    if not checked:
+        pending = [(resource, registry.resolver().in_subresource(resource))]
+        while pending:
+            current, resolver = pending.pop()
+            if isinstance(current.contents, dict):
+                for keyword in ("$ref", "$dynamicRef", "$recursiveRef"):
+                    reference = current.contents.get(keyword)
+                    if reference is None:
+                        continue
+                    if not isinstance(reference, str) or (reference and not reference.startswith("#")):
+                        raise ValueError(f"工具 JSON Schema 只支持本地引用: {keyword}={reference!r}")
+                    try:
+                        resolver.lookup(reference)
+                    except Unresolvable as error:
+                        raise ValueError(f"工具 JSON Schema 本地引用无法解析: {reference!r}") from error
+            pending.extend((child, resolver.in_subresource(child)) for child in current.subresources())
+        with _SCHEMA_VALIDATION_LOCK:
+            _SCHEMA_VALIDATION_CACHE[key] = True
     return validator_type(schema, registry=registry)
 
 
@@ -83,9 +100,8 @@ def validate_model_tool_arguments(
         )
     tool_call_schema = getattr(tool, "tool_call_schema", None)
     if isinstance(tool_call_schema, dict):
-        # 直接规范化后做一次元校验；先调用导出入口再构造 validator 会重复检查同一 schema。
-        parameters = json.loads(canonical_json_bytes(tool_call_schema))
-        model_tool_schema_validator(parameters).validate(arguments)
+        # 定义校验可复用，当前调用参数始终经过真实 validator。
+        model_tool_schema_validator(tool_call_schema).validate(arguments)
         return dict(arguments)
 
     # LangChain 的公开 subset model 不继承原模型的 extra 配置，但不得因此
@@ -143,7 +159,5 @@ def export_model_tool_json_schema(tool: BaseTool) -> dict[str, Any]:
         extra = cast(type[BaseModel], tool.get_input_schema()).model_config.get("extra")
         if extra in {"forbid", "allow"}:
             parameters = {**parameters, "additionalProperties": extra == "allow"}
-    # 隔离第三方缓存的 schema，所有消费者取得同一 JCS 规范值。
-    parameters = json.loads(canonical_json_bytes(parameters))
-    model_tool_schema_validator(parameters)
-    return parameters
+    # validator 持有本次隔离且 JCS 规范化的定义，不再重复编码和解析导出值。
+    return cast(dict[str, Any], model_tool_schema_validator(parameters).schema)

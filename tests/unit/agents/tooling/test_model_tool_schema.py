@@ -3,13 +3,15 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 import pytest
-from jsonschema import Draft202012Validator
+from cachetools import LRUCache
+from jsonschema import Draft202012Validator, SchemaError
 from jsonschema import ValidationError as JsonSchemaValidationError
 from langchain_core.tools import StructuredTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.errors import PydanticInvalidForJsonSchema
 
+from app.agents import model_tool_schema
 from app.agents.model_tool_schema import (
     export_model_tool_json_schema,
     filter_tool_event_injected_arguments,
@@ -17,6 +19,20 @@ from app.agents.model_tool_schema import (
     model_tool_schema_validator,
     validate_model_tool_arguments,
 )
+
+
+@pytest.fixture
+def schema_checks(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    monkeypatch.setattr(model_tool_schema, "_SCHEMA_VALIDATION_CACHE", LRUCache(maxsize=2))
+    checked = []
+    check_schema = Draft202012Validator.check_schema
+
+    def track(parameters):
+        checked.append(parameters)
+        check_schema(parameters)
+
+    monkeypatch.setattr(Draft202012Validator, "check_schema", staticmethod(track))
+    return checked
 
 
 def test_model_tool_schema_excludes_runtime_from_all_public_operations() -> None:
@@ -145,7 +161,7 @@ def test_schema_export_isolated_from_dictionary_owner() -> None:
 
 
 def test_dictionary_arguments_check_schema_once_and_observe_definition_changes(
-    monkeypatch: pytest.MonkeyPatch,
+    schema_checks: list[object],
 ) -> None:
     schema = {
         "type": "object", "$defs": {"value": {"type": "string"}},
@@ -153,22 +169,59 @@ def test_dictionary_arguments_check_schema_once_and_observe_definition_changes(
     }
     target = StructuredTool(name="changing", description="可更新的字典契约", args_schema=schema,
                             func=lambda **arguments: arguments)
-    checked = []
-    check_schema = Draft202012Validator.check_schema
-
-    def track(parameters):
-        checked.append(parameters)
-        check_schema(parameters)
-
-    monkeypatch.setattr(Draft202012Validator, "check_schema", staticmethod(track))
     assert validate_model_tool_arguments(target, {"value": "ready"}) == {"value": "ready"}
-    assert len(checked) == 1
+    assert len(schema_checks) == 1
     target.args_schema["$defs"]["value"]["type"] = "integer"
     with pytest.raises(JsonSchemaValidationError):
         validate_model_tool_arguments(target, {"value": "ready"})
-    assert len(checked) == 2
+    assert len(schema_checks) == 2
     assert validate_model_tool_arguments(target, {"value": 2}) == {"value": 2}
-    assert len(checked) == 3
+    assert export_model_tool_json_schema(target)["$defs"]["value"] == {"type": "integer"}
+    assert len(schema_checks) == 2
+
+
+def test_schema_receipt_does_not_share_mutable_validator_or_reference_tree(
+    schema_checks: list[object],
+) -> None:
+    schema = {"type": "object", "$defs": {"value": {"enum": ["original"]}},
+              "properties": {"value": {"$ref": "#/$defs/value"}}}
+    first = model_tool_schema_validator(schema)
+    first.schema["$defs"]["value"]["enum"].append("changed")
+    second = model_tool_schema_validator(schema)
+    assert second is not first
+    second.validate({"value": "original"})
+    with pytest.raises(JsonSchemaValidationError):
+        second.validate({"value": "changed"})
+    assert schema["$defs"]["value"]["enum"] == ["original"]
+    assert len(schema_checks) == 1
+
+
+@pytest.mark.parametrize("schema,error", [
+    ({"type": "unknown"}, SchemaError),
+    ({"$ref": "#/$defs/missing"}, ValueError),
+])
+def test_schema_receipts_never_publish_failed_validation(
+    schema_checks: list[object], schema: dict[str, object], error: type[Exception],
+) -> None:
+    for _ in range(2):
+        with pytest.raises(error):
+            model_tool_schema_validator(schema)
+    assert len(schema_checks) == 2
+
+
+def test_schema_receipts_evict_old_definitions_and_recheck_changed_references(
+    schema_checks: list[object],
+) -> None:
+    for kind in ("string", "integer", "boolean", "boolean", "string"):
+        model_tool_schema_validator({"type": kind})
+    assert len(schema_checks) == 4
+    schema = {"$defs": {"value": {"type": "string"}}, "$ref": "#/$defs/value"}
+    model_tool_schema_validator(schema).validate("valid")
+    schema["$ref"] = "https://offline.invalid/schema"
+    for _ in range(2):
+        with pytest.raises(ValueError, match="只支持本地引用"):
+            model_tool_schema_validator(schema)
+    assert len(schema_checks) == 7
 
 
 @pytest.mark.parametrize("extra", ["forbid", "allow", "ignore"])

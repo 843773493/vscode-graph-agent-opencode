@@ -23,7 +23,6 @@ from app.core.execution_admission_context import require_current_execution_admis
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
@@ -122,7 +121,8 @@ def read_sealed_assembly_dispatch(
         raise ValueError("source-mismatch: Provider invocation_purpose 非法")
     if value is None:
         raise ValueError("source-mismatch: Agent Provider 发送缺少 sealed assembly binding")
-    value.reference.validate_snapshot(value.snapshot)
+    # scope 入口已完整校验并私有复制，所有读取也只返回副本；内部封存值不会被调用方改写。
+    # 读取时只联校当前执行归属，避免每个 callback、日志和发送步骤重复计算完整历史 hash。
     admission = require_current_execution_admission(langgraph_thread_id=value.reference.thread_id)
     if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != (
         value.reference.session_id, value.reference.thread_id,
@@ -155,17 +155,11 @@ def validate_sealed_assembly_dispatch(
         preimage = normalize_wire_request(wire_request)
         actual_body = canonical_json_bytes(preimage)
         sealed_body = canonical_json_bytes(snapshot.request_hash_preimage)
-        actual_hash = context_request_hash(
-            snapshot.as_sealed_plan(),
-            profile.identity(),
-            projector_id=WIRE_PROJECTOR_ID,
-            projector_version=WIRE_PROJECTOR_VERSION,
-            target_format=target_format,
-            wire_request=preimage,
-        )
     except ItemSchemaError as error:
         raise ValueError("source-mismatch: 实际 Provider wire preimage 非法") from error
-    if actual_body != sealed_body or actual_hash != snapshot.request_hash:
+    # scope 已验证 sealed request_hash；相同 profile/projector 下，完整规范字节相等
+    # 就对应同一 hash preimage，无需再构造 plan 并重复计算整份请求摘要。
+    if actual_body != sealed_body:
         raise ValueError("source-mismatch: 实际 Provider wire 与 sealed request_hash/preimage 不一致")
 
 

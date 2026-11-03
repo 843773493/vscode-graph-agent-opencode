@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import rfc8785
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
@@ -32,7 +33,9 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
+    content_hash,
     contribution_content_hash,
+    payload_content_length,
     sha256_jcs,
 )
 from app.domain.itemized.identity.item_projection import (
@@ -54,6 +57,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.storage.catalog import (
+    items as catalog_items,
 )
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.orchestration.execution_step.failures import handle_step_failure
@@ -277,9 +283,12 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
     assert rollout_path.read_bytes() == before
 
 
+@pytest.mark.parametrize("structured", [False, True])
 def test_item_commit_uses_canonical_writer_for_block_part_projection(
     tmp_path: Path,
     session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    structured: bool,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
@@ -293,6 +302,37 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
             model_call_id="model-call-1", block_id="block-1", block_index=0
         ),
     )
+    payload = {"parts": ["块正文" * 2048]} if structured else "块正文" * 2048
+    payload_kind = PayloadKind.STRUCTURED_CONTENT if structured else PayloadKind.TEXT
+    item = replace(item, payload=payload, payload_kind=payload_kind, content_hash=content_hash(payload_kind, payload))
+    encoded_lines = []
+    measured_lengths = []
+    dumps = rfc8785.dumps
+    writing = False
+    append_records = saver._storage.storage._append_v2_records_transaction
+
+    def write_records(*args, **kwargs):
+        nonlocal writing
+        writing = True
+        try:
+            return append_records(*args, **kwargs)
+        finally:
+            writing = False
+
+    def encode(value):
+        encoded = dumps(value)
+        # 消息投影随后会回读并复验正文；这里只统计原子写入期间的行编码。
+        if writing and isinstance(value, dict) and value.get("record_type") == "item" and value.get("item_id") == item.item_id:
+            encoded_lines.append(encoded + b"\n")
+        return encoded
+
+    def measure_length(kind, value):
+        measured_lengths.append((kind, value))
+        return payload_content_length(kind, value)
+
+    monkeypatch.setattr(rfc8785, "dumps", encode)
+    monkeypatch.setattr(catalog_items, "payload_content_length", measure_length)
+    monkeypatch.setattr(saver._storage.storage, "_append_v2_records_transaction", write_records)
     commit_id = saver._storage.executions.append_item(
         SESSION_ID, thread, item,
         execution_id=str(accepted["initial_execution_id"]),
@@ -309,12 +349,51 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
             "WHERE item_id = ?",
             (item.item_id,),
         ).fetchone()
+        part_locator = json.loads(connection.execute(
+            "SELECT locator_json FROM item_parts WHERE item_id=?", (item.item_id,),
+        ).fetchone()[0])
+        catalog_length = connection.execute(
+            "SELECT payload_length FROM item_catalog WHERE item_id=?", (item.item_id,),
+        ).fetchone()[0]
     assert part[:4] == (item.item_id, "block-1", 0, item.content_hash)
     assert locator[2] == commit_id
     raw = saver._storage.storage.jsonl_path(SESSION_ID).read_bytes()
+    assert encoded_lines == [raw[locator[0] : locator[0] + locator[1]]]
+    assert measured_lengths == [(payload_kind, payload)]
+    assert catalog_length == part_locator["length"] == payload_content_length(payload_kind, payload)
     assert (
         part[4] == hashlib.sha256(raw[locator[0] : locator[0] + locator[1]]).hexdigest()
     )
+
+
+def test_commit_rejects_changed_nested_payload_before_jsonl_append(
+    tmp_path: Path, session_bundle_factory,
+) -> None:
+    sessions = tmp_path / "sessions"
+    session_bundle_factory(sessions, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions)
+    _accept(saver, SESSION_ID)
+    storage = saver._storage.storage
+    thread = storage.main_thread_id(SESSION_ID)
+    payload = {"parts": ["原始正文"]}
+    item = replace(
+        _assistant_item("mutated-before-commit"), item_sequence=2,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT, payload=payload,
+        content_hash=content_hash(PayloadKind.STRUCTURED_CONTENT, payload),
+    )
+    # frozen dataclass 的嵌套正文仍可变，写入边界不能只信任构造时的校验。
+    payload["parts"].append("构造后篡改")
+    path = storage.jsonl_path(SESSION_ID, thread_id=thread)
+    before = path.read_bytes()
+    with storage._connect(thread, session_id=SESSION_ID) as connection:
+        with pytest.raises(ItemSchemaError, match="content_hash 与 payload 不一致"):
+            storage._append_v2_records_transaction(
+                connection, thread, "", (item,), session_id=SESSION_ID,
+                commit_kind="item_convergence",
+            )
+        assert connection.execute("SELECT last_item_sequence FROM database_meta").fetchone() == (1,)
+        assert connection.execute("SELECT 1 FROM item_catalog WHERE item_id=?", (item.item_id,)).fetchone() is None
+    assert path.read_bytes() == before
 
 
 def _source_overlay_for_test(*, thread_id: str, **overrides: object) -> SimpleNamespace:

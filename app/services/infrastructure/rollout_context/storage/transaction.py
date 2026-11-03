@@ -42,7 +42,7 @@ class CanonicalItemWriter(Protocol):
         *,
         commit_id: int,
         jsonl_offset: int,
-        jsonl_length: int,
+        jsonl_bytes: bytes,
         commit_recorded_at: str,
     ) -> None: ...
 
@@ -148,7 +148,7 @@ def _canonical_metadata_text(value: object, *, field: str) -> str:
 
 
 
-def _validate_item_storage_projection(item: CanonicalItemRecord) -> tuple[str | None, int]:
+def validate_item_storage_projection(item: CanonicalItemRecord) -> tuple[str | None, int]:
     """typed domain 已校验 source manifest 与 stream block；存储不补造缺字段。"""
     item.validate()
     revision = item.source_manifest.source_revision if item.source_manifest is not None else None
@@ -180,13 +180,6 @@ def strict_optional_text(value: object, *, field: str) -> str | None:
     if value is None:
         return None
     return strict_text(value, field=field)
-
-
-def validate_item_storage_projection(
-    item: CanonicalItemRecord,
-) -> tuple[str | None, int]:
-    """向 checkpoint item writer 暴露统一的 catalog metadata 校验。"""
-    return _validate_item_storage_projection(item)
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,8 +460,8 @@ class V2ItemCommitCoordinator:
         prepared: list[tuple[CanonicalItemRecord, bytes, int]] = []
         offset = current_offset
         for item in items:
+            # 必须在追加文件前检查当前正文；metadata 提取不再重复完整校验。
             item.validate()
-            _validate_item_storage_projection(item)
             expected_sequence = last_item_sequence + len(prepared) + 1
             if item.item_sequence != expected_sequence:
                 raise ValueError(
@@ -547,7 +540,7 @@ class V2ItemCommitCoordinator:
                     item,
                     commit_id=commit_id,
                     jsonl_offset=item_offset,
-                    jsonl_length=len(raw),
+                    jsonl_bytes=raw,
                     commit_recorded_at=timestamp,
                 )
             committed_cursor = connection.execute(

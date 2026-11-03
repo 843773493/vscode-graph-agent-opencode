@@ -51,9 +51,6 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_line as _v2_json_line,
-)
-from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
@@ -168,14 +165,14 @@ class RolloutItemsMixin:
         *,
         commit_id: int,
         jsonl_offset: int,
-        jsonl_length: int,
+        jsonl_bytes: bytes,
         commit_recorded_at: str,
     ) -> None:
         """写入唯一 canonical catalog，并生成对应 item projection。"""
-        item.validate()
+        # metadata 入口已完整校验 item，不能在相邻步骤再次编码并核对同一正文。
+        source_revision, part_ordinal = validate_item_storage_projection(item)
         if item.projection_group is None or item.projection_group.ordinal == item.projection_group.size - 1:
             validate_message_revision_source(connection, item)
-        source_revision, part_ordinal = validate_item_storage_projection(item)
         if (
             not isinstance(commit_id, int)
             or isinstance(commit_id, bool)
@@ -188,12 +185,11 @@ class RolloutItemsMixin:
             or jsonl_offset < 0
         ):
             raise RuntimeError("item_catalog.jsonl_offset 必须是非负整数")
-        if (
-            not isinstance(jsonl_length, int)
-            or isinstance(jsonl_length, bool)
-            or jsonl_length <= 0
-        ):
+        jsonl_length = len(jsonl_bytes)
+        if jsonl_length == 0:
             raise RuntimeError("item_catalog.jsonl_length 必须是正整数")
+        # catalog 和 part locator 共用本次正文长度；line_hash 直接取实际追加的字节。
+        payload_length = payload_content_length(item.payload_kind, item.payload)
         connection.execute(
             "INSERT INTO item_catalog(item_sequence, item_id, semantic_kind, "
             "payload_kind, status, turn_id, turn_scope, message_group_id, "
@@ -212,7 +208,7 @@ class RolloutItemsMixin:
                 item.message_group_id,
                 item.wire_role,
                 _json(item.producer_ref),
-                payload_content_length(item.payload_kind, item.payload),
+                payload_length,
                 source_revision or f"canonical:{item.item_id}:{item.content_hash}",
                 item.content_hash,
                 jsonl_offset,
@@ -263,7 +259,7 @@ class RolloutItemsMixin:
                 "json_pointer": "/payload",
                 "encoding": "jcs:v1",
                 "offset": 0,
-                "length": payload_content_length(item.payload_kind, item.payload),
+                "length": payload_length,
             }
             connection.execute(
                 "INSERT INTO item_parts(item_id, part_id, part_ordinal, "
@@ -277,7 +273,7 @@ class RolloutItemsMixin:
                     None,
                     item.content_hash,
                     _json(locator),
-                    _hash_bytes(_v2_json_line(item.to_dict())),
+                    _hash_bytes(jsonl_bytes),
                     item.created_at,
                 ),
             )
