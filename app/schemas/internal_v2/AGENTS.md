@@ -18,7 +18,7 @@ internal_v2/
 │   │   ├── __init__.py               导航和生成 DTO 的显式导出
 │   │   ├── models.py                 导航节点、面包屑和搜索 DTO
 │   │   └── operations.py             导航操作请求与回执
-│   ├── message.py / message_stream.py / turn.py
+│   ├── message.py / message_stream.py / turn.py / turn_search.py
 │   │                                 消息提交、实时流和 Turn 展示
 │   ├── trace.py / llm_request_log.py
 │   │                                 Trace 事件与模型请求日志

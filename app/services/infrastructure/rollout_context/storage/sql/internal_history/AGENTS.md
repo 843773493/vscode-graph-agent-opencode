@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 同一 snapshot/view 内的历史分页 SQL，由 catalog/internal_history.py 显式加载和协调。
+- 同一 snapshot/view 内的历史分页 SQL，由 catalog/internal_history.py 显式加载和协调；消息搜索复用 survivor，正文替代 CTE 唯一位于上级 content_carrier_replacements.sql。
 
 # 不可修改内容
 

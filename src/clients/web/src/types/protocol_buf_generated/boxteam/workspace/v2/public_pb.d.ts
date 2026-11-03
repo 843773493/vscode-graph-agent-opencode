@@ -9568,6 +9568,159 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
 export declare const TurnDetailDTOSchema: GenMessage<TurnDetailDTO>;
 
 /**
+ * 精确 SessionThread 的字面量正文搜索；cursor 仅由历史 owner 解释。
+ *
+ * @generated from message boxteam.workspace.v2.TurnMessageSearchRequest
+ */
+export declare type TurnMessageSearchRequest = Message<"boxteam.workspace.v2.TurnMessageSearchRequest"> & {
+  /**
+   * @generated from field: string query = 1;
+   */
+  query: string;
+
+  /**
+   * @generated from field: int64 limit = 2;
+   */
+  limit: bigint;
+
+  /**
+   * @generated from field: optional string cursor = 3;
+   */
+  cursor?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TurnMessageSearchRequest.
+ * Use `create(TurnMessageSearchRequestSchema)` to create a new message.
+ */
+export declare const TurnMessageSearchRequestSchema: GenMessage<TurnMessageSearchRequest>;
+
+/**
+ * 零基 Unicode 码点半开区间，独立于展示片段。
+ *
+ * @generated from message boxteam.workspace.v2.TurnMessageReferenceDTO
+ */
+export declare type TurnMessageReferenceDTO = Message<"boxteam.workspace.v2.TurnMessageReferenceDTO"> & {
+  /**
+   * @generated from field: string item_id = 1;
+   */
+  itemId: string;
+
+  /**
+   * @generated from field: string content_hash = 2;
+   */
+  contentHash: string;
+
+  /**
+   * @generated from field: int64 start_codepoint = 3;
+   */
+  startCodepoint: bigint;
+
+  /**
+   * @generated from field: int64 end_codepoint = 4;
+   */
+  endCodepoint: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TurnMessageReferenceDTO.
+ * Use `create(TurnMessageReferenceDTOSchema)` to create a new message.
+ */
+export declare const TurnMessageReferenceDTOSchema: GenMessage<TurnMessageReferenceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TurnMessageMatchDTO
+ */
+export declare type TurnMessageMatchDTO = Message<"boxteam.workspace.v2.TurnMessageMatchDTO"> & {
+  /**
+   * @generated from field: string turn_id = 1;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: optional string message_id = 2;
+   */
+  messageId?: string | undefined;
+
+  /**
+   * @generated from field: string role = 3;
+   */
+  role: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TurnMessageReferenceDTO reference = 4;
+   */
+  reference?: TurnMessageReferenceDTO | undefined;
+
+  /**
+   * @generated from field: string preview = 5;
+   */
+  preview: string;
+
+  /**
+   * @generated from field: int64 preview_start_codepoint = 6;
+   */
+  previewStartCodepoint: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TurnMessageMatchDTO.
+ * Use `create(TurnMessageMatchDTOSchema)` to create a new message.
+ */
+export declare const TurnMessageMatchDTOSchema: GenMessage<TurnMessageMatchDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TurnMessageSearchResultsDTO
+ */
+export declare type TurnMessageSearchResultsDTO = Message<"boxteam.workspace.v2.TurnMessageSearchResultsDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TurnMessageMatchDTO items = 3;
+   */
+  items: TurnMessageMatchDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 4;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: bool complete = 5;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: optional string limited_reason = 6;
+   */
+  limitedReason?: string | undefined;
+
+  /**
+   * @generated from field: int64 scanned_items = 7;
+   */
+  scannedItems: bigint;
+
+  /**
+   * @generated from field: int64 scanned_bytes = 8;
+   */
+  scannedBytes: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TurnMessageSearchResultsDTO.
+ * Use `create(TurnMessageSearchResultsDTOSchema)` to create a new message.
+ */
+export declare const TurnMessageSearchResultsDTOSchema: GenMessage<TurnMessageSearchResultsDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.TurnHistoryLoadRequest
  */
 export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnHistoryLoadRequest"> & {
@@ -9620,6 +9773,11 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
    * @generated from field: repeated string tool_call_ids = 10;
    */
   toolCallIds: string[];
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TurnMessageReferenceDTO anchor_message = 11;
+   */
+  anchorMessage?: TurnMessageReferenceDTO | undefined;
 };
 
 /**

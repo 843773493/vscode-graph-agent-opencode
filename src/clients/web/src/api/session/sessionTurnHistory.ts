@@ -6,6 +6,7 @@ import type {
   TurnHistoryLoadRequest,
   TurnHistoryPage,
 } from "../../types/backend";
+import type { TurnMessageSearchRequest, TurnMessageSearchResultsDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import {
   HttpRequestError,
   requestJson,
@@ -15,6 +16,19 @@ import {
 
 const SESSION_TURN_HISTORY_TIMEOUT_MS = 10_000;
 const TURN_DETAIL_WORKER_PARSE_THRESHOLD_BYTES = 256 * 1024;
+
+export async function searchThreadHistoryMessages(
+  apiPort: number, sessionId: string, threadId: string,
+  request: TurnMessageSearchRequest, workspaceId: string, signal?: AbortSignal,
+): Promise<TurnMessageSearchResultsDTO> {
+  try {
+    return unwrapApiData(await requestJson<APIResponse<TurnMessageSearchResultsDTO>>(
+      apiPort, `/api/v1/sessions/${encodeURIComponent(sessionId)}/threads/${encodeURIComponent(threadId)}/history/search`,
+      { method: "POST", body: JSON.stringify(request), headers: workspaceHeader(workspaceId),
+        signal, timeoutMs: SESSION_TURN_HISTORY_TIMEOUT_MS },
+    ));
+  } catch (error) { mapTurnCursorError(error); }
+}
 
 export type TurnHistoryInclude =
   | "user"

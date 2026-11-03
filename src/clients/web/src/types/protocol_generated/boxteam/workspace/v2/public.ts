@@ -2242,6 +2242,41 @@ export interface TurnDetailDTO {
   tool_summary_truncated?: boolean | undefined;
 }
 
+/** 精确 SessionThread 的字面量正文搜索；cursor 仅由历史 owner 解释。 */
+export interface TurnMessageSearchRequest {
+  query: string;
+  limit: number;
+  cursor?: string | undefined;
+}
+
+/** 零基 Unicode 码点半开区间，独立于展示片段。 */
+export interface TurnMessageReferenceDTO {
+  item_id: string;
+  content_hash: string;
+  start_codepoint: number;
+  end_codepoint: number;
+}
+
+export interface TurnMessageMatchDTO {
+  turn_id: string;
+  message_id?: string | undefined;
+  role: string;
+  reference: TurnMessageReferenceDTO | undefined;
+  preview: string;
+  preview_start_codepoint: number;
+}
+
+export interface TurnMessageSearchResultsDTO {
+  session_id: string;
+  thread_id: string;
+  items: TurnMessageMatchDTO[];
+  cursor?: string | undefined;
+  complete: boolean;
+  limited_reason?: string | undefined;
+  scanned_items: number;
+  scanned_bytes: number;
+}
+
 export interface TurnHistoryLoadRequest {
   direction?: string | undefined;
   cursor?: string | undefined;
@@ -2253,6 +2288,7 @@ export interface TurnHistoryLoadRequest {
   include: string[];
   execution_id?: string | undefined;
   tool_call_ids: string[];
+  anchor_message?: TurnMessageReferenceDTO | undefined;
 }
 
 export interface TurnHistoryPageDTO {
@@ -16984,6 +17020,229 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
   },
 };
 
+function createBaseTurnMessageSearchRequest(): TurnMessageSearchRequest {
+  return { query: "", limit: 0, cursor: undefined };
+}
+
+export const TurnMessageSearchRequest: MessageFns<TurnMessageSearchRequest> = {
+  fromJSON(object: any): TurnMessageSearchRequest {
+    return {
+      query: isSet(object.query) ? globalThis.String(object.query) : "",
+      limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+    };
+  },
+
+  toJSON(message: TurnMessageSearchRequest): unknown {
+    const obj: any = {};
+    if (message.query !== "") {
+      obj.query = message.query;
+    }
+    if (message.limit !== 0) {
+      obj.limit = Math.round(message.limit);
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TurnMessageSearchRequest>, I>>(base?: I): TurnMessageSearchRequest {
+    return TurnMessageSearchRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TurnMessageSearchRequest>, I>>(object: I): TurnMessageSearchRequest {
+    const message = createBaseTurnMessageSearchRequest();
+    message.query = object.query ?? "";
+    message.limit = object.limit ?? 0;
+    message.cursor = object.cursor ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTurnMessageReferenceDTO(): TurnMessageReferenceDTO {
+  return { item_id: "", content_hash: "", start_codepoint: 0, end_codepoint: 0 };
+}
+
+export const TurnMessageReferenceDTO: MessageFns<TurnMessageReferenceDTO> = {
+  fromJSON(object: any): TurnMessageReferenceDTO {
+    return {
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : "",
+      content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : "",
+      start_codepoint: isSet(object.start_codepoint) ? globalThis.Number(object.start_codepoint) : 0,
+      end_codepoint: isSet(object.end_codepoint) ? globalThis.Number(object.end_codepoint) : 0,
+    };
+  },
+
+  toJSON(message: TurnMessageReferenceDTO): unknown {
+    const obj: any = {};
+    if (message.item_id !== "") {
+      obj.item_id = message.item_id;
+    }
+    if (message.content_hash !== "") {
+      obj.content_hash = message.content_hash;
+    }
+    if (message.start_codepoint !== 0) {
+      obj.start_codepoint = Math.round(message.start_codepoint);
+    }
+    if (message.end_codepoint !== 0) {
+      obj.end_codepoint = Math.round(message.end_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TurnMessageReferenceDTO>, I>>(base?: I): TurnMessageReferenceDTO {
+    return TurnMessageReferenceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TurnMessageReferenceDTO>, I>>(object: I): TurnMessageReferenceDTO {
+    const message = createBaseTurnMessageReferenceDTO();
+    message.item_id = object.item_id ?? "";
+    message.content_hash = object.content_hash ?? "";
+    message.start_codepoint = object.start_codepoint ?? 0;
+    message.end_codepoint = object.end_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseTurnMessageMatchDTO(): TurnMessageMatchDTO {
+  return {
+    turn_id: "",
+    message_id: undefined,
+    role: "",
+    reference: undefined,
+    preview: "",
+    preview_start_codepoint: 0,
+  };
+}
+
+export const TurnMessageMatchDTO: MessageFns<TurnMessageMatchDTO> = {
+  fromJSON(object: any): TurnMessageMatchDTO {
+    return {
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : "",
+      message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : undefined,
+      role: isSet(object.role) ? globalThis.String(object.role) : "",
+      reference: isSet(object.reference) ? TurnMessageReferenceDTO.fromJSON(object.reference) : undefined,
+      preview: isSet(object.preview) ? globalThis.String(object.preview) : "",
+      preview_start_codepoint: isSet(object.preview_start_codepoint)
+        ? globalThis.Number(object.preview_start_codepoint)
+        : 0,
+    };
+  },
+
+  toJSON(message: TurnMessageMatchDTO): unknown {
+    const obj: any = {};
+    if (message.turn_id !== "") {
+      obj.turn_id = message.turn_id;
+    }
+    if (message.message_id !== undefined) {
+      obj.message_id = message.message_id;
+    }
+    if (message.role !== "") {
+      obj.role = message.role;
+    }
+    if (message.reference !== undefined) {
+      obj.reference = TurnMessageReferenceDTO.toJSON(message.reference);
+    }
+    if (message.preview !== "") {
+      obj.preview = message.preview;
+    }
+    if (message.preview_start_codepoint !== 0) {
+      obj.preview_start_codepoint = Math.round(message.preview_start_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TurnMessageMatchDTO>, I>>(base?: I): TurnMessageMatchDTO {
+    return TurnMessageMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TurnMessageMatchDTO>, I>>(object: I): TurnMessageMatchDTO {
+    const message = createBaseTurnMessageMatchDTO();
+    message.turn_id = object.turn_id ?? "";
+    message.message_id = object.message_id ?? undefined;
+    message.role = object.role ?? "";
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? TurnMessageReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.preview = object.preview ?? "";
+    message.preview_start_codepoint = object.preview_start_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseTurnMessageSearchResultsDTO(): TurnMessageSearchResultsDTO {
+  return {
+    session_id: "",
+    thread_id: "",
+    items: [],
+    cursor: undefined,
+    complete: false,
+    limited_reason: undefined,
+    scanned_items: 0,
+    scanned_bytes: 0,
+  };
+}
+
+export const TurnMessageSearchResultsDTO: MessageFns<TurnMessageSearchResultsDTO> = {
+  fromJSON(object: any): TurnMessageSearchResultsDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => TurnMessageMatchDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
+      scanned_items: isSet(object.scanned_items) ? globalThis.Number(object.scanned_items) : 0,
+      scanned_bytes: isSet(object.scanned_bytes) ? globalThis.Number(object.scanned_bytes) : 0,
+    };
+  },
+
+  toJSON(message: TurnMessageSearchResultsDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => TurnMessageMatchDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.limited_reason !== undefined) {
+      obj.limited_reason = message.limited_reason;
+    }
+    if (message.scanned_items !== 0) {
+      obj.scanned_items = Math.round(message.scanned_items);
+    }
+    if (message.scanned_bytes !== 0) {
+      obj.scanned_bytes = Math.round(message.scanned_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TurnMessageSearchResultsDTO>, I>>(base?: I): TurnMessageSearchResultsDTO {
+    return TurnMessageSearchResultsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TurnMessageSearchResultsDTO>, I>>(object: I): TurnMessageSearchResultsDTO {
+    const message = createBaseTurnMessageSearchResultsDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.items = object.items?.map((e) => TurnMessageMatchDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.complete = object.complete ?? false;
+    message.limited_reason = object.limited_reason ?? undefined;
+    message.scanned_items = object.scanned_items ?? 0;
+    message.scanned_bytes = object.scanned_bytes ?? 0;
+    return message;
+  },
+};
+
 function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
   return {
     direction: undefined,
@@ -16996,6 +17255,7 @@ function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
     include: [],
     execution_id: undefined,
     tool_call_ids: [],
+    anchor_message: undefined,
   };
 }
 
@@ -17016,6 +17276,9 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
       tool_call_ids: globalThis.Array.isArray(object?.tool_call_ids)
         ? object.tool_call_ids.map((e: any) => globalThis.String(e))
         : [],
+      anchor_message: isSet(object.anchor_message)
+        ? TurnMessageReferenceDTO.fromJSON(object.anchor_message)
+        : undefined,
     };
   },
 
@@ -17051,6 +17314,9 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     if (message.tool_call_ids?.length) {
       obj.tool_call_ids = message.tool_call_ids;
     }
+    if (message.anchor_message !== undefined) {
+      obj.anchor_message = TurnMessageReferenceDTO.toJSON(message.anchor_message);
+    }
     return obj;
   },
 
@@ -17069,6 +17335,9 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     message.include = object.include?.map((e) => e) || [];
     message.execution_id = object.execution_id ?? undefined;
     message.tool_call_ids = object.tool_call_ids?.map((e) => e) || [];
+    message.anchor_message = (object.anchor_message !== undefined && object.anchor_message !== null)
+      ? TurnMessageReferenceDTO.fromPartial(object.anchor_message)
+      : undefined;
     return message;
   },
 };

@@ -29,6 +29,10 @@ from app.schemas.internal_v2.turn import (
     TurnHistoryPageDTO,
     TurnSummaryDTO,
 )
+from app.schemas.internal_v2.turn_search import (
+    TurnMessageSearchRequest,
+    TurnMessageSearchResultsDTO,
+)
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
@@ -499,6 +503,11 @@ class RolloutCheckpointSaver(
         self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str,
     ) -> str | None:
         return self._storage.storage.committed_tool_result_id(session_id, thread_id, model_call_id, tool_call_id)
+
+    def search_history_messages(
+        self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,
+    ) -> TurnMessageSearchResultsDTO:
+        return self._history_reader.search_messages(session_id, thread_id, request)
 
     def get_next_version(self, current: str | None, channel: None) -> str:
         if current is None:

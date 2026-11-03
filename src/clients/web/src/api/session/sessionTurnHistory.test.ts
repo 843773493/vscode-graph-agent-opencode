@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   getSessionTurnBootstrap,
   loadSessionHistory,
+  searchThreadHistoryMessages,
   StaleTurnCursorHttpError,
 } from "./sessionTurnHistory";
 import { HttpRequestError } from "../http";
@@ -22,6 +23,25 @@ afterEach(() => {
 });
 
 describe("Turn 历史 API client", () => {
+  test("正文查询固定精确 Thread，定位沿原 around 请求传递独立引用", async () => {
+    const requests: Array<{ path: string; body: unknown; workspace: string | null }> = [];
+    const reference = { item_id: "item-1", content_hash: "a".repeat(64), start_codepoint: 2, end_codepoint: 5 };
+    installSessionApiFetchMock(({ path, init }) => {
+      requests.push({ path, body: JSON.parse(String(init?.body)), workspace: new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") });
+      return apiResponse(path.endsWith("/search")
+        ? { session_id: "ses_api", thread_id: "thread_child", items: [], cursor: null, complete: true,
+          limited_reason: null, scanned_items: 0, scanned_bytes: 0 }
+        : { thread_id: "thread_child", items: [], projection_epoch: 1 });
+    });
+    await searchThreadHistoryMessages(49_219, "ses_api", "thread_child", { query: "😀词", limit: 3 }, "workspace-owner");
+    await loadSessionHistory(49_219, "ses_api", { direction: "around", anchor_turn_id: "turn-1", anchor_message: reference },
+      "workspace-owner", undefined, "thread_child");
+    expect(requests).toEqual([
+      { path: "/api/v1/sessions/ses_api/threads/thread_child/history/search", body: { query: "😀词", limit: 3 }, workspace: "workspace-owner" },
+      { path: "/api/v1/sessions/ses_api/threads/thread_child/history", body: { direction: "around", anchor_turn_id: "turn-1", anchor_message: reference }, workspace: "workspace-owner" },
+    ]);
+  });
+
   test("按约定路径请求 bootstrap 和语义化历史", async () => {
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
     installSessionApiFetchMock(({ url: rawUrl, path, method, init }) => {

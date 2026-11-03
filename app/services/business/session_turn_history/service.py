@@ -12,6 +12,10 @@ from app.schemas.internal_v2.turn import (
     TurnHistoryPageDTO,
     TurnJobSummaryDTO,
 )
+from app.schemas.internal_v2.turn_search import (
+    TurnMessageSearchRequest,
+    TurnMessageSearchResultsDTO,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -129,6 +133,15 @@ class SessionTurnHistoryService:
                     policy=history_loading,
                 )
             return page.model_copy(update={"thread_id": thread_id})
+
+    async def search_messages(
+        self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,
+    ) -> TurnMessageSearchResultsDTO:
+        # TODO(quick-access 9.3/9.7)：工作区正文分支和 React 精确定位继续消费此入口及原 around reader。
+        async with self._session_service.session_read_admission(session_id):
+            thread_id = await self._session_service.resolve_thread(session_id, thread_id)
+            async with self._checkpointer.history_read_lease(session_id, thread_id):
+                return self._checkpointer.search_history_messages(session_id, thread_id, request)
 
 
 __all__ = ["SessionTurnHistoryService"]

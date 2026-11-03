@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.catalog.message_search import (
+    message_search_candidates,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     ContextTurnItemWindow,
     HistorySnapshotBounds,
@@ -151,6 +154,15 @@ class RolloutContextReader:
     ) -> list[CanonicalItemRecord]:
         """按 context view 的 logical item ordinal 读取已提交 item。"""
         return self._storage.checkpoints.read_items_for_view(snapshot, self.context_view_id(chain))
+
+    def read_message_search_candidates(
+        self, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
+        lower_ordinal: int, limit: int, deadline: float, item_id: str | None = None,
+    ) -> list[tuple[int, str, str, int]]:
+        return message_search_candidates(
+            self._storage.storage._snapshot_connection(snapshot), self.context_view_id(chain),
+            lower_ordinal=lower_ordinal, limit=limit, deadline=deadline, item_id=item_id,
+        )
 
     def resolve_turn_anchor(
         self,

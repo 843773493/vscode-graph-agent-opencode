@@ -28,6 +28,10 @@ from app.schemas.internal_v2.turn import (
     TurnHistoryPageDTO,
     TurnProjectionCorruptedErrorDTO,
 )
+from app.schemas.internal_v2.turn_search import (
+    TurnMessageSearchRequest,
+    TurnMessageSearchResultsDTO,
+)
 from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.infrastructure.turn_history import (
     InvalidTurnCursorError,
@@ -36,6 +40,27 @@ from app.services.infrastructure.turn_history import (
 )
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+@router.post(
+    "/{session_id}/threads/{thread_id}/history/search",
+    response_model=APIResponse[TurnMessageSearchResultsDTO],
+    summary="有界查询精确 Thread 的可见消息正文（区分大小写字面量）",
+)
+async def search_thread_history_messages(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId,
+    payload: TurnMessageSearchRequest,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    turn_history_service: Annotated[SessionTurnHistoryService, Depends(get_session_turn_history_service)],
+):
+    try:
+        result = await turn_history_service.search_messages(session_id, thread_id, payload)
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except Exception as error:
+        raise _turn_history_http_error(session_id, error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 def _turn_history_http_error(

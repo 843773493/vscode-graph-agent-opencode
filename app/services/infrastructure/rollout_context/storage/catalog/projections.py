@@ -47,8 +47,8 @@ def _preview_text(value: object) -> str:
     return ""
 
 
-def _canonical_projection_content(item: CanonicalItemRecord) -> str:
-    """返回 item projection 的 bounded-visible 文本，不构造消息对象。"""
+def canonical_projection_content(item: CanonicalItemRecord) -> str:
+    """从唯一正文取得可见文本；投影写入方另行裁剪，不构造消息对象。"""
     payload = item.payload
     if item.semantic_kind == SemanticKind.TOOL_CALL:
         raw_calls = payload.get("tool_calls") if isinstance(payload, Mapping) else None
@@ -216,7 +216,7 @@ class RolloutProjectionMixin:
         commit_recorded_at: str,
     ) -> None:
         """写入 bounded projection；updated_at 取本次提交记录时刻。"""
-        content = _canonical_projection_content(item)
+        content = canonical_projection_content(item)
         truncated = len(content) > _VISIBLE_TEXT_LIMIT
         phase = {
             SemanticKind.USER_INPUT: "user_input",

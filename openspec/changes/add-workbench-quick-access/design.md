@@ -226,6 +226,8 @@ Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，�
 
 各类别通过自己的查询 owner 发布有界结果，统一浮层只组织结果和动作；不能用通用文件递归扫描私有存储代替领域检索。索引、规范 URI 与引用处理使用下述已确认规则，不再作为待确认项。消息列表、按 Session 读取整批 LLM 日志和现有 Trace 分页接口并不等于正文搜索：各 owner 必须补有界查询及按命中定位读取，禁止前端遍历所有会话、拉全日志后过滤。
 
+消息正文的底层切片先提供精确 `SessionThread/history/search`：区分大小写的字面量、非重叠匹配，每页默认 50、最多 100 个命中，最多检查 256 条正文、读取 8 MiB 已提交 JSONL，正文与 SQLite 查询调度共用 1 秒期限；原 snapshot／锁和本机同步 I/O 的准入规则继续生效，不声称能强行中断文件系统。SQLite 先在同一 active view 的完整替代范围择一，再有界取得正文 locator，不能因页外 final carrier 未返回就命中 stream shadow 或旧 canonical 版本。已有 internal history 的 stream 替代 CTE 和 survivor 同源复用，不创建搜索正文表；单项超过正文硬上限明确受限且不返回无法推进的 cursor。独立位置是 canonical item 可见文本中的零基 Unicode 码点半开区间，正文版本沿用原不透明 `content_hash`，不重新设计摘要语法。`around` 的可选 `anchor_message` 在同一快照核验位置后沿原分页链加载。工作区级消息分支和 React 实际挂载后的精确定位仍须继续迁齐，不能把底层入口算作整项内容搜索验收。
+
 ### 索引归搜索 owner 决定
 
 是否使用索引、索引技术、建立及维护时机、失效与重建均由各搜索 owner 根据数据性质决定。文件搜索可以按需查询，会话目录可以复用 catalog，消息或日志可以在其 owner 内采用必要的可重建索引；不要求统一技术或统一建索引流程。

@@ -490,7 +490,9 @@ class RolloutItemsMixin:
                 relation_rows = read_connection.execute(
                     "SELECT canonical_item_id, canonical_relation_ordinal, relation, source_ref, target_ref "
                     "FROM item_relations WHERE canonical_item_id IS NOT NULL "
-                    "ORDER BY canonical_item_id, canonical_relation_ordinal"
+                    + (f"AND canonical_item_id IN ({','.join('?' for _ in values)}) " if item_ids is not None else "")
+                    + "ORDER BY canonical_item_id, canonical_relation_ordinal",
+                    values if item_ids is not None else (),
                 ).fetchall()
                 relations_by_item: dict[str, list[tuple[object, ...]]] = {}
                 for owner, ordinal, relation, source, target in relation_rows:

@@ -2203,6 +2203,41 @@ message TurnDetailDTO {
   optional bool tool_summary_truncated = 28;
 }
 
+// 精确 SessionThread 的字面量正文搜索；cursor 仅由历史 owner 解释。
+message TurnMessageSearchRequest {
+  string query = 1;
+  int64 limit = 2;
+  optional string cursor = 3;
+}
+
+// 零基 Unicode 码点半开区间，独立于展示片段。
+message TurnMessageReferenceDTO {
+  string item_id = 1;
+  string content_hash = 2;
+  int64 start_codepoint = 3;
+  int64 end_codepoint = 4;
+}
+
+message TurnMessageMatchDTO {
+  string turn_id = 1;
+  optional string message_id = 2;
+  string role = 3;
+  TurnMessageReferenceDTO reference = 4;
+  string preview = 5;
+  int64 preview_start_codepoint = 6;
+}
+
+message TurnMessageSearchResultsDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  repeated TurnMessageMatchDTO items = 3;
+  optional string cursor = 4;
+  bool complete = 5;
+  optional string limited_reason = 6;
+  int64 scanned_items = 7;
+  int64 scanned_bytes = 8;
+}
+
 message TurnHistoryLoadRequest {
   optional string direction = 1;
   optional string cursor = 2;
@@ -2214,6 +2249,7 @@ message TurnHistoryLoadRequest {
   repeated string include = 8;
   optional string execution_id = 9;
   repeated string tool_call_ids = 10;
+  optional TurnMessageReferenceDTO anchor_message = 11;
 }
 
 message TurnHistoryPageDTO {

@@ -24,6 +24,10 @@ from app.schemas.internal_v2.turn import (
     TurnResponsePartDTO,
     TurnSummaryDTO,
 )
+from app.schemas.internal_v2.turn_search import (
+    TurnMessageSearchRequest,
+    TurnMessageSearchResultsDTO,
+)
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     ContextChain,
     RolloutContextReader,
@@ -33,6 +37,10 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
+from app.services.infrastructure.rollout_history.message_search import (
+    search_messages,
+    verify_message_reference,
+)
 from app.services.infrastructure.rollout_history.paging import (
     HistoryPageReadMixin,
 )
@@ -81,6 +89,22 @@ class RolloutHistoryReader(HistoryPageReadMixin):
     def __init__(self, context_reader: RolloutContextReader) -> None:
         self._context_reader = context_reader
         self._snapshots = IndexedHistorySnapshots(context_reader)
+
+    def search_messages(
+        self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,
+    ) -> TurnMessageSearchResultsDTO:
+        indexed = self._snapshots.read(session_id, thread_id)
+        if indexed is None:
+            if request.cursor is not None:
+                raise InvalidTurnCursorError("尚未物化的历史不能使用搜索 cursor")
+            return TurnMessageSearchResultsDTO(
+                session_id=session_id, thread_id=thread_id, items=[], cursor=None,
+                complete=True, limited_reason=None, scanned_items=0, scanned_bytes=0,
+            )
+        try:
+            return search_messages(self._context_reader, indexed, request)
+        finally:
+            indexed.snapshot.close()
 
     def bootstrap(
         self,
@@ -192,6 +216,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 items=[], next_cursor=None, has_more=False, projection_epoch=1
             )
         try:
+            if request.anchor_message is not None:
+                verify_message_reference(self._context_reader, indexed, request.anchor_turn_id, request.anchor_message)
             return self._load_indexed_history(
                 session_id,
                 request,
