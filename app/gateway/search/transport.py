@@ -150,5 +150,9 @@ class SearchTransport:
         if len(message) > MAX_SEARCH_ERROR_CHARS:
             message = message[:MAX_SEARCH_ERROR_CHARS] + "…（详情超过搜索响应上限，请按 request_id 查看原诊断）"
         provider_id = detail.get("provider_id") if isinstance(detail, dict) and detail.get("owner") == "search_provider" else None
+        owner = detail.get("owner") if isinstance(detail, dict) else None
+        reason = detail.get("reason") if isinstance(detail, dict) else None
         raise SearchBranchError(code, message, retryable=status >= 500 or code in {"deadline", "owner_rejected"},
-                                provider_id=provider_id if isinstance(provider_id, str) else None)
+                                provider_id=provider_id if isinstance(provider_id, str) else None,
+                                error_owner=owner if isinstance(owner, str) else None,
+                                reason=reason if isinstance(reason, str) else None, http_status=status)

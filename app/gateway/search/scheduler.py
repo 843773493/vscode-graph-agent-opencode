@@ -39,11 +39,15 @@ from app.services.business.session_navigation.name_search_budget import NameSear
 
 
 class SearchBranchError(ValueError):
-    def __init__(self, code: str, message: str, *, retryable: bool = False, provider_id: str | None = None) -> None:
+    def __init__(self, code: str, message: str, *, retryable: bool = False, provider_id: str | None = None,
+                 error_owner: str | None = None, reason: str | None = None, http_status: int | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
         self.provider_id = provider_id
+        self.error_owner = error_owner
+        self.reason = reason
+        self.http_status = http_status
 
 
 @dataclass(frozen=True)
@@ -127,10 +131,12 @@ async def search_events(
         job: SearchJob, *, state: Literal["complete", "limited", "failed", "cancelled"],
         code: str | None = None, message: str | None = None, retryable: bool = False,
         provider_id: str | None = None, cursor: str | None = None, returned_results: int = 0,
+        error_owner: str | None = None, reason: str | None = None, http_status: int | None = None,
     ) -> FederatedSearchBranchDTO:
         return FederatedSearchBranchDTO(
             branch=job.key, allocated_results=job.request.limit, state=state, code=code, message=message,
             retryable=retryable, provider_id=provider_id, cursor=cursor, returned_results=returned_results,
+            error_owner=error_owner, reason=reason, http_status=http_status,
         )
 
     def terminal(index: int) -> FederatedSearchEventDTO:
@@ -225,7 +231,8 @@ async def search_events(
                     statuses[index] = status(job, state="failed", code="deadline", message=str(error), retryable=True, cursor=job.request.cursor)
                 except SearchBranchError as error:
                     statuses[index] = status(job, state="failed", code=error.code, message=str(error),
-                                             retryable=error.retryable, provider_id=error.provider_id, cursor=job.request.cursor)
+                                             retryable=error.retryable, provider_id=error.provider_id, cursor=job.request.cursor,
+                                             error_owner=error.error_owner, reason=error.reason, http_status=error.http_status)
                 else:
                     statuses[index] = status(job, state=page.state, provider_id=page.provider_id,
                                              code=page.limited_reason, cursor=page.cursor,

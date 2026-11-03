@@ -433,6 +433,8 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 
 ### 查询请求、分页与定位的最小合同
 
+联邦分支保留原领域 `code` 与有界 `message`，另以 `error_owner` 和 `reason` 传递原错误命名空间及机器原因。例如文件 `execution_failed` 可分别携带 `invalid_search_pattern` 或 `invalid_cursor`，不能在 Gateway 丢成相同通用失败。真实下游 HTTP 拒绝携带 `http_status`，包括原401／403；本地调度、取消和未取得响应的网络失败不伪造状态码。原 Provider 身份、输入 cursor、零交付计数及 retryable 保持，逐分支终态与汇总使用同一对象；工具、脚本、SSE 和授权 JSON relay 复用这些字段，不另建错误账本或改变原领域错误码。
+
 这些是必须贯穿真实入口的数据语义。共享 Provider 及联邦信封只统一生命周期和归属，领域 payload 继续消费原 typed 合同，不建立通用业务对象平台：
 
 | 边界 | 必须保留的信息与行为 |

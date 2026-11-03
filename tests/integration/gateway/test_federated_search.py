@@ -66,6 +66,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
         for directory in ("search-one", "search-two"):
             target = root / directory
             (target / "needle-directory").mkdir(parents=True)
+            (target / "empty").mkdir()
             for name in ("needle-a.txt", "needle-b.txt", "needle-c.md"):
                 (target / name).write_text("🧪 needle\ncontext\nneedle\n", encoding="utf-8")
             (target / "covered.txt").write_bytes(b"\xffmodel body must not be read")
@@ -198,7 +199,26 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             rejected = await search({"scope": {"mode": "origin", "origin": owners[route_a]}, "queries": [invalid_query]}, "req_federation_file_encoding")
             rejected_branch, = rejected[-1]["summary"]["branches"]
             assert rejected_branch["state"] == "failed" and rejected_branch["code"] == "invalid_encoding"
+            assert rejected_branch["error_owner"] == "resource_file_operations" and rejected_branch["reason"] == "utf8"
+            assert rejected_branch["http_status"] == 400
             assert not any(event["type"] == "page" for event in rejected)
+            for request_id, query_error, cursor in (
+                ("req_federation_invalid_regex", {**content_query, "query": "[", "match_mode": "regex", "file_targets": [
+                    {"owner": owners[route_a], "target": {"uri": content_root + "/empty", "search_options": {"is_regex": True}}},
+                ]}, None),
+                ("req_federation_invalid_cursor", content_query, "not-a-cursor"),
+            ):
+                payload: dict[str, object] = {"scope": {"mode": "origin", "origin": owners[route_a]}, "queries": [query_error]}
+                if cursor is not None:
+                    payload["scope"] = {"mode": "resume", "scope": content[0]["scope"]["scope"]}
+                    payload["continuations"] = [{"branch": content_page["branch"]["branch"], "cursor": cursor}]
+                invalid = await search(payload, request_id)
+                failure, = invalid[-1]["summary"]["branches"]
+                assert failure["state"] == "failed" and failure["code"] == "execution_failed"
+                assert failure["error_owner"] == "resource_file_operations" and failure["http_status"] == 400
+                assert failure["reason"] == ("invalid_cursor" if cursor else "invalid_search_pattern")
+                assert failure["cursor"] == cursor and failure["returned_results"] == 0
+                assert not any(event["type"] == "page" for event in invalid)
             missing_query = {**file_query, "file_targets": [{"owner": owners[route_a], "target": {"uri": roots[route_a] + "/missing-directory"}}]}
             missing = await search({"scope": {"mode": "origin", "origin": owners[route_a]}, "queries": [missing_query]}, "req_federation_file_missing")
             missing_branch, = missing[-1]["summary"]["branches"]
@@ -269,6 +289,7 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
                 failed = next(branch for branch in failed_logs[-1]["summary"]["branches"] if branch["branch"]["owner"] == owners[route_a])
                 assert failed["state"] == "failed" and failed["code"] == "provider_read_failed"
                 assert failed["provider_id"] == "llm-request-log" and str(directory) in failed["message"]
+                assert failed["error_owner"] == "search_provider" and failed["http_status"] == 500
                 assert failed["cursor"] is None and failed["returned_results"] == 0 and failed["retryable"]
                 assert [page["branch"]["branch"]["owner"] for page in failed_logs if page["type"] == "page"] == [owners["route_b"]]
             finally:

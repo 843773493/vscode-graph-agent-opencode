@@ -6,7 +6,7 @@
 
 ```text
 internal_v2/
-├── __init__.py                    选定稳定 DTO 的包级导出
+├── __init__.py                    无副作用的包标记，DTO 按所属模块显式引用
 ├── 服务入口与运行状态
 │   ├── common.py                    公共枚举、API 响应和游标页
 │   ├── agent.py / config.py         Agent 选择、配置更新与重载回执

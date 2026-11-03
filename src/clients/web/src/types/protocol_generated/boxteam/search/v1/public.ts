@@ -67,6 +67,13 @@ export interface FederatedSearchBranchDTO {
   cursor?: string | undefined;
   allocated_results: number;
   returned_results: number;
+  /** 原领域错误命名空间与原因；不改写 code，也不依赖调用方解析 message。 */
+  error_owner?: string | undefined;
+  reason?:
+    | string
+    | undefined;
+  /** 仅真实 HTTP 拒绝携带；本地调度、取消或网络失败不伪造状态码。 */
+  http_status?: number | undefined;
 }
 
 export interface FederatedSearchSummaryDTO {
@@ -378,6 +385,9 @@ function createBaseFederatedSearchBranchDTO(): FederatedSearchBranchDTO {
     cursor: undefined,
     allocated_results: 0,
     returned_results: 0,
+    error_owner: undefined,
+    reason: undefined,
+    http_status: undefined,
   };
 }
 
@@ -393,6 +403,9 @@ export const FederatedSearchBranchDTO: MessageFns<FederatedSearchBranchDTO> = {
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
       allocated_results: isSet(object.allocated_results) ? globalThis.Number(object.allocated_results) : 0,
       returned_results: isSet(object.returned_results) ? globalThis.Number(object.returned_results) : 0,
+      error_owner: isSet(object.error_owner) ? globalThis.String(object.error_owner) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      http_status: isSet(object.http_status) ? globalThis.Number(object.http_status) : undefined,
     };
   },
 
@@ -425,6 +438,15 @@ export const FederatedSearchBranchDTO: MessageFns<FederatedSearchBranchDTO> = {
     if (message.returned_results !== 0) {
       obj.returned_results = Math.round(message.returned_results);
     }
+    if (message.error_owner !== undefined) {
+      obj.error_owner = message.error_owner;
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    if (message.http_status !== undefined) {
+      obj.http_status = Math.round(message.http_status);
+    }
     return obj;
   },
 
@@ -444,6 +466,9 @@ export const FederatedSearchBranchDTO: MessageFns<FederatedSearchBranchDTO> = {
     message.cursor = object.cursor ?? undefined;
     message.allocated_results = object.allocated_results ?? 0;
     message.returned_results = object.returned_results ?? 0;
+    message.error_owner = object.error_owner ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.http_status = object.http_status ?? undefined;
     return message;
   },
 };

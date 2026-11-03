@@ -682,3 +682,11 @@
 - 原查询生命周期故障装具迁到真实 SearchTransport 装配模块，继续核取消、总期限、独立失败与重试、停止目标零业务读取及身份失效。设置和搜索观察迁为 tests/support/workbench 唯一共享辅助，故障控制保留 Integration 专用；无替身场景归 tests/e2e/clients/web，不以故障装具证明真实服务故障。
 - 正式受保护矩阵 integration-web-search-coverage 通过：2 passed／179.54 秒，退出0；共享正式构建42.37秒、退出0。文件覆盖原件为 out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-be80e412f5e3/；后端原日志逐 request_id 核实际分发 A、A+B、A。Ruff、两文件Pyright零诊断、六个真实浏览器驱动的ESM编译和差异检查通过。本批未改产品源码，复用前一边界的真实类型与正式Web构建证据。
 - 首次失败是命令helper返回复杂对象，第二次是测试未关闭原picker的干净预览；均以原件归因后修正装具，未改产品配额或放宽隔离／续页断言。早期及最终命令、源码指纹、原始输出和退出码见 out/tests/temp/file_coverage_20261103/artifacts/verification.json。Windows canonical及大小写发布和其它选项／运行面仍未齐，16.19及完整16.17保持未勾选。
+
+
+### 2026-11-03：联邦分支保留原领域诊断（16.18 部分）
+
+- 原 FederatedSearchBranchDTO 增加 error_owner、reason 和真实下游 http_status；Gateway 从原错误详情取得这些字段，沿同一调度分支、SSE／JSON relay、终态与汇总发布，不改写领域 code／message、原 cursor 或交付计数。Provider 读取失败保留原身份；普通401／403仍能按真实状态区分，网络失败和本地取消不伪造 HTTP 状态。协议、Python／TS／JS与SSE结构均由唯一生成入口同步。
+- 独立网络验收暴露上轮通信接入的冷导入循环：internal_v2 包级批量导出反向导入尚未完成的搜索模块。全仓核对无包级DTO消费者，删除未使用批量导出，各原消费者继续按所属模块显式引用；两种独立进程导入顺序均通过，不靠测试收集或启动导入顺序规避。
+- 最终定向100项通过（10.41秒），包括原输出预算／取消／relay／客户端、两种同码不同原因、真实HTTP状态和冷导入。真实Gateway＋双Backend通过（50.31秒），原件 out/tests/integration/gateway/test_federated_search/runs/run-77357653a6af/：空目录非法正则、非法cursor、非法UTF-8及实际I/O失败保留原归属／原因，原续页／重启／部分失败保持。文件覆盖E2E通过（87.84秒），原件 out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-ef7e46002a50/，零页面错误，共享正式构建39.33秒、退出0。
+- 核心六文件Pyright零诊断、Ruff、真实Workbench类型检查（19份转换源码）、生成一致性、Buf breaking及OpenSpec strict通过。正式浏览器验收使用同源码的唯一产品构建，未重复无变化打包；本批不改变UI交互，不重复Electron。第一次独立网络检查在收集阶段因上述循环导入失败，原件仍保留；准确命令、指纹、原始输出及退出码见 out/tests/temp/search_diagnostics_20261103/artifacts/verification.json。原owner其余异常细分与信息／警告合同仍由16.18追踪，完整任务保持未勾选。

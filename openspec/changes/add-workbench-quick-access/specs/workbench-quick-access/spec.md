@@ -871,6 +871,13 @@ Gateway SHALL 保留原 registry／navigation store 的工作区顺序权威，�
 
 诊断 SHALL 携带可判别代码、原 owner 详细原因、分支／request_id 和适用的重试信息，至少区分无效查询／正则／glob／编码、不支持能力／版本、失效 cursor／revision、目标不可达／身份失效、期限和内部读取错误。普通信息／警告、正常结果或扫描受限、用户取消、失败 SHALL 分开，不要求 UI 或工具解析自然语言判定状态；未知内部错误不得被吞成空成功。参数验证即使在空目录或零匹配时仍生效。诊断按文本显示，不执行来自结果的任意命令链接。
 
+联邦错误分支 SHALL 保留原 `code`，以独立 `error_owner` 和 `reason` 传递原领域错误归属和机器原因，供所有搜索消费者共用。真实下游 HTTP 拒绝 SHALL 携带 `http_status`；未取得响应的网络失败、本地调度和取消 MUST NOT 虚构 HTTP 状态。分支终态和最终汇总 SHALL 保持相同诊断、原输入 cursor 及交付计数，不以诊断字段替换稳定目标 owner。缺少原领域原因时不猜测或解析自然语言生成原因码。
+
+#### Scenario: 同错误码的原领域原因仍可区分
+
+- **WHEN** 文件搜索分别在空目录提交非法正则，或携带失效的覆盖 cursor
+- **THEN** 联邦分支保留原 `execution_failed`，分别携带文件 owner 的 `invalid_search_pattern` 和 `invalid_cursor`，实际 HTTP 状态与 request_id 可核验，不推进未交付页的 cursor
+
 #### Scenario: 同样无命中但结束原因不同
 
 - **WHEN** 四次查询分别完整无匹配、扫描受限、用户取消及读取失败

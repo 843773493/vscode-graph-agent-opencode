@@ -73,6 +73,15 @@ class SearchHTTP:
                 "owner": "search_provider", "code": "provider_read_failed", "provider_id": "session-catalog",
                 "category": "catalog", "operation": "name", "message": "原目录 SQLite 无法读取: errno=13",
             }})
+        if self.mode in {"file-query-error", "file-cursor-error"}:
+            reason = "invalid_search_pattern" if self.mode == "file-query-error" else "invalid_cursor"
+            return httpx.Response(400, headers=headers, json={"detail": {
+                "owner": "resource_file_operations", "code": "execution_failed", "reason": reason,
+                "message": "文件查询被原 owner 拒绝",
+            }})
+        if self.mode in {"authentication-error", "permission-error"}:
+            return httpx.Response(401 if self.mode == "authentication-error" else 403,
+                                  headers=headers, json={"detail": "原访问权限拒绝"})
         if self.mode == "offline":
             raise httpx.ConnectError("目标断开", request=request)
         if self.mode == "wrong-id":
@@ -196,9 +205,35 @@ async def test_provider_read_error_keeps_identity_cause_and_original_continuatio
     failure, = summary.branches
     assert failure.state == "failed" and failure.code == "provider_read_failed"
     assert failure.provider_id == "session-catalog" and failure.message == "原目录 SQLite 无法读取: errno=13"
+    assert failure.error_owner == "search_provider" and failure.http_status == 500 and failure.reason is None
     assert failure.cursor == previous.cursor and failure.retryable
     assert failure.returned_results == summary.returned_results == 0
     assert not any(event.type == "page" for event in result)
+
+
+@pytest.mark.parametrize("mode,reason", [("file-query-error", "invalid_search_pattern"), ("file-cursor-error", "invalid_cursor")])
+async def test_original_domain_reason_distinguishes_same_failure_code(search_http: SearchHTTP, mode: str, reason: str) -> None:
+    search_http.mode = mode
+    result = events(await search_http.search(OWNERS[:1]))
+    summary = result[-1].summary
+    assert summary is not None
+    failure, = summary.branches
+    assert failure.code == "execution_failed" and failure.reason == reason
+    assert failure.error_owner == "resource_file_operations" and failure.http_status == 400
+    assert failure.state == "failed" and failure.returned_results == summary.returned_results == 0
+    terminal, = [event.branch for event in result if event.type == "branch"]
+    assert terminal == failure
+
+
+@pytest.mark.parametrize("mode,status", [("authentication-error", 401), ("permission-error", 403)])
+async def test_plain_http_rejection_keeps_actual_status_without_invented_owner(search_http: SearchHTTP, mode: str, status: int) -> None:
+    search_http.mode = mode
+    summary = events(await search_http.search(OWNERS[:1]))[-1].summary
+    assert summary is not None
+    failure, = summary.branches
+    assert failure.code == "owner_http_error" and failure.http_status == status
+    assert failure.error_owner is None and failure.reason is None
+    assert not failure.retryable
 
 
 async def test_route_invalidation_closes_body_before_releasing_reference(search_http: SearchHTTP) -> None:
@@ -284,6 +319,7 @@ async def test_mirror_is_opt_in_and_online_always_uses_owner(search_http: Search
     search_http.mode = "offline"
     failed = events(await search_http.search(OWNERS[:1]))
     assert failed[-1].summary.branches[0].code == "target_unavailable"
+    assert failed[-1].summary.branches[0].http_status is None
     assert not any(event.type == "page" for event in failed)
     query = {"category": "catalog", "query": "needle", "limit": 1, "allow_catalog_mirror": True}
     offline = events(await search_http.search(OWNERS[:1], queries=[query]))

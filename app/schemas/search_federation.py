@@ -114,6 +114,9 @@ class FederatedSearchBranchDTO(BaseModel):
     cursor: str | None = None
     allocated_results: int = Field(ge=0)
     returned_results: int = Field(default=0, ge=0)
+    error_owner: str | None = None
+    reason: str | None = None
+    http_status: int | None = Field(default=None, ge=100, le=599)
 
 
 class FederatedSearchSummaryDTO(BaseModel):

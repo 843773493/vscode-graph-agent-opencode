@@ -227,6 +227,25 @@ export declare type FederatedSearchBranchDTO = Message<"boxteam.search.v1.Federa
    * @generated from field: int32 returned_results = 9;
    */
   returnedResults: number;
+
+  /**
+   * 原领域错误命名空间与原因；不改写 code，也不依赖调用方解析 message。
+   *
+   * @generated from field: optional string error_owner = 10;
+   */
+  errorOwner?: string | undefined;
+
+  /**
+   * @generated from field: optional string reason = 11;
+   */
+  reason?: string | undefined;
+
+  /**
+   * 仅真实 HTTP 拒绝携带；本地调度、取消或网络失败不伪造状态码。
+   *
+   * @generated from field: optional int32 http_status = 12;
+   */
+  httpStatus?: number | undefined;
 };
 
 /**
