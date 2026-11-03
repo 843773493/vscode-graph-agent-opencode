@@ -47,6 +47,7 @@ app/core/
 
 ## 共享原语与专用子包说明
 
+- `http_cache.py`：对显式登记的 HTTP 路由模板统一设置失败响应 no-store，Backend 与 Gateway 共用；沿 Starlette 的路由模板匹配，不解析资源 URI、不处理权限或正文校验器，不改变其它接口策略。
 - `shielded_cleanup.py`：同步 worker 结算前保留调用方准入；线程桥接以结果值传递原异常，再在原异步任务抛出，保留异常身份、cause 与 notes，避免标准库重建 TimeoutError 等异常。正常返回的异常对象仍为返回值；取消继续等待 worker 结算。
 - `turn_execution_scope.py`：Turn 注册表持有原 scope／inbox 直到资源与控制文件清理成功；失败或等待者取消保留同一身份供重试，迟到关闭须核对象身份，不得删除后继登记或文件。inbox 经异步 open 加载，控制文件读写及删除交既有受保护 worker，提交结算后才在事件循环发布命令；控制提交与关闭沿原锁串行，不新增写入链。清理执行与重试仍由原 LifetimeScope 单点拥有，不新增关闭任务表。
 - `background_task_contracts.py`：精确Thread后台任务、版本化恢复描述、步骤checkpoint与邮箱消费identity的纯typed合同；不导入编排、handler实现或重型abstractions聚合出口。运行实体与执行策略分别由既有registry和服务owner承担。

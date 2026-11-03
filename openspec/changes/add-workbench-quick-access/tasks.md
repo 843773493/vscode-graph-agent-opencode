@@ -221,6 +221,22 @@
 - Ruff 排除原 API 的 B008 后通过；Pyright 新服务及 API 无新增诊断，容器／生命周期的 6 条既存诊断与 `9332b9be7` 原件逐条对比一致。协议生成一致性、Buf format／lint／breaking、真实 Workbench 类型检查（18 份转换源码）及正式 Web 构建通过。
 - 准确命令、源码指纹、原始输出和退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/provider-*`；产品运行原件：`out/tests/integration/gateway/test_thread_name_search/`。本批未改 UI 行为，未重复浏览器与 Electron 验收。树浏览、其余领域 Provider、规范 URI 的全部命中投影及 Gateway 联邦仍未完成，16.2／16.3／16.20 保持未勾选。
 
+## 17. 资源字节持久缓存（2026-11-03 补充设计）
+
+覆盖规范：原文件预览复用私有条件缓存；Webview 资源缓存沿原版加载与隔离规则；资源缓存跨 Web 与 Electron 持久且可丢弃。
+
+本组按实际实现和验收证据逐项勾选；此前图片解码、Range、文字保存及 Electron 历史缓存证据不能替代资源字节缓存证明。复用第 2／4 组的唯一文件打开与读取链，按完整纵向链迁齐原消费者和验收，不设定全局实施顺序。
+
+- [ ] 17.1 清点普通图片 FileService／Blob、Webview loadLocalResource／Worker、raw 读取、附件预览、Gateway 与 Electron 回环代理的实际调用方和相关测试；确认同一原文件入口与 URI 投影，明确第三方 URL、下载／临时数据／Range 边界，不复制图片编辑器、Worker 或资源解析器。
+- [x] 17.2 在原文件 owner 为普通预览完整 raw GET 实现 private/no-cache、有效 ETag 及认证／原目标校验之后的空正文 304；Vary 合并实际工作区／后端身份与认证头／Cookie，validator 绑定稳定资源及版本观察值。保留下载／临时／Range／失败的 no-store，304 不完整读正文、不沿旧 request_id，mtime／size 不代替内容 hash 或保存基线；同步相关 API 描述及真实类型消费者，移除该预览场景旧的统一 no-store 分支。
+- [ ] 17.3 沿标准 fetch HTTP 缓存接通原图片编辑器，保持原 FileService、Blob／object URL 生命周期；贯通 Gateway／回环代理条件头、缓存头、Vary、304。原 Webview 复用固定版本 Worker 和宿主 ETag／NotModified 链，不自建字节缓存服务或文件落盘 IPC，不通过替换原 Pane 绕过宿主条件。
+- [ ] 17.4 对齐稳定 owner／URI、HTTP Vary、Webview 根限制和认证切换；验证 watcher 更新／删除／重连／overflow、强制刷新、route 改变／重用及取消后迟到响应。覆盖缓存存在时的权限拒绝／断连，不能使用旧字节伪报当前成功，媒体内部 version 不成为业务版本。
+- [ ] 17.5 复用 Web origin 与 Electron 原固定 profile／partition／renderer origin 的持久存储，正常重启不清缓存；处理引擎淘汰、配额及写入诊断，资源清理不删设置／聊天／草稿／业务文件，无全量预热、home 镜像、另一份前端或新增原生能力。
+- [ ] 17.6 以隔离 A/B 同路径真实图片、UTF-8 文本及原 Webview 允许根中的 CSS／字体／脚本，经 Gateway 分别验首次／二次／更新／删除／断连／认证切换／route 重用、Range 和淘汰；按原读取 owner 保留 MIME、条件请求、服务端真实 200／304／206、正文传输量及缓存失效证据。不得只断言 fetch 状态码或可见图片；定向回归文本保存 CAS、未保存模型、备份和原媒体操作，不默认全套重跑。
+- [ ] 17.7 对同一源码及正式构建完成相关静态分析、真实类型检查和 Web build，并用可迁移打包 Electron 产物真实验普通图片／Webview 的正常退出重启及零正文重传；无开发服务器或源码目录依赖。所有执行性检查带进程外超时／内存保护，正式产物按测试路径保存；上游 Worker／宿主或原生条件缺失明确未通过，不用 Web 证明替代 Electron。
+
+## 既有切片的实现与验收记录
+
 ### 2026-11-02：Session／Thread 专用模式（11.2 部分）
 
 - `session ` 和 `thread ` 通过原 Registry、帮助 metadata 与 Action 接入同一 Provider；分别只查询 catalog 或精确 Thread owner，范围、分页、失败、取消和打开继续使用唯一链路。Session 名称不按文件行号／符号拆分；Thread 最近记录不混入文件。
@@ -582,3 +598,11 @@
 - 实际页面发现原 MatchImpl 的 lcut 对无分词边界长前缀可耗尽展示预算，导致查询词消失。通过唯一 sourceTransform 裁剪前缀并保持 Unicode 完整，固定 upstream 原件未改。27项真实 Provider／原结果模型／QueryBuilder及转换检查、含19份实际转换源码的真实类型检查、Python Ruff、TS／ESM AST和目录审查通过，无新增结构 findings。
 - 真实 Gateway＋正式 Workbench＋Chromium 验收通过（117.17秒）：Search Editor 有界预览及原 `%` picker 均保留查询词，搜索阶段额外正文读取为0，原命中 accessible label 为 UTF-16 2:1204，实际复制选中正文为 preview-target；原状态栏按码点显示起点列1203。原模型取消、只A不查B、A+B小配额、旧覆盖cursor、停止C及磁盘未改断言保持，页面错误为空。原件：`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-7df9c8ca7131/nodes/node-f238fd176e30/artifacts/model-coverage.json`。
 - 同批正式构建退出0、41.71秒，main SHA256=`ca208f890bf4c64d1cfea66c5bcb4baf0732c8a156925cc2c2c7e386c1dbaa61`。首轮类型只读属性写入、浏览器误选文件分组、长前缀实际缺陷及状态栏单位混用均保留原始失败记录；最终以精确源位置和实际所选文本验证，未放宽定位要求。准确命令、源码指纹、日志及退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-preview-*`；真实 Windows canonical及Electron仍未齐，16.19保持未勾选。
+
+### 2026-11-03：原文件私有条件读取（17.2）
+
+- 原 WorkspaceFileResponse 为完整 raw GET 发布 private/no-cache，弱 ETag 绑定稳定工作区、规范 URI 与原 stat 观察值；对照 VS Code serveFile，只散列小型身份／观察值，不读全文生成 validator，不建立字节库。原认证、路由、文件解析及当前读取权限先于304；304不读正文，返回本次请求ID及原缓存／Vary头。Vary覆盖两类目标头、Gateway、本地／联邦凭据及Cookie；下载、临时、Range继续no-store。唯一失败头策略按原Starlette路由模板同时覆盖canonical及内部头寻址载体，其他API不改变。
+- 21项文件响应检查通过，包含弱／强／多值／星号条件、实际打开但禁止read的304、权限异常因果、owner／URI／观察值隔离、原临时清理和Range。新增真实Web E2E通过（47.97秒）：经实际Gateway与两个托管后端，在原图片编辑器打开／关闭／重开，网络首次200传69字节，暖读304均传0正文，更新后200传70字节且原图片宽度变为2；UTF-8文本暖读304，外部改写后原保存基线仍409。相对／绝对／URI及canonical HTTP载体校验器一致，401／错误owner400／删除404明确no-store，Range206及下载合同保持，页面错误为空。
+- 原件：`out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-24e6c5652161/nodes/node-1a9400b31e52/artifacts/file-cache.json`。正式构建退出0、37.58秒，main SHA256=`ca208f890bf4c64d1cfea66c5bcb4baf0732c8a156925cc2c2c7e386c1dbaa61`；重跑前逐项核750份前端源码指纹后复用该构建，未重复打包。Python核心及装具Pyright零诊断、Ruff及AST／结构复核通过；原API的27条B008与HEAD逐项相同。两份OpenAPI快照仅补原raw说明／304，公开结构不变，生成一致性检查通过。
+- 初轮装具误用工作区准备参数，未进入产品；后续固定“每次打开恰好一个请求”的装具假设与原watcher建连再验证不符，按真实网络区分首次和暖读，所有暖读均须304及零正文。额外再验证的性能处理留给下一切片，不把本次零正文收益表述为已减少请求次数。扩大原错误映射检查在既有符号链接文案断言失败（原期待Path traversal detected，现原解析器返回文件路径超出当前目标目录的访问能力）；该测试及解析链与HEAD一致，未为通过改动。失败原件保留，准确命令／指纹／原始输出／退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/raw-cache-*`。
+- 本边界只完成17.2；原Webview／Electron回环及打包重启、route复用／断连／淘汰／配额、watcher完整失效场景仍需17.3～17.7分别验证，保持未勾选。

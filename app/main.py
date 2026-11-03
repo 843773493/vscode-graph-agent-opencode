@@ -37,6 +37,7 @@ from app.backend_lifecycle import BackendLifespan
 from app.container import WorkspaceContainerRegistry
 from app.core.env import load_boxteam_env
 from app.core.exceptions import BaseAPIException
+from app.core.http_cache import NoStoreErrorsMiddleware
 from app.core.logging_config import configure_application_logging
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
 from app.core.path_utils import (
@@ -124,6 +125,9 @@ app.state.workspace_lifespan = None
 
 # Add trace middleware
 app.add_middleware(TraceMiddleware)
+app.add_middleware(NoStoreErrorsMiddleware, paths=(
+    "/api/v1/workspace/files/raw", "/api/v1/workspaces/{workspace_id}/workspace/files/raw",
+))
 
 # 允许本地前端开发服务器通过浏览器跨域访问后端接口。
 # TODO: 这会放宽为允许所有来源，仅适合本地开发；若后续引入生产部署，请改成可配置项。

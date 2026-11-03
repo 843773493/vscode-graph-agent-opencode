@@ -574,6 +574,29 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 
 最近打开的资源／编辑器历史、最近命令、输入记忆与会话消息历史缓存是不同数据。复用现有 Workbench 存储与浏览器展示态存储，按 Gateway／工作区／用户身份边界隔离；不再为快速访问建立业务数据库。缓存允许先显示但要区分历史与当前事实，实际操作重新核验目标；从历史移除不删除会话，关闭 Tab 也不删除任务。输入记忆按模式保留，范围／凭据／接收者不随输入恢复；历史记录不得持久化 token 或临时 endpoint。Web 使用已有浏览器存储，Electron 使用既有固定 profile 存储，不增加 IPC；同一浏览器改连另一个 Gateway 或身份失效时，旧结果和动作立即失效。旧编辑器恢复数据通过一次明确格式升级读取稳定身份并重解路由，只保存新格式；旧数据不能恢复时明确提示并允许移除，不保留双写或长期两套解析。
 
+### 资源字节缓存复用原版加载链
+
+本节覆盖已允许读取的普通文件字节和 Webview 资源，图片只是验收样例之一；不替代模型、备份、历史、配置或搜索缓存的各自职责。固定上游的 `mediaPreview/browser/imagePreviewEditor.ts` 是 `FileService.readFile → Blob → object URL`，并不经过 Webview；`webview/browser/pre/service-worker.js` 才有 `vscode-resource-cache-*` 的 Cache Storage 与条件校验。不能用“原图片已解码”或“Electron 有 profile 目录”证明两者已完成持久缓存。此前图片／Range 证据继续有效，但不覆盖本节新增要求。
+
+| 资源入口 | 唯一缓存 owner 与读取路径 | 明确边界 |
+|---|---|---|
+| 原图片编辑器及普通原文件预览 | 原 FileService／文件 Provider → 原 raw API；完整 GET 复用浏览器／Chromium 私有 HTTP 缓存 | 保留原图片 Pane、Blob 与 object URL 释放，不新增图片编辑器或文件下载镜像 |
+| 原 Webview 的受控文件资源 | 原 `asWebviewUri` → Service Worker → 工作台 `loadLocalResource` → 同一 FileService；复用上游 Cache Storage | 保留 URI 投影、localResourceRoots 和原访问校验；不复制 Service Worker 或再写一个缓存状态机 |
+| 外部 HTTP(S) 图片 | 沿原浏览器请求、来源响应头及 Webview 安全规则 | 不隐式下载到后端，不把外部 URL 登记为工作区文件，不承诺所有第三方资源都能缓存 |
+| 音视频 Range、显式下载、临时归档及错误响应 | 沿原读取／下载链；Range 保持 206／Content-Range 及原取消 | 不把分段写成完整资源缓存，不为预热下载完整大文件；下载与临时数据仍保持 no-store |
+
+普通工作区文件预览的 raw 完整 GET 选择 `Cache-Control: private, no-cache` 与 ETag，替换该场景当前的 `no-store`；这是明确的响应缓存策略变更，不改变文件字节、权限、URI grammar 或保存合同。`no-cache` 表示允许私有存储但复用前必须验证，不是离线或免校验读取。原显式下载、临时文件、Range 和失败响应仍为 no-store，其它 API 不顺带放开。前端只在该原入口沿标准 fetch 缓存语义读取，不新增 fetch 缓存包装器；Gateway、Electron 回环代理保持 If-None-Match、ETag、Cache-Control、Vary 和 304 的真实 HTTP 语义，不集中持有图片缓存。
+
+每次校验先沿原认证、稳定目标路由及文件 owner 校验当前资源可访问，再比较 validator；相同返回空正文 304，不重新读取或传输图片正文，浏览器以旧字节组成可解码响应；不同返回 200 和当前字节。validator 绑定稳定工作区、规范资源身份及原 owner 的当前版本观察值，不能只用显示路径或临时 route。HTTP Vary 明确覆盖原目标工作区／后端身份请求头，以及该入口实际使用的认证头／Cookie，并正确合并已有 Vary；同一 URL 的不同目标或认证上下文不能互相命中。业务 URI、显式缓存标识及日志不嵌凭据。304 保留适用 validator、缓存策略、Vary 及本次网络请求的 request_id，不把缓存字节的旧请求诊断身份当成本次验证。
+
+Webview 继续先取得对应缓存及其 ETag，再请求宿主校验；宿主返回 NotModified 时复用缓存，返回新字节时沿原数据流显示及更新缓存。必须先核验原 Webview 根限制及当前 owner 权限，不能凭已存在缓存绕过鉴权。Webview 自己生成的受控响应缓存与 raw HTTP 响应是两个既有层次；允许原链路自然命中，不能据此追加第三份应用自管字节库、双写清单或原生下载目录。没有有效 validator 的资源沿原有界读取，不伪造固定版本；上游 stat ETag 的修改时间／大小观察值只用于再验证，不能冒充强内容 hash、完整版本快照或文件保存的 CAS 基线。不为生成缓存 validator 在每次 stat 全量读文件；媒体缓存或其内部 version 参数不推进保存基线。
+
+稳定 Gateway／工作区／规范资源归属沿唯一 URI 投影传入原资源地址；origin／profile 与当前认证上下文共同限定缓存使用。route 改变时重解原 owner，route 被另一个目标复用不得沿旧身份命中。退出／切换身份取消旧读取并撤销旧 Webview／object URL 的展示引用；新身份在校验成功前不消费旧资源。原 watcher 变更、删除、重连或 overflow 通知沿 FileService 刷新；刷新重新校验，显式强制刷新可沿标准 reload 绕过旧字节重取，不以旧校验结果掩盖通知。没有强版本且修改时间／大小均未变化时，不承诺发现绕过 owner 的任意改写；不能以此弱观察值证明可复现版本。
+
+Web 由浏览器管理对应 origin 的 HTTP 缓存与 Cache Storage；Electron 沿既有 `persist:boxteam`、稳定 renderer origin 及 `${BOXTEAM_HOME:-~/.boxteams}/clients/electron` 的 profile 使用相同机制，由 Chromium 管理磁盘格式。正常重启不清这些资源缓存；不增加 native FS IPC、手工 home 文件副本或另一份 renderer 源码。容量与淘汰沿引擎配额及上游缓存命名／版本生命周期，不新增用户必填配置或无界资源预热；缓存是可丢弃优化，清理仅影响所属资源缓存，不清聊天历史、设置、草稿或后端文件。写入失败／配额耗尽保留本地诊断，不宣称持久化成功；仍可按原权限读取来源。目标断开、删除或无权限时明确读取失败，不默认用旧图片冒充当前成功，不新增离线优先模式。
+
+验收必须分别覆盖真实 Web 和打包 Electron 的普通图片编辑器与 Webview 文件资源：首次有真实字节，第二次及正常重启后校验未修改且不重复传正文，修改后新字节及新 validator，A/B 同路径、认证切换与 route 重用无串读，删除／断连不伪报成功，Range 不误写完整缓存。记录条件请求、服务端实际状态和正文传输量；浏览器可能把网络 304 与缓存合成为 fetch 200，不能只断言 JavaScript 响应码，也不能只看图片可见或缓存目录存在。缓存淘汰／写入失败按同一读取链可诊断，原文字保存／revision、未保存模型与图片视图操作定向回归；每次验收绑定同一源码及构建指纹。Webview 宿主和 Worker 必须匹配固定上游，现有隔离宿主未就绪的失败不得算通过，也不能靠替换原编辑器绕开。
+
 ## 架构大纲与跨模块影响（不表示实施顺序）
 
 | 完整业务闭包 | 涉及模块 | 必须一起对齐的合同 |
@@ -655,6 +678,7 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 | 业务动作 | 多Thread同时可见，从A发起引用后切B／换搜索范围，只有A草稿改变且无turn；取消不改草稿；任务revision冲突、目录pending、写请求未知结果不自动重放 |
 | 恢复和隔离 | 保存历史／分屏／草稿／脏模型后重启，route变化但身份相同仍正确重开；route被复用成不同工作区必须拒绝；换Gateway／身份后旧候选失效，删除历史不删业务 |
 | 真正产品链路 | Web通过实际Gateway与目标后端；初始化 `/api/gateway/health`、`/api/gateway/workspaces`、`/api/v1/workspace` 及查询响应体request_id与X-Request-ID一致；Electron用打包产物验证快捷键、打开、动作和重启恢复 |
+| 资源缓存 | 普通图片与 Webview 文件资源分别验首次／二次／重启、条件验证正文零重传、修改更新、A/B 同路径及认证隔离、route 重用、删除／断连、淘汰／配额诊断与 Range；原文字保存基线不被缓存验证或媒体读取推进 |
 
 按闭包安排定向协议／owner测试、前端真实类型检查和web构建、真实浏览器及桌面验证；网络记录证明请求范围，不能仅靠UI看不到B断言未查询B。定向套件按资源／fixture隔离并行，同一有副作用fixture独占，昂贵全套只按影响扩展，不默认串行全跑，失败先归因不盲重跑。证据保留固定源码指纹、命令、进程外保护、原始输出、退出码和每项实际运行面；未具备条件的原生模式列缺失服务、宿主和原因，不用条件能力掩盖核心项目能力未完成。
 

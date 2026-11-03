@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.core.http_cache import NoStoreErrorsMiddleware
 from app.core.logging_config import configure_application_logging
 from app.core.trace_middleware import TraceMiddleware, get_request_id
 from app.gateway.lifespan import lifespan
@@ -39,6 +40,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(TraceMiddleware)
+app.add_middleware(NoStoreErrorsMiddleware, paths=(
+    "/api/v1/workspace/files/raw", "/api/v1/workspaces/{workspace_id}/workspace/files/raw",
+))
 
 
 @app.exception_handler(HTTPException)

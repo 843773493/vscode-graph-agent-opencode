@@ -344,6 +344,8 @@ async def get_workspace_file_content(
     "/files/raw",
     response_class=FileResponse,
     summary="获取工作区原始文件",
+    description="完整 GET 允许私有缓存但每次复用前校验 ETag；未修改返回空正文304。Range及失败响应禁止缓存。",
+    responses={304: {"description": "当前授权及目标校验通过，stat弱ETag未变，无响应正文"}},
 )
 async def get_workspace_raw_file(
     path: str = Query(description="相对工作区根目录或绝对文件系统文件路径"),
@@ -365,7 +367,7 @@ async def get_workspace_raw_file(
         raise forbidden_http_error(error) from error
     except (IsADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
-    return WorkspaceFileResponse(download, disposition="inline")
+    return WorkspaceFileResponse(download, disposition="inline", preview_owner=workspace_service.workspace_id)
 
 
 @router.get(
