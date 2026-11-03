@@ -1,4 +1,4 @@
-"""rollout schema 自省与 commit-offset 校验（只依赖连接与参数）。"""
+"""rollout schema 自省与 commit-offset 校验；正文复用 storage 的有界校验回执。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.domain.itemized.enums import (
@@ -52,8 +53,15 @@ _DEFAULT_NAMESPACE = ""
 
 __all__ = ["RolloutSchemaIntrospectionMixin"]
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.rollout_context.storage.service import (
+        RolloutStorage,
+    )
+
 
 class RolloutSchemaIntrospectionMixin:
+    _host: RolloutStorage
+
     def _manifest_from_connection(
         self,
         connection: sqlite3.Connection,
@@ -301,15 +309,16 @@ class RolloutSchemaIntrospectionMixin:
                 raise RuntimeError("source-mismatch: context view 缺少已提交创建顺序")
         validate_schema_journal(connection, schema_version)
 
-    @staticmethod
     def _validate_v2_commit_offsets(
+        self,
         connection: sqlite3.Connection,
         jsonl_path: Path,
         *,
         validate_jsonl_items: bool = True,
     ) -> None:
         """校验 committed offset 的单一权威和 storage commit 链。"""
-        # TODO(性能): 初始化与普通快照仍全扫历史 commit/catalog，完整初始化还重验全部正文。
+        # TODO(性能): 初始化与普通快照仍全扫历史 commit/catalog，完整初始化仍读取全部正文。
+        # 相同正文的解析、JCS 和 payload hash 已由存储实例内的有界回执复用。
         # 改为恢复时全量审计、在线增量校验前，须保留后续外部改写检测及校验失败不截断尾部的行为；
         # 不能仅按 last_commit_id 复用结果，也不能通过关闭正文检查掩盖这个热点。
         columns = {
@@ -577,6 +586,7 @@ class RolloutSchemaIntrospectionMixin:
                     catalog_hash=catalog_hash,
                     payload_length=logical_length,
                     source_revision=source_revision,
+                    cache=self._host._catalog_body_validation_cache,
                 )
             item_commit_id_value = strict_non_negative_int(
                 item_commit_id, field=f"item_catalog.commit_id: {item_id}"

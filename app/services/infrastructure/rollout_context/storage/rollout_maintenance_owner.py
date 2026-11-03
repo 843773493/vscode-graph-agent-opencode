@@ -493,8 +493,8 @@ class RolloutMaintenanceOwner(
             with self._host._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                # 同次初始化复用 writer；既有 authority 仍先经过只读预检，
-                # 不跨调用缓存结构、发布状态或 canonical 正文的校验结果。
+                # 同次初始化复用 writer；既有 authority 仍先经过只读预检。
+                # 结构、发布状态和提交链每次检查，正文只复用精确字节的校验回执。
                 if needs_schema:
                     initialize_rollout_schema(connection, initialize_activation=self._host._initialize_activation)
                 self._host._validate_reasoning_projection_connection(connection)

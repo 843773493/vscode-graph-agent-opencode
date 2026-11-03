@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import statistics
+import time
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import HumanMessage, message_to_dict
 from langgraph.checkpoint.base import empty_checkpoint
 
@@ -14,6 +17,11 @@ from app.domain.itemized.records import user_input_payload
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.storage import (
+    rollout_schema_introspection,
+)
+from app.services.infrastructure.rollout_context.storage.catalog import integrity
+from tests.harness.python.run_context import TestRunContext
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 
@@ -116,3 +124,62 @@ def test_long_session_persists_message_deltas_without_snapshot_growth(
     assert all(record["wire_role"] == "user" for record in message_records)
     assert rollout_bytes * 8 < naive_snapshot_bytes
     assert not list(root.glob("segment-*.jsonl"))
+
+
+def test_warm_initialization_measures_body_validation_receipts(
+    tmp_path: Path, session_bundle_factory, monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    sessions = tmp_path / "sessions"
+    session_bundle_factory(sessions, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions)
+    storage = saver._storage.storage
+    thread_id = storage.main_thread_id(SESSION_ID)
+    # 关键历史由 Saver 接受入口生成；测量只比较同一份历史的初始化，不计造数时间。
+    payload = [{"index": index, "text": "历史输入" * 64} for index in range(128)]
+    for index in range(32):
+        saver.accept_turn(
+            SESSION_ID, thread_id=thread_id, accepted_ingress_id=f"measure-{index}",
+            acceptance_idempotency_key=f"measure-{index}", job_id=f"measure-{index}",
+            admission_idempotency_key=f"measure-{index}", payload=payload,
+            payload_kind="structured_content",
+        )
+    storage.initialize(SESSION_ID, thread_id=thread_id)
+    body_path = storage.jsonl_path(SESSION_ID, thread_id=thread_id)
+    body_before = body_path.read_bytes()
+    item_count = len(body_before.splitlines())
+    validate = rollout_schema_introspection.validate_catalog_body
+    canonical_line = integrity.canonical_json_line
+    body_checks = 0
+
+    def observe(envelope):
+        nonlocal body_checks
+        body_checks += 1
+        return canonical_line(envelope)
+
+    def without_receipt(raw, **parameters):
+        # 仅在测量中取消回执复用；仍经过同一套完整校验，产品不增加关闭检查的配置。
+        parameters.pop("cache", None)
+        return validate(raw, **parameters)
+
+    measurements = {}
+    for mode in ("full_validation", "retained_receipts"):
+        body_checks = 0
+        durations = []
+        with monkeypatch.context() as patch:
+            patch.setattr(integrity, "canonical_json_line", observe)
+            if mode == "full_validation":
+                patch.setattr(rollout_schema_introspection, "validate_catalog_body", without_receipt)
+            for _ in range(5):
+                start = time.perf_counter_ns()
+                storage.initialize(SESSION_ID, thread_id=thread_id)
+                durations.append((time.perf_counter_ns() - start) / 1_000_000)
+        measurements[mode] = {"elapsed_ms": durations, "median_ms": statistics.median(durations),
+                              "body_checks": body_checks}
+        assert body_path.read_bytes() == body_before
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    output = context.artifacts_dir / f"body-validation-initialize-{time.time_ns()}.json"
+    output.write_text(json.dumps({"items": item_count, "jsonl_bytes": len(body_before),
+                                  "measurements": measurements}, indent=2), encoding="utf-8")
+    assert measurements["full_validation"]["body_checks"] == item_count * 5
+    assert measurements["retained_receipts"]["body_checks"] == 0

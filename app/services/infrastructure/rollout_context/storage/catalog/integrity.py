@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -32,6 +34,37 @@ _BodyValidationValue = tuple[bytes, CanonicalItemRecord]
 _body_validation_scope: ContextVar[tuple[LRUCache[_BodyValidationKey, _BodyValidationValue], int] | None] = (
     ContextVar("catalog_body_validation_scope", default=None)
 )
+
+
+class CatalogBodyValidationCache:
+    """存储实例内有界的纯校验回执，不保留正文或可变 item。"""
+
+    def __init__(self, *, max_entries: int = _BODY_VALIDATION_MAX_ENTRIES) -> None:
+        if type(max_entries) is not int or not 0 < max_entries <= _BODY_VALIDATION_MAX_ENTRIES:
+            raise ValueError("正文校验回执上限必须是 1 至 4096 的整数")
+        self._successful: LRUCache[_BodyValidationKey, _BodyValidationKey] = LRUCache(
+            maxsize=_BODY_VALIDATION_MAX_BYTES,
+            getsizeof=lambda receipt: sum(len(value.encode("utf-8")) if isinstance(value, str)
+                                         else len(value) if isinstance(value, bytes) else 8 for value in receipt),
+        )
+        self._max_entries = max_entries
+        self._lock = threading.Lock()
+
+    def validate(self, key: _BodyValidationKey) -> None:
+        raw, sequence, item_id, catalog_hash, payload_length, source_revision = key
+        # 只复用当前实际字节与全部 catalog 参数相同的结果；mtime、commit ID
+        # 和 catalog 自报的 hash 都不足以证明正文未被改写。摘要不持有历史正文。
+        receipt = (hashlib.sha256(raw).digest(), sequence, item_id, catalog_hash, payload_length, source_revision)
+        with self._lock:
+            if self._successful.get(receipt) is not None:
+                return
+        # 解析和编码不占共享锁；并发首次验证可以重复计算，失败绝不发布回执。
+        _validated_catalog_body(key)
+        with self._lock:
+            if self._successful.getsizeof(receipt) <= self._successful.maxsize:
+                while len(self._successful) >= self._max_entries:
+                    self._successful.popitem()
+                self._successful[receipt] = receipt
 
 
 @contextmanager
@@ -91,9 +124,14 @@ def validate_catalog_body(
     catalog_hash: str,
     payload_length: int,
     source_revision: str,
+    cache: CatalogBodyValidationCache | None = None,
 ) -> None:
     """校验实际正文与 catalog；初始化只验证，不分配调用方副本。"""
-    _validated_catalog_body((raw, sequence, item_id, catalog_hash, payload_length, source_revision))
+    key = (raw, sequence, item_id, catalog_hash, payload_length, source_revision)
+    if cache is None:
+        _validated_catalog_body(key)
+    else:
+        cache.validate(key)
 
 
 def read_catalog_body(

@@ -119,30 +119,64 @@ def test_body_validation_returns_isolated_nested_values_on_every_read(
     ("sequence", 2), ("item_id", "another-id"), ("catalog_hash", "another-hash"),
     ("payload_length", 100), ("source_revision", "another-revision"),
 ])
+@pytest.mark.parametrize("retained", [False, True])
 def test_body_validation_binds_every_catalog_parameter(
     body_input_factory: _BodyInputFactory, validation_calls: list[object], field: str, changed: object,
+    retained: bool,
 ) -> None:
     raw, parameters = body_input_factory()
+    cache = integrity.CatalogBodyValidationCache() if retained else None
     with integrity.catalog_body_validation_scope():
-        integrity.validate_catalog_body(raw, **parameters)
+        integrity.validate_catalog_body(raw, **parameters, cache=cache)
         with pytest.raises(RuntimeError, match="不一致"):
-            integrity.validate_catalog_body(raw, **{**parameters, field: changed})
-        integrity.validate_catalog_body(raw, **parameters)
+            integrity.validate_catalog_body(raw, **{**parameters, field: changed}, cache=cache)
+        integrity.validate_catalog_body(raw, **parameters, cache=cache)
     assert len(validation_calls) == 2
 
 
+@pytest.mark.parametrize("retained", [False, True])
 def test_body_validation_does_not_reuse_same_length_changed_bytes_or_cache_failures(
-    body_input_factory: _BodyInputFactory, validation_calls: list[object],
+    body_input_factory: _BodyInputFactory, validation_calls: list[object], retained: bool,
 ) -> None:
     raw, parameters = body_input_factory()
     damaged = raw.replace(b'"payload":"original"', b'"payload":"modified"')
     assert damaged != raw and len(damaged) == len(raw)
+    cache = integrity.CatalogBodyValidationCache() if retained else None
     with integrity.catalog_body_validation_scope():
-        integrity.validate_catalog_body(raw, **parameters)
+        integrity.validate_catalog_body(raw, **parameters, cache=cache)
         for _ in range(2):
             with pytest.raises(RuntimeError, match="schema/content 非法"):
-                integrity.validate_catalog_body(damaged, **parameters)
-        integrity.validate_catalog_body(raw, **parameters)
+                integrity.validate_catalog_body(damaged, **parameters, cache=cache)
+        integrity.validate_catalog_body(raw, **parameters, cache=cache)
+    assert len(validation_calls) == 3
+
+
+def test_retained_receipts_reuse_success_across_scopes_without_retaining_items(
+    body_input_factory: _BodyInputFactory, validation_calls: list[object],
+) -> None:
+    raw, parameters = body_input_factory()
+    cache = integrity.CatalogBodyValidationCache()
+    for _ in range(2):
+        with integrity.catalog_body_validation_scope():
+            integrity.validate_catalog_body(raw, **parameters, cache=cache)
+    assert len(validation_calls) == 1
+    # 回执只服务校验，不能把先前调用的可变 item 或正文当作新的读取结果。
+    integrity.read_catalog_body(raw, **parameters)
+    assert len(validation_calls) == 2
+    integrity.validate_catalog_body(raw, **parameters, cache=integrity.CatalogBodyValidationCache())
+    assert len(validation_calls) == 3
+
+
+def test_retained_receipts_evict_old_success_at_capacity(
+    body_input_factory: _BodyInputFactory, validation_calls: list[object],
+) -> None:
+    first, first_parameters = body_input_factory("first")
+    second, second_parameters = body_input_factory("other")
+    cache = integrity.CatalogBodyValidationCache(max_entries=1)
+    integrity.validate_catalog_body(first, **first_parameters, cache=cache)
+    integrity.validate_catalog_body(second, **second_parameters, cache=cache)
+    integrity.validate_catalog_body(second, **second_parameters, cache=cache)
+    integrity.validate_catalog_body(first, **first_parameters, cache=cache)
     assert len(validation_calls) == 3
 
 

@@ -24,6 +24,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.catalog import integrity
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -233,6 +234,70 @@ def test_warm_owner_revalidates_commit_catalog_and_metadata_before_reclaiming_ta
         else:
             with storage.open_read_snapshot(rollout.session_id, thread_id):
                 pytest.fail("后续 commit/catalog 损坏不得复用先前的校验结果")
+    assert rollout.jsonl.read_bytes() == before
+
+
+def test_warm_initialization_only_reencodes_new_bodies_and_rejects_changed_bytes(
+    committed_rollout: CommittedRollout, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rollout = committed_rollout
+    saver = RolloutCheckpointSaver(rollout.sessions)
+    storage = saver._storage.storage
+    thread_id = storage.main_thread_id(rollout.session_id)
+    storage.initialize(rollout.session_id, thread_id=thread_id)
+    validations: list[str] = []
+    canonical_line = integrity.canonical_json_line
+
+    def observe(envelope):
+        validations.append(envelope["item_id"])
+        return canonical_line(envelope)
+
+    monkeypatch.setattr(integrity, "canonical_json_line", observe)
+    storage.initialize(rollout.session_id, thread_id=thread_id)
+    storage.initialize(rollout.session_id, thread_id=thread_id)
+    assert validations == []
+    accepted = saver.accept_turn(
+        rollout.session_id, thread_id=thread_id,
+        accepted_ingress_id="warm-body", acceptance_idempotency_key="warm-body",
+        job_id="warm-body-job", admission_idempotency_key="warm-body-admission",
+        payload="新增输入" * 16384, payload_kind=PayloadKind.TEXT,
+    )
+    # 接受入口为消息投影读取一次新正文；以下单独统计 initialize 的历史复验。
+    assert validations == [accepted["root_input_item_id"]]
+    validations.clear()
+    storage.initialize(rollout.session_id, thread_id=thread_id)
+    storage.initialize(rollout.session_id, thread_id=thread_id)
+    assert validations == [accepted["root_input_item_id"]]
+    original = rollout.jsonl.read_bytes()
+    damaged = original.replace("用户输入".encode(), "篡改输入".encode(), 1)
+    assert damaged != original and len(damaged) == len(original)
+    damaged += b"uncommitted-tail"
+    rollout.jsonl.write_bytes(damaged)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="schema/content 非法"):
+            storage.initialize(rollout.session_id, thread_id=thread_id)
+        assert rollout.jsonl.read_bytes() == damaged
+    assert len(validations) == 3
+
+
+@pytest.mark.parametrize(("corruption", "match"), [
+    ("UPDATE item_catalog SET source_revision='unrelated'", "source_revision"),
+    ("UPDATE item_catalog SET payload_length=payload_length+1", "payload_length"),
+    ("UPDATE item_catalog SET content_hash='unrelated'", "content_hash"),
+])
+def test_warm_body_receipts_never_hide_later_catalog_damage(
+    committed_rollout: CommittedRollout, corruption: str, match: str,
+) -> None:
+    rollout = committed_rollout
+    storage = RolloutCheckpointSaver(rollout.sessions)._storage.storage
+    storage.initialize(rollout.session_id)
+    with sqlite3.connect(rollout.index) as connection:
+        connection.execute(corruption)
+    with rollout.jsonl.open("ab") as stream:
+        stream.write(b"uncommitted-tail")
+    before = rollout.jsonl.read_bytes()
+    with pytest.raises(RuntimeError, match=match):
+        storage.initialize(rollout.session_id)
     assert rollout.jsonl.read_bytes() == before
 
 

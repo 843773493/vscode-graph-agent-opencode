@@ -42,6 +42,8 @@ pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True
 def canonical_reader(registry_db, request):
     saver, session, connection, _accepted = registry_db
     storage = saver._storage.storage
+    # 从冷回执开始核对同次 prepare 的正文复用；跨调用的暖回执另有验收。
+    storage._catalog_body_validation_cache = integrity.CatalogBodyValidationCache()
     thread = storage.main_thread_id(session)
     sequence, item_id, offset, length = connection.execute(
         "SELECT item_sequence,item_id,jsonl_offset,jsonl_length FROM item_catalog ORDER BY item_sequence LIMIT 1",
@@ -293,6 +295,7 @@ def test_wire_seal_rechecks_same_length_body_damage_after_successful_validation(
 def test_provider_uses_storage_body_validation_scope_and_ends_after_success(production_context, monkeypatch):
     saver, session, thread, _connection, _manager, prepare = production_context
     storage = saver._storage.storage
+    storage._catalog_body_validation_cache = integrity.CatalogBodyValidationCache()
     original_scope = storage.catalog_body_validation_scope
     original_validate = rollout_schema_introspection.validate_catalog_body
     original_read = integrity.read_catalog_body
@@ -315,7 +318,7 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
         phase = "after"
         scope_events.append("exit")
 
-    def observe_validation(operation, raw, *, sequence, item_id, catalog_hash, payload_length, source_revision):
+    def observe_validation(operation, raw, *, sequence, item_id, catalog_hash, payload_length, source_revision, **options):
         key = (raw, sequence, item_id, catalog_hash, payload_length, source_revision)
         requests[phase][key] += 1
         token = active_request.set((phase, key))
@@ -323,6 +326,7 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
             return operation(
                 raw, sequence=sequence, item_id=item_id, catalog_hash=catalog_hash,
                 payload_length=payload_length, source_revision=source_revision,
+                **options,
             )
         finally:
             active_request.reset(token)
@@ -349,7 +353,8 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
     assert validations["inside"] == expected_validations
     storage.initialize(session, thread_id=thread)
     assert scope_events == ["enter", "exit"]
-    assert requests["after"] == validations["after"] == expected_validations
+    assert requests["after"] == expected_validations
+    assert validations["after"] == Counter()
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])

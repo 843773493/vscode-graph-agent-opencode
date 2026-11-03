@@ -20,6 +20,7 @@ from app.core.session_thread_context import require_current_session_thread_owner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.fork.path_scope import ForkPathScope
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    CatalogBodyValidationCache,
     catalog_body_validation_scope,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.internal_history import (
@@ -107,6 +108,7 @@ class RolloutStorage(
         self._message_codec = message_codec
         self._locks: dict[tuple[str, str], _RolloutOperationLock] = {}
         self._locks_guard = threading.Lock()
+        self._catalog_body_validation_cache = CatalogBodyValidationCache()
         self._active_fork_materializations: set[tuple[str, str, str]] = set()
         self._maintenance_owner = RolloutMaintenanceOwner(self)
         self._fork_recovery = fork_recovery
