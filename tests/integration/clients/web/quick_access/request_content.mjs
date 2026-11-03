@@ -15,7 +15,7 @@ try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('Chromium', () => browser.close());
-  page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1400, height: 1000 }, reducedMotion: 'reduce' });
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
@@ -63,7 +63,11 @@ try {
   await openSearch();
   const candidates = quick.locator(`[data-quick-input-id^="request:"][data-quick-input-id*="/${session.session_id}/"]`);
   expect(await candidates.count()).toBeGreaterThanOrEqual(2);
-  await candidates.first().click();
+  // 首次接受走真实键盘，并先核活动身份，避免动画期间点击重排中的列表。
+  await expect(quick.locator('.monaco-list-row.focused [data-quick-input-id]')).toHaveAttribute(
+    'data-quick-input-id', await candidates.first().getAttribute('data-quick-input-id'));
+  await expect(quick.locator('input')).toBeFocused();
+  await page.keyboard.press('Enter');
   const pane = page.locator(`section.boxteam-thread[data-session-id="${session.session_id}"][data-thread-id="${main}"]`);
   const mark = pane.getByLabel('请求日志命中原文').locator('mark');
   await expect(mark).toHaveText(query);
@@ -93,13 +97,46 @@ try {
   await command('workbench.action.quickOpen', 'content ' + query); await openSearch();
   const rejected = page.waitForResponse(response => response.url().endsWith('/llm-request-logs/locate') && response.status() === 409);
   await candidates.first().click();
-  expect((await (await rejected).json()).detail.code).toBe('stale_request_log_reference');
+  expect((await (await rejected).json()).detail).toMatchObject({
+    owner: 'llm_request_log', code: 'stale_request_log_reference', reason: 'record_changed',
+  });
   await expect(pane.getByRole('alert')).toContainText('命中的请求日志已变化');
   await expect(mark).toHaveCount(0);
   result.staleReferenceRejected = true;
   expect(result.searches.every(request => request.path === '/api/gateway/search' && request.body.queries.length === 1 && request.body.queries[0].category === 'llm_request')).toBe(true);
   expect(result.fullLogs).toHaveLength(0);
-  result.noFullLogRead = true; result.phase = 'passed';
+  result.noFullLogRead = true;
+  // 使用真实执行产出的日志，核验原API拒绝及联邦诊断；不预写日志或复制SSE解码器。
+  const workspace = await api('/api/v1/workspace');
+  const health = await api('/api/gateway/health');
+  const owner = { gateway_id: health.gateway_id, workspace_id: workspace.workspace_id };
+  const searchQuery = { category: 'llm_request', operation: 'content', match_mode: 'literal', query, limit: 1 };
+  const search = { workspace_id: workspace.workspace_id, ...searchQuery };
+  const originalPage = await api('/api/v1/search', search);
+  const cursor = originalPage.llm_requests.cursor;
+  expect(cursor).toBeTruthy();
+  const rejectCursor = async (cursor, status, code, reason) => {
+    const rejected = await page.evaluate(async ({ search, cursor }) => {
+      const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
+      const response = await fetch('/api/v1/search', { method: 'POST',
+        headers: { 'X-Local-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...search, cursor }) });
+      return { status: response.status, requestId: response.headers.get('X-Request-ID'), body: await response.json() };
+    }, { search, cursor });
+    expect(rejected.status).toBe(status);
+    expect(rejected.body.request_id).toBe(rejected.requestId);
+    expect(rejected.body.detail).toMatchObject({ owner: 'llm_request_log', code, reason });
+    expect(rejected.body.detail.message).toBeTruthy();
+    return rejected;
+  };
+  const malformed = await rejectCursor('%%%', 400, 'invalid_request_log_cursor', 'malformed');
+  const changedQuery = JSON.parse(Buffer.from(cursor, 'base64url').toString());
+  changedQuery.query = '另一个查询';
+  const mismatched = await rejectCursor(Buffer.from(JSON.stringify(changedQuery)).toString('base64url'), 400,
+    'invalid_request_log_cursor', 'query_mismatch');
+  await api('/api/v1/sessions', { title: '日志查询后的目录变化' });
+  const stale = await rejectCursor(cursor, 409, 'stale_request_log_cursor', 'catalog_changed');
+  result.cursorDiagnostics = { owner, searchQuery, cursor, malformed, mismatched, stale };
+  result.phase = 'passed';
 } catch (error) {
   failure = error; result.error = String(error?.stack ?? error);
   if (page) await page.screenshot({ path: screenshot }).catch(error => { result.screenshotError = String(error); });

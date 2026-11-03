@@ -159,7 +159,7 @@ def test_search_and_exact_location_preserve_unicode_and_do_not_load_all_logs(sea
 
 def test_log_reference_rejects_same_length_mutation_and_deletion(searchable_logs):
     from app.services.infrastructure.llm_request_log_service import (
-        LLMRequestLogReferenceError,
+        LLMRequestLogError,
     )
 
     service, session_id, path, budget = searchable_logs
@@ -167,12 +167,12 @@ def test_log_reference_rejects_same_length_mutation_and_deletion(searchable_logs
     reference = page.items[0].reference
     original = path.read_bytes()
     path.write_bytes(original.replace("请求词".encode(), "已改变".encode()))
-    with pytest.raises(LLMRequestLogReferenceError, match="已变化"):
+    with pytest.raises(LLMRequestLogError, match="已变化"):
         service.locate(reference)
-    with pytest.raises(LLMRequestLogReferenceError, match="已更新或裁剪"):
+    with pytest.raises(LLMRequestLogError, match="已更新或裁剪"):
         service.search_session_logs(session_id, "请求词😀", limit=1, position=page.position, budget=budget())
     path.unlink()
-    with pytest.raises(LLMRequestLogReferenceError, match="已删除"):
+    with pytest.raises(LLMRequestLogError, match="已删除"):
         service.locate(reference)
 
 

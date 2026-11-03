@@ -32,6 +32,7 @@ from app.services.business.search.service import (
     SearchProviderReadError,
     WorkspaceSearchService,
 )
+from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )
@@ -67,6 +68,9 @@ async def search_workspace(
         result = await service.search(payload, gateway_id=require_current_gateway_id("工作区搜索"))
     except SearchContractError as error:
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
+    except LLMRequestLogError as error:
+        raise HTTPException(status_code=400 if error.code == "invalid_request_log_cursor" else 409,
+                            detail=error.detail()) from error
     except SearchProviderReadError as error:
         raise HTTPException(status_code=500, detail=error.detail()) from error
     except SessionContextRevisionChangedError as error:
@@ -95,5 +99,5 @@ async def search_workspace(
     except ValueError as error:
         # TODO：随原 owner 的 cursor／revision 异常类型化，细分 owner_rejected 的诊断代码。
         raise HTTPException(status_code=409, detail={"code": "owner_rejected", "message": str(error)}) from error
-    # TODO：16.18 迁齐各传输 owner 的具名网络错误与信息／警告合同。
+    # TODO：16.18 迁齐其余原 owner 的具名异常与信息／警告合同。
     return APIResponse(data=result, request_id=request_id)

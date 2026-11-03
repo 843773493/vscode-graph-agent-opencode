@@ -715,3 +715,12 @@
 - 联邦搜索沿既有error_owner／reason字段传递search_transport及httpx原异常类型，区分连接／读取／写入／池超时、连接／读写故障、远端／本地协议、代理与解码等原因。保留原deadline／target_unavailable代码、异常因果、详情、输入cursor和重试，不伪造HTTP状态或Provider身份，不从自然语言推断原因，不增加第二错误分类链。
 - 57项定向检查通过（2.18秒）；每类传输异常均核原续点、零页、零交付、分支终态等于汇总、路由引用释放及原分支重试。真实Gateway＋双Backend通过（49.93秒）：关闭本装具B后端但保留登记URL，真实连接拒绝返回ConnectError／search_transport，A仍返回原页面。没有替换该网络响应或终止未知进程。
 - Ruff通过；核心与实网测试Pyright零诊断，原transport测试29条诊断与HEAD原件逐条同文，没有新增。OpenSpec strict及差异检查通过。命令、源码指纹、原始结果、实际退出码及正式产物见out/tests/temp/search_transport_reasons_20261103/artifacts/verification.json。本批无公开DTO或前端源码变化，不重复生成、Web构建或Electron；原owner其余异常与信息／警告合同仍未齐，16.18保持未勾选。
+
+
+### 2026-11-03：请求日志续点与引用具名拒绝（16.18 部分）
+
+- 原LLMRequestLogService统一续点／引用错误为LLMRequestLogError，移除旧无原因异常并迁齐全部调用方。输入格式、归属、查询和越界返回400 invalid_request_log_cursor；catalog、目录及正文变化返回409 stale_request_log_cursor；精确定位保留409 stale_request_log_reference。原因在原校验点产生，原API／Gateway沿同一owner、reason、真实HTTP状态、详细消息与输入cursor传递；权限、取消及内部错误不改标。
+- 29项日志定向检查通过（4.75秒）；相关搜索／API回归86项通过（8.38秒，有重叠不相加）。覆盖损坏base64／结构、跨owner／查询、目录／文件／正文位置越界、catalog／目录变化及同大小恢复mtime的正文变更。装具补齐产品HTTP错误处理器后，request_id响应体与响应头一致；原Unicode／预算／留存／原列表与精确定位断言保持。
+- 真实Gateway／Workbench／Chromium经产品消息及model_stream生成关键日志，原详情定位、同Pane第二位置、过期引用及零整批读取保持；另经原API核400与409诊断，由正式Python搜索SDK核原分支和汇总一致、零页、零交付及旧cursor保留。1 passed／95.67秒，pageErrors=[]，共享正式构建39.41秒、退出0；原件为out/tests/integration/clients/web/quick_access/test_request_content/runs/run-be62f0c9233b/。
+- 真实类型对照完整git archive基线，7条既存诊断同文、无新增；Ruff原sessions.py的27条B008与基线同文，其余触及文件零诊断。OpenSpec strict、ESM语法及差异检查通过。无产品前端／DTO变化，不重复生成或Electron。首次页面检查在原首次鼠标点击的动画稳定性等待阶段失败，未进入新诊断；首次接受改为明确核活动身份后走真实Enter及reduced motion，保留后续鼠标与全部定位断言，不将其称为产品缺陷修复。
+- 首轮缺HTTP处理器、类型注册签名、初次静态快照基线及页面失败原件均保留，最终使用完整基线。准确命令、源码指纹、原始结果与实际退出码见out/tests/temp/request_log_errors_20261103/artifacts/verification.json。其余owner和信息／警告合同继续由16.18追踪，保持整项未勾选。

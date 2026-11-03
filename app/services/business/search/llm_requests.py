@@ -20,6 +20,7 @@ from app.services.business.session_navigation.read_service import (
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.llm_request_log_service import (
+    LLMRequestLogError,
     LLMRequestLogService,
     LogSearchBudget,
     LogSearchPosition,
@@ -53,13 +54,16 @@ async def search_workspace_llm_requests(
             raw = base64.b64decode(request.cursor + "=" * (-len(request.cursor) % 4), altchars=b"-_", validate=True)
             previous = _Cursor.model_validate_json(raw)
         except (ValueError, binascii.Error, ValidationError) as error:
-            raise ValueError("请求日志搜索 cursor 格式无效") from error
-        if any(getattr(previous, key) != getattr(state, key)
-               for key in ("gateway_id", "workspace_id", "query", "catalog_revision")):
-            raise ValueError("请求日志搜索 cursor 的归属、查询或目录版本不符，请重新查询")
+            raise LLMRequestLogError("invalid_request_log_cursor", "malformed", "请求日志搜索 cursor 格式无效") from error
+        if (previous.gateway_id, previous.workspace_id) != (state.gateway_id, state.workspace_id):
+            raise LLMRequestLogError("invalid_request_log_cursor", "owner_mismatch", "请求日志搜索 cursor 的归属不符，请重新查询")
+        if previous.query != state.query:
+            raise LLMRequestLogError("invalid_request_log_cursor", "query_mismatch", "请求日志搜索 cursor 的查询不符，请重新查询")
+        if previous.catalog_revision != state.catalog_revision:
+            raise LLMRequestLogError("stale_request_log_cursor", "catalog_changed", "请求日志搜索 cursor 的目录版本不符，请重新查询")
         state = previous
     if state.node_offset > len(snapshot.items):
-        raise ValueError("请求日志搜索 cursor 目录位置越界")
+        raise LLMRequestLogError("invalid_request_log_cursor", "position_out_of_bounds", "请求日志搜索 cursor 目录位置越界")
     budget = LogSearchBudget(check=admission.check)
     items: list[WorkspaceLLMRequestLogMatchDTO] = []
     scanned_nodes = 0
@@ -93,7 +97,7 @@ async def search_workspace_llm_requests(
         state.node_offset += 1
         state.position = None
     if sessions.path_resolver.revision != snapshot.catalog_revision:
-        raise ValueError("请求日志搜索期间目录已更新，请重新查询")
+        raise LLMRequestLogError("stale_request_log_cursor", "catalog_changed", "请求日志搜索期间目录已更新，请重新查询")
     admission.check()
     complete = state.node_offset == len(snapshot.items)
     return WorkspaceLLMRequestLogSearchResultsDTO(

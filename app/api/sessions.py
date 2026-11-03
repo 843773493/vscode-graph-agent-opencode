@@ -119,7 +119,7 @@ from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
 from app.services.infrastructure.llm_request_log_service import (
-    LLMRequestLogReferenceError,
+    LLMRequestLogError,
     LLMRequestLogService,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -577,8 +577,8 @@ async def locate_session_llm_request_log(
     try:
         async with sessions.session_read_admission(session_id):
             result = await run_sync_shielded(logs.locate, reference)
-    except LLMRequestLogReferenceError as error:
-        raise HTTPException(status_code=409, detail={"code": "stale_request_log_reference", "message": str(error)}) from error
+    except LLMRequestLogError as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except SessionDeletionPendingError as error:

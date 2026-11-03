@@ -9,6 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from app.schemas.search_federation import FederatedSearchRequest
+from app.services.infrastructure.gateway_session_context_client import (
+    GatewaySessionContextClient,
+)
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
@@ -20,7 +24,11 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.gateway import close_gateway_process, start_gateway_process
+from tests.support.processes.gateway import (
+    LOCAL_TOKEN_HEADERS,
+    close_gateway_process,
+    start_gateway_process,
+)
 
 
 async def test_request_content_search_opens_only_the_exact_record(
@@ -60,5 +68,28 @@ async def test_request_content_search_opens_only_the_exact_record(
         for key in ("unselectedHasNoContentQuery", "exactRecordLocated", "samePaneNewLocation", "staleReferenceRejected", "noFullLogRead"):
             assert receipt[key], key
         assert receipt["pageErrors"] == []
+        diagnostic = receipt["cursorDiagnostics"]
+        transport = GatewaySessionContextClient(gateway_url=f"http://127.0.0.1:{gateway.port}",
+            local_token_supplier=lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"])
+        try:
+            original = [event async for event in transport.resource_search.search(FederatedSearchRequest.model_validate({
+                "scope": {"mode": "origin", "origin": diagnostic["owner"]}, "queries": [diagnostic["searchQuery"]],
+            }), request_id="req_log_cursor_scope")]
+            scope, summary = original[0].scope, original[-1].summary
+            assert scope is not None and summary is not None
+            branch, = summary.branches
+            events = [event.model_dump(mode="json") async for event in transport.resource_search.search(
+                FederatedSearchRequest.model_validate({"scope": {"mode": "resume", "scope": scope.scope.model_dump(mode="json")},
+                    "queries": [diagnostic["searchQuery"]], "continuations": [{"branch": branch.branch.model_dump(mode="json"),
+                        "cursor": diagnostic["cursor"]}]}), request_id="req_log_stale_cursor")]
+            failure, = events[-1]["summary"]["branches"]
+            assert failure["state"] == "failed" and failure["code"] == "stale_request_log_cursor"
+            assert failure["error_owner"] == "llm_request_log" and failure["reason"] == "catalog_changed"
+            assert failure["http_status"] == 409 and failure["cursor"] == diagnostic["cursor"]
+            assert failure["returned_results"] == 0 and not any(event["type"] == "page" for event in events)
+            assert [event["branch"] for event in events if event["type"] == "branch"] == [failure]
+            (context.artifacts_dir / "cursor-federation.json").write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n")
+        finally:
+            await transport.aclose()
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

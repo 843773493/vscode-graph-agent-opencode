@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from stat import S_ISDIR
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,8 +30,17 @@ MAX_SEARCH_RECORDS = 128
 MAX_DIRECTORY_FILES = 512
 
 
-class LLMRequestLogReferenceError(ValueError):
-    """原日志已删除、变化或位置无效，不能把旧位置应用到新记录。"""
+class LLMRequestLogError(ValueError):
+    """原日志 owner 的续点／引用拒绝；不依赖提示文字判断原因。"""
+
+    def __init__(self, code: Literal["invalid_request_log_cursor", "stale_request_log_cursor", "stale_request_log_reference"],
+                 reason: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.reason = reason
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": "llm_request_log", "code": self.code, "reason": self.reason, "message": str(self)}
 
 
 class LogSearchPosition(BaseModel):
@@ -101,7 +110,7 @@ class LLMRequestLogService:
             entries = os.scandir(directory)
         except FileNotFoundError:
             if position is not None:
-                raise LLMRequestLogReferenceError("请求日志目录已删除，请重新查询") from None
+                raise LLMRequestLogError("stale_request_log_cursor", "directory_deleted", "请求日志目录已删除，请重新查询") from None
             return LogSearchPage([])
         with entries:
             for entry in entries:
@@ -115,16 +124,16 @@ class LLMRequestLogService:
                 try:
                     stat = entry.stat()
                 except FileNotFoundError as error:
-                    raise LLMRequestLogReferenceError("请求日志在查询期间被裁剪，请重新查询") from error
+                    raise LLMRequestLogError("stale_request_log_cursor", "record_deleted", "请求日志在查询期间被裁剪，请重新查询") from error
                 metadata.append((self._timestamp_ns_from_filename(Path(entry.name)), entry.name, stat.st_size, stat.st_mtime_ns))
         metadata.sort()
         revision = hashlib.sha256(json.dumps(metadata).encode()).hexdigest()
         if position is not None and position.directory_revision != revision:
-            raise LLMRequestLogReferenceError("请求日志已更新或裁剪，请重新查询")
+            raise LLMRequestLogError("stale_request_log_cursor", "directory_changed", "请求日志已更新或裁剪，请重新查询")
         index = position.file_index if position else 0
         offset = position.offset if position else 0
         if index > len(metadata) or index == len(metadata) and offset:
-            raise ValueError("请求日志 cursor 位置越界")
+            raise LLMRequestLogError("invalid_request_log_cursor", "position_out_of_bounds", "请求日志 cursor 位置越界")
         items: list[LLMRequestLogMatchDTO] = []
         while index < len(metadata):
             reason = budget.limited_reason()
@@ -140,16 +149,16 @@ class LLMRequestLogService:
             try:
                 raw = self._read_bytes(directory / name, min(MAX_LOG_RECORD_BYTES, MAX_SEARCH_BYTES - budget.scanned_bytes))
             except FileNotFoundError as error:
-                raise LLMRequestLogReferenceError("请求日志在查询期间被裁剪，请重新查询") from error
+                raise LLMRequestLogError("stale_request_log_cursor", "record_deleted", "请求日志在查询期间被裁剪，请重新查询") from error
             budget.scanned_bytes += len(raw)
             budget.scanned_records += 1
             record = self._decode_log(raw, directory / name, session_id)
             version = hashlib.sha256(raw).hexdigest()
             if offset and (position is None or position.content_version != version):
-                raise LLMRequestLogReferenceError("请求日志正文已变化，请重新查询")
+                raise LLMRequestLogError("stale_request_log_cursor", "record_changed", "请求日志正文已变化，请重新查询")
             text = self._search_text(record)
             if offset > len(text):
-                raise ValueError("请求日志 cursor 正文位置越界")
+                raise LLMRequestLogError("invalid_request_log_cursor", "position_out_of_bounds", "请求日志 cursor 正文位置越界")
             while (start := text.find(query, offset)) >= 0:
                 end = start + len(query)
                 preview_start = max(0, start - 80)
@@ -181,13 +190,13 @@ class LLMRequestLogService:
         try:
             raw = self._read_bytes(path, MAX_LOG_RECORD_BYTES)
         except FileNotFoundError as error:
-            raise LLMRequestLogReferenceError("命中的请求日志已删除或被留存策略裁剪") from error
+            raise LLMRequestLogError("stale_request_log_reference", "record_deleted", "命中的请求日志已删除或被留存策略裁剪") from error
         if hashlib.sha256(raw).hexdigest() != reference.content_version:
-            raise LLMRequestLogReferenceError("命中的请求日志已变化")
+            raise LLMRequestLogError("stale_request_log_reference", "record_changed", "命中的请求日志已变化")
         record = self._decode_log(raw, path, reference.session_id)
         text = self._search_text(record)
         if reference.end_codepoint > len(text):
-            raise LLMRequestLogReferenceError("请求日志命中位置已失效")
+            raise LLMRequestLogError("stale_request_log_reference", "position_out_of_bounds", "请求日志命中位置已失效")
         return LLMRequestLogLocationDTO(reference=reference, record=record, text=text)
 
     @staticmethod
@@ -200,7 +209,7 @@ class LLMRequestLogService:
         with native_io_path(path).open("rb") as handle:
             raw = handle.read(max_bytes + 1)
         if len(raw) > max_bytes:
-            raise LLMRequestLogReferenceError("LLM 请求日志超出本次读取字节上限，无法核验原版本")
+            raise LLMRequestLogError("stale_request_log_reference", "record_size_limit", "LLM 请求日志超出本次读取字节上限，无法核验原版本")
         return raw
 
     def _read_log_file(self, log_file: Path, session_id: str) -> LLMRequestLogRecordDTO:
