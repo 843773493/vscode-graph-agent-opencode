@@ -34,6 +34,7 @@ from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 from app.services.mapping.session_catalog_search import (
     CatalogSearchTerms,
     catalog_search_terms,
+    iter_catalog_matches,
 )
 
 logger = logging.getLogger(__name__)
@@ -453,23 +454,14 @@ class GatewaySessionCatalogSearchService:
         *,
         limit: int,
     ) -> list[GatewaySessionSearchMatchDTO]:
-        def iter_matching_nodes() -> Iterator[SessionCatalogNodeDTO]:
-            for node in snapshot.nodes_by_id.values():
-                if any(
-                    is_subsequence(query, term)
-                    for term in snapshot.folded_search_terms[node.node_id]
-                ):
-                    yield node
-
-        def sort_key(node: SessionCatalogNodeDTO) -> tuple[str, str]:
-            return node.name.casefold(), node.node_id
-
-        candidates = iter_matching_nodes()
+        candidates = iter_catalog_matches(
+            snapshot.nodes_by_id.values(), snapshot.folded_search_terms, query,
+        )
         # 路由只接受 1..200；保留内部负 limit 原有的切片语义。
         selected_nodes = (
-            sorted(candidates, key=sort_key)[:limit]
+            sorted(candidates, key=lambda match: match[0])[:limit]
             if limit < 0
-            else nsmallest(limit, candidates, key=sort_key)
+            else nsmallest(limit, candidates, key=lambda match: match[0])
         )
         return [
             GatewaySessionCatalogSearchService._map_match(
@@ -477,7 +469,7 @@ class GatewaySessionCatalogSearchService:
                 node,
                 snapshot.nodes_by_id,
             )
-            for node in selected_nodes
+            for _key, node in selected_nodes
         ]
 
     @staticmethod

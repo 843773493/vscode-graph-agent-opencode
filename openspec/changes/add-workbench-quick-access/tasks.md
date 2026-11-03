@@ -398,3 +398,11 @@
 - 原 Chat 的 filter 拒绝不支持 scheme，additionPicks 保留，值附加与二级接受仅进入显式原 widget；返回项重开原选择器且后续焦点变化不改投，hide／取消结束二级流程、不自动返回。原 enabledProviderPrefixes 仍为 ['', '#', '@']，真实 Controller 拒绝调用已登记但不允许的 % Provider；未调用项目 Composer、Opener 或业务写入口。
 - 初次构建遗漏原 Chat 引用的字体／图片 loader，补齐真实资产及 CSS 后通过，未替换原模块。最终 JS AST 语法检查、差异及 OpenSpec strict 通过；新增 callers 子目录有四段式 AGENTS.md，三个代码文件各自负责宿主事件、真实调用方装配与断言，未新增产品实现。产品代码未变，复用上一切片真实类型检查和正式构建。
 - 准确命令、源码指纹、原输出和退出码：`out/tests/temp/quick_access_sources_20261103/artifacts/original-callers-{contract-1,contract-2,contract-3,static-1}.json`／`.raw`；正式编译资产位于 `out/tests/integration/clients/web/quick_access/callers/original.test/`。7.4 的其余行列／符号／quickNavigate、两级搜索及 Electron 继续未完成。
+
+
+### 2026-11-03：两级搜索调用方清点与目录匹配统一（16.1、16.10 部分）
+
+- 已按 URL、导出、Protocol、服务与测试清点 Gateway 镜像、旧 React 导航、Workbench／原文件 Provider 及 Agent context 工具；设计中登记唯一链路、物理删除清单和保留边界。scripts／tools 没有现存在线领域搜索调用方，历史资产生成与旧库导入不属于联邦。16.1 清点完成，不将其视为新调度器或其它第 16 组实现完成。
+- 工作区 catalog 与 Gateway 派生镜像共用同一个字段召回及稳定键迭代器；镜像同名项先沿原 owner 的冻结创建位置再按 ID 取首屏，避免相同查询的首屏分歧。保留有界 top-K、原分页、期限检查、目录同步与健康职责，没有新增索引或兼容链路。
+- 55 项目录／镜像检查与 10 项模糊查询／期限检查通过；新增反向日期／ID 顺序的同名回归。期限测试的故障注入点随实际 owner 平移，原超时和匹配计数断言不变；首轮失败原件保留。新改源码 Ruff 与 AST 通过，Gateway 文件既有两条 TRY004、一条 ISC004 经 HEAD 对比确认无新增；OpenSpec strict 与差异检查通过。未改公开类型或前端，未重复构建或声称真实页面／联邦验收通过。
+- 准确命令、启动源码指纹、原输出及退出码：`out/tests/temp/quick_access_sources_20261103/artifacts/catalog-match-{owner-1,fuzzy-budget-1,fuzzy-budget-2,static-1,spec-1}.json`／`.raw`。结构复核沿原 mapping／catalog owner 减少重复，无新增目录和新的职责层。

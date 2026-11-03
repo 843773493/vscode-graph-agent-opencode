@@ -152,6 +152,28 @@ def test_catalog_search_limits_matches_after_stable_name_sort(
     ] == ["node-a", "node-b"]
 
 
+def test_mirror_search_uses_owner_creation_key_before_id_for_same_name(
+    catalog_service: GatewaySessionCatalogSearchService,
+) -> None:
+    # ID 字典序与冻结创建日期相反，镜像首屏也应沿原目录 owner 的顺序选取。
+    nodes = [
+        SessionCatalogNodeDTO(
+            node_id=node_id, session_id=node_id, kind="session", name="Same Needle",
+            node_revision=1, created_at=datetime.fromisoformat(created_at),
+        )
+        for node_id, created_at in (
+            ("session-a", "2026-10-21T00:00:00+00:00"),
+            ("session-z", "2026-10-20T00:00:00+00:00"),
+        )
+    ]
+    snapshot = _CatalogSnapshot(
+        revision="same-name", updated_at=datetime.now(UTC),
+        nodes_by_id={node.node_id: node for node in nodes},
+    )
+    matches = catalog_service._search_snapshot(_offline_target(), snapshot, "sndl", limit=1)
+    assert [item.node_id for item in matches] == ["session-z"]
+
+
 def test_workspace_folder_search_uses_stable_path_sort_and_limit(
     catalog_service: GatewaySessionCatalogSearchService,
     monkeypatch: pytest.MonkeyPatch,

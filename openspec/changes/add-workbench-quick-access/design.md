@@ -96,6 +96,20 @@
 
 ## Decisions
 
+#### 2026-11-03：两级搜索的迁移与删除清单（16.1）
+
+全仓核对了 URL、导出函数、Protocol、调用侧服务与测试；脚本目录 `scripts/`、`tools/` 当前没有在线领域搜索消费者，已有历史资产生成／旧库导入脚本只引用 catalog 存储 owner，不属于联邦调用方。后续脚本入口直接消费同一 Gateway 合同，不保留脚本内 fan-out。
+
+| 现链路与消费者 | 迁移后唯一职责与删除边界 | 受影响验收 |
+|---|---|---|
+| `gateway/control/router.py` → `GatewaySessionCatalogSearchService.search` → 镜像；`web/gatewayApi.ts:searchGatewaySessionCatalog` → `useSessionResourceExplorer` | 旧导航迁联邦后删除 `/api/gateway/session-catalog/search`、旧聚合 DTO／客户端与 `.search`；保留后台 `_sync_all/_sync_workspace`、runtime config／health、持久镜像及原导航 folder 发现。在线走工作区 Provider，离线镜像仅共用原 catalog 匹配 | `test_session_catalog_search.py`、`control/test_catalog_search.py`、Gateway schema／auth／config／lifespan 合同、`browser_view_sessions.mjs` |
+| Workbench `quickAccess.ts` → `quickAccessBranches.ts` → `quickAccessQuery.ts` → catalog／Thread／history API；`quickAccessPicks.ts` 排名 | 逐领域迁 Gateway；迁齐后删除前端 Limiter、跨目标路由／重试／期限队列与同义远端排名。保留 Quick Input、明确 scope、组序、高亮、MRU、接受与活动身份保持 | `default_contract`、`default_scope`、`query_lifecycle`、`message_content`、catalog targets／pagination／source documents E2E |
+| 原 `ISearchService` singleton → `searchService.ts` → `fileProvider.ts`；`target.ts:loadSearchScope` 解析根 | 跨工作区文件调度交 Gateway；保留唯一 file／text Provider、领域 navigation 查询、原选项、根／extras／位置、单根 cursor、dirty model 同文件覆盖。明确根的元数据解析与原调用方 cache/delegate 不是另一套搜索队列，不机械删除 | `search_service`、`scoped_query`、`text_search`、`callers/original.test.mjs`、文件 Provider 合同 |
+| `agents/tools/session_history.py:search_context`、`session_target_resolver.py` → `GatewayContextQueryService.search_gateway_context` → transport／`GatewaySessionContextClient` → federation relay → `workspace_port.py` | 调用侧现有 Semaphore／全工作区 gather、跨库 revision／全局 offset 聚合必须迁到 Gateway 的唯一分支合同并物理删除；保留 inventory 读取、精确单资源 read/search、现有 federation grant、传输与本地 `SessionContextQueryService` 的来源／预算。effective_context、canonical 消息、目录名是不同领域，不能用同一正文扫描器替换 | `test_gateway_context_query_service`、工具／target resolver、Gateway routing／catalog errors、transport／protocol errors、context publication、Docker offline 场景 |
+| 原工作区 `/session-catalog/search`、`/session-threads/search`、`/sessions/history/search`、`/resources/navigation`、`context.py` | 作为原领域 owner 入口保留并与 Provider 调用同一核心实现；树浏览用原 list/breadcrumb，不能把空查询作为全量搜索。模型工具发现与 Web Search 属于不同领域，不迁入工作区资源搜索 | 各原 owner 的分页／取消／期限／归属合同及单入口对联邦的语义一致性 |
+
+本清单是迁移范围，尚未表示共享信封、调度或调用方已经实现。第 16 组其它验收须分别提供真实入口证据；现有后台同步仍按原范围运行。
+
 ### 一个交互 capability，引用现有领域 owner
 
 新增 `workbench-quick-access`，由本 change 维护查找、辨认和动作选择的可观察合同。统一资源寻址的 grammar／scope／kind／ResourceIdentity 仍只引用 `add-unified-virtual-resource-addressing`；文件、会话目录、上下文、任务和附件保留各自合同。

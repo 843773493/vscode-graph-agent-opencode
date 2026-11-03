@@ -9,7 +9,6 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from heapq import nsmallest
 
-from app.core.fuzzy import is_subsequence
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
@@ -28,6 +27,7 @@ from app.services.business.session_service import SessionService
 from app.services.mapping.session_catalog_search import (
     CatalogSearchTerms,
     catalog_search_terms,
+    iter_catalog_matches,
 )
 
 _SEARCH_TOP_K_MIN_NODE_COUNT = 2_000
@@ -179,13 +179,12 @@ class SessionCatalogReadService:
             tuple[tuple[str, str, str], SessionCatalogNodeDTO]
         ]:
             nonlocal match_count
-            for node in snapshot.nodes:
-                budget.check()
-                terms = snapshot.folded_search_terms[node.node_id]
-                if not any(is_subsequence(normalized_query, term) for term in terms):
-                    continue
+            for match in iter_catalog_matches(
+                snapshot.nodes, snapshot.folded_search_terms, normalized_query,
+                check=budget.check,
+            ):
                 match_count += 1
-                yield (terms[0], terms[3], node.node_id), node
+                yield match
 
         if (
             cursor is None

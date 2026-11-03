@@ -9,10 +9,10 @@ from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_navigation import (
     SessionCatalogService,
-    read_service,
     thread_search,
 )
 from app.services.business.session_navigation import name_search_budget as budgets
+from app.services.mapping import session_catalog_search as catalog_matching
 from tests.unit.services.business.session_navigation.test_fuzzy_catalog_search import (
     catalog as catalog,  # noqa: PLC0414 - 复用真实 catalog 和 Session owner。
 )
@@ -84,7 +84,7 @@ async def test_warm_snapshot_stops_matching_when_total_deadline_expires(
         resolver.catalog_store.create_folder(create_prefixed_id("ses"), resolver.workspace_id, None, f"needle {index}")
     assert (await catalog.search(query="needle", limit=1, cursor=None)).total == 10
     snapshot = catalog._cached_snapshot
-    original = read_service.is_subsequence
+    original = catalog_matching.is_subsequence
     matched = 0
 
     def matching(query: str, term: str) -> bool:
@@ -94,13 +94,13 @@ async def test_warm_snapshot_stops_matching_when_total_deadline_expires(
             budget_clock["now"] = 16.0
         return original(query, term)
 
-    monkeypatch.setattr(read_service, "is_subsequence", matching)
+    monkeypatch.setattr(catalog_matching, "is_subsequence", matching)
     with pytest.raises(TimeoutError, match="总执行期限"):
         await catalog.search(query="needle", limit=1, cursor=None)
     assert matched == 2
     assert catalog._cached_snapshot is snapshot
     budget_clock["now"] = 0.0
-    monkeypatch.setattr(read_service, "is_subsequence", original)
+    monkeypatch.setattr(catalog_matching, "is_subsequence", original)
     assert (await catalog.search(query="needle", limit=1, cursor=None)).total == 10
 
 

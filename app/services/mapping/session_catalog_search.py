@@ -1,12 +1,28 @@
 """公开 catalog 节点到可复用搜索键的纯投影，不读取工作区文件。"""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC
 
+from app.core.fuzzy import is_subsequence
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 
 # 名称、稳定 ID、逻辑目录路径、冻结 UTC 创建位置；字段之间不能拼接匹配。
 CatalogSearchTerms = tuple[str, str, str, str]
+
+
+def iter_catalog_matches(
+    nodes: Iterable[SessionCatalogNodeDTO],
+    terms_by_id: Mapping[str, CatalogSearchTerms],
+    normalized_query: str,
+    *,
+    check: Callable[[], None] = lambda: None,
+) -> Iterator[tuple[tuple[str, str, str], SessionCatalogNodeDTO]]:
+    """在线目录与派生镜像共用召回及稳定同分键，不拼接不同字段。"""
+    for node in nodes:
+        check()
+        terms = terms_by_id[node.node_id]
+        if any(is_subsequence(normalized_query, term) for term in terms):
+            yield (terms[0], terms[3], node.node_id), node
 
 
 def catalog_search_terms(
