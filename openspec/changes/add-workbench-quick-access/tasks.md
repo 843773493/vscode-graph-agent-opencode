@@ -575,3 +575,10 @@
 - 17项真实服务定向检查通过，新增模型变更／释放、服务释放、并行 A/B、同步 progress 变化及监听回收。真实 Gateway＋正式 Workbench＋Chromium 验收通过（114.76秒）：仅延迟真实 HTTP 发出，编辑实际未保存模型后由产品中止请求，原件记录 net::ERR_ABORTED；保留只 A 时 B 零查询、A+B 小配额、旧 cursor 失效、停止 C、磁盘不变及页面零错误。原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-c6b143adfb48/nodes/node-f238fd176e30/artifacts/model-coverage.json`。
 - 同批正式构建退出0、44.26秒，main SHA256=`33d29b14b80903d2e53f0a4b80d68b08998c0e057ccf19d22ea66d8f1a04640f`；含18份实际转换源码的真实类型检查通过，当前738份前端产品源码与该检查指纹一致。Ruff、7份TS／ESM AST及结构复核通过，无新增findings。准确命令、指纹、原始输出和退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-generation-*`。
 - 首轮服务装具误把 Emitter.hasListeners 方法当属性，已修正；首轮浏览器停在编辑器组定位，尚未执行取消断言，按原截图修正为可见原文件组并等待暂停回调结束再撤销路由。失败原件保留，未放宽取消、归属或结果要求。preview 映射、真实 Windows canonical 及 Electron 仍未覆盖，16.19保持未勾选。
+
+### 2026-11-03：原版有界预览与独立源区间（16.19 部分）
+
+- 文件 Provider 复用原 TextSearchMatch 同时投影最终结果及 progress，保留后端独立 UTF-16 source range；不为片段补读正文，不再重复构造同一命中。不支持的多行预览及非法列预算在本地匹配／HTTP 前拒绝；多行真实匹配仍保留，后续多行片段以具名 TODO 追踪。
+- 实际页面发现原 MatchImpl 的 lcut 对无分词边界长前缀可耗尽展示预算，导致查询词消失。通过唯一 sourceTransform 裁剪前缀并保持 Unicode 完整，固定 upstream 原件未改。27项真实 Provider／原结果模型／QueryBuilder及转换检查、含19份实际转换源码的真实类型检查、Python Ruff、TS／ESM AST和目录审查通过，无新增结构 findings。
+- 真实 Gateway＋正式 Workbench＋Chromium 验收通过（117.17秒）：Search Editor 有界预览及原 `%` picker 均保留查询词，搜索阶段额外正文读取为0，原命中 accessible label 为 UTF-16 2:1204，实际复制选中正文为 preview-target；原状态栏按码点显示起点列1203。原模型取消、只A不查B、A+B小配额、旧覆盖cursor、停止C及磁盘未改断言保持，页面错误为空。原件：`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-7df9c8ca7131/nodes/node-f238fd176e30/artifacts/model-coverage.json`。
+- 同批正式构建退出0、41.71秒，main SHA256=`ca208f890bf4c64d1cfea66c5bcb4baf0732c8a156925cc2c2c7e386c1dbaa61`。首轮类型只读属性写入、浏览器误选文件分组、长前缀实际缺陷及状态栏单位混用均保留原始失败记录；最终以精确源位置和实际所选文本验证，未放宽定位要求。准确命令、源码指纹、日志及退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-preview-*`；真实 Windows canonical及Electron仍未齐，16.19保持未勾选。

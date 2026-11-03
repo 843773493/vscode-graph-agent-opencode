@@ -103,6 +103,13 @@ export function validateTextQuery(query: ITextQuery, identity: IExtUri): ITextQu
     throw new Error('搜索前后文行数必须是 0～100 的整数');
   }
   if (!query.contentPattern.pattern) throw new Error('文件内容搜索不能为空');
+  if (query.previewOptions) {
+    // TODO：原文件 owner 支持多行片段后，贯通其独立位置与预览行数；目前只交付有界首行。
+    if (query.previewOptions.matchLines !== 1) throw new Error('业务文件搜索目前只支持单行预览');
+    if (!Number.isSafeInteger(query.previewOptions.charsPerLine) || query.previewOptions.charsPerLine < 1) {
+      throw new Error('文件搜索预览列数必须是正整数');
+    }
+  }
   if (query.maxFileSize !== undefined && (!Number.isSafeInteger(query.maxFileSize) || query.maxFileSize < 1 || query.maxFileSize > 33554432)) {
     throw new Error('业务文件搜索的文件读取上限必须在 1～33554432 字节内');
   }

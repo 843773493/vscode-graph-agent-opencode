@@ -3,16 +3,18 @@ import { writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
+import { buildSourcePlugin, pinnedUpstreamCommit, sourceTransform } from '../../../../../src/clients/workbench/scripts/sourceTransform.mjs';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/search_service.test.mjs').prepare();
 const bundle = join(run.artifactsDir, 'search.fixture.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/search.fixture.ts')],
   outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
+  plugins: [buildSourcePlugin(resolve('src/clients/workbench'), sourceTransform(resolve('src/clients/workbench'), { commit: pinnedUpstreamCommit }, []))],
   tsconfig: resolve('src/clients/workbench/tsconfig.jsonc'), logLevel: 'silent' });
 const { URI, gateway, fixture, model, WorkspaceSearchService, WorkspaceSearchProvider,
   workspaceFileUri, workspaceFileSource, textMatch, CancellationTokenSource, resourceInQuery,
-  ExtUri, extUri, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
+  ExtUri, extUri, textSearchResultToMatches, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
 const ownerA = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const ownerB = { gatewayId: 'gateway-b', workspaceId: 'workspace-a' };
 const root = owner => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`;
@@ -243,6 +245,10 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
     try {
       await withTransport(async calls => {
         for (const extra of [{ surroundingContext: 101 }, { maxFileSize: 0 }, { maxResults: -1 },
+          { previewOptions: { matchLines: 2, charsPerLine: 80 } }, { previewOptions: { matchLines: 0, charsPerLine: 80 } },
+          { previewOptions: { matchLines: 1, charsPerLine: 0 } }, { previewOptions: { matchLines: 1, charsPerLine: 1.5 } },
+          { folderQueries: [{ folder: uri(ownerA), fileEncoding: 'utf16le' }] },
+          { folderQueries: [{ folder: uri(ownerA), ignoreSymlinks: true }] },
           { folderQueries: [{ folder: uri(ownerA), disregardParentIgnoreFiles: false }] },
           { folderQueries: [{ folder: uri(ownerA), disregardGlobalIgnoreFiles: false }] },
           { extraFileResources: [URI.parse('workbench:/same.txt')] }]) expect(() => f.search.textSearchSplitSyncAsync(query(extra))).toThrow();
@@ -379,6 +385,46 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
       expect(resourceInQuery(uri(ownerA, 'nested/hidden/a.txt'), query({ excludePattern: { hidden: true } }), extUri)).toBe(false);
       expect(workspaceFileSource(uri(ownerB, 'same.txt')).gatewayId).toBe('gateway-b');
     } finally { f.instantiation.dispose(); }
+  });
+
+  test('原版 preview 截取同时应用模型及远端 progress，保留独立 UTF-16 源位置且不额外读正文', async () => {
+    const prefix = '🧪'.repeat(100), text = prefix + 'needle' + 'tail'.repeat(100);
+    const a = model(uri(ownerA, 'draft.txt'), text), f = fixture([a]);
+    const previewOptions = { matchLines: 1, charsPerLine: 30 };
+    try {
+      await withTransport(async calls => {
+        const progress = [], result = await f.search.textSearch(query({ previewOptions }), undefined, item => progress.push(item));
+        const local = result.results.find(item => item.resource.toString() === a.uri.toString()).results[0];
+        const remote = result.results.find(item => item.resource.toString() === uri(ownerA, 'disk.txt').toString()).results[0];
+        expect(remote.previewText).toBe(local.previewText);
+        expect(remote.previewText).toContain('needle'); expect(remote.previewText).not.toContain('tail'.repeat(20));
+        const range = remote.rangeLocations[0];
+        expect(range.source).toEqual({ startLineNumber: 6, startColumn: 1200, endLineNumber: 6, endColumn: 1206 });
+        expect(remote.previewText.slice(range.preview.startColumn, range.preview.endColumn)).toBe('needle');
+        expect(range.preview).toEqual(local.rangeLocations[0].preview);
+        expect(progress[1].results[0]).toBe(remote); expect(calls).toHaveLength(1);
+        expect(calls[0].request.queries[0].file_targets[0].target.search_options.excluded_resource_uris).toEqual([root(ownerA) + '/draft.txt']);
+      }, async target => page(target.uri, [{ ...hit(target.uri + '/disk.txt'), line: 7, end_line: 7, text,
+        utf16_column: 1201, utf16_end_column: 1207, snippet_start_utf16_column: 1001, truncated: true }]));
+      const multiline = textMatch({ ...hit(root(ownerA) + '/multi.txt'), line: 7, end_line: 9, text,
+        utf16_column: 1201, utf16_end_column: 5, snippet_start_utf16_column: 1001 }, previewOptions);
+      expect(multiline.rangeLocations[0].source).toEqual({ startLineNumber: 6, startColumn: 1200, endLineNumber: 8, endColumn: 4 });
+      expect(multiline.previewText.length).toBeLessThan(text.length);
+      expect(multiline.rangeLocations[0].preview.endColumn).toBeLessThanOrEqual(multiline.previewText.length);
+    } finally { f.instantiation.dispose(); a.dispose(); }
+  });
+
+  test('原结果模型的长单词／emoji 前缀不挤掉命中，裁剪不切断 Unicode 字符', () => {
+    for (const prefix of ['p'.repeat(256), '🧪'.repeat(128)]) {
+      const result = textMatch({ ...hit(root(ownerA) + '/long.txt'), text: prefix + 'needle tail',
+        utf16_column: 1201, utf16_end_column: 1207, snippet_start_utf16_column: 1201 - prefix.length },
+      { matchLines: 1, charsPerLine: 1000 });
+      const match = textSearchResultToMatches(result, { resource: uri(ownerA, 'long.txt') }, false)[0];
+      const preview = match.preview();
+      expect(preview.inside).toBe('needle'); expect(preview.after).toBe(' tail');
+      expect(preview.before.length).toBeLessThan(60); expect(preview.before.isWellFormed()).toBe(true);
+      expect(match.range().startColumn).toBe(1201); expect(match.range().endColumn).toBe(1207);
+    }
   });
 });
 

@@ -18,6 +18,7 @@ import { ISearchService } from '../../../../../src/clients/workbench/upstream/sr
 import { WorkspaceSearchService } from '../../../../../src/clients/workbench/src/search/searchService.js';
 export { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 export { ResourceSet } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/map.js';
+export { textSearchResultToMatches } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/browser/searchTreeModel/match.js';
 export { WorkspaceSearchProvider, textMatch } from '../../../../../src/clients/workbench/src/search/fileProvider.js';
 export { resourceInQuery } from '../../../../../src/clients/workbench/src/search/query.js';
 export { ExtUri, extUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';

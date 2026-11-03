@@ -173,6 +173,47 @@ try {
   const stillStopped = finalRegistry.body.data.items.find(target => target.workspace_id === routeC);
   expect(stillStopped.status).toBe('offline');
   expect(stillStopped.runtime_action).toBe('start_managed_backend');
+  result.phase = 'preview-crops-without-changing-source-position';
+  const extraReads = [];
+  const observeReads = request => {
+    const url = new URL(request.url());
+    if (['/api/v1/workspace/files/raw', '/api/v1/workspace/files/content'].includes(url.pathname)
+      && url.searchParams.get('path') === targets[0].rootUri + '/preview.txt') extraReads.push({ path: url.pathname });
+    if (url.pathname === '/api/v1/resources/navigation' && request.method() === 'POST') {
+      const body = request.postDataJSON();
+      if (body.operation === 'read' && body.uri === targets[0].rootUri + '/preview.txt') extraReads.push(body);
+    }
+  };
+  page.on('request', observeReads);
+  await command('search.action.openEditor', { query: 'preview-target', location: 'new', triggerSearch: true,
+    scope: { version: 1, kind: 'workspace', workspaces: [targets[0]] }, contextLines: 0,
+    useExcludeSettingsAndIgnoreFiles: false, filesToInclude: 'preview.txt' });
+  const previewEditor = page.locator('.search-editor').filter({ visible: true }).last();
+  await expect(previewEditor.locator('.view-lines')).toContainText('preview-target');
+  const previewText = await previewEditor.locator('.view-lines').innerText();
+  expect(previewText).not.toContain('q'.repeat(1200));
+  expect(previewText).not.toContain('preview-tail-sentinel');
+  expect(extraReads).toEqual([]);
+  page.off('request', observeReads);
+  await command('workbench.action.quickOpen', '%preview-target');
+  const quick = page.locator('.quick-input-widget');
+  await expect(quick).toBeVisible();
+  const previewPick = quick.getByRole('option').filter({ hasText: 'preview-target' });
+  await expect(previewPick).toContainText('preview-target');
+  await expect(previewPick).toHaveAttribute('aria-label', /Match at location 2:1204/);
+  expect(await previewPick.innerText()).not.toContain('q'.repeat(1000));
+  await previewPick.click();
+  await expect(quick).not.toBeVisible();
+  const selection = page.locator('[id="status.editor.selection"]');
+  await expect(selection).toContainText('Ln 2, Col 1217 (14 selected)');
+  await page.keyboard.press('ControlOrMeta+C');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('preview-target');
+  await page.keyboard.press('ArrowLeft');
+  // 原版状态栏按码点显示列号；搜索 source range 按 UTF-16，前面的 emoji 占两个码元。
+  await expect(selection).toHaveText('Ln 2, Col 1203');
+  result.preview = { sourceColumn: 1204, statusbarColumn: 1203, selectedText: 'preview-target',
+    extraReads: extraReads.length, searchEditorTextLength: previewText.length,
+    boundary: 'real Search Editor and original % picker; no response replacement or per-hit text read' };
   result.responses = { onlyAReceipt, receipt, pageA, pageB, small, beforeCoverage, changed };
   result.phase = 'passed';
 } catch (error) {

@@ -6,7 +6,7 @@ import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IUriIdentityService } from '../../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
-import { DEFAULT_MAX_SEARCH_RESULTS, IFileMatch, IFileQuery, IFolderQuery, isFilePatternMatch, ISearchComplete, ISearchProgressItem, ISearchResultProvider, ITextQuery, ITextSearchMatch, QueryType, TextSearchCompleteMessageType } from '../../upstream/src/vs/workbench/services/search/common/search.js';
+import { DEFAULT_MAX_SEARCH_RESULTS, IFileMatch, IFileQuery, IFolderQuery, isFilePatternMatch, ISearchComplete, ISearchProgressItem, ISearchResultProvider, ITextQuery, ITextSearchMatch, ITextSearchPreviewOptions, QueryType, TextSearchCompleteMessageType, TextSearchMatch } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import type { ResourceNavigationContextDTO, ResourceNavigationMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
 import type { FederatedSearchContinuationDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
@@ -15,19 +15,20 @@ import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
 import { fileOptions, openResources, resourceInQuery, validateQuery, validateTextQuery } from './query.js';
 
 /** 只把原文件 owner 的精确区间投影为搜索结果，不为片段再读一次正文。 */
-export function textMatch(hit: ResourceNavigationMatchDTO): ITextSearchMatch {
+export function textMatch(hit: ResourceNavigationMatchDTO, previewOptions?: ITextSearchPreviewOptions): ITextSearchMatch {
   if (hit.end_line === undefined || hit.utf16_column === undefined || hit.utf16_end_column === undefined || hit.snippet_start_utf16_column === undefined) {
     throw new Error('文件搜索响应缺少完整 UTF-16 区间');
   }
   const start = hit.utf16_column - hit.snippet_start_utf16_column;
   const end = hit.end_line === hit.line ? hit.utf16_end_column - hit.snippet_start_utf16_column : hit.text.length;
-  return { previewText: hit.text + '\n', rangeLocations: [{
-    source: { startLineNumber: hit.line - 1, startColumn: hit.utf16_column - 1,
-      endLineNumber: hit.end_line - 1, endColumn: hit.utf16_end_column - 1 },
-    // 后端预览仅含起始行；多行或长命中只高亮实际可见部分。
-    preview: { startLineNumber: 0, startColumn: Math.min(start, hit.text.length), endLineNumber: 0,
-      endColumn: Math.min(end, hit.text.length) },
-  }] };
+  // 原 owner 只交付有界首行片段；复用原版预览截取，真实跳转区间保持独立。
+  const match = new TextSearchMatch(hit.text + '\n', { startLineNumber: 0, startColumn: Math.min(start, hit.text.length),
+    endLineNumber: 0, endColumn: Math.min(end, hit.text.length) }, previewOptions);
+  match.rangeLocations[0].source = { startLineNumber: hit.line - 1, startColumn: hit.utf16_column - 1,
+    endLineNumber: hit.end_line - 1, endColumn: hit.utf16_end_column - 1 };
+  const preview = match.rangeLocations[0].preview;
+  match.rangeLocations[0].preview = { ...preview, endColumn: Math.min(preview.endColumn, match.previewText.length) };
+  return match;
 }
 
 export class WorkspaceSearchProvider extends Disposable implements ISearchResultProvider {
@@ -159,9 +160,10 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             if (count >= maximum || (query.type === QueryType.File && query.exists)) { limitHit = true; break; }
             count++;
             const match = results.get(key) ?? { resource, results: [] };
-            if (row.hit) match.results!.push(textMatch(row.hit));
+            const text = row.hit ? textMatch(row.hit, query.type === QueryType.Text ? query.previewOptions : undefined) : undefined;
+            if (text) match.results!.push(text);
             results.set(key, match);
-            onProgress?.({ resource, results: row.hit ? [textMatch(row.hit)] : undefined });
+            onProgress?.({ resource, results: text ? [text] : undefined });
           }
           for (const line of page.contexts) {
             if (source.token.isCancellationRequested) throw new CancellationError();

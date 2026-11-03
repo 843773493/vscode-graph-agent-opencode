@@ -38,6 +38,8 @@ async def test_dirty_model_coverage_reaches_target_before_page_allocation(
                                       schema_path=root / ".boxteam/workspace_schema.jsonc")
         (target / "a.coverage.txt").write_text("coverageword " * 20, encoding="utf-8")
     (targets[0] / "b.coverage.txt").write_text("A remaining coverageword", encoding="utf-8")
+    (targets[0] / "preview.txt").write_text(
+        "preview header\n" + "p" * 1200 + "🧪 preview-target " + "q" * 2400 + "preview-tail-sentinel\n", encoding="utf-8")
     result_path = context.artifacts_dir / "model-coverage.json"
     gateway = await asyncio.to_thread(start_gateway_process,
         workspace_root=targets[0], default_backend_url=None, port=search_gateway_port,
@@ -61,6 +63,8 @@ async def test_dirty_model_coverage_reaches_target_before_page_allocation(
         assert result["modelCoverage"] and result["smallPage"] and result["samePathDifferentOwner"]
         assert result["staleCoverageCursor"] and result["stoppedUnqueried"] and result["onlyAUnqueriedB"]
         assert result["modelChangeCancelled"]["reason"] == "net::ERR_ABORTED"
+        assert result["preview"]["sourceColumn"] == 1204
+        assert result["preview"]["extraReads"] == 0
         assert result["pageErrors"] == []
         # 搜索从未替用户保存草稿。
         assert targets[0].joinpath("a.coverage.txt").read_text() == "coverageword " * 20

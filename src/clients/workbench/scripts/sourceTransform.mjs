@@ -13,6 +13,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/contrib/search/browser/searchQuickAccess.contribution.ts',
   'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts',
   'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts',
+  'src/vs/workbench/contrib/search/browser/searchTreeModel/match.ts',
   'src/vs/workbench/contrib/search/browser/searchView.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
   ...searchEditorSourcePaths,
@@ -109,6 +110,13 @@ export function sourceTransform(root, productConfiguration, extensions) {
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts')) {
       const declaration = 'export class SearchModelImpl extends Disposable implements ISearchModel {';
       contents = replaceOnce(contents, declaration, `${declaration}\npublic ownSearchContext(context: IDisposable): void { this._register(context); }`);
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchTreeModel/match.ts')) {
+      // lcut 允许整词超出长度；有界片段的长前缀不能耗尽额度并隐藏真正命中。
+      const before = "const fullBefore = this._oneLinePreviewText.substring(0, this._rangeInPreviewText.startColumn - 1), before = lcut(fullBefore, 26, '…');";
+      contents = replaceOnce(contents, before, `const fullBefore = this._oneLinePreviewText.substring(0, this._rangeInPreviewText.startColumn - 1);
+let before = lcut(fullBefore, 26, '…');
+if (before.length > 26) before = '…' + Array.from(before).slice(-26).join('');`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts')) {
       // 由原 QueryBuilder 消费用户的 search.useIgnoreFiles，交目标文件 owner 解释规则。
