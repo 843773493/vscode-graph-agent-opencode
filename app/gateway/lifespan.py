@@ -84,6 +84,7 @@ from app.gateway.runtime_proof import (
     _report_managed_runtime_restore_task,
     _should_preserve_gateway_generation_for_handoff,
 )
+from app.gateway.search.service import GatewaySearchService
 from app.gateway.server.bootstrap import (
     _restore_managed_local_runtimes,
     create_registry,
@@ -204,6 +205,26 @@ async def lifespan(app: FastAPI):
     ):
         app.state.skill_source_owner = skill_source_owner
         app.state.http_client = http_client
+        app.state.workspace_navigation_store = WorkspaceNavigationStore(
+            storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
+        )
+        app.state.session_catalog_search_service = GatewaySessionCatalogSearchService(
+            registry=registry,
+            http_client=app.state.http_client,
+            cache_dir=_gateway_root() / "indexes" / "session-catalogs",
+            gateway_id=gateway_id,
+            refresh_interval_seconds=(
+                gateway_config.session_catalog_refresh_interval_seconds
+            ),
+            max_concurrency=gateway_config.session_catalog_max_concurrency,
+            request_timeout_seconds=(
+                gateway_config.session_catalog_request_timeout_seconds
+            ),
+        )
+        app.state.search_service = GatewaySearchService(
+            registry, app.state.workspace_navigation_store, http_client, gateway_id=gateway_id,
+            catalog_mirror=app.state.session_catalog_search_service,
+        )
         app.state.federation_rpc_service = FederationRpcService(
             gateway_id=gateway_id,
             policy_store=federation_policy,
@@ -212,7 +233,7 @@ async def lifespan(app: FastAPI):
             catalog=WorkspaceCatalogPort(http_client=app.state.http_client),
             session_main=WorkspaceSessionMainPort(
                 http_client=app.state.http_client, inventory_provider=federation_inventory,
-                skill_source_owner=skill_source_owner,
+                skill_source_owner=skill_source_owner, search_service=app.state.search_service,
             ),
             credential_store=app.state.federation_credential_store,
             spoke_directory=FederationSpokeDirectory(provider=lambda: registered_spokes(registry)),
@@ -262,22 +283,6 @@ async def lifespan(app: FastAPI):
             limits=httpx.Limits(
                 max_connections=1000,
                 max_keepalive_connections=100,
-            ),
-        )
-        app.state.workspace_navigation_store = WorkspaceNavigationStore(
-            storage_path=_gateway_root() / "navigation" / "workspace-tree.json"
-        )
-        app.state.session_catalog_search_service = GatewaySessionCatalogSearchService(
-            registry=registry,
-            http_client=app.state.http_client,
-            cache_dir=_gateway_root() / "indexes" / "session-catalogs",
-            gateway_id=gateway_id,
-            refresh_interval_seconds=(
-                gateway_config.session_catalog_refresh_interval_seconds
-            ),
-            max_concurrency=gateway_config.session_catalog_max_concurrency,
-            request_timeout_seconds=(
-                gateway_config.session_catalog_request_timeout_seconds
             ),
         )
         app.state.gateway_resource_catalog_service = GatewayResourceCatalogService(

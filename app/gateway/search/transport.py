@@ -2,11 +2,13 @@
 
 import asyncio
 import json
+import logging
 from time import time
 
 import httpx
 from pydantic import ValidationError
 
+from app.core.failures import report_failure
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.registry import GatewayWorkspaceRegistry
@@ -19,6 +21,7 @@ from app.schemas.search_federation import (
     FederatedSearchSourceDTO,
 )
 
+logger = logging.getLogger(__name__)
 
 class SearchTransport:
     def __init__(self, registry: GatewayWorkspaceRegistry, client: httpx.AsyncClient, *, gateway_id: str, request_id: str,
@@ -126,7 +129,10 @@ class SearchTransport:
             raise SearchBranchError("target_unavailable", f"领域请求失败: {error}", retryable=True) from error
         except ValidationError as error:
             detail = str(error.errors(include_input=False, include_url=False))[:MAX_SEARCH_ERROR_CHARS]
-            raise SearchBranchError("invalid_response", f"领域响应不符合公开合同: {detail}") from error
+            message = report_failure(error, diagnostic_logger=logger, detail=(
+                f"领域响应不符合公开合同: workspace_id={job.key.owner.workspace_id}, request_id={self.request_id}; {detail}"
+            ))
+            raise SearchBranchError("invalid_response", message) from error
 
     @staticmethod
     def _raise_owner_error(status: int, body: bytearray) -> None:

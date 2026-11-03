@@ -11,11 +11,24 @@ import httpx
 import pytest
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
-from app.gateway.routes.search import _SearchResponseEncoder
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
+from app.gateway.routes.search import _encode_search_sse
 from app.schemas.gateway.search import GatewaySearchScopeResolutionDTO
 from app.schemas.search_federation import (
     FederatedSearchEventDTO,
     FederatedSearchRequest,
+    GatewayContextSearchRequest,
+)
+from app.services.business.session_context_resource import (
+    gateway_session_inventory_identity,
+    gateway_session_inventory_uri,
+    workspace_session_inventory_identity,
+    workspace_session_inventory_uri,
 )
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
@@ -81,7 +94,7 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[GatewaySessio
 
 def install_response(monkeypatch, client, events, *, wait=False, status=200, headers=None):
     body = b": heartbeat\n\n" + b"".join(
-        _SearchResponseEncoder._encode(FederatedSearchEventDTO.model_validate(event)) + b": heartbeat\n\n"
+        _encode_search_sse(FederatedSearchEventDTO.model_validate(event)) + b": heartbeat\n\n"
         for event in events
     )
     stream = Stream(body, wait=wait)
@@ -193,3 +206,52 @@ async def test_gateway_rejection_preserves_registered_reason(client, monkeypatch
     monkeypatch.setattr(client._http_client, "_transport", httpx.MockTransport(send))
     with pytest.raises(WorkspaceSessionContextAccessError, match="status=400.*code=owner_mismatch; 目标不属于冻结范围"):
         _ = [event async for event in client.resource_search.search(request_body, request_id=REQUEST_ID)]
+
+
+@pytest.mark.parametrize("wrong_target", [False, True])
+async def test_context_json_relay_shares_event_validation_and_preserves_grant(client, monkeypatch, events, wrong_target):
+    payload = json.loads(json.dumps(events))
+    for event in payload:
+        branches = [event["branch"]] if "branch" in event else event.get("summary", {}).get("branches", [])
+        for branch in branches:
+            branch["branch"]["category"] = "context"
+            branch["branch"]["operation"] = "content"
+        if "page" in event:
+            page = event["page"]
+            del page["catalog"]
+            page.update(category="context", operation="content", provider_id="session-context", context={
+                "resource_identity": str(workspace_session_inventory_identity(OWNER["workspace_id"])),
+                "uri": workspace_session_inventory_uri(OWNER["workspace_id"], gateway_authority=OWNER["gateway_id"]),
+                "scope": "workspace", "query": "needle", "match_mode": "literal", "revision": "original-owner-revision",
+                "has_more": True, "next_cursor": "opaque-owner-cursor",
+            })
+    target_gateway = "gateway_" + "b" * 32 if wrong_target else OWNER["gateway_id"]
+    query = GatewayContextSearchRequest.model_validate({
+        "source_gateway_id": OWNER["gateway_id"],
+        "resource_target": {"gateway_id": target_gateway, "resource_identity": str(gateway_session_inventory_identity(target_gateway)),
+            "uri": gateway_session_inventory_uri(target_gateway, gateway_authority=target_gateway), "scope": "gateway"},
+        "resource_search": {"scope": {"mode": "all"}, "queries": [{
+            "category": "context", "operation": "content", "query": "needle", "match_mode": "literal",
+        }]},
+    })
+    received = []
+
+    async def send(request):
+        received.append(json.loads(request.content))
+        return httpx.Response(200, json={"request_id": REQUEST_ID, "data": {"events": payload}}, headers={"X-Request-ID": REQUEST_ID})
+
+    monkeypatch.setattr(client._http_client, "_transport", httpx.MockTransport(send))
+    gateway_token, request_token = set_current_gateway_id(OWNER["gateway_id"]), set_current_request_id(REQUEST_ID)
+    try:
+        if wrong_target:
+            with pytest.raises(RuntimeError, match="回执归属错误"):
+                await client.search_gateway_context(query)
+        else:
+            result = await client.search_gateway_context(query)
+            assert [event.model_dump(mode="json") for event in result.events] == [FederatedSearchEventDTO.model_validate(event).model_dump(mode="json") for event in payload]
+    finally:
+        reset_current_request_id(request_token)
+        reset_current_gateway_id(gateway_token)
+    assert len(received) == 1 and received[0]["operation"] == "read"
+    assert received[0]["resource_target"] == query.resource_target.to_payload()
+    assert received[0]["body"] == query.model_dump(mode="json")

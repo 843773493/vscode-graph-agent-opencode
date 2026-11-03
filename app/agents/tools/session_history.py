@@ -16,12 +16,21 @@ from app.core.session_control_communication_ledger.observations import (
     RemoteObservationError,
 )
 from app.core.trace_middleware import get_current_gateway_id, require_current_gateway_id
+from app.gateway.federation.grants import ContextGrantTarget
+from app.schemas.gateway.search import GatewaySearchScopeRequest
+from app.schemas.internal_v2.search import WorkspaceContextSearchOptionsDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextInclude,
     SessionContextMatchMode,
     SessionContextReadRequest,
     SessionContextSearchRequest,
     SessionContextSearchSource,
+)
+from app.schemas.search_federation import (
+    FederatedSearchContinuationDTO,
+    FederatedSearchQueryDTO,
+    FederatedSearchRequest,
+    GatewayContextSearchRequest,
 )
 from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
@@ -77,9 +86,14 @@ class SearchContextInput(BaseModel):
     match_mode: SessionContextMatchMode = "literal"
     case_sensitive: bool = False
     max_results: int = Field(default=20, ge=1, le=200)
-    max_chars: int = Field(default=16_384, ge=1_024, le=65_536)
+    max_chars: int = Field(default=16_384, ge=1_024, le=65_536, description=
+        "精确资源的结果字符预算；Gateway 范围为每个 owner 原上下文页的字符预算，总事件另受联邦输出上限约束。")
     cursor: str | None = None
     revision: str | None = None
+    search_scope: GatewaySearchScopeRequest | None = Field(default=None, description=
+        "仅 Gateway inventory：省略为该 Gateway 全部登记工作区；续查传回原冻结 scope。")
+    continuations: tuple[FederatedSearchContinuationDTO, ...] = Field(default=(), description=
+        "仅 Gateway inventory：明确续查／重试的原分支与独立 cursor，不使用全局 cursor 或 revision。")
 
 
 def _request_identity(
@@ -239,12 +253,40 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         max_chars: int = 16_384,
         cursor: str | None = None,
         revision: str | None = None,
+        search_scope: GatewaySearchScopeRequest | None = None,
+        continuations: tuple[FederatedSearchContinuationDTO, ...] = (),
     ) -> str:
         resource = _request_identity(
             resource_identity=resource_identity,
             uri=uri,
             scope=scope,
         )
+        if resource.scope == "gateway":
+            if cursor is not None or revision is not None:
+                raise ToolException("Gateway 搜索使用原冻结 search_scope 和各 owner continuations，不接受全局 cursor/revision")
+            if resource.kind != "workspace_sessions" or resource.resource_identity != gateway_session_inventory_identity(resource.scope_id):
+                raise ToolException("Gateway inventory URI 必须绑定目标真实 gateway_id")
+            gateway_id = require_current_gateway_id("search_context")
+            target_gateway = resource.gateway_authority or gateway_id
+            if target_gateway != resource.scope_id:
+                raise ToolException("Gateway inventory 的 authority 与目标 Gateway 不一致")
+            return await _result_json(context.workspace_session_context_client.search_gateway_context(
+                GatewayContextSearchRequest(
+                    source_gateway_id=gateway_id,
+                    resource_target=ContextGrantTarget(gateway_id=target_gateway, resource_identity=str(resource.resource_identity),
+                                                       uri=resource.uri, scope=resource.scope),
+                    resource_search=FederatedSearchRequest(
+                        scope=search_scope or GatewaySearchScopeRequest(mode="all"),
+                        queries=(FederatedSearchQueryDTO(category="context", operation="content", query=query,
+                            match_mode=match_mode, limit=max_results, context=WorkspaceContextSearchOptionsDTO(
+                                sources=tuple(sources or ["effective_context"]), case_sensitive=case_sensitive, max_chars=max_chars,
+                            )),),
+                        continuations=continuations, max_results=max_results,
+                    ),
+                ),
+            ))
+        if search_scope is not None or continuations:
+            raise ToolException("精确上下文查询使用原 cursor/revision，不接受 Gateway 搜索范围或分支续查")
         identity, canonical_uri, canonical_scope = resource.resource_identity, resource.uri, scope
         request = SessionContextSearchRequest(
             resource_identity=identity,
@@ -264,18 +306,6 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             return await _result_json(
                 context.workspace_session_context_client.search_resource_context(request)
             )
-        if resource.scope == "gateway":
-            gateway_id = require_current_gateway_id("search_context")
-            if (
-                resource.kind != "workspace_sessions"
-                or resource.resource_identity != gateway_session_inventory_identity(gateway_id)
-                or resource.uri != gateway_session_inventory_uri(gateway_id)
-            ):
-                raise ToolException("Gateway inventory URI 必须绑定当前真实 gateway_id")
-            return await _result_json(
-                context.workspace_session_context_client.search_gateway_context(request)
-            )
-
         if resource.kind == "workspace_sessions":
             if resource.scope_id == context.session_context_query_service.workspace_id:
                 return await _result_json(
@@ -307,7 +337,8 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         name="search_context",
         description=(
             "像 grep 一样搜索结构化资源范围；返回短预览和可供 read_context 再读取的身份、"
-            "URI、scope 与独立 revision。"
+            "URI、scope 与独立 revision。精确资源沿原 owner 分页；Gateway inventory 返回统一搜索的 "
+            "events（scope/page/branch/end），按 search_scope 与 continuations 独立续查，无全局版本或总数。"
         ),
         args_schema=SearchContextInput,
         handle_tool_error=True,

@@ -29,6 +29,8 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.rpc import FederationSpoke
 from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.gateway.search.scope import SearchScopeError
+from app.gateway.search.service import GatewaySearchService
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
@@ -36,8 +38,14 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
+from app.schemas.search_federation import (
+    MAX_SEARCH_OUTPUT_BYTES,
+    GatewayContextSearchRequest,
+    GatewayContextSearchResultDTO,
+)
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
+    require_gateway_inventory,
 )
 from app.services.business.session_context_resource import parse_session_context_ref
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
@@ -188,14 +196,32 @@ class WorkspaceSessionMainPort:
         self, *, http_client: httpx.AsyncClient, request_timeout: float = 5.0,
         inventory_provider: Callable[[], Awaitable[GatewayWorkspaceListDTO]] | None = None,
         skill_source_owner: GatewaySkillSourceOwner | None = None,
+        search_service: GatewaySearchService | None = None,
     ) -> None:
         self._request_timeout = request_timeout
         self._http_client = http_client
         self._inventory_provider = inventory_provider
         self._skill_source_owner = skill_source_owner
+        self._search_service = search_service
         self._context_query = GatewayContextQueryService(transport=self)
         self._backend_urls: dict[str, str] = {}
         self._backend_workspace_ids: dict[str, str] = {}
+
+    async def search_gateway_context(self, request: GatewayContextSearchRequest) -> GatewayContextSearchResultDTO:
+        from contextlib import aclosing
+
+        target = request.resource_target
+        require_gateway_inventory(resource_identity=target.resource_identity, uri=target.uri, scope=target.scope)
+        if self._search_service is None:
+            raise RuntimeError("当前 Gateway 未装配统一资源搜索服务")
+        # JSON relay 与 SSE 只改变输出编码；范围、配额、期限及终态使用同一实现。
+        execution = self._search_service.prepare(
+            request.resource_search, request_id=require_current_request_id("Gateway 上下文搜索"),
+            encode=lambda event: event.model_dump_json().encode() + b",",
+            max_bytes=MAX_SEARCH_OUTPUT_BYTES - len(b'{"events":[]}'),
+        )
+        async with aclosing(execution.events) as events:
+            return GatewayContextSearchResultDTO(events=[event async for event in events])
 
     def project_workspaces(self, workspaces: tuple[tuple[str, str, str], ...]) -> None:
         projected = {backend_id: url.rstrip("/") for _route_id, url, backend_id in workspaces}
@@ -472,8 +498,8 @@ class WorkspaceSessionMainPort:
                 raise FederationError(FEDERATION_MALFORMED_FRAME, "目标 Workspace fork 响应不符合合同") from error
             return data
         if "resource_identity" in target:
-            from app.schemas.internal_v2.communication import ContextQueryRequest
-            query = ContextQueryRequest.model_validate(body)
+            from app.schemas.internal_v2.communication import CONTEXT_QUERY_ADAPTER
+            query = CONTEXT_QUERY_ADAPTER.validate_python(body)
             if operation != "read" or query.resource_target.to_payload() != target or query.source_gateway_id != origin:
                 raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "上下文查询与 read grant target/origin 不一致")
             resource = parse_session_context_ref(
@@ -487,12 +513,17 @@ class WorkspaceSessionMainPort:
                 raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文 workspace 未共享或不存在")
             try:
                 async with asyncio.timeout(timeout):
-                    if query.read is not None:
+                    if isinstance(query, GatewayContextSearchRequest):
+                        result = await self.search_gateway_context(query)
+                    elif query.read is not None:
                         result = await self._context_query.read_gateway_context(query.read) if resource.scope == "gateway" else await self.read_resource_context(query.read)
                     elif query.search is not None:
-                        result = await self._context_query.search_gateway_context(query.search) if resource.scope == "gateway" else await self.search_resource_context(query.search)
+                        result = await self.search_resource_context(query.search)
                     else:
                         raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "上下文查询缺少 read/search")
+            except SearchScopeError as error:
+                raise FederationError(FEDERATION_TARGET_OWNER_REJECTED, "目标 Gateway 拒绝上下文搜索范围",
+                                      detail={"owner": "search_scope", "code": error.code, "message": str(error)}) from error
             except TimeoutError as error:
                 raise FederationError(FEDERATION_DEADLINE_EXCEEDED, "上下文查询超过联邦总 deadline") from error
             except ValidationError as error:

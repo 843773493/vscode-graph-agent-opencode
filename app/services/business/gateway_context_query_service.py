@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 
@@ -9,17 +8,18 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
     WorkspaceSessionContextTransportProtocol,
 )
-from app.core.failures import failure_detail
 from app.core.trace_middleware import require_current_gateway_id
 from app.schemas.gateway.workspaces import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
-    SessionContextPartialErrorDTO,
     SessionContextReadRequest,
     SessionContextReadResultDTO,
-    SessionContextSearchMatchDTO,
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
+)
+from app.schemas.search_federation import (
+    GatewayContextSearchRequest,
+    GatewayContextSearchResultDTO,
 )
 from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
@@ -30,19 +30,15 @@ from app.services.business.session_context_resource import (
     require_cursor_offset_in_range,
     require_session_context_revision,
     session_context_read_operation,
-    session_resource_identity,
     set_exact_returned_chars,
     validate_session_context_read_view,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
 
-_SEARCH_CONCURRENCY = 8
-_PER_WORKSPACE_MATCH_LIMIT = 200
-
 
 class GatewayContextQueryService:
-    """在调用侧编排 Gateway inventory 与跨工作区上下文查询。"""
+    """读取 Gateway inventory；跨目标搜索仅转交 Gateway 的统一调度。"""
 
     def __init__(
         self,
@@ -76,7 +72,7 @@ class GatewayContextQueryService:
         self,
         request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO:
-        resource = _require_gateway_inventory(
+        resource = require_gateway_inventory(
             resource_identity=request.resource_identity,
             uri=request.uri,
             scope=request.scope,
@@ -161,205 +157,9 @@ class GatewayContextQueryService:
         return result
 
     async def search_gateway_context(
-        self,
-        request: SessionContextSearchRequest,
-    ) -> SessionContextSearchResultDTO:
-        # TODO(quick-access 16.12): 将剩余消费者迁到已登记的 context/content Provider，
-        # 保留独立 owner cursor 后删除此聚合；资源搜索工具不得调用本链。
-        resource = _require_gateway_inventory(
-            resource_identity=request.resource_identity,
-            uri=request.uri,
-            scope=request.scope,
-        )
-        inventory = await self._transport.list_gateway_workspaces()
-        semaphore = asyncio.Semaphore(_SEARCH_CONCURRENCY)
-        targets = [(item, _backend_workspace_id(item)) for item in inventory.items]
-
-        async def search_one(
-            workspace: GatewayWorkspaceDTO,
-            backend_workspace_id: str,
-        ) -> SessionContextSearchResultDTO:
-            workspace_request = request.model_copy(
-                update={
-                    "resource_identity": str(
-                        workspace_session_inventory_identity(backend_workspace_id)
-                    ),
-                    "uri": workspace_session_inventory_uri(backend_workspace_id, gateway_authority=_workspace_gateway_authority(workspace, resource)),
-                    "scope": "workspace",
-                    "cursor": None,
-                    "revision": None,
-                    "max_results": _PER_WORKSPACE_MATCH_LIMIT,
-                    "max_chars": 65_536,
-                }
-            )
-            async with semaphore:
-                response = await self._transport.search_resource_context(workspace_request)
-            _validate_workspace_search_result(
-                response,
-                request=workspace_request,
-                backend_workspace_id=backend_workspace_id,
-            )
-            return response
-
-        gathered = await asyncio.gather(
-            *(
-                search_one(item, backend_workspace_id)
-                for item, backend_workspace_id in targets
-            ),
-            return_exceptions=True,
-        )
-        matches = []
-        errors: list[SessionContextPartialErrorDTO] = []
-        revisions: list[str] = []
-        total_matches = 0
-        upstream_truncated = False
-        for (workspace, backend_workspace_id), response in zip(
-            targets,
-            gathered,
-            strict=True,
-        ):
-            resource_identity = workspace_session_inventory_identity(
-                backend_workspace_id
-            )
-            if isinstance(response, BaseException):
-                # 已登记的访问拒绝保留业务说明；未知错误正文只进入诊断，不靠截断隐藏。
-                detail = (
-                    f"{type(response).__name__}: {response}"
-                    if isinstance(response, WorkspaceSessionContextAccessError)
-                    else failure_detail(
-                        response, stage=f"gateway-context-search:{backend_workspace_id}",
-                        label="工作区上下文搜索失败",
-                    )
-                )
-                errors.append(
-                    SessionContextPartialErrorDTO(
-                        resource_identity=resource_identity,
-                        error=detail,
-                    )
-                )
-                continue
-            revisions.append(response.revision)
-            total_matches += response.total_matches
-            matches.extend(response.matches)
-            if response.has_more:
-                upstream_truncated = True
-                errors.append(
-                    SessionContextPartialErrorDTO(
-                        resource_identity=resource_identity,
-                        error="该工作区匹配数超过单次 fan-out 上限，结果已截断",
-                    )
-                )
-
-        matches.sort(key=lambda item: (item.uri, item.match_start, item.match_end))
-        revision = _content_revision(
-            {
-                "inventory_revision": _workspace_inventory_revision(inventory),
-                "workspace_revisions": revisions,
-                "failed_resource_identities": [
-                    item.resource_identity for item in errors
-                ],
-                "query": request.query,
-                "sources": request.sources,
-                "match_mode": request.match_mode,
-                "case_sensitive": request.case_sensitive,
-            }
-        )
-        require_session_context_revision(request.revision, revision)
-        query_hash = _search_query_hash(request)
-        offset, char_offset = SessionContextCursorCodec.decode(
-            request.cursor,
-            resource_identity=request.resource_identity,
-            uri=request.uri,
-            scope=request.scope,
-            revision=revision,
-            operation=f"search:{query_hash}",
-        )
-        if char_offset:
-            raise ValueError("Gateway context search 不支持 item 内字符偏移")
-        require_cursor_offset_in_range(offset, len(matches), uri=request.uri)
-        selected = matches[offset : offset + request.max_results]
-        accepted_matches: list[SessionContextSearchMatchDTO] = []
-        accepted_errors: list[SessionContextPartialErrorDTO] = []
-        accepted_match_json_chars = 0
-        for match in selected:
-            serialized_match = match.model_dump_json()
-            candidate_returned_match_count = len(accepted_matches) + 1
-            empty_candidate = _build_gateway_search_result(
-                request=request,
-                revision=revision,
-                query_hash=query_hash,
-                matches=[],
-                errors=[],
-                returned_match_count=candidate_returned_match_count,
-                returned_error_count=0,
-                total_error_count=len(errors),
-                total_matches=total_matches,
-                available_match_count=len(matches),
-                offset=offset,
-                upstream_truncated=upstream_truncated,
-            )
-            candidate_returned_chars = exact_returned_chars_with_appended_json(
-                empty_result_returned_chars=empty_candidate.returned_chars,
-                appended_json_chars=(
-                    accepted_match_json_chars
-                    + len(serialized_match)
-                    + len(accepted_matches)
-                ),
-            )
-            if candidate_returned_chars > request.max_chars:
-                break
-            accepted_matches.append(match)
-            accepted_match_json_chars += len(serialized_match)
-        if selected and not accepted_matches:
-            raise ValueError("max_chars 太小，无法容纳 Gateway search 的首个 match")
-        accepted_error_json_chars = 0
-        for error in errors:
-            serialized_error = error.model_dump_json()
-            candidate_returned_error_count = len(accepted_errors) + 1
-            empty_candidate = _build_gateway_search_result(
-                request=request,
-                revision=revision,
-                query_hash=query_hash,
-                matches=[],
-                errors=[],
-                returned_match_count=len(accepted_matches),
-                returned_error_count=candidate_returned_error_count,
-                total_error_count=len(errors),
-                total_matches=total_matches,
-                available_match_count=len(matches),
-                offset=offset,
-                upstream_truncated=upstream_truncated,
-            )
-            candidate_returned_chars = exact_returned_chars_with_appended_json(
-                empty_result_returned_chars=empty_candidate.returned_chars,
-                appended_json_chars=(
-                    accepted_match_json_chars
-                    + len(accepted_matches)
-                    + accepted_error_json_chars
-                    + len(serialized_error)
-                    + len(accepted_errors)
-                ),
-            )
-            if candidate_returned_chars > request.max_chars:
-                break
-            accepted_errors.append(error)
-            accepted_error_json_chars += len(serialized_error)
-        result = _build_gateway_search_result(
-            request=request,
-            revision=revision,
-            query_hash=query_hash,
-            matches=accepted_matches,
-            errors=accepted_errors,
-            returned_match_count=len(accepted_matches),
-            returned_error_count=len(accepted_errors),
-            total_error_count=len(errors),
-            total_matches=total_matches,
-            available_match_count=len(matches),
-            offset=offset,
-            upstream_truncated=upstream_truncated,
-        )
-        _require_within_budget(result.returned_chars, request.max_chars)
-        return result
+        self, request: GatewayContextSearchRequest,
+    ) -> GatewayContextSearchResultDTO:
+        return await self._transport.search_gateway_context(request)
 
 
 def _build_gateway_read_result(
@@ -406,52 +206,6 @@ def _build_gateway_read_result(
     return set_exact_returned_chars(result, operation="gateway read_context")
 
 
-def _build_gateway_search_result(
-    *,
-    request: SessionContextSearchRequest,
-    revision: str,
-    query_hash: str,
-    matches: list[SessionContextSearchMatchDTO],
-    errors: list[SessionContextPartialErrorDTO],
-    returned_match_count: int,
-    returned_error_count: int,
-    total_error_count: int,
-    total_matches: int,
-    available_match_count: int,
-    offset: int,
-    upstream_truncated: bool,
-) -> SessionContextSearchResultDTO:
-    has_more = offset + returned_match_count < available_match_count
-    omitted_error_count = total_error_count - returned_error_count
-    result = SessionContextSearchResultDTO(
-        resource_identity=request.resource_identity,
-        uri=request.uri,
-        scope=request.scope,
-        query=request.query,
-        match_mode=request.match_mode,
-        revision=revision,
-        truncated=has_more or upstream_truncated or omitted_error_count > 0,
-        has_more=has_more,
-        next_cursor=(
-            SessionContextCursorCodec.encode(
-                resource_identity=request.resource_identity,
-                uri=request.uri,
-                scope=request.scope,
-                revision=revision,
-                operation=f"search:{query_hash}",
-                offset=offset + returned_match_count,
-            )
-            if has_more
-            else None
-        ),
-        total_matches=total_matches,
-        matches=matches,
-        partial_errors=errors,
-        omitted_partial_error_count=omitted_error_count,
-    )
-    return set_exact_returned_chars(result, operation="gateway search_context")
-
-
 def _require_within_budget(returned_chars: int, max_chars: int) -> None:
     if returned_chars > max_chars:
         raise ValueError("max_chars 太小，无法容纳 Gateway context 的基础响应 envelope")
@@ -496,7 +250,7 @@ def _content_revision(value: object) -> str:
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
-def _require_gateway_inventory(
+def require_gateway_inventory(
     *,
     resource_identity: str,
     uri: str,
@@ -543,45 +297,6 @@ def _backend_workspace_id(item: GatewayWorkspaceDTO) -> str:
     return backend_workspace_id
 
 
-def _validate_workspace_search_result(
-    result: SessionContextSearchResultDTO,
-    *,
-    request: SessionContextSearchRequest,
-    backend_workspace_id: str,
-) -> None:
-    if (
-        result.resource_identity != request.resource_identity
-        or result.uri != request.uri
-        or result.scope != request.scope
-    ):
-        raise WorkspaceSessionContextAccessError(
-            "Workspace context search 响应资源身份与请求不一致: "
-            f"workspace_scope_id={backend_workspace_id}"
-        )
-    request_resource = parse_session_context_ref(
-        resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
-    )
-    for match in result.matches:
-        resource = parse_session_context_ref(
-            resource_identity=match.resource_identity,
-            uri=match.uri,
-            scope=match.scope,
-        )
-        if (
-            resource.scope != "workspace"
-            or resource.gateway_authority != request_resource.gateway_authority
-            or resource.scope_id != backend_workspace_id
-            or resource.kind != "session"
-            or resource.session_id is None
-            or resource.resource_identity
-            != session_resource_identity(backend_workspace_id, resource.session_id)
-        ):
-            raise WorkspaceSessionContextAccessError(
-                "Workspace context search 返回了其他 Workspace 的资源身份: "
-                f"workspace_scope_id={backend_workspace_id}, uri={match.uri}"
-            )
-
-
 def _workspace_public_data(item: GatewayWorkspaceDTO) -> dict[str, object]:
     return {
         "workspace_id": item.workspace_id,
@@ -592,14 +307,3 @@ def _workspace_public_data(item: GatewayWorkspaceDTO) -> dict[str, object]:
         "active": item.active,
         "managed": item.managed,
     }
-
-
-def _search_query_hash(request: SessionContextSearchRequest) -> str:
-    return _content_revision(
-        {
-            "query": request.query,
-            "sources": request.sources,
-            "match_mode": request.match_mode,
-            "case_sensitive": request.case_sensitive,
-        }
-    )

@@ -16,13 +16,14 @@ from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 
 from app.schemas.internal_v2.communication import ContextQueryRequest
-from app.schemas.internal_v2.session_context import SessionContextSearchRequest
+from app.schemas.search_federation import GatewayContextSearchRequest
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     session_resource_identity,
     session_resource_uri,
     workspace_session_inventory_identity,
+    workspace_session_inventory_uri,
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.diagnostic_sink import install_failing_diagnostic_sink
@@ -99,7 +100,7 @@ async def stub_catalog() -> object:
     return {"data": {"revision": "resource-query-empty", "items": []}}
 
 
-@resource_stub_app.post("/api/v1/context/search")
+@resource_stub_app.post("/api/v1/search")
 def stub_context_search(request: Request, query: dict[str, object]) -> JSONResponse:
     control = json.loads(Path(os.environ["BOXTEAM_TEST_CATALOG_CONTROL"]).read_text())
     owner = request.headers["X-BoxTeam-Workspace-Id"]
@@ -107,7 +108,9 @@ def stub_context_search(request: Request, query: dict[str, object]) -> JSONRespo
     with Path(control["requests_path"]).open("a") as output:
         output.write(json.dumps({"workspace_id": owner, "request_id": request_id}) + "\n")
     result = {
-        **{key: query[key] for key in ("resource_identity", "uri", "scope", "query", "match_mode")},
+        "resource_identity": str(workspace_session_inventory_identity(owner)),
+        "uri": workspace_session_inventory_uri(owner, gateway_authority=request.headers["X-BoxTeam-Gateway-Id"]),
+        "scope": "workspace", "query": query["query"], "match_mode": query["match_mode"],
         "revision": "query-fixture-1", "total_matches": 1,
         "matches": [{
             "resource_identity": str(session_resource_identity(owner, SESSION_A)),
@@ -123,7 +126,10 @@ def stub_context_search(request: Request, query: dict[str, object]) -> JSONRespo
             result["uri"] = control["native_path"]
         elif control["mode"] == "match_uri":
             result["matches"][0]["uri"] = control["native_path"]
-    return JSONResponse({"request_id": request_id, "data": result}, headers={"X-Request-ID": request_id})
+    return JSONResponse({"request_id": request_id, "data": {
+        "provider_id": "session-context", "workspace_id": owner, "category": "context", "operation": "content",
+        "contract_version": 1, "state": "complete", "context": result,
+    }}, headers={"X-Request-ID": request_id})
 
 
 @resource_stub_app.get("/api/v1/resources")
@@ -298,15 +304,14 @@ async def test_context_search_validation_errors_keep_healthy_results_and_recover
             })
             assert added.status_code == 200, added.text
             assert {item["backend_workspace_id"] for item in added.json()["data"]["items"]} == {failed_owner, sibling_owner}
-            search = SessionContextSearchRequest(
-                resource_identity=gateway_session_inventory_identity(gateway_id),
-                uri=gateway_session_inventory_uri(gateway_id), scope="gateway", query="context-query-marker",
-            )
-            query = ContextQueryRequest.model_validate({
+            query = GatewayContextSearchRequest.model_validate({
                 "source_gateway_id": gateway_id,
-                "resource_target": {"gateway_id": gateway_id, "resource_identity": str(search.resource_identity),
-                                    "uri": search.uri, "scope": search.scope},
-                "search": search.model_dump(mode="json"),
+                "resource_target": {"gateway_id": gateway_id,
+                    "resource_identity": str(gateway_session_inventory_identity(gateway_id)),
+                    "uri": gateway_session_inventory_uri(gateway_id), "scope": "gateway"},
+                "resource_search": {"scope": {"mode": "all"}, "queries": [{
+                    "category": "context", "operation": "content", "match_mode": "literal", "query": "context-query-marker",
+                }]},
             })
             payload = {"operation": "read", "resource_target": query.resource_target.to_payload(), "body": query.model_dump(mode="json")}
             state = json.loads(control.read_text())
@@ -323,14 +328,16 @@ async def test_context_search_validation_errors_keep_healthy_results_and_recover
                 assert body["request_id"] == failed.headers["X-Request-ID"] == request_id
                 assert "context-marker" not in failed.text
                 result = body["data"]
-                assert result["returned_chars"] == len(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
-                assert result["total_matches"] == 1
-                match, = result["matches"]
+                events = result["events"]
+                assert events[0]["type"] == "scope" and events[-1]["type"] == "end"
+                assert events[-1]["summary"]["returned_results"] == 1
+                page, = [event["page"]["context"] for event in events if event["type"] == "page"]
+                match, = page["matches"]
                 assert match["resource_identity"] == str(session_resource_identity(sibling_owner, SESSION_A))
                 assert match["uri"] == session_resource_uri(sibling_owner, SESSION_A)
-                error, = result["partial_errors"]
-                assert error["error"] == f"工作区上下文搜索失败: stage=gateway-context-search:{failed_owner}, error=ValidationError"
-                assert error["resource_identity"] == str(workspace_session_inventory_identity(failed_owner))
+                error, = [branch for branch in events[-1]["summary"]["branches"] if branch["state"] == "failed"]
+                assert error["code"] == "invalid_response"
+                assert error["branch"]["owner"]["workspace_id"] == failed_owner
                 observed = [json.loads(line) for line in Path(state["requests_path"]).read_text().splitlines()]
                 assert {row["workspace_id"] for row in observed if row["request_id"] == request_id} == {failed_owner, sibling_owner}
                 evidence.append(body)
@@ -339,11 +346,17 @@ async def test_context_search_validation_errors_keep_healthy_results_and_recover
             recovered = await client.post("/api/gateway/federation/relay", json=payload)
             assert recovered.status_code == 200, recovered.text
             restored = recovered.json()["data"]
-            assert restored["partial_errors"] == [] and restored["total_matches"] == 2
-            assert {match["uri"] for match in restored["matches"]} == {
+            assert restored["events"][-1]["summary"]["state"] == "complete"
+            assert restored["events"][-1]["summary"]["returned_results"] == 2
+            assert {match["uri"] for event in restored["events"] if event["type"] == "page"
+                    for match in event["page"]["context"]["matches"]} == {
                 session_resource_uri(owner, SESSION_A) for owner in (failed_owner, sibling_owner)
             }
-            assert restored["revision"] != evidence[-1]["data"]["revision"]
+            # 一个分支恢复不改变健康 owner 的版本，不再为错误集合伪造全局 revision。
+            previous_page, = [event["page"]["context"] for event in evidence[-1]["data"]["events"] if event["type"] == "page"]
+            healthy_page, = [event["page"]["context"] for event in restored["events"] if event["type"] == "page"
+                             and event["branch"]["branch"]["owner"]["workspace_id"] == sibling_owner]
+            assert healthy_page["revision"] == previous_page["revision"] == "query-fixture-1"
             evidence.append(recovered.json())
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
         assert "context-marker" in logs and "ValidationError" in logs and "Traceback" in logs

@@ -5,7 +5,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import type { GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v1/public_pb.js";
-import type { WorkspaceContextSearchOptionsDTO, WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
+import type { ContextGrantTarget, WorkspaceContextSearchOptionsDTO, WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
 
 /**
  * Describes the file boxteam/search/v1/public.proto.
@@ -347,4 +347,48 @@ export declare type FederatedSearchEventDTO = Message<"boxteam.search.v1.Federat
  * Use `create(FederatedSearchEventDTOSchema)` to create a new message.
  */
 export declare const FederatedSearchEventDTOSchema: GenMessage<FederatedSearchEventDTO>;
+
+/**
+ * 复用原 Gateway inventory 的 read 授权，不新增资源种类或全局 cursor。
+ *
+ * @generated from message boxteam.search.v1.GatewayContextSearchRequest
+ */
+export declare type GatewayContextSearchRequest = Message<"boxteam.search.v1.GatewayContextSearchRequest"> & {
+  /**
+   * @generated from field: string source_gateway_id = 1;
+   */
+  sourceGatewayId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ContextGrantTarget resource_target = 2;
+   */
+  resourceTarget?: ContextGrantTarget | undefined;
+
+  /**
+   * @generated from field: boxteam.search.v1.FederatedSearchRequest resource_search = 3;
+   */
+  resourceSearch?: FederatedSearchRequest | undefined;
+};
+
+/**
+ * Describes the message boxteam.search.v1.GatewayContextSearchRequest.
+ * Use `create(GatewayContextSearchRequestSchema)` to create a new message.
+ */
+export declare const GatewayContextSearchRequestSchema: GenMessage<GatewayContextSearchRequest>;
+
+/**
+ * @generated from message boxteam.search.v1.GatewayContextSearchResultDTO
+ */
+export declare type GatewayContextSearchResultDTO = Message<"boxteam.search.v1.GatewayContextSearchResultDTO"> & {
+  /**
+   * @generated from field: repeated boxteam.search.v1.FederatedSearchEventDTO events = 1;
+   */
+  events: FederatedSearchEventDTO[];
+};
+
+/**
+ * Describes the message boxteam.search.v1.GatewayContextSearchResultDTO.
+ * Use `create(GatewayContextSearchResultDTOSchema)` to create a new message.
+ */
+export declare const GatewayContextSearchResultDTOSchema: GenMessage<GatewayContextSearchResultDTO>;
 

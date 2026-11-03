@@ -21,6 +21,7 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.schemas.internal_v2.session_fork_transfer import SessionForkTransferRequest
 from app.schemas.internal_v2.text_mutation import TextMutationRequest
+from app.schemas.search_federation import GatewayContextSearchRequest
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.admission import CommunicationPayload
 from app.services.business.communication.wait import DurableDeadline, WaitSelector
@@ -110,6 +111,8 @@ class ContextQueryRequest(BaseModel):
     def validate_query(self) -> ContextQueryRequest:
         if (self.read is None) == (self.search is None):
             raise ValueError("上下文查询必须恰好提供 read 或 search")
+        if self.search is not None and self.search.scope == "gateway":
+            raise ValueError("Gateway 上下文搜索必须使用 resource_search 的独立分支续查合同")
         query = self.read if self.read is not None else self.search
         if (query.resource_identity, query.uri, query.scope) != (
             self.resource_target.resource_identity, self.resource_target.uri, self.resource_target.scope,
@@ -117,6 +120,8 @@ class ContextQueryRequest(BaseModel):
             raise ValueError("上下文查询与 read grant 资源目标不一致")
         return self
 
+
+CONTEXT_QUERY_ADAPTER = TypeAdapter(ContextQueryRequest | GatewayContextSearchRequest)
 
 class ResourceNavigationRelayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -181,7 +186,7 @@ class CommunicationGatewayRequest(BaseModel):
         if self.resource_target is not None:
             if self.operation != "read":
                 raise ValueError("资源 target 只能使用 read capability")
-            query = ContextQueryRequest.model_validate(self.body)
+            query = CONTEXT_QUERY_ADAPTER.validate_python(self.body)
             if query.resource_target != self.resource_target:
                 raise ValueError("relay resource_target 与查询 envelope 不一致")
         if self.navigation_target is not None:

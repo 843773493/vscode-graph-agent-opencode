@@ -5,6 +5,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
+from app.gateway.federation.grants import ContextGrantTarget
 from app.schemas.gateway.search import (
     GatewaySearchScopeRequest,
     GatewaySearchScopeResolutionDTO,
@@ -158,3 +159,24 @@ class FederatedSearchEventDTO(BaseModel):
         if self.source is not None and self.type != "page":
             raise ValueError("只有搜索页携带来源信息")
         return self
+
+
+class GatewayContextSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_gateway_id: str = Field(min_length=1)
+    resource_target: ContextGrantTarget
+    resource_search: FederatedSearchRequest
+
+    @model_validator(mode="after")
+    def require_context_inventory(self) -> Self:
+        queries = self.resource_search.queries
+        if self.resource_target.scope != "gateway" or len(queries) != 1 or (
+            queries[0].category, queries[0].operation
+        ) != ("context", "content"):
+            raise ValueError("Gateway 上下文授权只接受 inventory 的 context/content 查询")
+        return self
+
+
+class GatewayContextSearchResultDTO(BaseModel):
+    events: list[FederatedSearchEventDTO]

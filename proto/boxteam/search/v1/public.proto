@@ -79,3 +79,14 @@ message FederatedSearchEventDTO {
   FederatedSearchSummaryDTO summary = 7;
   FederatedSearchSourceDTO source = 8;
 }
+
+// 复用原 Gateway inventory 的 read 授权，不新增资源种类或全局 cursor。
+message GatewayContextSearchRequest {
+  string source_gateway_id = 1;
+  boxteam.workspace.v2.ContextGrantTarget resource_target = 2;
+  FederatedSearchRequest resource_search = 3;
+}
+
+message GatewayContextSearchResultDTO {
+  repeated FederatedSearchEventDTO events = 1;
+}

@@ -247,11 +247,14 @@ async def _write_session_context_checkpoint(
             for message in messages[-3:-1]:
                 message.response_metadata["model_call_id"] = snapshot.model_call_id
             commit_fixture_output(saver, messages=messages)
+            checkpoint = checkpoint_fixture(
+                checkpoint_id, messages, channel_version=version
+            )
             await saver.aput(
                 config,
-                checkpoint_fixture(checkpoint_id, messages, channel_version=version),
+                checkpoint,
                 {"source": "e2e_fixture", "step": version, "writes": {}},
-                {"messages": str(version)},
+                checkpoint["channel_versions"],
             )
             return snapshot.model_call_id
 
@@ -567,6 +570,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
     context_auxiliary_services: Callable[[Path], MountedWorkspace],
     frozen_provider_prepare,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ):
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
@@ -783,8 +787,10 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
                 }
             )
         )
-        assert gateway_search_payload["total_matches"] >= 2
-        assert gateway_search_payload["partial_errors"] == []
+        events = gateway_search_payload["events"]
+        assert events[0]["type"] == "scope" and events[-1]["type"] == "end"
+        assert events[-1]["summary"]["returned_results"] >= 2
+        assert all(branch["state"] == "complete" for branch in events[-1]["summary"]["branches"])
 
         invoker = create_extension_tool_invoker_tool(
             [read_tool, search_tool],
@@ -835,7 +841,17 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         )
         assert isinstance(failed_result, ToolMessage)
         assert failed_result.status == "error"
-        failure = json.loads(failed_result.text.split("detail=", maxsplit=1)[1])
+        assert failed_result.text == (
+            "Gateway 通信失败: path=/api/gateway/federation/discovery, "
+            "request_id=cross-workspace-context-tools, stage=http_response, "
+            "status=409, code=target_not_resolvable"
+        )
+        failure = json.loads(next(
+            record.getMessage().split("；原始响应=", maxsplit=1)[1]
+            for record in reversed(caplog.records)
+            if record.name == "app.services.infrastructure.gateway_communication_client"
+            and "code=target_not_resolvable；原始响应=" in record.getMessage()
+        ))
         assert failure["detail"]["code"] == "target_not_resolvable"
         assert failure["request_id"] == "cross-workspace-context-tools"
 
@@ -845,7 +861,8 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
                 {**gateway_ref, "query": marker}
             )
         )
-        assert partial_gateway_search["partial_errors"]
+        branches = partial_gateway_search["events"][-1]["summary"]["branches"]
+        assert any(branch["state"] == "failed" and branch["branch"]["owner"]["workspace_id"] == backend_workspace_id for branch in branches)
     finally:
         if context_transport is not None:
             await context_transport.aclose()

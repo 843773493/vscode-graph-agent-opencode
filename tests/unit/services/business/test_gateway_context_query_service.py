@@ -18,9 +18,12 @@ from app.schemas.gateway.workspaces import (
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,
-    SessionContextSearchMatchDTO,
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
+)
+from app.schemas.search_federation import (
+    GatewayContextSearchRequest,
+    GatewayContextSearchResultDTO,
 )
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
@@ -28,9 +31,7 @@ from app.services.business.gateway_context_query_service import (
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
-    parse_session_context_ref,
     session_resource_identity,
-    session_resource_uri,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
@@ -84,59 +85,10 @@ def _gateway_read_request(**kwargs: object) -> SessionContextReadRequest:
     )
 
 
-def _gateway_search_request(**kwargs: object) -> SessionContextSearchRequest:
-    return SessionContextSearchRequest(
-        resource_identity=gateway_session_inventory_identity(GATEWAY_ID),
-        uri=gateway_session_inventory_uri(GATEWAY_ID),
-        scope="gateway",
-        **kwargs,
-    )
 
 
-def _workspace_search_result(
-    workspace_id: str,
-    *,
-    query: str,
-    total_matches: int = 0,
-    matches: list[SessionContextSearchMatchDTO] | None = None,
-    has_more: bool = False,
-    truncated: bool = False,
-    next_cursor: str | None = None,
-) -> SessionContextSearchResultDTO:
-    index = int(workspace_id.rsplit("_", maxsplit=1)[-1])
-    backend_workspace_id = _backend_workspace_id(index)
-    return SessionContextSearchResultDTO(
-        resource_identity=workspace_session_inventory_identity(backend_workspace_id),
-        uri=workspace_session_inventory_uri(backend_workspace_id),
-        scope="workspace",
-        query=query,
-        match_mode="literal",
-        revision=f"rev-{workspace_id}",
-        total_matches=total_matches,
-        matches=matches or [],
-        has_more=has_more,
-        truncated=truncated,
-        next_cursor=next_cursor,
-    )
 
 
-def _session_match(
-    backend_workspace_id: str,
-    session_id: str,
-    *,
-    preview: str = "marker",
-) -> SessionContextSearchMatchDTO:
-    return SessionContextSearchMatchDTO(
-        resource_identity=session_resource_identity(backend_workspace_id, session_id),
-        uri=session_resource_uri(backend_workspace_id, session_id),
-        scope="workspace",
-        preview=preview,
-        source="effective_context",
-        revision=f"rev-{session_id}",
-        record_index=0,
-        match_start=0,
-        match_end=6,
-    )
 
 
 class _FakeTransport:
@@ -148,9 +100,6 @@ class _FakeTransport:
         self.missing_backend_workspace_ids: set[str] = set()
         self.inventory_calls = 0
         self.visited: list[str] = []
-        self.search_requests: dict[str, SessionContextSearchRequest] = {}
-        self.search_errors: dict[str, Exception] = {}
-        self.search_results: dict[str, SessionContextSearchResultDTO] = {}
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
         self.inventory_calls += 1
@@ -192,26 +141,13 @@ class _FakeTransport:
             revision="rev-read",
         )
 
-    async def search_resource_context(
-        self,
-        request: SessionContextSearchRequest,
-    ) -> SessionContextSearchResultDTO:
-        resource = parse_session_context_ref(
-            resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
+    async def search_resource_context(self, request: SessionContextSearchRequest) -> SessionContextSearchResultDTO:
+        return SessionContextSearchResultDTO(
+            **request.model_dump(include={"resource_identity", "uri", "scope", "query", "match_mode"}), revision="local",
         )
-        workspace_id = next(
-            item for item in self.workspace_ids
-            if self._workspace_item(item).backend_workspace_id == resource.scope_id
-        )
-        self.visited.append(workspace_id)
-        self.search_requests[workspace_id] = request
-        error = self.search_errors.get(workspace_id)
-        if error is not None:
-            raise error
-        return self.search_results.get(workspace_id) or _workspace_search_result(
-            workspace_id,
-            query=request.query,
-        )
+
+    async def search_gateway_context(self, request: GatewayContextSearchRequest) -> GatewayContextSearchResultDTO:
+        raise AssertionError("inventory 读取不得触发正文搜索")
 
 
 @pytest.mark.asyncio
@@ -375,265 +311,25 @@ async def test_gateway_inventory_rolls_back_item_when_final_cursor_exceeds_budge
     assert result.returned_chars <= 2_000
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_routes_by_control_id_but_uses_backend_uuid_for_uri() -> (
-    None
-):
-    control_workspace_id = _workspace_id(1)
-    backend_workspace_id = _backend_workspace_id(1)
-    transport = _FakeTransport([control_workspace_id])
-    service = GatewayContextQueryService(transport=transport)
-
-    result = await service.search_gateway_context(
-        _gateway_search_request(query="marker")
-    )
-
-    workspace_request = transport.search_requests[control_workspace_id]
-    assert workspace_request.scope == "workspace"
-    assert workspace_request.uri == workspace_session_inventory_uri(
-        backend_workspace_id
-    )
-    assert workspace_request.resource_identity == workspace_session_inventory_identity(
-        backend_workspace_id
-    )
-    assert control_workspace_id not in workspace_request.uri
-    assert result.partial_errors == []
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_pages_stably_across_workspace_matches() -> None:
-    first_workspace_id = _workspace_id(1)
-    second_workspace_id = _workspace_id(2)
-    first_backend_id = _backend_workspace_id(1)
-    second_backend_id = _backend_workspace_id(2)
-    same_session_later = _session_match(
-        first_backend_id,
-        "ses_1",
-        preview="same session later",
-    ).model_copy(update={"match_start": 10, "match_end": 16})
-    same_session_earlier = _session_match(
-        first_backend_id,
-        "ses_1",
-        preview="same session earlier",
-    ).model_copy(update={"match_start": 1, "match_end": 7})
-    first_workspace_matches = [
-        same_session_later,
-        same_session_earlier,
-        _session_match(first_backend_id, "ses_2", preview="first workspace last"),
-    ]
-    second_workspace_matches = [
-        _session_match(second_backend_id, "ses_1", preview="second workspace last")
-    ]
-    transport = _FakeTransport([first_workspace_id, second_workspace_id])
-    transport.search_results = {
-        first_workspace_id: _workspace_search_result(
-            first_workspace_id,
-            query="marker",
-            total_matches=len(first_workspace_matches),
-            matches=first_workspace_matches,
-        ),
-        second_workspace_id: _workspace_search_result(
-            second_workspace_id,
-            query="marker",
-            total_matches=len(second_workspace_matches),
-            matches=second_workspace_matches,
-        ),
-    }
-    service = GatewayContextQueryService(transport=transport)
-
-    first_page = await service.search_gateway_context(
-        _gateway_search_request(query="marker", max_results=2)
-    )
-    assert [match.preview for match in first_page.matches] == [
-        "same session earlier",
-        "same session later",
-    ]
-    assert first_page.has_more is True
-    assert first_page.next_cursor is not None
-
-    second_page = await service.search_gateway_context(
-        _gateway_search_request(
-            query="marker",
-            max_results=2,
-            cursor=first_page.next_cursor,
-            revision=first_page.revision,
-        )
-    )
-
-    assert [match.preview for match in second_page.matches] == [
-        "first workspace last",
-        "second workspace last",
-    ]
-    assert second_page.has_more is False
-    assert second_page.next_cursor is None
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_partial_errors_obey_total_character_budget() -> None:
-    workspace_ids = [_workspace_id(index) for index in range(25)]
-    transport = _FakeTransport(workspace_ids)
-    transport.search_errors = {
-        workspace_id: RuntimeError("远端失败" * 1_000) for workspace_id in workspace_ids
-    }
-    service = GatewayContextQueryService(transport=transport)
-
-    result = await service.search_gateway_context(
-        _gateway_search_request(query="marker", max_chars=1_200)
-    )
-
-    assert result.returned_chars <= 1_200
-    assert result.returned_chars == len(result.model_dump_json())
-    assert result.truncated is True
-    assert 0 < len(result.partial_errors) < len(workspace_ids)
-    assert result.omitted_partial_error_count == (
-        len(workspace_ids) - len(result.partial_errors)
-    )
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_diagnostic_failure_keeps_healthy_scope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    failed, healthy = _workspace_id(1), _workspace_id(2)
-    transport = _FakeTransport([failed, healthy])
-    original = PermissionError(13, "原生读取拒绝", "/private/context-diagnostic/state.sqlite")
-    transport.search_errors[failed] = original
-    transport.search_results[healthy] = _workspace_search_result(
-        healthy, query="marker", total_matches=1,
-        matches=[_session_match(_backend_workspace_id(2), "ses_healthy")],
-    )
-
-    def fail_diagnostic(*args: object, **kwargs: object) -> None:
-        raise RuntimeError("诊断 sink 故障 /private/diagnostic-sink.log")
-
-    monkeypatch.setattr("app.core.failures.logger.error", fail_diagnostic)
-    result = await GatewayContextQueryService(transport=transport).search_gateway_context(
-        _gateway_search_request(query="marker")
-    )
-    assert result.total_matches == 1
-    assert [match.uri for match in result.matches] == [session_resource_uri(_backend_workspace_id(2), "ses_healthy")]
-    error, = result.partial_errors
-    assert error.resource_identity == workspace_session_inventory_identity(_backend_workspace_id(1))
-    assert "error=PermissionError, errno=13, diagnostic_sink_error=RuntimeError" in error.error
-    assert "/private/" not in result.model_dump_json()
-    assert "诊断 sink 故障 /private/diagnostic-sink.log" in "\n".join(original.__notes__)
-    assert set(transport.visited) == {failed, healthy}
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_keeps_complete_registered_access_rejection() -> None:
-    workspace_id = _workspace_id(1)
-    transport = _FakeTransport([workspace_id])
-    explanation = "已登记的访问拒绝：" + "请核对目标权限。" * 100
-    transport.search_errors[workspace_id] = WorkspaceSessionContextAccessError(explanation)
-    result = await GatewayContextQueryService(transport=transport).search_gateway_context(
-        _gateway_search_request(query="marker", max_chars=10_000)
-    )
-    error, = result.partial_errors
-    assert error.error == f"WorkspaceSessionContextAccessError: {explanation}"
-    assert result.returned_chars == len(result.model_dump_json())
-    assert result.omitted_partial_error_count == 0
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_propagates_workspace_truncation() -> None:
-    workspace_id = _workspace_id(1)
-    backend_workspace_id = _backend_workspace_id(1)
-    transport = _FakeTransport([workspace_id])
-    transport.search_results[workspace_id] = _workspace_search_result(
-        workspace_id,
-        query="marker",
-        total_matches=201,
-        matches=[_session_match(backend_workspace_id, "ses_1")],
-        has_more=True,
-        truncated=True,
-        next_cursor="workspace-cursor",
-    )
-    service = GatewayContextQueryService(transport=transport)
-
-    result = await service.search_gateway_context(
-        _gateway_search_request(query="marker")
-    )
-
-    assert result.has_more is False
-    assert result.truncated is True
-    assert result.total_matches == 201
-    assert "fan-out" in result.partial_errors[0].error
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_rolls_back_match_when_final_cursor_exceeds_budget() -> (
-    None
-):
-    workspace_id = _workspace_id(1)
-    backend_workspace_id = _backend_workspace_id(1)
-    transport = _FakeTransport([workspace_id])
-    transport.search_results[workspace_id] = _workspace_search_result(
-        workspace_id,
-        query="marker",
-        total_matches=2,
-        matches=[
-            _session_match(
-                backend_workspace_id,
-                f"ses_{index}",
-                preview="marker " + "x" * 500,
-            )
-            for index in range(2)
-        ],
-    )
-    service = GatewayContextQueryService(transport=transport)
-
-    result = await service.search_gateway_context(
-        _gateway_search_request(query="marker", max_chars=2_000)
-    )
-
-    assert result.matches
-    assert result.has_more is True
-    assert result.next_cursor is not None
-    assert result.returned_chars == len(result.model_dump_json())
-    assert result.returned_chars <= 2_000
 
 
-@pytest.mark.asyncio
-async def test_gateway_search_rejects_a_match_from_another_workspace() -> None:
-    workspace_id = _workspace_id(1)
-    foreign_backend_workspace_id = _backend_workspace_id(2)
-    transport = _FakeTransport([workspace_id])
-    transport.search_results[workspace_id] = _workspace_search_result(
-        workspace_id,
-        query="marker",
-        total_matches=1,
-        matches=[_session_match(foreign_backend_workspace_id, "ses_foreign")],
-    )
-    service = GatewayContextQueryService(transport=transport)
-
-    result = await service.search_gateway_context(
-        _gateway_search_request(query="marker")
-    )
-
-    assert result.matches == []
-    assert len(result.partial_errors) == 1
-    assert "其他 Workspace" in result.partial_errors[0].error
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("query", "max_chars"),
-    [("marker", 256), ("marker" * 400, 1_024)],
-)
-async def test_gateway_search_rejects_oversized_base_envelope(
-    query: str,
-    max_chars: int,
-) -> None:
-    service = GatewayContextQueryService(transport=_FakeTransport([]))
-
-    with pytest.raises(ValueError, match="基础响应 envelope"):
-        await service.search_gateway_context(
-            _gateway_search_request(query=query, max_chars=max_chars)
-        )
 
 
-async def test_gateway_inventory_and_fanout_preserve_remote_gateway_authority() -> None:
+async def test_gateway_inventory_preserves_remote_gateway_authority() -> None:
     route = _workspace_id(2)
     backend_id = _backend_workspace_id(2)
     transport = _FakeTransport([_workspace_id(1), route])
@@ -642,20 +338,8 @@ async def test_gateway_inventory_and_fanout_preserve_remote_gateway_authority() 
         gateway_id="gateway_remote", name="remote", host="remote.example", port=22,
         username="test", remote_gateway_port=8014,
     )
-    remote_uri = workspace_session_inventory_uri(backend_id, gateway_authority="gateway_remote")
-    remote_match = _session_match(backend_id, "remote-session").model_copy(update={
-        "uri": session_resource_uri(backend_id, "remote-session", gateway_authority="gateway_remote"),
-    })
-    transport.search_results[route] = _workspace_search_result(
-        route, query="marker", total_matches=1, matches=[remote_match],
-    ).model_copy(update={"uri": remote_uri})
     service = GatewayContextQueryService(transport=transport)
 
     inventory = await service.read_gateway_context(_gateway_read_request(view="inventory"))
     assert inventory.items[0].uri == workspace_session_inventory_uri(_backend_workspace_id(1))
-    assert inventory.items[1].uri == remote_uri
-    result = await service.search_gateway_context(_gateway_search_request(query="marker"))
-    assert result.partial_errors == []
-    assert result.matches == [remote_match]
-    assert transport.search_requests[route].uri == remote_uri
-    assert transport.search_requests[route].resource_identity == workspace_session_inventory_identity(backend_id)
+    assert inventory.items[1].uri == workspace_session_inventory_uri(backend_id, gateway_authority="gateway_remote")

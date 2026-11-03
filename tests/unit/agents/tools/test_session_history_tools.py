@@ -30,6 +30,7 @@ from app.schemas.internal_v2.session_context import (
     SessionContextReadResultDTO,
     SessionContextSearchResultDTO,
 )
+from app.schemas.search_federation import GatewayContextSearchResultDTO
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
@@ -78,6 +79,10 @@ class WorkspaceProbe:
     async def read_resource_context(self, request):
         self.calls.append(("resource-read", request))
         return SessionContextReadResultDTO(**request.model_dump(include={"resource_identity", "uri", "scope", "view"}), revision="remote-read")
+
+    async def search_gateway_context(self, request):
+        self.calls.append(("gateway-search", request))
+        return GatewayContextSearchResultDTO(events=[])
 
     async def search_resource_context(self, request):
         self.calls.append(("resource-search", request))
@@ -331,3 +336,40 @@ async def test_remote_workspace_inventory_uses_resource_relay(history_context, a
     assert request.uri == arguments["uri"]
     assert request.resource_identity == arguments["resource_identity"]
     assert history_context.session_context_query_service.calls == []
+
+
+@pytest.mark.parametrize("remote", [False, True])
+async def test_gateway_context_search_uses_shared_query_and_preserves_target(history_context, remote):
+    origin, target = "gateway_" + "a" * 32, "gateway_" + "b" * 32 if remote else "gateway_" + "a" * 32
+    token = set_current_gateway_id(origin)
+    try:
+        uri = gateway_session_inventory_uri(target, gateway_authority=target if remote else None)
+        result = json.loads(await create_search_context_tool(history_context).ainvoke({
+            "resource_identity": str(gateway_session_inventory_identity(target)), "uri": uri, "scope": "gateway",
+            "query": "needle", "sources": ["session_information"], "match_mode": "regex",
+            "case_sensitive": True, "max_results": 3, "max_chars": 2048,
+        }))
+    finally:
+        reset_current_gateway_id(token)
+    assert result == {"events": []}
+    operation, query = history_context.workspace_session_context_client.calls[0]
+    assert operation == "gateway-search"
+    assert query.source_gateway_id == origin and query.resource_target.gateway_id == target
+    assert query.resource_target.uri == uri
+    assert query.resource_search.scope.mode == "all" and query.resource_search.max_results == 3
+    domain, = query.resource_search.queries
+    assert (domain.category, domain.operation, domain.match_mode, domain.limit) == ("context", "content", "regex", 3)
+    assert domain.context.sources == ("session_information",) and domain.context.case_sensitive and domain.context.max_chars == 2048
+    assert history_context.session_context_query_service.calls == []
+
+
+@pytest.mark.parametrize("field,value", [("cursor", "old-offset"), ("revision", "old-global-revision")])
+async def test_gateway_context_search_rejects_global_paging(history_context, field, value):
+    tool = create_search_context_tool(history_context)
+    token = set_current_gateway_id("gateway_" + "a" * 32)
+    try:
+        result = await tool.ainvoke({"resource_identity": str(gateway_session_inventory_identity("gateway_" + "a" * 32)),
+            "uri": gateway_session_inventory_uri("gateway_" + "a" * 32), "scope": "gateway", "query": "needle", field: value})
+    finally:
+        reset_current_gateway_id(token)
+    assert "continuations" in result and history_context.workspace_session_context_client.calls == []

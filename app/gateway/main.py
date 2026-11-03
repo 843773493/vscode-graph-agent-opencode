@@ -17,7 +17,11 @@ from app.gateway.route_registry import register_gateway_routes
 from app.gateway.server.static_ui import install_static_web_ui
 from app.protocol.codecs.http_validation import request_validation_error_response
 from app.schemas.internal_v2.sse import install_sse_openapi_components
-from app.schemas.search_federation import FederatedSearchEventDTO
+from app.schemas.search_federation import (
+    FederatedSearchEventDTO,
+    GatewayContextSearchRequest,
+    GatewayContextSearchResultDTO,
+)
 
 configure_application_logging(service="gateway")
 logger = logging.getLogger(__name__)
@@ -66,7 +70,9 @@ app.add_exception_handler(RequestValidationError, request_validation_error_respo
 
 
 register_gateway_routes(app)
-install_sse_openapi_components(app, models={"FederatedSearchEventDTO": FederatedSearchEventDTO})
+install_sse_openapi_components(app, models={"FederatedSearchEventDTO": FederatedSearchEventDTO,
+                                           "GatewayContextSearchRequest": GatewayContextSearchRequest,
+                                           "GatewayContextSearchResultDTO": GatewayContextSearchResultDTO})
 
 # 静态 UI 必须最后挂载，确保 Gateway API、工作区代理、SSE 和 WebSocket
 # 路由优先匹配；源码开发未声明 BOXTEAM_WEB_ASSETS 时由 Vite 提供页面。

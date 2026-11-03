@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.gateway.routes.search import _SearchResponseEncoder
+from app.gateway.routes.search import _encode_search_sse
+from app.gateway.search.output import SearchResponseEncoder
 from app.gateway.search.scheduler import (
     SearchBranchError,
     SearchJob,
@@ -62,7 +63,7 @@ def output_page() -> Callable[[SearchJob], SearchPage]:
 async def collect(
     jobs: list[SearchJob], scope: GatewaySearchScopeResolutionDTO, query: Callable[[SearchJob], SearchPage],
 ) -> tuple[list[FederatedSearchEventDTO], list[bytes]]:
-    encoder = _SearchResponseEncoder(jobs, scope, "req-output")
+    encoder = SearchResponseEncoder(jobs, scope, "req-output", encode=_encode_search_sse)
 
     async def execute(job: SearchJob) -> SearchPage:
         return query(job)
@@ -88,10 +89,10 @@ async def test_exact_output_limit_and_one_extra_byte_never_skip_unpublished_page
     jobs = output_jobs[:1]
     baseline, frames = await collect(jobs, output_scope, output_page)
     size = sum(map(len, frames))
-    monkeypatch.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", size)
+    monkeypatch.setattr("app.gateway.search.output.MAX_SEARCH_OUTPUT_BYTES", size)
     exact, delivered = await collect(jobs, output_scope, output_page)
     assert exact == baseline and sum(map(len, delivered)) == size
-    monkeypatch.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", size - 1)
+    monkeypatch.setattr("app.gateway.search.output.MAX_SEARCH_OUTPUT_BYTES", size - 1)
     limited, _ = await collect(jobs, output_scope, output_page)
     assert [event.type for event in limited] == ["scope", "branch", "end"]
     summary = limited[-1].summary
@@ -107,7 +108,7 @@ async def test_multi_owner_budget_counts_status_cursors_and_encodes_each_page_on
     output_page: Callable[[SearchJob], SearchPage], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, frames = await collect(output_jobs, output_scope, output_page)
-    monkeypatch.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", sum(map(len, frames)) - 1)
+    monkeypatch.setattr("app.gateway.search.output.MAX_SEARCH_OUTPUT_BYTES", sum(map(len, frames)) - 1)
     serialized = []
     original = FederatedSearchEventDTO.model_dump_json
 
@@ -137,7 +138,7 @@ async def test_multi_owner_budget_counts_status_cursors_and_encodes_each_page_on
 async def test_oversized_owner_error_keeps_room_for_every_terminal(
     output_scope: GatewaySearchScopeResolutionDTO, output_jobs: list[SearchJob], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", 16000)
+    monkeypatch.setattr("app.gateway.search.output.MAX_SEARCH_OUTPUT_BYTES", 16000)
 
     def error(job: SearchJob) -> SearchPage:
         raise SearchBranchError("read_failed", "原诊断🙂" * 6000)
@@ -153,7 +154,7 @@ async def test_oversized_owner_error_keeps_room_for_every_terminal(
 def test_scope_and_original_continuations_must_fit_before_dispatch(
     output_scope: GatewaySearchScopeResolutionDTO, output_jobs: list[SearchJob], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", 1024)
+    monkeypatch.setattr("app.gateway.search.output.MAX_SEARCH_OUTPUT_BYTES", 1024)
     with pytest.raises(SearchScopeError) as failure:
-        _SearchResponseEncoder(output_jobs, output_scope, "req-output")
+        SearchResponseEncoder(output_jobs, output_scope, "req-output", encode=_encode_search_sse)
     assert failure.value.status_code == 413 and failure.value.code == "output_bytes"

@@ -47,6 +47,8 @@ from app.gateway.federation.store import (
 )
 from app.gateway.runtime.process_ports import allocate_local_port_in_range
 from app.services.business.session_context_resource import (
+    gateway_session_inventory_identity,
+    gateway_session_inventory_uri,
     session_resource_identity,
     session_resource_uri,
 )
@@ -899,3 +901,29 @@ async def test_navigation_read_grant_keeps_policy_deadline_and_channel_rejection
             await source.service.relay_operation(target=destination, operation="read", body=body)
         assert error.value.code == FEDERATION_CHANNEL_CLOSED
         assert len(executed) == 1
+
+
+async def test_gateway_context_search_keeps_original_star_grant_and_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async with _federation(tmp_path, c_catalog={}) as (_hub, source, target_runtime):
+        target = ContextGrantTarget("gateway_c", str(gateway_session_inventory_identity("gateway_c")),
+            gateway_session_inventory_uri("gateway_c", gateway_authority="gateway_c"), "gateway")
+        body = {"source_gateway_id": "gateway_b", "resource_target": target.to_payload(),
+            "resource_search": {"scope": {"mode": "all"}, "queries": [{
+                "category": "context", "operation": "content", "query": "needle", "match_mode": "literal",
+            }]}}
+        received = []
+
+        async def execute(**kwargs):
+            received.append(kwargs)
+            return {"events": []}
+
+        monkeypatch.setattr(target_runtime.service.session_main, "execute", execute)
+        await source.service.relay_operation(target=target, operation="read", body=body)
+        call, = received
+        assert call["body"] == body and call["target"] == target.to_payload()
+        assert call["origin"] == "gateway_b" and call["operation"] == "read"
+        assert call["timeout"] > 0
+        source.service.policy_store.publish({"rules": [{"capability": "read", "effect": "deny"}]})
+        with pytest.raises(FederationError) as rejected:
+            await source.service.relay_operation(target=target, operation="read", body=body)
+        assert rejected.value.code == FEDERATION_AUTHORIZATION_REVOKED and len(received) == 1

@@ -87,6 +87,8 @@ class SearchHTTP:
                 cursor="续点🙂" * 2000 if self.mode == "long-cursor" else f"{payload['workspace_id']}-cursor"),
         )
         body = APIResponse(data=page, request_id=request_id).model_dump(mode="json")
+        if self.mode == "invalid-page":
+            body["data"]["contract_version"] = "broken-version"
         return httpx.Response(200, headers=headers, json=body)
 
     async def search(self, owners: list[dict] | None = None, **updates: object) -> httpx.Response:
@@ -241,7 +243,7 @@ async def test_output_budget_includes_repeated_cursors_and_retry_keeps_original_
     assert resolved.status_code == 200
     scope = {"mode": "resume", "scope": resolved.json()["data"]["scope"]}
     with monkeypatch.context() as limits:
-        limits.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", 45000)
+        limits.setattr("app.gateway.search.output.MAX_SEARCH_OUTPUT_BYTES", 45000)
         response = await search_http.search(scope=scope, continuations=continuations)
     limited = events(response)
     assert len(response.content) <= 45000
@@ -259,7 +261,7 @@ async def test_output_budget_includes_repeated_cursors_and_retry_keeps_original_
 
 
 async def test_control_budget_rejected_before_http_dispatch(search_http: SearchHTTP, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.gateway.routes.search.MAX_SEARCH_OUTPUT_BYTES", 1024)
+    monkeypatch.setattr("app.gateway.search.output.MAX_SEARCH_OUTPUT_BYTES", 1024)
     response = await search_http.search()
     assert response.status_code == 413 and not search_http.requests
     assert response.json()["detail"]["code"] == "output_bytes"
@@ -313,3 +315,28 @@ async def test_mirror_never_masks_owner_rejection_or_route_reuse(search_http: Se
     search_http.registry.upsert(replace(old, backend_workspace_id="00000000-0000-4000-8000-000000000099"))
     response = await search_http.search(OWNERS[:1], queries=[query])
     assert response.status_code == 404 and response.json()["detail"]["code"] == "owner_unavailable"
+
+
+@pytest.mark.parametrize("sink_failed", [False, True])
+async def test_invalid_provider_page_preserves_diagnostic_and_branch_failure(
+    search_http: SearchHTTP, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, sink_failed: bool,
+) -> None:
+    search_http.mode = "invalid-page"
+    errors = []
+
+    def reject_log(_message, _detail, *, exc_info, extra):
+        errors.append(exc_info)
+        raise OSError("diagnostic unavailable")
+
+    if sink_failed:
+        monkeypatch.setattr("app.gateway.search.transport.logger.error", reject_log)
+    result = events(await search_http.search())
+    assert result[-1].summary is not None
+    assert all(branch.code == "invalid_response" and branch.state == "failed" and branch.cursor is None
+               for branch in result[-1].summary.branches)
+    if sink_failed:
+        assert len(errors) == 2 and all(error.__notes__ for error in errors)
+        assert all("diagnostic_sink_error=OSError" in branch.message for branch in result[-1].summary.branches)
+    else:
+        assert any(record.exc_info and "broken-version" in str(record.exc_info[1]) for record in caplog.records)
+    assert all(search_http.registry.route_reference_counts(f"route_{index}") == (0, 0) for index in range(3))

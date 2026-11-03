@@ -179,7 +179,7 @@
 - [x] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
 - [ ] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。
   - Session／Thread 名称、文件多根以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端；删除前端跨目标查询队列、文件直连 wrapper 及非标准 fileSearchPage。保留原根元数据读取、QueryBuilder 局部选项和 fuzzy 排名／高亮，普通搜索自动续原 cursor，Quick Access 明确单分支继续。旧 React 目录搜索／镜像已迁齐；canonical 重叠根和其余缓存合同仍未完成，不据此勾选整项。
-- [ ] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
+- [x] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
 - [ ] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
 - [ ] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
 - [ ] 16.15 在真实 Web 和 Electron 产品入口定向回归多范围搜索、原文件 dirty model／Search Editor、历史和动作；另在关闭浏览器后验证工具／脚本查全部会话树及真实 `search_context`。树验收覆盖 A/B 同名 folder 与 Session 不合并、各自根／父链／breadcrumb 及独立 cursor 正确；上下文验收对应 16.12 的原来源、身份、预算和版本语义，保存范围及原始结果证据。静态检查、类型检查、构建和受影响用例按第 15 组要求保护执行，不默认全套重跑。
@@ -665,3 +665,12 @@
 
 - 扩展原实网验收，在后端重启及原续页验证之后，经真实产品消息入口创建调用会话，由统一 model_stream 驱动 `invoke_extension_tool → search_resources → context/content`；断言冻结工作区、原 `session-context` Provider、精确会话 URI 和 effective_context 来源，并核验工具结果进入下一次模型 wire。关键执行与工具结果全部由产品生成，未增加模型或 SSE 替身。
 - 定向 1 passed／77.10 秒，原上下文页一致、精确读取、来源选择及旧 cursor 拒绝断言保持。Ruff 与该测试 Pyright 零诊断；仅扩展测试，复用原同源码的类型／构建及产品核心回归。命令、测试指纹、原始输出与退出码为 `out/tests/temp/context_provider_20261103/artifacts/tool-*`，正式网络与模型原件归同名 integration 测试目录；此证据不代替旧 `search_context` 聚合迁移或完整 Web／Electron 验收。
+
+
+### 2026-11-03：Gateway 上下文聚合迁入唯一搜索执行（16.12 完成）
+
+- `search_context` 保留工具名及精确资源合同；Gateway inventory 返回同一联邦事件，显式集合／all 与冻结范围／各 owner cursor 由 GatewaySearchService 执行。JSON relay 和浏览器 SSE 复用输出准入、总期限、调度与唯一终态，原 context read grant／origin 不扩大到文件或其它类别。Gateway 的 max_chars 是每个 owner 原上下文页的预算，总返回另受联邦条数及字节配额约束。
+- 已删除调用侧 Semaphore(8)、全工作区 gather、跨库 hash／全局 offset／聚合总数及专属 helper／测试。inventory 读取、精确 read/search、有效上下文与其它原来源、资源身份校验和独立 revision／cursor 保留；校验失败完整原件仍由原日志出口记录，日志 sink 失败不妨碍分支结算和租约释放。
+- 单元／公开合同批次 675 passed；最终 RPC／真实 WebSocket 授权与 relay／client 批次 51 passed，最后日志处理批次 17 passed。产品入口生成历史后，逐项比较原上下文页、重启后续查，并分别通过模型调用 search_resources 和 search_context：1 passed。下游非法 URI／类型的九组分支隔离、恢复及原日志：1 passed。原跨工作区工具、版本过期、错误归属与后端停止分支：1 passed／47.09 秒；旧查询装具的 new_versions 和错误格式断言同步现行合同，不放宽产品校验。
+- 协议生成一致性及 Buf breaking、真实 Workbench 类型检查（19 份转换源码）和正式 Web 构建通过。Ruff 无新增诊断；核心 Pyright 保留四条已核对的既存诊断，lifespan 保留两条既存 BLE001。原件、源码指纹及当前收尾命令记录在 `out/tests/temp/context_federation_20261103/artifacts/`；早期失败按原件保留。Docker 离线消费者已迁移，未运行 Docker E2E；本批没有改变 UI 交互，不替代 16.15 的完整 Web／Electron 产品验收。
+- 联合此前无浏览器 origin／selected／all、控制面发现后查树、Gateway 重启续页、停止目标和真实模型工具证据，勾选 16.12。16.15、16.16 及其它未闭环项继续保留，不以本边界宣称整个 Quick Access 完成。

@@ -10,13 +10,18 @@ import commentjson
 import httpx
 import pytest
 
-from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
-    SessionContextSearchRequest,
 )
+from app.schemas.search_federation import GatewayContextSearchRequest
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
 )
@@ -348,19 +353,24 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
 
         stop_remote_gateway(docker_target, remote_gateway_pid)
         remote_gateway_pid = None
-        offline_search = await context_service.search_gateway_context(
-            SessionContextSearchRequest(
-                resource_identity=gateway_session_inventory_identity(gateway_id),
-                uri=gateway_session_inventory_uri(gateway_id),
-                scope="gateway",
-                query="Docker SSH Routed Session",
-                sources=["session_catalog"],
-            )
-        )
-        assert any(
-            error.resource_identity == workspace_session_inventory_identity(remote_backend_workspace_id)
-            for error in offline_search.partial_errors
-        )
+        request_token = set_current_request_id("docker-offline-context-search")
+        try:
+            offline_search = await context_service.search_gateway_context(GatewayContextSearchRequest.model_validate({
+                "source_gateway_id": gateway_id,
+                "resource_target": {"gateway_id": gateway_id,
+                    "resource_identity": str(gateway_session_inventory_identity(gateway_id)),
+                    "uri": gateway_session_inventory_uri(gateway_id), "scope": "gateway"},
+                "resource_search": {"scope": {"mode": "all"}, "queries": [{
+                    "category": "context", "operation": "content", "match_mode": "literal",
+                    "query": "Docker SSH Routed Session", "context": {"sources": ["session_catalog"]},
+                }]},
+            }))
+        finally:
+            reset_current_request_id(request_token)
+        assert offline_search.events[-1].summary is not None
+        assert any(branch.branch.owner.workspace_id == remote_backend_workspace_id and branch.state == "failed"
+                   for branch in offline_search.events[-1].summary.branches)
+
     finally:
         if context_transport is not None:
             await context_transport.aclose()

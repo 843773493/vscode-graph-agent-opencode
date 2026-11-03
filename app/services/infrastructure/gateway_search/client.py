@@ -9,7 +9,10 @@ import httpx
 from httpx_sse import EventSource
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
-from app.schemas.gateway.search import GatewayWorkspaceDiscoveryResultsDTO
+from app.schemas.gateway.search import (
+    GatewaySearchScopeDTO,
+    GatewayWorkspaceDiscoveryResultsDTO,
+)
 from app.schemas.search_federation import (
     FederatedSearchBranchDTO,
     FederatedSearchBranchKeyDTO,
@@ -20,6 +23,61 @@ from app.services.business.session_navigation.name_search_budget import (
     NAME_SEARCH_MAX_SECONDS,
 )
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+
+
+class GatewaySearchEventValidator:
+    """SSE 与 JSON relay 共用事件顺序、目标归属和唯一终态合同。"""
+
+    def __init__(self, request: FederatedSearchRequest, *, request_id: str) -> None:
+        self.request = request
+        self.request_id = request_id
+        self.scope: GatewaySearchScopeDTO | None = None
+        self.terminals: dict[FederatedSearchBranchKeyDTO, FederatedSearchBranchDTO] = {}
+        self.pages: set[FederatedSearchBranchKeyDTO] = set()
+        self.ended = False
+        self.sequence = 0
+
+    def accept(self, event: FederatedSearchEventDTO) -> None:
+        self.sequence += 1
+        if self.ended or event.sequence != self.sequence or event.request_id != self.request_id:
+            raise RuntimeError("Gateway 搜索事件顺序、request_id 或唯一终态无效")
+        if event.type == "scope":
+            if self.sequence != 1 or event.scope is None:
+                raise RuntimeError("Gateway 搜索范围必须先于领域页且只发布一次")
+            self.scope = event.scope.scope
+            selection = self.request.scope
+            expected = ((selection.origin,) if selection.mode == "origin" else selection.owners)
+            if (selection.mode in {"origin", "selected"} and set(self.scope.owners) != set(expected)) or (
+                selection.mode == "resume" and self.scope != selection.scope
+            ):
+                raise RuntimeError("Gateway 搜索实际范围与明确选择不一致")
+        elif self.scope is None:
+            raise RuntimeError("Gateway 搜索缺少实际范围")
+        elif event.branch is not None:
+            branch = event.branch.branch
+            if branch.owner not in self.scope.owners or branch in self.terminals:
+                raise RuntimeError("Gateway 搜索分支归属错误或终态后继续发布")
+            if event.type == "page":
+                page = event.page
+                if page is None or branch in self.pages or (page.workspace_id, page.category, page.operation) != (
+                    branch.owner.workspace_id, branch.category, branch.operation,
+                ) or event.branch.returned_results != page.result_count:
+                    raise RuntimeError("Gateway 搜索领域页归属、计数或重复发布无效")
+                self.pages.add(branch)
+            else:
+                self.terminals[branch] = event.branch
+        elif event.summary is not None:
+            summary = event.summary
+            if {item.branch: item for item in summary.branches} != self.terminals or (
+                len(summary.branches) != len(self.terminals)
+                or summary.returned_results != sum(item.returned_results for item in self.terminals.values())
+            ):
+                raise RuntimeError("Gateway 搜索汇总与已结算分支不一致")
+            self.ended = True
+
+    def finish(self) -> None:
+        if not self.ended:
+            raise RuntimeError("Gateway 搜索流在最终汇总前断开；已交付分支须按原范围独立续查")
 
 
 class GatewayResourceSearchClient:
@@ -79,11 +137,7 @@ class GatewayResourceSearchClient:
         if deadline <= time.time():
             raise TimeoutError("Gateway 搜索期限已到，不发起请求")
         headers = {**self._headers(request_id), "Accept": "text/event-stream"}
-        scope = None
-        terminals: dict[FederatedSearchBranchKeyDTO, FederatedSearchBranchDTO] = {}
-        pages: set[FederatedSearchBranchKeyDTO] = set()
-        ended = False
-        sequence = 0
+        lifecycle = GatewaySearchEventValidator(request, request_id=request_id)
         async with asyncio.timeout(max(0, deadline - time.time())):
             async with self._http.stream(
                 "POST", self._connection.resolve_gateway_url() + "/api/gateway/search/agent",
@@ -98,42 +152,8 @@ class GatewayResourceSearchClient:
                         if frame.event != "search":
                             raise RuntimeError(f"Gateway 搜索事件类型无效: {frame.event!r}")
                         event = FederatedSearchEventDTO.model_validate_json(frame.data)
-                        sequence += 1
-                        if ended or event.sequence != sequence or frame.id != str(sequence) or event.request_id != request_id:
-                            raise RuntimeError("Gateway 搜索事件顺序、request_id 或唯一终态无效")
-                        if event.type == "scope":
-                            if sequence != 1 or event.scope is None:
-                                raise RuntimeError("Gateway 搜索范围必须先于领域页且只发布一次")
-                            scope = event.scope.scope
-                            selection = request.scope
-                            expected = ((selection.origin,) if selection.mode == "origin" else selection.owners)
-                            if (selection.mode in {"origin", "selected"} and set(scope.owners) != set(expected)) or (
-                                selection.mode == "resume" and scope != selection.scope
-                            ):
-                                raise RuntimeError("Gateway 搜索实际范围与明确选择不一致")
-                        elif scope is None:
-                            raise RuntimeError("Gateway 搜索缺少实际范围")
-                        elif event.branch is not None:
-                            branch = event.branch.branch
-                            if branch.owner not in scope.owners or branch in terminals:
-                                raise RuntimeError("Gateway 搜索分支归属错误或终态后继续发布")
-                            if event.type == "page":
-                                page = event.page
-                                if page is None or branch in pages or (page.workspace_id, page.category, page.operation) != (
-                                    branch.owner.workspace_id, branch.category, branch.operation,
-                                ) or event.branch.returned_results != page.result_count:
-                                    raise RuntimeError("Gateway 搜索领域页归属、计数或重复发布无效")
-                                pages.add(branch)
-                            else:
-                                terminals[branch] = event.branch
-                        elif event.summary is not None:
-                            summary = event.summary
-                            if {item.branch: item for item in summary.branches} != terminals or (
-                                len(summary.branches) != len(terminals)
-                                or summary.returned_results != sum(item.returned_results for item in terminals.values())
-                            ):
-                                raise RuntimeError("Gateway 搜索汇总与已结算分支不一致")
-                            ended = True
+                        if frame.id != str(event.sequence):
+                            raise RuntimeError("Gateway 搜索 SSE id 与事件序号不一致")
+                        lifecycle.accept(event)
                         yield event
-        if not ended:
-            raise RuntimeError("Gateway 搜索流在最终汇总前断开；已交付分支须按原范围独立续查")
+        lifecycle.finish()

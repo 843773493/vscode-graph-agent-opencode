@@ -825,10 +825,10 @@ class FederationRpcService:
                 raise FederationError(FEDERATION_MALFORMED_FRAME, "导航 URI/origin 与 read grant 不一致")
             frozen_target = target.to_payload()
         elif isinstance(target, ContextGrantTarget):
-            from app.schemas.internal_v2.communication import ContextQueryRequest
+            from app.schemas.internal_v2.communication import CONTEXT_QUERY_ADAPTER
             if operation != "read":
                 raise FederationError(FEDERATION_GRANT_KIND_MISMATCH, "资源目标只接受 read capability")
-            query = ContextQueryRequest.model_validate(body)
+            query = CONTEXT_QUERY_ADAPTER.validate_python(body)
             if query.resource_target != target or query.source_gateway_id != origin:
                 raise FederationError(FEDERATION_MALFORMED_FRAME, "上下文查询资源或 origin 与 read grant 不一致")
             frozen_target = target.to_payload()

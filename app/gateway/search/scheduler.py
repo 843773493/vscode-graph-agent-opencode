@@ -30,6 +30,11 @@ from app.schemas.search_federation import (
     FederatedSearchSourceDTO,
     FederatedSearchSummaryDTO,
 )
+from app.services.business.session_context_resource import (
+    parse_session_context_ref,
+    session_resource_identity,
+    workspace_session_inventory_identity,
+)
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 
 
@@ -188,6 +193,23 @@ async def search_events(
                         job.key.owner.workspace_id, job.key.category, job.key.operation, job.request.contract_version,
                     ):
                         raise SearchBranchError("invalid_response", "搜索 Provider 返回了其它 owner／类别／版本的页")
+                    if page.context is not None:
+                        context = page.context
+                        references = [(context, "workspace_sessions"), *((match, "session") for match in context.matches)]
+                        for reference, kind in references:
+                            resource = parse_session_context_ref(resource_identity=reference.resource_identity,
+                                uri=reference.uri, scope=reference.scope, local_gateway_id=job.key.owner.gateway_id)
+                            if resource.scope != "workspace" or resource.scope_id != job.key.owner.workspace_id or (
+                                resource.gateway_authority is not None or resource.kind != kind
+                            ):
+                                raise SearchBranchError("invalid_response", "上下文搜索返回了其它资源或 owner 的身份")
+                            if kind == "workspace_sessions":
+                                expected_identity = workspace_session_inventory_identity(job.key.owner.workspace_id)
+                            else:
+                                assert resource.session_id is not None
+                                expected_identity = session_resource_identity(job.key.owner.workspace_id, resource.session_id)
+                            if resource.resource_identity != expected_identity:
+                                raise SearchBranchError("invalid_response", "上下文搜索的资源身份与规范 URI 不一致")
                     count = page.result_count
                     if (page.files is not None and job.request.file is not None and job.request.file.uri is not None
                         and page.files.node.uri != parse_resource_uri(job.request.file.uri, local_gateway_id=job.key.owner.gateway_id).display_uri):

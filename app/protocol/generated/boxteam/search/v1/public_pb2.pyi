@@ -137,3 +137,19 @@ class FederatedSearchEventDTO(_message.Message):
     summary: FederatedSearchSummaryDTO
     source: FederatedSearchSourceDTO
     def __init__(self, sequence: _Optional[int] = ..., request_id: _Optional[str] = ..., type: _Optional[str] = ..., scope: _Optional[_Union[_public_pb2.GatewaySearchScopeResolutionDTO, _Mapping]] = ..., branch: _Optional[_Union[FederatedSearchBranchDTO, _Mapping]] = ..., page: _Optional[_Union[_public_pb2_1.WorkspaceSearchResultDTO, _Mapping]] = ..., summary: _Optional[_Union[FederatedSearchSummaryDTO, _Mapping]] = ..., source: _Optional[_Union[FederatedSearchSourceDTO, _Mapping]] = ...) -> None: ...
+
+class GatewayContextSearchRequest(_message.Message):
+    __slots__ = ("source_gateway_id", "resource_target", "resource_search")
+    SOURCE_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_TARGET_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_SEARCH_FIELD_NUMBER: _ClassVar[int]
+    source_gateway_id: str
+    resource_target: _public_pb2_1.ContextGrantTarget
+    resource_search: FederatedSearchRequest
+    def __init__(self, source_gateway_id: _Optional[str] = ..., resource_target: _Optional[_Union[_public_pb2_1.ContextGrantTarget, _Mapping]] = ..., resource_search: _Optional[_Union[FederatedSearchRequest, _Mapping]] = ...) -> None: ...
+
+class GatewayContextSearchResultDTO(_message.Message):
+    __slots__ = ("events",)
+    EVENTS_FIELD_NUMBER: _ClassVar[int]
+    events: _containers.RepeatedCompositeFieldContainer[FederatedSearchEventDTO]
+    def __init__(self, events: _Optional[_Iterable[_Union[FederatedSearchEventDTO, _Mapping]]] = ...) -> None: ...

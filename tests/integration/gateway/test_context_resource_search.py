@@ -20,8 +20,12 @@ from app.schemas.internal_v2.session_context import (
 from app.schemas.search_federation import (
     FederatedSearchEventDTO,
     FederatedSearchRequest,
+    GatewayContextSearchRequest,
+    GatewayContextSearchResultDTO,
 )
 from app.services.business.session_context_resource import (
+    gateway_session_inventory_identity,
+    gateway_session_inventory_uri,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
@@ -88,6 +92,26 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
             actual[request_id] = [event.model_dump(mode="json") for event in events]
             return events
 
+        async def gateway_context_search(payload: dict, request_id: str) -> GatewayContextSearchResultDTO:
+            gateway_token = set_current_gateway_id(gateway_id)
+            request_token = set_current_request_id(request_id)
+            try:
+                result = await transport.search_gateway_context(GatewayContextSearchRequest.model_validate({
+                    "source_gateway_id": gateway_id,
+                    "resource_target": {"gateway_id": gateway_id,
+                        "resource_identity": str(gateway_session_inventory_identity(gateway_id)),
+                        "uri": gateway_session_inventory_uri(gateway_id), "scope": "gateway"},
+                    "resource_search": payload,
+                }))
+            finally:
+                reset_current_request_id(request_token)
+                reset_current_gateway_id(gateway_token)
+            actual[request_id] = result.model_dump(mode="json")
+            assert {event.request_id for event in result.events} == {request_id}
+            return result
+
+        gateway_first = await gateway_context_search({"scope": {"mode": "all"}, "queries": [query]}, "req_gateway_context_first")
+        gateway_page, = [event.page for event in gateway_first.events if event.type == "page"]
         first = await search({"scope": {"mode": "origin", "origin": owner}, "queries": [query]}, "req_context_first")
         page, = [event.page for event in first if event.type == "page"]
         assert page is not None and page.context is not None and page.result_count == 1
@@ -98,6 +122,7 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         }, headers={"X-BoxTeam-Gateway-Id": gateway_id})
         assert original.status_code == 200, original.text
         assert page.context == SessionContextSearchResultDTO.model_validate(original.json()["data"])
+        assert gateway_page is not None and gateway_page.context == page.context
         hit, = page.context.matches
         assert hit.source == "effective_context" and hit.record_index is not None and hit.uri.endswith("/" + session_id)
         gateway_context = set_current_gateway_id(gateway_id)
@@ -125,6 +150,14 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         assert next_hit.resource_identity == hit.resource_identity and next_hit.record_index != hit.record_index
         assert following.context.revision == page.context.revision
         assert resumed[-1].summary is not None and resumed[-1].summary.state == "complete"
+        assert gateway_first.events[-1].summary is not None and gateway_first.events[0].scope is not None
+        gateway_branch, = gateway_first.events[-1].summary.branches
+        gateway_resumed = await gateway_context_search({
+            "scope": {"mode": "resume", "scope": gateway_first.events[0].scope.scope.model_dump(mode="json")},
+            "queries": [query], "continuations": [{"branch": gateway_branch.branch.model_dump(mode="json"), "cursor": gateway_branch.cursor}],
+        }, "req_gateway_context_resume")
+        gateway_following, = [event.page for event in gateway_resumed.events if event.type == "page"]
+        assert gateway_following is not None and gateway_following.context == following.context
         for source in ("session_catalog", "session_information"):
             selected = {**query, "query": "Context Search Execution", "limit": 50, "context": {"sources": [source]}}
             response = await search({"scope": {"mode": "origin", "origin": owner}, "queries": [selected]}, f"req_context_{source}")
@@ -173,6 +206,37 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         assert len(case.requests()) == 3
         actual["tool_events"] = [event.model_dump(mode="json") for event in tool_events]
         actual["tool_final_wire"] = final_wire
+        # 同一执行入口验证 search_context 的 Gateway inventory，不让测试手工写工具结果。
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
+            await acquire_gateway_guest(ui)
+            ui.headers["X-BoxTeam-Workspace-Id"] = route
+            gateway_caller = await create_session(ui, "Gateway Context Tool Caller")
+            gateway_calls = await case.plan(gateway_caller, [
+                _tool_reply("invoke_extension_tool", {"tool_name": "search_context", "arguments": {
+                    "resource_identity": str(gateway_session_inventory_identity(gateway_id)),
+                    "uri": gateway_session_inventory_uri(gateway_id), "scope": "gateway",
+                    "query": "assistant scope-proof🧪 done",
+                }}, "call_gateway_context"),
+                {"content": "GATEWAY_CONTEXT_COMPLETE"},
+            ])
+            case.client = ui
+            gateway_execution = await _send(case, gateway_caller, "从 Gateway inventory 搜索先前执行的有效上下文。")
+        case.client = original_client
+        assert isinstance(gateway_execution["job_id"], str)
+        await _job(case, gateway_execution["job_id"])
+        gateway_tool = GatewayContextSearchResultDTO.model_validate(case.tool_result(gateway_calls[0] + ":tool-call:call_gateway_context"))
+        assert gateway_tool.events[0].scope is not None and gateway_tool.events[-1].summary is not None
+        assert [item.model_dump(mode="json") for item in gateway_tool.events[0].scope.scope.owners] == [owner]
+        assert gateway_tool.events[-1].summary.state == "complete"
+        assert any(match.uri == hit.uri and match.source == "effective_context" for event in gateway_tool.events
+                   if event.page is not None and event.page.context is not None for match in event.page.context.matches)
+        gateway_wire = case.request(gateway_calls[1])
+        gateway_messages = gateway_wire["messages"]
+        assert isinstance(gateway_messages, list)
+        assert any(isinstance(message, dict) and message["role"] == "tool" and hit.uri in message["content"] for message in gateway_messages)
+        assert len(case.requests()) == 5
+        actual["gateway_tool"] = gateway_tool.model_dump(mode="json")
+        actual["gateway_final_wire"] = gateway_wire
         case.write_actual("context-search", actual)
     finally:
         case.client = original_client

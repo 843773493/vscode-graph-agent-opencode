@@ -29,6 +29,10 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
+from app.schemas.search_federation import (
+    GatewayContextSearchRequest,
+    GatewayContextSearchResultDTO,
+)
 
 
 class SessionForkTransportProtocol(Protocol):
@@ -163,9 +167,8 @@ class WorkspaceSessionContextClientProtocol(Protocol):
     ) -> SessionContextReadResultDTO: ...
 
     async def search_gateway_context(
-        self,
-        request: SessionContextSearchRequest,
-    ) -> SessionContextSearchResultDTO: ...
+        self, request: GatewayContextSearchRequest,
+    ) -> GatewayContextSearchResultDTO: ...
 
 
 class WorkspaceSessionContextTransportProtocol(Protocol):
@@ -176,5 +179,9 @@ class WorkspaceSessionContextTransportProtocol(Protocol):
     async def search_resource_context(
         self, request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO: ...
+
+    async def search_gateway_context(
+        self, request: GatewayContextSearchRequest,
+    ) -> GatewayContextSearchResultDTO: ...
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO: ...

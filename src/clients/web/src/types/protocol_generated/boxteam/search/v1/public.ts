@@ -11,6 +11,7 @@ import {
   GatewaySearchWorkspaceOwnerDTO,
 } from "../../gateway/v1/public.js";
 import {
+  ContextGrantTarget,
   WorkspaceContextSearchOptionsDTO,
   WorkspaceFileSearchTargetDTO,
   WorkspaceSearchResultDTO,
@@ -91,6 +92,17 @@ export interface FederatedSearchEventDTO {
   page: WorkspaceSearchResultDTO | undefined;
   summary: FederatedSearchSummaryDTO | undefined;
   source: FederatedSearchSourceDTO | undefined;
+}
+
+/** 复用原 Gateway inventory 的 read 授权，不新增资源种类或全局 cursor。 */
+export interface GatewayContextSearchRequest {
+  source_gateway_id: string;
+  resource_target: ContextGrantTarget | undefined;
+  resource_search: FederatedSearchRequest | undefined;
+}
+
+export interface GatewayContextSearchResultDTO {
+  events: FederatedSearchEventDTO[];
 }
 
 function createBaseFederatedFileSearchTargetDTO(): FederatedFileSearchTargetDTO {
@@ -605,6 +617,84 @@ export const FederatedSearchEventDTO: MessageFns<FederatedSearchEventDTO> = {
     message.source = (object.source !== undefined && object.source !== null)
       ? FederatedSearchSourceDTO.fromPartial(object.source)
       : undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayContextSearchRequest(): GatewayContextSearchRequest {
+  return { source_gateway_id: "", resource_target: undefined, resource_search: undefined };
+}
+
+export const GatewayContextSearchRequest: MessageFns<GatewayContextSearchRequest> = {
+  fromJSON(object: any): GatewayContextSearchRequest {
+    return {
+      source_gateway_id: isSet(object.source_gateway_id) ? globalThis.String(object.source_gateway_id) : "",
+      resource_target: isSet(object.resource_target) ? ContextGrantTarget.fromJSON(object.resource_target) : undefined,
+      resource_search: isSet(object.resource_search)
+        ? FederatedSearchRequest.fromJSON(object.resource_search)
+        : undefined,
+    };
+  },
+
+  toJSON(message: GatewayContextSearchRequest): unknown {
+    const obj: any = {};
+    if (message.source_gateway_id !== "") {
+      obj.source_gateway_id = message.source_gateway_id;
+    }
+    if (message.resource_target !== undefined) {
+      obj.resource_target = ContextGrantTarget.toJSON(message.resource_target);
+    }
+    if (message.resource_search !== undefined) {
+      obj.resource_search = FederatedSearchRequest.toJSON(message.resource_search);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayContextSearchRequest>, I>>(base?: I): GatewayContextSearchRequest {
+    return GatewayContextSearchRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayContextSearchRequest>, I>>(object: I): GatewayContextSearchRequest {
+    const message = createBaseGatewayContextSearchRequest();
+    message.source_gateway_id = object.source_gateway_id ?? "";
+    message.resource_target = (object.resource_target !== undefined && object.resource_target !== null)
+      ? ContextGrantTarget.fromPartial(object.resource_target)
+      : undefined;
+    message.resource_search = (object.resource_search !== undefined && object.resource_search !== null)
+      ? FederatedSearchRequest.fromPartial(object.resource_search)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayContextSearchResultDTO(): GatewayContextSearchResultDTO {
+  return { events: [] };
+}
+
+export const GatewayContextSearchResultDTO: MessageFns<GatewayContextSearchResultDTO> = {
+  fromJSON(object: any): GatewayContextSearchResultDTO {
+    return {
+      events: globalThis.Array.isArray(object?.events)
+        ? object.events.map((e: any) => FederatedSearchEventDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewayContextSearchResultDTO): unknown {
+    const obj: any = {};
+    if (message.events?.length) {
+      obj.events = message.events.map((e) => FederatedSearchEventDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayContextSearchResultDTO>, I>>(base?: I): GatewayContextSearchResultDTO {
+    return GatewayContextSearchResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayContextSearchResultDTO>, I>>(
+    object: I,
+  ): GatewayContextSearchResultDTO {
+    const message = createBaseGatewayContextSearchResultDTO();
+    message.events = object.events?.map((e) => FederatedSearchEventDTO.fromPartial(e)) || [];
     return message;
   },
 };

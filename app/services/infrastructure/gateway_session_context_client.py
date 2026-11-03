@@ -30,6 +30,10 @@ from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
 )
+from app.schemas.search_federation import (
+    GatewayContextSearchRequest,
+    GatewayContextSearchResultDTO,
+)
 from app.services.business.session_context_resource import parse_session_context_ref
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import (
@@ -38,6 +42,7 @@ from app.services.infrastructure.gateway_client_common import (
 )
 from app.services.infrastructure.gateway_search.client import (
     GatewayResourceSearchClient,
+    GatewaySearchEventValidator,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     RESOURCE_URI_RESOLVE_REASON_CODES,
@@ -95,6 +100,24 @@ class GatewaySessionContextClient:
         self, request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO:
         return await self._resource_query(request, SessionContextSearchResultDTO)
+
+    async def search_gateway_context(
+        self, request: GatewayContextSearchRequest,
+    ) -> GatewayContextSearchResultDTO:
+        if request.source_gateway_id != require_current_gateway_id("Gateway 上下文搜索 relay"):
+            raise ValueError("Gateway 上下文搜索 origin 与当前 Gateway 不一致")
+        result = await self._request(
+            "POST", "/api/gateway/federation/relay", response_type=GatewayContextSearchResultDTO,
+            json_body={"operation": "read", "resource_target": request.resource_target.to_payload(),
+                       "body": request.model_dump(mode="json")},
+        )
+        lifecycle = GatewaySearchEventValidator(request.resource_search, request_id=require_current_request_id("Gateway 上下文搜索 relay"))
+        for event in result.events:
+            lifecycle.accept(event)
+        lifecycle.finish()
+        if lifecycle.scope is None or lifecycle.scope.gateway_id != request.resource_target.gateway_id:
+            raise RuntimeError("Gateway 上下文搜索回执归属错误")
+        return result
 
     async def _resource_query(
         self, request: SessionContextReadRequest | SessionContextSearchRequest,
