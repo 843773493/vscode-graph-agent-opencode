@@ -60,6 +60,9 @@ class RegistryDtosMixin:
                 runtime_service_urls = (
                     dict(runtime.service_urls) if runtime is not None else {}
                 )
+                if target.connection_kind == "local" and not target.managed and target.backend_url:
+                    # 外部编排没有 Gateway runtime，列表与原代理复用已登记路由。
+                    runtime_service_urls["workspace_api"] = self.resolve_service_url(target.workspace_id, "workspace_api")
                 if target.connection_kind == "remote_gateway":
                     for service in (
                         "workspace_api",

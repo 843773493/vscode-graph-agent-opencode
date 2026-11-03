@@ -46,6 +46,34 @@ def backend_dto_case(tmp_path: Path, managed_backend_factory, health_registry_st
 
 
 @pytest.mark.asyncio
+async def test_external_registered_route_is_discoverable_without_health_requests(
+    tmp_path: Path, health_registry_state: GatewayStateStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "external-gateway.json", state_store=health_registry_state)
+    client_type = httpx.AsyncClient
+
+    def unexpected_request(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"不检查健康的列表不应发请求: {request.url}")
+
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(unexpected_request),
+    ))
+    try:
+        for workspace, backend in (("external", "http://127.0.0.1:41000"), ("unconnected", "")):
+            registry.upsert(WorkspaceTarget(
+                workspace_id=workspace, name=workspace, root_path=str(tmp_path / workspace),
+                connection_kind="local", managed=False, backend_url=backend,
+                backend_workspace_id="00000000-0000-4000-8000-000000000001",
+            ), activate=False)
+        items = {item.workspace_id: item for item in await registry.list_dtos(check_health=False)}
+        assert items["external"].status == items["external"].services["workspace_api"].status == "ready"
+        assert registry.resolve_service_url("external", "workspace_api") == "http://127.0.0.1:41000"
+        assert items["unconnected"].status == "offline"
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
 async def test_backend_dtos_probe_published_contract_inside_lifecycle_lock(
     backend_dto_case, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
