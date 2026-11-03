@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -117,6 +118,9 @@ async def test_packaged_electron_chat_files_and_restart_cache(
     runtime = context.runtime_root_for_node(request.node.nodeid)
     artifacts = context.artifacts_dir
     workspace = Path(integration_workspace_root_path)
+    (workspace / "native-cache.png").write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+    ))
     ports = integration_port_block_for_file(Path(request.node.path))
     temporary = runtime / "tmp"
     node = shutil.which("node")
@@ -172,7 +176,8 @@ async def test_packaged_electron_chat_files_and_restart_cache(
         assert result["storageErrors"] == []
         assert result["proxyErrors"] == []
         for name in ("packagedAsar", "noRendererNode", "nativeClose", "stableOrigin",
-                     "cacheBeforeSync", "cacheReadOnly", "liveAfterSync", "profileIsolation", "fileSaved"):
+                     "cacheBeforeSync", "cacheReadOnly", "liveAfterSync", "profileIsolation", "fileSaved",
+                     "imageRevalidated", "imageCacheSurvivesRestart", "imageProfileIsolation"):
             assert result["checks"][name] is True, name
         owner = result["owner"]
         assert owner["workspace_id"] == backend.workspace_id

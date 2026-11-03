@@ -10,6 +10,7 @@ import httpProxy from 'http-proxy';
 import { _electron, expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 import { testControl } from '../../../support/e2e_control/browser_client.mjs';
+import { observeImageCache } from './image_cache.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -31,6 +32,7 @@ const draft = 'ELECTRON_PACKAGED_UNSENT_DRAFT';
 const pageErrors = [], consoleErrors = [], proxyErrors = [], heldRequests = [], launches = [], receipts = [];
 const storageErrors = () => consoleErrors.filter(entry => /IndexedDB|database.*closed/i.test(entry.text));
 const checks = {};
+const imageReads = [];
 let owner, app, page, delay = false, release = () => {}, failure;
 let gate = Promise.resolve();
 let proxyOrigin;
@@ -158,6 +160,7 @@ try {
   await once(server, 'listening');
   proxyOrigin = `http://127.0.0.1:${server.address().port}`;
   await launch(profile);
+  let probeImage = await observeImageCache(page, imageReads);
   checks.packagedAsar = true;
   const origin = new URL(page.url()).origin;
   for (const path of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) {
@@ -206,6 +209,8 @@ try {
   await expect(thread.locator('.chat-stream-shell')).toContainText(answer, { timeout: 60_000 });
 
   const listing = (await api(page, '/api/v1/workspace/files')).data;
+  const imageOwner = { gatewayId: (await api(page, '/api/gateway/health')).data.gateway_id,
+    workspaceId: owner.workspace_id, rootUri: listing.path };
   const listed = listing.items.find(item => item.name === 'README.md');
   assert.ok(listed, '测试工作区必须提供 README.md');
   const fileUri = listed.path;
@@ -247,6 +252,10 @@ try {
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.closeActiveEditor'));
   thread = threadSurface(page);
   await expect(thread.getByTestId('composer-input')).toBeVisible();
+  const coldImage = await probeImage(imageOwner, 'cold', 200);
+  const warmImage = await probeImage(imageOwner, 'warm', 304);
+  assert.equal(warmImage.response.etag, coldImage.response.etag);
+  checks.imageRevalidated = true;
   await thread.getByTestId('composer-input').fill(draft);
   await page.screenshot({ path: join(artifacts, 'native-synced.png') });
   await closeNative();
@@ -256,6 +265,7 @@ try {
 
   holdBootstrap();
   await launch(profile);
+  probeImage = await observeImageCache(page, imageReads);
   assert.equal(new URL(page.url()).origin, origin);
   checks.stableOrigin = true;
   thread = threadSurface(page);
@@ -280,11 +290,16 @@ try {
   await expect(thread.getByTestId('composer-input')).toHaveValue(draft);
   await expect(thread.locator('.chat-stream-shell')).toContainText(answer);
   checks.liveAfterSync = true;
+  const restartedImage = await probeImage(imageOwner, 'restart', 304);
+  assert.equal(restartedImage.response.etag, coldImage.response.etag);
+  assert.notEqual(restartedImage.response['x-request-id'], warmImage.response['x-request-id']);
+  checks.imageCacheSurvivesRestart = true;
   await closeNative();
 
   const previousHeld = heldRequests.length;
   holdBootstrap();
   await launch(join(runtime, 'profile-b'));
+  probeImage = await observeImageCache(page, imageReads);
   await page.locator(`button[data-session-id="${owner.session_id}"]`).dblclick();
   thread = threadSurface(page);
   await expect(thread).toBeVisible();
@@ -297,13 +312,15 @@ try {
   await expect(thread.locator('.chat-stream-shell')).toContainText(answer);
   await expect(thread.getByTestId('composer-input')).toHaveValue('');
   checks.profileIsolation = true;
+  await probeImage(imageOwner, 'independent-profile', 200);
+  checks.imageProfileIsolation = true;
   await closeNative();
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(storageErrors(), [], '正常关窗与重启不能出现持久存储写入错误');
   assert.deepEqual(proxyErrors, []);
   await writeFile(join(artifacts, 'native-result.json'), JSON.stringify({ classification: 'Integration',
     checks, owner, modelCallIds, jobId: accepted.job_id, file, preferences, launches, heldRequests,
-    receipts, pageErrors, consoleErrors, storageErrors: storageErrors(), proxyErrors }, null, 2));
+    receipts, imageReads, pageErrors, consoleErrors, storageErrors: storageErrors(), proxyErrors }, null, 2));
 } catch (error) {
   failure = error;
 } finally {
@@ -316,7 +333,7 @@ try {
   }
   if (failure) await writeFile(join(artifacts, 'native-diagnostics.json'), JSON.stringify({ error: String(failure),
     pageUrl: page?.url(), checks, owner, launches, heldRequests, receipts, pageErrors,
-    consoleErrors, storageErrors: storageErrors(), proxyErrors }, null, 2));
+    consoleErrors, imageReads, storageErrors: storageErrors(), proxyErrors }, null, 2));
   try { await scope.close(); } catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, '便携 Electron 原生回归失败');
 }

@@ -2,6 +2,8 @@
 
 真实 Electron 原生容器与共享 Workbench、Gateway、工作区后端的集成回归。`test_packaged_workbench.py` 构建并校验便携归档，`packaged_workbench.mjs` 从解压后的 ASAR 产物操作会话、虚拟文件和重启恢复；`seed_electron_cache.mjs` 通过当前官方下载库校验并导入已有运行时 ZIP。
 
+`image_cache.mjs` 在同一 ASAR 原图片编辑器上通过 CDP 核验首次200、再次及正常退出重启后的304／零正文和独立profile隔离，只记录选定条件头、request_id和字节量，不采集凭据。图片来自本测试隔离工作区，不替换图片Pane，不调用缓存flush或文件系统IPC；此证据不覆盖原Webview缓存。
+
 # 可修改内容
 
 - Linux 原生 Electron 的产物构建、窗口操作、独立 profile、固定页面来源和缓存恢复验收。
