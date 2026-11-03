@@ -37,6 +37,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.tool_output_store import ToolOutputStore
 
 
 class RolloutCheckpointRuntime:
@@ -55,6 +56,7 @@ class RolloutCheckpointRuntime:
         node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig]
         | None = None,
         attachment_store: AttachmentBlobStore | None = None,
+        tool_outputs: ToolOutputStore | None = None,
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
         self.serde = serde or JsonPlusSerializer()
@@ -69,7 +71,7 @@ class RolloutCheckpointRuntime:
             storage=self.storage,
         )
         self.context_reader = RolloutContextReader(self.storage)
-        self.history_reader = RolloutHistoryReader(self.context_reader)
+        self.history_reader = RolloutHistoryReader(self.context_reader, tool_outputs=tool_outputs)
         self.context_plan_detail_store = ContextPlanDetailStore(
             self.sessions_dir,
         )

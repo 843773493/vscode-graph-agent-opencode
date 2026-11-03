@@ -1,6 +1,5 @@
 import type { APIResponse, CursorPage } from "../types/backend";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
-import { JsonResponseBodyError, parseJsonResponse } from "../runtime/jsonResponseParser";
 import { abortReason, awaitWithAbort } from "../utils/abortable";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
@@ -62,7 +61,6 @@ interface GatewayResponseInit extends RequestInit {
 
 type RequestJsonInit = GatewayResponseInit & {
   timeoutMs?: number;
-  parseInWorkerAboveBytes?: number;
   onResponse?: (requestId: string | null) => void;
 };
 
@@ -538,7 +536,6 @@ export async function requestJson<T>(
 ): Promise<T> {
   const {
     timeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
-    parseInWorkerAboveBytes = null,
     onResponse,
     headers,
     ...fetchInit
@@ -563,7 +560,6 @@ export async function requestJson<T>(
         : await parseJsonResponseOrThrowDiagnostic<T>(
           response,
           path,
-          parseInWorkerAboveBytes,
           signal,
         );
     },
@@ -577,18 +573,14 @@ export async function requestJson<T>(
 async function parseJsonResponseOrThrowDiagnostic<T>(
   response: Response,
   path: string,
-  parseInWorkerAboveBytes: number | null,
   signal: AbortSignal | undefined,
 ): Promise<T> {
+  const text = await awaitWithAbort(response.text(), signal);
+  if (signal?.aborted) throw abortReason(signal);
   try {
-    return await parseJsonResponse<T>(response, parseInWorkerAboveBytes, signal);
-  } catch (error) {
-    if (error instanceof JsonResponseBodyError) {
-      throw new Error(
-        jsonBodyDiagnosticMessage(response, path, error.bodyPrefix),
-      );
-    }
-    throw error;
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(jsonBodyDiagnosticMessage(response, path, text.slice(0, 512)));
   }
 }
 

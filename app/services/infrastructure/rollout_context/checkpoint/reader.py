@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Literal
 
 from langchain_core.messages import BaseMessage
 
@@ -158,10 +159,12 @@ class RolloutContextReader:
     def read_message_search_candidates(
         self, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
         lower_ordinal: int, limit: int, deadline: float, item_id: str | None = None,
+        category: Literal["message", "tool_result"] = "message",
     ) -> list[tuple[int, str, str, int]]:
         return message_search_candidates(
             self._storage.storage._snapshot_connection(snapshot), self.context_view_id(chain),
             lower_ordinal=lower_ordinal, limit=limit, deadline=deadline, item_id=item_id,
+            category=category,
         )
 
     def resolve_turn_anchor(

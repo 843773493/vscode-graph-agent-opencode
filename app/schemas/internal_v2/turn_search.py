@@ -15,6 +15,7 @@ class TurnMessageSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=512)
     limit: int = Field(default=50, ge=1, le=100)
     cursor: str | None = Field(default=None, min_length=1, max_length=16384)
+    category: Literal["message", "tool_result"] = "message"
 
 
 class TurnMessageReferenceDTO(BaseModel):
@@ -26,6 +27,7 @@ class TurnMessageReferenceDTO(BaseModel):
     content_hash: str = Field(min_length=1, max_length=256)
     start_codepoint: int = Field(ge=0)
     end_codepoint: int = Field(ge=1)
+    category: Literal["message", "tool_result"] = "message"
 
     @model_validator(mode="after")
     def validate_range(self) -> "TurnMessageReferenceDTO":
@@ -37,10 +39,12 @@ class TurnMessageReferenceDTO(BaseModel):
 class TurnMessageMatchDTO(BaseModel):
     turn_id: str
     message_id: str | None
-    role: Literal["user", "assistant"]
+    role: Literal["user", "assistant", "tool"]
     reference: TurnMessageReferenceDTO
     preview: str
     preview_start_codepoint: int = Field(ge=0)
+    tool_call_id: str | None = None
+    tool_name: str | None = None
 
 
 class TurnMessageLocationDTO(BaseModel):
@@ -48,9 +52,11 @@ class TurnMessageLocationDTO(BaseModel):
 
     turn_id: str
     message_id: str | None
-    role: Literal["user", "assistant"]
+    role: Literal["user", "assistant", "tool"]
     reference: TurnMessageReferenceDTO
     content: str
+    tool_call_id: str | None = None
+    tool_name: str | None = None
 
 
 class TurnMessageSearchResultsDTO(BaseModel):

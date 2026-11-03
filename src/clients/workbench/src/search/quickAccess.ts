@@ -39,7 +39,7 @@ import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
 import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
-import type { NameSearchCategory, SearchCategory } from './quickAccessQuery.js';
+import type { NameSearchCategory, ContentSearchCategory, SearchCategory } from './quickAccessQuery.js';
 import { querySearchBranches } from './quickAccessBranches.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
@@ -66,7 +66,7 @@ interface AccessRun {
   invalidated?: boolean;
 }
 interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchInvocationOptions {
-  contentCategory?: '会话消息';
+  contentCategory?: ContentSearchCategory;
   searchGroup?: number;
   searchRestore?: { query: string; activeId?: string };
 }
@@ -254,17 +254,18 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private contentCategories(run: AccessRun, filter: string): ResourcePick[] {
-    const select = (prefix: string, category?: '会话消息') => {
+    const select = (prefix: string, category?: ContentSearchCategory) => {
       this.assertAccess(run);
       run.picker.hide();
       const providerOptions: AccessOptions = { ...run.options, contentCategory: category, searchOwners: run.owners, searchGroup: run.group };
       this.quickInput.quickAccess.show(prefix + filter, { preserveValue: true, providerOptions });
     };
-    // TODO：工具结果、LLM 请求及 Trace／运行日志尚待各自 owner 的正文查询与定位切片。
+    // TODO：LLM 请求及 Trace／运行日志尚待各自 owner 的正文查询与定位切片。
     return [
       { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child', accept: () => select('content ', '会话消息') },
+      { id: 'content-category-tool', label: '工具结果', description: 'canonical 结果及不可变完整输出 · 不重放工具', accept: () => select('content ', '工具结果') },
       { id: 'content-category-file', label: '文件', description: '转到 % 文件内容搜索，保留所选工作区', accept: () => select('%') },
-      ...['工具结果', 'LLM 请求记录', 'Trace／运行日志'].map(label => ({ id: `content-category-pending-${label}`, label: `${label} · 尚未接入` })),
+      ...['LLM 请求记录', 'Trace／运行日志'].map(label => ({ id: `content-category-pending-${label}`, label: `${label} · 尚未接入` })),
     ];
   }
 

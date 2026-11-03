@@ -232,7 +232,6 @@ describe("requestJson 请求取消", () => {
 
     const pending = requestJson(port, "/api/v1/slow-download", {
       timeoutMs: 20,
-      parseInWorkerAboveBytes: 1,
       skipGatewayUserSession: true,
     });
     await downloadStarted;
@@ -546,6 +545,41 @@ describe("2xx 非 JSON 响应体的可诊断错误", () => {
     await expect(
       requestJson(port204, "/api/v1/workspace", { skipGatewayUserSession: true }),
     ).resolves.toBeUndefined();
+  });
+
+  test("大正文保留多行中文与 emoji，不依赖独立 Worker 产物", async () => {
+    const port = 49_356;
+    installWindow(port);
+    const value = "工具结果\n🧪".repeat(40_000);
+    installSuccessResponse(port, JSON.stringify({ data: { value } }));
+
+    const response = await requestJson<{ data: { value: string } }>(port, "/api/v1/large-json", {
+      skipGatewayUserSession: true,
+    });
+
+    expect(response.data.value).toBe(value);
+  });
+
+  test("正文下载完成时已取消，保留取消原因而不解析损坏正文", async () => {
+    const port = 49_357;
+    installWindow(port);
+    const controller = new AbortController();
+    const reason = new DOMException("定位已取消", "AbortError");
+    globalThis.fetch = withFetchPreconnect(async (...args: Parameters<typeof fetch>) => {
+      const path = resolveTestUrl(args[0], port).pathname;
+      if (path === "/api/gateway/auth/local-credential") return tokenResponse();
+      const response = new Response();
+      response.text = async () => {
+        controller.abort(reason);
+        return "{broken-json";
+      };
+      return response;
+    });
+
+    await expect(requestJson(port, "/api/v1/aborted-json", {
+      signal: controller.signal,
+      skipGatewayUserSession: true,
+    })).rejects.toBe(reason);
   });
 
   test("超大伪造 JSON 只带出前缀片段，不把整个载荷写进错误", async () => {

@@ -1,4 +1,5 @@
 import React from "react";
+import { MessageSearchLocationContext } from "../messageSearchLocation";
 import type { ConversationView } from "../../../types/frontend";
 import type { RenderGroup, WorkItem, ToolTimelineItem } from "../../../state/timeline/chatResponseGroups";
 import { historicalBoundaryStatus } from "../../../state/timeline/chatResponseGroups";
@@ -169,6 +170,10 @@ export function TurnActivitySummary({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const turnId = conversation.turnId;
+  const { message } = React.useContext(MessageSearchLocationContext);
+  React.useEffect(() => {
+    if (message?.role === "tool" && message.turn_id === turnId) { setOpen(true); setError(null); }
+  }, [message, turnId]);
   const boundaryStatus = historicalBoundaryStatus(conversation);
   const activityPreview = activityStatsPreview(conversation.activityStats);
   const displayPreview = boundaryStatus

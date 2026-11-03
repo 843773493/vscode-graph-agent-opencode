@@ -16,7 +16,8 @@ import { ThreadInput } from '../threadInput.js';
 import { SearchWorkspaceContext } from './scope.js';
 
 export type NameSearchCategory = '会话' | 'Thread' | '文件';
-export type SearchCategory = NameSearchCategory | '会话消息';
+export type ContentSearchCategory = '会话消息' | '工具结果';
+export type SearchCategory = NameSearchCategory | ContentSearchCategory;
 export type ResourceSearchItem = { title: string; description: string; detail: string } & (
   { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO } | { kind: 'session'; sessionId: string } | { kind: 'folder'; nodeId: string }
 );
@@ -35,8 +36,9 @@ export async function searchQuickAccessResources(category: SearchCategory, filte
   const requestIds: string[] = [];
   const onResponse = (requestId: string | null) => { if (requestId) requestIds.push(requestId); };
   if (cursor) query.set('cursor', cursor);
-  if (category === '会话消息') {
-    const page: WorkspaceMessageSearchResultsDTO = await searchWorkspaceHistoryMessages(0, { query: filter, limit: 50, cursor },
+  if (category === '会话消息' || category === '工具结果') {
+    const page: WorkspaceMessageSearchResultsDTO = await searchWorkspaceHistoryMessages(0,
+      { query: filter, limit: 50, cursor, category: category === '工具结果' ? 'tool_result' : 'message' },
       target, { signal, deadlineAt, onResponse });
     return { cursor: page.cursor ?? undefined, requestIds,
       limited: page.complete ? undefined : `本次正文覆盖受限（${page.limited_reason ?? '尚未覆盖全部历史'}）`,
@@ -45,7 +47,7 @@ export async function searchQuickAccessResources(category: SearchCategory, filte
         const input = new ThreadInput({ ...owner, routeId: '', sessionId: thread.session_id, threadId: thread.thread_id, title: thread.title });
         return { kind: 'resource', resource: input.resource, message: match,
           title: thread.title, description: match.preview.replace(/\s+/g, ' '),
-          detail: `${label} · ${thread.session_title} · ${match.role === 'user' ? '用户' : '助手'}消息 · ${thread.session_id} / ${thread.thread_id} · ${match.turn_id}` };
+          detail: `${label} · ${thread.session_title} · ${match.role === 'tool' ? `工具结果 ${match.tool_name} · ${match.tool_call_id}` : match.role === 'user' ? '用户消息' : '助手消息'} · ${thread.session_id} / ${thread.thread_id} · ${match.turn_id}` };
       }) };
   }
 

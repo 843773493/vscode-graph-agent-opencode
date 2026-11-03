@@ -89,8 +89,8 @@
 - [ ] 9.1 接入 `content ` 的类别选择与按 owner 分支组织，默认 Ctrl+P 不扫描正文；仅选类别发请求，`%` 固定文件并复用同一文件条件。
 - [x] 9.2 文件类复用第 4／5 组的唯一搜索链，提供有界片段和独立文本位置，不另建正文文件扫描器。
 - [x] 9.3 在原 canonical history owner 实现 main／child 消息正文有界查询和按命中加载，未打开及未加载页可定位，不查询前端缓存冒充完整历史。
-  - 已实现精确 Thread 及工作区范围的 canonical 正文查询、共享预算、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支发现未打开 child 并保持冷历史不物化；React 定位尚未完成，本项继续保持未勾选。
-- [ ] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
+  - 已实现精确 Thread 及工作区范围的 canonical 正文查询、共享预算、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支发现未打开 child 并保持冷历史不物化；React 原文定位及真实 Gateway／Workbench 页面验收已完成，详见本文件消息正文切片证据。
+- [x] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
 - [ ] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
 - [ ] 9.6 在原 Trace／运行日志 owner 实现分类正文查询及记录定位，区分工作区与 Gateway 日志，不越过明确范围与权限。
 - [ ] 9.7 将命中通过精确 owner、目标组与请求代际交给 React 虚拟列表／原详情加载，等待缺页与实际挂载后定位，失效记录明确报错而不回顶部。
@@ -379,3 +379,13 @@
 - 真实 Gateway／正式 Workbench／Chromium 验收通过（173.76 秒）：产品消息入口生成七轮历史并通过产品 fork 创建未打开 child，默认／未确认类别零正文请求；从旧页侧边打开、66,004 码点后的 emoji 命中、同一 Pane 第二处定位、显式旧版本参数的真实 409 与可用 Composer，以及原 `%` 转接均通过，页面错误为空。正式原件：`out/tests/integration/clients/web/quick_access/test_message_content/runs/run-4a8355028f3d/nodes/node-2c00fa0318ba/artifacts/message-content.json`。模型仅使用统一 model_stream 回放；旧版本场景只修改请求参数，不替换响应或预写业务历史。
 - 验收期间修正外部编排 Backend 的列表投影：不检查健康时复用原代理的已登记路由，不因缺少 Gateway runtime 错判 offline，也不增加探测；72 项 Gateway 回归通过，独立提交 `ad8b1b37f`。登录／模型资产身份／原列表按钮悬停等装具失败原件均保留；失败按具体阶段修正，没有放宽 owner、原文或可见性断言。
 - 后端长原文及过期引用 2 项、消息／loader／滚动定向检查、真实类型检查（18 份转换源码）、正式构建、协议一致性、OpenAPI、Ruff 和 strict 的命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/content-message-*`／`message-location-*`。未将本切片作为其它正文类别、Thread 大纲或 Electron 原生验收。
+
+
+### 2026-11-03：工具结果正文与原详情定位（9.4）
+
+- 原历史入口按显式 message／tool_result 类别读取同一 canonical view，引用和 Thread／工作区 cursor 绑定类别；JSONL 与原 ToolOutputStore 完整输出共用 8 MiB 预算，不增加搜索表或正文副本。同一逻辑结果按原 activity 的 item_sequence 取最早可见载体；around 按精确 canonical item 补原工具详情，不执行或重放工具。完整输出在同一次读取核原字节量与 SHA-256，删除及同长度改写明确拒绝旧定位。
+- React 在原 ToolRow 临时显示已核验完整输出；实际 mark 挂载后用原生 scrollIntoView 揭示限高详情内的命中，再对齐外层虚拟列表。30 项组件检查／125 条断言通过，包含内层滚动对照；HTTP 59 项／138 条断言、最新工具结果 API 两项通过，覆盖并发内联／完整结果、类别隔离、共享预算、cursor 及过期引用。消息原有五项回归亦通过；后续 catalog 身份修复由最终工具 API 和完整页面覆盖。
+- 正式 Workbench 构建、真实 Gateway／Backend／Chromium 通过（测试 239.25 秒，含独占闸门排队的包装进程 242.92 秒）：消息入口生成七轮历史，产品 fork 创建未打开 child；完整工具输出 hash、65536 码点之后的命中、内外两层可见性、类别隔离和原消息定位／过期错误／可用 Composer 全部通过，页面错误为空。正式原件：`out/tests/integration/clients/web/quick_access/test_message_content/runs/run-b9c52be618bf/nodes/node-2c00fa0318ba/artifacts/message-content.json`。精确 model_stream 回放属于 Integration，不作为真实模型服务验收。
+- 删除按体积切换新 Worker 的重复 JSON 解析链，全部调用方沿 requestJson 下载并解析；保留非法响应诊断、下载取消与解析前取消，代表载荷测量见 design 和 `json-parse-measure.json`，不宣称为 around 全链路性能收益。同步解析执行期间不可取消。
+- 最终真实类型检查含 18 份 sourceTransform 源码；协议生成一致性、OpenAPI、Buf breaking／格式、Python 静态检查与 OpenSpec strict 均有原件。最新浏览器运行期间本切片产品源码指纹未变，之后仅新增独立调用方测试及文档。结构审查无新增 findings：工具完整输出读取归原历史子目录，未把 I/O 放入 React 或 Gateway；既有大文件只扩展同一读取／装配职责。
+- 原失败与归因保留：载体身份不一致、工具详情嵌套滚动、瞬时端口冲突；另有一轮在导航准备阶段未发业务查询，补等待新 Session 的真实导航可见性及请求观测后通过；原五秒断言期限保持，隔离探针未复现该停滞，未据此宣称其唯一根因。准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/tool-content-*`。9.1、9.5～9.8、两级后端扩展及 Electron 仍未完成。

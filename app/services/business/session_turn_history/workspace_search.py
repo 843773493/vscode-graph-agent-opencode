@@ -39,6 +39,7 @@ class _WorkspaceMessageCursor(BaseModel):
     gateway_id: str
     workspace_id: str
     query: str
+    category: Literal["message", "tool_result"] = "message"
     catalog_revision: int
     node_offset: int = Field(default=0, ge=0)
     after_thread_id: str | None = None
@@ -56,7 +57,7 @@ async def search_workspace_messages(
     snapshot = await catalog.export_index(check=admission.check)
     state = _WorkspaceMessageCursor(
         gateway_id=gateway_id, workspace_id=sessions.workspace_id,
-        query=request.query, catalog_revision=snapshot.catalog_revision,
+        query=request.query, category=request.category, catalog_revision=snapshot.catalog_revision,
     )
     if request.cursor is not None:
         try:
@@ -65,7 +66,7 @@ async def search_workspace_messages(
         except (ValueError, binascii.Error, ValidationError) as error:
             raise InvalidTurnCursorError("工作区消息搜索 cursor 格式无效") from error
         if any(getattr(previous, field) != getattr(state, field)
-               for field in ("gateway_id", "workspace_id", "query")):
+               for field in ("gateway_id", "workspace_id", "query", "category")):
             raise InvalidTurnCursorError("工作区消息搜索 cursor 不属于本次 owner 或查询")
         if previous.catalog_revision != state.catalog_revision:
             raise ValueError("工作区消息搜索目录已更新，请重新查询")
@@ -104,7 +105,7 @@ async def search_workspace_messages(
                     row, = rows
                     page = await history.search_messages(node.node_id, row.thread_id,
                         TurnMessageSearchRequest(query=request.query, limit=request.limit - len(items),
-                                                 cursor=state.history_cursor), budget=budget)
+                                                 cursor=state.history_cursor, category=request.category), budget=budget)
                     scanned_sessions.add(node.node_id)
                     scanned_threads += 1
                     target = SessionThreadSearchResultDTO(

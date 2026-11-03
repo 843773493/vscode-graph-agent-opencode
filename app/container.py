@@ -680,9 +680,11 @@ def _build_app_container(
         config_service=config_service,
     )
 
+    artifact_outputs = ToolOutputStore(workspace_root=resolved_workspace_root)
     rollout_checkpoint_runtime = RolloutCheckpointRuntime(
         sessions_dir=resolved_sessions_root,
         attachment_store=attachment_blob_store,
+        tool_outputs=artifact_outputs,
         node_debug_workspace_config=lambda: build_workspace_fork_config(
             resolved_workspace_root,
             config_service.get_debug_runtime_config(),
@@ -765,8 +767,6 @@ def _build_app_container(
         store=background_work_store, residency_tracker=thread_residency_tracker,
         handlers=(SystemTimeEmitterHandler(), mcp_connection_wait_handler),
     )
-    artifact_outputs = ToolOutputStore(workspace_root=resolved_workspace_root)
-
     def read_artifact(uri: str, max_bytes: int) -> ResourceFileContent:
         artifact = parse_resource_uri(uri)
         if artifact.attachment_id is not None:

@@ -230,6 +230,12 @@ Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，�
 
 工作区 `POST /sessions/history/search` 在同一历史 owner 编排 catalog 与 SessionThread 的只读发现，每页至多检查 64 个目录位置、16 个 Thread；所有 Thread 共用上述 256 条、8 MiB 和 1 秒调度预算，准入等待共用最多 15 秒的总期限，并消费客户端传来的剩余期限。续页保存 catalog revision、当前 Session 控制库 Thread revision、keyset 与原历史 cursor；当前目录或历史变化明确冲突。各 Thread 是实际读取时的快照，已完成分支新增正文需重查。结果保留原 Thread 名称／归属和消息引用，空历史不物化，不由前端遍历 Session。消息定位通过 ThreadPane 的临时编辑器参数交给 React，复用原 around loader 与 Virtuoso 挂载回调；原文不进入时间线缓存。其它正文 owner 仍须各自实现后方可完成整项验收。
 
+工具结果使用上述两个历史搜索入口的显式 `category=tool_result`，省略仍为 `message`，引用和两级 cursor 都绑定类别。同一 Turn／ModelCall／规范 provider call ID 的 stream 与 checkpoint 载体择一，与原 activity 归并一样取 `item_sequence` 最早的可见载体；两者落盘先后不固定，不能按载体类型猜测详情身份。跨 ModelCall 的同裸调用 ID 不合并。位置与响应继续用原 canonical item 身份，不建立工具搜索表。内联正文沿原投影读取；已截断工具结果只沿 canonical `artifact.tool_output` 读取同一 ToolOutputStore 的完整版本，JSONL 与完整输出字节共同消费原 8 MiB 预算，完整输出不预读 stat、不重复读取。读取时核对既有字节量和 `content_sha256`，以免旧位置被应用到被改写的外部正文；这是原不可变版本核对，不增加每键资源请求。
+
+工具定位复用 `anchor_message`／`located_message`，around 在同一 snapshot 定点补取相应 ModelCall 限定调用的原工具详情。React 按 canonical item_id 找到原 ToolRow，展开其活动区与结果行后临时展示完整原文；mark 实际挂载通知原定位调度，原生 `scrollIntoView` 先揭示限高工具详情内的命中，再对齐外层虚拟列表。不得按同名工具或裸 call ID 猜测行。完整输出删除或改写明确转为 `stale_turn_reference`；权限与其它存储错误保留原错误归属。查询及打开均不触发模型或工具重放，关闭定位释放原文。
+
+HTTP JSON 沿原 `requestJson` 统一在完整下载后解析，保留原非法响应诊断和下载取消；物理删除按体积切换到新 Worker 的分支。参考 Copilot 的普通 JSON 读取，并在真实 Chromium 对代表载荷测量：346,991 B 的同步解析为 0.4～3.6 ms、新 Worker 为 10.9～19.6 ms；8,882,087 B 分别为 12.2～26 ms 和 86.3～112.5 ms。该测量不代表原 around 响应或全链路收益。同步解析执行期间不可被取消，解析开始前仍优先检查取消；不保留第二解析实现。
+
 ### 索引归搜索 owner 决定
 
 是否使用索引、索引技术、建立及维护时机、失效与重建均由各搜索 owner 根据数据性质决定。文件搜索可以按需查询，会话目录可以复用 catalog，消息或日志可以在其 owner 内采用必要的可重建索引；不要求统一技术或统一建索引流程。

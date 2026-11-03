@@ -161,6 +161,8 @@ export function useTurnAnchorNavigation({
         .find(candidate => candidate.dataset.messageItemId === anchor.message!.item_id)
       : element;
     if (!targetElement) return;
+    // 工具详情本身限高并滚动；先揭示内层命中，再对齐外层虚拟列表。
+    if (anchor.message) targetElement.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     const viewport = scroller.getBoundingClientRect();
     const delta = targetElement.getBoundingClientRect().top - viewport.top + anchor.offset;
     if (Math.abs(delta) > 0.5) {

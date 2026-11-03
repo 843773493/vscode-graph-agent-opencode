@@ -397,7 +397,7 @@ export default function ChatPanel({
   };
 
   return (
-    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, close: cancelMessageNavigation }}><section className="chat-stream-shell">
+    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, close: cancelMessageNavigation, onMount: scheduleAnchorAlignment }}><section className="chat-stream-shell">
       {navigation ? <p className="chat-history-notice" role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</p> : null}
       {hasActiveSession && sessionId && threadId ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId])}
         apiPort={apiPort} workspaceId={workspaceId} sessionId={sessionId} threadId={threadId} /> : null}

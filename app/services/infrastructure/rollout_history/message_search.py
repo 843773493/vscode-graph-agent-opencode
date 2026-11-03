@@ -4,7 +4,7 @@ import base64
 import binascii
 from dataclasses import dataclass
 from time import monotonic
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -23,6 +23,12 @@ from app.services.infrastructure.rollout_context.storage.catalog.projections imp
     canonical_projection_content,
 )
 from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
+from app.services.infrastructure.rollout_history.tool_result import (
+    ToolOutputChangedError,
+    read_tool_result_output,
+    tool_result_identity,
+)
+from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.turn_history.models import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
@@ -56,6 +62,7 @@ class _MessageCursor(BaseModel):
     thread_id: str
     rollout_id: str
     query: str
+    category: Literal["message", "tool_result"] = "message"
     view_id: str | None
     projection_epoch: int
     history_view_revision: int
@@ -67,7 +74,7 @@ def _cursor(indexed: IndexedHistory, request: TurnMessageSearchRequest) -> _Mess
     snapshot = indexed.snapshot
     current = _MessageCursor(
         session_id=snapshot.session_id, thread_id=snapshot.thread_id,
-        rollout_id=indexed.rollout_id, query=request.query, view_id=indexed.view_id,
+        rollout_id=indexed.rollout_id, query=request.query, category=request.category, view_id=indexed.view_id,
         projection_epoch=indexed.projection_epoch,
         history_view_revision=snapshot.manifest.history_view_revision,
     )
@@ -78,7 +85,7 @@ def _cursor(indexed: IndexedHistory, request: TurnMessageSearchRequest) -> _Mess
         previous = _MessageCursor.model_validate_json(raw)
     except (ValueError, binascii.Error, ValidationError) as error:
         raise InvalidTurnCursorError("消息搜索 cursor 格式无效") from error
-    for field in ("session_id", "thread_id", "rollout_id", "query"):
+    for field in ("session_id", "thread_id", "rollout_id", "query", "category"):
         if getattr(previous, field) != getattr(current, field):
             raise InvalidTurnCursorError("消息搜索 cursor 不属于当前 owner 或查询")
     if previous.projection_epoch != current.projection_epoch or previous.history_view_revision != current.history_view_revision:
@@ -96,12 +103,12 @@ def _cursor(indexed: IndexedHistory, request: TurnMessageSearchRequest) -> _Mess
 def _searchable_text(item: CanonicalItemRecord) -> str:
     if item.source_manifest is not None and item.source_manifest.protection != "public":
         return ""
-    return canonical_projection_content(item)
+    return item.payload if item.semantic_kind == "tool_result" and isinstance(item.payload, str) else canonical_projection_content(item)
 
 
 def search_messages(
     reader: RolloutContextReader, indexed: IndexedHistory, request: TurnMessageSearchRequest,
-    *, budget: MessageSearchBudget | None = None,
+    *, budget: MessageSearchBudget | None = None, tool_outputs: ToolOutputStore | None = None,
 ) -> TurnMessageSearchResultsDTO:
     budget = budget or MessageSearchBudget.create()
     deadline = budget.deadline
@@ -116,6 +123,7 @@ def search_messages(
             rows = reader.read_message_search_candidates(
                 indexed.snapshot, indexed.chain, lower_ordinal=state.ordinal,
                 limit=MAX_SEARCH_ITEMS + 1, deadline=deadline,
+                category=request.category,
             )
         except TimeoutError:
             reason = "deadline"
@@ -139,6 +147,15 @@ def search_messages(
         budget.scanned_bytes += length
         item, = reader.read_canonical_items(indexed.snapshot, item_ids=[item_id])
         text = _searchable_text(item)
+        if request.category == "tool_result" and (item.source_manifest is None or item.source_manifest.protection == "public"):
+            output = read_tool_result_output(item, tool_outputs, MAX_SEARCH_BYTES - budget.scanned_bytes)
+            if output is not None:
+                text, byte_count = output
+                if text is None:
+                    reason = "item_size_limit" if length + byte_count > MAX_SEARCH_BYTES else "byte_limit"
+                    break
+                scanned_bytes += byte_count
+                budget.scanned_bytes += byte_count
         offset = state.text_offset if ordinal == state.ordinal else 0
         if offset > len(text):
             raise InvalidTurnCursorError("消息搜索 cursor 的正文位置越界")
@@ -155,13 +172,15 @@ def search_messages(
             items.append(TurnMessageMatchDTO(
                 turn_id=turn_id,
                 message_id=item.projection_identity.projection_message_id if item.projection_identity else None,
-                role=item.wire_role,
+                role=cast(Literal["user", "assistant", "tool"], "tool" if request.category == "tool_result" else item.wire_role),
                 reference=TurnMessageReferenceDTO(
                     item_id=item_id, content_hash=item.content_hash,
                     start_codepoint=start, end_codepoint=end,
+                    category=request.category,
                 ),
                 preview=text[preview_start:preview_start + PREVIEW_CODEPOINTS],
                 preview_start_codepoint=preview_start,
+                **(tool_result_identity(item) if request.category == "tool_result" else {}),
             ))
             offset = end
             state.text_offset = end
@@ -185,17 +204,32 @@ def search_messages(
 def verify_message_reference(
     reader: RolloutContextReader, indexed: IndexedHistory, turn_id: str,
     reference: TurnMessageReferenceDTO,
+    *, tool_outputs: ToolOutputStore | None = None,
 ) -> TurnMessageLocationDTO:
     rows = [] if indexed.view_id is None else reader.read_message_search_candidates(
         indexed.snapshot, indexed.chain, lower_ordinal=0, limit=1,
         deadline=monotonic() + SEARCH_SECONDS, item_id=reference.item_id,
+        category=reference.category,
     )
     if rows and rows[0][2] == turn_id and rows[0][3] <= MAX_SEARCH_BYTES:
         item, = reader.read_canonical_items(indexed.snapshot, item_ids=[reference.item_id])
+        if item.content_hash != reference.content_hash:
+            raise StaleTurnReferenceError(session_id=indexed.snapshot.session_id, turn_ids=[turn_id])
         text = _searchable_text(item)
-        if item.content_hash == reference.content_hash and reference.end_codepoint <= len(text):
+        if reference.category == "tool_result" and (item.source_manifest is None or item.source_manifest.protection == "public"):
+            try:
+                output = read_tool_result_output(item, tool_outputs, MAX_SEARCH_BYTES - rows[0][3])
+            except (FileNotFoundError, ToolOutputChangedError) as error:
+                raise StaleTurnReferenceError(session_id=indexed.snapshot.session_id, turn_ids=[turn_id]) from error
+            if output is not None:
+                text, _ = output
+                if text is None:
+                    raise StaleTurnReferenceError(session_id=indexed.snapshot.session_id, turn_ids=[turn_id])
+        if reference.end_codepoint <= len(text):
             return TurnMessageLocationDTO(
                 turn_id=turn_id, message_id=item.projection_identity.projection_message_id if item.projection_identity else None,
-                role=item.wire_role, reference=reference, content=text,
+                role=cast(Literal["user", "assistant", "tool"], "tool" if reference.category == "tool_result" else item.wire_role),
+                reference=reference, content=text,
+                **(tool_result_identity(item) if reference.category == "tool_result" else {}),
             )
     raise StaleTurnReferenceError(session_id=indexed.snapshot.session_id, turn_ids=[turn_id])

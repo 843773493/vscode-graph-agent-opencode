@@ -1,7 +1,5 @@
 /**
- * 可取消等待的唯一实现。api/http.ts 的请求屏障与 runtime/jsonResponseParser.ts
- * 的响应体解析都需要「等待一个 Promise，但外部 signal 一中止就立即以同一原因
- * 拒绝」，此前两处各写了一份逐字相同的实现。收敛到这里，行为只有一份。
+ * 请求屏障和响应体下载共用的可取消等待；外部 signal 中止时立即保留原原因拒绝。
  */
 
 export function abortReason(signal: AbortSignal): unknown {

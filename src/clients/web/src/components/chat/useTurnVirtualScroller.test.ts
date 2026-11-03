@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ConversationView } from "../../types/frontend";
 import type { ChatTranscriptItem } from "./transcriptItems";
+import type { TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import {
   requestTurnFollowLatestFrame,
@@ -38,7 +39,8 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, signal?: AbortSignal) => Promise<void> = async () => {}, mountOnScroll = true) {
+function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, signal?: AbortSignal) => Promise<TurnMessageLocationDTO | void> = async () => {}, mountOnScroll = true,
+  messageTarget?: { dataset: { messageItemId: string }; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number } }) {
   let items = initial;
   let scopeKey = "workspace/session/thread";
   let viewState: { turn_anchor: string | null; scroll_offset: number; follow_latest: boolean } | null = null;
@@ -71,7 +73,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
     querySelectorAll() {
       const itemIndex = items.findIndex((item) => item.key === this.mountedId);
       if (itemIndex < 0) return [];
-      return [{ dataset: { turnId: this.mountedId }, getBoundingClientRect: () => {
+      return [{ dataset: { turnId: this.mountedId }, querySelectorAll: () => messageTarget ? [messageTarget] : [], getBoundingClientRect: () => {
         const top = items.slice(0, itemIndex).reduce((sum, item) => sum + (heights.get(item.key) ?? 150), 0) - this.scrollTop;
         return { top, bottom: top + (heights.get(items[itemIndex].key) ?? 150) };
       } }];
@@ -178,6 +180,24 @@ describe("Turn 虚拟列表滚动跟随", () => {
 });
 
 describe("正式轮次定位与位置恢复", () => {
+  test("工具命中先揭示限高详情内部的位置，再对齐聊天视口", async () => {
+    const reference = { category: "tool_result" as const, item_id: "result-a", content_hash: "v1", start_codepoint: 1, end_codepoint: 2 };
+    const message: TurnMessageLocationDTO = { turn_id: "turn-2", message_id: null, role: "tool", content: "正文", reference };
+    const revealed: ScrollIntoViewOptions[] = [];
+    let markTop = 10_000;
+    const marker = { dataset: { messageItemId: "result-a" },
+      scrollIntoView(options: ScrollIntoViewOptions) { revealed.push(options); markTop = 180; },
+      getBoundingClientRect: () => ({ top: markTop - harness.scroller.scrollTop, bottom: markTop - harness.scroller.scrollTop + 20 }) };
+    const harness = navigationHarness([turn("turn-1", 1), turn("turn-2", 2), turn("turn-3", 3)], async () => message, true, marker);
+    await act(async () => harness.state().navigateToTurn("turn-2", 0, false, reference));
+    harness.settle();
+    harness.settle();
+    expect(revealed[0]).toEqual({ block: "nearest", inline: "nearest", behavior: "auto" });
+    expect(harness.scroller.scrollTop).toBe(180);
+    expect(harness.state().navigation?.phase).toBe("located");
+    expect(harness.state().locatedMessage).toEqual(message);
+  });
+
   test.each(["pointerdown", "mousedown", "pointermove", "mousemove"] as const)(
     "滚动区右侧按钮及图标在 %s 时保留定位锚点且不冻结前插",
     (type) => {

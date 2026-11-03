@@ -104,6 +104,7 @@ async def test_message_search_uses_exact_canonical_owner_and_resumes_positions(
         assert located["located_message"] == {
             "turn_id": hit["turn_id"], "message_id": hit["message_id"], "role": "user",
             "reference": reference, "content": source,
+            "tool_call_id": None, "tool_name": None,
         }
         assert [turn["turn_id"] for turn in located["items"]] == [hit["turn_id"]]
     assert all_hits[0]["reference"]["start_codepoint"] > 65536

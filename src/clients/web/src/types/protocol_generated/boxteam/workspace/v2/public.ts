@@ -2246,7 +2246,11 @@ export interface TurnDetailDTO {
 export interface TurnMessageSearchRequest {
   query: string;
   limit: number;
-  cursor?: string | undefined;
+  cursor?:
+    | string
+    | undefined;
+  /** 省略为用户／助手消息；tool_result 必须显式选择，不混合正文类别。 */
+  category?: string | undefined;
 }
 
 /** 零基 Unicode 码点半开区间，独立于展示片段。 */
@@ -2255,6 +2259,7 @@ export interface TurnMessageReferenceDTO {
   content_hash: string;
   start_codepoint: number;
   end_codepoint: number;
+  category?: string | undefined;
 }
 
 export interface TurnMessageMatchDTO {
@@ -2264,6 +2269,9 @@ export interface TurnMessageMatchDTO {
   reference: TurnMessageReferenceDTO | undefined;
   preview: string;
   preview_start_codepoint: number;
+  /** 工具结果沿历史详情的 ModelCall 限定调用身份；结果身份仍为 canonical item_id。 */
+  tool_call_id?: string | undefined;
+  tool_name?: string | undefined;
 }
 
 /** 仅本次 around 核验的单条 canonical 原文，不是另一份持久历史。 */
@@ -2273,6 +2281,8 @@ export interface TurnMessageLocationDTO {
   role: string;
   reference: TurnMessageReferenceDTO | undefined;
   content: string;
+  tool_call_id?: string | undefined;
+  tool_name?: string | undefined;
 }
 
 export interface TurnMessageSearchResultsDTO {
@@ -17048,7 +17058,7 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
 };
 
 function createBaseTurnMessageSearchRequest(): TurnMessageSearchRequest {
-  return { query: "", limit: 0, cursor: undefined };
+  return { query: "", limit: 0, cursor: undefined, category: undefined };
 }
 
 export const TurnMessageSearchRequest: MessageFns<TurnMessageSearchRequest> = {
@@ -17057,6 +17067,7 @@ export const TurnMessageSearchRequest: MessageFns<TurnMessageSearchRequest> = {
       query: isSet(object.query) ? globalThis.String(object.query) : "",
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      category: isSet(object.category) ? globalThis.String(object.category) : undefined,
     };
   },
 
@@ -17071,6 +17082,9 @@ export const TurnMessageSearchRequest: MessageFns<TurnMessageSearchRequest> = {
     if (message.cursor !== undefined) {
       obj.cursor = message.cursor;
     }
+    if (message.category !== undefined) {
+      obj.category = message.category;
+    }
     return obj;
   },
 
@@ -17082,12 +17096,13 @@ export const TurnMessageSearchRequest: MessageFns<TurnMessageSearchRequest> = {
     message.query = object.query ?? "";
     message.limit = object.limit ?? 0;
     message.cursor = object.cursor ?? undefined;
+    message.category = object.category ?? undefined;
     return message;
   },
 };
 
 function createBaseTurnMessageReferenceDTO(): TurnMessageReferenceDTO {
-  return { item_id: "", content_hash: "", start_codepoint: 0, end_codepoint: 0 };
+  return { item_id: "", content_hash: "", start_codepoint: 0, end_codepoint: 0, category: undefined };
 }
 
 export const TurnMessageReferenceDTO: MessageFns<TurnMessageReferenceDTO> = {
@@ -17097,6 +17112,7 @@ export const TurnMessageReferenceDTO: MessageFns<TurnMessageReferenceDTO> = {
       content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : "",
       start_codepoint: isSet(object.start_codepoint) ? globalThis.Number(object.start_codepoint) : 0,
       end_codepoint: isSet(object.end_codepoint) ? globalThis.Number(object.end_codepoint) : 0,
+      category: isSet(object.category) ? globalThis.String(object.category) : undefined,
     };
   },
 
@@ -17114,6 +17130,9 @@ export const TurnMessageReferenceDTO: MessageFns<TurnMessageReferenceDTO> = {
     if (message.end_codepoint !== 0) {
       obj.end_codepoint = Math.round(message.end_codepoint);
     }
+    if (message.category !== undefined) {
+      obj.category = message.category;
+    }
     return obj;
   },
 
@@ -17126,6 +17145,7 @@ export const TurnMessageReferenceDTO: MessageFns<TurnMessageReferenceDTO> = {
     message.content_hash = object.content_hash ?? "";
     message.start_codepoint = object.start_codepoint ?? 0;
     message.end_codepoint = object.end_codepoint ?? 0;
+    message.category = object.category ?? undefined;
     return message;
   },
 };
@@ -17138,6 +17158,8 @@ function createBaseTurnMessageMatchDTO(): TurnMessageMatchDTO {
     reference: undefined,
     preview: "",
     preview_start_codepoint: 0,
+    tool_call_id: undefined,
+    tool_name: undefined,
   };
 }
 
@@ -17152,6 +17174,8 @@ export const TurnMessageMatchDTO: MessageFns<TurnMessageMatchDTO> = {
       preview_start_codepoint: isSet(object.preview_start_codepoint)
         ? globalThis.Number(object.preview_start_codepoint)
         : 0,
+      tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : undefined,
+      tool_name: isSet(object.tool_name) ? globalThis.String(object.tool_name) : undefined,
     };
   },
 
@@ -17175,6 +17199,12 @@ export const TurnMessageMatchDTO: MessageFns<TurnMessageMatchDTO> = {
     if (message.preview_start_codepoint !== 0) {
       obj.preview_start_codepoint = Math.round(message.preview_start_codepoint);
     }
+    if (message.tool_call_id !== undefined) {
+      obj.tool_call_id = message.tool_call_id;
+    }
+    if (message.tool_name !== undefined) {
+      obj.tool_name = message.tool_name;
+    }
     return obj;
   },
 
@@ -17191,12 +17221,22 @@ export const TurnMessageMatchDTO: MessageFns<TurnMessageMatchDTO> = {
       : undefined;
     message.preview = object.preview ?? "";
     message.preview_start_codepoint = object.preview_start_codepoint ?? 0;
+    message.tool_call_id = object.tool_call_id ?? undefined;
+    message.tool_name = object.tool_name ?? undefined;
     return message;
   },
 };
 
 function createBaseTurnMessageLocationDTO(): TurnMessageLocationDTO {
-  return { turn_id: "", message_id: undefined, role: "", reference: undefined, content: "" };
+  return {
+    turn_id: "",
+    message_id: undefined,
+    role: "",
+    reference: undefined,
+    content: "",
+    tool_call_id: undefined,
+    tool_name: undefined,
+  };
 }
 
 export const TurnMessageLocationDTO: MessageFns<TurnMessageLocationDTO> = {
@@ -17207,6 +17247,8 @@ export const TurnMessageLocationDTO: MessageFns<TurnMessageLocationDTO> = {
       role: isSet(object.role) ? globalThis.String(object.role) : "",
       reference: isSet(object.reference) ? TurnMessageReferenceDTO.fromJSON(object.reference) : undefined,
       content: isSet(object.content) ? globalThis.String(object.content) : "",
+      tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : undefined,
+      tool_name: isSet(object.tool_name) ? globalThis.String(object.tool_name) : undefined,
     };
   },
 
@@ -17227,6 +17269,12 @@ export const TurnMessageLocationDTO: MessageFns<TurnMessageLocationDTO> = {
     if (message.content !== "") {
       obj.content = message.content;
     }
+    if (message.tool_call_id !== undefined) {
+      obj.tool_call_id = message.tool_call_id;
+    }
+    if (message.tool_name !== undefined) {
+      obj.tool_name = message.tool_name;
+    }
     return obj;
   },
 
@@ -17242,6 +17290,8 @@ export const TurnMessageLocationDTO: MessageFns<TurnMessageLocationDTO> = {
       ? TurnMessageReferenceDTO.fromPartial(object.reference)
       : undefined;
     message.content = object.content ?? "";
+    message.tool_call_id = object.tool_call_id ?? undefined;
+    message.tool_name = object.tool_name ?? undefined;
     return message;
   },
 };

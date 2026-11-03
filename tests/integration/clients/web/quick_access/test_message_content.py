@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.tools.testing import LARGE_TEST_OUTPUT, LARGE_TEST_TARGET_VALUE
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
@@ -48,12 +50,23 @@ async def test_message_content_search_opens_unloaded_child_and_exact_original_ra
         frames=chat_completion_frames(response_id=f"message-content-{index}", model=model,
                                       deltas=[{"role": "assistant", "content": text}], finish_reason="stop"),
     ).raw["interactions"][0] for index, text in enumerate(["助手独有😀正文", *[f"已完成 {index}" for index in range(6)]])]
+    interactions.insert(0, build_cassette(
+        asset_id="tool-content", model=model, url=f"http://127.0.0.1:{endpoint}/v1/chat/completions",
+        frames=chat_completion_frames(response_id="tool-content", model=model, deltas=[{
+            "role": "assistant", "tool_calls": [{"index": 0, "id": "content-output", "type": "function",
+                "function": {"name": "invoke_extension_tool", "arguments": json.dumps({
+                    "tool_name": "large_test_output", "arguments": {},
+                })}}],
+        }], finish_reason="tool_calls"),
+    ).raw["interactions"][0])
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(
                 subprocess.run, command, cwd=context.project_root,
                 env={**os.environ, **temporary, **replay.environment,
                      "BOXTEAM_MESSAGE_SEARCH_INTERACTIONS": json.dumps(interactions),
+                     "BOXTEAM_TOOL_SEARCH_QUERY": LARGE_TEST_TARGET_VALUE,
+                     "BOXTEAM_TOOL_SEARCH_SHA256": hashlib.sha256(LARGE_TEST_OUTPUT.encode()).hexdigest(),
                      "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
@@ -65,7 +78,8 @@ async def test_message_content_search_opens_unloaded_child_and_exact_original_ra
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
         for key in ("unselectedHasNoContentQuery", "unopenedChildLocated", "longOriginalRangeVisible",
-                    "reusedPaneRevealsAnotherMatch", "staleReferenceRejected", "fileUsesOriginalProvider"):
+                    "reusedPaneRevealsAnotherMatch", "staleReferenceRejected", "fileUsesOriginalProvider",
+                    "unopenedToolChildLocated", "fullToolOutputVisible", "toolCategoryIsolated"):
             assert receipt[key] is True, key
         assert receipt["pageErrors"] == []
     finally:

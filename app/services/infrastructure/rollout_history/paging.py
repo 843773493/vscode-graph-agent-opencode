@@ -37,6 +37,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
         indexed: IndexedHistory,
         *,
         policy: HistoryLoadingConfig | None,
+        located_tool_call_id: str | None = None,
     ) -> TurnHistoryPageDTO:
         rollout_id = indexed.rollout_id
         projection_epoch = indexed.projection_epoch
@@ -460,7 +461,9 @@ class HistoryPageReadMixin(HistoryCursorMixin):
             return self._indexed_page(
                 session_id,
                 selected,
-                include=include,
+                include=tuple(dict.fromkeys((*include, "tool_call", "tool_result")))
+                if located_tool_call_id else include,
+                tool_call_ids=(located_tool_call_id,) if located_tool_call_id else (),
                 next_cursor=None,
                 has_more=False,
                 before_cursor=before_cursor,

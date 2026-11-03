@@ -3,6 +3,7 @@ import { deriveToolRowDisplay } from "../../state/display/toolDisplay";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
 import { errorMessage } from "../../utils/errorMessage";
+import { MessageSearchLocation, MessageSearchLocationContext } from "./messageSearchLocation";
 
 type ToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
@@ -64,12 +65,17 @@ function ToolRow({
   showRawDetails: boolean;
   onLoadDetails?: (toolCallId: string) => Promise<void>;
 }): React.ReactNode {
+  const { message } = React.useContext(MessageSearchLocationContext);
+  const locatedItemId = message?.role === "tool" && item.responseSources?.some(entry => entry.source?.item_id === message.reference?.item_id)
+    ? message.reference?.item_id : undefined;
   const [open, setOpen] = React.useState(false);
+  React.useEffect(() => { if (locatedItemId) setOpen(true); }, [locatedItemId, message]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const status = toolStatus(item);
   const hasMaterializedDetails = Boolean(
-    item.detailsLoaded
+    locatedItemId
+    || item.detailsLoaded
     || item.inputText
     || item.resultText
     || showRawDetails
@@ -126,6 +132,7 @@ function ToolRow({
       </button>
       {open ? (
         <div className="chat-tool-details">
+          {locatedItemId ? <MessageSearchLocation itemId={locatedItemId} /> : null}
           {error ? (
             <div className="chat-inline-error" role="alert">{error}</div>
           ) : null}

@@ -16,7 +16,6 @@ import {
 } from "../http";
 
 const SESSION_TURN_HISTORY_TIMEOUT_MS = 10_000;
-const TURN_DETAIL_WORKER_PARSE_THRESHOLD_BYTES = 256 * 1024;
 
 import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
 
@@ -160,7 +159,6 @@ export async function loadSessionHistory(
       headers: workspaceHeader(workspaceId),
       body: JSON.stringify(request),
       timeoutMs: SESSION_TURN_HISTORY_TIMEOUT_MS,
-      parseInWorkerAboveBytes: TURN_DETAIL_WORKER_PARSE_THRESHOLD_BYTES,
       signal,
     }));
   } catch (error) {

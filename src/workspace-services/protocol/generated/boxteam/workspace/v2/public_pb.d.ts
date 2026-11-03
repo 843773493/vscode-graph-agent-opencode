@@ -9587,6 +9587,13 @@ export declare type TurnMessageSearchRequest = Message<"boxteam.workspace.v2.Tur
    * @generated from field: optional string cursor = 3;
    */
   cursor?: string | undefined;
+
+  /**
+   * 省略为用户／助手消息；tool_result 必须显式选择，不混合正文类别。
+   *
+   * @generated from field: optional string category = 4;
+   */
+  category?: string | undefined;
 };
 
 /**
@@ -9620,6 +9627,11 @@ export declare type TurnMessageReferenceDTO = Message<"boxteam.workspace.v2.Turn
    * @generated from field: int64 end_codepoint = 4;
    */
   endCodepoint: bigint;
+
+  /**
+   * @generated from field: optional string category = 5;
+   */
+  category?: string | undefined;
 };
 
 /**
@@ -9661,6 +9673,18 @@ export declare type TurnMessageMatchDTO = Message<"boxteam.workspace.v2.TurnMess
    * @generated from field: int64 preview_start_codepoint = 6;
    */
   previewStartCodepoint: bigint;
+
+  /**
+   * 工具结果沿历史详情的 ModelCall 限定调用身份；结果身份仍为 canonical item_id。
+   *
+   * @generated from field: optional string tool_call_id = 7;
+   */
+  toolCallId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_name = 8;
+   */
+  toolName?: string | undefined;
 };
 
 /**
@@ -9699,6 +9723,16 @@ export declare type TurnMessageLocationDTO = Message<"boxteam.workspace.v2.TurnM
    * @generated from field: string content = 5;
    */
   content: string;
+
+  /**
+   * @generated from field: optional string tool_call_id = 6;
+   */
+  toolCallId?: string | undefined;
+
+  /**
+   * @generated from field: optional string tool_name = 7;
+   */
+  toolName?: string | undefined;
 };
 
 /**

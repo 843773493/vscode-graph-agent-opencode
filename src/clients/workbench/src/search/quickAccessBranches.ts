@@ -73,7 +73,7 @@ export function querySearchBranches(owners: readonly WorkspaceOwner[], categorie
           abort.signal, source.token, instantiation, search, cursor, deadlineAt);
         if (source.token.isCancellationRequested || !alive()) return;
         const merged = new Map([...branch.picks, ...page.items.map(item => map(item, branch.owner))].map(pick => [pick.id, pick]));
-        branch.picks = branch.category === '会话消息' ? [...merged.values()] : rankResourcePicks([...merged.values()], filter, cache);
+        branch.picks = branch.category === '会话消息' || branch.category === '工具结果' ? [...merged.values()] : rankResourcePicks([...merged.values()], filter, cache);
         branch.status = { id: `status-${branch.key}`,
           label: `${branch.label} · ${page.limited ?? (page.cursor ? '还有更多结果' : branch.picks.length ? '本次查询完成' : '没有匹配的资源')}`,
           detail: `本次读取 ${branch.picks.length} 项，不代表全局快照${page.requestIds.length ? ` · request_id: ${page.requestIds.join('、')}` : ''}`,

@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
@@ -7,7 +8,7 @@ import { testControl } from '../../../../support/e2e_control/browser_client.mjs'
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 if (!base || !output) throw new Error('消息正文验收缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_message_content.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], around: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], around: [], queries: [],
   boundary: '真实 Gateway／正式 Workbench；消息和 fork 经产品 API 创建；model_stream 精确回放，不预写历史或缓存' };
 let page, failure;
 try {
@@ -18,14 +19,22 @@ try {
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
+  const queries = new Map();
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (/\/api\/(gateway\/(health|workspaces)|v1\/(session-catalog\/search|session-threads\/search|workspace\/files\/roots))$/.test(path)) {
+      const observation = { url: request.url(), phase: result.phase, state: 'pending' };
+      queries.set(request, observation);
+      result.queries.push(observation);
+    }
     if (path === '/api/v1/sessions/history/search') result.searches.push({ path, body: request.postDataJSON(),
       route: request.headers()['x-boxteam-workspace-id'], deadline: request.headers()['x-boxteam-content-search-deadline'] });
     if (/\/threads\/[^/]+\/history$/.test(path) && request.postDataJSON()?.direction === 'around') {
       result.around.push({ path, body: request.postDataJSON(), route: request.headers()['x-boxteam-workspace-id'] });
     }
   });
+  page.on('requestfinished', request => { const query = queries.get(request); if (query) query.state = 'finished'; });
+  page.on('requestfailed', request => { const query = queries.get(request); if (query) { query.state = 'failed'; query.error = request.failure(); } });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   const api = async (path, data) => page.evaluate(async ({ path, data }) => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
@@ -48,7 +57,8 @@ try {
   const messagePath = thread => `/api/v1/sessions/${sessionId}/threads/${thread}/messages`;
   const interactions = JSON.parse(process.env.BOXTEAM_MESSAGE_SEARCH_INTERACTIONS);
   const send = async (thread, content) => {
-    await testControl({ action: 'plan_model', session_id: sessionId, thread_id: thread, interactions: [interactions.shift()] });
+    await testControl({ action: 'plan_model', session_id: sessionId, thread_id: thread,
+      interactions: interactions.splice(0, interactions.length === 8 ? 2 : 1) });
     const accepted = await api(messagePath(thread), { message: { content }, run: {} });
     await expect.poll(async () => {
       const job = await api(`/api/v1/jobs/${accepted.job_id}`);
@@ -70,6 +80,8 @@ try {
   expect(child).not.toBe(main);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  // 刷新按钮先于工作区镜像出现；等产品导航实际读到刚创建的 Session 后再发起搜索。
+  await expect(page.getByRole('treeitem', { name: /^消息原文定位验收/ })).toBeVisible();
   expect(await page.locator(`section.boxteam-thread[data-thread-id="${child}"]`).count()).toBe(0);
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   await command('workbench.action.quickOpen', query);
@@ -146,6 +158,45 @@ try {
   await expect(input).toHaveValue('%README');
   await expect(input).toHaveAttribute('placeholder', /搜索文件内容/);
   result.fileUsesOriginalProvider = true;
+  await page.keyboard.press('Escape');
+
+  result.phase = 'tool-result-content';
+  const toolQuery = process.env.BOXTEAM_TOOL_SEARCH_QUERY;
+  const toolFork = await api(`/api/v1/sessions/${sessionId}/fork-context`, {
+    idempotency_key: 'tool-content-child', source_uri: source.source_uri, source_view_id: source.source_view_id,
+    source_view_revision: source.source_view_revision, anchor_item_id: source.anchor_item_id,
+    target_container_uri: source.child_container_uri, mode: 'view_prefix_fork', creation_kind: 'new_child_thread',
+  });
+  expect(await page.locator(`section.boxteam-thread[data-thread-id="${toolFork.thread_id}"]`).count()).toBe(0);
+  await command('workbench.action.quickOpen', 'content ' + toolQuery);
+  await quick.locator('[data-quick-input-id="content-category-message"]').click();
+  await expect(quick).toContainText('会话消息 · 没有匹配的资源');
+  expect(await quick.locator('[data-quick-input-id^="boxteam-thread://"]').count()).toBe(0);
+  await page.keyboard.press('Escape');
+  await command('workbench.action.quickOpen', 'content ' + toolQuery);
+  await quick.locator('[data-quick-input-id="content-category-tool"]').click();
+  await expect(quick).toContainText('工具结果 · 本次查询完成');
+  const toolPick = quick.locator(`[data-quick-input-id^="boxteam-thread://"][data-quick-input-id*="/${toolFork.thread_id}#"]`);
+  await expect(toolPick).toHaveCount(1);
+  // 原版详情悬停会覆盖下方行；从行左边缘进入，再点击右侧的真实动作。
+  await input.hover();
+  await toolPick.hover({ position: { x: 5, y: 5 } });
+  await toolPick.getByRole('button', { name: '在侧边打开', exact: true }).click();
+  const toolThread = page.locator(`section.boxteam-thread[data-workspace-id="${target.backend_workspace_id}"][data-session-id="${sessionId}"][data-thread-id="${toolFork.thread_id}"]`);
+  await expect(toolThread).toBeVisible();
+  const toolOriginal = toolThread.locator('.chat-tool-details .chat-message-location');
+  await expect(toolOriginal.locator('mark')).toHaveText(toolQuery);
+  expect(createHash('sha256').update(await toolOriginal.locator('pre').textContent()).digest('hex')).toBe(process.env.BOXTEAM_TOOL_SEARCH_SHA256);
+  await expect(toolThread).toContainText('已定位消息原文');
+  await expect.poll(() => toolOriginal.locator('mark').evaluate(element => {
+    const bounds = element.getBoundingClientRect(), viewport = element.closest('[data-virtuoso-scroller]').getBoundingClientRect();
+    const details = element.closest('.chat-thinking-body').getBoundingClientRect();
+    return bounds.bottom > Math.max(viewport.top, details.top) && bounds.top < Math.min(viewport.bottom, details.bottom);
+  })).toBe(true);
+  expect(result.around.at(-1).body.anchor_message.category).toBe('tool_result');
+  expect(result.around.at(-1).body.anchor_message.start_codepoint).toBeGreaterThan(65536);
+  expect(result.searches.at(-1).body.category).toBe('tool_result');
+  result.unopenedToolChildLocated = result.fullToolOutputVisible = result.toolCategoryIsolated = true;
   result.firstPick = firstId;
   result.owner = { gateway: health.gateway_id, workspace: target.backend_workspace_id, sessionId, main, child };
   result.phase = 'complete';
@@ -153,6 +204,12 @@ try {
   failure = error;
   result.error = String(error.stack ?? error);
   if (page) {
+    result.chatViewport = await page.locator('.chat-stream-shell').evaluateAll(shells => shells.map(shell => {
+      const stream = shell.querySelector('[data-virtuoso-scroller]'), mark = shell.querySelector('.chat-message-location mark');
+      return { notice: shell.querySelector('.chat-history-notice')?.textContent,
+        scroll: stream ? { top: stream.scrollTop, height: stream.scrollHeight, client: stream.clientHeight } : null,
+        mark: mark ? { top: mark.getBoundingClientRect().top, bottom: mark.getBoundingClientRect().bottom } : null };
+    }));
     result.quickInputSnapshot = await page.locator('.quick-input-widget').ariaSnapshot().catch(() => '浮层已关闭');
     await page.screenshot({ path: output.replace(/\.json$/, '.failure.png') }).catch(error => { result.screenshotError = String(error); });
   }

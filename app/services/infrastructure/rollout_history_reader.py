@@ -49,6 +49,7 @@ from app.services.infrastructure.rollout_history.snapshot import (
     IndexedHistorySnapshots,
     IndexedTurnSpan,
 )
+from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.turn_history.load_plan import (
     DetailReadBudget,
     LoadLimits,
@@ -87,8 +88,9 @@ class _InternalExecutionHistoryProjection:
 
 
 class RolloutHistoryReader(HistoryPageReadMixin):
-    def __init__(self, context_reader: RolloutContextReader) -> None:
+    def __init__(self, context_reader: RolloutContextReader, *, tool_outputs: ToolOutputStore | None = None) -> None:
         self._context_reader = context_reader
+        self._tool_outputs = tool_outputs
         self._snapshots = IndexedHistorySnapshots(context_reader)
 
     def search_messages(
@@ -104,7 +106,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 complete=True, limited_reason=None, scanned_items=0, scanned_bytes=0,
             )
         try:
-            return search_messages(self._context_reader, indexed, request, budget=budget)
+            return search_messages(self._context_reader, indexed, request, budget=budget, tool_outputs=self._tool_outputs)
         finally:
             indexed.snapshot.close()
 
@@ -219,7 +221,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             )
         try:
             located = (
-                verify_message_reference(self._context_reader, indexed, request.anchor_turn_id, request.anchor_message)
+                verify_message_reference(self._context_reader, indexed, request.anchor_turn_id, request.anchor_message,
+                                         tool_outputs=self._tool_outputs)
                 if request.anchor_message is not None else None
             )
             page = self._load_indexed_history(
@@ -227,6 +230,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 request,
                 indexed,
                 policy=policy,
+                located_tool_call_id=located.tool_call_id if located is not None else None,
             )
             return page.model_copy(update={"located_message": located})
         finally:
