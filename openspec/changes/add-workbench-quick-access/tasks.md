@@ -69,7 +69,7 @@
 - [x] 7.3 在 Quick Input 聚焦前捕获发起上下文，空输入历史只限已选范围，名称／描述／详情、图标、高亮和行内动作准确，不枚举全部资源填空。
 - [ ] 7.4 保留 URI 粘贴、文件追加行列／符号、quickNavigate 和原 filesOnly／fileSearchDelegate、filter／additionPicks、handleAccept、按钮与 prefix 限制的真实调用语义。
 - [x] 7.5 接入 `?` 与 Command Center includeHelp 的原注册帮助、命令及选模式转接，保留发起范围与接收者，默认模式关闭递归帮助。
-- [ ] 7.6 验证空文件编辑器的 delegate／cache 生命周期与原 Chat 二级 picker 取消返回，不将原 widget 接受动作转投项目 Composer。
+- [x] 7.6 验证空文件编辑器的 delegate／cache 生命周期与原 Chat 二级 picker 取消返回，不将原 widget 接受动作转投项目 Composer。
 
 ## 8. 查询范围与异步结果
 
@@ -389,3 +389,12 @@
 - 删除按体积切换新 Worker 的重复 JSON 解析链，全部调用方沿 requestJson 下载并解析；保留非法响应诊断、下载取消与解析前取消，代表载荷测量见 design 和 `json-parse-measure.json`，不宣称为 around 全链路性能收益。同步解析执行期间不可取消。
 - 最终真实类型检查含 18 份 sourceTransform 源码；协议生成一致性、OpenAPI、Buf breaking／格式、Python 静态检查与 OpenSpec strict 均有原件。最新浏览器运行期间本切片产品源码指纹未变，之后仅新增独立调用方测试及文档。结构审查无新增 findings：工具完整输出读取归原历史子目录，未把 I/O 放入 React 或 Gateway；既有大文件只扩展同一读取／装配职责。
 - 原失败与归因保留：载体身份不一致、工具详情嵌套滚动、瞬时端口冲突；另有一轮在导航准备阶段未发业务查询，补等待新 Session 的真实导航可见性及请求观测后通过；原五秒断言期限保持，隔离探针未复现该停滞，未据此宣称其唯一根因。准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/tool-content-*`。9.1、9.5～9.8、两级后端扩展及 Electron 仍未完成。
+
+
+### 2026-11-03：原空文件编辑器与 Chat 调用方（7.6）
+
+- 新组件装具经同一生产 sourceTransform 编译原 EmptyFileEditorSearch、AttachContextAction、QuickAccessController、QueryBuilder 和项目 WorkspaceQuickAccess；仅 Picker 宿主事件、文件搜索传输及外围服务是明确替身，不读取或变异私有字段／prototype，不把本检查称为完整 Gateway 页面或真实键盘验收。
+- 六项 Chromium 检查／67 条断言通过（11.30 秒）：原空文件编辑器发起空查询及后续 delegate 查询，使用明确根和同一原 cacheKey，隐藏／换工作区／dispose 均取消并清原 cache，重新打开生成新 key；迟到结果不覆盖当前结果，目录描述及禁用侧边按钮沿原调用方消费。
+- 原 Chat 的 filter 拒绝不支持 scheme，additionPicks 保留，值附加与二级接受仅进入显式原 widget；返回项重开原选择器且后续焦点变化不改投，hide／取消结束二级流程、不自动返回。原 enabledProviderPrefixes 仍为 ['', '#', '@']，真实 Controller 拒绝调用已登记但不允许的 % Provider；未调用项目 Composer、Opener 或业务写入口。
+- 初次构建遗漏原 Chat 引用的字体／图片 loader，补齐真实资产及 CSS 后通过，未替换原模块。最终 JS AST 语法检查、差异及 OpenSpec strict 通过；新增 callers 子目录有四段式 AGENTS.md，三个代码文件各自负责宿主事件、真实调用方装配与断言，未新增产品实现。产品代码未变，复用上一切片真实类型检查和正式构建。
+- 准确命令、源码指纹、原输出和退出码：`out/tests/temp/quick_access_sources_20261103/artifacts/original-callers-{contract-1,contract-2,contract-3,static-1}.json`／`.raw`；正式编译资产位于 `out/tests/integration/clients/web/quick_access/callers/original.test/`。7.4 的其余行列／符号／quickNavigate、两级搜索及 Electron 继续未完成。
