@@ -187,6 +187,12 @@
 - [ ] 16.19 贯通原 owner canonical／大小写及 IUriIdentityService 比较键、重叠根／额外文件／模型去重与根局部选项；保留 onlyOpenEditors、preview、文件大小／编码／链接策略的真实映射，未支持选项明确拒绝。冻结按工作区分区的本地覆盖身份并交文件 owner 在输出计量／分页前排除，不传正文，绑定缓存／cursor。验证只选 A 时 B 不查询，以及 A+B 小配额时 A 本地删词屏蔽旧磁盘命中、B 同路径及 A 另一文件仍可续页取得，核真实序列化、progress／终态计数、模型变化与旧 cursor 失效及本地剩余远端配额。
 - [ ] 16.20 追加可判别生命周期与流式验收：查询中注销后无新分发／fallback／迟到 progress，安全结算后释放；同 picker 缓存复用／范围隔离及 A/B 独立编辑器释放；受限预热不能标记完整，唯一匹配在预热上限外时仍可有界查询／续查或明确受限，不返回完整无匹配；进度与最终结果不重复计数、最后不足批次仍 flush、慢消费缓冲有界、终态唯一、未交付页不漏项。按相关源码批次做定向受保护验证，不默认重跑全套。
 
+### 2026-11-03：目录公开结构补齐（1.2、16.2 部分）
+
+- Session catalog 的六种公开读侧结构统一登记到 Workspace proto；前端从生成结构派生，仅保留 HTTP presence 和业务值域窄化，不再逐字段手写同形接口。原 Pydantic、目录版本及分页职责保持。
+- 真实路由、嵌套结构漂移与候选 descriptor 发布前拒绝等定向检查合计 72 passed；Ruff、协议生成一致性、Buf format／lint／基于 `bce2fc960` 的 breaking 检查通过。真实 Workbench 类型检查包含 18 份转换源码并零诊断，正式 Web 构建通过。
+- 准确命令、源码指纹、原始输出及退出码保留于 `out/tests/temp/quick_access_provider_20261103/artifacts/catalog-*`。本批未改变运行时查询行为，不重复浏览器流程；Provider 和联邦合同仍待实现，1.2／16.2 不据此勾选。
+
 ### 2026-11-02：Session／Thread 专用模式（11.2 部分）
 
 - `session ` 和 `thread ` 通过原 Registry、帮助 metadata 与 Action 接入同一 Provider；分别只查询 catalog 或精确 Thread owner，范围、分页、失败、取消和打开继续使用唯一链路。Session 名称不按文件行号／符号拆分；Thread 最近记录不混入文件。

@@ -1,6 +1,14 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
-import type { WorkspaceResourceDTO } from "./protocol_generated/boxteam/workspace/v2/public";
+import type {
+  WorkspaceResourceDTO,
+  SessionCatalogNodeDTO,
+  SessionCatalogPageDTO,
+  SessionCatalogBreadcrumbDTO,
+  SessionCatalogSearchResultDTO,
+  SessionCatalogSearchResultsDTO,
+  SessionCatalogExportDTO,
+} from "./protocol_generated/boxteam/workspace/v2/public";
 import type { ConfigSourceDTO, ConfigSourcesDTO, Session, SessionResource } from "./protocol";
 
 export type {
@@ -642,58 +650,39 @@ export type WorkspaceNavigationTree = Omit<
   nodes: WorkspaceNavigationNode[];
 };
 
-export interface SessionCatalogNode {
-  node_id: string;
+// Proto presence 在现行 HTTP JSON 中允许省略或 null；枚举与 Session 的业务窄化仍留本层。
+type CatalogJsonFields<T> = {
+  [K in keyof T as undefined extends T[K] ? never : K]: T[K];
+} & {
+  [K in keyof T as undefined extends T[K] ? K : never]?: T[K] | null;
+};
+
+export type SessionCatalogNode = Omit<CatalogJsonFields<SessionCatalogNodeDTO>, "kind" | "state" | "session"> & {
   kind: "folder" | "session";
-  name: string;
-  parent_node_id?: string | null;
-  session_id?: string | null;
-  folder_id?: string | null;
-  has_children: boolean;
-  node_revision: number;
   state: "active" | "deleting";
-  created_at?: string | null;
-  updated_at?: string | null;
-  /** 会话节点携带完整会话元数据；消息历史不属于目录节点。 */
   session?: Session | null;
-}
+};
 
-export interface SessionCatalogPage {
-  revision: string;
-  catalog_revision: number;
-  parent_node_id?: string | null;
+export type SessionCatalogPage = Omit<CatalogJsonFields<SessionCatalogPageDTO>, "items"> & {
   items: SessionCatalogNode[];
-  cursor?: string | null;
-  total: number;
-  /** 目录仍按权威索引展示时，提示未通过严格物理树校验的原因。 */
-  consistency_warning?: string | null;
-}
+};
 
-export interface SessionCatalogBreadcrumb {
-  revision: string;
-  catalog_revision: number;
+export type SessionCatalogBreadcrumb = Omit<SessionCatalogBreadcrumbDTO, "items"> & {
   items: SessionCatalogNode[];
-}
+};
 
-export interface SessionCatalogSearchResult {
+export type SessionCatalogSearchResult = Omit<SessionCatalogSearchResultDTO, "node" | "breadcrumb"> & {
   node: SessionCatalogNode;
   breadcrumb: SessionCatalogNode[];
-  relative_path: string;
-}
+};
 
-export interface SessionCatalogSearchResults {
-  revision: string;
-  catalog_revision: number;
+export type SessionCatalogSearchResults = Omit<CatalogJsonFields<SessionCatalogSearchResultsDTO>, "items"> & {
   items: SessionCatalogSearchResult[];
-  cursor?: string | null;
-  total: number;
-}
+};
 
-export interface SessionCatalogExport {
-  revision: string;
-  catalog_revision: number;
+export type SessionCatalogExport = Omit<SessionCatalogExportDTO, "items"> & {
   items: SessionCatalogNode[];
-}
+};
 
 export type GatewaySessionSearchMatch = DeepRequired<GatewaySessionSearchMatchDTO>;
 

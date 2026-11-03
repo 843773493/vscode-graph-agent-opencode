@@ -201,6 +201,96 @@ class ChildThreadListDTO(_message.Message):
     teams: _containers.RepeatedCompositeFieldContainer[TeamBoardDTO]
     def __init__(self, parent_session_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[ChildThreadSummaryDTO, _Mapping]]] = ..., total: _Optional[int] = ..., teams: _Optional[_Iterable[_Union[TeamBoardDTO, _Mapping]]] = ...) -> None: ...
 
+class SessionCatalogNodeDTO(_message.Message):
+    __slots__ = ("node_id", "kind", "name", "parent_node_id", "session_id", "folder_id", "has_children", "node_revision", "state", "created_at", "updated_at", "session")
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    PARENT_NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    FOLDER_ID_FIELD_NUMBER: _ClassVar[int]
+    HAS_CHILDREN_FIELD_NUMBER: _ClassVar[int]
+    NODE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
+    SESSION_FIELD_NUMBER: _ClassVar[int]
+    node_id: str
+    kind: str
+    name: str
+    parent_node_id: str
+    session_id: str
+    folder_id: str
+    has_children: bool
+    node_revision: int
+    state: str
+    created_at: _timestamp_pb2.Timestamp
+    updated_at: _timestamp_pb2.Timestamp
+    session: SessionDTO
+    def __init__(self, node_id: _Optional[str] = ..., kind: _Optional[str] = ..., name: _Optional[str] = ..., parent_node_id: _Optional[str] = ..., session_id: _Optional[str] = ..., folder_id: _Optional[str] = ..., has_children: _Optional[bool] = ..., node_revision: _Optional[int] = ..., state: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., session: _Optional[_Union[SessionDTO, _Mapping]] = ...) -> None: ...
+
+class SessionCatalogPageDTO(_message.Message):
+    __slots__ = ("revision", "catalog_revision", "parent_node_id", "items", "cursor", "total", "consistency_warning")
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PARENT_NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_FIELD_NUMBER: _ClassVar[int]
+    CONSISTENCY_WARNING_FIELD_NUMBER: _ClassVar[int]
+    revision: str
+    catalog_revision: int
+    parent_node_id: str
+    items: _containers.RepeatedCompositeFieldContainer[SessionCatalogNodeDTO]
+    cursor: str
+    total: int
+    consistency_warning: str
+    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., parent_node_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., total: _Optional[int] = ..., consistency_warning: _Optional[str] = ...) -> None: ...
+
+class SessionCatalogBreadcrumbDTO(_message.Message):
+    __slots__ = ("revision", "catalog_revision", "items")
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    revision: str
+    catalog_revision: int
+    items: _containers.RepeatedCompositeFieldContainer[SessionCatalogNodeDTO]
+    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ...) -> None: ...
+
+class SessionCatalogSearchResultDTO(_message.Message):
+    __slots__ = ("node", "breadcrumb", "relative_path")
+    NODE_FIELD_NUMBER: _ClassVar[int]
+    BREADCRUMB_FIELD_NUMBER: _ClassVar[int]
+    RELATIVE_PATH_FIELD_NUMBER: _ClassVar[int]
+    node: SessionCatalogNodeDTO
+    breadcrumb: _containers.RepeatedCompositeFieldContainer[SessionCatalogNodeDTO]
+    relative_path: str
+    def __init__(self, node: _Optional[_Union[SessionCatalogNodeDTO, _Mapping]] = ..., breadcrumb: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ..., relative_path: _Optional[str] = ...) -> None: ...
+
+class SessionCatalogSearchResultsDTO(_message.Message):
+    __slots__ = ("revision", "catalog_revision", "items", "cursor", "total")
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_FIELD_NUMBER: _ClassVar[int]
+    revision: str
+    catalog_revision: int
+    items: _containers.RepeatedCompositeFieldContainer[SessionCatalogSearchResultDTO]
+    cursor: str
+    total: int
+    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogSearchResultDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., total: _Optional[int] = ...) -> None: ...
+
+class SessionCatalogExportDTO(_message.Message):
+    __slots__ = ("revision", "catalog_revision", "items")
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    revision: str
+    catalog_revision: int
+    items: _containers.RepeatedCompositeFieldContainer[SessionCatalogNodeDTO]
+    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ...) -> None: ...
+
 class SessionThreadSearchResultDTO(_message.Message):
     __slots__ = ("workspace_id", "session_id", "thread_id", "thread_uri", "kind", "title", "session_title", "created_at")
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]

@@ -63,6 +63,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionForkTransferRequest", "SessionForkTransferResultDTO",
         "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
         "SessionThreadSearchResultsDTO",
+        "SessionCatalogPageDTO", "SessionCatalogBreadcrumbDTO",
+        "SessionCatalogSearchResultsDTO", "SessionCatalogExportDTO",
         "SessionTurnBootstrapDTO", "TurnHistoryLoadRequest", "TurnHistoryPageDTO",
         "TurnMessageSearchRequest", "TurnMessageSearchResultsDTO",
         "WorkspaceMessageSearchResultsDTO",

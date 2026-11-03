@@ -509,6 +509,237 @@ export declare const ChildThreadListDTOSchema: GenMessage<ChildThreadListDTO>;
 /**
  * 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。
  *
+ * @generated from message boxteam.workspace.v2.SessionCatalogNodeDTO
+ */
+export declare type SessionCatalogNodeDTO = Message<"boxteam.workspace.v2.SessionCatalogNodeDTO"> & {
+  /**
+   * @generated from field: string node_id = 1;
+   */
+  nodeId: string;
+
+  /**
+   * @generated from field: string kind = 2;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string name = 3;
+   */
+  name: string;
+
+  /**
+   * @generated from field: optional string parent_node_id = 4;
+   */
+  parentNodeId?: string | undefined;
+
+  /**
+   * @generated from field: optional string session_id = 5;
+   */
+  sessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string folder_id = 6;
+   */
+  folderId?: string | undefined;
+
+  /**
+   * @generated from field: bool has_children = 7;
+   */
+  hasChildren: boolean;
+
+  /**
+   * @generated from field: int64 node_revision = 8;
+   */
+  nodeRevision: bigint;
+
+  /**
+   * @generated from field: string state = 9;
+   */
+  state: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 10;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 11;
+   */
+  updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionDTO session = 12;
+   */
+  session?: SessionDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogNodeDTO.
+ * Use `create(SessionCatalogNodeDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogNodeDTOSchema: GenMessage<SessionCatalogNodeDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionCatalogPageDTO
+ */
+export declare type SessionCatalogPageDTO = Message<"boxteam.workspace.v2.SessionCatalogPageDTO"> & {
+  /**
+   * @generated from field: string revision = 1;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: int64 catalog_revision = 2;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: optional string parent_node_id = 3;
+   */
+  parentNodeId?: string | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionCatalogNodeDTO items = 4;
+   */
+  items: SessionCatalogNodeDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 5;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: int64 total = 6;
+   */
+  total: bigint;
+
+  /**
+   * @generated from field: optional string consistency_warning = 7;
+   */
+  consistencyWarning?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogPageDTO.
+ * Use `create(SessionCatalogPageDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogPageDTOSchema: GenMessage<SessionCatalogPageDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionCatalogBreadcrumbDTO
+ */
+export declare type SessionCatalogBreadcrumbDTO = Message<"boxteam.workspace.v2.SessionCatalogBreadcrumbDTO"> & {
+  /**
+   * @generated from field: string revision = 1;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: int64 catalog_revision = 2;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionCatalogNodeDTO items = 3;
+   */
+  items: SessionCatalogNodeDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogBreadcrumbDTO.
+ * Use `create(SessionCatalogBreadcrumbDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogBreadcrumbDTOSchema: GenMessage<SessionCatalogBreadcrumbDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionCatalogSearchResultDTO
+ */
+export declare type SessionCatalogSearchResultDTO = Message<"boxteam.workspace.v2.SessionCatalogSearchResultDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionCatalogNodeDTO node = 1;
+   */
+  node?: SessionCatalogNodeDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionCatalogNodeDTO breadcrumb = 2;
+   */
+  breadcrumb: SessionCatalogNodeDTO[];
+
+  /**
+   * @generated from field: string relative_path = 3;
+   */
+  relativePath: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogSearchResultDTO.
+ * Use `create(SessionCatalogSearchResultDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogSearchResultDTOSchema: GenMessage<SessionCatalogSearchResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionCatalogSearchResultsDTO
+ */
+export declare type SessionCatalogSearchResultsDTO = Message<"boxteam.workspace.v2.SessionCatalogSearchResultsDTO"> & {
+  /**
+   * @generated from field: string revision = 1;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: int64 catalog_revision = 2;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionCatalogSearchResultDTO items = 3;
+   */
+  items: SessionCatalogSearchResultDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 4;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: int64 total = 5;
+   */
+  total: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogSearchResultsDTO.
+ * Use `create(SessionCatalogSearchResultsDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogSearchResultsDTOSchema: GenMessage<SessionCatalogSearchResultsDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.SessionCatalogExportDTO
+ */
+export declare type SessionCatalogExportDTO = Message<"boxteam.workspace.v2.SessionCatalogExportDTO"> & {
+  /**
+   * @generated from field: string revision = 1;
+   */
+  revision: string;
+
+  /**
+   * @generated from field: int64 catalog_revision = 2;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SessionCatalogNodeDTO items = 3;
+   */
+  items: SessionCatalogNodeDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SessionCatalogExportDTO.
+ * Use `create(SessionCatalogExportDTOSchema)` to create a new message.
+ */
+export declare const SessionCatalogExportDTOSchema: GenMessage<SessionCatalogExportDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.SessionThreadSearchResultDTO
  */
 export declare type SessionThreadSearchResultDTO = Message<"boxteam.workspace.v2.SessionThreadSearchResultDTO"> & {

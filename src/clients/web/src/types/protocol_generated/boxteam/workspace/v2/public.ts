@@ -125,6 +125,57 @@ export interface ChildThreadListDTO {
 }
 
 /** 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。 */
+export interface SessionCatalogNodeDTO {
+  node_id: string;
+  kind: string;
+  name: string;
+  parent_node_id?: string | undefined;
+  session_id?: string | undefined;
+  folder_id?: string | undefined;
+  has_children: boolean;
+  node_revision: number;
+  state: string;
+  created_at: string | undefined;
+  updated_at: string | undefined;
+  session: SessionDTO | undefined;
+}
+
+export interface SessionCatalogPageDTO {
+  revision: string;
+  catalog_revision: number;
+  parent_node_id?: string | undefined;
+  items: SessionCatalogNodeDTO[];
+  cursor?: string | undefined;
+  total: number;
+  consistency_warning?: string | undefined;
+}
+
+export interface SessionCatalogBreadcrumbDTO {
+  revision: string;
+  catalog_revision: number;
+  items: SessionCatalogNodeDTO[];
+}
+
+export interface SessionCatalogSearchResultDTO {
+  node: SessionCatalogNodeDTO | undefined;
+  breadcrumb: SessionCatalogNodeDTO[];
+  relative_path: string;
+}
+
+export interface SessionCatalogSearchResultsDTO {
+  revision: string;
+  catalog_revision: number;
+  items: SessionCatalogSearchResultDTO[];
+  cursor?: string | undefined;
+  total: number;
+}
+
+export interface SessionCatalogExportDTO {
+  revision: string;
+  catalog_revision: number;
+  items: SessionCatalogNodeDTO[];
+}
+
 export interface SessionThreadSearchResultDTO {
   workspace_id: string;
   session_id: string;
@@ -3900,6 +3951,356 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
     message.items = object.items?.map((e) => ChildThreadSummaryDTO.fromPartial(e)) || [];
     message.total = object.total ?? 0;
     message.teams = object.teams?.map((e) => TeamBoardDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSessionCatalogNodeDTO(): SessionCatalogNodeDTO {
+  return {
+    node_id: "",
+    kind: "",
+    name: "",
+    parent_node_id: undefined,
+    session_id: undefined,
+    folder_id: undefined,
+    has_children: false,
+    node_revision: 0,
+    state: "",
+    created_at: undefined,
+    updated_at: undefined,
+    session: undefined,
+  };
+}
+
+export const SessionCatalogNodeDTO: MessageFns<SessionCatalogNodeDTO> = {
+  fromJSON(object: any): SessionCatalogNodeDTO {
+    return {
+      node_id: isSet(object.node_id) ? globalThis.String(object.node_id) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      parent_node_id: isSet(object.parent_node_id) ? globalThis.String(object.parent_node_id) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
+      folder_id: isSet(object.folder_id) ? globalThis.String(object.folder_id) : undefined,
+      has_children: isSet(object.has_children) ? globalThis.Boolean(object.has_children) : false,
+      node_revision: isSet(object.node_revision) ? globalThis.Number(object.node_revision) : 0,
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      session: isSet(object.session) ? SessionDTO.fromJSON(object.session) : undefined,
+    };
+  },
+
+  toJSON(message: SessionCatalogNodeDTO): unknown {
+    const obj: any = {};
+    if (message.node_id !== "") {
+      obj.node_id = message.node_id;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.parent_node_id !== undefined) {
+      obj.parent_node_id = message.parent_node_id;
+    }
+    if (message.session_id !== undefined) {
+      obj.session_id = message.session_id;
+    }
+    if (message.folder_id !== undefined) {
+      obj.folder_id = message.folder_id;
+    }
+    if (message.has_children !== false) {
+      obj.has_children = message.has_children;
+    }
+    if (message.node_revision !== 0) {
+      obj.node_revision = Math.round(message.node_revision);
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.session !== undefined) {
+      obj.session = SessionDTO.toJSON(message.session);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogNodeDTO>, I>>(base?: I): SessionCatalogNodeDTO {
+    return SessionCatalogNodeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogNodeDTO>, I>>(object: I): SessionCatalogNodeDTO {
+    const message = createBaseSessionCatalogNodeDTO();
+    message.node_id = object.node_id ?? "";
+    message.kind = object.kind ?? "";
+    message.name = object.name ?? "";
+    message.parent_node_id = object.parent_node_id ?? undefined;
+    message.session_id = object.session_id ?? undefined;
+    message.folder_id = object.folder_id ?? undefined;
+    message.has_children = object.has_children ?? false;
+    message.node_revision = object.node_revision ?? 0;
+    message.state = object.state ?? "";
+    message.created_at = object.created_at ?? undefined;
+    message.updated_at = object.updated_at ?? undefined;
+    message.session = (object.session !== undefined && object.session !== null)
+      ? SessionDTO.fromPartial(object.session)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseSessionCatalogPageDTO(): SessionCatalogPageDTO {
+  return {
+    revision: "",
+    catalog_revision: 0,
+    parent_node_id: undefined,
+    items: [],
+    cursor: undefined,
+    total: 0,
+    consistency_warning: undefined,
+  };
+}
+
+export const SessionCatalogPageDTO: MessageFns<SessionCatalogPageDTO> = {
+  fromJSON(object: any): SessionCatalogPageDTO {
+    return {
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      parent_node_id: isSet(object.parent_node_id) ? globalThis.String(object.parent_node_id) : undefined,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => SessionCatalogNodeDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      total: isSet(object.total) ? globalThis.Number(object.total) : 0,
+      consistency_warning: isSet(object.consistency_warning)
+        ? globalThis.String(object.consistency_warning)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SessionCatalogPageDTO): unknown {
+    const obj: any = {};
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.parent_node_id !== undefined) {
+      obj.parent_node_id = message.parent_node_id;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => SessionCatalogNodeDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.total !== 0) {
+      obj.total = Math.round(message.total);
+    }
+    if (message.consistency_warning !== undefined) {
+      obj.consistency_warning = message.consistency_warning;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogPageDTO>, I>>(base?: I): SessionCatalogPageDTO {
+    return SessionCatalogPageDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogPageDTO>, I>>(object: I): SessionCatalogPageDTO {
+    const message = createBaseSessionCatalogPageDTO();
+    message.revision = object.revision ?? "";
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.parent_node_id = object.parent_node_id ?? undefined;
+    message.items = object.items?.map((e) => SessionCatalogNodeDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.total = object.total ?? 0;
+    message.consistency_warning = object.consistency_warning ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionCatalogBreadcrumbDTO(): SessionCatalogBreadcrumbDTO {
+  return { revision: "", catalog_revision: 0, items: [] };
+}
+
+export const SessionCatalogBreadcrumbDTO: MessageFns<SessionCatalogBreadcrumbDTO> = {
+  fromJSON(object: any): SessionCatalogBreadcrumbDTO {
+    return {
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => SessionCatalogNodeDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: SessionCatalogBreadcrumbDTO): unknown {
+    const obj: any = {};
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => SessionCatalogNodeDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogBreadcrumbDTO>, I>>(base?: I): SessionCatalogBreadcrumbDTO {
+    return SessionCatalogBreadcrumbDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogBreadcrumbDTO>, I>>(object: I): SessionCatalogBreadcrumbDTO {
+    const message = createBaseSessionCatalogBreadcrumbDTO();
+    message.revision = object.revision ?? "";
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.items = object.items?.map((e) => SessionCatalogNodeDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSessionCatalogSearchResultDTO(): SessionCatalogSearchResultDTO {
+  return { node: undefined, breadcrumb: [], relative_path: "" };
+}
+
+export const SessionCatalogSearchResultDTO: MessageFns<SessionCatalogSearchResultDTO> = {
+  fromJSON(object: any): SessionCatalogSearchResultDTO {
+    return {
+      node: isSet(object.node) ? SessionCatalogNodeDTO.fromJSON(object.node) : undefined,
+      breadcrumb: globalThis.Array.isArray(object?.breadcrumb)
+        ? object.breadcrumb.map((e: any) => SessionCatalogNodeDTO.fromJSON(e))
+        : [],
+      relative_path: isSet(object.relative_path) ? globalThis.String(object.relative_path) : "",
+    };
+  },
+
+  toJSON(message: SessionCatalogSearchResultDTO): unknown {
+    const obj: any = {};
+    if (message.node !== undefined) {
+      obj.node = SessionCatalogNodeDTO.toJSON(message.node);
+    }
+    if (message.breadcrumb?.length) {
+      obj.breadcrumb = message.breadcrumb.map((e) => SessionCatalogNodeDTO.toJSON(e));
+    }
+    if (message.relative_path !== "") {
+      obj.relative_path = message.relative_path;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogSearchResultDTO>, I>>(base?: I): SessionCatalogSearchResultDTO {
+    return SessionCatalogSearchResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogSearchResultDTO>, I>>(
+    object: I,
+  ): SessionCatalogSearchResultDTO {
+    const message = createBaseSessionCatalogSearchResultDTO();
+    message.node = (object.node !== undefined && object.node !== null)
+      ? SessionCatalogNodeDTO.fromPartial(object.node)
+      : undefined;
+    message.breadcrumb = object.breadcrumb?.map((e) => SessionCatalogNodeDTO.fromPartial(e)) || [];
+    message.relative_path = object.relative_path ?? "";
+    return message;
+  },
+};
+
+function createBaseSessionCatalogSearchResultsDTO(): SessionCatalogSearchResultsDTO {
+  return { revision: "", catalog_revision: 0, items: [], cursor: undefined, total: 0 };
+}
+
+export const SessionCatalogSearchResultsDTO: MessageFns<SessionCatalogSearchResultsDTO> = {
+  fromJSON(object: any): SessionCatalogSearchResultsDTO {
+    return {
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => SessionCatalogSearchResultDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      total: isSet(object.total) ? globalThis.Number(object.total) : 0,
+    };
+  },
+
+  toJSON(message: SessionCatalogSearchResultsDTO): unknown {
+    const obj: any = {};
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => SessionCatalogSearchResultDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.total !== 0) {
+      obj.total = Math.round(message.total);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogSearchResultsDTO>, I>>(base?: I): SessionCatalogSearchResultsDTO {
+    return SessionCatalogSearchResultsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogSearchResultsDTO>, I>>(
+    object: I,
+  ): SessionCatalogSearchResultsDTO {
+    const message = createBaseSessionCatalogSearchResultsDTO();
+    message.revision = object.revision ?? "";
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.items = object.items?.map((e) => SessionCatalogSearchResultDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.total = object.total ?? 0;
+    return message;
+  },
+};
+
+function createBaseSessionCatalogExportDTO(): SessionCatalogExportDTO {
+  return { revision: "", catalog_revision: 0, items: [] };
+}
+
+export const SessionCatalogExportDTO: MessageFns<SessionCatalogExportDTO> = {
+  fromJSON(object: any): SessionCatalogExportDTO {
+    return {
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => SessionCatalogNodeDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: SessionCatalogExportDTO): unknown {
+    const obj: any = {};
+    if (message.revision !== "") {
+      obj.revision = message.revision;
+    }
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => SessionCatalogNodeDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogExportDTO>, I>>(base?: I): SessionCatalogExportDTO {
+    return SessionCatalogExportDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogExportDTO>, I>>(object: I): SessionCatalogExportDTO {
+    const message = createBaseSessionCatalogExportDTO();
+    message.revision = object.revision ?? "";
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.items = object.items?.map((e) => SessionCatalogNodeDTO.fromPartial(e)) || [];
     return message;
   },
 };

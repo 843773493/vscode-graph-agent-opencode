@@ -127,6 +127,57 @@ message ChildThreadListDTO {
 }
 
 // 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。
+message SessionCatalogNodeDTO {
+  string node_id = 1;
+  string kind = 2;
+  string name = 3;
+  optional string parent_node_id = 4;
+  optional string session_id = 5;
+  optional string folder_id = 6;
+  bool has_children = 7;
+  int64 node_revision = 8;
+  string state = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  SessionDTO session = 12;
+}
+
+message SessionCatalogPageDTO {
+  string revision = 1;
+  int64 catalog_revision = 2;
+  optional string parent_node_id = 3;
+  repeated SessionCatalogNodeDTO items = 4;
+  optional string cursor = 5;
+  int64 total = 6;
+  optional string consistency_warning = 7;
+}
+
+message SessionCatalogBreadcrumbDTO {
+  string revision = 1;
+  int64 catalog_revision = 2;
+  repeated SessionCatalogNodeDTO items = 3;
+}
+
+message SessionCatalogSearchResultDTO {
+  SessionCatalogNodeDTO node = 1;
+  repeated SessionCatalogNodeDTO breadcrumb = 2;
+  string relative_path = 3;
+}
+
+message SessionCatalogSearchResultsDTO {
+  string revision = 1;
+  int64 catalog_revision = 2;
+  repeated SessionCatalogSearchResultDTO items = 3;
+  optional string cursor = 4;
+  int64 total = 5;
+}
+
+message SessionCatalogExportDTO {
+  string revision = 1;
+  int64 catalog_revision = 2;
+  repeated SessionCatalogNodeDTO items = 3;
+}
+
 message SessionThreadSearchResultDTO {
   string workspace_id = 1;
   string session_id = 2;
