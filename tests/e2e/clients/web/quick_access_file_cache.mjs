@@ -50,6 +50,25 @@ try {
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), listing = await api('/api/gateway/workspaces');
   expect(health.status).toBe(200); expect(listing.status).toBe(200);
+  result.phase = 'build-static-cache-policy';
+  const manifestResponse = await fetch(new URL('/immutable-assets.json', baseUrl));
+  expect(manifestResponse.status).toBe(200);
+  const immutable = await manifestResponse.json();
+  expect(immutable.length).toBeGreaterThan(0);
+  result.staticResources = [];
+  for (const path of ['/index.html', '/out/main.js', '/out/vs/editor/common/services/editorWebWorkerMain.js', '/' + immutable[0]]) {
+    const cold = await fetch(new URL(path, baseUrl), { method: 'HEAD' });
+    const policy = immutable.includes(path.slice(1)) ? 'public, max-age=31536000, immutable' : 'no-cache';
+    expect(cold.status).toBe(200); expect(cold.headers.get('cache-control')).toBe(policy);
+    const warm = await fetch(new URL(path, baseUrl), { headers: { 'If-None-Match': cold.headers.get('etag') } });
+    expect(warm.status).toBe(304);
+    const bytes = (await warm.arrayBuffer()).byteLength;
+    expect(bytes).toBe(0); expect(warm.headers.get('cache-control')).toBe(policy);
+    result.staticResources.push({ path, policy, warmStatus: warm.status, bytes });
+  }
+  const missingWorker = await fetch(new URL('/out/missing-worker.js', baseUrl));
+  expect(missingWorker.status).toBe(404);
+  result.staticCachePolicy = true;
   const targets = [];
   for (const route of [routeA, routeB]) {
     const current = await api('/api/v1/workspace', { headers: { 'X-BoxTeam-Workspace-Id': route } });

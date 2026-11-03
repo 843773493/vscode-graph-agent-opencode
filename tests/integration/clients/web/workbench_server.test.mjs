@@ -9,7 +9,8 @@ import { TestRunContext } from '../../../harness/js/run-context.mjs';
 const observer = String.raw`
 import { createServer, request } from 'node:http';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 const input = JSON.parse(readFileSync(0, 'utf8'));
 const { createWorkbenchServer } = await import(input.module);
 const servers = [], sockets = new Set(), clients = [], upstreams = [];
@@ -95,6 +96,24 @@ try {
     let body = '';
     for await (const chunk of response) body += chunk;
     observed.response = { status: response.statusCode, headers: response.headers, body: JSON.parse(body) };
+  } else if (input.scenario === 'static') {
+    const read = async (path, headers = {}, method = 'GET') => {
+      const response = await fetch(origin + path, { headers, method });
+      return { status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() };
+    };
+    observed.reads = {};
+    for (const path of ['/index.html', '/main.js', '/worker.js', '/font-ABC12345.ttf', '/unlisted-ABC12345.js']) {
+      const cold = await read(path);
+      observed.reads[path] = { cold, warm: await read(path, { 'If-None-Match': cold.headers.etag }) };
+    }
+    const old = observed.reads['/worker.js'].cold;
+    writeFileSync(join(input.root, 'worker.js'), 'worker-version-two');
+    observed.updated = await read('/worker.js', { 'If-None-Match': old.headers.etag });
+    observed.head = await read('/worker.js', {}, 'HEAD');
+    unlinkSync(join(input.root, 'worker.js'));
+    observed.missing = await read('/worker.js', { 'If-None-Match': observed.updated.headers.etag });
+    observed.oauth = await read('/%6dcp-oauth-callback.html?code=private-code');
+    observed.multi = await read('/main.js', { 'If-None-Match': '"different", ' + observed.reads['/main.js'].cold.headers.etag.slice(2) });
   } else throw new Error('未知场景: ' + input.scenario);
   observed.requests = upstreams.map(({ response, ...entry }) => entry);
   // 在 fixture 强制清理之前取证，不能把兜底清理误当成代理释放。
@@ -111,13 +130,21 @@ try {
 const scope = await TestRunContext.fromTestFile('tests/integration/clients/web/workbench_server.test.mjs').prepare();
 await writeFile(join(scope.artifactsDir, 'observer.mjs'), observer);
 
-for (const scenario of ['streams', 'pending', 'json']) {
+for (const scenario of ['streams', 'pending', 'json', 'static']) {
   test(`Workbench HTTP 代理：${scenario}`, async () => {
     const directory = join(scope.artifactsDir, scenario);
     await mkdir(directory);
+    const root = join(scope.workspaceRoot, scenario);
+    await mkdir(root, { recursive: true });
+    if (scenario === 'static') {
+      for (const name of ['index.html', 'main.js', 'worker.js', 'font-ABC12345.ttf', 'unlisted-ABC12345.js', 'mcp-oauth-callback.html']) {
+        await writeFile(join(root, name), name + '-v1');
+      }
+      await writeFile(join(root, 'immutable-assets.json'), JSON.stringify(['font-ABC12345.ttf']));
+    }
     const input = {
       module: pathToFileURL(resolve('src/clients/workbench/scripts/server.mjs')).href,
-      root: scope.workspaceRoot, scenario,
+      root, scenario,
     };
     // http-proxy 的已知弃用告警与连接行为无关；其余 stderr 仍按原件审计。
     const command = ['node', '--disable-warning=DEP0060', '--input-type=module', '-e', observer];
@@ -148,12 +175,29 @@ for (const scenario of ['streams', 'pending', 'json']) {
     } else if (scenario === 'pending') {
       expect(observed.releasedBeforeHeaders).toBe(true);
       expect(observed.clientErrors).toEqual(['ECONNRESET']);
-    } else {
+    } else if (scenario === 'json') {
       expect(observed.response.status).toBe(201);
       expect(observed.response.headers['x-request-id']).toBe('fixture-request');
       expect(observed.response.headers['set-cookie']).toEqual(['fixture-session=returned; HttpOnly']);
       expect(observed.response.body).toEqual({ path: '/api/json', owner: '/api/json',
         cookie: 'fixture-session=local', body: { thread_id: '/api/json' } });
+    } else {
+      for (const [path, { cold, warm }] of Object.entries(observed.reads)) {
+        const policy = path.endsWith('.ttf') ? 'public, max-age=31536000, immutable' : 'no-cache';
+        expect(cold.status).toBe(200); expect(cold.body).toBe(path.slice(1) + '-v1');
+        expect(cold.headers['cache-control']).toBe(policy);
+        expect(warm.status).toBe(304); expect(warm.body).toBe('');
+        expect(warm.headers['cache-control']).toBe(policy);
+      }
+      expect(observed.updated.status).toBe(200); expect(observed.updated.body).toBe('worker-version-two');
+      expect(observed.updated.headers.etag).not.toBe(observed.reads['/worker.js'].cold.headers.etag);
+      expect(observed.head.status).toBe(200); expect(observed.head.body).toBe('');
+      expect(observed.head.headers['content-length']).toBe(String('worker-version-two'.length));
+      expect(observed.missing.status).toBe(404); expect(observed.missing.headers['cache-control']).toBe('no-store');
+      expect(observed.oauth.status).toBe(200); expect(observed.oauth.headers['cache-control']).toBe('no-store');
+      expect(observed.oauth.headers['referrer-policy']).toBe('no-referrer');
+      expect(observed.oauth.headers.etag).toBeUndefined();
+      expect(observed.multi.status).toBe(304); expect(observed.requests).toEqual([]);
     }
   });
 }

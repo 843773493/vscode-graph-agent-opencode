@@ -67,6 +67,9 @@ async def test_original_image_editor_revalidates_private_file_cache(
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "原图片缓存验收需要 Chromium"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    immutable = json.loads((web_workbench_assets / "immutable-assets.json").read_text())
+    assert immutable and "out/main.js" not in immutable
+    assert all((web_workbench_assets / path).is_file() for path in immutable)
     workspace = Path(e2e_workspace_root_path)
     other = prepare_test_workspace(
         workspace_root=workspace / "B", template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace",
@@ -99,6 +102,7 @@ async def test_original_image_editor_revalidates_private_file_cache(
         assert result["phase"] == "passed" and result["pageErrors"] == []
         assert result["imageRevalidated"] and result["updatedImage"] and result["ownerIsolated"]
         assert result["watcherUpdatedImage"]
+        assert result["staticCachePolicy"]
         assert result["textRevalidated"] and result["staleSaveRejected"] and result["errorsNoStore"]
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

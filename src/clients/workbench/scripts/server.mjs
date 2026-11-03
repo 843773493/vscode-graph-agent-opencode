@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { resolve, extname, sep } from 'node:path';
+import { resolve, extname, sep, join, relative } from 'node:path';
 import httpProxy from 'http-proxy';
 
 /** @type {Record<string, string>} */
@@ -9,6 +9,10 @@ const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 /** @param {{ root: string; gateway?: string }} options */
 export function createWorkbenchServer({ root: directory, gateway }) {
   const root = resolve(directory);
+  const manifest = join(root, 'immutable-assets.json');
+  const assets = existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')) : [];
+  if (!Array.isArray(assets) || !assets.every(path => typeof path === 'string')) throw new Error(`静态资源缓存清单必须是路径列表：${manifest}`);
+  const immutableAssets = new Set(assets);
   const proxy = httpProxy.createProxyServer({ target: gateway, ws: true });
   proxy.on('proxyReq', (outgoing, _request, response) => {
     // SSE 请求体结束后，页面关闭只触发响应 close；同步释放该请求的上游连接。
@@ -41,14 +45,26 @@ export function createWorkbenchServer({ root: directory, gateway }) {
       if (cause.code === 'ENOENT' || cause.code === 'ENOTDIR') return null;
       throw cause;
     });
-    if (!file?.isFile()) { response.writeHead(404); response.end(`资源不存在：${url.pathname}`); return; }
-    const callback = url.pathname === '/mcp-oauth-callback.html';
-    response.writeHead(200, {
+    if (!file?.isFile()) { response.writeHead(404, { 'Cache-Control': 'no-store' }); response.end(`资源不存在：${url.pathname}`); return; }
+    const resourcePath = relative(root, path).split(sep).join('/');
+    const callback = resourcePath === 'mcp-oauth-callback.html';
+    // 与原 VS Code serveFile 一样只使用 stat 观察值；不为再验证重读 bundle 或计算正文 hash。
+    const etag = `W/"${[file.ino, file.size, file.mtimeMs].join('-')}"`;
+    const headers = {
       'Content-Type': mime[extname(path)] ?? 'application/octet-stream',
-      'Cache-Control': callback ? 'no-store' : 'no-cache',
-      ...(callback ? { 'Referrer-Policy': 'no-referrer' } : {}),
-    });
-    createReadStream(path).on('error', cause => response.destroy(cause)).pipe(response);
+      'Cache-Control': callback ? 'no-store' : immutableAssets.has(resourcePath)
+        ? 'public, max-age=31536000, immutable' : 'no-cache',
+      ...(callback ? { 'Referrer-Policy': 'no-referrer' } : { ETag: etag }),
+    };
+    if (!callback && ['GET', 'HEAD'].includes(request.method) && request.headers['if-none-match']?.split(',')
+      .some(value => value.trim() === '*' || value.trim().replace(/^W\//, '') === etag.slice(2))) {
+      response.writeHead(304, headers); response.end(); return;
+    }
+    if (request.method === 'HEAD') { response.writeHead(200, { ...headers, 'Content-Length': file.size }); response.end(); return; }
+    const stream = createReadStream(path);
+    response.once('close', () => stream.destroy());
+    stream.on('error', cause => response.destroy(cause));
+    stream.once('open', () => { response.writeHead(200, { ...headers, 'Content-Length': file.size }); stream.pipe(response); });
   });
   server.on('upgrade', (request, socket, head) => {
     if (!gateway || !new URL(request.url ?? '/', 'http://localhost').pathname.startsWith('/api/')) {

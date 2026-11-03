@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -25,6 +26,14 @@ class _OAuthCallbackAccessFilter(logging.Filter):
 class SpaStaticFiles(StaticFiles):
     """提供静态资源，并把非 API 的前端路由回退到 index.html。"""
 
+    def __init__(self, *, directory: Path) -> None:
+        super().__init__(directory=directory, html=True, check_dir=True)
+        manifest = directory / "immutable-assets.json"
+        assets = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else []
+        if not isinstance(assets, list) or not all(isinstance(path, str) for path in assets):
+            raise ValueError(f"静态资源缓存清单必须是路径列表: {manifest}")
+        self.immutable_assets = frozenset(assets)
+
     async def get_response(self, path: str, scope):
         normalized_path = path.replace("\\", "/")
         if normalized_path == "api" or normalized_path.startswith("api/"):
@@ -32,9 +41,14 @@ class SpaStaticFiles(StaticFiles):
         try:
             response = await super().get_response(normalized_path, scope)
         except HTTPException as error:
-            if error.status_code != 404:
+            if error.status_code != 404 or Path(normalized_path).suffix or normalized_path.split("/")[0] in {
+                "out", "assets", "extensions", "node_modules",
+            }:
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable" if normalized_path in self.immutable_assets else "no-cache"
+        )
         if normalized_path == _MCP_OAUTH_CALLBACK_PATH.lstrip("/"):
             response.headers["Cache-Control"] = "no-store"
             response.headers["Referrer-Policy"] = "no-referrer"
@@ -65,7 +79,7 @@ def install_static_web_ui(
         access_logger.addFilter(_OAuthCallbackAccessFilter())
     app.mount(
         "/",
-        SpaStaticFiles(directory=resolved_root, html=True, check_dir=True),
+        SpaStaticFiles(directory=resolved_root),
         name="boxteam-web-ui",
     )
     return True
