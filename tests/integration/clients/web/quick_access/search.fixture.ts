@@ -1,6 +1,6 @@
 import { URI } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
 import { Event } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
-import { extUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
+import { extUri, type IExtUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
 import { Range } from '../../../../../src/clients/workbench/upstream/src/vs/editor/common/core/range.js';
 import { TextModelSearch, SearchParams } from '../../../../../src/clients/workbench/upstream/src/vs/editor/common/model/textModelSearch.js';
 import { IModelService } from '../../../../../src/clients/workbench/upstream/src/vs/editor/common/services/model.js';
@@ -20,6 +20,7 @@ export { CancellationTokenSource } from '../../../../../src/clients/workbench/up
 export { ResourceSet } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/map.js';
 export { WorkspaceSearchProvider, textMatch } from '../../../../../src/clients/workbench/src/search/fileProvider.js';
 export { resourceInQuery } from '../../../../../src/clients/workbench/src/search/query.js';
+export { ExtUri, extUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
 export { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
 export { workspaceFileUri, workspaceFileSource } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 export { URI, WorkspaceSearchService };
@@ -40,7 +41,7 @@ export function model(resource: URI, text: string) {
   };
 }
 
-export function fixture(models: ReturnType<typeof model>[], open = models.map(model => model.uri)) {
+export function fixture(models: ReturnType<typeof model>[], open = models.map(model => model.uri), identity: IExtUri = extUri) {
   // 按真实 web.main 的顺序消费全体描述符；同一 ServiceCollection 最终只能得到项目实现。
   const services = new ServiceCollection(...getSingletonServiceDescriptors());
   const descriptor = services.get(ISearchService);
@@ -51,7 +52,7 @@ export function fixture(models: ReturnType<typeof model>[], open = models.map(mo
   services.set(ILogService, new NullLogService());
   services.set(ITelemetryService, { publicLog2() {} } as never);
   services.set(IExtensionService, { activateByEvent: async () => {}, whenInstalledExtensionsRegistered: async () => {} } as never);
-  services.set(IUriIdentityService, { extUri, onDidChange: Event.None } as never);
+  services.set(IUriIdentityService, { extUri: identity, onDidChange: Event.None } as never);
   services.set(IWebWorkerService, { createWorkerClient() { throw new Error('业务查询启动了浏览器文件 worker'); } } as never);
   const instantiation = new InstantiationService(services, true);
   const search = instantiation.invokeFunction(accessor => accessor.get(ISearchService));

@@ -3,9 +3,9 @@ import { CancellationToken, CancellationTokenSource } from '../../upstream/src/v
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { Disposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
-import { relativePath } from '../../upstream/src/vs/base/common/resources.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IUriIdentityService } from '../../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
 import { DEFAULT_MAX_SEARCH_RESULTS, IFileMatch, IFileQuery, IFolderQuery, isFilePatternMatch, ISearchComplete, ISearchProgressItem, ISearchResultProvider, ITextQuery, ITextSearchMatch, QueryType, TextSearchCompleteMessageType } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import type { ResourceNavigationContextDTO, ResourceNavigationMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
@@ -32,8 +32,10 @@ export function textMatch(hit: ResourceNavigationMatchDTO): ITextSearchMatch {
 
 export class WorkspaceSearchProvider extends Disposable implements ISearchResultProvider {
   private readonly active = new Set<CancellationTokenSource>();
+  private readonly resourceKey = (resource: URI) => this.uriIdentity.extUri.getComparisonKey(resource);
 
-  constructor(@IEditorService private readonly editors: IEditorService) { super(); }
+  constructor(@IEditorService private readonly editors: IEditorService,
+    @IUriIdentityService private readonly uriIdentity: IUriIdentityService) { super(); }
 
   override dispose(): void {
     for (const source of this.active) source.cancel();
@@ -54,7 +56,9 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
 
   private async search(query: IFileQuery | ITextQuery, onProgress?: (item: ISearchProgressItem) => void,
     token = CancellationToken.None, models = new ResourceSet()): Promise<ISearchComplete> {
-    if (query.type === QueryType.Text) validateTextQuery(query); else validateQuery(query);
+    const identity = this.uriIdentity.extUri;
+    query = query.type === QueryType.Text ? validateTextQuery(query, identity) : validateQuery(query, identity);
+    models = new ResourceSet([...models], this.resourceKey);
     if (token.isCancellationRequested) throw new CancellationError();
     if (this._store.isDisposed) throw new Error('文件搜索服务已释放');
     const source = new CancellationTokenSource(token), controller = new AbortController();
@@ -76,17 +80,16 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     const coveredResources = [...models];
     const seen = new Set<string>();
     const targets: { resource: URI; folder: IFolderQuery }[] = query.onlyOpenEditors
-      ? openResources(this.editors, query).map(resource => ({ resource, folder: query.folderQueries.find(folder => resourceInQuery(resource, { ...query, folderQueries: [folder] }))! }))
+      ? openResources(this.editors, query, identity).map(resource => ({ resource, folder: query.folderQueries.find(folder => resourceInQuery(resource, { ...query, folderQueries: [folder] }, identity))! }))
       : query.folderQueries.map(folder => ({ resource: folder.folder, folder }));
     try {
-      // TODO：16.19 沿文件 owner 的 canonical 身份统一重叠根及冲突局部选项，避免重复扫描。
       const planned = targets.flatMap(({ resource: target, folder }) => {
         if (query.type === QueryType.Text && models.has(target)) return [];
         if (query.onlyOpenEditors && query.type === QueryType.File && query.filePattern && !isFilePatternMatch({
-          relativePath: relativePath(folder.folder, target)!, searchPath: undefined,
+          relativePath: identity.relativePath(folder.folder, target)!, searchPath: undefined,
         }, query.filePattern, !query.shouldGlobMatchFilePattern)) return [];
         const owner = workspaceFileSource(target);
-        const options = fileOptions(query, folder);
+        const options = fileOptions(query, folder, identity);
         // 已打开文件已按原目录语义过滤；精确文件请求不重新把 include 当 basename 模式。
         if (query.onlyOpenEditors) { options.include_globs = []; options.exclude_globs = []; }
         if (query.type === QueryType.Text) Object.assign(options, {
@@ -94,7 +97,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           is_regex: !!query.contentPattern.isRegExp, whole_word: !!query.contentPattern.isWordMatch,
           word_separators: query.contentPattern.wordSeparators, is_multiline: !!query.contentPattern.isMultiline, all_matches: true,
           context_lines: query.surroundingContext ?? 0,
-          excluded_resource_uris: coveredResources.filter(resource => !query.onlyOpenEditors && resourceInQuery(resource, { ...query, folderQueries: [folder] }))
+          excluded_resource_uris: coveredResources.filter(resource => !query.onlyOpenEditors && resourceInQuery(resource, { ...query, folderQueries: [folder] }, identity))
             .map(resource => workspaceFileSource(resource).path).sort(),
         });
         return [{ target, folder, owner, wire: { owner: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId },
@@ -146,28 +149,30 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           for (const row of rows) {
             if (source.token.isCancellationRequested) throw new CancellationError();
             const resource = workspaceFileUri(owner, row.uri, owner.root);
-            if (query.onlyOpenEditors && resource.toString() !== target.toString()) throw new Error('精确文件搜索返回了其它文件');
-            if (!resourceInQuery(resource, { ...query, folderQueries: [folder] })) throw new Error('文件搜索响应越过本次目录或过滤范围');
+            if (query.onlyOpenEditors && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件');
+            if (!resourceInQuery(resource, { ...query, folderQueries: [folder] }, identity)) throw new Error('文件搜索响应越过本次目录或过滤范围');
             if (models.has(resource)) continue;
-            const identity = resource.toString() + (row.hit ? `:${row.hit.line}:${row.hit.utf16_column}:${row.hit.end_line}:${row.hit.utf16_end_column}` : '');
-            if (seen.has(identity)) continue;
-            seen.add(identity);
+            const key = this.resourceKey(resource);
+            const matchKey = key + (row.hit ? `:${row.hit.line}:${row.hit.utf16_column}:${row.hit.end_line}:${row.hit.utf16_end_column}` : '');
+            if (seen.has(matchKey)) continue;
+            seen.add(matchKey);
             if (count >= maximum || (query.type === QueryType.File && query.exists)) { limitHit = true; break; }
             count++;
-            const match = results.get(resource.toString()) ?? { resource, results: [] };
+            const match = results.get(key) ?? { resource, results: [] };
             if (row.hit) match.results!.push(textMatch(row.hit));
-            results.set(resource.toString(), match);
+            results.set(key, match);
             onProgress?.({ resource, results: row.hit ? [textMatch(row.hit)] : undefined });
           }
           for (const line of page.contexts) {
             if (source.token.isCancellationRequested) throw new CancellationError();
             const resource = workspaceFileUri(owner, line.uri, owner.root);
-            if (query.onlyOpenEditors && resource.toString() !== target.toString()) throw new Error('精确文件搜索返回了其它文件的上下文');
-            if (!resourceInQuery(resource, { ...query, folderQueries: [folder] })) throw new Error('文件搜索上下文越过本次目录或过滤范围');
+            if (query.onlyOpenEditors && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件的上下文');
+            if (!resourceInQuery(resource, { ...query, folderQueries: [folder] }, identity)) throw new Error('文件搜索上下文越过本次目录或过滤范围');
             if (models.has(resource)) continue;
-            const lines = contexts.get(resource.toString()) ?? new Map<number, ResourceNavigationContextDTO>();
+            const key = this.resourceKey(resource);
+            const lines = contexts.get(key) ?? new Map<number, ResourceNavigationContextDTO>();
             lines.set(line.line, line);
-            contexts.set(resource.toString(), lines);
+            contexts.set(key, lines);
           }
         } }), source.token);
         if (!scope) throw new Error('文件搜索缺少冻结范围');

@@ -560,3 +560,11 @@
 - 真实类型检查含18份实际转换源码通过，620份当前前端产品源码与收据一致；核心Pyright零诊断，24份Python文件Ruff通过，lifespan两条既存BLE001与HEAD逐项一致；Python／TS AST及目录结构审查无新增findings，既有大组件和大测试目录风险未扩修。生成一致性、OpenAPI导出和Buf lint通过。基于真实提交`f3045c2c5`的breaking仅报告已授权下线的三份GatewaySessionSearch DTO删除，保留失败原件，没有为通过恢复兼容类型。
 - 首轮实网装具重复登记默认工作区造成启动拒绝，沿原默认登记修正；首轮浏览器产品交互已完成，但Python仍把稳定workspace当route，现分别校验两种身份后通过。新增客户端装具补齐真实节点state，未放宽归属、顺序、期限或结果断言。初轮长批外部超时、主动终止的排查批及所有失败原件保留，不作为全批通过。准确命令、源码指纹、日志及退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/catalog-*`。
 - 16.11、16.12、16.17、16.19及剩余Provider／工具／Electron等完整任务仍未完成；本边界只勾选16.10，不把Web实证推广为其它运行面验收。
+
+### 2026-11-03：文件比较键与重叠根准入（16.19 部分）
+
+- 原文件 Provider、SearchService 和 Quick Access 的查询准入统一消费 `IUriIdentityService.extUri`：目录包含、根局部 exclude、额外文件、已打开集合、模型负命中覆盖、结果区间及上下文共用原比较规则，不再独立按 URI 字符串去重或全局折叠大小写。根内额外文件不另发重复分支，输入查询不被改写；同名跨 Gateway／工作区保留独立身份。
+- 相同有效选项的重复根合并，无根相对过滤且 ignore 边界一致的父子根仅扫描父根，保留最初范围次序。冲突局部选项或根相对 glob／ignore 继承不等价时，在本地匹配和 HTTP 前明确拒绝；后者保留具名 TODO，不能静默丢掉某根选项。已对照 reference_repo/vscode 的 Copilot 搜索：保留原服务和相对根，覆盖身份仍由文件 owner 在输出计量前排除，不新增正文 hash 或客户端重扫补额度。
+- 22项真实 Provider／原 QueryBuilder 定向集成检查通过，包含重叠根顺序、冲突、根内额外文件、局部选项和注入的目标大小写规则；注入规则只证明消费 URI identity，不能替代真实 Windows canonical 能力验收。首轮输入不变断言误比较 URI 惰性 external 缓存，已改为核查询语义和数组身份，原失败记录保留。
+- 真实 Gateway／正式 Workbench／Chromium 模型覆盖用例通过（132.33秒）：新增只选 A 时 B 零查询，保留 A+B 小配额、A 未保存删词、B 同路径与 A 另一文件、旧覆盖 cursor 失效、停止 C 和磁盘未改断言，页面错误为空。原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-b8181195ecd5/nodes/node-f238fd176e30/artifacts/model-coverage.json`。同批正式构建退出0、55.37秒，main SHA256=`0fcc0299354de2f22cdf0543494af08d65eaf4d44cfc360c885c598730b213cf`，复用该完整产品构建，不重复构建。
+- 含18份真实 sourceTransform 的类型检查、7份 TS／ESM AST、受影响 Python Ruff 和差异检查通过；目录职责及 AGENTS 复核无新增结构 findings。准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-identity-*`。模型变化、preview 映射、真实 Windows canonical 及 Electron 尚未由本批验证，16.19 和整体进度保持未勾选。

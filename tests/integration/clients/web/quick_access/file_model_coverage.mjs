@@ -71,6 +71,18 @@ try {
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.insertText('only in A draft, with no search match');
   await expect(editor.locator('.view-lines')).toContainText('only in A draft');
+  result.phase = 'original-search-editor-only-a';
+  const waitOnlyA = page.waitForRequest(request => new URL(request.url()).pathname === '/api/gateway/search'
+    && request.method() === 'POST' && request.postDataJSON().queries.some(query => query.category === 'file' && query.query === 'coverageword'));
+  await command('search.action.openEditor', { query: 'coverageword', location: 'new', triggerSearch: true,
+    scope: { version: 1, kind: 'workspace', workspaces: [targets[0]] }, onlyOpenEditors: false, contextLines: 0,
+    useExcludeSettingsAndIgnoreFiles: false, filesToInclude: '*.coverage.txt' });
+  const onlyAReceipt = await searchReceipt(await waitOnlyA);
+  expect(onlyAReceipt.status).toBe(200);
+  expect(onlyAReceipt.scope.owners.map(owner => owner.workspace_id)).toEqual([targets[0].workspaceId]);
+  expect(onlyAReceipt.pages.flatMap(event => event.page.files.matches.map(hit => hit.uri))).toEqual([targets[0].rootUri + '/b.coverage.txt']);
+  expect(result.requests.filter(item => item.query === 'coverageword').every(item => item.workspaceId === targets[0].workspaceId)).toBe(true);
+  result.onlyAUnqueriedB = true;
   result.phase = 'original-search-editor-explicit-a-b';
   const waitA = page.waitForRequest(request => new URL(request.url()).pathname === '/api/gateway/search'
     && request.method() === 'POST' && request.postDataJSON().queries.some(query => query.category === 'file' && query.query === 'coverageword'));
@@ -92,7 +104,7 @@ try {
   const pageB = receipt.pages.find(event => event.branch.branch.owner.workspace_id === targets[1].workspaceId).page.files;
   expect(pageB.matches[0].uri).toBe(targets[1].rootUri + '/a.coverage.txt');
   expect(pageB.next_cursor).toBeTruthy();
-  const search = page.locator('.search-editor');
+  const search = page.locator('.search-editor').filter({ visible: true }).last();
   await expect(search.locator('.view-lines')).toContainText('A remaining coverageword');
   await expect(search.locator('.view-lines')).toContainText('a.coverage.txt');
   await expect(search.locator('.view-lines')).not.toContainText('only in A draft');
@@ -124,7 +136,7 @@ try {
   const stillStopped = finalRegistry.body.data.items.find(target => target.workspace_id === routeC);
   expect(stillStopped.status).toBe('offline');
   expect(stillStopped.runtime_action).toBe('start_managed_backend');
-  result.responses = { receipt, pageA, pageB, small, beforeCoverage, changed };
+  result.responses = { onlyAReceipt, receipt, pageA, pageB, small, beforeCoverage, changed };
   result.phase = 'passed';
 } catch (error) {
   failure = error; result.error = String(error?.stack ?? error);

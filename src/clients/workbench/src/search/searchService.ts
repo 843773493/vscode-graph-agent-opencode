@@ -2,6 +2,7 @@ import { raceCancellationError } from '../../upstream/src/vs/base/common/async.j
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
+import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IModelService } from '../../upstream/src/vs/editor/common/services/model.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../upstream/src/vs/platform/instantiation/common/extensions.js';
@@ -29,9 +30,9 @@ export class WorkspaceSearchService extends RemoteSearchService {
     @IExtensionService extensionService: IExtensionService,
     @IFileService fileService: IFileService,
     @IInstantiationService instantiationService: IInstantiationService,
-    @IUriIdentityService uriIdentityService: IUriIdentityService,
+    @IUriIdentityService private readonly businessIdentity: IUriIdentityService,
   ) {
-    super(businessModels, businessEditors, telemetryService, logService, extensionService, fileService, instantiationService, uriIdentityService);
+    super(businessModels, businessEditors, telemetryService, logService, extensionService, fileService, instantiationService, businessIdentity);
     this.businessProvider = this._register(instantiationService.createInstance(WorkspaceSearchProvider));
     this._register(this.registerSearchResultProvider(fileScheme, SearchProviderType.file, this.businessProvider));
     this._register(this.registerSearchResultProvider(fileScheme, SearchProviderType.text, this.businessProvider));
@@ -51,16 +52,18 @@ export class WorkspaceSearchService extends RemoteSearchService {
     onProgress?: (item: ISearchProgressItem) => void, notebookFilesToIgnore?: ResourceSet,
     asyncNotebookFilesToIgnore?: Promise<ResourceSet>): { syncResults: ISearchComplete; asyncResults: Promise<ISearchComplete> } {
     if (!businessQuery(query)) return super.textSearchSplitSyncAsync(query, token, onProgress, notebookFilesToIgnore, asyncNotebookFilesToIgnore);
-    validateTextQuery(query);
+    const identity = this.businessIdentity.extUri;
+    query = validateTextQuery(query, identity);
     if (token.isCancellationRequested) throw new CancellationError();
-    const open = new ResourceSet(openResources(this.businessEditors, query));
-    const covered = new ResourceSet(), results: FileMatch[] = [];
+    const key = (resource: URI) => identity.getComparisonKey(resource);
+    const open = new ResourceSet(openResources(this.businessEditors, query, identity), key);
+    const covered = new ResourceSet(key), results: FileMatch[] = [];
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     let count = 0, limitHit = false;
     for (const model of this.businessModels.getModels()) {
       if (token.isCancellationRequested) throw new CancellationError();
       // 在 findMatches 和首次 progress 之前限制完整身份；零命中模型也覆盖磁盘正文。
-      if (!open.has(model.uri) || !resourceInQuery(model.uri, query)) continue;
+      if (!open.has(model.uri) || !resourceInQuery(model.uri, query, identity) || covered.has(model.uri)) continue;
       covered.add(model.uri);
       if (notebookFilesToIgnore?.has(model.uri)) continue;
       const matches = model.findMatches(query.contentPattern.pattern, false, !!query.contentPattern.isRegExp,

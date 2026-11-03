@@ -12,7 +12,7 @@ await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/
   tsconfig: resolve('src/clients/workbench/tsconfig.jsonc'), logLevel: 'silent' });
 const { URI, gateway, fixture, model, WorkspaceSearchService, WorkspaceSearchProvider,
   workspaceFileUri, workspaceFileSource, textMatch, CancellationTokenSource, resourceInQuery,
-  installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
+  ExtUri, extUri, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
 const ownerA = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const ownerB = { gatewayId: 'gateway-b', workspaceId: 'workspace-a' };
 const root = owner => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`;
@@ -144,6 +144,72 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
     } finally { f.instantiation.dispose(); }
   });
 
+  test('重叠根和根内额外文件在 HTTP 前去重，不影响 B 同路径；输入对象保持原样', async () => {
+    const f = fixture([]);
+    try {
+      for (const reversed of [false, true]) await withTransport(async calls => {
+        const nested = [{ folder: uri(ownerA, 'src/nested') }, { folder: uri(ownerA, 'src') }, { folder: uri(ownerA) }];
+        const folders = [...(reversed ? nested.toReversed() : nested), { folder: uri(ownerA) }, { folder: uri(ownerB) }];
+        const request = { type: 1, folderQueries: folders, extraFileResources: [uri(ownerA, 'file.txt'), uri(ownerA, 'file.txt')], filePattern: 'file', maxResults: 2 };
+        // URI 自带惰性 external 缓存；只比较查询语义和数组身份。
+        const snapshot = () => ({ ...request, folderQueries: request.folderQueries.map(folder => ({ ...folder, folder: folder.folder.toString() })),
+          extraFileResources: request.extraFileResources.map(resource => resource.toString()) });
+        const before = snapshot();
+        const result = await f.search.fileSearch(request);
+        expect(snapshot()).toEqual(before); expect(request.folderQueries).toBe(folders);
+        expect(calls).toHaveLength(1);
+        expect(calls[0].request.queries[0].file_targets.map(item => item.target.uri)).toEqual([root(ownerA), root(ownerB)]);
+        expect(result.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'file.txt').toString(), uri(ownerB, 'file.txt').toString()]);
+      }, async target => files(target, ['file.txt']));
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('重叠根冲突、根相对 glob 和 ignore 继承在本地匹配与 HTTP 前明确拒绝', async () => {
+    const a = model(uri(ownerA, 'src/file.txt'), 'needle'), f = fixture([a]);
+    try {
+      await withTransport(async calls => {
+        const sets = [
+          [{ folder: uri(ownerA), includePattern: { '*.txt': true } }, { folder: uri(ownerA), includePattern: { '*.md': true } }],
+          [{ folder: uri(ownerA) }, { folder: uri(ownerA, 'src'), disregardIgnoreFiles: true }],
+          [{ folder: uri(ownerA), includePattern: { '*.txt': true } }, { folder: uri(ownerA, 'src'), includePattern: { '*.txt': true } }],
+          [{ folder: uri(ownerA), disregardIgnoreFiles: false }, { folder: uri(ownerA, 'src'), disregardIgnoreFiles: false }],
+        ];
+        for (const folders of sets) {
+          expect(() => f.search.textSearchSplitSyncAsync(query({ folderQueries: folders }))).toThrow('重叠搜索目录');
+          await expect(f.search.fileSearch({ type: 1, folderQueries: folders, filePattern: 'file' })).rejects.toThrow('重叠搜索目录');
+        }
+        expect(a.calls).toBe(0); expect(calls).toEqual([]);
+        const folders = [true, false].map(reverse => ({ folder: uri(ownerA), includePattern: reverse ? { '*.txt': true, '*.md': true } : { '*.md': true, '*.txt': true } }));
+        await f.search.fileSearch({ type: 1, folderQueries: folders, filePattern: 'file' });
+        expect(calls).toHaveLength(1); expect(calls[0].request.queries[0].file_targets).toHaveLength(1);
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('消费注入的目标 URI identity；模型负命中及磁盘区间按同一键去重，不全局折叠 B', async () => {
+    // 这是目标能力注入合同；真实 Windows owner 的 canonical 公布另行验收。
+    const identity = new ExtUri(resource => resource.authority === ownerA.gatewayId);
+    const a = model(uri(ownerA, 'SAME.txt'), 'removed'), lowerB = model(uri(ownerB, 'same.txt'), 'removed');
+    const f = fixture([a, lowerB], [uri(ownerA, 'same.txt'), lowerB.uri, uri(ownerA, 'same.txt')], identity);
+    try {
+      await withTransport(async calls => {
+        const progress = [], result = await f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerA) }, { folder: uri(ownerB) }] }), undefined, item => progress.push(item));
+        expect(a.calls).toBe(1); expect(lowerB.calls).toBe(1);
+        expect(calls[0].request.queries[0].file_targets.map(item => item.target.search_options.excluded_resource_uris)).toEqual([[root(ownerA) + '/SAME.txt'], [root(ownerB) + '/same.txt']]);
+        expect(result.results).toHaveLength(3);
+        expect(result.results.filter(item => workspaceFileSource(item.resource).gatewayId === ownerA.gatewayId)[0].results).toHaveLength(1);
+        expect(progress).toHaveLength(3);
+        expect(progress.some(item => item.resource.toString() === uri(ownerA, 'same.txt').toString())).toBe(false);
+        expect(progress.some(item => item.resource.toString() === uri(ownerB, 'SAME.txt').toString())).toBe(true);
+      }, async target => page(target.uri, [hit(target.uri + '/same.txt'), hit(target.uri + '/SAME.txt'), hit(target.uri + '/other.txt'), hit(target.uri + '/OTHER.txt')]
+        .filter(row => target.uri === root(ownerA) || row.uri.endsWith('/SAME.txt') || row.uri.endsWith('/other.txt'))));
+      await withTransport(async calls => {
+        const result = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], onlyOpenEditors: true });
+        expect(calls[0].request.queries[0].file_targets).toHaveLength(1); expect(result.results).toHaveLength(1);
+      }, async target => page(target.uri, [], { entries: [{ uri: target.uri.replace(/same\.txt$/, 'SAME.txt'), resource_shape: 'file', operations: ['read'] }] }));
+    } finally { f.instantiation.dispose(); }
+  });
+
   test('上游 maxResults=0 有界召回，业务正文零配额不输出，exists 只探测且不返回结果', async () => {
     const f = fixture([]);
     try {
@@ -245,8 +311,8 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
       const projected = textMatch({ ...hit(root(ownerA) + '/emoji.txt'), text: '🧪 needle', utf16_column: 103, utf16_end_column: 5, snippet_start_utf16_column: 100, end_line: 3 });
       expect(projected.rangeLocations[0]).toEqual({ source: { startLineNumber: 0, startColumn: 102, endLineNumber: 2, endColumn: 4 },
         preview: { startLineNumber: 0, startColumn: 3, endLineNumber: 0, endColumn: 9 } });
-      expect(resourceInQuery(uri(ownerA, 'nested/a.txt'), query({ includePattern: { '*.txt': true } }))).toBe(true);
-      expect(resourceInQuery(uri(ownerA, 'nested/hidden/a.txt'), query({ excludePattern: { hidden: true } }))).toBe(false);
+      expect(resourceInQuery(uri(ownerA, 'nested/a.txt'), query({ includePattern: { '*.txt': true } }), extUri)).toBe(true);
+      expect(resourceInQuery(uri(ownerA, 'nested/hidden/a.txt'), query({ excludePattern: { hidden: true } }), extUri)).toBe(false);
       expect(workspaceFileSource(uri(ownerB, 'same.txt')).gatewayId).toBe('gateway-b');
     } finally { f.instantiation.dispose(); }
   });
