@@ -126,6 +126,12 @@
             "tool_id": "search_context"
           },
           {
+            "tool_id": "discover_workspaces"
+          },
+          {
+            "tool_id": "search_resources"
+          },
+          {
             "tool_id": "web_search"
           },
           {

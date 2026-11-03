@@ -7,6 +7,8 @@ _BUILTIN_TOOL_FACTORIES = MappingProxyType(
         "connections.manage": "app.agents.tools.connections:create_connections_tool",
         "read_context": "app.agents.tools.session_history:create_read_context_tool",
         "search_context": "app.agents.tools.session_history:create_search_context_tool",
+        "discover_workspaces": "app.agents.tools.resource_search:create_discover_workspaces_tool",
+        "search_resources": "app.agents.tools.resource_search:create_search_resources_tool",
         "web_search": "app.agents.tools.web:create_web_search_tool",
         "fetch_webpage": "app.agents.tools.web:create_fetch_webpage_tool",
         "listBrowserPage": "app.agents.tools.browser:create_list_browser_page_tool",

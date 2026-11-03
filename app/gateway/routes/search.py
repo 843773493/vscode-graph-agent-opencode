@@ -13,7 +13,6 @@ from app.api.sse_heartbeat import (
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.control.user_access import UserAccessContext
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import get_registry, get_workspace_navigation_store
 from app.gateway.search.scheduler import (
@@ -127,16 +126,23 @@ async def resolve_scope(
     return APIResponse(data=result, request_id=request_id)
 
 
+_SEARCH_RESPONSES = sse_responses("请求级联邦搜索流", {"search": FederatedSearchEventDTO},
+                                 models={"FederatedSearchEventDTO": FederatedSearchEventDTO})
+
+
 @router.post(
-    "", response_class=StreamingResponse,
-    responses=sse_responses("请求级联邦搜索流", {"search": FederatedSearchEventDTO},
-                            models={"FederatedSearchEventDTO": FederatedSearchEventDTO}),
+    "", response_class=StreamingResponse, dependencies=[Depends(verify_user_access_for_proxy)],
+    responses=_SEARCH_RESPONSES,
+)
+@router.post(
+    "/agent", response_class=StreamingResponse,
+    description="本机 Agent／脚本只读搜索；本机私有凭据授权，不创建浏览器访问租约。与浏览器入口共用同一查询及调度。",
+    responses=_SEARCH_RESPONSES,
 )
 async def search(
     payload: FederatedSearchRequest,
     request: Request,
     _: Annotated[str, Depends(verify_gateway_token)],
-    _access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
     request_id: Annotated[str, Depends(get_request_id)],
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     navigation: Annotated[WorkspaceNavigationStore, Depends(get_workspace_navigation_store)],

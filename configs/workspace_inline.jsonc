@@ -292,6 +292,12 @@
             "tool_id": "search_context" // builtin_tool_registry 稳定工具 ID。
           },
           {
+            "tool_id": "discover_workspaces"
+          },
+          {
+            "tool_id": "search_resources"
+          },
+          {
             "tool_id": "web_search" // builtin_tool_registry 稳定工具 ID。
           },
           {

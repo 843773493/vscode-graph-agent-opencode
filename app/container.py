@@ -678,11 +678,13 @@ def _build_app_container(
     browser_manager_client = BrowserManagerClient(workspace_id=workspace_id, config_service=config_service,
         backend_url=startup_mount.browser_backend_url if startup_mount is not None else None)
     workspace_session_context_transport = GatewaySessionContextClient(
+        gateway_url=os.environ.get("BOXTEAM_GATEWAY_URL"),
         config_service=config_service,
         local_token_supplier=get_gateway_local_token,
     )
     workspace_session_context_client = GatewayContextQueryService(
-        transport=workspace_session_context_transport
+        transport=workspace_session_context_transport,
+        resource_search=workspace_session_context_transport.resource_search,
     )
     communication_transport = GatewayCommunicationClient(
         config_service=config_service,

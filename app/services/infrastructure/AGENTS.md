@@ -12,6 +12,7 @@ infrastructure/
 ├── config/                    配置解析、事件游标和重载状态组件
 ├── config_service/            工作区 ConfigService 实现
 ├── events/                    有界事件 channel 与 typed 事件合同
+├── gateway_search/            复用原 Gateway 连接的发现与联邦搜索传输
 ├── mcp/                       MCP 连接、工具目录与 Agent 工具适配
 ├── persistent_tasks/          持久任务定义版本、运行账本与轻量事件
 ├── node_debug/                Node 调试运行时；按 breakpoint/config/process/session 分区

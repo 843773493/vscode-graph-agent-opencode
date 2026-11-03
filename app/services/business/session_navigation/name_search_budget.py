@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 
 NAME_SEARCH_DEADLINE_HEADER = "X-BoxTeam-Name-Search-Deadline"
-_QUERY_SECONDS = 15.0
+NAME_SEARCH_MAX_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class NameSearchBudget:
     @classmethod
     def create(cls, deadline_at: float | None) -> "NameSearchBudget":
         now = time.monotonic()
-        deadline = now + _QUERY_SECONDS
+        deadline = now + NAME_SEARCH_MAX_SECONDS
         if deadline_at is not None:
             if not math.isfinite(deadline_at):
                 raise ValueError("查询执行期限必须为有限 UTC 时间戳")

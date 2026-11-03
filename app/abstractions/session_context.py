@@ -4,6 +4,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
+from app.abstractions.resource_search import GatewayResourceSearchProtocol
 from app.schemas.internal_v2.session_fork_transfer import (
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
@@ -143,6 +144,9 @@ class SessionContextQueryProtocol(Protocol):
 
 
 class WorkspaceSessionContextClientProtocol(Protocol):
+    @property
+    def resource_search(self) -> GatewayResourceSearchProtocol: ...
+
     async def read_resource_context(
         self, request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO: ...

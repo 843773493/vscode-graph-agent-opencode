@@ -1,0 +1,139 @@
+"""复用 Gateway HTTP 连接和官方 SSE 解码；不分发工作区请求。"""
+
+import asyncio
+import time
+from collections.abc import AsyncIterator, Callable
+from contextlib import aclosing
+
+import httpx
+from httpx_sse import EventSource
+
+from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.schemas.gateway.search import GatewayWorkspaceDiscoveryResultsDTO
+from app.schemas.search_federation import (
+    FederatedSearchBranchDTO,
+    FederatedSearchBranchKeyDTO,
+    FederatedSearchEventDTO,
+    FederatedSearchRequest,
+)
+from app.services.business.session_navigation.name_search_budget import (
+    NAME_SEARCH_MAX_SECONDS,
+)
+from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
+
+
+class GatewayResourceSearchClient:
+    def __init__(
+        self, *, http_client: httpx.AsyncClient, connection: GatewayTransportConnection,
+        local_token_supplier: Callable[[], str],
+    ) -> None:
+        self._http = http_client
+        self._connection = connection
+        self._local_token_supplier = local_token_supplier
+
+    def _headers(self, request_id: str) -> dict[str, str]:
+        if not request_id:
+            raise ValueError("Gateway 搜索需要发起者提供 request_id")
+        return {"X-Local-Token": self._local_token_supplier(), "X-Request-ID": request_id}
+
+    @staticmethod
+    async def _check_response(response: httpx.Response, request_id: str) -> None:
+        if response.headers.get("X-Request-ID") != request_id:
+            raise RuntimeError(f"Gateway 搜索响应 request_id 漂移: path={response.request.url.path}, status={response.status_code}, request_id={request_id}")
+        if not response.is_success:
+            await response.aread()
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("request_id") != request_id:
+                raise RuntimeError(f"Gateway 搜索错误响应信封无效: path={response.request.url.path}, status={response.status_code}, request_id={request_id}")
+            # Gateway 的具名搜索拒绝保留原原因；不投影未知异常或任意错误正文。
+            detail = payload.get("detail")
+            reason = f"code={detail.get('code')}; {detail.get('message', '')}" if isinstance(detail, dict) else ""
+            raise WorkspaceSessionContextAccessError(
+                f"Gateway 搜索失败: status={response.status_code}, request_id={request_id}; {reason}"
+            )
+
+    async def discover_workspaces(
+        self, *, query: str = "", limit: int = 50, cursor: str | None = None,
+        include_folders: bool = False, request_id: str,
+    ) -> GatewayWorkspaceDiscoveryResultsDTO:
+        params: dict[str, str | int | bool] = {"query": query, "limit": limit, "include_folders": include_folders}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = await self._http.get(
+            self._connection.resolve_gateway_url() + "/api/gateway/search/workspaces",
+            params=params, headers=self._headers(request_id), timeout=self._connection.resolve_timeout_seconds(),
+        )
+        await self._check_response(response, request_id)
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("request_id") != request_id:
+            raise RuntimeError("Gateway 工作区发现响应信封无效")
+        return GatewayWorkspaceDiscoveryResultsDTO.model_validate(payload["data"])
+
+    async def search(
+        self, request: FederatedSearchRequest, *, request_id: str,
+    ) -> AsyncIterator[FederatedSearchEventDTO]:
+        # 建连、全部事件和关闭共用一个总期限；没有逐工作区重试或续期。
+        deadline = min(time.time() + NAME_SEARCH_MAX_SECONDS, request.deadline_at if request.deadline_at is not None else float("inf"))
+        deadline = min(deadline, time.time() + self._connection.resolve_timeout_seconds())
+        request = request.model_copy(update={"deadline_at": deadline})
+        if deadline <= time.time():
+            raise TimeoutError("Gateway 搜索期限已到，不发起请求")
+        headers = {**self._headers(request_id), "Accept": "text/event-stream"}
+        scope = None
+        terminals: dict[FederatedSearchBranchKeyDTO, FederatedSearchBranchDTO] = {}
+        pages: set[FederatedSearchBranchKeyDTO] = set()
+        ended = False
+        sequence = 0
+        async with asyncio.timeout(max(0, deadline - time.time())):
+            async with self._http.stream(
+                "POST", self._connection.resolve_gateway_url() + "/api/gateway/search/agent",
+                json=request.model_dump(mode="json"), headers=headers, timeout=max(0, deadline - time.time()),
+            ) as response:
+                await self._check_response(response, request_id)
+                async with aclosing(EventSource(response).aiter_sse()) as frames:
+                    async for frame in frames:
+                        # 解码器沿 SSE 合同保留 last-event-id，注释心跳可形成无 data 的 message。
+                        if frame.event == "message" and not frame.data:
+                            continue
+                        if frame.event != "search":
+                            raise RuntimeError(f"Gateway 搜索事件类型无效: {frame.event!r}")
+                        event = FederatedSearchEventDTO.model_validate_json(frame.data)
+                        sequence += 1
+                        if ended or event.sequence != sequence or frame.id != str(sequence) or event.request_id != request_id:
+                            raise RuntimeError("Gateway 搜索事件顺序、request_id 或唯一终态无效")
+                        if event.type == "scope":
+                            if sequence != 1 or event.scope is None:
+                                raise RuntimeError("Gateway 搜索范围必须先于领域页且只发布一次")
+                            scope = event.scope.scope
+                            selection = request.scope
+                            expected = ((selection.origin,) if selection.mode == "origin" else selection.owners)
+                            if (selection.mode in {"origin", "selected"} and set(scope.owners) != set(expected)) or (
+                                selection.mode == "resume" and scope != selection.scope
+                            ):
+                                raise RuntimeError("Gateway 搜索实际范围与明确选择不一致")
+                        elif scope is None:
+                            raise RuntimeError("Gateway 搜索缺少实际范围")
+                        elif event.branch is not None:
+                            branch = event.branch.branch
+                            if branch.owner not in scope.owners or branch in terminals:
+                                raise RuntimeError("Gateway 搜索分支归属错误或终态后继续发布")
+                            if event.type == "page":
+                                page = event.page
+                                if page is None or branch in pages or (page.workspace_id, page.category, page.operation) != (
+                                    branch.owner.workspace_id, branch.category, branch.operation,
+                                ) or event.branch.returned_results != page.result_count:
+                                    raise RuntimeError("Gateway 搜索领域页归属、计数或重复发布无效")
+                                pages.add(branch)
+                            else:
+                                terminals[branch] = event.branch
+                        elif event.summary is not None:
+                            summary = event.summary
+                            if {item.branch: item for item in summary.branches} != terminals or (
+                                len(summary.branches) != len(terminals)
+                                or summary.returned_results != sum(item.returned_results for item in terminals.values())
+                            ):
+                                raise RuntimeError("Gateway 搜索汇总与已结算分支不一致")
+                            ended = True
+                        yield event
+        if not ended:
+            raise RuntimeError("Gateway 搜索流在最终汇总前断开；已交付分支须按原范围独立续查")

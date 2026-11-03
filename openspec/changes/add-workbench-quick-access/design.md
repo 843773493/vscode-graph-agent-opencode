@@ -241,6 +241,10 @@ URI 等价由原寻址／文件 owner 决定，再通过唯一内部投影进入
 
 Agent 搜索工具与脚本显式接收当前／指定集合／all 的同一范围语义，工作区上下文不足时要求指定，不猜全局活动项。工具先发现工作区名称，再查询选中工作区会话树／Thread，或直接执行用户明确的 all；结果保留规范引用、分支受限／错误和实际范围。查询只读，不把结果自动附加到其它 Thread、不发新 turn；工具调用的原授权和既有执行记录保持不变。产品验收必须包含关闭浏览器后的真实 Gateway 工具／脚本调用。
 
+已接入 `discover_workspaces` 与 `search_resources` 扩展工具及 Python 客户端：前者仅发现控制面元数据，后者直接消费原领域查询和联邦事件，不另作跨工作区调度。省略工具范围时取调用所属稳定 Gateway／工作区；显式集合、all 及冻结续查沿原合同，不借活动导航推断。Python 客户端复用原上下文 transport 的 HTTP 连接、凭据、配置及关闭生命周期，使用 httpx-sse 解码和同一十五秒总期限，取消或显式关闭释放原响应。
+
+具名机器入口 `POST /api/gateway/search/agent` 使用既有本机私有凭据，不需要浏览器 Cookie、不创建游客；与普通浏览器入口注册同一个处理函数、请求、编码器和调度。普通入口继续校验访问租约，正式授权边界登记在本 change 的 `gateway-user-access` delta。原有效上下文、inventory 与精确读取仍沿既有 owner；`search_context` 的 Semaphore／gather／全局 offset 尚待完整迁移，不能用 canonical 消息搜索替换其来源语义，16.12 保持未完成。
+
 #### 2026-11-03：两级搜索的迁移与删除清单（16.1）
 
 全仓核对了 URL、导出函数、Protocol、调用侧服务与测试；脚本目录 `scripts/`、`tools/` 当前没有在线领域搜索消费者，已有历史资产生成／旧库导入脚本只引用 catalog 存储 owner，不属于联邦调用方。后续脚本入口直接消费同一 Gateway 合同，不保留脚本内 fan-out。

@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 
+from app.abstractions.resource_search import GatewayResourceSearchProtocol
 from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
     WorkspaceSessionContextTransportProtocol,
@@ -47,8 +48,16 @@ class GatewayContextQueryService:
         self,
         *,
         transport: WorkspaceSessionContextTransportProtocol,
+        resource_search: GatewayResourceSearchProtocol | None = None,
     ) -> None:
         self._transport = transport
+        self._resource_search = resource_search
+
+    @property
+    def resource_search(self) -> GatewayResourceSearchProtocol:
+        if self._resource_search is None:
+            raise RuntimeError("当前组合根未装配 Gateway 联邦资源搜索客户端")
+        return self._resource_search
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
         return await self._transport.list_gateway_workspaces()
@@ -155,6 +164,8 @@ class GatewayContextQueryService:
         self,
         request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO:
+        # TODO(quick-access 16.12): 将 effective_context 等原来源迁入领域 Provider，
+        # 再迁齐独立 owner cursor 及消费者并删除此聚合；资源搜索工具不得调用本链。
         resource = _require_gateway_inventory(
             resource_identity=request.resource_identity,
             uri=request.uri,

@@ -35,6 +35,7 @@ app/abstractions/
 ├── 资源边界
 │   ├── browser_resources.py        Browser 动作与传输
 │   ├── resource_file_content.py    原字节/MIME 读取端口
+│   ├── resource_search.py          Gateway 工作区发现与领域搜索流
 │   └── workspace_resources.py      工作区资源快照与授权
 ├── terminal/                       Terminal 资源与执行观察协议
 │   ├── execution_monitor.py        持久终端执行状态观察端口

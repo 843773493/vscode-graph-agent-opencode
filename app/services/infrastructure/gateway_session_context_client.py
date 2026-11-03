@@ -36,6 +36,9 @@ from app.services.infrastructure.gateway_client_common import (
     MODEL_RECOVERABLE_HTTP_STATUSES,
     GatewayTransportConnection,
 )
+from app.services.infrastructure.gateway_search.client import (
+    GatewayResourceSearchClient,
+)
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     RESOURCE_URI_RESOLVE_REASON_CODES,
 )
@@ -68,6 +71,10 @@ class GatewaySessionContextClient:
         )
         self._local_token_supplier = local_token_supplier
         self._http_client = httpx.AsyncClient()
+        self.resource_search = GatewayResourceSearchClient(
+            http_client=self._http_client, connection=self._connection,
+            local_token_supplier=local_token_supplier,
+        )
 
     async def aclose(self) -> None:
         await self._http_client.aclose()
@@ -248,7 +255,9 @@ class GatewaySessionContextClient:
         if request_id is None or not isinstance(payload, dict) or payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
             return ""
         detail = payload.get("detail")
-        code = detail.get("code") if isinstance(detail, dict) else None
+        if not isinstance(detail, dict):
+            return ""
+        code = detail.get("code")
         if not isinstance(code, str) or code not in FEDERATION_ERROR_CODES:
             return ""
         result = f", code={code}"
