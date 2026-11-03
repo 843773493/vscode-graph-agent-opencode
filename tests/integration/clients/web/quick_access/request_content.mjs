@@ -19,7 +19,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
-    if (path === '/api/v1/search' || path === '/api/v1/sessions/history/search') result.searches.push({ path, body: request.postDataJSON() });
+    if (path === '/api/gateway/search' || path === '/api/v1/search' || path === '/api/v1/sessions/history/search') result.searches.push({ path, body: request.postDataJSON() });
     if (path.endsWith('/llm-request-logs/locate')) result.locations.push({ path, body: request.postDataJSON() });
     if (path.endsWith('/llm-request-logs')) result.fullLogs.push(path);
   });
@@ -97,7 +97,7 @@ try {
   await expect(pane.getByRole('alert')).toContainText('命中的请求日志已变化');
   await expect(mark).toHaveCount(0);
   result.staleReferenceRejected = true;
-  expect(result.searches.every(request => request.path === '/api/v1/search' && request.body.category === 'llm_request')).toBe(true);
+  expect(result.searches.every(request => request.path === '/api/gateway/search' && request.body.queries.length === 1 && request.body.queries[0].category === 'llm_request')).toBe(true);
   expect(result.fullLogs).toHaveLength(0);
   result.noFullLogRead = true; result.phase = 'passed';
 } catch (error) {

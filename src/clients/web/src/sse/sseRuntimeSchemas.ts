@@ -12,6 +12,12 @@ import type {
 import { parseSessionExecutionSse } from "../protocol/sessionSse";
 import { validateWorkspaceObservationFrameDTO } from "../../../../shared/sseRuntimeValidators.js";
 import type { WorkspaceObservationFrameDTO } from "../types/backend";
+import { validateFederatedSearchEvent as validateSearchEvent } from "../../../../shared/sseRuntime.js";
+import type { FederatedSearchEventDTO } from "../types/protocol_generated/boxteam/search/v1/public";
+
+export function validateFederatedSearchEvent(value: unknown): FederatedSearchEventDTO {
+  return validateSearchEvent(value) as FederatedSearchEventDTO;
+}
 
 export function validateWorkspaceObservationFrame(value: unknown): WorkspaceObservationFrameDTO {
   if (!validateWorkspaceObservationFrameDTO(value)) {

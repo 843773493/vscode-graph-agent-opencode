@@ -40,6 +40,44 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+test('正文跨目标只请求 Gateway，快分支续页不被初始流收尾取消，失败分支独立重试', async () => {
+  const result = await exercise('contentBranchContract', 'retry');
+  expect(result.requests).toHaveLength(3);
+  expect(result.paths.every(path => ['/api/gateway/auth/local-credential', '/api/gateway/search'].includes(path))).toBe(true);
+  expect(result.requests[0].scope.owners.map(owner => owner.workspace_id)).toEqual(['A', 'B']);
+  for (const request of result.requests.slice(1)) {
+    expect(request.scope.mode).toBe('resume');
+    expect(request.scope.scope.owners).toEqual(result.requests[0].scope.owners);
+    expect(request.continuations).toHaveLength(1);
+  }
+  expect(result.requests[1].continuations[0].branch.owner.workspace_id).toBe('A');
+  expect(result.requests[1].continuations[0].cursor).toBe('A-original-cursor');
+  expect(result.requests[2].continuations[0].branch.owner.workspace_id).toBe('B');
+  expect(result.requests[2].continuations[0].cursor).toBeUndefined();
+  expect(result.pendingPreserved).toBe(true);
+  expect(result.partialFailure).toContain('B 原始读取失败');
+  expect(result.originalPreserved).toBe(true);
+  expect(result.picks).toEqual([['A/2', 'A/4'], ['B/2']]);
+  expect(result.busy).toBe(false);
+  expect(result.label).toBe('名称 A、名称 B');
+  expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);
+});
+
+test('正文 picker 取消释放同一 Gateway reader，之后没有迟到展示更新', async () => {
+  const result = await exercise('contentBranchContract', 'cancel');
+  expect(result.cancelled).toBe(true);
+  expect(result.unchanged).toBe(true);
+  expect(result.calls).toBe(1);
+});
+
+test('正文流断开保留已完成 A，B 明确失败并显示原 request_id', async () => {
+  const result = await exercise('contentBranchContract', 'disconnect');
+  expect(result.labels[0]).toContain('本次查询完成');
+  expect(result.labels[1]).toContain('未收到完整终态');
+  expect(result.details[1]).toBe('request_id: request-0');
+  expect(result.picks).toEqual([['A/2'], []]);
+});
+
 test('URI 原样交原 Opener 并冻结发起组，校验前不创建侧边组，后台接受保持原选项', async () => {
   const calls = await exercise('uriContract');
   expect(calls.map(call => call.uri)).toEqual([

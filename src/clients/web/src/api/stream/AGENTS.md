@@ -2,6 +2,8 @@
 
 `src/clients/web/src/api/stream/` 存放浏览器前端的实时流（SSE）与消息流快照 API 客户端：Turn 消息流订阅、会话 Trace 历史与事件流、工作区文件变更监听流，以及消息流快照的严格 DTO 校验。
 
+`federatedSearch.ts` 消费 Gateway 的请求级搜索流，复用共享 SSE 与生成校验器，核对范围、事件顺序、领域归属及唯一终态。跨目标并发、配额、独立 cursor 和错误均由 Gateway 调度，本模块不预检工作区、不另建 fan-out、不自动重试分支。一个总期限覆盖建连与正文消费，取消回收原 reader。
+
 与相邻文件的边界：
 
 - `api/http.ts`（上级目录）：统一请求屏障（Gateway 凭据、用户会话、重试、超时）与 JSON 解包。本包所有 HTTP 入口都基于它，不自带传输层。`sessionTraceStream` 走 `requestJson`，SSE 入口走 `requestGatewayResponse`。

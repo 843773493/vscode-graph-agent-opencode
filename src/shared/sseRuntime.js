@@ -1,9 +1,19 @@
 import {
+  validateFederatedSearchEventDTO,
   validateSessionExecutionSseDTO,
   validateSseErrorDTO,
   validateTraceEventDTO,
   validateWorkspaceFileChangeBatchDTO,
 } from './sseRuntimeValidators.js';
+
+export function validateFederatedSearchEvent(value) {
+  const event = validateGenerated('FederatedSearchEventDTO', validateFederatedSearchEventDTO, value);
+  const actual = [event.scope, event.branch, event.page, event.summary].map(value => value != null).join(',');
+  const expected = { scope: 'true,false,false,false', page: 'false,true,true,false',
+    branch: 'false,true,false,false', end: 'false,false,false,true' };
+  if (actual !== expected[event.type]) throw new Error('搜索事件类型与 payload 不符');
+  return event;
+}
 
 function formatErrors(errors) {
   if (!errors?.length) {

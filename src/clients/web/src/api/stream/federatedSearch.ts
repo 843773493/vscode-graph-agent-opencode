@@ -1,0 +1,101 @@
+import type {
+  FederatedSearchBranchKeyDTO,
+  FederatedSearchEventDTO,
+  FederatedSearchRequest,
+  FederatedSearchSummaryDTO,
+} from "../../types/protocol_generated/boxteam/search/v1/public";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { validateFederatedSearchEvent } from "../../sse/sseRuntimeSchemas";
+import { DEFAULT_API_REQUEST_TIMEOUT_MS, requestGatewayResponse } from "../http";
+
+export function searchBranchKey(branch: FederatedSearchBranchKeyDTO): string {
+  if (!branch.owner) throw new Error("搜索分支缺少 owner");
+  return JSON.stringify([branch.owner.gateway_id, branch.owner.workspace_id, branch.category, branch.operation]);
+}
+
+/** 只消费 Gateway 的调度结果；不预检目标、不重试读分支、不另建跨目标队列。 */
+export async function streamFederatedSearch(port: number, request: FederatedSearchRequest,
+  options: { signal: AbortSignal; onEvent: (event: FederatedSearchEventDTO) => void },
+): Promise<FederatedSearchSummaryDTO> {
+  const abort = new AbortController();
+  const cancel = () => abort.abort(options.signal.reason);
+  options.signal.addEventListener("abort", cancel, { once: true });
+  if (options.signal.aborted) cancel();
+  const deadline = Math.min(request.deadline_at ?? Infinity, (Date.now() + DEFAULT_API_REQUEST_TIMEOUT_MS) / 1000);
+  const timer = setTimeout(() => abort.abort(new Error("搜索总期限已到")), Math.max(0, deadline * 1000 - Date.now()));
+  let response: Response | undefined;
+  try {
+    response = await requestGatewayResponse(port, "/api/gateway/search", {
+      // 同一个总期限覆盖建连和正文；不再叠加仅到响应头的计时器。
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...request, deadline_at: deadline }), signal: abort.signal, timeoutMs: 0,
+    });
+    const requestId = response.headers.get("X-Request-ID");
+    if (!requestId) throw new Error("搜索响应缺少 request_id");
+    let sequence = 0, scoped = false;
+    let expected = new Set<string>();
+    const pages = new Set<string>(), terminals = new Set<string>();
+    let summary: FederatedSearchSummaryDTO | undefined;
+    await consumeSseResponse(response, { signal: abort.signal,
+      events: { search: defineSseEvent((data, frame) => {
+        const event = validateFederatedSearchEvent(decodeJsonSseData(data, frame));
+        if (summary || event.sequence !== ++sequence || frame.id !== String(sequence) || event.request_id !== requestId) {
+          throw new Error("搜索事件顺序或 request_id 不符，或终态后仍有事件");
+        }
+        return event;
+      }, event => {
+        if (event.type === "scope" && event.scope && !scoped) {
+          scoped = true;
+          const owners = event.scope.scope?.owners;
+          if (!owners) throw new Error("搜索范围缺少冻结 owner");
+          const requestedOwners = request.scope?.mode === "origin" ? [request.scope.origin]
+            : request.scope?.mode === "selected" ? request.scope.owners
+            : request.scope?.mode === "resume" ? request.scope.scope?.owners : undefined;
+          if (requestedOwners && (owners.length !== requestedOwners.length || owners.some((owner, index) =>
+            owner.gateway_id !== requestedOwners[index]?.gateway_id || owner.workspace_id !== requestedOwners[index]?.workspace_id))) {
+            throw new Error("搜索实际范围改变了指定 owner 或顺序");
+          }
+          expected = new Set(request.continuations.length ? request.continuations.map(item => {
+            if (!item.branch) throw new Error("搜索续查缺少分支");
+            return searchBranchKey(item.branch);
+          }) : request.queries.flatMap(query => owners.map(owner => searchBranchKey({ owner,
+            category: query.category, operation: query.operation }))));
+        } else if (scoped && (event.type === "page" || event.type === "branch") && event.branch?.branch) {
+          const branch = event.branch.branch, key = searchBranchKey(branch);
+          if (!expected.has(key) || terminals.has(key)) throw new Error("搜索返回未知分支或重复终态");
+          if (event.type === "page") {
+            if (pages.has(key) || !event.page || event.page.workspace_id !== branch.owner?.workspace_id
+              || event.page.category !== branch.category || event.page.operation !== branch.operation) {
+              throw new Error("搜索领域页重复或归属不符");
+            }
+            pages.add(key);
+          } else {
+            if (["complete", "limited"].includes(event.branch.state) && event.branch.returned_results > 0 && !pages.has(key)) {
+              throw new Error("搜索分支没有交付对应正文页");
+            }
+            terminals.add(key);
+          }
+        } else if (scoped && event.type === "end" && event.summary) {
+          const keys = new Set(event.summary.branches.map(item => {
+            if (!item.branch) throw new Error("搜索汇总缺少分支");
+            return searchBranchKey(item.branch);
+          }));
+          if (terminals.size !== expected.size || keys.size !== expected.size
+            || event.summary.branches.length !== expected.size || [...keys].some(key => !terminals.has(key))) {
+            throw new Error("搜索汇总缺少分支终态");
+          }
+          summary = event.summary;
+        } else throw new Error("搜索事件生命周期不符");
+        options.onEvent(event);
+      }) },
+    });
+    abort.signal.throwIfAborted();
+    if (!summary) throw new Error("搜索连接已结束，但未收到完整终态");
+    return summary;
+  } finally {
+    clearTimeout(timer);
+    options.signal.removeEventListener("abort", cancel);
+    // 协议错误发生在开始消费前时，同样回收响应体。
+    if (response?.body && !response.body.locked) await response.body.cancel();
+  }
+}

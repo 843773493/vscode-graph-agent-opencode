@@ -6,9 +6,8 @@ import type {
   TurnHistoryLoadRequest,
   TurnHistoryPage,
 } from "../../types/backend";
-import type { TurnMessageSearchRequest, TurnMessageSearchResultsDTO, WorkspaceMessageSearchResultsDTO, TurnMessageReferenceDTO, TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { TurnMessageSearchRequest, TurnMessageSearchResultsDTO, TurnMessageReferenceDTO, TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import {
-  gatewayWorkspaceRequestHeaders,
   HttpRequestError,
   requestJson,
   unwrapApiData,
@@ -17,25 +16,7 @@ import {
 
 const SESSION_TURN_HISTORY_TIMEOUT_MS = 10_000;
 
-import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
-
 export type LoadAroundTurn = (turnId: string, signal?: AbortSignal, message?: TurnMessageReferenceDTO) => Promise<TurnMessageLocationDTO | void>;
-
-export async function searchWorkspaceHistoryMessages(
-  apiPort: number, request: TurnMessageSearchRequest, target: GatewayWorkspaceRequestTarget,
-  options: { signal?: AbortSignal; deadlineAt?: number; onResponse?: (requestId: string | null) => void } = {},
-): Promise<WorkspaceMessageSearchResultsDTO> {
-  try {
-    return unwrapApiData(await requestJson<APIResponse<WorkspaceMessageSearchResultsDTO>>(
-      apiPort, "/api/v1/sessions/history/search", {
-        method: "POST", body: JSON.stringify(request),
-        headers: { ...gatewayWorkspaceRequestHeaders(target),
-          ...(options.deadlineAt === undefined ? {} : { "X-BoxTeam-Content-Search-Deadline": String(options.deadlineAt / 1000) }) },
-        signal: options.signal, onResponse: options.onResponse, timeoutMs: SESSION_TURN_HISTORY_TIMEOUT_MS,
-      },
-    ));
-  } catch (error) { mapTurnCursorError(error); }
-}
 
 export async function searchThreadHistoryMessages(
   apiPort: number, sessionId: string, threadId: string,

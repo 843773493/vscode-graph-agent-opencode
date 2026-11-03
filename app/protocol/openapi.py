@@ -117,6 +117,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO")}
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
     "WorkspaceFileChangeBatchDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["WorkspaceFileChangeBatch"],
     "SseErrorDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["SseError"],
@@ -132,7 +133,6 @@ SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     **SSE_JSON_DESCRIPTORS,
-    "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
     # 此 DTO 展平 header 并改变 payload 外形，由 SSE 导出入口的具名投影核对。
     "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
 }

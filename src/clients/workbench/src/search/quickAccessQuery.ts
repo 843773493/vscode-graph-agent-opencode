@@ -7,9 +7,8 @@ import { QueryBuilder } from '../../upstream/src/vs/workbench/services/search/co
 import type { WorkspaceSearchService } from './searchService.js';
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import type { SessionCatalogSearchResults } from '../../../web/src/types/backend.js';
-import type { WorkspaceMessageSearchResultsDTO, TurnMessageMatchDTO, WorkspaceFileRootsDTO, WorkspaceSearchResultDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { TurnMessageMatchDTO, WorkspaceFileRootsDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
-import { searchWorkspaceHistoryMessages } from '../../../web/src/api/session/sessionTurnHistory.js';
 import { searchSessionThreads } from '../../../web/src/api/session/sessions.js';
 import { gateway, type ThreadOwner, type WorkspaceTarget } from '../agentApi.js';
 import { ThreadInput } from '../threadInput.js';
@@ -29,46 +28,13 @@ export interface ResourceSearchPage {
 }
 
 /** 查询只读取所选工作区原 owner；不使用 Gateway 全范围聚合或前端全量目录。 */
-export async function searchQuickAccessResources(category: SearchCategory, filter: string,
+export async function searchQuickAccessResources(category: NameSearchCategory, filter: string,
   owner: WorkspaceOwner, target: WorkspaceTarget, label: string, signal: AbortSignal, token: CancellationToken,
   instantiation: IInstantiationService, search: WorkspaceSearchService, cursor?: string, deadlineAt?: number): Promise<ResourceSearchPage> {
   const query = new URLSearchParams({ query: filter, limit: '50' });
   const requestIds: string[] = [];
   const onResponse = (requestId: string | null) => { if (requestId) requestIds.push(requestId); };
   if (cursor) query.set('cursor', cursor);
-  if (category === '会话消息' || category === '工具结果') {
-    const page: WorkspaceMessageSearchResultsDTO = await searchWorkspaceHistoryMessages(0,
-      { query: filter, limit: 50, cursor, category: category === '工具结果' ? 'tool_result' : 'message' },
-      target, { signal, deadlineAt, onResponse });
-    return { cursor: page.cursor ?? undefined, requestIds,
-      limited: page.complete ? undefined : `本次正文覆盖受限（${page.limited_reason ?? '尚未覆盖全部历史'}）`,
-      items: page.items.map(({ thread, match }) => {
-        if (!thread || !match?.reference || thread.workspace_id !== owner.workspaceId) throw new Error('消息命中缺少精确归属或位置');
-        const input = new ThreadInput({ ...owner, routeId: '', sessionId: thread.session_id, threadId: thread.thread_id, title: thread.title });
-        return { kind: 'resource', resource: input.resource, message: match,
-          title: thread.title, description: match.preview.replace(/\s+/g, ' '),
-          detail: `${label} · ${thread.session_title} · ${match.role === 'tool' ? `工具结果 ${match.tool_name} · ${match.tool_call_id}` : match.role === 'user' ? '用户消息' : '助手消息'} · ${thread.session_id} / ${thread.thread_id} · ${match.turn_id}` };
-      }) };
-  }
-
-  if (category === 'LLM 请求记录') {
-    const result = await gateway.request<WorkspaceSearchResultDTO>('/api/v1/search', {
-      method: 'POST', signal, onResponse, headers: gatewayWorkspaceRequestHeaders(target),
-      body: JSON.stringify({ workspace_id: owner.workspaceId, category: 'llm_request', operation: 'content',
-        query: filter, match_mode: 'literal', limit: 50, cursor, deadline_at: deadlineAt === undefined ? undefined : deadlineAt / 1000 }),
-    }, target.workspace_id);
-    const page = result.llm_requests;
-    if (!page || result.workspace_id !== owner.workspaceId) throw new Error('请求日志搜索缺少原 owner 的结果');
-    return { cursor: page.cursor, requestIds,
-      limited: page.complete ? undefined : `本次请求日志覆盖受限（${page.limited_reason}）`,
-      items: page.items.map(item => {
-        if (!item.match?.reference || !item.session_uri) throw new Error('请求日志命中缺少 Session 资源或记录位置');
-        return { kind: 'session', sessionId: item.match.reference.session_id, requestLog: item.match,
-          title: item.session_title, description: item.match.preview.replace(/\s+/g, ' '),
-          detail: `${label} · 会话级 LLM 请求记录 · ${item.match.reference.session_id} · ${item.match.reference.file_name}` };
-      }) };
-  }
-
   if (category === '会话') {
     const page = await gateway.request<SessionCatalogSearchResults>(`/api/v1/session-catalog/search?${query}`,
       { signal, onResponse, headers: { ...gatewayWorkspaceRequestHeaders(target),

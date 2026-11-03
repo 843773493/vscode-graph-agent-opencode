@@ -13,6 +13,7 @@ from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.workspace import WorkspaceFileChangeBatchDTO
 from app.schemas.internal_v2.workspace_observation import WorkspaceObservationFrameDTO
+from app.schemas.search_federation import FederatedSearchEventDTO
 
 
 class SseErrorDTO(BaseModel):
@@ -28,6 +29,7 @@ SSE_EVENT_MODELS: dict[str, type[BaseModel]] = {
         SseErrorDTO,
         WorkspaceObservationFrameDTO,
         PersistentTaskListDTO,
+        FederatedSearchEventDTO,
     )
 }
 

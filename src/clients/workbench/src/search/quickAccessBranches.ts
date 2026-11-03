@@ -12,13 +12,14 @@ import { requireGatewayWorkspaceRoute, type WorkspaceOwner } from '../../../web/
 import { gateway } from '../agentApi.js';
 import { searchOwnerKey } from './quickAccessScope.js';
 import { rankResourcePicks, type ResourcePick } from './quickAccessPicks.js';
-import { searchQuickAccessResources, type SearchCategory, type ResourceSearchItem } from './quickAccessQuery.js';
+import { searchQuickAccessResources, type NameSearchCategory, type SearchCategory, type ResourceSearchItem } from './quickAccessQuery.js';
+import { isContentSearchCategory, queryContentSearchBranches } from './quickAccessContent.js';
 import type { WorkspaceSearchService } from './searchService.js';
 import type { FuzzyScorerCache } from '../../upstream/src/vs/base/common/fuzzyScorer.js';
 
-interface SearchBranch {
+export interface SearchBranch<Category extends SearchCategory = SearchCategory> {
   owner: WorkspaceOwner;
-  category: SearchCategory;
+  category: Category;
   key: string;
   label: string;
   picks: ResourcePick[];
@@ -31,11 +32,15 @@ export function querySearchBranches(owners: readonly WorkspaceOwner[], categorie
   disposables: DisposableStore, token: CancellationToken, instantiation: IInstantiationService, search: WorkspaceSearchService,
   cache: FuzzyScorerCache, map: (item: ResourceSearchItem, owner: WorkspaceOwner) => ResourcePick,
   progress: (branches: SearchBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void): SearchBranch[] {
+  if (categories.every(isContentSearchCategory)) return queryContentSearchBranches(owners, categories, filter,
+    disposables, token, map, progress, busy, scopeLabel);
+  const names = categories.filter((category): category is NameSearchCategory => !isContentSearchCategory(category));
+  if (names.length !== categories.length) throw new Error('名称与正文查询须分别选择模式');
   const controller = new AbortController();
   disposables.add(toDisposable(() => controller.abort()));
   disposables.add(token.onCancellationRequested(() => controller.abort()));
   const alive = () => !controller.signal.aborted && !token.isCancellationRequested;
-  const branches: SearchBranch[] = categories.flatMap(category => owners.map(owner => ({ owner, category,
+  const branches: SearchBranch<NameSearchCategory>[] = names.flatMap(category => owners.map(owner => ({ owner, category,
     key: `${searchOwnerKey(owner)}/${category}`, label: owners.length === 1 ? category : `${owner.workspaceId} · ${category}`,
     picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${owner.workspaceId} · ${category} · 正在查询` } })));
   const limiter = disposables.add(new Limiter<void>(3));
@@ -49,7 +54,7 @@ export function querySearchBranches(owners: readonly WorkspaceOwner[], categorie
     if (alive()) scopeLabel([...labels.values()].join('、'));
     return target;
   };
-  const queue = async (branch: SearchBranch, cursor?: string): Promise<void> => {
+  const queue = async (branch: SearchBranch<NameSearchCategory>, cursor?: string): Promise<void> => {
     if (!alive() || branch.pending) return;
     branch.pending = true;
     const source = new CancellationTokenSource(token), abort = new AbortController();
@@ -73,7 +78,7 @@ export function querySearchBranches(owners: readonly WorkspaceOwner[], categorie
           abort.signal, source.token, instantiation, search, cursor, deadlineAt);
         if (source.token.isCancellationRequested || !alive()) return;
         const merged = new Map([...branch.picks, ...page.items.map(item => map(item, branch.owner))].map(pick => [pick.id, pick]));
-        branch.picks = branch.category === '会话消息' || branch.category === '工具结果' || branch.category === 'LLM 请求记录' ? [...merged.values()] : rankResourcePicks([...merged.values()], filter, cache);
+        branch.picks = rankResourcePicks([...merged.values()], filter, cache);
         branch.status = { id: `status-${branch.key}`,
           label: `${branch.label} · ${page.limited ?? (page.cursor ? '还有更多结果' : branch.picks.length ? '本次查询完成' : '没有匹配的资源')}`,
           detail: `本次读取 ${branch.picks.length} 项，不代表全局快照${page.requestIds.length ? ` · request_id: ${page.requestIds.join('、')}` : ''}`,

@@ -15,6 +15,7 @@ import { querySearchBranches } from '../../../../../src/clients/workbench/src/se
 import { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
 import { HttpRequestError } from '../../../../../src/clients/web/src/api/http.js';
 import { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
+export { contentBranchContract } from './content_branches.fixture.mjs';
 
 const owner = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const root = 'boxteam://workspace/workspace-a/resources/files/root';

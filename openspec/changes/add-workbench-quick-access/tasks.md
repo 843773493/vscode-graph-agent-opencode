@@ -178,6 +178,7 @@
 - [ ] 16.9 将可打开／引用命中的规范 URI 设为默认输出，复用统一寻址 owner 及稳定身份、位置／版本；验证同资源多位置、重命名／移动、route 重用、无 URI 的命令／进度，不把 URI 当所有索引记录主键。
 - [ ] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
 - [ ] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。
+  - 消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端，移除这三类的前端跨目标调度和直连 wrapper；名称、目录镜像及文件多范围迁移仍未完成，不据此勾选整项。
 - [ ] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
 - [ ] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
 - [ ] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
@@ -187,6 +188,15 @@
 - [ ] 16.18 补机器可判别的错误／受限／取消／信息／警告代码、详细原原因和分支重试信息；验证空目录非法正则、能力版本不匹配、流断开、内部读取失败及原 request_id，诊断文本不执行任意命令链接，复用本地耗时／数量诊断不新增遥测后台。
 - [ ] 16.19 贯通原 owner canonical／大小写及 IUriIdentityService 比较键、重叠根／额外文件／模型去重与根局部选项；保留 onlyOpenEditors、preview、文件大小／编码／链接策略的真实映射，未支持选项明确拒绝。冻结按工作区分区的本地覆盖身份并交文件 owner 在输出计量／分页前排除，不传正文，绑定缓存／cursor。验证只选 A 时 B 不查询，以及 A+B 小配额时 A 本地删词屏蔽旧磁盘命中、B 同路径及 A 另一文件仍可续页取得，核真实序列化、progress／终态计数、模型变化与旧 cursor 失效及本地剩余远端配额。
 - [ ] 16.20 追加可判别生命周期与流式验收：查询中注销后无新分发／fallback／迟到 progress，安全结算后释放；同 picker 缓存复用／范围隔离及 A/B 独立编辑器释放；受限预热不能标记完整，唯一匹配在预热上限外时仍可有界查询／续查或明确受限，不返回完整无匹配；进度与最终结果不重复计数、最后不足批次仍 flush、慢消费缓冲有界、终态唯一、未交付页不漏项。按相关源码批次做定向受保护验证，不默认重跑全套。
+
+### 2026-11-03：三类正文客户端统一联邦（16.11、16.14、16.18、16.20 部分）
+
+- Quick Access 消息、工具结果及 LLM 请求记录正文统一提交所选 owner，经同一 Gateway 流取得增量领域页；删除原工作区消息搜索客户端和 LLM 直连分支。这三类不再预检工作区或使用前端 Limiter，只有 Gateway 分配并发及页额度；名称和文件类仍由后续切片迁移，不保留同类 fallback。
+- 复用共享 SSE 分帧与 descriptor 核对的生成校验器，核对范围、事件顺序、request_id、领域归属及唯一终态，不对正文新增 hash 或深比较。一个十五秒总期限覆盖建连和正文；用户取消回收同一 reader。续页／重试保留冻结范围，只发对应分支；A 已开始续页时原 A+B 请求的收尾不会清除新请求状态，断流保留已完成 A 并让未完成 B 明确失败。
+- 最终 17 项 API 检查、12 项真实 Provider／Quick Input 调用合同检查及 129 项后端／公开结构／Gateway 调度检查通过。合同装具明确替换网络、Picker 事件及宿主服务，不将其当完整产品页面。真实 Workbench 类型检查覆盖 18 份 sourceTransform 源码，零诊断；Ruff、Pyright、协议生成一致性、OpenSpec strict 与差异检查通过。本批未改 proto，无需重复 Buf breaking。
+- 两项真实 Gateway／正式 Workbench／Chromium 验收通过：`2 passed in 253.77s`。关键消息、工具输出、child 与请求记录均通过产品入口及统一 model_stream 生成。消息／工具场景五次正文请求、请求日志场景三次正文请求均只访问 `/api/gateway/search`，旧正文入口零请求；精确打开、复用 Pane、长正文／emoji、旧引用 409 及零整批日志读取的原断言保持，两个页面 `pageErrors=[]`。同会话共享一次正式构建，46.95 秒、退出零，main SHA256 为 `4f70ca8ee5678e4c52af2c4e3169578610cdc6af5c1ec97e1f767b736d047c35`。
+- 首轮真实浏览器发现新入口漏传 JSON Content-Type（422），已补齐并在网络装具中增加请求头断言；另一失败来自虚拟列表末尾状态未实际渲染，复用原真实滚轮装具查看末尾，保留原文案和期限断言，未修改产品列表来迁就测试。首轮失败及最终通过原件都保留；最终运行源码指纹无变化。
+- 准确命令、源码指纹、原始输出及退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/content-federation-*`；最终产品原件分别在 `out/tests/integration/clients/web/quick_access/test_message_content/runs/run-76c55bc35cb5/` 和 `out/tests/integration/clients/web/quick_access/test_request_content/runs/run-76c55bc35cb5/`。文件、目录镜像、工具／脚本消费者、all UI 与 Electron 等仍未完成，以上整项保持未勾选，不用本切片替代剩余验收。
 
 ### 2026-11-03：文件模型覆盖先于正文读取与分页（16.19 部分）
 

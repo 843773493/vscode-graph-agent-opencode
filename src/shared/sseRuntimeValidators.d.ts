@@ -5,3 +5,4 @@ export const validateWorkspaceFileChangeBatchDTO: { (value: unknown): boolean; e
 export const validateSseErrorDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateWorkspaceObservationFrameDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validatePersistentTaskListDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
+export const validateFederatedSearchEventDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
+import { expectLastSearchStatus } from './default_interactions.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -27,7 +28,7 @@ try {
       queries.set(request, observation);
       result.queries.push(observation);
     }
-    if (path === '/api/v1/sessions/history/search') result.searches.push({ path, body: request.postDataJSON(),
+    if (['/api/gateway/search', '/api/v1/sessions/history/search', '/api/v1/search'].includes(path)) result.searches.push({ path, body: request.postDataJSON(),
       route: request.headers()['x-boxteam-workspace-id'], deadline: request.headers()['x-boxteam-content-search-deadline'] });
     if (/\/threads\/[^/]+\/history$/.test(path) && request.postDataJSON()?.direction === 'around') {
       result.around.push({ path, body: request.postDataJSON(), route: request.headers()['x-boxteam-workspace-id'] });
@@ -85,7 +86,7 @@ try {
   expect(await page.locator(`section.boxteam-thread[data-thread-id="${child}"]`).count()).toBe(0);
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   await command('workbench.action.quickOpen', query);
-  await expect(quick).toContainText('文件 · 没有匹配的资源');
+  await expectLastSearchStatus({ page, quick, label: '文件 · 没有匹配的资源' });
   await page.keyboard.press('Escape');
   await command('workbench.action.quickOpen', 'content ' + query);
   await expect(quick).toContainText('会话消息');
@@ -94,8 +95,10 @@ try {
   await quick.locator('[data-quick-input-id="content-category-message"]').click();
   await expect(quick).toContainText('会话消息 · 本次查询完成');
   expect(result.searches).toHaveLength(1);
-  expect(result.searches[0].route).toBe(target.workspace_id);
-  expect(Number(result.searches[0].deadline)).toBeGreaterThan(Date.now() / 1000 - 15);
+  expect(result.searches[0].path).toBe('/api/gateway/search');
+  expect(result.searches[0].body.scope).toEqual({ mode: 'selected', owners: [{ gateway_id: health.gateway_id, workspace_id: target.backend_workspace_id }] });
+  expect(result.searches[0].body.queries.map(query => query.category)).toEqual(['message']);
+  expect(result.searches[0].body.deadline_at).toBeGreaterThan(Date.now() / 1000 - 15);
   const picks = quick.locator(`[data-quick-input-id^="boxteam-thread://"][data-quick-input-id*="/${child}#"]`);
   await expect(picks).toHaveCount(2);
   const firstId = await picks.first().getAttribute('data-quick-input-id');
@@ -195,7 +198,8 @@ try {
   })).toBe(true);
   expect(result.around.at(-1).body.anchor_message.category).toBe('tool_result');
   expect(result.around.at(-1).body.anchor_message.start_codepoint).toBeGreaterThan(65536);
-  expect(result.searches.at(-1).body.category).toBe('tool_result');
+  expect(result.searches.at(-1).body.queries.map(query => query.category)).toEqual(['tool_result']);
+  expect(result.searches.every(request => request.path === '/api/gateway/search')).toBe(true);
   result.unopenedToolChildLocated = result.fullToolOutputVisible = result.toolCategoryIsolated = true;
   result.firstPick = firstId;
   result.owner = { gateway: health.gateway_id, workspace: target.backend_workspace_id, sessionId, main, child };
