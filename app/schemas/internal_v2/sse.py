@@ -35,10 +35,11 @@ SSE_EVENT_MODELS: dict[str, type[BaseModel]] = {
 def sse_responses(
     description: str,
     events: Mapping[str, type[BaseModel]],
-) -> dict[int, dict[str, Any]]:
+    *, models: Mapping[str, type[BaseModel]] = SSE_EVENT_MODELS,
+) -> dict[int | str, dict[str, Any]]:
     event_refs: dict[str, dict[str, str]] = {}
     for event_name, model in events.items():
-        registered = SSE_EVENT_MODELS.get(model.__name__)
+        registered = models.get(model.__name__)
         if registered is not model:
             raise RuntimeError(f"SSE DTO 未注册: {model.__name__}")
         event_refs[event_name] = {
@@ -56,13 +57,13 @@ def sse_responses(
     }
 
 
-def install_sse_openapi_components(app: FastAPI) -> None:
+def install_sse_openapi_components(app: FastAPI, *, models: Mapping[str, type[BaseModel]] = SSE_EVENT_MODELS) -> None:
     original_openapi = app.openapi
 
     def openapi_with_sse_components() -> dict[str, Any]:
         schema = original_openapi()
         _, root_schema = models_json_schema(
-            [(model, "serialization") for model in SSE_EVENT_MODELS.values()],
+            [(model, "serialization") for model in models.values()],
             ref_template="#/components/schemas/{model}",
         )
         generated = root_schema.get("$defs", {})

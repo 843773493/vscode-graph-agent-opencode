@@ -1,0 +1,189 @@
+"""真实 ASGI／HTTP 编码与显式下游替身；不把这些检查称为实网验收。"""
+
+import asyncio
+import json
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi import FastAPI
+
+from app.core.trace_middleware import TraceMiddleware
+from app.gateway.control.navigation import WorkspaceNavigationStore
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes.search import router
+from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
+from app.schemas.internal_v2.session_navigation import SessionCatalogSearchResultsDTO
+from app.schemas.search_federation import FederatedSearchEventDTO
+
+GATEWAY = "gateway_search_transport"
+OWNERS = [{"gateway_id": GATEWAY, "workspace_id": f"00000000-0000-4000-8000-{index:012d}"} for index in range(1, 4)]
+
+
+class PausedBody(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self.entered.set()
+        await asyncio.Event().wait()
+        yield b"unreachable"
+
+    async def aclose(self) -> None:
+        await asyncio.sleep(0)
+        self.closed.set()
+
+
+@dataclass
+class SearchHTTP:
+    client: httpx.AsyncClient
+    registry: GatewayWorkspaceRegistry
+    requests: list[httpx.Request] = field(default_factory=list)
+    mode: str = "normal"
+    paused: PausedBody = field(default_factory=PausedBody)
+
+    async def receive(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        payload = json.loads(request.content)
+        request_id = request.headers["X-Request-ID"]
+        headers = {"X-Request-ID": request_id, "Content-Type": "application/json"}
+        if self.mode == "paused":
+            return httpx.Response(200, headers=headers, stream=self.paused)
+        if self.mode == "error":
+            return httpx.Response(409, headers=headers, json={"detail": {"code": "owner_rejected", "message": "cursor 已过期"}})
+        if self.mode == "wrong-id":
+            headers["X-Request-ID"] = "another-request"
+        if self.mode == "large":
+            return httpx.Response(200, headers=headers, content=b"x" * (8 * 1024 * 1024 + 1))
+        page = WorkspaceSearchResultDTO(
+            provider_id="session-catalog", workspace_id=payload["workspace_id"] if self.mode != "wrong-owner" else "wrong",
+            category=payload["category"], operation=payload["operation"], contract_version=1,
+            state="limited", limited_reason="result_limit",
+            catalog=SessionCatalogSearchResultsDTO(revision="r1", catalog_revision=1, cursor=f"{payload['workspace_id']}-cursor"),
+        )
+        body = APIResponse(data=page, request_id=request_id).model_dump(mode="json")
+        return httpx.Response(200, headers=headers, json=body)
+
+    async def search(self, owners: list[dict] | None = None, **updates: object) -> httpx.Response:
+        return await self.client.post("/api/gateway/search", json={
+            "scope": {"mode": "selected", "owners": owners or OWNERS[:2]},
+            "queries": [{"category": "catalog", "query": "needle"}], **updates,
+        })
+
+
+@pytest.fixture
+async def search_http(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SearchHTTP]:
+    monkeypatch.setattr("app.gateway.auth.get_gateway_local_token", lambda: "test-search-token")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    for index, owner in enumerate(OWNERS):
+        registry.upsert(WorkspaceTarget(
+            workspace_id=f"route_{index}", backend_workspace_id=owner["workspace_id"],
+            name=f"Same project {index}", root_path=str(tmp_path / f"unused-{index}"),
+            backend_url=f"http://owner-{index}.test", connection_kind="local",
+        ), activate=False)
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(router)
+    application.state.registry = registry
+    application.state.workspace_navigation_store = WorkspaceNavigationStore(storage_path=tmp_path / "navigation.json")
+    application.state.gateway_id = GATEWAY
+    # 此装具的授权边界是明确替身；实网验收另走真实 guest 登录。
+    application.dependency_overrides[verify_user_access_for_proxy] = lambda: None
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://gateway.test",
+                                 headers={"X-Local-Token": "test-search-token", "X-Request-ID": "req_search"}) as client:
+        fixture = SearchHTTP(client, registry)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(fixture.receive)) as upstream:
+            application.state.http_client = upstream
+            try:
+                yield fixture
+            finally:
+                registry.close()
+
+
+def events(response: httpx.Response) -> list[FederatedSearchEventDTO]:
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == "req_search"
+    assert response.headers["Content-Type"].startswith("text/event-stream")
+    frames = [frame for frame in response.text.split("\n\n") if frame and not frame.startswith(":")]
+    result = []
+    for frame in frames:
+        lines = frame.splitlines()
+        event = FederatedSearchEventDTO.model_validate_json(next(line.removeprefix("data: ") for line in lines if line.startswith("data: ")))
+        assert f"id: {event.sequence}" in lines and "event: search" in lines
+        assert event.request_id == "req_search"
+        result.append(event)
+    assert result[0].type == "scope" and result[-1].type == "end"
+    assert [item.sequence for item in result] == list(range(1, len(result) + 1))
+    return result
+
+
+async def test_only_explicit_a_b_receive_same_request_and_original_owner_cursor(search_http: SearchHTTP) -> None:
+    result = events(await search_http.search())
+    assert len(search_http.requests) == 2
+    assert {request.url.host for request in search_http.requests} == {"owner-0.test", "owner-1.test"}
+    for request in search_http.requests:
+        payload = json.loads(request.content)
+        assert request.url.path == "/api/v1/search"
+        assert request.headers["X-Request-ID"] == "req_search"
+        assert request.headers["X-BoxTeam-Gateway-Id"] == GATEWAY
+        assert request.headers["X-BoxTeam-Workspace-Id"] == payload["workspace_id"]
+        assert payload["deadline_at"] is not None and payload["limit"] == 50
+    pages = [event for event in result if event.type == "page"]
+    assert len(pages) == 2 and all(page.page.catalog.cursor == f"{page.branch.branch.owner.workspace_id}-cursor" for page in pages)
+    assert result[-1].summary.state == "incomplete"
+    assert all(search_http.registry.route_reference_counts(f"route_{index}") == (0, 0) for index in range(3))
+
+
+async def test_unknown_owner_rejected_before_any_dispatch(search_http: SearchHTTP) -> None:
+    response = await search_http.search([{**OWNERS[0], "workspace_id": "unknown"}])
+    assert response.status_code == 404 and not search_http.requests
+    assert response.json()["detail"]["code"] == "owner_unavailable"
+
+
+@pytest.mark.parametrize("mode,code", [("wrong-id", "invalid_response"), ("wrong-owner", "invalid_response"),
+                                       ("large", "delivery_limit"), ("error", "owner_rejected")])
+async def test_failed_branch_has_no_page_or_advanced_cursor(search_http: SearchHTTP, mode: str, code: str) -> None:
+    search_http.mode = mode
+    result = events(await search_http.search(OWNERS[:1]))
+    assert not any(event.type == "page" for event in result)
+    assert result[-1].summary.branches[0].code == code
+    assert result[-1].summary.branches[0].cursor is None
+    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+
+
+async def test_route_invalidation_closes_body_before_releasing_reference(search_http: SearchHTTP) -> None:
+    search_http.mode = "paused"
+    response = asyncio.create_task(search_http.search(OWNERS[:1]))
+    await search_http.paused.entered.wait()
+    assert search_http.registry.route_reference_counts("route_0") == (1, 0)
+    search_http.registry.invalidate_route("route_0")
+    result = events(await response)
+    assert search_http.paused.closed.is_set()
+    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+    assert result[-1].summary.branches[0].code == "route_invalidated"
+    assert not any(event.type == "page" for event in result)
+
+
+async def test_cancellation_closes_body_and_releases_without_late_response(search_http: SearchHTTP) -> None:
+    search_http.mode = "paused"
+    response = asyncio.create_task(search_http.search(OWNERS[:1]))
+    await search_http.paused.entered.wait()
+    response.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await response
+    assert search_http.paused.closed.is_set()
+    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+
+
+async def test_zero_quota_and_missing_auth_do_not_read_owner(search_http: SearchHTTP) -> None:
+    result = events(await search_http.search(max_results=0))
+    assert not search_http.requests
+    assert all(branch.code == "output_limit" for branch in result[-1].summary.branches)
+    search_http.client.headers.pop("X-Local-Token")
+    assert (await search_http.search()).status_code == 401
+    assert not search_http.requests

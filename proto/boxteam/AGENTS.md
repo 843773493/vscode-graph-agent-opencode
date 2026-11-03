@@ -4,7 +4,7 @@
 
 ## 可修改内容
 
-- 可以维护 `common`、`gateway`、`workspace`、`terminal` 和 `browser` 协议子目录。
+- 可以维护 `common`、`gateway`、`workspace`、`terminal`、`browser` 和跨目标编排的 `search` 协议子目录。
 
 ## 不可修改内容
 

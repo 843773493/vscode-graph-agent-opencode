@@ -1,6 +1,6 @@
 # 目录用途
 
-`proto/` 是跨进程公开协议的唯一源目录，保存 Gateway、Workspace、Terminal、Browser 与公共基础协议的 `.proto` 文件。
+`proto/` 是跨进程公开协议的唯一源目录，保存 Gateway、Workspace、Terminal、Browser、跨目标 Search 与公共基础协议的 `.proto` 文件。
 
 ## 可修改内容
 

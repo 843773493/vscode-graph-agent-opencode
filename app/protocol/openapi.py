@@ -7,6 +7,7 @@ from google.protobuf.descriptor_pool import Default, DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_public_pb2
+from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
@@ -112,7 +113,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "WorkspaceNavigationPlacementRequest", "WorkspaceNavigationReorderRequest",
         "WorkspaceNavigationTreeDTO", "WorkspaceNavigationBreadcrumbDTO",
     )
-}
+} | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO")}
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
@@ -130,6 +131,7 @@ SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     **SSE_JSON_DESCRIPTORS,
+    "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
     # 此 DTO 展平 header 并改变 payload 外形，由 SSE 导出入口的具名投影核对。
     "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
 }

@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package boxteam.search.v1;
+
+import "boxteam/gateway/v1/public.proto";
+import "boxteam/workspace/v2/public.proto";
+
+message FederatedSearchQueryDTO {
+  string category = 1;
+  string operation = 2;
+  int32 contract_version = 3;
+  string query = 4;
+  string match_mode = 5;
+  int32 limit = 6;
+}
+
+message FederatedSearchBranchKeyDTO {
+  boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+  string category = 2;
+  string operation = 3;
+}
+
+message FederatedSearchContinuationDTO {
+  FederatedSearchBranchKeyDTO branch = 1;
+  optional string cursor = 2;
+}
+
+message FederatedSearchRequest {
+  boxteam.gateway.v1.GatewaySearchScopeRequest scope = 1;
+  repeated FederatedSearchQueryDTO queries = 2;
+  repeated FederatedSearchContinuationDTO continuations = 3;
+  int32 max_results = 4;
+  optional double deadline_at = 5;
+}
+
+message FederatedSearchBranchDTO {
+  FederatedSearchBranchKeyDTO branch = 1;
+  string state = 2;
+  optional string provider_id = 3;
+  optional string code = 4;
+  optional string message = 5;
+  bool retryable = 6;
+  optional string cursor = 7;
+  int32 allocated_results = 8;
+  int32 returned_results = 9;
+}
+
+message FederatedSearchSummaryDTO {
+  string state = 1;
+  string order = 2;
+  repeated FederatedSearchBranchDTO branches = 3;
+  int32 returned_results = 4;
+}
+
+message FederatedSearchEventDTO {
+  int32 sequence = 1;
+  string request_id = 2;
+  string type = 3;
+  boxteam.gateway.v1.GatewaySearchScopeResolutionDTO scope = 4;
+  FederatedSearchBranchDTO branch = 5;
+  boxteam.workspace.v2.WorkspaceSearchResultDTO page = 6;
+  FederatedSearchSummaryDTO summary = 7;
+}
