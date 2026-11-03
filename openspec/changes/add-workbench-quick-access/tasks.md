@@ -180,7 +180,7 @@
 - [ ] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。
   - Session／Thread 名称、文件多根以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端；删除前端跨目标查询队列、文件直连 wrapper 及非标准 fileSearchPage。保留原根元数据读取、QueryBuilder 局部选项和 fuzzy 排名／高亮，普通搜索自动续原 cursor，Quick Access 明确单分支继续。旧 React 目录搜索／镜像已迁齐；canonical 重叠根和其余缓存合同仍未完成，不据此勾选整项。
 - [x] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
-- [ ] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
+- [x] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
 - [ ] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
 - [ ] 16.15 在真实 Web 和 Electron 产品入口定向回归多范围搜索、原文件 dirty model／Search Editor、历史和动作；另在关闭浏览器后验证工具／脚本查全部会话树及真实 `search_context`。树验收覆盖 A/B 同名 folder 与 Session 不合并、各自根／父链／breadcrumb 及独立 cursor 正确；上下文验收对应 16.12 的原来源、身份、预算和版本语义，保存范围及原始结果证据。静态检查、类型检查、构建和受影响用例按第 15 组要求保护执行，不默认全套重跑。
 - [ ] 16.16 复核删除清单、原调用方／测试迁移、无双重调度／重复匹配／第二事实源；同步实际 Gateway 职责说明与相关 AGENTS.md，在实现完成时登记准确证据，不把本次规范扩展当实现完成。
@@ -700,3 +700,11 @@
 - 真实Gateway与双Backend网络1 passed／48.98秒：原查询及Gateway重启后的文件内续点相同，通过原保存API更新已消费文件后，旧cursor返回原resource_file_operations/stale_cursor/400，零页、零交付并保留输入cursor。正式Workbench／Gateway／Chromium文件覆盖E2E 1 passed／90.58秒，pageErrors=[]，共享正式构建41.11秒、退出0；A/B覆盖、小配额和原查询隔离断言保持。
 - Ruff、OpenSpec strict和差异检查通过；Pyright与HEAD原件对照，核心9条及既有测试17条诊断完全相同、无新增，网络测试零诊断。无公开DTO或前端源码变化，不重复协议生成、前端类型或Electron。基线初次负载超过默认读取预算已改为显式128KiB；第二次基线异步完整复现后，同步部分被90秒外部监督器终止，未把它算作完成；原件均保留。
 - 准确命令、源码指纹、测量、原始输出、退出码及正式产物路径：out/tests/temp/search_pagination_20261103/artifacts/verification.json。16.11／16.17的其余合同与16.19 Windows canonical等仍未闭环，保持整项未勾选。
+
+
+### 2026-11-03：冻结搜索范围与登记变更实网验收（16.13 完成）
+
+- 复用真实双Backend／Gateway与正式搜索SDK，通过产品入口创建A/B各两条Session、CAS保存B独有正文并删除B登记。origin只访问A，selected只访问A/B；相关发现仅查控制面，名称不相关的B仍在明确all正文范围命中。空集合422、混入未知owner404，均保留request_id且零后端请求；停止C明确target_unavailable，没有搜索触发启动。
+- Gateway停止后沿原registry owner准备真实目录／UUID的离线D并复用B旧route，重启后沿原all范围续查：保留A/B/C身份、时间和顺序，只有A真正分发并取得第二条Session，B明确owner_unavailable、零交付且保留原cursor；D不替代B，只有新all才包含D。C/D没有创建Session业务目录。离线准备不作为管理UI新增目标的验收。
+- 受保护矩阵最终1 passed／50.49秒，退出0；两后端全部access日志按request_id核对实际分发，控制面发现与前置拒绝均零后端HTTP读取。Ruff通过、测试Pyright零诊断、OpenSpec strict及差异检查通过。无产品源码／公开DTO变化，未重复Web构建或Web／Electron、Windows canonical验收。
+- 首轮测试将D指向不存在目录和虚构UUID，Gateway启动实际拒绝；已修正测试输入，没有放宽产品校验。失败与通过原件、准确命令及源码指纹保留于out/tests/temp/search_scope_changes_20261103/artifacts/verification.json，最终正式原件为out/tests/integration/gateway/test_search_scope_changes/runs/run-34a886b96831/。联合既有范围和实际网络证据勾选16.13，其余未闭环项保持。
