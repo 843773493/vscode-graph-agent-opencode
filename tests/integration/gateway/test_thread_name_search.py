@@ -107,6 +107,38 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
 
             child = await fork("thread-discovery-first")
 
+            capabilities = await client.get("/api/v1/search/capabilities")
+            assert capabilities.status_code == 200, capabilities.text
+            assert capabilities.headers["X-Request-ID"] == capabilities.json()["request_id"]
+            workspace_id = capabilities.json()["data"]["workspace_id"]
+            assert {(item["category"], operation) for item in capabilities.json()["data"]["providers"] for operation in item["operations"]} == {
+                ("catalog", "name"), ("thread", "name"),
+            }
+            payload = {"workspace_id": workspace_id, "category": "thread", "query": "SDN🧪", "limit": 1}
+            unified = await client.post("/api/v1/search", json=payload)
+            assert unified.status_code == 200, unified.text
+            assert unified.json()["data"]["provider_id"] == "session-thread"
+            assert unified.json()["data"]["state"] == "limited"
+            for change, code in (
+                ({"workspace_id": "another-workspace"}, "owner_mismatch"),
+                ({"category": "message"}, "provider_unavailable"),
+                ({"contract_version": 2}, "unsupported_version"),
+                ({"match_mode": "regex"}, "unsupported_option"),
+            ):
+                rejected = await client.post("/api/v1/search", json={**payload, **change})
+                assert rejected.status_code == 400, rejected.text
+                assert rejected.json()["detail"]["code"] == code
+                assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"]
+            zero = await client.post("/api/v1/search", json={**payload, "limit": 0})
+            assert zero.status_code == 200, zero.text
+            assert zero.json()["data"]["limited_reason"] == "output_limit"
+            assert zero.json()["data"]["threads"] is None
+
+            catalog_search = await client.post("/api/v1/search", json={**payload, "category": "catalog"})
+            direct_catalog = await client.get("/api/v1/session-catalog/search", params={"query": "SDN🧪", "limit": 1})
+            assert catalog_search.status_code == direct_catalog.status_code == 200
+            assert catalog_search.json()["data"]["catalog"] == direct_catalog.json()["data"]
+
             async def search(cursor: str | None = None) -> httpx.Response:
                 response = await client.get(
                     "/api/v1/session-threads/search",
@@ -121,6 +153,7 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
 
             first = await search()
             assert first.status_code == 200, first.text
+            assert unified.json()["data"]["threads"] == first.json()["data"]
             assert first.json()["data"]["items"][0]["kind"] == "main"
             assert first.json()["data"]["items"][0]["session_id"] == session
             first_cursor = first.json()["data"]["cursor"]
@@ -136,6 +169,10 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
                 "child",
             )
             assert hit["thread_uri"] == child["thread_uri"]
+            continued = await client.post("/api/v1/search", json={**payload, "cursor": first_cursor})
+            assert continued.status_code == 200, continued.text
+            assert continued.json()["data"]["threads"] == second.json()["data"]
+            assert continued.headers["X-Request-ID"] == continued.json()["request_id"]
             assert hit["thread_uri"].startswith(
                 f"boxteam://{health.json()['data']['gateway_id']}/"
             )

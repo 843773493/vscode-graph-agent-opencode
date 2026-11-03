@@ -1,0 +1,150 @@
+"""工作区唯一搜索分派；不拥有领域数据或跨目标队列。"""
+
+import asyncio
+from collections.abc import Awaitable, Callable, Coroutine
+from time import time
+
+from app.core.shielded_cleanup import run_cleanup_shielded
+from app.schemas.internal_v2.search import (
+    SearchProviderCapabilityDTO,
+    WorkspaceSearchCapabilitiesDTO,
+    WorkspaceSearchRequest,
+    WorkspaceSearchResultDTO,
+)
+from app.services.business.session_navigation.name_search_budget import NameSearchBudget
+
+SearchQuery = Callable[[WorkspaceSearchRequest, str | None], Coroutine[None, None, WorkspaceSearchResultDTO]]
+
+
+class SearchContractError(ValueError):
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+
+
+class SearchRegistration:
+    def __init__(
+        self, capability: SearchProviderCapabilityDTO, query: SearchQuery,
+        release: Callable[[], Awaitable[None]] | None,
+    ) -> None:
+        self.capability = capability
+        self.query = query
+        self.active = True
+        self.tasks: set[asyncio.Task[WorkspaceSearchResultDTO]] = set()
+        self._release = release
+        self._closing: asyncio.Task[None] | None = None
+
+    def close_admission(self) -> None:
+        if self._closing is None:
+            self.active = False
+            for task in self.tasks:
+                if not task.cancelling():
+                    task.cancel()
+            self._closing = asyncio.create_task(self._settle())
+
+    async def aclose(self) -> None:
+        self.close_admission()
+        closing = self._closing
+        assert closing is not None
+        await run_cleanup_shielded(lambda: closing)
+
+    async def _settle(self) -> None:
+        # 查询错误仍由原请求消费；释放须等待所有原 owner 退出安全边界。
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self._release is not None:
+            await self._release()
+
+
+class WorkspaceSearchService:
+    def __init__(self, workspace_id: str) -> None:
+        self.workspace_id = workspace_id
+        self._providers: dict[tuple[str, str], SearchRegistration] = {}
+        self._closed = False
+
+    def register(
+        self, capability: SearchProviderCapabilityDTO, query: SearchQuery,
+        *, release: Callable[[], Awaitable[None]] | None = None,
+    ) -> SearchRegistration:
+        if self._closed:
+            raise SearchContractError("provider_unavailable", "工作区搜索服务已关闭")
+        if len(set(capability.operations)) != len(capability.operations):
+            raise ValueError(f"搜索 Provider 重复声明操作: {capability.provider_id}")
+        keys = tuple((capability.category, operation) for operation in capability.operations)
+        for key in keys:
+            if key in self._providers:
+                raise ValueError(f"搜索类别／操作已注册: {key}")
+        if any(item.capability.provider_id == capability.provider_id for item in self._providers.values()):
+            raise ValueError(f"搜索 Provider 身份已注册: {capability.provider_id}")
+
+        async def unregister() -> None:
+            if release is not None:
+                await release()
+            for key in keys:
+                del self._providers[key]
+
+        registration = SearchRegistration(capability, query, unregister)
+        self._providers.update(dict.fromkeys(keys, registration))
+        return registration
+
+    def capabilities(self) -> WorkspaceSearchCapabilitiesDTO:
+        return WorkspaceSearchCapabilitiesDTO(
+            workspace_id=self.workspace_id,
+            providers=[item.capability for item in dict.fromkeys(self._providers.values()) if item.active],
+        )
+
+    async def search(
+        self, request: WorkspaceSearchRequest, *, gateway_id: str | None = None,
+    ) -> WorkspaceSearchResultDTO:
+        if request.workspace_id != self.workspace_id:
+            raise SearchContractError("owner_mismatch", "搜索请求与目标工作区归属不一致")
+        registration = self._providers.get((request.category, request.operation))
+        if self._closed or registration is None or not registration.active:
+            raise SearchContractError("provider_unavailable", f"搜索能力不可用: {request.category}/{request.operation}")
+        capability = registration.capability
+        if request.contract_version != capability.contract_version:
+            raise SearchContractError("unsupported_version", f"搜索合同版本不匹配: {capability.provider_id}")
+        if request.match_mode != "fuzzy":
+            raise SearchContractError("unsupported_option", f"名称搜索不支持匹配模式: {request.match_mode}")
+        if not request.query.strip():
+            raise SearchContractError("invalid_query", "名称搜索词不能为空")
+        if request.limit > capability.max_results:
+            raise SearchContractError("invalid_query", f"搜索输出上限超过 Provider 限制: {capability.max_results}")
+        budget = NameSearchBudget.create(request.deadline_at)
+        if request.limit == 0:
+            return WorkspaceSearchResultDTO(
+                provider_id=capability.provider_id, workspace_id=self.workspace_id,
+                category=request.category, operation=request.operation, contract_version=capability.contract_version,
+                state="limited", limited_reason="output_limit",
+            )
+        request = request.model_copy(update={"deadline_at": time() + budget.remaining()})
+        task = asyncio.create_task(registration.query(request, gateway_id))
+        registration.tasks.add(task)
+        try:
+            result = await asyncio.shield(task)
+            if not registration.active:
+                raise SearchContractError("provider_unavailable", f"搜索 Provider 已注销: {capability.provider_id}")
+            return result
+        except asyncio.CancelledError:
+            if not task.cancelling():
+                task.cancel()
+
+            async def settle() -> None:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            await run_cleanup_shielded(settle)
+            if not registration.active:
+                raise SearchContractError("provider_unavailable", f"搜索 Provider 已注销: {capability.provider_id}") from None
+            raise
+        finally:
+            registration.tasks.discard(task)
+
+    async def aclose(self) -> None:
+        self._closed = True
+        registrations = tuple(dict.fromkeys(self._providers.values()))
+        for registration in registrations:
+            registration.close_admission()
+        for registration in registrations:
+            await registration.aclose()

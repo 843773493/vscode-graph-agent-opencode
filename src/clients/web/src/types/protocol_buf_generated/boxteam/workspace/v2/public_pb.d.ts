@@ -740,6 +740,192 @@ export declare type SessionCatalogExportDTO = Message<"boxteam.workspace.v2.Sess
 export declare const SessionCatalogExportDTOSchema: GenMessage<SessionCatalogExportDTO>;
 
 /**
+ * 工作区搜索的能力与生命周期；领域分页仍由原 owner 解释。
+ *
+ * @generated from message boxteam.workspace.v2.SearchProviderCapabilityDTO
+ */
+export declare type SearchProviderCapabilityDTO = Message<"boxteam.workspace.v2.SearchProviderCapabilityDTO"> & {
+  /**
+   * @generated from field: string provider_id = 1;
+   */
+  providerId: string;
+
+  /**
+   * @generated from field: string category = 2;
+   */
+  category: string;
+
+  /**
+   * @generated from field: repeated string operations = 3;
+   */
+  operations: string[];
+
+  /**
+   * @generated from field: int32 contract_version = 4;
+   */
+  contractVersion: number;
+
+  /**
+   * @generated from field: repeated string supported_options = 5;
+   */
+  supportedOptions: string[];
+
+  /**
+   * @generated from field: string position_kind = 6;
+   */
+  positionKind: string;
+
+  /**
+   * @generated from field: int32 max_results = 7;
+   */
+  maxResults: number;
+
+  /**
+   * @generated from field: string cache_policy = 8;
+   */
+  cachePolicy: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SearchProviderCapabilityDTO.
+ * Use `create(SearchProviderCapabilityDTOSchema)` to create a new message.
+ */
+export declare const SearchProviderCapabilityDTOSchema: GenMessage<SearchProviderCapabilityDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceSearchCapabilitiesDTO
+ */
+export declare type WorkspaceSearchCapabilitiesDTO = Message<"boxteam.workspace.v2.WorkspaceSearchCapabilitiesDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SearchProviderCapabilityDTO providers = 2;
+   */
+  providers: SearchProviderCapabilityDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceSearchCapabilitiesDTO.
+ * Use `create(WorkspaceSearchCapabilitiesDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceSearchCapabilitiesDTOSchema: GenMessage<WorkspaceSearchCapabilitiesDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceSearchRequest
+ */
+export declare type WorkspaceSearchRequest = Message<"boxteam.workspace.v2.WorkspaceSearchRequest"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string category = 2;
+   */
+  category: string;
+
+  /**
+   * @generated from field: string operation = 3;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: int32 contract_version = 4;
+   */
+  contractVersion: number;
+
+  /**
+   * @generated from field: string query = 5;
+   */
+  query: string;
+
+  /**
+   * @generated from field: string match_mode = 6;
+   */
+  matchMode: string;
+
+  /**
+   * @generated from field: int32 limit = 7;
+   */
+  limit: number;
+
+  /**
+   * @generated from field: optional string cursor = 8;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: optional double deadline_at = 9;
+   */
+  deadlineAt?: number | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceSearchRequest.
+ * Use `create(WorkspaceSearchRequestSchema)` to create a new message.
+ */
+export declare const WorkspaceSearchRequestSchema: GenMessage<WorkspaceSearchRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceSearchResultDTO
+ */
+export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.WorkspaceSearchResultDTO"> & {
+  /**
+   * @generated from field: string provider_id = 1;
+   */
+  providerId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string category = 3;
+   */
+  category: string;
+
+  /**
+   * @generated from field: string operation = 4;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: int32 contract_version = 5;
+   */
+  contractVersion: number;
+
+  /**
+   * @generated from field: string state = 6;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string limited_reason = 7;
+   */
+  limitedReason?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionCatalogSearchResultsDTO catalog = 8;
+   */
+  catalog?: SessionCatalogSearchResultsDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.SessionThreadSearchResultsDTO threads = 9;
+   */
+  threads?: SessionThreadSearchResultsDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceSearchResultDTO.
+ * Use `create(WorkspaceSearchResultDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceSearchResultDTOSchema: GenMessage<WorkspaceSearchResultDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.SessionThreadSearchResultDTO
  */
 export declare type SessionThreadSearchResultDTO = Message<"boxteam.workspace.v2.SessionThreadSearchResultDTO"> & {

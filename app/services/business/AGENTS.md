@@ -43,6 +43,7 @@
 │   ├── persistent_task_service.py  工作区任务管理、目标和 revision 校验
 │   └── persistent_tasks/goal.py    Goal 目标、预算记账与内部提示的纯应用规则
 ├── 会话执行与通信
+│   ├── search/                  工作区具名搜索 Provider 与安全结算
 │   ├── session_generation/      生成入口和结果回执
 │   ├── session_navigation/      导航操作及目录状态
 │   ├── communication/           会话间通信

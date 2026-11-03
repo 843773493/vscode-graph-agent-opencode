@@ -291,6 +291,78 @@ class SessionCatalogExportDTO(_message.Message):
     items: _containers.RepeatedCompositeFieldContainer[SessionCatalogNodeDTO]
     def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ...) -> None: ...
 
+class SearchProviderCapabilityDTO(_message.Message):
+    __slots__ = ("provider_id", "category", "operations", "contract_version", "supported_options", "position_kind", "max_results", "cache_policy")
+    PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
+    OPERATIONS_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SUPPORTED_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    POSITION_KIND_FIELD_NUMBER: _ClassVar[int]
+    MAX_RESULTS_FIELD_NUMBER: _ClassVar[int]
+    CACHE_POLICY_FIELD_NUMBER: _ClassVar[int]
+    provider_id: str
+    category: str
+    operations: _containers.RepeatedScalarFieldContainer[str]
+    contract_version: int
+    supported_options: _containers.RepeatedScalarFieldContainer[str]
+    position_kind: str
+    max_results: int
+    cache_policy: str
+    def __init__(self, provider_id: _Optional[str] = ..., category: _Optional[str] = ..., operations: _Optional[_Iterable[str]] = ..., contract_version: _Optional[int] = ..., supported_options: _Optional[_Iterable[str]] = ..., position_kind: _Optional[str] = ..., max_results: _Optional[int] = ..., cache_policy: _Optional[str] = ...) -> None: ...
+
+class WorkspaceSearchCapabilitiesDTO(_message.Message):
+    __slots__ = ("workspace_id", "providers")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    PROVIDERS_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    providers: _containers.RepeatedCompositeFieldContainer[SearchProviderCapabilityDTO]
+    def __init__(self, workspace_id: _Optional[str] = ..., providers: _Optional[_Iterable[_Union[SearchProviderCapabilityDTO, _Mapping]]] = ...) -> None: ...
+
+class WorkspaceSearchRequest(_message.Message):
+    __slots__ = ("workspace_id", "category", "operation", "contract_version", "query", "match_mode", "limit", "cursor", "deadline_at")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    QUERY_FIELD_NUMBER: _ClassVar[int]
+    MATCH_MODE_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    DEADLINE_AT_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    category: str
+    operation: str
+    contract_version: int
+    query: str
+    match_mode: str
+    limit: int
+    cursor: str
+    deadline_at: float
+    def __init__(self, workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., cursor: _Optional[str] = ..., deadline_at: _Optional[float] = ...) -> None: ...
+
+class WorkspaceSearchResultDTO(_message.Message):
+    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads")
+    PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_FIELD_NUMBER: _ClassVar[int]
+    CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    LIMITED_REASON_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_FIELD_NUMBER: _ClassVar[int]
+    THREADS_FIELD_NUMBER: _ClassVar[int]
+    provider_id: str
+    workspace_id: str
+    category: str
+    operation: str
+    contract_version: int
+    state: str
+    limited_reason: str
+    catalog: SessionCatalogSearchResultsDTO
+    threads: SessionThreadSearchResultsDTO
+    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ...) -> None: ...
+
 class SessionThreadSearchResultDTO(_message.Message):
     __slots__ = ("workspace_id", "session_id", "thread_id", "thread_uri", "kind", "title", "session_title", "created_at")
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]

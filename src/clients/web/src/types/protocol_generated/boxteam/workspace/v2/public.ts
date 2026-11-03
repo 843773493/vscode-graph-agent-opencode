@@ -176,6 +176,47 @@ export interface SessionCatalogExportDTO {
   items: SessionCatalogNodeDTO[];
 }
 
+/** 工作区搜索的能力与生命周期；领域分页仍由原 owner 解释。 */
+export interface SearchProviderCapabilityDTO {
+  provider_id: string;
+  category: string;
+  operations: string[];
+  contract_version: number;
+  supported_options: string[];
+  position_kind: string;
+  max_results: number;
+  cache_policy: string;
+}
+
+export interface WorkspaceSearchCapabilitiesDTO {
+  workspace_id: string;
+  providers: SearchProviderCapabilityDTO[];
+}
+
+export interface WorkspaceSearchRequest {
+  workspace_id: string;
+  category: string;
+  operation: string;
+  contract_version: number;
+  query: string;
+  match_mode: string;
+  limit: number;
+  cursor?: string | undefined;
+  deadline_at?: number | undefined;
+}
+
+export interface WorkspaceSearchResultDTO {
+  provider_id: string;
+  workspace_id: string;
+  category: string;
+  operation: string;
+  contract_version: number;
+  state: string;
+  limited_reason?: string | undefined;
+  catalog: SessionCatalogSearchResultsDTO | undefined;
+  threads: SessionThreadSearchResultsDTO | undefined;
+}
+
 export interface SessionThreadSearchResultDTO {
   workspace_id: string;
   session_id: string;
@@ -4301,6 +4342,283 @@ export const SessionCatalogExportDTO: MessageFns<SessionCatalogExportDTO> = {
     message.revision = object.revision ?? "";
     message.catalog_revision = object.catalog_revision ?? 0;
     message.items = object.items?.map((e) => SessionCatalogNodeDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSearchProviderCapabilityDTO(): SearchProviderCapabilityDTO {
+  return {
+    provider_id: "",
+    category: "",
+    operations: [],
+    contract_version: 0,
+    supported_options: [],
+    position_kind: "",
+    max_results: 0,
+    cache_policy: "",
+  };
+}
+
+export const SearchProviderCapabilityDTO: MessageFns<SearchProviderCapabilityDTO> = {
+  fromJSON(object: any): SearchProviderCapabilityDTO {
+    return {
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      category: isSet(object.category) ? globalThis.String(object.category) : "",
+      operations: globalThis.Array.isArray(object?.operations)
+        ? object.operations.map((e: any) => globalThis.String(e))
+        : [],
+      contract_version: isSet(object.contract_version) ? globalThis.Number(object.contract_version) : 0,
+      supported_options: globalThis.Array.isArray(object?.supported_options)
+        ? object.supported_options.map((e: any) => globalThis.String(e))
+        : [],
+      position_kind: isSet(object.position_kind) ? globalThis.String(object.position_kind) : "",
+      max_results: isSet(object.max_results) ? globalThis.Number(object.max_results) : 0,
+      cache_policy: isSet(object.cache_policy) ? globalThis.String(object.cache_policy) : "",
+    };
+  },
+
+  toJSON(message: SearchProviderCapabilityDTO): unknown {
+    const obj: any = {};
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.category !== "") {
+      obj.category = message.category;
+    }
+    if (message.operations?.length) {
+      obj.operations = message.operations;
+    }
+    if (message.contract_version !== 0) {
+      obj.contract_version = Math.round(message.contract_version);
+    }
+    if (message.supported_options?.length) {
+      obj.supported_options = message.supported_options;
+    }
+    if (message.position_kind !== "") {
+      obj.position_kind = message.position_kind;
+    }
+    if (message.max_results !== 0) {
+      obj.max_results = Math.round(message.max_results);
+    }
+    if (message.cache_policy !== "") {
+      obj.cache_policy = message.cache_policy;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SearchProviderCapabilityDTO>, I>>(base?: I): SearchProviderCapabilityDTO {
+    return SearchProviderCapabilityDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SearchProviderCapabilityDTO>, I>>(object: I): SearchProviderCapabilityDTO {
+    const message = createBaseSearchProviderCapabilityDTO();
+    message.provider_id = object.provider_id ?? "";
+    message.category = object.category ?? "";
+    message.operations = object.operations?.map((e) => e) || [];
+    message.contract_version = object.contract_version ?? 0;
+    message.supported_options = object.supported_options?.map((e) => e) || [];
+    message.position_kind = object.position_kind ?? "";
+    message.max_results = object.max_results ?? 0;
+    message.cache_policy = object.cache_policy ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceSearchCapabilitiesDTO(): WorkspaceSearchCapabilitiesDTO {
+  return { workspace_id: "", providers: [] };
+}
+
+export const WorkspaceSearchCapabilitiesDTO: MessageFns<WorkspaceSearchCapabilitiesDTO> = {
+  fromJSON(object: any): WorkspaceSearchCapabilitiesDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      providers: globalThis.Array.isArray(object?.providers)
+        ? object.providers.map((e: any) => SearchProviderCapabilityDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: WorkspaceSearchCapabilitiesDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.providers?.length) {
+      obj.providers = message.providers.map((e) => SearchProviderCapabilityDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceSearchCapabilitiesDTO>, I>>(base?: I): WorkspaceSearchCapabilitiesDTO {
+    return WorkspaceSearchCapabilitiesDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceSearchCapabilitiesDTO>, I>>(
+    object: I,
+  ): WorkspaceSearchCapabilitiesDTO {
+    const message = createBaseWorkspaceSearchCapabilitiesDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.providers = object.providers?.map((e) => SearchProviderCapabilityDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseWorkspaceSearchRequest(): WorkspaceSearchRequest {
+  return {
+    workspace_id: "",
+    category: "",
+    operation: "",
+    contract_version: 0,
+    query: "",
+    match_mode: "",
+    limit: 0,
+    cursor: undefined,
+    deadline_at: undefined,
+  };
+}
+
+export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
+  fromJSON(object: any): WorkspaceSearchRequest {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      category: isSet(object.category) ? globalThis.String(object.category) : "",
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+      contract_version: isSet(object.contract_version) ? globalThis.Number(object.contract_version) : 0,
+      query: isSet(object.query) ? globalThis.String(object.query) : "",
+      match_mode: isSet(object.match_mode) ? globalThis.String(object.match_mode) : "",
+      limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      deadline_at: isSet(object.deadline_at) ? globalThis.Number(object.deadline_at) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceSearchRequest): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.category !== "") {
+      obj.category = message.category;
+    }
+    if (message.operation !== "") {
+      obj.operation = message.operation;
+    }
+    if (message.contract_version !== 0) {
+      obj.contract_version = Math.round(message.contract_version);
+    }
+    if (message.query !== "") {
+      obj.query = message.query;
+    }
+    if (message.match_mode !== "") {
+      obj.match_mode = message.match_mode;
+    }
+    if (message.limit !== 0) {
+      obj.limit = Math.round(message.limit);
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.deadline_at !== undefined) {
+      obj.deadline_at = message.deadline_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceSearchRequest>, I>>(base?: I): WorkspaceSearchRequest {
+    return WorkspaceSearchRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceSearchRequest>, I>>(object: I): WorkspaceSearchRequest {
+    const message = createBaseWorkspaceSearchRequest();
+    message.workspace_id = object.workspace_id ?? "";
+    message.category = object.category ?? "";
+    message.operation = object.operation ?? "";
+    message.contract_version = object.contract_version ?? 0;
+    message.query = object.query ?? "";
+    message.match_mode = object.match_mode ?? "";
+    message.limit = object.limit ?? 0;
+    message.cursor = object.cursor ?? undefined;
+    message.deadline_at = object.deadline_at ?? undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
+  return {
+    provider_id: "",
+    workspace_id: "",
+    category: "",
+    operation: "",
+    contract_version: 0,
+    state: "",
+    limited_reason: undefined,
+    catalog: undefined,
+    threads: undefined,
+  };
+}
+
+export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
+  fromJSON(object: any): WorkspaceSearchResultDTO {
+    return {
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      category: isSet(object.category) ? globalThis.String(object.category) : "",
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+      contract_version: isSet(object.contract_version) ? globalThis.Number(object.contract_version) : 0,
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
+      catalog: isSet(object.catalog) ? SessionCatalogSearchResultsDTO.fromJSON(object.catalog) : undefined,
+      threads: isSet(object.threads) ? SessionThreadSearchResultsDTO.fromJSON(object.threads) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceSearchResultDTO): unknown {
+    const obj: any = {};
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.category !== "") {
+      obj.category = message.category;
+    }
+    if (message.operation !== "") {
+      obj.operation = message.operation;
+    }
+    if (message.contract_version !== 0) {
+      obj.contract_version = Math.round(message.contract_version);
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.limited_reason !== undefined) {
+      obj.limited_reason = message.limited_reason;
+    }
+    if (message.catalog !== undefined) {
+      obj.catalog = SessionCatalogSearchResultsDTO.toJSON(message.catalog);
+    }
+    if (message.threads !== undefined) {
+      obj.threads = SessionThreadSearchResultsDTO.toJSON(message.threads);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceSearchResultDTO>, I>>(base?: I): WorkspaceSearchResultDTO {
+    return WorkspaceSearchResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceSearchResultDTO>, I>>(object: I): WorkspaceSearchResultDTO {
+    const message = createBaseWorkspaceSearchResultDTO();
+    message.provider_id = object.provider_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.category = object.category ?? "";
+    message.operation = object.operation ?? "";
+    message.contract_version = object.contract_version ?? 0;
+    message.state = object.state ?? "";
+    message.limited_reason = object.limited_reason ?? undefined;
+    message.catalog = (object.catalog !== undefined && object.catalog !== null)
+      ? SessionCatalogSearchResultsDTO.fromPartial(object.catalog)
+      : undefined;
+    message.threads = (object.threads !== undefined && object.threads !== null)
+      ? SessionThreadSearchResultsDTO.fromPartial(object.threads)
+      : undefined;
     return message;
   },
 };

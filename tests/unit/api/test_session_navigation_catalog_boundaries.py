@@ -4,12 +4,14 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import session_navigation as nav
+from app.schemas.internal_v2.search import WorkspaceSearchRequest
 
 
 class _FailingCatalogService:
     """按调用方指定的异常类型模拟会话目录读取失败。"""
 
     def __init__(self, error: Exception) -> None:
+        self.workspace_id = "workspace-validation"
         self.error = error
         self.list_children_kwargs: dict[str, object] = {}
         self.search_kwargs: dict[str, object] = {}
@@ -28,8 +30,8 @@ class _FailingCatalogService:
         }
         raise self.error
 
-    async def search(self, *, query: str, limit: int, cursor: str | None, deadline_at: float | None = None):
-        self.search_kwargs = {"query": query, "limit": limit, "cursor": cursor, "deadline_at": deadline_at}
+    async def search(self, request: WorkspaceSearchRequest):
+        self.search_kwargs = request.model_dump()
         raise self.error
 
 

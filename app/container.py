@@ -55,6 +55,8 @@ from app.services.business.gateway_context_query_service import (
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
+from app.services.business.search.providers import register_navigation_search
+from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_query_service import (
@@ -396,6 +398,7 @@ class AppContainer:
     thread_initial_execution_service: ThreadInitialExecutionService
     terminal_steering_service: TerminalSteeringService
     session_catalog_service: SessionCatalogService
+    workspace_search_service: WorkspaceSearchService
     session_generation_service: SessionGenerationService
     session_subagent_service: SessionSubagentService
     team_service: TeamCoordinationService
@@ -906,6 +909,8 @@ def _build_app_container(
         session_service=session_service,
         background_task_registry=background_task_registry,
     )
+    workspace_search_service = WorkspaceSearchService(workspace_id)
+    register_navigation_search(workspace_search_service, session_catalog_service, session_service)
     session_title_service = SessionTitleService(
         session_service=session_service,
         session_catalog_service=session_catalog_service,
@@ -1179,6 +1184,7 @@ def _build_app_container(
         terminal_steering_service=terminal_steering_service,
         session_catalog_service=session_catalog_service,
         session_generation_service=session_generation_service,
+        workspace_search_service=workspace_search_service,
         session_subagent_service=session_subagent_service,
         team_service=team_service,
         team_fanout_service=team_fanout_service,

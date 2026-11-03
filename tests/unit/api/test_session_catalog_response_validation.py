@@ -14,10 +14,16 @@ from httpx import Response
 from pydantic import ValidationError
 
 from app.api import session_navigation
-from app.api.deps import get_session_catalog_service, verify_local_token
+from app.api.deps import (
+    get_session_catalog_service,
+    get_workspace_search_service,
+    verify_local_token,
+)
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session_navigation import SessionCatalogPageDTO
+from app.services.business.search.providers import register_navigation_search
+from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.read_service import (
     SessionCatalogReadService,
@@ -46,6 +52,12 @@ class CatalogCase:
     application: FastAPI
 
 
+def _search_service(catalog: SessionCatalogReadService) -> WorkspaceSearchService:
+    service = WorkspaceSearchService("workspace-validation")
+    register_navigation_search(service, catalog, Mock(spec=SessionService))
+    return service
+
+
 @pytest.fixture
 def catalog_case() -> Iterator[CatalogCase]:
     from app.main import app as workspace_app
@@ -60,6 +72,8 @@ def catalog_case() -> Iterator[CatalogCase]:
         )
     application.dependency_overrides[verify_local_token] = lambda: "local"
     application.dependency_overrides[get_session_catalog_service] = lambda: service
+    search_service = _search_service(service)
+    application.dependency_overrides[get_workspace_search_service] = lambda: search_service
     with TestClient(application, raise_server_exceptions=False, headers={
         "X-Request-ID": REQUEST_ID,
         "X-BoxTeam-Gateway-Id": "gateway_789f146c159aa74461af8dacca7341ca",
@@ -150,6 +164,8 @@ def test_real_read_service_response_retries_after_source_metadata_repair(
     sessions = Mock(spec=SessionService, path_resolver=resolver)
     service = SessionCatalogReadService(session_service=sessions)
     catalog_case.application.dependency_overrides[get_session_catalog_service] = lambda: service
+    search_service = _search_service(service)
+    catalog_case.application.dependency_overrides[get_workspace_search_service] = lambda: search_service
     response = _request(catalog_case.client, route)
     assert response.status_code == 500, response.text
     assert response.json() == {

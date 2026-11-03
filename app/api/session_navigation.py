@@ -9,7 +9,7 @@ from app.api.deps import (
     get_request_id,
     get_session_catalog_service,
     get_session_generation_service,
-    get_session_service,
+    get_workspace_search_service,
     verify_local_token,
 )
 from app.api.errors import (
@@ -24,6 +24,7 @@ from app.core.trace_middleware import (
     require_current_navigation_actor,
 )
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.search import WorkspaceSearchRequest
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
     SessionCatalogExportDTO,
@@ -47,6 +48,7 @@ from app.schemas.internal_v2.session_navigation.operations import (
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultsDTO,
 )
+from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.name_search_budget import (
@@ -60,10 +62,6 @@ from app.services.business.session_navigation.queue_store import (
     NavigationMutationConflictError,
     NavigationQueueOwnerError,
 )
-from app.services.business.session_navigation.thread_search import (
-    search_session_threads,
-)
-from app.services.business.session_service import SessionService
 
 router = APIRouter(tags=["session-navigation"])
 
@@ -73,17 +71,19 @@ async def search_workspace_threads(
     query: Annotated[str, Query(min_length=1, max_length=512)],
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    catalog: Annotated[SessionCatalogService, Depends(get_session_catalog_service)],
-    sessions: Annotated[SessionService, Depends(get_session_service)],
+    service: Annotated[WorkspaceSearchService, Depends(get_workspace_search_service)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=4096)] = None,
     deadline_at: Annotated[FiniteFloat | None, Header(alias=NAME_SEARCH_DEADLINE_HEADER)] = None,
 ):
     try:
-        result = await search_session_threads(
-            catalog, sessions, gateway_id=require_current_gateway_id("Thread 名称查询"),
-            query=query, limit=limit, cursor=cursor, deadline_at=deadline_at,
+        page = await service.search(
+            WorkspaceSearchRequest(workspace_id=service.workspace_id, category="thread",
+                                   query=query, limit=limit, cursor=cursor, deadline_at=deadline_at),
+            gateway_id=require_current_gateway_id("Thread 名称查询"),
         )
+        result = page.threads
+        assert result is not None
     except NotFoundError as error:
         raise not_found_http_error(error) from error
     except (ValueError, RuntimeError, TimeoutError) as error:
@@ -348,15 +348,20 @@ async def export_session_catalog(
     response_model=APIResponse[SessionCatalogSearchResultsDTO],
 )
 async def search_session_catalog(
+    service: Annotated[WorkspaceSearchService, Depends(get_workspace_search_service)],
     query: str = Query(min_length=1),
     limit: int = Query(default=100, ge=1, le=500),
     cursor: str | None = None,
     request_id: str = Depends(get_request_id),
-    service: SessionCatalogService = Depends(get_session_catalog_service),
     deadline_at: Annotated[FiniteFloat | None, Header(alias=NAME_SEARCH_DEADLINE_HEADER)] = None,
 ):
     try:
-        result = await service.search(query=query, limit=limit, cursor=cursor, deadline_at=deadline_at)
+        page = await service.search(WorkspaceSearchRequest(
+            workspace_id=service.workspace_id, category="catalog", query=query,
+            limit=limit, cursor=cursor, deadline_at=deadline_at,
+        ))
+        result = page.catalog
+        assert result is not None
     except ValidationError:
         raise
     except (TypeError, ValueError, RuntimeError, TimeoutError) as error:

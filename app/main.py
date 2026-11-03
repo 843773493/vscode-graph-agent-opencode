@@ -25,6 +25,7 @@ from app.api.persistent_tasks import router as persistent_tasks_router
 from app.api.resources import router as resources_router
 from app.api.runtime import router as runtime_router
 from app.api.runtime_logging import runtime_logging_router, verify_runtime_control_token
+from app.api.search import router as search_router
 from app.api.session_activity import router as session_activity_router
 from app.api.session_navigation import router as session_navigation_router
 from app.api.session_turns import router as session_turns_router
@@ -230,6 +231,7 @@ for router in (
     sessions_router,
     session_turns_router,
     session_navigation_router,
+    search_router,
     messages_router,
     context_router,
     mcp_router,

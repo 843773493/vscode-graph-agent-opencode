@@ -193,6 +193,15 @@
 - 真实路由、嵌套结构漂移与候选 descriptor 发布前拒绝等定向检查合计 72 passed；Ruff、协议生成一致性、Buf format／lint／基于 `bce2fc960` 的 breaking 检查通过。真实 Workbench 类型检查包含 18 份转换源码并零诊断，正式 Web 构建通过。
 - 准确命令、源码指纹、原始输出及退出码保留于 `out/tests/temp/quick_access_provider_20261103/artifacts/catalog-*`。本批未改变运行时查询行为，不重复浏览器流程；Provider 和联邦合同仍待实现，1.2／16.2 不据此勾选。
 
+### 2026-11-03：工作区名称 Provider（16.2、16.3、16.20 部分）
+
+- 工作区容器装配唯一 SearchService，按类别及操作注册 catalog／Thread 名称 owner；旧名称 API 和新增 `/search` 入口共用原查询。能力发现只读注册信息，声明合同版本、选项、位置、页上限及原 owner 缓存职责，不扫描历史或恢复 runtime。一个注册可声明多个操作，重复身份及类别／操作冲突明确拒绝。
+- 注册释放和工作区关闭先撤销准入，取消并等待在途 owner 安全结算后才释放；迟到结果不得发布，不切换 Provider。直接复用原 worker 清理原语，零输出配额明确受限且不调用 owner；未知类别、版本、选项和工作区归属均在扫描前拒绝。本切片没有新建索引、缓存库、SSE 或跨目标队列。
+- 目录／Thread 结果及原 cursor 保留原类型，新增请求、能力和结果信封从 proto 生成并递归核对 OpenAPI，两个离线快照同步导出。62 项定向 API／owner／协议检查通过；最终生命周期文件 13 项通过，另有 65 项协议批次通过（其中新增 search 合同在能力字段最终调整后已由前述 62 项再次覆盖）。
+- 真实 Gateway＋Backend 测试通过产品创建、执行及 fork 建立 main／child，核对新旧入口的完整目录／Thread 页一致、工作区隔离拒绝、版本及选项错误、零配额、request_id 和后端重启后跨入口继续原 cursor；1 passed / 74.56 秒。模型仍使用统一 model_stream 回放，不将其宣称为真实外部模型验收。第一次在端口租约阶段遇到 48242 冲突，确认全部声明端口空闲后再运行通过，未终止未知进程。
+- Ruff 排除原 API 的 B008 后通过；Pyright 新服务及 API 无新增诊断，容器／生命周期的 6 条既存诊断与 `9332b9be7` 原件逐条对比一致。协议生成一致性、Buf format／lint／breaking、真实 Workbench 类型检查（18 份转换源码）及正式 Web 构建通过。
+- 准确命令、源码指纹、原始输出和退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/provider-*`；产品运行原件：`out/tests/integration/gateway/test_thread_name_search/`。本批未改 UI 行为，未重复浏览器与 Electron 验收。树浏览、其余领域 Provider、规范 URI 的全部命中投影及 Gateway 联邦仍未完成，16.2／16.3／16.20 保持未勾选。
+
 ### 2026-11-02：Session／Thread 专用模式（11.2 部分）
 
 - `session ` 和 `thread ` 通过原 Registry、帮助 metadata 与 Action 接入同一 Provider；分别只查询 catalog 或精确 Thread owner，范围、分页、失败、取消和打开继续使用唯一链路。Session 名称不按文件行号／符号拆分；Thread 最近记录不混入文件。

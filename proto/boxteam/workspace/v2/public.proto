@@ -178,6 +178,47 @@ message SessionCatalogExportDTO {
   repeated SessionCatalogNodeDTO items = 3;
 }
 
+// 工作区搜索的能力与生命周期；领域分页仍由原 owner 解释。
+message SearchProviderCapabilityDTO {
+  string provider_id = 1;
+  string category = 2;
+  repeated string operations = 3;
+  int32 contract_version = 4;
+  repeated string supported_options = 5;
+  string position_kind = 6;
+  int32 max_results = 7;
+  string cache_policy = 8;
+}
+
+message WorkspaceSearchCapabilitiesDTO {
+  string workspace_id = 1;
+  repeated SearchProviderCapabilityDTO providers = 2;
+}
+
+message WorkspaceSearchRequest {
+  string workspace_id = 1;
+  string category = 2;
+  string operation = 3;
+  int32 contract_version = 4;
+  string query = 5;
+  string match_mode = 6;
+  int32 limit = 7;
+  optional string cursor = 8;
+  optional double deadline_at = 9;
+}
+
+message WorkspaceSearchResultDTO {
+  string provider_id = 1;
+  string workspace_id = 2;
+  string category = 3;
+  string operation = 4;
+  int32 contract_version = 5;
+  string state = 6;
+  optional string limited_reason = 7;
+  SessionCatalogSearchResultsDTO catalog = 8;
+  SessionThreadSearchResultsDTO threads = 9;
+}
+
 message SessionThreadSearchResultDTO {
   string workspace_id = 1;
   string session_id = 2;

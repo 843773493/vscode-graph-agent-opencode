@@ -16,6 +16,7 @@ from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
+from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_query_service import (
@@ -83,6 +84,7 @@ class _AppContainerProtocol(Protocol):
     workspace_id: str
     workspace_root: Path
     session_catalog: SessionCatalogComponents
+    workspace_search_service: WorkspaceSearchService
     config_service: ConfigService
     agent_service: AgentService
     artifact_service: ArtifactService
@@ -408,6 +410,10 @@ def get_persistent_task_service(request: Request) -> PersistentTaskService:
 
 def get_session_catalog_service(request: Request) -> SessionCatalogService:
     return _require_service(request, "session_catalog_service", SessionCatalogService, "SessionCatalogService 尚未在应用启动阶段初始化")
+
+
+def get_workspace_search_service(request: Request) -> WorkspaceSearchService:
+    return _require_service(request, "workspace_search_service", WorkspaceSearchService, "WorkspaceSearchService 尚未在应用启动阶段初始化")
 
 
 def get_session_generation_service(request: Request) -> SessionGenerationService:

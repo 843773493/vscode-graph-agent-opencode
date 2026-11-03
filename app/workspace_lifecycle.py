@@ -127,6 +127,7 @@ class WorkspaceLifespan:
         self._ready: asyncio.Future[None] | None = None
         self._owner: asyncio.Task[None] | None = None
         self._steps: deque[tuple[str, CloseAction]] = deque([
+            ("search.close", container.workspace_search_service.aclose),
             ("navigation_operations.stop", container.session_catalog_service.operations.stop),
             ("jobs.close_admission", partial(_drain_workspace_jobs, container)),
             ("jobs.drain_finalizations", container.job_service.drain_finalizations),

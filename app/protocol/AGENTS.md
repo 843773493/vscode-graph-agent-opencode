@@ -29,6 +29,7 @@
 - Fork 的来源点、创建及跨 Gateway 传输共用该检查；冻结 capture、资源 owner、发布结果和分块成员从 descriptor 递归核对，锚点、资源选择、授权角色及分块边界仍由原 Pydantic 和业务 owner 校验。
 - Session 创建、更新、查询与信息快照共用该检查；时间、来源、资源汇总及错误成员由 descriptor 递归核对，URI、fork 来源和展示长度约束仍由原 Pydantic 与 owner 负责。
 - Session bootstrap 与 main／精确 Thread 历史共用该检查；Turn、响应部件、canonical 来源及 internal execution 展示成员由 descriptor 递归核对，历史选择器互斥、分页预算与 canonical／streaming 身份仍归原 Pydantic 与 owner。
+- 工作区搜索的请求、能力和结果信封共用该检查，目录与 Thread 结果沿原领域 descriptor 递归核对；Provider 选择、合同版本、归属及取消结算仍归搜索服务，领域分页和索引仍归原 owner。
 - 消息流 HTTP 快照的同形嵌套对象共用该检查，块归属使用 Proto 已声明的 `model_call_id`，codec 不删除、客户端不从块 ID 或序号推导；HTTP 根从 StreamSnapshot 和事件定位字段组合 descriptor，旧中断别名按公开嵌套对象的字段核对，不跳过根字段或另外复制字段类型。
 - 会话文件变更的列表、详情和审查入口共用该检查；汇总、文件条目及审查回执由 descriptor 递归核对，文件 URI、变更类别和审查状态仍由原 Pydantic 与 owner 负责。
 - 上下文读取、搜索及 Skill 停止跟踪共用该检查；嵌套资源来源、搜索坐标、部分错误和回执从 descriptor 递归核对，身份、URI、内容预算及 Skill 状态约束仍由原 Pydantic 与 owner 负责。
