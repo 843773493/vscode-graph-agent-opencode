@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -14,26 +13,12 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
-
-
-@pytest.fixture
-def search_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    port = integration_port_block_for_file(Path(request.node.path)).port(20)
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (port,))
-    lease.acquire()
-    try:
-        yield port
-    finally:
-        lease.release()
 
 
 @pytest.mark.asyncio

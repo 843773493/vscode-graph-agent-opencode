@@ -29,7 +29,7 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
   };
   const observeCancellation = request => {
     const observed = searchRequest(request);
-    if (observed?.query === 'quick-concurrency') cancelled.push({ path: observed.path, reason: request.failure()?.errorText });
+    if (observed?.query === 'quick-concurrency') cancelled.push({ path: observed.path, categories: observed.categories, reason: request.failure()?.errorText });
   };
   page.on('request', observe);
   // 取消的请求可能发出 response 后丢弃正文；只对成功传完的请求核验正文信封。
@@ -76,8 +76,8 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await expect(quick).toContainText('quickdiscover B 会话');
     await lastStatus('搜索隔离 B · 文件 · 本次查询完成');
     const both = queryRequests(beforeConfirm);
-    expect(both.filter(item => item.path === '/api/gateway/search').map(item => item.owners)).toEqual([[ownerA.workspaceId, ownerB.workspaceId]]);
-    expect([...new Set(both.filter(item => item.path !== '/api/gateway/search').map(item => item.route))].sort()).toEqual([ownerA.route, ownerB.route].sort());
+    expect(both.filter(item => item.path === '/api/gateway/search' && !item.categories.includes('file')).map(item => item.owners)).toEqual([[ownerA.workspaceId, ownerB.workspaceId]]);
+    expect([...new Set(both.filter(item => item.categories?.includes('file')).flatMap(item => item.owners))].sort()).toEqual([ownerA.workspaceId, ownerB.workspaceId].sort());
     expect(requests.every(item => item.route !== registered.workspace_id)).toBe(true);
     await expect(input).toHaveAttribute('placeholder', /home.*搜索隔离 B/);
 
@@ -95,8 +95,8 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
       await lastStatus('搜索隔离 B · 文件 · 本次查询完成');
       await expect.poll(async () => (await searchFault(page, 'quick-concurrency')).reads.filter(read => read.cancelled && read.settled).length).toBe(3);
       expect((await searchFault(page, 'quick-concurrency')).reads).toHaveLength(3);
-      expect(requests.filter(item => item.path === '/api/gateway/search' && item.query === 'quick-concurrency')).toHaveLength(1);
-      await expect.poll(() => cancelled.filter(item => item.path === '/api/gateway/search').length).toBe(1);
+      expect(requests.filter(item => item.path === '/api/gateway/search' && item.query === 'quick-concurrency' && !item.categories.includes('file'))).toHaveLength(1);
+      await expect.poll(() => cancelled.filter(item => item.path === '/api/gateway/search' && !item.categories.includes('file')).length).toBe(1);
       expect(cancelled.every(item => /ERR_ABORTED/.test(item.reason))).toBe(true);
       result.defaultScope.cancelledReads = (await searchFault(page, 'quick-concurrency')).reads;
       await expect(quick).toContainText('quickdiscover A 会话');
@@ -111,7 +111,7 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await expect(quick).toContainText('mode scope A quickmodeword');
     await expect(quick).toContainText('mode scope B quickmodeword');
     const text = requests.slice(beforeText).filter(item => item.query === 'quickmodeword');
-    expect([...new Set(text.map(item => item.route))].sort()).toEqual([ownerA.route, ownerB.route].sort());
+    expect([...new Set(text.flatMap(item => item.owners))].sort()).toEqual([ownerA.workspaceId, ownerB.workspaceId].sort());
     await input.fill('?');
     await quick.getByRole('option', { name: /^…,/ }).click();
     await input.fill('quickdiscover');

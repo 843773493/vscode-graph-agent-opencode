@@ -63,6 +63,29 @@ test('正文跨目标只请求 Gateway，快分支续页不被初始流收尾取
   expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);
 });
 
+test('文件使用原 QueryBuilder 选项，一次联邦 A+B，快分支续原 cursor 且独立重试', async () => {
+  const result = await exercise('fileBranchContract', 'retry');
+  expect(result.requests).toHaveLength(3);
+  const first = result.requests[0], second = result.requests[1], retry = result.requests[2];
+  expect(first.scope.owners.map(owner => owner.workspace_id)).toEqual(['A', 'B']);
+  expect(first.queries[0].file_targets.map(item => item.target.uri)).toEqual(['A', 'B'].map(id => `boxteam://workspace/${id}/resources/files/root`));
+  expect(first.queries[0].file_targets.every(item => item.target.search_options.ignore_mode === 'none')).toBe(true);
+  expect(second.continuations).toEqual([{ branch: { owner: first.scope.owners[0], category: 'file', operation: 'name',
+    resource_uri: first.queries[0].file_targets[0].target.uri }, cursor: 'A-original-cursor' }]);
+  expect(second.queries[0].limit).toBe(first.queries[0].limit);
+  expect(retry.continuations[0].branch.owner.workspace_id).toBe('B'); expect(retry.continuations[0].cursor).toBeUndefined();
+  expect(retry.queries[0].file_targets).toHaveLength(1);
+  expect(result.pendingPreserved).toBe(true); expect(result.originalPreserved).toBe(true);
+  expect(result.picks).toEqual([['A/resource/needle-2.txt', 'A/resource/needle-4.txt'], ['B/resource/needle-2.txt']]);
+  expect(result.paths.filter(path => path === '/api/v1/workspace/files/roots')).toHaveLength(2);
+  expect(result.busy).toBe(false);
+});
+
+for (const mode of ['cancel', 'late']) test(`文件 ${mode} 取消同一联邦流且不发布迟到页`, async () => {
+  const result = await exercise('fileBranchContract', mode);
+  expect(result.cancelled).toBe(true); expect(result.unchanged).toBe(true); expect(result.calls).toBe(1);
+});
+
 test('正文 picker 取消释放同一 Gateway reader，之后没有迟到展示更新', async () => {
   const result = await exercise('contentBranchContract', 'cancel');
   expect(result.cancelled).toBe(true);
@@ -117,7 +140,7 @@ for (const category of ['会话', 'Thread']) {
     expect(result.paths.every(path => ['/api/gateway/auth/local-credential', '/api/gateway/search'].includes(path))).toBe(true);
     expect(result.requests[0].scope.owners.map(owner => owner.workspace_id)).toEqual(['A', 'B']);
     expect(result.requests[0].queries).toEqual([{ category: category === '会话' ? 'catalog' : 'thread', operation: 'name',
-      contract_version: 1, query: 'needle', match_mode: 'fuzzy', limit: 50 }]);
+      contract_version: 1, query: 'needle', match_mode: 'fuzzy', limit: 50, file_targets: [] }]);
     for (const request of result.requests.slice(1)) {
       expect(request.scope.mode).toBe('resume');
       expect(request.scope.scope.owners).toEqual(result.requests[0].scope.owners);

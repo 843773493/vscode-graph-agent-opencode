@@ -57,3 +57,4 @@ export function fixture(models: ReturnType<typeof model>[], open = models.map(mo
   const search = instantiation.invokeFunction(accessor => accessor.get(ISearchService));
   return { search, editors, descriptor, instantiation };
 }
+export { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';

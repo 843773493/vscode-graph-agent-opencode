@@ -178,7 +178,7 @@
 - [ ] 16.9 将可打开／引用命中的规范 URI 设为默认输出，复用统一寻址 owner 及稳定身份、位置／版本；验证同资源多位置、重命名／移动、route 重用、无 URI 的命令／进度，不把 URI 当所有索引记录主键。
 - [ ] 16.10 将原 Gateway 目录搜索及派生镜像统一到联邦合同，在线转交工作区 Provider，离线沿原 owner 共享匹配实现返回来源／更新时间／stale；迁齐旧 API 消费者后物理移除重复接口和独立匹配，保留原同步缓存职责及权威 catalog。
 - [ ] 16.11 将 Workbench、旧 React 搜索及文件多范围查询迁到同一后端链，删除前端跨目标队列及重复后端查询逻辑；保留原版 Quick Input、交互评分／高亮、MRU、dirty model 同文件负命中覆盖、Search Editor 固定 scope 及 delegate。区分请求／搜索会话／可选查询缓存／cursor／镜像，迁齐原 cacheKey／clearCache，清理有界且不影响独立编辑器或持久数据。
-  - Session／Thread 名称以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端，移除这些类别的前端跨目标调度和直连 wrapper，名称保留原 fuzzy 排名与高亮；目录镜像及文件多范围迁移仍未完成，不据此勾选整项。
+  - Session／Thread 名称、文件多根以及消息、工具结果与 LLM 请求记录正文已迁到同一 Gateway 流客户端；删除前端跨目标查询队列、文件直连 wrapper 及非标准 fileSearchPage。保留原根元数据读取、QueryBuilder 局部选项和 fuzzy 排名／高亮，普通搜索自动续原 cursor，Quick Access 明确单分支继续。旧 React 目录搜索／镜像、canonical 重叠根和其余缓存合同仍未完成，不据此勾选整项。
 - [ ] 16.12 接入真实 Agent 搜索工具与脚本调用，支持明确上下文／集合／all、控制面发现后查树，返回实际范围、规范引用及分支状态；无 UI 时不依赖浏览器历史、活动工作区或标签，不自动发 turn／改其它草稿。迁移 `search_context` 的跨目标调度时，保留 effective_context、canonical 消息、inventory、精确单资源读取和本地来源／预算语义；验证原资源身份及各 owner revision／cursor，不能以普通消息正文搜索替代上下文查询。
 - [ ] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
 - [ ] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
@@ -539,3 +539,12 @@
 - 105项原定向检查通过；补充的嵌套公开结构漂移／目录根检查37项、文件 Provider 准入5项、HTTP 错误归属4项及客户端流14项均通过。Pyright、Ruff、Buf format／lint／对真实提交的 breaking、生成一致性、OpenAPI 导出、含18份真实转换源码的类型检查及完整 Workbench 构建通过。519份前端产品源码与类型检查／构建指纹一致；临时 dist 已清理，保留构建 hash、日志、准确命令、源码指纹和退出码，见 `out/tests/temp/quick_access_provider_20261103/artifacts/files-federation-*`。
 - 首次实网失败为装具的同机 Backend／Gateway 使用独立本机令牌，改为共享隔离 HOME 后通过；新增单测装配与 Gateway ID 准备失败原件保留，未放宽业务断言。静态检查发现通用 OSError 捕获会抢占 TimeoutError 并误标其它领域，已移除该泛化处理，以真实 HTTP 适配断言期限仍409、文件编码错误400、未知请求日志权限失败仍500。通用网络／I/O 的具名归属仍由16.18和代码 TODO 追踪。
 - **未完成：** 前端文件 Provider／Quick Access 尚待迁入新合同，原文件前端队列尚未删除；重叠根、0哨兵／exists、统一输出字节及其它计量验收仍待推进。本切片只完成可独立调用的后端文件查询入口和共享流合同，不勾选16.11、16.17或完整Provider任务，不代表Web或Electron文件联邦已验收。
+
+### 2026-11-03：普通文件搜索与 Quick Access 统一联邦（16.11、16.17 部分）
+
+- 普通 file／text Provider 一次提交全部明确业务根，经唯一 Gateway 联邦流自动继续未完成根，固定首次页大小及总期限；保留各根局部选项、UTF-16 位置、上下文合并、onlyOpenEditors、dirty model 零命中覆盖和取消。业务 fileSearch 不再先逐根发 exists 预检；真实不存在根仍由原 owner 明确拒绝。原 IFileQuery 0 哨兵转换为最多500项有界召回，exists 只探测，不返回文件；后端无查询缓存，clearCache 明确无缓存。
+- Quick Access 名称可先返回，原有界根加载器和 child QueryBuilder 准备文件条件后，一次联邦请求提交可用文件 owner；根失败按分支表达，续页／重试复用冻结范围、根选项及原 cursor，不重复读取根。移除 quickAccessBranches、fileSearchPage 及全部生产消费者，原 delegate／cache 调用合同保留。名称和文件各用一次联邦请求，不将其描述为所有类别合成单个请求；重叠根及 canonical 身份仍由16.19追踪。
+- 11项服务、8项范围构建、6项原空文件／Chat调用方检查通过；新增文件合同最初因装具缺响应信封失败，补齐后完整18项Provider合同通过。含18份真实转换源码的类型检查通过，当前748份前端源码与该检查指纹一致。最终Ruff、TypeScript AST解析、OpenSpec strict及差异检查通过；结构复核无新增findings，435行主Provider及既有测试目录规模继续关注。Bun --check曾实际执行场景并因缺运行参数早退，不作为纯语法通过证据；最终以真实AST解析核验。
+- 真实Gateway＋正式Workbench＋Chromium：模型覆盖1项通过，A+B小配额中A旧磁盘命中被屏蔽，B同路径和A其它文件仍能取得，停止C零查询，未保存草稿不写盘；完整搜索／恢复及生命周期最终补跑2项通过（296.37秒）。覆盖分屏、SearchView／Search Editor转交、保存／备份恢复、迟到Pane、route复用拒绝旧owner且出站零分发、原owner新route恢复，以及取消、超时、全部失败、单分支重试、身份失效；页面错误为空。后两项共用一次正式构建，与模型覆盖使用相同main SHA256=`9bdad91dbae0444bcd9a39e96bf90ff03d4584801fae6409867a072be5eb8666`。
+- 页面端口统一复用本目录fixture，在各测试自己的端口块内选择并持续保留空闲绑定，保存探测收据；实跑已跳过被占用的44420，没有终止未知进程。原浏览器失败分别是端口准备冲突、旧直连路由断言及误读错误信封，均保留原件；迁移为稳定owner、404/detail.code及原request_id断言，并保留原结果／身份／期限要求，产品源码未因这些装具修复变化。
+- 准确命令、源码指纹、输出及退出码见`out/tests/temp/quick_access_provider_20261103/artifacts/files-workbench-*`。模型覆盖原件为`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-ebf949b1bbb4/`；最终其它两项原件分别为`test_text_search/runs/run-d6cbe3a8b4f2/`、`test_query_lifecycle/runs/run-d6cbe3a8b4f2/`。未重复已经通过的模型覆盖，未运行Electron验收；16.11／16.17／16.19等完整任务保持未勾选，旧React目录／镜像、工具／脚本、统一输出字节及其余缓存合同继续推进。

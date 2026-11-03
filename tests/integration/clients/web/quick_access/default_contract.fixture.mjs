@@ -11,7 +11,7 @@ import { WorkspaceSymbolsQuickAccess } from '../../../../../src/clients/workbenc
 import { WorkspaceSymbolProviderRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/common/search.js';
 import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
-export { contentBranchContract, nameBranchContract } from './federated_branches.fixture.mjs';
+export { contentBranchContract, nameBranchContract, fileBranchContract } from './federated_branches.fixture.mjs';
 
 const owner = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const root = 'boxteam://workspace/workspace-a/resources/files/root';
@@ -26,7 +26,7 @@ function defaultAccess(options, history = [], opener = { open() { throw new Erro
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
   const groups = { groups: [], activeGroup: { id: 1 } }, editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } };
   const provider = new WorkspaceQuickAccess({ createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
-    { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {}, {},
+    { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {},
     opener, { error(error) { throw error; } }, { enabled: false }, {});
   const lifetime = provider.provide(picker, cancellation.token, options);
   return { picker, accepts, change(value) { picker.value = value; changes.fire(); },

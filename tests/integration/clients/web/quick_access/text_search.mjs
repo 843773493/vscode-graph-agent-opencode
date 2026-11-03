@@ -8,6 +8,7 @@ import { verifySearchRecovery } from './search_recovery.mjs';
 import { verifyFileWatch } from './file_watch.mjs';
 import { verifyDefaultAccess } from './default_access.mjs';
 import { verifyDefaultScope } from './default_scope.mjs';
+import { fileSearchRequests } from './federation_observation.mjs';
 import { writeWorkspaceSettings } from './settings.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
@@ -42,12 +43,7 @@ try {
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
-  page.on('request', request => {
-    if (new URL(request.url()).pathname === '/api/v1/resources/navigation' && request.method() === 'POST') {
-      const body = request.postDataJSON();
-      if (body.operation === 'search') result.searches.push({ ...body, route: request.headers()['x-boxteam-workspace-id'] });
-    }
-  });
+  page.on('request', request => result.searches.push(...fileSearchRequests(request)));
   // 静态 IndexedDB 文件是查询装具；在工作台创建目录树之前准备，编辑仍走原入口。
   await page.goto(new URL('/api/gateway/health', baseUrl).href, { waitUntil: 'domcontentloaded' });
   await page.evaluate(async () => {
@@ -209,7 +205,7 @@ try {
   result.movedViewRerun = true;
   // 新增的 A+B 查询由范围场景独立核验；原 A 单范围断言仍覆盖其全部原有请求。
   if (result.searches.filter((_, index) => index < scopeSearchStart || index >= scopeSearchEnd)
-    .filter(request => request.search_mode === 'content').some(request => request.uri !== result.owner.root || request.route !== route)) throw new Error('文件搜索访问了未选择的目录或路由');
+    .filter(request => request.search_mode === 'content').some(request => request.uri !== result.owner.root || request.workspaceId !== result.owner.workspaceId || request.gatewayId !== result.owner.gatewayId)) throw new Error('文件搜索访问了未选择的目录或路由');
   result.phase = 'reverse-owner-isolation';
   await command('_workbench.open', await fileUri(otherOwner), [undefined, { pinned: true }]);
   const reverseRequests = result.searches.length;
@@ -218,7 +214,7 @@ try {
   await expect.poll(() => result.searches.slice(reverseRequests).some(request => request.query === 'quickscope')).toBe(true);
   await expect(quick).not.toContainText('dirtyword');
   await expect(quick).not.toContainText('virtual-buffer');
-  if (result.searches.slice(reverseRequests).some(request => request.uri !== otherOwner.root || request.route !== otherOwner.route)) throw new Error('反向 B 查询串入其它范围');
+  if (result.searches.slice(reverseRequests).some(request => request.uri !== otherOwner.root || request.workspaceId !== otherOwner.workspaceId || request.gatewayId !== otherOwner.gatewayId)) throw new Error('反向 B 查询串入其它范围');
   result.reverseOwnerIsolation = true;
   await page.keyboard.press('Escape');
   await verifySearchEditors({ page, command, result, fileUri, ownerA: result.owner, ownerB: otherOwner });

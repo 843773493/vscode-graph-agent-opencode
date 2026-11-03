@@ -14,4 +14,4 @@
 
 使用唯一文件投影及现有 Gateway 传输；查询发起前限制根、extraFileResources 和模型。取消和 dispose 释放实际操作；不支持的选项明确拒绝。原生虚拟容器沿原服务，业务资源不进入浏览器文件 handle worker。
 
-Quick Access 的 Session／Thread 名称及消息、工具结果和 LLM 请求记录正文只通过共享 Gateway 联邦客户端查询；本层保留候选投影、原 Quick Input 展示及接受动作，续页／重试传回冻结范围和单个 owner 分支。文件多根分页与配额尚按原链迁移；名称与正文不再接回前端跨目标队列，原 fuzzy scorer 只负责名称展示评分和高亮。
+Quick Access 的 Session／Thread／文件名称及消息、工具结果和 LLM 请求记录正文只通过共享 Gateway 联邦客户端查询；本层保留候选投影、原 Quick Input 展示及接受动作，续页／重试传回冻结范围和单个 owner 分支。文件根元数据由原有界加载器读取，原 QueryBuilder 保留各根配置；领域查询不再接回前端跨目标队列。普通文件搜索自动继续各根原 cursor，Quick Access 明确单分支继续；两者复用同一后端文件 Provider，原 fuzzy scorer 只负责名称展示评分和高亮。

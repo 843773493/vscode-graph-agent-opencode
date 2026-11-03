@@ -26,7 +26,7 @@ try {
   });
   page.on('requestfailed', request => {
     const observed = searchRequest(request);
-    if (observed) result.cancelled.push({ path: observed.path, query: observed.query, error: request.failure()?.errorText });
+    if (observed) result.cancelled.push({ path: observed.path, query: observed.query, categories: observed.categories, error: request.failure()?.errorText });
   });
   page.on('requestfinished', request => {
     if (!searchRequest(request)) return;
@@ -99,14 +99,15 @@ try {
   };
   await command('workbench.action.quickOpen', 'branchscope');
   await expectStatus(a, '文件', '本次查询完成');
-  expect(queries('branchscope').filter(item => item.path === '/api/gateway/search').map(item => item.owners)).toEqual([[a.backend_workspace_id]]);
-  expect(queries('branchscope').filter(item => item.path !== '/api/gateway/search').every(item => item.route === routeA)).toBe(true);
+  expect(queries('branchscope').filter(item => item.path === '/api/gateway/search' && !item.categories.includes('file')).map(item => item.owners)).toEqual([[a.backend_workspace_id]]);
+  expect(queries('branchscope').filter(item => item.categories?.includes('file')).map(item => item.owners)).toEqual([[a.backend_workspace_id]]);
   await choose([b]);
   await expectStatus(b, '文件', '本次查询完成');
   await expectStatus(b, 'Thread', '本次查询完成');
   await inactive();
-  expect(queries('branchscope').filter(item => item.path === '/api/gateway/search').map(item => item.owners)).toEqual([[a.backend_workspace_id], owners.map(item => item.backend_workspace_id)]);
-  expect(new Set(queries('branchscope').filter(item => item.path !== '/api/gateway/search').map(item => item.route))).toEqual(new Set(owners.map(item => item.workspace_id)));
+  expect(queries('branchscope').filter(item => item.path === '/api/gateway/search' && !item.categories.includes('file')).map(item => item.owners)).toEqual([[a.backend_workspace_id], owners.map(item => item.backend_workspace_id)]);
+  expect(queries('branchscope').filter(item => item.categories?.includes('file')).map(item => item.owners)).toEqual([[a.backend_workspace_id], owners.map(item => item.backend_workspace_id)]);
+  expect(new Set(result.requests.filter(item => item.path === '/api/v1/workspace/files/roots').map(item => item.route))).toEqual(new Set(owners.map(item => item.workspace_id)));
   expect(queries('branchscope').filter(item => item.query).every(item => Number(item.deadline) > item.issuedAt && Number(item.deadline) <= item.issuedAt + 15)).toBe(true);
   result.serverBudget = true;
   for (const target of owners) for (const category of ['会话', 'Thread', '文件']) {
@@ -119,7 +120,7 @@ try {
   await searchFault(page, 'slowcancel', 'delay');
   await input.fill('slowcancel');
   await expect.poll(async () => (await searchFault(page, 'slowcancel')).reads.filter(read => read.received).length).toBe(3);
-  expect(queries('slowcancel').filter(item => item.path === '/api/gateway/search')).toHaveLength(1);
+  expect(queries('slowcancel').filter(item => item.path === '/api/gateway/search' && !item.categories.includes('file'))).toHaveLength(1);
   await input.fill('branchscope');
   await expectStatus(b, '文件', '本次查询完成');
   await inactive();
@@ -127,7 +128,7 @@ try {
   result.cancelledReads = (await searchFault(page, 'slowcancel')).reads;
   expect(result.cancelledReads).toHaveLength(3); // 第四个名称分支未越过 Gateway 队列。
   await searchFault(page, 'slowcancel', 'release');
-  await expect.poll(() => result.cancelled.filter(item => item.path === '/api/gateway/search' && item.query === 'slowcancel').length).toBe(1);
+  await expect.poll(() => result.cancelled.filter(item => item.path === '/api/gateway/search' && item.query === 'slowcancel' && !item.categories.includes('file')).length).toBe(1);
   await expect(quick).not.toContainText('slowcancel');
   result.cancelledQueueAndLateResponses = true;
 
@@ -157,14 +158,7 @@ try {
   result.timeoutKeepsOtherBranches = true;
 
   result.phase = 'all-failed-and-single-branch-retry';
-  await searchFault(page, 'allfailure', 'fail');
-  const pattern = '**/api/v1/resources/navigation';
-  const failFile = async route => {
-    if (searchRequest(route.request())?.query !== 'allfailure') { await route.continue(); return; }
-    await route.fulfill({ status: 503, contentType: 'application/json', headers: { 'X-Request-ID': 'req-injected-file-failure' },
-      body: JSON.stringify({ request_id: 'req-injected-file-failure', detail: '显式测试故障：owner 读取失败' }) });
-  };
-  await page.route(pattern, failFile);
+  await searchFault(page, 'allfailure', 'fail', ['catalog', 'thread', 'file']);
   try {
     await input.fill('allfailure');
     for (const target of owners) for (const category of ['会话', 'Thread', '文件']) {
@@ -173,18 +167,19 @@ try {
     }
     await inactive();
     result.failedReads = (await searchFault(page, 'allfailure')).reads;
-    expect(result.failedReads).toHaveLength(4);
-    expect(new Set(result.failedReads.map(read => read.request_id)).size).toBe(1);
-    for (const target of owners) for (const category of ['会话', 'Thread']) await expectStatus(target, category, result.failedReads[0].request_id);
+    expect(result.failedReads).toHaveLength(6);
+    expect(new Set(result.failedReads.filter(read => read.category !== 'file').map(read => read.request_id)).size).toBe(1);
+    expect(new Set(result.failedReads.filter(read => read.category === 'file').map(read => read.request_id)).size).toBe(1);
+    for (const target of owners) for (const category of ['会话', 'Thread']) await expectStatus(target, category, result.failedReads.find(read => read.category === 'catalog').request_id);
     await expect(quick).not.toContainText('没有匹配的资源');
     result.allFailuresRemainFailures = true;
-  } finally { await page.unroute(pattern, failFile); await searchFault(page, 'allfailure', 'release'); }
+  } finally { await searchFault(page, 'allfailure', 'release'); }
   const beforeRetry = result.requests.length;
   await (await showStatus(a, 'Thread')).hover();
   await status(a, 'Thread').getByRole('button', { name: '重新查询此类别', exact: true }).click();
   await expectStatus(a, 'Thread', '本次查询完成');
   await expectStatus(b, 'Thread', '查询失败');
-  await expectStatus(b, 'Thread', result.failedReads[0].request_id);
+  await expectStatus(b, 'Thread', result.failedReads.find(read => read.category === 'catalog').request_id);
   await inactive();
   const retried = result.requests.slice(beforeRetry);
   expect(retried).toHaveLength(1);
@@ -195,10 +190,10 @@ try {
   expect(Number(retried[0].deadline)).toBeGreaterThan(retried[0].issuedAt);
   expect(Number(retried[0].deadline)).toBeLessThanOrEqual(retried[0].issuedAt + 15);
   result.retriedReads = (await searchFault(page, 'allfailure')).reads;
-  expect(result.retriedReads).toHaveLength(5);
+  expect(result.retriedReads).toHaveLength(7);
   expect(result.retriedReads.at(-1).workspace_id).toBe(a.backend_workspace_id);
   expect(result.retriedReads.at(-1).category).toBe('thread');
-  expect(result.retriedReads.at(-1).request_id).not.toBe(result.failedReads[0].request_id);
+  expect(result.retriedReads.at(-1).request_id).not.toBe(result.failedReads.find(read => read.category === 'catalog').request_id);
   result.retryOnlyFailedBranch = true;
 
   result.phase = 'offline-scope';
@@ -231,7 +226,7 @@ try {
   await page.keyboard.press('Escape');
   await Promise.all(responseReads);
   expect(responseErrors).toEqual([]);
-  expect(result.requests.filter(item => ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(item.path) && item.query !== 'budgetcontract')).toEqual([]);
+  expect(result.requests.filter(item => ['/api/v1/session-catalog/search', '/api/v1/session-threads/search', '/api/v1/resources/navigation'].includes(item.path) && item.query !== 'budgetcontract')).toEqual([]);
   expect(result.forbiddenWrites).toEqual([]);
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';

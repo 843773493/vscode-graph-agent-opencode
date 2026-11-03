@@ -24,7 +24,6 @@ import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/
 import { GroupDirection, IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IHistoryService } from '../../upstream/src/vs/workbench/services/history/common/history.js';
 import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
-import { ISearchService } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import type { IRange } from '../../upstream/src/vs/editor/common/core/range.js';
 import { ITextModelService } from '../../upstream/src/vs/editor/common/services/resolverService.js';
 import { ScrollType } from '../../upstream/src/vs/editor/common/editorCommon.js';
@@ -40,10 +39,9 @@ import { ThreadInput } from '../threadInput.js';
 import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
 import type { NameSearchCategory, ContentSearchCategory, SearchCategory } from './quickAccessQuery.js';
-import { querySearchBranches } from './quickAccessBranches.js';
+import { queryFederatedSearchBranches } from './quickAccessFederation.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
-import type { WorkspaceSearchService } from './searchService.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
 import type { ThreadEditorOptions } from '../threadPane.js';
 import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
@@ -84,7 +82,6 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     @IEditorGroupsService private readonly groups: IEditorGroupsService,
     @IHistoryService private readonly history: IHistoryService,
     @IConfigurationService private readonly configuration: IConfigurationService,
-    @ISearchService private readonly search: WorkspaceSearchService,
     @IQuickInputService private readonly quickInput: IQuickInputService,
     @IContextKeyService private readonly contexts: IContextKeyService,
     @IKeybindingService private readonly keybindings: IKeybindingService,
@@ -234,7 +231,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const categories: SearchCategory[] = this.contentMode ? [run.options.contentCategory!] : this.category ? [this.category]
       : run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
     const seen = new Set(recent.map(pick => pick.id));
-    const branches = querySearchBranches(run.owners, categories, filter, disposables, token, this.instantiation, this.search, run.cache,
+    const branches = queryFederatedSearchBranches(run.owners, categories, filter, disposables, token, run.cache,
       (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message)
         : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail, item.requestLog)
           : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
@@ -249,7 +246,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         }
         this.publish(run, accepted(items));
       }, value => { if (alive()) run.picker.busy = value; },
-      label => { if (alive()) run.picker.placeholder = `${this.contentMode ? '搜索正文 · ' + run.options.contentCategory : '查找' + (this.category ?? '会话、Thread 和文件')} · ${label}`; });
+      label => { if (alive()) run.picker.placeholder = `${this.contentMode ? '搜索正文 · ' + run.options.contentCategory : '查找' + (this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation);
     return [...fast, ...branches.map(branch => branch.status)];
   }
 

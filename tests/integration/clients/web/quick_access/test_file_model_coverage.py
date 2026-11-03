@@ -13,9 +13,6 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
-from tests.integration.clients.web.quick_access.test_text_search import (
-    search_gateway_port as search_gateway_port,  # noqa: PLC0414
-)
 from tests.support.paths import chromium_temporary_environment
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (

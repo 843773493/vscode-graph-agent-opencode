@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
+import { fileSearchRequests, searchReceipt } from './federation_observation.mjs';
 import { writeWorkspaceSettings } from './settings.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
@@ -18,11 +19,8 @@ try {
   run.addCleanup('Chromium', () => browser.close());
   page = await browser.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
-  page.on('request', request => {
-    if (new URL(request.url()).pathname !== '/api/v1/resources/navigation' || request.method() !== 'POST') return;
-    const body = request.postDataJSON();
-    if (body.operation === 'search') result.requests.push({ body, route: request.headers()['x-boxteam-workspace-id'] });
-  });
+  const observe = request => result.requests.push(...fileSearchRequests(request));
+  page.on('request', observe);
   const command = (id, ...args) => page.evaluate(async ({ id, args }) => { await globalThis.workbench.commands.executeCommand(id, ...args); }, { id, args });
   const api = (path, init = {}) => page.evaluate(async ({ path, init }) => {
     const credential = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
@@ -74,29 +72,39 @@ try {
   await page.keyboard.insertText('only in A draft, with no search match');
   await expect(editor.locator('.view-lines')).toContainText('only in A draft');
   result.phase = 'original-search-editor-explicit-a-b';
-  const waitA = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/resources/navigation'
-    && response.request().method() === 'POST' && response.request().postDataJSON().query === 'coverageword'
-    && response.request().headers()['x-boxteam-workspace-id'] === targets[0].route);
+  const waitA = page.waitForRequest(request => new URL(request.url()).pathname === '/api/gateway/search'
+    && request.method() === 'POST' && request.postDataJSON().queries.some(query => query.category === 'file' && query.query === 'coverageword'));
   await command('search.action.openEditor', { query: 'coverageword', location: 'new', triggerSearch: true,
     scope: { version: 1, kind: 'workspace', workspaces: targets }, onlyOpenEditors: false, contextLines: 0,
     useExcludeSettingsAndIgnoreFiles: false, filesToInclude: '*.coverage.txt' });
-  const responseA = await waitA;
-  expect(responseA.status()).toBe(200);
-  const pageA = await responseA.json();
-  expect(pageA.request_id).toBe(responseA.headers()['x-request-id']);
-  const requestA = responseA.request().postDataJSON();
-  expect(requestA.search_options.excluded_resource_uris).toEqual([targets[0].rootUri + '/a.coverage.txt']);
-  expect(pageA.data.matches.map(hit => hit.uri)).toEqual([targets[0].rootUri + '/b.coverage.txt']);
-  expect(pageA.data.next_cursor).toBeNull();
+  const request = await waitA, receipt = await searchReceipt(request);
+  expect(receipt.status).toBe(200);
+  expect(receipt.scope.owners.map(owner => owner.workspace_id)).toEqual(targets.map(target => target.workspaceId));
+  const initialTargets = request.postDataJSON().queries[0].file_targets;
+  expect(initialTargets).toHaveLength(2);
+  const targetAQuery = initialTargets.find(item => item.owner.workspace_id === targets[0].workspaceId).target;
+  const targetBQuery = initialTargets.find(item => item.owner.workspace_id === targets[1].workspaceId).target;
+  expect(targetAQuery.search_options.excluded_resource_uris).toEqual([targets[0].rootUri + '/a.coverage.txt']);
+  expect(targetBQuery.search_options.excluded_resource_uris).toEqual([]);
+  const pageA = receipt.pages.find(event => event.branch.branch.owner.workspace_id === targets[0].workspaceId).page.files;
+  expect(pageA.matches.map(hit => hit.uri)).toEqual([targets[0].rootUri + '/b.coverage.txt']);
+  expect(pageA.next_cursor).toBeNull();
+  const pageB = receipt.pages.find(event => event.branch.branch.owner.workspace_id === targets[1].workspaceId).page.files;
+  expect(pageB.matches[0].uri).toBe(targets[1].rootUri + '/a.coverage.txt');
+  expect(pageB.next_cursor).toBeTruthy();
   const search = page.locator('.search-editor');
   await expect(search.locator('.view-lines')).toContainText('A remaining coverageword');
   await expect(search.locator('.view-lines')).toContainText('a.coverage.txt');
   await expect(search.locator('.view-lines')).not.toContainText('only in A draft');
-  await expect.poll(() => result.requests.some(item => item.route === targets[1].route && item.body.query === 'coverageword')).toBe(true);
-  const requests = result.requests.filter(item => item.body.query === 'coverageword');
-  expect(requests.filter(item => item.route === targets[1].route).every(item => item.body.search_options.excluded_resource_uris.length === 0)).toBe(true);
-  expect(requests.every(item => [targets[0].route, targets[1].route].includes(item.route))).toBe(true);
+  await expect.poll(() => result.requests.some(item => item.workspaceId === targets[1].workspaceId && item.query === 'coverageword')).toBe(true);
+  const requests = result.requests.filter(item => item.query === 'coverageword');
+  expect(requests.filter(item => item.workspaceId === targets[1].workspaceId).every(item => item.search_options.excluded_resource_uris.length === 0)).toBe(true);
+  expect(requests.every(item => targets.some(target => target.workspaceId === item.workspaceId && target.gatewayId === item.gatewayId))).toBe(true);
+  expect(receipt.pages.every(event => event.branch.allocated_results === 1)).toBe(true);
   result.modelCoverage = true; result.samePathDifferentOwner = true; result.stoppedUnqueried = true;
+  page.off('request', observe);
+  const requestA = { uri: targetAQuery.uri, operation: 'search', query: 'coverageword', search_mode: 'content',
+    search_options: targetAQuery.search_options, max_bytes: targetAQuery.max_bytes };
   // 复用真实浏览器请求取得的覆盖集合，验证原文件 owner 的一条配额页，不补造模型 metadata。
   const read = payload => api('/api/v1/resources/navigation', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': targets[0].route }, body: JSON.stringify(payload) });
   const small = await read({ ...requestA, limit: 1 });
@@ -111,12 +119,12 @@ try {
   expect(changed.status).toBe(400);
   expect(changed.body.detail.reason).toBe('invalid_cursor');
   result.staleCoverageCursor = true;
-  expect(result.requests.filter(item => item.body.query === 'coverageword').every(item => [routeA, routeB].includes(item.route))).toBe(true);
+  expect(result.requests.filter(item => item.query === 'coverageword').every(item => targets.some(target => target.workspaceId === item.workspaceId && target.gatewayId === item.gatewayId))).toBe(true);
   const finalRegistry = await api('/api/gateway/workspaces?check_health=false');
   const stillStopped = finalRegistry.body.data.items.find(target => target.workspace_id === routeC);
   expect(stillStopped.status).toBe('offline');
   expect(stillStopped.runtime_action).toBe('start_managed_backend');
-  result.responses = { pageA, small, beforeCoverage, changed };
+  result.responses = { receipt, pageA, pageB, small, beforeCoverage, changed };
   result.phase = 'passed';
 } catch (error) {
   failure = error; result.error = String(error?.stack ?? error);

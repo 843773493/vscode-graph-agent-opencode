@@ -63,7 +63,7 @@ async def observations(query: str, _: Annotated[str, Depends(verify_gateway_toke
 class FaultSearchTransport(SearchTransport):
     async def _read(self, job: SearchJob, url: str, headers: dict[str, str]) -> WorkspaceSearchResultDTO:
         fault = faults.get(job.request.query)
-        if fault is None:
+        if fault is None or (job.key.category == "file" and "file" not in fault.request.categories):
             return await super()._read(job, url, headers)
         read = ReadObservation(job.key.owner.workspace_id, job.key.category, self.request_id, job.request.deadline_at)
         fault.reads.append(read)

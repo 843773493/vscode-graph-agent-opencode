@@ -55,11 +55,11 @@ export function captureSearchOwner(editors: IEditorService): WorkspaceOwner {
   return gatewayWorkspaceOwner(target, snapshot.gatewayId);
 }
 
-export async function loadSearchScope(owners: readonly WorkspaceOwner[], signal: AbortSignal): Promise<SearchScope> {
+export async function loadSearchRoots(owners: readonly WorkspaceOwner[], signal: AbortSignal): Promise<PromiseSettledResult<SearchScope['workspaces'][number]>[]> {
   if (!owners.length) throw new Error('请先选择明确搜索工作区');
   const routes = await gateway.workspaceRoutes(signal), limiter = new Limiter<SearchScope['workspaces'][number]>(3);
   try {
-    const workspaces = await Promise.all(owners.map(owner => limiter.queue(async () => {
+    return await Promise.allSettled(owners.map(owner => limiter.queue(async () => {
       signal.throwIfAborted();
       const target = requireGatewayWorkspaceRoute(routes.items, routes.gatewayId, owner);
       if (target.status !== 'ready') throw new Error(`工作区 ${target.name} 当前不可查询（${target.status}），请明确启动或连接后再搜索`);
@@ -67,6 +67,14 @@ export async function loadSearchScope(owners: readonly WorkspaceOwner[], signal:
         { signal, headers: gatewayWorkspaceRequestHeaders(target) }, target.workspace_id);
       return { ...owner, rootUri: roots.workspace_uri, label: target.name };
     })));
-    return { version: 1, workspaces };
   } finally { limiter.dispose(); }
+}
+
+/** 原搜索视图需要完整范围；Quick Access 则逐根表达元数据失败。 */
+export async function loadSearchScope(owners: readonly WorkspaceOwner[], signal: AbortSignal): Promise<SearchScope> {
+  const roots = await loadSearchRoots(owners, signal);
+  return { version: 1, workspaces: roots.map(root => {
+    if (root.status === 'rejected') throw root.reason;
+    return root.value;
+  }) };
 }

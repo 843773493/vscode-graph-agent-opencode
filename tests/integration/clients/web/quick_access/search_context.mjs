@@ -42,7 +42,7 @@ export async function verifySearchContext({ page, command, result, fileUri, owne
   await expect(editor.locator('.boxteam-search-scope')).toContainText('home');
   const requests = result.searches.slice(before);
   expect(requests.length).toBeGreaterThan(0);
-  if (requests.some(request => request.route !== owner.route || request.uri !== owner.root)) throw new Error('上下文自动重查改投其它范围');
+  if (requests.some(request => request.workspaceId !== owner.workspaceId || request.gatewayId !== owner.gatewayId || request.uri !== owner.root)) throw new Error('上下文自动重查改投其它范围');
   // 相邻命中相互成为上下文时，原 serializer 仍只输出一份命中行。
   expect(await lines.locator('.view-line').filter({ hasText: 'contextbranchonly' }).count()).toBe(2);
   result.editorAutomaticContextRerun = true;

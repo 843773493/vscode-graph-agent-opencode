@@ -7,8 +7,10 @@ import { relativePath } from '../../upstream/src/vs/base/common/resources.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { DEFAULT_MAX_SEARCH_RESULTS, IFileMatch, IFileQuery, IFolderQuery, isFilePatternMatch, ISearchComplete, ISearchProgressItem, ISearchResultProvider, ITextQuery, ITextSearchMatch, QueryType, TextSearchCompleteMessageType } from '../../upstream/src/vs/workbench/services/search/common/search.js';
-import type { ResourceNavigationContextDTO, ResourceNavigationMatchDTO, ResourceNavigationResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import { gateway } from '../agentApi.js';
+import type { ResourceNavigationContextDTO, ResourceNavigationMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
+import type { FederatedSearchContinuationDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
+import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v1/public.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
 import { fileOptions, openResources, resourceInQuery, validateQuery, validateTextQuery } from './query.js';
 
@@ -28,11 +30,6 @@ export function textMatch(hit: ResourceNavigationMatchDTO): ITextSearchMatch {
   }] };
 }
 
-export interface WorkspaceFileSearchPage extends ISearchComplete {
-  cursor?: string;
-  requestIds?: string[];
-}
-
 export class WorkspaceSearchProvider extends Disposable implements ISearchResultProvider {
   private readonly active = new Set<CancellationTokenSource>();
 
@@ -50,20 +47,13 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     return this.search(query, undefined, token);
   }
 
-  fileSearchPage(query: IFileQuery, cursor: string | undefined, token?: CancellationToken, deadlineAt?: number): Promise<WorkspaceFileSearchPage> {
-    if (query.folderQueries.length !== 1 || query.onlyOpenEditors || query.exists || query.extraFileResources?.length) {
-      throw new Error('文件续页必须使用单个明确目录根');
-    }
-    return this.search(query, undefined, token, undefined, { cursor, deadlineAt });
-  }
-
   textSearch(query: ITextQuery, onProgress?: (item: ISearchProgressItem) => void, token?: CancellationToken,
     models = new ResourceSet()): Promise<ISearchComplete> {
     return this.search(query, onProgress, token, models);
   }
 
   private async search(query: IFileQuery | ITextQuery, onProgress?: (item: ISearchProgressItem) => void,
-    token = CancellationToken.None, models = new ResourceSet(), paging?: { cursor?: string; deadlineAt?: number }): Promise<WorkspaceFileSearchPage> {
+    token = CancellationToken.None, models = new ResourceSet()): Promise<ISearchComplete> {
     if (query.type === QueryType.Text) validateTextQuery(query); else validateQuery(query);
     if (token.isCancellationRequested) throw new CancellationError();
     if (this._store.isDisposed) throw new Error('文件搜索服务已释放');
@@ -72,34 +62,30 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     this.active.add(source);
     let timedOut = false;
     // 沿原导航的十秒预算限制整个查询；续页不重新获得完整等待期限。
-    const deadlineAt = Math.min(Date.now() + 10000, paging?.deadlineAt ?? Infinity);
+    const deadlineAt = Date.now() + 10000;
     const timer = setTimeout(() => { timedOut = true; source.cancel(); }, Math.max(0, deadlineAt - Date.now()));
     if (deadlineAt <= Date.now()) { timedOut = true; source.cancel(); }
     const results = new Map<string, IFileMatch>();
     const contexts = new Map<string, Map<number, ResourceNavigationContextDTO>>();
     const messages: ISearchComplete['messages'] = [];
-    const requestIds: string[] = [];
-    let count = 0, limitHit = false, continuation: string | undefined;
-    const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
+    let count = 0, limitHit = false;
+    let continuation: { scope: GatewaySearchScopeDTO; branches: FederatedSearchContinuationDTO[] } | undefined;
+    // 原 FileSearchManager 把 0 当预热哨兵；这里无缓存，只执行服务硬上限内的有界召回。
+    const maximum = query.type === QueryType.File && query.maxResults === 0 ? 500 : query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     // 冻结本代际覆盖集合；每个目标只发送其自身根内的规范身份。
     const coveredResources = [...models];
-    const routes = new Map<string, Promise<string>>();
     const seen = new Set<string>();
     const targets: { resource: URI; folder: IFolderQuery }[] = query.onlyOpenEditors
       ? openResources(this.editors, query).map(resource => ({ resource, folder: query.folderQueries.find(folder => resourceInQuery(resource, { ...query, folderQueries: [folder] }))! }))
       : query.folderQueries.map(folder => ({ resource: folder.folder, folder }));
     try {
-      for (const { resource: target, folder } of targets) {
-        if (limitHit) break;
-        if (query.type === QueryType.Text && models.has(target)) continue;
+      // TODO：16.19 沿文件 owner 的 canonical 身份统一重叠根及冲突局部选项，避免重复扫描。
+      const planned = targets.flatMap(({ resource: target, folder }) => {
+        if (query.type === QueryType.Text && models.has(target)) return [];
         if (query.onlyOpenEditors && query.type === QueryType.File && query.filePattern && !isFilePatternMatch({
           relativePath: relativePath(folder.folder, target)!, searchPath: undefined,
-        }, query.filePattern, !query.shouldGlobMatchFilePattern)) continue;
-        if (source.token.isCancellationRequested) throw new CancellationError();
-        const owner = workspaceFileSource(target), key = JSON.stringify([owner.gatewayId, owner.workspaceId]);
-        let route = routes.get(key);
-        if (!route) { route = gateway.resolveWorkspace(owner, controller.signal); routes.set(key, route); }
-        const routeId = await raceCancellationError(route, source.token);
+        }, query.filePattern, !query.shouldGlobMatchFilePattern)) return [];
+        const owner = workspaceFileSource(target);
         const options = fileOptions(query, folder);
         // 已打开文件已按原目录语义过滤；精确文件请求不重新把 include 当 basename 模式。
         if (query.onlyOpenEditors) { options.include_globs = []; options.exclude_globs = []; }
@@ -111,21 +97,50 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           excluded_resource_uris: coveredResources.filter(resource => !query.onlyOpenEditors && resourceInQuery(resource, { ...query, folderQueries: [folder] }))
             .map(resource => workspaceFileSource(resource).path).sort(),
         });
-        // 固定每一目标的请求合同，分页 cursor 绑定包括 limit 在内的全部选项。
-        const request = { uri: owner.path, operation: 'search', query: query.type === QueryType.Text ? query.contentPattern.pattern : query.onlyOpenEditors ? '**/*' : query.filePattern || '**/*',
-          search_mode: query.type === QueryType.Text ? 'content' : query.onlyOpenEditors || query.shouldGlobMatchFilePattern || !query.filePattern ? 'glob' : 'fuzzy',
-          search_options: options, limit: Math.max(1, Math.min(1000, maximum + (paging ? 0 : 1))),
-          ...(query.type === QueryType.Text && query.maxFileSize !== undefined ? { max_bytes: query.maxFileSize } : {}) };
-        let cursor = paging?.cursor;
-        do {
+        return [{ target, folder, owner, wire: { owner: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId },
+          target: { uri: owner.path, search_options: options, max_bytes: query.type === QueryType.Text ? query.maxFileSize ?? 65536 : 65536 } } }];
+      });
+      if (!planned.length) return { results: [], messages: [], limitHit: false };
+      const operation = query.type === QueryType.Text ? 'content' : 'name';
+      const byKey = new Map(planned.map(item => [searchBranchKey({ owner: item.wire.owner, category: 'file', operation, resource_uri: item.owner.path }), item]));
+      // 页大小保持不变；后续只读未完成根，不因分支减少改变原 cursor 的绑定。
+      const pageLimit = Math.max(1, Math.min(500, Math.floor(1000 / planned.length), query.type === QueryType.File && query.exists ? 1 : Math.floor((maximum + 1) / planned.length)));
+      const owners = [...new Map(planned.map(item => [JSON.stringify(item.wire.owner), item.wire.owner])).values()];
+      const requestQuery = { category: 'file', operation, contract_version: 1,
+        query: query.type === QueryType.Text ? query.contentPattern.pattern : query.onlyOpenEditors ? '**/*' : query.filePattern || '**/*',
+        match_mode: query.type === QueryType.Text ? query.contentPattern.isRegExp ? 'regex' : 'literal'
+          : query.onlyOpenEditors || query.shouldGlobMatchFilePattern || !query.filePattern ? 'glob' : 'fuzzy',
+        limit: pageLimit, file_targets: planned.map(item => item.wire) };
+      do {
+        if (source.token.isCancellationRequested) throw new CancellationError();
+        let scope = continuation?.scope;
+        const branches: FederatedSearchContinuationDTO[] = [];
+        await raceCancellationError(streamFederatedSearch(0, {
+          scope: scope ? { mode: 'resume', scope, owners: [] } : { mode: 'selected', owners },
+          queries: [requestQuery], continuations: continuation?.branches ?? [], max_results: pageLimit * planned.length,
+          deadline_at: deadlineAt / 1000,
+        }, { signal: controller.signal, onEvent: event => {
           if (source.token.isCancellationRequested) throw new CancellationError();
-          const page = await raceCancellationError(gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/navigation', {
-            method: 'POST', body: JSON.stringify({ ...request, cursor }), signal: controller.signal,
-            headers: { 'X-BoxTeam-Resource-Navigation-Deadline': String(deadlineAt / 1000) },
-            onResponse: requestId => { if (requestId) requestIds.push(requestId); },
-          }, routeId), source.token);
-          if (source.token.isCancellationRequested) throw new CancellationError();
-          if (page.node?.uri !== owner.path) throw new Error('文件搜索响应目标与请求不一致');
+          if (event.type === 'scope') { scope = event.scope!.scope; return; }
+          if (!event.branch?.branch) return;
+          const plan = byKey.get(searchBranchKey(event.branch.branch));
+          if (!plan) throw new Error('文件搜索返回了其它目录根');
+          const { owner, folder, target } = plan;
+          if (event.type === 'branch') {
+            if (event.branch.state === 'failed' || event.branch.state === 'cancelled') throw new Error(
+              `文件搜索失败：${event.branch.code} · ${event.branch.message ?? ''} · request_id: ${event.request_id}`);
+            if (event.branch.state === 'limited') {
+              if (event.branch.cursor || event.branch.code === 'output_limit') branches.push({ branch: event.branch.branch, cursor: event.branch.cursor });
+              else {
+                limitHit = true;
+                messages.push({ type: TextSearchCompleteMessageType.Warning, text: `文件搜索受限：${event.branch.code}（${owner.path}）` });
+              }
+            }
+            return;
+          }
+          if (event.type !== 'page') return;
+          const page = event.page?.files;
+          if (!page || page.node?.uri !== owner.path) throw new Error('文件搜索响应目标与请求不一致');
           const rows = query.type === QueryType.Text ? page.matches.map(hit => ({ uri: hit.uri, hit })) : page.entries
             .filter(entry => entry.resource_shape === 'file').map(entry => ({ uri: entry.uri, hit: undefined }));
           for (const row of rows) {
@@ -154,14 +169,10 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             lines.set(line.line, line);
             contexts.set(resource.toString(), lines);
           }
-          cursor = page.next_cursor;
-          if (page.truncated && !cursor) {
-            limitHit = true;
-            messages.push({ type: TextSearchCompleteMessageType.Warning, text: `文件搜索受限：${page.truncation_reason ?? '未知预算'}（${owner.path}）` });
-          }
-          if (paging) { continuation = cursor; limitHit ||= page.truncated; break; }
-        } while (cursor && !limitHit);
-      }
+        } }), source.token);
+        if (!scope) throw new Error('文件搜索缺少冻结范围');
+        continuation = branches.length ? { scope, branches } : undefined;
+      } while (continuation && !limitHit);
       if (source.token.isCancellationRequested) throw new CancellationError();
       if (query.type === QueryType.Text && query.surroundingContext) {
         for (const [key, file] of results) {
@@ -186,7 +197,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
         }
       }
       if (source.token.isCancellationRequested) throw new CancellationError();
-      return { results: [...results.values()], messages, limitHit, requestIds, ...(continuation ? { cursor: continuation } : {}) };
+      return { results: [...results.values()], messages, limitHit };
     } catch (error) {
       if (timedOut) throw new Error('文件搜索超过本次总期限', { cause: error });
       throw error;

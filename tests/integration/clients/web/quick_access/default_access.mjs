@@ -122,9 +122,9 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await input.fill('%quickmodeword');
     await expect(quick).toContainText('mode scope A quickmodeword');
     await expect(quick).not.toContainText('mode scope B quickmodeword');
-    const modeRequests = requests.slice(beforeMode).filter(request => request.body?.query === 'quickmodeword');
+    const modeRequests = requests.slice(beforeMode).filter(request => request.query === 'quickmodeword');
     expect(modeRequests.length).toBeGreaterThan(0);
-    expect(modeRequests.every(request => request.route === ownerA.route && request.body?.uri === ownerA.root)).toBe(true);
+    expect(modeRequests.every(request => request.owners.length === 1 && request.owners[0] === ownerA.workspaceId && request.body.queries.every(query => query.category === 'file' && query.file_targets.every(target => target.target.uri === ownerA.root)))).toBe(true);
     await input.fill('?');
     await quick.getByRole('option', { name: /^…,/ }).click();
     await expect(quick).toContainText('最近打开');

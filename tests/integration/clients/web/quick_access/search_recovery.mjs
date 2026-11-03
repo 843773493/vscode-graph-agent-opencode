@@ -1,5 +1,6 @@
 import { rename } from 'node:fs/promises';
 import { expect } from 'playwright/test';
+import { searchFault } from './federation_observation.mjs';
 
 /** 只读检查原工作副本 backup；内容与配置均由原编辑器生成。 */
 async function readBackups(page) {
@@ -33,7 +34,7 @@ export async function verifySearchRecovery({ page, command, api, result, fileUri
     await expect.poll(() => result.searches.slice(before).some(request => request.query === query)).toBe(true);
     await expect(lines(editor)).toContainText(expected);
     const requests = result.searches.slice(before);
-    expect(requests.every(request => request.route === owner.route && request.uri === owner.root)).toBe(true);
+    expect(requests.every(request => request.workspaceId === owner.workspaceId && request.gatewayId === owner.gatewayId && request.uri === owner.root)).toBe(true);
   };
 
   result.phase = 'unsaved-search-result-backups';
@@ -123,10 +124,27 @@ export async function verifySearchRecovery({ page, command, api, result, fileUri
   expect(replacement.backend_workspace_id).toEqual(expect.any(String));
   expect(replacement.backend_workspace_id).not.toBe(ownerB.workspaceId);
   const beforeMissing = result.searches.length;
+  // 只在出站边界观察：失效 owner 应在分发前被拒绝，不能查询复用 route 的 C。
+  await searchFault(page, 'quickscope', 'fail', ['file']);
+  const rejectedResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/search'
+    && response.request().postDataJSON()?.queries.some(query => query.category === 'file' && query.query === 'quickscope'));
   await input(b).fill('quickscope');
   await input(b).press('Enter');
-  await expect(page.locator('.notifications-toasts')).toContainText('缺少唯一的已登记路由');
-  expect(result.searches.slice(beforeMissing)).toEqual([]);
+  const rejected = await rejectedResponse;
+  expect(rejected.status()).toBe(404);
+  const error = await rejected.json(), message = `工作区归属未登记或已移除: ${ownerB.gatewayId}/${ownerB.workspaceId}`;
+  expect(error.detail.code).toBe('owner_unavailable');
+  expect(error.detail.message).toBe(message);
+  expect(error.request_id).toBeTruthy();
+  expect(error.request_id).toBe(rejected.headers()['x-request-id']);
+  await expect(page.locator('.notifications-toasts')).toContainText(message);
+  const missingRequests = result.searches.slice(beforeMissing);
+  expect(missingRequests.length).toBeGreaterThan(0);
+  expect(missingRequests.every(request => request.workspaceId === ownerB.workspaceId && request.gatewayId === ownerB.gatewayId && request.uri === ownerB.root)).toBe(true);
+  expect((await searchFault(page, 'quickscope')).reads).toEqual([]);
+  await searchFault(page, 'quickscope', 'release');
+  result.editorRejectedOwner = { gatewayId: ownerB.gatewayId, workspaceId: ownerB.workspaceId,
+    status: rejected.status(), requestId: error.request_id, dispatched: 0 };
 
   result.phase = 'stable-owner-resolves-new-route';
   await api('/api/gateway/managed-workspaces', { method: 'POST',

@@ -10,6 +10,7 @@ export function searchRequest(request) {
   if (path === '/api/v1/resources/navigation' && body?.operation !== 'search') return undefined;
   return { path, body, query: path === '/api/gateway/search' ? body.queries[0].query : new URL(request.url()).searchParams.get('query') ?? body?.query,
     owners: path === '/api/gateway/search' ? (body.scope.mode === 'resume' ? body.scope.scope.owners : body.scope.owners).map(owner => owner.workspace_id) : undefined,
+    categories: body?.queries?.map(query => query.category),
     route: request.headers()['x-boxteam-workspace-id'], issuedAt: Date.now() / 1000,
     deadline: body?.deadline_at ?? request.headers()['x-boxteam-name-search-deadline'] ?? request.headers()['x-boxteam-resource-navigation-deadline'] };
 }
@@ -30,7 +31,7 @@ export async function searchReceipt(request) {
   expect(events[0].type).toBe('scope'); expect(events.at(-1).type).toBe('end');
   expect(events.every((event, index) => event.sequence === index + 1 && event.request_id === header)).toBe(true);
   return { path: observed.path, query: observed.query, status: response.status(), requestId: header, header,
-    scope: events[0].scope.scope, summary: events.at(-1).summary };
+    scope: events[0].scope.scope, summary: events.at(-1).summary, pages: events.filter(event => event.type === 'page') };
 }
 
 /** 控制仅存在于本场景 ASGI 装具的出站故障，不触碰产品配置或业务存储。 */
@@ -44,4 +45,19 @@ export async function searchFault(page, query, mode, categories) {
     if (!response.ok) throw new Error(`搜索故障装具返回 ${response.status}: ${await response.text()}`);
     return response.json();
   }, { query, mode, categories });
+}
+
+/** 将实际联邦文件请求按根展开供断言，不把临时 route 当作文件身份。 */
+export function fileSearchRequests(request) {
+  const observed = searchRequest(request);
+  if (!observed || observed.path !== '/api/gateway/search') return [];
+  return observed.body.queries.filter(query => query.category === 'file').flatMap(query => query.file_targets.flatMap(item => {
+    const continuation = observed.body.continuations.find(next => next.branch.resource_uri === item.target.uri
+      && next.branch.owner.gateway_id === item.owner.gateway_id && next.branch.owner.workspace_id === item.owner.workspace_id);
+    if (observed.body.continuations.length && !continuation) return [];
+    return [{ uri: item.target.uri, search_options: item.target.search_options, max_bytes: item.target.max_bytes,
+      query: query.query, search_mode: query.operation === 'content' ? 'content' : query.match_mode, limit: query.limit,
+      gatewayId: item.owner.gateway_id, workspaceId: item.owner.workspace_id, cursor: continuation?.cursor,
+      deadline: observed.body.deadline_at }];
+  }));
 }

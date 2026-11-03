@@ -10,7 +10,7 @@ export async function verifySearchEditors({ page, command, result, fileUri, owne
     await queryInput(editor).press('Enter');
     await expect.poll(() => result.searches.slice(before).some(request => request.query === value)).toBe(true);
     await expect(lines(editor)).toContainText(expected);
-    if (result.searches.slice(before).some(request => request.route !== owner.route)) throw new Error('Search Editor 查询改投其它工作区');
+    if (result.searches.slice(before).some(request => request.workspaceId !== owner.workspaceId || request.gatewayId !== owner.gatewayId)) throw new Error('Search Editor 查询改投其它工作区');
   };
 
   result.phase = 'search-editor-from-transferred-view';
@@ -125,7 +125,7 @@ export async function verifySearchEditors({ page, command, result, fileUri, owne
   await expect(lines(legacy)).not.toContainText('legacy-display-only');
   await expect(lines(legacy)).not.toContainText('dirtyword');
   expect(result.searches.slice(beforeLegacy).length).toBeGreaterThan(0);
-  if (result.searches.slice(beforeLegacy).some(request => request.route !== ownerB.route)) throw new Error('旧结果选择范围后仍查询了其它工作区');
+  if (result.searches.slice(beforeLegacy).some(request => request.workspaceId !== ownerB.workspaceId || request.gatewayId !== ownerB.gatewayId)) throw new Error('旧结果选择范围后仍查询了其它工作区');
   result.editorLegacyScope = true;
 
   result.phase = 'invalid-scope-rejected-visibly';

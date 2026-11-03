@@ -5,15 +5,12 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
     install_test_workspace_config,
@@ -21,24 +18,12 @@ from tests.support.workspaces import (
 )
 
 
-@pytest.fixture
-def query_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    port = integration_port_block_for_file(Path(request.node.path)).port(20)
-    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (port,))
-    lease.acquire()
-    try:
-        yield port
-    finally:
-        lease.release()
-
-
 @pytest.mark.asyncio
 async def test_query_branches_cancel_expire_and_retry_only_their_selected_owner(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-    query_gateway_port: int,
+    search_gateway_port: int,
     web_workbench_assets: Path,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
@@ -54,7 +39,7 @@ async def test_query_branches_cancel_expire_and_retry_only_their_selected_owner(
                                       schema_path=root / ".boxteam/workspace_schema.jsonc")
         (target / "branchscope-file.txt").write_text(target.name + " query lifecycle\n", encoding="utf-8")
     gateway = start_gateway_process(
-        workspace_root=workspaces[0], default_backend_url=None, port=query_gateway_port,
+        workspace_root=workspaces[0], default_backend_url=None, port=search_gateway_port,
         asgi_app="tests.integration.clients.web.quick_access.query_gateway_fixture:app",
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
