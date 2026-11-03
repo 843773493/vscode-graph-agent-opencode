@@ -226,9 +226,9 @@ Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，�
 
 各类别通过自己的查询 owner 发布有界结果，统一浮层只组织结果和动作；不能用通用文件递归扫描私有存储代替领域检索。索引、规范 URI 与引用处理使用下述已确认规则，不再作为待确认项。消息列表、按 Session 读取整批 LLM 日志和现有 Trace 分页接口并不等于正文搜索：各 owner 必须补有界查询及按命中定位读取，禁止前端遍历所有会话、拉全日志后过滤。
 
-消息正文的底层切片提供精确 `SessionThread/history/search`：区分大小写的字面量、非重叠匹配，每页默认 50、最多 100 个命中，最多检查 256 条正文、读取 8 MiB 已提交 JSONL，正文与 SQLite 查询调度共用 1 秒期限；原 snapshot／锁和本机同步 I/O 的准入规则继续生效，不声称能强行中断文件系统。SQLite 先在同一 active view 的完整替代范围择一，再有界取得正文 locator，不能因页外 final carrier 未返回就命中 stream shadow 或旧 canonical 版本。已有 internal history 的 stream 替代 CTE 和 survivor 同源复用，不创建搜索正文表；单项超过正文硬上限明确受限且不返回无法推进的 cursor。独立位置是 canonical item 可见文本中的零基 Unicode 码点半开区间，正文版本沿用原不透明 `content_hash`，不重新设计摘要语法。`around` 的可选 `anchor_message` 在同一快照核验位置后沿原分页链加载。
+消息正文的底层切片提供精确 `SessionThread/history/search`：区分大小写的字面量、非重叠匹配，每页默认 50、最多 100 个命中，最多检查 256 条正文、读取 8 MiB 已提交 JSONL，正文与 SQLite 查询调度共用 1 秒期限；原 snapshot／锁和本机同步 I/O 的准入规则继续生效，不声称能强行中断文件系统。SQLite 先在同一 active view 的完整替代范围择一，再有界取得正文 locator，不能因页外 final carrier 未返回就命中 stream shadow 或旧 canonical 版本。已有 internal history 的 stream 替代 CTE 和 survivor 同源复用，不创建搜索正文表；单项超过正文硬上限明确受限且不返回无法推进的 cursor。独立位置是 canonical item 可见文本中的零基 Unicode 码点半开区间，正文版本沿用原不透明 `content_hash`，不重新设计摘要语法。`around` 的可选 `anchor_message` 在同一快照核验位置后沿原分页链加载。核验响应同时返回一条完整 canonical 原文，不增加一次正文读取；由于常规历史详情有正文截断且 Markdown DOM 不保留原始码点位置，React 在对应 Turn 内临时展示并高亮该原文，等待 Virtuoso 实际挂载后滚动到 mark。关闭即释放，不进入时间线缓存、持久展示态或第二历史存储。
 
-工作区 `POST /sessions/history/search` 在同一历史 owner 编排 catalog 与 SessionThread 的只读发现，每页至多检查 64 个目录位置、16 个 Thread；所有 Thread 共用上述 256 条、8 MiB 和 1 秒调度预算，准入等待共用最多 15 秒的总期限，并消费客户端传来的剩余期限。续页保存 catalog revision、当前 Session 控制库 Thread revision、keyset 与原历史 cursor；当前目录或历史变化明确冲突。各 Thread 是实际读取时的快照，已完成分支新增正文需重查。结果保留原 Thread 名称／归属和消息引用，空历史不物化，不由前端遍历 Session。React 实际挂载后的精确定位仍须继续迁齐，不能把查询入口算作整项内容搜索验收。
+工作区 `POST /sessions/history/search` 在同一历史 owner 编排 catalog 与 SessionThread 的只读发现，每页至多检查 64 个目录位置、16 个 Thread；所有 Thread 共用上述 256 条、8 MiB 和 1 秒调度预算，准入等待共用最多 15 秒的总期限，并消费客户端传来的剩余期限。续页保存 catalog revision、当前 Session 控制库 Thread revision、keyset 与原历史 cursor；当前目录或历史变化明确冲突。各 Thread 是实际读取时的快照，已完成分支新增正文需重查。结果保留原 Thread 名称／归属和消息引用，空历史不物化，不由前端遍历 Session。消息定位通过 ThreadPane 的临时编辑器参数交给 React，复用原 around loader 与 Virtuoso 挂载回调；原文不进入时间线缓存。其它正文 owner 仍须各自实现后方可完成整项验收。
 
 ### 索引归搜索 owner 决定
 

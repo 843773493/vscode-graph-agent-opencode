@@ -9,7 +9,7 @@ from .attachment import AttachmentDirectoryURI, AttachmentFileURI
 from .common import JobStatus
 from .session import SessionDTO
 from .trace import TraceEventDTO
-from .turn_search import TurnMessageReferenceDTO
+from .turn_search import TurnMessageLocationDTO, TurnMessageReferenceDTO
 
 TurnInclude = Literal[
     "user",
@@ -503,6 +503,7 @@ class TurnHistoryPageDTO(BaseModel):
     has_before: bool = False
     has_after: bool = False
     projection_epoch: int = Field(ge=1)
+    located_message: TurnMessageLocationDTO | None = None
 
     @model_validator(mode="after")
     def validate_internal_execution_identity(self) -> TurnHistoryPageDTO:

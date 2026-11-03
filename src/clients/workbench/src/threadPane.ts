@@ -16,6 +16,11 @@ import { ThreadInput, UnavailableThreadInput } from './threadInput.js';
 import { ChatSurface } from './react/chatView.js';
 import { showFileOpenMenu } from './fileOpenMenu.js';
 import './thread.css';
+import type { TurnMessageMatchDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+
+export interface ThreadEditorOptions extends IEditorOptions {
+  boxteamMessage?: TurnMessageMatchDTO;
+}
 
 /** 原版只管理编辑器生命周期，完整会话产品由既有 React 组件呈现。 */
 export class ThreadPane extends EditorPane {
@@ -53,7 +58,7 @@ export class ThreadPane extends EditorPane {
     this.content = document.createElement('div'); this.content.className = 'boxteam-thread-body';
     this.root.append(toolbar, this.content); parent.append(this.root);
   }
-  override async setInput(input: EditorInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
+  override async setInput(input: EditorInput, options: ThreadEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
     this.conversation?.dispose(); this.conversation = undefined; this.current = undefined;
     await super.setInput(input, options, context, token);
     if (token.isCancellationRequested || this.input !== input) return;
@@ -70,13 +75,17 @@ export class ThreadPane extends EditorPane {
       this.toggle.setAttribute('aria-expanded', String(input.resourcesVisible));
     }, (path, anchor) => showFileOpenMenu(path, anchor, input.owner,
       this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications);
+    if (options?.boxteamMessage) this.conversation.revealMessage(options.boxteamMessage);
   }
-  override setOptions(options: IEditorOptions | undefined): void {
+  override setOptions(options: ThreadEditorOptions | undefined): void {
     super.setOptions(options);
-    if (!this.current || !options?.viewState) return;
-    this.current.restoreViewState({ ...this.current.getViewState(), ...options.viewState });
-    this.toggle.setAttribute('aria-expanded', String(this.current.resourcesVisible));
-    this.conversation?.update();
+    if (!this.current) return;
+    if (options?.viewState) {
+      this.current.restoreViewState({ ...this.current.getViewState(), ...options.viewState });
+      this.toggle.setAttribute('aria-expanded', String(this.current.resourcesVisible));
+      this.conversation?.update();
+    }
+    if (options?.boxteamMessage) this.conversation?.revealMessage(options.boxteamMessage);
   }
   protected override setEditorVisible(visible: boolean): void {
     super.setEditorVisible(visible); this.conversation?.setVisible(visible);

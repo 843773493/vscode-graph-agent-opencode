@@ -1,4 +1,5 @@
 import React from "react";
+import { MessageSearchLocation } from "../messageSearchLocation";
 import type { TurnHistoryInclude } from "../../../api/session/sessionTurnHistory";
 import type { AttachmentRef } from "../../../types/backend";
 import { isLiveConversationView } from "../../../state/trace/traceAggregation";
@@ -56,6 +57,7 @@ function ChatTurn({
   });
   return (
     <article className="chat-turn" data-conversation-id={conversation.conversationId} data-turn-id={conversation.turnId} data-root-logical-item-ordinal={conversation.rootLogicalItemOrdinal}>
+      <MessageSearchLocation turnId={conversation.turnId} />
       <ChatTurnUserSection
         apiPort={apiPort}
         workspaceId={workspaceId}

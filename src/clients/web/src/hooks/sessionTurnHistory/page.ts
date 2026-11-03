@@ -4,6 +4,7 @@ import {
   loadSessionHistory,
   StaleTurnCursorHttpError,
   StaleTurnReferenceHttpError,
+  type LoadAroundTurn,
 } from "../../api/session/sessionTurnHistory";
 import {
   applyTurnHistoryPage,
@@ -494,9 +495,9 @@ export function useAroundTurnLoader({
   requestSignal,
   setState,
 }: Omit<Parameters<typeof useDirectionalTurnLoader>[0], "direction">):
-  (anchorTurnId: string, signal?: AbortSignal) => Promise<void> {
+  LoadAroundTurn {
   const activeRequestRef = useRef<AbortController | null>(null);
-  return useCallback(async (anchorTurnId: string, navigationSignal?: AbortSignal) => {
+  return useCallback<LoadAroundTurn>(async (anchorTurnId, navigationSignal, anchorMessage) => {
     if (apiPort === null || !sessionId || !sessionCacheKey || !anchorTurnId) {
       throw new Error("当前会话尚未就绪，无法定位轮次");
     }
@@ -553,6 +554,7 @@ export function useAroundTurnLoader({
         {
           direction: "around",
           anchor_turn_id: anchorTurnId,
+          ...(anchorMessage ? { anchor_message: anchorMessage } : {}),
           before_turns: CURSOR_HISTORY_TURNS,
           after_turns: CURSOR_HISTORY_TURNS,
         },
@@ -563,6 +565,7 @@ export function useAroundTurnLoader({
       signal.throwIfAborted();
       if (!isCurrentRequest()) throw new Error("轮次定位请求的会话线程已切换");
       if (page.thread_id !== currentTimeline.threadId) throw new Error("指定轮次历史的 thread owner 与请求不一致");
+      if (anchorMessage && !page.located_message) throw new Error("指定消息缺少后端核验的原文，无法定位");
       if (![...page.items, ...(page.summaries ?? [])].some((turn) => turn.turn_id === anchorTurnId)) {
         throw new Error("当前会话线程中未找到指定轮次：" + anchorTurnId);
       }
@@ -583,13 +586,14 @@ export function useAroundTurnLoader({
           ),
         };
       });
+      return page.located_message ?? undefined;
     } catch (error) {
       if (signal.aborted) {
         releaseLoading();
         throw error;
       }
       if (!isCurrentRequest()) throw error;
-      if (error instanceof HttpRequestError && error.status === 404) {
+      if (error instanceof StaleTurnReferenceHttpError || error instanceof HttpRequestError && error.status === 404) {
         // 指定目标不存在只属于本次导航；保留可用历史与它的事件流。
         releaseLoading();
         throw error;

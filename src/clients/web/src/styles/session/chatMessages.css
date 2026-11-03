@@ -627,6 +627,45 @@
   padding-top: 1px;
 }
 
+.chat-history-notice {
+  margin: 8px 12px;
+  color: var(--bt-text-muted);
+  font-size: 12px;
+}
+
+.chat-history-notice[role="alert"] {
+  color: var(--bt-status-danger);
+}
+
+.chat-message-location {
+  margin-block: 12px;
+  padding: 12px;
+  border: 1px solid var(--bt-border);
+  border-radius: 6px;
+  color: var(--bt-text-primary);
+}
+
+.chat-message-location header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--bt-text-muted);
+}
+
+.chat-message-location pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.62;
+}
+
+.chat-message-location mark {
+  color: var(--vscode-editor-findMatchHighlightForeground, inherit);
+  background: var(--vscode-editor-findMatchBackground, #b5890040);
+  outline: 1px solid var(--vscode-editor-findMatchBorder, currentColor);
+}
+
 .chat-markdown {
   min-width: 0;
   color: var(--bt-text-primary);

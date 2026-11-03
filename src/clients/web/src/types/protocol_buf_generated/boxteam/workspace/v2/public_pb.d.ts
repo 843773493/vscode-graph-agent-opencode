@@ -9670,6 +9670,44 @@ export declare type TurnMessageMatchDTO = Message<"boxteam.workspace.v2.TurnMess
 export declare const TurnMessageMatchDTOSchema: GenMessage<TurnMessageMatchDTO>;
 
 /**
+ * 仅本次 around 核验的单条 canonical 原文，不是另一份持久历史。
+ *
+ * @generated from message boxteam.workspace.v2.TurnMessageLocationDTO
+ */
+export declare type TurnMessageLocationDTO = Message<"boxteam.workspace.v2.TurnMessageLocationDTO"> & {
+  /**
+   * @generated from field: string turn_id = 1;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: optional string message_id = 2;
+   */
+  messageId?: string | undefined;
+
+  /**
+   * @generated from field: string role = 3;
+   */
+  role: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TurnMessageReferenceDTO reference = 4;
+   */
+  reference?: TurnMessageReferenceDTO | undefined;
+
+  /**
+   * @generated from field: string content = 5;
+   */
+  content: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TurnMessageLocationDTO.
+ * Use `create(TurnMessageLocationDTOSchema)` to create a new message.
+ */
+export declare const TurnMessageLocationDTOSchema: GenMessage<TurnMessageLocationDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.TurnMessageSearchResultsDTO
  */
 export declare type TurnMessageSearchResultsDTO = Message<"boxteam.workspace.v2.TurnMessageSearchResultsDTO"> & {
@@ -9931,6 +9969,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: optional int64 source_view_revision = 13;
    */
   sourceViewRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TurnMessageLocationDTO located_message = 14;
+   */
+  locatedMessage?: TurnMessageLocationDTO | undefined;
 };
 
 /**

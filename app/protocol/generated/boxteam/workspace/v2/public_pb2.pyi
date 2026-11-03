@@ -3697,6 +3697,20 @@ class TurnMessageMatchDTO(_message.Message):
     preview_start_codepoint: int
     def __init__(self, turn_id: _Optional[str] = ..., message_id: _Optional[str] = ..., role: _Optional[str] = ..., reference: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., preview: _Optional[str] = ..., preview_start_codepoint: _Optional[int] = ...) -> None: ...
 
+class TurnMessageLocationDTO(_message.Message):
+    __slots__ = ("turn_id", "message_id", "role", "reference", "content")
+    TURN_ID_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    ROLE_FIELD_NUMBER: _ClassVar[int]
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_FIELD_NUMBER: _ClassVar[int]
+    turn_id: str
+    message_id: str
+    role: str
+    reference: TurnMessageReferenceDTO
+    content: str
+    def __init__(self, turn_id: _Optional[str] = ..., message_id: _Optional[str] = ..., role: _Optional[str] = ..., reference: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., content: _Optional[str] = ...) -> None: ...
+
 class TurnMessageSearchResultsDTO(_message.Message):
     __slots__ = ("session_id", "thread_id", "items", "cursor", "complete", "limited_reason", "scanned_items", "scanned_bytes")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -3774,7 +3788,7 @@ class TurnHistoryLoadRequest(_message.Message):
     def __init__(self, direction: _Optional[str] = ..., cursor: _Optional[str] = ..., anchor_turn_id: _Optional[str] = ..., turn_ids: _Optional[_Iterable[str]] = ..., turns: _Optional[int] = ..., before_turns: _Optional[int] = ..., after_turns: _Optional[int] = ..., include: _Optional[_Iterable[str]] = ..., execution_id: _Optional[str] = ..., tool_call_ids: _Optional[_Iterable[str]] = ..., anchor_message: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ...) -> None: ...
 
 class TurnHistoryPageDTO(_message.Message):
-    __slots__ = ("items", "next_cursor", "has_more", "before_cursor", "after_cursor", "has_before", "has_after", "projection_epoch", "summaries", "internal_executions", "thread_id", "source_view_id", "source_view_revision")
+    __slots__ = ("items", "next_cursor", "has_more", "before_cursor", "after_cursor", "has_before", "has_after", "projection_epoch", "summaries", "internal_executions", "thread_id", "source_view_id", "source_view_revision", "located_message")
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
     HAS_MORE_FIELD_NUMBER: _ClassVar[int]
@@ -3788,6 +3802,7 @@ class TurnHistoryPageDTO(_message.Message):
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_VIEW_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_VIEW_REVISION_FIELD_NUMBER: _ClassVar[int]
+    LOCATED_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     items: _containers.RepeatedCompositeFieldContainer[TurnDetailDTO]
     next_cursor: str
     has_more: bool
@@ -3801,7 +3816,8 @@ class TurnHistoryPageDTO(_message.Message):
     thread_id: str
     source_view_id: str
     source_view_revision: int
-    def __init__(self, items: _Optional[_Iterable[_Union[TurnDetailDTO, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., has_more: _Optional[bool] = ..., before_cursor: _Optional[str] = ..., after_cursor: _Optional[str] = ..., has_before: _Optional[bool] = ..., has_after: _Optional[bool] = ..., projection_epoch: _Optional[int] = ..., summaries: _Optional[_Iterable[_Union[TurnSummaryDTO, _Mapping]]] = ..., internal_executions: _Optional[_Iterable[_Union[InternalExecutionHistoryDTO, _Mapping]]] = ..., thread_id: _Optional[str] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ...) -> None: ...
+    located_message: TurnMessageLocationDTO
+    def __init__(self, items: _Optional[_Iterable[_Union[TurnDetailDTO, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., has_more: _Optional[bool] = ..., before_cursor: _Optional[str] = ..., after_cursor: _Optional[str] = ..., has_before: _Optional[bool] = ..., has_after: _Optional[bool] = ..., projection_epoch: _Optional[int] = ..., summaries: _Optional[_Iterable[_Union[TurnSummaryDTO, _Mapping]]] = ..., internal_executions: _Optional[_Iterable[_Union[InternalExecutionHistoryDTO, _Mapping]]] = ..., thread_id: _Optional[str] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., located_message: _Optional[_Union[TurnMessageLocationDTO, _Mapping]] = ...) -> None: ...
 
 class InternalExecutionHistoryDTO(_message.Message):
     __slots__ = ("execution_id", "job_id", "status", "created_at", "display_parts", "response_parts", "session_id", "thread_id", "updated_at")

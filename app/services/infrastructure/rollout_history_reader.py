@@ -218,14 +218,17 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 items=[], next_cursor=None, has_more=False, projection_epoch=1
             )
         try:
-            if request.anchor_message is not None:
+            located = (
                 verify_message_reference(self._context_reader, indexed, request.anchor_turn_id, request.anchor_message)
-            return self._load_indexed_history(
+                if request.anchor_message is not None else None
+            )
+            page = self._load_indexed_history(
                 session_id,
                 request,
                 indexed,
                 policy=policy,
             )
+            return page.model_copy(update={"located_message": located})
         finally:
             indexed.snapshot.close()
 

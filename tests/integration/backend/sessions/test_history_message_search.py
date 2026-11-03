@@ -101,6 +101,10 @@ async def test_message_search_uses_exact_canonical_owner_and_resumes_positions(
         assert response.status_code == 200, response.text
         located = response.json()["data"]
         assert located["thread_id"] == child
+        assert located["located_message"] == {
+            "turn_id": hit["turn_id"], "message_id": hit["message_id"], "role": "user",
+            "reference": reference, "content": source,
+        }
         assert [turn["turn_id"] for turn in located["items"]] == [hit["turn_id"]]
     assert all_hits[0]["reference"]["start_codepoint"] > 65536
     assistant = await history_client.post(f"{base}/{child}/history/search", json={"query": "真实编译图回复"})

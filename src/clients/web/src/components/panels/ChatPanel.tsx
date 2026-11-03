@@ -1,3 +1,4 @@
+import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
 import type { SessionViewState } from "../../state/sessionViewState";
 import React from "react";
 import { Virtuoso } from "react-virtuoso";
@@ -27,6 +28,8 @@ import { chatTranscriptItems, type ChatTranscriptItem } from "../chat/transcript
 import { useTurnVirtualScroller } from "../chat/useTurnVirtualScroller";
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat/turn/types";
+import { MessageSearchLocationContext } from "../chat/messageSearchLocation";
+import type { TurnMessageMatchDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 interface ChatPanelRenderState extends ChatTurnHandlers {
   apiPort: number;
@@ -204,6 +207,7 @@ export default function ChatPanel({
   viewState,
   onViewStateChange,
   onViewStateRestoreStatus,
+  messageNavigation,
 }: {
   apiPort: number;
   workspaceId?: string | null;
@@ -220,7 +224,7 @@ export default function ChatPanel({
   historyLoading: boolean;
   projectionState: TurnProjectionState;
   historyError: string | null;
-  onLoadAroundTurn: (anchorTurnId: string, signal?: AbortSignal) => Promise<void>;
+  onLoadAroundTurn: LoadAroundTurn;
   onLoadNewerMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
   onLoadTurnDetails: LoadTurnDetails;
@@ -242,6 +246,7 @@ export default function ChatPanel({
     follow_latest: boolean;
   }) => void;
   onViewStateRestoreStatus?: (message: string) => void;
+  messageNavigation?: TurnMessageMatchDTO;
 } & ChatTurnHandlers): React.ReactNode {
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
   const [pendingActionRunning, setPendingActionRunning] = React.useState(false);
@@ -273,6 +278,8 @@ export default function ChatPanel({
     scrollToLatest,
     showJumpToLatest,
     streamRef,
+    locatedMessage,
+    cancelMessageNavigation,
   } = useTurnVirtualScroller({
     items: transcriptItems,
     scopeKey,
@@ -287,6 +294,7 @@ export default function ChatPanel({
     viewState,
     onViewStateChange,
     onViewStateRestoreStatus,
+    messageNavigation,
   });
   const sessionBusy = conversations.some(
     (conversation) => isLiveConversationView(conversation)
@@ -389,7 +397,8 @@ export default function ChatPanel({
   };
 
   return (
-    <section className="chat-stream-shell">
+    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, close: cancelMessageNavigation }}><section className="chat-stream-shell">
+      {navigation ? <p className="chat-history-notice" role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</p> : null}
       {hasActiveSession && sessionId && threadId ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId])}
         apiPort={apiPort} workspaceId={workspaceId} sessionId={sessionId} threadId={threadId} /> : null}
       <section
@@ -448,6 +457,6 @@ export default function ChatPanel({
           跳到最新消息
         </button>
       ) : null}
-    </section>
+    </section></MessageSearchLocationContext.Provider>
   );
 }

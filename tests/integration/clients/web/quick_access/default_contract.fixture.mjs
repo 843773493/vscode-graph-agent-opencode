@@ -11,7 +11,7 @@ import { WorkspaceSymbolsQuickAccess } from '../../../../../src/clients/workbenc
 import { WorkspaceSymbolProviderRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/common/search.js';
 import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
-import { queryNameBranches } from '../../../../../src/clients/workbench/src/search/quickAccessBranches.js';
+import { querySearchBranches } from '../../../../../src/clients/workbench/src/search/quickAccessBranches.js';
 import { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
 import { HttpRequestError } from '../../../../../src/clients/web/src/api/http.js';
 import { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
@@ -130,7 +130,7 @@ export async function branchContract(mode) {
   if (mode === 'timeout') globalThis.setTimeout = (handler, ms, ...args) => originalTimer(handler, ms === 15000 ? 450 : ms, ...args);
   let busy = false;
   try {
-    const branches = queryNameBranches(owners, ['会话'], 'needle', lifetime, token.token, {}, {}, {},
+    const branches = querySearchBranches(owners, ['会话'], 'needle', lifetime, token.token, {}, {}, {},
       item => ({ id: item.sessionId, label: item.title, accept() {} }),
       branches => updates.push(branches.map(branch => ({ count: branch.picks.length, label: branch.status.label }))),
       value => { busy = value; if (!value) drained.resolve(); }, () => {});

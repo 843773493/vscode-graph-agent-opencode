@@ -17,9 +17,15 @@ class ThreadQuickAccess extends WorkspaceQuickAccess {
   protected override get category(): NameSearchCategory { return 'Thread'; }
 }
 
+class ContentQuickAccess extends WorkspaceQuickAccess {
+  static override readonly PREFIX = 'content ';
+  protected override get contentMode(): boolean { return true; }
+}
+
 for (const [ctor, id, title, order] of [
   [SessionQuickAccess, 'boxteam.quickAccess.sessions', '查找会话和目录', 41],
   [ThreadQuickAccess, 'boxteam.quickAccess.threads', '查找 Thread', 42],
+  [ContentQuickAccess, 'boxteam.quickAccess.content', '搜索正文', 43],
 ] as const) {
   Registry.as<IQuickAccessRegistry>(Extensions.Quickaccess).registerQuickAccessProvider({
     ctor, prefix: ctor.PREFIX, placeholder: `${title} · 当前明确工作区`,

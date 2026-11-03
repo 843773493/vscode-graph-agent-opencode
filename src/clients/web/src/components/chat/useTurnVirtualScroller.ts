@@ -1,3 +1,4 @@
+import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
 import React from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
@@ -7,6 +8,7 @@ import {
 import type { ChatTranscriptItem } from "./transcriptItems";
 import { errorMessage } from "../../utils/errorMessage";
 import { useTurnAnchorNavigation, type TurnViewportPosition } from "./useTurnAnchorNavigation";
+import type { TurnMessageMatchDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 const SCROLL_POSITION_CHANGE_TOLERANCE_PX = 0.5;
 const NATIVE_SCROLLBAR_HIT_WIDTH_PX = 24;
@@ -62,12 +64,13 @@ export function useTurnVirtualScroller({
   viewState,
   onViewStateChange,
   onViewStateRestoreStatus,
+  messageNavigation,
 }: {
   items: readonly ChatTranscriptItem[];
   scopeKey: string;
   onLoadNewerMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
-  onLoadAroundTurn: (anchorTurnId: string, signal?: AbortSignal) => Promise<void>;
+  onLoadAroundTurn: LoadAroundTurn;
   hasNewerMessages: boolean;
   hasOlderMessages: boolean;
   loadingNewerMessages: boolean;
@@ -76,6 +79,7 @@ export function useTurnVirtualScroller({
   viewState?: TurnViewportPosition | null;
   onViewStateChange?: (payload: TurnViewportPosition) => void;
   onViewStateRestoreStatus?: (message: string) => void;
+  messageNavigation?: TurnMessageMatchDTO;
 }) {
   const streamRef = React.useRef<VirtuosoHandle | null>(null);
   const scrollerRef = React.useRef<HTMLElement | null>(null);
@@ -132,11 +136,12 @@ export function useTurnVirtualScroller({
     : `${item.key}:${item.displayPart.text}`).join("|"), [items]);
 
   const {
-    anchorRef, cancelAnchor, navigateToTurn, navigation,
+    anchorRef, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage,
     scheduleAnchorAlignment, scrollToLatest,
   } = useTurnAnchorNavigation({
     items, scopeKey, streamRef, scrollerRef, followsLatestRef,
     setShowJumpToLatest, onLoadAroundTurn, historyLoading,
+    messageNavigation,
     viewState, onViewStateChange, onViewStateRestoreStatus,
   });
   const followOutput = React.useCallback(
@@ -417,6 +422,8 @@ export function useTurnVirtualScroller({
     handleEndReached,
     handleStartReached,
     navigateToTurn,
+    locatedMessage,
+    cancelMessageNavigation: closeMessageNavigation,
     navigation,
     scheduleAnchorAlignment,
     scrollToLatest,

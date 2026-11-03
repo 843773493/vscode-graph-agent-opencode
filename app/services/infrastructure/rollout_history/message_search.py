@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.turn_search import (
+    TurnMessageLocationDTO,
     TurnMessageMatchDTO,
     TurnMessageReferenceDTO,
     TurnMessageSearchRequest,
@@ -184,13 +185,17 @@ def search_messages(
 def verify_message_reference(
     reader: RolloutContextReader, indexed: IndexedHistory, turn_id: str,
     reference: TurnMessageReferenceDTO,
-) -> None:
+) -> TurnMessageLocationDTO:
     rows = [] if indexed.view_id is None else reader.read_message_search_candidates(
         indexed.snapshot, indexed.chain, lower_ordinal=0, limit=1,
         deadline=monotonic() + SEARCH_SECONDS, item_id=reference.item_id,
     )
     if rows and rows[0][2] == turn_id and rows[0][3] <= MAX_SEARCH_BYTES:
         item, = reader.read_canonical_items(indexed.snapshot, item_ids=[reference.item_id])
-        if item.content_hash == reference.content_hash and reference.end_codepoint <= len(_searchable_text(item)):
-            return
+        text = _searchable_text(item)
+        if item.content_hash == reference.content_hash and reference.end_codepoint <= len(text):
+            return TurnMessageLocationDTO(
+                turn_id=turn_id, message_id=item.projection_identity.projection_message_id if item.projection_identity else None,
+                role=item.wire_role, reference=reference, content=text,
+            )
     raise StaleTurnReferenceError(session_id=indexed.snapshot.session_id, turn_ids=[turn_id])

@@ -43,6 +43,16 @@ class TurnMessageMatchDTO(BaseModel):
     preview_start_codepoint: int = Field(ge=0)
 
 
+class TurnMessageLocationDTO(BaseModel):
+    """本次 around 请求核验的单条原文；不写入历史投影或前端历史缓存。"""
+
+    turn_id: str
+    message_id: str | None
+    role: Literal["user", "assistant"]
+    reference: TurnMessageReferenceDTO
+    content: str
+
+
 class TurnMessageSearchResultsDTO(BaseModel):
     session_id: str
     thread_id: str

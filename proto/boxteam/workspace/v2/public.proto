@@ -2227,6 +2227,15 @@ message TurnMessageMatchDTO {
   int64 preview_start_codepoint = 6;
 }
 
+// 仅本次 around 核验的单条 canonical 原文，不是另一份持久历史。
+message TurnMessageLocationDTO {
+  string turn_id = 1;
+  optional string message_id = 2;
+  string role = 3;
+  TurnMessageReferenceDTO reference = 4;
+  string content = 5;
+}
+
 message TurnMessageSearchResultsDTO {
   string session_id = 1;
   string thread_id = 2;
@@ -2283,6 +2292,7 @@ message TurnHistoryPageDTO {
   optional string thread_id = 11;
   optional string source_view_id = 12;
   optional int64 source_view_revision = 13;
+  optional TurnMessageLocationDTO located_message = 14;
 }
 
 message InternalExecutionHistoryDTO {

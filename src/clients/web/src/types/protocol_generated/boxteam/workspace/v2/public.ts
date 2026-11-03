@@ -2266,6 +2266,15 @@ export interface TurnMessageMatchDTO {
   preview_start_codepoint: number;
 }
 
+/** 仅本次 around 核验的单条 canonical 原文，不是另一份持久历史。 */
+export interface TurnMessageLocationDTO {
+  turn_id: string;
+  message_id?: string | undefined;
+  role: string;
+  reference: TurnMessageReferenceDTO | undefined;
+  content: string;
+}
+
 export interface TurnMessageSearchResultsDTO {
   session_id: string;
   thread_id: string;
@@ -2322,6 +2331,7 @@ export interface TurnHistoryPageDTO {
   thread_id?: string | undefined;
   source_view_id?: string | undefined;
   source_view_revision?: number | undefined;
+  located_message?: TurnMessageLocationDTO | undefined;
 }
 
 export interface InternalExecutionHistoryDTO {
@@ -17185,6 +17195,57 @@ export const TurnMessageMatchDTO: MessageFns<TurnMessageMatchDTO> = {
   },
 };
 
+function createBaseTurnMessageLocationDTO(): TurnMessageLocationDTO {
+  return { turn_id: "", message_id: undefined, role: "", reference: undefined, content: "" };
+}
+
+export const TurnMessageLocationDTO: MessageFns<TurnMessageLocationDTO> = {
+  fromJSON(object: any): TurnMessageLocationDTO {
+    return {
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : "",
+      message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : undefined,
+      role: isSet(object.role) ? globalThis.String(object.role) : "",
+      reference: isSet(object.reference) ? TurnMessageReferenceDTO.fromJSON(object.reference) : undefined,
+      content: isSet(object.content) ? globalThis.String(object.content) : "",
+    };
+  },
+
+  toJSON(message: TurnMessageLocationDTO): unknown {
+    const obj: any = {};
+    if (message.turn_id !== "") {
+      obj.turn_id = message.turn_id;
+    }
+    if (message.message_id !== undefined) {
+      obj.message_id = message.message_id;
+    }
+    if (message.role !== "") {
+      obj.role = message.role;
+    }
+    if (message.reference !== undefined) {
+      obj.reference = TurnMessageReferenceDTO.toJSON(message.reference);
+    }
+    if (message.content !== "") {
+      obj.content = message.content;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TurnMessageLocationDTO>, I>>(base?: I): TurnMessageLocationDTO {
+    return TurnMessageLocationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TurnMessageLocationDTO>, I>>(object: I): TurnMessageLocationDTO {
+    const message = createBaseTurnMessageLocationDTO();
+    message.turn_id = object.turn_id ?? "";
+    message.message_id = object.message_id ?? undefined;
+    message.role = object.role ?? "";
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? TurnMessageReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.content = object.content ?? "";
+    return message;
+  },
+};
+
 function createBaseTurnMessageSearchResultsDTO(): TurnMessageSearchResultsDTO {
   return {
     session_id: "",
@@ -17497,6 +17558,7 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     thread_id: undefined,
     source_view_id: undefined,
     source_view_revision: undefined,
+    located_message: undefined,
   };
 }
 
@@ -17521,6 +17583,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
       source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : undefined,
       source_view_revision: isSet(object.source_view_revision)
         ? globalThis.Number(object.source_view_revision)
+        : undefined,
+      located_message: isSet(object.located_message)
+        ? TurnMessageLocationDTO.fromJSON(object.located_message)
         : undefined,
     };
   },
@@ -17566,6 +17631,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.source_view_revision !== undefined) {
       obj.source_view_revision = Math.round(message.source_view_revision);
     }
+    if (message.located_message !== undefined) {
+      obj.located_message = TurnMessageLocationDTO.toJSON(message.located_message);
+    }
     return obj;
   },
 
@@ -17588,6 +17656,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     message.thread_id = object.thread_id ?? undefined;
     message.source_view_id = object.source_view_id ?? undefined;
     message.source_view_revision = object.source_view_revision ?? undefined;
+    message.located_message = (object.located_message !== undefined && object.located_message !== null)
+      ? TurnMessageLocationDTO.fromPartial(object.located_message)
+      : undefined;
     return message;
   },
 };

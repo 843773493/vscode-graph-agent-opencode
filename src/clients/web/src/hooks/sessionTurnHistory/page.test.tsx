@@ -9,6 +9,8 @@ import {
 } from "../../state/session/turnTimeline";
 import type { AppState } from "../../types/frontend";
 import type { TurnHistoryPage } from "../../types/backend";
+import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
+import type { TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import { useAroundTurnLoader, useInitialTurnLoader, useOlderTurnLoader } from "./page";
 import { turnDetail } from "./testFixtures";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
@@ -117,7 +119,7 @@ function aroundHarness(port: number, respond: (request: AroundRequest) => Respon
   }
   act(() => { aroundRenderer = create(<Harness />); });
   return {
-    load: (turnId: string, signal?: AbortSignal) => load(turnId, signal),
+    load: ((...args) => load(...args)) as LoadAroundTurn,
     requests, generationRef, controller,
     state: () => currentState,
     timeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY)!,
@@ -128,6 +130,19 @@ function aroundHarness(port: number, respond: (request: AroundRequest) => Respon
 }
 
 describe("指定 Turn 的真实 history reader", () => {
+  test("消息引用沿 around 核验，定位原文只返回调用方而不进入时间线缓存", async () => {
+    const located: TurnMessageLocationDTO = { turn_id: "turn-found", role: "user", content: "😀定位词",
+      reference: { item_id: "item-found", content_hash: "opaque", start_codepoint: 1, end_codepoint: 4 } };
+    const harness = aroundHarness(9148, () => aroundResponse(aroundPage("turn-found", { located_message: located })));
+    let result;
+    await act(async () => { result = await harness.load("turn-found", undefined, located.reference); });
+    expect(result).toEqual(located);
+    expect(harness.requests[0].body.anchor_message).toEqual(located.reference);
+    expect(harness.timeline().orderedTurnIds).toEqual(["turn-found"]);
+    expect(JSON.stringify(harness.state())).not.toContain("item-found");
+    expect(harness.timeline()).not.toHaveProperty("located_message");
+  });
+
   test("精确 thread around 请求和重复同 ID 都返回完整目标窗口", async () => {
     const harness = aroundHarness(9140, (request) => aroundResponse(aroundPage(String(request.body.anchor_turn_id))));
     await act(async () => { await harness.load("turn-anchor"); await harness.load("turn-anchor"); });
@@ -272,6 +287,19 @@ describe("指定 Turn 的真实 history reader", () => {
     expect(harness.timeline().phase).toBe("ready");
     expect(harness.timeline().error).toBeNull();
     expect(harness.state().sessionHistoryReloadNonce).toBe(0);
+  });
+
+  test("过期消息只拒绝本次导航，不把可用时间线改成失败态", async () => {
+    const harness = aroundHarness(9149, () => Response.json({ detail: {
+      code: "stale_turn_reference", session_id: SESSION_ID, turn_ids: ["turn-found"], message: "命中已过期",
+    }, request_id: "request-stale" }, { status: 409 }));
+    const before = applyTurnHistoryPage(harness.timeline(), aroundPage("turn-existing"), "around");
+    harness.replaceTimeline(before);
+    await expect(harness.load("turn-found", undefined, {
+      item_id: "old-item", content_hash: "old", start_codepoint: 0, end_codepoint: 1,
+    })).rejects.toMatchObject({ name: "StaleTurnReferenceHttpError" });
+    expect(harness.timeline()).toEqual(before);
+    expect(harness.timeline().turnsById).toBe(before.turnsById);
   });
 });
 

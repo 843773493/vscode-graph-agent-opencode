@@ -87,8 +87,8 @@
 覆盖规范：内容搜索必须覆盖明确选择的正文类别；正文命中必须能够加载并精确恢复位置。
 
 - [ ] 9.1 接入 `content ` 的类别选择与按 owner 分支组织，默认 Ctrl+P 不扫描正文；仅选类别发请求，`%` 固定文件并复用同一文件条件。
-- [ ] 9.2 文件类复用第 4／5 组的唯一搜索链，提供有界片段和独立文本位置，不另建正文文件扫描器。
-- [ ] 9.3 在原 canonical history owner 实现 main／child 消息正文有界查询和按命中加载，未打开及未加载页可定位，不查询前端缓存冒充完整历史。
+- [x] 9.2 文件类复用第 4／5 组的唯一搜索链，提供有界片段和独立文本位置，不另建正文文件扫描器。
+- [x] 9.3 在原 canonical history owner 实现 main／child 消息正文有界查询和按命中加载，未打开及未加载页可定位，不查询前端缓存冒充完整历史。
   - 已实现精确 Thread 及工作区范围的 canonical 正文查询、共享预算、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支发现未打开 child 并保持冷历史不物化；React 定位尚未完成，本项继续保持未勾选。
 - [ ] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
 - [ ] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
@@ -371,3 +371,11 @@
 - 原历史 owner 由 catalog／SessionThread 只读接口发现 main 和 published child，沿同一 canonical 搜索取得正文；每页最多 64 个目录位置、16 个 Thread，所有 Thread 共用 256 条正文／8 MiB／1 秒调度预算，准入沿原 15 秒总期限。cursor 保存当前目录、Thread revision、keyset 和原历史位置，不新增表、schema 版本或正文索引。
 - 工作区真实消息入口验证 3 项通过；补充跨 Thread 共用正文预算与既有名称期限回归 9 项通过。覆盖 child 未打开仍可发现、长正文／emoji、原 around 定位、冷历史不物化、空页续查、当前 Thread／catalog／历史变化冲突与过期期限。API 客户端 5 项、真实类型检查（18 份转换源码）、正式工作台构建、协议一致性、OpenAPI、Ruff 与 strict 通过。
 - 首次失败来自测试装具在历史生成阶段绑定查询 Gateway，触发不相关 Skill 控制面；改为仅本次搜索请求绑定认证上下文，生成历史沿既有装具。准确命令、源码指纹、失败原件及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/workspace-message-*.json`／`.raw`。React 接线及真实浏览器正文搜索尚未完成，9.3／9.7 保持未勾选。
+
+### 2026-11-03：消息正文 Quick Access 与真实原文定位
+
+- `content ` 首次仅显示类别选择；消息类别沿同一分支生命周期、明确工作区集合、独立 cursor、取消与期限查询，文件类别转交原 `%` Provider。工具结果、LLM 请求及 Trace／运行日志仍明确未接入，9.1／9.4–9.8 未以消息切片代替整体验收。
+- 原 around 响应附带本次已核验的单条 canonical 原文，ThreadPane 以临时编辑器参数转交 React；复用原 around loader 和 Virtuoso 实际挂载回调，在所属 Turn 内高亮 Unicode 码点区间。该原文不写入时间线缓存／持久展示态；手动滚动停止自动定位，关闭释放原文。过期命中只拒绝本次导航，保留可用历史及原 request_id。
+- 真实 Gateway／正式 Workbench／Chromium 验收通过（173.76 秒）：产品消息入口生成七轮历史并通过产品 fork 创建未打开 child，默认／未确认类别零正文请求；从旧页侧边打开、66,004 码点后的 emoji 命中、同一 Pane 第二处定位、显式旧版本参数的真实 409 与可用 Composer，以及原 `%` 转接均通过，页面错误为空。正式原件：`out/tests/integration/clients/web/quick_access/test_message_content/runs/run-4a8355028f3d/nodes/node-2c00fa0318ba/artifacts/message-content.json`。模型仅使用统一 model_stream 回放；旧版本场景只修改请求参数，不替换响应或预写业务历史。
+- 验收期间修正外部编排 Backend 的列表投影：不检查健康时复用原代理的已登记路由，不因缺少 Gateway runtime 错判 offline，也不增加探测；72 项 Gateway 回归通过，独立提交 `ad8b1b37f`。登录／模型资产身份／原列表按钮悬停等装具失败原件均保留；失败按具体阶段修正，没有放宽 owner、原文或可见性断言。
+- 后端长原文及过期引用 2 项、消息／loader／滚动定向检查、真实类型检查（18 份转换源码）、正式构建、协议一致性、OpenAPI、Ruff 和 strict 的命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_sources_20261103/artifacts/content-message-*`／`message-location-*`。未将本切片作为其它正文类别、Thread 大纲或 Electron 原生验收。

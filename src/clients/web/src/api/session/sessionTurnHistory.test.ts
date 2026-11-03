@@ -15,7 +15,7 @@ import {
 function apiResponse(data: unknown, status = 200): Response {
   return Response.json(
     { code: status === 200 ? 0 : status, message: "ok", request_id: "req", data },
-    { status },
+    { status, headers: { "X-Request-ID": "req" } },
   );
 }
 
@@ -26,6 +26,7 @@ afterEach(() => {
 describe("Turn 历史 API client", () => {
   test("工作区正文查询透传独立 cursor、范围和剩余期限，不遍历 Session", async () => {
     const seen: Array<{ path: string; body: unknown; workspace: string | null; deadline: string | null }> = [];
+    const responseIds: Array<string | null> = [];
     installSessionApiFetchMock(({ path, init }) => {
       const headers = new Headers(init?.headers);
       seen.push({ path, body: JSON.parse(String(init?.body)), workspace: headers.get("X-BoxTeam-Workspace-Id"),
@@ -34,9 +35,11 @@ describe("Turn 历史 API client", () => {
         scanned_sessions: 0, scanned_threads: 0, scanned_items: 0, scanned_bytes: 0 });
     });
     await searchWorkspaceHistoryMessages(49_219, { query: "😀词", cursor: "owner-cursor", limit: 3 },
-      "workspace-owner", undefined, 123_456);
+      { workspace_id: "workspace-owner", connection_kind: "local", backend_workspace_id: "backend-owner" },
+      { deadlineAt: 123_456, onResponse: requestId => responseIds.push(requestId) });
     expect(seen).toEqual([{ path: "/api/v1/sessions/history/search", body: { query: "😀词", cursor: "owner-cursor", limit: 3 },
       workspace: "workspace-owner", deadline: "123.456" }]);
+    expect(responseIds).toEqual(["req"]);
   });
   test("正文查询固定精确 Thread，定位沿原 around 请求传递独立引用", async () => {
     const requests: Array<{ path: string; body: unknown; workspace: string | null }> = [];
@@ -138,17 +141,17 @@ describe("Turn 历史 API client", () => {
           current_epoch: 2,
           message: "历史已重排",
         },
-      }, { status: 409, statusText: "Conflict" });
+      }, { status: 409, statusText: "Conflict", headers: { "X-Request-ID": "request-stale" } });
     }, { credentialToken: "stale-token" });
 
-    expect(
-      loadSessionHistory(
+    const failed = loadSessionHistory(
         49_212,
         "ses_stale",
         { direction: "before", cursor: "old" },
         "workspace",
-      ),
-    ).rejects.toBeInstanceOf(StaleTurnCursorHttpError);
+      );
+    await expect(failed).rejects.toBeInstanceOf(StaleTurnCursorHttpError);
+    await expect(failed).rejects.toHaveProperty("requestId", "request-stale");
     // 桩只应答业务请求（屏障隧道由共享桩内部处理）。若这条断言失败，说明 409
     // 来自屏障请求而非 history 端点：用例会退化成空转，必须响亮失败。
     expect(seen).toEqual(["POST /api/v1/sessions/ses_stale/history"]);

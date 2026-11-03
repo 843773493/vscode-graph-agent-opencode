@@ -7,37 +7,53 @@ import { QueryBuilder } from '../../upstream/src/vs/workbench/services/search/co
 import type { WorkspaceSearchService } from './searchService.js';
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import type { SessionCatalogSearchResults } from '../../../web/src/types/backend.js';
-import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { WorkspaceMessageSearchResultsDTO, TurnMessageMatchDTO, WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
+import { searchWorkspaceHistoryMessages } from '../../../web/src/api/session/sessionTurnHistory.js';
 import { searchSessionThreads } from '../../../web/src/api/session/sessions.js';
 import { gateway, type ThreadOwner, type WorkspaceTarget } from '../agentApi.js';
 import { ThreadInput } from '../threadInput.js';
 import { SearchWorkspaceContext } from './scope.js';
 
 export type NameSearchCategory = '会话' | 'Thread' | '文件';
-export type NameSearchItem = { title: string; description: string; detail: string } & (
-  { kind: 'resource'; resource: URI } | { kind: 'session'; sessionId: string } | { kind: 'folder'; nodeId: string }
+export type SearchCategory = NameSearchCategory | '会话消息';
+export type ResourceSearchItem = { title: string; description: string; detail: string } & (
+  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO } | { kind: 'session'; sessionId: string } | { kind: 'folder'; nodeId: string }
 );
-export interface NameSearchPage {
-  items: NameSearchItem[];
+export interface ResourceSearchPage {
+  items: ResourceSearchItem[];
   cursor?: string;
   limited?: string;
   requestIds: string[];
 }
 
 /** 查询只读取所选工作区原 owner；不使用 Gateway 全范围聚合或前端全量目录。 */
-export async function searchResourceNames(category: NameSearchCategory, filter: string,
+export async function searchQuickAccessResources(category: SearchCategory, filter: string,
   owner: WorkspaceOwner, target: WorkspaceTarget, label: string, signal: AbortSignal, token: CancellationToken,
-  instantiation: IInstantiationService, search: WorkspaceSearchService, cursor?: string, deadlineAt?: number): Promise<NameSearchPage> {
+  instantiation: IInstantiationService, search: WorkspaceSearchService, cursor?: string, deadlineAt?: number): Promise<ResourceSearchPage> {
   const query = new URLSearchParams({ query: filter, limit: '50' });
   const requestIds: string[] = [];
   const onResponse = (requestId: string | null) => { if (requestId) requestIds.push(requestId); };
   if (cursor) query.set('cursor', cursor);
+  if (category === '会话消息') {
+    const page: WorkspaceMessageSearchResultsDTO = await searchWorkspaceHistoryMessages(0, { query: filter, limit: 50, cursor },
+      target, { signal, deadlineAt, onResponse });
+    return { cursor: page.cursor ?? undefined, requestIds,
+      limited: page.complete ? undefined : `本次正文覆盖受限（${page.limited_reason ?? '尚未覆盖全部历史'}）`,
+      items: page.items.map(({ thread, match }) => {
+        if (!thread || !match?.reference || thread.workspace_id !== owner.workspaceId) throw new Error('消息命中缺少精确归属或位置');
+        const input = new ThreadInput({ ...owner, routeId: '', sessionId: thread.session_id, threadId: thread.thread_id, title: thread.title });
+        return { kind: 'resource', resource: input.resource, message: match,
+          title: thread.title, description: match.preview.replace(/\s+/g, ' '),
+          detail: `${label} · ${thread.session_title} · ${match.role === 'user' ? '用户' : '助手'}消息 · ${thread.session_id} / ${thread.thread_id} · ${match.turn_id}` };
+      }) };
+  }
+
   if (category === '会话') {
     const page = await gateway.request<SessionCatalogSearchResults>(`/api/v1/session-catalog/search?${query}`,
       { signal, onResponse, headers: { ...gatewayWorkspaceRequestHeaders(target),
         ...(deadlineAt !== undefined ? { 'X-BoxTeam-Name-Search-Deadline': String(deadlineAt / 1000) } : {}) } }, target.workspace_id);
-    return { cursor: page.cursor ?? undefined, requestIds, items: page.items.map((item): NameSearchItem => {
+    return { cursor: page.cursor ?? undefined, requestIds, items: page.items.map((item): ResourceSearchItem => {
       if (item.node.kind === 'folder') return { kind: 'folder', nodeId: item.node.node_id, title: item.node.name,
         description: `${label} · ${item.relative_path} · ${item.node.node_id}`, detail: `文件夹 · ${item.node.node_id}` };
       if (!item.node.session_id) throw new Error('会话目录命中缺少精确 Session 身份');

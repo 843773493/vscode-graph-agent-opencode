@@ -1,3 +1,4 @@
+import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
 import React, { createContext, useContext } from "react";
 import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
 import type {
@@ -50,7 +51,7 @@ export interface AppContextType {
     deliveryPolicy: DeliveryPolicy,
     expectedSnapshotVersion?: number,
   ) => Promise<void>;
-  loadAroundTurn: (anchorTurnId: string, signal?: AbortSignal) => Promise<void>;
+  loadAroundTurn: LoadAroundTurn;
   loadNewerMessages: () => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   loadTurnDetails: (

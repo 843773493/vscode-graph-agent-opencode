@@ -6,18 +6,19 @@ import { ThemeIcon } from '../../upstream/src/vs/base/common/themables.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { TriggerAction } from '../../upstream/src/vs/platform/quickinput/browser/pickerQuickAccess.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from '../../../web/src/api/http.js';
+import { StaleTurnCursorHttpError } from '../../../web/src/api/session/sessionTurnHistory.js';
 import { awaitWithAbort } from '../../../web/src/utils/abortable.js';
 import { requireGatewayWorkspaceRoute, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
 import { searchOwnerKey } from './quickAccessScope.js';
 import { rankResourcePicks, type ResourcePick } from './quickAccessPicks.js';
-import { searchResourceNames, type NameSearchCategory, type NameSearchItem } from './quickAccessQuery.js';
+import { searchQuickAccessResources, type SearchCategory, type ResourceSearchItem } from './quickAccessQuery.js';
 import type { WorkspaceSearchService } from './searchService.js';
 import type { FuzzyScorerCache } from '../../upstream/src/vs/base/common/fuzzyScorer.js';
 
-interface NameBranch {
+interface SearchBranch {
   owner: WorkspaceOwner;
-  category: NameSearchCategory;
+  category: SearchCategory;
   key: string;
   label: string;
   picks: ResourcePick[];
@@ -26,15 +27,15 @@ interface NameBranch {
 }
 
 /** 每次输入只有一组分支；原 Limiter、取消 token 和 HTTP 屏障共同约束实际请求。 */
-export function queryNameBranches(owners: readonly WorkspaceOwner[], categories: NameSearchCategory[], filter: string,
+export function querySearchBranches(owners: readonly WorkspaceOwner[], categories: SearchCategory[], filter: string,
   disposables: DisposableStore, token: CancellationToken, instantiation: IInstantiationService, search: WorkspaceSearchService,
-  cache: FuzzyScorerCache, map: (item: NameSearchItem, owner: WorkspaceOwner) => ResourcePick,
-  progress: (branches: NameBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void): NameBranch[] {
+  cache: FuzzyScorerCache, map: (item: ResourceSearchItem, owner: WorkspaceOwner) => ResourcePick,
+  progress: (branches: SearchBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void): SearchBranch[] {
   const controller = new AbortController();
   disposables.add(toDisposable(() => controller.abort()));
   disposables.add(token.onCancellationRequested(() => controller.abort()));
   const alive = () => !controller.signal.aborted && !token.isCancellationRequested;
-  const branches: NameBranch[] = categories.flatMap(category => owners.map(owner => ({ owner, category,
+  const branches: SearchBranch[] = categories.flatMap(category => owners.map(owner => ({ owner, category,
     key: `${searchOwnerKey(owner)}/${category}`, label: owners.length === 1 ? category : `${owner.workspaceId} · ${category}`,
     picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${owner.workspaceId} · ${category} · 正在查询` } })));
   const limiter = disposables.add(new Limiter<void>(3));
@@ -48,7 +49,7 @@ export function queryNameBranches(owners: readonly WorkspaceOwner[], categories:
     if (alive()) scopeLabel([...labels.values()].join('、'));
     return target;
   };
-  const queue = async (branch: NameBranch, cursor?: string): Promise<void> => {
+  const queue = async (branch: SearchBranch, cursor?: string): Promise<void> => {
     if (!alive() || branch.pending) return;
     branch.pending = true;
     const source = new CancellationTokenSource(token), abort = new AbortController();
@@ -68,11 +69,11 @@ export function queryNameBranches(owners: readonly WorkspaceOwner[], categories:
         const target = await awaitWithAbort(resolveTarget(branch.owner), abort.signal);
         if (source.token.isCancellationRequested || !alive()) return;
         branch.label = owners.length === 1 ? branch.category : `${target.name} · ${branch.category}`;
-        const page = await searchResourceNames(branch.category, filter, branch.owner, target, target.name,
+        const page = await searchQuickAccessResources(branch.category, filter, branch.owner, target, target.name,
           abort.signal, source.token, instantiation, search, cursor, deadlineAt);
         if (source.token.isCancellationRequested || !alive()) return;
         const merged = new Map([...branch.picks, ...page.items.map(item => map(item, branch.owner))].map(pick => [pick.id, pick]));
-        branch.picks = rankResourcePicks([...merged.values()], filter, cache);
+        branch.picks = branch.category === '会话消息' ? [...merged.values()] : rankResourcePicks([...merged.values()], filter, cache);
         branch.status = { id: `status-${branch.key}`,
           label: `${branch.label} · ${page.limited ?? (page.cursor ? '还有更多结果' : branch.picks.length ? '本次查询完成' : '没有匹配的资源')}`,
           detail: `本次读取 ${branch.picks.length} 项，不代表全局快照${page.requestIds.length ? ` · request_id: ${page.requestIds.join('、')}` : ''}`,
@@ -84,7 +85,7 @@ export function queryNameBranches(owners: readonly WorkspaceOwner[], categories:
       // 续页失败撤下该分支旧页，独立重查；其它 owner 的有效结果不受影响。
       if (cursor) branch.picks = [];
       const message = timedOut ? '查询超时（含排队与目标读取），请重试' : error instanceof Error ? error.message : String(error);
-      const requestId = error instanceof HttpRequestError ? error.requestId : undefined;
+      const requestId = error instanceof HttpRequestError || error instanceof StaleTurnCursorHttpError ? error.requestId : undefined;
       branch.status = { id: `status-${branch.key}`, label: `${branch.label}${cursor ? '续页，请重新' : ''}查询失败：${message}`,
         detail: requestId ? `request_id: ${requestId}` : undefined,
         buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: cursor ? '重新查询此类别' : '重试此查询' }],

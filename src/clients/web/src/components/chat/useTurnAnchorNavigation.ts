@@ -1,7 +1,10 @@
+import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
+import { StaleTurnReferenceHttpError } from "../../api/session/sessionTurnHistory";
 import React from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTranscriptItem } from "./transcriptItems";
+import type { TurnMessageMatchDTO, TurnMessageLocationDTO, TurnMessageReferenceDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 export interface TurnViewportPosition {
   turn_anchor: string | null;
@@ -24,6 +27,7 @@ interface TurnAnchor {
   controller: AbortController;
   loading: boolean;
   located: boolean;
+  message?: TurnMessageReferenceDTO;
 }
 
 function isTargetTurn(item: ChatTranscriptItem, turnId: string): boolean {
@@ -35,6 +39,7 @@ function isTargetTurn(item: ChatTranscriptItem, turnId: string): boolean {
 export function useTurnAnchorNavigation({
   items, scopeKey, streamRef, scrollerRef, followsLatestRef, setShowJumpToLatest,
   onLoadAroundTurn, historyLoading, viewState, onViewStateChange, onViewStateRestoreStatus,
+  messageNavigation,
 }: {
   items: readonly ChatTranscriptItem[];
   scopeKey: string;
@@ -42,17 +47,20 @@ export function useTurnAnchorNavigation({
   scrollerRef: React.MutableRefObject<HTMLElement | null>;
   followsLatestRef: React.MutableRefObject<boolean>;
   setShowJumpToLatest: (value: boolean) => void;
-  onLoadAroundTurn: (turnId: string, signal?: AbortSignal) => Promise<void>;
+  onLoadAroundTurn: LoadAroundTurn;
   historyLoading: boolean;
   viewState?: TurnViewportPosition | null;
   onViewStateChange?: (position: TurnViewportPosition) => void;
   onViewStateRestoreStatus?: (message: string) => void;
+  messageNavigation?: TurnMessageMatchDTO;
 }) {
   const anchorRef = React.useRef<TurnAnchor | null>(null);
   const scopeRef = React.useRef(scopeKey);
   const restoredScopeRef = React.useRef<string | null>(null);
   const frameRef = React.useRef<number | null>(null);
   const [navigation, setNavigation] = React.useState<TurnNavigation | null>(null);
+  const [locatedMessage, setLocatedMessage] = React.useState<{ scopeKey: string; message: TurnMessageLocationDTO }>();
+  const handledMessageRef = React.useRef<TurnMessageMatchDTO>();
   const currentRef = React.useRef({ items, scopeKey, onViewStateChange, onViewStateRestoreStatus });
   currentRef.current = { items, scopeKey, onViewStateChange, onViewStateRestoreStatus };
   if (scopeRef.current !== scopeKey) {
@@ -62,18 +70,21 @@ export function useTurnAnchorNavigation({
     restoredScopeRef.current = null;
     // 已取消的定位状态与任务一起失效，返回原 owner 时不能重新显示。
     setNavigation(null);
+    setLocatedMessage(undefined);
     followsLatestRef.current = true;
   }
 
-  const cancelAnchor = React.useCallback(() => {
+  const cancelAnchor = React.useCallback((clearMessage = false) => {
     anchorRef.current?.controller.abort();
     anchorRef.current = null;
     restoredScopeRef.current = currentRef.current.scopeKey;
     setNavigation(null);
+    if (clearMessage) setLocatedMessage(undefined);
   }, []);
+  const closeMessageNavigation = React.useCallback(() => cancelAnchor(true), [cancelAnchor]);
 
   const scrollToLatest = React.useCallback((behavior: "auto" | "smooth" = "auto", rememberIntent = true) => {
-    if (rememberIntent) cancelAnchor();
+    if (rememberIntent) cancelAnchor(true);
     else if (anchorRef.current) return;
     followsLatestRef.current = true;
     setShowJumpToLatest(false);
@@ -88,6 +99,7 @@ export function useTurnAnchorNavigation({
     if (anchorRef.current !== anchor || anchor.scopeKey !== currentRef.current.scopeKey) return;
     anchor.controller.abort();
     anchorRef.current = null;
+    setLocatedMessage(undefined);
     if (anchor.restoring) {
       scrollToLatest();
       currentRef.current.onViewStateRestoreStatus?.("历史位置已失效，已回到会话尾部：" + message);
@@ -95,31 +107,34 @@ export function useTurnAnchorNavigation({
     setNavigation({ scopeKey: anchor.scopeKey, turnId: anchor.turnId, phase: "error", message });
   }, [scrollToLatest]);
 
-  const navigateToTurn = React.useCallback((turnId: string, offset = 0, restoring = false) => {
-    cancelAnchor();
+  const navigateToTurn = React.useCallback((turnId: string, offset = 0, restoring = false, message?: TurnMessageReferenceDTO) => {
+    cancelAnchor(true);
     restoredScopeRef.current = scopeKey;
     followsLatestRef.current = false;
     setShowJumpToLatest(true);
     const anchor: TurnAnchor = {
       scopeKey, turnId: turnId.trim(), offset, restoring,
-      controller: new AbortController(), loading: false, located: false,
+      controller: new AbortController(), loading: false, located: false, message,
     };
     anchorRef.current = anchor;
     if (!anchor.turnId) {
       failAnchor(anchor, "请输入轮次 ID");
       return;
     }
-    const loaded = currentRef.current.items.some((item) => isTargetTurn(item, anchor.turnId));
+    const loaded = !message && currentRef.current.items.some((item) => isTargetTurn(item, anchor.turnId));
     anchor.loading = !loaded;
     setNavigation({ scopeKey, turnId: anchor.turnId, phase: loaded ? "positioning" : "loading",
       message: loaded ? "正在定位轮次…" : "正在读取指定轮次…" });
     if (loaded) return;
-    void onLoadAroundTurn(anchor.turnId, anchor.controller.signal).then(() => {
+    void onLoadAroundTurn(anchor.turnId, anchor.controller.signal, message).then((located) => {
       if (anchorRef.current !== anchor || anchor.controller.signal.aborted || currentRef.current.scopeKey !== scopeKey) return;
+      if (message && !located) { failAnchor(anchor, "后端未返回已核验的消息原文"); return; }
+      setLocatedMessage(located ? { scopeKey, message: located } : undefined);
       anchor.loading = false;
       setNavigation({ scopeKey, turnId: anchor.turnId, phase: "positioning", message: "正在定位轮次…" });
     }, (error: unknown) => {
-      failAnchor(anchor, "无法跳到指定轮次：" + errorMessage(error));
+      failAnchor(anchor, message && error instanceof StaleTurnReferenceHttpError
+        ? "消息命中已过期，请重新搜索" : "无法跳到指定轮次：" + errorMessage(error));
     });
   }, [cancelAnchor, failAnchor, followsLatestRef, onLoadAroundTurn, scopeKey, setShowJumpToLatest]);
 
@@ -141,18 +156,23 @@ export function useTurnAnchorNavigation({
       stream.scrollToIndex({ index, align: "start", behavior: "auto", offset: anchor.offset });
       return;
     }
+    const targetElement = anchor.message
+      ? Array.from(element.querySelectorAll<HTMLElement>("[data-message-item-id]"))
+        .find(candidate => candidate.dataset.messageItemId === anchor.message!.item_id)
+      : element;
+    if (!targetElement) return;
     const viewport = scroller.getBoundingClientRect();
-    const delta = element.getBoundingClientRect().top - viewport.top + anchor.offset;
+    const delta = targetElement.getBoundingClientRect().top - viewport.top + anchor.offset;
     if (Math.abs(delta) > 0.5) {
       scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + delta));
     }
-    const bounds = element.getBoundingClientRect();
+    const bounds = targetElement.getBoundingClientRect();
     if (bounds.bottom <= viewport.top || bounds.top >= viewport.bottom || anchor.located) return;
     anchor.located = true;
     const target = currentRef.current.items[index];
     const ordinal = target.kind === "turn" ? target.conversation.turnOrdinal : undefined;
     setNavigation({ scopeKey: anchor.scopeKey, turnId: anchor.turnId, phase: "located",
-      message: ordinal === undefined ? "已定位指定轮次" : "已定位第 " + ordinal + " 轮" });
+      message: anchor.message ? "已定位消息原文" : ordinal === undefined ? "已定位指定轮次" : "已定位第 " + ordinal + " 轮" });
     currentRef.current.onViewStateChange?.({ turn_anchor: anchor.turnId, scroll_offset: anchor.offset, follow_latest: false });
   }, [failAnchor, scrollerRef, streamRef]);
 
@@ -190,6 +210,18 @@ export function useTurnAnchorNavigation({
   }, [items, navigation, scheduleAnchorAlignment, scrollerRef]);
 
   React.useEffect(() => {
+    if (!messageNavigation || historyLoading || handledMessageRef.current === messageNavigation) return;
+    handledMessageRef.current = messageNavigation;
+    if (!messageNavigation.reference) {
+      cancelAnchor();
+      setNavigation({ scopeKey, turnId: messageNavigation.turn_id, phase: "error", message: "消息命中缺少位置引用，请重新查询" });
+      return;
+    }
+    navigateToTurn(messageNavigation.turn_id, 0, false, messageNavigation.reference);
+  }, [cancelAnchor, historyLoading, messageNavigation, navigateToTurn, scopeKey]);
+
+  React.useEffect(() => {
+    if (messageNavigation && handledMessageRef.current !== messageNavigation) return;
     if (!viewState || historyLoading || restoredScopeRef.current === scopeKey) return;
     restoredScopeRef.current = scopeKey;
     if (viewState.follow_latest || !viewState.turn_anchor) {
@@ -197,7 +229,7 @@ export function useTurnAnchorNavigation({
     } else {
       navigateToTurn(viewState.turn_anchor, viewState.scroll_offset, true);
     }
-  }, [historyLoading, navigateToTurn, scopeKey, scrollToLatest, viewState]);
+  }, [historyLoading, messageNavigation, navigateToTurn, scopeKey, scrollToLatest, viewState]);
 
   React.useEffect(() => () => {
     anchorRef.current?.controller.abort();
@@ -207,6 +239,8 @@ export function useTurnAnchorNavigation({
 
   return {
     anchorRef, cancelAnchor, navigateToTurn, scheduleAnchorAlignment, scrollToLatest,
+    closeMessageNavigation,
+    locatedMessage: locatedMessage?.scopeKey === scopeKey ? locatedMessage.message : undefined,
     navigation: navigation?.scopeKey === scopeKey ? navigation : null,
   };
 }
