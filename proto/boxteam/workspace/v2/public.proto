@@ -196,6 +196,13 @@ message WorkspaceSearchCapabilitiesDTO {
   repeated SearchProviderCapabilityDTO providers = 2;
 }
 
+message WorkspaceFileSearchTargetDTO {
+  // 省略时访问目标工作区的原文件根；显式 URI 仍由原 owner 校验归属和权限。
+  optional string uri = 1;
+  ResourceNavigationSearchOptions search_options = 2;
+  uint32 max_bytes = 3;
+}
+
 message WorkspaceSearchRequest {
   string workspace_id = 1;
   string category = 2;
@@ -206,6 +213,7 @@ message WorkspaceSearchRequest {
   int32 limit = 7;
   optional string cursor = 8;
   optional double deadline_at = 9;
+  WorkspaceFileSearchTargetDTO file = 10;
 }
 
 message WorkspaceSearchResultDTO {
@@ -220,6 +228,7 @@ message WorkspaceSearchResultDTO {
   SessionThreadSearchResultsDTO threads = 9;
   WorkspaceMessageSearchResultsDTO messages = 10;
   WorkspaceLLMRequestLogSearchResultsDTO llm_requests = 11;
+  ResourceNavigationResultDTO files = 12;
 }
 
 message SessionThreadSearchResultDTO {
@@ -1841,6 +1850,8 @@ message ResourceNavigationSearchOptions {
   uint32 context_lines = 10;
   // 已由调用方模型覆盖的精确资源；只传身份，正文和草稿不出客户端。
   repeated string excluded_resource_uris = 11;
+  // 文件搜索在输出计数和分页前排除目录；原树浏览不启用。
+  optional bool files_only = 12;
 }
 
 message ResourceNavigationNodeDTO {

@@ -10,9 +10,14 @@ import {
   GatewaySearchScopeResolutionDTO,
   GatewaySearchWorkspaceOwnerDTO,
 } from "../../gateway/v1/public.js";
-import { WorkspaceSearchResultDTO } from "../../workspace/v2/public.js";
+import { WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public.js";
 
 export const protobufPackage = "boxteam.search.v1";
+
+export interface FederatedFileSearchTargetDTO {
+  owner: GatewaySearchWorkspaceOwnerDTO | undefined;
+  target: WorkspaceFileSearchTargetDTO | undefined;
+}
 
 export interface FederatedSearchQueryDTO {
   category: string;
@@ -21,12 +26,15 @@ export interface FederatedSearchQueryDTO {
   query: string;
   match_mode: string;
   limit: number;
+  /** 显式多根保留各自选项；省略时只查所选工作区的默认根。 */
+  file_targets: FederatedFileSearchTargetDTO[];
 }
 
 export interface FederatedSearchBranchKeyDTO {
   owner: GatewaySearchWorkspaceOwnerDTO | undefined;
   category: string;
   operation: string;
+  resource_uri?: string | undefined;
 }
 
 export interface FederatedSearchContinuationDTO {
@@ -71,8 +79,46 @@ export interface FederatedSearchEventDTO {
   summary: FederatedSearchSummaryDTO | undefined;
 }
 
+function createBaseFederatedFileSearchTargetDTO(): FederatedFileSearchTargetDTO {
+  return { owner: undefined, target: undefined };
+}
+
+export const FederatedFileSearchTargetDTO: MessageFns<FederatedFileSearchTargetDTO> = {
+  fromJSON(object: any): FederatedFileSearchTargetDTO {
+    return {
+      owner: isSet(object.owner) ? GatewaySearchWorkspaceOwnerDTO.fromJSON(object.owner) : undefined,
+      target: isSet(object.target) ? WorkspaceFileSearchTargetDTO.fromJSON(object.target) : undefined,
+    };
+  },
+
+  toJSON(message: FederatedFileSearchTargetDTO): unknown {
+    const obj: any = {};
+    if (message.owner !== undefined) {
+      obj.owner = GatewaySearchWorkspaceOwnerDTO.toJSON(message.owner);
+    }
+    if (message.target !== undefined) {
+      obj.target = WorkspaceFileSearchTargetDTO.toJSON(message.target);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FederatedFileSearchTargetDTO>, I>>(base?: I): FederatedFileSearchTargetDTO {
+    return FederatedFileSearchTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FederatedFileSearchTargetDTO>, I>>(object: I): FederatedFileSearchTargetDTO {
+    const message = createBaseFederatedFileSearchTargetDTO();
+    message.owner = (object.owner !== undefined && object.owner !== null)
+      ? GatewaySearchWorkspaceOwnerDTO.fromPartial(object.owner)
+      : undefined;
+    message.target = (object.target !== undefined && object.target !== null)
+      ? WorkspaceFileSearchTargetDTO.fromPartial(object.target)
+      : undefined;
+    return message;
+  },
+};
+
 function createBaseFederatedSearchQueryDTO(): FederatedSearchQueryDTO {
-  return { category: "", operation: "", contract_version: 0, query: "", match_mode: "", limit: 0 };
+  return { category: "", operation: "", contract_version: 0, query: "", match_mode: "", limit: 0, file_targets: [] };
 }
 
 export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
@@ -84,6 +130,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
       query: isSet(object.query) ? globalThis.String(object.query) : "",
       match_mode: isSet(object.match_mode) ? globalThis.String(object.match_mode) : "",
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
+      file_targets: globalThis.Array.isArray(object?.file_targets)
+        ? object.file_targets.map((e: any) => FederatedFileSearchTargetDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -107,6 +156,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     if (message.limit !== 0) {
       obj.limit = Math.round(message.limit);
     }
+    if (message.file_targets?.length) {
+      obj.file_targets = message.file_targets.map((e) => FederatedFileSearchTargetDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -121,12 +173,13 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     message.query = object.query ?? "";
     message.match_mode = object.match_mode ?? "";
     message.limit = object.limit ?? 0;
+    message.file_targets = object.file_targets?.map((e) => FederatedFileSearchTargetDTO.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseFederatedSearchBranchKeyDTO(): FederatedSearchBranchKeyDTO {
-  return { owner: undefined, category: "", operation: "" };
+  return { owner: undefined, category: "", operation: "", resource_uri: undefined };
 }
 
 export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO> = {
@@ -135,6 +188,7 @@ export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO
       owner: isSet(object.owner) ? GatewaySearchWorkspaceOwnerDTO.fromJSON(object.owner) : undefined,
       category: isSet(object.category) ? globalThis.String(object.category) : "",
       operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+      resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : undefined,
     };
   },
 
@@ -149,6 +203,9 @@ export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO
     if (message.operation !== "") {
       obj.operation = message.operation;
     }
+    if (message.resource_uri !== undefined) {
+      obj.resource_uri = message.resource_uri;
+    }
     return obj;
   },
 
@@ -162,6 +219,7 @@ export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO
       : undefined;
     message.category = object.category ?? "";
     message.operation = object.operation ?? "";
+    message.resource_uri = object.resource_uri ?? undefined;
     return message;
   },
 };

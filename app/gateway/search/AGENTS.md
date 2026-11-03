@@ -17,3 +17,4 @@ Gateway 联邦搜索的范围解析与跨目标查询编排；领域匹配仍由
 - `scope.py` 和 `scheduler.py` 的核心不依赖 HTTP、SSE 或 UI；`transport.py` 只沿原登记路由读取有界领域页，SSE 编码归 `routes/`。
 - 目标用稳定 Gateway／workspace 身份，执行前重解当前登记路由；失效分支不得换投其它 owner。
 - 范围和原 cursor 可由调用方传回，不能引入持久搜索 session 或全域 revision。
+- 文件多根以稳定工作区及明确资源根区分分支，保留根局部选项和独立原 cursor；不能用全局游标合并，或在交付受限页后丢掉尾部再推进游标。

@@ -12,8 +12,10 @@ from app.api.deps import (
 )
 from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
+from app.core.resource_uri import ResourceUriGrammarError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.trace_middleware import require_current_gateway_id
+from app.gateway.federation.errors import FederationError
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import (
     WorkspaceSearchCapabilitiesDTO,
@@ -23,6 +25,12 @@ from app.schemas.internal_v2.search import (
 from app.services.business.search.service import (
     SearchContractError,
     WorkspaceSearchService,
+)
+from app.services.infrastructure.resource_platform.sources.resource_navigation import (
+    ResourceFileOperationError,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
 )
 from app.services.infrastructure.turn_history import (
     InvalidTurnCursorError,
@@ -53,6 +61,15 @@ async def search_workspace(
         result = await service.search(payload, gateway_id=require_current_gateway_id("工作区搜索"))
     except SearchContractError as error:
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
+    except ResourceUriGrammarError as error:
+        raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
+    except ResourceUriResolveError as error:
+        status = 404 if error.reason_code == "unknown_resource" else 403
+        raise HTTPException(status, detail={"owner": "resource_uri_resolver", "code": error.reason_code, "message": str(error)}) from error
+    except ResourceFileOperationError as error:
+        raise HTTPException(400, detail=error.detail()) from error
+    except FederationError as error:
+        raise HTTPException(409, detail=error.to_wire()) from error
     except NotFoundError as error:
         raise not_found_http_error(error) from error
     except InvalidTurnCursorError as error:
@@ -68,4 +85,5 @@ async def search_workspace(
     except ValueError as error:
         # TODO：随原 owner 的 cursor／revision 异常类型化，细分 owner_rejected 的诊断代码。
         raise HTTPException(status_code=409, detail={"code": "owner_rejected", "message": str(error)}) from error
+    # TODO：16.18 按 Provider 归属迁齐通用网络／I/O 失败，不能把其它领域或 TimeoutError 误标为文件错误。
     return APIResponse(data=result, request_id=request_id)

@@ -23,7 +23,8 @@ def test_search_stream_publishes_typed_request_and_event(gateway_openapi: JsonSc
 
 @pytest.mark.parametrize("name", ["FederatedSearchRequest", "FederatedSearchEventDTO", "FederatedSearchQueryDTO",
                                   "FederatedSearchBranchDTO", "FederatedSearchContinuationDTO", "FederatedSearchSummaryDTO",
-                                  "WorkspaceSearchResultDTO"])
+                                  "WorkspaceSearchResultDTO", "FederatedFileSearchTargetDTO", "FederatedSearchBranchKeyDTO",
+                                  "WorkspaceFileSearchTargetDTO"])
 def test_federated_root_and_nested_drift_are_rejected(
     gateway_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet, name: str,
 ) -> None:

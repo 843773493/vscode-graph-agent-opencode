@@ -9,7 +9,11 @@ from app.schemas.gateway.search import (
     GatewaySearchScopeResolutionDTO,
     GatewaySearchWorkspaceOwnerDTO,
 )
-from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
+from app.schemas.internal_v2.resource_navigation import NavigationResourceURI
+from app.schemas.internal_v2.search import (
+    WorkspaceFileSearchTargetDTO,
+    WorkspaceSearchResultDTO,
+)
 
 MAX_SEARCH_BRANCHES = 128
 SEARCH_CONCURRENCY = 3
@@ -17,6 +21,13 @@ SEARCH_CONCURRENCY = 3
 # TODO：16.17 补齐包含控制状态的统一输出字节计量，以及正文／文件的独立计数单位。
 MAX_SEARCH_PAGE_BYTES = 8 * 1024 * 1024
 MAX_SEARCH_ERROR_CHARS = 4096
+
+
+class FederatedFileSearchTargetDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner: GatewaySearchWorkspaceOwnerDTO
+    target: WorkspaceFileSearchTargetDTO
 
 
 class FederatedSearchQueryDTO(BaseModel):
@@ -28,14 +39,31 @@ class FederatedSearchQueryDTO(BaseModel):
     query: str = Field(min_length=1, max_length=512)
     match_mode: str = Field(default="fuzzy", min_length=1, max_length=64)
     limit: int = Field(default=50, ge=0, le=500)
+    file_targets: tuple[FederatedFileSearchTargetDTO, ...] = Field(default=(), max_length=MAX_SEARCH_BRANCHES)
+
+    @model_validator(mode="after")
+    def validate_file_targets(self) -> Self:
+        if self.file_targets and self.category != "file":
+            raise ValueError("只有文件搜索接受目录根集合")
+        keys = [(item.owner, item.target.uri) for item in self.file_targets]
+        if len(set(keys)) != len(keys):
+            raise ValueError("文件根不得重复声明；不同局部选项不能隐式覆盖")
+        return self
 
 
-class FederatedSearchBranchKeyDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class FederatedSearchBranchKeyDTO(BaseModel, frozen=True):
+    model_config = ConfigDict(extra="forbid")
 
     owner: GatewaySearchWorkspaceOwnerDTO
     category: str = Field(min_length=1, max_length=64)
     operation: str = Field(default="name", min_length=1, max_length=64)
+    resource_uri: NavigationResourceURI | None = None
+
+    @model_validator(mode="after")
+    def validate_resource_branch(self) -> Self:
+        if self.resource_uri is not None and self.category != "file":
+            raise ValueError("只有文件分支接受目录根身份")
+        return self
 
 
 class FederatedSearchContinuationDTO(BaseModel):

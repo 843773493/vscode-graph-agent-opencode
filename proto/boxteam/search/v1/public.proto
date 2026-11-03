@@ -5,6 +5,11 @@ package boxteam.search.v1;
 import "boxteam/gateway/v1/public.proto";
 import "boxteam/workspace/v2/public.proto";
 
+message FederatedFileSearchTargetDTO {
+  boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+  boxteam.workspace.v2.WorkspaceFileSearchTargetDTO target = 2;
+}
+
 message FederatedSearchQueryDTO {
   string category = 1;
   string operation = 2;
@@ -12,12 +17,15 @@ message FederatedSearchQueryDTO {
   string query = 4;
   string match_mode = 5;
   int32 limit = 6;
+  // 显式多根保留各自选项；省略时只查所选工作区的默认根。
+  repeated FederatedFileSearchTargetDTO file_targets = 7;
 }
 
 message FederatedSearchBranchKeyDTO {
   boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
   string category = 2;
   string operation = 3;
+  optional string resource_uri = 4;
 }
 
 message FederatedSearchContinuationDTO {

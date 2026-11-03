@@ -19,6 +19,7 @@ from app.schemas.gateway.search import (
     GatewaySearchScopeDTO,
     GatewaySearchScopeResolutionDTO,
 )
+from app.schemas.internal_v2.resource_navigation import ResourceNavigationResultDTO
 from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultDTO,
@@ -27,6 +28,60 @@ from app.schemas.internal_v2.session_navigation import (
 from app.schemas.internal_v2.turn_search import WorkspaceMessageSearchResultsDTO
 from app.schemas.search_federation import FederatedSearchRequest
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
+
+
+def test_file_roots_keep_local_options_and_independent_continuations(scope: GatewaySearchScopeResolutionDTO) -> None:
+    targets = [{"owner": scope.scope.owners[0], "target": {"uri": f"boxteam://workspace/ws-0/resources/files/root/{root}",
+                "search_options": {"include_globs": [pattern]}}} for root, pattern in (("one", "*.txt"), ("two", "*.md"))]
+    request = FederatedSearchRequest.model_validate({"scope": {"mode": "resume", "scope": scope.scope},
+        "queries": [{"category": "file", "query": "needle", "file_targets": targets}], "max_results": 3})
+    jobs = plan_search(request, scope)
+    assert len(jobs) == 2 and [job.request.limit for job in jobs] == [2, 1]
+    assert [job.request.file.search_options.include_globs for job in jobs] == [("*.txt",), ("*.md",)]
+    resumed = FederatedSearchRequest.model_validate({**request.model_dump(), "continuations": [{"branch": jobs[1].key, "cursor": "root-two-cursor"}]})
+    next_jobs = plan_search(resumed, scope)
+    assert len(next_jobs) == 1 and next_jobs[0].request.cursor == "root-two-cursor"
+    assert next_jobs[0].request.file == jobs[1].request.file
+    wrong = resumed.continuations[0].branch.model_copy(update={"resource_uri": "boxteam://workspace/ws-0/resources/files/root/other"})
+    with pytest.raises(SearchScopeError, match="目录根"):
+        plan_search(FederatedSearchRequest.model_validate({**request.model_dump(), "continuations": [{"branch": wrong}]}), scope)
+    targets[0]["owner"] = {"gateway_id": "gw", "workspace_id": "outside"}
+    with pytest.raises(SearchScopeError, match="工作区集合"):
+        plan_search(FederatedSearchRequest.model_validate({**request.model_dump(), "queries": [{"category": "file", "query": "needle", "file_targets": targets}]}), scope)
+
+
+@pytest.mark.parametrize("operation", ["name", "content"])
+async def test_file_page_counts_domain_units_and_rejects_wrong_root(scope: GatewaySearchScopeResolutionDTO, operation: str) -> None:
+    root = "boxteam://workspace/ws-0/resources/files/root/one"
+    request = FederatedSearchRequest.model_validate({"scope": {"mode": "resume", "scope": scope.scope},
+        "queries": [{"category": "file", "operation": operation, "query": "needle", "limit": 1,
+                     "file_targets": [{"owner": scope.scope.owners[0], "target": {"uri": root}}]}]})
+    jobs = plan_search(request, scope)
+
+    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+        return WorkspaceSearchResultDTO(
+            provider_id="files", workspace_id=job.key.owner.workspace_id, category="file", operation=operation,
+            contract_version=1, state="limited", limited_reason="result_limit", files=ResourceNavigationResultDTO.model_validate({
+                "node": {"uri": root, "resource_shape": "directory", "operations": ["search"]},
+                "entries": [] if operation == "content" else [{"uri": root + "/a.txt", "resource_shape": "file", "operations": ["read"]}],
+                "matches": [{"uri": root + "/a.txt", "line": 1, "column": 1, "text": "needle", "snippet_start_column": 1}] if operation == "content" else [],
+                "contexts": [{"uri": root + "/a.txt", "line": 2, "text": "context"}], "truncated": True, "next_cursor": "original-root-cursor",
+                "truncation_reason": "entry_limit",
+            }),
+        )
+
+    events = [event async for event in search_events(jobs, scope, request_id="files", query=query, budget=NameSearchBudget.create(None))]
+    branch, = events[-1].summary.branches
+    assert branch.returned_results == 1 and branch.cursor == "original-root-cursor"
+
+    async def wrong_root(job: SearchJob) -> WorkspaceSearchResultDTO:
+        result = await query(job)
+        result.files = result.files.model_copy(update={"node": result.files.node.model_copy(update={"uri": root + "/wrong"})})
+        return result
+
+    invalid = [event async for event in search_events(jobs, scope, request_id="wrong-root", query=wrong_root, budget=NameSearchBudget.create(None))]
+    assert not any(event.type == "page" for event in invalid)
+    assert invalid[-1].summary.branches[0].code == "invalid_response" and invalid[-1].summary.branches[0].cursor is None
 
 
 @pytest.fixture

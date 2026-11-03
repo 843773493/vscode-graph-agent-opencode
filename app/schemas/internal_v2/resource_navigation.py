@@ -49,6 +49,7 @@ class ResourceNavigationSearchOptions(BaseModel):
     word_separators: str | None = None
     is_multiline: bool = False
     all_matches: bool = False
+    files_only: bool = False
     include_globs: tuple[str, ...] = Field(default=(), max_length=64)
     exclude_globs: tuple[str, ...] = Field(default=(), max_length=64)
     ignore_mode: Literal["default", "none", "respect"] = "default"

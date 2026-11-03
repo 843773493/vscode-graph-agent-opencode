@@ -194,6 +194,13 @@ export interface WorkspaceSearchCapabilitiesDTO {
   providers: SearchProviderCapabilityDTO[];
 }
 
+export interface WorkspaceFileSearchTargetDTO {
+  /** 省略时访问目标工作区的原文件根；显式 URI 仍由原 owner 校验归属和权限。 */
+  uri?: string | undefined;
+  search_options: ResourceNavigationSearchOptions | undefined;
+  max_bytes: number;
+}
+
 export interface WorkspaceSearchRequest {
   workspace_id: string;
   category: string;
@@ -204,6 +211,7 @@ export interface WorkspaceSearchRequest {
   limit: number;
   cursor?: string | undefined;
   deadline_at?: number | undefined;
+  file: WorkspaceFileSearchTargetDTO | undefined;
 }
 
 export interface WorkspaceSearchResultDTO {
@@ -218,6 +226,7 @@ export interface WorkspaceSearchResultDTO {
   threads: SessionThreadSearchResultsDTO | undefined;
   messages: WorkspaceMessageSearchResultsDTO | undefined;
   llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | undefined;
+  files: ResourceNavigationResultDTO | undefined;
 }
 
 export interface SessionThreadSearchResultDTO {
@@ -1857,6 +1866,8 @@ export interface ResourceNavigationSearchOptions {
   context_lines: number;
   /** 已由调用方模型覆盖的精确资源；只传身份，正文和草稿不出客户端。 */
   excluded_resource_uris: string[];
+  /** 文件搜索在输出计数和分页前排除目录；原树浏览不启用。 */
+  files_only?: boolean | undefined;
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -4515,6 +4526,49 @@ export const WorkspaceSearchCapabilitiesDTO: MessageFns<WorkspaceSearchCapabilit
   },
 };
 
+function createBaseWorkspaceFileSearchTargetDTO(): WorkspaceFileSearchTargetDTO {
+  return { uri: undefined, search_options: undefined, max_bytes: 0 };
+}
+
+export const WorkspaceFileSearchTargetDTO: MessageFns<WorkspaceFileSearchTargetDTO> = {
+  fromJSON(object: any): WorkspaceFileSearchTargetDTO {
+    return {
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : undefined,
+      search_options: isSet(object.search_options)
+        ? ResourceNavigationSearchOptions.fromJSON(object.search_options)
+        : undefined,
+      max_bytes: isSet(object.max_bytes) ? globalThis.Number(object.max_bytes) : 0,
+    };
+  },
+
+  toJSON(message: WorkspaceFileSearchTargetDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== undefined) {
+      obj.uri = message.uri;
+    }
+    if (message.search_options !== undefined) {
+      obj.search_options = ResourceNavigationSearchOptions.toJSON(message.search_options);
+    }
+    if (message.max_bytes !== 0) {
+      obj.max_bytes = Math.round(message.max_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceFileSearchTargetDTO>, I>>(base?: I): WorkspaceFileSearchTargetDTO {
+    return WorkspaceFileSearchTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceFileSearchTargetDTO>, I>>(object: I): WorkspaceFileSearchTargetDTO {
+    const message = createBaseWorkspaceFileSearchTargetDTO();
+    message.uri = object.uri ?? undefined;
+    message.search_options = (object.search_options !== undefined && object.search_options !== null)
+      ? ResourceNavigationSearchOptions.fromPartial(object.search_options)
+      : undefined;
+    message.max_bytes = object.max_bytes ?? 0;
+    return message;
+  },
+};
+
 function createBaseWorkspaceSearchRequest(): WorkspaceSearchRequest {
   return {
     workspace_id: "",
@@ -4526,6 +4580,7 @@ function createBaseWorkspaceSearchRequest(): WorkspaceSearchRequest {
     limit: 0,
     cursor: undefined,
     deadline_at: undefined,
+    file: undefined,
   };
 }
 
@@ -4541,6 +4596,7 @@ export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : 0,
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
       deadline_at: isSet(object.deadline_at) ? globalThis.Number(object.deadline_at) : undefined,
+      file: isSet(object.file) ? WorkspaceFileSearchTargetDTO.fromJSON(object.file) : undefined,
     };
   },
 
@@ -4573,6 +4629,9 @@ export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
     if (message.deadline_at !== undefined) {
       obj.deadline_at = message.deadline_at;
     }
+    if (message.file !== undefined) {
+      obj.file = WorkspaceFileSearchTargetDTO.toJSON(message.file);
+    }
     return obj;
   },
 
@@ -4590,6 +4649,9 @@ export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
     message.limit = object.limit ?? 0;
     message.cursor = object.cursor ?? undefined;
     message.deadline_at = object.deadline_at ?? undefined;
+    message.file = (object.file !== undefined && object.file !== null)
+      ? WorkspaceFileSearchTargetDTO.fromPartial(object.file)
+      : undefined;
     return message;
   },
 };
@@ -4607,6 +4669,7 @@ function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
     threads: undefined,
     messages: undefined,
     llm_requests: undefined,
+    files: undefined,
   };
 }
 
@@ -4626,6 +4689,7 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       llm_requests: isSet(object.llm_requests)
         ? WorkspaceLLMRequestLogSearchResultsDTO.fromJSON(object.llm_requests)
         : undefined,
+      files: isSet(object.files) ? ResourceNavigationResultDTO.fromJSON(object.files) : undefined,
     };
   },
 
@@ -4664,6 +4728,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
     if (message.llm_requests !== undefined) {
       obj.llm_requests = WorkspaceLLMRequestLogSearchResultsDTO.toJSON(message.llm_requests);
     }
+    if (message.files !== undefined) {
+      obj.files = ResourceNavigationResultDTO.toJSON(message.files);
+    }
     return obj;
   },
 
@@ -4690,6 +4757,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       : undefined;
     message.llm_requests = (object.llm_requests !== undefined && object.llm_requests !== null)
       ? WorkspaceLLMRequestLogSearchResultsDTO.fromPartial(object.llm_requests)
+      : undefined;
+    message.files = (object.files !== undefined && object.files !== null)
+      ? ResourceNavigationResultDTO.fromPartial(object.files)
       : undefined;
     return message;
   },
@@ -14951,6 +15021,7 @@ function createBaseResourceNavigationSearchOptions(): ResourceNavigationSearchOp
     ignore_mode: "",
     context_lines: 0,
     excluded_resource_uris: [],
+    files_only: undefined,
   };
 }
 
@@ -14974,6 +15045,7 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
       excluded_resource_uris: globalThis.Array.isArray(object?.excluded_resource_uris)
         ? object.excluded_resource_uris.map((e: any) => globalThis.String(e))
         : [],
+      files_only: isSet(object.files_only) ? globalThis.Boolean(object.files_only) : undefined,
     };
   },
 
@@ -15012,6 +15084,9 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     if (message.excluded_resource_uris?.length) {
       obj.excluded_resource_uris = message.excluded_resource_uris;
     }
+    if (message.files_only !== undefined) {
+      obj.files_only = message.files_only;
+    }
     return obj;
   },
 
@@ -15033,6 +15108,7 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     message.ignore_mode = object.ignore_mode ?? "";
     message.context_lines = object.context_lines ?? 0;
     message.excluded_resource_uris = object.excluded_resource_uris?.map((e) => e) || [];
+    message.files_only = object.files_only ?? undefined;
     return message;
   },
 };

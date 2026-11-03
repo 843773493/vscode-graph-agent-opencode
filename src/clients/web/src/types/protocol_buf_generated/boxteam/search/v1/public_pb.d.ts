@@ -5,12 +5,33 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import type { GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v1/public_pb.js";
-import type { WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
+import type { WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
 
 /**
  * Describes the file boxteam/search/v1/public.proto.
  */
 export declare const file_boxteam_search_v1_public: GenFile;
+
+/**
+ * @generated from message boxteam.search.v1.FederatedFileSearchTargetDTO
+ */
+export declare type FederatedFileSearchTargetDTO = Message<"boxteam.search.v1.FederatedFileSearchTargetDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+   */
+  owner?: GatewaySearchWorkspaceOwnerDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceFileSearchTargetDTO target = 2;
+   */
+  target?: WorkspaceFileSearchTargetDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.search.v1.FederatedFileSearchTargetDTO.
+ * Use `create(FederatedFileSearchTargetDTOSchema)` to create a new message.
+ */
+export declare const FederatedFileSearchTargetDTOSchema: GenMessage<FederatedFileSearchTargetDTO>;
 
 /**
  * @generated from message boxteam.search.v1.FederatedSearchQueryDTO
@@ -45,6 +66,13 @@ export declare type FederatedSearchQueryDTO = Message<"boxteam.search.v1.Federat
    * @generated from field: int32 limit = 6;
    */
   limit: number;
+
+  /**
+   * 显式多根保留各自选项；省略时只查所选工作区的默认根。
+   *
+   * @generated from field: repeated boxteam.search.v1.FederatedFileSearchTargetDTO file_targets = 7;
+   */
+  fileTargets: FederatedFileSearchTargetDTO[];
 };
 
 /**
@@ -71,6 +99,11 @@ export declare type FederatedSearchBranchKeyDTO = Message<"boxteam.search.v1.Fed
    * @generated from field: string operation = 3;
    */
   operation: string;
+
+  /**
+   * @generated from field: optional string resource_uri = 4;
+   */
+  resourceUri?: string | undefined;
 };
 
 /**

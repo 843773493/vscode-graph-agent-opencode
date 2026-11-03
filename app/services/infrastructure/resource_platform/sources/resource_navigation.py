@@ -469,6 +469,8 @@ class ResourceNavigation:
         candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
         for child, metadata in candidates:
             self._check_deadline(deadline)
+            if request.search_options is not None and request.search_options.files_only and child.resource_shape != "file":
+                continue
             if child.uri in excluded:
                 continue
             if request.operation != "search" or request.search_mode != "content" or child.resource_shape != "file":

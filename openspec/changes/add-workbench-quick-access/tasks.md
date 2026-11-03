@@ -530,3 +530,12 @@
 - 浏览器原件分别为 `out/tests/integration/clients/web/quick_access/test_message_content/runs/run-bd26d8722db7/nodes/node-2c00fa0318ba/artifacts/message-content.json` 和 `out/tests/integration/clients/web/quick_access/test_text_search/runs/run-bd26d8722db7/nodes/node-f4e408bf0b21/artifacts/search-result.json`。构建 main SHA256=`4dcd424d5da92cb36edc55400d008141ada2b63b70035051be1daad2ef52bb13`。故障装具仅延迟真实 Gateway 出站领域响应或注入具名网络失败，不替换调度／匹配／SSE；名称与正文请求分别观察，继续捕获旧直连入口。
 - 原滚动断言失败经隔离实页探针确认：delta=1000的五次 wheel 各只推进50px，poll退避在原五秒内只走到350px，末尾状态用原版首尾命令仍可到达。装具改为在原滚动条上有界连续滚动并核首尾位置；未延长期限、放宽状态或替换产品列表。原始失败、瞬时端口占用及探针准备失败保留于 `names-scroll-probe-*`／`names-federation-browser-final-01`；诊断 JSON及对照截图保留在 `out/tests/temp/quick_access_names_scroll_20261103/artifacts/`，临时工作区与运行态已删除。
 - 含18份实际sourceTransform源码的真实类型检查、Pyright零诊断、Ruff、20份ESM语法检查与差异检查通过；最终产品源码逐文件对照类型检查指纹无变化，复用其结果。准确命令、源码指纹、原始输出和退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/names-federation-*`，最终两项浏览器收据为 `names-federation-browser-final-02`。目录镜像、文件多范围及其配额／缓存、其余Provider和Electron仍未完成，16.11保持未勾选。
+
+
+### 2026-11-03：文件领域 Provider 与多根联邦合同（16.2、16.3、16.11、16.17 部分）
+
+- 工作区唯一 SearchService 注册文件 name／content Provider，直接委托原 ResourceNavigation；不新增扫描器或查询缓存。协议复用原选项及领域页，显式 file_targets 保留各根局部选项，分支以稳定 owner／类别／操作和资源根区分，原 cursor 不封装成全局游标。默认根由目标工作区身份生成；外部根仍经原目标 Gateway 文件 owner 授权。files_only 在原扫描链分页前排除目录，名称按文件、正文按命中区间计，上下文不消耗命中配额。
+- 真实 Gateway＋两个 Backend 的网络验收通过（最终48.51秒）：A 两根及 B 一根保留独立过滤与原续点，Gateway 重启后只继续 B 指定根；正文小页按原位置取得同一文件的第二处命中，覆盖的非法 UTF-8 旧正文不读取。另核非法编码和不存在目录保留原错误代码、唯一终态与 request_id，停止 C 不被启动。原名称范围、目录失效、单分支重试与重启续查断言全部保留。原件位于 `out/tests/integration/gateway/test_federated_search/runs/run-b60444e697f1/nodes/node-1578f60a3a46/artifacts/federation-network.json`。
+- 105项原定向检查通过；补充的嵌套公开结构漂移／目录根检查37项、文件 Provider 准入5项、HTTP 错误归属4项及客户端流14项均通过。Pyright、Ruff、Buf format／lint／对真实提交的 breaking、生成一致性、OpenAPI 导出、含18份真实转换源码的类型检查及完整 Workbench 构建通过。519份前端产品源码与类型检查／构建指纹一致；临时 dist 已清理，保留构建 hash、日志、准确命令、源码指纹和退出码，见 `out/tests/temp/quick_access_provider_20261103/artifacts/files-federation-*`。
+- 首次实网失败为装具的同机 Backend／Gateway 使用独立本机令牌，改为共享隔离 HOME 后通过；新增单测装配与 Gateway ID 准备失败原件保留，未放宽业务断言。静态检查发现通用 OSError 捕获会抢占 TimeoutError 并误标其它领域，已移除该泛化处理，以真实 HTTP 适配断言期限仍409、文件编码错误400、未知请求日志权限失败仍500。通用网络／I/O 的具名归属仍由16.18和代码 TODO 追踪。
+- **未完成：** 前端文件 Provider／Quick Access 尚待迁入新合同，原文件前端队列尚未删除；重叠根、0哨兵／exists、统一输出字节及其它计量验收仍待推进。本切片只完成可独立调用的后端文件查询入口和共享流合同，不勾选16.11、16.17或完整Provider任务，不代表Web或Electron文件联邦已验收。

@@ -21,7 +21,7 @@ def test_search_checks_actual_public_structure(http_openapi: JsonSchemaValue, mo
         assert_public_http_schemas(http_openapi)
 
 
-@pytest.mark.parametrize("model", ["SearchProviderCapabilityDTO", "WorkspaceSearchResultDTO"])
+@pytest.mark.parametrize("model", ["SearchProviderCapabilityDTO", "WorkspaceSearchResultDTO", "WorkspaceFileSearchTargetDTO", "ResourceNavigationSearchOptions"])
 def test_search_rejects_candidate_protocol_drift(
     http_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet, model: str,
 ) -> None:

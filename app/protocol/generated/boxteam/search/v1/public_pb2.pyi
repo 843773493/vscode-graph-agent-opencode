@@ -8,31 +8,43 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class FederatedFileSearchTargetDTO(_message.Message):
+    __slots__ = ("owner", "target")
+    OWNER_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    owner: _public_pb2.GatewaySearchWorkspaceOwnerDTO
+    target: _public_pb2_1.WorkspaceFileSearchTargetDTO
+    def __init__(self, owner: _Optional[_Union[_public_pb2.GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., target: _Optional[_Union[_public_pb2_1.WorkspaceFileSearchTargetDTO, _Mapping]] = ...) -> None: ...
+
 class FederatedSearchQueryDTO(_message.Message):
-    __slots__ = ("category", "operation", "contract_version", "query", "match_mode", "limit")
+    __slots__ = ("category", "operation", "contract_version", "query", "match_mode", "limit", "file_targets")
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
     QUERY_FIELD_NUMBER: _ClassVar[int]
     MATCH_MODE_FIELD_NUMBER: _ClassVar[int]
     LIMIT_FIELD_NUMBER: _ClassVar[int]
+    FILE_TARGETS_FIELD_NUMBER: _ClassVar[int]
     category: str
     operation: str
     contract_version: int
     query: str
     match_mode: str
     limit: int
-    def __init__(self, category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
+    file_targets: _containers.RepeatedCompositeFieldContainer[FederatedFileSearchTargetDTO]
+    def __init__(self, category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., file_targets: _Optional[_Iterable[_Union[FederatedFileSearchTargetDTO, _Mapping]]] = ...) -> None: ...
 
 class FederatedSearchBranchKeyDTO(_message.Message):
-    __slots__ = ("owner", "category", "operation")
+    __slots__ = ("owner", "category", "operation", "resource_uri")
     OWNER_FIELD_NUMBER: _ClassVar[int]
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_URI_FIELD_NUMBER: _ClassVar[int]
     owner: _public_pb2.GatewaySearchWorkspaceOwnerDTO
     category: str
     operation: str
-    def __init__(self, owner: _Optional[_Union[_public_pb2.GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ...) -> None: ...
+    resource_uri: str
+    def __init__(self, owner: _Optional[_Union[_public_pb2.GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., resource_uri: _Optional[str] = ...) -> None: ...
 
 class FederatedSearchContinuationDTO(_message.Message):
     __slots__ = ("branch", "cursor")

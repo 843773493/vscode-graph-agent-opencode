@@ -104,7 +104,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
       await streamFederatedSearch(0, {
         scope: scope ? { mode: 'resume', scope, owners: [] } : { mode: 'selected', owners: owners.map(owner => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId })) },
         queries: [...new Set(active.map(branch => branch.category))].map(category => ({ category: categories[category], operation: isContentSearchCategory(category) ? 'content' : 'name',
-          contract_version: 1, query: filter, match_mode: isContentSearchCategory(category) ? 'literal' : 'fuzzy', limit: 50 })),
+          contract_version: 1, query: filter, match_mode: isContentSearchCategory(category) ? 'literal' : 'fuzzy', limit: 50, file_targets: [] })),
         continuations: scope ? active.map(branch => ({ branch: key(branch), cursor })) : [], max_results: 200,
       }, { signal: abort.signal, onEvent: event => {
         if (!alive()) return;

@@ -321,8 +321,18 @@ class WorkspaceSearchCapabilitiesDTO(_message.Message):
     providers: _containers.RepeatedCompositeFieldContainer[SearchProviderCapabilityDTO]
     def __init__(self, workspace_id: _Optional[str] = ..., providers: _Optional[_Iterable[_Union[SearchProviderCapabilityDTO, _Mapping]]] = ...) -> None: ...
 
+class WorkspaceFileSearchTargetDTO(_message.Message):
+    __slots__ = ("uri", "search_options", "max_bytes")
+    URI_FIELD_NUMBER: _ClassVar[int]
+    SEARCH_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    MAX_BYTES_FIELD_NUMBER: _ClassVar[int]
+    uri: str
+    search_options: ResourceNavigationSearchOptions
+    max_bytes: int
+    def __init__(self, uri: _Optional[str] = ..., search_options: _Optional[_Union[ResourceNavigationSearchOptions, _Mapping]] = ..., max_bytes: _Optional[int] = ...) -> None: ...
+
 class WorkspaceSearchRequest(_message.Message):
-    __slots__ = ("workspace_id", "category", "operation", "contract_version", "query", "match_mode", "limit", "cursor", "deadline_at")
+    __slots__ = ("workspace_id", "category", "operation", "contract_version", "query", "match_mode", "limit", "cursor", "deadline_at", "file")
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
@@ -332,6 +342,7 @@ class WorkspaceSearchRequest(_message.Message):
     LIMIT_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     DEADLINE_AT_FIELD_NUMBER: _ClassVar[int]
+    FILE_FIELD_NUMBER: _ClassVar[int]
     workspace_id: str
     category: str
     operation: str
@@ -341,10 +352,11 @@ class WorkspaceSearchRequest(_message.Message):
     limit: int
     cursor: str
     deadline_at: float
-    def __init__(self, workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., cursor: _Optional[str] = ..., deadline_at: _Optional[float] = ...) -> None: ...
+    file: WorkspaceFileSearchTargetDTO
+    def __init__(self, workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., cursor: _Optional[str] = ..., deadline_at: _Optional[float] = ..., file: _Optional[_Union[WorkspaceFileSearchTargetDTO, _Mapping]] = ...) -> None: ...
 
 class WorkspaceSearchResultDTO(_message.Message):
-    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages", "llm_requests")
+    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages", "llm_requests", "files")
     PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
@@ -356,6 +368,7 @@ class WorkspaceSearchResultDTO(_message.Message):
     THREADS_FIELD_NUMBER: _ClassVar[int]
     MESSAGES_FIELD_NUMBER: _ClassVar[int]
     LLM_REQUESTS_FIELD_NUMBER: _ClassVar[int]
+    FILES_FIELD_NUMBER: _ClassVar[int]
     provider_id: str
     workspace_id: str
     category: str
@@ -367,7 +380,8 @@ class WorkspaceSearchResultDTO(_message.Message):
     threads: SessionThreadSearchResultsDTO
     messages: WorkspaceMessageSearchResultsDTO
     llm_requests: WorkspaceLLMRequestLogSearchResultsDTO
-    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ..., llm_requests: _Optional[_Union[WorkspaceLLMRequestLogSearchResultsDTO, _Mapping]] = ...) -> None: ...
+    files: ResourceNavigationResultDTO
+    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ..., llm_requests: _Optional[_Union[WorkspaceLLMRequestLogSearchResultsDTO, _Mapping]] = ..., files: _Optional[_Union[ResourceNavigationResultDTO, _Mapping]] = ...) -> None: ...
 
 class SessionThreadSearchResultDTO(_message.Message):
     __slots__ = ("workspace_id", "session_id", "thread_id", "thread_uri", "kind", "title", "session_title", "created_at")
@@ -3042,7 +3056,7 @@ class ResourceNavigationRequest(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., operation: _Optional[str] = ..., query: _Optional[str] = ..., limit: _Optional[int] = ..., max_bytes: _Optional[int] = ..., cursor: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., scan_limit: _Optional[int] = ..., max_response_bytes: _Optional[int] = ..., read_format: _Optional[str] = ..., line_offset: _Optional[int] = ..., max_lines: _Optional[int] = ..., search_mode: _Optional[str] = ..., file_glob: _Optional[str] = ..., max_snippet_bytes: _Optional[int] = ..., search_options: _Optional[_Union[ResourceNavigationSearchOptions, _Mapping]] = ...) -> None: ...
 
 class ResourceNavigationSearchOptions(_message.Message):
-    __slots__ = ("case_mode", "is_regex", "whole_word", "word_separators", "is_multiline", "all_matches", "include_globs", "exclude_globs", "ignore_mode", "context_lines", "excluded_resource_uris")
+    __slots__ = ("case_mode", "is_regex", "whole_word", "word_separators", "is_multiline", "all_matches", "include_globs", "exclude_globs", "ignore_mode", "context_lines", "excluded_resource_uris", "files_only")
     CASE_MODE_FIELD_NUMBER: _ClassVar[int]
     IS_REGEX_FIELD_NUMBER: _ClassVar[int]
     WHOLE_WORD_FIELD_NUMBER: _ClassVar[int]
@@ -3054,6 +3068,7 @@ class ResourceNavigationSearchOptions(_message.Message):
     IGNORE_MODE_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_LINES_FIELD_NUMBER: _ClassVar[int]
     EXCLUDED_RESOURCE_URIS_FIELD_NUMBER: _ClassVar[int]
+    FILES_ONLY_FIELD_NUMBER: _ClassVar[int]
     case_mode: str
     is_regex: bool
     whole_word: bool
@@ -3065,7 +3080,8 @@ class ResourceNavigationSearchOptions(_message.Message):
     ignore_mode: str
     context_lines: int
     excluded_resource_uris: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ..., context_lines: _Optional[int] = ..., excluded_resource_uris: _Optional[_Iterable[str]] = ...) -> None: ...
+    files_only: bool
+    def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ..., context_lines: _Optional[int] = ..., excluded_resource_uris: _Optional[_Iterable[str]] = ..., files_only: _Optional[bool] = ...) -> None: ...
 
 class ResourceNavigationNodeDTO(_message.Message):
     __slots__ = ("uri", "resource_shape", "operations", "child_path", "stat")

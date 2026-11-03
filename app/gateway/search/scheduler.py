@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from time import monotonic, time
 from typing import Literal
 
+from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.search.scope import SearchScopeError
 from app.schemas.gateway.search import (
@@ -13,6 +14,7 @@ from app.schemas.gateway.search import (
     GatewaySearchScopeResolutionDTO,
 )
 from app.schemas.internal_v2.search import (
+    WorkspaceFileSearchTargetDTO,
     WorkspaceSearchRequest,
     WorkspaceSearchResultDTO,
 )
@@ -50,30 +52,35 @@ SearchPageQuery = Callable[[SearchJob], Awaitable[WorkspaceSearchResultDTO]]
 
 def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolutionDTO) -> list[SearchJob]:
     """按类别、冻结范围顺序公平预留配额；不先读大页再丢尾部。"""
-    queries = {(query.category, query.operation): query for query in request.queries}
     owners = {branch.owner: branch for branch in scope.branches}
     selected = {item.branch: item.cursor for item in request.continuations}
-    for key in selected:
-        if key.owner not in owners or (key.category, key.operation) not in queries:
-            raise SearchScopeError("invalid_continuation", "续查分支不属于原冻结范围或本次查询", status_code=400)
-    entries: list[tuple[FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO]] = []
+    entries: list[tuple[FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO, WorkspaceFileSearchTargetDTO | None]] = []
     # 名称类别沿原固定组序；尚未登记的类别也有确定次序，不按响应快慢决定归属顺序。
     for query in sorted(request.queries, key=lambda item: ({"catalog": 0, "thread": 1}.get(item.category, 2), item.category, item.operation)):
+        if any(target.owner not in owners for target in query.file_targets):
+            raise SearchScopeError("owner_mismatch", "文件根不属于本次冻结工作区集合", status_code=400)
         for owner in scope.scope.owners:
-            key = FederatedSearchBranchKeyDTO(owner=owner, category=query.category, operation=query.operation)
-            if not selected or key in selected:
-                entries.append((key, query))
+            targets = [item.target for item in query.file_targets if item.owner == owner] if query.file_targets else [None]
+            for target in targets:
+                key = FederatedSearchBranchKeyDTO(owner=owner, category=query.category, operation=query.operation,
+                                                 resource_uri=target.uri if target else None)
+                entries.append((key, query, target))
+    keys = {key for key, _, _ in entries}
+    if any(key not in keys for key in selected):
+        raise SearchScopeError("invalid_continuation", "续查分支不属于原冻结范围、查询或目录根", status_code=400)
+    if selected:
+        entries = [entry for entry in entries if entry[0] in selected]
     if len(entries) > MAX_SEARCH_BRANCHES:
         raise SearchScopeError("branch_limit", f"搜索超过 {MAX_SEARCH_BRANCHES} 个分支，请缩小范围或类别")
     per_branch, remainder = divmod(request.max_results, len(entries))
     return [SearchJob(
         key=key, scope_branch=owners[key.owner], max_bytes=MAX_SEARCH_PAGE_BYTES // len(entries),
         request=WorkspaceSearchRequest(
-            workspace_id=key.owner.workspace_id, **query.model_dump(exclude={"limit"}),
+            workspace_id=key.owner.workspace_id, **query.model_dump(exclude={"limit", "file_targets"}), file=target,
             limit=min(query.limit, per_branch + int(index < remainder)), cursor=selected.get(key),
             deadline_at=request.deadline_at,
         ),
-    ) for index, (key, query) in enumerate(entries)]
+    ) for index, (key, query, target) in enumerate(entries)]
 
 
 async def search_events(
@@ -147,8 +154,10 @@ async def search_events(
                         job.key.owner.workspace_id, job.key.category, job.key.operation, job.request.contract_version,
                     ):
                         raise SearchBranchError("invalid_response", "搜索 Provider 返回了其它 owner／类别／版本的页")
-                    domain = page.domain_page
-                    count = len(domain.items) if domain is not None else 0
+                    count = page.result_count
+                    if (page.files is not None and job.request.file is not None and job.request.file.uri is not None
+                        and page.files.node.uri != parse_resource_uri(job.request.file.uri, local_gateway_id=job.key.owner.gateway_id).display_uri):
+                        raise SearchBranchError("invalid_response", "文件搜索返回了其它目录根的页")
                     if count > job.request.limit:
                         raise SearchBranchError("invalid_response", "搜索 Provider 返回结果超过分配配额")
                 except asyncio.CancelledError:
@@ -163,7 +172,7 @@ async def search_events(
                                              retryable=error.retryable, cursor=job.request.cursor)
                 else:
                     statuses[index] = status(job, state=page.state, provider_id=page.provider_id,
-                                             code=page.limited_reason, cursor=domain.cursor if domain is not None else None,
+                                             code=page.limited_reason, cursor=page.cursor,
                                              returned_results=count)
                     sequence += 1
                     yield FederatedSearchEventDTO(sequence=sequence, request_id=request_id, type="page", branch=statuses[index], page=page)

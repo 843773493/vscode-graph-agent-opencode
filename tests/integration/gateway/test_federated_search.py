@@ -1,4 +1,4 @@
-"""真实 Gateway 和两个 Backend 的名称联邦；关键目录由产品创建入口生成。"""
+"""真实 Gateway 和两个 Backend 的名称及文件联邦；目录历史由产品入口生成。"""
 
 import asyncio
 import json
@@ -60,16 +60,28 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
         prepare_default_test_workspace(workspace_root=root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True)
         install_test_workspace_config(workspace_root=root, config_path=workspace / ".boxteam/workspace.jsonc",
                                       schema_path=workspace / ".boxteam/workspace_schema.jsonc")
+    for root in (workspace, secondary):
+        for directory in ("search-one", "search-two"):
+            target = root / directory
+            (target / "needle-directory").mkdir(parents=True)
+            for name in ("needle-a.txt", "needle-b.txt", "needle-c.md"):
+                (target / name).write_text("🧪 needle\ncontext\nneedle\n", encoding="utf-8")
+            (target / "covered.txt").write_bytes(b"\xffmodel body must not be read")
     ports = integration_port_block_for_file(Path(request.node.path))
     monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
     lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 1, 20)))
     fixture = Network(workspace, secondary, stopped, runtime / "gateway-home", ports.port(20), ports.port(0), context.artifacts_dir)
+    # 本机目录控制链和 Gateway 使用同一原生身份；独立 HOME 会产生互不相认的本机令牌。
+    credential = fixture.gateway_home / "state/gateway/credentials/local-token"
+    credential.parent.mkdir(parents=True, exist_ok=True)
+    credential.write_text(LOCAL_TOKEN_HEADERS["X-Local-Token"] + "\n", encoding="utf-8")
+    credential.chmod(0o600)
     with ExitStack() as cleanup:
         lease.acquire()
         cleanup.callback(lease.release)
         for index, root in enumerate((workspace, secondary)):
             backend = start_backend_process(workspace_root=str(root), port=ports.port(index), log_name=f"backend-{index}",
-                                            boxteam_home=runtime / f"backend-home-{index}", artifacts_dir=fixture.artifacts)
+                                            boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts)
             cleanup.callback(close_backend_process, backend)
         # 外部后端登记是查询输入，目录历史不通过磁盘写入或 mock 准备。
         gateway_root = fixture.gateway_home / "state/gateway"
@@ -134,9 +146,69 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert {event["page"]["workspace_id"] for event in pages} == {owners[route_a]["workspace_id"], owners["route_b"]["workspace_id"]}
             b_page = next(event for event in pages if event["page"]["workspace_id"] == owners["route_b"]["workspace_id"])
             frozen = both[0]["scope"]["scope"]
+
+            roots = {}
+            for route in (route_a, "route_b"):
+                response = await client.get("/api/v1/workspace/files/roots", headers={"X-BoxTeam-Workspace-Id": route})
+                response.raise_for_status()
+                roots[route] = response.json()["data"]["workspace_uri"]
+            file_targets = [
+                {"owner": owners[route], "target": {"uri": roots[route] + "/" + directory,
+                    "search_options": {"include_globs": [pattern]}}}
+                for route, directory, pattern in ((route_a, "search-one", "*.txt"), (route_a, "search-two", "*.md"), ("route_b", "search-one", "*.txt"))
+            ]
+            file_query = {"category": "file", "operation": "name", "query": "needle", "match_mode": "fuzzy", "limit": 1,
+                          "file_targets": file_targets}
+            file_first = await search({"scope": {"mode": "selected", "owners": [owners[route_a], owners["route_b"]]},
+                                       "queries": [file_query]}, "req_federation_files")
+            file_pages = [event for event in file_first if event["type"] == "page"]
+            assert len(file_pages) == 3 and file_first[-1]["summary"]["returned_results"] == 3
+            assert [item["branch"]["resource_uri"] for item in file_first[-1]["summary"]["branches"]] == [item["target"]["uri"] for item in file_targets]
+            for event in file_pages:
+                page = event["page"]["files"]
+                assert event["branch"]["returned_results"] == 1
+                assert len(page["entries"]) == 1 and page["entries"][0]["resource_shape"] == "file"
+                assert page["node"]["uri"] == event["branch"]["branch"]["resource_uri"]
+            markdown = next(event for event in file_pages if event["branch"]["branch"]["resource_uri"].endswith("/search-two"))
+            assert markdown["page"]["files"]["entries"][0]["uri"].endswith("/needle-c.md")
+            file_resume = next(event for event in file_pages if event["branch"]["branch"]["owner"] == owners["route_b"])
+            assert file_resume["branch"]["cursor"]
+
+            # 同一文件的两处正文分别计量；上下文不消耗配额，覆盖的非法 UTF-8 正文不读取。
+            content_root = roots[route_a] + "/search-one"
+            content_query = {"category": "file", "operation": "content", "query": "needle", "match_mode": "literal", "limit": 1,
+                "file_targets": [{"owner": owners[route_a], "target": {"uri": content_root,
+                    "search_options": {"include_globs": ["*.txt"], "all_matches": True, "context_lines": 1,
+                                       "excluded_resource_uris": [content_root + "/covered.txt", content_root + "/needle-a.txt"]}}}]}
+            content = await search({"scope": {"mode": "origin", "origin": owners[route_a]}, "queries": [content_query]}, "req_federation_file_content")
+            content_page, = [event for event in content if event["type"] == "page"]
+            assert content_page["branch"]["returned_results"] == 1 and content[-1]["summary"]["returned_results"] == 1
+            hit, = content_page["page"]["files"]["matches"]
+            assert hit["uri"] == content_root + "/needle-b.txt" and hit["utf16_column"] == 4
+            assert content_page["page"]["files"]["contexts"]
+            following = await search({"scope": {"mode": "resume", "scope": content[0]["scope"]["scope"]}, "queries": [content_query],
+                "continuations": [{"branch": content_page["branch"]["branch"], "cursor": content_page["branch"]["cursor"]}]}, "req_federation_file_content_next")
+            next_hit, = next(event for event in following if event["type"] == "page")["page"]["files"]["matches"]
+            assert next_hit["uri"] == hit["uri"] and next_hit["line"] == 3
+            invalid_query = {**content_query, "file_targets": [{"owner": owners[route_a], "target": {"uri": content_root,
+                "search_options": {"include_globs": ["*.txt"]}}}]}
+            rejected = await search({"scope": {"mode": "origin", "origin": owners[route_a]}, "queries": [invalid_query]}, "req_federation_file_encoding")
+            rejected_branch, = rejected[-1]["summary"]["branches"]
+            assert rejected_branch["state"] == "failed" and rejected_branch["code"] == "invalid_encoding"
+            assert not any(event["type"] == "page" for event in rejected)
+            missing_query = {**file_query, "file_targets": [{"owner": owners[route_a], "target": {"uri": roots[route_a] + "/missing-directory"}}]}
+            missing = await search({"scope": {"mode": "origin", "origin": owners[route_a]}, "queries": [missing_query]}, "req_federation_file_missing")
+            missing_branch, = missing[-1]["summary"]["branches"]
+            assert missing_branch["state"] == "failed" and missing_branch["code"] == "unknown_resource"
+
             await asyncio.to_thread(close_gateway_process, gateway)
             gateway = None
             gateway = await asyncio.to_thread(network.start)
+            file_continued = await search({"scope": {"mode": "resume", "scope": file_first[0]["scope"]["scope"]}, "queries": [file_query],
+                "continuations": [{"branch": file_resume["branch"]["branch"], "cursor": file_resume["branch"]["cursor"]}]}, "req_federation_files_restart")
+            file_next, = [event for event in file_continued if event["type"] == "page"]
+            assert file_next["page"]["files"]["entries"][0]["uri"] == roots["route_b"] + "/search-one/needle-b.txt"
+            assert len(file_continued[-1]["summary"]["branches"]) == 1
             resumed = await search({"scope": {"mode": "resume", "scope": frozen}, "queries": [query],
                                     "continuations": [{"branch": b_page["branch"]["branch"], "cursor": b_page["branch"]["cursor"]}]}, "req_federation_resume")
             resumed_page, = [event for event in resumed if event["type"] == "page"]

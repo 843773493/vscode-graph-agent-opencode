@@ -6,7 +6,7 @@ import { streamFederatedSearch } from "./federatedSearch";
 const owners = ["A", "B"].map(workspace_id => ({ gateway_id: "gateway", workspace_id }));
 const scope = { version: 1, gateway_id: "gateway", resolved_at: "2026-11-03T00:00:00Z", mode: "selected", owners };
 const request = () => FederatedSearchRequest.create({ scope: { mode: "selected", owners }, max_results: 100,
-  queries: [{ category: "message", operation: "content", contract_version: 1, query: "😀词", match_mode: "literal", limit: 50 }] });
+  queries: [{ category: "message", operation: "content", contract_version: 1, query: "😀词", match_mode: "literal", limit: 50, file_targets: [] }] });
 const key = (index: number) => ({ owner: owners[index], category: "message", operation: "content" });
 const branch = (index: number, state = "complete") => ({ branch: key(index), state, retryable: false,
   allocated_results: 50, returned_results: 0, ...(state === "limited" ? { code: "scan_limit", cursor: "original-owner-cursor" } : {}) });
@@ -42,6 +42,34 @@ async function until(condition: () => boolean) {
   throw new Error("搜索测试条件未收敛");
 }
 afterEach(unwrapSessionApiFetch);
+
+test("同 owner 多根各自结算，续查只接受原文件根而不合并游标", async () => {
+  const roots = ["one", "two"].map(name => `boxteam://workspace/A/resources/files/root/${name}`);
+  const input = FederatedSearchRequest.create({ scope: { mode: "selected", owners }, max_results: 3,
+    queries: [{ category: "file", operation: "name", contract_version: 1, query: "needle", match_mode: "fuzzy", limit: 1,
+      file_targets: roots.map(uri => ({ owner: owners[0], target: { uri, max_bytes: 65536 } })) }] });
+  const branches = roots.map((resource_uri, index) => ({ ...branch(0, "limited"), cursor: `cursor-${index}`,
+    branch: { owner: owners[0], category: "file", operation: "name", resource_uri } }));
+  const backend = install(), received: string[] = [];
+  const running = streamFederatedSearch(49_351, input, { signal: new AbortController().signal,
+    onEvent: event => { if (event.type === "branch") received.push(event.branch!.branch!.resource_uri!); } });
+  await until(() => backend.calls.length === 1);
+  backend.send("scope", { scope: resolution() });
+  for (const item of branches) backend.send("branch", { branch: item });
+  backend.send("end", { summary: summary(branches) }); backend.close();
+  expect((await running).branches.map(item => item.cursor)).toEqual(["cursor-0", "cursor-1"]);
+  expect(received).toEqual(roots);
+
+  const followup = FederatedSearchRequest.create({ ...input, scope: { mode: "resume", scope, owners: [] },
+    continuations: [{ branch: branches[1].branch, cursor: branches[1].cursor }] });
+  const resumed = install();
+  const next = streamFederatedSearch(49_352, followup, { signal: new AbortController().signal, onEvent() {} });
+  await until(() => resumed.calls.length === 1);
+  resumed.send("scope", { scope: resolution() }); resumed.send("branch", { branch: branches[1] });
+  resumed.send("end", { summary: summary([branches[1]]) }); resumed.close();
+  expect((await next).branches).toHaveLength(1);
+  expect(resumed.calls[0].body.continuations).toEqual(followup.continuations);
+});
 
 test("一次请求指定 A+B，快分支在 B 完成前交付，结束汇总不重复投影正文", async () => {
   const backend = install(), events: string[] = [], controller = new AbortController();

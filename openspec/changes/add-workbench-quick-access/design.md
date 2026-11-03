@@ -156,6 +156,8 @@ Gateway 联邦 SearchService
 
 Provider 由现有工作区服务装配／依赖注入持有，注册返回可释放句柄。服务关闭时先禁止新准入，再取消并等待原 owner 安全结算，释放监听及可选缓存；注销／版本变化使本次能力代际失效，在途未完成分支明确不可用，不能转投另一个 Provider 或晚到后再发布。当前不新增插件热加载体系或永久等待注册的队列；请求中缺少所需 Provider 立即返回明确不支持。能力合同版本不匹配在正文扫描前归属到该分支，不能静默按旧选项执行。
 
+文件 Provider 的 `name`／`content` 都委托原 ResourceNavigation。文件领域请求携带独立的根 URI、原 `search_options` 和单文件字节上限，省略 URI 仅表示目标工作区的默认文件根；原生目录 URI 仍由目标 Gateway 原文件 owner 授权解析。联邦 `file_targets` 明确每个根所属的稳定工作区；省略集合时分别查询已选工作区的默认根，提供集合时只分派其中的明确根。文件分支在 owner／类别／操作之外携带可选 `resource_uri`，因此同一工作区的多个根各自保存局部选项和原 cursor；续查不得替换根，也不合成全局游标。原目录搜索可返回目录，文件 Provider 明确启用 `files_only`，在输出计数和分页前排除目录；名称按文件数计，正文按命中区间计，上下文仅消耗字节预算。
+
 已接入的能力通过 `match_modes` 明确声明匹配语义：catalog／Thread 名称仅接受 `fuzzy`，canonical 消息／工具结果的 `content` 操作仅接受区分大小写的 `literal`，后者允许查询空格等正文。消息与工具结果共享原 `WorkspaceMessageSearchResultsDTO`，保留码点位置、精确 Thread、原游标及所有原预算原因；每页最多100个命中，不建立缓存或第二正文索引。原 `/sessions/history/search` 与统一分派共用同一 Provider，原响应形状及400／409历史错误保持不变。精确 Thread 的查询与 around 继续沿原历史 owner，不变成工作区发现查询。
 
 #### 请求、搜索会话与缓存的独立生命周期

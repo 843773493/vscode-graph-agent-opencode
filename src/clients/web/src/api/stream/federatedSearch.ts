@@ -10,7 +10,7 @@ import { DEFAULT_API_REQUEST_TIMEOUT_MS, requestGatewayResponse } from "../http"
 
 export function searchBranchKey(branch: FederatedSearchBranchKeyDTO): string {
   if (!branch.owner) throw new Error("搜索分支缺少 owner");
-  return JSON.stringify([branch.owner.gateway_id, branch.owner.workspace_id, branch.category, branch.operation]);
+  return JSON.stringify([branch.owner.gateway_id, branch.owner.workspace_id, branch.category, branch.operation, branch.resource_uri ?? null]);
 }
 
 /** 只消费 Gateway 的调度结果；不预检目标、不重试读分支、不另建跨目标队列。 */
@@ -58,8 +58,11 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
           expected = new Set(request.continuations.length ? request.continuations.map(item => {
             if (!item.branch) throw new Error("搜索续查缺少分支");
             return searchBranchKey(item.branch);
-          }) : request.queries.flatMap(query => owners.map(owner => searchBranchKey({ owner,
-            category: query.category, operation: query.operation }))));
+          }) : request.queries.flatMap(query => owners.flatMap(owner => {
+            const targets = query.file_targets?.length ? query.file_targets.filter(item => item.owner?.gateway_id === owner.gateway_id
+              && item.owner.workspace_id === owner.workspace_id).map(item => item.target?.uri) : [undefined];
+            return targets.map(resource_uri => searchBranchKey({ owner, category: query.category, operation: query.operation, resource_uri }));
+          })));
         } else if (scoped && (event.type === "page" || event.type === "branch") && event.branch?.branch) {
           const branch = event.branch.branch, key = searchBranchKey(branch);
           if (!expected.has(key) || terminals.has(key)) throw new Error("搜索返回未知分支或重复终态");

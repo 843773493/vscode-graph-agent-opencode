@@ -7,6 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 from app.schemas.internal_v2.llm_request_log import (
     WorkspaceLLMRequestLogSearchResultsDTO,
 )
+from app.schemas.internal_v2.resource_navigation import (
+    NavigationResourceURI,
+    ResourceNavigationResultDTO,
+    ResourceNavigationSearchOptions,
+)
 from app.schemas.internal_v2.session_navigation import SessionCatalogSearchResultsDTO
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultsDTO,
@@ -33,6 +38,16 @@ class WorkspaceSearchCapabilitiesDTO(BaseModel):
     providers: list[SearchProviderCapabilityDTO]
 
 
+class WorkspaceFileSearchTargetDTO(BaseModel):
+    """一个原文件根的局部选项；省略 URI 时只访问目标工作区根。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uri: NavigationResourceURI | None = None
+    search_options: ResourceNavigationSearchOptions = Field(default_factory=ResourceNavigationSearchOptions)
+    max_bytes: int = Field(default=65536, ge=1, le=33554432)
+
+
 class WorkspaceSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -45,6 +60,13 @@ class WorkspaceSearchRequest(BaseModel):
     limit: int = Field(default=50, ge=0, le=500)
     cursor: str | None = None
     deadline_at: FiniteFloat | None = None
+    file: WorkspaceFileSearchTargetDTO | None = None
+
+    @model_validator(mode="after")
+    def validate_file_target(self) -> Self:
+        if self.file is not None and self.category != "file":
+            raise ValueError("只有文件搜索接受文件根和局部选项")
+        return self
 
 
 class WorkspaceSearchResultDTO(BaseModel):
@@ -61,10 +83,25 @@ class WorkspaceSearchResultDTO(BaseModel):
     threads: SessionThreadSearchResultsDTO | None = None
     messages: WorkspaceMessageSearchResultsDTO | None = None
     llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | None = None
+    files: ResourceNavigationResultDTO | None = None
 
     @property
-    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | None:
-        return self.catalog or self.threads or self.messages or self.llm_requests
+    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | ResourceNavigationResultDTO | None:
+        return self.catalog or self.threads or self.messages or self.llm_requests or self.files
+
+    @property
+    def result_count(self) -> int:
+        page = self.domain_page
+        if isinstance(page, ResourceNavigationResultDTO):
+            return len(page.matches) if self.operation == "content" else len(page.entries)
+        return len(page.items) if page is not None else 0
+
+    @property
+    def cursor(self) -> str | None:
+        page = self.domain_page
+        if isinstance(page, ResourceNavigationResultDTO):
+            return page.next_cursor
+        return page.cursor if page is not None else None
 
     @model_validator(mode="after")
     def validate_domain_result(self) -> Self:
@@ -75,7 +112,8 @@ class WorkspaceSearchResultDTO(BaseModel):
                 raise ValueError("零输出配额不得返回领域结果")
             return self
         expected = {"catalog": self.catalog, "thread": self.threads,
-                    "message": self.messages, "tool_result": self.messages, "llm_request": self.llm_requests}.get(self.category)
-        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages, self.llm_requests)) == 1:
+                    "message": self.messages, "tool_result": self.messages, "llm_request": self.llm_requests,
+                    "file": self.files}.get(self.category)
+        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages, self.llm_requests, self.files)) == 1:
             return self
         raise ValueError("搜索类别与领域结果不一致")

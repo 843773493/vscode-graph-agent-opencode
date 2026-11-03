@@ -819,6 +819,34 @@ export declare type WorkspaceSearchCapabilitiesDTO = Message<"boxteam.workspace.
 export declare const WorkspaceSearchCapabilitiesDTOSchema: GenMessage<WorkspaceSearchCapabilitiesDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.WorkspaceFileSearchTargetDTO
+ */
+export declare type WorkspaceFileSearchTargetDTO = Message<"boxteam.workspace.v2.WorkspaceFileSearchTargetDTO"> & {
+  /**
+   * 省略时访问目标工作区的原文件根；显式 URI 仍由原 owner 校验归属和权限。
+   *
+   * @generated from field: optional string uri = 1;
+   */
+  uri?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ResourceNavigationSearchOptions search_options = 2;
+   */
+  searchOptions?: ResourceNavigationSearchOptions | undefined;
+
+  /**
+   * @generated from field: uint32 max_bytes = 3;
+   */
+  maxBytes: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceFileSearchTargetDTO.
+ * Use `create(WorkspaceFileSearchTargetDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceFileSearchTargetDTOSchema: GenMessage<WorkspaceFileSearchTargetDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.WorkspaceSearchRequest
  */
 export declare type WorkspaceSearchRequest = Message<"boxteam.workspace.v2.WorkspaceSearchRequest"> & {
@@ -866,6 +894,11 @@ export declare type WorkspaceSearchRequest = Message<"boxteam.workspace.v2.Works
    * @generated from field: optional double deadline_at = 9;
    */
   deadlineAt?: number | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceFileSearchTargetDTO file = 10;
+   */
+  file?: WorkspaceFileSearchTargetDTO | undefined;
 };
 
 /**
@@ -932,6 +965,11 @@ export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.Wor
    * @generated from field: boxteam.workspace.v2.WorkspaceLLMRequestLogSearchResultsDTO llm_requests = 11;
    */
   llmRequests?: WorkspaceLLMRequestLogSearchResultsDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ResourceNavigationResultDTO files = 12;
+   */
+  files?: ResourceNavigationResultDTO | undefined;
 };
 
 /**
@@ -8000,6 +8038,13 @@ export declare type ResourceNavigationSearchOptions = Message<"boxteam.workspace
    * @generated from field: repeated string excluded_resource_uris = 11;
    */
   excludedResourceUris: string[];
+
+  /**
+   * 文件搜索在输出计数和分页前排除目录；原树浏览不启用。
+   *
+   * @generated from field: optional bool files_only = 12;
+   */
+  filesOnly?: boolean | undefined;
 };
 
 /**
