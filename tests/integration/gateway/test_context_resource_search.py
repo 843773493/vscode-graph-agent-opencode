@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from app.core.trace_middleware import (
     reset_current_gateway_id,
@@ -31,6 +32,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RestartRuntimeSourceCase,
     _job,
     _send,
+    _tool_reply,
 )
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     restart_source_case as restart_source_case,  # noqa: PLC0414 - 复用真实Backend／统一模型回放。
@@ -136,6 +138,41 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         rejected, = stale[-1].summary.branches
         assert rejected.state == "failed" and rejected.code == "owner_rejected" and rejected.cursor == branch.cursor
         assert len(case.requests()) == 1 and not transport._http_client.cookies
+
+        # 经真实模型工具入口消费相同 Provider；不替产品准备执行或工具结果。
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
+            await acquire_gateway_guest(ui)
+            ui.headers["X-BoxTeam-Workspace-Id"] = route
+            caller = await create_session(ui, "Context Search Tool Caller")
+            calls = await case.plan(caller, [
+                _tool_reply("invoke_extension_tool", {"tool_name": "search_resources", "arguments": {
+                    "queries": [{**query, "query": "assistant scope-proof🧪 done", "limit": 20}],
+                }}, "call_context_resources"),
+                {"content": "CONTEXT_SEARCH_COMPLETE"},
+            ])
+            case.client = ui
+            tool_execution = await _send(case, caller, "使用资源搜索检索先前会话中的助手回复。")
+        case.client = original_client
+        assert isinstance(tool_execution["job_id"], str)
+        await _job(case, tool_execution["job_id"])
+        tool_events = TypeAdapter(list[FederatedSearchEventDTO]).validate_python(
+            case.tool_result(calls[0] + ":tool-call:call_context_resources"),
+        )
+        assert tool_events[0].scope is not None
+        assert [item.model_dump(mode="json") for item in tool_events[0].scope.scope.owners] == [owner]
+        tool_page, = [event.page for event in tool_events if event.type == "page"]
+        assert tool_page is not None and tool_page.context is not None and tool_page.provider_id == "session-context"
+        assert any(match.uri == hit.uri and match.source == "effective_context" for match in tool_page.context.matches)
+        assert tool_events[-1].summary is not None and tool_events[-1].summary.state == "complete"
+        final_wire = case.request(calls[1])
+        messages = final_wire["messages"]
+        assert isinstance(messages, list)
+        tool_messages = [message for message in messages if message["role"] == "tool"]
+        assert len(tool_messages) == 1 and tool_messages[0]["name"] == "invoke_extension_tool"
+        assert hit.uri in tool_messages[0]["content"] and "effective_context" in tool_messages[0]["content"]
+        assert len(case.requests()) == 3
+        actual["tool_events"] = [event.model_dump(mode="json") for event in tool_events]
+        actual["tool_final_wire"] = final_wire
         case.write_actual("context-search", actual)
     finally:
         case.client = original_client

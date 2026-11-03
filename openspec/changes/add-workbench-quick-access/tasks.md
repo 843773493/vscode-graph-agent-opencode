@@ -660,3 +660,8 @@
 - 全仓核对确认旧 SessionTargetResolver 只有定义、自身测试和无效依赖注入，生产工具早已通过结构化 URI 及原通信／联邦 owner 处理目标。删除解析器、协议／DTO、包导出、容器装配、runtime／工厂参数及专属测试，迁齐其它测试装具和目录职责；不为死链路新增联邦搜索包装。现行 FederationRpcService 的 exact-ID、权限、歧义、期限与通道行为保持原入口。
 - 88 项定向回归通过、5 项真实外部模型用例按原条件跳过；覆盖 Agent 工厂、工具装配、runtime、上下文工具与完整 federation transit 文件。真实 Gateway＋Backend 通过产品消息执行、上下文精确读取及重启续页，1 passed／57.13 秒。Ruff、差异检查通过；核心五文件 Pyright 的 7 条诊断与 `e28ce7de1` 基线逐条同文，没有新增，未把该检查称为零诊断。
 - 命令、源码指纹、原始输出、退出码及类型诊断对比保留在 `out/tests/temp/quick_access_dead_target_20261103/artifacts/`。本批没有改变前端或公开协议，复用前一切片的真实类型与构建；不重复 Web／Electron 交互。旧 Gateway 上下文聚合仍有实际工具与 relay 消费者，继续由 16.12 追踪；16.16 完整项保持未勾选。
+
+### 2026-11-03：真实 Agent 消费有效上下文搜索（16.12 部分）
+
+- 扩展原实网验收，在后端重启及原续页验证之后，经真实产品消息入口创建调用会话，由统一 model_stream 驱动 `invoke_extension_tool → search_resources → context/content`；断言冻结工作区、原 `session-context` Provider、精确会话 URI 和 effective_context 来源，并核验工具结果进入下一次模型 wire。关键执行与工具结果全部由产品生成，未增加模型或 SSE 替身。
+- 定向 1 passed／77.10 秒，原上下文页一致、精确读取、来源选择及旧 cursor 拒绝断言保持。Ruff 与该测试 Pyright 零诊断；仅扩展测试，复用原同源码的类型／构建及产品核心回归。命令、测试指纹、原始输出与退出码为 `out/tests/temp/context_provider_20261103/artifacts/tool-*`，正式网络与模型原件归同名 integration 测试目录；此证据不代替旧 `search_context` 聚合迁移或完整 Web／Electron 验收。
