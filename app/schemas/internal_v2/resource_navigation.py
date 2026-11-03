@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     PlainSerializer,
+    field_validator,
     model_validator,
 )
 
@@ -18,6 +19,23 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResourceNavigationOperation,
     ResourceShape,
 )
+
+
+def _require_navigation_uri(value: str) -> str:
+    try:
+        parse_resource_uri(value)
+    except ResourceUriGrammarError as error:
+        # 输出合同故障只报告字段与原因；原生输入和文件正文不走此校验。
+        raise ValueError(f"导航资源引用必须是资源 URI: code={error.reason_code}") from error
+    return value
+
+
+NavigationResourceURI = Annotated[
+    str,
+    AfterValidator(_require_navigation_uri),
+    # 归属投影使用model_copy；构造后引用仍须在HTTP/联邦/模型共用的发布点核验。
+    PlainSerializer(_require_navigation_uri, return_type=str),
+]
 
 
 class ResourceNavigationSearchOptions(BaseModel):
@@ -35,6 +53,12 @@ class ResourceNavigationSearchOptions(BaseModel):
     exclude_globs: tuple[str, ...] = Field(default=(), max_length=64)
     ignore_mode: Literal["default", "none", "respect"] = "default"
     context_lines: int = Field(default=0, ge=0, le=100)
+    excluded_resource_uris: tuple[NavigationResourceURI, ...] = Field(default=(), max_length=10000)
+
+    @field_validator("excluded_resource_uris")
+    @classmethod
+    def normalize_excluded_resources(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(sorted(set(values)))
 
     @model_validator(mode="after")
     def require_nonempty_patterns(self) -> ResourceNavigationSearchOptions:
@@ -86,26 +110,10 @@ class ResourceNavigationRequest(BaseModel):
                 self.search_options.whole_word, self.search_options.word_separators is not None,
                 self.search_options.is_multiline, self.search_options.all_matches,
                 self.search_options.context_lines,
+                self.search_options.excluded_resource_uris,
             )):
                 raise ValueError("只有内容搜索接受文本匹配选项")
         return self
-
-
-def _require_navigation_uri(value: str) -> str:
-    try:
-        parse_resource_uri(value)
-    except ResourceUriGrammarError as error:
-        # 输出合同故障只报告字段与原因；原生输入和文件正文不走此校验。
-        raise ValueError(f"导航资源引用必须是资源 URI: code={error.reason_code}") from error
-    return value
-
-
-NavigationResourceURI = Annotated[
-    str,
-    AfterValidator(_require_navigation_uri),
-    # 归属投影使用model_copy；构造后引用仍须在HTTP/联邦/模型共用的发布点核验。
-    PlainSerializer(_require_navigation_uri, return_type=str),
-]
 
 
 class ResourceNavigationStatDTO(BaseModel):

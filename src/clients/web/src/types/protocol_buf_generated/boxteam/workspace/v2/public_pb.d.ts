@@ -7816,6 +7816,13 @@ export declare type ResourceNavigationSearchOptions = Message<"boxteam.workspace
    * @generated from field: uint32 context_lines = 10;
    */
   contextLines: number;
+
+  /**
+   * 已由调用方模型覆盖的精确资源；只传身份，正文和草稿不出客户端。
+   *
+   * @generated from field: repeated string excluded_resource_uris = 11;
+   */
+  excludedResourceUris: string[];
 };
 
 /**

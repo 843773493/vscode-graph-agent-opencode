@@ -106,6 +106,30 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
     } finally { f.instantiation.dispose(); }
   });
 
+  test('覆盖集合在请求前按根和完整 owner 分区，零命中也不占后端小页配额', async () => {
+    const a = model(uri(ownerA, 'same.txt'), 'removed in A'), b = model(uri(ownerB, 'same.txt'), 'needle B');
+    const f = fixture([a, b]);
+    try {
+      await withTransport(async ({ requests }) => {
+        const result = await f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerA) }, { folder: uri(ownerB) }], maxResults: 2 }));
+        const bodies = requests.mock.calls.map(call => JSON.parse(call[1].body));
+        expect(bodies).toHaveLength(2);
+        expect(bodies.map(body => body.search_options.excluded_resource_uris)).toEqual([
+          [root(ownerA) + '/same.txt'], [root(ownerB) + '/same.txt'],
+        ]);
+        expect(result.results.map(item => item.resource.toString()).sort()).toEqual([
+          uri(ownerA, 'remaining.txt').toString(), b.uri.toString(),
+        ].sort());
+        expect(JSON.stringify(bodies)).not.toContain('removed in A');
+      }, async (_path, options) => {
+        const body = JSON.parse(options.body);
+        // 此显式网络替身只验证前端实际传输；正文排除和分页由真实文件 owner 测试证明。
+        expect(body.search_options.excluded_resource_uris).toEqual([body.uri + '/same.txt']);
+        return page(body.uri, body.uri === root(ownerA) ? [hit(body.uri + '/remaining.txt')] : []);
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
   test('onlyOpenEditors 在查询前选择精确目标，保留 include 目录语义且不读 B', async () => {
     const open = [uri(ownerA, 'src/open.txt'), uri(ownerB, 'src/open.txt'), URI.parse('workbench:/src/open.txt')];
     const f = fixture([], open);
@@ -119,6 +143,25 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
         finally { empty.instantiation.dispose(); }
         expect(requests.mock.calls).toHaveLength(1);
       }, async (_path, options) => { const target = JSON.parse(options.body).uri; return page(target, [hit(target)]); });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('仅已打开的精确磁盘文件不携带其它已覆盖文件的身份', async () => {
+    const local = model(uri(ownerA, 'draft.txt'), '已删除查询词');
+    const disk = uri(ownerA, 'unloaded.txt');
+    const f = fixture([local], [local.uri, disk]);
+    try {
+      await withTransport(async ({ requests }) => {
+        const result = await f.search.textSearch(query({ onlyOpenEditors: true }));
+        expect(result.results.map(item => item.resource.toString())).toEqual([disk.toString()]);
+        expect(requests.mock.calls).toHaveLength(1);
+        const body = JSON.parse(requests.mock.calls[0][1].body);
+        expect(body.uri).toBe(root(ownerA) + '/unloaded.txt');
+        expect(body.search_options.excluded_resource_uris).toEqual([]);
+      }, async (_path, options) => {
+        const body = JSON.parse(options.body);
+        return page(body.uri, [hit(body.uri)]);
+      });
     } finally { f.instantiation.dispose(); }
   });
 
@@ -156,7 +199,7 @@ describe('业务 SearchService 真实注册及完整身份隔离（Gateway 传�
           const bodies = requests.mock.calls.map(call => JSON.parse(call[1].body));
           expect(bodies.map(body => body.cursor)).toEqual([undefined, 'next-page']);
           expect(bodies[0].search_options).toEqual({ case_mode: 'insensitive', is_regex: true, whole_word: true,
-            word_separators: ' /', is_multiline: true, all_matches: true, context_lines: 0, include_globs: ['*.txt'], exclude_globs: ['**/hidden/**'], ignore_mode: 'default' });
+            word_separators: ' /', is_multiline: true, all_matches: true, context_lines: 0, include_globs: ['*.txt'], exclude_globs: ['**/hidden/**'], ignore_mode: 'default', excluded_resource_uris: [] });
           expect(bodies[1].limit).toBe(bodies[0].limit);
           const files = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'dp' });
           expect(files.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'deep.txt').toString()]);

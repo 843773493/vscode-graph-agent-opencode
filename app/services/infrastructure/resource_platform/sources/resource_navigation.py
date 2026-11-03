@@ -249,6 +249,7 @@ class ResourceNavigation:
         artifact_reader: ResourceFileReader | None = None,
     ) -> ResourceNavigationResultDTO:
         self._check_deadline(deadline)
+        excluded = self._excluded_resources(parsed, request, gateway_id)
         if parsed.kind == "skills" and parsed.tail_segments[0].startswith("http_"):
             return self._navigate_owned_file(parsed, request, gateway_id, deadline, self._network_skill_reader,
                                              owner_id=self._workspace_id if self._workspace_root is not None else self._gateway_id)
@@ -287,7 +288,7 @@ class ResourceNavigation:
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
         ))
-        for index, (child_node, metadata, hit) in enumerate(self._search_items(root, children, parsed, node, request, deadline, pattern), start=1):
+        for index, (child_node, metadata, hit) in enumerate(self._search_items(root, children, parsed, node, request, deadline, pattern, excluded), start=1):
             match = hit.match if hit is not None else None
             prefix.update(json.dumps((child_node.uri, metadata, match.model_dump() if match is not None else None), separators=(",", ":")).encode())
             if index <= offset:
@@ -444,14 +445,32 @@ class ResourceNavigation:
         except regex.error as error:
             raise ResourceFileOperationError("execution_failed", f"内容搜索正则无效: {error}", reason="invalid_search_pattern") from error
 
+    @staticmethod
+    def _excluded_resources(parsed: ParsedResourceUri, request: ResourceNavigationRequest, gateway_id: str) -> frozenset[str]:
+        uris = request.search_options.excluded_resource_uris if request.search_options is not None else ()
+        excluded: set[str] = set()
+        for uri in uris:
+            target = parse_resource_uri(uri, local_gateway_id=gateway_id)
+            if (target.scope, target.scope_id, target.kind, target.gateway_authority) != (
+                parsed.scope, parsed.scope_id, parsed.kind, parsed.gateway_authority,
+            ) or target.tail_segments[:len(parsed.tail_segments)] != parsed.tail_segments:
+                raise ResourceUriResolveError("scope_mismatch", "模型覆盖资源不属于本次文件查询根")
+            excluded.add(target.display_uri)
+        if excluded and (parsed.session_artifact_kind is not None or (parsed.kind == "skills" and parsed.tail_segments[0].startswith("http_"))):
+            raise ResourceUriResolveError("capability_denied", "私有产物或网络快照不接受文件模型覆盖")
+        return frozenset(excluded)
+
     def _search_items(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
+        excluded: frozenset[str],
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, ContentMatch | None]]:
         path = self._contained(root, children, parsed)
         candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
         for child, metadata in candidates:
             self._check_deadline(deadline)
+            if child.uri in excluded:
+                continue
             if request.operation != "search" or request.search_mode != "content" or child.resource_shape != "file":
                 yield child, metadata, None
                 continue

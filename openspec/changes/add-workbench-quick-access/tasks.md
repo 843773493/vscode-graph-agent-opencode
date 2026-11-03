@@ -188,6 +188,14 @@
 - [ ] 16.19 贯通原 owner canonical／大小写及 IUriIdentityService 比较键、重叠根／额外文件／模型去重与根局部选项；保留 onlyOpenEditors、preview、文件大小／编码／链接策略的真实映射，未支持选项明确拒绝。冻结按工作区分区的本地覆盖身份并交文件 owner 在输出计量／分页前排除，不传正文，绑定缓存／cursor。验证只选 A 时 B 不查询，以及 A+B 小配额时 A 本地删词屏蔽旧磁盘命中、B 同路径及 A 另一文件仍可续页取得，核真实序列化、progress／终态计数、模型变化与旧 cursor 失效及本地剩余远端配额。
 - [ ] 16.20 追加可判别生命周期与流式验收：查询中注销后无新分发／fallback／迟到 progress，安全结算后释放；同 picker 缓存复用／范围隔离及 A/B 独立编辑器释放；受限预热不能标记完整，唯一匹配在预热上限外时仍可有界查询／续查或明确受限，不返回完整无匹配；进度与最终结果不重复计数、最后不足批次仍 flush、慢消费缓冲有界、终态唯一、未交付页不漏项。按相关源码批次做定向受保护验证，不默认重跑全套。
 
+### 2026-11-03：文件模型覆盖先于正文读取与分页（16.19 部分）
+
+- 原文件查询接受规范资源覆盖集合，按目标 Gateway、工作区及查询根核验，在读取正文、计数与分页前排除；集合排序去重并参与原 cursor 绑定。模型正文不传出浏览器，省略集合仍查询已提交文件。仅已打开的精确单文件请求不携带兄弟文件覆盖项。
+- 原 owner 同步／异步及相关导航回归 239 passed；真实 SearchService 的 19 项集成检查通过，覆盖 A/B 分区、零命中、小配额、上下文及精确单文件请求。Ruff、生成一致性、Buf format／lint／对 `9bedff21b` 的 breaking 检查通过；真实 Workbench 类型检查包含 18 份转换源码并零诊断。文件 owner 的 9 条 Pyright 诊断与 HEAD 基线一致，无新增。
+- 正式 Workbench 构建、真实 Gateway／Chromium 验收 1 passed / 105.18 秒：从原文本编辑器删除 A 查询词后，在 A+B Search Editor 中仍找到 A 另一文件及 B 同路径；一条小页不被 A 旧正文占用，更换覆盖集合使旧 cursor 返回 `invalid_cursor`，C 保持 offline／可启动且没有搜索请求，磁盘未保存草稿、无页面错误。
+- 原命令、源码指纹、退出码及失败归因保留于 `out/tests/temp/quick_access_provider_20261103/artifacts/file-coverage-*`；最终浏览器原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-6ec4755d7c8b/`。此前两次失败分别来自驱动命令返回值／清理方法，以及误将列表状态期待为运行时状态，均保留原件并按现有合同修正。
+- Gateway 文件 Provider、跨目标文件调度迁移、URI identity 及重叠根等仍待实现；本切片不将 16.19 或整个两级搜索标为完成，也不代 Electron 验收。
+
 ### 2026-11-03：目录公开结构补齐（1.2、16.2 部分）
 
 - Session catalog 的六种公开读侧结构统一登记到 Workspace proto；前端从生成结构派生，仅保留 HTTP presence 和业务值域窄化，不再逐字段手写同形接口。原 Pydantic、目录版本及分页职责保持。

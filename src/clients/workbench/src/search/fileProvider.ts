@@ -81,6 +81,8 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     const requestIds: string[] = [];
     let count = 0, limitHit = false, continuation: string | undefined;
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
+    // 冻结本代际覆盖集合；每个目标只发送其自身根内的规范身份。
+    const coveredResources = [...models];
     const routes = new Map<string, Promise<string>>();
     const seen = new Set<string>();
     const targets: { resource: URI; folder: IFolderQuery }[] = query.onlyOpenEditors
@@ -106,6 +108,8 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           is_regex: !!query.contentPattern.isRegExp, whole_word: !!query.contentPattern.isWordMatch,
           word_separators: query.contentPattern.wordSeparators, is_multiline: !!query.contentPattern.isMultiline, all_matches: true,
           context_lines: query.surroundingContext ?? 0,
+          excluded_resource_uris: coveredResources.filter(resource => !query.onlyOpenEditors && resourceInQuery(resource, { ...query, folderQueries: [folder] }))
+            .map(resource => workspaceFileSource(resource).path).sort(),
         });
         // 固定每一目标的请求合同，分页 cursor 绑定包括 limit 在内的全部选项。
         const request = { uri: owner.path, operation: 'search', query: query.type === QueryType.Text ? query.contentPattern.pattern : query.onlyOpenEditors ? '**/*' : query.filePattern || '**/*',

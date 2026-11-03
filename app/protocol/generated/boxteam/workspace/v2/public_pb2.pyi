@@ -2974,7 +2974,7 @@ class ResourceNavigationRequest(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., operation: _Optional[str] = ..., query: _Optional[str] = ..., limit: _Optional[int] = ..., max_bytes: _Optional[int] = ..., cursor: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., scan_limit: _Optional[int] = ..., max_response_bytes: _Optional[int] = ..., read_format: _Optional[str] = ..., line_offset: _Optional[int] = ..., max_lines: _Optional[int] = ..., search_mode: _Optional[str] = ..., file_glob: _Optional[str] = ..., max_snippet_bytes: _Optional[int] = ..., search_options: _Optional[_Union[ResourceNavigationSearchOptions, _Mapping]] = ...) -> None: ...
 
 class ResourceNavigationSearchOptions(_message.Message):
-    __slots__ = ("case_mode", "is_regex", "whole_word", "word_separators", "is_multiline", "all_matches", "include_globs", "exclude_globs", "ignore_mode", "context_lines")
+    __slots__ = ("case_mode", "is_regex", "whole_word", "word_separators", "is_multiline", "all_matches", "include_globs", "exclude_globs", "ignore_mode", "context_lines", "excluded_resource_uris")
     CASE_MODE_FIELD_NUMBER: _ClassVar[int]
     IS_REGEX_FIELD_NUMBER: _ClassVar[int]
     WHOLE_WORD_FIELD_NUMBER: _ClassVar[int]
@@ -2985,6 +2985,7 @@ class ResourceNavigationSearchOptions(_message.Message):
     EXCLUDE_GLOBS_FIELD_NUMBER: _ClassVar[int]
     IGNORE_MODE_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_LINES_FIELD_NUMBER: _ClassVar[int]
+    EXCLUDED_RESOURCE_URIS_FIELD_NUMBER: _ClassVar[int]
     case_mode: str
     is_regex: bool
     whole_word: bool
@@ -2995,7 +2996,8 @@ class ResourceNavigationSearchOptions(_message.Message):
     exclude_globs: _containers.RepeatedScalarFieldContainer[str]
     ignore_mode: str
     context_lines: int
-    def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ..., context_lines: _Optional[int] = ...) -> None: ...
+    excluded_resource_uris: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, case_mode: _Optional[str] = ..., is_regex: _Optional[bool] = ..., whole_word: _Optional[bool] = ..., word_separators: _Optional[str] = ..., is_multiline: _Optional[bool] = ..., all_matches: _Optional[bool] = ..., include_globs: _Optional[_Iterable[str]] = ..., exclude_globs: _Optional[_Iterable[str]] = ..., ignore_mode: _Optional[str] = ..., context_lines: _Optional[int] = ..., excluded_resource_uris: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ResourceNavigationNodeDTO(_message.Message):
     __slots__ = ("uri", "resource_shape", "operations", "child_path", "stat")

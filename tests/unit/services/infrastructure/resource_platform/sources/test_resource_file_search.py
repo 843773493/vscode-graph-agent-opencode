@@ -7,6 +7,9 @@ from app.schemas.internal_v2.resource_navigation import ResourceNavigationReques
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
+)
 from tests.unit.services.infrastructure.resource_platform.sources.test_resource_navigation import (
     GATEWAY_ID,
 )
@@ -16,6 +19,79 @@ from tests.unit.services.infrastructure.resource_platform.sources.test_resource_
 from tests.unit.services.infrastructure.resource_platform.sources.test_resource_navigation import (
     navigation_case as navigation_case,  # noqa: PLC0414 - 复用隔离文件owner装配
 )
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_model_coverage_excludes_body_before_read_count_and_cursor(navigation_case, monkeypatch, synchronous):
+    owner, workspace, uri = navigation_case
+    directory = workspace / "model-coverage"
+    directory.mkdir()
+    excluded = directory / "a.txt"
+    excluded.write_bytes(b"\xffcovered body must not be read")
+    for name in ("b.txt", "c.txt"):
+        (directory / name).write_text("needle\ncontext")
+    root = uri + "/model-coverage"
+    reads = []
+    read = owner._read_bytes
+
+    def observed(path, *args, **kwargs):
+        reads.append(path)
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "_read_bytes", observed)
+    request = ResourceNavigationRequest(uri=root, operation="search", search_mode="content", query="needle", limit=1,
+        search_options={"excluded_resource_uris": [root + "/a.txt"], "context_lines": 1})
+
+    async def search(payload):
+        return owner.navigate_sync(payload, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(payload, local_gateway_id=GATEWAY_ID)
+
+    first = await search(request)
+    assert [hit.uri for hit in first.matches] == [root + "/b.txt"]
+    assert first.truncated and first.next_cursor and first.truncation_reason == "entry_limit"
+    assert excluded not in reads
+    assert {line.uri for line in first.contexts} == {root + "/b.txt"}
+    # 覆盖文件的磁盘正文改变不应成为这份正文续页的前缀依赖。
+    excluded.write_text("needle now exists on disk")
+    following = await search(request.model_copy(update={"cursor": first.next_cursor}))
+    assert [hit.uri for hit in following.matches] == [root + "/c.txt"]
+    assert not following.truncated and following.next_cursor is None and excluded not in reads
+    changed = ResourceNavigationRequest(**{**request.model_dump(), "cursor": first.next_cursor, "search_options": {}})
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await search(changed)
+    assert failure.value.reason == "invalid_cursor"
+    reads.clear()
+    exact = await search(request.model_copy(update={"uri": root + "/a.txt"}))
+    assert not exact.matches and not exact.entries and not reads
+
+
+@pytest.mark.parametrize("foreign", [
+    "boxteam://workspace/another/resources/files/root/a.txt",
+    "boxteam://another-gateway/workspace/{workspace}/resources/files/root/a.txt",
+    "boxteam://workspace/{workspace}/resources/files/root/outside.txt",
+])
+async def test_coverage_rejects_foreign_owner_or_root_before_body_read(navigation_case, monkeypatch, foreign):
+    owner, workspace, uri = navigation_case
+    (workspace / "coverage-root").mkdir()
+    (workspace / "coverage-root/a.txt").write_text("needle")
+    reads = []
+    monkeypatch.setattr(owner, "_read_bytes", lambda *args, **kwargs: reads.append(args))
+    request = ResourceNavigationRequest(uri=uri + "/coverage-root", operation="search", search_mode="content", query="needle",
+        search_options={"excluded_resource_uris": [foreign.format(workspace=owner._workspace_id)]})
+    with pytest.raises(ResourceUriResolveError) as failure:
+        await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+    assert failure.value.reason_code == "scope_mismatch" and not reads
+
+
+def test_coverage_is_a_canonical_uri_set_only_for_content_queries():
+    uri = "boxteam://workspace/ws/resources/files/root/a.txt"
+    request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle",
+        search_options={"excluded_resource_uris": [uri, uri]})
+    assert request.search_options.excluded_resource_uris == (uri,)
+    for options in ({"excluded_resource_uris": ["/tmp/native.txt"]}, {"excluded_resource_uris": ["boxteam://invalid"]}):
+        with pytest.raises(ValidationError):
+            ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", search_options=options)
+    with pytest.raises(ValidationError, match="文本匹配选项"):
+        ResourceNavigationRequest(uri=uri, operation="search", query="needle", search_options=request.search_options)
 
 
 @pytest.mark.parametrize("synchronous", [False, True])

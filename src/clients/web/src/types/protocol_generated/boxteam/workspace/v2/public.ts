@@ -1813,6 +1813,8 @@ export interface ResourceNavigationSearchOptions {
   ignore_mode: string;
   /** 每个命中区间前后各取 0～100 行，正文仍受原片段及响应字节预算约束。 */
   context_lines: number;
+  /** 已由调用方模型覆盖的精确资源；只传身份，正文和草稿不出客户端。 */
+  excluded_resource_uris: string[];
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -14634,6 +14636,7 @@ function createBaseResourceNavigationSearchOptions(): ResourceNavigationSearchOp
     exclude_globs: [],
     ignore_mode: "",
     context_lines: 0,
+    excluded_resource_uris: [],
   };
 }
 
@@ -14654,6 +14657,9 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
         : [],
       ignore_mode: isSet(object.ignore_mode) ? globalThis.String(object.ignore_mode) : "",
       context_lines: isSet(object.context_lines) ? globalThis.Number(object.context_lines) : 0,
+      excluded_resource_uris: globalThis.Array.isArray(object?.excluded_resource_uris)
+        ? object.excluded_resource_uris.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -14689,6 +14695,9 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     if (message.context_lines !== 0) {
       obj.context_lines = Math.round(message.context_lines);
     }
+    if (message.excluded_resource_uris?.length) {
+      obj.excluded_resource_uris = message.excluded_resource_uris;
+    }
     return obj;
   },
 
@@ -14709,6 +14718,7 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     message.exclude_globs = object.exclude_globs?.map((e) => e) || [];
     message.ignore_mode = object.ignore_mode ?? "";
     message.context_lines = object.context_lines ?? 0;
+    message.excluded_resource_uris = object.excluded_resource_uris?.map((e) => e) || [];
     return message;
   },
 };

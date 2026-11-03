@@ -40,7 +40,8 @@ export function fileOptions(query: ICommonQueryProps<URI>, folder: IFolderQuery)
   });
   return { case_mode: 'sensitive', is_regex: false, whole_word: false, is_multiline: false, all_matches: false, context_lines: 0,
     include_globs: [...globalIncludes, ...folderIncludes], exclude_globs: [...patterns(query.excludePattern), ...excludes],
-    ignore_mode: folder.disregardIgnoreFiles === undefined ? 'default' : folder.disregardIgnoreFiles ? 'none' : 'respect' };
+    ignore_mode: folder.disregardIgnoreFiles === undefined ? 'default' : folder.disregardIgnoreFiles ? 'none' : 'respect',
+    excluded_resource_uris: [] };
 }
 
 export function validateQuery(query: ICommonQueryProps<URI>): void {
