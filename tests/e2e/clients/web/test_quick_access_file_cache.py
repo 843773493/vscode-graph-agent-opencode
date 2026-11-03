@@ -102,6 +102,9 @@ async def test_original_image_editor_revalidates_private_file_cache(
         assert result["phase"] == "passed" and result["pageErrors"] == []
         assert result["imageRevalidated"] and result["updatedImage"] and result["ownerIsolated"]
         assert result["watcherUpdatedImage"]
+        assert result["deletedImageFailureVisible"] and result["deletedImageRecovery"]
+        if os.name != "nt":
+            assert result["permissionFailureVisible"] and result["permissionRecovery"]
         assert result["staticCachePolicy"]
         assert result["textRevalidated"] and result["staleSaveRejected"] and result["errorsNoStore"]
     finally:

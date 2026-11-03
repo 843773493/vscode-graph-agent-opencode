@@ -1,4 +1,4 @@
-import { writeFile, unlink } from 'node:fs/promises';
+import { chmod, stat, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
@@ -156,6 +156,27 @@ try {
   const watched = await completeRead(targets[0], beforeWatcher, 200);
   expect(watched.response.etag).not.toBe(updated.response.etag);
   result.watcherUpdatedImage = true;
+  const imageFailure = page.locator('.image-preview-editor').filter({ visible: true }).locator('.editor-placeholder-label-container');
+  if (process.platform !== 'win32') {
+    result.phase = 'visible-image-permission-failure';
+    const path = join(workspace, 'cache-image.png'), mode = (await stat(path)).mode;
+    const beforeDenied = imageReads(targets[0]).length;
+    try {
+      await chmod(path, 0);
+      await expect(imageFailure).toContainText('Unable to read image');
+      await expect(visibleImage).not.toBeVisible();
+      // 此原生延迟 I/O 由现有 TraceMiddleware 发布500，不能误写为API授权拒绝403。
+      await expect.poll(() => imageReads(targets[0]).slice(beforeDenied).some(item => item.finished && item.wireStatus === 500)).toBe(true);
+      const denied = imageReads(targets[0]).slice(beforeDenied).find(item => item.finished && item.wireStatus === 500);
+      expect(denied.response['cache-control']).toBe('no-store');
+      expect(denied.response['x-request-id']).toBeTruthy();
+      result.permissionFailure = { requestId: denied.response['x-request-id'], message: await imageFailure.textContent() };
+      result.permissionFailureVisible = true;
+    } finally { await chmod(path, mode); }
+    await expect.poll(() => visibleImage.evaluate(element => element.naturalWidth)).toBe(1);
+    await expect(imageFailure).not.toBeVisible();
+    result.permissionRecovery = true;
+  }
   result.openingRequestCounts = Object.fromEntries(['original-image-cold', 'original-image-warm', 'same-path-other-owner']
     .map(phase => [phase, result.network.filter(item => item.phase === phase).length]));
   const raw = (target, name, headers = {}, endpoint = 'raw') => page.evaluate(async ({ target, name, headers, endpoint }) => {
@@ -194,6 +215,13 @@ try {
   await unlink(join(workspace, 'cache-image.png'));
   const missing = await raw(targets[0], 'cache-image.png');
   expect(missing.status).toBe(404); expect(missing.headers['cache-control']).toBe('no-store');
+  await expect(imageFailure).toContainText('Unable to read image');
+  await expect(visibleImage).not.toBeVisible();
+  result.deletedImageFailureVisible = true;
+  await writeFile(join(workspace, 'cache-image.png'), Buffer.from(process.env.BOXTEAM_CACHE_ORIGINAL, 'base64'));
+  await expect.poll(() => visibleImage.evaluate(element => element.naturalWidth)).toBe(1);
+  await expect(imageFailure).not.toBeVisible();
+  result.deletedImageRecovery = true;
   result.receipts = { textCold, textWarm, changed, conflict, range, download, denied, wrongOwner, missing };
   result.errorsNoStore = true;
   result.phase = 'passed';

@@ -769,3 +769,10 @@
 - 普通链接在原行列解析前按原入口条件识别，端口、路径中的冒号、数字 fragment 和逗号均原样交给现有 Opener；不新增 URI 解析器。文件 delegate 保留行列定位，修改位置复用候选而不重查；filesOnly 对照固定上游保持字面查询，未改变其语义。
 - 旧产品回归实际失败，明确复现三类 URL 被行号解析改写；修复后实际 Provider＋Chromium 的25项定向检查全部通过（23.17秒、230条断言），包括原空文件编辑器和 Chat 调用方。Picker事件及宿主服务为显式替身，不作为完整Gateway页面或操作系统链接打开验收。
 - 含19份实际sourceTransform投影的完整Workbench类型检查通过（65.64秒），正式Web构建通过（52.91秒）；ESM语法、OpenSpec strict及差异检查通过。准确命令、源码及构建指纹、失败和通过原件、退出码：out/tests/temp/quick_access_uri_suffix_20261103/artifacts/verification.json。未重复完整Gateway页面和Electron；quickNavigate及文件符号等其余范围仍未闭环，7.4保持未勾选。
+
+### 2026-11-03：原图片读取失败不再静默显示旧图（17.4 部分）
+
+- 对照固定上游及reference_repo/vscode，确认原图片reload忽略所有读取失败且不消费删除。业务文件沿唯一sourceTransform补齐删除刷新；当前加载失败时清理旧图、object URL与大小并显示原错误。保留原Pane、FileService、watcher、加载代际及恢复链，未改其它原生文件行为。
+- 旧产品真实页面回归失败：POSIX撤销文件读取权限后原raw返回500/no-store，界面仍显示1x1旧图且无错误。修复后真实Gateway＋双托管后端＋正式Workbench＋Chromium通过（1项／93.08秒）：权限失败／恢复、删除／重建均在原Pane可见；原冷热200／304零正文、外部更新、A/B隔离、静态资源、文本CAS及Range／下载／401等断言保持，pageErrors=[]。该原生延迟I/O沿原TraceMiddleware为500，不改写成授权403。
+- 10项源码转换／watcher检查通过（118条断言）；含20份真实转换源码的完整类型检查通过（49.71秒），本批正式页面构建退出0、40.83秒；复用与Web build相同的唯一构建管线，不重复打包。ESM、Ruff、Python类型、OpenSpec strict及差异检查通过；初次uv run pyright因工具未安装失败，改用仓库既有uvx入口后零诊断，保留原件。
+- 准确命令、源码及构建指纹、失败与通过输出及退出码：out/tests/temp/image_read_failures_20261103/artifacts/verification.json；最终真实页面原件：out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-c8d73ac5b960/nodes/node-1a9400b31e52/artifacts/file-cache.json。未重跑Webview／Electron；认证切换、route复用、断连与迟到加载等仍由17.4追踪，整项保持未勾选。

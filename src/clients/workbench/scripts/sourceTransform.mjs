@@ -16,6 +16,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/contrib/search/browser/searchTreeModel/match.ts',
   'src/vs/workbench/contrib/search/browser/searchView.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
+  'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   ...searchEditorSourcePaths,
 ];
 
@@ -45,6 +46,25 @@ export function sourceTransform(root, productConfiguration, extensions) {
       // pagehide 的同步 shutdown 仍会产生延迟日志；数据库连接由浏览器随文档释放，不能提前关闭并中止事务。
       contents = replaceOnce(contents, closeDatabase, '// IndexedDB 连接随浏览器文档释放，保留关闭期间日志和设置写入的机会。');
       contents = `import { installWorkspaceFileSystem, workspaceFolder } from ${JSON.stringify(join(root, 'src/filesystem.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts')) {
+      // 业务文件删除及读取失败不能继续把旧图当作当前成功；其余原生文件沿原版行为。
+      contents = replaceOnce(contents, 'if (e.contains(input.resource, FileChangeType.UPDATED, FileChangeType.ADDED)) {',
+        "if (e.contains(input.resource, FileChangeType.UPDATED, FileChangeType.ADDED) || input.resource.scheme === 'boxteam-file' && e.contains(input.resource, FileChangeType.DELETED)) {");
+      const swallowed = `} catch {
+\t\t\t// Keep showing the previous image, e.g. when the file is in the middle of being written
+\t\t\treturn;
+\t\t}`;
+      contents = replaceOnce(contents, swallowed, `} catch (error) {
+if (input.resource.scheme === 'boxteam-file' && this._isCurrentLoad(loadId, input)) {
+  this._viewer?.clear();
+  this._objectUrl.clear();
+  this._fileSize = undefined;
+  this._setMessage(localize('imagePreview.readFailed', "Unable to read image: {0}", error instanceof Error ? error.message : String(error)));
+  this._onDidChangeImageInfo.fire();
+}
+return;
+}`);
     }
     if (path === join(upstream, 'src/vs/workbench/services/search/common/queryBuilder.ts')) {
       const commonQuery = 'private commonQuery(folderResources: (IWorkspaceFolderData | URI)[] = [], options: ICommonQueryBuilderOptions = {}): ICommonQueryProps<uri> {';
