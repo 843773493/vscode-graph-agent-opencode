@@ -6,6 +6,7 @@
 
 - 可以维护文件来源 owner，以及认证 Gateway Skill 原始快照的 typed 消费 owner。
 - `resource_navigation.py` 是 Workspace/Gateway 共用的固定根只读导航实现；普通导航不经过来源登记、快照或上下文激活。
+- 文件续页按已完成文件数及当前文件内命中定位；原文件观察值与 ignore 版本校验已消费前缀，跳过已完成文件的正文，不为每条匹配重复编码正文指纹。续点指向首条未交付项，重启仍可恢复；目录观察不另立权威索引。
 - 会话产物仅经注入的原 owner 读取端口访问精确单文件；模型调用必须显式传入其 SessionThread capability，拒绝后不得回退到容器读取端口。附件 MIME、预览与保活归附件 owner，工具输出只开放单文件读取与正文搜索。
 - `gateway_resource_navigation.py` 只经已配置 Gateway 传输固定 URI，复用联邦 read grant；响应根、文件匹配及 authority 的校验由同一函数负责，不能在 source 读取远端宿主路径。
 - 未登记的导航 HTTP 错误由同步、异步与 API 共用同一失败投影，保留状态、目标 URI、request_id 和原 request/response/cause；远端原始正文只留诊断，不复制到普通响应或工具错误，不重复记录已投影错误。

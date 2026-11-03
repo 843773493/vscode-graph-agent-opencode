@@ -1,15 +1,26 @@
 """同一文件导航入口的显式文本选项、路径过滤和码点位置。"""
 
+import json
+import os
+import time
+from collections import Counter
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
+from app.schemas.internal_v2.resource_navigation import (
+    ResourceNavigationRequest,
+    ResourceNavigationSearchOptions,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
+    ResourceNavigation,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
+from tests.harness.python.run_context import TestRunContext
 from tests.unit.services.infrastructure.resource_platform.sources.test_resource_navigation import (
     GATEWAY_ID,
 )
@@ -19,6 +30,134 @@ from tests.unit.services.infrastructure.resource_platform.sources.test_resource_
 from tests.unit.services.infrastructure.resource_platform.sources.test_resource_navigation import (
     navigation_case as navigation_case,  # noqa: PLC0414 - 复用隔离文件owner装配
 )
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_content_cursor_skips_completed_file_bodies(navigation_case, monkeypatch, request, synchronous):
+    owner, workspace, uri = navigation_case
+    count = 64
+    body = "unchanged filler\n" * 4095 + "needle\n"
+    names = [f"{index:03}.txt" for index in range(count)]
+    for name in names:
+        (workspace / name).write_text(body, encoding="utf-8")
+    reads = Counter()
+    read_bytes = 0
+    read = owner._read_bytes
+
+    def observed(path, *args, **kwargs):
+        nonlocal read_bytes
+        data = read(path, *args, **kwargs)
+        reads[path.name] += 1
+        read_bytes += len(data)
+        return data
+
+    monkeypatch.setattr(owner, "_read_bytes", observed)
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", limit=1, max_bytes=128 * 1024)
+    seen, durations, cursor = [], [], None
+    for _ in range(count + 1):
+        started = time.perf_counter()
+        payload = query.model_copy(update={"cursor": cursor})
+        page = owner.navigate_sync(payload, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(payload, local_gateway_id=GATEWAY_ID)
+        durations.append(time.perf_counter() - started)
+        seen.extend(hit.uri for hit in page.matches)
+        assert len(page.matches) == 1
+        cursor = page.next_cursor
+        if not page.truncated:
+            assert cursor is None
+            break
+        assert cursor and page.truncation_reason == "entry_limit"
+    else:
+        pytest.fail("文件正文分页未收敛")
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "pagination-measurement.json").write_text(json.dumps({
+        "synchronous": synchronous, "files": count, "file_bytes": len(body.encode()), "pages": len(durations),
+        "body_reads": reads.total(), "body_bytes": read_bytes, "page_seconds": durations,
+        "elapsed_seconds": sum(durations), "per_file_reads": dict(reads),
+    }, indent=2), encoding="utf-8")
+    assert seen == [uri + "/" + name for name in names]
+    # 下一页可重读自己的锚点，不能再读此前已完成文件的正文。
+    assert reads.total() == count * 2 - 1
+    assert reads[names[0]] == 1 and all(reads[name] == 2 for name in names[1:])
+    assert read_bytes == len(body.encode()) * (count * 2 - 1)
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.skipif(os.name == "nt", reason="此用例验证 POSIX 修改 ctime；Windows ctime 仍可能表示创建时间")
+async def test_consumed_body_change_rejects_cursor_before_any_body_read(navigation_case, monkeypatch, synchronous):
+    owner, workspace, uri = navigation_case
+    first = workspace / "a.txt"
+    first.write_text("needle first")
+    (workspace / "b.txt").write_text("needle second")
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", limit=1)
+
+    async def search(payload):
+        return owner.navigate_sync(payload, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(payload, local_gateway_id=GATEWAY_ID)
+
+    page = await search(query)
+    assert page.next_cursor and [hit.uri for hit in page.matches] == [uri + "/a.txt"]
+    before = first.stat()
+    first.write_text("needle other")
+    os.utime(first, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert first.stat().st_size == before.st_size
+    assert first.stat().st_ctime_ns != before.st_ctime_ns
+    reads = []
+    monkeypatch.setattr(owner, "_read_bytes", lambda *args, **kwargs: reads.append(args))
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await search(query.model_copy(update={"cursor": page.next_cursor}))
+    assert failure.value.reason == "stale_cursor" and not reads
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_unconsumed_body_change_is_visible_without_rereading_prefix(navigation_case, monkeypatch, synchronous):
+    owner, workspace, uri = navigation_case
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (workspace / name).write_text("needle old")
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", limit=1)
+
+    async def search(payload):
+        return owner.navigate_sync(payload, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(payload, local_gateway_id=GATEWAY_ID)
+
+    first = await search(query)
+    assert first.next_cursor
+    (workspace / "b.txt").write_text("needle updated")
+    reads = []
+    read = owner._read_bytes
+
+    def observed(path, *args, **kwargs):
+        reads.append(path.name)
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "_read_bytes", observed)
+    second = await search(query.model_copy(update={"cursor": first.next_cursor}))
+    assert [(hit.uri, hit.text) for hit in second.matches] == [(uri + "/b.txt", "needle updated")]
+    assert "a.txt" not in reads and "b.txt" in reads
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_fresh_owner_resumes_file_and_match_position(navigation_case, synchronous):
+    owner, workspace, uri = navigation_case
+    for name in ("a.txt", "b.txt"):
+        (workspace / name).write_bytes("🧪 needle needle\r\nneedle Ω\r\n".encode())
+    query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", limit=1,
+        search_options=ResourceNavigationSearchOptions(all_matches=True, context_lines=1))
+    seen, cursor = [], None
+    for _ in range(7):
+        # 每页重建 owner，续查不能依赖上页留下的匹配列表或目录缓存。
+        owner = ResourceNavigation(workspace_root=workspace, workspace_id=owner._workspace_id,
+            project_root=Path.cwd(), file_paths=owner._file_paths)
+        payload = query.model_copy(update={"cursor": cursor})
+        page = owner.navigate_sync(payload, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(payload, local_gateway_id=GATEWAY_ID)
+        seen.extend((hit.uri, hit.line, hit.column, hit.utf16_column) for hit in page.matches)
+        assert page.contexts and len(page.matches) == 1
+        cursor = page.next_cursor
+        if not page.truncated:
+            assert cursor is None
+            break
+        assert cursor
+    else:
+        pytest.fail("重建 owner 后的正文续页未收敛")
+    assert seen == [(uri + "/" + name, line, column, utf16) for name in ("a.txt", "b.txt")
+        for line, column, utf16 in ((1, 3, 4), (1, 10, 11), (2, 1, 1))]
 
 
 @pytest.mark.parametrize("synchronous", [False, True])

@@ -232,6 +232,25 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             file_next, = [event for event in file_continued if event["type"] == "page"]
             assert file_next["page"]["files"]["entries"][0]["uri"] == roots["route_b"] + "/search-one/needle-b.txt"
             assert len(file_continued[-1]["summary"]["branches"]) == 1
+            content_continuation = {"scope": {"mode": "resume", "scope": content[0]["scope"]["scope"]}, "queries": [content_query],
+                "continuations": [{"branch": content_page["branch"]["branch"], "cursor": content_page["branch"]["cursor"]}]}
+            content_restarted = await search(content_continuation, "req_federation_content_restart")
+            restored_hit, = next(event for event in content_restarted if event["type"] == "page")["page"]["files"]["matches"]
+            assert restored_hit == next_hit
+            # 通过原保存入口更新已消费的同一文件，旧的文件内续点必须明确失效。
+            selection = {"X-BoxTeam-Workspace-Id": route_a}
+            current = await client.get("/api/v1/workspace/files/content", headers=selection, params={"path": hit["uri"]})
+            current.raise_for_status()
+            original = current.json()["data"]
+            saved = await client.put("/api/v1/workspace/files/content", headers=selection, params={"path": hit["uri"]},
+                json={"content": original["content"] + "updated", "expected_revision": original["revision"]})
+            saved.raise_for_status()
+            stale_content = await search(content_continuation, "req_federation_content_stale")
+            stale_branch, = stale_content[-1]["summary"]["branches"]
+            assert (stale_branch["state"], stale_branch["error_owner"], stale_branch["reason"], stale_branch["http_status"]) == (
+                "failed", "resource_file_operations", "stale_cursor", 400)
+            assert stale_branch["cursor"] == content_page["branch"]["cursor"] and stale_branch["returned_results"] == 0
+            assert not any(event["type"] == "page" for event in stale_content)
             resumed = await search({"scope": {"mode": "resume", "scope": frozen}, "queries": [query],
                                     "continuations": [{"branch": b_page["branch"]["branch"], "cursor": b_page["branch"]["cursor"]}]}, "req_federation_resume")
             resumed_page, = [event for event in resumed if event["type"] == "page"]

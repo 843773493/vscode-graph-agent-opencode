@@ -83,6 +83,12 @@ class FileObservation(NamedTuple):
     ignore: tuple[int, ...] = ()
 
 
+class SearchPosition(NamedTuple):
+    offset: int
+    matches: int
+    prefix: str
+
+
 def _resolve_path(path: Path) -> Path:
     try:
         return path.resolve()
@@ -273,12 +279,7 @@ class ResourceNavigation:
             {**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri, "gateway_id": gateway_id},
             sort_keys=True, separators=(",", ":"),
         ).encode()).hexdigest()
-        # TODO：多页目前重复有界扫描，待主体完成后按实测优化，不能引入第二目录事实源。
-        offset, expected_prefix = self._decode_cursor(request.cursor, binding)
-        root_stat = path.stat()
-        prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
-        prefix_checked = offset == 0
-        consumed, consumed_prefix = 0, prefix.hexdigest()
+        resume = self._decode_cursor(request.cursor, binding)
         entries: list[ResourceNavigationNodeDTO] = []
         matches: list[ResourceNavigationMatchDTO] = []
         contexts: dict[tuple[str, int], ResourceNavigationContextDTO] = {}
@@ -288,16 +289,8 @@ class ResourceNavigation:
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
         ))
-        for index, (child_node, metadata, hit) in enumerate(self._search_items(root, children, parsed, node, request, deadline, pattern, excluded), start=1):
+        for child_node, hit, position in self._search_items(root, children, parsed, node, request, deadline, pattern, excluded, resume):
             match = hit.match if hit is not None else None
-            prefix.update(json.dumps((child_node.uri, metadata, match.model_dump() if match is not None else None), separators=(",", ":")).encode())
-            if index <= offset:
-                if index == offset:
-                    prefix_checked = prefix.hexdigest() == expected_prefix
-                    if not prefix_checked:
-                        raise ResourceFileOperationError("execution_failed", "目录已改变，不能沿旧 cursor 续页", reason="stale_cursor")
-                    consumed, consumed_prefix = index, prefix.hexdigest()
-                continue
             relative = parse_resource_uri(child_node.uri).tail_segments[len(parsed.tail_segments):]
             name = "/".join(relative) or parsed.tail_segments[-1]
             if request.operation == "list":
@@ -324,7 +317,8 @@ class ResourceNavigation:
                 if reason is not None:
                     if not entries:
                         raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
-                    cursor = self._encode_cursor(binding, consumed, consumed_prefix)
+                    # 续点指向首条未交付项；页预算不能推进越过该命中。
+                    cursor = self._encode_cursor(binding, position)
                     return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()),
                         truncated=True, next_cursor=cursor, truncation_reason=reason), request, deadline)
                 if child_node.uri not in seen:
@@ -334,9 +328,6 @@ class ResourceNavigation:
                     matches.append(match)
                 contexts.update(additions)
                 response_bytes += entry_bytes
-            consumed, consumed_prefix = index, prefix.hexdigest()
-        if not prefix_checked:
-            raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
         return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values())), request, deadline)
 
     def _navigate_owned_file(
@@ -372,8 +363,9 @@ class ResourceNavigation:
         binding = hashlib.sha256(json.dumps({**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri,
                                             "gateway_id": gateway_id}, sort_keys=True).encode()).hexdigest()
         version = hashlib.sha256(owned.data).hexdigest()
-        offset, previous = self._decode_cursor(request.cursor, binding)
-        if previous is not None and previous != version:
+        resume = self._decode_cursor(request.cursor, binding)
+        offset = resume.offset
+        if request.cursor is not None and (resume.prefix != version or resume.matches):
             raise ResourceFileOperationError("execution_failed", "工具结果已改变，不能使用原 cursor", reason="stale_cursor")
         if not self._file_included(parsed.tail_segments[-1], request):
             if offset:
@@ -390,7 +382,7 @@ class ResourceNavigation:
         consumed = 0
         truncated = False
         reason = None
-        for _, _, hit in self._content_matches(node, content, request, deadline, FileObservation(()), pattern):
+        for hit in self._content_matches(node, content, request, deadline, pattern):
             if hit is None:
                 continue
             consumed += 1
@@ -399,7 +391,7 @@ class ResourceNavigation:
             additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts}
             candidate = ResourceNavigationResultDTO(node=node, entries=(node,), matches=(*matches, hit.match),
                 contexts=(*contexts.values(), *additions.values()), truncated=True,
-                next_cursor=self._encode_cursor(binding, consumed, version), truncation_reason="response_byte_limit", view="live")
+                next_cursor=self._encode_cursor(binding, SearchPosition(consumed, 0, version)), truncation_reason="response_byte_limit", view="live")
             if len(matches) >= request.limit or self._size(candidate) > request.max_response_bytes:
                 truncated, reason = True, "entry_limit" if len(matches) >= request.limit else "response_byte_limit"
                 break
@@ -412,7 +404,7 @@ class ResourceNavigation:
         return self._response(ResourceNavigationResultDTO(node=node, entries=(node,) if matches else (), matches=tuple(matches),
             contexts=tuple(contexts.values()),
             view="live", truncated=truncated, truncation_reason=reason,
-            next_cursor=self._encode_cursor(binding, offset + len(matches), version) if truncated else None), request, deadline)
+            next_cursor=self._encode_cursor(binding, SearchPosition(offset + len(matches), 0, version)) if truncated else None), request, deadline)
 
     @staticmethod
     def _glob_matches(name: str, pattern: str) -> bool:
@@ -463,53 +455,85 @@ class ResourceNavigation:
     def _search_items(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-        excluded: frozenset[str],
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, ContentMatch | None]]:
+        excluded: frozenset[str], resume: SearchPosition,
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, ContentMatch | None, SearchPosition]]:
         path = self._contained(root, children, parsed)
         candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
+        root_stat = path.stat()
+        prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
+        prefix_checked = not resume.prefix
+        index = 0
+        # TODO：目录前缀仍逐页观察；64 文件小页实测见 test_content_cursor_skips_completed_file_bodies。
+        # 后续复用须沿原 watcher/cacheKey 生命周期，不能缓存另一份权威目录或绕过重启续页校验。
         for child, metadata in candidates:
             self._check_deadline(deadline)
             if request.search_options is not None and request.search_options.files_only and child.resource_shape != "file":
                 continue
             if child.uri in excluded:
                 continue
-            if request.operation != "search" or request.search_mode != "content" or child.resource_shape != "file":
-                yield child, metadata, None
+            index += 1
+            # 文件观察值和 ignore 版本足以识别可变前缀；不重复序列化每条命中正文。
+            previous_prefix = prefix.hexdigest()
+            prefix.update(json.dumps((child.uri, metadata), separators=(",", ":")).encode())
+            current_prefix = prefix.hexdigest()
+            if index <= resume.offset:
                 continue
-            target = parse_resource_uri(child.uri)
-            name = "/".join(target.tail_segments[len(parsed.tail_segments):]) or target.tail_segments[-1]
-            if not self._file_included(name, request) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
-                yield child, metadata, None
-                continue
-            file = self._contained(root, target.tail_segments[1:], target)
-            data = self._read_bytes(file, request.max_bytes, deadline, before=metadata.stat)
-            # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
-            if b"\0" in data:
-                yield child, metadata, None
-                continue
-            if len(data) > request.max_bytes:
-                raise ResourceFileOperationError("output_limit_exceeded", "搜索文件超过读取上限，请缩小过滤或增加 max_bytes", reason="file_byte_limit")
-            try:
-                content = data.decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise ResourceFileOperationError("invalid_encoding", "搜索文件不是有效的 UTF-8 文本", reason="utf8") from error
-            yield from self._content_matches(child, content, request, deadline, metadata, pattern)
+            if index == resume.offset + 1 and resume.prefix:
+                if (current_prefix if resume.matches else previous_prefix) != resume.prefix:
+                    raise ResourceFileOperationError("execution_failed", "目录已改变，不能沿旧 cursor 续页", reason="stale_cursor")
+                prefix_checked = True
+            skipped = resume.matches if index == resume.offset + 1 else 0
+            hits = self._file_matches(root, parsed, child, metadata, request, deadline, pattern) if (
+                request.operation == "search" and request.search_mode == "content" and child.resource_shape == "file"
+            ) else iter((None,))
+            for match_index, hit in enumerate(hits):
+                if skipped:
+                    skipped -= 1
+                    continue
+                yield child, hit, SearchPosition(index - 1, match_index, current_prefix if match_index else previous_prefix)
+            if skipped:
+                raise ResourceFileOperationError("execution_failed", "文件内 cursor 的位置不存在", reason="stale_cursor")
+        if not prefix_checked:
+            raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
+
+    def _file_matches(
+        self, root: Path, parsed: ParsedResourceUri, child: ResourceNavigationNodeDTO, metadata: FileObservation,
+        request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
+    ) -> Iterator[ContentMatch | None]:
+        target = parse_resource_uri(child.uri)
+        name = "/".join(target.tail_segments[len(parsed.tail_segments):]) or target.tail_segments[-1]
+        if not self._file_included(name, request) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
+            yield None
+            return
+        file = self._contained(root, target.tail_segments[1:], target)
+        data = self._read_bytes(file, request.max_bytes, deadline, before=metadata.stat)
+        # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
+        if b"\0" in data:
+            yield None
+            return
+        if len(data) > request.max_bytes:
+            raise ResourceFileOperationError("output_limit_exceeded", "搜索文件超过读取上限，请缩小过滤或增加 max_bytes", reason="file_byte_limit")
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ResourceFileOperationError("invalid_encoding", "搜索文件不是有效的 UTF-8 文本", reason="utf8") from error
+        yield from self._content_matches(child, content, request, deadline, pattern)
 
     def _content_matches(
         self, child: ResourceNavigationNodeDTO, content: str, request: ResourceNavigationRequest,
-        deadline: float, metadata: FileObservation, pattern: regex.Pattern[str] | None,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, ContentMatch | None]]:
+        deadline: float, pattern: regex.Pattern[str] | None,
+    ) -> Iterator[ContentMatch | None]:
         if pattern is None:
             raise ValueError("内容搜索缺少已编译查询")
         found = False
         try:
             for hit in content_matches(child.uri, content, request, deadline, pattern, time.monotonic):
                 found = True
-                yield child, metadata, hit
+                yield hit
         except TimeoutError as error:
             raise ResourceFileOperationError("output_limit_exceeded", "文件内容匹配超过本次总期限", reason="deadline") from error
         if not found:
-            yield child, metadata, None
+            yield None
 
     @staticmethod
     def _stat(path: Path) -> tuple[int, ...]:
@@ -691,24 +715,27 @@ class ResourceNavigation:
         return result
 
     @staticmethod
-    def _encode_cursor(binding: str, offset: int, prefix: str) -> str:
-        raw = json.dumps({"v": 1, "binding": binding, "offset": offset, "prefix": prefix}, separators=(",", ":")).encode()
+    def _encode_cursor(binding: str, position: SearchPosition) -> str:
+        raw = json.dumps({"v": 2, "binding": binding, "offset": position.offset,
+                          "matches": position.matches, "prefix": position.prefix}, separators=(",", ":")).encode()
         return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
     @staticmethod
-    def _decode_cursor(cursor: str | None, binding: str) -> tuple[int, str | None]:
+    def _decode_cursor(cursor: str | None, binding: str) -> SearchPosition:
         if cursor is None:
-            return 0, None
+            return SearchPosition(0, 0, "")
         try:
             value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
         except (ValueError, UnicodeError) as error:
             raise ResourceFileOperationError("execution_failed", "文件导航 cursor 无效", reason="invalid_cursor") from error
-        if (not isinstance(value, dict) or set(value) != {"v", "binding", "offset", "prefix"}
-                or value["v"] != 1 or value["binding"] != binding
-                or type(value["offset"]) is not int or value["offset"] <= 0
+        if (not isinstance(value, dict) or set(value) != {"v", "binding", "offset", "matches", "prefix"}
+                or value["v"] != 2 or value["binding"] != binding
+                or type(value["offset"]) is not int or value["offset"] < 0
+                or type(value["matches"]) is not int or value["matches"] < 0
+                or value["offset"] + value["matches"] == 0
                 or not isinstance(value["prefix"], str) or len(value["prefix"]) != 64):
             raise ResourceFileOperationError("execution_failed", "cursor 与目标、操作或查询限制不一致", reason="invalid_cursor")
-        return value["offset"], value["prefix"]
+        return SearchPosition(value["offset"], value["matches"], value["prefix"])
 
     def _root(self, parsed: ParsedResourceUri) -> tuple[Path, tuple[str, ...]]:
         if parsed.kind in {"files", "attachments"} and self._file_paths is not None:

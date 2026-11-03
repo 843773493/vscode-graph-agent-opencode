@@ -690,3 +690,13 @@
 - 独立网络验收暴露上轮通信接入的冷导入循环：internal_v2 包级批量导出反向导入尚未完成的搜索模块。全仓核对无包级DTO消费者，删除未使用批量导出，各原消费者继续按所属模块显式引用；两种独立进程导入顺序均通过，不靠测试收集或启动导入顺序规避。
 - 最终定向100项通过（10.41秒），包括原输出预算／取消／relay／客户端、两种同码不同原因、真实HTTP状态和冷导入。真实Gateway＋双Backend通过（50.31秒），原件 out/tests/integration/gateway/test_federated_search/runs/run-77357653a6af/：空目录非法正则、非法cursor、非法UTF-8及实际I/O失败保留原归属／原因，原续页／重启／部分失败保持。文件覆盖E2E通过（87.84秒），原件 out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-ef7e46002a50/，零页面错误，共享正式构建39.33秒、退出0。
 - 核心六文件Pyright零诊断、Ruff、真实Workbench类型检查（19份转换源码）、生成一致性、Buf breaking及OpenSpec strict通过。正式浏览器验收使用同源码的唯一产品构建，未重复无变化打包；本批不改变UI交互，不重复Electron。第一次独立网络检查在收集阶段因上述循环导入失败，原件仍保留；准确命令、指纹、原始输出及退出码见 out/tests/temp/search_diagnostics_20261103/artifacts/verification.json。原owner其余异常细分与信息／警告合同仍由16.18追踪，完整任务保持未勾选。
+
+
+### 2026-11-03：文件续页跳过已完成正文（16.11、16.17 性能切片）
+
+- 参考 VS Code 原 FileSystemFileSearchProvider／RawSearchService 与 Copilot 搜索接入，将续点分成已完成文件和当前文件内位置；原文件／ignore 观察值继续保护已消费前缀，删除逐条匹配正文的前缀序列化。已完成文件不重读正文，单文件多命中、UTF-16、上下文及首条未交付项仍沿唯一匹配链；没有新增缓存、目录索引或持久搜索状态。内部 cursor 统一 v2，v1 明确 invalid_cursor，不加兼容双轨。
+- 相同64文件、每文件69,622字节、每页一条的异步负载，正文读取由2,143次／149,199,946字节降为127次／8,841,994字节，测量耗时由56.106秒降为6.755秒；优化后同步为6.803秒。仅这些实际负载证明收益，不承诺全链路线性增长。目录前缀仍重复观察，保留对应源码 TODO；部分文件继续按原匹配器恢复。
+- 最终owner定向163 passed／18.53秒；改用typed测试选项后补核重建owner用例2 passed。覆盖同大小并恢复mtime后ctime变化的POSIX前缀拒绝且无正文读取、未消费文件更新可见、重建owner后的文件内位置连续。该ctime用例明确不适用于仍以ctime表示创建时间的Windows，不冒充Windows实机验收。
+- 真实Gateway与双Backend网络1 passed／48.98秒：原查询及Gateway重启后的文件内续点相同，通过原保存API更新已消费文件后，旧cursor返回原resource_file_operations/stale_cursor/400，零页、零交付并保留输入cursor。正式Workbench／Gateway／Chromium文件覆盖E2E 1 passed／90.58秒，pageErrors=[]，共享正式构建41.11秒、退出0；A/B覆盖、小配额和原查询隔离断言保持。
+- Ruff、OpenSpec strict和差异检查通过；Pyright与HEAD原件对照，核心9条及既有测试17条诊断完全相同、无新增，网络测试零诊断。无公开DTO或前端源码变化，不重复协议生成、前端类型或Electron。基线初次负载超过默认读取预算已改为显式128KiB；第二次基线异步完整复现后，同步部分被90秒外部监督器终止，未把它算作完成；原件均保留。
+- 准确命令、源码指纹、测量、原始输出、退出码及正式产物路径：out/tests/temp/search_pagination_20261103/artifacts/verification.json。16.11／16.17的其余合同与16.19 Windows canonical等仍未闭环，保持整项未勾选。
