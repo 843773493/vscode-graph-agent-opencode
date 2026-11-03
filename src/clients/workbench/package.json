@@ -13,6 +13,7 @@
     "@microsoft/1ds-core-js": "3.2.13",
     "@microsoft/1ds-post-js": "3.2.13",
     "@microsoft/applicationinsights-common": "^3.3.4",
+    "@noble/hashes": "^2.0.1",
     "@vscode/codicons": "0.0.46-47",
     "@vscode/diff": "0.0.2-7",
     "@vscode/hubrpc": "0.0.2-20",

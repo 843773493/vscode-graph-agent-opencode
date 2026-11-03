@@ -46,7 +46,7 @@ export class ResourceOpener extends Disposable implements IOpener {
         threadId: address.thread_id ?? (await gateway.mainThread(target.workspace_id, address.session_id)).thread_id,
         title: address.thread_id ?? address.session_id })
       : address.file_root_uri ? { resource: workspaceFileUri(owner, address.uri, address.file_root_uri) } : undefined;
-    // TODO：只读来源、媒体及更改的统一投影继续由同一入口补齐，不走系统外部打开。
+    // TODO：只读来源及更改的统一投影继续由同一入口补齐；音视频 Webview 宿主条件见 startWorkbench。
     if (!input) throw new Error(`此资源尚未接入编辑器：${address.kind}`);
     const source = this.groups.getGroup(groupId);
     if (!source) throw new Error('发起打开的编辑器组已关闭');

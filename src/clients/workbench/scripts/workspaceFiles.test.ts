@@ -7,6 +7,10 @@ import { NullLogService } from '../upstream/src/vs/platform/log/common/log.js';
 import { gateway, GatewayRequestError } from '../src/agentApi.js';
 import { installBackendFiles, workspaceFileUri, workspaceFileSource } from '../src/workspaceFiles.js';
 import * as fileEvents from '../../web/src/api/stream/workspaceFileEvents.js';
+import * as fileApi from '../../web/src/api/workspaceFilesystem.js';
+import { CancellationToken, CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
+import { consumeStream } from '../upstream/src/vs/base/common/stream.js';
+import { createHash } from 'node:crypto';
 
 const owner = { gatewayId: 'gateway_file_test', workspaceId: 'workspace-a' };
 const root = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`;
@@ -36,6 +40,10 @@ describe('后端文件目录根和稳定投影', () => {
     expect(isEqualOrParent(workspaceFileUri(owner, otherRoot + '/x.txt', otherRoot), directory)).toBe(false);
     expect(workspaceFileUri({ ...owner, gatewayId: 'another-gateway' }, root, root).toString()).not.toBe(directory.toString());
     expect(() => workspaceFileSource(URI.from({ scheme: 'boxteam-file', authority: 'workspace-a', path: '/x.txt', query: 'route=old&path=old' }))).toThrow('旧临时路由');
+    const media = workspaceFileUri(owner, root + '/video.mp4', root);
+    expect(workspaceFileSource(media.with({ query: 'version=123' })).path).toBe(root + '/video.mp4');
+    expect(() => workspaceFileSource(media.with({ query: 'revision=123' }))).toThrow();
+    expect(() => workspaceFileSource(media.with({ fragment: 'L2' }))).toThrow();
   });
 
   test('目录和二进制 stat 只 describe，缺失和权限错误由原服务返回', async () => {
@@ -68,12 +76,13 @@ describe('后端文件目录根和稳定投影', () => {
     const resource = workspaceFileUri(owner, path, root);
     const provider = files.getProvider(resource.scheme);
     if (!provider?.readFile || !provider.writeFile) throw new Error('文件 provider 未登记');
-    const original = '1'.repeat(64), changed = '2'.repeat(64);
+    const original = createHash('sha256').update('original').digest('hex'), changed = '2'.repeat(64);
     const resolve = spyOn(gateway, 'resolveWorkspace').mockResolvedValue('old-route');
     const request = spyOn(gateway, 'request');
+    const raw = spyOn(fileApi, 'getWorkspaceRawFileBlob').mockResolvedValue(new Blob(['original']));
     try {
-      request.mockResolvedValueOnce({ path, content: 'original', revision: original });
       expect(new TextDecoder().decode(await provider.readFile(resource))).toBe('original');
+      expect(raw.mock.calls[0].slice(0, 3)).toEqual([0, path, 'old-route']);
       resolve.mockResolvedValue('replacement-route');
       request.mockResolvedValueOnce({ node: { uri: path, resource_shape: 'file', stat: { size: 9, modified_at_ms: 99, changed_at_ms: 99 } } });
       await files.stat(resource);
@@ -84,7 +93,45 @@ describe('后端文件目录根和稳定投影', () => {
       expect(JSON.parse(String(write[1]?.body))).toEqual({ content: 'my draft', expected_revision: original });
       expect(write[2]).toBe('replacement-route');
       expect(request.mock.calls.at(-1)?.[1]?.method).not.toBe('PUT');
-    } finally { resolve.mockRestore(); request.mockRestore(); files.dispose(); }
+    } finally { raw.mockRestore(); resolve.mockRestore(); request.mockRestore(); files.dispose(); }
+  });
+
+  test('原 FileService 的范围读取传递精确字节和取消；部分正文不覆盖文本 CAS 基线', async () => {
+    const files = fileService(), resource = workspaceFileUri(owner, root + '/bytes.txt', root);
+    const provider = files.getProvider(resource.scheme)!;
+    if (!provider.readFile || !provider.readFileStream || !provider.writeFile) throw new Error('缺少文件字节能力');
+    const full = new Uint8Array([239, 187, 191, 65, 13, 10]);
+    const resolve = spyOn(gateway, 'resolveWorkspace').mockResolvedValue('byte-route');
+    const raw = spyOn(fileApi, 'getWorkspaceRawFileBlob').mockResolvedValueOnce(new Blob([full]));
+    const request = spyOn(gateway, 'request').mockResolvedValue({ path: root + '/bytes.txt', revision: '3'.repeat(64) });
+    const cancellation = new CancellationTokenSource();
+    const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    try {
+      // 普通文件入口继续支持远程 HTTP，不依赖只在安全上下文提供的 WebCrypto。
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined });
+      expect(await provider.readFile(resource)).toEqual(full);
+      raw.mockResolvedValueOnce(new Blob([full.subarray(3, 5)]));
+      const partial = await consumeStream(provider.readFileStream(resource, { position: 3, length: 2 }, CancellationToken.None), chunks => chunks.flatMap(chunk => [...chunk]));
+      expect(partial).toEqual([65, 13]);
+      expect(raw.mock.calls.at(-1)?.[4]).toEqual({ start: 3, end: 4 });
+      await provider.writeFile(resource, new TextEncoder().encode('saved'), { create: false, overwrite: true, unlock: false, atomic: false });
+      expect(JSON.parse(String(request.mock.calls.at(-1)?.[1]?.body)).expected_revision).toBe(createHash('sha256').update(full).digest('hex'));
+      const reading = Promise.withResolvers<Blob>();
+      const started = Promise.withResolvers<void>();
+      raw.mockImplementationOnce((_port, _path, _route, signal) => {
+        signal!.addEventListener('abort', () => reading.reject(new Error('原字节读取已取消')), { once: true });
+        started.resolve();
+        return reading.promise;
+      });
+      const pending = consumeStream(provider.readFileStream(resource, {}, cancellation.token), chunks => chunks);
+      await started.promise;
+      cancellation.cancel();
+      await expect(pending).rejects.toThrow('原字节读取已取消');
+    } finally {
+      if (cryptoDescriptor) Object.defineProperty(globalThis, 'crypto', cryptoDescriptor);
+      else Reflect.deleteProperty(globalThis, 'crypto');
+      cancellation.dispose(true); raw.mockRestore(); request.mockRestore(); resolve.mockRestore(); files.dispose();
+    }
   });
 
   test('同根多个文件及重复 watch 共用原 SSE，变化通知不读正文，最后解除才取消', async () => {

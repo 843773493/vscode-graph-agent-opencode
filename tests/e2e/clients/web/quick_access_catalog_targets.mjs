@@ -158,6 +158,21 @@ try {
   await verifyResourceLinks({ page, command, api, result, owner: result.owner });
   result.phase = 'dedicated-name-modes';
   const modeRequests = [];
+  const modeReceipts = [];
+  const queryMode = async (value, endpoint, query) => {
+    const [response] = await Promise.all([
+      page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === endpoint && url.searchParams.get('query') === query
+          && response.request().headers()['x-boxteam-workspace-id'] === routeA;
+      }),
+      quick.locator('input').first().fill(value),
+    ]);
+    const body = await response.json();
+    expect(response.status()).toBe(200);
+    expect(body.request_id).toBe(response.headers()['x-request-id']);
+    modeReceipts.push({ path: endpoint, query, requestId: body.request_id });
+  };
   const observeMode = request => {
     const url = new URL(request.url());
     if (['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(url.pathname)
@@ -168,14 +183,15 @@ try {
   page.on('request', observeMode);
   try {
     await command('boxteam.quickAccess.sessions');
-    await quick.locator('input').first().fill('session catalogexact');
+    await queryMode('session catalogexact', '/api/v1/session-catalog/search', 'catalogexact');
     const sessionPick = quick.locator(`[data-quick-input-id="session:${health.gateway_id}/${identity.workspace_id}/${session.session_id}"]`);
     await expect(sessionPick).toHaveCount(1);
     await expect(quick.locator('[data-quick-input-id^="boxteam-thread:"]')).toHaveCount(0);
     await sessionPick.click();
     await expect(page.locator(`.editor-group-container.active section.boxteam-thread[data-thread-id="${main.thread_id}"]`)).toBeVisible();
     await command('boxteam.quickAccess.threads');
-    await quick.locator('input').first().fill(`thread ${fork.thread_id}`);
+    // 最近历史也可包含同一 child；等本次查询回执后再接受，不能用旧历史替代查询验收。
+    await queryMode(`thread ${fork.thread_id}`, '/api/v1/session-threads/search', fork.thread_id);
     const exactChild = quick.locator(`[data-quick-input-id$="/${fork.thread_id}"]`);
     await expect(exactChild).toHaveCount(1);
     await expect(quick.locator('[data-quick-input-id^="session:"]')).toHaveCount(0);
@@ -185,7 +201,7 @@ try {
       { path: '/api/v1/session-catalog/search', route: routeA },
       { path: '/api/v1/session-threads/search', route: routeA },
     ]);
-    result.nameModes = { requests: modeRequests, exactOwners: true };
+    result.nameModes = { requests: modeRequests, receipts: modeReceipts, exactOwners: true };
   } finally { page.off('request', observeMode); }
   result.phase = 'complete';
   expect(result.pageErrors).toEqual([]);

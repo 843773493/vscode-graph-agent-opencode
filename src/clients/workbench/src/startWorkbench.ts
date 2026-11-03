@@ -24,6 +24,8 @@ export async function startWorkbench(): Promise<void> {
   const container = document.getElementById('workbench');
   if (!container) throw new Error('缺少 Workbench 容器');
   create(container, {
+    // TODO：为音视频及扩展 Webview 配置匹配固定上游的隔离宿主；现有 CDN Worker v4 与本版 v6 不兼容。
+    // 不可直接改为 Gateway 同源地址，否则 Webview 正文会获得控制面的同源访问能力。
     // TODO：辅助侧边栏的 Agent 内容待后续设计；会话资源只放入对应 Thread 编辑器。
     workspaceProvider: {
       workspace, trusted: folder || workspaceFile ? undefined : true,

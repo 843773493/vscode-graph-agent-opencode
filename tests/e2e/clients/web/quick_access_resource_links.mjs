@@ -1,14 +1,23 @@
 import { expect } from 'playwright/test';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 /** 规范链接经过真实原 Opener，关键状态仍由本场景的产品 API 创建。 */
 export async function verifyResourceLinks({ page, command, api, result, owner }) {
   const quick = page.locator('.quick-input-widget');
-  const links = { requests: [], receipts: [] };
+  const links = { requests: [], receipts: [], byteReads: [] };
   result.resourceLinks = links;
   const observe = request => {
     if (new URL(request.url()).pathname === '/api/gateway/resource-addresses/parse') links.requests.push(request.postDataJSON());
   };
   page.on('request', observe);
+  const observeBytes = response => {
+    const request = response.request(), url = new URL(request.url());
+    if (url.pathname !== '/api/v1/workspace/files/raw') return;
+    links.byteReads.push({ uri: url.searchParams.get('path'), route: request.headers()['x-boxteam-workspace-id'],
+      range: request.headers().range ?? null, status: response.status(), requestId: response.headers()['x-request-id'] });
+  };
+  page.on('response', observeBytes);
   const open = async (uri, expected = 200, modifiers = []) => {
     await command('workbench.action.quickOpen', uri);
     const [response] = await Promise.all([
@@ -57,6 +66,48 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
     await expect(editor.locator('.view-lines')).not.toContainText('URI link B');
     links.fileUsesOriginalProjection = true;
 
+    result.phase = 'canonical-image-uri';
+    await open(roots.workspace_uri + '/uri-image.png');
+    const image = page.locator('.image-preview-editor').filter({ visible: true }).locator('img');
+    await expect(image).toBeVisible();
+    await expect.poll(() => image.evaluate(element => [element.naturalWidth, element.naturalHeight])).toEqual([1, 1]);
+    links.imageDecoded = true;
+
+    result.phase = 'canonical-real-http-range';
+    const ranged = await page.evaluate(async ({ uri, route }) => {
+      const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
+      const query = new URLSearchParams({ path: uri, scope: 'workspace' });
+      const response = await fetch(`/api/v1/workspace/files/raw?${query}`, {
+        headers: { 'X-Local-Token': credential.data.token, 'X-BoxTeam-Workspace-Id': route, Range: 'bytes=1-3' },
+      });
+      return { status: response.status, bytes: [...new Uint8Array(await response.arrayBuffer())],
+        range: response.headers.get('content-range'), requestId: response.headers.get('x-request-id') };
+    }, { uri: roots.workspace_uri + '/uri-image.png', route: owner.routeA });
+    expect(ranged.status).toBe(206);
+    expect(ranged.bytes).toEqual([80, 78, 71]);
+    expect(ranged.range).toMatch(/^bytes 1-3\/\d+$/);
+    expect(ranged.requestId).toBeTruthy();
+    links.realHttpRange = ranged;
+
+    result.phase = 'canonical-text-raw-byte-save';
+    await open(roots.workspace_uri + '/uri-bom.txt');
+    const text = page.locator('.editor-instance .monaco-editor').filter({ visible: true });
+    await expect(text.locator('.view-lines')).toContainText('BOM original');
+    await text.locator('[role="textbox"]').focus();
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.insertText('BOM saved');
+    const [saved] = await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/workspace/files/content'
+        && response.request().method() === 'PUT'),
+      command('workbench.action.files.save'),
+    ]);
+    expect(saved.status()).toBe(200);
+    const savedBytes = await readFile(join(process.env.BOXTEAM_CATALOG_WORKSPACE, 'uri-bom.txt'));
+    expect(Array.from(savedBytes.subarray(0, 3))).toEqual([239, 187, 191]);
+    expect(savedBytes.subarray(3).toString()).toBe('BOM saved');
+    links.textSavePreservesBom = true;
+    expect(links.byteReads.every(read => read.route === owner.routeA && read.requestId)).toBe(true);
+
     result.phase = 'invalid-canonical-uri';
     const tabs = await page.locator('.tabs-container .tab').count();
     const groups = await page.locator('.editor-group-container').count();
@@ -68,5 +119,5 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
     links.invalidUriIsNotRewritten = true;
     links.noExecution = result.forbidden.length === 0;
     expect(links.noExecution).toBe(true);
-  } finally { page.off('request', observe); }
+  } finally { page.off('request', observe); page.off('response', observeBytes); }
 }

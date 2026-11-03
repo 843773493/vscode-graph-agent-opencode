@@ -304,6 +304,7 @@ export async function getWorkspaceRawFileBlob(
   path: string,
   workspaceId?: string | null,
   signal?: AbortSignal,
+  range?: { start: number; end?: number },
 ): Promise<Blob> {
   const { query } = fileTreeLocationQuery(path);
   // 二进制下载只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
@@ -311,11 +312,12 @@ export async function getWorkspaceRawFileBlob(
     port,
     `/api/v1/workspace/files/raw?${query.toString()}`,
     {
-      headers: workspaceHeader(workspaceId),
+      headers: { ...workspaceHeader(workspaceId), ...(range ? { Range: `bytes=${range.start}-${range.end ?? ""}` } : {}) },
       signal,
       skipGatewayUserSession: true,
     },
   );
+  if (range && response.status !== 206) throw new Error("目标文件服务没有按请求返回字节范围");
   return await response.blob();
 }
 

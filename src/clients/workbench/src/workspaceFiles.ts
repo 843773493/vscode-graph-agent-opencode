@@ -1,12 +1,18 @@
 import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { encodeHex, VSBuffer } from '../upstream/src/vs/base/common/buffer.js';
+import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
+import { getMediaMime } from '../upstream/src/vs/base/common/mime.js';
 import { Event, Emitter } from '../upstream/src/vs/base/common/event.js';
 import { toDisposable, IDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { isEqualOrParent } from '../upstream/src/vs/base/common/resources.js';
-import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult } from '../upstream/src/vs/platform/files/common/files.js';
+import { newWriteableStream, ReadableStreamEvents } from '../upstream/src/vs/base/common/stream.js';
+import { IFileService, FileSystemProviderCapabilities, IFileSystemProviderWithFileReadWriteCapability, IFileSystemProviderWithFileReadStreamCapability, IFileReadStreamOptions, IStat, FileType, IFileChange, FileChangeType, createFileSystemProviderError, FileSystemProviderErrorCode, FileOperationError, FileOperationResult } from '../upstream/src/vs/platform/files/common/files.js';
 import type { WorkspaceFileContentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
+import { getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
 
 const scheme = 'boxteam-file';
@@ -24,7 +30,9 @@ export function workspaceFileUri(owner: WorkspaceOwner, path: string, rootPath: 
 
 export function workspaceFileSource(resource: URI): WorkspaceOwner & { path: string; root: string } {
   const [, workspaceId, encodedRoot, ...children] = resource.path.split('/');
-  if (resource.scheme !== scheme || !resource.authority || !workspaceId || !encodedRoot || resource.query || resource.fragment) {
+  // 原媒体 Webview 添加的 version 仅用于绕过浏览器缓存，不是资源版本参数。
+  const mediaCacheQuery = getMediaMime(resource.path) && /^version=\d+$/.test(resource.query);
+  if (resource.scheme !== scheme || !resource.authority || !workspaceId || !encodedRoot || (resource.query && !mediaCacheQuery) || resource.fragment) {
     throw new Error('文件编辑器资源缺少稳定身份，或包含旧临时路由；请从原文件入口重新打开');
   }
   // 仅反转编辑器投影；公开 URI grammar、根权限和真实目标仍由后端唯一 owner 校验。
@@ -34,26 +42,29 @@ export function workspaceFileSource(resource: URI): WorkspaceOwner & { path: str
       .replace(/[!'()*]/g, character => '%' + character.charCodeAt(0).toString(16).toUpperCase())).join('/') : '') };
 }
 
-class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
-  readonly capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.PathCaseSensitive;
+class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, IFileSystemProviderWithFileReadStreamCapability {
+  readonly capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.FileReadStream | FileSystemProviderCapabilities.PathCaseSensitive;
   readonly onDidChangeCapabilities = Event.None;
   private readonly changes = new Emitter<readonly IFileChange[]>();
   readonly onDidChangeFile = this.changes.event;
   private readonly watchErrors = new Emitter<string>();
   readonly onDidWatchError = this.watchErrors.event;
-  // 仅保留文本模型实际读取的版本；stat/watch 不得推进写入基线。
+  // 仅完整正文读取能建立保存基线；stat/watch 和媒体范围读取不得推进它。
   private readonly revisions = new Map<string, string>();
   private readonly watches = new Map<string, FileWatch>();
 
-  private async request<T>(resource: URI, endpoint: string, options: RequestInit = {}): Promise<T> {
+  private async access<T>(resource: URI, action: (routeId: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const source = workspaceFileSource(resource);
-    const routeId = await gateway.resolveWorkspace(source);
-    try { return await gateway.request<T>(endpoint, options, routeId); }
+    const routeId = await gateway.resolveWorkspace(source, signal);
+    try { return await action(routeId); }
     catch (error) {
       if (error instanceof GatewayRequestError && error.status === 404) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotFound);
       if (error instanceof GatewayRequestError && error.status === 403) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.NoPermissions);
       throw error;
     }
+  }
+  private request<T>(resource: URI, endpoint: string, options: RequestInit = {}): Promise<T> {
+    return this.access(resource, routeId => gateway.request<T>(endpoint, options, routeId));
   }
   private async content(resource: URI, options: RequestInit = {}): Promise<WorkspaceFileContentDTO> {
     const source = workspaceFileSource(resource);
@@ -75,9 +86,33 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
       ctime: node.stat.changed_at_ms, mtime: node.stat.modified_at_ms, size: node.stat.size };
   }
   async readFile(resource: URI): Promise<Uint8Array> {
-    const file = await this.content(resource);
-    this.revisions.set(resource.toString(), file.revision);
-    return new TextEncoder().encode(file.content);
+    return this.readBytes(resource);
+  }
+  private async readBytes(resource: URI, signal?: AbortSignal, options: IFileReadStreamOptions = {}): Promise<Uint8Array> {
+    if (options.length === 0) return new Uint8Array();
+    const start = options.position ?? 0;
+    const range = options.position !== undefined || options.length !== undefined
+      ? { start, end: options.length === undefined ? undefined : start + options.length - 1 } : undefined;
+    const source = workspaceFileSource(resource);
+    const blob = await this.access(resource, routeId => getWorkspaceRawFileBlob(0, source.path, routeId, signal, range), signal);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (!range) {
+      // 复用后端 expected_revision 的原字节 SHA-256；不额外请求文本正文或重读磁盘。
+      const revision = encodeHex(VSBuffer.wrap(sha256(bytes)));
+      if (!signal?.aborted) this.revisions.set(resource.toString(), revision);
+    }
+    return bytes;
+  }
+  readFileStream(resource: URI, options: IFileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array> {
+    const stream = newWriteableStream<Uint8Array>(chunks => VSBuffer.concat(chunks.map(chunk => VSBuffer.wrap(chunk))).buffer);
+    const controller = new AbortController();
+    const cancellation = token.onCancellationRequested(() => controller.abort());
+    if (token.isCancellationRequested) controller.abort();
+    void this.readBytes(resource, controller.signal, options).then(bytes => stream.end(bytes), error => {
+      stream.error(error instanceof Error ? error : new Error(String(error)));
+      stream.end();
+    }).finally(() => cancellation.dispose());
+    return stream;
   }
   async writeFile(resource: URI, bytes: Uint8Array): Promise<void> {
     const expectedRevision = this.revisions.get(resource.toString());
@@ -143,7 +178,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability {
     });
     if (!signal.aborted) throw new Error('文件监听流意外结束');
   }
-  // 此 provider 只负责已有文本；目录管理复用会话文件树的 operation receipt 链路。
+  // 此 provider 读取原字节并沿原文本合同保存；目录管理复用会话文件树的 operation receipt 链路。
   async mkdir(): Promise<void> { throw new Error('请在会话文件树中新建目录'); }
   async readdir(): Promise<[string, FileType][]> { throw createFileSystemProviderError('请在 Thread 的文件资源中浏览目录', FileSystemProviderErrorCode.FileNotADirectory); }
   async delete(): Promise<void> { throw new Error('文本资源不支持直接删除后端文件'); }

@@ -9,7 +9,7 @@ export async function verifyFileWatch({ page, command, result, workspace, resour
   let lastRead = Date.now();
   const observe = response => {
     const request = response.request(), url = new URL(request.url());
-    if (url.pathname !== '/api/v1/workspace/files/content' || url.searchParams.get('path') !== path) return;
+    if (!['/api/v1/workspace/files/content', '/api/v1/workspace/files/raw'].includes(url.pathname) || url.searchParams.get('path') !== path) return;
     const receipt = { route: request.headers()['x-boxteam-workspace-id'], status: response.status(), path };
     if (request.method() === 'GET') { reads.push(receipt); lastRead = Date.now(); }
     if (request.method() === 'PUT') saves.push(receipt);

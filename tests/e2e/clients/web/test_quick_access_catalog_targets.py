@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -66,6 +67,9 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
                                   schema_path=workspace / ".boxteam/workspace_schema.jsonc")
     (workspace / "uri@target.txt").write_text("URI link A\n", encoding="utf-8")
     (other / "uri@target.txt").write_text("URI link B\n", encoding="utf-8")
+    (workspace / "uri-image.png").write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6GDIAAAAASUVORK5CYII="))
+    (workspace / "uri-bom.txt").write_bytes(b"\xef\xbb\xbfBOM original\r\n")
     result_path = context.artifacts_dir / "catalog-targets.json"
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=catalog_gateway_port,
@@ -102,6 +106,8 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert receipt["resourceLinks"]["fileUsesOriginalProjection"] is True
         assert receipt["resourceLinks"]["invalidUriIsNotRewritten"] is True
         assert receipt["resourceLinks"]["noExecution"] is True
+        assert receipt["resourceLinks"]["imageDecoded"] is True
+        assert receipt["resourceLinks"]["textSavePreservesBom"] is True
         assert receipt["nameModes"]["exactOwners"] is True
         assert receipt["pageErrors"] == []
     finally:

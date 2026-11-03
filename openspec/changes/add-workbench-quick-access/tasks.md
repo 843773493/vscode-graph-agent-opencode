@@ -340,3 +340,13 @@
 - 386 项后端定向检查通过：已过期请求零扫描、冷读取中途停止、暖缓存匹配中途停止、远期时间戳不能扩大上限、真实准入等待超时后可继续查询。首轮唯一失败为测试 breadcrumb 包装函数未迁齐 check 参数，迁齐后通过，失败原件保留。90 项前端合同检查／332 条断言、18 份实际转换源码的真实类型检查通过；OpenAPI 两份快照同步登记 Header。
 - 正式共享 Workbench 构建／真实 Gateway／Chromium 两场景通过（206.76 秒，包装进程 209.73 秒）：两个名称端点真实返回过期 409 及同一 request_id；普通分支和单分支重试都传剩余期限，继续核三路取消、迟到响应、十五秒超时、A/B/C 隔离、身份失效、目录定位、精确 child、独立分页和旧 cursor。生命周期页面记录 47 条查询，页面错误与禁止写请求为空；原件位于 `out/tests/integration/clients/web/quick_access/test_query_lifecycle/runs/run-4f9cc6b3b59b/nodes/node-6c413386faf0/artifacts/query-lifecycle.json` 和 `out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-4f9cc6b3b59b/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。
 - 定向 Ruff、Python AST、结构审查及 OpenSpec strict 通过；API 原有 12 条 B008 按提交前后诊断逐项核对，无新增告警，未扩大修改。无新增源码目录、第二查询器或业务状态库。准确命令、指纹、原输出及退出码见 `out/tests/temp/quick_access_scoped_query_20261102/artifacts/budget-{owner-final-001,contract-001,types-001,browser-001,static-001,structure-001,spec-001}.json`；类型及页面运行期间只有不参与构建的后端测试变化。未重跑不受此次变化影响的完整 text_search，Electron 和其它未勾选任务仍未完成。
+
+### 2026-11-03：文件原字节与图片打开（2.2 部分）
+
+- 同一 FileService Provider 的完整读取改用既有 raw 文件入口，原图片编辑器直接解码真实字节；范围读取沿同一入口透传 Range 和取消，不再以文本 JSON 或完整文件切片冒充目标字节范围。普通文本仍沿原 PUT／expected_revision 保存，基线是本次完整读入字节的 SHA-256，stat、watch 与范围读取不推进它；没有额外正文请求或磁盘重读。复用 noble 单一 SHA-256 实现，普通远程 HTTP 不增加 WebCrypto／安全上下文要求。原媒体 Webview 的内部缓存参数不成为规范 URI 或业务版本。
+- 28 项 Provider／原始请求／鉴权定向检查通过，覆盖真实原 FileService、原字节／BOM、范围取消、路由变化、stat 不推进基线、部分读取不推进基线、无 WebCrypto、206 和错误返回；另有 17 项原搜索 Service 定向检查通过。18 份实际转换源码的最终真实类型检查通过。原始取消测试误用了会吞掉错误的 consumeStream 无 reducer 重载，改用原可传播错误的重载后通过，未修改产品取消语义；失败原件保留。
+- 正式 Workbench／真实 Gateway 的图片解码、真实 HTTP 206、BOM 文本编辑保存、精确 child、Session main、独立分页和旧 cursor 通过。完整 text_search 回归通过，保留 A/B／IndexedDB、dirty、watch、SearchView、Search Editor、保存／backup／route 原断言；两场景合计 323.66 秒。该冻结构建仍采用先前 WebCrypto SHA-256；随后只替换为同算法的 noble 实现，最终产物另行验收，不能把两份源码指纹混为一份。
+- **未完成／TODO：** 原音视频 Webview 的真实验收失败，未出现 audio 元素；确认现有产品 CDN Worker 是 v4，固定上游要求 v6。证据位于 `out/tests/temp/quick_access_media_20261102/artifacts/webview-prerequisite.json` 及首轮失败页面。匹配固定上游的隔离宿主尚未接入；不能改为 Gateway 同源 Webview 绕过该条件。代码保留具名 TODO，音视频未算实现或验收完成；只读来源、Diff／独立版本与 Electron 也仍未完成，因此 2.2 不勾选。
+- 准确命令、源码指纹、退出码和失败原件见 `out/tests/temp/quick_access_media_20261102/artifacts/` 的 provider、types、browser 和 static 收据；正式页面产物按对应 tests 路径保留。
+
+- 最终 noble 版本正式构建／真实 Gateway／Chromium 通过（117.51 秒），源码指纹保持一致：`out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-cb96bf4a6595/nodes/node-11ce5d55e445/artifacts/catalog-targets.json`。图片真实解码、原 HTTP Range、BOM 编辑保存和全部既有目录／child／分页断言通过，页面错误为空。前一轮尾部模式测试从最近历史提前接受同一 child，导致查询被取消；现等待精确 owner／query 的真实 HTTP 回执后再接受，原请求数、归属和零额外文件查询断言全部保留。原件见 browser-3，最终见 browser-4；没有产品查询语义变化。

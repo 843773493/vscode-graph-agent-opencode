@@ -79,4 +79,23 @@ describe("工作区原始文件 API", () => {
       "/api/v1/workspace/files/raw?path=C%3A%5CModels%5Cmodel.bin&scope=filesystem",
     );
   });
+
+  test.each([206, 200])("媒体范围请求必须保持目标身份并收到 206（实际 %i）", async (status) => {
+    const requests: RecordedRequest[] = [];
+    installWorkspaceFileFetchMock({
+      port: 28_016,
+      requests,
+      token: "raw-token",
+      handler: ({ pathname }) => pathname === "/api/v1/workspace/files/raw"
+        ? new Response(new Uint8Array([2, 3]), { status }) : undefined,
+    });
+    const reading = getWorkspaceRawFileBlob(28_016, "audio.wav", "workspace-range", undefined, { start: 1, end: 2 });
+    if (status === 206) expect(Array.from(new Uint8Array(await (await reading).arrayBuffer()))).toEqual([2, 3]);
+    else await expect(reading).rejects.toThrow("没有按请求返回字节范围");
+    const request = businessRequest(requests, "/api/v1/workspace/files/raw");
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("Range")).toBe("bytes=1-2");
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe("workspace-range");
+    expect(headers.get("X-Local-Token")).toBe("raw-token");
+  });
 });
