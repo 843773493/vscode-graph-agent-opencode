@@ -103,10 +103,10 @@ class WorkspaceSearchService:
         capability = registration.capability
         if request.contract_version != capability.contract_version:
             raise SearchContractError("unsupported_version", f"搜索合同版本不匹配: {capability.provider_id}")
-        if request.match_mode != "fuzzy":
-            raise SearchContractError("unsupported_option", f"名称搜索不支持匹配模式: {request.match_mode}")
-        if not request.query.strip():
-            raise SearchContractError("invalid_query", "名称搜索词不能为空")
+        if request.match_mode not in capability.match_modes:
+            raise SearchContractError("unsupported_option", f"搜索 Provider 不支持匹配模式: {request.match_mode}")
+        if not request.query or (request.match_mode == "fuzzy" and not request.query.strip()):
+            raise SearchContractError("invalid_query", "搜索词不能为空")
         if request.limit > capability.max_results:
             raise SearchContractError("invalid_query", f"搜索输出上限超过 Provider 限制: {capability.max_results}")
         budget = NameSearchBudget.create(request.deadline_at)

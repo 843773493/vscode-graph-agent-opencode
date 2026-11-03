@@ -784,6 +784,11 @@ export declare type SearchProviderCapabilityDTO = Message<"boxteam.workspace.v2.
    * @generated from field: string cache_policy = 8;
    */
   cachePolicy: string;
+
+  /**
+   * @generated from field: repeated string match_modes = 9;
+   */
+  matchModes: string[];
 };
 
 /**
@@ -917,6 +922,11 @@ export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.Wor
    * @generated from field: boxteam.workspace.v2.SessionThreadSearchResultsDTO threads = 9;
    */
   threads?: SessionThreadSearchResultsDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceMessageSearchResultsDTO messages = 10;
+   */
+  messages?: WorkspaceMessageSearchResultsDTO | undefined;
 };
 
 /**

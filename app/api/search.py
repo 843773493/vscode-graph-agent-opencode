@@ -10,6 +10,9 @@ from app.api.deps import (
     get_workspace_search_service,
     verify_local_token,
 )
+from app.api.errors import not_found_http_error, state_conflict_http_error
+from app.core.exceptions import NotFoundError
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.trace_middleware import require_current_gateway_id
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import (
@@ -20,6 +23,11 @@ from app.schemas.internal_v2.search import (
 from app.services.business.search.service import (
     SearchContractError,
     WorkspaceSearchService,
+)
+from app.services.infrastructure.turn_history import (
+    InvalidTurnCursorError,
+    StaleTurnCursorError,
+    StaleTurnReferenceError,
 )
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -45,6 +53,14 @@ async def search_workspace(
         result = await service.search(payload, gateway_id=require_current_gateway_id("工作区搜索"))
     except SearchContractError as error:
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except InvalidTurnCursorError as error:
+        raise HTTPException(status_code=400, detail={"code": "invalid_turn_cursor", "message": str(error)}) from error
+    except (StaleTurnCursorError, StaleTurnReferenceError) as error:
+        raise HTTPException(status_code=409, detail=error.detail.model_dump(mode="json")) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     except ValidationError:
         raise
     except TimeoutError as error:

@@ -24,7 +24,7 @@ from app.services.business.search.service import (
 def capability() -> SearchProviderCapabilityDTO:
     return SearchProviderCapabilityDTO(
         provider_id="test-catalog", category="catalog", operations=("name",), contract_version=1,
-        supported_options=("match_mode",), position_kind="catalog", max_results=100, cache_policy="none",
+        supported_options=("match_mode",), position_kind="catalog", max_results=100, cache_policy="none", match_modes=("fuzzy",),
     )
 
 

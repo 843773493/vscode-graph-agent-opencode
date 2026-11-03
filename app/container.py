@@ -55,7 +55,10 @@ from app.services.business.gateway_context_query_service import (
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
-from app.services.business.search.providers import register_navigation_search
+from app.services.business.search.providers import (
+    register_history_search,
+    register_navigation_search,
+)
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
@@ -944,6 +947,7 @@ def _build_app_container(
         job_service=job_service,
         trace_event_store=trace_event_store,
     )
+    register_history_search(workspace_search_service, session_catalog_service, session_service, session_turn_history_service)
     dependency_provider.set_job_service(job_service)
     runtime_source_dispatcher = RuntimeSourceDispatcher(
         saver=checkpointer, session_service=session_service, job_service=job_service,

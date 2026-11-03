@@ -34,13 +34,63 @@ ENDPOINT = "/api/v1/sessions/history/search"
 @pytest.fixture
 def workspace_query(history_client: httpx.AsyncClient):
     """仅查询请求绑定已认证 Gateway；生成历史不依赖开发服务的 Skill 控制面。"""
-    async def query(**kwargs):
+    async def query(*, endpoint=ENDPOINT, **kwargs):
         token = set_current_gateway_id(COMPACTION_GATEWAY_ID)
         try:
-            return await history_client.post(ENDPOINT, **kwargs)
+            return await history_client.post(endpoint, **kwargs)
         finally:
             reset_current_gateway_id(token)
     return query
+
+
+async def test_unified_provider_preserves_literal_body_cursor_and_original_errors(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient, search_history, workspace_query,
+) -> None:
+    session_id, base, main, child, cold, *_rest = search_history
+    payload = {"workspace_id": runtime_case.runner.container.workspace_id, "category": "message",
+               "operation": "content", "match_mode": "literal", "query": "定位词", "limit": 1}
+
+    async def query(**changes):
+        return await workspace_query(endpoint="/api/v1/search", json={**payload, **changes})
+
+    first = await query()
+    assert first.status_code == 200, first.text
+    result = first.json()["data"]
+    assert result["provider_id"] == "canonical-message" and result["state"] == "limited"
+    assert result["catalog"] is result["threads"] is None
+    page = result["messages"]
+    assert page["items"][0]["thread"]["thread_id"] == child
+    direct = await workspace_query(json={"query": payload["query"], "limit": 1})
+    assert direct.status_code == 200 and direct.json()["data"] == page
+    following = await query(cursor=page["cursor"])
+    direct_following = await workspace_query(json={"query": payload["query"], "limit": 1, "cursor": page["cursor"]})
+    assert following.status_code == direct_following.status_code == 200
+    assert following.json()["data"]["messages"] == direct_following.json()["data"]
+    assert following.json()["data"]["messages"]["items"][0]["match"]["reference"]["start_codepoint"] > page["items"][0]["match"]["reference"]["start_codepoint"]
+    wrong = await query(query="其它词", cursor=page["cursor"])
+    assert wrong.status_code == 400 and wrong.json()["detail"]["code"] == "invalid_turn_cursor", wrong.text
+    wrong_category = await query(category="tool_result", cursor=page["cursor"])
+    assert wrong_category.status_code == 400 and wrong_category.json()["detail"]["code"] == "invalid_turn_cursor"
+    whitespace = await query(query=" ")
+    assert whitespace.status_code == 200, whitespace.text
+    assert whitespace.json()["data"]["messages"]["items"]
+    for changes, code in (({"match_mode": "fuzzy"}, "unsupported_option"),
+                          ({"query": "a" * 513}, "invalid_query"),
+                          ({"limit": 101}, "invalid_query")):
+        rejected = await query(**changes)
+        assert rejected.status_code == 400 and rejected.json()["detail"]["code"] == code, rejected.text
+    expired = await query(deadline_at=time.time() - 1)
+    assert expired.status_code == 409 and expired.json()["detail"]["code"] == "deadline", expired.text
+    # 真实执行推进历史版本；统一入口仍返回原 owner 的冲突代码。
+    source = await query(query="真实编译图回复")
+    cursor = source.json()["data"]["messages"]["cursor"]
+    submitted = await history_client.post(f"{base}/{main}/messages", json={"message": {"content": "推进历史"}, "run": {}})
+    assert submitted.status_code == 200, submitted.text
+    job = runtime_case.runner.container.job_service._jobs[submitted.json()["data"]["job_id"]]
+    await asyncio.wait_for(asyncio.shield(job.task), 20)
+    stale = await query(query="真实编译图回复", cursor=cursor)
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "stale_turn_cursor", stale.text
+    assert not runtime_case.runner.saver._storage.storage.root(session_id, thread_id=cold).exists()
 
 
 async def test_workspace_search_discovers_exact_children_and_resumes_canonical_positions(

@@ -103,6 +103,13 @@ async def test_tool_result_search_uses_full_output_and_exact_original_details(
     assert workspace.status_code == 200, workspace.text
     workspace_hit, = workspace.json()["data"]["items"]
     assert workspace_hit["thread"]["thread_id"] == child and workspace_hit["match"] == hit
+    unified = await workspace_query(endpoint="/api/v1/search", json={
+        **payload, "workspace_id": runtime_case.runner.container.workspace_id, "operation": "content", "match_mode": "literal",
+    })
+    assert unified.status_code == 200, unified.text
+    result = unified.json()["data"]
+    assert result["provider_id"] == "canonical-tool_result" and result["state"] == "complete"
+    assert result["messages"] == workspace.json()["data"]
     inline = await history_client.post(f"{base}/{child}/history/search", json={
         "query": "4568", "category": "tool_result",
     })

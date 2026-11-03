@@ -1,6 +1,7 @@
 """真实 Gateway 创建/执行/fork 后查询尚未打开的 durable child；模型使用统一回放。"""
 
 import asyncio
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RestartRuntimeSourceCase,
     _job,
     _send,
+    _tool_reply,
 )
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     restart_source_case as restart_source_case,  # noqa: PLC0414 - 复用进程/回放生命周期
@@ -78,7 +80,10 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             session = await create_session(client, "Same Discovery Name🧪")
             sibling = await create_session(client, "Same Discovery Name🧪")
             await case.plan(
-                session, [{"content": "canonical-source-for-thread-discovery"}]
+                session, [
+                    _tool_reply("invoke_extension_tool", {"tool_name": "test_tool_2", "arguments": {}}, "call_search_body"),
+                    {"content": "canonical-source-for-thread-discovery"},
+                ]
             )
             accepted = await _send(case, session, "通过产品执行创建 fork 来源")
             await _job(case, accepted["job_id"])
@@ -112,7 +117,10 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             assert capabilities.headers["X-Request-ID"] == capabilities.json()["request_id"]
             workspace_id = capabilities.json()["data"]["workspace_id"]
             assert {(item["category"], operation) for item in capabilities.json()["data"]["providers"] for operation in item["operations"]} == {
-                ("catalog", "name"), ("thread", "name"),
+                ("catalog", "name"), ("thread", "name"), ("message", "content"), ("tool_result", "content"),
+            }
+            assert {item["category"]: item["match_modes"] for item in capabilities.json()["data"]["providers"]} == {
+                "catalog": ["fuzzy"], "thread": ["fuzzy"], "message": ["literal"], "tool_result": ["literal"],
             }
             payload = {"workspace_id": workspace_id, "category": "thread", "query": "SDN🧪", "limit": 1}
             unified = await client.post("/api/v1/search", json=payload)
@@ -121,7 +129,7 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             assert unified.json()["data"]["state"] == "limited"
             for change, code in (
                 ({"workspace_id": "another-workspace"}, "owner_mismatch"),
-                ({"category": "message"}, "provider_unavailable"),
+                ({"category": "unregistered"}, "provider_unavailable"),
                 ({"contract_version": 2}, "unsupported_version"),
                 ({"match_mode": "regex"}, "unsupported_option"),
             ):
@@ -138,6 +146,32 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             direct_catalog = await client.get("/api/v1/session-catalog/search", params={"query": "SDN🧪", "limit": 1})
             assert catalog_search.status_code == direct_catalog.status_code == 200
             assert catalog_search.json()["data"]["catalog"] == direct_catalog.json()["data"]
+
+            queries = [{"category": category, "operation": "content", "match_mode": "literal", "query": text, "limit": 1}
+                       for category, text in (("message", "canonical-source-for-thread-discovery"), ("tool_result", "4568"))]
+
+            async def federated(payload: dict, request_id: str) -> list[dict]:
+                async with client.stream("POST", "/api/gateway/search", json=payload, headers={"X-Request-ID": request_id}) as response:
+                    assert response.status_code == 200, (await response.aread()).decode()
+                    assert response.headers["X-Request-ID"] == request_id
+                    events = [json.loads(line.removeprefix("data: ")) async for line in response.aiter_lines() if line.startswith("data: ")]
+                assert all(event["request_id"] == request_id for event in events)
+                assert events[0]["type"] == "scope" and events[-1]["type"] == "end"
+                assert events[-1]["summary"]["returned_results"] == 2
+                assert {item["branch"]["category"] for item in events[-1]["summary"]["branches"]} == {"message", "tool_result"}
+                return events
+
+            body_first = await federated({
+                "scope": {"mode": "origin", "origin": {"gateway_id": health.json()["data"]["gateway_id"], "workspace_id": workspace_id}},
+                "queries": queries,
+            }, "req_body_first")
+            body_pages = [event for event in body_first if event["type"] == "page"]
+            assert len(body_pages) == 2
+            for event in body_pages:
+                assert event["branch"]["returned_results"] == 1 and event["branch"]["cursor"]
+                hit, = event["page"]["messages"]["items"]
+                assert hit["thread"]["session_id"] == session and hit["thread"]["kind"] == "main"
+                assert hit["match"]["reference"]["category"] == event["page"]["category"]
 
             async def search(cursor: str | None = None) -> httpx.Response:
                 response = await client.get(
@@ -160,6 +194,21 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             assert first_cursor
             calls_before = len(case.requests())
             await case.restart(hard=False)
+            body_resumed = await federated({
+                "scope": {"mode": "resume", "scope": body_first[0]["scope"]["scope"]}, "queries": queries,
+                "continuations": [{"branch": event["branch"]["branch"], "cursor": event["branch"]["cursor"]} for event in body_pages],
+            }, "req_body_after_restart")
+            for event in body_resumed:
+                if event["type"] != "page":
+                    continue
+                hit, = event["page"]["messages"]["items"]
+                assert hit["thread"]["thread_uri"] == child["thread_uri"]
+                located = await client.post(f"/api/v1/sessions/{session}/threads/{child['thread_id']}/history", json={
+                    "direction": "around", "anchor_turn_id": hit["match"]["turn_id"], "anchor_message": hit["match"]["reference"],
+                })
+                assert located.status_code == 200, located.text
+                expected = "4568" if event["page"]["category"] == "tool_result" else "canonical-source-for-thread-discovery"
+                assert located.json()["data"]["located_message"]["content"] == expected
             second = await search(first_cursor)
             assert second.status_code == 200, second.text
             (hit,) = second.json()["data"]["items"]
@@ -197,6 +246,8 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
                     "stale": stale.json(),
                     "child": child,
                     "model_calls": calls_before,
+                    "body_first": body_first,
+                    "body_resumed": body_resumed,
                 },
             )
     finally:

@@ -186,6 +186,7 @@ export interface SearchProviderCapabilityDTO {
   position_kind: string;
   max_results: number;
   cache_policy: string;
+  match_modes: string[];
 }
 
 export interface WorkspaceSearchCapabilitiesDTO {
@@ -215,6 +216,7 @@ export interface WorkspaceSearchResultDTO {
   limited_reason?: string | undefined;
   catalog: SessionCatalogSearchResultsDTO | undefined;
   threads: SessionThreadSearchResultsDTO | undefined;
+  messages: WorkspaceMessageSearchResultsDTO | undefined;
 }
 
 export interface SessionThreadSearchResultDTO {
@@ -4356,6 +4358,7 @@ function createBaseSearchProviderCapabilityDTO(): SearchProviderCapabilityDTO {
     position_kind: "",
     max_results: 0,
     cache_policy: "",
+    match_modes: [],
   };
 }
 
@@ -4374,6 +4377,9 @@ export const SearchProviderCapabilityDTO: MessageFns<SearchProviderCapabilityDTO
       position_kind: isSet(object.position_kind) ? globalThis.String(object.position_kind) : "",
       max_results: isSet(object.max_results) ? globalThis.Number(object.max_results) : 0,
       cache_policy: isSet(object.cache_policy) ? globalThis.String(object.cache_policy) : "",
+      match_modes: globalThis.Array.isArray(object?.match_modes)
+        ? object.match_modes.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -4403,6 +4409,9 @@ export const SearchProviderCapabilityDTO: MessageFns<SearchProviderCapabilityDTO
     if (message.cache_policy !== "") {
       obj.cache_policy = message.cache_policy;
     }
+    if (message.match_modes?.length) {
+      obj.match_modes = message.match_modes;
+    }
     return obj;
   },
 
@@ -4419,6 +4428,7 @@ export const SearchProviderCapabilityDTO: MessageFns<SearchProviderCapabilityDTO
     message.position_kind = object.position_kind ?? "";
     message.max_results = object.max_results ?? 0;
     message.cache_policy = object.cache_policy ?? "";
+    message.match_modes = object.match_modes?.map((e) => e) || [];
     return message;
   },
 };
@@ -4551,6 +4561,7 @@ function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
     limited_reason: undefined,
     catalog: undefined,
     threads: undefined,
+    messages: undefined,
   };
 }
 
@@ -4566,6 +4577,7 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
       catalog: isSet(object.catalog) ? SessionCatalogSearchResultsDTO.fromJSON(object.catalog) : undefined,
       threads: isSet(object.threads) ? SessionThreadSearchResultsDTO.fromJSON(object.threads) : undefined,
+      messages: isSet(object.messages) ? WorkspaceMessageSearchResultsDTO.fromJSON(object.messages) : undefined,
     };
   },
 
@@ -4598,6 +4610,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
     if (message.threads !== undefined) {
       obj.threads = SessionThreadSearchResultsDTO.toJSON(message.threads);
     }
+    if (message.messages !== undefined) {
+      obj.messages = WorkspaceMessageSearchResultsDTO.toJSON(message.messages);
+    }
     return obj;
   },
 
@@ -4618,6 +4633,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       : undefined;
     message.threads = (object.threads !== undefined && object.threads !== null)
       ? SessionThreadSearchResultsDTO.fromPartial(object.threads)
+      : undefined;
+    message.messages = (object.messages !== undefined && object.messages !== null)
+      ? WorkspaceMessageSearchResultsDTO.fromPartial(object.messages)
       : undefined;
     return message;
   },

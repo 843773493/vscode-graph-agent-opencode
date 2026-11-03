@@ -147,7 +147,7 @@ async def search_events(
                         job.key.owner.workspace_id, job.key.category, job.key.operation, job.request.contract_version,
                     ):
                         raise SearchBranchError("invalid_response", "搜索 Provider 返回了其它 owner／类别／版本的页")
-                    domain = page.catalog if page.catalog is not None else page.threads
+                    domain = page.domain_page
                     count = len(domain.items) if domain is not None else 0
                     if count > job.request.limit:
                         raise SearchBranchError("invalid_response", "搜索 Provider 返回结果超过分配配额")

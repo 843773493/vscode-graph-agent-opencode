@@ -188,6 +188,7 @@ message SearchProviderCapabilityDTO {
   string position_kind = 6;
   int32 max_results = 7;
   string cache_policy = 8;
+  repeated string match_modes = 9;
 }
 
 message WorkspaceSearchCapabilitiesDTO {
@@ -217,6 +218,7 @@ message WorkspaceSearchResultDTO {
   optional string limited_reason = 7;
   SessionCatalogSearchResultsDTO catalog = 8;
   SessionThreadSearchResultsDTO threads = 9;
+  WorkspaceMessageSearchResultsDTO messages = 10;
 }
 
 message SessionThreadSearchResultDTO {

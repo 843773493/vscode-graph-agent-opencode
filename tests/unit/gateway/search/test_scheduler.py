@@ -7,6 +7,7 @@ from time import monotonic
 
 import pytest
 
+from app.core.resource_uri import thread_resource_uri
 from app.gateway.search.scheduler import (
     SearchBranchError,
     SearchJob,
@@ -23,6 +24,7 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultDTO,
     SessionCatalogSearchResultsDTO,
 )
+from app.schemas.internal_v2.turn_search import WorkspaceMessageSearchResultsDTO
 from app.schemas.search_federation import FederatedSearchRequest
 from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 
@@ -223,3 +225,46 @@ async def test_invalid_page_never_publishes_or_advances_cursor(
     assert result[-1].summary.state == "incomplete"
     branch = result[-1].summary.branches[0]
     assert branch.cursor is None and branch.code == "invalid_response"
+
+
+@pytest.mark.parametrize("category", ["message", "tool_result"])
+@pytest.mark.parametrize("exceeds_quota", [False, True])
+async def test_content_page_counts_domain_hits_and_preserves_owner_continuation(
+    scope: GatewaySearchScopeResolutionDTO, request_body: FederatedSearchRequest, category: str, exceeds_quota: bool,
+) -> None:
+    request = FederatedSearchRequest.model_validate({**request_body.model_dump(), "queries": [{
+        "category": category, "operation": "content", "match_mode": "literal", "query": "needle",
+    }]})
+    job = plan_search(request, scope)[0]
+
+    async def query(job: SearchJob) -> WorkspaceSearchResultDTO:
+        hit = {"thread": {
+            "workspace_id": job.key.owner.workspace_id, "session_id": "session", "thread_id": "child",
+            "thread_uri": thread_resource_uri(job.key.owner.workspace_id, "session", "child", gateway_authority="gw"),
+            "kind": "child", "title": "child", "session_title": "Session",
+            "created_at": datetime.now(UTC),
+        }, "match": {
+            "turn_id": "turn", "message_id": None, "role": "tool" if category == "tool_result" else "assistant",
+            "reference": {"item_id": "canonical", "content_hash": "version", "start_codepoint": 3,
+                          "end_codepoint": 9, "category": category}, "preview": "…needle", "preview_start_codepoint": 2,
+        }}
+        domain = WorkspaceMessageSearchResultsDTO.model_validate({
+            "catalog_revision": 1, "items": [hit] * (job.request.limit + 1 if exceeds_quota else 1),
+            "cursor": "original-history-position", "complete": False, "limited_reason": "byte_limit",
+            "scanned_sessions": 1, "scanned_threads": 1, "scanned_items": 1, "scanned_bytes": 100,
+        })
+        return WorkspaceSearchResultDTO(
+            provider_id=f"canonical-{category}", workspace_id=job.key.owner.workspace_id, category=category,
+            operation="content", contract_version=1, state="limited", limited_reason="byte_limit", messages=domain,
+        )
+
+    events = [event async for event in search_events([job], scope, request_id="body", query=query, budget=NameSearchBudget.create(None))]
+    branch, = events[-1].summary.branches
+    if exceeds_quota:
+        assert not any(event.type == "page" for event in events)
+        assert branch.code == "invalid_response" and branch.cursor is None
+        assert events[-1].summary.returned_results == 0
+    else:
+        assert len([event for event in events if event.type == "page"]) == 1
+        assert branch.returned_results == events[-1].summary.returned_results == 1
+        assert branch.code == "byte_limit" and branch.cursor == "original-history-position"

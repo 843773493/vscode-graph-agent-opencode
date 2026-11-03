@@ -482,3 +482,13 @@
 - 参照 Copilot 的 nodeFetcher／jsonBody 单一编码边界，移除调度核心为已受网络字节上限保护的页再次执行 JSON 编码测量；超限仍由真实接收边界拒绝，输出只在 SSE 编码一次。没有删除内容完整性 hash，不声称已测得全链路性能收益，也未运行参考仓库测试。
 - 最终核心／路由／schema Pyright 零诊断、Ruff 全绿；协议生成一致性、Buf lint／基于 `1c8061388` 的 breaking、18 份转换源码的真实类型检查及独立正式构建通过。构建／类型检查后仅改变 Python 核心和验收，前端与生成绑定保持原指纹；最终实网期间源码未变，之后只补具名 TODO 注释及文档。结构审查无新增 findings，生成目录不作为手写代码审查；既有 internal_v2 和测试目录超过 20 文件的拆分风险保留，未扩大无关整理。临时 dist 已删除，保留构建 manifest、AST／目录 JSON 和收据。
 - 准确命令、源码指纹、原始输出及退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/federation-*`。新 Buf JS／声明绑定的四处文件末尾空行触发默认 diff 检查；这是统一插件的可重复输出，生成一致性已通过，保留原件并仅在本次检查排除 blank-at-eof，其余空白检查通过，没有手改绑定或持久修改 Git 设置。本边界提供真实可调用后端，现有目录／Thread Provider 可用；文件及正文 Provider、旧 UI／镜像／工具调用方迁移、完整字节计量和 Web／Electron 联邦交互仍未完成，16.2／16.3／16.6／16.10～16.16 等不据此勾选。
+
+
+### 2026-11-03：canonical 正文 Provider 纵向接入（16.2／16.3 局部）
+
+- 注册 `message/content` 与 `tool_result/content`，能力明确声明字面量模式、码点位置、100个命中上限及无缓存；名称能力声明 fuzzy。原工作区正文入口改走同一 Provider，唯一 `search_workspace_messages` 调用方为 Provider；精确 Thread 与 around 沿原 owner。不新增匹配器、正文索引或持久搜索状态。
+- 联邦汇总按正文命中数和原 cursor 结算，保留字节／Thread／单项大小等受限原因，超配额整页拒绝。统一 API 保留原无效 cursor、历史版本冲突及删除准入错误；原 API 的响应形状和状态码不变。
+- 首批68项定向检查通过；新增正文配额测试修正装具中未登记 URI 后，最终15项调度检查通过，另一个40项通过批次与首批存在重叠，不相加。消息／工具的6项真实执行集成检查通过，覆盖未打开child、完整输出、空格查询、跨入口cursor、预算及失效。
+- 真实 Gateway＋Backend 验收通过（1 passed / 74.44秒）：经产品消息入口执行真实工具和助手回复，再通过产品fork生成child；显式两类联邦正文查询，核准确计数、独立cursor、精确归属；Backend重启后沿原cursor续至child，并经原around取得正确完整原文。整个查询／恢复没有新增模型或工具执行，所有事件与响应头沿本次request_id。原件：`out/tests/integration/gateway/test_thread_name_search/runs/run-25b159247ad7/nodes/node-d071f7f9468a/artifacts/thread-discovery-actual.json`。
+- Ruff、核心Pyright、公开结构、生成一致性、Buf格式／lint／基于`39f3d0aa7`的breaking均通过；含18份sourceTransform源码的真实类型检查与正式Web构建通过。结构审查没有新增findings；既有容器／大目录风险未扩修，生成目录不按手写结构审查。临时dist已删除，原始命令、源码指纹与退出码保留于`out/tests/temp/quick_access_provider_20261103/artifacts/content-*`。最初误用未安装的Python pyright入口，随后使用仓库既有Bun Pyright，未改环境。
+- 16.2／16.3仍未整体完成：文件、请求与日志Provider及其调用方待迁，前端多目标队列、镜像和工具迁移仍在原任务追踪；这次没有勾选未完成的整组验收，也不把实网正文证明称为Web交互证明。
