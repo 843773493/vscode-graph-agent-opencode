@@ -1,5 +1,5 @@
 import { URI } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
-import { Event } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
+import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { extUri, type IExtUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
 import { Range } from '../../../../../src/clients/workbench/upstream/src/vs/editor/common/core/range.js';
 import { TextModelSearch, SearchParams } from '../../../../../src/clients/workbench/upstream/src/vs/editor/common/model/textModelSearch.js';
@@ -27,9 +27,14 @@ export { URI, WorkspaceSearchService };
 
 /** 只提供内存文本存取，匹配使用真实上游引擎；不加载浏览器编辑器 UI。 */
 export function model(resource: URI, text: string) {
-  const lines = text.split('\n');
+  let lines = text.split('\n');
+  const changed = new Emitter<void>(), disposing = new Emitter<void>();
   return {
     uri: resource, calls: 0,
+    onDidChangeContent: changed.event, onWillDispose: disposing.event,
+    get watching() { return changed.hasListeners() || disposing.hasListeners(); },
+    setValue(value: string) { lines = value.split('\n'); changed.fire(); },
+    dispose() { disposing.fire(); changed.dispose(); disposing.dispose(); },
     getLineContent(line: number) { return lines[line - 1]; },
     getLineCount() { return lines.length; },
     getLanguageId() { return 'plaintext'; },

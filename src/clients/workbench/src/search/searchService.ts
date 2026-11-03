@@ -1,6 +1,7 @@
 import { raceCancellationError } from '../../upstream/src/vs/base/common/async.js';
-import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
+import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IModelService } from '../../upstream/src/vs/editor/common/services/model.js';
@@ -55,38 +56,55 @@ export class WorkspaceSearchService extends RemoteSearchService {
     const identity = this.businessIdentity.extUri;
     query = validateTextQuery(query, identity);
     if (token.isCancellationRequested) throw new CancellationError();
+    if (this._store.isDisposed) throw new Error('文件搜索服务已释放');
     const key = (resource: URI) => identity.getComparisonKey(resource);
     const open = new ResourceSet(openResources(this.businessEditors, query, identity), key);
     const covered = new ResourceSet(key), results: FileMatch[] = [];
+    const ignoredModels = new ResourceSet([...(notebookFilesToIgnore ?? [])], key);
+    const source = new CancellationTokenSource(token);
+    token = source.token;
+    const lifetime = this._register(new DisposableStore());
+    lifetime.add(toDisposable(() => source.dispose(true)));
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     let count = 0, limitHit = false;
-    for (const model of this.businessModels.getModels()) {
-      if (token.isCancellationRequested) throw new CancellationError();
-      // 在 findMatches 和首次 progress 之前限制完整身份；零命中模型也覆盖磁盘正文。
-      if (!open.has(model.uri) || !resourceInQuery(model.uri, query, identity) || covered.has(model.uri)) continue;
-      covered.add(model.uri);
-      if (notebookFilesToIgnore?.has(model.uri)) continue;
-      const matches = model.findMatches(query.contentPattern.pattern, false, !!query.contentPattern.isRegExp,
-        !!query.contentPattern.isCaseSensitive, query.contentPattern.isWordMatch ? query.contentPattern.wordSeparators ?? null : null,
-        false, maximum - count + 1);
-      if (matches.length > maximum - count) limitHit = true;
-      const accepted = matches.slice(0, maximum - count);
-      count += accepted.length;
-      if (accepted.length) {
-        const match = new FileMatch(model.uri);
-        match.results = getTextSearchMatchWithModelContext(editorMatchesToTextSearchResults(accepted, model, query.previewOptions), model, query);
-        results.push(match);
-        if (!token.isCancellationRequested) onProgress?.(match);
+    try {
+      for (const model of this.businessModels.getModels()) {
+        if (token.isCancellationRequested) throw new CancellationError();
+        // 在 findMatches 和首次 progress 之前限制完整身份；零命中模型也覆盖磁盘正文。
+        if (!open.has(model.uri) || !resourceInQuery(model.uri, query, identity) || covered.has(model.uri)) continue;
+        covered.add(model.uri);
+        if (ignoredModels.has(model.uri)) continue;
+        // 位置及负命中都属于这一代模型；变更／释放后停止网络、续页及迟到 progress。
+        lifetime.add(model.onDidChangeContent(() => source.cancel()));
+        lifetime.add(model.onWillDispose(() => source.cancel()));
+        const matches = model.findMatches(query.contentPattern.pattern, false, !!query.contentPattern.isRegExp,
+          !!query.contentPattern.isCaseSensitive, query.contentPattern.isWordMatch ? query.contentPattern.wordSeparators ?? null : null,
+          false, maximum - count + 1);
+        if (matches.length > maximum - count) limitHit = true;
+        const accepted = matches.slice(0, maximum - count);
+        count += accepted.length;
+        if (accepted.length) {
+          const match = new FileMatch(model.uri);
+          match.results = getTextSearchMatchWithModelContext(editorMatchesToTextSearchResults(accepted, model, query.previewOptions), model, query);
+          results.push(match);
+          if (!token.isCancellationRequested) onProgress?.(match);
+        }
       }
+      if (token.isCancellationRequested) throw new CancellationError();
+      const syncResults: ISearchComplete = { results, messages: [], limitHit };
+      const asyncResults = (async () => {
+        try {
+          const ignored = await raceCancellationError(asyncNotebookFilesToIgnore ?? Promise.resolve(new ResourceSet()), token);
+          for (const resource of ignoredModels) covered.add(resource);
+          for (const resource of ignored) covered.add(resource);
+          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered);
+        } finally { this._store.delete(lifetime); }
+      })();
+      return { syncResults, asyncResults };
+    } catch (error) {
+      this._store.delete(lifetime);
+      throw error;
     }
-    const syncResults: ISearchComplete = { results, messages: [], limitHit };
-    const asyncResults = (async () => {
-      const ignored = await raceCancellationError(asyncNotebookFilesToIgnore ?? Promise.resolve(new ResourceSet()), token);
-      for (const resource of notebookFilesToIgnore ?? []) covered.add(resource);
-      for (const resource of ignored) covered.add(resource);
-      return this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered);
-    })();
-    return { syncResults, asyncResults };
   }
 }
 

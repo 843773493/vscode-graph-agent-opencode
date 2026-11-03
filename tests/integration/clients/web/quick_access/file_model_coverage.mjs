@@ -71,6 +71,43 @@ try {
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.insertText('only in A draft, with no search match');
   await expect(editor.locator('.view-lines')).toContainText('only in A draft');
+  result.phase = 'model-change-cancels-pending-generation';
+  const held = Promise.withResolvers(), resume = Promise.withResolvers(), forwarded = Promise.withResolvers();
+  let delayEntered = false;
+  const pattern = '**/api/gateway/search';
+  const delay = async route => {
+    if (!route.request().postDataJSON().queries.some(query => query.query === 'generation-cancel')) return route.continue();
+    delayEntered = true; held.resolve();
+    await resume.promise;
+    try { await route.continue(); forwarded.resolve({}); }
+    catch (error) { forwarded.resolve({ error: String(error), failure: route.request().failure() }); }
+  };
+  await page.route(pattern, delay);
+  try {
+    // 仅暂停真实 HTTP 发出；修改真实模型必须由产品取消请求，不以测试 abort 代替。
+    let modelWasEdited = false;
+    const failed = page.waitForEvent('requestfailed', { predicate: request => new URL(request.url()).pathname === '/api/gateway/search'
+      && request.postDataJSON().queries.some(query => query.query === 'generation-cancel') }).then(request => ({ request, afterEdit: modelWasEdited }));
+    const opening = command('search.action.openEditor', { query: 'generation-cancel', location: 'new', triggerSearch: true,
+      scope: { version: 1, kind: 'workspace', workspaces: [targets[0]] }, useExcludeSettingsAndIgnoreFiles: false });
+    await held.promise;
+    await expect(page.locator('.search-editor').filter({ visible: true })).toHaveCount(1);
+    await command('_workbench.open', await resource(targets[0]), [1, { pinned: true }]);
+    await expect(editor.locator('.view-lines')).toContainText('only in A draft');
+    await editor.locator('.view-lines').click();
+    await page.keyboard.press('ControlOrMeta+A');
+    modelWasEdited = true;
+    await page.keyboard.insertText('new generation of A draft without a match');
+    resume.resolve();
+    const transport = await forwarded.promise;
+    const cancelled = await failed;
+    expect(cancelled.afterEdit).toBe(true);
+    expect(cancelled.request.failure().errorText).toContain('ERR_ABORTED');
+    if (transport.error) expect(transport.failure?.errorText).toBe('net::ERR_ABORTED');
+    await opening;
+    result.modelChangeCancelled = { query: 'generation-cancel', reason: cancelled.request.failure().errorText,
+      transport, boundary: 'only HTTP dispatch delayed; product model event aborted the request' };
+  } finally { resume.resolve(); if (delayEntered) result.suspendedTransport = await forwarded.promise; await page.unroute(pattern, delay); }
   result.phase = 'original-search-editor-only-a';
   const waitOnlyA = page.waitForRequest(request => new URL(request.url()).pathname === '/api/gateway/search'
     && request.method() === 'POST' && request.postDataJSON().queries.some(query => query.category === 'file' && query.query === 'coverageword'));

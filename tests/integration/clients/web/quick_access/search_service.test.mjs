@@ -305,6 +305,70 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
     }
   });
 
+  test('已搜索模型变化、释放或服务释放均取消其网络和迟到 progress，随后释放模型监听', async () => {
+    for (const mode of ['change', 'model-dispose', 'service-dispose']) {
+      const a = model(uri(ownerA, 'same.txt'), 'removed'), f = fixture([a]);
+      const entered = Promise.withResolvers(), release = Promise.withResolvers();
+      try {
+        await withTransport(async calls => {
+          const progress = [], pending = f.search.textSearch(query(), undefined, item => progress.push(item));
+          await entered.promise;
+          expect(a.watching).toBe(true);
+          if (mode === 'change') a.setValue('needle new generation');
+          else if (mode === 'model-dispose') a.dispose();
+          else f.instantiation.dispose();
+          await expect(pending).rejects.toThrow();
+          expect(calls[0].signal.aborted).toBe(true); expect(a.watching).toBe(false);
+          release.resolve(); await new Promise(resolve => setTimeout(resolve, 5));
+          expect(progress).toEqual([]); expect(calls).toHaveLength(1);
+        }, async target => { entered.resolve(); await release.promise; return page(target.uri, [hit(target.uri + '/late.txt')]); });
+      } finally { release.resolve(); if (mode !== 'service-dispose') f.instantiation.dispose(); a.dispose(); }
+    }
+  });
+
+  test('A 模型变化不取消独立的 B 查询；完成和同步匹配异常都释放监听', async () => {
+    const a = model(uri(ownerA, 'same.txt'), 'removed A'), b = model(uri(ownerB, 'same.txt'), 'removed B'), f = fixture([a, b]);
+    const entered = [Promise.withResolvers(), Promise.withResolvers()], release = [Promise.withResolvers(), Promise.withResolvers()];
+    try {
+      await withTransport(async calls => {
+        const progressA = [], progressB = [];
+        const pendingA = f.search.textSearch(query(), undefined, item => progressA.push(item));
+        const pendingB = f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerB) }] }), undefined, item => progressB.push(item));
+        await Promise.all(entered.map(item => item.promise));
+        a.setValue('needle in next generation');
+        await expect(pendingA).rejects.toThrow();
+        expect(calls[0].signal.aborted).toBe(true); expect(calls[1].signal.aborted).toBe(false);
+        expect(a.watching).toBe(false); expect(b.watching).toBe(true);
+        release[1].resolve();
+        expect((await pendingB).results.map(item => item.resource.toString())).toEqual([uri(ownerB, 'disk.txt').toString()]);
+        expect(b.watching).toBe(false); expect(progressA).toEqual([]); expect(progressB).toHaveLength(1);
+        release[0].resolve(); await new Promise(resolve => setTimeout(resolve, 5));
+        expect(progressA).toEqual([]);
+      }, async target => { const index = target.uri === root(ownerA) ? 0 : 1; entered[index].resolve(); await release[index].promise;
+        return page(target.uri, [hit(target.uri + '/disk.txt')]); });
+      a.findMatches = () => { throw new Error('模型匹配原始失败'); };
+      expect(() => f.search.textSearchSplitSyncAsync(query())).toThrow('模型匹配原始失败');
+      expect(a.watching).toBe(false);
+    } finally { release.forEach(item => item.resolve()); f.instantiation.dispose(); a.dispose(); b.dispose(); }
+  });
+
+  test('等待 notebook 排除集合时修改模型也取消；同步 progress 中修改不会开始旧代际 HTTP', async () => {
+    const a = model(uri(ownerA, 'same.txt'), 'needle'), f = fixture([a]);
+    const waiting = Promise.withResolvers();
+    try {
+      await withTransport(async calls => {
+        const split = f.search.textSearchSplitSyncAsync(query(), undefined, undefined, undefined, waiting.promise);
+        expect(split.syncResults.results).toHaveLength(1);
+        a.setValue('next draft');
+        await expect(split.asyncResults).rejects.toThrow();
+        expect(a.watching).toBe(false); expect(calls).toEqual([]);
+        a.setValue('needle');
+        expect(() => f.search.textSearchSplitSyncAsync(query(), undefined, () => a.setValue('changed during progress'))).toThrow();
+        expect(a.watching).toBe(false); expect(calls).toEqual([]);
+      });
+    } finally { waiting.resolve([]); f.instantiation.dispose(); a.dispose(); }
+  });
+
   test('UTF-16 片段及多行位置不从裁剪文本猜测', async () => {
     const f = fixture([]);
     try {

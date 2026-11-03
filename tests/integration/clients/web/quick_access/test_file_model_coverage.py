@@ -60,6 +60,7 @@ async def test_dirty_model_coverage_reaches_target_before_page_allocation(
         result = json.loads(result_path.read_text())
         assert result["modelCoverage"] and result["smallPage"] and result["samePathDifferentOwner"]
         assert result["staleCoverageCursor"] and result["stoppedUnqueried"] and result["onlyAUnqueriedB"]
+        assert result["modelChangeCancelled"]["reason"] == "net::ERR_ABORTED"
         assert result["pageErrors"] == []
         # 搜索从未替用户保存草稿。
         assert targets[0].joinpath("a.coverage.txt").read_text() == "coverageword " * 20

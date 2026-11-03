@@ -568,3 +568,10 @@
 - 22项真实 Provider／原 QueryBuilder 定向集成检查通过，包含重叠根顺序、冲突、根内额外文件、局部选项和注入的目标大小写规则；注入规则只证明消费 URI identity，不能替代真实 Windows canonical 能力验收。首轮输入不变断言误比较 URI 惰性 external 缓存，已改为核查询语义和数组身份，原失败记录保留。
 - 真实 Gateway／正式 Workbench／Chromium 模型覆盖用例通过（132.33秒）：新增只选 A 时 B 零查询，保留 A+B 小配额、A 未保存删词、B 同路径与 A 另一文件、旧覆盖 cursor 失效、停止 C 和磁盘未改断言，页面错误为空。原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-b8181195ecd5/nodes/node-f238fd176e30/artifacts/model-coverage.json`。同批正式构建退出0、55.37秒，main SHA256=`0fcc0299354de2f22cdf0543494af08d65eaf4d44cfc360c885c598730b213cf`，复用该完整产品构建，不重复构建。
 - 含18份真实 sourceTransform 的类型检查、7份 TS／ESM AST、受影响 Python Ruff 和差异检查通过；目录职责及 AGENTS 复核无新增结构 findings。准确命令、源码指纹、原始输出及退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-identity-*`。模型变化、preview 映射、真实 Windows canonical 及 Electron 尚未由本批验证，16.19 和整体进度保持未勾选。
+
+### 2026-11-03：模型代际变化取消文件查询（16.19 部分）
+
+- 唯一 SearchService 为本次适用模型（含零命中）订阅内容变化及释放，沿原 CancellationToken 同时取消等待、实际 HTTP、续页与迟到 progress；原服务 dispose 也结束等待 notebook 排除集合的查询。完成、同步异常及取消均释放本次监听，A 模型变化不取消独立 B 查询。notebook 排除集合消费同一 URI identity，不新增正文 hash 或第二查询链。
+- 17项真实服务定向检查通过，新增模型变更／释放、服务释放、并行 A/B、同步 progress 变化及监听回收。真实 Gateway＋正式 Workbench＋Chromium 验收通过（114.76秒）：仅延迟真实 HTTP 发出，编辑实际未保存模型后由产品中止请求，原件记录 net::ERR_ABORTED；保留只 A 时 B 零查询、A+B 小配额、旧 cursor 失效、停止 C、磁盘不变及页面零错误。原件为 `out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-c6b143adfb48/nodes/node-f238fd176e30/artifacts/model-coverage.json`。
+- 同批正式构建退出0、44.26秒，main SHA256=`33d29b14b80903d2e53f0a4b80d68b08998c0e057ccf19d22ea66d8f1a04640f`；含18份实际转换源码的真实类型检查通过，当前738份前端产品源码与该检查指纹一致。Ruff、7份TS／ESM AST及结构复核通过，无新增findings。准确命令、指纹、原始输出和退出码见 `out/tests/temp/quick_access_provider_20261103/artifacts/file-generation-*`。
+- 首轮服务装具误把 Emitter.hasListeners 方法当属性，已修正；首轮浏览器停在编辑器组定位，尚未执行取消断言，按原截图修正为可见原文件组并等待暂停回调结束再撤销路由。失败原件保留，未放宽取消、归属或结果要求。preview 映射、真实 Windows canonical 及 Electron 仍未覆盖，16.19保持未勾选。
