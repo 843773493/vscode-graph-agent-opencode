@@ -107,8 +107,27 @@ test('URI 原样交原 Opener 并冻结发起组，校验前不创建侧边组�
     'boxteam://workspace/workspace-a/resources/files/root/name%40target.txt',
     'boxteam://workspace/workspace-a/resources/files/root/name%40target.txt#L2',
     'https://example.test/file',
+    'https://example.test:8042',
+    'https://example.test/file:2:3',
+    'https://example.test/#7',
+    'https://example.test/report,12',
   ]);
   expect(calls.every(call => call.group === 1 && call.side && call.pinned && call.preserveFocus)).toBe(true);
+});
+
+test('普通 delegate 保留行列定位且修改位置不重查，filesOnly 沿上游保留字面查询', async () => {
+  const positioned = await exercise('fileRangeContract', false);
+  expect(positioned.patterns).toEqual(['', 'target.txt']);
+  expect(positioned.samePick).toBe(true);
+  expect(positioned.opened).toHaveLength(1);
+  expect(positioned.opened[0]).toMatchObject({ group: 1,
+    selection: { startLineNumber: 9, startColumn: 2, endLineNumber: 9, endColumn: 2 } });
+  expect(positioned.opened[0].resource).toEndWith('/target.txt');
+  const literal = await exercise('fileRangeContract', true);
+  expect(literal.patterns).toEqual(['', 'target.txt:7:3', 'target.txt:9:2']);
+  expect(literal.samePick).toBe(false);
+  expect(literal.opened).toHaveLength(1);
+  expect(literal.opened[0].selection).toBeNull();
 });
 
 test('delegate 接收空查询及 URI 查询，换查询和释放取消旧调用且忽略迟到结果', async () => {

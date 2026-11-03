@@ -178,7 +178,9 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (run.invalidated) return [{ id: 'identity-invalidated', label: 'Gateway 或用户身份已改变，请重新打开快速访问' }];
     if (run.options.searchRestore?.query !== run.picker.value) run.restoreId = undefined;
     const previousFilter = run.normalized;
-    const resourceLink = /^boxteam:/i.test(original);
+    const openLink = !this.contentMode && !this.category && !run.options.filesOnly && !run.options.fileSearchDelegate
+      && !run.options.handleAccept && /^[a-z][a-z0-9+.-]+:\/\//i.test(original);
+    const resourceLink = openLink || /^boxteam:/i.test(original);
     if (this.contentMode && !run.options.contentCategory) return this.contentCategories(run, original);
     const parsed = this.contentMode || this.category || run.options.filesOnly || resourceLink ? undefined : extractRangeFromFilter(original, ['@']);
     run.range = parsed?.range;
@@ -203,7 +205,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const fast = accepted([...extras, ...(!filter && run.options.includeHelp ? this.help(run) : []),
       ...(recent.length ? [{ type: 'separator' as const, label: '最近打开' }, ...recent] : [])]);
     if (run.picker.quickNavigate || !filter && !run.options.filesOnly && !run.options.fileSearchDelegate && !this.contentMode) return fast;
-    if (!this.contentMode && !this.category && !run.options.filesOnly && !run.options.fileSearchDelegate && !run.options.handleAccept && /^[a-z][a-z0-9+.-]+:\/\//i.test(filter)) {
+    if (openLink) {
       return accepted([{ id: 'link:' + filter, label: '打开链接', description: filter,
         accept: (mods, event) => {
           this.assertAccess(run);

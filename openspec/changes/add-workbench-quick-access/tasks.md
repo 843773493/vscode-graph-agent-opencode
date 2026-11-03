@@ -763,3 +763,9 @@
 - 原网络测试能力清单迁齐已注册file名称／正文、LLM请求与context，以类别＋操作核全部匹配模式，不通过覆盖同类别键丢掉文件操作。真实消息及工具续点的400／409、原因、原cursor、分支重试和request_id均留原件，显式重查只请求原分支。
 - Ruff零诊断；Pyright三条与完整HEAD基线按未改行逐条相同，产品及API测试零新增诊断。初轮测试装具缺生产HTTP异常处理器的失败保留；API单测接入原处理器，简化历史ASGI装具只证明领域详情，完整请求ID由真实Gateway场景证明，未改共享fixture。OpenSpec strict和差异检查通过。
 - 准确命令、源码指纹、原始结果、实际退出码、基线比较及正式网络回执位置：out/tests/temp/message_search_errors_20261103/artifacts/verification.json。临时完整基线及tar已删除；本批无前端／公开DTO字段变化，不重复生成或Web／Electron构建。其余具名owner和信息／警告仍由16.18追踪，整项保持未勾选。
+
+### 2026-11-03：普通 URI 保留端口与数字片段（7.4 部分）
+
+- 普通链接在原行列解析前按原入口条件识别，端口、路径中的冒号、数字 fragment 和逗号均原样交给现有 Opener；不新增 URI 解析器。文件 delegate 保留行列定位，修改位置复用候选而不重查；filesOnly 对照固定上游保持字面查询，未改变其语义。
+- 旧产品回归实际失败，明确复现三类 URL 被行号解析改写；修复后实际 Provider＋Chromium 的25项定向检查全部通过（23.17秒、230条断言），包括原空文件编辑器和 Chat 调用方。Picker事件及宿主服务为显式替身，不作为完整Gateway页面或操作系统链接打开验收。
+- 含19份实际sourceTransform投影的完整Workbench类型检查通过（65.64秒），正式Web构建通过（52.91秒）；ESM语法、OpenSpec strict及差异检查通过。准确命令、源码及构建指纹、失败和通过原件、退出码：out/tests/temp/quick_access_uri_suffix_20261103/artifacts/verification.json。未重复完整Gateway页面和Electron；quickNavigate及文件符号等其余范围仍未闭环，7.4保持未勾选。

@@ -18,13 +18,14 @@ const root = 'boxteam://workspace/workspace-a/resources/files/root';
 const uri = name => workspaceFileUri(owner, root + '/' + name, root);
 
 /** 仅替原 Picker 事件和宿主服务；实际 Provider、取消及接受逻辑均来自生产源码。 */
-function defaultAccess(options, history = [], opener = { open() { throw new Error('delegate 不应被 URI opener 抢占'); } }) {
+function defaultAccess(options, history = [], opener = { open() { throw new Error('delegate 不应被 URI opener 抢占'); } },
+  editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }) {
   const changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
   const picker = { value: '', items: [], activeItems: [], selectedItems: [], keyMods: { alt: false, ctrlCmd: false },
     buttons: [], onDidTriggerButton: Event.None,
     onDidHide: Event.None, onDidChangeActive: Event.None, onDidChangeValue: changes.event, onDidAccept: accepts.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
-  const groups = { groups: [], activeGroup: { id: 1 } }, editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } };
+  const group = { id: 1 }, groups = { groups: [], activeGroup: group, getGroup: id => id === group.id ? group : undefined };
   const provider = new WorkspaceQuickAccess({ createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
     { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {},
     opener, { error(error) { throw error; } }, { enabled: false }, {});
@@ -35,7 +36,8 @@ function defaultAccess(options, history = [], opener = { open() { throw new Erro
 
 export function uriContract() {
   const calls = [];
-  for (const uri of [root + '/name%40target.txt', root + '/name%40target.txt#L2', 'https://example.test/file']) {
+  for (const uri of [root + '/name%40target.txt', root + '/name%40target.txt#L2', 'https://example.test/file',
+    'https://example.test:8042', 'https://example.test/file:2:3', 'https://example.test/#7', 'https://example.test/report,12']) {
     const f = defaultAccess({ searchOwner: owner }, [], { open(resource, options) {
       calls.push({ uri: resource, group: options.boxteamTargetGroup, side: options.openToSide,
         pinned: options.editorOptions.pinned, preserveFocus: options.editorOptions.preserveFocus });
@@ -49,6 +51,31 @@ export function uriContract() {
     } finally { f.dispose(); }
   }
   return calls;
+}
+
+export async function fileRangeContract(filesOnly) {
+  const patterns = [], opened = [];
+  const f = defaultAccess({ filesOnly, includeOpenToSideButton: false, fileSearchDelegate: {
+    search(pattern) {
+      patterns.push(pattern);
+      return Promise.resolve({ results: [{ resource: uri(filesOnly && pattern ? pattern : 'target.txt') }], messages: [] });
+    },
+  } }, [], undefined, { openEditor(input, group) {
+    opened.push({ resource: input.resource.toString(), selection: input.options.selection ?? null, group });
+    return Promise.resolve();
+  } });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    f.change('target.txt:7:3');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const first = f.picker.items[0];
+    f.change('target.txt:9:2');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    f.picker.activeItems = f.picker.selectedItems = [f.picker.items[0]];
+    f.accepts.fire({ inBackground: false });
+    await Promise.resolve();
+    return { patterns, samePick: first === f.picker.items[0], opened };
+  } finally { f.dispose(); }
 }
 
 export async function delegateContract() {
