@@ -34,7 +34,8 @@ class SearchResourcesInput(BaseModel):
 
     queries: tuple[FederatedSearchQueryDTO, ...] = Field(min_length=1, max_length=8, description=(
         "领域查询：catalog/thread 使用 name、fuzzy；message/tool_result/llm_request 使用 content、literal；"
-        "file 支持 name/fuzzy 和 content/literal。文件条件放在 file_targets，不扫描未选类别。"
+        "file 支持 name/fuzzy 和 content/literal；context/content 保留原有效上下文，支持 literal/regex。"
+        "文件条件放在 file_targets，上下文来源／大小写／字符预算放在 context，不扫描未选类别。"
     ))
     scope: GatewaySearchScopeRequest | None = Field(default=None, description=(
         "省略时只查发起工具所属工作区；selected 为明确 owner 集合，all 为当前 Gateway 全部登记工作区，"
@@ -86,8 +87,8 @@ def create_search_resources_tool(context: CustomToolFactoryContext) -> BaseTool:
     return StructuredTool.from_function(
         coroutine=search_resources, name="search_resources", args_schema=SearchResourcesInput,
         description=(
-            "在明确工作区范围只读搜索目录、Thread、文件、canonical 消息、工具结果或模型请求记录。"
+            "在明确工作区范围只读搜索目录、Thread、文件、canonical 消息、工具结果、模型请求记录或有效上下文。"
             "返回原联邦 scope/page/branch/end 事件、规范引用和 owner 独立 cursor；只对原冻结范围的分支显式续查或重试。"
-            "相关工作区先用 discover_workspaces 发现再明确选集合。有效上下文与精确资源读取继续用 search_context/read_context。"
+            "相关工作区先用 discover_workspaces 发现再明确选集合；精确单资源查询与读取使用 search_context/read_context。"
         ), handle_tool_error=True,
     )

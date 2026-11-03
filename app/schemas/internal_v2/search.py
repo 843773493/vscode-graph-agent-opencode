@@ -12,6 +12,10 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationResultDTO,
     ResourceNavigationSearchOptions,
 )
+from app.schemas.internal_v2.session_context import (
+    SessionContextSearchResultDTO,
+    SessionContextSearchSource,
+)
 from app.schemas.internal_v2.session_navigation import SessionCatalogSearchResultsDTO
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultsDTO,
@@ -48,6 +52,17 @@ class WorkspaceFileSearchTargetDTO(BaseModel):
     max_bytes: int = Field(default=65536, ge=1, le=33554432)
 
 
+class WorkspaceContextSearchOptionsDTO(BaseModel):
+    """原上下文领域选项，身份由目标 owner 生成。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sources: tuple[SessionContextSearchSource, ...] = Field(default=("effective_context",), min_length=1)
+    case_sensitive: bool = False
+    max_chars: int = Field(default=16384, ge=256, le=65536)
+    revision: str | None = None
+
+
 class WorkspaceSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -61,11 +76,14 @@ class WorkspaceSearchRequest(BaseModel):
     cursor: str | None = None
     deadline_at: FiniteFloat | None = None
     file: WorkspaceFileSearchTargetDTO | None = None
+    context: WorkspaceContextSearchOptionsDTO | None = None
 
     @model_validator(mode="after")
     def validate_file_target(self) -> Self:
         if self.file is not None and self.category != "file":
             raise ValueError("只有文件搜索接受文件根和局部选项")
+        if self.context is not None and self.category != "context":
+            raise ValueError("只有上下文搜索接受来源及字符预算")
         return self
 
 
@@ -84,14 +102,17 @@ class WorkspaceSearchResultDTO(BaseModel):
     messages: WorkspaceMessageSearchResultsDTO | None = None
     llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | None = None
     files: ResourceNavigationResultDTO | None = None
+    context: SessionContextSearchResultDTO | None = None
 
     @property
-    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | ResourceNavigationResultDTO | None:
-        return self.catalog or self.threads or self.messages or self.llm_requests or self.files
+    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | ResourceNavigationResultDTO | SessionContextSearchResultDTO | None:
+        return self.catalog or self.threads or self.messages or self.llm_requests or self.files or self.context
 
     @property
     def result_count(self) -> int:
         page = self.domain_page
+        if isinstance(page, SessionContextSearchResultDTO):
+            return len(page.matches)
         if isinstance(page, ResourceNavigationResultDTO):
             return len(page.matches) if self.operation == "content" else len(page.entries)
         return len(page.items) if page is not None else 0
@@ -99,7 +120,7 @@ class WorkspaceSearchResultDTO(BaseModel):
     @property
     def cursor(self) -> str | None:
         page = self.domain_page
-        if isinstance(page, ResourceNavigationResultDTO):
+        if isinstance(page, (ResourceNavigationResultDTO, SessionContextSearchResultDTO)):
             return page.next_cursor
         return page.cursor if page is not None else None
 
@@ -113,7 +134,7 @@ class WorkspaceSearchResultDTO(BaseModel):
             return self
         expected = {"catalog": self.catalog, "thread": self.threads,
                     "message": self.messages, "tool_result": self.messages, "llm_request": self.llm_requests,
-                    "file": self.files}.get(self.category)
-        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages, self.llm_requests, self.files)) == 1:
+                    "file": self.files, "context": self.context}.get(self.category)
+        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages, self.llm_requests, self.files, self.context)) == 1:
             return self
         raise ValueError("搜索类别与领域结果不一致")

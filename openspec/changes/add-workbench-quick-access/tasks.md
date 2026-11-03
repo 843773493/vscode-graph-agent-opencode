@@ -647,3 +647,10 @@
 - 真实产品消息入口经统一model_stream三轮执行发现、资源搜索及最终回答，job完成，两个扩展结果进入实际模型wire；范围绑定调用owner、只命中目标Session，两个Gateway请求ID独立且搜索事件沿原ID。定向1 passed／60.02秒；脚本原件为 `out/tests/integration/gateway/test_resource_search_tools/runs/run-a58ef7e308b0/`，模型原件为同目录 `runs/run-8600e4026484/`。关键Session由产品API生成，不手工准备执行状态。
 - 实网测试揭露容器未将启动Gateway URL传给原上下文transport，已沿原装配显式传入；另一失败为日志解析未接受GET查询参数，已用原日志证明并修正，保留两个不同请求ID和精确搜索ID断言。失败及通过原件均保留。Ruff、11份核心／测试Pyright、生成一致性、OpenAPI真实结构及OpenSpec strict通过；无前端／公开DTO字段变化，不重复Web构建或Electron验收。准确命令、源码指纹、日志和退出码见 `out/tests/temp/resource_search_20261103/artifacts/`。
 - 旧 `search_context` 的有效上下文／本地来源、inventory及精确单资源读取仍保留原语义；跨目标gather和全局offset迁移尚未完成，代码附具名TODO。16.12／16.15及完整Quick Access保持未勾选，本批不以普通canonical消息搜索代替上下文验收。
+
+### 2026-11-03：原上下文来源接入统一 Provider（16.12 部分）
+
+- 工作区注册唯一 `context/content` Provider，委托原 SessionContextQueryService，保留有效上下文、目录和会话信息来源、literal／regex、大小写、字符预算、资源身份、码点位置及原 revision／cursor。目标工作区身份由 owner 生成；工具与脚本复用既有联邦请求及 typed 领域选项。原上下文接口与统一接口共用版本冲突 409 信封。
+- 143 项 Provider、原上下文、联邦调度及公开协议定向检查通过。真实 Gateway＋Backend 通过产品入口生成执行历史后核新旧查询完整页一致、按原身份及版本精确读取、后端重启后原续点继续、来源变化明确拒绝旧续点；1 passed／62.42 秒。首次读取失败为测试未绑定请求身份，已按原请求作用域补齐；另一次装具启动前端口占用的失败原件保留，确认端口空闲后通过，未终止未知进程。
+- Ruff、9 份核心／测试 Pyright、协议生成一致性、Buf format／lint／基于 `7c9b2c27a` 的 breaking、OpenSpec strict、真实 Workbench 类型检查（19 份转换源码）和正式 Web 构建通过。准确命令、源码指纹、原始输出及退出码保留在 `out/tests/temp/context_provider_20261103/artifacts/`；正式网络原件归 `out/tests/integration/gateway/test_context_resource_search/`。
+- 本批没有改变 Quick Input／Electron 交互，不重复浏览器和打包 Electron 验收。旧 `search_context` 跨目标聚合及相关消费者迁移仍未完成，16.12／16.15 保持未勾选。

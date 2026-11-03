@@ -5,12 +5,17 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
+from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.api.deps import (
     get_request_id,
     get_workspace_search_service,
     verify_local_token,
 )
-from app.api.errors import not_found_http_error, state_conflict_http_error
+from app.api.errors import (
+    not_found_http_error,
+    session_context_revision_http_error,
+    state_conflict_http_error,
+)
 from app.core.exceptions import NotFoundError
 from app.core.resource_uri import ResourceUriGrammarError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
@@ -64,6 +69,8 @@ async def search_workspace(
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
     except SearchProviderReadError as error:
         raise HTTPException(status_code=500, detail=error.detail()) from error
+    except SessionContextRevisionChangedError as error:
+        raise session_context_revision_http_error(error) from error
     except ResourceUriGrammarError as error:
         raise HTTPException(400, detail={"owner": "resource_uri_grammar", "code": error.reason_code, "message": str(error)}) from error
     except ResourceUriResolveError as error:

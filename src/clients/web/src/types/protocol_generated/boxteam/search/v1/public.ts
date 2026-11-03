@@ -10,7 +10,11 @@ import {
   GatewaySearchScopeResolutionDTO,
   GatewaySearchWorkspaceOwnerDTO,
 } from "../../gateway/v1/public.js";
-import { WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public.js";
+import {
+  WorkspaceContextSearchOptionsDTO,
+  WorkspaceFileSearchTargetDTO,
+  WorkspaceSearchResultDTO,
+} from "../../workspace/v2/public.js";
 
 export const protobufPackage = "boxteam.search.v1";
 
@@ -29,6 +33,7 @@ export interface FederatedSearchQueryDTO {
   /** 显式多根保留各自选项；省略时只查所选工作区的默认根。 */
   file_targets: FederatedFileSearchTargetDTO[];
   allow_catalog_mirror?: boolean | undefined;
+  context?: WorkspaceContextSearchOptionsDTO | undefined;
 }
 
 export interface FederatedSearchBranchKeyDTO {
@@ -136,6 +141,7 @@ function createBaseFederatedSearchQueryDTO(): FederatedSearchQueryDTO {
     limit: 0,
     file_targets: [],
     allow_catalog_mirror: undefined,
+    context: undefined,
   };
 }
 
@@ -154,6 +160,7 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
       allow_catalog_mirror: isSet(object.allow_catalog_mirror)
         ? globalThis.Boolean(object.allow_catalog_mirror)
         : undefined,
+      context: isSet(object.context) ? WorkspaceContextSearchOptionsDTO.fromJSON(object.context) : undefined,
     };
   },
 
@@ -183,6 +190,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     if (message.allow_catalog_mirror !== undefined) {
       obj.allow_catalog_mirror = message.allow_catalog_mirror;
     }
+    if (message.context !== undefined) {
+      obj.context = WorkspaceContextSearchOptionsDTO.toJSON(message.context);
+    }
     return obj;
   },
 
@@ -199,6 +209,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     message.limit = object.limit ?? 0;
     message.file_targets = object.file_targets?.map((e) => FederatedFileSearchTargetDTO.fromPartial(e)) || [];
     message.allow_catalog_mirror = object.allow_catalog_mirror ?? undefined;
+    message.context = (object.context !== undefined && object.context !== null)
+      ? WorkspaceContextSearchOptionsDTO.fromPartial(object.context)
+      : undefined;
     return message;
   },
 };

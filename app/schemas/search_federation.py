@@ -12,6 +12,7 @@ from app.schemas.gateway.search import (
 )
 from app.schemas.internal_v2.resource_navigation import NavigationResourceURI
 from app.schemas.internal_v2.search import (
+    WorkspaceContextSearchOptionsDTO,
     WorkspaceFileSearchTargetDTO,
     WorkspaceSearchResultDTO,
 )
@@ -42,6 +43,7 @@ class FederatedSearchQueryDTO(BaseModel):
     limit: int = Field(default=50, ge=0, le=500)
     file_targets: tuple[FederatedFileSearchTargetDTO, ...] = Field(default=(), max_length=MAX_SEARCH_BRANCHES)
     allow_catalog_mirror: bool = False
+    context: WorkspaceContextSearchOptionsDTO | None = None
 
     @model_validator(mode="after")
     def validate_file_targets(self) -> Self:
@@ -49,6 +51,8 @@ class FederatedSearchQueryDTO(BaseModel):
             raise ValueError("离线目录镜像只支持 catalog/name v1 fuzzy 合同")
         if self.file_targets and self.category != "file":
             raise ValueError("只有文件搜索接受目录根集合")
+        if self.context is not None and self.category != "context":
+            raise ValueError("只有上下文搜索接受来源及字符预算")
         keys = [(item.owner, item.target.uri) for item in self.file_targets]
         if len(set(keys)) != len(keys):
             raise ValueError("文件根不得重复声明；不同局部选项不能隐式覆盖")

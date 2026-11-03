@@ -201,6 +201,14 @@ export interface WorkspaceFileSearchTargetDTO {
   max_bytes: number;
 }
 
+export interface WorkspaceContextSearchOptionsDTO {
+  /** 原上下文来源及预算；不把有效上下文替换为 canonical 消息搜索。 */
+  sources: string[];
+  case_sensitive: boolean;
+  max_chars: number;
+  revision?: string | undefined;
+}
+
 export interface WorkspaceSearchRequest {
   workspace_id: string;
   category: string;
@@ -212,6 +220,7 @@ export interface WorkspaceSearchRequest {
   cursor?: string | undefined;
   deadline_at?: number | undefined;
   file: WorkspaceFileSearchTargetDTO | undefined;
+  context?: WorkspaceContextSearchOptionsDTO | undefined;
 }
 
 export interface WorkspaceSearchResultDTO {
@@ -227,6 +236,7 @@ export interface WorkspaceSearchResultDTO {
   messages: WorkspaceMessageSearchResultsDTO | undefined;
   llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | undefined;
   files: ResourceNavigationResultDTO | undefined;
+  context?: SessionContextSearchResultDTO | undefined;
 }
 
 export interface SessionThreadSearchResultDTO {
@@ -4569,6 +4579,56 @@ export const WorkspaceFileSearchTargetDTO: MessageFns<WorkspaceFileSearchTargetD
   },
 };
 
+function createBaseWorkspaceContextSearchOptionsDTO(): WorkspaceContextSearchOptionsDTO {
+  return { sources: [], case_sensitive: false, max_chars: 0, revision: undefined };
+}
+
+export const WorkspaceContextSearchOptionsDTO: MessageFns<WorkspaceContextSearchOptionsDTO> = {
+  fromJSON(object: any): WorkspaceContextSearchOptionsDTO {
+    return {
+      sources: globalThis.Array.isArray(object?.sources)
+        ? object.sources.map((e: any) => globalThis.String(e))
+        : [],
+      case_sensitive: isSet(object.case_sensitive) ? globalThis.Boolean(object.case_sensitive) : false,
+      max_chars: isSet(object.max_chars) ? globalThis.Number(object.max_chars) : 0,
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceContextSearchOptionsDTO): unknown {
+    const obj: any = {};
+    if (message.sources?.length) {
+      obj.sources = message.sources;
+    }
+    if (message.case_sensitive !== false) {
+      obj.case_sensitive = message.case_sensitive;
+    }
+    if (message.max_chars !== 0) {
+      obj.max_chars = Math.round(message.max_chars);
+    }
+    if (message.revision !== undefined) {
+      obj.revision = message.revision;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceContextSearchOptionsDTO>, I>>(
+    base?: I,
+  ): WorkspaceContextSearchOptionsDTO {
+    return WorkspaceContextSearchOptionsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceContextSearchOptionsDTO>, I>>(
+    object: I,
+  ): WorkspaceContextSearchOptionsDTO {
+    const message = createBaseWorkspaceContextSearchOptionsDTO();
+    message.sources = object.sources?.map((e) => e) || [];
+    message.case_sensitive = object.case_sensitive ?? false;
+    message.max_chars = object.max_chars ?? 0;
+    message.revision = object.revision ?? undefined;
+    return message;
+  },
+};
+
 function createBaseWorkspaceSearchRequest(): WorkspaceSearchRequest {
   return {
     workspace_id: "",
@@ -4581,6 +4641,7 @@ function createBaseWorkspaceSearchRequest(): WorkspaceSearchRequest {
     cursor: undefined,
     deadline_at: undefined,
     file: undefined,
+    context: undefined,
   };
 }
 
@@ -4597,6 +4658,7 @@ export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
       deadline_at: isSet(object.deadline_at) ? globalThis.Number(object.deadline_at) : undefined,
       file: isSet(object.file) ? WorkspaceFileSearchTargetDTO.fromJSON(object.file) : undefined,
+      context: isSet(object.context) ? WorkspaceContextSearchOptionsDTO.fromJSON(object.context) : undefined,
     };
   },
 
@@ -4632,6 +4694,9 @@ export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
     if (message.file !== undefined) {
       obj.file = WorkspaceFileSearchTargetDTO.toJSON(message.file);
     }
+    if (message.context !== undefined) {
+      obj.context = WorkspaceContextSearchOptionsDTO.toJSON(message.context);
+    }
     return obj;
   },
 
@@ -4652,6 +4717,9 @@ export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
     message.file = (object.file !== undefined && object.file !== null)
       ? WorkspaceFileSearchTargetDTO.fromPartial(object.file)
       : undefined;
+    message.context = (object.context !== undefined && object.context !== null)
+      ? WorkspaceContextSearchOptionsDTO.fromPartial(object.context)
+      : undefined;
     return message;
   },
 };
@@ -4670,6 +4738,7 @@ function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
     messages: undefined,
     llm_requests: undefined,
     files: undefined,
+    context: undefined,
   };
 }
 
@@ -4690,6 +4759,7 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
         ? WorkspaceLLMRequestLogSearchResultsDTO.fromJSON(object.llm_requests)
         : undefined,
       files: isSet(object.files) ? ResourceNavigationResultDTO.fromJSON(object.files) : undefined,
+      context: isSet(object.context) ? SessionContextSearchResultDTO.fromJSON(object.context) : undefined,
     };
   },
 
@@ -4731,6 +4801,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
     if (message.files !== undefined) {
       obj.files = ResourceNavigationResultDTO.toJSON(message.files);
     }
+    if (message.context !== undefined) {
+      obj.context = SessionContextSearchResultDTO.toJSON(message.context);
+    }
     return obj;
   },
 
@@ -4760,6 +4833,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       : undefined;
     message.files = (object.files !== undefined && object.files !== null)
       ? ResourceNavigationResultDTO.fromPartial(object.files)
+      : undefined;
+    message.context = (object.context !== undefined && object.context !== null)
+      ? SessionContextSearchResultDTO.fromPartial(object.context)
       : undefined;
     return message;
   },

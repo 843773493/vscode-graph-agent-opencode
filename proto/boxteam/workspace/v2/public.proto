@@ -203,6 +203,14 @@ message WorkspaceFileSearchTargetDTO {
   uint32 max_bytes = 3;
 }
 
+message WorkspaceContextSearchOptionsDTO {
+  // 原上下文来源及预算；不把有效上下文替换为 canonical 消息搜索。
+  repeated string sources = 1;
+  bool case_sensitive = 2;
+  uint32 max_chars = 3;
+  optional string revision = 4;
+}
+
 message WorkspaceSearchRequest {
   string workspace_id = 1;
   string category = 2;
@@ -214,6 +222,7 @@ message WorkspaceSearchRequest {
   optional string cursor = 8;
   optional double deadline_at = 9;
   WorkspaceFileSearchTargetDTO file = 10;
+  optional WorkspaceContextSearchOptionsDTO context = 11;
 }
 
 message WorkspaceSearchResultDTO {
@@ -229,6 +238,7 @@ message WorkspaceSearchResultDTO {
   WorkspaceMessageSearchResultsDTO messages = 10;
   WorkspaceLLMRequestLogSearchResultsDTO llm_requests = 11;
   ResourceNavigationResultDTO files = 12;
+  optional SessionContextSearchResultDTO context = 13;
 }
 
 message SessionThreadSearchResultDTO {

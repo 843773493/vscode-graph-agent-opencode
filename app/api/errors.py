@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.core.exceptions import BaseAPIException, NotFoundError
 
@@ -30,10 +31,19 @@ __all__ = [
     "client_error_message",
     "forbidden_http_error",
     "not_found_http_error",
+    "session_context_revision_http_error",
     "state_conflict_error",
     "state_conflict_http_error",
     "unimplemented_http_error",
 ]
+
+
+def session_context_revision_http_error(error: SessionContextRevisionChangedError) -> HTTPException:
+    """原上下文与统一搜索保留同一版本冲突信封。"""
+    return HTTPException(status_code=409, detail={
+        "code": "snapshot_changed", "expected_revision": error.expected_revision,
+        "actual_revision": error.actual_revision, "message": str(error),
+    })
 
 
 def not_found_http_error(error: NotFoundError | KeyError) -> HTTPException:

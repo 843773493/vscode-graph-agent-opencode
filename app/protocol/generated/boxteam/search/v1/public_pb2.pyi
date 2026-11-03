@@ -17,7 +17,7 @@ class FederatedFileSearchTargetDTO(_message.Message):
     def __init__(self, owner: _Optional[_Union[_public_pb2.GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ..., target: _Optional[_Union[_public_pb2_1.WorkspaceFileSearchTargetDTO, _Mapping]] = ...) -> None: ...
 
 class FederatedSearchQueryDTO(_message.Message):
-    __slots__ = ("category", "operation", "contract_version", "query", "match_mode", "limit", "file_targets", "allow_catalog_mirror")
+    __slots__ = ("category", "operation", "contract_version", "query", "match_mode", "limit", "file_targets", "allow_catalog_mirror", "context")
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -26,6 +26,7 @@ class FederatedSearchQueryDTO(_message.Message):
     LIMIT_FIELD_NUMBER: _ClassVar[int]
     FILE_TARGETS_FIELD_NUMBER: _ClassVar[int]
     ALLOW_CATALOG_MIRROR_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_FIELD_NUMBER: _ClassVar[int]
     category: str
     operation: str
     contract_version: int
@@ -34,7 +35,8 @@ class FederatedSearchQueryDTO(_message.Message):
     limit: int
     file_targets: _containers.RepeatedCompositeFieldContainer[FederatedFileSearchTargetDTO]
     allow_catalog_mirror: bool
-    def __init__(self, category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., file_targets: _Optional[_Iterable[_Union[FederatedFileSearchTargetDTO, _Mapping]]] = ..., allow_catalog_mirror: _Optional[bool] = ...) -> None: ...
+    context: _public_pb2_1.WorkspaceContextSearchOptionsDTO
+    def __init__(self, category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., file_targets: _Optional[_Iterable[_Union[FederatedFileSearchTargetDTO, _Mapping]]] = ..., allow_catalog_mirror: _Optional[bool] = ..., context: _Optional[_Union[_public_pb2_1.WorkspaceContextSearchOptionsDTO, _Mapping]] = ...) -> None: ...
 
 class FederatedSearchBranchKeyDTO(_message.Message):
     __slots__ = ("owner", "category", "operation", "resource_uri")

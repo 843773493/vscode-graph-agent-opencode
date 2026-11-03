@@ -55,6 +55,7 @@ from app.services.business.gateway_context_query_service import (
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
+from app.services.business.search.context import register_context_search
 from app.services.business.search.files import register_file_search
 from app.services.business.search.providers import (
     register_history_search,
@@ -917,6 +918,7 @@ def _build_app_container(
         background_task_registry=background_task_registry,
     )
     workspace_search_service = WorkspaceSearchService(workspace_id)
+    register_context_search(workspace_search_service, session_context_query_service)
     register_file_search(workspace_search_service, resource_navigation)
     register_navigation_search(workspace_search_service, session_catalog_service, session_service)
     session_title_service = SessionTitleService(

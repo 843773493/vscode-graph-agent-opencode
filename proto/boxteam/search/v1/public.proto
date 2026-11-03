@@ -20,6 +20,7 @@ message FederatedSearchQueryDTO {
   // 显式多根保留各自选项；省略时只查所选工作区的默认根。
   repeated FederatedFileSearchTargetDTO file_targets = 7;
   optional bool allow_catalog_mirror = 8;
+  optional boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO context = 9;
 }
 
 message FederatedSearchBranchKeyDTO {

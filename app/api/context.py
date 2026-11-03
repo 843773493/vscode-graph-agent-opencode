@@ -8,7 +8,11 @@ from pydantic_core import PydanticSerializationError
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
 from app.api.deps import get_request_id, get_session_context_query_service
-from app.api.errors import not_found_http_error, state_conflict_http_error
+from app.api.errors import (
+    not_found_http_error,
+    session_context_revision_http_error,
+    state_conflict_http_error,
+)
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.schemas.internal_v2.common import APIResponse
@@ -28,21 +32,6 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 router = APIRouter(prefix="/context", tags=["context"])
 
 
-def _revision_changed_http_error(
-    error: SessionContextRevisionChangedError,
-) -> HTTPException:
-    """上下文 revision 过期统一落 409，read/search 共用同一响应体。"""
-    return HTTPException(
-        status_code=409,
-        detail={
-            "code": "snapshot_changed",
-            "expected_revision": error.expected_revision,
-            "actual_revision": error.actual_revision,
-            "message": str(error),
-        },
-    )
-
-
 @router.post(
     "/read",
     response_model=APIResponse[SessionContextReadResultDTO],
@@ -58,7 +47,7 @@ async def read_context(
     try:
         result = await query_service.read_context(payload)
     except SessionContextRevisionChangedError as error:
-        raise _revision_changed_http_error(error) from error
+        raise session_context_revision_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except ResourceUriResolveError as error:
@@ -101,7 +90,7 @@ async def search_context(
     try:
         result = await query_service.search_context(payload)
     except SessionContextRevisionChangedError as error:
-        raise _revision_changed_http_error(error) from error
+        raise session_context_revision_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except ResourceUriResolveError as error:

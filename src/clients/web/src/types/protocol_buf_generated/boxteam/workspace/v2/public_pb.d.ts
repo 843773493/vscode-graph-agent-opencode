@@ -847,6 +847,39 @@ export declare type WorkspaceFileSearchTargetDTO = Message<"boxteam.workspace.v2
 export declare const WorkspaceFileSearchTargetDTOSchema: GenMessage<WorkspaceFileSearchTargetDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO
+ */
+export declare type WorkspaceContextSearchOptionsDTO = Message<"boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO"> & {
+  /**
+   * 原上下文来源及预算；不把有效上下文替换为 canonical 消息搜索。
+   *
+   * @generated from field: repeated string sources = 1;
+   */
+  sources: string[];
+
+  /**
+   * @generated from field: bool case_sensitive = 2;
+   */
+  caseSensitive: boolean;
+
+  /**
+   * @generated from field: uint32 max_chars = 3;
+   */
+  maxChars: number;
+
+  /**
+   * @generated from field: optional string revision = 4;
+   */
+  revision?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO.
+ * Use `create(WorkspaceContextSearchOptionsDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceContextSearchOptionsDTOSchema: GenMessage<WorkspaceContextSearchOptionsDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.WorkspaceSearchRequest
  */
 export declare type WorkspaceSearchRequest = Message<"boxteam.workspace.v2.WorkspaceSearchRequest"> & {
@@ -899,6 +932,11 @@ export declare type WorkspaceSearchRequest = Message<"boxteam.workspace.v2.Works
    * @generated from field: boxteam.workspace.v2.WorkspaceFileSearchTargetDTO file = 10;
    */
   file?: WorkspaceFileSearchTargetDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO context = 11;
+   */
+  context?: WorkspaceContextSearchOptionsDTO | undefined;
 };
 
 /**
@@ -970,6 +1008,11 @@ export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.Wor
    * @generated from field: boxteam.workspace.v2.ResourceNavigationResultDTO files = 12;
    */
   files?: ResourceNavigationResultDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionContextSearchResultDTO context = 13;
+   */
+  context?: SessionContextSearchResultDTO | undefined;
 };
 
 /**

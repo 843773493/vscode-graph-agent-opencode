@@ -5,7 +5,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import type { GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v1/public_pb.js";
-import type { WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
+import type { WorkspaceContextSearchOptionsDTO, WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
 
 /**
  * Describes the file boxteam/search/v1/public.proto.
@@ -78,6 +78,11 @@ export declare type FederatedSearchQueryDTO = Message<"boxteam.search.v1.Federat
    * @generated from field: optional bool allow_catalog_mirror = 8;
    */
   allowCatalogMirror?: boolean | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO context = 9;
+   */
+  context?: WorkspaceContextSearchOptionsDTO | undefined;
 };
 
 /**
