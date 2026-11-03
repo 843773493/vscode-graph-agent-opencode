@@ -6,7 +6,7 @@ import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL, resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const workspace = process.env.BOXTEAM_CACHE_WORKSPACE, other = process.env.BOXTEAM_CACHE_OTHER;
-if (!baseUrl || !resultPath || !workspace || !other || !process.env.BOXTEAM_CACHE_UPDATE) throw new Error('文件缓存验收缺少隔离路径');
+if (!baseUrl || !resultPath || !workspace || !other || !process.env.BOXTEAM_CACHE_UPDATE || !process.env.BOXTEAM_CACHE_ORIGINAL) throw new Error('文件缓存验收缺少隔离路径');
 const run = TestRunContext.fromTestFile('tests/e2e/clients/web/test_quick_access_file_cache.py');
 const result = { classification: 'E2E', phase: 'initialization', pageErrors: [], network: [], receipts: [] };
 let page, failure;
@@ -24,7 +24,7 @@ try {
   cdp.on('Network.requestWillBeSent', event => {
     if (new URL(event.request.url).pathname !== '/api/v1/workspace/files/raw') return;
     const item = record(event.requestId);
-    Object.assign(item, { url: event.request.url, request: selectedHeaders(event.request.headers) });
+    Object.assign(item, { url: event.request.url, phase: result.phase, request: selectedHeaders(event.request.headers) });
     result.network.push(item);
   });
   cdp.on('Network.requestWillBeSentExtraInfo', event => { record(event.requestId).wireRequest = selectedHeaders(event.headers); });
@@ -75,12 +75,13 @@ try {
     expect(item.response['x-request-id']).toBeTruthy();
     return item;
   };
-  result.phase = 'original-image-private-revalidation';
+  result.phase = 'original-image-cold';
   await openImage(targets[0], 1);
   const cold = await completeRead(targets[0], 0, 200);
   expect(cold.encodedBodyBytes).toBeGreaterThan(0);
   await command('workbench.action.closeActiveEditor');
   const beforeWarm = imageReads(targets[0]).length;
+  result.phase = 'original-image-warm';
   await openImage(targets[0], 1);
   const warm = await completeRead(targets[0], beforeWarm, 304);
   // 原 watcher 建连可能额外再验证；每次暖读都必须零正文，不以请求数量代替字节合同。
@@ -93,6 +94,7 @@ try {
   expect(warm.response['x-request-id']).not.toBe(cold.response['x-request-id']);
   result.imageRevalidated = true;
   await command('workbench.action.closeActiveEditor');
+  result.phase = 'same-path-other-owner';
   await openImage(targets[1], 1);
   const b = await completeRead(targets[1], 0, 200);
   expect(b.response.etag).not.toBe(cold.response.etag);
@@ -127,6 +129,16 @@ try {
   }
   expect(variants[3].status).toBe(401); expect(variants[3].policy).toBe('no-store');
   result.inputVariants = variants;
+  result.phase = 'watcher-updates-visible-original-image';
+  const beforeWatcher = imageReads(targets[0]).length;
+  await writeFile(join(workspace, 'cache-image.png'), Buffer.from(process.env.BOXTEAM_CACHE_ORIGINAL, 'base64'));
+  const visibleImage = page.locator('.image-preview-editor').filter({ visible: true }).locator('img');
+  await expect.poll(() => visibleImage.evaluate(element => [element.naturalWidth, element.naturalHeight])).toEqual([1, 1]);
+  const watched = await completeRead(targets[0], beforeWatcher, 200);
+  expect(watched.response.etag).not.toBe(updated.response.etag);
+  result.watcherUpdatedImage = true;
+  result.openingRequestCounts = Object.fromEntries(['original-image-cold', 'original-image-warm', 'same-path-other-owner']
+    .map(phase => [phase, result.network.filter(item => item.phase === phase).length]));
   const raw = (target, name, headers = {}, endpoint = 'raw') => page.evaluate(async ({ target, name, headers, endpoint }) => {
     const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
     const response = await fetch(`/api/v1/workspace/files/${endpoint}?${new URLSearchParams({ path: target.rootUri + '/' + name })}`,
@@ -151,14 +163,14 @@ try {
     { method: 'PUT', headers: { 'X-BoxTeam-Workspace-Id': routeA }, body: JSON.stringify({ content: 'stale save', expected_revision: original.body.data.revision }) });
   expect(conflict.status).toBe(409); result.staleSaveRejected = true;
   result.phase = 'range-download-and-failure-boundaries';
-  const range = await raw(targets[0], 'cache-image.png', { Range: 'bytes=1-3', 'If-None-Match': updated.response.etag });
+  const range = await raw(targets[0], 'cache-image.png', { Range: 'bytes=1-3', 'If-None-Match': watched.response.etag });
   expect(range.status).toBe(206); expect(range.bytes).toEqual([80, 78, 71]);
   expect(range.headers['cache-control']).toBe('no-store'); expect(range.headers['content-range']).toMatch(/^bytes 1-3\/\d+$/);
-  const download = await raw(targets[0], 'cache-image.png', { 'If-None-Match': updated.response.etag }, 'download');
+  const download = await raw(targets[0], 'cache-image.png', { 'If-None-Match': watched.response.etag }, 'download');
   expect(download.status).toBe(200); expect(download.headers['cache-control']).toBe('no-store');
-  const denied = await raw(targets[0], 'cache-image.png', { 'X-Local-Token': 'explicit-invalid-credential', 'If-None-Match': updated.response.etag });
+  const denied = await raw(targets[0], 'cache-image.png', { 'X-Local-Token': 'explicit-invalid-credential', 'If-None-Match': watched.response.etag });
   expect(denied.status).toBe(401); expect(denied.headers['cache-control']).toBe('no-store');
-  const wrongOwner = await raw(targets[0], 'cache-image.png', { 'X-BoxTeam-Workspace-Id': routeB, 'If-None-Match': updated.response.etag });
+  const wrongOwner = await raw(targets[0], 'cache-image.png', { 'X-BoxTeam-Workspace-Id': routeB, 'If-None-Match': watched.response.etag });
   expect(wrongOwner.status).toBe(400); expect(wrongOwner.headers['cache-control']).toBe('no-store');
   await unlink(join(workspace, 'cache-image.png'));
   const missing = await raw(targets[0], 'cache-image.png');

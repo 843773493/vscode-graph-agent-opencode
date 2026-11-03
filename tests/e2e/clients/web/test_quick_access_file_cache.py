@@ -89,6 +89,7 @@ async def test_original_image_editor_revalidates_private_file_cache(
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_CACHE_WORKSPACE": str(workspace),
                      "BOXTEAM_CACHE_OTHER": str(other), "BOXTEAM_CACHE_UPDATE": base64.b64encode(image_versions[1]).decode(),
+                     "BOXTEAM_CACHE_ORIGINAL": base64.b64encode(image_versions[0]).decode(),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium}, capture_output=True, text=True, timeout=150, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_text(process.stdout)
         (context.artifacts_dir / "browser.stderr.raw").write_text(process.stderr)
@@ -97,6 +98,7 @@ async def test_original_image_editor_revalidates_private_file_cache(
         result = json.loads(result_path.read_text())
         assert result["phase"] == "passed" and result["pageErrors"] == []
         assert result["imageRevalidated"] and result["updatedImage"] and result["ownerIsolated"]
+        assert result["watcherUpdatedImage"]
         assert result["textRevalidated"] and result["staleSaveRejected"] and result["errorsNoStore"]
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

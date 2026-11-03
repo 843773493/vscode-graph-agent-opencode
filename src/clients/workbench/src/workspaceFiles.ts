@@ -157,10 +157,11 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     const routeId = await gateway.resolveWorkspace(source, signal);
     if (signal.aborted) return;
     const invalidate = () => this.changes.fire([...watch.resources.values()].map(({ resource }) => ({ resource, type: FileChangeType.UPDATED })));
+    let connected = false;
     await streamWorkspaceFileEvents(0, [source.root], {
       workspaceId: routeId, signal,
-      // 连接重建可能错过原生事件；沿原 FileService 重新核实已打开资源。
-      onConnected: invalidate,
+      // 首次注册不是文件变化；连接重建可能漏掉事件，届时才重新核实已打开资源。
+      onConnected: () => { if (connected) invalidate(); connected = true; },
       onBatch: batch => {
         if (signal.aborted) return;
         if (batch.overflow) { invalidate(); return; }
