@@ -6,6 +6,17 @@ from sqlite3 import Connection
 from typing import Literal
 
 
+class ThreadCatalogRevisionChangedError(ValueError):
+    """当前 Session 的 Thread 发布版本变化，不属于读取故障。"""
+
+    def __init__(self, session_id: str, expected_revision: int, actual_revision: int) -> None:
+        super().__init__(f"Thread 目录已更新，请重新查询: session_id={session_id}, "
+                         f"expected_revision={expected_revision}, actual_revision={actual_revision}")
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": "session_thread_catalog", "code": "stale_thread_catalog", "reason": "thread_revision", "message": str(self)}
+
+
 @dataclass(frozen=True, slots=True)
 class ThreadNameRow:
     thread_id: str

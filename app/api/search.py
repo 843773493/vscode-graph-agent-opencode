@@ -18,6 +18,9 @@ from app.api.errors import (
 )
 from app.core.exceptions import NotFoundError
 from app.core.resource_uri import ResourceUriGrammarError
+from app.core.session_control_thread_catalog.search import (
+    ThreadCatalogRevisionChangedError,
+)
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.trace_middleware import require_current_gateway_id
 from app.gateway.federation.errors import FederationError
@@ -33,6 +36,9 @@ from app.services.business.search.service import (
     WorkspaceSearchService,
 )
 from app.services.business.session_navigation.catalog_query import CatalogCursorError
+from app.services.business.session_navigation.thread_search import (
+    ThreadSearchCursorError,
+)
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
@@ -69,7 +75,7 @@ async def search_workspace(
         result = await service.search(payload, gateway_id=require_current_gateway_id("工作区搜索"))
     except SearchContractError as error:
         raise HTTPException(status_code=400, detail={"code": error.code, "message": str(error)}) from error
-    except CatalogCursorError as error:
+    except (CatalogCursorError, ThreadSearchCursorError, ThreadCatalogRevisionChangedError) as error:
         raise HTTPException(status_code=409, detail=error.detail()) from error
     except LLMRequestLogError as error:
         raise HTTPException(status_code=400 if error.code == "invalid_request_log_cursor" else 409,

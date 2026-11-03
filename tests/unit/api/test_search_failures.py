@@ -6,11 +6,17 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import search
+from app.api import search, session_navigation
 from app.api.deps import get_workspace_search_service, verify_local_token
+from app.core.session_control_thread_catalog.search import (
+    ThreadCatalogRevisionChangedError,
+)
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.search import SearchProviderCapabilityDTO
 from app.services.business.search.service import WorkspaceSearchService
+from app.services.business.session_navigation.thread_search import (
+    ThreadSearchCursorError,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )
@@ -19,10 +25,11 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 @pytest.fixture
 def search_api():
     query = AsyncMock()
-    service = Mock(spec=WorkspaceSearchService, search=query)
+    service = Mock(spec=WorkspaceSearchService, search=query, workspace_id="ws")
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(search.router, prefix="/api/v1")
+    application.include_router(session_navigation.router, prefix="/api/v1")
     application.dependency_overrides[verify_local_token] = lambda: "test-search-token"
     application.dependency_overrides[get_workspace_search_service] = lambda: service
     with TestClient(application, raise_server_exceptions=False,
@@ -45,6 +52,23 @@ def test_domain_failures_keep_original_http_ownership(search_api, category, erro
     if code is not None:
         assert response.json()["detail"]["code"] == code
         assert response.headers["X-Request-ID"] == "req-search-failure"
+
+
+@pytest.mark.parametrize("error", [
+    ThreadSearchCursorError("malformed", "Thread 搜索 cursor 格式无效"),
+    ThreadSearchCursorError("catalog_revision", "Thread 搜索目录已更新"),
+    ThreadCatalogRevisionChangedError("session-exact", 1, 2),
+])
+@pytest.mark.parametrize("endpoint", ["/api/v1/search", "/api/v1/session-threads/search"])
+def test_thread_cursor_rejections_keep_named_owner_on_both_routes(search_api, endpoint, error):
+    client, query = search_api
+    query.side_effect = error
+    response = (client.post(endpoint, json={"workspace_id": "ws", "category": "thread", "query": "needle"})
+                if endpoint == "/api/v1/search" else client.get(endpoint, params={"query": "needle"}))
+    assert response.status_code == 409
+    assert response.headers["X-Request-ID"] == "req-search-failure"
+    assert response.json()["detail"] == error.detail()
+    query.assert_awaited_once()
 
 
 @pytest.fixture

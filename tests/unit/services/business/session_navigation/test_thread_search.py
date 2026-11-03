@@ -66,8 +66,8 @@ async def test_cursor_rejects_query_gateway_and_catalog_changes(
         cursor=None,
     )
     assert first.cursor is not None and first.limited_reason == "result_limit"
-    for gateway, query in ((GATEWAY, "other"), ("gateway_other", "mtc")):
-        with pytest.raises(ValueError, match="cursor 与查询或目录版本不匹配"):
+    for gateway, query, reason in ((GATEWAY, "other", "query_mismatch"), ("gateway_other", "mtc", "owner_mismatch")):
+        with pytest.raises(thread_search.ThreadSearchCursorError, match="cursor 与查询或目录版本不匹配") as rejected:
             await thread_search.search_session_threads(
                 catalog,
                 sessions,
@@ -76,8 +76,10 @@ async def test_cursor_rejects_query_gateway_and_catalog_changes(
                 limit=1,
                 cursor=first.cursor,
             )
+        assert rejected.value.reason == reason
+        assert rejected.value.code == "invalid_thread_cursor"
     await sessions.create(SessionCreateRequest(title="Later"))
-    with pytest.raises(ValueError, match="cursor 与查询或目录版本不匹配"):
+    with pytest.raises(thread_search.ThreadSearchCursorError, match="cursor 与查询或目录版本不匹配") as rejected:
         await thread_search.search_session_threads(
             catalog,
             sessions,
@@ -86,6 +88,22 @@ async def test_cursor_rejects_query_gateway_and_catalog_changes(
             limit=1,
             cursor=first.cursor,
         )
+    assert rejected.value.reason == "catalog_revision"
+    assert rejected.value.code == "stale_thread_cursor"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor,reason", [("not-base64!", "malformed"), ("MTIz", "malformed"),
+                                         ("e30", "malformed")])
+async def test_invalid_thread_cursor_shape_is_named_even_on_empty_catalog(
+    catalog: SessionCatalogService, cursor: str, reason: str,
+) -> None:
+    with pytest.raises(thread_search.ThreadSearchCursorError) as rejected:
+        await thread_search.search_session_threads(catalog, catalog._session_service, gateway_id=GATEWAY,
+                                                  query="needle", limit=1, cursor=cursor)
+    assert rejected.value.reason == reason
+    assert rejected.value.detail()["owner"] == "session_thread_search"
+    assert rejected.value.code == "invalid_thread_cursor"
 
 
 @pytest.mark.asyncio

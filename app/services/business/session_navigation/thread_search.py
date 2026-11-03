@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import binascii
 from time import monotonic
 from typing import Literal
 
@@ -23,6 +22,18 @@ from app.services.business.session_service import SessionService
 _MAX_SCANNED_NODES = 64
 _MAX_SCANNED_THREADS = 512
 _QUERY_SECONDS = 1.0
+
+
+class ThreadSearchCursorError(ValueError):
+    """原 Thread 名称游标校验点的具名拒绝，API 保留既有409。"""
+
+    def __init__(self, reason: Literal["malformed", "owner_mismatch", "query_mismatch", "catalog_revision", "position_out_of_bounds"], message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.code = "stale_thread_cursor" if reason == "catalog_revision" else "invalid_thread_cursor"
+
+    def detail(self) -> dict[str, str]:
+        return {"owner": "session_thread_search", "code": self.code, "reason": self.reason, "message": str(self)}
 
 
 class _ThreadSearchCursor(BaseModel):
@@ -68,22 +79,18 @@ async def search_session_threads(
             raw = base64.b64decode(
                 cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
             )
-        except (ValueError, binascii.Error) as error:
-            raise ValueError("Thread 搜索 cursor 格式无效") from error
-        previous = _ThreadSearchCursor.model_validate_json(raw)
-        if any(
-            getattr(previous, key) != getattr(state, key)
-            for key in (
-                "workspace_id",
-                "gateway_id",
-                "query",
-                "catalog_revision",
-            )
-        ):
-            raise ValueError("Thread 搜索 cursor 与查询或目录版本不匹配，请重新查询")
+            previous = _ThreadSearchCursor.model_validate_json(raw)
+        except ValueError as error:
+            raise ThreadSearchCursorError("malformed", "Thread 搜索 cursor 格式无效") from error
+        if previous.workspace_id != state.workspace_id or previous.gateway_id != state.gateway_id:
+            raise ThreadSearchCursorError("owner_mismatch", "Thread 搜索 cursor 与查询或目录版本不匹配，请重新查询")
+        if previous.query != state.query:
+            raise ThreadSearchCursorError("query_mismatch", "Thread 搜索 cursor 与查询或目录版本不匹配，请重新查询")
+        if previous.catalog_revision != state.catalog_revision:
+            raise ThreadSearchCursorError("catalog_revision", "Thread 搜索 cursor 与查询或目录版本不匹配，请重新查询")
         state = previous
     if state.node_offset > len(snapshot.items):
-        raise ValueError("Thread 搜索 cursor 目录位置越界")
+        raise ThreadSearchCursorError("position_out_of_bounds", "Thread 搜索 cursor 目录位置越界")
     items: list[SessionThreadSearchResultDTO] = []
     scanned_nodes = scanned_threads = 0
     scanned_session_ids: set[str] = set()
@@ -158,7 +165,7 @@ async def search_session_threads(
         state.thread_revision = None
     # 目录变化不能让旧的名称/归属混入本页；原 owner 负责发布版本。
     if sessions.path_resolver.revision != snapshot.catalog_revision:
-        raise ValueError("Thread 搜索期间目录已更新，请重新查询")
+        raise ThreadSearchCursorError("catalog_revision", "Thread 搜索期间目录已更新，请重新查询")
     complete = state.node_offset == len(snapshot.items)
     budget.check()
     return SessionThreadSearchResultsDTO(

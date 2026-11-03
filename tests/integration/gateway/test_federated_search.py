@@ -10,11 +10,17 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.session_catalog_store import SessionCatalogStore
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.search_federation import MAX_SEARCH_OUTPUT_BYTES
+from tests.harness.python.browser_manager import (
+    close_browser_manager_processes,
+    start_browser_manager_processes,
+)
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
@@ -28,6 +34,7 @@ from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
     start_backend_process,
+    terminate_process,
     workspace_backend_id_for_root,
 )
 from tests.support.workspaces import (
@@ -74,7 +81,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
             (target / "covered.txt").write_bytes(b"\xffmodel body must not be read")
     ports = integration_port_block_for_file(Path(request.node.path))
     monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
-    lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 1, 20)))
+    lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 1, 20, 40, 42, 43)))
     fixture = Network(workspace, secondary, stopped, runtime / "gateway-home", ports.port(20), ports.port(0), context.artifacts_dir, [])
     # 本机目录控制链和 Gateway 使用同一原生身份；独立 HOME 会产生互不相认的本机令牌。
     credential = fixture.gateway_home / "state/gateway/credentials/local-token"
@@ -84,9 +91,20 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     with ExitStack() as cleanup:
         lease.acquire()
         cleanup.callback(lease.release)
+        # fork 来源会读取真实资源状态；辅助服务使用本装具独占的端口和生命周期。
+        terminal = start_terminal_backend(backend_port=ports.port(40), workspace_root=str(workspace), artifacts_dir=fixture.artifacts)
+        cleanup.callback(terminate_process, terminal)
+        browser = start_browser_manager_processes(
+            workspace_root=workspace, backend_port=ports.port(42), frontend_port=ports.port(43),
+            backend_host="127.0.0.1", artifacts_dir=fixture.artifacts,
+        )
+        cleanup.callback(close_browser_manager_processes, browser)
+        mount = MountedWorkspace(workspace_backend_id_for_root(workspace), workspace,
+                                 f"http://127.0.0.1:{ports.port(40)}", f"http://127.0.0.1:{ports.port(42)}")
         for index, root in enumerate((workspace, secondary)):
             backend = start_backend_process(workspace_root=str(root), port=ports.port(index), log_name=f"backend-{index}",
-                                            boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts)
+                                            boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts,
+                                            startup_mount=mount if index == 0 else None)
             cleanup.callback(close_backend_process, backend)
             fixture.backends.append(backend)
         # 外部后端登记是查询输入，目录历史不通过磁盘写入或 mock 准备。
@@ -352,6 +370,62 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert sum(len(event["page"]["catalog"]["items"]) for event in full if event["type"] == "page") == 6
             assert full[-1]["summary"]["returned_results"] == 6
             assert not (network.stopped / ".boxteam/sessions").exists()
+
+            # 产品入口发布真实 child，使名称续点停留在同一 Session 的 Thread 版本内。
+            session_a = sessions[route_a][0]
+            selection = {"X-BoxTeam-Workspace-Id": route_a}
+            point_response = await client.get(f"/api/v1/sessions/{session_a}/fork-source-point", headers=selection,
+                                              params={"mode": "full_rollout_copy"})
+            assert point_response.status_code == 200, point_response.text
+            point = point_response.json()["data"]
+
+            async def publish_child(key: str) -> dict:
+                response = await client.post(f"/api/v1/sessions/{session_a}/fork-context", headers=selection, json={
+                    "idempotency_key": key, "source_uri": point["source_uri"], "source_view_id": point["source_view_id"],
+                    "source_view_revision": point["source_view_revision"], "mode": "full_rollout_copy", "anchor_mode": "inclusive",
+                    "target_container_uri": point["child_container_uri"], "creation_kind": "new_child_thread",
+                    "title": "Shared Search child", "relationship": "detached", "resources": [],
+                })
+                assert response.status_code == 200, response.text
+                assert response.headers["X-Request-ID"] == response.json()["request_id"]
+                return response.json()["data"]
+
+            await publish_child("search-thread-first-child")
+            thread_query = {"category": "thread", "query": "ShSe", "limit": 1}
+            thread_first = await search({"scope": {"mode": "selected", "owners": frozen["owners"]},
+                                         "queries": [thread_query]}, "req_federation_thread_first")
+            thread_pages = [event for event in thread_first if event["type"] == "page"]
+            thread_a = next(page for page in thread_pages if page["branch"]["branch"]["owner"] == owners[route_a])
+            for cursor, changed_query, reason in (("MTIz", "ShSe", "malformed"),
+                                                  (thread_a["branch"]["cursor"], "Shared", "query_mismatch")):
+                direct = await client.get("/api/v1/session-threads/search", headers=selection,
+                                          params={"query": changed_query, "cursor": cursor})
+                assert direct.status_code == 409, direct.text
+                assert direct.headers["X-Request-ID"] == direct.json()["request_id"]
+                assert (direct.json()["detail"]["code"], direct.json()["detail"]["owner"], direct.json()["detail"]["reason"]) == (
+                    "invalid_thread_cursor", "session_thread_search", reason)
+                rejected_events = await search({"scope": {"mode": "resume", "scope": thread_first[0]["scope"]["scope"]},
+                    "queries": [{**thread_query, "query": changed_query}],
+                    "continuations": [{"branch": thread_a["branch"]["branch"], "cursor": cursor}]}, "req_thread_" + reason)
+                rejection, = rejected_events[-1]["summary"]["branches"]
+                assert (rejection["code"], rejection["error_owner"], rejection["reason"], rejection["http_status"]) == (
+                    "invalid_thread_cursor", "session_thread_search", reason, 409)
+                assert rejection["cursor"] == cursor and rejection["returned_results"] == 0 and rejection["retryable"]
+                assert not any(event["type"] == "page" for event in rejected_events)
+            await publish_child("search-thread-second-child")
+            thread_stale = await search({"scope": {"mode": "resume", "scope": thread_first[0]["scope"]["scope"]},
+                "queries": [thread_query], "continuations": [{"branch": page["branch"]["branch"], "cursor": page["branch"]["cursor"]}
+                                                           for page in thread_pages]}, "req_federation_thread_changed")
+            failed_thread, = [branch for branch in thread_stale[-1]["summary"]["branches"] if branch["state"] == "failed"]
+            assert failed_thread["branch"]["owner"] == owners[route_a]
+            assert (failed_thread["code"], failed_thread["error_owner"], failed_thread["reason"], failed_thread["http_status"]) == (
+                "stale_thread_catalog", "session_thread_catalog", "thread_revision", 409)
+            assert failed_thread["cursor"] == thread_a["branch"]["cursor"] and failed_thread["returned_results"] == 0 and failed_thread["retryable"]
+            assert [page["branch"]["branch"]["owner"] for page in thread_stale if page["type"] == "page"] == [owners["route_b"]]
+            thread_retry = await search({"scope": {"mode": "resume", "scope": thread_first[0]["scope"]["scope"]},
+                "queries": [thread_query], "continuations": [{"branch": failed_thread["branch"]}]}, "req_federation_thread_retry")
+            assert len(thread_retry[-1]["summary"]["branches"]) == 1
+            assert all(branch["state"] != "failed" for branch in thread_retry[-1]["summary"]["branches"])
 
             # 只改变产品已创建 Session 的目录权限，不伪造日志或搜索回执。
             sessions_root = network.workspace / ".boxteam/sessions"

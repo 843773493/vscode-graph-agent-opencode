@@ -19,6 +19,9 @@ from app.api.errors import (
 )
 from app.core.exceptions import NotFoundError
 from app.core.failures import report_failure
+from app.core.session_control_thread_catalog.search import (
+    ThreadCatalogRevisionChangedError,
+)
 from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_navigation_actor,
@@ -63,6 +66,9 @@ from app.services.business.session_navigation.queue_store import (
     NavigationMutationConflictError,
     NavigationQueueOwnerError,
 )
+from app.services.business.session_navigation.thread_search import (
+    ThreadSearchCursorError,
+)
 
 router = APIRouter(tags=["session-navigation"])
 
@@ -87,6 +93,8 @@ async def search_workspace_threads(
         assert result is not None
     except NotFoundError as error:
         raise not_found_http_error(error) from error
+    except (ThreadSearchCursorError, ThreadCatalogRevisionChangedError) as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
     except (ValueError, RuntimeError, TimeoutError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

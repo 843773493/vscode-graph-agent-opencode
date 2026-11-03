@@ -48,6 +48,8 @@ Gateway 跨工作区目录搜索 SHALL 接入统一联邦查询合同，支持�
 
 单页一秒分支调度预算耗尽继续沿原未完成状态与 cursor；端到端总期限耗尽则明确拒绝，不给后续 Session 重新分配完整等待时间。
 
+Thread 名称搜索的原游标校验 SHALL 发布 `owner=session_thread_search` 的 `invalid_thread_cursor` 或 `stale_thread_cursor`，由实际校验点区分 `malformed`、`owner_mismatch`、`query_mismatch`、`position_out_of_bounds` 和 `catalog_revision`。当前 Session 的 Thread 发布版本变化 SHALL 由原控制库读取方发布 `owner=session_thread_catalog`、`code=stale_thread_catalog`、`reason=thread_revision`，名称与消息发现共用这一拒绝。原名称入口与统一搜索均保持 HTTP 409、原详细原因及 request_id；Gateway 保留原字段、输入续点及零交付计数，并允许显式重查原分支，不把它们改标为通用读取故障或从头自动执行。
+
 #### Scenario: 未打开的同名 child 与 main 均能发现
 - **WHEN** 产品入口在同一 Session 发布一个尚未打开且与 main 同名的 fork child，另一 Session 也有同名 main
 - **THEN** 名称查询及续页返回三个不同 owner 的候选，child 保留精确身份，查询不触发模型调用或执行恢复

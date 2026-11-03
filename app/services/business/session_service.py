@@ -25,6 +25,7 @@ from app.core.session_catalog_store.contracts import (
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
 from app.core.session_control_thread_catalog.search import (
+    ThreadCatalogRevisionChangedError,
     ThreadNameRow,
     read_thread_name_page,
 )
@@ -516,7 +517,7 @@ class SessionService:
             control.verify_matches_catalog_main_thread(node.main_thread_id)
             revision = control.get_thread_catalog_revision()
             if expected_revision is not None and expected_revision != revision:
-                raise ValueError(f"Thread 目录已更新，请重新查询: session_id={session_id}")
+                raise ThreadCatalogRevisionChangedError(session_id, expected_revision, revision)
             rows, has_more = read_thread_name_page(control.connection, after_thread_id=after_thread_id, limit=limit)
         return revision, rows, has_more
 

@@ -748,3 +748,10 @@
 - 完整目录浏览器场景最终 1 passed / 139.24秒，真实 Gateway＋托管后端＋正式 Workbench＋Chromium，无业务替身；Session／fork child／目录和55个分页 Session 均由产品入口创建。文件活动项保持、失效候选清除后Enter不误开、显式单分支重查、目录revision的409／stale_catalog_cursor／revision、main与child、跨工作区只读来源、图片／Range／BOM保存和非法URI断言均保留，pageErrors=[]。
 - 前五轮原件保留：原滚动步数不足、上述真实不可重试缺陷、旧状态文案、按钮须悬停及失效候选移除后的虚拟列表重新定位；按实际上游交互修正驱动，未延长业务期限或放宽身份／冲突断言。首次传输单测中的断言放置错误亦保留原件，修正后38项通过。
 - 准确命令、源码指纹、原始结果、类型基线比较和退出码：out/tests/temp/quick_access_catalog_acceptance_20261103/artifacts/verification.json；最终页面原件：out/tests/e2e/clients/web/test_quick_access_catalog_targets/runs/run-2e8daea77b1f/。其余owner及信息／警告仍由16.18追踪，整项保持未勾选。
+
+### 2026-11-03：Thread 搜索续点保留原校验原因（16.18 部分）
+
+- 原 Thread 名称游标按实际校验点区分非法形态、owner／查询不符、目录位置越界与 catalog revision 变化，发布 invalid_thread_cursor／stale_thread_cursor；当前 Session 的 Thread 发布版本冲突由原控制库读取方发布 stale_thread_catalog，并供名称与消息发现共用。原名称入口与统一搜索保持409、原owner／reason、详细原因及request_id；Gateway保留输入cursor、零交付和显式原分支重查，不自动重放。
+- 267项定向测试通过（7.75秒），覆盖控制库、名称查询预算、Thread游标形态、两条API及传输。Ruff11条及Pyright19条与完整HEAD基线按未变行映射逐条相同，无新增；最终网络测试文件Ruff与Pyright均零诊断。OpenSpec strict及差异检查通过。
+- 真实双Backend＋Gateway网络场景1项通过（51.82秒）：产品入口创建Session并发布两个fork child，非法续点与跨查询在直接API／联邦中具名拒绝；A发布新child使旧Thread版本失效，B仍可续页，显式重查只调度A。原全范围、离线／重启、文件续点、权限及真实连接拒绝断言保留。
+- 首轮500原件保留，原因是测试装具未启动fork资源枚举所需的终端服务；沿既有终端／浏览器进程装具、独占端口及MountedWorkspace补齐真实服务，来源请求明确full_rollout_copy，未伪造child或历史。准确命令、指纹、原始结果、基线比较和退出码：out/tests/temp/thread_search_errors_20261103/artifacts/verification.json。临时完整基线及tar已删除，诊断原件保留；本批无前端或DTO字段变化，不重复Web构建／Electron。16.18其余owner及信息／警告尚未收齐，保持未勾选。
