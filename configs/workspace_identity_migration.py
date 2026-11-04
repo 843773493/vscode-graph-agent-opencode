@@ -8,7 +8,7 @@ import subprocess
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from app.core.config_sources import config_revision
 from app.core.identifier import validate_gateway_id
@@ -17,6 +17,7 @@ from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.gateway_registry.snapshot import (
     read_workspace_registry,
 )
+from app.gateway.control.generator_import import read_session_generator_inputs
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_ids
@@ -50,6 +51,17 @@ class WorkspaceIdentityReference:
 
 
 @dataclass(frozen=True, slots=True)
+class GeneratorImportPreflight:
+    source: str
+    task_id: str
+    legacy_workspace_id: str
+    source_hash: str | None
+    status: Literal["pending", "imported", "invalid"]
+    receipt_received: bool
+    remaining_sources: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceIdentityPreview:
     gateway_id: str | None
     registry_source: str | None
@@ -58,6 +70,7 @@ class WorkspaceIdentityPreview:
     mappings: tuple[WorkspaceIdentityMapping, ...]
     blockers: tuple[IdentityMigrationBlocker, ...]
     references: tuple[WorkspaceIdentityReference, ...] = ()
+    generator_imports: tuple[GeneratorImportPreflight, ...] = ()
 
     def report(self) -> dict[str, object]:
         return {
@@ -68,6 +81,7 @@ class WorkspaceIdentityPreview:
             "mappings": [asdict(item) for item in self.mappings],
             "blockers": [asdict(item) for item in self.blockers],
             "references": [asdict(item) for item in self.references],
+            "generator_imports": [asdict(item) for item in self.generator_imports],
             # TODO(unify-workspace-identity 6.1/6.2)：迁齐其余引用并实现可恢复原子发布后才能提供 apply。
             "apply_available": False,
             "remaining_checks": ["persistent_reference_migration", "client_recovery_material", "recoverable_atomic_publish"],
@@ -246,6 +260,36 @@ def _user_view_references(
     return tuple(references), tuple(blockers)
 
 
+def _generator_import_preflight(
+    root: Path,
+) -> tuple[tuple[GeneratorImportPreflight, ...], tuple[IdentityMigrationBlocker, ...]]:
+    records = []
+    blockers = []
+    for item in read_session_generator_inputs(root):
+        source = item.source.relative_to(root).as_posix()
+        status: Literal["pending", "imported", "invalid"] = (
+            "invalid" if item.error is not None else "imported" if item.settled else "pending"
+        )
+        records.append(GeneratorImportPreflight(
+            source, item.task_id, item.workspace_id,
+            item.snapshot.request.source_hash if item.snapshot is not None else None,
+            status, item.received, tuple(path.relative_to(root).as_posix() for path in item.remaining_sources),
+        ))
+        if item.error is not None:
+            blockers.append(IdentityMigrationBlocker(
+                "invalid_generator_import", source,
+                f"旧 Generator 输入校验失败；{diagnostic_error(item.error, stage='generator_import_preflight')}；保留原件并由显式导入入口处理",
+            ))
+        elif not item.settled:
+            reason = ("导入已有匹配回执，但运行源尚未全部退休" if item.received
+                      else "冻结导入尚无匹配回执" if item.snapshot is not None else "旧 Generator 尚未显式导入")
+            blockers.append(IdentityMigrationBlocker(
+                "unsettled_generator_import", source,
+                f"{reason}；先由既有显式导入入口结算，身份预检不会自动导入或修改冻结快照",
+            ))
+    return tuple(records), tuple(blockers)
+
+
 def preview_workspace_identity_migration(
     *, gateway_root: Path, project_root: Path,
 ) -> WorkspaceIdentityPreview:
@@ -253,6 +297,8 @@ def preview_workspace_identity_migration(
     root = gateway_root.expanduser().resolve()
     file_payload = _registry_file(root / "workspaces.json")
     database_payload, blockers, view_keys = _database_registry(root / "gateway.sqlite")
+    generator_imports, generator_blockers = _generator_import_preflight(root)
+    blockers.extend(generator_blockers)
     # JSON 导入源与权威库同时存在时，不隐式选择较新的一个或覆盖冲突。
     if database_payload is not None and file_payload is not None and {
         key: value for key, value in database_payload.items() if key != "registry_revision"
@@ -264,7 +310,7 @@ def preview_workspace_identity_migration(
         view_references, view_blockers = _user_view_references(view_keys, ())
         return WorkspaceIdentityPreview(
             None, None, None, None, (), (*blockers, *navigation_blockers, *view_blockers),
-            (*references, *view_references),
+            (*references, *view_references), generator_imports,
         )
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != 13:
         raise ValueError("工作区身份预检只支持 registry 合同 13；先完成既有版本升级")
@@ -334,5 +380,5 @@ def preview_workspace_identity_migration(
     return WorkspaceIdentityPreview(
         gateway_id, str(source), cast(int | None, payload.get("registry_revision")),
         config_revision(payload), tuple(mappings), (*blockers, *navigation_blockers, *view_blockers),
-        (*references, *view_references),
+        (*references, *view_references), generator_imports,
     )

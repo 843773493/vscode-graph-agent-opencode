@@ -6,17 +6,22 @@ import hashlib
 import json
 import shutil
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import closing
-from dataclasses import astuple, dataclass
+from dataclasses import astuple, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 
-from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.control import generator_import as generator_import_owner
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.control.generator_import import import_session_generators
 from app.gateway.control.navigation import WorkspaceNavigationStore
+from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.control.user_access import UserAccessContext, UserAccessService
 from app.gateway.control.view_state import UserViewStateRecord, UserViewStateStore
 from app.gateway.credentials import load_or_create_gateway_id
@@ -154,19 +159,32 @@ def test_same_uuid_in_different_native_roots_blocks_publication(registered: Regi
     clone = registered.workspace.with_name(registered.workspace.name + "-clone")
     clone.mkdir(exist_ok=True)
     assert registered.target.backend_workspace_id is not None
-    bind_workspace_id(clone, registered.target.backend_workspace_id)
+    clone_id = load_or_create_workspace_id(clone)
     registered.registry.upsert(WorkspaceTarget(
         workspace_id="gw_clone", name="原目录的副本", root_path=str(clone),
         backend_url="http://127.0.0.1:49998", connection_kind="local",
-        backend_workspace_id=registered.target.backend_workspace_id,
+        backend_workspace_id=clone_id,
     ))
+    # 新 writer 已拒绝冲突；仅变更旧持久输入，模拟外部复制形成的相同 UUID。
+    identity = registered.workspace / ".boxteam/workspace-identity.json"
+    clone_identity = clone / ".boxteam/workspace-identity.json"
+    shutil.copyfile(identity, clone_identity)
+    with closing(registered.store.connection()) as connection:
+        payload = json.loads(connection.execute(
+            "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id='gw_clone'"
+        ).fetchone()[0])
+        payload["backend_workspace_id"] = registered.target.backend_workspace_id
+        connection.execute("UPDATE gateway_workspace_registry SET payload_json=? WHERE workspace_id='gw_clone'",
+                           (json.dumps(payload),))
     before = _dump(registered.store.path)
+    original_identity = identity.read_bytes()
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["duplicate_native_workspace"]
     assert len(result.mappings) == 2
     assert {item.workspace_id for item in result.mappings} == {registered.target.backend_workspace_id}
     assert result.report()["mapping_complete"] is False
     assert _dump(registered.store.path) == before
+    assert identity.read_bytes() == clone_identity.read_bytes() == original_identity
 
 
 def test_target_uuid_mismatch_is_reported_and_never_rebound(registered: Registration) -> None:
@@ -635,3 +653,299 @@ def test_user_view_and_registry_are_read_from_one_snapshot(
     assert _view_rows(registered.store.path)[0][1:4] == (
         replacement_key, original.session_id, "并发 writer 提交的新正文",
     )
+
+
+@dataclass
+class GeneratorImportCase:
+    registered: Registration
+    client: httpx.AsyncClient
+    api: GatewayResourceCatalogService
+    sent: list[httpx.Request]
+
+    async def run(self, *, preview: bool = False) -> list[dict[str, str]]:
+        return await import_session_generators(
+            root=self.registered.root, registry=self.registered.registry, api=self.api,
+            http_client=self.client, gateway_id=self.registered.gateway_id,
+            request_id="req_identity_generator_preflight", preview=preview,
+        )
+
+    @property
+    def backup(self) -> Path:
+        snapshot, = (self.registered.root / "migration-backups/session-generators").glob("*/snapshot.json")
+        return snapshot.parent
+
+
+@pytest.fixture
+async def generator_case(registered: Registration) -> AsyncIterator[GeneratorImportCase]:
+    root, workspace_id = registered.root, registered.target.workspace_id
+    created = datetime(2026, 10, 27, tzinfo=UTC).isoformat()
+    files = {
+        "generators/gen_old.json": {
+            "generator_id": "gen_old", "name": "保留原 Generator", "execution_workspace_id": workspace_id,
+            "placement": {"kind": "workspace", "workspace_id": workspace_id},
+            "created_from": {"workspace_id": workspace_id, "session_id": "ses_original"},
+            "created_at": created, "updated_at": created, "revision": 7,
+            "trigger": {"type": "interval", "interval_seconds": 60},
+            "config": {"prompt": f"原正文不能迁写: {workspace_id}"},
+        },
+        "generator-schedules/gen_old.json": {"definition_revision": 7, "next_run_at": "2026-10-27T00:01:00Z"},
+        "generation-runs/gen_old/run_old.json": {
+            "run_id": "run_old", "generator_id": "gen_old", "idempotency_key": "key_old",
+            "status": "completed", "trigger_type": "interval", "scheduled_for": created,
+            "execution_workspace_id": workspace_id,
+        },
+    }
+    for relative, payload in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode())
+    sent: list[httpx.Request] = []
+
+    def receive(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        payload = json.loads(request.content)
+        assert payload["workspace_ids"] == {workspace_id: registered.target.backend_workspace_id}
+        assert request.headers["X-BoxTeam-Workspace-Id"] == registered.target.backend_workspace_id
+        return httpx.Response(200, json={"data": {"task_id": payload["task_id"]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(receive)) as client:
+        yield GeneratorImportCase(registered, client, GatewayResourceCatalogService(
+            registry=registered.registry, http_client=client,
+        ), sent)
+
+
+def _generator_files(root: Path) -> dict[str, tuple[bytes, int, int]]:
+    return {
+        path.relative_to(root).as_posix(): (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ino)
+        for directory in ("generators", "generation-runs", "generator-schedules", "migration-backups")
+        for path in (root / directory).rglob("*") if path.is_file()
+    }
+
+
+def test_generator_cli_preflight_never_imports_or_changes_active_sources(
+    generator_case: GeneratorImportCase, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    registered = generator_case.registered
+    before, database = _generator_files(registered.root), _dump(registered.store.path)
+
+    def reject_import(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("身份预检不能自动导入 Generator")
+
+    monkeypatch.setattr("app.gateway.control.generator_import.import_session_generators", reject_import)
+    with pytest.raises(SystemExit) as error:
+        _cli(monkeypatch)
+    assert error.value.code == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["generator_imports"] == [{
+        "source": "generators/gen_old.json", "task_id": "gen_old",
+        "legacy_workspace_id": registered.target.workspace_id, "source_hash": None,
+        "status": "pending", "receipt_received": False, "remaining_sources": [],
+    }]
+    assert [item["code"] for item in report["blockers"]] == ["unsettled_generator_import"]
+    assert report["mapping_complete"] is report["apply_available"] is False
+    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert generator_case.sent == [] and not (registered.root / "migration-backups").exists()
+
+
+@pytest.mark.parametrize("phase", ["frozen", "lost_ack", "retiring", "unsealed", "retired"])
+async def test_generator_cli_distinguishes_frozen_receipts_and_retirement_without_writes(
+    generator_case: GeneratorImportCase, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    phase: str,
+) -> None:
+    case, registered = generator_case, generator_case.registered
+    original_post, original_unlink = case.client.post, Path.unlink
+    original_write = generator_import_owner.atomic_write_bytes
+
+    async def post(*args, **kwargs):
+        if phase == "frozen":
+            raise httpx.ConnectError("目标离线")
+        response = await original_post(*args, **kwargs)
+        if phase == "lost_ack":
+            raise httpx.ReadError("目标已接受，但应答丢失", request=response.request)
+        return response
+
+    def unlink(path: Path, *args, **kwargs):
+        if phase == "retiring" and path == registered.root / "generator-schedules/gen_old.json":
+            raise OSError("源文件退休中断")
+        return original_unlink(path, *args, **kwargs)
+
+    def write(path: Path, raw: bytes) -> None:
+        if phase == "unsealed" and path.name == "snapshot.json":
+            raise OSError("snapshot 发布前中断")
+        original_write(path, raw)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(case.client, "post", post)
+        patch.setattr(Path, "unlink", unlink)
+        patch.setattr(generator_import_owner, "atomic_write_bytes", write)
+        installed, = await case.run()
+    assert installed["status"] == ("imported" if phase == "retired" else "failed")
+    before, database, sent = _generator_files(registered.root), _dump(registered.store.path), len(case.sent)
+    if phase == "retired":
+        _cli(monkeypatch)
+    else:
+        with pytest.raises(SystemExit) as error:
+            _cli(monkeypatch)
+        assert error.value.code == 1
+    report = json.loads(capsys.readouterr().out)
+    records = report["generator_imports"]
+    if phase == "unsealed":
+        assert {item["status"] for item in records} == {"pending", "invalid"}
+        assert {item["code"] for item in report["blockers"]} == {"unsettled_generator_import", "invalid_generator_import"}
+    else:
+        record, = records
+        snapshot = json.loads((case.backup / "snapshot.json").read_bytes())
+        assert record["source_hash"] == snapshot["request"]["source_hash"] == case.backup.name
+        assert record["receipt_received"] is (phase in {"retiring", "retired"})
+        assert record["status"] == ("imported" if phase == "retired" else "pending")
+        assert bool(record["remaining_sources"]) is (phase != "retired")
+    assert report["mapping_complete"] is (phase == "retired")
+    assert report["apply_available"] is False
+    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert len(case.sent) == sent
+    # 显式重入负责结算；身份预检既不重发，也不退休任何原件。
+    receipt_before = (case.backup / "receipt.json").read_bytes() if phase in {"retiring", "retired"} else None
+    recovered, = await case.run()
+    assert recovered["status"] == "imported"
+    assert len(case.sent) == (2 if phase == "lost_ack" else 1)
+    assert not tuple((registered.root / "generators").glob("*.json"))
+    assert registered.preview().blockers == ()
+    if receipt_before is not None:
+        assert (case.backup / "receipt.json").read_bytes() == receipt_before
+
+
+@pytest.mark.parametrize("damage", [
+    "source_bytes", "backup_bytes", "source_hash", "workspace_mapping", "owner", "receipt_hash",
+    "receipt_workspace", "receipt_status", "snapshot_missing", "receipt_missing", "unreceipted_retirement",
+])
+async def test_generator_cli_rejects_conflicting_frozen_input_and_receipts_without_rewriting(
+    generator_case: GeneratorImportCase, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    damage: str,
+) -> None:
+    case, registered = generator_case, generator_case.registered
+
+    async def offline(*_args: object, **_kwargs: object) -> None:
+        raise httpx.ConnectError("冻结真实 owner 的导入输入")
+
+    if damage in {"source_bytes", "unreceipted_retirement"}:
+        with monkeypatch.context() as patch:
+            patch.setattr(case.client, "post", offline)
+            result, = await case.run()
+        assert result["status"] == "failed"
+    else:
+        result, = await case.run()
+        assert result["status"] == "imported"
+    backup = case.backup
+    snapshot_path, receipt_path = backup / "snapshot.json", backup / "receipt.json"
+    if damage in {"source_bytes", "backup_bytes"}:
+        path = (registered.root if damage == "source_bytes" else backup) / "generators/gen_old.json"
+        path.write_bytes(path.read_bytes() + b" ")
+    elif damage in {"source_hash", "workspace_mapping", "owner"}:
+        snapshot = json.loads(snapshot_path.read_bytes())
+        if damage == "source_hash":
+            snapshot["request"]["source_hash"] = "f" * 64
+            replacement = backup.with_name("f" * 64)
+            backup.rename(replacement)
+            backup, snapshot_path = replacement, replacement / "snapshot.json"
+        elif damage == "workspace_mapping":
+            snapshot["request"]["workspace_ids"]["unrelated_alias"] = str(uuid4())
+        else:
+            snapshot["owner"] = str(uuid4())
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    elif damage.startswith("receipt_") and damage != "receipt_missing":
+        receipt = json.loads(receipt_path.read_bytes())
+        field = {"receipt_hash": "source_hash", "receipt_workspace": "workspace_id", "receipt_status": "status"}[damage]
+        receipt[field] = "conflicting-value"
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    else:
+        path = {"snapshot_missing": snapshot_path, "receipt_missing": receipt_path,
+                "unreceipted_retirement": registered.root / "generators/gen_old.json"}[damage]
+        path.unlink()
+    before, database, sent = _generator_files(registered.root), _dump(registered.store.path), len(case.sent)
+    with pytest.raises(SystemExit) as error:
+        _cli(monkeypatch)
+    assert error.value.code == 1
+    report = json.loads(capsys.readouterr().out)
+    assert [item["code"] for item in report["blockers"]] == ["invalid_generator_import"]
+    record, = report["generator_imports"]
+    assert record["status"] == "invalid" and record["receipt_received"] is False
+    assert report["mapping_complete"] is False
+    failed_preview, = await case.run(preview=True)
+    failed_import, = await case.run()
+    assert failed_preview["status"] == failed_import["status"] == "failed"
+    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert len(case.sent) == sent
+
+
+@pytest.mark.parametrize("retired", [False, True])
+async def test_generator_preflight_without_registry_keeps_exact_history_and_never_creates_identity(
+    generator_case: GeneratorImportCase, retired: bool,
+) -> None:
+    case, registered = generator_case, generator_case.registered
+    if retired:
+        result, = await case.run()
+        assert result["status"] == "imported"
+    with closing(registered.store.connection()) as connection:
+        connection.execute("DELETE FROM gateway_workspace_registry")
+        connection.execute("DELETE FROM gateway_config WHERE config_key='workspace_registry_meta'")
+        connection.execute("DELETE FROM registry_meta WHERE registry_key='workspace'")
+    identity = registered.root / "identity.json"
+    identity.unlink()
+    before, database, sent = _generator_files(registered.root), _dump(registered.store.path), len(case.sent)
+    preview = registered.preview()
+    record, = preview.generator_imports
+    assert record.status == ("imported" if retired else "pending")
+    assert record.legacy_workspace_id == registered.target.workspace_id
+    assert [item.code for item in preview.blockers] == ([] if retired else ["unsettled_generator_import"])
+    assert preview.gateway_id is preview.registry_source is None and preview.mappings == ()
+    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert len(case.sent) == sent and not identity.exists()
+
+
+@pytest.mark.parametrize("change", ["source_bytes", "workspace_mapping", "archive_bytes", "invalid_definition"])
+@pytest.mark.parametrize("preview", [True, False], ids=["preview", "apply"])
+async def test_unsealed_generator_backup_blocks_changed_hash_and_all_unsettled_imports(
+    generator_case: GeneratorImportCase, monkeypatch: pytest.MonkeyPatch, change: str, preview: bool,
+) -> None:
+    case, registered = generator_case, generator_case.registered
+    original_write = generator_import_owner.atomic_write_bytes
+
+    def interrupt(path: Path, raw: bytes) -> None:
+        if path.name == "snapshot.json":
+            raise OSError("snapshot 发布前中断，冻结 H1 原始归档")
+        original_write(path, raw)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(generator_import_owner, "atomic_write_bytes", interrupt)
+        failed, = await case.run()
+    assert failed["status"] == "failed" and case.sent == []
+    pending = registered.root / "migration-backups/session-generators"
+    unsealed, = pending.iterdir()
+    assert not (unsealed / "snapshot.json").exists()
+    definition = registered.root / "generators/gen_old.json"
+    original_definition = definition.read_bytes()
+    if change == "source_bytes":
+        definition.write_bytes(original_definition + b" \n")
+    elif change == "workspace_mapping":
+        registered.target = registered.registry.upsert(replace(
+            registered.target, backend_workspace_id=str(uuid4()),
+        ))
+    elif change == "archive_bytes":
+        (unsealed / "generators/gen_old.json").write_bytes(original_definition + b" \n")
+    else:
+        definition.write_bytes(b"{")
+    # 排在 gen_old 前的另一未结算项，也不能在 H1 对账完成前先写入或 POST。
+    fresh = json.loads(original_definition)
+    fresh["generator_id"] = "gen_fresh"
+    (definition.parent / "gen_fresh.json").write_text(json.dumps(fresh), encoding="utf-8")
+    before, database = _generator_files(registered.root), _dump(registered.store.path)
+    results = await case.run(preview=preview)
+    observed = {
+        "accepted": [item for item in results if item["status"] != "failed"],
+        "post_count": len(case.sent),
+        "backups": sorted(path.name for path in pending.iterdir()),
+        "snapshots": sorted(path.relative_to(pending).as_posix() for path in pending.glob("*/snapshot.json")),
+        "receipts": sorted(path.relative_to(pending).as_posix() for path in pending.glob("*/receipt.json")),
+    }
+    assert observed == {"accepted": [], "post_count": 0, "backups": [unsealed.name], "snapshots": [], "receipts": []}
+    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database

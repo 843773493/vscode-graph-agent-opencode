@@ -62,3 +62,9 @@
 - 原 registry 准入、冷恢复和代次校验共用本机 UUID／物理根约束；同原生 Gateway 已登记 UUID 的不同根在发布前明确拒绝，保留原登记、活动项、代次及身份文件。远端投影不套用本机根约束，原受控 target 更新仍沿原 owner 流程。
 - 真实 Gateway 的 managed／external 注册均拒绝复制身份形成的根冲突，原工作区继续健康；连同已有身份损坏恢复共 3 passed／99.70s。定向 registry／managed 73 passed；扩大相关组 277 passed／13 failed，失败均为两个辅助用例不同根共用假 UUID，修正 fixture 后分别 12 passed 和 1 passed，未放宽错误归属、顺序或状态断言。
 - 静态对照完整原基线无新增诊断：生产切片存量 Pyright 42／Ruff 27，相关测试存量 Pyright 16。精确命令、实际退出码、失败归因与最终指纹见 `out/tests/temp/identity_root_binding_20261104/artifacts/verification.json`；尚未验证 symlink alias、受控换根及 generation 冲突实际触发。本切片仍使用待迁齐的原路由别名，1.3 保持未勾选，不代表完整身份统一。
+
+### 2026-11-04：6.1 旧 Generator 冻结导入预检切片
+
+- 显式 Generator 导入和身份预检共用唯一只读输入校验，按原 bytes、冻结映射／owner／来源、source_hash 和精确回执区分 pending／imported／invalid；未结算或失配阻塞身份切换，已退休历史不按当前登记重绑。预检不写文件、不导入、不发网络请求，完整迁移仍 `apply_available=false`，6.1 不勾选。
+- 独审指出 snapshot 发布前中断留下半备份时，输入变化可能先导入新 hash 再报告旧备份失败。4 个反例先复现；原链路现先只读准备整批 bundle，所有半备份必须命中同一 source_hash 且已有归档 bytes 一致，再执行缓存结果。新增 preview／apply × 原 bytes、映射、归档冲突、定义重建失败共 8 场景，核零 POST、无新备份／snapshot／receipt、原件及原库不变；原输入不变的中断、丢应答、退休中断重入继续成功。
+- 最终 66 passed／18.24s，Ruff、Python 3.12 Pyright 退出 0，独立只读复核确认上述缺口闭合。准确命令、原始输出及源码指纹见 `out/tests/temp/identity_generator_unsealed_sol_20261104/artifacts/p2_verification.json`；基础预检证据保留在 `out/tests/temp/identity_generator_preflight_sol_20261104/artifacts/verification.json`。HTTP 边界采用明确 MockTransport，未声称真实目标 HTTP 导入或完整可恢复迁移已完成。
