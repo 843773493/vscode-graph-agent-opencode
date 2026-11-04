@@ -201,3 +201,8 @@
 - 真实候选进程失败恢复完整旧组 1 passed／96.11 秒；双挂载由消息入口产生历史后重启 Backend，两工作区原 Thread、消息顺序、规范化请求前缀及续跑隔离通过。原件为同目录 `product-shared-candidate-after-gate-release-1793828578895237626.*`、`product-shared-history-and-workbench-lifecycle-1793828754894097214.*`。后一批另一个 Web 项在浏览器前因缺少 fixture 接线报错，不能计成功；改为直接导入原装具后 Ruff／Pyright 通过，正式 Workbench 构建通过，补跑又在宿主 `/proc/<pid>/fd` 的 psutil.AccessDenied 处停止，尚未进入浏览器。两次失败均保留，不修改系统权限或绕过监听身份检查，3.3 保持未完成。
 
 - 通信 startup 装具迁为完整 owner，新增同 UUID 错误 Gateway 归属拒绝，原期限、错误 cause、HTTP 分类与诊断断言保留，57 passed／3.51 秒。Ruff 通过，Pyright 当前／实际 HEAD 均两条原异常联合类型诊断，无新增；原件在同目录 `communication-owner-readiness-*`、`communication-readiness-baseline-types-*`。此处 HTTP 使用原请求替身，不代替真实通信恢复或完整 6.4 验收。
+
+### 2026-11-04：5.2 导航与 Generator 消费者收口
+
+- 导航节点、父关系、持久 JSON 及公开请求／响应迁为完整 owner，保留排序、循环拒绝、原子失败和冷重开断言。Generator 保留原件、冻结 hash、接受／退休断点与请求重试的完整断言；当前版本仅处理 canonical 引用的旧文件格式，独立旧别名反例验证预览／应用均保全原件、零下游且不发布备份。仍有别名源或未结算快照的 registry 13 必须在升级前版本先完成显式退休，已在 design 明确；未新增普通请求别名表。
+- 三文件 16 passed，Ruff／Pyright 退出 0，原 17 条类型诊断消除，源码检查前后一致。原件见 `out/tests/temp/identity_navigation_consumers_current/artifacts/verification-1793829450550130776.json`；不把合法旧格式的 mock 导入称为真实旧服务升级验收，5.2／6.3 整体保持未完成。

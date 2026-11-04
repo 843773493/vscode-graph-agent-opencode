@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 
 import httpx
@@ -9,6 +11,12 @@ from app.gateway.auth import get_gateway_local_token
 from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes._shared import get_registry
+
+GATEWAY = "gateway_" + "a" * 32
+PARENT = "00000000-0000-4000-8000-000000000001"
+CHILD = "00000000-0000-4000-8000-000000000002"
+GRANDCHILD = "00000000-0000-4000-8000-000000000003"
+UNKNOWN = "00000000-0000-4000-8000-000000000099"
 
 
 @pytest.fixture(autouse=True)
@@ -37,137 +45,122 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
 
 def _target(workspace_id: str) -> WorkspaceTarget:
     return WorkspaceTarget(
+        gateway_id=GATEWAY,
         workspace_id=workspace_id,
         name=workspace_id,
         root_path=f"/workspace/{workspace_id}",
-        backend_url="http://127.0.0.1:18010",
+        backend_url="",  # 只核对离线登记层级，不让单元测试探测外部服务。
         connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
 
-def test_workspace_parent_persists_and_rejects_cycles(tmp_path: Path) -> None:
-    storage_path = tmp_path / "workspaces.json"
-    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
-    registry.upsert(_target("gw_parent"))
-    registry.upsert(_target("gw_child"))
-    registry.upsert(_target("gw_grandchild"))
+@pytest.fixture
+def registry(tmp_path: Path) -> Iterator[GatewayWorkspaceRegistry]:
+    with closing(GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", gateway_id=GATEWAY)) as result:
+        yield result
 
-    registry.set_parent("gw_child", "gw_parent")
-    registry.set_parent("gw_grandchild", "gw_child")
+
+def test_workspace_parent_persists_and_rejects_cycles(tmp_path: Path, registry: GatewayWorkspaceRegistry) -> None:
+    registry.upsert(_target(PARENT))
+    registry.upsert(_target(CHILD))
+    registry.upsert(_target(GRANDCHILD))
+
+    registry.set_parent((GATEWAY, CHILD), (GATEWAY, PARENT))
+    registry.set_parent((GATEWAY, GRANDCHILD), (GATEWAY, CHILD))
 
     with pytest.raises(ValueError, match="不能形成循环"):
-        registry.set_parent("gw_parent", "gw_grandchild")
+        registry.set_parent((GATEWAY, PARENT), (GATEWAY, GRANDCHILD))
     with pytest.raises(ValueError, match="不能成为自己的父工作区"):
-        registry.set_parent("gw_parent", "gw_parent")
+        registry.set_parent((GATEWAY, PARENT), (GATEWAY, PARENT))
 
-    restored = GatewayWorkspaceRegistry(storage_path=storage_path)
-    assert restored.resolve("gw_child").parent_workspace_id == "gw_parent"
-    assert (
-        restored.resolve("gw_grandchild").parent_workspace_id
-        == "gw_child"
-    )
+    with closing(GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", gateway_id=GATEWAY)) as restored:
+        assert restored.resolve((GATEWAY, CHILD)).parent_workspace == (GATEWAY, PARENT)
+        assert restored.resolve((GATEWAY, GRANDCHILD)).parent_workspace == (GATEWAY, CHILD)
 
 
 def test_remove_workspace_promotes_direct_children_to_roots(
-    tmp_path: Path,
+    registry: GatewayWorkspaceRegistry,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json"
-    )
-    registry.upsert(_target("gw_parent"))
-    registry.upsert(_target("gw_child"))
-    registry.set_parent("gw_child", "gw_parent")
+    registry.upsert(_target(PARENT))
+    registry.upsert(_target(CHILD))
+    registry.set_parent((GATEWAY, CHILD), (GATEWAY, PARENT))
 
-    registry.remove("gw_parent")
+    registry.remove((GATEWAY, PARENT))
 
-    assert registry.resolve("gw_child").parent_workspace_id is None
+    assert registry.resolve((GATEWAY, CHILD)).parent_workspace is None
 
 
 def test_workspace_update_is_atomic_when_parent_is_invalid(
-    tmp_path: Path,
+    registry: GatewayWorkspaceRegistry,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json"
-    )
-    registry.upsert(_target("gw_child"))
+    registry.upsert(_target(CHILD))
 
     with pytest.raises(KeyError, match="未知 Gateway 父工作区"):
         registry.update(
-            "gw_child",
+            (GATEWAY, CHILD),
             name="Renamed",
-            parent_workspace_id="gw_unknown",
+            parent_workspace=(GATEWAY, UNKNOWN),
         )
 
-    assert registry.resolve("gw_child").name == "gw_child"
-    assert registry.resolve("gw_child").parent_workspace_id is None
+    assert registry.resolve((GATEWAY, CHILD)).name == CHILD
+    assert registry.resolve((GATEWAY, CHILD)).parent_workspace is None
 
 
 @pytest.mark.asyncio
 async def test_workspace_update_endpoint_sets_and_clears_parent(
-    tmp_path: Path,
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json"
-    )
-    registry.upsert(_target("gw_parent"))
-    registry.upsert(_target("gw_child"))
-    app.dependency_overrides[get_registry] = lambda: registry
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://gateway.test",
-        ) as client:
-            bind_response = await client.patch(
-                "/api/gateway/workspaces/gw_child",
-                    headers={"X-Local-Token": get_gateway_local_token()},
-                json={"parent_workspace_id": "gw_parent"},
-            )
-            unbind_response = await client.patch(
-                "/api/gateway/workspaces/gw_child",
-                    headers={"X-Local-Token": get_gateway_local_token()},
-                json={"parent_workspace_id": None},
-            )
-    finally:
-        app.dependency_overrides.clear()
+    registry.upsert(_target(PARENT))
+    registry.upsert(_target(CHILD))
+    monkeypatch.setitem(app.dependency_overrides, get_registry, lambda: registry)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://gateway.test",
+    ) as client:
+        bind_response = await client.patch(
+            f"/api/gateway/workspaces/{CHILD}",
+            headers={"X-Local-Token": get_gateway_local_token()},
+            json={"parent_workspace": {"gateway_id": GATEWAY, "workspace_id": PARENT}},
+        )
+        unbind_response = await client.patch(
+            f"/api/gateway/workspaces/{CHILD}",
+            headers={"X-Local-Token": get_gateway_local_token()},
+            json={"parent_workspace": None},
+        )
 
     assert bind_response.status_code == 200
     bound = next(
         item
         for item in bind_response.json()["data"]["items"]
-        if item["workspace_id"] == "gw_child"
+        if (item["gateway_id"], item["workspace_id"]) == (GATEWAY, CHILD)
     )
-    assert bound["parent_workspace_id"] == "gw_parent"
+    assert bound["parent_workspace"] == {"gateway_id": GATEWAY, "workspace_id": PARENT}
     assert unbind_response.status_code == 200
     unbound = next(
         item
         for item in unbind_response.json()["data"]["items"]
-        if item["workspace_id"] == "gw_child"
+        if (item["gateway_id"], item["workspace_id"]) == (GATEWAY, CHILD)
     )
-    assert unbound["parent_workspace_id"] is None
+    assert unbound["parent_workspace"] is None
 
 
 @pytest.mark.asyncio
 async def test_workspace_update_endpoint_rejects_unknown_parent(
-    tmp_path: Path,
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json"
-    )
-    registry.upsert(_target("gw_child"))
-    app.dependency_overrides[get_registry] = lambda: registry
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://gateway.test",
-        ) as client:
-            response = await client.patch(
-                "/api/gateway/workspaces/gw_child",
-                    headers={"X-Local-Token": get_gateway_local_token()},
-                json={"parent_workspace_id": "gw_unknown"},
-            )
-    finally:
-        app.dependency_overrides.clear()
+    registry.upsert(_target(CHILD))
+    monkeypatch.setitem(app.dependency_overrides, get_registry, lambda: registry)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://gateway.test",
+    ) as client:
+        response = await client.patch(
+            f"/api/gateway/workspaces/{CHILD}",
+            headers={"X-Local-Token": get_gateway_local_token()},
+            json={"parent_workspace": {"gateway_id": GATEWAY, "workspace_id": UNKNOWN}},
+        )
 
     assert response.status_code == 404
     assert "未知 Gateway 父工作区" in response.json()["detail"]

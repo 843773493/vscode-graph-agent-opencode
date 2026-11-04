@@ -12,20 +12,23 @@ from app.gateway.control.generator_import import import_session_generators
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 
+GATEWAY = "gateway_" + "a" * 32
+WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+
 
 @pytest.fixture
 def migration_case(tmp_path, monkeypatch):
-    target = WorkspaceTarget(workspace_id="route", name="目标", root_path="/not-used", backend_url="http://workspace.test",
-                             connection_kind="local", backend_workspace_id="00000000-0000-4000-8000-000000000001")
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    target = WorkspaceTarget(gateway_id=GATEWAY, workspace_id=WORKSPACE_ID, name="目标", root_path=str(tmp_path / "target"),
+                             backend_url="http://workspace.test", connection_kind="local")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json", gateway_id=GATEWAY)
     registry.upsert(target, activate=False)
     root = tmp_path / "legacy"
-    monkeypatch.setattr("app.gateway.control.resource_catalog.load_proxy_gateway_id", lambda: "gateway_local")
+    monkeypatch.setattr("app.gateway.control.resource_catalog.load_proxy_gateway_id", lambda: GATEWAY)
     created = datetime(2026, 10, 27, tzinfo=UTC).isoformat()
-    definition = {"generator_id": "gen_old", "name": "原生成器", "execution_workspace_id": "route",
-                  "placement": {"kind": "workspace", "workspace_id": "route"}, "created_at": created, "updated_at": created,
+    definition = {"generator_id": "gen_old", "name": "原生成器", "execution_workspace_id": WORKSPACE_ID,
+                  "placement": {"kind": "workspace", "workspace_id": WORKSPACE_ID}, "created_at": created, "updated_at": created,
                   "config": {"prompt": "原提示"}, "trigger": {"type": "interval", "interval_seconds": 60}, "revision": 7,
-                  "created_from": {"workspace_id": "route", "session_id": "ses_origin"}}
+                  "created_from": {"workspace_id": WORKSPACE_ID, "session_id": "ses_origin"}}
     path = root / "generators/gen_old.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(definition))
@@ -48,7 +51,7 @@ def migration_case(tmp_path, monkeypatch):
 async def migrate(case, *, preview=False):
     root, registry, client, api, _sent = case
     return await import_session_generators(root=root, registry=registry, http_client=client, api=api,
-                                           gateway_id="gateway_local", request_id="req_import", preview=preview)
+                                           gateway_id=GATEWAY, request_id="req_import", preview=preview)
 
 
 @pytest.mark.asyncio
@@ -64,10 +67,11 @@ async def test_preview_then_install_and_repeat_retains_original_snapshot(migrati
         request, = sent
         assert request.url.path == "/api/v1/persistent-tasks/imports/session-generators"
         assert request.headers["X-Request-ID"] == "req_import"
-        assert request.headers["X-BoxTeam-Workspace-Id"] == "00000000-0000-4000-8000-000000000001"
+        assert request.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
         payload = json.loads(request.content)
         assert payload["task_id"] == "gen_old" and payload["revision"] == 7
-        assert payload["configuration"]["action"]["generation"]["created_from_uri"].startswith("boxteam://gateway_local/")
+        assert payload["workspace_ids"] == {WORKSPACE_ID: WORKSPACE_ID}
+        assert payload["configuration"]["action"]["generation"]["created_from_uri"].startswith(f"boxteam://{GATEWAY}/")
         assert payload["next_run_at"] == "2026-10-27T00:01:00Z"
         assert not (root / "generators/gen_old.json").exists()
         assert (await migrate(migration_case)) == [installed]
@@ -75,6 +79,31 @@ async def test_preview_then_install_and_repeat_retains_original_snapshot(migrati
         backup = root / "migration-backups/session-generators" / planned["source_hash"]
         for relative, raw in before.items():
             assert (backup / relative).read_bytes() == raw
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preview", [True, False])
+async def test_legacy_alias_without_frozen_mapping_is_rejected_without_publishing(
+    migration_case, preview, caplog: pytest.LogCaptureFixture,
+):
+    root, registry, client, _api, sent = migration_case
+    path = root / "generators/gen_old.json"
+    definition = json.loads(path.read_bytes())
+    definition["execution_workspace_id"] = "route"
+    definition["placement"]["workspace_id"] = "route"
+    definition["created_from"]["workspace_id"] = "route"
+    path.write_text(json.dumps(definition))
+    before = {source.relative_to(root): source.read_bytes() for source in root.rglob("*") if source.is_file()}
+    try:
+        failed, = await migrate(migration_case, preview=preview)
+        assert failed["status"] == "failed" and failed["workspace_id"] == "route" and sent == []
+        assert "request_id=req_import" in failed["error"]
+        assert "Workspace 后端工作区 ID 必须是标准 UUID" in caplog.text
+        assert {relative: (root / relative).read_bytes() for relative in before} == before
+        assert not (root / "migration-backups/session-generators").exists()
+        assert registry.resolve((GATEWAY, WORKSPACE_ID)).workspace_id == WORKSPACE_ID
     finally:
         await client.aclose()
 
@@ -105,7 +134,7 @@ async def test_retirement_crash_retries_deleted_prefix_without_second_publish(mi
 async def test_offline_or_changed_owner_never_falls_back(migration_case):
     root, registry, client, _api, sent = migration_case
     try:
-        registry.remove("route")
+        registry.remove((GATEWAY, WORKSPACE_ID))
         failed, = await migrate(migration_case)
         assert failed["status"] == "failed" and sent == []
         assert (root / "generators/gen_old.json").exists()
