@@ -60,14 +60,15 @@ try {
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), workspaces = await api('/api/gateway/workspaces');
-  const routeA = workspaces.data.active_workspace_id;
-  const workspace = await api('/api/v1/workspace', { headers: { 'X-BoxTeam-Workspace-Id': routeA } });
-  const roots = await api('/api/v1/workspace/files/roots', { headers: { 'X-BoxTeam-Workspace-Id': routeA } });
+  const ownerA = workspaces.data.active_workspace;
+  const headers = { 'X-BoxTeam-Workspace-Id': ownerA.workspace_id, 'X-BoxTeam-Target-Gateway-Id': ownerA.gateway_id };
+  const workspace = await api('/api/v1/workspace', { headers });
+  const roots = await api('/api/v1/workspace/files/roots', { headers });
   const b = workspaces.data.items.find(item => item.name === '覆盖隔离 B');
   expect(b.status).toBe('ready');
   result.initialization = [health, workspaces, workspace, roots].map(body => body.request_id);
-  const ownerA = { gateway_id: health.data.gateway_id, workspace_id: workspace.data.workspace_id };
-  const ownerB = { gateway_id: health.data.gateway_id, workspace_id: b.backend_workspace_id };
+  expect(workspace.data.workspace_id).toBe(ownerA.workspace_id);
+  const ownerB = { gateway_id: b.gateway_id, workspace_id: b.workspace_id };
   result.owners = [ownerA, ownerB];
   const root = roots.data.workspace_uri;
   await writeWorkspaceSettings({ page, command }, { 'files.autoSave': 'off', 'search.useIgnoreFiles': false, 'search.maxResults': 2 });
@@ -107,7 +108,8 @@ try {
   await command('workbench.action.quickOpen', 'coverageword');
   await quick.getByRole('button', { name: '选择搜索范围', exact: true }).click();
   await expect(quick).toContainText('选择快速访问搜索范围');
-  await quick.locator('.monaco-list-row').filter({ hasText: ownerB.workspace_id }).getByRole('checkbox').click();
+  await quick.locator('.monaco-list-row').filter({ hasText: ownerB.gateway_id })
+    .filter({ hasText: ownerB.workspace_id }).getByRole('checkbox').click();
   await quick.getByRole('button', { name: 'OK', exact: true }).click();
   await quick.locator('input').first().fill('?');
   await quick.getByRole('option', { name: /^%,/ }).click();
@@ -135,8 +137,8 @@ try {
   await page.keyboard.press('Escape');
 
   result.phase = 'cursor-coverage-changed';
-  const target = initial.queries[0].file_targets.find(item => item.owner.workspace_id === ownerA.workspace_id).target;
-  const rejected = await api('/api/v1/search', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': routeA }, body: JSON.stringify({
+  const target = initial.queries[0].file_targets.find(item => item.owner.gateway_id === ownerA.gateway_id && item.owner.workspace_id === ownerA.workspace_id).target;
+  const rejected = await api('/api/v1/search', { method: 'POST', headers, body: JSON.stringify({
     workspace_id: ownerA.workspace_id, category: 'file', operation: 'content', query: 'coverageword', match_mode: 'literal',
     limit: 1, cursor: continuation.continuations[0].cursor,
     file: { ...target, search_options: { ...target.search_options, excluded_resource_uris: [] } },

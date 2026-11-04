@@ -103,14 +103,15 @@ async def test_dirty_file_coverage_keeps_other_owner_and_paginated_matches(
         logs = context.boxteam_home_for_node(request.node.nodeid) / "state/logs/backend"
         backend_logs = [log.read_text() for log in logs.glob("*.log")]
         owner_logs = {
-            owner["workspace_id"]: [log for log in backend_logs
-                                    if f"Workspace 挂载 begin: workspace_id={owner['workspace_id']}" in log]
+            (owner["gateway_id"], owner["workspace_id"]): [log for log in backend_logs
+                                                        if f"Workspace 挂载 begin: workspace_id={owner['workspace_id']}" in log]
             for owner in receipt["owners"]
         }
         assert all(len(entries) == 1 for entries in owner_logs.values())
         observed_dispatch = []
         for response in [*receipt["receipts"], receipt["nestedReceipt"]]:
-            expected = list(dict.fromkeys(branch["branch"]["owner"]["workspace_id"] for branch in response["summary"]["branches"]))
+            expected = list(dict.fromkeys((branch["branch"]["owner"]["gateway_id"], branch["branch"]["owner"]["workspace_id"])
+                                          for branch in response["summary"]["branches"]))
             actual = [owner for owner, entries in owner_logs.items()
                       if any(f'request_id="{response["requestId"]}"' in line and '"POST /api/v1/search ' in line
                              for line in entries[0].splitlines())]
