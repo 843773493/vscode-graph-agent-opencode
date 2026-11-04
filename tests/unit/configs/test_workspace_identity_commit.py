@@ -12,6 +12,7 @@ import pytest
 
 from app.core.config_migration_guard import require_settled_config_migration
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.control.gateway_state._schema import _GATEWAY_MIGRATIONS
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry
 from configs import runtime_logging_commit as publisher
@@ -53,7 +54,8 @@ def test_full_legacy_state_migrates_to_single_owner_and_keeps_views_and_shared_g
     with closing(sqlite3.connect(case.database)) as connection:
         view, = connection.execute("SELECT gateway_id,workspace_id,turn_anchor,scroll_offset,projection_version FROM user_view_state")
         assert view == (case.gateway_id, case.metadata["workspaces"]["gw_local_0"]["workspace_id"], "正文必须保留 gw_local_0", 123.5, 7)
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 19
+        assert connection.execute("SELECT version FROM schema_migrations WHERE version = 19").fetchone() == (19,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == len(_GATEWAY_MIGRATIONS)
     journal = json.loads((case.root / ".workspace-identity-migration.json").read_text())
     with closing(sqlite3.connect(Path(journal["backup_root"]) / "gateway.before.sqlite")) as connection:
         assert "\n".join(connection.iterdump()) == before
@@ -100,14 +102,34 @@ def test_restore_preserves_complete_before_state_and_rejects_new_writes(legacy_g
     commit(case)
     assert commit(case, restore=True)["state"] == "restored"
     assert case.dump() == before and (case.root / "navigation/workspace-tree.json").read_bytes() == navigation
-    commit(case)
+    result = commit(case)
     with closing(sqlite3.connect(case.database)) as connection:
         connection.execute("UPDATE user_view_state SET turn_anchor='新状态不允许被旧备份覆盖'")
         connection.commit()
     changed = case.dump()
+    assert commit(case) == result and case.dump() == changed
     with pytest.raises(RuntimeError, match="外部修改"):
         commit(case, restore=True)
     assert case.dump() == changed
+
+
+def test_completed_migration_keeps_recovery_output_conflict_after_schema_upgrade(legacy_gateway: LegacyGateway) -> None:
+    case = legacy_gateway
+    result = commit(case)
+    with GatewayStateStore(path=case.database) as state:
+        assert state.load_workspace_registry() is not None
+    after = case.dump()
+    journal_path = case.root / ".workspace-identity-migration.json"
+    journal = journal_path.read_bytes()
+    output = case.directory / "occupied-recovery.json"
+    output.write_text("保留已存在的不同恢复材料")
+    original = output.read_bytes()
+    with pytest.raises(ValueError, match="客户端恢复输出已存在不同内容"):
+        commit(case, recovery_output=output)
+    assert output.read_bytes() == original
+    assert case.dump() == after and journal_path.read_bytes() == journal
+    require_settled_config_migration(case.database)
+    assert commit(case) == result and case.dump() == after
 
 
 def test_file_only_input_is_imported_once_and_can_restore_absence(legacy_gateway: LegacyGateway) -> None:

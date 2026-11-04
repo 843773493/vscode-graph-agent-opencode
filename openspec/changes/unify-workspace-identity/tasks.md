@@ -165,3 +165,5 @@
 - 冷恢复在构造新建对象前要求持久 owner、namespace、generation 和连接集合真实存在；generation 非字符串在原准入入口拒绝，缺件不再被新建默认值替代。新建、owner 授权、root binding、revision CAS 和租约仍沿唯一登记链路。
 - 身份恢复 53 项、健康／查找 100 项通过；本地登记／根／owner 与恢复集中检查 129 passed，另一个配置迁移重入用例失败单独处理，不算本项成功。真实 Gateway 经产品注册、激活后重启恢复 1 passed／107.80 秒，源码首尾一致；复合活动归属、原错误 cause、JSON／SQLite 原件和租约断言保留，独立六文件只读复核未发现问题。
 - 准确命令与原始结果在 `out/tests/temp/identity_registry_recovery_root/artifacts/`、`identity_registry_recovery_current/artifacts/`、`identity_registry_read_consumers_current/artifacts/`。Root 四文件 Pyright 完整 HEAD 基线／当前 108／108、Ruff 1／1，均无新增诊断；代理三测试静态零诊断。未将该证据扩展为 Windows、真实远端、客户端或完整 6.3／6.4 验收。
+
+- 6.3 重入补充：已完成身份迁移只返回冻结回执和导出恢复材料，不重新锁定数据库或发布旧快照；正常 schema 升级、后续视图写入不再触发旧 digest 误判。首次／中断发布、显式回退仍用原 CAS／备份／屏障，后续写入仍拒绝被旧备份覆盖；恢复输出冲突保全原件。参考 Copilot `sessionStore.ensureSchema` 的已完成版本门，未运行参考仓库测试。直接迁移四文件组 103 passed，Ruff 通过，Pyright 7／7 为既存测试诊断、生产零诊断；准确命令、原件和指纹见 `out/tests/temp/identity_completed_migration_current/artifacts/verification-1793826712816757004.json`。真实重启及客户端恢复的整体 6.3 继续未勾选。

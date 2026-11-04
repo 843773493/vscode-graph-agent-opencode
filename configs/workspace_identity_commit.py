@@ -138,21 +138,23 @@ def commit_workspace_identity_migration(
             raise ValueError("身份迁移原件属于另一 Gateway 根，禁止重绑定")
         if restore and journal is None:
             raise ValueError("没有可恢复的身份迁移原件")
-        database = root / "gateway.sqlite"
-        if journal is not None and any(asset["path"] == str(database) and asset["kind"] == "file" for asset in journal["assets"]):
-            ownership = SQLiteProcessOwnership(database)
-            ownership.acquire()
-            stack.callback(ownership.release)
-            connections = {}
-        else:
-            connections = _lock_databases([database], stack)
-        if journal is None or journal["state"] == "restored" and not restore:
-            preview = _checked_preview(root, project_root, verified_preview)
-            journal = _prepare(root, preview, connections)
-            atomic_write(journal_path, _json_bytes(journal), 0o600)
-        assert journal is not None
-        _publish(journal_path, journal, connections, restore=restore,
-                 database_digest=database_digest, replace_database=replace_database)
+        # completed 只读取冻结回执；显式恢复仍须经过原 CAS、备份校验和屏障。
+        if restore or journal is None or journal["state"] != "completed":
+            database = root / "gateway.sqlite"
+            if journal is not None and any(asset["path"] == str(database) and asset["kind"] == "file" for asset in journal["assets"]):
+                ownership = SQLiteProcessOwnership(database)
+                ownership.acquire()
+                stack.callback(ownership.release)
+                connections = {}
+            else:
+                connections = _lock_databases([database], stack)
+            if journal is None or journal["state"] == "restored" and not restore:
+                preview = _checked_preview(root, project_root, verified_preview)
+                journal = _prepare(root, preview, connections)
+                atomic_write(journal_path, _json_bytes(journal), 0o600)
+            assert journal is not None
+            _publish(journal_path, journal, connections, restore=restore,
+                     database_digest=database_digest, replace_database=replace_database)
         recovery_file = recovery_output or Path(journal["backup_root"]) / "client-recovery.json"
         if not restore:
             content = _json_bytes(journal["recovery"])
