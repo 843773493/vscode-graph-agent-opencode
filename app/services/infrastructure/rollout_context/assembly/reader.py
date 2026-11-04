@@ -212,20 +212,22 @@ class ContextAssemblyReaderMixin:
         snapshot 保留的原执行 scope；binding 仅核准历史 scope，不定位源库。
         """
         self._storage._require_v2_runtime(connection)
+        # header 只核标量身份；完整 snapshot 正文由下方 registry 唯一读取和校验，
+        # 避免冷读或前驱检查把随历史增长的同一份 manifest 重复取回 Python。
         row = connection.execute(
-            "SELECT snapshot_json, status, plan_id, plan_hash, request_hash, turn_id, execution_id, history_view_revision, source_overlay_epoch, detail_ref, session_id, thread_id FROM context_assemblies WHERE assembly_id = ?",
+            "SELECT status, plan_id, plan_hash, request_hash, turn_id, execution_id, history_view_revision, source_overlay_epoch, detail_ref, session_id, thread_id FROM context_assemblies WHERE assembly_id = ?",
             (assembly_id,),
         ).fetchone()
         if row is None:
             raise KeyError(f"context assembly 不存在: {assembly_id}")
         historical_owner = (
-            required_text(row[10], field="context_assemblies.session_id"),
-            required_text(row[11], field="context_assemblies.thread_id"),
+            required_text(row[9], field="context_assemblies.session_id"),
+            required_text(row[10], field="context_assemblies.thread_id"),
         )
         require_historical_scope(
             connection, *historical_owner, current_owner=(session_id, thread_id),
         )
-        status = required_text(row[1], field="status")
+        status = required_text(row[0], field="status")
         if status not in {"sealed", "terminal"}:
             raise RuntimeError(
                 f"context assembly manifest status 非法或未封存: {assembly_id}"
@@ -234,11 +236,11 @@ class ContextAssemblyReaderMixin:
         # header/detail/selection 的完整 reader 校验仍在本次连接内完成。
         if registration is None:
             registration = read_registration(
-                connection, *historical_owner, required_text(row[2], field="plan_id"),
+                connection, *historical_owner, required_text(row[1], field="plan_id"),
                 validated_predecessors=validated_predecessors,
             )
         if (registration.session_id, registration.thread_id, registration.draft.plan_id) != (
-            *historical_owner, row[2],
+            *historical_owner, row[1],
         ):
             raise RuntimeError(f"source-mismatch: context assembly registry owner 不一致: {assembly_id}")
         snapshot = registration.sealed_snapshot
@@ -250,13 +252,13 @@ class ContextAssemblyReaderMixin:
         ):
             raise RuntimeError(f"context assembly identity 不一致: {assembly_id}")
         persisted_identity = (
-            required_text(row[2], field="plan_id"),
-            required_text(row[3], field="plan_hash"),
-            required_text(row[4], field="request_hash"),
-            optional_text(row[5], field="turn_id"),
-            required_text(row[6], field="execution_id"),
-            non_negative_int(row[7], field="history_view_revision"),
-            non_negative_int(row[8], field="source_overlay_epoch"),
+            required_text(row[1], field="plan_id"),
+            required_text(row[2], field="plan_hash"),
+            required_text(row[3], field="request_hash"),
+            optional_text(row[4], field="turn_id"),
+            required_text(row[5], field="execution_id"),
+            non_negative_int(row[6], field="history_view_revision"),
+            non_negative_int(row[7], field="source_overlay_epoch"),
         )
         if persisted_identity != (
             snapshot.plan_id,
@@ -270,7 +272,7 @@ class ContextAssemblyReaderMixin:
             raise RuntimeError(
                 f"context assembly header 与 snapshot 不一致: {assembly_id}"
             )
-        header_key = optional_text(row[9], field="detail_ref")
+        header_key = optional_text(row[8], field="detail_ref")
         header_ref = detail_ref_from_key(header_key) if header_key is not None else None
         if header_ref is not None:
             header_ref.require_owner(*historical_owner, assembly_id)

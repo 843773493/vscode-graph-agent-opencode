@@ -101,6 +101,39 @@ def test_prepare_shares_tools_and_frozen_prefix_then_cold_reads_without_current_
     assert canonical_files == []
 
 
+def test_cold_assembly_fetches_snapshot_body_once(shared_assemblies, monkeypatch, request):
+    saver, session, thread, connection, _manager, first, _second, _before = shared_assemblies
+    body_reads = 0
+
+    def observe_read(action, table, column, _database, _trigger):
+        nonlocal body_reads
+        if action == sqlite3.SQLITE_READ and (table, column) == ("context_assemblies", "snapshot_json"):
+            body_reads += 1
+        return sqlite3.SQLITE_OK
+
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        connect = cold._storage.storage._connect
+
+        def observed_connection(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            db.set_authorizer(observe_read)
+            return db
+
+        monkeypatch.setattr(cold._storage.storage, "_connect", observed_connection)
+        restored = cold.get_context_assembly(session, thread, assembly_id=first.assembly_id)
+        assert restored.to_dict() == first.to_dict()
+    body_bytes = connection.execute(
+        "SELECT length(CAST(snapshot_json AS BLOB)) FROM context_assemblies WHERE assembly_id=?",
+        (first.assembly_id,),
+    ).fetchone()[0]
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "cold-snapshot-body-reads.json").write_text(
+        json.dumps({"snapshot_bytes": body_bytes, "body_column_reads": body_reads}, indent=2), encoding="utf-8",
+    )
+    # header 只消费标量；整份历史正文只交给 registry 读取与校验一次。
+    assert body_reads == 1
+
+
 @pytest.fixture
 def assembly_control(shared_assemblies, tmp_path):
     saver, session, thread, _connection, _manager, first, second, _before = shared_assemblies
