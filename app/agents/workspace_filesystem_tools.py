@@ -43,6 +43,9 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
+from app.services.infrastructure.workspace_files.filesystem import (
+    file_access_error_detail,
+)
 from app.services.infrastructure.workspace_files.text_mutation import (
     text_mutation_failure,
 )
@@ -167,9 +170,9 @@ def _path_error(
             "owner": "resource_file_operations", "code": "execution_failed",
             "reason": "filesystem" if isinstance(error, OSError) else "transport",
             "type": type(error).__name__, "errno": getattr(error, "errno", None),
-            "message": report_failure(error, detail=(
-                "文件导航文件系统访问失败" if isinstance(error, OSError) else "文件导航传输失败"
-            )),
+            "message": file_access_error_detail(error) if isinstance(error, OSError) else report_failure(
+                error, detail="文件导航传输失败"
+            ),
         }, ensure_ascii=False)
     else:
         content = f"Error: {error}"

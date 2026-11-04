@@ -154,6 +154,7 @@ def test_detail_path_failure_keeps_owner_cause_and_cold_retry(
         assert isinstance(original, PermissionError) and original.errno == errno.EACCES
         assert original.filename == str(case.target)
         assert error.__cause__ is original and "error=PermissionError, errno=13" in str(error)
+        assert original.strerror is not None and original.strerror in str(error)
     else:
         original = error
         assert error.__cause__ is None
@@ -167,7 +168,7 @@ def test_detail_path_failure_keeps_owner_cause_and_cold_retry(
         assert "diagnostic_sink_error=NotADirectoryError" in str(error)
     else:
         assert not sink_errors and "diagnostic_sink_error" not in str(error)
-    assert str(blocked) not in str(error) and "detail-diagnostic-log-secret" not in str(error)
+    assert str(blocked) in str(error) and "detail-diagnostic-log-secret" not in str(error)
     assert case.target.read_bytes() == raw == case.prepared.raw
     assert case.sibling.read_bytes() == sibling
     assert sorted(path.name for path in case.target.parent.iterdir()) == sorted([case.target.name, case.sibling.name])
@@ -175,3 +176,53 @@ def test_detail_path_failure_keeps_owner_cause_and_cold_retry(
     restored = cold.read(session_id=_SESSION, thread_id=case.prepared.record.thread_id, record=case.prepared.record)
     assert restored["detail"] == {"text": "冻结正文 Ω\r\n"}
     assert restored["detail_ref"] == case.prepared.record.detail_ref.to_dict()
+
+
+def test_missing_detail_keeps_native_location_and_cold_recovery(detail_case: DetailCase, detail_log) -> None:
+    case = detail_case
+    unavailable, records, sink_errors = detail_log
+    case.target.unlink()
+    record = case.prepared.record
+    with pytest.raises(DetailUnavailableError) as caught:
+        ContextPlanDetailStore(case.sessions).read(session_id=_SESSION, thread_id=record.thread_id, record=record)
+    original = caught.value.__cause__
+    assert isinstance(original, FileNotFoundError) and original.errno == errno.ENOENT
+    assert original.filename == str(case.target)
+    detail = str(caught.value)
+    assert str(original) in detail and "stage=read" in detail and str(record.detail_ref) in detail
+    logged, = records
+    assert logged.exc_info is not None and logged.exc_info[1] is original
+    if unavailable:
+        sink_error, = sink_errors
+        assert str(sink_error) in "\n".join(original.__notes__)
+        assert "diagnostic_sink_error=NotADirectoryError" in detail
+    assert "detail-diagnostic-log-secret" not in detail
+    assert not case.target.exists() and case.sibling.read_bytes() == b"unrelated immutable body"
+    case.store.publish(case.prepared)
+    restored = ContextPlanDetailStore(case.sessions).read(session_id=_SESSION, thread_id=record.thread_id, record=record)
+    assert restored["detail"] == {"text": "冻结正文 Ω\r\n"}
+    assert case.target.read_bytes() == case.prepared.raw
+
+
+def test_exclusive_detail_collision_keeps_both_native_filenames_and_original_body(
+    detail_case: DetailCase, detail_log,
+) -> None:
+    case = detail_case
+    unavailable, records, sink_errors = detail_log
+    with pytest.raises(DetailUnavailableError) as caught:
+        case.store.publish(case.prepared)
+    original = caught.value.__cause__
+    assert isinstance(original, FileExistsError) and original.errno == errno.EEXIST
+    assert original.filename2 == str(case.target)
+    detail = str(caught.value)
+    assert str(original) in detail and "stage=publish" in detail
+    assert str(case.prepared.record.detail_ref) in detail
+    logged, = records
+    assert logged.exc_info is not None and logged.exc_info[1] is original
+    if unavailable:
+        sink_error, = sink_errors
+        assert str(sink_error) in "\n".join(original.__notes__)
+        assert "diagnostic_sink_error=NotADirectoryError" in detail
+    assert "detail-diagnostic-log-secret" not in detail
+    assert case.target.read_bytes() == case.prepared.raw
+    assert sorted(path.name for path in case.target.parent.iterdir()) == sorted([case.target.name, case.sibling.name])

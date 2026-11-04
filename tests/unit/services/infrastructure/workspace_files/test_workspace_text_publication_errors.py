@@ -1,4 +1,4 @@
-"""最终文件访问错误不把原生文件名带出文本 owner。"""
+"""最终文件访问保留原生原因，文本 owner 继续报告原 URI 和发布效果。"""
 
 from __future__ import annotations
 
@@ -89,16 +89,14 @@ def test_read_failures_preserve_type_errno_cause_and_uri(source, monkeypatch, nu
         with pytest.raises(type(original)) as caught:
             text_publication.read_file_preimage(target, reference=uri)
     error = caught.value
-    assert type(error) is type(original) and error.errno == number
-    assert error.__cause__ is original
-    assert error.filename is None and error.filename2 is None
-    assert uri in str(error) and f"errno={number}" in str(error)
-    assert filesystem.file_access_error_detail(error) == str(error)
-    assert str(target.parent) not in str(error)
-    assert original.filename == str(target)
+    assert error is original and error.errno == number and error.__cause__ is None
+    assert error.filename == str(target) and error.strerror == f"原始系统消息含路径 {target}"
+    detail = filesystem.file_access_error_detail(error)
+    assert uri in detail and f"errno={number}" in detail and "stage=read" in detail
+    assert str(error) in detail
     assert target.read_bytes() == b"original\r\n"
     if diagnostic_sink is not None:
-        assert "diagnostic_sink_error=NotADirectoryError" in str(error)
+        assert "diagnostic_sink_error=NotADirectoryError" in detail
         assert any(str(diagnostic_sink) in note for note in original.__notes__)
 
 
@@ -136,17 +134,16 @@ def test_publication_failures_leave_original_and_remove_temporary(source, monkey
             else:
                 text_publication.publish_file_content(target, b"replacement", before=before, reference=uri)
     error = caught.value
-    assert type(error) is type(original) and error.errno == number
-    assert error.__cause__ is original
-    assert error.filename is None and error.filename2 is None
-    assert uri in str(error) and f"errno={number}" in str(error)
-    assert filesystem.file_access_error_detail(error) == str(error)
-    assert str(target.parent) not in str(error)
-    assert original.filename == str(target) and original.filename2 == str(target.with_suffix(".tmp"))
+    assert error is original and error.errno == number and error.__cause__ is None
+    assert error.filename == str(target) and error.filename2 == str(target.with_suffix(".tmp"))
+    assert error.strerror == f"原生系统消息含路径 {target.parent}"
+    detail = filesystem.file_access_error_detail(error)
+    assert uri in detail and f"errno={number}" in detail
+    assert f"stage={'delete' if stage == 'delete' else 'publish'}" in detail and str(error) in detail
     assert target.read_bytes() == before.content
     assert list(target.parent.glob(".notes.txt.*.tmp")) == []
     if diagnostic_sink is not None:
-        assert "diagnostic_sink_error=NotADirectoryError" in str(error)
+        assert "diagnostic_sink_error=NotADirectoryError" in detail
         assert any(str(diagnostic_sink) in note for note in original.__notes__)
 
 
@@ -176,7 +173,9 @@ def test_postpublication_read_failure_keeps_unknown_effect(source, monkeypatch, 
     error = caught.value
     assert error.observed_hash is None and error.reference == uri
     assert uri in str(error) and str(target.parent) not in str(error)
-    assert isinstance(error.__cause__, OSError) and error.__cause__.__cause__ is original
+    assert error.__cause__ is original
+    detail = filesystem.file_access_error_detail(error)
+    assert str(error) in detail and str(original) in detail and "stage=read" in detail
     assert target.read_bytes() == b"published"
     assert list(target.parent.glob(".notes.txt.*.tmp")) == []
     if diagnostic_sink is not None:
@@ -192,7 +191,11 @@ def test_raw_file_error_keeps_public_facts_when_diagnostics_fail(source, diagnos
         setattr(original, "filename" if filename_field == "first" else "filename2", str(target))
     detail = filesystem.file_access_error_detail(original)
     assert "PermissionError" in detail and f"errno={number}" in detail
-    assert str(target.parent) not in detail and "private-strerror" not in detail
+    if filename_field == "first" and number is not None:
+        assert original.strerror is not None
+        assert repr(str(target)) in detail and original.strerror in detail
+    else:
+        assert str(target.parent) not in detail and "private-strerror" not in detail
     if diagnostic_sink is not None:
         assert "diagnostic_sink_error=NotADirectoryError" in detail
         assert any(str(diagnostic_sink) in note for note in original.__notes__)
@@ -211,3 +214,30 @@ def test_unregistered_error_cannot_publish_even_when_it_looks_like_file_access(s
     detail = filesystem.file_access_error_detail(original)
     assert "error=OSError" in detail and "errno=None" in detail
     assert uri not in detail and str(target.parent) not in detail and "private-strerror" not in detail
+
+
+@pytest.mark.parametrize("number", [errno.EIO, None])
+def test_known_file_access_keeps_reason_without_filename_and_preserves_existing_cause(source, diagnostic_sink, number):
+    target, uri = source
+    original = OSError(number, f"已知文件同步失败: {target}")
+    cause = RuntimeError("原有文件系统原因")
+    original.__cause__ = cause
+    arguments = original.args
+    with pytest.raises(OSError) as caught, filesystem.file_access(uri, "fsync"):
+        raise original
+    assert caught.value is original and original.__cause__ is cause and original.args == arguments
+    detail = filesystem.file_access_error_detail(original)
+    assert uri in detail and "stage=fsync" in detail and str(original) in detail
+    if diagnostic_sink is not None:
+        assert "diagnostic_sink_error=NotADirectoryError" in detail
+
+
+def test_provider_file_shaped_error_keeps_source_protection(source, diagnostic_sink):
+    target, uri = source
+    original = failures.mark_provider_failure(PermissionError(errno.EACCES, "provider-key-secret", str(target)))
+    with pytest.raises(PermissionError) as caught, filesystem.file_access(uri, "read"):
+        raise original
+    assert caught.value is original and original.filename == str(target)
+    detail = filesystem.file_access_error_detail(original)
+    assert "stage=execution-provider" in detail and "errno=13" in detail
+    assert str(target) not in detail and "provider-key-secret" not in detail

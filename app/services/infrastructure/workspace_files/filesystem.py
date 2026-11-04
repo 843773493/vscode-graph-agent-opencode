@@ -13,9 +13,12 @@ from typing import BinaryIO
 
 from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
 from app.core.failures import (
+    execution_failure_message,
     failure_detail,
+    is_provider_failure,
     mark_public_failure,
     public_failure_message,
+    report_failure,
 )
 from app.services.infrastructure.workspace_files.runtime import (
     rename_entry_exclusive,
@@ -24,10 +27,14 @@ from app.services.infrastructure.workspace_files.store import canonical_json, di
 
 
 def file_access_error_detail(error: BaseException) -> str:
-    """原生文件名与系统原文只进入诊断，业务错误保留既有 URI 消息。"""
+    """消费原文件 owner 的说明；未登记错误只公开已知文件事实。"""
+    if is_provider_failure(error):
+        return execution_failure_message(error)
+    if (detail := public_failure_message(error)) is not None:
+        return detail
     if isinstance(error, OSError):
-        if (detail := public_failure_message(error)) is not None:
-            return detail
+        if error.errno is not None and error.filename is not None:
+            return report_failure(error, detail=execution_failure_message(error))
         return failure_detail(error, stage="file-access", label="目标文件系统访问失败")
     return str(error)
 
@@ -45,15 +52,15 @@ class PreparedFileDownload:
 
 @contextmanager
 def file_access(reference: str | None, stage: str) -> Iterator[None]:
-    """原生文件访问只发布 URI、实际阶段与系统错误码。"""
+    """原生文件访问保留原异常和目标原因，URI 继续承担资源定位。"""
     try:
         yield
     except OSError as error:
-        public = type(error)(
-            error.errno,
-            failure_detail(error, stage=stage, label=f"文件访问失败: uri={reference}"),
-        )
-        raise mark_public_failure(public, str(public)) from error
+        if public_failure_message(error) is None and not is_provider_failure(error):
+            detail = (f"文件访问失败: uri={reference}, stage={stage}, "
+                      f"error={type(error).__name__}, errno={error.errno}, reason={error}")
+            mark_public_failure(error, report_failure(error, detail=detail))
+        raise
 
 
 class FileEffectUnverifiedError(RuntimeError):

@@ -28,7 +28,7 @@
 
 - operation 冻结明确的 workspace、scope、root、规范路径及认证 actor；不因工作区切换改投，也不把代理选项当成免认证。
 - 普通文件入口统一接受目标机器原生路径和资源 URI；业务记录、响应、游标与事件只保存或返回 URI。未注册目录根仅由原生 Gateway 绑定，后台恢复重新解析绑定，不把真实根复制进工作区存储。
-- 文件错误出口只保留产生位置显式登记的原生业务拒绝说明；未登记的 `OSError` 即使没有 filename 或 errno 也不得发布系统原文。URI 访问、写锁与 journal 已分离的阶段说明复用同一公开登记，保持原异常类别、参数和原因链，不靠正文前缀猜测公开许可。
+- 文件访问边界保留原 `OSError` 的实例、参数、filename、strerror 和原因链，复用共享失败出口登记 URI、阶段及已知原生原因；直接消费者不再仅为隐藏路径重建异常。未登记且没有明确 filename／errno 的错误及 Provider 来源仍按既有来源保护，不能靠正文前缀推断公开许可。写锁与 journal 的逻辑阶段说明继续由各自 owner 登记。
 - Windows 扩展路径只在原生 I/O 边界复用 `native_io_path`；目录扫描与归档仍以逻辑 child 路径校验归属、私有目录和 staging，不把扩展前缀用于 URI、目录键或业务持久化。
 - 同目标及祖先链依赖沿既有 operation 语义；前序创建者提供 accepted 身份和 revision，禁止从执行时当前版本补缺。
 - upload 必须先完整持久保存 payload 与校验清单再返回 202，后台不持有请求 UploadFile 句柄。

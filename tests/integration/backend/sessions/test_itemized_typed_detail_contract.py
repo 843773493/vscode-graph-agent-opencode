@@ -95,7 +95,7 @@ def test_detail_path_rejections_keep_physical_location_in_diagnostics(
             else:
                 files.remove_paths(ref)
         detail = str(failure.value)
-        assert str(session) not in detail and str(node) not in detail
+        assert str(node) in detail
         assert ref.detail_id in detail and "stage=path" in detail
         assert any(str(node) in record.getMessage() for record in caplog.records)
         assert (session / "rollout/rollout.jsonl").read_bytes() == canonical
@@ -137,7 +137,7 @@ def test_detail_path_native_failures_keep_original_cause_and_allow_retry(
         with pytest.raises(DetailUnavailableError) as caught:
             saver._detail_store._files.path(ref, create=stage == "mkdir")
     detail = str(caught.value)
-    assert private not in detail and str(session) not in detail
+    assert private in detail and str(native_path) in detail
     assert ref.detail_id in detail and "stage=path" in detail
     assert "PermissionError" in detail and f"errno={errno.EACCES}" in detail
     assert caught.value.__cause__ is original_error
@@ -174,7 +174,7 @@ async def test_product_detail_rejection_preserves_history_and_repaired_source_ca
         with pytest.raises(DetailUnavailableError) as failure:
             saver.read_context_plan_detail(source.session_id, accepted.thread_id, detail_ref=ref, include_sensitive=True)
         detail = str(failure.value)
-        assert str(node) not in detail and "stage=path" in detail and ref.detail_id in detail
+        assert str(target) in detail and "stage=path" in detail and ref.detail_id in detail
         assert any(str(target) in record.getMessage() for record in caplog.records)
         assert parked.read_bytes() == raw and (node / "rollout/rollout.jsonl").read_bytes() == canonical
     finally:

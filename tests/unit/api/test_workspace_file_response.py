@@ -15,7 +15,10 @@ from starlette.responses import Response
 from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.atomic_fs import native_io_path
 from app.core.http_cache import NoStoreErrorsMiddleware
-from app.services.infrastructure.workspace_files.filesystem import PreparedFileDownload
+from app.services.infrastructure.workspace_files.filesystem import (
+    PreparedFileDownload,
+    file_access_error_detail,
+)
 
 
 @pytest.fixture
@@ -76,11 +79,11 @@ async def test_transfer_and_cleanup_failures_keep_both_causes(download, monkeypa
     if failure == "cancel":
         assert primary is cancellation
     else:
-        assert primary.__cause__ is native_error
-        assert "stage=文件传输" in str(primary)
-    assert cleanup.__cause__ is cleanup_error
-    assert "stage=临时文件清理" in str(cleanup)
-    assert str(download.path) not in str(primary) + str(cleanup)
+        assert primary is native_error and primary.__cause__ is None
+        assert "stage=文件传输" in file_access_error_detail(primary)
+    assert cleanup is cleanup_error and cleanup.__cause__ is None
+    assert "stage=临时文件清理" in file_access_error_detail(cleanup)
+    assert str(download.path) in str(cleanup)
     assert download.path.read_bytes() == b"archive-content"
     assert all(message["type"] != "http.response.pathsend" for message in sent)
     if failure in {"open", "read"}:
@@ -108,8 +111,9 @@ async def test_failed_transfer_removes_temporary_archive(download, monkeypatch):
     assert not download.path.exists()
     assert sent == []
     assert caught.value.errno == errno.ENOENT
-    assert caught.value.__cause__.filename == str(download.path)
-    assert str(download.path) not in str(caught.value)
+    assert caught.value.filename == str(download.path) and caught.value.strerror == "gone"
+    assert caught.value.__cause__ is None
+    assert download.uri in file_access_error_detail(caught.value)
 
 
 @pytest.fixture
@@ -181,7 +185,7 @@ async def test_preview_validator_does_not_hide_read_permission_failure(preview, 
     with pytest.raises(PermissionError) as caught:
         await transfer(WorkspaceFileResponse(preview, disposition="inline", preview_owner="owner-a"),
                        headers=[(b"if-none-match", headers["etag"].encode())])
-    assert caught.value.__cause__ is native
+    assert caught.value is native and native.filename == str(preview.path)
 
 
 @pytest.mark.asyncio

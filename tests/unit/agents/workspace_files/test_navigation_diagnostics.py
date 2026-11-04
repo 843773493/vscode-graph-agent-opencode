@@ -63,7 +63,11 @@ async def test_navigation_rejection_survives_log_error_and_retries_same_tool(
         message = tool.invoke(call) if synchronous else await tool.ainvoke(call)
     assert message.status == "error" and message.tool_call_id == "navigation-error" and message.name == name
     detail = json.loads(message.content)
-    expected_message = "文件导航文件系统访问失败" if failure == "filesystem" else "文件导航传输失败"
+    expected_message = (
+        "执行系统 I/O 失败: error=PermissionError, errno=13, reason=目标拒绝读取, "
+        "filename='/private/navigation-secret/guide.txt'"
+        if failure == "filesystem" else "文件导航传输失败"
+    )
     if log_fails:
         expected_message += ", diagnostic_sink_error=NotADirectoryError"
     assert detail == {
@@ -71,7 +75,8 @@ async def test_navigation_rejection_survives_log_error_and_retries_same_tool(
         "type": type(error).__name__, "errno": errno.EACCES if failure == "filesystem" else None,
         "message": expected_message,
     }
-    assert "navigation-secret" not in message.content and "diagnostic-log-secret" not in message.content
+    assert ("navigation-secret" in message.content) is (failure == "filesystem")
+    assert "diagnostic-log-secret" not in message.content
     assert source.read_bytes() == original
     if log_fails:
         sink_error, = diagnostic_sink.errors
@@ -115,7 +120,8 @@ async def test_owned_reader_without_errno_keeps_filesystem_failure_and_same_refe
     assert message.status == "error" and message.tool_call_id == "owned-native"
     assert json.loads(message.content) == {
         "owner": "resource_file_operations", "code": "execution_failed", "reason": "filesystem",
-        "type": "PermissionError", "errno": None, "message": "文件导航文件系统访问失败" + (
+        "type": "PermissionError", "errno": None,
+        "message": "目标文件系统访问失败: stage=file-access, error=PermissionError, errno=None" + (
             ", diagnostic_sink_error=NotADirectoryError" if log_fails else ""),
     }
     if log_fails:

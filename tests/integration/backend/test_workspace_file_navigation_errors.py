@@ -241,7 +241,7 @@ async def test_native_control_invalid_reply_preserves_files_and_allows_original_
     }, ensure_ascii=False, indent=2) + "\n")
 
 
-async def test_directory_native_messages_stay_in_logs_and_original_listing_survives(
+async def test_directory_native_messages_keep_location_and_original_listing_survives(
     file_case, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ):
     case = file_case
@@ -270,7 +270,8 @@ async def test_directory_native_messages_stay_in_logs_and_original_listing_survi
             assert failed.status_code == status, failed.text
             body = failed.json()
             assert body["request_id"] == failed.headers["X-Request-ID"] == request_id
-            assert str(case.directory) not in failed.text and "private-strerror" not in failed.text
+            assert original.strerror is not None
+            assert str(case.directory) in body["detail"] and original.strerror in body["detail"]
             assert type(original).__name__ in body["detail"] and f"errno={number}" in body["detail"]
             assert "stage=目录扫描" in body["detail"] and case.listing["path"] in body["detail"]
             assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
@@ -441,7 +442,8 @@ async def test_text_preflight_uses_shared_error_and_creates_nothing_until_retry(
     assert receipt["error_type"] == "OSError" and f"errno={errno.EIO}" in receipt["error"]
     assert "stage=目标解析" in receipt["error"] and uri in receipt["error"]
     assert not receipt["journal_id"] and not receipt["files"]
-    assert str(case.root) not in failed.text and "private-strerror" not in failed.text
+    assert original.strerror is not None
+    assert str(target) in receipt["error"] and original.strerror in receipt["error"]
     assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
     assert str(target) in caplog.text and "private-strerror" in caplog.text
     assert file_rows(case) == before and not target.exists()
@@ -675,7 +677,11 @@ async def test_file_access_log_failure_preserves_original_result_and_retry(
         body = failed.json()
         assert body["request_id"] == failed.headers["X-Request-ID"] == "req-file-access-" + stage
         assert "FileNotFoundError" in failed.text and "diagnostic_sink_error=NotADirectoryError" in failed.text
-        assert str(case.root) not in failed.text and "private-strerror" not in failed.text
+        detail = (body["data"]["receipt"]["error"] if stage == "text" else
+                  body["message"] if stage == "transfer" else body["detail"])
+        assert original.strerror is not None
+        assert str(target) in detail and original.strerror in detail
+        assert str(blocked_log) not in detail
         if stage == "text":
             receipt = body["data"]["receipt"]
             assert (receipt["status"], receipt["effect"], receipt["error_type"]) == ("error", "not_executed", "FileNotFoundError")
@@ -702,6 +708,56 @@ async def test_file_access_log_failure_preserves_original_result_and_retry(
             logger.removeHandler(handler)
         handler.close()
         assert blocked_log.read_bytes() == b"keep obstruction"
+
+
+@pytest.mark.parametrize("fault", ["permission", "missing"])
+async def test_real_native_file_failure_keeps_target_reason_and_same_request_retry(
+    file_case, native_control_sink, caplog: pytest.LogCaptureFixture, fault: str,
+):
+    if fault == "permission" and (os.name == "nt" or os.geteuid() == 0):
+        pytest.skip("真实 chmod 权限拒绝需 POSIX 非 root 用户")
+    case = file_case
+    target = case.directory / "seed.txt"
+    uri = case.listing["path"] + "/seed.txt"
+    raw, mode = target.read_bytes(), target.stat().st_mode
+    before = file_rows(case)
+    headers = {"X-Request-ID": "req-real-file-" + fault}
+    try:
+        if fault == "permission":
+            target.chmod(0)
+        else:
+            target.unlink()
+        failed = await case.client.get("/api/v1/workspace/files/content", params={"path": uri}, headers=headers)
+    finally:
+        if fault == "missing":
+            target.write_bytes(raw)
+        target.chmod(mode)
+    assert failed.status_code == (500 if fault == "permission" else 404), failed.text
+    body = failed.json()
+    detail = body["message"] if fault == "permission" else body["detail"]
+    assert body["request_id"] == failed.headers["X-Request-ID"] == headers["X-Request-ID"]
+    if native_control_sink is None:
+        original, = [record.exc_info[1] for record in caplog.records if record.exc_info
+                     and isinstance(record.exc_info[1], OSError) and record.exc_info[1].filename == str(target)]
+    else:
+        original, = native_control_sink.errors
+        assert "diagnostic_sink_error=NotADirectoryError" in detail
+        assert str(native_control_sink.blocked) not in detail
+        assert any(str(native_control_sink.blocked) in note for note in original.__notes__)
+    assert isinstance(original, PermissionError if fault == "permission" else FileNotFoundError)
+    assert original.errno == (errno.EACCES if fault == "permission" else errno.ENOENT)
+    assert original.filename == str(target) and original.__cause__ is None
+    assert uri in detail and str(original) in detail and "stage=read" in detail
+    assert file_rows(case) == before and target.read_bytes() == raw
+    continued = await case.client.get("/api/v1/workspace/files/content", params={"path": uri}, headers=headers)
+    assert continued.status_code == 200, continued.text
+    assert continued.json()["data"]["path"] == uri and continued.json()["data"]["content"] == "original\n"
+    assert continued.json()["request_id"] == continued.headers["X-Request-ID"] == headers["X-Request-ID"]
+    assert file_rows(case) == before and target.read_bytes() == raw
+    (case.artifacts / f"real-native-file-{fault}-{'broken-logging' if native_control_sink else 'logging'}.json").write_text(
+        json.dumps({"failure": body, "continued": continued.json(), "filename": original.filename,
+                    "errno": original.errno, "strerror": original.strerror}, ensure_ascii=False, indent=2) + "\n",
+    )
 
 
 @pytest.mark.parametrize(("kind", "native"), [

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
-from app.core.failures import mark_public_failure
+from app.core.failures import mark_public_failure, public_failure_message
 from app.core.hashing import sha256_hex
 from app.services.infrastructure.workspace_files.filesystem import file_access
 from app.services.infrastructure.workspace_files.runtime import rename_entry_exclusive
@@ -81,7 +81,10 @@ def require_file_preimage(path: Path, *, before: FilePreimage | None, reference:
     try:
         latest = read_file_preimage(path, reference=reference, max_bytes=len(before.content))
     except (FileNotFoundError, IsADirectoryError, ValueError) as error:
-        raise WorkspaceFileConflictError(f"文件在保存期间发生变化，请重新载入后再保存: {reference}") from error
+        conflict = WorkspaceFileConflictError(f"文件在保存期间发生变化，请重新载入后再保存: {reference}")
+        if (detail := public_failure_message(error)) is not None:
+            mark_public_failure(conflict, f"{conflict}; cause={detail}")
+        raise conflict from error
     if latest.content != before.content:
         raise WorkspaceFileConflictError(f"文件在保存期间发生变化，请重新载入后再保存: {reference}")
 
@@ -114,7 +117,10 @@ def publish_file_content(path: Path, content: bytes, *, before: FilePreimage | N
             try:
                 observed = read_file_preimage(path, reference=reference, max_bytes=len(content))
             except (OSError, ValueError, WorkspaceFileConflictError) as error:
-                raise FilePublicationUnverifiedError(reference, "sha256:" + sha256_hex(content), None) from error
+                failure = FilePublicationUnverifiedError(reference, "sha256:" + sha256_hex(content), None)
+                if (detail := public_failure_message(error)) is not None:
+                    mark_public_failure(failure, f"{failure}; cause={detail}")
+                raise failure from error
             if observed.content != content:
                 raise FilePublicationUnverifiedError(reference, "sha256:" + sha256_hex(content), observed.content_hash)
             return observed

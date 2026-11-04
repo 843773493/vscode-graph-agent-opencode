@@ -37,8 +37,7 @@ class DetailFiles:
 
     @staticmethod
     def _invalid_path(ref: DetailRef, path: Path, reason: str) -> DetailUnavailableError:
-        error = DetailUnavailableError(f"{reason}: detail_ref={ref}, stage=path")
-        error.add_note(f"detail path: {path}")
+        error = DetailUnavailableError(f"{reason}: detail_ref={ref}, stage=path, path={path}")
         error.args = (report_failure(
             error, detail=str(error), diagnostic_logger=logger,
             extra={"detail_path": str(path)},
@@ -47,7 +46,7 @@ class DetailFiles:
 
     @staticmethod
     @contextmanager
-    def _path_access(ref: DetailRef, path: Path) -> Iterator[None]:
+    def _path_access(ref: DetailRef, path: Path, *, stage: str = "path") -> Iterator[None]:
         try:
             yield
         except OSError as error:
@@ -55,7 +54,8 @@ class DetailFiles:
             winerror = getattr(error, "winerror", None)
             if winerror is not None:
                 facts += f", winerror={winerror}"
-            detail = f"assembly detail 路径访问失败: detail_ref={ref}, stage=path, {facts}"
+            detail = (f"assembly detail 路径访问失败: detail_ref={ref}, stage={stage}, "
+                      f"path={path}, {facts}, reason={error}")
             raise DetailUnavailableError(report_failure(
                 error, detail=detail, diagnostic_logger=logger,
                 extra={"detail_path": str(path)},
@@ -155,21 +155,18 @@ class DetailFiles:
         target = self.path(ref, storage_owner=owner)
         if target is None:
             raise DetailUnavailableError(f"assembly detail 正文缺失: {ref.detail_id}")
-        descriptor = -1
-        try:
-            descriptor = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                raise OSError("detail target 不是普通文件")
-            with os.fdopen(descriptor, "rb") as stream:
-                descriptor = -1
-                return stream.read()
-        except OSError as error:
-            raise DetailUnavailableError(
-                f"assembly detail 无法读取: {ref.detail_id}"
-            ) from error
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
+        with self._path_access(ref, target, stage="read"):
+            descriptor = -1
+            try:
+                descriptor = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise OSError("detail target 不是普通文件")
+                with os.fdopen(descriptor, "rb") as stream:
+                    descriptor = -1
+                    return stream.read()
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
 
     def publish(
         self, ref: DetailRef, raw: bytes, *, creation_record: SessionCreationRecord | None = None,
@@ -180,36 +177,33 @@ class DetailFiles:
         temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
         temporary_created = False
         published = False
-        try:
-            descriptor = os.open(
-                temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-            )
-            temporary_created = True
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            # link 是排他发布，不能用 replace 覆盖已经存在的 immutable detail。
-            self.path(ref, creation_record=creation_record)
-            os.link(temporary, target, follow_symlinks=False)
-            published = True
-            temporary.unlink()
-            temporary_created = False
-        except BaseException as error:
-            # 发布后清理临时 link 失败也不能留下无 record 可追踪的正文。
-            if published:
+        with self._path_access(ref, target, stage="publish"):
+            try:
+                descriptor = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                temporary_created = True
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(raw)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                # link 是排他发布，不能用 replace 覆盖已经存在的 immutable detail。
                 self.path(ref, creation_record=creation_record)
-                target.unlink()
-            if isinstance(error, OSError):
-                raise DetailUnavailableError(
-                    f"assembly detail 排他写入失败: {ref.detail_id}"
-                ) from error
-            raise
-        finally:
-            if temporary_created:
-                temporary.unlink(missing_ok=True)
+                os.link(temporary, target, follow_symlinks=False)
+                published = True
+                temporary.unlink()
+                temporary_created = False
+            except BaseException:
+                # 发布后清理临时 link 失败也不能留下无 record 可追踪的正文。
+                if published:
+                    self.path(ref, creation_record=creation_record)
+                    target.unlink()
+                raise
+            finally:
+                if temporary_created:
+                    temporary.unlink(missing_ok=True)
         return target
 
     def remove_paths(

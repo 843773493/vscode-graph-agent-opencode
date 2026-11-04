@@ -62,7 +62,7 @@ async def test_file_read_failure_keeps_paired_history_and_same_thread_retry(
 
     def emit(record: logging.LogRecord) -> None:
         capture(record)
-        if not record.getMessage().startswith("文件导航"):
+        if not causes or record.exc_info is None or record.exc_info[1] is not causes[-1]:
             return
         assert record.exc_info is not None and isinstance(record.exc_info[1], BaseException)
         assert record.exc_info[1] is causes[-1]
@@ -109,7 +109,9 @@ async def test_file_read_failure_keeps_paired_history_and_same_thread_retry(
         assert paired["function"]["name"] == "read_file" and json.loads(paired["function"]["arguments"]) == {"path": uri}
         if index == 0:
             detail = json.loads(content)
-            expected_message = "文件导航文件系统访问失败"
+            native = causes[-1]
+            expected_message = (f"执行系统 I/O 失败: error=NotADirectoryError, errno={errno.ENOTDIR}, "
+                                f"reason={native.strerror}, filename={native.filename!r}")
             if log_fails:
                 expected_message += ", diagnostic_sink_error=NotADirectoryError"
             assert detail == {"owner": "resource_file_operations", "code": "execution_failed",
@@ -150,7 +152,10 @@ async def test_file_read_failure_keeps_paired_history_and_same_thread_retry(
     assert len(case.requests()) == 4
     with storage._connect(thread, session_id=session, read_only=True) as connection:
         persisted = "\n".join(connection.iterdump())
-    for native in (str(case.workspace), str(blocker), str(log_blocker)):
+    known_target = str(blocker / "guide.txt")
+    assert known_target in json.dumps([results, case.requests()], ensure_ascii=False)
+    assert known_target in persisted and known_target.encode() in canonical
+    for native in (str(case.workspace), str(log_blocker)):
         assert native not in json.dumps([results, case.requests()], ensure_ascii=False)
         assert native not in persisted and native.encode() not in canonical
     case.write_actual(f"file-navigation-diagnostics-{log_fails}", {

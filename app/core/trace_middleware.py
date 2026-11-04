@@ -7,7 +7,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.core.failures import failure_detail
+from app.core.failures import failure_detail, public_failure_message
 from app.core.identifier import validate_gateway_id
 
 logger = logging.getLogger(__name__)
@@ -206,9 +206,11 @@ class TraceMiddleware:
                 f"[TRACE] method={request.method} path={request.url.path} status={response_status} "
                 f"duration={duration:.4f}s request_id={request_id} response_started={str(response_started).lower()}"
             )
-            message = failure_detail(
-                error, stage="http_response_stream" if response_started else "http_request", label="请求处理失败",
-            )
+            message = public_failure_message(error)
+            if message is None:
+                message = failure_detail(
+                    error, stage="http_response_stream" if response_started else "http_request", label="请求处理失败",
+                )
             if response_started:
                 raise
             response = JSONResponse(

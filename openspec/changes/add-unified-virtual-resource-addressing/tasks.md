@@ -2028,7 +2028,7 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - [x] 10.2 调试运行展示字段允许原生路径，导航 URI 继续严格校验，可移植方案保持相对路径；迁齐构造、复制、发布与真实 Inspector 验收。
 - [x] 10.3 stderr 进入现有有界调试 output，保留握手、日志点和输出限制；日志 sink 失败不隐藏输出，不复制完整日志到动作。
 - [x] 10.4 移除 metadata 名称扫描及全部调用，保留对象结构与真实定位字段／owner 的显式校验；覆盖 Workspace、Session 与 Workspace resource 发布和冷读。
-- [x] 10.5 已知文件操作的执行／模型调用日志保留目标和具体原因，保护 Provider／凭据／内部校验输入，保留原错误归属和日志双错处理。
+- [x] 10.5 已知文件操作的执行／模型调用日志保留目标和具体原因，保护 Provider／凭据／内部校验输入，保留原错误归属和日志双错处理。此勾选仅对应下方 2026-11-02 已验收范围；文件 owner 二次包装残留单独由 10.7 收口。
 - [x] 10.6 doctor／diagnose 同时报告实际配置／schema／SQLite位置及已有 URI；验证只读、缺失身份、故障修复和秘密保护。
 
 
@@ -2039,3 +2039,11 @@ Ruff／compileall／矩阵注册及本change strict通过；全量首轮53/53，
 - 真实 Node／Inspector 状态与配置恢复3项、真实 PTY metadata与原 owner／lease保持1项、stderr退出与冷读1项通过。执行错误集成初轮误要求诊断正文进入 canonical SQLite；恢复其原不写入断言后3项通过，Job／事件／冷消息流／LLM日志精确验证新诊断，原 canonical 前缀和同 Thread 后继执行保持。真实调试工具成功／日志故障两场景及执行日志双错恢复共3项通过（138.16秒）；原异常、工具配对、动作、owner及全部sealed request_hash均核验。
 - doctor全文件一次45秒预算用尽（exit124，18个进度点，无完整结论），不计作通过；此前整批及失败定向已覆盖其既有场景，最后仅补新增符号链接及受影响正常位置检查，无无效重复长跑。全部测试使用外部 timeout、4GiB数据段限制，集成沿原独占闸门串行；没有重启共享debug服务。
 - 最终23个修改Python文件 Ruff、compileall通过；Pyright候选与完整HEAD归档均17项既有测试装具诊断，按相对文件／规则／消息／最窄AST及重数比较无新增，生产文件无诊断，不称类型检查全绿。严格OpenSpec校验54通过／0失败。准确命令、源码指纹、原始输出、实际退出码及最终汇总保留于 `out/tests/temp/uri_field_roles_20261102/artifacts/verification.json`。原URI identity／revision／owner／hash／seal／fork合同未改；历史验收按依赖复用。本轮未跑完整Gateway／Web或Windows实机，不以局部通过代替这些范围；未编辑前端或团队协作功能。
+
+## 2026-11-04 文件 owner 错误残留收口（10.7 已完成）
+
+- [x] 10.7 迁齐 workspace_files/filesystem.py 的 file_access／file_access_error_detail、DetailFiles._path_access 及其直接／间接错误消费者与旧断言，删除仅为隐藏原生路径而去掉 filename／strerror 的二次包装。已知文件操作保留目标机器上的位置、原生错误码及具体原因，URI 定位、授权、原 cause／错误归属及日志故障处理保持；Provider／凭据／内部校验仍按来源保护，不无差别公开任意异常全文。经真实文件／工具入口验证权限不足、缺失、日志双错、纠正后成功与冷读诊断，相关静态／定向验证后才勾选。不要因该残留重做 metadata／Inspector／doctor 或扩大到全仓异常扫描。
+
+2026-11-04 10.7 收口：原文件访问保留同一异常、filename／strerror 和 cause，文本冲突／发布未知、Agent 文件工具及 Trace 只消费原 owner 已核定的说明；DetailFiles 的路径、读取和发布共用原错误出口，删除旧二次包装。真实 ASGI 文件入口覆盖 chmod 权限不足、缺失、日志双错及同请求重试；Agent/model_stream 的正常日志／日志故障两场景最终 2 passed／88.31 秒，核工具配对、已知位置及原因、同 Thread 后续请求、SQLite／canonical 和新 Saver 冷读、原字节及 sealed request_hash。首轮两个 setup error 来自共享身份 fixture 的旧 backend_workspace_id 参数，由身份切片 owner 迁齐原 fixture 后仅重验原两参数，未绕过 managed_gateway 或变更认证链。
+
+原 299 项文件错误单测、49 项 Trace 单测、151 项已通过 detail 检查及 41 项正式 detail/fork 矩阵按未变源码指纹复用，不重复相加；151 项批次另有 watchdog 装具初始化错误，对应产品场景已由正式 41 项矩阵通过。Ruff 已通过；生产 Pyright 的 3 条既有诊断与完整旧 HEAD 的原函数 AST／重数一致、无新增，Trace 类型检查零诊断，不称全库全绿。旧 file-effects 批次另有 1 项锁释放文案断言失败，测试 AST、消费者及无 filename／errno 的未登记错误分支与完整旧 HEAD 相同，归为既存且未改动。准确命令、原始输出、源码指纹、全部失败及复用归属见 `out/tests/temp/uri_file_errors_20261104/artifacts/verification.json`；本次仅修改本 task 勾选及证据，未重做 metadata／Inspector／doctor，未验完整 Gateway／Web、独立 Backend 重启或 Windows 实机。
