@@ -31,13 +31,12 @@ class RolloutMessageViewMixin:
             thread_id,
             checkpoint_ns,
             view_id,
-            set(),
             session_id=session_id,
             connection=connection,
         )
         if selection_view_id is not None:
             selected = set(self._storage._view_message_sequences(
-                thread_id, checkpoint_ns, selection_view_id, set(),
+                thread_id, checkpoint_ns, selection_view_id,
                 session_id=session_id, connection=connection,
             ))
             sequences = [sequence for sequence in sequences if sequence in selected]

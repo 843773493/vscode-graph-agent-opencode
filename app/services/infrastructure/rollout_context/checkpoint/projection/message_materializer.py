@@ -224,7 +224,6 @@ class RolloutMessageMaterializerMixin:
                     thread_id,
                     checkpoint_ns,
                     ranges[-1][0],
-                    set(),
                     connection=connection,
                 )
             else:
@@ -234,7 +233,6 @@ class RolloutMessageMaterializerMixin:
                         thread_id,
                         checkpoint_ns,
                         strict_text(row[6], field="checkpoints.view_id"),
-                        set(),
                         connection=connection,
                     )
                     if row

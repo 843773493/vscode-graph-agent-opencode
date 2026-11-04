@@ -21,7 +21,6 @@ class RolloutViewSequenceMixin:
         thread_id: str,
         checkpoint_ns: str,
         view_id: str,
-        visited: set[str],
         *,
         session_id: str | None = None,
         connection: sqlite3.Connection | None = None,
@@ -31,9 +30,9 @@ class RolloutViewSequenceMixin:
                 raise ValueError("读取 context view message sequences 必须显式提供 session_id")
             with self.read_connection(session_id, thread_id, checkpoint_ns) as owned_connection:
                 return self._view_message_sequences_from_connection(
-                    owned_connection, view_id, visited,
+                    owned_connection, view_id,
                 )
-        return self._view_message_sequences_from_connection(connection, view_id, visited)
+        return self._view_message_sequences_from_connection(connection, view_id)
     @staticmethod
     def _include_tool_call_declarations(
         connection: sqlite3.Connection,
@@ -84,69 +83,78 @@ class RolloutViewSequenceMixin:
         self,
         connection: sqlite3.Connection,
         view_id: str,
-        visited: set[str] | None = None,
     ) -> list[int]:
         """canonical membership 是唯一选择根；range 只校验既有 view 结构。"""
         view_id = strict_text(view_id, field="context_views.view_id")
-        seen = set(visited or ())
-        if view_id in seen:
-            raise RuntimeError(f"context view 引用形成循环: {view_id}")
-        seen.add(view_id)
-        view_row = connection.execute(
-            "SELECT view_kind, parent_view_id FROM context_views WHERE view_id = ?",
-            (view_id,),
-        ).fetchone()
-        if view_row is None:
-            raise RuntimeError(f"context view 不存在: {view_id}")
-        view_kind = strict_text(view_row[0], field=f"context_views.view_kind: {view_id}")
-        parent_view_id = strict_optional_text(
-            view_row[1], field=f"context_views.parent_view_id: {view_id}"
-        )
-        ranges = connection.execute(
-            "SELECT source_kind, source_view_id, start_message_sequence, end_message_sequence "
-            "FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
-            (view_id,),
-        ).fetchall()
-        has_parent_range = False
-        for source_kind, source_view, start, end in ranges:
-            source_kind = strict_text(
-                source_kind, field=f"context_view_ranges.source_kind: {view_id}"
+        # range 只校验结构，不物化随后被丢弃的祖先 membership；共享祖先与
+        # 相同消息范围在本次调用内只检查一次，显式栈也不受 Python 递归深度限制。
+        active: set[str] = set()
+        completed: set[str] = set()
+        checked_spans: set[tuple[int, int]] = set()
+        pending = [(view_id, False)]
+        while pending:
+            current, exiting = pending.pop()
+            if exiting:
+                active.remove(current)
+                completed.add(current)
+                continue
+            if current in active:
+                raise RuntimeError(f"context view 引用形成循环: {current}")
+            if current in completed:
+                continue
+            active.add(current)
+            view_row = connection.execute(
+                "SELECT view_kind, parent_view_id FROM context_views WHERE view_id = ?",
+                (current,),
+            ).fetchone()
+            if view_row is None:
+                raise RuntimeError(f"context view 不存在: {current}")
+            view_kind = strict_text(view_row[0], field=f"context_views.view_kind: {current}")
+            parent_view_id = strict_optional_text(
+                view_row[1], field=f"context_views.parent_view_id: {current}"
             )
-            if source_kind == "view":
-                source_view = strict_text(
-                    source_view, field=f"context_view_ranges.source_view_id: {view_id}"
+            ranges = connection.execute(
+                "SELECT source_kind, source_view_id, start_message_sequence, end_message_sequence "
+                "FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
+                (current,),
+            ).fetchall()
+            sources: list[str] = []
+            for source_kind, source_view, start, end in ranges:
+                source_kind = strict_text(
+                    source_kind, field=f"context_view_ranges.source_kind: {current}"
                 )
-                self._view_message_sequences_from_connection(connection, source_view, seen)
-                has_parent_range |= source_view == parent_view_id
-            elif source_kind == "messages":
-                start_value = strict_non_negative_int(
-                    start, field=f"context view range start: {view_id}"
-                )
-                end_value = strict_non_negative_int(
-                    end, field=f"context view range end: {view_id}"
-                )
-                if start_value == 0 or end_value == 0 or end_value < start_value:
+                if source_kind == "view":
+                    sources.append(strict_text(
+                        source_view, field=f"context_view_ranges.source_view_id: {current}"
+                    ))
+                elif source_kind == "messages":
+                    start_value = strict_non_negative_int(start, field=f"context view range start: {current}")
+                    end_value = strict_non_negative_int(end, field=f"context view range end: {current}")
+                    if start_value == 0 or end_value < start_value:
+                        raise RuntimeError(
+                            f"context view range 不能反向: view={current}, start={start_value}, end={end_value}"
+                        )
+                    span = (start_value, end_value)
+                    if span not in checked_spans:
+                        count = connection.execute(
+                            "SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN ? AND ?", span,
+                        ).fetchone()[0]
+                        if count != end_value - start_value + 1:
+                            raise RuntimeError(
+                                f"context view range 引用不存在完整消息范围: view={current}, "
+                                f"start={start_value}, end={end_value}"
+                            )
+                        checked_spans.add(span)
+                else:
                     raise RuntimeError(
-                        f"context view range 不能反向: view={view_id}, "
-                        f"start={start_value}, end={end_value}"
+                        f"context view range source_kind 非法: view={current}, source_kind={source_kind}"
                     )
-                count = connection.execute(
-                    "SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN ? AND ?",
-                    (start_value, end_value),
-                ).fetchone()[0]
-                if count != end_value - start_value + 1:
-                    raise RuntimeError(
-                        f"context view range 引用不存在完整消息范围: view={view_id}, "
-                        f"start={start_value}, end={end_value}"
-                    )
-            else:
-                raise RuntimeError(
-                    f"context view range source_kind 非法: view={view_id}, source_kind={source_kind}"
+            if view_kind in {"checkpoint", "checkpoint_messages"} and parent_view_id is not None and parent_view_id not in sources:
+                raise FormatDispatchError(
+                    f"v2_migration_required: checkpoint view 缺少显式 parent range: view_id={current}"
                 )
-        if view_kind in {"checkpoint", "checkpoint_messages"} and parent_view_id is not None and not has_parent_range:
-            raise FormatDispatchError(
-                f"v2_migration_required: checkpoint view 缺少显式 parent range: view_id={view_id}"
-            )
+            pending.append((current, True))
+            pending.extend((source, False) for source in reversed(sources))
         rows = connection.execute(
             "SELECT member.item_id, item.semantic_kind, item.projection_manifest_json, "
             "message.message_sequence FROM context_view_items AS member "

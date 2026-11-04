@@ -30,7 +30,7 @@ class RolloutViewMembershipMixin:
 
     if TYPE_CHECKING:
         def _view_message_sequences_from_connection(
-            self, connection: sqlite3.Connection, view_id: str, visited: set[str] | None = None,
+            self, connection: sqlite3.Connection, view_id: str,
         ) -> list[int]: ...
 
     @staticmethod

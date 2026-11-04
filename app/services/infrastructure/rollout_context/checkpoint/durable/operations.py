@@ -133,7 +133,6 @@ class RolloutCheckpointOperationsMixin:
                     thread_id,
                     checkpoint_ns,
                     source_view_id,
-                    set(),
                     connection=connection,
                 )
                 cutoff = len(source_sequences)
