@@ -813,3 +813,11 @@
 - 统一 model_stream 提供两次模型交互，后端原记录核验 Session／Thread／调用身份、stream、prompt 与 write_file 工具结果配对，实际文件正文及权威历史核验通过；关键历史未预写。真实 Linux 原生业务 1 passed／101.74 秒，pageErrors、存储与代理错误均为空，后端正常关闭。首轮将面板 changesets/all 请求误计入目标Diff，改为冻结 changesetPath 精确断言后通过；全部原件保留。
 - 正式矩阵成功构建并核归档 SHA256；只改测试计数后，重核打包器完整 sourceFingerprint 及归档摘要复用相同便携包，新 Gateway／Backend／profile／工作区及所有原生步骤重新执行。ESM、Ruff 通过；Python 类型的一条 raw object 索引诊断与 HEAD 基线相同，无新增。本批仅改测试，复用产品相同的23份转换源码类型检查和正式Web构建，未重复无变化构建。
 - 完整命令、源码／包指纹、复用装具原文、失败归因、原始输出和退出码：`out/tests/temp/native_readonly_20261104/artifacts/verification.json`；最终原生原件：`out/tests/integration/clients/electron/test_packaged_workbench/runs/run-f5cf036c07f6/nodes/node-95670caeaac1/artifacts/native-result.json`。Windows／macOS、异常退出及其余历史身份／版本场景未验证，18.2、13.2 保持未勾选；该证据不覆盖 Webview 缓存。
+
+
+### 2026-11-04：本地已超限的搜索停止远端读取并保留受限提示（16.19、16.20 部分）
+
+- 对照参考 VS Code 的 getOpenEditorResults／FileSearchManager，在取得本地超限哨兵后停止后续模型匹配和 Gateway 查询；释放模型监听，异步完成仍携带真实 limitHit。原 Search Editor 消费异步完成，旧链会漏掉本地受限提示，此次同时补齐。恰好达到上限继续按原覆盖集合探测远端，零配额无本地命中和文件名预热哨兵语义保持。
+- 服务／QueryBuilder 28 项、439 条断言通过：同模型或跨模型超限、零配额、精确上限有／无远端命中、模型监听释放、A/B隔离及取消均保留。旧产品失败原件留存，明确区分 Search Editor 的完成信息与单个 helper。
+- 真实 Gateway、A/B 托管后端、正式 Workbench 与 Chromium 1 passed／134.52 秒：原编辑器写入三条草稿而上限两条，A+B 查询零 HTTP 且显示受限；改为恰好两条后实际探测A/B、排除同草稿并确认完整无剩余命中。原代际取消、覆盖分页、停止C零查询、UTF-16与preview验证仍通过，pageErrors为空，磁盘未被保存。
+- 23份转换源码的完整类型检查、ESM、Ruff、OpenSpec strict和差异检查通过；正式Web构建退出0／60.37秒，复用唯一构建管线不重复打包。完整指纹、准确命令、失败及通过输出、退出码：`out/tests/temp/search_local_limit_20261104/artifacts/verification.json`；页面原件：`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-c9555bd8dbcc/nodes/node-f238fd176e30/artifacts/model-coverage.json`。本批未重跑Electron，不承诺固定耗时比例；16.19、16.20其余场景保持未勾选。

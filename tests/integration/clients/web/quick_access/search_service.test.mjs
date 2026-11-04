@@ -108,6 +108,39 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
     } finally { f.instantiation.dispose(); }
   });
 
+  test('本地已确认超过上限时停止后续模型及远端读取，精确上限仍探测远端', async () => {
+    for (const [maximum, texts, matchingCalls] of [[2, ['needle needle needle', 'needle'], [1, 0]],
+      [2, ['needle needle', 'needle', 'needle'], [1, 1, 0]], [0, ['needle', 'needle'], [1, 0]]]) {
+      const models = texts.map((text, index) => model(uri(ownerA, `draft-${index}.txt`), text)), f = fixture(models);
+      try {
+        await withTransport(async calls => {
+          const progress = [], split = f.search.textSearchSplitSyncAsync(query({ maxResults: maximum }), undefined, item => progress.push(item));
+          expect(split.syncResults.limitHit).toBe(true);
+          expect(split.syncResults.results.flatMap(file => file.results.flatMap(result => result.rangeLocations))).toHaveLength(maximum);
+          const remote = await split.asyncResults;
+          expect(remote.results).toEqual([]); expect(remote.limitHit).toBe(true);
+          expect(calls).toEqual([]); expect(models.map(model => model.calls)).toEqual(matchingCalls);
+          expect(models.every(model => !model.watching)).toBe(true);
+          expect(progress.flatMap(file => file.results.flatMap(result => result.rangeLocations))).toHaveLength(maximum);
+        });
+      } finally { f.instantiation.dispose(); models.forEach(model => model.dispose()); }
+    }
+    for (const more of [false, true]) {
+      const local = model(uri(ownerA, 'draft.txt'), 'needle needle'), f = fixture([local]);
+      try {
+        await withTransport(async calls => {
+          const progress = [], result = await f.search.textSearch(query({ maxResults: 2 }), undefined, item => progress.push(item));
+          expect(result.limitHit).toBe(more);
+          expect(result.results.map(file => file.resource.toString())).toEqual([local.uri.toString()]);
+          expect(progress).toHaveLength(1); expect(calls).toHaveLength(1);
+          expect(calls[0].request.queries[0].limit).toBe(1);
+          expect(calls[0].request.queries[0].file_targets[0].target.search_options.excluded_resource_uris).toEqual([root(ownerA) + '/draft.txt']);
+          expect(local.watching).toBe(false);
+        }, async target => page(target.uri, more ? [hit(target.uri + '/disk.txt')] : []));
+      } finally { f.instantiation.dispose(); local.dispose(); }
+    }
+  });
+
   test('onlyOpenEditors 只发送未覆盖的精确文件，先应用相对目录 glob 和名称模式', async () => {
     const dirty = model(uri(ownerA, 'src/draft.txt'), 'removed'), disk = uri(ownerA, 'src/open.txt');
     const f = fixture([dirty], [dirty.uri, disk, uri(ownerB, 'src/open.txt'), URI.parse('workbench:/src/open.txt')]);

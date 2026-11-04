@@ -65,6 +65,8 @@ async def test_dirty_model_coverage_reaches_target_before_page_allocation(
         assert result["modelChangeCancelled"]["reason"] == "net::ERR_ABORTED"
         assert result["preview"]["sourceColumn"] == 1204
         assert result["preview"]["extraReads"] == 0
+        assert result["localOverflow"]["requests"] == 0
+        assert len(result["exactLocalLimit"]["requests"]) == 2
         assert result["pageErrors"] == []
         # 搜索从未替用户保存草稿。
         assert targets[0].joinpath("a.coverage.txt").read_text() == "coverageword " * 20

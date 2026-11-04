@@ -89,11 +89,14 @@ export class WorkspaceSearchService extends RemoteSearchService {
           results.push(match);
           if (!token.isCancellationRequested) onProgress?.(match);
         }
+        if (limitHit) break;
       }
       if (token.isCancellationRequested) throw new CancellationError();
       const syncResults: ISearchComplete = { results, messages: [], limitHit };
       const asyncResults = (async () => {
         try {
+          // 本地已取得超限哨兵，无剩余输出或完整性信息需要远端补充。
+          if (limitHit) return { results: [], messages: [], limitHit: true };
           const ignored = await raceCancellationError(asyncNotebookFilesToIgnore ?? Promise.resolve(new ResourceSet()), token);
           for (const resource of ignoredModels) covered.add(resource);
           for (const resource of ignored) covered.add(resource);

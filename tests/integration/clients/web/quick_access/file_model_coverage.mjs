@@ -214,6 +214,43 @@ try {
   result.preview = { sourceColumn: 1204, statusbarColumn: 1203, selectedText: 'preview-target',
     extraReads: extraReads.length, searchEditorTextLength: previewText.length,
     boundary: 'real Search Editor and original % picker; no response replacement or per-hit text read' };
+  result.phase = 'local-overflow-avoids-remote-search';
+  const localQuery = 'local-limit-only', localRequests = [];
+  page.on('request', request => localRequests.push(...fileSearchRequests(request).filter(item => item.query === localQuery)));
+  const editDraft = async text => {
+    await command('_workbench.open', await resource(targets[0]), [undefined, { pinned: true }]);
+    const draftEditor = page.locator('.editor-instance .monaco-editor').filter({ visible: true }).last();
+    await draftEditor.locator('.view-lines').click();
+    await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.insertText(text);
+    await expect(draftEditor.locator('.view-lines')).toContainText(text.split('\n')[0]);
+  };
+  const searchLocal = () => command('search.action.openEditor', { query: localQuery, location: 'new', triggerSearch: true,
+    scope: { version: 1, kind: 'workspace', workspaces: targets }, contextLines: 0,
+    useExcludeSettingsAndIgnoreFiles: false, filesToInclude: '*.coverage.txt' });
+  await editDraft(`${localQuery} FIRST\n${localQuery} SECOND\n${localQuery} THIRD`);
+  await searchLocal();
+  const limited = page.locator('.search-editor').filter({ visible: true }).last().locator('.view-lines');
+  await expect(limited).toContainText('SECOND');
+  await expect(limited).not.toContainText('THIRD');
+  await expect(limited).toContainText('The result set only contains a subset of all matches');
+  expect(localRequests).toEqual([]);
+  result.localOverflow = { requests: localRequests.length, text: await limited.innerText() };
+  // 恰好两条尚不能断言全域完整；真实远端探测必须继续，且不重读草稿文件。
+  await editDraft(`${localQuery} FIRST\n${localQuery} SECOND`);
+  const probeRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/gateway/search'
+    && request.method() === 'POST' && request.postDataJSON().queries.some(query => query.query === localQuery));
+  await searchLocal();
+  const probe = await searchReceipt(await probeRequest);
+  expect(probe.status).toBe(200); expect(probe.summary.state).toBe('complete');
+  expect(probe.scope.owners.map(owner => owner.workspace_id)).toEqual(targets.map(target => target.workspaceId));
+  expect(probe.pages.flatMap(event => event.page.files.matches)).toEqual([]);
+  const complete = page.locator('.search-editor').filter({ visible: true }).last().locator('.view-lines');
+  await expect(complete).toContainText('SECOND');
+  await expect(complete).not.toContainText('The result set only contains a subset of all matches');
+  expect(localRequests).toHaveLength(2);
+  expect(localRequests.find(item => item.workspaceId === targets[0].workspaceId).search_options.excluded_resource_uris)
+    .toEqual([targets[0].rootUri + '/a.coverage.txt']);
+  result.exactLocalLimit = { probe, requests: localRequests, text: await complete.innerText() };
   result.responses = { onlyAReceipt, receipt, pageA, pageB, small, beforeCoverage, changed };
   result.phase = 'passed';
 } catch (error) {
