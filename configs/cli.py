@@ -188,6 +188,7 @@ def main() -> None:
             "migrate",
             "migrate-runtime-config",
             "preview-workspace-identity",
+            "migrate-workspace-identity",
             "doctor",
             "diagnose",
         ),
@@ -198,7 +199,8 @@ def main() -> None:
     parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--verify-remote", action="store_true", help="身份预检时通过既有凭据和 SSH 隧道只读核验远端，不自动配对或启动服务")
-    parser.add_argument("--restore", action="store_true", help="恢复最近一次运行时配置迁移的原件")
+    parser.add_argument("--recovery-output", type=Path, help="身份迁移成功后导出供客户端显式导入的恢复材料")
+    parser.add_argument("--restore", action="store_true", help="恢复对应维护操作最近一次迁移的原件")
     parser.add_argument("--level")
     parser.add_argument("--pretty", choices=("true", "false"))
     parser.add_argument("--home", type=Path, default=Path.home())
@@ -208,11 +210,13 @@ def main() -> None:
         help="显式用普通静态模板重建 Gateway 与 Workspace 用户配置",
     )
     args = parser.parse_args()
-    if args.verify_remote and args.action != "preview-workspace-identity":
-        parser.error("--verify-remote 只用于 preview-workspace-identity")
+    if args.verify_remote and args.action not in {"preview-workspace-identity", "migrate-workspace-identity"}:
+        parser.error("--verify-remote 只用于工作区身份维护")
+    if args.recovery_output is not None and args.action != "migrate-workspace-identity":
+        parser.error("--recovery-output 只用于 migrate-workspace-identity")
     if args.action != "migrate-runtime-config" and (
         args.preview
-        or args.restore
+        or args.restore and args.action != "migrate-workspace-identity"
         or args.level is not None
         or args.pretty is not None
         or args.migration_workspace
@@ -234,15 +238,34 @@ def main() -> None:
         if args.project_root is not None
         else None
     )
-    if args.action == "preview-workspace-identity":
+    if args.action in {"preview-workspace-identity", "migrate-workspace-identity"}:
         from configs.workspace_identity_migration import (
             preview_workspace_identity_migration,
             verify_remote_workspace_identities,
         )
 
         gateway_root = (Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) if os.environ.get("BOXTEAM_GATEWAY_ROOT")
-                        else boxteam_home / "state/gateway")
+                        else boxteam_home / "state/gateway").expanduser().resolve()
         try:
+            if args.action == "migrate-workspace-identity":
+                from configs.workspace_identity_commit import (
+                    commit_workspace_identity_migration,
+                )
+
+                # 继续与回退使用已冻结计划；不再次要求旧格式预检或已离线远端。
+                journal = gateway_root / ".workspace-identity-migration.json"
+                verified = None
+                if args.verify_remote and not args.restore and (not journal.exists() or json.loads(journal.read_text())["state"] == "restored"):
+                    verified = asyncio.run(verify_remote_workspace_identities(
+                        preview_workspace_identity_migration(gateway_root=gateway_root, project_root=project_root or Path.cwd()),
+                        gateway_root=gateway_root, log_dir=load_runtime_log_contract(project_root).root_for(boxteam_home),
+                    ))
+                report = commit_workspace_identity_migration(
+                    gateway_root=gateway_root, project_root=project_root or Path.cwd(), restore=args.restore,
+                    verified_preview=verified, recovery_output=args.recovery_output,
+                )
+                print(json.dumps({"action": args.action, **report}, ensure_ascii=False))
+                return
             preview = preview_workspace_identity_migration(
                 gateway_root=gateway_root, project_root=project_root or Path.cwd(),
             )
@@ -253,7 +276,7 @@ def main() -> None:
                 ))
             report = preview.report()
         except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error) as error:
-            print(json.dumps({"action": args.action, "read_only": True,
+            print(json.dumps({"action": args.action, "read_only": args.action == "preview-workspace-identity",
                               "error": str(error),
                               "diagnostic": diagnostic_error(error, stage="registry_identity_preflight")}, ensure_ascii=False))
             raise SystemExit(1) from None

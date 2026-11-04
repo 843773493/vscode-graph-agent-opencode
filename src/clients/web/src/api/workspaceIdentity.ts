@@ -19,7 +19,7 @@ export function nullableGatewayWorkspaceKey(workspace: GatewayWorkspaceRequestTa
 }
 
 export function workspaceOwnerFromKey(key: string): WorkspaceOwner {
-  // TODO：旧 selection／IndexedDB／outbox 的别名恢复需显式迁移；不能借当前 active 补归属。
+  // 旧别名只允许在显式恢复入口升级；普通请求始终要求完整 owner。
   const value: unknown = JSON.parse(key);
   if (!Array.isArray(value) || value.length !== 2 || !value.every(item => typeof item === "string" && item.trim())) {
     throw new Error("工作区选择缺少完整 Gateway／UUID 归属，请从工作区导航重新选择");

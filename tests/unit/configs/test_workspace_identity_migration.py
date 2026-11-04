@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import sqlite3
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import closing
-from dataclasses import astuple, dataclass, replace
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -16,62 +15,66 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.control import generator_import as generator_import_owner
+from app.gateway.control.gateway_registry.snapshot import read_workspace_registry
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.generator_import import import_session_generators
-from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.control.user_access import UserAccessContext, UserAccessService
-from app.gateway.control.view_state import UserViewStateRecord, UserViewStateStore
-from app.gateway.credentials import load_or_create_gateway_id
-from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.control.view_state import UserViewStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.schemas.gateway_control import WorkspaceFolderCreateRequest
 from configs import workspace_identity_migration as migration
 from configs.cli import main
 from configs.workspace_identity_migration import preview_workspace_identity_migration
-from tests.harness.python.run_context import TestRunContext
+from tests.unit.configs.conftest import LegacyGateway
+
+LOCAL_ALIAS = "gw_local_0"
 
 
-@dataclass
-class Registration:
-    root: Path
-    workspace: Path
-    gateway_id: str
-    target: WorkspaceTarget
-    store: GatewayStateStore
-    registry: GatewayWorkspaceRegistry
+def _workspace_id(case: LegacyGateway, alias: str = LOCAL_ALIAS) -> str:
+    return case.metadata["workspaces"][alias]["workspace_id"]
 
-    def preview(self):
-        return preview_workspace_identity_migration(gateway_root=self.root, project_root=Path.cwd())
+
+def _registry(case: LegacyGateway) -> dict[str, object]:
+    with closing(sqlite3.connect(case.database)) as connection:
+        payload = read_workspace_registry(connection)
+    assert payload is not None
+    return payload
+
+
+def _alter_target(case: LegacyGateway, alias: str, **changes: object) -> None:
+    # 只离线改变冻结输入副本，不调用新 runtime 重新生成旧登记。
+    with closing(sqlite3.connect(case.database)) as connection:
+        payload = json.loads(connection.execute(
+            "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (alias,),
+        ).fetchone()[0])
+        connection.execute("UPDATE gateway_workspace_registry SET payload_json=? WHERE workspace_id=?",
+                           (json.dumps({**payload, **changes}), alias))
+        connection.commit()
+
+
+def _alter_metadata(case: LegacyGateway, **changes: object) -> None:
+    with closing(sqlite3.connect(case.database)) as connection:
+        payload = json.loads(connection.execute(
+            "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+        ).fetchone()[0])
+        connection.execute("UPDATE gateway_config SET payload_json=? WHERE config_key='workspace_registry_meta'",
+                           (json.dumps({**payload, **changes}),))
+        connection.commit()
 
 
 @pytest.fixture
-def registered(
-    tmp_path: Path, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Registration]:
-    root = tmp_path / "home/state/gateway"
-    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
-    context = TestRunContext.from_test_file(Path(request.node.path))
-    case_root = context.workspace_root / hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:12]
-    if case_root.exists():
-        shutil.rmtree(case_root)
-    workspace = case_root / "original"
-    workspace.mkdir(parents=True)
-    workspace_id = load_or_create_workspace_id(workspace)
-    gateway_id = load_or_create_gateway_id(root / "identity.json")
-    with GatewayStateStore(path=root / "gateway.sqlite") as store:
-        registry = GatewayWorkspaceRegistry(storage_path=root / "workspaces.json", state_store=store)
-        target = registry.upsert(WorkspaceTarget(
-            workspace_id="gw_old_local", name="不能作为迁移依据的名称", root_path=str(workspace),
-            backend_url="http://127.0.0.1:49999", connection_kind="local", backend_workspace_id=workspace_id,
-        ))
-        try:
-            yield Registration(root, workspace, gateway_id, target, store, registry)
-        finally:
-            registry.close()
+def registered(legacy_gateway: LegacyGateway) -> LegacyGateway:
+    with closing(sqlite3.connect(legacy_gateway.database)) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+    return legacy_gateway
+
+
+@pytest.fixture
+def current_state(registered: LegacyGateway) -> Iterator[GatewayStateStore]:
+    # 当前 owner 生成业务状态，旧库只接收离线复制的旧格式输入。
+    with GatewayStateStore(path=registered.directory / "current-owner/gateway.sqlite") as state:
+        yield state
 
 
 def _dump(path: Path) -> str:
@@ -87,24 +90,40 @@ def _view_rows(path: Path) -> list[tuple[object, ...]]:
 
 
 @pytest.fixture
-def write_view_state(registered: Registration) -> Callable[[str, str, str], UserViewStateRecord]:
-    access = UserAccessService(state=registered.store)
-    views = UserViewStateStore(state=registered.store)
+def write_view_state(registered: LegacyGateway, current_state: GatewayStateStore) -> Callable[[str, str, str], sqlite3.Row]:
+    access = UserAccessService(state=current_state)
+    views = UserViewStateStore(state=current_state)
     contexts: dict[str, UserAccessContext] = {}
     ordinal = 0
+    with closing(sqlite3.connect(registered.database)) as connection:
+        connection.execute("DELETE FROM user_view_state")
+        connection.commit()
 
-    def write(user_id: str, workspace_id: str, session_id: str) -> UserViewStateRecord:
+    def write(user_id: str, workspace_id: str, session_id: str) -> sqlite3.Row:
         nonlocal ordinal
         if user_id not in contexts:
             access.create_user(display_name="保留用户显示名", user_id=user_id)
             contexts[user_id] = access.acquire_user(user_id=user_id, client_label="identity-preview")
         ordinal += 1
-        return views.put(
-            context=contexts[user_id], workspace_id=workspace_id, session_id=session_id,
-            turn_anchor=f"保留正文:{registered.target.workspace_id}", scroll_offset=128.5 + ordinal,
+        record = views.put(
+            context=contexts[user_id], gateway_id=registered.gateway_id,
+            workspace_id=_workspace_id(registered, workspace_id) if workspace_id in registered.metadata["workspaces"] else _workspace_id(registered),
+            session_id=session_id,
+            turn_anchor=f"保留正文:{LOCAL_ALIAS}", scroll_offset=128.5 + ordinal,
             follow_latest=bool(ordinal % 2), projection_version=ordinal,
             tool_details_expanded=not bool(ordinal % 2),
         )
+        with closing(current_state.connection()) as source, closing(sqlite3.connect(registered.database)) as destination:
+            user = source.execute("SELECT * FROM user_account WHERE user_id=?", (user_id,)).fetchone()
+            destination.execute("INSERT OR IGNORE INTO user_account VALUES(?,?,?,?)", tuple(user))
+            payload = asdict(record)
+            del payload["gateway_id"]
+            payload["workspace_id"] = workspace_id
+            destination.execute(f"INSERT INTO user_view_state({','.join(payload)}) VALUES({','.join('?' for _ in payload)})", tuple(payload.values()))
+            destination.commit()
+            destination.row_factory = sqlite3.Row
+            return destination.execute("SELECT * FROM user_view_state WHERE user_id=? AND workspace_id=? AND session_id=?",
+                                       (user_id, workspace_id, session_id)).fetchone()
 
     return write
 
@@ -135,72 +154,66 @@ def test_empty_home_preview_never_installs_or_creates_identity(
     assert not home.exists()
 
 
-def test_existing_registration_is_verified_without_writes(registered: Registration) -> None:
-    before = _dump(registered.store.path)
-    identity = registered.workspace / ".boxteam/workspace-identity.json"
+def test_existing_registration_is_verified_without_writes(registered: LegacyGateway) -> None:
+    before = _dump(registered.database)
+    identity = (registered.directory / "workspace-0") / ".boxteam/workspace-identity.json"
     original = identity.read_bytes()
     result = registered.preview()
     assert result.blockers == ()
-    assert result.report()["mapping_complete"] is True
-    mapping, = result.mappings
-    assert (mapping.registered_gateway_id, mapping.legacy_workspace_id) == (registered.gateway_id, registered.target.workspace_id)
-    assert (mapping.gateway_id, mapping.workspace_id) == (registered.gateway_id, registered.target.backend_workspace_id)
+    assert result.report()["mapping_complete"] is result.report()["apply_available"] is True
+    assert len(result.mappings) == 3
+    mapping = result.mappings[0]
+    assert (mapping.registered_gateway_id, mapping.legacy_workspace_id) == (registered.gateway_id, LOCAL_ALIAS)
+    assert (mapping.gateway_id, mapping.workspace_id) == (registered.gateway_id, _workspace_id(registered))
     assert mapping.verified is True
-    assert result.registry_revision == registered.registry.registry_revision
-    assert result.registry_source == str(registered.store.path)
+    assert result.registry_revision == _registry(registered)["registry_revision"]
+    assert result.registry_source == str(registered.database)
     assert registered.preview() == result
-    assert _dump(registered.store.path) == before
+    assert _dump(registered.database) == before
     assert identity.read_bytes() == original
-    assert not (registered.workspace / ".boxteam/state").exists()
+    assert not ((registered.directory / "workspace-0") / ".boxteam/state").exists()
     assert not (registered.root / "workspaces.json").exists()
 
 
-def test_same_uuid_in_different_native_roots_blocks_publication(registered: Registration) -> None:
-    clone = registered.workspace.with_name(registered.workspace.name + "-clone")
-    clone.mkdir(exist_ok=True)
-    assert registered.target.backend_workspace_id is not None
-    clone_id = load_or_create_workspace_id(clone)
-    registered.registry.upsert(WorkspaceTarget(
-        workspace_id="gw_clone", name="原目录的副本", root_path=str(clone),
-        backend_url="http://127.0.0.1:49998", connection_kind="local",
-        backend_workspace_id=clone_id,
-    ))
-    # 新 writer 已拒绝冲突；仅变更旧持久输入，模拟外部复制形成的相同 UUID。
-    identity = registered.workspace / ".boxteam/workspace-identity.json"
+def test_same_uuid_in_different_native_roots_blocks_publication(registered: LegacyGateway) -> None:
+    clone = registered.directory / "workspace-1"
+    identity = (registered.directory / "workspace-0") / ".boxteam/workspace-identity.json"
     clone_identity = clone / ".boxteam/workspace-identity.json"
     shutil.copyfile(identity, clone_identity)
-    with closing(registered.store.connection()) as connection:
-        payload = json.loads(connection.execute(
-            "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id='gw_clone'"
-        ).fetchone()[0])
-        payload["backend_workspace_id"] = registered.target.backend_workspace_id
-        connection.execute("UPDATE gateway_workspace_registry SET payload_json=? WHERE workspace_id='gw_clone'",
-                           (json.dumps(payload),))
-    before = _dump(registered.store.path)
+    _alter_target(registered, "gw_local_1", backend_workspace_id=_workspace_id(registered))
+    backends = _registry(registered)["managed_backends"]
+    assert isinstance(backends, list)
+    for backend in backends:
+        for member in backend["members"]:
+            if member["workspace_id"] == "gw_local_1":
+                member["backend_workspace_id"] = _workspace_id(registered)
+    _alter_metadata(registered, managed_backends=backends)
+    before = _dump(registered.database)
+    navigation = registered.root / "navigation/workspace-tree.json"
+    original_navigation = navigation.read_bytes()
     original_identity = identity.read_bytes()
     result = registered.preview()
-    assert [item.code for item in result.blockers] == ["duplicate_native_workspace"]
-    assert len(result.mappings) == 2
-    assert {item.workspace_id for item in result.mappings} == {registered.target.backend_workspace_id}
+    assert [item.code for item in result.blockers] == ["duplicate_native_workspace", "invalid_navigation_reference"]
+    assert len(result.mappings) == 3
+    assert [item.workspace_id for item in result.mappings[:2]] == [_workspace_id(registered)] * 2
     assert result.report()["mapping_complete"] is False
-    assert _dump(registered.store.path) == before
+    assert _dump(registered.database) == before
+    assert navigation.read_bytes() == original_navigation
     assert identity.read_bytes() == clone_identity.read_bytes() == original_identity
 
 
-def test_target_uuid_mismatch_is_reported_and_never_rebound(registered: Registration) -> None:
-    actual = registered.target.backend_workspace_id
-    assert actual is not None
-    registered.target.backend_workspace_id = str(uuid4())
-    registered.registry.upsert(registered.target)
+def test_target_uuid_mismatch_is_reported_and_never_rebound(registered: LegacyGateway) -> None:
+    actual = _workspace_id(registered)
+    _alter_target(registered, LOCAL_ALIAS, backend_workspace_id=str(uuid4()))
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["workspace_identity_mismatch"]
     assert actual in result.blockers[0].detail
     assert result.mappings[0].verified is False
-    assert json.loads((registered.workspace / ".boxteam/workspace-identity.json").read_bytes())["workspace_id"] == actual
+    assert json.loads(((registered.directory / "workspace-0") / ".boxteam/workspace-identity.json").read_bytes())["workspace_id"] == actual
 
 
-def test_missing_workspace_identity_is_not_initialized(registered: Registration) -> None:
-    identity = registered.workspace / ".boxteam/workspace-identity.json"
+def test_missing_workspace_identity_is_not_initialized(registered: LegacyGateway) -> None:
+    identity = (registered.directory / "workspace-0") / ".boxteam/workspace-identity.json"
     identity.unlink()
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["local_identity_probe_failed"]
@@ -208,20 +221,19 @@ def test_missing_workspace_identity_is_not_initialized(registered: Registration)
     assert not identity.exists()
 
 
-def test_missing_cached_uuid_can_only_come_from_existing_native_identity(registered: Registration) -> None:
-    actual = registered.target.backend_workspace_id
-    registered.target.backend_workspace_id = None
-    registered.registry.upsert(registered.target)
-    before = _dump(registered.store.path)
+def test_missing_cached_uuid_can_only_come_from_existing_native_identity(registered: LegacyGateway) -> None:
+    actual = _workspace_id(registered)
+    _alter_target(registered, LOCAL_ALIAS, backend_workspace_id=None)
+    before = _dump(registered.database)
     result = registered.preview()
     assert result.blockers == ()
-    mapping, = result.mappings
+    mapping = result.mappings[0]
     assert mapping.workspace_id == actual and mapping.verified
-    assert _dump(registered.store.path) == before
+    assert _dump(registered.database) == before
 
 
 def test_missing_gateway_identity_is_not_initialized(
-    registered: Registration, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    registered: LegacyGateway, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     identity = registered.root / "identity.json"
     identity.unlink()
@@ -236,22 +248,20 @@ def test_missing_gateway_identity_is_not_initialized(
     assert not identity.exists()
 
 
-def test_legacy_file_conflicting_with_authoritative_sqlite_is_not_chosen(registered: Registration) -> None:
-    payload = registered.store.load_workspace_registry()
-    assert payload is not None
+def test_legacy_file_conflicting_with_authoritative_sqlite_is_not_chosen(registered: LegacyGateway) -> None:
+    payload = _registry(registered)
     payload["active_workspace_id"] = None
     legacy = registered.root / "workspaces.json"
     legacy.write_text(json.dumps(payload))
     original = legacy.read_bytes()
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["registry_sources_conflict"]
-    assert result.registry_source == str(registered.store.path)
+    assert result.registry_source == str(registered.database)
     assert legacy.read_bytes() == original
 
 
-def test_legacy_file_alone_uses_same_mapping_without_creating_sqlite(registered: Registration) -> None:
-    payload = registered.store.load_workspace_registry()
-    assert payload is not None
+def test_legacy_file_alone_uses_same_mapping_without_creating_sqlite(registered: LegacyGateway) -> None:
+    payload = _registry(registered)
     other = registered.root / "file-only"
     other.mkdir()
     (other / "workspaces.json").write_text(json.dumps(payload))
@@ -266,83 +276,106 @@ def test_legacy_file_alone_uses_same_mapping_without_creating_sqlite(registered:
     ("gateway_" + "a" * 32, "gateway_" + "b" * 32),
     ("gateway_" + "a" * 32, "gateway_" + "a" * 32),
 ])
+@pytest.mark.parametrize("legacy_gateway", [True], indirect=True)
 def test_remote_uuid_keeps_gateway_and_connection_identity_and_requires_confirmation(
-    registered: Registration, owner_ids: tuple[str, str],
-    write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    registered: LegacyGateway, owner_ids: tuple[str, str],
+    write_view_state: Callable[[str, str, str], sqlite3.Row],
 ) -> None:
+    connections = _registry(registered)["remote_gateway_connections"]
+    assert isinstance(connections, list)
     for index, owner in enumerate(owner_ids):
-        connection_id = f"rgw_remote_{index}"
-        registered.registry.upsert_remote_gateway(RemoteGatewayConnection(
-            connection_id=connection_id, name="名称里不能泄露 secret-sentinel", host="host-sentinel",
-            port=22, username="username-sentinel", private_key_path="/credentials/private-sentinel",
-            ssh_config_host=None, remote_gateway_port=8014, remote_gateway_id=owner,
-            protocol_version=1, source_owner="manual",
-        ))
-        registered.registry.upsert(WorkspaceTarget(
-            workspace_id=f"gw_remote_{index}", name="远程目标", root_path=None,
-            backend_url="http://127.0.0.1:49997", connection_kind="remote_gateway",
-            owner="remote_projection", connection_id=connection_id, remote_gateway_connection_id=connection_id,
-            remote_workspace_id="gw_remote_native", backend_workspace_id=registered.target.backend_workspace_id,
-        ))
+        connections[index].update(remote_gateway_id=owner, name="名称里不能泄露 secret-sentinel", host="host-sentinel",
+                                  username="username-sentinel", private_key_path="/credentials/private-sentinel")
+        _alter_target(registered, f"gw_remote_{index}", backend_workspace_id=_workspace_id(registered))
+    _alter_metadata(registered, remote_gateway_connections=connections)
     navigation_path = registered.root / "navigation/workspace-tree.json"
-    WorkspaceNavigationStore(storage_path=navigation_path).list_tree(registered.registry.targets())
-    for target in registered.registry.targets():
-        write_view_state("remote-user", target.workspace_id, "same-session")
+    navigation = json.loads(navigation_path.read_bytes())
+    distinct_owners = list(dict.fromkeys(owner_ids))
+    navigation["nodes"].extend({**navigation["nodes"][0], "node_id": f"gwn_remote_{index}",
+                                "workspace_id": f"gw_remote_{owner_ids.index(owner)}", "position": 4 + index}
+                               for index, owner in enumerate(distinct_owners))
+    navigation_path.write_text(json.dumps(navigation))
+    aliases = ["gw_local_0", "gw_local_1", "gw_local_2", "gw_remote_0", "gw_remote_1"]
+    for alias in aliases:
+        write_view_state("remote-user", alias, "same-session")
     original_navigation = navigation_path.read_bytes()
-    original_database = _dump(registered.store.path)
-    original_views = _view_rows(registered.store.path)
+    original_database = _dump(registered.database)
+    original_views = _view_rows(registered.database)
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["remote_identity_unverified", "remote_identity_unverified"]
-    remote = result.mappings[1:]
+    remote = result.mappings[3:]
     assert [item.gateway_id for item in remote] == list(owner_ids)
-    assert {item.workspace_id for item in result.mappings} == {registered.target.backend_workspace_id}
-    assert [item.connection_id for item in remote] == ["rgw_remote_0", "rgw_remote_1"]
+    assert {item.workspace_id for item in remote} == {_workspace_id(registered)}
+    assert [item.connection_id for item in remote] == ["rgw_fixture_0", "rgw_fixture_1"]
     assert all(not item.verified for item in remote)
     navigation_refs = [item for item in result.references if item.source == "navigation/workspace-tree.json"]
     view_refs = [item for item in result.references if item.source == "user_view_state.workspace_id"]
-    assert [item.gateway_id for item in navigation_refs] == [registered.gateway_id, *owner_ids]
-    assert len({item.record_id for item in navigation_refs}) == 3
+    assert [item.gateway_id for item in navigation_refs] == [registered.gateway_id] * 3 + distinct_owners
+    assert len({item.record_id for item in navigation_refs}) == 3 + len(distinct_owners)
     assert [(json.loads(item.record_id), item.gateway_id) for item in view_refs] == [
         (["remote-user", identity, "same-session"], owner)
-        for identity, owner in zip((registered.target.workspace_id, "gw_remote_0", "gw_remote_1"),
-                                   (registered.gateway_id, *owner_ids), strict=True)
+        for identity, owner in zip(aliases, [registered.gateway_id] * 3 + list(owner_ids), strict=True)
     ]
-    assert {item.workspace_id for item in result.references} == {registered.target.backend_workspace_id}
+    assert {item.workspace_id for item in result.references} == {value["workspace_id"] for value in registered.metadata["workspaces"].values()}
     assert navigation_path.read_bytes() == original_navigation
-    assert _view_rows(registered.store.path) == original_views
-    assert _dump(registered.store.path) == original_database
+    assert _view_rows(registered.database) == original_views
+    assert _dump(registered.database) == original_database
     assert "sentinel" not in json.dumps(result.report())
 
 
+@pytest.mark.parametrize("legacy_gateway", [True], indirect=True)
+def test_navigation_aliases_converging_on_one_native_owner_block_without_repair(registered: LegacyGateway) -> None:
+    path = registered.root / "navigation/workspace-tree.json"
+    navigation = json.loads(path.read_bytes())
+    navigation["nodes"].extend({**navigation["nodes"][0], "node_id": f"gwn_remote_{index}",
+                                "workspace_id": f"gw_remote_{index}", "position": 4 + index} for index in range(2))
+    path.write_text(json.dumps(navigation))
+    before, original = _dump(registered.database), path.read_bytes()
+    result = registered.preview()
+    assert [item.code for item in result.blockers] == [
+        "remote_identity_unverified", "remote_identity_unverified", "invalid_navigation_reference",
+    ]
+    assert result.blockers[-1].source == str(path)
+    assert "重复规范引用" in result.blockers[-1].detail
+    assert result.report()["mapping_complete"] is result.report()["apply_available"] is False
+    assert not [item for item in result.references if item.source == "navigation/workspace-tree.json"]
+    assert path.read_bytes() == original and _dump(registered.database) == before
+
+
 def test_live_generation_blocks_preview_and_cli_reports_failure_without_settling(
-    registered: Registration, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    registered: LegacyGateway, current_state: GatewayStateStore,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    registered.store.record_gateway_runtime_generation(
+    current_state.record_gateway_runtime_generation(
         generation_id="gateway-live", process_id=123, loaded_source="active", candidate_id=None,
         active_revision=1, pending_revision=None, candidate_digest=None, effective_digest="digest",
         secret_binding_digest=None, fencing_token=None, listener_state="serving", state="active",
     )
-    before = _dump(registered.store.path)
+    with closing(current_state.connection()) as source, closing(sqlite3.connect(registered.database)) as destination:
+        row = source.execute("SELECT * FROM gateway_runtime_generation WHERE generation_id='gateway-live'").fetchone()
+        destination.execute(f"INSERT INTO gateway_runtime_generation VALUES({','.join('?' for _ in row)})", tuple(row))
+        destination.commit()
+    before = _dump(registered.database)
     with pytest.raises(SystemExit) as error:
         _cli(monkeypatch)
     assert error.value.code == 1
     report = json.loads(capsys.readouterr().out)
     assert report["blockers"] == [{"code": "unsettled_control_state", "source": "gateway_runtime_generation:gateway-live", "detail": "状态尚未结算: active"}]
     assert report["apply_available"] is False
-    assert _dump(registered.store.path) == before
+    assert _dump(registered.database) == before
 
 
 @pytest.mark.parametrize("version", [12, 14])
-def test_unknown_registry_version_is_not_guessed(registered: Registration, version: int) -> None:
-    registered.store.set_config(config_key="workspace_registry_meta", payload={"schema_version": version}, config_version=1)
+def test_unknown_registry_version_is_not_guessed(registered: LegacyGateway, version: int) -> None:
+    _alter_metadata(registered, schema_version=version)
     with pytest.raises(ValueError, match="registry 合同 13"):
         registered.preview()
 
 
 def test_cli_reports_actionable_contract_rejection(
-    registered: Registration, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    registered: LegacyGateway, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    registered.store.set_config(config_key="workspace_registry_meta", payload={"schema_version": 12}, config_version=1)
+    _alter_metadata(registered, schema_version=12)
     with pytest.raises(SystemExit) as error:
         _cli(monkeypatch)
     assert error.value.code == 1
@@ -376,40 +409,36 @@ def test_cli_reports_unreadable_database_without_changing_it(
     assert set(database.parent.iterdir()) == {database}
 
 
-def test_parent_cycle_is_reported_without_recursion_or_repair(registered: Registration) -> None:
-    with closing(registered.store.connection()) as connection:
-        row = connection.execute("SELECT payload_json FROM gateway_workspace_registry").fetchone()
-        payload = json.loads(row[0])
-        payload["parent_workspace_id"] = payload["workspace_id"]
-        connection.execute("UPDATE gateway_workspace_registry SET payload_json=?", (json.dumps(payload),))
-    before = _dump(registered.store.path)
+def test_parent_cycle_is_reported_without_recursion_or_repair(registered: LegacyGateway) -> None:
+    _alter_target(registered, LOCAL_ALIAS, parent_workspace_id=LOCAL_ALIAS)
+    before = _dump(registered.database)
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["workspace_parent_cycle"]
-    assert _dump(registered.store.path) == before
+    assert _dump(registered.database) == before
 
 
 def test_registry_metadata_and_rows_share_one_read_snapshot(
-    registered: Registration, monkeypatch: pytest.MonkeyPatch,
+    registered: LegacyGateway, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = registered.store.load_workspace_registry()
-    assert original is not None
-    assert isinstance(original["registry_revision"], int)
-    factory = registered.store._database.connection
+    original = registered.preview()
+    assert original.registry_revision is not None
+    factory = sqlite3.connect
     published = False
 
-    def connection() -> sqlite3.Connection:
-        read = factory()
+    def connection(database: str, *, uri: bool) -> sqlite3.Connection:
+        assert uri and database.endswith("?mode=ro")
+        read = factory(database, uri=uri)
 
         def during_read(sql: str) -> None:
             nonlocal published
             if "SELECT payload_json FROM gateway_workspace_registry" not in sql or published:
                 return
             published = True
-            with closing(factory()) as writer:
+            with closing(factory(registered.database)) as writer:
                 writer.execute("BEGIN IMMEDIATE")
-                target = json.loads(writer.execute("SELECT payload_json FROM gateway_workspace_registry").fetchone()[0])
+                target = json.loads(writer.execute("SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (LOCAL_ALIAS,)).fetchone()[0])
                 target["name"] = "读取中发布的新版本"
-                writer.execute("UPDATE gateway_workspace_registry SET payload_json=?", (json.dumps(target),))
+                writer.execute("UPDATE gateway_workspace_registry SET payload_json=? WHERE workspace_id=?", (json.dumps(target), LOCAL_ALIAS))
                 meta = json.loads(writer.execute("SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'").fetchone()[0])
                 meta["registry_revision"] += 1
                 writer.execute("UPDATE gateway_config SET payload_json=? WHERE config_key='workspace_registry_meta'", (json.dumps(meta),))
@@ -419,48 +448,48 @@ def test_registry_metadata_and_rows_share_one_read_snapshot(
         read.set_trace_callback(during_read)
         return read
 
-    monkeypatch.setattr(registered.store._database, "connection", connection)
-    assert registered.store.load_workspace_registry() == original
-    updated = registered.store.load_workspace_registry()
-    assert published and updated is not None
-    assert updated["registry_revision"] == original["registry_revision"] + 1
-    targets = updated["targets"]
+    with monkeypatch.context() as patch:
+        patch.setattr(migration.sqlite3, "connect", connection)
+        assert registered.preview() == original
+        updated = registered.preview()
+    assert published and updated.blockers == ()
+    assert updated.registry_revision == original.registry_revision + 1
+    assert updated.registry_digest != original.registry_digest
+    targets = _registry(registered)["targets"]
     assert isinstance(targets, list) and isinstance(targets[0], dict)
     assert targets[0]["name"] == "读取中发布的新版本"
 
 
 def test_navigation_preview_maps_only_workspace_references_without_synchronizing(
-    registered: Registration,
+    registered: LegacyGateway,
 ) -> None:
     path = registered.root / "navigation/workspace-tree.json"
-    navigation = WorkspaceNavigationStore(storage_path=path)
-    tree = navigation.create_folder(
-        WorkspaceFolderCreateRequest(name=registered.target.workspace_id),
-        registered.registry.targets(),
-    )
+    tree = json.loads(path.read_bytes())
+    folder, = [node for node in tree["nodes"] if node["kind"] == "workspace_folder"]
+    folder["name"] = LOCAL_ALIAS
+    path.write_text(json.dumps(tree))
     original = path.read_bytes()
     result = registered.preview()
     assert result.blockers == ()
-    node, = [node for node in tree.nodes if node.kind == "workspace_ref"]
-    assert result.report()["references"] == [{
-        "source": "navigation/workspace-tree.json", "record_id": node.node_id,
-        "legacy_workspace_id": registered.target.workspace_id,
-        "gateway_id": registered.gateway_id, "workspace_id": registered.target.backend_workspace_id,
-    }]
+    references = result.report()["references"]
+    assert isinstance(references, list)
+    assert [item for item in references if item["source"] == "navigation/workspace-tree.json"] == [{
+        "source": "navigation/workspace-tree.json", "record_id": node["node_id"],
+        "legacy_workspace_id": node["workspace_id"],
+        "gateway_id": registered.gateway_id, "workspace_id": _workspace_id(registered, node["workspace_id"]),
+    } for node in tree["nodes"] if node["kind"] == "workspace_ref"]
     assert path.read_bytes() == original
-    assert any(node.kind == "workspace_folder" and node.name == registered.target.workspace_id for node in tree.nodes)
+    assert folder["kind"] == "workspace_folder" and folder["name"] == LOCAL_ALIAS
 
 
 @pytest.mark.parametrize("corruption", ["unknown_workspace", "duplicate_node", "parent_cycle", "schema_version"])
 def test_navigation_corruption_blocks_preview_without_repair(
-    registered: Registration, corruption: str,
+    registered: LegacyGateway, corruption: str,
 ) -> None:
     path = registered.root / "navigation/workspace-tree.json"
-    navigation = WorkspaceNavigationStore(storage_path=path)
-    navigation.create_folder(WorkspaceFolderCreateRequest(name="保留原目录"), registered.registry.targets())
     payload = json.loads(path.read_bytes())
     if corruption == "unknown_workspace":
-        node, = [node for node in payload["nodes"] if node["kind"] == "workspace_ref"]
+        node = next(node for node in payload["nodes"] if node["kind"] == "workspace_ref")
         node["workspace_id"] = "gw_unmapped"
     elif corruption == "duplicate_node":
         payload["nodes"].append(payload["nodes"][0])
@@ -476,113 +505,117 @@ def test_navigation_corruption_blocks_preview_without_repair(
     assert blocker.code == "invalid_navigation_reference"
     assert blocker.source == str(path)
     assert result.report()["mapping_complete"] is False
-    assert result.references == ()
+    assert not [item for item in result.references if item.source == "navigation/workspace-tree.json"]
     assert path.read_bytes() == original
 
 
-def test_navigation_without_registry_is_not_discarded_or_given_new_identity(tmp_path: Path) -> None:
-    path = tmp_path / "navigation/workspace-tree.json"
-    path.parent.mkdir()
-    path.write_text(json.dumps({"schema_version": 1, "nodes": [{
-        "kind": "workspace_ref", "node_id": "retained-node", "workspace_id": "gw_orphan", "name": "保留引用",
-    }]}))
+def test_navigation_without_registry_is_not_discarded_or_given_new_identity(registered: LegacyGateway) -> None:
+    path = registered.root / "navigation/workspace-tree.json"
+    payload = json.loads(path.read_bytes())
+    payload["nodes"][0]["workspace_id"] = "gw_orphan"
+    path.write_text(json.dumps(payload))
+    registered.database.unlink()
+    (registered.root / "identity.json").unlink()
     original = path.read_bytes()
-    result = preview_workspace_identity_migration(gateway_root=tmp_path, project_root=Path.cwd())
+    result = registered.preview()
     blocker, = result.blockers
     assert blocker.code == "invalid_navigation_reference"
     assert result.mappings == ()
     assert result.report()["mapping_complete"] is False
     assert path.read_bytes() == original
-    assert not (tmp_path / "identity.json").exists()
-    assert not (tmp_path / "gateway.sqlite").exists()
+    assert not (registered.root / "identity.json").exists()
+    assert not registered.database.exists()
 
 
 def test_user_view_preview_maps_complete_original_keys_and_keeps_every_view_field(
-    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    registered: LegacyGateway, write_view_state: Callable[[str, str, str], sqlite3.Row],
 ) -> None:
-    other_root = registered.workspace.with_name("other")
-    other_root.mkdir()
-    other_id = load_or_create_workspace_id(other_root)
-    other = registered.registry.upsert(WorkspaceTarget(
-        workspace_id=other_id, name=registered.target.workspace_id, root_path=str(other_root),
-        backend_url="http://127.0.0.1:49998", connection_kind="local", backend_workspace_id=other_id,
-    ))
-    registered.registry.activate(other.workspace_id)
+    other_alias = "gw_local_1"
+    _alter_target(registered, other_alias, name=LOCAL_ALIAS)
+    _alter_metadata(registered, active_workspace_id=other_alias)
+    with closing(sqlite3.connect(registered.database)) as connection:
+        connection.execute("UPDATE gateway_workspace_registry SET active=(workspace_id=?)", (other_alias,))
+        connection.commit()
     records = [
-        write_view_state("user-a", registered.target.workspace_id, "same-session"),
-        write_view_state("user-a", registered.target.workspace_id, "session:with:separators"),
-        write_view_state("user-b", registered.target.workspace_id, "same-session"),
-        write_view_state("user-b", other.workspace_id, "same-session"),
+        write_view_state("user-a", LOCAL_ALIAS, "same-session"),
+        write_view_state("user-a", LOCAL_ALIAS, "session:with:separators"),
+        write_view_state("user-b", LOCAL_ALIAS, "same-session"),
+        write_view_state("user-b", other_alias, "same-session"),
     ]
-    records.sort(key=lambda row: (row.user_id, row.workspace_id, row.session_id))
-    before = _dump(registered.store.path)
-    original_views = _view_rows(registered.store.path)
-    assert original_views == [astuple(record) for record in records]
+    records.sort(key=lambda row: (row["user_id"], row["workspace_id"], row["session_id"]))
+    before = _dump(registered.database)
+    original_views = _view_rows(registered.database)
+    assert original_views == [tuple(record) for record in records]
     result = registered.preview()
     assert result.blockers == () and result.report()["mapping_complete"] is True
-    assert result.report()["references"] == [{
+    references = result.report()["references"]
+    assert isinstance(references, list)
+    assert [item for item in references if item["source"] == "user_view_state.workspace_id"] == [{
         "source": "user_view_state.workspace_id",
-        "record_id": json.dumps((record.user_id, record.workspace_id, record.session_id), separators=(",", ":")),
-        "legacy_workspace_id": record.workspace_id, "gateway_id": registered.gateway_id,
-        "workspace_id": other_id if record.workspace_id == other_id else registered.target.backend_workspace_id,
+        "record_id": json.dumps((record["user_id"], record["workspace_id"], record["session_id"]), separators=(",", ":")),
+        "legacy_workspace_id": record["workspace_id"], "gateway_id": registered.gateway_id,
+        "workspace_id": _workspace_id(registered, record["workspace_id"]),
     } for record in records]
-    assert _view_rows(registered.store.path) == original_views
-    assert _dump(registered.store.path) == before
+    assert _view_rows(registered.database) == original_views
+    assert _dump(registered.database) == before
     assert registered.preview() == result
 
 
 @pytest.mark.parametrize("reference_kind", ["unknown_key", "display_name", "backend_uuid"])
 def test_user_view_unknown_reference_blocks_without_inferring_owner_or_changing_rows(
-    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    registered: LegacyGateway, write_view_state: Callable[[str, str, str], sqlite3.Row],
     reference_kind: str,
 ) -> None:
-    assert registered.target.backend_workspace_id is not None
+    assert _workspace_id(registered) is not None
     workspace_id = {
-        "unknown_key": "gw_unregistered", "display_name": registered.target.name,
-        "backend_uuid": registered.target.backend_workspace_id,
+        "unknown_key": "gw_unregistered", "display_name": "工作区 0",
+        "backend_uuid": _workspace_id(registered),
     }[reference_kind]
-    write_view_state("user-a", registered.target.workspace_id, "known-session")
-    unknown = write_view_state("user-a", workspace_id, registered.target.workspace_id)
-    before, original_views = _dump(registered.store.path), _view_rows(registered.store.path)
+    write_view_state("user-a", LOCAL_ALIAS, "known-session")
+    unknown = write_view_state("user-a", workspace_id, LOCAL_ALIAS)
+    before, original_views = _dump(registered.database), _view_rows(registered.database)
     result = registered.preview()
     blocker, = result.blockers
-    record_id = json.dumps((unknown.user_id, unknown.workspace_id, unknown.session_id),
+    record_id = json.dumps((unknown["user_id"], unknown["workspace_id"], unknown["session_id"]),
                            ensure_ascii=False, separators=(",", ":"))
     assert blocker.code == "unknown_user_view_workspace_reference"
     assert blocker.source == f"user_view_state:{record_id}" and workspace_id in blocker.detail
     assert result.report()["mapping_complete"] is False and result.report()["apply_available"] is False
-    reference, = result.references
-    assert reference.legacy_workspace_id == registered.target.workspace_id
-    assert _view_rows(registered.store.path) == original_views
-    assert _dump(registered.store.path) == before
+    reference, = [item for item in result.references if item.source == "user_view_state.workspace_id"]
+    assert reference.legacy_workspace_id == LOCAL_ALIAS
+    assert _view_rows(registered.database) == original_views
+    assert _dump(registered.database) == before
 
 
 def test_user_view_without_registry_preserves_orphan_and_does_not_create_identity(
-    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    registered: LegacyGateway, write_view_state: Callable[[str, str, str], sqlite3.Row],
 ) -> None:
-    write_view_state("user-a", registered.target.workspace_id, "orphan-session")
-    with closing(registered.store.connection()) as connection:
+    write_view_state("user-a", LOCAL_ALIAS, "orphan-session")
+    with closing(sqlite3.connect(registered.database)) as connection:
         connection.execute("DELETE FROM gateway_workspace_registry")
         connection.execute("DELETE FROM gateway_config WHERE config_key='workspace_registry_meta'")
         connection.execute("DELETE FROM registry_meta WHERE registry_key='workspace'")
+        connection.commit()
+    # 本用例只检查视图孤项，导航孤项由独立用例保留并验证。
+    (registered.root / "navigation/workspace-tree.json").unlink()
     identity = registered.root / "identity.json"
     identity.unlink()
-    before, original_views = _dump(registered.store.path), _view_rows(registered.store.path)
+    before, original_views = _dump(registered.database), _view_rows(registered.database)
     result = registered.preview()
     blocker, = result.blockers
     assert blocker.code == "unknown_user_view_workspace_reference"
     assert result.mappings == result.references == () and result.gateway_id is None
     assert result.report()["mapping_complete"] is False
-    assert _view_rows(registered.store.path) == original_views and _dump(registered.store.path) == before
+    assert _view_rows(registered.database) == original_views and _dump(registered.database) == before
     assert not identity.exists()
 
 
 def test_user_view_ambiguous_registered_key_is_rejected_without_changing_original_rows(
-    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    registered: LegacyGateway, write_view_state: Callable[[str, str, str], sqlite3.Row],
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    write_view_state("user-a", registered.target.workspace_id, "retained-session")
-    with closing(registered.store.connection()) as connection:
+    write_view_state("user-a", LOCAL_ALIAS, "retained-session")
+    with closing(sqlite3.connect(registered.database)) as connection:
         row = connection.execute("SELECT payload_json,updated_at FROM gateway_workspace_registry").fetchone()
         payload = json.loads(row[0])
         payload["backend_workspace_id"] = str(uuid4())
@@ -590,20 +623,21 @@ def test_user_view_ambiguous_registered_key_is_rejected_without_changing_origina
             "INSERT INTO gateway_workspace_registry(workspace_id,position,active,payload_json,updated_at) VALUES(?,?,?,?,?)",
             ("gw_duplicate_row", 1, 0, json.dumps(payload), row[1]),
         )
-    before, original_views = _dump(registered.store.path), _view_rows(registered.store.path)
+        connection.commit()
+    before, original_views = _dump(registered.database), _view_rows(registered.database)
     with pytest.raises(SystemExit) as error:
         _cli(monkeypatch)
     assert error.value.code == 1
     report = json.loads(capsys.readouterr().out)
     assert report["read_only"] is True and report["error"] == "Gateway registry 工作区别名重复"
-    assert _view_rows(registered.store.path) == original_views and _dump(registered.store.path) == before
+    assert _view_rows(registered.database) == original_views and _dump(registered.database) == before
 
 
 def test_user_view_and_registry_are_read_from_one_snapshot(
-    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    registered: LegacyGateway, write_view_state: Callable[[str, str, str], sqlite3.Row],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_key = registered.target.workspace_id
+    original_key = LOCAL_ALIAS
     original = write_view_state("user-a", original_key, "snapshot-session")
     factory = sqlite3.connect
     read_connections: list[str] = []
@@ -614,12 +648,12 @@ def test_user_view_and_registry_are_read_from_one_snapshot(
         nonlocal published_dump
         if "FROM user_view_state" not in sql or published_dump is not None:
             return
-        with closing(factory(registered.store.path)) as writer:
+        with closing(factory(registered.database)) as writer:
             writer.execute("BEGIN IMMEDIATE")
-            target = json.loads(writer.execute("SELECT payload_json FROM gateway_workspace_registry").fetchone()[0])
+            target = json.loads(writer.execute("SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (original_key,)).fetchone()[0])
             target["workspace_id"] = replacement_key
-            writer.execute("UPDATE gateway_workspace_registry SET workspace_id=?,payload_json=?",
-                           (replacement_key, json.dumps(target)))
+            writer.execute("UPDATE gateway_workspace_registry SET workspace_id=?,payload_json=? WHERE workspace_id=?",
+                           (replacement_key, json.dumps(target), original_key))
             metadata = json.loads(writer.execute(
                 "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'"
             ).fetchone()[0])
@@ -645,26 +679,31 @@ def test_user_view_and_registry_are_read_from_one_snapshot(
         result = registered.preview()
     assert len(read_connections) == 1 and published_dump is not None
     assert result.blockers == ()
-    mapping, = result.mappings
-    reference, = result.references
+    mapping = result.mappings[0]
+    reference, = [item for item in result.references if item.source == "user_view_state.workspace_id"]
     assert mapping.legacy_workspace_id == reference.legacy_workspace_id == original_key
-    assert json.loads(reference.record_id) == [original.user_id, original.workspace_id, original.session_id]
-    assert _dump(registered.store.path) == published_dump
-    assert _view_rows(registered.store.path)[0][1:4] == (
-        replacement_key, original.session_id, "并发 writer 提交的新正文",
+    assert json.loads(reference.record_id) == [original["user_id"], original["workspace_id"], original["session_id"]]
+    assert _dump(registered.database) == published_dump
+    assert _view_rows(registered.database)[0][1:4] == (
+        replacement_key, original["session_id"], "并发 writer 提交的新正文",
     )
 
 
 @dataclass
 class GeneratorImportCase:
-    registered: Registration
+    registered: LegacyGateway
+    registry: GatewayWorkspaceRegistry
     client: httpx.AsyncClient
     api: GatewayResourceCatalogService
     sent: list[httpx.Request]
 
+    @property
+    def workspace_id(self) -> str:
+        return _workspace_id(self.registered)
+
     async def run(self, *, preview: bool = False) -> list[dict[str, str]]:
         return await import_session_generators(
-            root=self.registered.root, registry=self.registered.registry, api=self.api,
+            root=self.registered.root, registry=self.registry, api=self.api,
             http_client=self.client, gateway_id=self.registered.gateway_id,
             request_id="req_identity_generator_preflight", preview=preview,
         )
@@ -676,8 +715,13 @@ class GeneratorImportCase:
 
 
 @pytest.fixture
-async def generator_case(registered: Registration) -> AsyncIterator[GeneratorImportCase]:
-    root, workspace_id = registered.root, registered.target.workspace_id
+async def generator_case(registered: LegacyGateway, current_state: GatewayStateStore) -> AsyncIterator[GeneratorImportCase]:
+    root, workspace_id = registered.root, _workspace_id(registered)
+    registry = GatewayWorkspaceRegistry(storage_path=current_state.path.parent / "workspaces.json",
+                                        state_store=current_state, gateway_id=registered.gateway_id)
+    registry.upsert(WorkspaceTarget(gateway_id=registered.gateway_id, workspace_id=workspace_id,
+                                   name="当前原生工作区", root_path=str(registered.directory / "workspace-0"),
+                                   backend_url="http://127.0.0.1:49999", connection_kind="local"))
     created = datetime(2026, 10, 27, tzinfo=UTC).isoformat()
     files = {
         "generators/gen_old.json": {
@@ -704,14 +748,17 @@ async def generator_case(registered: Registration) -> AsyncIterator[GeneratorImp
     def receive(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         payload = json.loads(request.content)
-        assert payload["workspace_ids"] == {workspace_id: registered.target.backend_workspace_id}
-        assert request.headers["X-BoxTeam-Workspace-Id"] == registered.target.backend_workspace_id
+        assert payload["workspace_ids"] == {workspace_id: _workspace_id(registered)}
+        assert request.headers["X-BoxTeam-Workspace-Id"] == _workspace_id(registered)
         return httpx.Response(200, json={"data": {"task_id": payload["task_id"]}})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(receive)) as client:
-        yield GeneratorImportCase(registered, client, GatewayResourceCatalogService(
-            registry=registered.registry, http_client=client,
-        ), sent)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(receive)) as client:
+            yield GeneratorImportCase(registered, registry, client, GatewayResourceCatalogService(
+                registry=registry, http_client=client,
+            ), sent)
+    finally:
+        registry.close()
 
 
 def _generator_files(root: Path) -> dict[str, tuple[bytes, int, int]]:
@@ -726,7 +773,7 @@ def test_generator_cli_preflight_never_imports_or_changes_active_sources(
     generator_case: GeneratorImportCase, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     registered = generator_case.registered
-    before, database = _generator_files(registered.root), _dump(registered.store.path)
+    before, database = _generator_files(registered.root), _dump(registered.database)
 
     def reject_import(*_args: object, **_kwargs: object) -> None:
         pytest.fail("身份预检不能自动导入 Generator")
@@ -738,12 +785,12 @@ def test_generator_cli_preflight_never_imports_or_changes_active_sources(
     report = json.loads(capsys.readouterr().out)
     assert report["generator_imports"] == [{
         "source": "generators/gen_old.json", "task_id": "gen_old",
-        "legacy_workspace_id": registered.target.workspace_id, "source_hash": None,
+        "legacy_workspace_id": generator_case.workspace_id, "source_hash": None,
         "status": "pending", "receipt_received": False, "remaining_sources": [],
     }]
     assert [item["code"] for item in report["blockers"]] == ["unsettled_generator_import"]
     assert report["mapping_complete"] is report["apply_available"] is False
-    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert _generator_files(registered.root) == before and _dump(registered.database) == database
     assert generator_case.sent == [] and not (registered.root / "migration-backups").exists()
 
 
@@ -780,7 +827,7 @@ async def test_generator_cli_distinguishes_frozen_receipts_and_retirement_withou
         patch.setattr(generator_import_owner, "atomic_write_bytes", write)
         installed, = await case.run()
     assert installed["status"] == ("imported" if phase == "retired" else "failed")
-    before, database, sent = _generator_files(registered.root), _dump(registered.store.path), len(case.sent)
+    before, database, sent = _generator_files(registered.root), _dump(registered.database), len(case.sent)
     if phase == "retired":
         _cli(monkeypatch)
     else:
@@ -800,8 +847,8 @@ async def test_generator_cli_distinguishes_frozen_receipts_and_retirement_withou
         assert record["status"] == ("imported" if phase == "retired" else "pending")
         assert bool(record["remaining_sources"]) is (phase != "retired")
     assert report["mapping_complete"] is (phase == "retired")
-    assert report["apply_available"] is False
-    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert report["apply_available"] is (phase == "retired")
+    assert _generator_files(registered.root) == before and _dump(registered.database) == database
     assert len(case.sent) == sent
     # 显式重入负责结算；身份预检既不重发，也不退休任何原件。
     receipt_before = (case.backup / "receipt.json").read_bytes() if phase in {"retiring", "retired"} else None
@@ -861,7 +908,7 @@ async def test_generator_cli_rejects_conflicting_frozen_input_and_receipts_witho
         path = {"snapshot_missing": snapshot_path, "receipt_missing": receipt_path,
                 "unreceipted_retirement": registered.root / "generators/gen_old.json"}[damage]
         path.unlink()
-    before, database, sent = _generator_files(registered.root), _dump(registered.store.path), len(case.sent)
+    before, database, sent = _generator_files(registered.root), _dump(registered.database), len(case.sent)
     with pytest.raises(SystemExit) as error:
         _cli(monkeypatch)
     assert error.value.code == 1
@@ -873,7 +920,7 @@ async def test_generator_cli_rejects_conflicting_frozen_input_and_receipts_witho
     failed_preview, = await case.run(preview=True)
     failed_import, = await case.run()
     assert failed_preview["status"] == failed_import["status"] == "failed"
-    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert _generator_files(registered.root) == before and _dump(registered.database) == database
     assert len(case.sent) == sent
 
 
@@ -885,20 +932,24 @@ async def test_generator_preflight_without_registry_keeps_exact_history_and_neve
     if retired:
         result, = await case.run()
         assert result["status"] == "imported"
-    with closing(registered.store.connection()) as connection:
+    with closing(sqlite3.connect(registered.database)) as connection:
         connection.execute("DELETE FROM gateway_workspace_registry")
         connection.execute("DELETE FROM gateway_config WHERE config_key='workspace_registry_meta'")
         connection.execute("DELETE FROM registry_meta WHERE registry_key='workspace'")
+        connection.execute("DELETE FROM user_view_state")
+        connection.commit()
+    # Generator 历史与 registry 缺失独立验证，不混入其它导航／视图孤项。
+    (registered.root / "navigation/workspace-tree.json").unlink()
     identity = registered.root / "identity.json"
     identity.unlink()
-    before, database, sent = _generator_files(registered.root), _dump(registered.store.path), len(case.sent)
+    before, database, sent = _generator_files(registered.root), _dump(registered.database), len(case.sent)
     preview = registered.preview()
     record, = preview.generator_imports
     assert record.status == ("imported" if retired else "pending")
-    assert record.legacy_workspace_id == registered.target.workspace_id
+    assert record.legacy_workspace_id == case.workspace_id
     assert [item.code for item in preview.blockers] == ([] if retired else ["unsettled_generator_import"])
     assert preview.gateway_id is preview.registry_source is None and preview.mappings == ()
-    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert _generator_files(registered.root) == before and _dump(registered.database) == database
     assert len(case.sent) == sent and not identity.exists()
 
 
@@ -927,9 +978,12 @@ async def test_unsealed_generator_backup_blocks_changed_hash_and_all_unsettled_i
     if change == "source_bytes":
         definition.write_bytes(original_definition + b" \n")
     elif change == "workspace_mapping":
-        registered.target = registered.registry.upsert(replace(
-            registered.target, backend_workspace_id=str(uuid4()),
-        ))
+        # UUID 已是唯一身份；移除原 owner 后只能登记另一真实 UUID，不能重绑旧 alias。
+        case.registry.remove((registered.gateway_id, case.workspace_id))
+        case.registry.upsert(WorkspaceTarget(gateway_id=registered.gateway_id,
+            workspace_id=_workspace_id(registered, "gw_local_1"), name="替换后的原生工作区",
+            root_path=str(registered.directory / "workspace-1"), backend_url="http://127.0.0.1:49998",
+            connection_kind="local"))
     elif change == "archive_bytes":
         (unsealed / "generators/gen_old.json").write_bytes(original_definition + b" \n")
     else:
@@ -938,7 +992,7 @@ async def test_unsealed_generator_backup_blocks_changed_hash_and_all_unsettled_i
     fresh = json.loads(original_definition)
     fresh["generator_id"] = "gen_fresh"
     (definition.parent / "gen_fresh.json").write_text(json.dumps(fresh), encoding="utf-8")
-    before, database = _generator_files(registered.root), _dump(registered.store.path)
+    before, database = _generator_files(registered.root), _dump(registered.database)
     results = await case.run(preview=preview)
     observed = {
         "accepted": [item for item in results if item["status"] != "failed"],
@@ -948,4 +1002,4 @@ async def test_unsealed_generator_backup_blocks_changed_hash_and_all_unsettled_i
         "receipts": sorted(path.relative_to(pending).as_posix() for path in pending.glob("*/receipt.json")),
     }
     assert observed == {"accepted": [], "post_count": 0, "backups": [unsealed.name], "snapshots": [], "receipts": []}
-    assert _generator_files(registered.root) == before and _dump(registered.store.path) == database
+    assert _generator_files(registered.root) == before and _dump(registered.database) == database

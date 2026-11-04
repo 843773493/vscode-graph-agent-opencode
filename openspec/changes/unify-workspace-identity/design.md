@@ -65,6 +65,10 @@ registry 的工作区键为 `(gateway_id, workspace_id)`；本地工作区可由
 
 迁移覆盖 registry 主外键与 metadata、root binding、`managed_backends` 成员、活动选择、导航／Generator／user_view_state 和客户端 serializer／缓存。共享 Backend 的根数据只更新唯一 binding，不复制进成员合同。客户端可通过同一显式迁移结果导入恢复引用；无法确认的旧项明确报告，不能重新打开到当前工作区。迁移材料不在普通 workspace DTO 中长期暴露。
 
+服务停止后运行 `migrate-workspace-identity`，沿已有备份、CAS 与启动屏障发布；远端通过 `--verify-remote` 先核验，`--restore` 只恢复同批原件。发布完成后才导出客户端恢复材料，`migration_id` 为标准 UUID。浏览器共享数据库可能包含多个登记 Gateway 的旧分区，显式导入入口允许一次选择多份材料，并按原登记来源在同一队列事务中转换；缺少来源材料时保留整批及高水位，不先升版或派发。恢复材料仅在维护操作中使用，不成为普通请求的别名表。
+
+多连接合并为同一资源后，若旧导航节点或用户视图发生冲突，不任意选择一个值覆盖其它记录。导航重复 owner 沿现有唯一节点校验明确阻塞并保留原件；用户视图仅在完整记录等价时去重，否则要求先解决冲突。
+
 有效资源 URI 和 canonical owner 已经使用正确 UUID 的记录保持原值；不全库字符串替换、不重写历史请求与 hash。仅实际改变 SQLite 结构时提升该库 schema 版本；纯值与引用迁移使用明确的数据迁移版本，不把 SQL 文件抽离当作前置。
 
 替代方案是运行时维护旧别名查询或清空所有客户端恢复状态。前者继续双轨，后者丢失用户状态，因此均不采用。

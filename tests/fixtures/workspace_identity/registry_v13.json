@@ -1,0 +1,64 @@
+{
+  "source_commit": "bf0f2e1d9d037efcb0210c458fa157fb4d54a27a",
+  "parameterized_field": "root_path 中的 __TEST_ROOT__ 绑定测试工作区，其他记录由旧 owner 原样生成",
+  "gateway_identity": {
+    "gateway_id": "gateway_feb50d8ad9eae9739350777549eeae12"
+  },
+  "workspaces": {
+    "gw_local_0": {
+      "workspace_id": "6b67f566-61c5-4848-921d-f546e59b1e07",
+      "identity": {
+        "workspace_id": "6b67f566-61c5-4848-921d-f546e59b1e07"
+      }
+    },
+    "gw_local_1": {
+      "workspace_id": "9c559036-31d2-48b3-bf29-50f34af43a54",
+      "identity": {
+        "workspace_id": "9c559036-31d2-48b3-bf29-50f34af43a54"
+      }
+    },
+    "gw_local_2": {
+      "workspace_id": "79588e63-9d63-4ffe-9ff0-405b054ec7ea",
+      "identity": {
+        "workspace_id": "79588e63-9d63-4ffe-9ff0-405b054ec7ea"
+      }
+    }
+  },
+  "navigation": {
+    "schema_version": 1,
+    "nodes": [
+      {
+        "node_id": "gwn_01a1a69eec6a7681aaee8599cd4a3c8a",
+        "kind": "workspace_ref",
+        "name": "工作区 0",
+        "parent_node_id": null,
+        "workspace_id": "gw_local_0",
+        "position": 0
+      },
+      {
+        "node_id": "gwn_01a1a69eec6a7681aaee85affb8ebc81",
+        "kind": "workspace_ref",
+        "name": "工作区 1",
+        "parent_node_id": null,
+        "workspace_id": "gw_local_1",
+        "position": 1
+      },
+      {
+        "node_id": "gwn_01a1a69eec6a7681aaee85b9e67d59f1",
+        "kind": "workspace_ref",
+        "name": "工作区 2",
+        "parent_node_id": null,
+        "workspace_id": "gw_local_2",
+        "position": 2
+      },
+      {
+        "node_id": "gwn_01a1a69eec6c7e8298acf2cdf95ce011",
+        "kind": "workspace_folder",
+        "name": "保留节点",
+        "parent_node_id": null,
+        "workspace_id": null,
+        "position": 3
+      }
+    ]
+  }
+}

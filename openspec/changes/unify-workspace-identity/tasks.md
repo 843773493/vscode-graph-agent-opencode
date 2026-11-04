@@ -30,13 +30,13 @@
 
 - [ ] 5.1 迁齐共享 owner、Gateway 请求、工作区选择、目录／搜索 scope、缓存键及相关客户端运行面，删除路由 ID 到 Backend UUID 的转换函数和调用方。
 - [ ] 5.2 迁齐编辑器 serializer、活动选择、导航／Generator 与用户视图态的持久引用；按 Gateway 归属保存同一 UUID。
-- [ ] 5.3 接入显式迁移恢复材料，准确升级旧客户端引用；无法确认的项逐项报告并保留可重试信息，不切到当前工作区或清空有效状态。
+- [x] 5.3 接入显式迁移恢复材料，准确升级旧客户端引用；无法确认的项逐项报告并保留可重试信息，不切到当前工作区或清空有效状态。
 - [ ] 5.4 运行受影响客户端真实类型检查及 Workbench 构建，以真实 Gateway 和隔离浏览器验证两工作区切换、远程选择、文件打开、搜索及重载恢复。
 
 ## 6. 存量迁移与单链路收尾
 
-- [ ] 6.1 实现只读预览与显式可恢复迁移，核验完整映射、owner、引用和未结算状态；仅按实际结构变化提升 schema，离线或歧义时保留原记录并阻塞发布。
-- [ ] 6.2 原子迁移 registry／metadata、root binding、managed_backends、活动选择、目录／Generator 和 user_view_state；保留有效 URI、canonical 正文、历史 hash 及 Session／Thread 身份。
+- [x] 6.1 实现只读预览与显式可恢复迁移，核验完整映射、owner、引用和未结算状态；仅按实际结构变化提升 schema，离线或歧义时保留原记录并阻塞发布。
+- [x] 6.2 原子迁移 registry／metadata、root binding、managed_backends、活动选择、目录／Generator 和 user_view_state；保留有效 URI、canonical 正文、历史 hash 及 Session／Thread 身份。
 - [ ] 6.3 用受支持旧版本完整输入验证成功、重入、冲突、远端离线、写入中断恢复和维护窗口回退，检查迁移后真实重启与客户端恢复，不手工补齐产品应生成的关联。
 - [ ] 6.4 迁齐后物理删除旧别名生成器、重复字段、换算接口、死代码和旧协议分支；完成全仓消费者核对、相关静态分析及定向回归，保留准确命令、源码版本与原始结果。所有测试使用既有矩阵或进程外超时／内存保护。
 
@@ -97,3 +97,11 @@
 - 主组 235 passed；间接导入补查发现旧单测 fixture 使用 Mock registry，已迁为真实 registry，登记与旧迁移输入分目录，离线用原 owner 移除登记，原备份／顺序／丢应答断言均保留，7 passed。Ruff 全部通过；修改文件 Pyright 与完整 HEAD archive 比较为 73／76 项存量诊断，新增零、消除三项，导入测试单独为零。独立只读复核确认查询和间接消费链；准确命令、源码指纹、原始失败与最终结果见 `out/tests/temp/target_query_headers_20261104/artifacts/verification.json`。
 - 两个真实 Gateway＋两个真实 Backend 经产品入口创建独有会话、注册远端并发现 owner；相同 UUID 按目标分别读取独有会话，客户端伪造 sender 被覆盖，A→B 为 target=B／sender=A，B→Backend 剥离 target／sender=B；错误、空和歧义目标不进入下游，不改变 active，request_id 全链一致。最终精确源码运行 1 passed／51.65s、退出 0，16 份源码首尾指纹一致；新测试 Ruff／Python 3.12 Pyright 均通过。原混合源码窗口运行另存，不作最终版本证据。
 - 实网测试只替换 SSH 执行为原 pairing CLI 的隔离本机执行、隧道为 loopback URL；注册、凭据解析、HTTP 发现／投影／路由仍是真实链路。已登记 `integration-target-gateway-routing`（180 秒／4GiB），原 runner 列表校验通过，业务通过来自受相同保护的直接 pytest。原件见 `out/tests/temp/target_gateway_network_20261104/artifacts/verification.json`，正式产物在 `out/tests/integration/gateway/test_target_gateway_routing/`。本轮不代表真实 SSH／跨机、UI、辅助服务网络或 4.4 完整迁移验收，2.2／4.3／4.4 仍未勾选。
+
+
+### 2026-11-04：5.3／6.1／6.2 显式维护与客户端恢复
+
+- `migrate-workspace-identity` 消费完整旧 registry 13／SQLite 18 输入，沿唯一备份、CAS 与启动屏障发布 schema 19、registry 14 和导航 2。迁齐活动选择、根归属、共享组、远端连接关系及用户视图；相同来源多连接合并，跨 Gateway 同 UUID 隔离，导航／视图冲突保全原件并拒绝。继续及回退只用原冻结计划，新写入或备份变化拒绝覆盖。已结算 Generator 冻结正文／回执保留，未结算输入继续阻塞。
+- 发布完成后导出标准 UUID 的恢复材料；工作台显式入口可一次选择多个 Gateway 的材料，逐项恢复展示记录、编辑器及同事务队列，保留 Blob、操作身份、unknown 回执、顺序和独存高水位。缺来源、歧义、写入中断或旧窗口阻塞均保留原件，不增加运行时别名表。
+- 维护／中断／回退／来源冲突 14 项通过，原生身份 ASGI 5 项通过，预检与 Generator／远端核验 82 项通过；另以认证 HTTP MockTransport 贯通真实 CLI 核验、发布、导出与生产 registry 重开。原日志维护相关 62 项通过。准确命令、原始输出和指纹见 `out/tests/temp/identity_convergence_20261104/artifacts/` 及 `out/tests/temp/identity_client_recovery_20261104/artifacts/`，不是实机 SSH 证明。
+- 客户端恢复 10 项／85 断言、受影响原测试 41 项通过；实际 sourceTransform 类型检查及完整 79 扩展 Workbench 构建退出 0，真实 CLI 材料已由客户端 parser 消费。最终新增原件前缀为 `identity-multi-gateway-client-final-1793797585131750584`、`identity-multi-gateway-types-1793797600886220974`、`identity-multi-gateway-build-1793797718841380477`、`identity-real-cli-client-contract-1793797639022454499`。独立 Web tsconfig 的既有测试类型／lib 问题未改环境；尚无本切片浏览器重载、真实远端及 Windows 完整验收，5.4、6.3 与归档保持未完成。

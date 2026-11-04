@@ -28,6 +28,7 @@ from app.gateway.federation import (
     start_remote_gateway_tunnel,
 )
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_ids
+from app.schemas.gateway_control import WorkspaceNavigationNodeDTO
 from configs.diagnostics import diagnostic_error
 
 
@@ -97,9 +98,7 @@ class WorkspaceIdentityPreview:
             "blockers": [asdict(item) for item in self.blockers],
             "references": [asdict(item) for item in self.references],
             "generator_imports": [asdict(item) for item in self.generator_imports],
-            # TODO(unify-workspace-identity 6.1/6.2)：迁齐其余引用并实现可恢复原子发布后才能提供 apply。
-            "apply_available": False,
-            "remaining_checks": ["persistent_reference_migration", "client_recovery_material", "recoverable_atomic_publish"],
+            "apply_available": self.registry_source is not None and not self.blockers and all(item.verified for item in self.mappings),
         }
 
 
@@ -235,22 +234,32 @@ def _navigation_references(
     root: Path, mappings: tuple[WorkspaceIdentityMapping, ...],
 ) -> tuple[tuple[WorkspaceIdentityReference, ...], tuple[IdentityMigrationBlocker, ...]]:
     source = root / "navigation/workspace-tree.json"
-    store = WorkspaceNavigationStore(storage_path=source)
     by_alias = {item.legacy_workspace_id: item for item in mappings}
     try:
-        nodes = store.read_nodes()
-        store.validate_nodes(nodes, set(by_alias))
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        payload = _registry_file(source)
+        if payload is None:
+            return (), ()
+        if type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
+            raise ValueError("身份迁移只接受 Gateway 导航格式 1")
+        raw_nodes = _objects(payload, "nodes")
+        nodes = []
+        references = []
+        for raw in raw_nodes:
+            record = dict(raw)
+            alias = record.pop("workspace_id", None)
+            if record.get("kind") == "workspace_ref":
+                if not isinstance(alias, str) or alias not in by_alias:
+                    raise ValueError(f"导航引用未登记的工作区: {alias}")
+                mapping = by_alias[alias]
+                record["workspace"] = {"gateway_id": mapping.gateway_id, "workspace_id": mapping.workspace_id}
+                references.append(WorkspaceIdentityReference(
+                    "navigation/workspace-tree.json", _text(record, "node_id"), alias,
+                    mapping.gateway_id, mapping.workspace_id,
+                ))
+            nodes.append(WorkspaceNavigationNodeDTO.model_validate(record))
+        WorkspaceNavigationStore.validate_nodes(nodes, {(item.gateway_id, item.workspace_id) for item in mappings})
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
         return (), (IdentityMigrationBlocker("invalid_navigation_reference", str(source), str(error)),)
-    references = []
-    for node in nodes:
-        if node.kind == "workspace_ref":
-            assert node.workspace_id is not None
-            mapping = by_alias[node.workspace_id]
-            references.append(WorkspaceIdentityReference(
-                "navigation/workspace-tree.json", node.node_id, node.workspace_id,
-                mapping.gateway_id, mapping.workspace_id,
-            ))
     return tuple(references), ()
 
 
@@ -430,12 +439,6 @@ async def verify_remote_workspace_identities(
                 by_route = {str(item["workspace_id"]): item for item in items}
                 if len(by_route) != len(items):
                     raise ValueError("远端原生工作区路由重复，无法确认来源")
-                owners: dict[str, str] = {}
-                for route, item in by_route.items():
-                    workspace_id = str(item["backend_workspace_id"])
-                    if workspace_id in owners:
-                        raise ValueError("远端同一 UUID 对应多个原生工作区登记")
-                    owners[workspace_id] = route
             except BaseException as failure:
                 try:
                     runtime.close()
@@ -451,13 +454,11 @@ async def verify_remote_workspace_identities(
                     f"远端来源核验失败，保留原登记；{diagnostic_error(error, stage=f'remote_identity_{stage}')}",
                 ))
             continue
-        for alias, route in probe.workspace_routes:
+        for alias, _ in probe.workspace_routes:
             mapping = mappings[alias]
-            item = by_route.get(route)
+            item = by_route.get(mapping.workspace_id)
             if item is None:
-                blockers.append(IdentityMigrationBlocker("remote_workspace_missing", alias, "原远端路由未出现在已认证原生工作区列表中"))
-            elif item["backend_workspace_id"] != mapping.workspace_id:
-                blockers.append(IdentityMigrationBlocker("remote_workspace_identity_mismatch", alias, "远端原路由 UUID 与冻结登记不同，不能重新绑定来源"))
+                blockers.append(IdentityMigrationBlocker("remote_workspace_missing", alias, "原工作区 UUID 未出现在已核验身份的原生 Gateway 列表中，不能重新绑定来源"))
             else:
                 mappings[alias] = replace(mapping, verified=True)
     # 缺失原路由等不完整记录不能因其它连接核验通过而变成已确认。

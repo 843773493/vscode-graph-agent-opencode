@@ -6,7 +6,8 @@
 
 - 可以维护 `configs.boxteam` 配置安装入口、静态模板和配置 schema。
 - 身份预检的 `--verify-remote` 仅通过冻结连接记录、已有联邦凭据及短期 SSH 隧道读取原生 manifest／工作区列表；列表显式复用原 owner 实时只读核验身份文件并检查 registry revision，旧服务没有核验确认时阻塞。不自动配对或启动目标，诊断日志沿传入 home 的共享日志合同写入。连接解析复用唯一记录合同；默认预览仍离线。
-- `workspace_identity_migration.py` 提供 `preview-workspace-identity` 只读登记身份、导航、用户视图工作区引用及旧 Generator 导入预检；用户视图主键与登记共用 SQLite 只读快照，只按原登记 key 关联。通过既有身份 owner 核验已登记根，复用导航和显式 Generator 导入 owner 的读取与校验；未结算导入阻塞切换，已退休备份和回执保留，不自动导入、重写原 hash 或访问工作区业务数据。不创建身份、同步导航、启动目标或发布迁移。完整引用迁移与原子发布仍按对应 OpenSpec 推进，预览结果不能用于普通请求的旧别名换算。
+- `workspace_identity_migration.py` 提供 `preview-workspace-identity` 只读登记身份、导航、用户视图工作区引用及旧 Generator 导入预检；用户视图主键与登记共用 SQLite 只读快照，只按原登记 key 关联。通过既有身份 owner 核验已登记根，复用导航和显式 Generator 导入 owner 的读取与校验；未结算导入阻塞切换，已退休备份和回执保留，不自动导入、重写原 hash 或访问工作区业务数据。不创建身份、同步导航或启动目标；预览映射不能用于普通请求的旧别名换算。
+- `migrate-workspace-identity` 在服务停止后显式迁移 registry 13／SQLite 18 与导航格式 1，复用原配置维护的进程互斥、完整备份、逐资产 CAS 和启动屏障；转换 registry／活动选择／共享组／导航／用户视图到唯一 Gateway＋工作区 UUID。远端先通过原认证联邦入口核验；继续和 `--restore` 使用原冻结计划，检测新写入后拒绝回退覆盖。客户端恢复材料仅在发布完成后导出，不放普通 API、不包含凭据；生产入口不双读旧身份。
 - 可以维护 `configs/tests/workspace/` 下由 E2E fixture 复制到隔离工作区的完整 Workspace 测试配置，以及 `configs/tests/model_stream/` 下的 model-stream transport 选择配置。
 - 可以维护完整的 `gateway_inline.jsonc`、`workspace_inline.jsonc` 内置默认配置，及 `gateway_dev.jsonc`、`workspace_dev.jsonc` 开发模板。
 

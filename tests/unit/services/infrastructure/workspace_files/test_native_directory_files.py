@@ -308,10 +308,9 @@ async def native_case(
         shutil.rmtree(gateway_root)
     state = GatewayStateStore(path=workspace.parent / "gateway/gateway.sqlite")
     registry_path = workspace.parent / "gateway/registry.json"
-    registry = GatewayWorkspaceRegistry(storage_path=registry_path, state_store=state)
-    registry.upsert(WorkspaceTarget(workspace_id="local-files", name="测试文件 owner",
-        root_path=str(workspace), backend_url="http://127.0.0.1:45124", connection_kind="local",
-        backend_workspace_id=workspace_id))
+    registry = GatewayWorkspaceRegistry(storage_path=registry_path, state_store=state, gateway_id=GATEWAY_ID)
+    registry.upsert(WorkspaceTarget(gateway_id=GATEWAY_ID, workspace_id=workspace_id, name="测试文件 owner",
+        root_path=str(workspace), backend_url="http://127.0.0.1:45124", connection_kind="local"))
     gateway = FastAPI()
     gateway.add_middleware(TraceMiddleware)
     gateway.include_router(native_directories.router)
@@ -490,7 +489,7 @@ async def test_native_directory_http_edit_shortcut_and_operation_restart(native_
         case.registry.close()
         case.state.close()
         case.state = GatewayStateStore(path=case.workspace.parent / "gateway/gateway.sqlite")
-        case.registry = GatewayWorkspaceRegistry(storage_path=case.registry_path, state_store=case.state)
+        case.registry = GatewayWorkspaceRegistry(storage_path=case.registry_path, state_store=case.state, gateway_id=GATEWAY_ID)
         case.gateway.state.gateway_state = case.state
         assert case.registry.targets() == registered
         case.service = case.make_service()

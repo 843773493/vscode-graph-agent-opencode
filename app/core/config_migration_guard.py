@@ -18,8 +18,9 @@ def require_settled_config_migration(path: Path) -> None:
     journal_path = Path(pointer["journal"])
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
     if journal["state"] not in {"completed", "restored"}:
+        action = journal.get("action", "migrate-runtime-config")
         raise RuntimeError(
-            "运行时配置迁移尚未完成，禁止读取部分迁移状态；停止相关服务后执行 "
-            "uv run python -m configs.boxteam migrate-runtime-config 继续，"
+            "控制面迁移尚未完成，禁止读取部分迁移状态；停止相关服务后执行 "
+            f"uv run python -m configs.boxteam {action} 继续，"
             "或加 --restore 恢复原件。"
         )

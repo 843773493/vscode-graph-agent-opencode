@@ -1,4 +1,5 @@
 import type { SessionCatalogOperationReceipt } from "../../api/session/sessionCatalogOperations";
+import { requireEmptyIdentityUpgrade, type IdentityUpgrade } from "../workspaceIdentityMigration/indexedDb";
 import {
   applyCatalogOutboxOperationReceipt,
   catalogOutboxPartitionKey,
@@ -35,7 +36,7 @@ export interface CatalogOutboxPersistencePort {
 export const CATALOG_OUTBOX_DATABASE_NAME = "boxteam-session-catalog-outbox";
 export const CATALOG_OUTBOX_STORE_NAME = "operations";
 const CATALOG_OUTBOX_SEQUENCE_STORE_NAME = "partition-sequences";
-const CATALOG_OUTBOX_SCHEMA_VERSION = 2;
+const CATALOG_OUTBOX_SCHEMA_VERSION = 3;
 const OPERATION_ID_INDEX = "partition_operation_id";
 
 interface CatalogOutboxSequenceRecord {
@@ -73,15 +74,21 @@ function transactionDone(transaction: IDBTransaction, context: string): Promise<
   });
 }
 
-function configureSchema(request: IDBOpenDBRequest): void {
+function configureSchema(request: IDBOpenDBRequest, upgrade: IdentityUpgrade | undefined, fail: (error: Error) => void, abandoned: () => boolean): void {
   request.onupgradeneeded = (event) => {
     const database = request.result;
     const transaction = request.transaction;
     if (!transaction) throw new Error("IndexedDB schema upgrade 缺少 versionchange transaction");
+    if (abandoned()) { transaction.abort(); return; }
 
     if (event.oldVersion > 0 && event.oldVersion < 2) {
-      // v1 仅是未发布的开发结构，升级时清空其中的 pending，避免旧序号与新高水位并存。
-      database.deleteObjectStore(CATALOG_OUTBOX_STORE_NAME);
+      fail(new Error("不支持的目录 outbox v1，原记录已保留，不能清空旧命令"));
+      transaction.abort();
+      return;
+    }
+    if (event.oldVersion === 2) {
+      if (upgrade) upgrade(transaction);
+      else requireEmptyIdentityUpgrade(transaction, [CATALOG_OUTBOX_STORE_NAME, CATALOG_OUTBOX_SEQUENCE_STORE_NAME], fail);
     }
     const operations = database.objectStoreNames.contains(CATALOG_OUTBOX_STORE_NAME)
       ? transaction.objectStore(CATALOG_OUTBOX_STORE_NAME)
@@ -104,20 +111,26 @@ function configureSchema(request: IDBOpenDBRequest): void {
         keyPath: "partition_key",
       });
     }
+    database.createObjectStore("identity-recovery", { keyPath: "migration_id" });
   };
 }
 
-export function openCatalogOutboxDatabase(): Promise<IDBDatabase> {
+export function openCatalogOutboxDatabase(upgrade?: IdentityUpgrade): Promise<IDBDatabase> {
   const factory = requireIndexedDb();
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = factory.open(CATALOG_OUTBOX_DATABASE_NAME, CATALOG_OUTBOX_SCHEMA_VERSION);
-    configureSchema(request);
+    let upgradeError: Error | undefined;
+    configureSchema(request, upgrade, error => { upgradeError = error; }, () => upgradeError !== undefined);
+    request.onblocked = () => {
+      upgradeError = new Error("会话目录队列身份升级被旧窗口阻塞，请关闭旧窗口后重试导入");
+      reject(upgradeError);
+    };
     request.onsuccess = () => {
       request.result.onversionchange = () => request.result.close();
       resolve(request.result);
     };
     request.onerror = () => reject(
-      new Error("打开会话目录 outbox 数据库失败: " + (request.error?.message ?? "未知错误")),
+      upgradeError ?? new Error("打开会话目录 outbox 数据库失败: " + (request.error?.message ?? "未知错误")),
     );
   });
 }

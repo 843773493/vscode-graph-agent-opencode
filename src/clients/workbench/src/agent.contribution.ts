@@ -7,6 +7,7 @@ import { ViewPaneContainer } from '../upstream/src/vs/workbench/browser/parts/vi
 import { Codicon } from '../upstream/src/vs/base/common/codicons.js';
 import { WorkspacePanel } from './workspacePanel.js';
 import './workspacePanelState.js';
+import './workspaceIdentityRecovery.js';
 import './search/searchService.js';
 
 const views = Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry);

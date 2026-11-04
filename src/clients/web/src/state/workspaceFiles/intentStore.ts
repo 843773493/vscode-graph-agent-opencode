@@ -4,6 +4,7 @@ import type {
   WorkspaceFileOperationReceipt,
 } from "../../types/backend";
 import type { WorkspaceUploadEntry } from "../../api/workspaceFilesystem";
+import { requireEmptyIdentityUpgrade, type IdentityUpgrade } from "../workspaceIdentityMigration/indexedDb";
 
 export interface FileIntentScope {
   gatewayId: string;
@@ -237,14 +238,14 @@ export class WorkspaceFileIntentStore {
 
 let opening: Promise<WorkspaceFileIntentStore> | null = null;
 
-export function openWorkspaceFileIntentStore(): Promise<WorkspaceFileIntentStore> {
-  if (opening) return opening;
+export function openWorkspaceFileIntentDatabase(upgrade?: IdentityUpgrade): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") return Promise.reject(new Error("缺少 IndexedDB，不能持久受理文件操作"));
-  opening = new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, 2);
     let upgradeError: Error | null = null;
     request.onupgradeneeded = (event) => {
       const transaction = request.transaction!;
+      if (upgradeError) { transaction.abort(); return; }
       if (event.oldVersion === 0) {
         const records = request.result.createObjectStore(RECORDS, { keyPath: ["scopeKey", "intent.client_operation_id"] });
         records.createIndex("scopeKey", "scopeKey");
@@ -253,23 +254,26 @@ export function openWorkspaceFileIntentStore(): Promise<WorkspaceFileIntentStore
         return;
       }
       const records = transaction.objectStore(RECORDS);
-      const count = records.count();
-      count.onsuccess = () => {
-        // TODO：旧 alias 意图需显式解析原 owner 后迁移；保留原库，不能借当前工作区改投。
-        if (count.result > 0) {
-          upgradeError = new Error("存在旧身份的未确认文件操作，原记录已保留；请先完成原 Gateway／UUID 归属迁移");
-          transaction.abort();
-          return;
-        }
-        records.deleteIndex("gatewayWorkspaceId");
-        records.createIndex("workspaceOwner", ["scope.gatewayId", "scope.workspaceId"]);
-      };
+      if (upgrade) upgrade(transaction);
+      else requireEmptyIdentityUpgrade(transaction, [RECORDS, SEQUENCES], error => { upgradeError = error; });
+      records.deleteIndex("gatewayWorkspaceId");
+      records.createIndex("workspaceOwner", ["scope.gatewayId", "scope.workspaceId"]);
     };
     request.onerror = () => { opening = null; reject(upgradeError ?? new Error(`打开文件意图存储失败: ${request.error?.message}`)); };
+    request.onblocked = () => {
+      upgradeError = new Error("文件意图身份升级被旧窗口阻塞，请关闭旧窗口后重试导入");
+      reject(upgradeError);
+    };
     request.onsuccess = () => {
       request.result.onversionchange = () => { request.result.close(); opening = null; };
-      resolve(new WorkspaceFileIntentStore(request.result));
+      resolve(request.result);
     };
   });
+}
+
+export function openWorkspaceFileIntentStore(): Promise<WorkspaceFileIntentStore> {
+  if (opening) return opening;
+  opening = openWorkspaceFileIntentDatabase().then(database => new WorkspaceFileIntentStore(database));
+  void opening.catch(() => { opening = null; });
   return opening;
 }

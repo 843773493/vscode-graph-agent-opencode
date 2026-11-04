@@ -110,9 +110,9 @@ export class ThreadSerializer implements IEditorSerializer {
   }
   deserialize(_instantiation: IInstantiationService, serialized: string): ThreadInput | UnavailableThreadInput {
     const data = JSON.parse(serialized) as StoredThread & { unavailable?: object; reason?: string; owner?: ThreadOwner };
-    // TODO：仅在一次展示格式迁移时识别无版本旧记录；缺少 Gateway 身份无法安全恢复。
+    // 缺少来源的旧记录保留原件；显式导入恢复材料也不能猜当前 Gateway。
     if (data.version === undefined && data.owner) return new UnavailableThreadInput(data,
-      '旧 Thread 记录缺少 Gateway 身份，无法自动恢复；请从会话导航重新打开，或关闭此记录。', data.owner.title);
+      '旧 Thread 记录尚未确认 Gateway 身份；可运行“导入工作区身份恢复材料”重试，或从会话导航重新打开。', data.owner.title);
     if (data.version !== 2) throw new Error(`不支持的 Thread 编辑器恢复版本：${String(data.version)}`);
     if (data.unavailable) return new UnavailableThreadInput(data.unavailable, data.reason ?? 'Thread 记录无法恢复', data.title);
     if (!data.target || Object.values(data.target).some(value => typeof value !== 'string' || !value.trim())

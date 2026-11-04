@@ -6,7 +6,6 @@ import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceI
 export async function readSessionView(port: number, workspaceId: string, sessionId: string, threadId?: string): Promise<SessionViewState | null> {
   const key = browserViewKey(await browserGatewayId(port), "session", workspaceId, sessionId, threadId ?? "main");
   const view = await readBrowserView<SessionViewState>(key);
-  // TODO：旧 IndexedDB 记录缺少完整 owner 时需显式恢复，不能借活动工作区补归属。
   if (view && gatewayWorkspaceKey(view) !== workspaceId) throw new Error("浏览器视图记录的 Gateway／UUID 归属不匹配");
   return view ?? null;
 }

@@ -6,9 +6,10 @@ import hashlib
 import json
 import shutil
 import sqlite3
+from collections.abc import Callable
 from contextlib import ExitStack, closing
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 from uuid import uuid4
 
 import portalocker
@@ -43,6 +44,7 @@ class MigrationAsset(TypedDict):
 
 
 class MigrationJournal(TypedDict):
+    action: NotRequired[str]
     state: str
     workspaces: list[str]
     assets: list[MigrationAsset]
@@ -191,6 +193,8 @@ def _prepare(
 
 def _publish(
     journal_path: Path, journal: MigrationJournal, connections: dict[Path, sqlite3.Connection], *, restore: bool,
+    database_digest: Callable[[sqlite3.Connection], str] = _database_digest,
+    replace_database: Callable[[sqlite3.Connection, sqlite3.Connection], None] = replace_configuration_rows,
 ) -> None:
     assets = journal["assets"]
     for path in [Path(path) for path in journal["guards"]] + [Path(asset["path"]) for asset in assets]:
@@ -198,7 +202,7 @@ def _publish(
     # 全部 CAS 通过后才允许写第一个资产；中断重放只接受原版或计划结果。
     for asset in assets:
         path = Path(str(asset["path"]))
-        observed = _database_digest(connections[path]) if asset["kind"] == "database" else _digest(path)
+        observed = database_digest(connections[path]) if asset["kind"] == "database" else _digest(path)
         if observed not in (asset["before_digest"], asset["after_digest"]):
             raise RuntimeError(f"迁移期间配置被外部修改，拒绝覆盖；请核对备份: {path}")
         for backup, expected_digest in ((Path(asset["before"]), asset["before_digest"]), (Path(asset["after"]), asset["after_digest"])):
@@ -206,7 +210,7 @@ def _publish(
                 continue
             if asset["kind"] == "database":
                 with closing(_connection(backup)) as source:
-                    fingerprint = _database_digest(source)
+                    fingerprint = database_digest(source)
             else:
                 fingerprint = _digest(backup)
             if fingerprint != expected_digest:
@@ -219,9 +223,9 @@ def _publish(
         expected_digest = asset["before_digest"] if restore else asset["after_digest"]
         if asset["kind"] == "database":
             connection = connections[path]
-            if _database_digest(connection) != expected_digest:
+            if database_digest(connection) != expected_digest:
                 with closing(_connection(content_path)) as source:
-                    replace_configuration_rows(connection, source)
+                    replace_database(connection, source)
                 connection.commit()
                 connection.execute("BEGIN IMMEDIATE")
         elif _digest(path) != expected_digest:

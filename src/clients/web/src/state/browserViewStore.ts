@@ -3,7 +3,7 @@ const DATABASE = "boxteam-browser-views";
 const STORE = "views";
 let database: Promise<IDBDatabase> | undefined;
 
-function openDatabase(): Promise<IDBDatabase> {
+export function openBrowserViewDatabase(): Promise<IDBDatabase> {
   if (!database) {
     database = new Promise((resolve, reject) => {
       const request = indexedDB.open(DATABASE, 1);
@@ -27,7 +27,7 @@ export function browserViewKey(gatewayId: string, kind: string, ...owner: string
 }
 
 export async function readBrowserView<T>(key: string): Promise<T | undefined> {
-  const db = await openDatabase();
+  const db = await openBrowserViewDatabase();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, "readonly");
     const request = transaction.objectStore(STORE).get(key) as IDBRequest<T | undefined>;
@@ -38,7 +38,7 @@ export async function readBrowserView<T>(key: string): Promise<T | undefined> {
 
 /** 读改写共用一个事务，多个 Tab／窗口更新不同字段时不会丢失彼此的修改。 */
 export async function updateBrowserView<T>(key: string, update: (current: T | undefined) => T | undefined): Promise<T | undefined> {
-  const db = await openDatabase();
+  const db = await openBrowserViewDatabase();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, "readwrite");
     const store = transaction.objectStore(STORE);
@@ -65,7 +65,7 @@ export async function updateBrowserViewCache<T extends { bytes: number; savedAt:
   key: string, indexKey: string, update: (current: T | undefined) => T | undefined,
   limits: { entries: number; bytes: number },
 ): Promise<void> {
-  const db = await openDatabase();
+  const db = await openBrowserViewDatabase();
   type Index = Record<string, { bytes: number; savedAt: number }>;
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE, "readwrite");

@@ -36,14 +36,14 @@ async def native_preflight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace_id = load_or_create_workspace_id(workspace)
-    load_or_create_gateway_id(root / "identity.json")
+    gateway_id = load_or_create_gateway_id(root / "identity.json")
     credential = FederationCredentialStore(storage_path=root / "credentials/federation.json").issue(
         connection_id="rgw_inbound", peer_gateway_id="gateway_" + "b" * 32,
     )
     with GatewayStateStore(path=root / "gateway.sqlite") as store:
         registry = GatewayWorkspaceRegistry(storage_path=root / "workspaces.json", state_store=store)
         registry.upsert(WorkspaceTarget(
-            workspace_id="gw_old_native", backend_workspace_id=workspace_id, name="保留名称",
+            gateway_id=gateway_id, workspace_id=workspace_id, name="保留名称",
             root_path=str(workspace), connection_kind="local", backend_url="http://127.0.0.1:49999",
         ))
         app = FastAPI()
@@ -68,7 +68,8 @@ async def test_explicit_inventory_proof_uses_real_identity_and_preserves_request
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["data"]["identities_verified"] is True
-    assert body["data"]["items"][0]["backend_workspace_id"] == state.workspace_id
+    assert body["data"]["items"][0]["workspace_id"] == state.workspace_id
+    assert body["data"]["gateway_id"] == state.registry.gateway_id
     assert body["request_id"] == response.headers["X-Request-ID"] == "req_native_identity"
     assert state.identity.read_bytes() == before
     assert state.registry.registry_revision == revision
@@ -95,7 +96,7 @@ async def test_changed_or_missing_native_identity_rejects_proof_without_initiali
     assert response.status_code == 500, response.text
     assert (None if not state.identity.exists() else state.identity.read_bytes()) == before
     assert state.registry.registry_revision == revision
-    assert state.registry.resolve("gw_old_native").backend_workspace_id == state.workspace_id
+    assert state.registry.resolve(state.workspace_id).workspace_id == state.workspace_id
 
 
 @pytest.mark.asyncio
@@ -107,7 +108,7 @@ async def test_registry_change_during_probe_cannot_label_new_inventory_verified(
 
     def changing(project_root: Path) -> None:
         validate(project_root)
-        state.registry.rename("gw_old_native", "核验期间修改")
+        state.registry.rename(state.workspace_id, "核验期间修改")
 
     monkeypatch.setattr(state.registry, "validate_local_root_bindings", changing)
     response = await state.client.get("/api/gateway/federation/workspaces?verify_identity=true")
