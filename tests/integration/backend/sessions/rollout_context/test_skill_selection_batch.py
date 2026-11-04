@@ -16,6 +16,7 @@ from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
+from app.services.infrastructure.rollout_context.checkpoint.durable import source_activation
 from app.services.infrastructure.rollout_context.runtime.context_sources import skill_catalog
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import ContextSourceOwnerKey
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import ContextSourceManager
@@ -76,6 +77,30 @@ async def test_prepare_restores_pending_skills_with_linear_name_work(
     restore = ContextSourceManager.restore_frozen_skill_selections
     normalize = skill_catalog._normalize_skill_name
     calls, active = [], []
+    seals, active_seals = [], []
+    apply_sources = source_activation.ContextSourceActivationMixin._apply_sealed_context_sources
+    from_row = source_activation._state_from_row
+
+    def observe_apply(context_store, connection, snapshot, *, previous):
+        call = {"skill_scans": 0, "state_decodes": 0}
+        seals.append(call)
+        active_seals.append(call)
+
+        def trace(sql):
+            if "FROM context_source_control_states " in sql and "AND source_kind='skill'" in sql:
+                call["skill_scans"] += 1
+
+        connection.set_trace_callback(trace)
+        try:
+            return apply_sources(context_store, connection, snapshot, previous=previous)
+        finally:
+            connection.set_trace_callback(None)
+            active_seals.pop()
+
+    def observe_row(row):
+        if active_seals:
+            active_seals[-1]["state_decodes"] += 1
+        return from_row(row)
 
     def observe_restore(context_sources, snapshot):
         call = {"skills": sum(state.source_kind == "skill" for state in context_sources._sources.values()), "normalizations": 0}
@@ -93,6 +118,8 @@ async def test_prepare_restores_pending_skills_with_linear_name_work(
 
     monkeypatch.setattr(ContextSourceManager, "restore_frozen_skill_selections", observe_restore)
     monkeypatch.setattr(skill_catalog, "_normalize_skill_name", observe_name)
+    monkeypatch.setattr(source_activation.ContextSourceActivationMixin, "_apply_sealed_context_sources", observe_apply)
+    monkeypatch.setattr(source_activation, "_state_from_row", observe_row)
     selected = prepare("skill-batch-selected")
     unchanged = prepare("skill-batch-unchanged")
     blocks = [block for frame in selected.seal_binding.prefix.state.frames if frame.source_protocol is not None
@@ -115,6 +142,12 @@ async def test_prepare_restores_pending_skills_with_linear_name_work(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     (context.artifacts_dir / f"skill-batch-{source_count}-{cold}.json").write_text(json.dumps(calls, indent=2), encoding="utf-8")
     print(f"skill selection work ({source_count} sources, cold={cold}): {calls}")
+    (context.artifacts_dir / f"skill-seal-{source_count}-{cold}.json").write_text(json.dumps(seals, indent=2), encoding="utf-8")
+    print(f"skill seal work ({source_count} sources, cold={cold}): {seals}")
     assert len(calls) == 2 and calls[0]["skills"] >= source_count
     assert calls[0]["normalizations"] <= 3 * calls[0]["skills"]
     assert calls[1]["normalizations"] == 0
+    # 同一事务只扫描一次 Skill sibling；各待提交行仍逐个读取并执行 CAS。
+    assert [seal["skill_scans"] for seal in seals] == [1, 0]
+    assert seals[0]["state_decodes"] == source_count + sum(state.source_kind == "skill" for state in before)
+    assert seals[1]["state_decodes"] == 0

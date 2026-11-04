@@ -274,6 +274,7 @@ class ContextSourceActivationMixin:
         for facet in TEAM_FACETS:
             _validate_activation_guidance(connection, snapshot, previous,
                                           resource_id=TEAM_RESOURCE_IDS[facet], source_id=TEAM_SOURCE_IDS[facet])
+        latest_skill_selections: dict[str, int] | None = None
         for source in binding.source_revisions:
             if (is_tool_definition_source(source.source_id)
                     or source.source_id in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}):
@@ -291,13 +292,25 @@ class ContextSourceActivationMixin:
             consumed_transition = binding.prefix.consumed_transition
             rebuilding_source = consumed_transition is not None and source.decision_id.startswith("source-rebuild:")
             if stored.source_kind == "skill":
-                siblings = connection.execute(
-                    f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
-                    "WHERE session_id=? AND thread_id=? AND source_kind='skill'",
-                    (snapshot.session_id, snapshot.thread_id),
-                ).fetchall()
-                if any(value.name.strip() == stored.name.strip() and value.selection_sequence > stored.selection_sequence
-                       for value in map(_state_from_row, siblings)):
+                name = stored.name.strip()
+                if latest_skill_selections is None:
+                    # 本事务只推进 applied/CAS，不修改名称和选择次序；首次需要时建索引，
+                    # 避免每个 Skill 重读并解析全部 sibling。无 Skill 回执时不查询。
+                    latest_skill_selections = {}
+                    siblings = connection.execute(
+                        f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                        "WHERE session_id=? AND thread_id=? AND source_kind='skill'",
+                        (snapshot.session_id, snapshot.thread_id),
+                    ).fetchall()
+                    for value in map(_state_from_row, siblings):
+                        sibling_name = value.name.strip()
+                        latest_skill_selections[sibling_name] = max(
+                            latest_skill_selections.get(sibling_name, 0), value.selection_sequence,
+                        )
+                        # 保留原首个冲突的短路：不先解析原本不会读取的后续损坏行。
+                        if sibling_name == name and value.selection_sequence > stored.selection_sequence:
+                            break
+                if latest_skill_selections.get(name, 0) > stored.selection_sequence:
                     raise ItemSchemaError("skill-selection-conflict: 待封存来源已被同名新选择取代")
                 if consumed_transition is not None and rebuilding_source and stored.selection_sequence > 0 and source.decision_id != (
                     f"source-rebuild:{consumed_transition.transition_id}:{source.source_id}:{stored.selection_sequence}"

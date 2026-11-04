@@ -10,6 +10,7 @@ import pytest
 
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import content_hash, sha256_jcs
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.identity.item_projection import ItemSourceManifest
 from app.domain.itemized.mutation_intents import (
     ApplySourceLifecycleDecision,
@@ -19,6 +20,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
+from app.services.infrastructure.rollout_context.checkpoint.durable import source_activation
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     CommittedContextSourceBatch,
     ContextSourceDescriptor,
@@ -129,6 +131,48 @@ def test_activation_is_applied_by_one_seal_without_source_mutation_intent(source
     assert applied.source_id == "src_a"
     assert applied.revision == batch.deltas[0].revision
     assert applied.previous_revision is None
+
+
+@pytest.mark.parametrize("conflict", ["first", "later", "before_corruption"])
+def test_skill_seal_rejects_superseded_selection_and_rolls_back_batch(
+    source_seal_case, monkeypatch, conflict,
+):
+    case = source_seal_case
+    events = []
+    manager = case.manager(lifecycle_event_sink=events.append)
+    for suffix in ("a", "b", "c", "z"):
+        _activate(manager, "src_" + suffix, suffix, "冻结正文 " + suffix)
+    before = case.saver.load_context_source_control_states(case.owner)
+    pending = manager.prepare_pending()
+    apply_sources = source_activation.ContextSourceActivationMixin._apply_sealed_context_sources
+    injected = False
+
+    def supersede(context_store, connection, snapshot, *, previous):
+        nonlocal injected
+        injected = True
+        target = "b" if conflict == "later" else "a"
+        # 保持 Python strip 的 Unicode 空白语义；同名较晚选择必须取代旧 pending。
+        connection.execute(
+            "UPDATE context_source_control_states SET name=?,selection_sequence=2 "
+            "WHERE session_id=? AND thread_id=? AND source_id='src_c'",
+            ("\u2003" + target + "\u2003", case.owner.session_id, case.owner.thread_id),
+        )
+        if conflict == "before_corruption":
+            connection.execute(
+                "UPDATE context_source_control_states SET name='' "
+                "WHERE session_id=? AND thread_id=? AND source_id='src_z'",
+                (case.owner.session_id, case.owner.thread_id),
+            )
+        return apply_sources(context_store, connection, snapshot, previous=previous)
+
+    monkeypatch.setattr(source_activation.ContextSourceActivationMixin, "_apply_sealed_context_sources", supersede)
+    with pytest.raises(ItemSchemaError, match="skill-selection-conflict: 待封存来源已被同名新选择取代"):
+        case.seal(manager)
+    assert injected
+    assert case.saver.load_context_source_control_states(case.owner) == before
+    assert manager.prepare_pending() == pending and events == []
+    with closing(case.saver._storage.storage._connect(case.owner.thread_id, session_id=case.owner.session_id)) as connection:
+        assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
 
 
 @pytest.mark.parametrize(
