@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -12,7 +13,12 @@ from app.core.env import get_project_root
 from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
-from app.gateway.config import GatewayConfig, load_gateway_config
+from app.gateway.config import (
+    ConfiguredRemoteGateway,
+    GatewayConfig,
+    load_gateway_config,
+    resolve_gateway_path,
+)
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import build_remote_gateway_connection_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceKey, WorkspaceTarget
@@ -76,6 +82,33 @@ def _default_workspace_root() -> Path:
         else get_user_workspace_root()
     )
     return root_path
+
+
+def _configured_remote_connections_unchanged(
+    registry: GatewayWorkspaceRegistry,
+    configured: dict[str, ConfiguredRemoteGateway],
+) -> bool:
+    persisted = {
+        connection.connection_id: connection
+        for connection in registry.remote_gateway_connections()
+        if connection.source_owner == "config"
+    }
+    if not configured or configured.keys() != persisted.keys():
+        return False
+    return all(
+        item.enabled and persisted[connection_id] == replace(
+            persisted[connection_id],
+            name=item.name or item.host,
+            host=item.host,
+            port=item.port,
+            username=item.username,
+            private_key_path=(str(resolve_gateway_path(item.private_key_path)) if item.private_key_path else None),
+            ssh_config_host=item.ssh_config_host,
+            remote_pair_command=item.remote_pair_command,
+            remote_gateway_port=item.remote_gateway_port,
+        )
+        for connection_id, item in configured.items()
+    )
 
 
 async def _restore_managed_local_runtimes(
@@ -262,37 +295,36 @@ async def _complete_registry_startup(
         keep_workspace_id=default_workspace_id,
     )
     configured_active_workspace: WorkspaceKey | None = None
-    await reconcile_configured_remote_gateways(
-        registry=registry,
-        configured_workspaces=resolved_gateway_config.workspaces,
-        log_dir=get_runtime_log_root(),
-        health_request_timeout_seconds=(
-            resolved_gateway_config.gateway_process_health_request_timeout_seconds
-        ),
-        health_poll_interval_seconds=(
-            resolved_gateway_config.gateway_process_health_poll_interval_seconds
-        ),
-    )
-    configured_connection_ids = {
-        item.connection_id
-        or build_remote_gateway_connection_id(
+    configured_connections = {
+        (item.connection_id or build_remote_gateway_connection_id(
             host=item.host,
             port=item.port,
             username=item.username,
             remote_gateway_port=item.remote_gateway_port,
-        )
+        )): item
         for item in resolved_gateway_config.workspaces
     }
-    configured_active_connection_ids = {
-        item.connection_id
-        or build_remote_gateway_connection_id(
-            host=item.host,
-            port=item.port,
-            username=item.username,
-            remote_gateway_port=item.remote_gateway_port,
+    # 普通冷启动复用原连接恢复链；候选与配置增删改仍须完整 batch 验证。
+    restore_configured_connections = (
+        not preserve_existing_managed_runtimes
+        and len(configured_connections) == len(resolved_gateway_config.workspaces)
+        and _configured_remote_connections_unchanged(registry, configured_connections)
+    )
+    if not restore_configured_connections:
+        await reconcile_configured_remote_gateways(
+            registry=registry,
+            configured_workspaces=resolved_gateway_config.workspaces,
+            log_dir=get_runtime_log_root(),
+            health_request_timeout_seconds=(
+                resolved_gateway_config.gateway_process_health_request_timeout_seconds
+            ),
+            health_poll_interval_seconds=(
+                resolved_gateway_config.gateway_process_health_poll_interval_seconds
+            ),
         )
-        for item in resolved_gateway_config.workspaces
-        if item.activate
+    configured_active_connection_ids = {
+        connection_id for connection_id, item in configured_connections.items()
+        if item.activate and not restore_configured_connections
     }
     for target in registry.targets():
         if set(target.remote_gateway_connection_ids) & configured_active_connection_ids:
@@ -300,7 +332,7 @@ async def _complete_registry_startup(
             break
 
     for connection in registry.remote_gateway_connections():
-        if connection.connection_id in configured_connection_ids:
+        if connection.connection_id in configured_connections and not restore_configured_connections:
             continue
         try:
             await reconnect_remote_gateway(

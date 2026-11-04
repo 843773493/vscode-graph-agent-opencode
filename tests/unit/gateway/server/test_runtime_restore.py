@@ -16,12 +16,18 @@ from app.core.workspace_identity import (
     load_or_create_workspace_id,
     workspace_identity_path,
 )
+from app.gateway import remote_gateway
 from app.gateway.auth import verify_gateway_token
-from app.gateway.config import GatewayConfig
+from app.gateway.config import (
+    ConfiguredRemoteGateway,
+    GatewayConfig,
+    resolve_gateway_path,
+)
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes import workspaces
+from app.gateway.runtime.consumer_protocol import GatewayRuntimeConsumerApplyError
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
@@ -174,6 +180,43 @@ def list_workspace_http():
         assert response.json()["request_id"] == response.headers["X-Request-ID"] == "restore-failure-01"
         return response
     return listed
+
+
+@pytest.fixture
+def configured_remote_restore_case(request: pytest.FixtureRequest, startup_case: StartupCase, persisted_targets):
+    persisted, _ = persisted_targets
+    configured = []
+    connections = []
+    projections: dict[str, tuple[WorkspaceTarget, ...]] = {}
+    for index, name in enumerate(("failed", "healthy"), start=1):
+        item = ConfiguredRemoteGateway(
+            connection_id=f"rgw_{name}", name=name, host=f"{name}.example.com",
+            username="developer", private_key_path=str(startup_case.gateway_root / "keys" / name),
+            ssh_config_host=name, remote_pair_command="boxteam gateway pair", activate=index == 1,
+        )
+        connection = RemoteGatewayConnection(
+            connection_id=item.connection_id, name=name, host=item.host, port=item.port,
+            username=item.username, private_key_path=str(resolve_gateway_path(item.private_key_path)),
+            ssh_config_host=item.ssh_config_host, remote_gateway_port=item.remote_gateway_port,
+            remote_pair_command=item.remote_pair_command, remote_gateway_id="gateway_" + str(index) * 32,
+            protocol_version=FEDERATION_PROTOCOL_VERSION,
+            source_owner="manual" if getattr(request, "param", "config") == "manual" else "config",
+            remote_config_event_cursor=index * 7,
+        )
+        targets = tuple(WorkspaceTarget(
+            gateway_id=connection.remote_gateway_id,
+            workspace_id=f"00000000-0000-4000-8000-{member + 1:012d}",
+            name=f"{name}-{member}", root_path=None,
+            backend_url=f"http://127.0.0.1:{43000 + index}", connection_kind="remote_gateway",
+            owner="remote_projection", remote_gateway_connection_ids=(connection.connection_id,),
+            remote_service_names=("workspace_api",),
+        ) for member in range(2 if index == 1 else 1))
+        persisted.apply_remote_projection_snapshot(connection=connection, projections=targets)
+        projections[connection.connection_id] = tuple(replace(persisted.resolve(target.key)) for target in targets)
+        configured.append(item)
+        connections.append(connection)
+    persisted.activate(projections[connections[0].connection_id][1].key)
+    return GatewayConfig(workspaces=tuple(configured)), tuple(connections), projections
 
 
 def test_default_backend_port_is_optional_and_validated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -368,6 +411,156 @@ async def test_gateway_remote_restore_persists_failure_facts_and_retries_origina
         assert all(restored.resolve(key).remote_gateway_connection_ids == (failed.connection_id,) for key in failed_keys)
         assert restored.resolve(healthy_target.key).connection_error is None
         restored.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore_state_store", [True], indirect=True)
+async def test_unchanged_configured_remote_cold_restore_keeps_offline_owner_and_active(
+    startup_case: StartupCase, configured_remote_restore_case, restore_state_store,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, list_workspace_http,
+) -> None:
+    config, connections, projections = configured_remote_restore_case
+    failed, healthy = connections
+    offline = httpx.ConnectError("configured peer offline: /private/remote-restore")
+    prepared: list[str] = []
+    attempts: list[str] = []
+    fail_restore = True
+
+    async def prepare(*, configured: ConfiguredRemoteGateway, **_options: object):
+        prepared.append(configured.connection_id)
+        raise offline
+
+    async def reconnect(*, registry: GatewayWorkspaceRegistry, connection_id: str, **_options: object):
+        attempts.append(connection_id)
+        if connection_id == failed.connection_id and fail_restore:
+            raise offline
+        targets = projections[connection_id]
+        registry.apply_remote_projection_snapshot(
+            connection=registry.remote_gateway_connection(connection_id), projections=targets,
+            runtime=WorkspaceRuntime(service_urls={"workspace_api": targets[0].backend_url}),
+        )
+        return targets
+
+    monkeypatch.setattr(remote_gateway, "_prepare_remote_gateway", prepare)
+    monkeypatch.setattr(bootstrap, "reconnect_remote_gateway", reconnect)
+    registry = await bootstrap.create_registry(gateway_config=config, state_store=restore_state_store)
+    expected = f"恢复远程 Gateway 失败: connection_id={failed.connection_id}: stage=remote_gateway_restore, error=ConnectError"
+    failed_targets = projections[failed.connection_id]
+    active = failed_targets[1].key
+    assert prepared == []
+    assert attempts == [failed.connection_id, healthy.connection_id]
+    assert registry.active_workspace == active
+    assert registry.remote_gateway_connection(failed.connection_id) == failed
+    assert any(record.exc_info and record.exc_info[1] is offline for record in caplog.records)
+    for target in failed_targets:
+        current = registry.resolve(target.key)
+        assert current.connection_error == expected
+        assert replace(current, connection_error=target.connection_error) == target
+    listed = await list_workspace_http(registry)
+    by_owner = {(item["gateway_id"], item["workspace_id"]): item for item in listed.json()["data"]["items"]}
+    assert listed.json()["data"]["active_workspace"] == {"gateway_id": active[0], "workspace_id": active[1]}
+    assert all(by_owner[target.key]["status"] == "offline" and by_owner[target.key]["connection_error"] == expected for target in failed_targets)
+    assert by_owner[projections[healthy.connection_id][0].key]["status"] == "ready"
+    assert "/private/remote-restore" not in listed.text
+    registry.close()
+    restore_state_store.close()
+    with GatewayStateStore(path=startup_case.gateway_root / "restore.sqlite") as cold_state:
+        cold = GatewayWorkspaceRegistry(storage_path=startup_case.gateway_root / "workspaces.json", state_store=cold_state)
+        assert cold.active_workspace == active
+        assert cold.remote_gateway_connection(failed.connection_id) == failed
+        for target in failed_targets:
+            current = cold.resolve(target.key)
+            assert current.connection_error == expected
+            assert replace(current, connection_error=target.connection_error) == target
+        cold.close()
+        fail_restore = False
+        restored = await bootstrap.create_registry(gateway_config=config, state_store=cold_state)
+        assert attempts == [failed.connection_id, healthy.connection_id] * 2
+        assert prepared == []
+        assert restored.active_workspace == active
+        assert restored.remote_gateway_connection(failed.connection_id) == failed
+        assert all(restored.resolve(target.key) == target for target in failed_targets)
+        assert all(restored.resolve_service_url(target.key, "workspace_api") == target.backend_url for target in failed_targets)
+        restored.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore_state_store", [True], indirect=True)
+@pytest.mark.parametrize("boundary", [
+    "candidate", "new", "removed", "duplicate", "name", "host", "port", "username",
+    "private_key_path", "ssh_config_host", "remote_pair_command", "remote_gateway_port",
+])
+async def test_changed_configured_remote_or_candidate_still_requires_atomic_reconciliation(
+    configured_remote_restore_case, restore_state_store, monkeypatch: pytest.MonkeyPatch, boundary: str,
+) -> None:
+    config, connections, projections = configured_remote_restore_case
+    first, *remaining = config.workspaces
+    if boundary == "new":
+        config = replace(config, workspaces=(*config.workspaces, replace(first, connection_id="rgw_new")))
+    elif boundary == "removed":
+        config = replace(config, workspaces=(first,))
+    elif boundary == "duplicate":
+        config = replace(config, workspaces=(*config.workspaces, first))
+    elif boundary != "candidate":
+        value = getattr(first, boundary)
+        changed = value + 1 if isinstance(value, int) else str(value) + "-changed"
+        config = replace(config, workspaces=(replace(first, **{boundary: changed}), *remaining))
+    offline = httpx.ConnectError("configured peer offline")
+    prepared: list[str] = []
+    restored: list[str] = []
+
+    async def prepare(*, configured: ConfiguredRemoteGateway, **_options: object):
+        prepared.append(configured.connection_id)
+        raise offline
+
+    async def reconnect(*, connection_id: str, **_options: object):
+        restored.append(connection_id)
+        raise AssertionError("新配置或候选不能走持久连接离线恢复")
+
+    monkeypatch.setattr(remote_gateway, "_prepare_remote_gateway", prepare)
+    monkeypatch.setattr(bootstrap, "reconnect_remote_gateway", reconnect)
+    if boundary == "duplicate":
+        with pytest.raises(ValueError, match="重复 connection_id"):
+            await bootstrap.create_registry(gateway_config=config, state_store=restore_state_store)
+        assert prepared == []
+    else:
+        with pytest.raises(GatewayRuntimeConsumerApplyError) as raised:
+            await bootstrap.create_registry(
+                gateway_config=config, state_store=restore_state_store,
+                preserve_existing_managed_runtimes=boundary == "candidate",
+            )
+        assert raised.value.original_error is offline
+        assert raised.value.__cause__ is offline
+        assert raised.value.recovery_required is False
+        assert prepared == [first.connection_id]
+    assert restored == []
+    cold = GatewayWorkspaceRegistry(storage_path=Path(restore_state_store.path).with_name("workspaces.json"), state_store=restore_state_store)
+    assert cold.active_workspace == projections[connections[0].connection_id][1].key
+    assert cold.remote_gateway_connections() == connections
+    assert all(cold.resolve(target.key) == target for targets in projections.values() for target in targets)
+    cold.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore_state_store", [True], indirect=True)
+@pytest.mark.parametrize("configured_remote_restore_case", ["manual"], indirect=True)
+async def test_configured_remote_with_manual_connection_requires_reconciliation(
+    configured_remote_restore_case, restore_state_store, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _, _ = configured_remote_restore_case
+    offline = httpx.ConnectError("configured peer offline")
+
+    async def prepare(**_options: object):
+        raise offline
+
+    async def reconnect(**_options: object):
+        raise AssertionError("不同来源的同 ID 连接不能走普通冷恢复")
+
+    monkeypatch.setattr(remote_gateway, "_prepare_remote_gateway", prepare)
+    monkeypatch.setattr(bootstrap, "reconnect_remote_gateway", reconnect)
+    with pytest.raises(GatewayRuntimeConsumerApplyError) as raised:
+        await bootstrap.create_registry(gateway_config=config, state_store=restore_state_store)
+    assert raised.value.original_error is offline
 
 
 @pytest.mark.asyncio

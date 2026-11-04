@@ -24,7 +24,7 @@
 - [x] 4.1 将 manifest、projection 和远程代理迁为来源 `(gateway_id, workspace_id)`，移除投影 ID 生成及远程 UUID 换算，保留 cursor、CAS 与 lease。
 - [x] 4.2 迁齐连接配置对账和工作区关联，同一来源多连接只保留一个资源身份，删除连接不误删其他关联；保留 generation 排空和独立凭据边界。
 - [x] 4.3 接通独立目标 Gateway 载体，迁齐远程生命周期、目录和 Generator 引用，不改变发送方身份头、管理授权或有界联邦规则。
-- [ ] 4.4 通过两个真实 Gateway 验证同 UUID 不同归属、多连接同来源、连接更新／离线、快照恢复及不兼容协议拒绝，检查请求 UUID 不经换算。
+- [x] 4.4 通过两个真实 Gateway 验证同 UUID 不同归属、多连接同来源、连接更新／离线、快照恢复及不兼容协议拒绝，检查请求 UUID 不经换算。
 
 ## 5. 客户端引用与持久恢复
 
@@ -243,3 +243,9 @@
 
 - 完整归档受支持旧提交 `bf0f2e1d9d037efcb0210c458fa157fb4d54a27a`，使用该版真实 Gateway、Backend、HTTP 与现有 model_stream 生成 Session、main Thread、消息、封存请求、关联 Turn 的用户视图和导航文件夹；停止旧服务后确认 registry 13／SQLite 18。当前维护 CLI 完成迁移及两次幂等重入，再经两轮当前真实服务核原 UUID、导航、视图、消息、canonical 字节和 request_hash；未直接补写业务或恢复关联。
 - 单项 1 passed／226.44 秒、退出 0；此前维护／冲突／离线 proof／中断／回退负例及客户端恢复 parser 的证据沿上方 5.3／6.1／6.2 复用，负例的明确替身边界不变。准确命令、完整源码归档来源、指纹及原始输出见 `out/tests/temp/identity_migration_restart_20261104/artifacts/verification-1793832689136496966.json`，正式原件为 `run-45cea3b955a7`。产品通过后仅加强测试命令的中断回收，业务顶层 AST 未变；超时、中断和正常命令三项短探针确认整棵子进程树回收，最终 Ruff／Pyright 退出 0。新矩阵入口保留 420 秒／4GiB；未重新运行矩阵，不将列表校验记作业务通过。本项不代表真实 SSH、Windows 或浏览器 5.4 验收。
+
+### 2026-11-04：4.4 双 Gateway 更新、协议拒绝与离线冷恢复收口
+
+- 配置连接的普通冷启动在来源及全部连接参数未变时复用原恢复循环；离线连接保留原 owner、UUID、快照、活动选择和可见错误。新增／移除／参数变化、重复 ID、manual 来源及候选启动仍走原严格 batch，不新增第二恢复链。真实反例在 B 离线时导致 A 冷启退出 3，修复后同一完整场景通过。
+- 双真实 Gateway／Backend 完成两次候选先晋升后停止旧 PID 的交接、端口更新及旧 token 401、协议不兼容拒绝且原 lease／cursor 保留、B 离线后 A 冷重启及原 owner 重连，所有远端读取均核本机 Backend 零命中。第七轮 1 passed／266.03 秒（含独占锁等待）、退出 0，154 项依赖首尾指纹一致；原件为 `run-1a193ec1000b`。协议拒绝只注入正式发现端点的旧版本声明，不是完整旧版服务；SSH pairing／隧道沿原明确本机装具，不代表真实 SSH、Windows 或 Launcher 自动协调。
+- 启动恢复全文件 74 passed，关联批次 34 passed／3 个旧健康 fixture 构造失败，迁齐完整 owner 后仅补该文件 3 passed；manual 来源测试准确限定为必须进入 reconcile，再补单项通过。最终 Ruff／Pyright／编译退出 0，证据索引为 `out/tests/temp/identity_remote_recovery_current/artifacts/verification-index-1793832974572841795.json`。同 UUID 不同 Gateway 与同源多连接验收沿上方已通过实网场景复用；旧路由套件排除新长场景并单列 360 秒／4GiB 恢复套件，列表校验通过，未重复长跑。
