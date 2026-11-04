@@ -805,3 +805,11 @@
 - 真实 FolderConfiguration 经唯一文件投影验证非本地配置读取、更新、删除后空设置及另一 Gateway 同路径的独立 key／正文；type／key／cacheHome 隔离、失败重试和原转换／查询回归合计 15 项／162 断言通过。本地 workbench 设置仍沿原 needsCaching 排除。计数装具只延迟／拒绝目录准备，内存 Provider 不代替 IndexedDB 验收；消费者把缺失设置缓存为 `{}` 的既有合同保持。
 - 正式 Workbench、真实 Gateway／后端与 Chromium 的元数据页面通过（1 passed／97.57 秒）：原设置编辑器连续三轮保存后直接刷新，正文及实际字体均恢复，受控关闭期间日志写入仍可提交，页面错误为空，无预写存储。该页面的模型回放未发生模型调用。23 份实际转换源码的完整类型检查、ESM、OpenSpec strict 和差异检查通过；同批正式构建通过／40.95 秒，复用 Web 的唯一构建管线。
 - 准确命令、源码与构建指纹、旧产品失败及测试归因：`out/tests/temp/configuration_cache_20261104/artifacts/verification.json`；最终页面原件：`out/tests/integration/clients/web/test_workspace_metadata_bootstrap/runs/run-b028fb3526ef/nodes/node-8954dc22de03/artifacts/workspace-metadata-browser.json`。本批未重跑 Vite 变体、打包 Electron、真实 profile 切换及全部配置诊断／关闭竞态，18.4 保持未勾选。
+
+
+### 2026-11-04：Linux 便携 Electron 只读模型正常退出恢复（18.2、13.2 部分）
+
+- 同一正式 ASAR 产物通过真实 Agent 的 write_file 建立创建历史，再从原会话资源打开 Diff；前后侧一次读取、分屏零新增读取、只读来源及 Diff 均通过。BrowserWindow 正常关闭、同 profile 重启后，两组中的来源／Diff 由原 serializer 和 Provider 恢复，目标变更集和来源各读取一次；独立 profile 没有对应 Tab、模型或读取。保留原聊天、README CAS 保存、草稿、历史先显后同步及图片200／304零正文验收。
+- 统一 model_stream 提供两次模型交互，后端原记录核验 Session／Thread／调用身份、stream、prompt 与 write_file 工具结果配对，实际文件正文及权威历史核验通过；关键历史未预写。真实 Linux 原生业务 1 passed／101.74 秒，pageErrors、存储与代理错误均为空，后端正常关闭。首轮将面板 changesets/all 请求误计入目标Diff，改为冻结 changesetPath 精确断言后通过；全部原件保留。
+- 正式矩阵成功构建并核归档 SHA256；只改测试计数后，重核打包器完整 sourceFingerprint 及归档摘要复用相同便携包，新 Gateway／Backend／profile／工作区及所有原生步骤重新执行。ESM、Ruff 通过；Python 类型的一条 raw object 索引诊断与 HEAD 基线相同，无新增。本批仅改测试，复用产品相同的23份转换源码类型检查和正式Web构建，未重复无变化构建。
+- 完整命令、源码／包指纹、复用装具原文、失败归因、原始输出和退出码：`out/tests/temp/native_readonly_20261104/artifacts/verification.json`；最终原生原件：`out/tests/integration/clients/electron/test_packaged_workbench/runs/run-f5cf036c07f6/nodes/node-95670caeaac1/artifacts/native-result.json`。Windows／macOS、异常退出及其余历史身份／版本场景未验证，18.2、13.2 保持未勾选；该证据不覆盖 Webview 缓存。

@@ -118,6 +118,7 @@ async def test_packaged_electron_chat_files_and_restart_cache(
     runtime = context.runtime_root_for_node(request.node.nodeid)
     artifacts = context.artifacts_dir
     workspace = Path(integration_workspace_root_path)
+    (workspace / "AGENTS.md").write_text("NATIVE_READONLY_AGENT_SPEC\n", encoding="utf-8")
     (workspace / "native-cache.png").write_bytes(base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
     ))
@@ -148,12 +149,20 @@ async def test_packaged_electron_chat_files_and_restart_cache(
             navigation = await client.get("/api/gateway/workspaces")
             assert navigation.status_code == 200, navigation.text
             route_id = navigation.json()["data"]["active_workspace_id"]
-        interaction = build_cassette(
-            asset_id="packaged-electron-chat", model="big-pickle",
+        history_content = "".join(f"NATIVE_HISTORY_LINE_{index:02d}\n" for index in range(1, 21))
+        replies = [
+            ({"tool_calls": [{"index": 0, "id": "native-write-history", "type": "function", "function": {
+                "name": "write_file", "arguments": json.dumps({"file_path": "native-history.txt", "content": history_content,
+                    "expected_version": "absent"}),
+            }}]}, "tool_calls"),
+            ({"content": ANSWER}, "stop"),
+        ]
+        interactions = [build_cassette(
+            asset_id=f"packaged-electron-chat-{index}", model="big-pickle",
             url="https://opencode.ai/zen/v1/chat/completions",
-            frames=chat_completion_frames(response_id="chatcmpl-packaged-electron", model="big-pickle",
-                deltas=({"role": "assistant", "content": ANSWER},), finish_reason="stop"),
-        ).raw["interactions"][0]
+            frames=chat_completion_frames(response_id=f"chatcmpl-packaged-electron-{index}", model="big-pickle",
+                deltas=({"role": "assistant"}, delta), finish_reason=reason),
+        ).raw["interactions"][0] for index, (delta, reason) in enumerate(replies)]
         result_path = artifacts / "native-result.json"
         environment = os.environ | replay.environment | {
             **browser_temporary,
@@ -163,7 +172,7 @@ async def test_packaged_electron_chat_files_and_restart_cache(
             "BOXTEAM_ELECTRON_PROXY_PORT": str(ports.port(21)),
             "BOXTEAM_ELECTRON_RUNTIME": str(runtime),
             "BOXTEAM_ELECTRON_ARTIFACTS": str(artifacts),
-            "BOXTEAM_ELECTRON_INTERACTION": json.dumps(interaction),
+            "BOXTEAM_ELECTRON_INTERACTIONS": json.dumps(interactions),
         }
         # TODO：Bun 1.3.11 的 Playwright inspector WebSocket 握手不完成，修复后再统一驱动。
         command = ["xvfb-run", "-a", node, "tests/integration/clients/electron/packaged_workbench.mjs"]
@@ -177,18 +186,22 @@ async def test_packaged_electron_chat_files_and_restart_cache(
         assert result["proxyErrors"] == []
         for name in ("packagedAsar", "noRendererNode", "nativeClose", "stableOrigin",
                      "cacheBeforeSync", "cacheReadOnly", "liveAfterSync", "profileIsolation", "fileSaved",
-                     "imageRevalidated", "imageCacheSurvivesRestart", "imageProfileIsolation"):
+                     "imageRevalidated", "imageCacheSurvivesRestart", "imageProfileIsolation",
+                     "readonlyDiffShared", "readonlyDocumentsRestored", "readonlyProfileIsolation"):
             assert result["checks"][name] is True, name
         owner = result["owner"]
         assert owner["workspace_id"] == backend.workspace_id
-        assert len(result["modelCallIds"]) == 1
-        recordings = list(replay.artifacts.glob("*.json"))
-        assert [path.stem for path in recordings] == result["modelCallIds"]
-        recorded = json.loads(recordings[0].read_text())
-        assert recorded["identity"] == {"session_id": owner["session_id"], "thread_id": owner["thread_id"],
-                                        "model_call_id": result["modelCallIds"][0]}
-        assert recorded["request"]["stream"] is True
-        assert PROMPT in json.dumps(recorded["request"]["messages"])
+        assert len(result["modelCallIds"]) == 2
+        recordings = {path.stem: json.loads(path.read_text()) for path in replay.artifacts.glob("*.json")}
+        assert set(recordings) == set(result["modelCallIds"])
+        for call_id in result["modelCallIds"]:
+            recorded = recordings[call_id]
+            assert recorded["identity"] == {"session_id": owner["session_id"], "thread_id": owner["thread_id"], "model_call_id": call_id}
+            assert recorded["request"]["stream"] is True
+            assert PROMPT in json.dumps(recorded["request"]["messages"])
+        final_messages = recordings[result["modelCallIds"][1]]["request"]["messages"]
+        assert any(message["role"] == "tool" and message["tool_call_id"] == "native-write-history" for message in final_messages)
+        assert (workspace / "native-history.txt").read_text() == history_content
         assert result["file"]["sha256"] == hashlib.sha256((workspace / "README.md").read_bytes()).hexdigest()
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS | {
             "X-BoxTeam-Workspace-Id": route_id,

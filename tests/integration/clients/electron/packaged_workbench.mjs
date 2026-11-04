@@ -11,6 +11,7 @@ import { _electron, expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 import { testControl } from '../../../support/e2e_control/browser_client.mjs';
 import { observeImageCache } from './image_cache.mjs';
+import { readonlyDocumentProbe } from './readonly_documents.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -33,6 +34,7 @@ const pageErrors = [], consoleErrors = [], proxyErrors = [], heldRequests = [], 
 const storageErrors = () => consoleErrors.filter(entry => /IndexedDB|database.*closed/i.test(entry.text));
 const checks = {};
 const imageReads = [];
+const readonlyReads = [], readonlyDocuments = readonlyDocumentProbe(readonlyReads, checks);
 let owner, app, page, delay = false, release = () => {}, failure;
 let gate = Promise.resolve();
 let proxyOrigin;
@@ -132,6 +134,7 @@ async function launch(home) {
   launches.push(launchRecord);
   app = instance;
   page = await instance.firstWindow();
+  readonlyDocuments.observe(page);
   page.setDefaultTimeout(30_000);
   page.on('pageerror', error => pageErrors.push(String(error)));
   page.on('console', message => {
@@ -190,8 +193,8 @@ try {
   // 与正式 Web Composer 初始化同为 30 秒；新 profile 还需完成模型目录读取。
   await expect(thread.getByTestId('composer-input')).toBeVisible({ timeout: 30_000 });
   const modelCallIds = await testControl({ action: 'plan_model', session_id: owner.session_id,
-    thread_id: owner.thread_id, interactions: [JSON.parse(required('BOXTEAM_ELECTRON_INTERACTION'))] });
-  assert.equal(modelCallIds.length, 1);
+    thread_id: owner.thread_id, interactions: JSON.parse(required('BOXTEAM_ELECTRON_INTERACTIONS')) });
+  assert.equal(modelCallIds.length, 2);
   await thread.getByTestId('composer-input').fill(prompt);
   const messagePath = `/api/v1/sessions/${owner.session_id}/threads/${owner.thread_id}/messages`;
   const sent = page.waitForResponse(response => response.request().method() === 'POST'
@@ -256,6 +259,8 @@ try {
   const warmImage = await probeImage(imageOwner, 'warm', 304);
   assert.equal(warmImage.response.etag, coldImage.response.etag);
   checks.imageRevalidated = true;
+  await readonlyDocuments.prepare(page, { owner, gatewayId: imageOwner.gatewayId, routeId, turnId: accepted.turn_id });
+  thread = threadSurface(page);
   await thread.getByTestId('composer-input').fill(draft);
   await page.screenshot({ path: join(artifacts, 'native-synced.png') });
   await closeNative();
@@ -294,11 +299,13 @@ try {
   assert.equal(restartedImage.response.etag, coldImage.response.etag);
   assert.notEqual(restartedImage.response['x-request-id'], warmImage.response['x-request-id']);
   checks.imageCacheSurvivesRestart = true;
+  await readonlyDocuments.restored(page);
   await closeNative();
 
   const previousHeld = heldRequests.length;
   holdBootstrap();
   await launch(join(runtime, 'profile-b'));
+  await readonlyDocuments.isolated(page);
   probeImage = await observeImageCache(page, imageReads);
   await page.locator(`button[data-session-id="${owner.session_id}"]`).dblclick();
   thread = threadSurface(page);
@@ -320,7 +327,7 @@ try {
   assert.deepEqual(proxyErrors, []);
   await writeFile(join(artifacts, 'native-result.json'), JSON.stringify({ classification: 'Integration',
     checks, owner, modelCallIds, jobId: accepted.job_id, file, preferences, launches, heldRequests,
-    receipts, imageReads, pageErrors, consoleErrors, storageErrors: storageErrors(), proxyErrors }, null, 2));
+    receipts, imageReads, readonlyReads, pageErrors, consoleErrors, storageErrors: storageErrors(), proxyErrors }, null, 2));
 } catch (error) {
   failure = error;
 } finally {
@@ -333,7 +340,7 @@ try {
   }
   if (failure) await writeFile(join(artifacts, 'native-diagnostics.json'), JSON.stringify({ error: String(failure),
     pageUrl: page?.url(), checks, owner, launches, heldRequests, receipts, pageErrors,
-    consoleErrors, imageReads, storageErrors: storageErrors(), proxyErrors }, null, 2));
+    consoleErrors, imageReads, readonlyReads, storageErrors: storageErrors(), proxyErrors }, null, 2));
   try { await scope.close(); } catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, '便携 Electron 原生回归失败');
 }
