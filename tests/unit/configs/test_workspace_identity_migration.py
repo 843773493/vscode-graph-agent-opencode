@@ -6,9 +6,9 @@ import hashlib
 import json
 import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,10 +17,13 @@ import pytest
 from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
+from app.gateway.control.user_access import UserAccessContext, UserAccessService
+from app.gateway.control.view_state import UserViewStateRecord, UserViewStateStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.gateway_control import WorkspaceFolderCreateRequest
+from configs import workspace_identity_migration as migration
 from configs.cli import main
 from configs.workspace_identity_migration import preview_workspace_identity_migration
 from tests.harness.python.run_context import TestRunContext
@@ -69,6 +72,36 @@ def registered(
 def _dump(path: Path) -> str:
     with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as connection:
         return "\n".join(connection.iterdump())
+
+
+def _view_rows(path: Path) -> list[tuple[object, ...]]:
+    with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as connection:
+        return [tuple(row) for row in connection.execute(
+            "SELECT * FROM user_view_state ORDER BY user_id,workspace_id,session_id"
+        )]
+
+
+@pytest.fixture
+def write_view_state(registered: Registration) -> Callable[[str, str, str], UserViewStateRecord]:
+    access = UserAccessService(state=registered.store)
+    views = UserViewStateStore(state=registered.store)
+    contexts: dict[str, UserAccessContext] = {}
+    ordinal = 0
+
+    def write(user_id: str, workspace_id: str, session_id: str) -> UserViewStateRecord:
+        nonlocal ordinal
+        if user_id not in contexts:
+            access.create_user(display_name="保留用户显示名", user_id=user_id)
+            contexts[user_id] = access.acquire_user(user_id=user_id, client_label="identity-preview")
+        ordinal += 1
+        return views.put(
+            context=contexts[user_id], workspace_id=workspace_id, session_id=session_id,
+            turn_anchor=f"保留正文:{registered.target.workspace_id}", scroll_offset=128.5 + ordinal,
+            follow_latest=bool(ordinal % 2), projection_version=ordinal,
+            tool_details_expanded=not bool(ordinal % 2),
+        )
+
+    return write
 
 
 def _cli(monkeypatch: pytest.MonkeyPatch, *args: str) -> None:
@@ -217,6 +250,7 @@ def test_legacy_file_alone_uses_same_mapping_without_creating_sqlite(registered:
 ])
 def test_remote_uuid_keeps_gateway_and_connection_identity_and_requires_confirmation(
     registered: Registration, owner_ids: tuple[str, str],
+    write_view_state: Callable[[str, str, str], UserViewStateRecord],
 ) -> None:
     for index, owner in enumerate(owner_ids):
         connection_id = f"rgw_remote_{index}"
@@ -234,7 +268,11 @@ def test_remote_uuid_keeps_gateway_and_connection_identity_and_requires_confirma
         ))
     navigation_path = registered.root / "navigation/workspace-tree.json"
     WorkspaceNavigationStore(storage_path=navigation_path).list_tree(registered.registry.targets())
+    for target in registered.registry.targets():
+        write_view_state("remote-user", target.workspace_id, "same-session")
     original_navigation = navigation_path.read_bytes()
+    original_database = _dump(registered.store.path)
+    original_views = _view_rows(registered.store.path)
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["remote_identity_unverified", "remote_identity_unverified"]
     remote = result.mappings[1:]
@@ -242,10 +280,19 @@ def test_remote_uuid_keeps_gateway_and_connection_identity_and_requires_confirma
     assert {item.workspace_id for item in result.mappings} == {registered.target.backend_workspace_id}
     assert [item.connection_id for item in remote] == ["rgw_remote_0", "rgw_remote_1"]
     assert all(not item.verified for item in remote)
-    assert [item.gateway_id for item in result.references] == [registered.gateway_id, *owner_ids]
-    assert len({item.record_id for item in result.references}) == 3
+    navigation_refs = [item for item in result.references if item.source == "navigation/workspace-tree.json"]
+    view_refs = [item for item in result.references if item.source == "user_view_state.workspace_id"]
+    assert [item.gateway_id for item in navigation_refs] == [registered.gateway_id, *owner_ids]
+    assert len({item.record_id for item in navigation_refs}) == 3
+    assert [(json.loads(item.record_id), item.gateway_id) for item in view_refs] == [
+        (["remote-user", identity, "same-session"], owner)
+        for identity, owner in zip((registered.target.workspace_id, "gw_remote_0", "gw_remote_1"),
+                                   (registered.gateway_id, *owner_ids), strict=True)
+    ]
     assert {item.workspace_id for item in result.references} == {registered.target.backend_workspace_id}
     assert navigation_path.read_bytes() == original_navigation
+    assert _view_rows(registered.store.path) == original_views
+    assert _dump(registered.store.path) == original_database
     assert "sentinel" not in json.dumps(result.report())
 
 
@@ -430,3 +477,161 @@ def test_navigation_without_registry_is_not_discarded_or_given_new_identity(tmp_
     assert path.read_bytes() == original
     assert not (tmp_path / "identity.json").exists()
     assert not (tmp_path / "gateway.sqlite").exists()
+
+
+def test_user_view_preview_maps_complete_original_keys_and_keeps_every_view_field(
+    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+) -> None:
+    other_root = registered.workspace.with_name("other")
+    other_root.mkdir()
+    other_id = load_or_create_workspace_id(other_root)
+    other = registered.registry.upsert(WorkspaceTarget(
+        workspace_id=other_id, name=registered.target.workspace_id, root_path=str(other_root),
+        backend_url="http://127.0.0.1:49998", connection_kind="local", backend_workspace_id=other_id,
+    ))
+    registered.registry.activate(other.workspace_id)
+    records = [
+        write_view_state("user-a", registered.target.workspace_id, "same-session"),
+        write_view_state("user-a", registered.target.workspace_id, "session:with:separators"),
+        write_view_state("user-b", registered.target.workspace_id, "same-session"),
+        write_view_state("user-b", other.workspace_id, "same-session"),
+    ]
+    records.sort(key=lambda row: (row.user_id, row.workspace_id, row.session_id))
+    before = _dump(registered.store.path)
+    original_views = _view_rows(registered.store.path)
+    assert original_views == [astuple(record) for record in records]
+    result = registered.preview()
+    assert result.blockers == () and result.report()["mapping_complete"] is True
+    assert result.report()["references"] == [{
+        "source": "user_view_state.workspace_id",
+        "record_id": json.dumps((record.user_id, record.workspace_id, record.session_id), separators=(",", ":")),
+        "legacy_workspace_id": record.workspace_id, "gateway_id": registered.gateway_id,
+        "workspace_id": other_id if record.workspace_id == other_id else registered.target.backend_workspace_id,
+    } for record in records]
+    assert _view_rows(registered.store.path) == original_views
+    assert _dump(registered.store.path) == before
+    assert registered.preview() == result
+
+
+@pytest.mark.parametrize("reference_kind", ["unknown_key", "display_name", "backend_uuid"])
+def test_user_view_unknown_reference_blocks_without_inferring_owner_or_changing_rows(
+    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    reference_kind: str,
+) -> None:
+    assert registered.target.backend_workspace_id is not None
+    workspace_id = {
+        "unknown_key": "gw_unregistered", "display_name": registered.target.name,
+        "backend_uuid": registered.target.backend_workspace_id,
+    }[reference_kind]
+    write_view_state("user-a", registered.target.workspace_id, "known-session")
+    unknown = write_view_state("user-a", workspace_id, registered.target.workspace_id)
+    before, original_views = _dump(registered.store.path), _view_rows(registered.store.path)
+    result = registered.preview()
+    blocker, = result.blockers
+    record_id = json.dumps((unknown.user_id, unknown.workspace_id, unknown.session_id),
+                           ensure_ascii=False, separators=(",", ":"))
+    assert blocker.code == "unknown_user_view_workspace_reference"
+    assert blocker.source == f"user_view_state:{record_id}" and workspace_id in blocker.detail
+    assert result.report()["mapping_complete"] is False and result.report()["apply_available"] is False
+    reference, = result.references
+    assert reference.legacy_workspace_id == registered.target.workspace_id
+    assert _view_rows(registered.store.path) == original_views
+    assert _dump(registered.store.path) == before
+
+
+def test_user_view_without_registry_preserves_orphan_and_does_not_create_identity(
+    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+) -> None:
+    write_view_state("user-a", registered.target.workspace_id, "orphan-session")
+    with closing(registered.store.connection()) as connection:
+        connection.execute("DELETE FROM gateway_workspace_registry")
+        connection.execute("DELETE FROM gateway_config WHERE config_key='workspace_registry_meta'")
+        connection.execute("DELETE FROM registry_meta WHERE registry_key='workspace'")
+    identity = registered.root / "identity.json"
+    identity.unlink()
+    before, original_views = _dump(registered.store.path), _view_rows(registered.store.path)
+    result = registered.preview()
+    blocker, = result.blockers
+    assert blocker.code == "unknown_user_view_workspace_reference"
+    assert result.mappings == result.references == () and result.gateway_id is None
+    assert result.report()["mapping_complete"] is False
+    assert _view_rows(registered.store.path) == original_views and _dump(registered.store.path) == before
+    assert not identity.exists()
+
+
+def test_user_view_ambiguous_registered_key_is_rejected_without_changing_original_rows(
+    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_view_state("user-a", registered.target.workspace_id, "retained-session")
+    with closing(registered.store.connection()) as connection:
+        row = connection.execute("SELECT payload_json,updated_at FROM gateway_workspace_registry").fetchone()
+        payload = json.loads(row[0])
+        payload["backend_workspace_id"] = str(uuid4())
+        connection.execute(
+            "INSERT INTO gateway_workspace_registry(workspace_id,position,active,payload_json,updated_at) VALUES(?,?,?,?,?)",
+            ("gw_duplicate_row", 1, 0, json.dumps(payload), row[1]),
+        )
+    before, original_views = _dump(registered.store.path), _view_rows(registered.store.path)
+    with pytest.raises(SystemExit) as error:
+        _cli(monkeypatch)
+    assert error.value.code == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["read_only"] is True and report["error"] == "Gateway registry 工作区别名重复"
+    assert _view_rows(registered.store.path) == original_views and _dump(registered.store.path) == before
+
+
+def test_user_view_and_registry_are_read_from_one_snapshot(
+    registered: Registration, write_view_state: Callable[[str, str, str], UserViewStateRecord],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_key = registered.target.workspace_id
+    original = write_view_state("user-a", original_key, "snapshot-session")
+    factory = sqlite3.connect
+    read_connections: list[str] = []
+    published_dump: str | None = None
+    replacement_key = "gw_after_snapshot"
+
+    def during_read(sql: str) -> None:
+        nonlocal published_dump
+        if "FROM user_view_state" not in sql or published_dump is not None:
+            return
+        with closing(factory(registered.store.path)) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            target = json.loads(writer.execute("SELECT payload_json FROM gateway_workspace_registry").fetchone()[0])
+            target["workspace_id"] = replacement_key
+            writer.execute("UPDATE gateway_workspace_registry SET workspace_id=?,payload_json=?",
+                           (replacement_key, json.dumps(target)))
+            metadata = json.loads(writer.execute(
+                "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'"
+            ).fetchone()[0])
+            metadata["registry_revision"] += 1
+            metadata["active_workspace_id"] = replacement_key
+            writer.execute("UPDATE gateway_config SET payload_json=? WHERE config_key='workspace_registry_meta'",
+                           (json.dumps(metadata),))
+            writer.execute("UPDATE registry_meta SET revision=revision+1 WHERE registry_key='workspace'")
+            writer.execute("UPDATE user_view_state SET workspace_id=?,turn_anchor=?",
+                           (replacement_key, "并发 writer 提交的新正文"))
+            writer.commit()
+            published_dump = "\n".join(writer.iterdump())
+
+    def connect(database: str, *, uri: bool) -> sqlite3.Connection:
+        assert uri and database.endswith("?mode=ro")
+        read_connections.append(database)
+        connection = factory(database, uri=uri)
+        connection.set_trace_callback(during_read)
+        return connection
+
+    with monkeypatch.context() as patch:
+        patch.setattr(migration.sqlite3, "connect", connect)
+        result = registered.preview()
+    assert len(read_connections) == 1 and published_dump is not None
+    assert result.blockers == ()
+    mapping, = result.mappings
+    reference, = result.references
+    assert mapping.legacy_workspace_id == reference.legacy_workspace_id == original_key
+    assert json.loads(reference.record_id) == [original.user_id, original.workspace_id, original.session_id]
+    assert _dump(registered.store.path) == published_dump
+    assert _view_rows(registered.store.path)[0][1:4] == (
+        replacement_key, original.session_id, "并发 writer 提交的新正文",
+    )

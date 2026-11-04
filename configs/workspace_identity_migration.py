@@ -120,9 +120,11 @@ def _unsettled(connection: sqlite3.Connection) -> list[IdentityMigrationBlocker]
     return result
 
 
-def _database_registry(path: Path) -> tuple[dict[str, object] | None, list[IdentityMigrationBlocker]]:
+def _database_registry(path: Path) -> tuple[
+    dict[str, object] | None, list[IdentityMigrationBlocker], tuple[tuple[str, str, str], ...],
+]:
     if not path.exists():
-        return None, []
+        return None, [], ()
     with closing(sqlite3.connect(sqlite_file_uri(path) + "?mode=ro", uri=True)) as connection:
         connection.execute("BEGIN")
         version, = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
@@ -152,7 +154,14 @@ def _database_registry(path: Path) -> tuple[dict[str, object] | None, list[Ident
             active = [identity for identity, flag, _ in rows if flag]
             if active != ([] if payload["active_workspace_id"] is None else [payload["active_workspace_id"]]):
                 blockers.append(IdentityMigrationBlocker("active_selection_mismatch", str(path), "SQLite 活动标记与 registry metadata 不一致"))
-        return payload, blockers
+        # 视图主键与登记必须来自同一只读快照；不读取或改写其它视图业务字段。
+        view_keys = tuple(
+            (str(user_id), str(workspace_id), str(session_id))
+            for user_id, workspace_id, session_id in connection.execute(
+                "SELECT user_id,workspace_id,session_id FROM user_view_state ORDER BY user_id,workspace_id,session_id"
+            )
+        )
+        return payload, blockers, view_keys
 
 
 def _references(payload: dict[str, object], targets: dict[str, dict[str, object]]) -> list[IdentityMigrationBlocker]:
@@ -216,13 +225,34 @@ def _navigation_references(
     return tuple(references), ()
 
 
+def _user_view_references(
+    keys: tuple[tuple[str, str, str], ...], mappings: tuple[WorkspaceIdentityMapping, ...],
+) -> tuple[tuple[WorkspaceIdentityReference, ...], tuple[IdentityMigrationBlocker, ...]]:
+    by_alias = {item.legacy_workspace_id: item for item in mappings}
+    references = []
+    blockers = []
+    for user_id, workspace_id, session_id in keys:
+        record_id = json.dumps((user_id, workspace_id, session_id), ensure_ascii=False, separators=(",", ":"))
+        mapping = by_alias.get(workspace_id)
+        if mapping is None:
+            blockers.append(IdentityMigrationBlocker(
+                "unknown_user_view_workspace_reference", f"user_view_state:{record_id}",
+                f"用户视图工作区引用未登记: {workspace_id}；不能从当前活动项、名称或 Backend UUID 推定原归属",
+            ))
+            continue
+        references.append(WorkspaceIdentityReference(
+            "user_view_state.workspace_id", record_id, workspace_id, mapping.gateway_id, mapping.workspace_id,
+        ))
+    return tuple(references), tuple(blockers)
+
+
 def preview_workspace_identity_migration(
     *, gateway_root: Path, project_root: Path,
 ) -> WorkspaceIdentityPreview:
     """只读当前 Gateway 的明确注册根；不扫描工作区，不创建身份或启动目标。"""
     root = gateway_root.expanduser().resolve()
     file_payload = _registry_file(root / "workspaces.json")
-    database_payload, blockers = _database_registry(root / "gateway.sqlite")
+    database_payload, blockers, view_keys = _database_registry(root / "gateway.sqlite")
     # JSON 导入源与权威库同时存在时，不隐式选择较新的一个或覆盖冲突。
     if database_payload is not None and file_payload is not None and {
         key: value for key, value in database_payload.items() if key != "registry_revision"
@@ -231,7 +261,11 @@ def preview_workspace_identity_migration(
     payload = database_payload if database_payload is not None else file_payload
     if payload is None:
         references, navigation_blockers = _navigation_references(root, ())
-        return WorkspaceIdentityPreview(None, None, None, None, (), (*blockers, *navigation_blockers), references)
+        view_references, view_blockers = _user_view_references(view_keys, ())
+        return WorkspaceIdentityPreview(
+            None, None, None, None, (), (*blockers, *navigation_blockers, *view_blockers),
+            (*references, *view_references),
+        )
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != 13:
         raise ValueError("工作区身份预检只支持 registry 合同 13；先完成既有版本升级")
     gateway_id = load_or_create_gateway_id(root / "identity.json", read_only=True)
@@ -296,7 +330,9 @@ def preview_workspace_identity_migration(
             raise ValueError(f"工作区连接类型不在身份迁移支持范围: {kind}")
     source = root / ("gateway.sqlite" if database_payload is not None else "workspaces.json")
     references, navigation_blockers = _navigation_references(root, tuple(mappings))
+    view_references, view_blockers = _user_view_references(view_keys, tuple(mappings))
     return WorkspaceIdentityPreview(
         gateway_id, str(source), cast(int | None, payload.get("registry_revision")),
-        config_revision(payload), tuple(mappings), (*blockers, *navigation_blockers), references,
+        config_revision(payload), tuple(mappings), (*blockers, *navigation_blockers, *view_blockers),
+        (*references, *view_references),
     )

@@ -50,3 +50,9 @@
 
 - 导航 owner 暴露并复用唯一只读节点读取与图校验，格式 1 之外明确拒绝；普通导航和维护预检不再各自解析。预检不调用会同步保存的 `list_tree`，按原 node ID 输出工作区字段的候选归属，不改 folder、父链、显示名或原文件。未知引用、重复节点、父链循环、错误格式及没有 registry 的孤立引用均阻塞，不以自动删节点掩盖迁移缺件。
 - 产品导航 owner 生成的本地及远端引用覆盖同 UUID 不同 Gateway，并验证文件原件不变；已有规范 URI 和业务正文不进入此映射。配置／导航定向 41 passed／8.10s，Ruff、实际项目解释器 Pyright 和严格规范校验退出 0；准确耗时以原始日志为准，原件与源码指纹位于 `out/tests/temp/identity_navigation_preflight_20261104/artifacts/`。本切片不包含 user_view_state、旧 Generator、客户端恢复与可恢复发布，6.1 保持未勾选。
+
+### 2026-11-04：6.1 用户视图持久引用预检切片
+
+- 在原 SQLite 只读事务内读取 `user_view_state` 的完整原主键，与 registry 共用同一快照；仅按登记旧 key 精确关联，保留用户、Session 及所有视图业务字段。不能根据 Backend UUID、显示名或当前活动项猜测归属；未登记引用和缺少 registry 的孤立行明确阻塞。
+- 原用户／视图 owner 生成多用户、多 Session、同 UUID 不同 Gateway 及多连接输入，核对原主键、全库逻辑不变与并发发布时的快照一致性。定向 97 passed；Ruff、项目解释器 Pyright、编译均退出 0，源码指纹与准确命令、原始日志、实际退出码位于 `out/tests/temp/identity_view_preflight_sol_20261104/artifacts/verification.json`，集成时指纹一致。
+- 本切片未实现 apply、引用写迁移、远端身份核验、旧 Generator、客户端恢复材料或可恢复原子发布，不提升 schema；6.1 保持未勾选。
