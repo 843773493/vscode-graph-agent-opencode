@@ -890,3 +890,9 @@
 - 来源与 Opener 15 项／140 条断言、25 份实际转换源码的真实 Workbench 类型检查、规定 Web 构建、Ruff、MJS 语法及严格规范校验通过。集成时生产指纹与构建一致，复用相同产物。正式 Gateway／后端／Workbench／Chromium 1 passed／72.47 秒：真实执行生成规范工具结果，核完整中段、只读、三组共享、正常刷新恢复和最后引用关闭后冷读；无普通文件读取、无额外执行，pageErrors=[]。
 - 集合能力负例通过原 `_workbench.open` 命令调用相同 Opener，核真实 403、领域 owner／原因、组不变与零回退。前序 Quick Input 鼠标接受未产生 parse 请求的失败原件保留，未归因或宣称修复，不以命令证据替代该交互。原更改导航 hover 超时未改动。Electron、媒体、配置和完整 Diff URI 场景尚未验证，2.2／2.4／2.5 整项不勾选。
 - 准确命令、源码指纹、构建及全部原始退出码见 `out/tests/temp/quick_access_sol_20261104/artifacts/verification.json`；正式页面原件位于 `out/tests/integration/clients/web/quick_access/test_resource_opener_sources/runs/run-bbec73388455/`。
+
+
+### 2026-11-04：Search Provider 整批关闭结算（16.3／16.20 部分）
+
+- 工作区服务先关闭全部准入，再等待所有原 registration 完成安全结算；任一 release 失败不使服务提前返回。保留单一关闭任务和原错误实例，多错聚合；调用方取消等待清理后继续传播，释放失败保留为原因链，不重复 release、不切换 Provider 或发布迟到结果。
+- 修改前判别反例 1 failed；相关搜索目录 62 passed，补充直接 registration 取消场景后服务模块 27 passed，Ruff 与项目 Python 3.12 Pyright 零诊断。原始输出、准确命令及最终源码指纹：`out/tests/temp/search_provider_close_sol_20261104/artifacts/verification.json`。本切片未运行真实 HTTP、Web 或 Electron，不替代本组完整生命周期与流式验收，16.3／16.20 保持未勾选。

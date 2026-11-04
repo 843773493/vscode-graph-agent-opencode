@@ -70,6 +70,7 @@ async def test_multiple_operations_share_one_registration_and_release(
     assert len(service.capabilities().providers) == 1
     for operation in ("name", "resolve"):
         await service.search(search_request.model_copy(update={"operation": operation}))
+        assert query.await_args is not None
         assert query.await_args.args[0].operation == operation
     await service.aclose()
     release.assert_awaited_once()
@@ -228,3 +229,259 @@ async def test_unregister_rejects_result_even_if_owner_ignores_cancellation(
     with pytest.raises(SearchContractError) as caught:
         await pending
     assert caught.value.code == "provider_unavailable"
+
+
+async def test_service_close_waits_for_all_original_owners_after_release_failure(
+    capability: SearchProviderCapabilityDTO, query: AsyncMock, search_request: WorkspaceSearchRequest,
+) -> None:
+    service = WorkspaceSearchService("workspace-A")
+    failure = OSError("第一个 owner 释放失败")
+    first_release, second_release = AsyncMock(side_effect=failure), AsyncMock()
+    started, settling, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def second_owner(request: WorkspaceSearchRequest, gateway_id: str | None) -> WorkspaceSearchResultDTO:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            settling.set()
+            await finish.wait()
+        return await query(request, gateway_id)
+
+    service.register(capability, query, release=first_release)
+    second = service.register(capability.model_copy(update={
+        "provider_id": "second-owner", "operations": ("resolve",),
+    }), second_owner, release=second_release)
+    pending = asyncio.create_task(service.search(search_request.model_copy(update={"operation": "resolve"})))
+    await asyncio.wait_for(started.wait(), 1)
+    closing = asyncio.create_task(service.aclose())
+    try:
+        await asyncio.wait_for(settling.wait(), 1)
+        assert service.capabilities().providers == []
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(closing), 0.02)
+        second_release.assert_not_called()
+        finish.set()
+        with pytest.raises(OSError) as caught:
+            await closing
+        assert caught.value is failure
+        first_release.assert_awaited_once()
+        second_release.assert_awaited_once()
+        with pytest.raises(SearchContractError) as unavailable:
+            await pending
+        assert unavailable.value.code == "provider_unavailable"
+        query.assert_not_called()
+    finally:
+        finish.set()
+        await asyncio.gather(pending, closing, second.aclose(), return_exceptions=True)
+
+
+@pytest.mark.parametrize("failures", [
+    (OSError("owner A 释放失败"), ValueError("owner B 释放失败")),
+    (asyncio.CancelledError("owner A 原取消"), OSError("owner B 释放失败")),
+    (OSError("owner A 释放失败"), asyncio.CancelledError("owner B 原取消")),
+])
+async def test_service_close_keeps_all_original_failures_without_releasing_twice(
+    capability: SearchProviderCapabilityDTO, query: AsyncMock, failures: tuple[BaseException, BaseException],
+) -> None:
+    service = WorkspaceSearchService("workspace-A")
+    first_release, second_release = (AsyncMock(side_effect=error) for error in failures)
+    first = service.register(capability, query, release=first_release)
+    second = service.register(capability.model_copy(update={
+        "provider_id": "second-owner", "operations": ("resolve",),
+    }), AsyncMock(), release=second_release)
+    for _ in range(2):
+        with pytest.raises(BaseExceptionGroup) as caught:
+            await service.aclose()
+        assert len(caught.value.exceptions) == 2
+        assert all(actual is original for actual, original in zip(caught.value.exceptions, failures, strict=True))
+    for registration, original in zip((first, second), failures, strict=True):
+        with pytest.raises(type(original)) as observed:
+            await registration.aclose()
+        assert observed.value is original
+    first_release.assert_awaited_once()
+    second_release.assert_awaited_once()
+    assert service.capabilities().providers == []
+    with pytest.raises(SearchContractError) as unavailable:
+        service.register(capability, query)
+    assert unavailable.value.code == "provider_unavailable"
+    query.assert_not_called()
+
+
+@pytest.mark.parametrize("release_fails", [False, True])
+async def test_cancelled_service_close_settles_all_owners_and_keeps_original_cancellation(
+    capability: SearchProviderCapabilityDTO, query: AsyncMock, release_fails: bool,
+) -> None:
+    service = WorkspaceSearchService("workspace-A")
+    failures = (OSError("owner A 释放失败"), ValueError("owner B 释放失败"))
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def release_second() -> None:
+        entered.set()
+        await finish.wait()
+        if release_fails:
+            raise failures[1]
+
+    first_release = AsyncMock(side_effect=failures[0] if release_fails else None)
+    second_release = AsyncMock(side_effect=release_second)
+    service.register(capability, query, release=first_release)
+    service.register(capability.model_copy(update={
+        "provider_id": "second-owner", "operations": ("resolve",),
+    }), AsyncMock(), release=second_release)
+    closing = asyncio.create_task(service.aclose())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        closing.cancel("原关闭调用方取消")
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(closing), 0.02)
+        closing.cancel("后续取消不能替换原取消")
+        finish.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await closing
+        assert caught.value.args == ("原关闭调用方取消",)
+        if release_fails:
+            cause = caught.value.__cause__
+            assert isinstance(cause, BaseExceptionGroup)
+            assert all(actual is original for actual, original in zip(cause.exceptions, failures, strict=True))
+        else:
+            assert caught.value.__cause__ is None
+        first_release.assert_awaited_once()
+        second_release.assert_awaited_once()
+        query.assert_not_called()
+    finally:
+        finish.set()
+        await asyncio.gather(closing, return_exceptions=True)
+
+
+async def test_concurrent_unregister_and_repeated_service_close_release_each_owner_once(
+    capability: SearchProviderCapabilityDTO, query: AsyncMock, search_request: WorkspaceSearchRequest,
+) -> None:
+    service = WorkspaceSearchService("workspace-A")
+    release_entered, started, cancelled, finish = (asyncio.Event() for _ in range(4))
+
+    async def release_first() -> None:
+        release_entered.set()
+        await finish.wait()
+
+    async def late_owner(request: WorkspaceSearchRequest, gateway_id: str | None) -> WorkspaceSearchResultDTO:
+        started.set()
+        try:
+            await finish.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await finish.wait()
+        return await query(request, gateway_id)
+
+    first_release, second_release = AsyncMock(side_effect=release_first), AsyncMock()
+    first_query = AsyncMock()
+    first = service.register(capability, first_query, release=first_release)
+    second = service.register(capability.model_copy(update={
+        "provider_id": "second-owner", "operations": ("resolve",),
+    }), late_owner, release=second_release)
+    pending = asyncio.create_task(service.search(search_request.model_copy(update={"operation": "resolve"})))
+    await asyncio.wait_for(started.wait(), 1)
+    unregister = asyncio.create_task(first.aclose())
+    await asyncio.wait_for(release_entered.wait(), 1)
+    closing = [asyncio.create_task(service.aclose()) for _ in range(2)]
+    try:
+        await asyncio.wait_for(cancelled.wait(), 1)
+        assert not unregister.done() and all(not task.done() for task in closing)
+        assert service.capabilities().providers == []
+        with pytest.raises(SearchContractError) as unavailable:
+            await service.search(search_request)
+        assert unavailable.value.code == "provider_unavailable"
+        finish.set()
+        await asyncio.gather(unregister, *closing)
+        with pytest.raises(SearchContractError) as late:
+            await pending
+        assert late.value.code == "provider_unavailable"
+        await first.aclose()
+        await second.aclose()
+        await service.aclose()
+        first_release.assert_awaited_once()
+        second_release.assert_awaited_once()
+        first_query.assert_not_called()
+        query.assert_awaited_once()
+    finally:
+        finish.set()
+        await asyncio.gather(pending, unregister, *closing, return_exceptions=True)
+
+
+async def test_query_cancellation_keeps_its_identity_and_does_not_unregister_provider(
+    capability: SearchProviderCapabilityDTO, query: AsyncMock, search_request: WorkspaceSearchRequest,
+    worker: tuple[threading.Event, threading.Event],
+) -> None:
+    started, finish = worker
+
+    def read() -> None:
+        started.set()
+        assert finish.wait(5), "测试 worker 未获释放"
+
+    async def owner(request: WorkspaceSearchRequest, gateway_id: str | None) -> WorkspaceSearchResultDTO:
+        await run_sync_shielded(read)
+        return await query(request, gateway_id)
+
+    service = WorkspaceSearchService("workspace-A")
+    released = AsyncMock()
+    registration = service.register(capability, owner, release=released)
+    pending = asyncio.create_task(service.search(search_request))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        pending.cancel("原查询取消")
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(pending), 0.02)
+        finish.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await pending
+        assert caught.value.args == ("原查询取消",)
+        assert registration.active and service.capabilities().providers == [capability]
+        query.assert_not_called()
+        assert (await service.search(search_request)).state == "complete"
+        query.assert_awaited_once()
+        await service.aclose()
+        released.assert_awaited_once()
+    finally:
+        finish.set()
+        await asyncio.gather(pending, service.aclose(), return_exceptions=True)
+
+
+@pytest.mark.parametrize("release_fails", [False, True])
+async def test_cancelled_registration_observer_keeps_original_result_for_later_close(
+    capability: SearchProviderCapabilityDTO, query: AsyncMock, release_fails: bool,
+) -> None:
+    service = WorkspaceSearchService("workspace-A")
+    failure = OSError("原 registration 释放失败")
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def release() -> None:
+        entered.set()
+        await finish.wait()
+        if release_fails:
+            raise failure
+
+    released = AsyncMock(side_effect=release)
+    registration = service.register(capability, query, release=released)
+    closing = asyncio.create_task(registration.aclose())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        closing.cancel("原注销观察者取消")
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(closing), 0.02)
+        closing.cancel("后续取消")
+        finish.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await closing
+        assert caught.value.args == ("原注销观察者取消",)
+        assert caught.value.__cause__ is (failure if release_fails else None)
+        if release_fails:
+            with pytest.raises(OSError) as observed:
+                await registration.aclose()
+            assert observed.value is failure
+        else:
+            await registration.aclose()
+        released.assert_awaited_once()
+        assert not registration.active and service.capabilities().providers == []
+        query.assert_not_called()
+    finally:
+        finish.set()
+        await asyncio.gather(closing, service.aclose(), return_exceptions=True)

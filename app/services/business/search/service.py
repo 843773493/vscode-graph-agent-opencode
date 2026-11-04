@@ -53,7 +53,7 @@ class SearchRegistration:
         self.active = True
         self.tasks: set[asyncio.Task[WorkspaceSearchResultDTO]] = set()
         self._release = release
-        self._closing: asyncio.Task[None] | None = None
+        self._closing: asyncio.Task[BaseException | None] | None = None
 
     def close_admission(self) -> None:
         if self._closing is None:
@@ -67,13 +67,29 @@ class SearchRegistration:
         self.close_admission()
         closing = self._closing
         assert closing is not None
-        await run_cleanup_shielded(lambda: closing)
+        try:
+            error = await asyncio.shield(closing)
+        except asyncio.CancelledError as failure:
+            async def settle() -> None:
+                await closing
 
-    async def _settle(self) -> None:
+            await run_cleanup_shielded(settle)
+            error = closing.result()
+            if error is not None:
+                raise failure from error
+            raise
+        if error is not None:
+            raise error
+
+    async def _settle(self) -> BaseException | None:
         # 查询错误仍由原请求消费；释放须等待所有原 owner 退出安全边界。
-        await asyncio.gather(*self.tasks, return_exceptions=True)
-        if self._release is not None:
-            await self._release()
+        try:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+            if self._release is not None:
+                await self._release()
+        except BaseException as error:  # noqa: BLE001 - 共享原结算结果，取消也保留原实例供并发观察。
+            return error
+        return None
 
 
 class WorkspaceSearchService:
@@ -172,5 +188,24 @@ class WorkspaceSearchService:
         registrations = tuple(dict.fromkeys(self._providers.values()))
         for registration in registrations:
             registration.close_admission()
-        for registration in registrations:
-            await registration.aclose()
+        errors: list[BaseException] = []
+
+        async def settle() -> None:
+            for registration in registrations:
+                try:
+                    await registration.aclose()
+                except BaseException as error:  # noqa: BLE001 - 收齐所有原 owner 的释放结果后统一抛出。
+                    errors.append(error)
+
+        closing = asyncio.create_task(settle())
+        try:
+            await asyncio.shield(closing)
+        except asyncio.CancelledError as failure:
+            await run_cleanup_shielded(lambda: closing)
+            if errors:
+                raise failure from BaseExceptionGroup("工作区搜索 Provider 关闭失败", errors)
+            raise
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("工作区搜索 Provider 关闭失败", errors)
