@@ -235,13 +235,15 @@ def test_restart_recovery_does_not_reinject_tracked_source(
 
 
 @pytest.mark.parametrize("damage", ["missing", "symlink"])
-def test_control_read_resolves_thread_once_and_rechecks_next_read(
+@pytest.mark.parametrize("read_kind", ["control", "rebuild"])
+def test_source_state_read_resolves_thread_once_and_rechecks_next_read(
     rollout_storage: RolloutContextStore,
     control_state_port: RolloutCheckpointSaver,
     owner: ContextSourceOwnerKey,
     seal_sources,
     monkeypatch: pytest.MonkeyPatch,
     damage: str,
+    read_kind: str,
 ) -> None:
     """真实 owner 读取只定位一次；下一次读取仍拒绝失效的物理节点。"""
     _track_skill(_new_manager(owner, control_state_port), seal_sources)
@@ -255,9 +257,14 @@ def test_control_read_resolves_thread_once_and_rechecks_next_read(
         return resolve_thread(session_id, thread_id)
 
     monkeypatch.setattr(resolver, "resolve_thread_node", resolve)
-    states = control_state_port.load_context_source_control_states(owner)
-    assert len(states) == 1
-    assert states[0].latest_visible_committed_revision == states[0].latest_revision
+    read = (control_state_port.load_context_source_control_states if read_kind == "control"
+            else control_state_port.load_context_source_rebuild_state)
+    states = read(owner)
+    if read_kind == "control":
+        assert len(states) == 1
+        assert states[0].latest_visible_committed_revision == states[0].latest_revision
+    else:
+        assert states is None
     assert resolutions == [(owner.session_id, owner.thread_id)]
 
     moved = thread_node.with_name(thread_node.name + ".moved")
@@ -266,14 +273,14 @@ def test_control_read_resolves_thread_once_and_rechecks_next_read(
         if damage == "symlink":
             thread_node.symlink_to(moved, target_is_directory=True)
         with pytest.raises(RuntimeError, match="冻结 locator 缺失或不是普通目录"):
-            control_state_port.load_context_source_control_states(owner)
+            read(owner)
     finally:
         if thread_node.is_symlink():
             thread_node.unlink()
         moved.rename(thread_node)
 
     # 成功与失败都不能把路径校验结果留给下一次存储操作。
-    assert control_state_port.load_context_source_control_states(owner) == states
+    assert read(owner) == states
     assert resolutions == [(owner.session_id, owner.thread_id)] * 3
 
 

@@ -409,46 +409,48 @@ class ContextSourceVersionsStorageMixin:
         tuple[object, ...], tuple[tuple[object, ...], ...], ContextAssemblySnapshot | None,
         frozenset[tuple[str, str]],
     ] | None:
-        thread_id = self._context_source_rollout_owner_or_none(session_id, thread_id)
-        if thread_id is None:
-            return None
-        try:
-            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
-                self._require_context_source_control_runtime(connection)
-                # 普通 prepare 没有重建任务时不读取全部控制行；待重建时仍在同一快照内读取。
-                pending = self._pending_context_epoch_row(connection, checkpoint_ns)
-                if pending is None:
-                    # 保留来源表/列损坏的拒绝契约，只编译查询，不扫描任何控制行。
-                    connection.execute(f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states LIMIT 0")
-                    return None
-                states = connection.execute(
-                    f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states "
-                    "WHERE session_id = ? AND thread_id = ? ORDER BY created_at, source_id",
-                    (session_id, thread_id),
-                ).fetchall()
-                header = connection.execute(
-                    "SELECT session_id, thread_id, source_assembly_id "
-                    "FROM checkpoint_context_source_snapshots WHERE checkpoint_id = ? AND checkpoint_ns = ?",
-                    (pending[3], checkpoint_ns),
-                ).fetchone()
-                if header is None:
-                    raise RuntimeError("checkpoint-context-state-conflict: rebuild 缺少目标 checkpoint source selection")
-                require_historical_scope(connection, *header[:2], current_owner=(session_id, thread_id))
-                assembly_id = strict_optional_text(header[2], field="checkpoint.source_assembly_id")
-                source_assembly = None
-                if assembly_id is not None:
-                    source_assembly = self._context.assemblies._read_context_assembly_connection(
-                        connection, session_id, thread_id,
-                        assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
-                    )[0]
-                    if source_assembly.seal_binding is None:
-                        raise RuntimeError("checkpoint-context-state-conflict: 目标 source assembly 缺少 immutable prefix")
-                retained_refs = self._retained_context_source_refs(
-                    connection, pending, states, source_assembly,
-                )
-                return tuple(pending), tuple(tuple(row) for row in states), source_assembly, retained_refs
-        except RolloutNotMaterializedError:
-            return None
+        # owner 检查和读取快照共用本次定位；不跨重建状态读取保留路径或权限结果。
+        with self._storage.fork_paths.thread_resolution_scope():
+            thread_id = self._context_source_rollout_owner_or_none(session_id, thread_id)
+            if thread_id is None:
+                return None
+            try:
+                with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+                    self._require_context_source_control_runtime(connection)
+                    # 普通 prepare 没有重建任务时不读取全部控制行；待重建时仍在同一快照内读取。
+                    pending = self._pending_context_epoch_row(connection, checkpoint_ns)
+                    if pending is None:
+                        # 保留来源表/列损坏的拒绝契约，只编译查询，不扫描任何控制行。
+                        connection.execute(f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states LIMIT 0")
+                        return None
+                    states = connection.execute(
+                        f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states "
+                        "WHERE session_id = ? AND thread_id = ? ORDER BY created_at, source_id",
+                        (session_id, thread_id),
+                    ).fetchall()
+                    header = connection.execute(
+                        "SELECT session_id, thread_id, source_assembly_id "
+                        "FROM checkpoint_context_source_snapshots WHERE checkpoint_id = ? AND checkpoint_ns = ?",
+                        (pending[3], checkpoint_ns),
+                    ).fetchone()
+                    if header is None:
+                        raise RuntimeError("checkpoint-context-state-conflict: rebuild 缺少目标 checkpoint source selection")
+                    require_historical_scope(connection, *header[:2], current_owner=(session_id, thread_id))
+                    assembly_id = strict_optional_text(header[2], field="checkpoint.source_assembly_id")
+                    source_assembly = None
+                    if assembly_id is not None:
+                        source_assembly = self._context.assemblies._read_context_assembly_connection(
+                            connection, session_id, thread_id,
+                            assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
+                        )[0]
+                        if source_assembly.seal_binding is None:
+                            raise RuntimeError("checkpoint-context-state-conflict: 目标 source assembly 缺少 immutable prefix")
+                    retained_refs = self._retained_context_source_refs(
+                        connection, pending, states, source_assembly,
+                    )
+                    return tuple(pending), tuple(tuple(row) for row in states), source_assembly, retained_refs
+            except RolloutNotMaterializedError:
+                return None
 
     def _retained_context_source_refs(
         self,
