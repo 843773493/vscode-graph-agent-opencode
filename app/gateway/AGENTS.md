@@ -35,7 +35,7 @@ app/gateway/
 工作区目标；`ssh_command.py`、`ssh_config.py`、`ssh_connections.py` 解析 SSH 配置并生成连接参数；
 `auxiliary_proxy.py` 转发 Terminal、Browser 与附加资源请求，`proxy_upstream.py` 转发上游 Gateway 请求；
 `device_connections.py` 管理设备连接 API；`diagnostics.py` 汇集 Gateway 诊断信息；`runtime_proof.py`
-负责运行配置应用与健康证明；`service_types.py`、`workspace_ids.py` 定义共享服务类型和工作区标识；
+负责运行配置应用与健康证明；`service_types.py` 定义共享服务类型；工作区 UUID 由既有 `app/core/workspace_identity.py` 管理；
 `ui_settings.py` 合并 UI 设置。不要仅因文件变长就按语法类型拆分；应先找出独立的数据 owner 和调用边界。
 
 # 可修改内容

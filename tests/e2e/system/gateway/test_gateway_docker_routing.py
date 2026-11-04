@@ -16,8 +16,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
-from app.core.workspace_identity import load_or_create_workspace_id
-from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
 )
@@ -45,6 +44,7 @@ from tests.e2e.system.gateway.gateway_target import (
     GatewayTargetE2EPaths,
     build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
+    read_remote_workspace_owner,
     start_remote_gateway_via_ssh,
     stop_remote_gateway,
 )
@@ -106,6 +106,16 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             remote_gateway_port=remote_gateway_port,
             remote_boxteam_home=remote_boxteam_home,
         )
+        remote_gateway_id, remote_workspace_id = read_remote_workspace_owner(
+            docker_target,
+            remote_workspace_path=remote_workspace_path,
+            remote_boxteam_home=remote_boxteam_home,
+        )
+        remote_owner = {"gateway_id": remote_gateway_id, "workspace_id": remote_workspace_id}
+        remote_headers = {
+            "X-BoxTeam-Workspace-Id": remote_workspace_id,
+            "X-BoxTeam-Target-Gateway-Id": remote_gateway_id,
+        }
         write_gateway_remote_gateway_config(
             workspace_root=local_workspace,
             ssh_port=docker_target.ssh_port,
@@ -149,7 +159,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             assert len(workspace_list["items"]) >= 2
             assert any(
                 item["connection_kind"] == "local"
-                and item["workspace_id"] == build_managed_local_workspace_id(str(local_workspace))
+                and item["workspace_id"] == read_workspace_id(local_workspace)
+                and item["gateway_id"] == gateway_id
                 and item["status"] == "ready"
                 for item in workspace_list["items"]
             )
@@ -157,12 +168,17 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 item
                 for item in workspace_list["items"]
                 if item["connection_kind"] == "remote_gateway"
-                and item["remote"]["remote_workspace_id"]
-                == build_managed_local_workspace_id(remote_workspace_path)
+                and item["workspace_id"] == remote_workspace_id
+                and item["gateway_id"] == remote_gateway_id
                 and item["status"] == "ready"
             )
-            remote_workspace_id = remote_workspace["workspace_id"]
-            assert workspace_list["active_workspace_id"] != remote_workspace_id
+            assert remote_gateway_id != gateway_id
+            assert workspace_list["active_workspace"] == {
+                "gateway_id": gateway_id, "workspace_id": read_workspace_id(local_workspace),
+            }
+            remote_connections = remote_workspace["remote_gateways"]
+            assert remote_connections
+            assert all(connection["gateway_id"] == remote_gateway_id for connection in remote_connections)
             tunnel_port = urlparse(remote_workspace["backend_url"]).port
             assert tunnel_port is not None
             assert tunnel_port_range[0] <= tunnel_port <= tunnel_port_range[1]
@@ -178,27 +194,27 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 item
                 for item in ssh_connections_response.json()["data"]["items"]
                 if item["source"] == "boxteam"
-                and item["workspace_id"] == remote_workspace_id
+                and item["connection_id"] in {
+                    connection["gateway_connection_id"] for connection in remote_connections
+                }
             )
             assert configured_connection["initial_path"] is None
             assert remote_workspace_path not in ssh_connections_response.text
             assert configured_connection["ssh_config_host"] is None
 
             default_workspace_response = await client.get("/api/v1/workspace")
-            assert workspace_id_from_response(default_workspace_response) == load_or_create_workspace_id(local_workspace)
+            assert workspace_id_from_response(default_workspace_response) == read_workspace_id(local_workspace)
 
             remote_workspace_response = await client.get(
                 "/api/v1/workspace",
-                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                headers=remote_headers,
             )
-            remote_backend_workspace_id = workspace_id_from_response(remote_workspace_response)
-            assert remote_backend_workspace_id == remote_workspace["backend_workspace_id"]
-            assert remote_backend_workspace_id != remote_workspace_id
+            assert workspace_id_from_response(remote_workspace_response) == remote_workspace_id
 
             remote_tools_response = await client.get(
                 "/api/v1/tools",
                 params={"agent_id": "default"},
-                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                headers=remote_headers,
             )
             assert remote_tools_response.status_code == 200, remote_tools_response.text
             remote_tool_ids = {
@@ -220,27 +236,27 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             remote_tool_tests_response = await client.get(
                 "/api/v1/tools/tests",
                 params={"limit": 50},
-                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                headers=remote_headers,
             )
             assert remote_tool_tests_response.status_code == 200, remote_tool_tests_response.text
             assert isinstance(remote_tool_tests_response.json()["data"]["items"], list)
 
             create_response = await client.post(
                 "/api/v1/sessions",
-                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                headers=remote_headers,
                 json={"title": "Docker SSH Routed Session"},
             )
             assert create_response.status_code == 200, create_response.text
             remote_session_id = create_response.json()["data"]["session_id"]
 
             inventory_ref = {
-                "resource_identity": str(workspace_session_inventory_identity(remote_backend_workspace_id)),
-                "uri": workspace_session_inventory_uri(remote_backend_workspace_id),
+                "resource_identity": str(workspace_session_inventory_identity(remote_workspace_id)),
+                "uri": workspace_session_inventory_uri(remote_workspace_id, gateway_authority=remote_gateway_id),
                 "scope": "workspace",
             }
             context_search_response = await client.post(
                 "/api/v1/context/search",
-                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                headers=remote_headers,
                 json={
                     **inventory_ref,
                     "query": "Docker SSH Routed Session",
@@ -252,8 +268,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             )
             context_matches = context_search_response.json()["data"]["matches"]
             session_ref = {
-                "resource_identity": str(session_resource_identity(remote_backend_workspace_id, remote_session_id)),
-                "uri": session_resource_uri(remote_backend_workspace_id, remote_session_id),
+                "resource_identity": str(session_resource_identity(remote_workspace_id, remote_session_id)),
+                "uri": session_resource_uri(remote_workspace_id, remote_session_id, gateway_authority=remote_gateway_id),
                 "scope": "workspace",
             }
             session_match = next(
@@ -265,7 +281,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
 
             context_read_response = await client.post(
                 "/api/v1/context/read",
-                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                headers=remote_headers,
                 json=session_ref,
             )
             assert context_read_response.status_code == 200, context_read_response.text
@@ -274,7 +290,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
 
             sessions_response = await client.get(
                 "/api/v1/sessions",
-                headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
+                headers=remote_headers,
             )
             assert sessions_response.status_code == 200, sessions_response.text
             session_titles = [
@@ -284,9 +300,11 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             assert "Docker SSH Routed Session" in session_titles
 
             activate_response = await client.post(
-                f"/api/gateway/workspaces/{remote_workspace_id}/activate"
+                f"/api/gateway/workspaces/{remote_workspace_id}/activate",
+                headers=remote_headers,
             )
             assert activate_response.status_code == 200, activate_response.text
+            assert activate_response.json()["data"]["active_workspace"] == remote_owner
 
         close_gateway_process(gateway)
         gateway = None
@@ -326,10 +344,11 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 item
                 for item in restored_list["items"]
                 if item["workspace_id"] == remote_workspace_id
+                and item["gateway_id"] == remote_gateway_id
             )
             assert restored_ssh["status"] == "ready"
             assert restored_ssh["connection_error"] is None
-            assert restored_list["active_workspace_id"] == remote_workspace_id
+            assert restored_list["active_workspace"] == remote_owner
 
         context_transport = GatewaySessionContextClient(
             gateway_url=f"http://127.0.0.1:{gateway.port}",
@@ -345,8 +364,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             )
         )
         assert any(
-            item.resource_identity == workspace_session_inventory_identity(remote_backend_workspace_id)
-            and item.uri == workspace_session_inventory_uri(remote_backend_workspace_id)
+            item.resource_identity == workspace_session_inventory_identity(remote_workspace_id)
+            and item.uri == workspace_session_inventory_uri(remote_workspace_id, gateway_authority=remote_gateway_id)
             and item.scope == "workspace"
             for item in gateway_inventory.items
         )
@@ -368,7 +387,8 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
         finally:
             reset_current_request_id(request_token)
         assert offline_search.events[-1].summary is not None
-        assert any(branch.branch.owner.workspace_id == remote_backend_workspace_id and branch.state == "failed"
+        assert any(branch.branch.owner.workspace_id == remote_workspace_id
+                   and branch.branch.owner.gateway_id == remote_gateway_id and branch.state == "failed"
                    for branch in offline_search.events[-1].summary.branches)
 
     finally:

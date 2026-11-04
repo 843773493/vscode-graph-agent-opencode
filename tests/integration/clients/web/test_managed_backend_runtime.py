@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
@@ -34,10 +34,13 @@ async def test_complete_backend_group_confirmation_and_runtime_actions(
     case = shared_backend_case
     initial = await case.data("GET", "/api/gateway/workspaces")
     primary = next(item for item in initial["items"] if item["system_default"])
+    assert primary["workspace_id"] == read_workspace_id(case.roots[0])
     added = await case.data("POST", "/api/gateway/workspaces/local", json={
         "root_path": str(case.roots[1]), "name": "Web Secondary",
     })
-    secondary = next(item for item in added["items"] if item["workspace_id"] == build_managed_local_workspace_id(str(case.roots[1])))
+    secondary_id = read_workspace_id(case.roots[1])
+    secondary = next(item for item in added["items"]
+                     if item["gateway_id"] == primary["gateway_id"] and item["workspace_id"] == secondary_id)
     await case.data("POST", f"/api/gateway/workspaces/{secondary['workspace_id']}/runtime/stop")
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium") or shutil.which("chromium-browser")
     assert chromium is not None, "Backend 完整组 Web Integration 需要 Chromium"

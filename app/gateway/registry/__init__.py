@@ -38,11 +38,6 @@ from app.gateway.runtime.consumer_protocol import (
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime as WorkspaceRuntime
 from app.gateway.service_types import GatewayServiceName as GatewayServiceName
-from app.gateway.workspace_ids import (
-    build_managed_local_workspace_id as build_managed_local_workspace_id,
-)
-from app.gateway.workspace_ids import build_workspace_id as build_workspace_id
-from app.gateway.workspace_ids import is_legacy_workspace_id as is_legacy_workspace_id
 from app.services.infrastructure.config.state import (
     ConfigConflictError as ConfigConflictError,
 )

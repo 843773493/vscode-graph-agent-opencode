@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import shutil
 import time
 from collections.abc import Callable, Iterator
@@ -39,7 +38,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
-from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.workspace_identity import load_or_create_workspace_id, read_workspace_id
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -52,7 +51,6 @@ from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.remote_gateway import refresh_remote_gateway_projections
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
@@ -126,19 +124,12 @@ def _remove_remote_gateway_registration(
     gateway_root: Path,
     connection_id: str,
 ) -> None:
-    """移除测试注册的远程 Gateway 投影与连接，避免残留污染共享 BOXTEAM_HOME。
+    """由连接 owner 统一解绑投影，再移除本测试签发的凭据。"""
 
-    远程投影工作区引用连接；连接定义由测试直接写入 registry，不会随用户配置
-    重建。若删除投影时留下孤儿投影，下一次 Gateway 启动会按 fail-closed 拒绝
-    加载（引用未知连接），因此测试必须在退出时把两者一起清理掉。
-    """
-
-    if registry is not None:
-        for target in registry.targets():
-            if target.remote_gateway_connection_id == connection_id:
-                # owner="registry" 让这条清理写入 registry 自身的完整快照，
-                # 从而把已无人引用的连接从持久化元数据里一并移除。
-                registry.remove(target.workspace_id, owner="registry")
+    if registry is not None and any(
+        connection.connection_id == connection_id for connection in registry.remote_gateway_connections()
+    ):
+        registry.remove_remote_gateway(connection_id)
     FederationCredentialStore(
         storage_path=gateway_root / "credentials" / "federation.json"
     ).remove(connection_id)
@@ -386,7 +377,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             default_request_id = default_workspace_response.json()["request_id"]
             assert default_request_id
             assert default_workspace_response.headers["X-Request-ID"] == default_request_id
-            assert workspace_id_from_response(default_workspace_response) == load_or_create_workspace_id(primary_workspace)
+            assert workspace_id_from_response(default_workspace_response) == read_workspace_id(primary_workspace)
 
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
@@ -400,13 +391,17 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             assert add_response.json()["request_id"]
             assert add_response.headers["X-Request-ID"] == add_response.json()["request_id"]
             workspace_list = add_response.json()["data"]
+            health_response = await client.get("/api/gateway/health")
+            assert health_response.status_code == 200, health_response.text
+            gateway_id = health_response.json()["data"]["gateway_id"]
             default_workspace_id = next(
                 item["workspace_id"]
                 for item in workspace_list["items"]
-                if item["workspace_id"] == build_managed_local_workspace_id(str(primary_workspace))
+                if item["workspace_id"] == read_workspace_id(primary_workspace)
+                and item["gateway_id"] == gateway_id
             )
-            assert re.fullmatch(r"gw_[0-9a-f]{32}", default_workspace_id)
-            assert workspace_list["active_workspace_id"] == default_workspace_id
+            default_owner = {"gateway_id": gateway_id, "workspace_id": default_workspace_id}
+            assert workspace_list["active_workspace"] == default_owner
             default_workspace_item = next(
                 item
                 for item in workspace_list["items"]
@@ -418,27 +413,28 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             secondary_workspace_item = next(
                 item
                 for item in workspace_list["items"]
-                if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
+                if item["workspace_id"] == read_workspace_id(secondary_workspace)
+                and item["gateway_id"] == gateway_id
             )
             secondary_workspace_id = secondary_workspace_item["workspace_id"]
-            assert re.fullmatch(r"gw_[0-9a-f]{32}", secondary_workspace_id)
+            secondary_owner = {"gateway_id": gateway_id, "workspace_id": secondary_workspace_id}
             assert secondary_workspace_item["system_default"] is False
             assert secondary_workspace_item["removable"] is True
 
             reorder_response = await client.put(
                 "/api/gateway/workspaces/order",
-                json={"workspace_ids": [secondary_workspace_id, default_workspace_id]},
+                json={"workspaces": [secondary_owner, default_owner]},
             )
             assert reorder_response.status_code == 200, reorder_response.text
             reordered_list = reorder_response.json()["data"]
-            assert reordered_list["active_workspace_id"] == default_workspace_id
+            assert reordered_list["active_workspace"] == default_owner
             assert [
                 item["workspace_id"]
                 for item in reordered_list["items"]
             ][:2] == [secondary_workspace_id, default_workspace_id]
 
             routed_workspace_response = await client.get("/api/v1/workspace")
-            assert workspace_id_from_response(routed_workspace_response) == load_or_create_workspace_id(primary_workspace)
+            assert workspace_id_from_response(routed_workspace_response) == read_workspace_id(primary_workspace)
 
             create_response = await client.post(
                 "/api/v1/sessions",
@@ -446,6 +442,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             )
             assert create_response.status_code == 200, create_response.text
             default_session_id = create_response.json()["data"]["session_id"]
+            assert create_response.json()["data"]["workspace_id"] == default_workspace_id
 
             default_sessions_response = await client.get("/api/v1/sessions")
             assert default_sessions_response.status_code == 200
@@ -462,6 +459,7 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             )
             assert routed_create_response.status_code == 200, routed_create_response.text
             routed_session_id = routed_create_response.json()["data"]["session_id"]
+            assert routed_create_response.json()["data"]["workspace_id"] == secondary_workspace_id
 
             secondary_sessions_response = await client.get(
                 "/api/v1/sessions",
@@ -625,7 +623,8 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             secondary_workspace_id = next(
                 item["workspace_id"]
                 for item in workspace_items
-                if item["backend_workspace_id"] == load_or_create_workspace_id(secondary_workspace)
+                if item["workspace_id"] == read_workspace_id(secondary_workspace)
+                and item["gateway_id"] == gateway_id
             )
 
             create_response = await client.post(
@@ -635,8 +634,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             )
             assert create_response.status_code == 200, create_response.text
             source_session_id = create_response.json()["data"]["session_id"]
-            backend_workspace_id = create_response.json()["data"]["workspace_id"]
-            assert backend_workspace_id != secondary_workspace_id
+            assert create_response.json()["data"]["workspace_id"] == secondary_workspace_id
 
         marker = "CROSS_WORKSPACE_CONTEXT_ALPHA"
         await _write_session_context_checkpoint(
@@ -693,8 +691,8 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             finally:
                 invocation.reset_tool_call_id(token)
         resource_ref = {
-            "resource_identity": str(session_resource_identity(backend_workspace_id, source_session_id)),
-            "uri": session_resource_uri(backend_workspace_id, source_session_id),
+            "resource_identity": str(session_resource_identity(secondary_workspace_id, source_session_id)),
+            "uri": session_resource_uri(secondary_workspace_id, source_session_id),
             "scope": "workspace",
         }
         gateway_ref = {
@@ -832,8 +830,8 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
                 "args": {
                     "tool_name": read_tool.name,
                     "arguments": {
-                        "resource_identity": str(session_resource_identity("wrong_backend_workspace_id", source_session_id)),
-                        "uri": session_resource_uri("wrong_backend_workspace_id", source_session_id),
+                        "resource_identity": str(session_resource_identity("00000000-0000-4000-8000-000000000099", source_session_id)),
+                        "uri": session_resource_uri("00000000-0000-4000-8000-000000000099", source_session_id),
                         "scope": "workspace",
                     },
                 },
@@ -862,7 +860,9 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             )
         )
         branches = partial_gateway_search["events"][-1]["summary"]["branches"]
-        assert any(branch["state"] == "failed" and branch["branch"]["owner"]["workspace_id"] == backend_workspace_id for branch in branches)
+        assert any(branch["state"] == "failed" and branch["branch"]["owner"] == {
+            "gateway_id": gateway_id, "workspace_id": secondary_workspace_id,
+        } for branch in branches)
     finally:
         if context_transport is not None:
             await context_transport.aclose()
@@ -904,15 +904,6 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             timeout=60,
         ) as client:
             await acquire_gateway_guest(client)
-            existing_response = await client.get("/api/gateway/workspaces")
-            assert existing_response.status_code == 200, existing_response.text
-            for existing_item in existing_response.json()["data"]["items"]:
-                if existing_item["workspace_id"] != build_managed_local_workspace_id(str(managed_workspace)):
-                    continue
-                cleanup_response = await client.delete(
-                    f"/api/gateway/workspaces/{existing_item['workspace_id']}"
-                )
-                assert cleanup_response.status_code == 200, cleanup_response.text
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={"root_path": str(managed_workspace), "name": "managed-local"},
@@ -921,19 +912,18 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             managed_item = next(
                 item
                 for item in add_response.json()["data"]["items"]
-                if item["workspace_id"] == build_managed_local_workspace_id(str(managed_workspace))
+                if item["workspace_id"] == read_workspace_id(managed_workspace)
             )
             managed_workspace_id = managed_item["workspace_id"]
-            assert re.fullmatch(r"gw_[0-9a-f]{32}", managed_workspace_id)
+            managed_owner = {"gateway_id": managed_item["gateway_id"], "workspace_id": managed_workspace_id}
             assert managed_item["managed"] is True
+            assert managed_item["status"] == "ready"
+            assert managed_item["backend_generation"]
+            assert managed_item["affected_workspace_ids"] == [managed_workspace_id]
             activate_response = await client.post(
                 f"/api/gateway/workspaces/{managed_workspace_id}/activate"
             )
             assert activate_response.status_code == 200, activate_response.text
-            start_response = await client.post(
-                f"/api/gateway/workspaces/{managed_workspace_id}/runtime/start"
-            )
-            assert start_response.status_code == 200, start_response.text
 
         close_gateway_process(gateway)
         gateway = start_gateway_process(
@@ -957,7 +947,7 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             )
             assert restored_item["status"] == "ready"
             assert restored_item["connection_error"] is None
-            assert restored_list["active_workspace_id"] == managed_workspace_id
+            assert restored_list["active_workspace"] == managed_owner
             cleanup_response = await restarted_client.delete(
                 f"/api/gateway/workspaces/{managed_workspace_id}"
             )

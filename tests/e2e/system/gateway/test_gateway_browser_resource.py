@@ -16,7 +16,7 @@ import httpx
 import pytest
 import websockets
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from tests.e2e.system.gateway.gateway_docker import (
     docker_daemon_error,
     ensure_gateway_ssh_container,
@@ -26,6 +26,7 @@ from tests.e2e.system.gateway.gateway_target import (
     GatewayTargetE2EPaths,
     build_remote_pair_command,
     install_gateway_ssh_assets_for_e2e,
+    read_remote_workspace_owner,
     start_remote_gateway_via_ssh,
     stop_remote_gateway,
 )
@@ -308,8 +309,10 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
             workspace_list = _gateway_response_data(
                 await client.get("/api/gateway/workspaces")
             )
-            workspace_id = workspace_list.get("active_workspace_id")
-            assert isinstance(workspace_id, str), workspace_list
+            active_workspace = workspace_list.get("active_workspace")
+            assert isinstance(active_workspace, dict), workspace_list
+            workspace_id = read_workspace_id(workspace_root)
+            assert active_workspace == {"gateway_id": initial_health["gateway_id"], "workspace_id": workspace_id}
             health_path = (
                 f"/api/gateway/workspaces/{workspace_id}/browser-manager/health"
             )
@@ -411,7 +414,8 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
             )
             restarted_gateway_pid = restarted_health.get("process_id")
             assert isinstance(restarted_gateway_pid, int), restarted_health
-            assert restarted_health.get("active_workspace_id") == workspace_id
+            assert restarted_health.get("active_workspace") == active_workspace
+            assert read_workspace_id(workspace_root) == workspace_id
 
             final_status = await _wait_for_gateway_data(
                 client,
@@ -607,6 +611,15 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             remote_gateway_port=remote_gateway_port,
             remote_boxteam_home=remote_boxteam_home,
         )
+        remote_gateway_id, workspace_id = read_remote_workspace_owner(
+            docker_target,
+            remote_workspace_path=remote_workspace_path,
+            remote_boxteam_home=remote_boxteam_home,
+        )
+        remote_headers = {
+            "X-BoxTeam-Workspace-Id": workspace_id,
+            "X-BoxTeam-Target-Gateway-Id": remote_gateway_id,
+        }
         write_gateway_remote_gateway_config(
             workspace_root=local_workspace,
             ssh_port=docker_target.ssh_port,
@@ -659,17 +672,18 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
                 item
                 for item in workspace_list["items"]
                 if item["connection_kind"] == "remote_gateway"
-                and item["remote"]["remote_workspace_id"]
-                == build_managed_local_workspace_id(remote_workspace_path)
+                and item["workspace_id"] == workspace_id
+                and item["gateway_id"] == remote_gateway_id
             )
             assert remote_workspace["status"] == "ready"
             assert remote_workspace["services"]["terminal_manager"]["status"] == "ready"
             assert remote_workspace["services"]["browser_manager"]["status"] == "ready"
-            workspace_id = remote_workspace["workspace_id"]
+            assert remote_workspace["remote_gateways"]
+            assert all(connection["gateway_id"] == remote_gateway_id for connection in remote_workspace["remote_gateways"])
 
             session_response = await client.post(
                 "/api/v1/sessions",
-                headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                headers=remote_headers,
                 json={"title": "Docker Remote Auxiliary Services"},
             )
             assert session_response.status_code == 200, session_response.text
@@ -677,7 +691,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
             browser_response = await client.post(
                 "/api/v1/resources/browsers",
-                headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                headers=remote_headers,
                 json={
                     "session_id": session_id,
                     "title": "Remote Docker Browser",
@@ -690,7 +704,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
             terminal_response = await client.post(
                 "/api/v1/resources/terminals",
-                headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                headers=remote_headers,
                 json={
                     "session_id": session_id,
                     "retention_scope": "thread",
@@ -705,7 +719,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
 
             resources_response = await client.get(
                 f"/api/v1/sessions/{session_id}/resources",
-                headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                headers=remote_headers,
             )
             assert resources_response.status_code == 200, resources_response.text
             resources = resources_response.json()["data"]["items"]
@@ -721,10 +735,12 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             browser_attach = await client.get(
                 "/api/gateway/attach/browser/",
                 params={"workspaceId": workspace_id, "browserId": browser_id},
+                headers=remote_headers,
             )
             terminal_attach = await client.get(
                 "/api/gateway/attach/terminal/",
                 params={"workspaceId": workspace_id, "terminalId": terminal_id},
+                headers=remote_headers,
             )
             assert browser_attach.status_code == 200
             assert "可附加浏览器" in browser_attach.text
@@ -732,7 +748,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             assert "持久终端" in terminal_attach.text
 
             browser_grant = await client.post(
-                f"/api/v1/resources/{browser_id}/transport-grant", headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                f"/api/v1/resources/{browser_id}/transport-grant", headers=remote_headers,
                 json={"expected_revision": browser_resource["owner_revision"], "thread": browser_resource["source_thread"]},
             )
             browser_grant.raise_for_status()
@@ -740,7 +756,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
                 f"ws://127.0.0.1:{gateway.port}/api/gateway/workspaces/"
                 f"{workspace_id}/browser-manager/browser?token=local-dev-token"
             )
-            async with websockets.connect(browser_ws_url) as websocket:
+            async with websockets.connect(browser_ws_url, additional_headers=remote_headers) as websocket:
                 await websocket.send(
                     json.dumps({"type": "attach", "browserId": browser_id, "grantToken": browser_grant.json()["data"]["grant_token"]})
                 )
@@ -754,7 +770,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             terminal_resource = terminal_response.json()["data"]
             grant_response = await client.post(
                 f"/api/v1/resources/{terminal_id}/transport-grant",
-                headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                headers=remote_headers,
                 json={"expected_revision": terminal_resource["owner_revision"], "thread": terminal_resource["source_thread"]},
             )
             grant_response.raise_for_status()
@@ -763,7 +779,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
                 f"ws://127.0.0.1:{gateway.port}/api/gateway/workspaces/"
                 f"{workspace_id}/terminal-manager/terminal?token=local-dev-token"
             )
-            async with websockets.connect(terminal_ws_url) as websocket:
+            async with websockets.connect(terminal_ws_url, additional_headers=remote_headers) as websocket:
                 await websocket.send(
                     json.dumps(
                         {
@@ -805,7 +821,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             await acquire_gateway_guest(restarted_client)
             restored_response = await restarted_client.get(
                 f"/api/v1/resources/{browser_id}",
-                headers={"X-BoxTeam-Workspace-Id": workspace_id}
+                headers=remote_headers,
             )
             assert restored_response.status_code == 200, restored_response.text
             assert restored_response.json()["data"]["resource_id"] == browser_id

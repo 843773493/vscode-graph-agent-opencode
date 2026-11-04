@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 from contextlib import ExitStack, closing
@@ -12,8 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
-from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -37,13 +37,14 @@ def denied_workspace_roots(integration_workspace_root_path: str):
         for scope in ("workspace", "metadata"):
             workspace = root / f"denied-{scope}"
             workspace.mkdir()
-            backend_id = resolve_backend_workspace_id(Path.cwd(), workspace)
             denied = workspace if scope == "workspace" else workspace / ".boxteam"
+            if scope == "metadata":
+                denied.mkdir()
             permissions.callback(denied.chmod, denied.stat().st_mode)
             denied.chmod(0o500)
             if os.access(denied, os.W_OK):
                 pytest.skip("当前平台或用户不支持真实目录写权限拒绝")
-            cases.append((scope, workspace, backend_id))
+            cases.append((scope, workspace))
         yield cases
 
 
@@ -51,13 +52,29 @@ def denied_workspace_roots(integration_workspace_root_path: str):
 async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persisted_errors(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
-    denied_workspace_roots: list[tuple[str, Path, str]],
+    denied_workspace_roots: list[tuple[str, Path]],
 ) -> None:
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     primary = Path(integration_workspace_root_path)
     reset_gateway_persistent_state(workspace_root=primary)
     ports = integration_port_block_for_file(Path(request.node.fspath))
     evidence = {}
+    state_path = context.boxteam_home / "state/gateway/gateway.sqlite"
+
+    def persisted_state() -> dict[str, object]:
+        with closing(sqlite3.connect(f"{state_path.as_uri()}?mode=ro", uri=True)) as connection:
+            rows = connection.execute(
+                "SELECT gateway_id, workspace_id, payload_json FROM gateway_workspace_registry "
+                "ORDER BY gateway_id, workspace_id",
+            ).fetchall()
+            metadata, = connection.execute(
+                "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+            ).fetchone()
+        return {
+            "targets": [(gateway_id, workspace_id, json.loads(payload)["root_path"])
+                        for gateway_id, workspace_id, payload in rows],
+            "managed_backends": json.loads(metadata)["managed_backends"],
+        }
 
     async def inspect_public_errors(client: httpx.AsyncClient, stage: str) -> None:
         for check_health in (False, True):
@@ -65,30 +82,15 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
             assert response.status_code == 200, response.text
             body = response.json()
             assert body["request_id"] == response.headers["X-Request-ID"]
-            for scope, workspace, backend_id in denied_workspace_roots:
+            assert {(item["gateway_id"], item["workspace_id"]) for item in body["data"]["items"]} == expected_owners
+            for _, workspace in denied_workspace_roots:
                 assert str(workspace) not in response.text
-                workspace_id = build_managed_local_workspace_id(str(workspace))
-                item = next(item for item in body["data"]["items"] if item["workspace_id"] == workspace_id)
-                assert item["backend_workspace_id"] == backend_id
-                assert item["status"] == "offline"
-                if stage == "registered":
-                    assert item["connection_error"].startswith("Backend 启动失败: owner=backend_owner_")
-                    assert item["connection_error"].endswith(": stage=backend_start, error=PermissionError, errno=None")
-                else:
-                    if check_health:
-                        assert item["connection_error"] == (
-                            f"{workspace_id}/workspace_api: 工作区健康检查失败: workspace_id={workspace_id}: "
-                            "stage=workspace_health, error=RuntimeError"
-                        )
-                    else:
-                        assert item["connection_error"].startswith(
-                            f"{workspace_id}/workspace_api: Backend 运行检查失败: owner=backend_owner_",
-                        )
-                        assert item["connection_error"].endswith(": stage=backend_runtime_health, error=RuntimeError")
-                assert item["services"]["workspace_api"]["error"] == item["connection_error"]
-                assert item["services"]["workspace_api"]["status"] == "offline"
-                evidence[f"{stage}-{scope}-{check_health}"] = item
+                assert not (workspace / ".boxteam/workspace-identity.json").exists()
             evidence[f"{stage}-{check_health}"] = body
+        # 身份准备失败发生于 target/Backend owner 登记前，不能留下半登记事实。
+        actual_registry = persisted_state()
+        assert actual_registry == initial_registry
+        evidence[f"registry-{stage}"] = actual_registry
 
     with ExitStack() as processes:
         backend = start_backend_process(
@@ -109,13 +111,20 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=60,
         ) as client:
             await acquire_gateway_guest(client)
-            for scope, workspace, _ in denied_workspace_roots:
+            initial_response = await client.get("/api/gateway/workspaces")
+            assert initial_response.status_code == 200, initial_response.text
+            expected_owners = {(item["gateway_id"], item["workspace_id"])
+                               for item in initial_response.json()["data"]["items"]}
+            initial_registry = persisted_state()
+            evidence["initial_registry"] = initial_registry
+            for scope, workspace in denied_workspace_roots:
                 response = await client.post(
                     "/api/gateway/workspaces/local", json={"root_path": str(workspace), "name": scope},
                 )
                 assert response.status_code == 500, response.text
+                assert response.json()["request_id"] == response.headers["X-Request-ID"]
                 assert str(workspace) not in response.text
-                evidence[f"register-{scope}"] = {"status": response.status_code, "body": response.text}
+                evidence[f"register-{scope}"] = {"status": response.status_code, "body": response.json()}
             await inspect_public_errors(client, "registered")
 
         close_gateway_process(gateway)
@@ -126,22 +135,15 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
             await acquire_gateway_guest(client)
             await inspect_public_errors(client, "restarted")
 
-        state_path = context.boxteam_home / "state/gateway/gateway.sqlite"
-        with closing(sqlite3.connect(f"{state_path.as_uri()}?mode=ro", uri=True)) as connection:
-            for scope, workspace, backend_id in denied_workspace_roots:
-                row, = connection.execute(
-                    "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?",
-                    (build_managed_local_workspace_id(str(workspace)),),
-                ).fetchone()
-                record = json.loads(row)
-                assert record["root_path"] == str(workspace)
-                assert record["backend_workspace_id"] == backend_id
-                assert record["connection_error"] == evidence[f"registered-{scope}-False"]["connection_error"]
-                assert str(workspace) not in record["connection_error"]
-                evidence[f"record-{scope}"] = record
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
-        for _, workspace, _ in denied_workspace_roots:
-            assert str(workspace) in logs, "真实位置只保留在 Gateway 自有诊断日志"
+        entries = re.split(r"(?m)(?=^\d{4}-\d{2}-\d{2}T)", logs)
+        for scope, workspace in denied_workspace_roots:
+            request_id = evidence[f"register-{scope}"]["body"]["request_id"]
+            assert any(
+                f'request_id="{request_id}"' in entry and str(workspace) in entry
+                and "Workspace backend UUID CLI" in entry and "PermissionError" in entry
+                for entry in entries
+            ), "真实权限错误及位置只保留在同一请求的 Gateway 自有诊断日志"
         (context.artifacts_dir / "managed-startup-access-errors.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
         )
@@ -159,7 +161,6 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
     ports = integration_port_block_for_file(Path(request.node.fspath))
     workspace = primary / f"managed-{failure}-failure"
     workspace.mkdir()
-    workspace_id = build_managed_local_workspace_id(str(workspace))
     gateway_root = context.boxteam_home / "state/gateway"
     log_root = context.boxteam_home / "state/logs/terminal"
     missing_executable = primary / "private-missing-node"
@@ -209,6 +210,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
                     assert response.json()["request_id"] == response.headers["X-Request-ID"]
                     assert native_location not in response.text
                     evidence["registration"] = response.json()
+                workspace_id = read_workspace_id(workspace)
                 for check_health in (False, True):
                     response = await client.get("/api/gateway/workspaces", params={"check_health": check_health})
                     assert response.status_code == 200, response.text
@@ -217,6 +219,7 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
                     assert native_location not in response.text
                     assert str(workspace) not in response.text
                     item = next(item for item in body["data"]["items"] if item["workspace_id"] == workspace_id)
+                    assert item["gateway_id"] == body["data"]["active_workspace"]["gateway_id"]
                     assert item["status"] == "offline"
                     assert item["connection_error"]
                     assert item["services"]["workspace_api"]["status"] == "offline"
@@ -231,9 +234,12 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
                     evidence[f"{stage}-{check_health}"] = item
             with closing(sqlite3.connect(f"{(gateway_root / 'gateway.sqlite').as_uri()}?mode=ro", uri=True)) as connection:
                 row, = connection.execute(
-                    "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (workspace_id,),
+                    "SELECT payload_json FROM gateway_workspace_registry WHERE gateway_id=? AND workspace_id=?",
+                    (item["gateway_id"], workspace_id),
                 ).fetchone()
             record = json.loads(row)
+            assert record["gateway_id"] == item["gateway_id"]
+            assert record["workspace_id"] == workspace_id
             assert record["root_path"] == str(workspace)
             assert record["connection_error"]
             assert native_location not in record["connection_error"]

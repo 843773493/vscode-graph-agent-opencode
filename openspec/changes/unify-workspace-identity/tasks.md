@@ -120,3 +120,9 @@
 - 后续 registry 消费者定向 35 passed／1.41 秒，保留 SQLite 重开、cursor、CAS、排空和完整组归属断言，远端登记沿正式 snapshot/batch 发布。真实 Gateway 导航 CRUD、循环／非空拒绝与重启恢复 1 passed／51.54 秒，核对注册 UUID、目标端身份文件和嵌套 Gateway owner；下游使用原 HTTP 替身。两份测试 Ruff、Pyright 均退出 0，原件位于 `out/tests/temp/identity_local_consumers_20261104/artifacts/` 的 `registry-*-fixed-*`、`navigation-*-owners-*`；registry 最后仅调整空白并核 AST 相同。本轮不代表客户端或 Windows 验收，6.4 保持未完成。
 
 - 联邦及转发消费者迁齐后物理删除 `build_projected_workspace_id`，代码调用方清零。公开转发六接口沿原 `resolve_workspace_key` 解析目标 Gateway，保持原管理授权；同 UUID 的不同 Gateway 隔离，路径/头冲突在 manager 前拒绝。原错误对象、系统码、持久文件不变与清理重试断言迁到实际拥有转发删除的公开入口，manual CRUD 越过 `remote_projection` owner 仍拒绝。三份定向测试 131 passed，公开 schema 1 passed；最后成功回执仅增加非空断言，export 单项复验通过。四文件 Ruff 通过，联邦模块保留 5 条原有 TRY004；Pyright 两份生产文件无诊断，三份测试仍有 18 条替身/object/winerror 等类型诊断，不表述为全绿。准确命令、指纹、原始反例与结果在 `out/tests/temp/identity_federation_consumers_20261104/artifacts/`。连接删除协调转发清理仍未验收，本轮不代替实机 SSH/Web 或完整 6.4。
+
+### 2026-11-04：恢复与本地别名生成器收口
+
+- 恢复失败事实沿原 owner 补齐连接写入范围，未放宽 SQLite 授权；rename/restore 迁齐 UUID、完整 owner 和单一成员身份。删除旧模块后的定向测试 67 passed／17.22 秒，Ruff 通过。两份测试 Pyright 零诊断；`routes.py` 有 44 条 mixin 成员诊断，已对照改前同方法源码，未执行旧 HEAD 类型检查。修复提交 `243ebcdf5`，原件在 `out/tests/temp/identity_restore_consumers_20261104/artifacts/`。
+- 全仓迁齐本地生成器直接及间接消费者后，物理删除 `workspace_ids.py` 三个函数与 registry 再导出。14 个装配／消费者模块实际导入通过；SSH 装具原单测 17 passed。双工作区真实路由与 Session UUID、托管工作区重启恢复、跨工作区上下文工具三个场景分别通过；其中恢复／上下文合跑 2 passed／130.69 秒。旧恢复测试的重复 start 已删除，由创建结果 ready、generation 与完整成员断言承接。一次复验端口占用后未清理未知进程，确认端口可绑定才补跑失败及未执行场景；失败原件保留。
+- 身份准备真实权限拒绝、executable 启动失败及 actor 代理三项 3 passed／95.19 秒，五份消费者 Ruff／Pyright 均通过；未预建权限场景身份，明确验证无半登记 target／owner。其余启动失败参数、完整 Launcher/Web、Docker SSH 和真实 Provider E2E 未重跑。原件在 `out/tests/temp/identity_remaining_clients_20261104/artifacts/`；主线程命令、指纹、端口观察和结果在 `out/tests/temp/identity_routing_consumers_20261104/artifacts/`。主线程五文件 Pyright 仍有 22 条测试诊断，逐条源码与改前相同，未运行旧 HEAD 完整类型检查；生产 facade 与目标侧只读 helper 无诊断。独立只读审查未发现本批漏迁，不据此勾选完整 6.4。

@@ -14,16 +14,15 @@ import httpx
 import pytest
 
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import build_session_catalog_components
-from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.proxy_upstream import load_proxy_gateway_id
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
@@ -32,7 +31,6 @@ from tests.support.processes.gateway import (
     reset_gateway_persistent_state,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
     ensure_local_port_available,
     resolve_workspace_python_executable,
@@ -57,7 +55,6 @@ class _NavigationScopeProxyRuntime:
     workspace_id: str
     backend_port: int
     gateway: GatewayProcess
-    gateway_workspace_id: str
     peer_credential: FederationCredential
 
 
@@ -117,6 +114,7 @@ def _start_navigation_scope_backend(
             env=environment,
             stdout=stdout_file,
             stderr=stderr_file,
+            text=True,
         )
         handle = _NavigationScopeBackendProcess(
             process=process,
@@ -157,15 +155,6 @@ def navigation_scope_proxy_runtime(
     monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
     reset_gateway_persistent_state(workspace_root=workspace_root)
 
-    workspace_id = load_or_create_workspace_id(workspace_root)
-    catalog = build_session_catalog_components(
-        workspace_root / ".boxteam" / "sessions", workspace_id
-    )
-    try:
-        catalog.resolver.initialize()
-    finally:
-        catalog.close()
-
     gateway_root = boxteam_home / "state" / "gateway"
     peer_credential = FederationCredentialStore(
         storage_path=gateway_root / "credentials" / "federation.json"
@@ -195,17 +184,14 @@ def navigation_scope_proxy_runtime(
         ) as client:
             response = client.get("/api/gateway/workspaces")
         assert response.status_code == 200, response.text
-        workspace_entries = response.json()["data"]["items"]
-        gateway_workspace_id = next(
-            item["workspace_id"]
-            for item in workspace_entries
-            if item["workspace_id"] == build_managed_local_workspace_id(str(workspace_root))
-        )
+        workspace_id = read_workspace_id(workspace_root)
+        workspace_entry, = response.json()["data"]["items"]
+        assert workspace_entry["workspace_id"] == workspace_id
+        assert workspace_entry["gateway_id"] == load_proxy_gateway_id()
         yield _NavigationScopeProxyRuntime(
             workspace_id=workspace_id,
             backend_port=backend.port,
             gateway=gateway,
-            gateway_workspace_id=gateway_workspace_id,
             peer_credential=peer_credential,
         )
     finally:
@@ -244,7 +230,7 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
     """覆盖用户隔离、guest 稳定 scope、peer 认证、伪造头与请求上下文重置。"""
     runtime = navigation_scope_proxy_runtime
     gateway_id = load_proxy_gateway_id()
-    gateway_workspace_id = runtime.gateway_workspace_id
+    workspace_id = runtime.workspace_id
     gateway_client = httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{runtime.gateway.port}",
         headers=LOCAL_TOKEN_HEADERS,
@@ -290,7 +276,7 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
         ) -> httpx.Response:
             headers = {
                 "X-Request-ID": request_id,
-                "X-BoxTeam-Workspace-Id": gateway_workspace_id,
+                "X-BoxTeam-Workspace-Id": workspace_id,
                 "X-BoxTeam-Gateway-Id": "gateway:forged-client-value",
                 "X-BoxTeam-Navigation-Actor": "user:forged-client-value",
             }
@@ -317,7 +303,7 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
                 "/api/v1/session-catalog/operations",
                 headers={
                     "X-Request-ID": request_id,
-                    "X-BoxTeam-Workspace-Id": gateway_workspace_id,
+                    "X-BoxTeam-Workspace-Id": workspace_id,
                     "X-BoxTeam-Gateway-Id": "gateway:forged-status-value",
                     "X-Local-Token": LOCAL_TOKEN_HEADERS["X-Local-Token"],
                     "X-BoxTeam-Navigation-Actor": "user:forged-status-value",
@@ -460,7 +446,7 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
         public_read = await gateway_client.post(
             "/api/v1/context/read",
             headers={
-                "X-BoxTeam-Workspace-Id": gateway_workspace_id,
+                "X-BoxTeam-Workspace-Id": workspace_id,
                 "X-BoxTeam-Gateway-Id": "gateway:forged-public-value",
                 "X-BoxTeam-Navigation-Actor": "user:forged-public-value",
                 "Cookie": f"{USER_ACCESS_COOKIE_NAME}={guest_cookie_one}",
@@ -470,7 +456,7 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
         public_search = await gateway_client.post(
             "/api/v1/context/search",
             headers={
-                "X-BoxTeam-Workspace-Id": gateway_workspace_id,
+                "X-BoxTeam-Workspace-Id": workspace_id,
                 "X-BoxTeam-Gateway-Id": "gateway:forged-public-value",
                 "X-BoxTeam-Navigation-Actor": "user:forged-public-value",
                 "Cookie": f"{USER_ACCESS_COOKIE_NAME}={guest_cookie_one}",
@@ -511,6 +497,5 @@ async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
         assert [scope["actor"] for scope in scopes] == expected_actors
         assert all(scope["gateway_id"] == gateway_id for scope in scopes)
         assert all(scope["workspace_id"] == runtime.workspace_id for scope in scopes)
-        assert runtime.workspace_id != gateway_workspace_id
     finally:
         await gateway_client.aclose()

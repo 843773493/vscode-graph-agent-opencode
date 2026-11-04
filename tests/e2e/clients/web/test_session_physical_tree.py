@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
@@ -71,11 +71,14 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             assert health_response.status_code == 200, health_response.text
             workspaces_response = await client.get("/api/gateway/workspaces")
             assert workspaces_response.status_code == 200, workspaces_response.text
-            parent_workspace_id = workspaces_response.json()["data"][
-                "active_workspace_id"
-            ]
+            parent_workspace = workspaces_response.json()["data"]["active_workspace"]
+            assert parent_workspace is not None
+            parent_workspace_id = parent_workspace["workspace_id"]
+            assert parent_workspace_id == read_workspace_id(workspace_root)
+            assert parent_workspace["gateway_id"] == health_response.json()["data"]["gateway_id"]
             assert any(
                 item["workspace_id"] == parent_workspace_id
+                and item["gateway_id"] == parent_workspace["gateway_id"]
                 for item in workspaces_response.json()["data"]["items"]
             )
             child_workspace_root = prepare_test_workspace(
@@ -97,14 +100,14 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 },
             )
             assert add_workspace_response.status_code == 200, add_workspace_response.text
+            child_workspace_id = read_workspace_id(child_workspace_root)
             child_workspace = next(
                 item
                 for item in add_workspace_response.json()["data"]["items"]
-                if item["workspace_id"]
-                == build_managed_local_workspace_id(str(child_workspace_root))
+                if item["workspace_id"] == child_workspace_id
+                and item["gateway_id"] == parent_workspace["gateway_id"]
             )
             assert child_workspace["managed"] is True
-            child_workspace_id = child_workspace["workspace_id"]
             parent_response = await client.post(
                 "/api/v1/sessions",
                 json={"title": "物理父会话"},

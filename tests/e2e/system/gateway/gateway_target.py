@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import shlex
 import subprocess
 import time
@@ -8,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal
 
+from app.core.identifier import validate_gateway_id
+from app.core.workspace_identity import validate_workspace_id
 from configs.boxteam import SSH_KEY_NAME, install_gateway_development_assets
 
 READY_TIMEOUT_SECONDS = 60
@@ -508,6 +511,39 @@ def run_ssh_command(
     timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
     return run_checked_command(ssh_command(target, remote_command), timeout=timeout)
+
+
+def read_remote_workspace_owner(
+    target: GatewaySshTarget,
+    *,
+    remote_workspace_path: str,
+    remote_boxteam_home: str,
+) -> tuple[str, str]:
+    """在目标机器只读产品已生成的身份，不在中继解释远端路径。"""
+    script = """import json, sys
+from pathlib import Path
+from app.core.workspace_identity import read_workspace_id
+from app.gateway.credentials import load_or_create_gateway_id
+print(json.dumps([
+    load_or_create_gateway_id(Path(sys.argv[2]) / 'state' / 'gateway' / 'identity.json', read_only=True),
+    read_workspace_id(Path(sys.argv[1])),
+]))
+"""
+    arguments = (_remote_python(target), "-c", script, remote_workspace_path, remote_boxteam_home)
+    if target.platform == "windows":
+        command = _powershell_command(
+            "$ErrorActionPreference = 'Stop'; "
+            f"Set-Location -LiteralPath {_powershell_quote(target.repository_path)}; "
+            "& " + " ".join(_powershell_quote(value) for value in arguments)
+            + "; exit $LASTEXITCODE"
+        )
+    else:
+        command = (
+            f"cd {shlex.quote(target.repository_path)} && "
+            + " ".join(shlex.quote(value) for value in arguments)
+        )
+    gateway_id, workspace_id = json.loads(run_ssh_command(target, command, timeout=30).stdout)
+    return validate_gateway_id(gateway_id), validate_workspace_id(workspace_id)
 
 
 def wait_for_ssh_ready(target: GatewaySshTarget) -> None:

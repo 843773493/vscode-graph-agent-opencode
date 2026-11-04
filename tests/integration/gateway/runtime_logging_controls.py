@@ -13,7 +13,7 @@ import commentjson
 import httpx
 
 from app.core.logging_contract import load_runtime_log_contract
-from app.gateway.workspace_ids import build_managed_local_workspace_id
+from app.core.workspace_identity import read_workspace_id
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -27,9 +27,16 @@ def join_runtime_logging_workspaces(gateway_url: str, token: str, workspace_root
     (secondary_root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
     shutil.copy2(workspace_root / ".boxteam/workspace.jsonc", secondary_root / ".boxteam/workspace.jsonc")
     with httpx.Client(base_url=gateway_url, headers={"X-Local-Token": token}, timeout=120, trust_env=False) as client:
-        primary = next(item for item in client.get("/api/gateway/workspaces").raise_for_status().json()["data"]["items"] if item["active"])
+        listing = client.get("/api/gateway/workspaces").raise_for_status().json()["data"]
+        active = listing["active_workspace"]
+        assert active is not None
+        primary = next(item for item in listing["items"]
+                       if {"gateway_id": item["gateway_id"], "workspace_id": item["workspace_id"]} == active)
+        assert primary["workspace_id"] == read_workspace_id(workspace_root)
         added = client.post("/api/gateway/workspaces/local", json={"root_path": str(secondary_root), "name": "Logging Secondary"}).raise_for_status().json()["data"]
-        secondary = next(item for item in added["items"] if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_root)))
+        secondary_id = read_workspace_id(secondary_root)
+        secondary = next(item for item in added["items"]
+                         if item["gateway_id"] == primary["gateway_id"] and item["workspace_id"] == secondary_id)
         assert secondary["status"] == "ready" and secondary["backend_generation"] != primary["backend_generation"]
         client.post(f"/api/gateway/workspaces/{secondary['workspace_id']}/runtime/stop").raise_for_status()
         desired = [primary["workspace_id"], secondary["workspace_id"]]
@@ -196,7 +203,11 @@ def verify_runtime_logging_controls(
     with httpx.Client(timeout=5, trust_env=False) as client:
         workspaces = client.get(f"{gateway_url}/api/gateway/workspaces", headers={"X-Local-Token": token})
         workspaces.raise_for_status()
-        target = next(item for item in workspaces.json()["data"]["items"] if item["active"])
+        listing = workspaces.json()["data"]
+        active = listing["active_workspace"]
+        assert active is not None
+        target = next(item for item in listing["items"]
+                      if {"gateway_id": item["gateway_id"], "workspace_id": item["workspace_id"]} == active)
         urls = {"gateway": f"{gateway_url}/api/gateway/internal/runtime-logging"}
         for name, service in (("backend", "workspace_api"), ("terminal", "terminal_manager"), ("browser", "browser_manager")):
             base = target["services"][service]["local_url"]
@@ -259,8 +270,10 @@ def verify_runtime_logging_controls(
         assert "invalid runtime control token" in str(_launcher_control(home, {"action": "status", "token": invalid})["error"])
     before = _launcher_control(home, {"action": "status", "token": token})
     assert before["service"] == "launcher" and before["pid"] == launcher_pid
-    assert before["log_sink"]["path"] == str(contract.path_for(log_root, "launcher"))
-    assert before["log_sink"]["role"] == "launcher"
+    launcher_sink = before["log_sink"]
+    assert isinstance(launcher_sink, dict)
+    assert launcher_sink["path"] == str(contract.path_for(log_root, "launcher"))
+    assert launcher_sink["role"] == "launcher"
     assert before["applied_revision"] == authority_revision
     payload = {"runtime_instance_id": before["runtime_instance_id"], "expected_revision": before["applied_revision"],
                    "revision": "control-launcher-debug", "level": "debug", "pretty": False}
