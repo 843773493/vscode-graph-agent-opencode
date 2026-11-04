@@ -668,10 +668,11 @@ class RolloutViewMembershipMixin:
             ordered_item_rows = [item_rows_by_id[item_id] for item_id in inherited_ids] + [
                 row for row in ordered_item_rows if row[0] not in inherited_set
             ]
+            # 复用已算出的继承集合；逐项重建父集合会让默认 context 排序退化为 O(n²)。
             context_order = (
                 list(ordered_context_item_ids) if ordered_context_item_ids is not None
                 else [item_id for item_id in parent_context_order if item_id in item_rows_by_id]
-                + [row[0] for row in ordered_item_rows if row[0] not in set(parent_item_order)]
+                + [row[0] for row in ordered_item_rows if row[0] not in inherited_set]
             )
             if len(context_order) != len(set(context_order)) or set(context_order) - set(item_rows_by_id):
                 raise ValueError("context selection 含重复或不属于该历史 view 的 item")
