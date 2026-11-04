@@ -12,6 +12,7 @@ from app.protocol.codecs.terminal import (
 from app.protocol.generated.boxteam.browser.v1 import browser_pb2
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 from app.schemas.gateway.diagnostics import GatewayHealthDTO
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 
 
 @pytest.fixture
@@ -250,15 +251,18 @@ def test_browser_business_constraints_remain_at_the_boundary(browser_snapshot, n
 def test_gateway_adapter_uses_only_gateway_protocol_fields() -> None:
     encoded = gateway_health_to_proto(
         GatewayHealthDTO(
-            gateway_id="gateway_123",
+            gateway_id="gateway_" + "0" * 32,
             process_id=123,
-            active_workspace_id="workspace_123",
+            active_workspace=GatewaySearchWorkspaceOwnerDTO(
+                gateway_id="gateway_" + "1" * 32, workspace_id="00000000-0000-4000-8000-000000000001",
+            ),
             development_restart_available=True,
         ),
     )
 
-    assert encoded.gateway_id == "gateway_123"
-    assert encoded.active_workspace_id == "workspace_123"
+    assert encoded.gateway_id == "gateway_" + "0" * 32
+    assert encoded.active_workspace.gateway_id == "gateway_" + "1" * 32
+    assert encoded.active_workspace.workspace_id == "00000000-0000-4000-8000-000000000001"
     assert encoded.process_id == 123
 
 @pytest.mark.parametrize("exit_code", [0, 9, -9, -(2**31), 2**31 - 1, None])

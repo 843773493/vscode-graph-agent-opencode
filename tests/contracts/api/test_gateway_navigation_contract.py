@@ -13,6 +13,7 @@ from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol import openapi
 from app.protocol.schema import descriptor_pool_from_set
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.workspaces import (
     AddLocalWorkspaceRequest,
     UpdateGatewayWorkspaceRequest,
@@ -73,9 +74,9 @@ def test_navigation_contract_requires_roots(gateway_openapi: JsonSchemaValue, na
 
 @pytest.mark.parametrize(("model", "field", "shape"), [
     ("AddLocalWorkspaceRequest", "root_path", {"type": "integer"}),
-    ("UpdateGatewayWorkspaceRequest", "parent_workspace_id", {"type": "integer"}),
-    ("ReorderGatewayWorkspacesRequest", "workspace_ids", {"type": "object"}),
-    ("ActivateGatewayWorkspaceResultDTO", "active_workspace_id", {"type": "integer"}),
+    ("UpdateGatewayWorkspaceRequest", "parent_workspace", {"type": "integer"}),
+    ("ReorderGatewayWorkspacesRequest", "workspaces", {"type": "object"}),
+    ("ActivateGatewayWorkspaceResultDTO", "active_workspace", {"type": "integer"}),
     ("WorkspaceFolderCreateRequest", "name", {"type": "array"}),
     ("WorkspaceNavigationNodeUpdateRequest", "parent_node_id", {"type": "integer"}),
     ("WorkspaceNavigationPlacementRequest", "target_node_id", {"type": "integer"}),
@@ -125,8 +126,9 @@ def test_navigation_contract_keeps_model_business_constraints() -> None:
     assert WorkspaceFolderCreateRequest(name="  项目  ").name == "项目"
     cleared = WorkspaceNavigationNodeUpdateRequest.model_validate({"parent_node_id": None})
     assert cleared.model_fields_set == {"parent_node_id"}
-    assert WorkspaceNavigationNodeDTO(node_id="folder", name="目录", kind="workspace_folder").workspace_id is None
-    assert WorkspaceNavigationNodeDTO(node_id="ref", name="工作区", kind="workspace_ref", workspace_id="route").workspace_id == "route"
+    owner = GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_" + "0" * 32, workspace_id="00000000-0000-4000-8000-000000000001")
+    assert WorkspaceNavigationNodeDTO(node_id="folder", name="目录", kind="workspace_folder").workspace is None
+    assert WorkspaceNavigationNodeDTO(node_id="ref", name="工作区", kind="workspace_ref", workspace=owner).workspace == owner
     for mode, target in (("before", "peer"), ("after", "peer"), ("last", None)):
         value = WorkspaceNavigationPlacementRequest.model_validate({"node_id": "node", "mode": mode, "target_node_id": target})
         assert value.mode == mode and value.target_node_id == target
@@ -140,7 +142,7 @@ def test_navigation_contract_keeps_model_business_constraints() -> None:
             WorkspaceNavigationPlacementRequest.model_validate(invalid)
     for invalid in (
         {"node_id": "node", "name": "目录", "kind": "workspace_ref"},
-        {"node_id": "node", "name": "目录", "kind": "workspace_folder", "workspace_id": "route"},
+        {"node_id": "node", "name": "目录", "kind": "workspace_folder", "workspace": owner.model_dump()},
         {"node_id": "node", "name": "目录", "kind": "unknown"},
     ):
         with pytest.raises(ValidationError):
@@ -156,8 +158,8 @@ def test_navigation_contract_keeps_model_business_constraints() -> None:
 def test_workspace_management_contract_keeps_native_input_and_explicit_null() -> None:
     for native in ("/outside/project", r"C:\outside\project"):
         assert AddLocalWorkspaceRequest(root_path=native).root_path == native
-    cleared = UpdateGatewayWorkspaceRequest.model_validate({"parent_workspace_id": None})
-    assert cleared.model_fields_set == {"parent_workspace_id"}
+    cleared = UpdateGatewayWorkspaceRequest.model_validate({"parent_workspace": None})
+    assert cleared.model_fields_set == {"parent_workspace"}
     assert UpdateGatewayWorkspaceRequest(name="  工作区  ").name == "工作区"
     for invalid in ({}, {"name": None}, {"unexpected": True}):
         with pytest.raises(ValidationError):
