@@ -1,4 +1,4 @@
-"""快照公开引用经过真实 HTTP 保存和读取，并绑定明确的工作区与会话。"""
+"""快照公开引用经 ASGI 真实路由保存和读取，并绑定明确的工作区与会话。"""
 
 from __future__ import annotations
 
@@ -13,11 +13,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.runtime import router
-from app.core.path_utils import get_gateway_root, get_session_path_resolver
+from app.core.path_utils import get_session_path_resolver
 from app.core.trace_middleware import TraceMiddleware
+from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
-from app.gateway.credentials import FederationCredentialStore
+from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import router as proxy_router
 from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
 from app.services.infrastructure.log_service import LogService
@@ -108,10 +112,11 @@ def test_snapshot_wire_roundtrip_and_http_contract_reserve_removed_location() ->
     from app.main import app
     from app.protocol.generated.boxteam.workspace.v2 import public_pb2
 
+    workspace_id = "00000000-0000-4000-8000-000000000001"
     value = public_pb2.UiSnapshotResultDTO(
         snapshot_id="snapshot_019c257bff2c7c6989d1c38a6ae7fbf2",
-        html_url="/api/v1/workspaces/explicit/runtime/log-snapshot/snapshot_id/html",
-        metadata_url="/api/v1/workspaces/explicit/runtime/log-snapshot/snapshot_id/metadata",
+        html_url=f"/api/v1/workspaces/{workspace_id}/runtime/log-snapshot/snapshot_id/html",
+        metadata_url=f"/api/v1/workspaces/{workspace_id}/runtime/log-snapshot/snapshot_id/metadata",
         status="saved",
     )
     assert value.FromString(value.SerializeToString()) == value
@@ -135,11 +140,15 @@ async def test_snapshot_gateway_roundtrip_stays_on_explicit_workspace(
     snapshot_endpoint, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote_gateway: bool,
 ) -> None:
     backend_client, workspace_root, _, workspace_id = snapshot_endpoint
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway" / "targets.json")
-    for target_id, backend_id in (("snapshot-target", workspace_id), ("active-target", "00000000-0000-4000-8000-000000000099")):
+    native_root = tmp_path / "gateway"
+    native_gateway_id = load_or_create_gateway_id(native_root / "identity.json")
+    active_root = tmp_path / "native-active-workspace"
+    active_workspace_id = load_or_create_workspace_id(active_root)
+    registry = GatewayWorkspaceRegistry(storage_path=native_root / "targets.json", gateway_id=native_gateway_id)
+    for target_id, target_root in ((workspace_id, workspace_root), (active_workspace_id, active_root)):
         registry.upsert(WorkspaceTarget(
-            workspace_id=target_id, backend_workspace_id=backend_id, name=target_id,
-            root_path=str(workspace_root), backend_url="http://backend.test", connection_kind="local",
+            gateway_id=native_gateway_id, workspace_id=target_id, name=target_id,
+            root_path=str(target_root), backend_url="http://backend.test", connection_kind="local",
         ), activate=True)
     gateway = FastAPI()
     gateway.add_middleware(TraceMiddleware)
@@ -147,51 +156,115 @@ async def test_snapshot_gateway_roundtrip_stays_on_explicit_workspace(
     gateway.state.registry = registry
     gateway.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
     gateway.dependency_overrides[verify_user_access_for_proxy] = lambda: None
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=backend_client.app), trust_env=False) as upstream:
+
+    class GatewayTransport(httpx.ASGITransport):
+        def __init__(self, application: FastAPI, gateway_root: Path) -> None:
+            super().__init__(app=application)
+            self.gateway_root = gateway_root
+            self.requests: list[httpx.Request] = []
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            # 本测试串行请求，在 transport 边界模拟各 Gateway 独立进程的身份目录。
+            with monkeypatch.context() as environment:
+                environment.setenv("BOXTEAM_GATEWAY_ROOT", str(self.gateway_root))
+                return await super().handle_async_request(request)
+
+    backend_requests: list[httpx.Request] = []
+
+    async def record_backend_request(request: httpx.Request) -> None:
+        backend_requests.append(request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=backend_client.app), trust_env=False,
+        event_hooks={"request": [record_backend_request]},
+    ) as upstream:
         gateway.state.http_client = gateway.state.streaming_http_client = upstream
+        entry_registry = registry
+        entry_gateway_id = native_gateway_id
+        federation_token: str | None = None
         if remote_gateway:
-            monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(tmp_path / "gateway-root"))
-            FederationCredentialStore(storage_path=get_gateway_root() / "credentials" / "federation.json").issue(
-                connection_id="remote-connection", peer_gateway_id="gateway_019c257bff2c7c6989d1c38a6ae7fbf2",
-            )
+            entry_root = tmp_path / "projection"
+            entry_gateway_id = load_or_create_gateway_id(entry_root / "identity.json")
+            federation_token = FederationCredentialStore(storage_path=entry_root / "credentials" / "federation.json").issue(
+                connection_id="remote-connection", peer_gateway_id=entry_gateway_id,
+            ).token
             gateway.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(
-                kind="federation", peer_gateway_id="gateway_019c257bff2c7c6989d1c38a6ae7fbf3",
+                kind="federation", peer_gateway_id=entry_gateway_id,
             )
-            projected_registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "projection" / "targets.json")
-            projected_registry.upsert(WorkspaceTarget(
-                workspace_id="remote-projection", backend_workspace_id=workspace_id, name="remote",
-                root_path=None, backend_url="http://remote-gateway.test", connection_kind="remote_gateway",
-                remote_gateway_connection_id="remote-connection", remote_workspace_id="snapshot-target",
-            ), activate=False)
-            projected_registry.upsert(WorkspaceTarget(
-                workspace_id="active-target", backend_workspace_id="00000000-0000-4000-8000-000000000099",
-                name="active", root_path=str(workspace_root), backend_url="http://unused.test", connection_kind="local",
+            entry_registry = GatewayWorkspaceRegistry(storage_path=entry_root / "targets.json", gateway_id=entry_gateway_id)
+            connection = RemoteGatewayConnection(
+                connection_id="remote-connection", name="远端", host="remote.test", port=22, username="unit",
+                private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
+                remote_gateway_id=native_gateway_id, protocol_version=FEDERATION_PROTOCOL_VERSION,
+                source_owner="manual", remote_config_event_cursor=1,
+            )
+            entry_registry.apply_remote_projection_snapshot(
+                connection=connection,
+                projections=(WorkspaceTarget(
+                    gateway_id=native_gateway_id, workspace_id=workspace_id, name="remote", root_path=None,
+                    backend_url="http://remote-gateway.test", connection_kind="remote_gateway", owner="remote_projection",
+                    remote_gateway_connection_ids=(connection.connection_id,),
+                ),),
+                runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote-gateway.test"}),
+            )
+            entry_active_root = tmp_path / "entry-active-workspace"
+            bind_workspace_id(entry_active_root, workspace_id)
+            entry_registry.upsert(WorkspaceTarget(
+                gateway_id=entry_gateway_id, workspace_id=workspace_id, name="active",
+                root_path=str(entry_active_root), backend_url="http://unused.test", connection_kind="local",
             ), activate=True)
-            projected_registry._remote_gateway_runtimes["remote-connection"] = SimpleNamespace(
-                service_urls={"workspace_api": "http://remote-gateway.test"},
-            )
             entry = FastAPI()
             entry.add_middleware(TraceMiddleware)
             entry.include_router(proxy_router)
-            entry.state.registry = projected_registry
+            entry.state.registry = entry_registry
             entry.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
             entry.dependency_overrides[verify_user_access_for_proxy] = lambda: None
         else:
             entry = gateway
-        # 两层都走真实代理与后端路由；transport 仅替换网络连接。
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), trust_env=False) as remote_upstream:
+            entry_root = native_root
+        # 两层都走真实代理与后端 ASGI 路由；transport 只替换网络和进程边界。
+        remote_transport = GatewayTransport(gateway, native_root)
+        async with httpx.AsyncClient(transport=remote_transport, trust_env=False) as remote_upstream:
             if remote_gateway:
                 entry.state.http_client = entry.state.streaming_http_client = remote_upstream
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=entry), base_url="http://gateway.test") as client:
-                response = await client.post(f"/api/v1/workspaces/{workspace_id}/runtime/log-snapshot", json={
+            async with httpx.AsyncClient(
+                transport=GatewayTransport(entry, entry_root), base_url="http://gateway.test", trust_env=False,
+                headers={TARGET_GATEWAY_ID_HEADER: native_gateway_id},
+            ) as client:
+                snapshot_url = f"/api/v1/workspaces/{workspace_id}/runtime/log-snapshot"
+                request_ids = ("snapshot-through-gateway", "snapshot-html-through-gateway", "snapshot-metadata-through-gateway")
+                response = await client.post(snapshot_url, json={
                     "html": "<p>经过 Gateway 的快照</p>", "session_id": SESSION_ID,
-                }, headers={"X-Request-ID": "snapshot-through-gateway"})
+                }, headers={"X-Request-ID": request_ids[0]})
                 assert response.status_code == 200, response.text
-                assert response.json()["request_id"] == response.headers["X-Request-ID"] == "snapshot-through-gateway"
+                assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_ids[0]
                 result = response.json()["data"]
-                html = await client.get(result["html_url"])
+                assert all(result[key].startswith(f"/api/v1/workspaces/{workspace_id}/") for key in ("html_url", "metadata_url"))
+                html = await client.get(result["html_url"], headers={"X-Request-ID": request_ids[1]})
                 assert html.status_code == 200 and html.text == "<p>经过 Gateway 的快照</p>"
-                metadata = await client.get(result["metadata_url"])
+                assert html.headers["X-Request-ID"] == request_ids[1]
+                metadata = await client.get(result["metadata_url"], headers={"X-Request-ID": request_ids[2]})
                 assert metadata.status_code == 200 and metadata.json()["workspace_id"] == workspace_id
+                assert metadata.headers["X-Request-ID"] == request_ids[2]
                 assert str(workspace_root) not in metadata.text + response.text
-                assert registry.active_workspace_id == "active-target"
+                expected_routes = [
+                    (method, httpx.URL(url).raw_path)
+                    for method, url in (("POST", snapshot_url), ("GET", result["html_url"]), ("GET", result["metadata_url"]))
+                ]
+                assert [(request.method, request.url.raw_path) for request in backend_requests] == expected_routes
+                assert all(request.url.host == "backend.test" for request in backend_requests)
+                assert tuple(request.headers["X-Request-ID"] for request in backend_requests) == request_ids
+                assert all(request.headers["X-BoxTeam-Workspace-Id"] == workspace_id for request in backend_requests)
+                assert all(request.headers["X-BoxTeam-Gateway-Id"] == native_gateway_id for request in backend_requests)
+                assert all(TARGET_GATEWAY_ID_HEADER not in request.headers for request in backend_requests)
+                assert registry.active_workspace == (native_gateway_id, active_workspace_id)
+                if remote_gateway:
+                    assert [(request.method, request.url.raw_path) for request in remote_transport.requests] == expected_routes
+                    assert all(request.url.host == "remote-gateway.test" for request in remote_transport.requests)
+                    assert tuple(request.headers["X-Request-ID"] for request in remote_transport.requests) == request_ids
+                    assert all(request.headers["X-BoxTeam-Workspace-Id"] == workspace_id for request in remote_transport.requests)
+                    assert all(request.headers[TARGET_GATEWAY_ID_HEADER] == native_gateway_id for request in remote_transport.requests)
+                    assert all(request.headers["X-BoxTeam-Gateway-Id"] == entry_gateway_id for request in remote_transport.requests)
+                    assert all(request.headers["X-BoxTeam-Federation-Token"] == federation_token for request in remote_transport.requests)
+                    assert entry_registry.active_workspace == (entry_gateway_id, workspace_id)

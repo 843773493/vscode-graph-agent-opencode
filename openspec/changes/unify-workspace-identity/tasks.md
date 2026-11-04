@@ -9,7 +9,7 @@
 
 - [x] 2.1 将本地工作区登记、唯一 root binding、活动选择和路由键迁为工作区 UUID 与 Gateway 归属，保持 owner／租约／registry revision CAS。
 - [x] 2.2 迁齐本地管理和业务代理的工作区定位，统一路径与头部 UUID，拒绝冲突及错误归属，保留原 request ID 和管理授权。
-- [ ] 2.3 同步协议 descriptor／proto、公开 DTO、生成映射与校验、OpenAPI 和 SDK；更新破坏性协议版本，执行生成产物一致性检查和受影响类型检查。
+- [x] 2.3 同步协议 descriptor／proto、公开 DTO、生成映射与校验、OpenAPI 和 SDK；更新破坏性协议版本，执行生成产物一致性检查和受影响类型检查。
 - [x] 2.4 通过真实注册和 HTTP／URI 文件入口验证各层 UUID 相同、两工作区隔离、相同 UUID 不同根冲突及未授权根管理拒绝。
 
 ## 3. 共享 Backend 生命周期
@@ -167,3 +167,9 @@
 - 准确命令与原始结果在 `out/tests/temp/identity_registry_recovery_root/artifacts/`、`identity_registry_recovery_current/artifacts/`、`identity_registry_read_consumers_current/artifacts/`。Root 四文件 Pyright 完整 HEAD 基线／当前 108／108、Ruff 1／1，均无新增诊断；代理三测试静态零诊断。未将该证据扩展为 Windows、真实远端、客户端或完整 6.3／6.4 验收。
 
 - 6.3 重入补充：已完成身份迁移只返回冻结回执和导出恢复材料，不重新锁定数据库或发布旧快照；正常 schema 升级、后续视图写入不再触发旧 digest 误判。首次／中断发布、显式回退仍用原 CAS／备份／屏障，后续写入仍拒绝被旧备份覆盖；恢复输出冲突保全原件。参考 Copilot `sessionStore.ensureSchema` 的已完成版本门，未运行参考仓库测试。直接迁移四文件组 103 passed，Ruff 通过，Pyright 7／7 为既存测试诊断、生产零诊断；准确命令、原件和指纹见 `out/tests/temp/identity_completed_migration_current/artifacts/verification-1793826712816757004.json`。真实重启及客户端恢复的整体 6.3 继续未勾选。
+
+### 2026-11-04：2.3 公开协议消费者收口
+
+- Gateway／Workspace 公开绑定统一为 v2，联邦协商为 2，旧重复身份字段保留为 reserved；现有 Python／Node／Web 绑定和 OpenAPI 共用 descriptor 校验。迁齐目录结构反例和快照两层代理装具，远端只通过正式快照发布连接关联，不再手填旧别名或 runtime 字典；每跳核 UUID、Gateway、request_id、查询参数及活动 owner 不变。联邦列表的序列化装具补带真实隔离本地凭据，保留生产授权。
+- 生成一致性、真实 sourceTransform 类型检查和完整 79 扩展 Workbench 构建退出 0，客户端及生成源码检查前后一致；构建期间只有并行测试文件变化。Node／Web 往返 5 passed，目录合同 34 passed，联邦真实 ASGI JSON→Python 绑定→两套 JS 消费者 2 passed，快照 7 passed；三个修改测试 Ruff／Pyright 零诊断。
+- Python 扩大回归共收集 262 项，原运行在完成 216 项后触发 90 秒外层超时（退出 124），不称整组全绿；余下联邦 10 项通过，两个认证装具失败修正后通过，目录组沿上述独立结果复用。原命令、失败、补验、收集顺序和源码指纹保留于 `out/tests/temp/identity_registry_recovery_root/artifacts/`，快照最终索引为 `out/tests/temp/identity_snapshot_contract_current/artifacts/verification-index-1793827109683158503.json`。该证据不代替真实双 Gateway、浏览器交互或 Windows 验收，5.4／6.4 继续未完成。

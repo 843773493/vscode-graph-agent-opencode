@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
 from app.core.path_utils import get_user_gateway_config_path
-from app.gateway.auth import verify_federation_token
+from app.gateway.auth import get_gateway_local_token, verify_federation_token
 from app.gateway.config import GatewayConfigReloadService
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
@@ -165,7 +165,10 @@ async def test_real_federation_http_serialization_survives_generated_consumers(
     path.write_text(json.dumps(payload))
     await config_owner.reload()
     samples = {}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test",
+        headers={"X-Local-Token": get_gateway_local_token()},
+    ) as client:
         for endpoint, name in (("federation/manifest", "FederationProtocolManifestDTO"),
                                ("workspaces?check_health=false", "GatewayWorkspaceListDTO")):
             response = await client.get("/api/gateway/" + endpoint, headers={"X-Request-ID": "federation-" + name})

@@ -45,7 +45,7 @@ def test_catalog_schema_requires_exported_roots(gateway_openapi: JsonSchemaValue
 
 @pytest.mark.parametrize(("model", "field", "shape"), [
     ("FederationWorkspaceListDTO", "items", {"type": "object"}),
-    ("FederationWorkspaceDTO", "backend_workspace_id", {"type": "integer"}),
+    ("FederationWorkspaceDTO", "workspace_id", {"type": "integer"}),
     ("FederationWorkspaceDTO", "managed", {"type": "string"}),
     ("GatewayInboundAccessListDTO", "peers", {"type": "object"}),
     ("GatewayInboundPeerDTO", "credential_expires_at", {"type": "integer"}),
@@ -103,12 +103,15 @@ def test_catalog_structure_checks_preserve_business_constraints(gateway_openapi:
     openapi.assert_gateway_http_schemas(gateway_openapi)
     assert gateway_openapi == original
     workspace = {
-        "workspace_id": "gateway-route", "backend_workspace_id": "01900000-0000-7000-8000-000000000001",
+        "workspace_id": "01900000-0000-7000-8000-000000000001",
         "name": "工作区", "managed": True, "connection_kind": "local", "services": ["workspace_api"],
     }
-    assert FederationWorkspaceDTO.model_validate(workspace).backend_workspace_id == workspace["backend_workspace_id"]
+    published = FederationWorkspaceDTO.model_validate(workspace).model_dump(mode="json")
+    assert published["workspace_id"] == workspace["workspace_id"]
+    assert "backend_workspace_id" not in published
     for invalid in (
-        {**workspace, "backend_workspace_id": "/private/workspace"},
+        {**workspace, "workspace_id": "/private/workspace"},
+        {**workspace, "backend_workspace_id": workspace["workspace_id"]},
         {**workspace, "connection_kind": "remote_gateway"},
         {**workspace, "services": ["unknown"]},
         {**workspace, "unexpected": True},
