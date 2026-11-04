@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from app.core.resource_uri import parse_resource_uri
+from app.core.workspace_identity import read_workspace_id
 from tests.integration.test_shared_managed_backend_lifecycle import (
     SharedBackendCase,
     _join_group,
@@ -20,14 +21,19 @@ async def test_three_file_inputs_keep_mount_owner_and_external_native_target(
 ) -> None:
     case = shared_backend_case
     primary, secondary, joined = await _join_group(case)
-    gateway_ids = (primary, secondary)
-    headers = [{"X-BoxTeam-Workspace-Id": identity} for identity in gateway_ids]
+    workspace_ids = (primary, secondary)
+    assert workspace_ids == tuple(read_workspace_id(root) for root in case.roots)
+    headers = [{"X-BoxTeam-Workspace-Id": identity} for identity in workspace_ids]
     workspaces = await asyncio.gather(*(
         case.data("GET", "/api/v1/workspace", headers=selection)
         for selection in headers
     ))
     assert len({workspace["runtime"]["pid"] for workspace in workspaces}) == 1
-    assert len({workspace["workspace_id"] for workspace in workspaces}) == 2
+    assert tuple(workspace["workspace_id"] for workspace in workspaces) == workspace_ids
+    for identity in workspace_ids:
+        explicit = await case.data("GET", f"/api/v1/workspaces/{identity}/workspace")
+        assert explicit["workspace_id"] == identity
+        assert explicit["runtime"]["pid"] == workspaces[0]["runtime"]["pid"]
     await case.data("POST", f"/api/gateway/workspaces/{secondary}/activate")
 
     name = "原生路径与 URI.json"
@@ -70,6 +76,9 @@ async def test_three_file_inputs_keep_mount_owner_and_external_native_target(
     # 两个挂载同时读写同名文件；工作区选择只由各自请求与资源 owner 决定。
     await asyncio.gather(read_and_update(0), read_and_update(1))
     for index, uri in enumerate(uris):
+        explicit = await case.data("GET", f"/api/v1/workspaces/{workspace_ids[index]}/workspace/files/content",
+                                   params={"path": uri})
+        assert explicit["path"] == uri and explicit["content"] == contents[index]
         selected = await case.data("POST", "/api/v1/resources/navigation",
                                    headers=headers[1 - index], json={"uri": uri, "operation": "read"})
         assert selected["node"]["uri"] == uri and selected["content"] == contents[index]
@@ -77,6 +86,13 @@ async def test_three_file_inputs_keep_mount_owner_and_external_native_target(
                                          params={"path": uri})
         assert rejected.status_code == 400, rejected.text
         assert rejected.headers["X-Request-ID"] == rejected.json()["request_id"]
+        conflict = await case.client.get(
+            f"/api/v1/workspaces/{workspace_ids[index]}/workspace/files/content",
+            headers={**headers[1 - index], "X-Request-ID": f"canonical-file-conflict-{index}"}, params={"path": uri},
+        )
+        assert conflict.status_code == 400, conflict.text
+        assert conflict.json()["detail"] == "路径与请求头的工作区 UUID 不一致"
+        assert conflict.headers["X-Request-ID"] == conflict.json()["request_id"] == f"canonical-file-conflict-{index}"
         assert targets[index].read_text(encoding="utf-8") == contents[index]
 
     # 未注册目录仍由原生 Gateway 唯一绑定；绝对路径不能改投工作区内同名位置。
@@ -103,8 +119,10 @@ async def test_three_file_inputs_keep_mount_owner_and_external_native_target(
                                   })
         assert updated["path"] == external_uri and external.read_text(encoding="utf-8") == changed
     listed = await case.data("GET", "/api/gateway/workspaces")
-    assert listed["active_workspace_id"] == secondary
-    assert {item["workspace_id"] for item in listed["items"]} == set(gateway_ids)
+    assert listed["active_workspace"] == {"gateway_id": joined["gateway_id"], "workspace_id": secondary}
+    assert {(item["gateway_id"], item["workspace_id"]) for item in listed["items"]} == {
+        (joined["gateway_id"], identity) for identity in workspace_ids
+    }
     assert {item["backend_generation"] for item in listed["items"]} == {joined["backend_generation"]}
     assert [target.read_text(encoding="utf-8") for target in targets] == contents
 

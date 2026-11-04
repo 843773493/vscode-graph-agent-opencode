@@ -371,7 +371,8 @@ async def _proxy_workspace_request(
     try:
         if target_workspace_id is not None:
             target = registry.resolve(target_workspace_id)
-            if requested_workspace_id is not None and target.workspace_id != requested_workspace_id:
+            # URI owner 已选定目标；通用入口的工作区头仅是当前界面上下文。
+            if path_workspace_id is not None and target.workspace_id != path_workspace_id:
                 raise ValueError("明确工作区目标与请求 UUID 不一致")
             if requested_gateway_id is not None and target.gateway_id != requested_gateway_id:
                 raise ValueError("目标 Gateway 与选定工作区归属冲突")

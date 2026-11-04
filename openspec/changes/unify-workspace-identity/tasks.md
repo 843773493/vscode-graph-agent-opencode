@@ -8,9 +8,9 @@
 ## 2. 原生 Gateway 登记与本地请求链
 
 - [ ] 2.1 将本地工作区登记、唯一 root binding、活动选择和路由键迁为工作区 UUID 与 Gateway 归属，保持 owner／租约／registry revision CAS。
-- [ ] 2.2 迁齐本地管理和业务代理的工作区定位，统一路径与头部 UUID，拒绝冲突及错误归属，保留原 request ID 和管理授权。
+- [x] 2.2 迁齐本地管理和业务代理的工作区定位，统一路径与头部 UUID，拒绝冲突及错误归属，保留原 request ID 和管理授权。
 - [ ] 2.3 同步协议 descriptor／proto、公开 DTO、生成映射与校验、OpenAPI 和 SDK；更新破坏性协议版本，执行生成产物一致性检查和受影响类型检查。
-- [ ] 2.4 通过真实注册和 HTTP／URI 文件入口验证各层 UUID 相同、两工作区隔离、相同 UUID 不同根冲突及未授权根管理拒绝。
+- [x] 2.4 通过真实注册和 HTTP／URI 文件入口验证各层 UUID 相同、两工作区隔离、相同 UUID 不同根冲突及未授权根管理拒绝。
 
 ## 3. 共享 Backend 生命周期
 
@@ -148,3 +148,14 @@
 - 真实 Gateway＋独立 HTTP 协议替身迁齐 canonical UUID、完整 blocked owner／活动选择及显式目标头。保留 HTTP 拒绝、非法 data、诊断原文、完整回执及原错误类别／日志断言；生命周期四动作的出站路径与 UUID 完全一致。远端投影、回执属于协议装具，不作为真实远端注册或 blocker 产生过程的验收。
 - 单元最终 23 passed／3.14 秒，Ruff／Pyright 均通过。HTTP 分两组 2 passed／63.51 秒、6 passed／172.87 秒，源码首尾指纹稳定；纠正装具投影 URL 元数据后，仅补直接读取该字段的删除场景 1 passed／30.44 秒，新增精确 URL 断言，其余不受影响的协议结果复用。重复场景不累加。HTTP 测试 Ruff 通过；Pyright 剩两条 Popen bytes／str 存量诊断，对应装具函数与改前 AST 完全相同，未运行旧版类型基线，不声称类型全绿。
 - 原始命令、实际退出码、失败与最终指纹见 `out/tests/temp/identity_target_proxy_consumers/artifacts/verification-final-1793823103774822530.json` 和 `out/tests/temp/identity_federation_protocol_current/artifacts/`。本轮未改生产、前端或共享运行 fixture，不代表真实 SSH、Windows、完整客户端和 2.2／4.3／6.4 全部验收。
+
+
+### 2026-11-04：2.2／2.4 文件代理的统一身份与真实目标验证
+
+- Gateway 导航及文本修改路径统一公开 `workspace_id`，移除旧 Backend 参数；真实 OpenAPI 核对路径参数，公开结构 validate-only 退出 0。URI 选择目标与当前界面工作区上下文分开：无工作区路径的 URI 入口沿 URI owner 分派，显式路径与头冲突仍在准入前拒绝，目标 Gateway、授权和 request_id 保持。
+- 相关代理、流、上下文与公开合同集中 241 passed／30.02 秒；导航短检查单独记录。最新真实 Gateway 双挂载经产品注册／组重启产生身份，核身份文件、HTTP 路径、头和 URI 的 UUID 完全相同；相对／绝对／URI 并发读写隔离，跨工作区 URI 导航、未注册目录编辑与路径／头冲突均通过，1 passed／66.61 秒。此前真实未授权 peer 拒绝项通过且无登记／目录／进程副作用；同 UUID 异根冲突复用 1.3 的真实注册证据。首次文件验收的 URI／上下文头误判失败原件保留，修复后仅补失败项。
+- 原始命令、实际退出码与源码前后指纹在 `out/tests/temp/identity_file_proxy_current/artifacts/`：`final-proxy-contract-unit-1793824492530125704`、`final-openapi-validation-1793824553303697765`、`product-owner-admission-1793823934739974081`、`product-file-uri-fixed-1793824718895518575`。最终文件产品检查追踪源码首尾一致；本切片不代表完整客户端、真实 SSH、Windows 或所有身份恢复验收。
+- Root 四个路由／测试文件静态零诊断；共享代理保留 Ruff 7 条／Pyright 6 条，与改前完整该文件在当前依赖下按规则、完整消息和重数比较无新增，不称全库静态全绿。导航及准入测试迁移证据另在 `identity_resource_navigation_current` 与 `identity_proxy_admission_current` 临时产物目录；完整 2.1／2.3／6.4 继续保留未完成。
+
+- 导航最终短检查 51 passed／2.76 秒；URI 业务归属复用既有 Gateway ID 校验，非法归属在 owner／RPC／租约前明确 400，合法未登记归属仍 404，已登记远端共享 UUID 继续成功。首次真实导航的非法 authority 500 原件保留；修复后完整主集成 1 passed／74.77 秒，覆盖真实双工作区注册激活、工具结果 URI、Session 删除隔离与失败修复，源码首尾一致。原件 `out/tests/temp/identity_resource_navigation_current/artifacts/navigation-owner-fixed-integration-1793824974306682510.*`；本场景不包含真实模型执行。
+- 最后路由消费者补验及独立十文件差异复核完成；导航生产 Pyright 零诊断，两测试保留 11 条与改前比较无新增的存量诊断。身份 OpenSpec strict 退出 0。最终源码指纹与准确命令索引在 `identity_file_proxy_current/artifacts/final-evidence-index.json`，独立复核原件在 `identity_proxy_admission_current/artifacts/identity-ten-owned-review-index-1793825005852749713.json`。

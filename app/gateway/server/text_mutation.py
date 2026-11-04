@@ -21,15 +21,15 @@ router = APIRouter()
 
 
 @router.post("/api/v1/resources/text-mutations", response_model=APIResponse[TextMutationTransferDTO])
-@router.post("/api/v1/workspaces/{backend_workspace_id}/resources/text-mutations", response_model=APIResponse[TextMutationTransferDTO])
+@router.post("/api/v1/workspaces/{workspace_id}/resources/text-mutations", response_model=APIResponse[TextMutationTransferDTO])
 async def mutate_workspace_text(
     payload: TextMutationRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
-    backend_workspace_id: str | None = None,
+    workspace_id: str | None = None,
 ):
     if auth.kind == "federation":
         raise HTTPException(400, detail="联邦文本修改必须通过独立 file_write grant relay")
-    path = "resources/text-mutations" if backend_workspace_id is None else f"workspaces/{backend_workspace_id}/resources/text-mutations"
+    path = "resources/text-mutations" if workspace_id is None else f"workspaces/{workspace_id}/resources/text-mutations"
     return await _proxy_workspace_request(path, request, auth=auth, user_access=user_access,
         include_credentials=True, request_body=payload.model_dump_json(exclude_none=True).encode("utf-8"))

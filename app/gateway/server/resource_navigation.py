@@ -33,7 +33,6 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.grants import ResourceNavigationGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
-from app.gateway.registry.owners import workspace_owner
 from app.gateway.server.workspace_proxy import (
     _proxy_workspace_request,
     _registry,
@@ -64,13 +63,13 @@ router = APIRouter()
 
 async def _navigate(
     payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext | None,
-    user_access: UserAccessContext | None, backend_workspace_id: str | None = None,
+    user_access: UserAccessContext | None, workspace_id: str | None = None,
 ) -> Response:
     try:
         deadline = navigation_deadline(payload, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
         async with asyncio.timeout(max(0, deadline - time.monotonic())):
             response = await _navigate_target(payload, request, auth=auth, user_access=user_access,
-                                             backend_workspace_id=backend_workspace_id, deadline=deadline)
+                                             workspace_id=workspace_id, deadline=deadline)
             ResourceNavigation._check_deadline(deadline)
             return response
     except TimeoutError as error:
@@ -83,7 +82,7 @@ async def _navigate(
 
 async def _navigate_target(
     payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext | None,
-    user_access: UserAccessContext | None, backend_workspace_id: str | None, deadline: float,
+    user_access: UserAccessContext | None, workspace_id: str | None, deadline: float,
 ) -> Response:
     gateway_id = request.app.state.gateway_id
     requested_gateway_id = parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER))
@@ -91,24 +90,25 @@ async def _navigate_target(
         if auth is not None and auth.kind == "federation":
             raise HTTPException(400, detail="联邦资源导航必须通过原 read grant relay")
         resource = parse_resource_uri(payload.uri, local_gateway_id=gateway_id)
+        uri_gateway_id = parse_target_gateway_id(resource.gateway_authority)
         payload = payload.model_copy(update={"uri": resource.display_uri})
-        if backend_workspace_id is not None:
+        if workspace_id is not None:
             registry = _registry(request)
             header_workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
-            if header_workspace_id is not None and header_workspace_id != backend_workspace_id:
+            if header_workspace_id is not None and header_workspace_id != workspace_id:
                 raise HTTPException(400, detail="路径与请求头的工作区 UUID 不一致")
-            owner_gateway_id = resource.gateway_authority or requested_gateway_id or gateway_id
+            owner_gateway_id = uri_gateway_id or requested_gateway_id or gateway_id
             if resource.scope == "gateway" and resource.scope_id != owner_gateway_id:
                 raise ResourceUriResolveError("scope_mismatch", "导航 URI 与目标 Gateway 不一致")
             try:
-                workspace_target = registry.resolve_request_target(backend_workspace_id, owner_gateway_id)
+                workspace_target = registry.resolve_request_target(workspace_id, owner_gateway_id)
             except LookupError as error:
                 raise HTTPException(404, detail="workspace 未注册或不存在") from error
-            if resource.gateway_authority not in {None, owner_gateway_id} or (resource.scope == "workspace" and resource.scope_id != backend_workspace_id):
+            if resource.gateway_authority not in {None, owner_gateway_id} or (resource.scope == "workspace" and resource.scope_id != workspace_id):
                 raise ResourceUriResolveError("scope_mismatch", "导航 URI 与固定 Workspace 路由不一致")
             if workspace_target.connection_kind != "remote_gateway":
                 return await _proxy_workspace_request(
-                    f"workspaces/{backend_workspace_id}/resources/navigation", request,
+                    f"workspaces/{workspace_id}/resources/navigation", request,
                     auth=auth, user_access=user_access, include_credentials=True,
                     target_workspace_id=workspace_target.key,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
@@ -205,13 +205,13 @@ async def navigate_resource(
     return await _navigate(payload, request, auth=auth, user_access=user_access)
 
 
-@router.post("/api/v1/workspaces/{backend_workspace_id}/resources/navigation", response_model=APIResponse[ResourceNavigationResultDTO])
+@router.post("/api/v1/workspaces/{workspace_id}/resources/navigation", response_model=APIResponse[ResourceNavigationResultDTO])
 async def navigate_workspace_resource(
-    backend_workspace_id: str, payload: ResourceNavigationRequest, request: Request,
+    workspace_id: str, payload: ResourceNavigationRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
-    return await _navigate(payload, request, auth=auth, user_access=user_access, backend_workspace_id=backend_workspace_id)
+    return await _navigate(payload, request, auth=auth, user_access=user_access, workspace_id=workspace_id)
 
 
 @router.post("/api/gateway/resource-navigation/workspaces/{source_workspace_id}",

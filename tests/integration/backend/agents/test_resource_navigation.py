@@ -280,10 +280,22 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 explicit = resource_display_uri(scope=scope, scope_id=scope_id, kind="skills", tail_segments=(name, "SKILL.md"), gateway_authority=gateway_id)
                 assert (await navigate(explicit, "read"))["node"]["uri"] == entry["uri"]
 
+            for authority, status in (("gateway_other", 400), ("gateway_" + "f" * 32, 404)):
+                uri = files_root.replace("boxteam://", f"boxteam://{authority}/")
+                request_id = f"navigation-authority-{status}"
+                response = await client.post(path, json={"uri": uri, "operation": "list"},
+                                             headers={"X-Request-ID": request_id})
+                receipts.append({"uri": uri, "operation": "list", "status": response.status_code, "body": response.json()})
+                assert response.status_code == status, response.text
+                assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+                assert response.json()["detail"] == (
+                    "非法 gateway_id（要求 gateway_<32位小写hex>）: 'gateway_other'"
+                    if status == 400 else "workspace 未注册或不存在"
+                )
+
             # 同一入口按URI拒绝目标错位、私有树、非法路径与领域对象目录猜测。
             for uri, operation, code in (
                 (files_root.replace(workspace_id, str(uuid4())), "list", "scope_mismatch"),
-                (files_root.replace("boxteam://", "boxteam://gateway_other/"), "list", "scope_mismatch"),
                 (files_root + "/.boxteam", "list", "capability_denied"),
                 (files_root, "read", "capability_denied"),
                 (agents_uri, "list", "capability_denied"),
@@ -326,10 +338,12 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             registered = await client.post("/api/gateway/workspaces/local", json={"root_path": str(second), "name": "导航第二工作区"})
             assert registered.status_code == 200, registered.text
             second_id = json.loads((second / ".boxteam/workspace-identity.json").read_text())["workspace_id"]
-            target = next(item for item in registered.json()["data"]["items"] if item["backend_workspace_id"] == second_id)
+            target = next(item for item in registered.json()["data"]["items"] if item["workspace_id"] == second_id)
             activated = await client.post(f"/api/gateway/workspaces/{target['workspace_id']}/activate")
             assert activated.status_code == 200, activated.text
-            assert activated.json()["data"]["active_workspace_id"] == target["workspace_id"]
+            assert activated.json()["data"]["active_workspace"] == {
+                "gateway_id": gateway_id, "workspace_id": second_id,
+            }
             active = await client.get("/api/v1/workspace")
             assert active.status_code == 200 and active.json()["data"]["workspace_id"] == second_id
             source_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", "src", "中文 文件.v2.md"))
@@ -399,7 +413,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             registered = await client.get("/api/gateway/workspaces")
             original_workspace = next(
                 item for item in registered.json()["data"]["items"]
-                if item["backend_workspace_id"] == workspace_id
+                if item["workspace_id"] == workspace_id
             )
             activated = await client.post(f"/api/gateway/workspaces/{original_workspace['workspace_id']}/activate")
             assert activated.status_code == 200, activated.text

@@ -40,6 +40,17 @@ from app.schemas.gateway.workspaces import (
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 
+def test_workspace_file_proxy_paths_expose_one_canonical_workspace_identity(gateway_openapi: JsonSchemaValue) -> None:
+    for resource in ("navigation", "text-mutations"):
+        paths = gateway_openapi["paths"]
+        operation = paths[f"/api/v1/workspaces/{{workspace_id}}/resources/{resource}"]["post"]
+        assert f"/api/v1/workspaces/{{backend_workspace_id}}/resources/{resource}" not in paths
+        path_parameters = [parameter for parameter in operation["parameters"] if parameter["in"] == "path"]
+        assert len(path_parameters) == 1
+        assert path_parameters[0]["name"] == "workspace_id" and path_parameters[0]["required"] is True
+        assert all(parameter["name"] != "backend_workspace_id" for parameter in operation["parameters"])
+
+
 def test_resource_address_http_projection_uses_descriptor_and_fresh_message_roots(
     gateway_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet,
     monkeypatch: pytest.MonkeyPatch,

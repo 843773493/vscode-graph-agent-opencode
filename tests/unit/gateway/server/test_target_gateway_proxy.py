@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core.resource_uri import resource_display_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import LOCAL_TOKEN, get_gateway_local_token
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
@@ -26,6 +27,7 @@ from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.resource_navigation import router as navigation_router
+from app.gateway.server.text_mutation import router as text_mutation_router
 from app.gateway.server.workspace_proxy import router, verify_user_access_for_proxy
 from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
@@ -103,6 +105,7 @@ async def target_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
 
     app.add_exception_handler(HTTPException, http_error)
     app.include_router(navigation_router)
+    app.include_router(text_mutation_router)
     app.include_router(router)
     app.dependency_overrides[verify_user_access_for_proxy] = lambda: None
     app.state.registry = registry
@@ -142,6 +145,56 @@ async def test_canonical_workspace_route_uses_target_gateway_without_merging_equ
         assert outgoing.headers["X-BoxTeam-Federation-Token"] == state.credentials.get(f"rgw_{index}").token
         assert "X-Local-Token" not in outgoing.headers
     assert state.registry.active_workspace == (state.gateway_id, WORKSPACE_ID)
+    assert all(state.registry.route_reference_counts(target.key) == (0, 0) for target in state.registry.targets())
+
+
+@pytest.mark.parametrize("index", [None, 0, 1])
+async def test_text_mutation_keeps_canonical_owner_and_command(
+    target_proxy: Proxy, index: int | None,
+) -> None:
+    state = target_proxy
+    owner = state.gateway_id if index is None else REMOTE_GATEWAY_IDS[index]
+    command = {
+        "target": resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="files",
+                                       tail_segments=("root", "result.txt"), gateway_authority=owner),
+        "content": "保留目标机器上的修改正文\n", "expected_version": "absent",
+    }
+    before = state.registry._capture_registry_state()
+    response = await state.client.post(f"/api/v1/workspaces/{WORKSPACE_ID}/resources/text-mutations", json={"create": command},
+        headers={TARGET_GATEWAY_ID_HEADER: owner, "X-Request-ID": "req_text_owner"})
+    assert response.status_code == 200, response.text
+    outgoing, = state.requests
+    assert outgoing.method == "POST"
+    assert outgoing.url.host == ("local.test" if index is None else f"remote-{index}.test")
+    assert outgoing.url.path == f"/api/v1/workspaces/{WORKSPACE_ID}/resources/text-mutations"
+    assert json.loads(outgoing.content)["create"] == command
+    assert outgoing.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+    assert outgoing.headers["X-BoxTeam-Gateway-Id"] == state.gateway_id
+    assert outgoing.headers.get(TARGET_GATEWAY_ID_HEADER) == (None if index is None else owner)
+    assert outgoing.headers["X-Request-ID"] == response.headers["X-Request-ID"] == response.json()["request_id"] == "req_text_owner"
+    assert "X-BoxTeam-Backend-Workspace-Id" not in outgoing.headers
+    if index is None:
+        assert outgoing.headers["X-Local-Token"] == LOCAL_TOKEN
+        assert "X-BoxTeam-Federation-Token" not in outgoing.headers
+    else:
+        assert outgoing.headers["X-BoxTeam-Federation-Token"] == state.credentials.get(f"rgw_{index}").token
+        assert "X-Local-Token" not in outgoing.headers
+    assert state.registry._capture_registry_state() == before
+    assert all(state.registry.route_reference_counts(target.key) == (0, 0) for target in state.registry.targets())
+
+
+async def test_text_mutation_rejects_path_header_conflict_before_write_admission(target_proxy: Proxy) -> None:
+    state = target_proxy
+    before = state.registry._capture_registry_state()
+    response = await state.client.post(f"/api/v1/workspaces/{WORKSPACE_ID}/resources/text-mutations", json={"create": {
+        "target": resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="files", tail_segments=("root", "result.txt")),
+        "content": "不能写入", "expected_version": "absent",
+    }}, headers={"X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000002", "X-Request-ID": "req_text_conflict"})
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "路径与请求头的工作区 UUID 不一致"
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req_text_conflict"
+    assert state.requests == state.relay.calls == []
+    assert state.registry._capture_registry_state() == before
     assert all(state.registry.route_reference_counts(target.key) == (0, 0) for target in state.registry.targets())
 
 
