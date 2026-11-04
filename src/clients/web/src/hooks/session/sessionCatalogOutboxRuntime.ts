@@ -1,5 +1,4 @@
-import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
-import { getWorkspace } from "../../api/workspace";
+import { gatewayWorkspaceKey, gatewayWorkspaceOwner } from "../../api/workspaceIdentity";
 import { HttpRequestError } from "../../api/http";
 import {
   fetchSessionCatalogSnapshot,
@@ -145,20 +144,6 @@ export function sessionCatalogOutboxScopeKey(
   access: GatewayUserAccess,
 ): string {
   return catalogOutboxWorkspaceScopeKey(gatewayWorkspaceId, principalFor(access));
-}
-
-function requireGatewayId(value: unknown): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error("Gateway health 缺少稳定 gateway_id，拒绝建立会话目录 outbox 分区");
-  }
-  return value;
-}
-
-function requireBackendWorkspaceId(value: unknown): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error("/api/v1/workspace 缺少后端 workspace UUID，拒绝建立会话目录 outbox 分区");
-  }
-  return value;
 }
 
 export function createSessionCatalogOutboxRuntime(
@@ -413,10 +398,8 @@ export function createSessionCatalogOutboxRuntime(
     access,
   ) => {
     if (disposed) throw new Error("会话目录 outbox runtime 已停止");
-    const gatewayWorkspaceId = gatewayWorkspaceKey(workspaceTarget);
-    if (!gatewayWorkspaceId) {
-      throw new Error("建立会话目录 outbox 需要 Gateway 与工作区 UUID");
-    }
+    const owner = gatewayWorkspaceOwner(workspaceTarget);
+    const gatewayWorkspaceId = gatewayWorkspaceKey(owner);
     const principal = principalFor(access);
     if (activePrincipal !== principal) {
       throw new Error(
@@ -436,30 +419,8 @@ export function createSessionCatalogOutboxRuntime(
     if (opening) return await opening;
 
     const pending = (async (): Promise<RuntimeDriver> => {
-      const [gatewayId, workspace] = await Promise.all([
-        Promise.resolve(requireGatewayId(workspaceTarget.gateway_id)),
-        getWorkspace(options.apiPort, gatewayWorkspaceId),
-      ]);
-      assertActivePrincipal(principal, generation);
-      const backendWorkspaceId = requireBackendWorkspaceId(workspace.workspace_id);
-      if (backendWorkspaceId !== workspaceTarget.workspace_id) {
-        throw new Error(
-          `Gateway workspace backend 身份不匹配: route=${gatewayWorkspaceId}, `
-          + `target=${workspaceTarget.workspace_id}, actual=${backendWorkspaceId}`,
-        );
-      }
-      const partition: CatalogOutboxPartition = {
-        gatewayId,
-        workspaceId: backendWorkspaceId,
-        principal,
-      };
+      const partition: CatalogOutboxPartition = { ...owner, principal };
       const partitionKey = catalogOutboxPartitionKey(partition);
-      const currentByPartition = driversByPartition.get(partitionKey);
-      if (currentByPartition && currentByPartition.gatewayWorkspaceId !== gatewayWorkspaceId) {
-        throw new Error(
-          `同一 outbox 分区映射到多个工作区选择: ${currentByPartition.gatewayWorkspaceId}, ${gatewayWorkspaceId}`,
-        );
-      }
       startBroadcast();
       const persistence = await getPersistence();
       assertActivePrincipal(principal, generation);

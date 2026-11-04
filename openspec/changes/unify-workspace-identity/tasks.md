@@ -184,3 +184,8 @@
 
 - 目录镜像与资源查询装具统一为 canonical UUID 和明确 Gateway，远端通过正式 snapshot 建立连接关系；保留旧合同拒绝、cursor、错误原实例与部分失败恢复。真实反例发现本机有资源时误取远程连接，现仅远端查询连接，本机 DTO 的连接为 null，连接错误仍归原 scope。
 - 两份单测 39＋35＝74 项通过；真实 Gateway 与独立下游 HTTP 的正常查询、错误隔离及恢复 2 项通过／104.12 秒。单测 Ruff 通过、Pyright 21→1，无新增；生产与 HTTP 测试静态零诊断。原件见 `out/tests/temp/identity_catalog_consumers_current/artifacts/verification-1793828004925186304.json` 及 `identity_registry_recovery_root/artifacts/catalog-product-http-recovery-1793827721836850898.*`；HTTP 首尾仅并行客户端／单测文件变化，生产与集成装具稳定。未将查询装具当作真实资源创建或完整 4.4 验收。
+
+### 2026-11-04：5.1 outbox 身份请求减法
+
+- outbox 直接复用选定目标的完整 owner 建立原持久分区，删除仅为身份换算的工作区 GET、重复校验和不可能的分区映射冲突；生产净减 39 行。principal／generation、广播、迟到持久清理和接受队列保护保持，同 UUID 不同 Gateway 分区重开及零身份 GET 由行为测试核验。按 Copilot workspace owner 取值方式对照，未运行参考仓库测试。
+- runtime 24 项和原 driver 的 principal／取消核心 3 项通过。实际 sourceTransform 类型检查及完整 Workbench 构建均退出 0；构建期间只发生独立搜索单测变化。原 Web tsc 的 28 条外部既存诊断保留，修改两文件零诊断，不称全仓类型全绿。原件见 `out/tests/temp/identity_outbox_owner_current/artifacts/verification-index-1793828133506734641.json`，Root `identity_registry_recovery_root/artifacts/outbox-workbench-types-1793828047948199746.*` 与 `outbox-workbench-build-1793828133506377581.*`；未以此替代真实浏览器 5.4 验收。
