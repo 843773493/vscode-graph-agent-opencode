@@ -30,7 +30,7 @@ class _AssemblyContentStore:
         self.connection = connection
         self.assembly_owner = (session, thread)
         self.nodes: dict[str, dict[str, object]] = {}
-        self.values: dict[str, object] = {}
+        self.leaf_values: dict[str, object] = {}
         self.canonical_payloads: dict[tuple[str, str, str], object] = {}
         self.sources: dict[str, dict[str, object]] = {}
         self.dependencies: set[str] = set()
@@ -162,19 +162,19 @@ class _AssemblyContentStore:
 
     def decode(self, reference: dict[str, object]) -> object:
         if set(reference) == {"literal"}:
-            return reference["literal"]
+            return deepcopy(reference["literal"])
         if set(reference) != {"node"} or not isinstance(reference["node"], str):
             raise ValueError("source-mismatch: assembly content 引用非法")
         key = reference["node"]
-        if key in self.values:
-            return deepcopy(self.values[key])
+        if key in self.leaf_values:
+            return deepcopy(self.leaf_values[key])
         node = self._node(key)
         kind = node.get("kind")
-        if kind == "value" and set(node) == {"kind", "value"}:
-            value = node["value"]
-        elif kind == "object" and set(node) == {"kind", "entries"} and isinstance(node["entries"], dict):
-            value = {name: self.decode(child) for name, child in node["entries"].items()}
-        elif kind == "prefix":
+        # 容器逐层创建独立对象，不再缓存后对整棵子树反复 deepcopy；
+        # 已核验节点和叶值仍在本次读取内复用，复制量只随实际输出增长。
+        if kind == "object" and set(node) == {"kind", "entries"} and isinstance(node["entries"], dict):
+            return {name: self.decode(child) for name, child in node["entries"].items()}
+        if kind == "prefix":
             reversed_values = []
             cursor = reference
             while cursor is not None:
@@ -183,7 +183,9 @@ class _AssemblyContentStore:
                     raise ValueError("source-mismatch: assembly prefix 结构非法")
                 reversed_values.append(self.decode(current["value"]))
                 cursor = current["parent"]
-            value = list(reversed(reversed_values))
+            return list(reversed(reversed_values))
+        if kind == "value" and set(node) == {"kind", "value"}:
+            value = node["value"]
         elif kind == "canonical" and set(node) == {"kind", "item_id", "session_id", "thread_id", "path", "value_hash"}:
             historical_owner = (node["session_id"], node["thread_id"])
             value = self._canonical_item_payload(node["item_id"], historical_owner)
@@ -193,7 +195,7 @@ class _AssemblyContentStore:
                 raise ValueError("source-mismatch: assembly canonical 正文版本不一致")
         else:
             raise ValueError(f"source-mismatch: assembly content kind 非法: {kind!r}")
-        self.values[key] = value
+        self.leaf_values[key] = value
         # JSON里的重复值是独立对象；节点共享不能让一次字段编辑改写另一字段。
         return deepcopy(value)
 

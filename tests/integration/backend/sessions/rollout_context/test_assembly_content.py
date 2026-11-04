@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -38,6 +39,7 @@ from tests.integration.backend.sessions.rollout_context.test_context_production_
     production_context as production_context,  # noqa: PLC0414 - 复用真实prepare链
 )
 from tests.support.e2e_control.harness import E2ETestControlHarness
+from tests.harness.python.run_context import TestRunContext
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 
@@ -248,6 +250,72 @@ def test_shared_nodes_restore_independent_json_fields(shared_assemblies):
     decoded["tool_snapshot"][0]["function"]["description"] = "只编辑这个字段"
     assert canonical_json_bytes(decoded["tool_set_refs"]) == original
     assert canonical_json_bytes(load_snapshot(connection, raw)) == canonical_json_bytes(first.to_dict())
+
+
+def _container_count(value: object) -> int:
+    if isinstance(value, dict):
+        return 1 + sum(_container_count(child) for child in value.values())
+    if isinstance(value, (list, tuple)):
+        return 1 + sum(_container_count(child) for child in value)
+    return 0
+
+
+@pytest.mark.parametrize("depth", [4, 20])
+def test_nested_tools_cold_read_copies_only_linear_content(
+    production_context, monkeypatch, request, depth,
+):
+    saver, session, thread, connection, _manager, prepare = production_context
+    leaf = {"type": "string", "enum": ["alpha", "beta"]}
+    schema = {"type": "object", "properties": {"left": leaf, "right": leaf}}
+    for _ in range(depth):
+        schema = {
+            "type": "object", "properties": {"next": schema},
+            "description": "嵌套参数说明。" * 30,
+        }
+    tools = ToolSetSnapshot(selection_revision=sha256_jcs(schema), tools=tuple(
+        {"type": "function", "function": {"name": name, "parameters": schema}}
+        for name in ("read_nested", "write_nested")
+    ))
+    snapshot = prepare(f"nested-tools:{depth}", supplier=lambda: tools)["snapshot"]
+    expected = snapshot.to_dict()
+    copy_containers = 0
+    original_copy = content_store.deepcopy
+
+    def count_copy(value):
+        nonlocal copy_containers
+        copy_containers += _container_count(value)
+        return original_copy(value)
+
+    # 经过真实冷 registry/assembly reader，防止只测 helper 而漏掉实际调用。
+    with monkeypatch.context() as patch, RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        patch.setattr(content_store, "deepcopy", count_copy)
+        restored = cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id)
+        assert restored.to_dict() == expected
+    containers = _container_count(expected)
+    measurement = {"depth": depth, "output_containers": containers, "copied_containers": copy_containers}
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"nested-tools-copy-{depth}.json").write_text(
+        json.dumps(measurement, indent=2), encoding="utf-8",
+    )
+    print(f"nested tools cold read: {measurement}")
+
+    raw = connection.execute(
+        "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (snapshot.assembly_id,),
+    ).fetchone()[0]
+    decoded = load_snapshot(connection, raw)
+    other_fields = canonical_json_bytes({key: value for key, value in decoded.items() if key != "tool_snapshot"})
+    first, second = decoded["tool_snapshot"]
+    other_tool = canonical_json_bytes(second)
+    parameters = first["function"]["parameters"]
+    for _ in range(depth):
+        parameters = parameters["properties"]["next"]
+    parameters["properties"]["left"]["enum"].append("changed")
+    assert parameters["properties"]["right"]["enum"] == ["alpha", "beta"]
+    assert canonical_json_bytes(second) == other_tool
+    assert canonical_json_bytes({key: value for key, value in decoded.items() if key != "tool_snapshot"}) == other_fields
+    assert canonical_json_bytes(load_snapshot(connection, raw)) == canonical_json_bytes(expected)
+    # 复制量应随返回 JSON 大小线性增长，不能随嵌套层数反复复制已构建子树。
+    assert copy_containers <= containers * 2
 
 
 def test_seal_failure_rolls_back_content_nodes_and_assembly(production_context, monkeypatch):
