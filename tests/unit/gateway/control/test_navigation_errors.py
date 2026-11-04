@@ -23,11 +23,11 @@ def navigation_store(tmp_path: Path) -> tuple[navigation.WorkspaceNavigationStor
 
 @pytest.mark.parametrize("content, category", [
     (b"[]", RuntimeError),
-    (b'{"nodes":"/private/navigation-secret"}', RuntimeError),
-    (b'{"nodes":[{"kind":"/private/navigation-secret"}]}', ValueError),
-    (b'{"nodes":[{"node_id":"x","kind":"workspace_folder","name":"x","position":"/private/navigation-secret"}]}', ValueError),
-    (b'{"nodes":[{"node_id":"x","kind":"workspace_folder","name":"x","parent_node_id":"/private/navigation-secret"}]}', ValueError),
-    (b'{"nodes":"/private/navigation-secret",}', ValueError),
+    (b'{"schema_version":1,"nodes":"/private/navigation-secret"}', RuntimeError),
+    (b'{"schema_version":1,"nodes":[{"kind":"/private/navigation-secret"}]}', ValueError),
+    (b'{"schema_version":1,"nodes":[{"node_id":"x","kind":"workspace_folder","name":"x","position":"/private/navigation-secret"}]}', ValueError),
+    (b'{"schema_version":1,"nodes":[{"node_id":"x","kind":"workspace_folder","name":"x","parent_node_id":"/private/navigation-secret"}]}', ValueError),
+    (b'{"schema_version":1,"nodes":"/private/navigation-secret",}', ValueError),
     (b'\xff/private/navigation-secret', ValueError),
 ])
 def test_corrupt_navigation_is_rejected_without_rewrite_or_input_echo(
@@ -58,10 +58,10 @@ def test_native_failure_preserves_category_errno_cause_and_diagnostics(
     error = PermissionError(errno.EACCES, f"拒绝访问 {native_path}", native_path)
     original_read = Path.read_text
 
-    def read(target: Path, *args: object, **kwargs: object) -> str:
+    def read(target: Path, encoding: str | None = None, errors: str | None = None) -> str:
         if target == path:
             raise error
-        return original_read(target, *args, **kwargs)
+        return original_read(target, encoding=encoding, errors=errors)
 
     def write(*_args: object, **_kwargs: object) -> None:
         raise error

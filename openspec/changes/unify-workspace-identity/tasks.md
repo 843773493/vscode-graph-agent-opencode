@@ -45,3 +45,8 @@
 - 新增显式 `python -m configs.boxteam preview-workspace-identity`，只读 registry 13／Gateway SQLite 18／connection record 4；不安装配置、不创建缺失身份、不启动目标。运行时与维护入口复用唯一 registry 快照投影，metadata 与行使用同一读事务，避免并发发布时混合 revision。
 - 本地身份经既有目标侧只读入口核验，映射保留登记 Gateway、旧别名、原生 Gateway／UUID 和连接；重复 UUID、错误归属、父链、成员、活动引用及未结算控制状态明确阻塞。远端缓存声明不算验证成功，保留联邦核验 TODO；`apply_available=false`，完整引用迁移、恢复材料和原子发布仍未实现，6.1 不勾选。
 - 独立审查发现空库／损坏库的 SQLite 错误会越过 CLI 诊断出口；已显式纳入同一错误出口，并以真实 CLI 验证 JSON 归属、非零退出及原件不变。最新定向 19 passed／8.78s，Ruff 与 Pyright 退出 0；更广 registry／配置回归日志与 XML 为 175 passed／2 skipped，但外层进程句柄丢失，未取得该次精确退出码，不表述为完整退出码验收。原件位于 `out/tests/temp/workspace_identity_preflight_20261104/artifacts/`；本轮收尾指纹、独立审查及严格校验见 `out/tests/temp/2026/11/04/openspec_parallel_01/root/artifacts/`。
+
+### 2026-11-04：6.1 导航持久引用预检切片
+
+- 导航 owner 暴露并复用唯一只读节点读取与图校验，格式 1 之外明确拒绝；普通导航和维护预检不再各自解析。预检不调用会同步保存的 `list_tree`，按原 node ID 输出工作区字段的候选归属，不改 folder、父链、显示名或原文件。未知引用、重复节点、父链循环、错误格式及没有 registry 的孤立引用均阻塞，不以自动删节点掩盖迁移缺件。
+- 产品导航 owner 生成的本地及远端引用覆盖同 UUID 不同 Gateway，并验证文件原件不变；已有规范 URI 和业务正文不进入此映射。配置／导航定向 41 passed／8.10s，Ruff、实际项目解释器 Pyright 和严格规范校验退出 0；准确耗时以原始日志为准，原件与源码指纹位于 `out/tests/temp/identity_navigation_preflight_20261104/artifacts/`。本切片不包含 user_view_state、旧 Generator、客户端恢复与可恢复发布，6.1 保持未勾选。

@@ -17,6 +17,7 @@ from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.gateway_registry.snapshot import (
     read_workspace_registry,
 )
+from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_ids
 from configs.diagnostics import diagnostic_error
@@ -40,6 +41,15 @@ class IdentityMigrationBlocker:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceIdentityReference:
+    source: str
+    record_id: str
+    legacy_workspace_id: str
+    gateway_id: str
+    workspace_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceIdentityPreview:
     gateway_id: str | None
     registry_source: str | None
@@ -47,6 +57,7 @@ class WorkspaceIdentityPreview:
     registry_digest: str | None
     mappings: tuple[WorkspaceIdentityMapping, ...]
     blockers: tuple[IdentityMigrationBlocker, ...]
+    references: tuple[WorkspaceIdentityReference, ...] = ()
 
     def report(self) -> dict[str, object]:
         return {
@@ -56,6 +67,7 @@ class WorkspaceIdentityPreview:
             "mapping_complete": not self.blockers and all(item.verified for item in self.mappings),
             "mappings": [asdict(item) for item in self.mappings],
             "blockers": [asdict(item) for item in self.blockers],
+            "references": [asdict(item) for item in self.references],
             # TODO(unify-workspace-identity 6.1/6.2)：迁齐其余引用并实现可恢复原子发布后才能提供 apply。
             "apply_available": False,
             "remaining_checks": ["persistent_reference_migration", "client_recovery_material", "recoverable_atomic_publish"],
@@ -181,6 +193,29 @@ def _references(payload: dict[str, object], targets: dict[str, dict[str, object]
     return blockers
 
 
+def _navigation_references(
+    root: Path, mappings: tuple[WorkspaceIdentityMapping, ...],
+) -> tuple[tuple[WorkspaceIdentityReference, ...], tuple[IdentityMigrationBlocker, ...]]:
+    source = root / "navigation/workspace-tree.json"
+    store = WorkspaceNavigationStore(storage_path=source)
+    by_alias = {item.legacy_workspace_id: item for item in mappings}
+    try:
+        nodes = store.read_nodes()
+        store.validate_nodes(nodes, set(by_alias))
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        return (), (IdentityMigrationBlocker("invalid_navigation_reference", str(source), str(error)),)
+    references = []
+    for node in nodes:
+        if node.kind == "workspace_ref":
+            assert node.workspace_id is not None
+            mapping = by_alias[node.workspace_id]
+            references.append(WorkspaceIdentityReference(
+                "navigation/workspace-tree.json", node.node_id, node.workspace_id,
+                mapping.gateway_id, mapping.workspace_id,
+            ))
+    return tuple(references), ()
+
+
 def preview_workspace_identity_migration(
     *, gateway_root: Path, project_root: Path,
 ) -> WorkspaceIdentityPreview:
@@ -195,7 +230,8 @@ def preview_workspace_identity_migration(
         blockers.append(IdentityMigrationBlocker("registry_sources_conflict", str(root / "workspaces.json"), "JSON 注册表与 SQLite 权威快照不同"))
     payload = database_payload if database_payload is not None else file_payload
     if payload is None:
-        return WorkspaceIdentityPreview(None, None, None, None, (), tuple(blockers))
+        references, navigation_blockers = _navigation_references(root, ())
+        return WorkspaceIdentityPreview(None, None, None, None, (), (*blockers, *navigation_blockers), references)
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != 13:
         raise ValueError("工作区身份预检只支持 registry 合同 13；先完成既有版本升级")
     gateway_id = load_or_create_gateway_id(root / "identity.json", read_only=True)
@@ -259,7 +295,8 @@ def preview_workspace_identity_migration(
         else:
             raise ValueError(f"工作区连接类型不在身份迁移支持范围: {kind}")
     source = root / ("gateway.sqlite" if database_payload is not None else "workspaces.json")
+    references, navigation_blockers = _navigation_references(root, tuple(mappings))
     return WorkspaceIdentityPreview(
         gateway_id, str(source), cast(int | None, payload.get("registry_revision")),
-        config_revision(payload), tuple(mappings), tuple(blockers),
+        config_revision(payload), tuple(mappings), (*blockers, *navigation_blockers), references,
     )

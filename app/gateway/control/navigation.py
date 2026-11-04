@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+from typing import cast
 
 from pydantic import ValidationError
 
@@ -28,9 +29,9 @@ class WorkspaceNavigationStore:
         self._storage_path = storage_path
 
     def list_tree(self, targets: tuple[WorkspaceTarget, ...]) -> WorkspaceNavigationTreeDTO:
-        nodes = self._load_nodes()
+        nodes = self.read_nodes()
         changed = self._synchronize_workspace_refs(nodes, targets)
-        self._validate(nodes, {target.workspace_id for target in targets})
+        self.validate_nodes(nodes, {target.workspace_id for target in targets})
         ordered = self._ordered(nodes)
         serialized_nodes = [node.model_dump(mode="json") for node in ordered]
         if changed:
@@ -122,7 +123,7 @@ class WorkspaceNavigationStore:
                 raise ValueError("导航节点只能挂在工作区文件夹下")
 
         node.parent_node_id = payload.parent_node_id
-        self._validate(nodes, {target.workspace_id for target in targets})
+        self.validate_nodes(nodes, {target.workspace_id for target in targets})
 
         siblings = self._siblings_in_position_order(
             nodes,
@@ -242,7 +243,7 @@ class WorkspaceNavigationStore:
         targets: tuple[WorkspaceTarget, ...],
     ) -> WorkspaceNavigationTreeDTO:
         valid_workspace_ids = {target.workspace_id for target in targets}
-        self._validate(nodes, valid_workspace_ids)
+        self.validate_nodes(nodes, valid_workspace_ids)
         ordered = self._ordered(nodes)
         serialized_nodes = [node.model_dump(mode="json") for node in ordered]
         self._save(serialized_nodes)
@@ -251,7 +252,8 @@ class WorkspaceNavigationStore:
             nodes=ordered,
         )
 
-    def _load_nodes(self) -> list[WorkspaceNavigationNodeDTO]:
+    def read_nodes(self) -> list[WorkspaceNavigationNodeDTO]:
+        """只读原节点；维护预检不能调用会同步并保存引用的 list_tree。"""
         try:
             payload = json.loads(self._storage_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -271,6 +273,9 @@ class WorkspaceNavigationStore:
             ) from error
         if not isinstance(payload, dict):
             raise RuntimeError("Gateway 工作区导航必须是 JSON 对象: artifact=workspace_navigation")  # noqa: TRY004 -- 保留原存储错误类别。
+        version = payload.get("schema_version")
+        if type(version) is not int or version != 1:
+            raise ValueError("Gateway 工作区导航只支持 schema_version 1: artifact=workspace_navigation")
         raw_nodes = payload.get("nodes", [])
         if not isinstance(raw_nodes, list):
             raise RuntimeError("Gateway 工作区导航 nodes 必须是数组: artifact=workspace_navigation")  # noqa: TRY004 -- 保留原存储错误类别。
@@ -298,8 +303,8 @@ class WorkspaceNavigationStore:
             "Gateway 工作区导航存储失败: artifact=workspace_navigation, "
             f"operation={operation}, error_type={type(error).__name__}, errno={error.errno}"
         )
-        if getattr(error, "winerror", None) is not None:
-            message += f", winerror={error.winerror}"
+        if (winerror := getattr(error, "winerror", None)) is not None:
+            message += f", winerror={winerror}"
         logger.exception("%s, path=%s", message, self._storage_path)
         return type(error)(error.errno, message)
 
@@ -313,7 +318,7 @@ class WorkspaceNavigationStore:
         retained_nodes: list[WorkspaceNavigationNodeDTO] = []
         for node in nodes:
             if node.kind == "workspace_ref":
-                target = targets_by_id.get(node.workspace_id)
+                target = targets_by_id.get(cast(str, node.workspace_id))
                 if target is None:
                     changed = True
                     continue
@@ -346,7 +351,7 @@ class WorkspaceNavigationStore:
         return changed
 
     @classmethod
-    def _validate(
+    def validate_nodes(
         cls,
         nodes: list[WorkspaceNavigationNodeDTO],
         valid_workspace_ids: set[str],

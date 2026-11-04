@@ -16,9 +16,11 @@ import pytest
 
 from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.schemas.gateway_control import WorkspaceFolderCreateRequest
 from configs.cli import main
 from configs.workspace_identity_migration import preview_workspace_identity_migration
 from tests.harness.python.run_context import TestRunContext
@@ -230,6 +232,9 @@ def test_remote_uuid_keeps_gateway_and_connection_identity_and_requires_confirma
             owner="remote_projection", connection_id=connection_id, remote_gateway_connection_id=connection_id,
             remote_workspace_id="gw_remote_native", backend_workspace_id=registered.target.backend_workspace_id,
         ))
+    navigation_path = registered.root / "navigation/workspace-tree.json"
+    WorkspaceNavigationStore(storage_path=navigation_path).list_tree(registered.registry.targets())
+    original_navigation = navigation_path.read_bytes()
     result = registered.preview()
     assert [item.code for item in result.blockers] == ["remote_identity_unverified", "remote_identity_unverified"]
     remote = result.mappings[1:]
@@ -237,6 +242,10 @@ def test_remote_uuid_keeps_gateway_and_connection_identity_and_requires_confirma
     assert {item.workspace_id for item in result.mappings} == {registered.target.backend_workspace_id}
     assert [item.connection_id for item in remote] == ["rgw_remote_0", "rgw_remote_1"]
     assert all(not item.verified for item in remote)
+    assert [item.gateway_id for item in result.references] == [registered.gateway_id, *owner_ids]
+    assert len({item.record_id for item in result.references}) == 3
+    assert {item.workspace_id for item in result.references} == {registered.target.backend_workspace_id}
+    assert navigation_path.read_bytes() == original_navigation
     assert "sentinel" not in json.dumps(result.report())
 
 
@@ -353,3 +362,71 @@ def test_registry_metadata_and_rows_share_one_read_snapshot(
     targets = updated["targets"]
     assert isinstance(targets, list) and isinstance(targets[0], dict)
     assert targets[0]["name"] == "读取中发布的新版本"
+
+
+def test_navigation_preview_maps_only_workspace_references_without_synchronizing(
+    registered: Registration,
+) -> None:
+    path = registered.root / "navigation/workspace-tree.json"
+    navigation = WorkspaceNavigationStore(storage_path=path)
+    tree = navigation.create_folder(
+        WorkspaceFolderCreateRequest(name=registered.target.workspace_id),
+        registered.registry.targets(),
+    )
+    original = path.read_bytes()
+    result = registered.preview()
+    assert result.blockers == ()
+    node, = [node for node in tree.nodes if node.kind == "workspace_ref"]
+    assert result.report()["references"] == [{
+        "source": "navigation/workspace-tree.json", "record_id": node.node_id,
+        "legacy_workspace_id": registered.target.workspace_id,
+        "gateway_id": registered.gateway_id, "workspace_id": registered.target.backend_workspace_id,
+    }]
+    assert path.read_bytes() == original
+    assert any(node.kind == "workspace_folder" and node.name == registered.target.workspace_id for node in tree.nodes)
+
+
+@pytest.mark.parametrize("corruption", ["unknown_workspace", "duplicate_node", "parent_cycle", "schema_version"])
+def test_navigation_corruption_blocks_preview_without_repair(
+    registered: Registration, corruption: str,
+) -> None:
+    path = registered.root / "navigation/workspace-tree.json"
+    navigation = WorkspaceNavigationStore(storage_path=path)
+    navigation.create_folder(WorkspaceFolderCreateRequest(name="保留原目录"), registered.registry.targets())
+    payload = json.loads(path.read_bytes())
+    if corruption == "unknown_workspace":
+        node, = [node for node in payload["nodes"] if node["kind"] == "workspace_ref"]
+        node["workspace_id"] = "gw_unmapped"
+    elif corruption == "duplicate_node":
+        payload["nodes"].append(payload["nodes"][0])
+    elif corruption == "parent_cycle":
+        node, = [node for node in payload["nodes"] if node["kind"] == "workspace_folder"]
+        node["parent_node_id"] = node["node_id"]
+    else:
+        payload["schema_version"] = 2
+    path.write_text(json.dumps(payload))
+    original = path.read_bytes()
+    result = registered.preview()
+    blocker, = result.blockers
+    assert blocker.code == "invalid_navigation_reference"
+    assert blocker.source == str(path)
+    assert result.report()["mapping_complete"] is False
+    assert result.references == ()
+    assert path.read_bytes() == original
+
+
+def test_navigation_without_registry_is_not_discarded_or_given_new_identity(tmp_path: Path) -> None:
+    path = tmp_path / "navigation/workspace-tree.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"schema_version": 1, "nodes": [{
+        "kind": "workspace_ref", "node_id": "retained-node", "workspace_id": "gw_orphan", "name": "保留引用",
+    }]}))
+    original = path.read_bytes()
+    result = preview_workspace_identity_migration(gateway_root=tmp_path, project_root=Path.cwd())
+    blocker, = result.blockers
+    assert blocker.code == "invalid_navigation_reference"
+    assert result.mappings == ()
+    assert result.report()["mapping_complete"] is False
+    assert path.read_bytes() == original
+    assert not (tmp_path / "identity.json").exists()
+    assert not (tmp_path / "gateway.sqlite").exists()
