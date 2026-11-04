@@ -415,14 +415,17 @@ class ContextSourceVersionsStorageMixin:
         try:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
                 self._require_context_source_control_runtime(connection)
+                # 普通 prepare 没有重建任务时不读取全部控制行；待重建时仍在同一快照内读取。
+                pending = self._pending_context_epoch_row(connection, checkpoint_ns)
+                if pending is None:
+                    # 保留来源表/列损坏的拒绝契约，只编译查询，不扫描任何控制行。
+                    connection.execute(f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states LIMIT 0")
+                    return None
                 states = connection.execute(
                     f"SELECT {_SOURCE_COLUMNS} FROM context_source_control_states "
                     "WHERE session_id = ? AND thread_id = ? ORDER BY created_at, source_id",
                     (session_id, thread_id),
                 ).fetchall()
-                pending = self._pending_context_epoch_row(connection, checkpoint_ns)
-                if pending is None:
-                    return None
                 header = connection.execute(
                     "SELECT session_id, thread_id, source_assembly_id "
                     "FROM checkpoint_context_source_snapshots WHERE checkpoint_id = ? AND checkpoint_ns = ?",

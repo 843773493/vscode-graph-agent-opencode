@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
@@ -312,6 +313,27 @@ def rebuild_reads(monkeypatch):
 
 
 @pytest.fixture
+def rebuild_state_scans(epoch_case, monkeypatch):
+    """记录真实重建 reader 的 SQL，不替换查询或返回的来源事实。"""
+    scans = []
+    storage = epoch_case.saver._storage.storage
+    connect = storage._connect
+
+    def observe(statement):
+        if ("FROM context_source_control_states" in statement and "LIMIT 0" not in statement
+                and sys._getframe(1).f_code.co_name == "read_context_source_rebuild_rows"):
+            scans.append(statement)
+
+    def open_connection(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.set_trace_callback(observe)
+        return connection
+
+    monkeypatch.setattr(storage, "_connect", open_connection)
+    return scans
+
+
+@pytest.fixture
 def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation, request):
     saver, session, connection, accepted = epoch_db
     thread = saver._storage.storage.main_thread_id(session)
@@ -371,7 +393,9 @@ def test_tracking_contract_survives_provider_retry_and_cold_append(epoch_case):
 
 
 @pytest.mark.parametrize("epoch_case", (False, True), indirect=True, ids=("no-sources", "tracked-sources"))
-def test_prepare_reuses_empty_rebuild_read_only_within_each_request(epoch_case, rebuild_reads):
+def test_prepare_reuses_empty_rebuild_read_only_within_each_request(
+    epoch_case, rebuild_reads, rebuild_state_scans,
+):
     case = epoch_case
     before = case.source_rows()
     assert len(before) == len(case.descriptors)
@@ -384,6 +408,7 @@ def test_prepare_reuses_empty_rebuild_read_only_within_each_request(epoch_case, 
     assert case.snapshot(next_prepared).seal_binding.prefix.state.epoch.ordinal == 1
     assert case.source_rows() == before
     assert case.pending_rows() == []
+    assert rebuild_state_scans == []
 
 
 def test_prepare_pending_reuses_empty_read_but_default_freeze_reads_again(epoch_case, rebuild_reads):
@@ -439,7 +464,9 @@ def test_summary_reads_rebuild_once_without_applying_sources_or_epoch(
         assert {row[0]: row[3] for row in case.source_rows()}["workspace:rules"] == "rules:2"
 
 
-def test_rewind_reconciles_only_from_frozen_control_state(epoch_case, rebuild_reads):
+def test_rewind_reconciles_only_from_frozen_control_state(
+    epoch_case, rebuild_reads, rebuild_state_scans,
+):
     case = epoch_case
     second = case.advance()
     second_bytes = canonical_json_bytes(case.snapshot(second).to_dict())
@@ -454,7 +481,9 @@ def test_rewind_reconciles_only_from_frozen_control_state(epoch_case, rebuild_re
     assert all(row[2] == row[3] and row[2].endswith(":1") for row in case.source_rows())
     assert case.snapshot(second).seal_binding.prefix.state.epoch.ordinal == 1
     rebuild_reads.clear()
+    rebuild_state_scans.clear()
     rebuilt = case.prepare("rewind")
+    assert len(rebuild_state_scans) == 1
     assert len(rebuild_reads) == 1
     assert rebuild_reads[0] is not None
     assert rebuild_reads[0].transition.transition_id == pending[0]
@@ -1275,7 +1304,9 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
     assert case.manager.prepare_pending() is None
 
 
-def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources(epoch_case, rebuild_reads):
+def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources(
+    epoch_case, rebuild_reads, rebuild_state_scans,
+):
     case = epoch_case
     second = case.advance()
     old_snapshot = canonical_json_bytes(case.snapshot(second).to_dict())
@@ -1286,7 +1317,9 @@ def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources
     assert case.connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before_assemblies
     assert case.snapshot(second).seal_binding.prefix.state.epoch.ordinal == 1
     rebuild_reads.clear()
+    rebuild_state_scans.clear()
     rebuilt = case.prepare("compaction")
+    assert len(rebuild_state_scans) == 1
     assert len(rebuild_reads) == 1
     assert rebuild_reads[0] is not None
     assert rebuild_reads[0].transition.transition_id == pending[0]
