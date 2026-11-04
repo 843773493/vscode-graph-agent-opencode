@@ -95,11 +95,11 @@ async def test_context_response_validation_keeps_original_input_in_diagnostics(
 ) -> None:
     read = _read_request("ws_query")
     search = SessionContextSearchRequest(**read.model_dump(include={"resource_identity", "uri", "scope"}), query="needle")
-    valid = ({"active_workspace_id": None, "items": []} if operation == "inventory" else {
+    valid = ({"active_workspace": None, "items": []} if operation == "inventory" else {
         **read.model_dump(include={"resource_identity", "uri", "scope"}), "revision": "rev-1",
         **({"view": "overview"} if operation == "read" else {"query": "needle", "match_mode": "literal"}),
     })
-    field = "active_workspace_id" if operation == "inventory" else "revision"
+    field = "active_workspace" if operation == "inventory" else "revision"
     invalid = {"native_path": native_path}
     data = {**valid, field: invalid}
     wire_requests: list[dict[str, object]] = []
@@ -170,4 +170,5 @@ async def test_context_protocol_failures_keep_decode_and_request_identity_bounda
         assert "stage=response_validation" in str(caught.value) and "private" not in str(caught.value)
         assert isinstance(caught.value.__cause__, JSONDecodeError if fault == "json" else TypeError)
         if fault == "json":
+            assert isinstance(caught.value.__cause__, JSONDecodeError)
             assert caught.value.__cause__.doc == "/private/context/not-json"

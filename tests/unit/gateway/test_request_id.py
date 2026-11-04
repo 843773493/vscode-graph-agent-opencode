@@ -20,10 +20,13 @@ from app.gateway.federation.channel_owner import FederationChannelOwner
 from app.gateway.main import app
 from app.gateway.routes._shared import get_registry
 from app.gateway.server.workspace_proxy import _proxy_headers
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 
 
 class _GatewayRegistryStub:
-    active_workspace_id = "gw_test"
+    active_workspace_dto = GatewaySearchWorkspaceOwnerDTO(
+        gateway_id="gateway_" + "0" * 32, workspace_id="00000000-0000-4000-8000-000000000001",
+    )
 
 
 @pytest.fixture
@@ -53,6 +56,7 @@ def test_gateway_endpoint_returns_middleware_request_id(
     assert response.json()["data"]["gateway_id"] == "gateway_test_id"
     assert response.json()["data"]["process_id"] == os.getpid()
     assert response.json()["data"]["development_restart_available"] is False
+    assert response.json()["data"]["active_workspace"] == _GatewayRegistryStub.active_workspace_dto.model_dump()
 
 
 def test_gateway_auth_error_contains_request_id_in_body(
