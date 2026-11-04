@@ -199,11 +199,11 @@ async def test_extensions_preserve_typed_controls_through_seal_fork_and_cold_rea
         ]
         print(f"inherited detail read work: {measurements}")
         assert measurements == [
-            {"snapshot": True, "resolves": 1, "connections": 0, "scopes": 1},
+            {"snapshot": True, "resolves": 0, "connections": 0, "scopes": 1},
             {"snapshot": False, "resolves": 1, "connections": 1, "scopes": 1},
             {"snapshot": True, "resolves": 0, "connections": 0, "scopes": 0},
             {"snapshot": True, "resolves": 0, "connections": 0, "scopes": 0},
-            {"snapshot": True, "resolves": 1, "connections": 0, "scopes": 1},
+            {"snapshot": True, "resolves": 0, "connections": 0, "scopes": 1},
         ]
         assert calls[0]["scopes"] == [borrowed.connection]
     assert jsonl.read_bytes() == before

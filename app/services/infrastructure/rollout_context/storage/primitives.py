@@ -662,6 +662,9 @@ class RolloutReadSnapshot:
     manifest: RolloutManifest
     connection: sqlite3.Connection
     file_lock: _RolloutFileLock
+    # 本次快照建立时已由 catalog 解析的物理节点；关闭后不得借用于 detail 读取。
+    thread_node: Path
+    sessions_root: Path
     _closed: bool = False
     # 只读事务内复用成功的顺序校验；replace 快照时不继承，且绑定原连接。
     _validated_history_orders: set[tuple[sqlite3.Connection, str]] = field(

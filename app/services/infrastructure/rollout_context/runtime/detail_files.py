@@ -83,17 +83,23 @@ class DetailFiles:
                 raise RuntimeError("rollout read snapshot 已关闭")
             if (snapshot.session_id, snapshot.thread_id) != (owner_session, owner_thread):
                 raise ValueError("read snapshot 与 detail 目标 owner 不一致")
+            if snapshot.sessions_root != self._resolver.sessions_root:
+                raise ValueError("read snapshot 与 detail 工作区不一致")
         relative = detail_relative_path(ref)
         if create or creation_record is not None:
             ref.require_owner(owner_session, owner_thread)
         if creation_record is not None and creation_record.session_id != ref.session_id:
             raise ValueError("source-mismatch: detail 与 prepared Session creation owner 不一致")
-        root = (
-            self._resolver.resolve_thread_node(owner_session, owner_thread)
-            if creation_record is None else self._resolver.resolve_prepared_thread_node(
+        if creation_record is not None:
+            root = self._resolver.resolve_prepared_thread_node(
                 creation_record, ref.thread_id,
             )
-        )
+        elif snapshot is not None:
+            # 借用当前快照已核验的 locator，不为每份正文重复打开 catalog/control。
+            # 下方仍逐份核历史授权、文件形态和路径边界；新快照重新解析节点。
+            root = snapshot.thread_node
+        else:
+            root = self._resolver.resolve_thread_node(owner_session, owner_thread)
         if (ref.session_id, ref.thread_id) != (owner_session, owner_thread):
             # 历史授权与物理路径共用一次 locator 解析；有快照时借用同一读取事务。
             # 归属仍逐份核验，不再由 read 和 path 各开连接重复检查。

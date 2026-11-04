@@ -202,6 +202,8 @@ class RolloutIndexMixin:
                 manifest,
                 connection,
                 file_lock,
+                thread_node=self._host.fork_paths.thread_node(session_id, thread_id),
+                sessions_root=self._host.sessions_dir,
             )
             cleanup.pop_all()
             return snapshot

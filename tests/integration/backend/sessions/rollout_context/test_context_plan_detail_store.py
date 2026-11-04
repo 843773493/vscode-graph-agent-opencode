@@ -28,6 +28,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     detail_record_from_mapping,
     detail_relative_path,
 )
+from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 OTHER_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
@@ -76,6 +77,38 @@ def _rollout_state(root: Path) -> dict[str, tuple[str, bytes | None]]:
             ("directory", None) if path.is_dir() else ("file", path.read_bytes())
         )
         for path in sorted(root.rglob("*"))
+    }
+
+
+@pytest.fixture
+def foreign_detail_sessions(detail_case_root: Path, detail_sessions: Path) -> Path:
+    sessions = detail_case_root / "other-workspace" / ".boxteam/sessions"
+    seed_catalog_session_bundle(
+        sessions, SESSION_ID, main_thread_id=_main_thread_id(detail_sessions, SESSION_ID),
+    )
+    _initialize_rollout_owner(sessions, SESSION_ID)
+    return sessions
+
+
+def test_detail_snapshot_rejects_same_owner_from_another_workspace(
+    detail_sessions: Path, foreign_detail_sessions: Path,
+) -> None:
+    store = ContextPlanDetailStore(detail_sessions)
+    thread = _main_thread_id(detail_sessions, SESSION_ID)
+    record = store.write(
+        session_id=SESSION_ID, thread_id=thread, assembly_id="workspace-bound-detail",
+        detail_kind="request_source", retention_class="request_replay", visibility="internal",
+        detail={"text": "当前工作区的冻结正文"}, required=True,
+    )
+    target = store._files.path(record.detail_ref)
+    before = target.read_bytes()
+    with RolloutCheckpointSaver(foreign_detail_sessions) as foreign:
+        with foreign._storage.storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+            with pytest.raises(ValueError, match="read snapshot 与 detail 工作区不一致"):
+                store.read(session_id=SESSION_ID, thread_id=thread, record=record, snapshot=snapshot)
+    assert target.read_bytes() == before
+    assert store.read(session_id=SESSION_ID, thread_id=thread, record=record)["detail"] == {
+        "text": "当前工作区的冻结正文",
     }
 
 
