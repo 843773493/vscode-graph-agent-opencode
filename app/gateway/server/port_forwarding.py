@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
+from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.routes._shared import get_registry, resolve_workspace_key
 from app.gateway.runtime.port_forwarding import (
     SshPortForwardManager,
     port_forward_failure,
@@ -49,12 +52,15 @@ def port_forward_http_error(
 )
 async def list_port_forwards(
     workspace_id: str,
+    request: Request,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        items = await manager.list(workspace_id)
+        items = await manager.list(workspace_key)
     except Exception as error:
         raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
@@ -67,13 +73,16 @@ async def list_port_forwards(
 async def create_port_forward(
     workspace_id: str,
     payload: CreatePortForwardRequest,
+    request: Request,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        await manager.create(workspace_id, payload)
-        items = await manager.list(workspace_id)
+        await manager.create(workspace_key, payload)
+        items = await manager.list(workspace_key)
     except Exception as error:
         raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
@@ -86,13 +95,16 @@ async def create_port_forward(
 async def delete_port_forward(
     workspace_id: str,
     forward_id: str,
+    request: Request,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        await manager.delete(workspace_id, forward_id)
-        items = await manager.list(workspace_id)
+        await manager.delete(workspace_key, forward_id)
+        items = await manager.list(workspace_key)
     except Exception as error:
         raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
@@ -105,13 +117,16 @@ async def delete_port_forward(
 async def reconnect_port_forward(
     workspace_id: str,
     forward_id: str,
+    request: Request,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        await manager.reconnect(workspace_id, forward_id)
-        items = await manager.list(workspace_id)
+        await manager.reconnect(workspace_key, forward_id)
+        items = await manager.list(workspace_key)
     except Exception as error:
         raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
@@ -125,13 +140,16 @@ async def change_local_port(
     workspace_id: str,
     forward_id: str,
     payload: ChangePortForwardLocalPortRequest,
+    request: Request,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        await manager.change_local_port(workspace_id, forward_id, payload.local_port)
-        items = await manager.list(workspace_id)
+        await manager.change_local_port(workspace_key, forward_id, payload.local_port)
+        items = await manager.list(workspace_key)
     except Exception as error:
         raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)
@@ -145,13 +163,16 @@ async def change_port_forward_label(
     workspace_id: str,
     forward_id: str,
     payload: ChangePortForwardLabelRequest,
+    request: Request,
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     manager: SshPortForwardManager = Depends(get_port_forward_manager),  # noqa: B008
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        await manager.change_label(workspace_id, forward_id, payload.label)
-        items = await manager.list(workspace_id)
+        await manager.change_label(workspace_key, forward_id, payload.label)
+        items = await manager.list(workspace_key)
     except Exception as error:
         raise port_forward_http_error(error) from error
     return APIResponse(data=PortForwardListDTO(items=items), request_id=request_id)

@@ -143,16 +143,6 @@ def build_remote_gateway_connection_id(
     return f"rgw_{digest[:32]}"
 
 
-def build_projected_workspace_id(
-    connection_id: str,
-    remote_workspace_id: str,
-) -> str:
-    digest = hashlib.sha256(
-        f"projected-workspace\0{connection_id}\0{remote_workspace_id}".encode()
-    ).hexdigest()
-    return f"gw_{digest[:32]}"
-
-
 def obtain_pairing_credential_over_ssh(
     *,
     connection_id: str,

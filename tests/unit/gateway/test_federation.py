@@ -22,7 +22,6 @@ from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     PAIRING_SSH_TIMEOUT_SECONDS,
     RemoteGatewayConnection,
-    build_projected_workspace_id,
     discover_remote_gateway,
     obtain_pairing_credential_over_ssh,
     start_remote_gateway_tunnel,
@@ -38,6 +37,11 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import _proxy_headers
 from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
 from app.services.infrastructure.config.state import ConfigConflictError
+
+_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
+_OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000003"
+_REMOTE_GATEWAY_ID = "gateway_" + "a" * 32
+_OTHER_GATEWAY_ID = "gateway_" + "b" * 32
 
 
 def _response(data: dict[str, object]) -> httpx.Response:
@@ -124,7 +128,7 @@ async def test_inbound_access_excludes_credentials_held_for_outbound_gateways(
     async def list_dtos() -> list[SimpleNamespace]:
         return [
             SimpleNamespace(
-                workspace_id="local_workspace",
+                workspace_id=_WORKSPACE_ID,
                 name="Local workspace",
                 root_path=str(tmp_path / "local"),
                 status="ready",
@@ -133,7 +137,7 @@ async def test_inbound_access_excludes_credentials_held_for_outbound_gateways(
                 connection_kind="local",
             ),
             SimpleNamespace(
-                workspace_id="remote_projection",
+                workspace_id=_OTHER_WORKSPACE_ID,
                 name="Remote projection",
                 root_path="/remote/project",
                 status="ready",
@@ -149,7 +153,7 @@ async def test_inbound_access_excludes_credentials_held_for_outbound_gateways(
 
     assert result.gateway_id == local_gateway_id
     assert [peer.peer_gateway_id for peer in result.peers] == ["gateway_external"]
-    assert [workspace.workspace_id for workspace in result.items] == ["local_workspace"]
+    assert [workspace.workspace_id for workspace in result.items] == [_WORKSPACE_ID]
 
 
 def test_gateway_local_credential_is_generated_and_stable(
@@ -280,7 +284,7 @@ def test_registry_persists_remote_gateway_without_federation_token(
         private_key_path="/tmp/key",
         ssh_config_host=None,
         remote_gateway_port=8014,
-        remote_gateway_id="gateway_remote",
+        remote_gateway_id=_REMOTE_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="manual",
     )
@@ -290,27 +294,28 @@ def test_registry_persists_remote_gateway_without_federation_token(
             service_urls={"workspace_api": "http://127.0.0.1:41000"}
         ),
     )
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id=build_projected_workspace_id("rgw_test", "remote_ws"),
+    registry.apply_remote_projection_snapshot(
+        connection=registry.remote_gateway_connection("rgw_test"),
+        projections=(WorkspaceTarget(
+            gateway_id=_REMOTE_GATEWAY_ID,
+            workspace_id=_WORKSPACE_ID,
             name="Remote workspace",
             root_path=None,
             backend_url="http://127.0.0.1:41000",
             connection_kind="remote_gateway",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             managed=True,
-            remote_gateway_connection_id="rgw_test",
-            remote_workspace_id="remote_ws",
-        )
+            remote_gateway_connection_ids=("rgw_test",),
+            owner="remote_projection",
+        ),),
     )
 
     serialized = storage_path.read_text(encoding="utf-8")
     assert "federation-secret" not in serialized
     restored = GatewayWorkspaceRegistry(storage_path=storage_path)
     target = restored.targets()[0]
-    assert target.remote_gateway_connection_id == "rgw_test"
-    assert target.remote_workspace_id == "remote_ws"
-    assert target.backend_workspace_id == "00000000-0000-4000-8000-000000000002"
+    assert target.remote_gateway_connection_ids == ("rgw_test",)
+    assert target.gateway_id == _REMOTE_GATEWAY_ID
+    assert target.workspace_id == _WORKSPACE_ID
 
 
 @pytest.mark.asyncio
@@ -332,24 +337,23 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
         private_key_path=None,
         ssh_config_host="manual",
         remote_gateway_port=8014,
-        remote_gateway_id="manual-gateway",
+        remote_gateway_id=_OTHER_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="manual",
     )
     registry.upsert_remote_gateway(manual_connection)
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id="manual-projection",
+    registry.apply_remote_projection_snapshot(
+        connection=registry.remote_gateway_connection("rgw_manual"),
+        projections=(WorkspaceTarget(
+            gateway_id=_OTHER_GATEWAY_ID,
+            workspace_id=_WORKSPACE_ID,
             name="Manual projection",
             root_path=None,
             backend_url="http://manual",
             connection_kind="remote_gateway",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             owner="remote_projection",
-            connection_id="rgw_manual",
-            remote_gateway_connection_id="rgw_manual",
-            remote_workspace_id="manual-workspace",
-        )
+            remote_gateway_connection_ids=("rgw_manual",),
+        ),),
     )
     initial_revision = registry.registry_revision
 
@@ -367,7 +371,7 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
             private_key_path=None,
             ssh_config_host=configured.ssh_config_host,
             remote_gateway_port=configured.remote_gateway_port,
-            remote_gateway_id=f"{configured.connection_id}-gateway",
+            remote_gateway_id=_REMOTE_GATEWAY_ID,
             protocol_version=FEDERATION_PROTOCOL_VERSION,
             source_owner="config",
             remote_config_event_cursor=7,
@@ -383,11 +387,10 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
             runtime,
             [
                 {
-                    "workspace_id": f"{configured.connection_id}-workspace",
-                    "name": configured.name or configured.connection_id,
-                    "managed": False,
-                    "services": ["workspace_api"],
-                    "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                    'workspace_id': _WORKSPACE_ID,
+                    'name': configured.name or configured.connection_id,
+                    'managed': False,
+                    'services': ['workspace_api'],
                 }
             ],
         )
@@ -409,9 +412,9 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
     )
 
     assert registry.registry_revision == initial_revision + 1
-    assert registry.has_target("manual-projection")
+    assert registry.has_target((_OTHER_GATEWAY_ID, _WORKSPACE_ID))
     assert registry.has_target(
-        build_projected_workspace_id("rgw_config", "rgw_config-workspace")
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID)
     )
     assert registry.remote_gateway_connection("rgw_manual").source_owner == "manual"
     assert registry.remote_gateway_connection("rgw_config").source_owner == "config"
@@ -420,12 +423,57 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
     assert configured_connection.remote_config_state == "pending_restart"
     assert configured_connection.remote_restart_required is True
     assert configured_connection.remote_candidate_ref == "remote-candidate-ref"
-    assert (
-        registry.resolve(
-            build_projected_workspace_id("rgw_config", "rgw_config-workspace")
-        ).remote_config_event_cursor
-        == 7
+    configured_target = registry.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
+    assert registry.remote_connection_for_target(configured_target).remote_config_event_cursor == 7
+    assert {target.key for target in registry.targets()} == {
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID), (_OTHER_GATEWAY_ID, _WORKSPACE_ID),
+    }
+    registry.close()
+    state.close()
+
+
+def test_remote_projection_keeps_one_owner_for_multiple_connections(
+    tmp_path: Path,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", state_store=state)
+    first = RemoteGatewayConnection(
+        connection_id="rgw_first", name="First", host="first.example.com", port=22,
+        username="developer", private_key_path=None, ssh_config_host=None,
+        remote_gateway_port=8014, remote_gateway_id=_REMOTE_GATEWAY_ID,
+        protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
+        remote_config_event_cursor=3,
     )
+    second = replace(first, connection_id="rgw_second", host="second.example.com", remote_config_event_cursor=7)
+    target = WorkspaceTarget(
+        gateway_id=_REMOTE_GATEWAY_ID, workspace_id=_WORKSPACE_ID,
+        name="Shared source", root_path=None, backend_url="http://first",
+        connection_kind="remote_gateway", owner="remote_projection",
+        remote_gateway_connection_ids=(first.connection_id,),
+    )
+    registry.apply_remote_projection_snapshot(connection=first, projections=(target,))
+    registry.apply_remote_projection_snapshot(
+        connection=second,
+        projections=(replace(target, backend_url="http://second", remote_gateway_connection_ids=(second.connection_id,)),),
+    )
+    restored = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", state_store=state)
+    [shared] = restored.targets()
+    assert shared.key == target.key
+    assert shared.remote_gateway_connection_ids == (first.connection_id, second.connection_id)
+    assert restored.remote_gateway_connection(first.connection_id).remote_config_event_cursor == 3
+    assert restored.remote_gateway_connection(second.connection_id).remote_config_event_cursor == 7
+    with pytest.raises(LookupError, match="不能唯一确定"):
+        restored.target_request_headers(shared)
+    with pytest.raises(LookupError):
+        restored.resolve(_WORKSPACE_ID)
+    before_revision = restored.registry_revision
+    restored.remove_remote_gateway(first.connection_id)
+    assert restored.registry_revision == before_revision + 1
+    [remaining] = restored.targets()
+    assert remaining.key == shared.key
+    assert remaining.remote_gateway_connection_ids == (second.connection_id,)
+    assert restored.remote_connection_for_target(remaining) == second
+    restored.close()
     registry.close()
     state.close()
 
@@ -449,31 +497,28 @@ def test_remote_projection_rejects_stale_cursor_and_accepts_full_snapshot_jump(
             private_key_path=None,
             ssh_config_host="cursor",
             remote_gateway_port=8014,
-            remote_gateway_id="cursor-gateway",
+            remote_gateway_id=_REMOTE_GATEWAY_ID,
             protocol_version=FEDERATION_PROTOCOL_VERSION,
             source_owner="config",
             remote_config_event_cursor=cursor,
         )
 
-    def target(cursor: int) -> WorkspaceTarget:
+    def target() -> WorkspaceTarget:
         return WorkspaceTarget(
-            workspace_id=build_projected_workspace_id("rgw_cursor", "workspace"),
+            gateway_id=_REMOTE_GATEWAY_ID,
+            workspace_id=_WORKSPACE_ID,
             name="Cursor workspace",
             root_path=None,
             backend_url="http://cursor",
             connection_kind="remote_gateway",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             owner="remote_projection",
-            connection_id="rgw_cursor",
-            remote_gateway_connection_id="rgw_cursor",
-            remote_workspace_id="workspace",
-            remote_config_event_cursor=cursor,
+            remote_gateway_connection_ids=("rgw_cursor",),
         )
 
     registry.apply_remote_projection_snapshot(
         connection=connection(5),
         runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://cursor"}),
-        projections=(target(5),),
+        projections=(target(),),
     )
     initial_revision = registry.registry_revision
 
@@ -481,43 +526,44 @@ def test_remote_projection_rejects_stale_cursor_and_accepts_full_snapshot_jump(
         registry.apply_remote_projection_snapshot(
             connection=connection(4),
             runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://stale"}),
-            projections=(target(4),),
+            projections=(target(),),
         )
 
     assert registry.registry_revision == initial_revision
     assert (
         registry.remote_gateway_connection("rgw_cursor").remote_config_event_cursor == 5
     )
-    assert registry.resolve(target(5).workspace_id).backend_url == "http://cursor"
+    assert registry.resolve(target().key).backend_url == "http://cursor"
     assert (
-        registry.resolve(target(5).workspace_id).backend_workspace_id
-        == "00000000-0000-4000-8000-000000000002"
+        registry.resolve(target().key).workspace_id
+        == _WORKSPACE_ID
     )
 
     registry.apply_remote_projection_snapshot(
         connection=connection(9),
         runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://resynced"}),
-        projections=(target(9),),
+        projections=(target(),),
     )
     assert (
         registry.remote_gateway_connection("rgw_cursor").remote_config_event_cursor == 9
     )
-    assert registry.resolve(target(9).workspace_id).remote_config_event_cursor == 9
-    # backend UUID 属于路由签名；活动引用不能被新快照指向另一个后端。
-    workspace_id = target(9).workspace_id
-    lease = registry.acquire_route_reference(workspace_id, streaming=True)
+    assert registry.remote_connection_for_target(registry.resolve(target().key)).remote_config_event_cursor == 9
+    # UUID 变化表示替换工作区资源；原路由引用排空前不能移除旧 owner。
+    workspace_key = target().key
+    lease = registry.acquire_route_reference(workspace_key, streaming=True)
     replacement = replace(
-        target(10), backend_workspace_id="00000000-0000-4000-8000-000000000003"
+        target(), workspace_id=_OTHER_WORKSPACE_ID
     )
     with pytest.raises(RuntimeError, match="仍有引用"):
         registry.apply_remote_projection_snapshot(
             connection=connection(10), projections=(replacement,)
         )
     assert (
-        registry.resolve(workspace_id).backend_workspace_id
-        == "00000000-0000-4000-8000-000000000002"
+        registry.resolve(workspace_key).workspace_id
+        == _WORKSPACE_ID
     )
-    registry.release_route_reference(workspace_id, streaming=True)
+    assert registry.remote_gateway_connection("rgw_cursor").remote_config_event_cursor == 9
+    registry.release_route_reference(workspace_key, streaming=True)
     registry.apply_remote_projection_snapshot(
         connection=connection(10), projections=(replacement,)
     )
@@ -526,9 +572,11 @@ def test_remote_projection_rejects_stale_cursor_and_accepts_full_snapshot_jump(
         storage_path=tmp_path / "workspaces.json", state_store=state
     )
     assert (
-        restored.resolve(workspace_id).backend_workspace_id
-        == replacement.backend_workspace_id
+        restored.resolve(replacement.key).workspace_id
+        == replacement.workspace_id
     )
+    assert not restored.has_target(workspace_key)
+    assert restored.remote_gateway_connection("rgw_cursor").remote_config_event_cursor == 10
 
     restored.close()
     registry.close()
@@ -562,25 +610,21 @@ async def test_remote_gateway_registration_closes_staged_runtime_before_commit(
         private_key_path=None,
         ssh_config_host="precommit",
         remote_gateway_port=8014,
-        remote_gateway_id="precommit-gateway",
+        remote_gateway_id=_REMOTE_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="manual",
         remote_config_event_cursor=4,
     )
     old_runtime = _TrackingRuntime("http://old")
     old_target = WorkspaceTarget(
-        workspace_id=build_projected_workspace_id(
-            connection.connection_id, "old-workspace"
-        ),
+        gateway_id=connection.remote_gateway_id,
+        workspace_id=_WORKSPACE_ID,
         name="Old workspace",
         root_path=None,
         backend_url="http://old",
         connection_kind="remote_gateway",
-        backend_workspace_id="00000000-0000-4000-8000-000000000002",
         owner="remote_projection",
-        connection_id=connection.connection_id,
-        remote_gateway_connection_id=connection.connection_id,
-        remote_workspace_id="old-workspace",
+        remote_gateway_connection_ids=(connection.connection_id,),
     )
     registry.apply_remote_projection_snapshot(
         connection=connection,
@@ -599,10 +643,9 @@ async def test_remote_gateway_registration_closes_staged_runtime_before_commit(
             staged_runtime,
             [
                 {
-                    "workspace_id": "new-workspace",
-                    "name": "New workspace",
-                    "backend_workspace_id": "00000000-0000-4000-8000-000000000003",
-                    "services": ["workspace_api"],
+                    'workspace_id': _OTHER_WORKSPACE_ID,
+                    'name': 'New workspace',
+                    'services': ['workspace_api'],
                 }
             ],
         )
@@ -635,10 +678,10 @@ async def test_remote_gateway_registration_closes_staged_runtime_before_commit(
     assert registry._last_committed_snapshot is previous_commit
     assert state.load_workspace_registry() == previous_saved_state
     assert registry._remote_gateway_runtimes[connection.connection_id] is old_runtime
-    assert registry.resolve(old_target.workspace_id).backend_url == "http://old"
+    assert registry.resolve(old_target.key).backend_url == "http://old"
     assert registry.remote_gateway_connection(connection.connection_id) == connection
     assert not registry.has_target(
-        build_projected_workspace_id(connection.connection_id, "new-workspace")
+        (connection.remote_gateway_id, _OTHER_WORKSPACE_ID)
     )
     registry.close()
     state.close()
@@ -671,25 +714,21 @@ async def test_remote_gateway_registration_keeps_published_runtime_after_observe
         private_key_path=None,
         ssh_config_host="postcommit",
         remote_gateway_port=8014,
-        remote_gateway_id="postcommit-gateway",
+        remote_gateway_id=_REMOTE_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="manual",
         remote_config_event_cursor=4,
     )
     old_runtime = _TrackingRuntime("http://old")
     old_target = WorkspaceTarget(
-        workspace_id=build_projected_workspace_id(
-            connection.connection_id, "old-workspace"
-        ),
+        gateway_id=connection.remote_gateway_id,
+        workspace_id=_WORKSPACE_ID,
         name="Old workspace",
         root_path=None,
         backend_url="http://old",
         connection_kind="remote_gateway",
-        backend_workspace_id="00000000-0000-4000-8000-000000000002",
         owner="remote_projection",
-        connection_id=connection.connection_id,
-        remote_gateway_connection_id=connection.connection_id,
-        remote_workspace_id="old-workspace",
+        remote_gateway_connection_ids=(connection.connection_id,),
     )
     registry.apply_remote_projection_snapshot(
         connection=connection,
@@ -707,10 +746,9 @@ async def test_remote_gateway_registration_keeps_published_runtime_after_observe
             staged_runtime,
             [
                 {
-                    "workspace_id": "new-workspace",
-                    "name": "New workspace",
-                    "backend_workspace_id": "00000000-0000-4000-8000-000000000003",
-                    "services": ["workspace_api"],
+                    'workspace_id': _OTHER_WORKSPACE_ID,
+                    'name': 'New workspace',
+                    'services': ['workspace_api'],
                 }
             ],
         )
@@ -740,10 +778,8 @@ async def test_remote_gateway_registration_keeps_published_runtime_after_observe
         assert registry.registry_revision == previous_revision + 1
         assert registry._last_committed_snapshot is not previous_commit
         assert state.get_registry_revision() == registry.registry_revision
-        new_workspace_id = build_projected_workspace_id(
-            connection.connection_id, "new-workspace"
-        )
-        assert registry.resolve(new_workspace_id).backend_url == "http://published"
+        new_workspace_id = _OTHER_WORKSPACE_ID
+        assert registry.resolve((connection.remote_gateway_id, new_workspace_id)).backend_url == "http://published"
         assert registry.remote_gateway_url(connection.connection_id) == "http://published"
         assert registry._remote_gateway_runtimes[connection.connection_id] is staged_runtime
         assert staged_runtime.closed is False
@@ -806,7 +842,7 @@ async def test_configured_remote_reconcile_keeps_published_runtime_after_observe
             private_key_path=None,
             ssh_config_host=configured.ssh_config_host,
             remote_gateway_port=configured.remote_gateway_port,
-            remote_gateway_id="batch-observer-gateway",
+            remote_gateway_id=_REMOTE_GATEWAY_ID,
             protocol_version=FEDERATION_PROTOCOL_VERSION,
             source_owner="config",
             remote_config_event_cursor=1,
@@ -816,11 +852,10 @@ async def test_configured_remote_reconcile_keeps_published_runtime_after_observe
             runtime,
             [
                 {
-                    "workspace_id": "batch-workspace",
-                    "name": "Batch workspace",
-                    "managed": False,
-                    "services": ["workspace_api"],
-                    "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                    'workspace_id': _WORKSPACE_ID,
+                    'name': 'Batch workspace',
+                    'managed': False,
+                    'services': ['workspace_api'],
                 }
             ],
         )
@@ -841,9 +876,7 @@ async def test_configured_remote_reconcile_keeps_published_runtime_after_observe
                 health_request_timeout_seconds=2,
                 health_poll_interval_seconds=0.01,
             )
-        workspace_id = build_projected_workspace_id(
-            configured.connection_id, "batch-workspace"
-        )
+        workspace_id = _WORKSPACE_ID
         assert raised.value.original_error is failure
         assert raised.value.__cause__ is failure
         assert raised.value.recovery_required is False
@@ -854,7 +887,7 @@ async def test_configured_remote_reconcile_keeps_published_runtime_after_observe
         assert registry.registry_revision == previous_revision + 1
         assert registry._last_committed_snapshot is not previous_commit
         assert state.get_registry_revision() == registry.registry_revision
-        assert registry.resolve(workspace_id).backend_url == "http://batch-published"
+        assert registry.resolve((_REMOTE_GATEWAY_ID, workspace_id)).backend_url == "http://batch-published"
         assert registry._remote_gateway_runtimes[configured.connection_id] is runtime
         assert registry.remote_gateway_url(configured.connection_id) == "http://batch-published"
         assert runtime.closed is False
@@ -890,7 +923,7 @@ async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_off
         private_key_path=None,
         ssh_config_host="old",
         remote_gateway_port=8014,
-        remote_gateway_id="old-gateway",
+        remote_gateway_id=_OTHER_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="config",
     )
@@ -904,19 +937,14 @@ async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_off
         projections={
             old_connection.connection_id: (
                 WorkspaceTarget(
-                    workspace_id=build_projected_workspace_id(
-                        old_connection.connection_id,
-                        "old-workspace",
-                    ),
+                    gateway_id=old_connection.remote_gateway_id,
+                    workspace_id=_WORKSPACE_ID,
                     name="Old workspace",
                     root_path=None,
                     backend_url="http://old",
                     connection_kind="remote_gateway",
-                    backend_workspace_id="00000000-0000-4000-8000-000000000002",
                     owner="remote_projection",
-                    connection_id=old_connection.connection_id,
-                    remote_gateway_connection_id=old_connection.connection_id,
-                    remote_workspace_id="old-workspace",
+                    remote_gateway_connection_ids=(old_connection.connection_id,),
                 ),
             )
         },
@@ -948,18 +976,17 @@ async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_off
                 private_key_path=None,
                 ssh_config_host="new",
                 remote_gateway_port=8014,
-                remote_gateway_id="new-gateway",
+                remote_gateway_id=_REMOTE_GATEWAY_ID,
                 protocol_version=FEDERATION_PROTOCOL_VERSION,
                 source_owner="config",
             ),
             StagedRuntime(),
             [
                 {
-                    "workspace_id": "new-workspace",
-                    "name": "New workspace",
-                    "managed": False,
-                    "services": ["workspace_api"],
-                    "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                    'workspace_id': _OTHER_WORKSPACE_ID,
+                    'name': 'New workspace',
+                    'managed': False,
+                    'services': ['workspace_api'],
                 }
             ],
         )
@@ -991,12 +1018,12 @@ async def test_configured_remote_reconcile_keeps_old_projection_when_peer_is_off
     assert registry.registry_revision == initial_revision
     assert (
         registry.resolve(
-            build_projected_workspace_id("rgw_configured", "old-workspace")
+            (old_connection.remote_gateway_id, _WORKSPACE_ID)
         ).backend_url
         == "http://old"
     )
     assert not registry.has_target(
-        build_projected_workspace_id("rgw_configured", "new-workspace")
+        (_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID)
     )
     registry.close()
     state.close()
@@ -1014,7 +1041,7 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
     )
     credential_store.issue(
         connection_id="rgw_reconnect",
-        peer_gateway_id="gateway_remote",
+        peer_gateway_id=_REMOTE_GATEWAY_ID,
     )
     registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     old_connection = RemoteGatewayConnection(
@@ -1026,7 +1053,7 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
         private_key_path=None,
         ssh_config_host="remote",
         remote_gateway_port=8014,
-        remote_gateway_id="gateway_remote",
+        remote_gateway_id=_REMOTE_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="config",
         remote_config_event_cursor=5,
@@ -1053,19 +1080,14 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
         runtime=old_runtime,
         projections=(
             WorkspaceTarget(
-                workspace_id=build_projected_workspace_id(
-                    "rgw_reconnect", "old-workspace"
-                ),
+                gateway_id=_REMOTE_GATEWAY_ID,
+                workspace_id=_WORKSPACE_ID,
                 name="Old workspace",
                 root_path=None,
                 backend_url="http://old",
                 connection_kind="remote_gateway",
-                backend_workspace_id="00000000-0000-4000-8000-000000000002",
                 owner="remote_projection",
-                connection_id="rgw_reconnect",
-                remote_gateway_connection_id="rgw_reconnect",
-                remote_workspace_id="old-workspace",
-                remote_config_event_cursor=5,
+                remote_gateway_connection_ids=("rgw_reconnect",),
             ),
         ),
     )
@@ -1080,19 +1102,18 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
         return (
             {
                 "protocol_version": FEDERATION_PROTOCOL_VERSION,
-                "gateway_id": "gateway_remote",
+                "gateway_id": _REMOTE_GATEWAY_ID,
                 "config_event_cursor": 8,
                 "config_reload_state": "active",
                 "config_reload_restart_required": False,
             },
             [
                 {
-                    "workspace_id": "new-workspace",
-                    "name": "New workspace",
-                    "managed": True,
-                    "connection_kind": "local",
-                    "services": ["workspace_api"],
-                    "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                    'workspace_id': _OTHER_WORKSPACE_ID,
+                    'name': 'New workspace',
+                    'managed': True,
+                    'connection_kind': 'local',
+                    'services': ['workspace_api'],
                 }
             ],
         )
@@ -1116,20 +1137,20 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
     assert connection.remote_config_state == "active"
     assert (
         registry.resolve(
-            build_projected_workspace_id("rgw_reconnect", "new-workspace")
+            (_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID)
         ).backend_url
         == "http://new"
     )
     assert not registry.has_target(
-        build_projected_workspace_id("rgw_reconnect", "old-workspace")
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID)
     )
     assert old_runtime.closed is True
     assert new_runtime.closed is False
     assert (
         registry.resolve(
-            build_projected_workspace_id("rgw_reconnect", "new-workspace")
-        ).backend_workspace_id
-        == "00000000-0000-4000-8000-000000000002"
+            (_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID)
+        ).workspace_id
+        == _OTHER_WORKSPACE_ID
     )
     registry.close()
 
@@ -1138,8 +1159,8 @@ async def test_remote_reconnect_refreshes_projection_cursor_and_retires_old_tunn
 @pytest.mark.parametrize(
     "health_workspace_id, expected_status",
     [
-        ("00000000-0000-4000-8000-000000000002", "ready"),
-        ("00000000-0000-4000-8000-000000000003", "offline"),
+        (_WORKSPACE_ID, "ready"),
+        (_OTHER_WORKSPACE_ID, "offline"),
     ],
 )
 async def test_workspace_dto_exposes_safe_remote_connection_summary(
@@ -1155,7 +1176,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
         storage_path=gateway_root / "credentials" / "federation.json"
     ).issue(
         connection_id="rgw_test",
-        peer_gateway_id="gateway_remote",
+        peer_gateway_id=_REMOTE_GATEWAY_ID,
     )
     registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     registry.upsert_remote_gateway(
@@ -1168,7 +1189,7 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
             private_key_path="/secret/id_ed25519",
             ssh_config_host="gpu-server",
             remote_gateway_port=9014,
-            remote_gateway_id="gateway_remote",
+            remote_gateway_id=_REMOTE_GATEWAY_ID,
             protocol_version=FEDERATION_PROTOCOL_VERSION,
             source_owner="manual",
         ),
@@ -1176,19 +1197,20 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
             service_urls={"workspace_api": "http://127.0.0.1:41000"}
         ),
     )
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id="projected",
+    registry.apply_remote_projection_snapshot(
+        connection=registry.remote_gateway_connection("rgw_test"),
+        projections=(WorkspaceTarget(
+            gateway_id=_REMOTE_GATEWAY_ID,
+            workspace_id=_WORKSPACE_ID,
             name="Remote workspace",
             root_path=None,
             backend_url="http://127.0.0.1:41000",
             connection_kind="remote_gateway",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             managed=True,
-            remote_gateway_connection_id="rgw_test",
-            remote_workspace_id="remote_ws",
+            remote_gateway_connection_ids=("rgw_test",),
             remote_service_names=("workspace_api",),
-        )
+            owner="remote_projection",
+        ),),
     )
 
     class WorkspaceHealthClient:
@@ -1208,9 +1230,12 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
             *,
             headers: dict[str, str],
         ) -> httpx.Response:
-            assert headers["X-BoxTeam-Workspace-Id"] == "remote_ws"
+            assert headers["X-BoxTeam-Workspace-Id"] == _WORKSPACE_ID
+            assert headers["X-BoxTeam-Target-Gateway-Id"] == _REMOTE_GATEWAY_ID
             assert headers["X-BoxTeam-Federation-Token"]
-            payload: dict[str, object] = {"workspace_id": health_workspace_id}
+            payload: dict[str, object] = {
+                "workspace_id": health_workspace_id,
+            }
             if url.endswith("/api/v1/config/reload-status"):
                 payload = {
                     "data": {
@@ -1229,10 +1254,12 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
     [workspace] = await registry.list_dtos()
 
     assert workspace.status == expected_status
-    assert workspace.backend_workspace_id == "00000000-0000-4000-8000-000000000002"
+    assert workspace.workspace_id == _WORKSPACE_ID
+    assert workspace.gateway_id == _REMOTE_GATEWAY_ID
+    assert not {"backend_workspace_id", "remote_workspace_id"} & workspace.model_dump().keys()
     if expected_status == "offline":
         assert workspace.services["workspace_api"].error == (
-            "工作区健康检查失败: workspace_id=projected: stage=workspace_health, error=RuntimeError"
+            f"工作区健康检查失败: workspace_id={_WORKSPACE_ID}: stage=workspace_health, error=RuntimeError"
         )
         assert any(
             record.exc_info and type(record.exc_info[1]) is RuntimeError
@@ -1240,13 +1267,15 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
             for record in caplog.records
         )
         assert f"actual='{health_workspace_id}'" in caplog.text
-    assert workspace.remote is not None
-    assert workspace.remote.ssh_config_host == "gpu-server"
-    assert workspace.remote.host == "remote.example.com"
-    assert workspace.remote.port == 2222
-    assert workspace.remote.username == "developer"
-    assert workspace.remote.remote_gateway_port == 9014
-    assert "private_key_path" not in workspace.remote.model_dump()
+    [remote_summary] = workspace.remote_gateways
+    assert remote_summary.gateway_id == _REMOTE_GATEWAY_ID
+    assert remote_summary.gateway_connection_id == "rgw_test"
+    assert remote_summary.ssh_config_host == "gpu-server"
+    assert remote_summary.host == "remote.example.com"
+    assert remote_summary.port == 2222
+    assert remote_summary.username == "developer"
+    assert remote_summary.remote_gateway_port == 9014
+    assert "private_key_path" not in remote_summary.model_dump()
     assert "/secret/id_ed25519" not in workspace.model_dump_json()
 
 
@@ -1268,23 +1297,21 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
     )
     federation_client_state.manifest = {
         "protocol_version": FEDERATION_PROTOCOL_VERSION,
-        "gateway_id": "gateway_remote",
+        "gateway_id": _REMOTE_GATEWAY_ID,
     }
     federation_client_state.workspaces = {
         "items": [
             {
-                "workspace_id": "direct",
-                "name": "Direct",
-                "connection_kind": "local",
-                "managed": True,
-                "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                'workspace_id': _WORKSPACE_ID,
+                'name': 'Direct',
+                'connection_kind': 'local',
+                'managed': True,
             },
             {
-                "workspace_id": "nested",
-                "name": "Nested",
-                "connection_kind": "remote_gateway",
-                "managed": True,
-                "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                'workspace_id': _OTHER_WORKSPACE_ID,
+                'name': 'Nested',
+                'connection_kind': 'remote_gateway',
+                'managed': True,
             },
         ]
     }
@@ -1293,11 +1320,11 @@ async def test_discovery_filters_nested_workspaces_and_checks_protocol(
         credential=credential,
     )
 
-    assert manifest["gateway_id"] == "gateway_remote"
-    assert [item["workspace_id"] for item in workspaces] == ["direct"]
+    assert manifest["gateway_id"] == _REMOTE_GATEWAY_ID
+    assert [item["workspace_id"] for item in workspaces] == [_WORKSPACE_ID]
 
-    federation_client_state.manifest["protocol_version"] = 2
-    with pytest.raises(RuntimeError, match="local=1, remote=2"):
+    federation_client_state.manifest["protocol_version"] = 1
+    with pytest.raises(RuntimeError, match=f"local={FEDERATION_PROTOCOL_VERSION}, remote=1"):
         await discover_remote_gateway(
             gateway_url="http://127.0.0.1:41000",
             credential=credential,
@@ -1332,29 +1359,42 @@ def test_remote_proxy_headers_preserve_request_id_and_hide_local_token(
     )
     credential = store.issue(
         connection_id="rgw_test",
-        peer_gateway_id="gateway_local",
+        peer_gateway_id=_OTHER_GATEWAY_ID,
     )
+    registry = GatewayWorkspaceRegistry(
+        storage_path=tmp_path / "workspaces.json", gateway_id=_OTHER_GATEWAY_ID,
+    )
+    registry.upsert_remote_gateway(RemoteGatewayConnection(
+        connection_id="rgw_test", name="Remote", host="remote.example.com", port=22,
+        username="developer", private_key_path=None, ssh_config_host=None,
+        remote_gateway_port=8014, remote_gateway_id=_REMOTE_GATEWAY_ID,
+        protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
+    ))
     request = Request(
         {
             "type": "http",
             "method": "GET",
             "path": "/api/v1/health",
+            "app": SimpleNamespace(state=SimpleNamespace(registry=registry)),
             "headers": [
                 (b"x-local-token", b"browser-token"),
                 (b"x-request-id", b"untrusted"),
+                (b"x-boxteam-gateway-id", b"forged-sender"),
+                (b"x-boxteam-target-gateway-id", b"forged-target"),
+                (b"x-boxteam-workspace-id", b"forged-workspace"),
             ],
         }
     )
     request.state.request_id = "req_authoritative"
     target = WorkspaceTarget(
-        workspace_id="projected",
+        gateway_id=_REMOTE_GATEWAY_ID,
+        workspace_id=_WORKSPACE_ID,
         name="Remote",
         root_path=None,
         backend_url="http://127.0.0.1:41000",
         connection_kind="remote_gateway",
-        backend_workspace_id="00000000-0000-4000-8000-000000000002",
-        remote_gateway_connection_id="rgw_test",
-        remote_workspace_id="remote_ws",
+        remote_gateway_connection_ids=("rgw_test",),
+        owner="remote_projection",
     )
 
     headers = _proxy_headers(request, target, gateway_id="gateway_" + "b" * 32,
@@ -1363,7 +1403,7 @@ def test_remote_proxy_headers_preserve_request_id_and_hide_local_token(
     assert headers["X-Request-ID"] == "req_authoritative"
     assert headers["X-BoxTeam-Gateway-Id"] == "gateway_" + "b" * 32
     assert headers["X-BoxTeam-Federation-Token"] == credential.token
-    assert headers["X-BoxTeam-Workspace-Id"] == "remote_ws"
+    assert headers["X-BoxTeam-Workspace-Id"] == _WORKSPACE_ID
     assert headers["X-BoxTeam-Target-Gateway-Id"] == "gateway_" + "a" * 32
     assert "X-Local-Token" not in headers
 
@@ -1373,7 +1413,7 @@ def test_legacy_ssh_registry_has_explicit_migration_error(tmp_path: Path) -> Non
     storage_path.write_text(
         json.dumps(
             {
-                "schema_version": _REGISTRY_SCHEMA_VERSION,
+                "schema_version": 13,
                 "managed_backends": [],
                 "targets": [
                     {
@@ -1382,7 +1422,7 @@ def test_legacy_ssh_registry_has_explicit_migration_error(tmp_path: Path) -> Non
                         "backend_url": "http://127.0.0.1:41000",
                         "connection_kind": "ssh",
                         "managed": True,
-                        "backend_workspace_id": "00000000-0000-4000-8000-000000000002",
+                        "backend_workspace_id": _WORKSPACE_ID,
                     }
                 ],
             }
@@ -1390,7 +1430,7 @@ def test_legacy_ssh_registry_has_explicit_migration_error(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="SSH 直连后端注册记录"):
+    with pytest.raises(ValueError, match="身份合同需要显式迁移"):
         GatewayWorkspaceRegistry(storage_path=storage_path)
 
 
@@ -1468,7 +1508,7 @@ async def test_remote_gateway_uses_one_ssh_forward(
         private_key_path=None,
         ssh_config_host="remote",
         remote_gateway_port=8014,
-        remote_gateway_id="gateway_remote",
+        remote_gateway_id=_REMOTE_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="manual",
     )
@@ -1502,32 +1542,41 @@ async def test_remote_restart_is_delegated_with_request_id(
         RemoteGatewayConnection(
             connection_id="rgw_test", name="Remote", host="remote.example.com",
             port=22, username="developer", private_key_path=None, ssh_config_host="remote",
-            remote_gateway_port=8014, remote_gateway_id="gateway_remote",
+            remote_gateway_port=8014, remote_gateway_id=_REMOTE_GATEWAY_ID,
             protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
         ),
         runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://127.0.0.1:41000"}),
     )
-    remote_ids = ["remote_ws", "remote_sibling"]
-    local_ids = [build_projected_workspace_id("rgw_test", member_id) for member_id in remote_ids]
+    workspace_ids = [_WORKSPACE_ID, _OTHER_WORKSPACE_ID]
     generation = "remote-generation-2" if status == "restarted" else "remote-generation-1"
     remote_workspaces = []
-    for index, (remote_id, local_id) in enumerate(zip(remote_ids, local_ids, strict=True)):
-        backend_id = f"00000000-0000-4000-8000-{index + 2:012d}"
-        registry.upsert(WorkspaceTarget(
-            workspace_id=local_id, name=f"Remote {index}", root_path=None,
-            backend_url="http://127.0.0.1:41000", connection_kind="remote_gateway",
-            owner="remote_projection", connection_id="rgw_test",
-            backend_workspace_id=backend_id, managed=True,
-            remote_gateway_connection_id="rgw_test", remote_workspace_id=remote_id,
+    projections = []
+    for index, workspace_id in enumerate(workspace_ids):
+        projections.append(WorkspaceTarget(
+            gateway_id=_REMOTE_GATEWAY_ID,
+            workspace_id=workspace_id,
+            name=f"Remote {index}",
+            root_path=None,
+            backend_url="http://127.0.0.1:41000",
+            connection_kind="remote_gateway",
+            owner="remote_projection",
+            managed=True,
+            remote_gateway_connection_ids=("rgw_test",),
             remote_backend_generation="remote-generation-1",
-            remote_affected_workspace_ids=tuple(local_ids),
-        ), activate=index == 0)
+            remote_affected_workspace_ids=tuple(workspace_ids),
+        ))
         remote_workspaces.append({
-            "workspace_id": remote_id, "backend_workspace_id": backend_id,
-            "name": f"Remote {index}", "managed": True,
-            "backend_generation": generation, "affected_workspace_ids": remote_ids,
-            "services": ["workspace_api"],
+            'workspace_id': workspace_id,
+            'name': f'Remote {index}',
+            'managed': True,
+            'backend_generation': generation,
+            'affected_workspace_ids': workspace_ids,
+            'services': ['workspace_api'],
         })
+    registry.apply_remote_projection_snapshot(
+        connection=registry.remote_gateway_connection("rgw_test"),
+        projections=tuple(projections), activate=True,
+    )
     captured: dict[str, object] = {}
     client_options: list[tuple[int, bool | None]] = []
 
@@ -1549,12 +1598,16 @@ async def test_remote_restart_is_delegated_with_request_id(
             return httpx.Response(
                 200,
                 json={"data": {
+                    "gateway_id": _REMOTE_GATEWAY_ID, "workspace_id": _WORKSPACE_ID,
                     "status": status, "backend_generation": generation,
-                    "affected_workspace_ids": remote_ids,
+                    "affected_workspace_ids": workspace_ids,
                     "blockers": [{
-                        "workspace_id": remote_ids[1], "kind": "proxy_stream",
-                        "resource_id": "remote-stream", "session_id": "gateway-proxy",
-                        "status": "active", "detail": "另一成员仍有 SSE",
+                        "gateway_id": _REMOTE_GATEWAY_ID, "workspace_id": workspace_ids[1],
+                        "kind": "proxy_stream",
+                        "resource_id": "remote-stream",
+                        "session_id": "gateway-proxy",
+                        "status": "active",
+                        "detail": "另一成员仍有 SSE",
                     }] if status == "blocked" else [],
                 }},
                 request=httpx.Request("POST", url),
@@ -1580,32 +1633,36 @@ async def test_remote_restart_is_delegated_with_request_id(
     )
     try:
         result = await controller.safe_restart_managed_backend(
-            local_ids[0], request_id="req_federation",
+            (_REMOTE_GATEWAY_ID, workspace_ids[0]), request_id="req_federation",
             group_request=GatewayRuntimeGroupRequest(
                 expected_backend_generation="remote-generation-1",
-                expected_workspace_ids=local_ids, desired_workspace_ids=local_ids,
+                expected_workspace_ids=workspace_ids, desired_workspace_ids=workspace_ids,
             ),
         )
         assert (2, False) in client_options
+        assert (result.gateway_id, result.workspace_id) == (_REMOTE_GATEWAY_ID, _WORKSPACE_ID)
         assert result.status == status
         assert result.backend_generation == generation
-        assert result.affected_workspace_ids == local_ids
+        assert result.affected_workspace_ids == workspace_ids
         assert captured["url"] == (
-            "http://127.0.0.1:41000/api/gateway/workspaces/remote_ws/runtime/restart-safe"
+            f"http://127.0.0.1:41000/api/gateway/workspaces/{_WORKSPACE_ID}/runtime/restart-safe"
         )
         assert captured["headers"] == {
             "X-BoxTeam-Federation-Token": credential.token,
             "X-Request-ID": "req_federation",
+            "X-BoxTeam-Gateway-Id": registry.gateway_id,
+            "X-BoxTeam-Target-Gateway-Id": _REMOTE_GATEWAY_ID,
+            "X-BoxTeam-Workspace-Id": _WORKSPACE_ID,
         }
         assert captured["body"] == {
             "expected_backend_generation": "remote-generation-1",
-            "expected_workspace_ids": remote_ids, "desired_workspace_ids": remote_ids,
+            "expected_workspace_ids": workspace_ids, "desired_workspace_ids": workspace_ids,
         }
-        assert captured["refresh"]["expected_remote_gateway_id"] == "gateway_remote"
+        assert captured["refresh"]["expected_remote_gateway_id"] == _REMOTE_GATEWAY_ID
         assert all(item.remote_backend_generation == generation for item in registry.targets())
-        assert all(item.remote_affected_workspace_ids == tuple(local_ids) for item in registry.targets())
+        assert all(item.remote_affected_workspace_ids == tuple(workspace_ids) for item in registry.targets())
         assert all(item.backend_generation == generation for item in result.workspaces.items)
-        assert {item.workspace_id for item in result.blockers} == ({local_ids[1]} if status == "blocked" else set())
+        assert {(item.gateway_id, item.workspace_id) for item in result.blockers} == ({(_REMOTE_GATEWAY_ID, workspace_ids[1])} if status == "blocked" else set())
     finally:
         registry.close()
 
@@ -1643,12 +1700,12 @@ def test_pairing_ssh_has_bounded_timeout_and_stable_error_code(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "backend_id", [None, "workspace-alias", "00000000-0000-4000-8000-00000000000A"]
+    "workspace_id", [None, "workspace-alias", "00000000-0000-4000-8000-00000000000A"]
 )
-async def test_discovery_rejects_missing_or_noncanonical_backend_uuid(
+async def test_discovery_rejects_missing_or_noncanonical_workspace_uuid(
     tmp_path: Path,
     federation_client_state: _FederationClientState,
-    backend_id: str | None,
+    workspace_id: str | None,
 ):
     credential = FederationCredentialStore(
         storage_path=tmp_path / "credentials.json"
@@ -1664,29 +1721,28 @@ async def test_discovery_rejects_missing_or_noncanonical_backend_uuid(
     )
     federation_client_state.manifest = {
         "protocol_version": FEDERATION_PROTOCOL_VERSION,
-        "gateway_id": "gateway-remote",
+        "gateway_id": _REMOTE_GATEWAY_ID,
     }
     federation_client_state.workspaces = {
         "items": [
             {
-                "workspace_id": "remote-alias",
-                "name": "Remote",
-                "managed": False,
-                "connection_kind": "local",
-                "backend_workspace_id": backend_id,
+                'workspace_id': workspace_id,
+                'name': 'Remote',
+                'managed': False,
+                'connection_kind': 'local',
             }
         ]
     }
-    if backend_id is None:
-        del federation_client_state.workspaces["items"][0]["backend_workspace_id"]
-    with pytest.raises(ValueError, match="backend_workspace_id"):
+    if workspace_id is None:
+        del federation_client_state.workspaces["items"][0]["workspace_id"]
+    with pytest.raises(ValueError, match="workspace_id"):
         await discover_remote_gateway(
             gateway_url="http://remote.test", credential=credential
         )
 
 
 @pytest.mark.asyncio
-async def test_federation_export_declares_registered_backend_uuid(
+async def test_federation_export_declares_registered_workspace_uuid(
     tmp_path, monkeypatch
 ):
     from app.gateway.routes.federation import federation_workspaces
@@ -1697,19 +1753,18 @@ async def test_federation_export_declares_registered_backend_uuid(
     )
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gateway-workspace-alias",
+            gateway_id=registry.gateway_id,
+            workspace_id=_WORKSPACE_ID,
             name="Local",
             root_path="/workspace",
             backend_url="http://local.test",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
         )
     )
     response = await federation_workspaces(
         _=None, request_id="request-uuid-export", registry=registry
     )
-    assert response.data.items[0].workspace_id == "gateway-workspace-alias"
-    assert (
-        response.data.items[0].backend_workspace_id
-        == "00000000-0000-4000-8000-000000000002"
-    )
+    assert response.data is not None
+    assert response.data.items[0].workspace_id == _WORKSPACE_ID
+    assert response.data.gateway_id == registry.gateway_id
+    assert not {"backend_workspace_id", "remote_workspace_id"} & response.data.items[0].model_dump().keys()

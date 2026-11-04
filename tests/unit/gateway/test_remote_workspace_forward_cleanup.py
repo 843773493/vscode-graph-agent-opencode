@@ -17,7 +17,6 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     RemoteGatewayConnection,
-    build_projected_workspace_id,
     build_remote_gateway_connection_id,
 )
 from app.gateway.main import app
@@ -28,6 +27,11 @@ from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from app.schemas.gateway.port_forwarding import CreatePortForwardRequest
+
+_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
+_OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000003"
+_REMOTE_GATEWAY_ID = "gateway_" + "a" * 32
+_OTHER_GATEWAY_ID = "gateway_" + "b" * 32
 
 
 class _FakeManagedProcess:
@@ -85,25 +89,28 @@ def forward_cleanup(
             private_key_path=None,
             ssh_config_host=None,
             remote_gateway_port=8014,
-            remote_gateway_id="remote-gateway",
-            protocol_version=1,
+            remote_gateway_id=_REMOTE_GATEWAY_ID,
+            protocol_version=FEDERATION_PROTOCOL_VERSION,
             source_owner="manual",
         )
     )
-    for workspace_id in ("workspace_remove", "workspace_sibling"):
-        registry.upsert(
+    projections = []
+    for workspace_id in (_WORKSPACE_ID, _OTHER_WORKSPACE_ID):
+        projections.append(
             WorkspaceTarget(
+                gateway_id=_REMOTE_GATEWAY_ID,
                 workspace_id=workspace_id,
                 name=workspace_id,
                 root_path=None,
                 backend_url="http://127.0.0.1:41000",
                 connection_kind="remote_gateway",
-                backend_workspace_id="00000000-0000-4000-8000-000000000002",
-                remote_gateway_connection_id="rgw_cleanup",
-                remote_workspace_id=workspace_id,
+                remote_gateway_connection_ids=("rgw_cleanup",),
+                owner="remote_projection",
             ),
-            activate=False,
         )
+    registry.apply_remote_projection_snapshot(
+        connection=registry.remote_gateway_connection("rgw_cleanup"), projections=tuple(projections),
+    )
 
     processes: list[_FakeManagedProcess] = []
 
@@ -133,14 +140,14 @@ def forward_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fails(
+async def test_remote_forward_removal_preserves_registry_when_cleanup_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
     close_error: OSError, caplog: pytest.LogCaptureFixture,
 ) -> None:
     registry, manager, processes = forward_cleanup
     forward = await manager.create(
-        "workspace_remove",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, protocol="http"),
     )
     process = processes[0]
@@ -156,6 +163,7 @@ async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fail
     )
     headers = {
         "X-Local-Token": get_gateway_local_token(),
+        "X-BoxTeam-Target-Gateway-Id": _REMOTE_GATEWAY_ID,
         "X-Request-ID": "remote-forward-cleanup-failure",
     }
     try:
@@ -163,49 +171,73 @@ async def test_remote_workspace_removal_keeps_registry_when_forward_cleanup_fail
             transport=httpx.ASGITransport(app=app),
             base_url="http://gateway.test",
         ) as client:
-            failed = await client.delete(
-                "/api/gateway/workspaces/workspace_remove",
+            rejected = await client.delete(
+                f"/api/gateway/workspaces/{_WORKSPACE_ID}",
                 headers=headers,
             )
-            assert failed.status_code == (403 if isinstance(close_error, PermissionError) else 502)
+            assert rejected.status_code == 403
+            assert rejected.headers["X-Request-ID"] == "remote-forward-cleanup-failure"
+            assert rejected.json()["request_id"] == "remote-forward-cleanup-failure"
+            assert "stage=workspace_remove" in rejected.json()["detail"]
+            assert "error=PermissionError" in rejected.json()["detail"]
+            assert any(
+                record.exc_info and isinstance(record.exc_info[1], PermissionError)
+                and "不能越过 target owner" in str(record.exc_info[1])
+                for record in caplog.records
+            )
+            assert process.close_calls == 0
+            assert (tmp_path / "workspaces.json").read_bytes() == registry_before
+            assert (tmp_path / "port-forwards.json").read_bytes() == forwards_before
+
+            endpoint = f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards/{forward.forward_id}"
+            failed = await client.delete(endpoint, headers=headers)
+            assert failed.status_code == 502
             assert failed.headers["X-Request-ID"] == "remote-forward-cleanup-failure"
             assert failed.json()["request_id"] == "remote-forward-cleanup-failure"
             detail = failed.json()["detail"]
             assert close_error.filename not in detail
             assert f"errno={close_error.errno}" in detail and "winerror=206" in detail
-            assert "stage=workspace_remove" in detail
+            assert "stage=request" in detail
             assert any(record.exc_info and record.exc_info[1] is close_error for record in caplog.records)
             assert (tmp_path / "workspaces.json").read_bytes() == registry_before
             assert (tmp_path / "port-forwards.json").read_bytes() == forwards_before
-            assert registry.resolve("workspace_remove").workspace_id == "workspace_remove"
-            assert registry.resolve("workspace_sibling").workspace_id == "workspace_sibling"
-            assert (await manager.list("workspace_remove"))[0].forward_id == forward.forward_id
+            assert registry.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)).workspace_id == _WORKSPACE_ID
+            assert registry.resolve((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID)).workspace_id == _OTHER_WORKSPACE_ID
+            assert (await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)))[0].forward_id == forward.forward_id
             assert process.closed is False
             restored_registry = GatewayWorkspaceRegistry(
                 storage_path=tmp_path / "workspaces.json"
             )
-            assert restored_registry.resolve("workspace_remove").workspace_id == "workspace_remove"
+            assert restored_registry.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)).workspace_id == _WORKSPACE_ID
             assert json.loads(
                 (tmp_path / "port-forwards.json").read_text()
             )["items"][0]["forward_id"] == forward.forward_id
 
             retried = await client.delete(
-                "/api/gateway/workspaces/workspace_remove",
+                endpoint,
                 headers={
                     "X-Local-Token": get_gateway_local_token(),
+                    "X-BoxTeam-Target-Gateway-Id": _REMOTE_GATEWAY_ID,
                     "X-Request-ID": "remote-forward-cleanup-retry",
                 },
             )
 
         assert retried.status_code == 200
         assert retried.headers["X-Request-ID"] == "remote-forward-cleanup-retry"
+        assert retried.json()["request_id"] == "remote-forward-cleanup-retry"
+        assert retried.json()["data"]["items"] == []
+        assert (tmp_path / "workspaces.json").read_bytes() == registry_before
+        sibling = registry.resolve((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID))
+        registry.apply_remote_projection_snapshot(
+            connection=registry.remote_gateway_connection("rgw_cleanup"), projections=(sibling,),
+        )
         with pytest.raises(LookupError):
-            registry.resolve("workspace_remove")
+            registry.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
         with pytest.raises(LookupError):
             GatewayWorkspaceRegistry(
                 storage_path=tmp_path / "workspaces.json"
-            ).resolve("workspace_remove")
-        assert registry.resolve("workspace_sibling").workspace_id == "workspace_sibling"
+            ).resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
+        assert registry.resolve((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID)).workspace_id == _OTHER_WORKSPACE_ID
         assert process.closed is True
         assert json.loads((tmp_path / "port-forwards.json").read_text())["items"] == []
     finally:
@@ -250,25 +282,21 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
         private_key_path=None,
         ssh_config_host=None,
         remote_gateway_port=remote_gateway_port,
-        remote_gateway_id="old-gateway",
+        remote_gateway_id=_OTHER_GATEWAY_ID,
         protocol_version=FEDERATION_PROTOCOL_VERSION,
         source_owner="manual",
     )
     old_runtime = _TrackingRuntime("http://127.0.0.1:41000")
-    old_workspace_id = build_projected_workspace_id(
-        connection_id, "old-remote-workspace"
-    )
+    old_workspace_id = _WORKSPACE_ID
     old_target = WorkspaceTarget(
-        workspace_id=old_workspace_id,
+        gateway_id=old_connection.remote_gateway_id,
+        workspace_id=_WORKSPACE_ID,
         name="Old remote workspace",
         root_path=None,
         backend_url=old_runtime.service_urls["workspace_api"],
         connection_kind="remote_gateway",
-        backend_workspace_id="00000000-0000-4000-8000-000000000002",
         owner="remote_projection",
-        connection_id=connection_id,
-        remote_gateway_connection_id=connection_id,
-        remote_workspace_id="old-remote-workspace",
+        remote_gateway_connection_ids=(connection_id,),
         remote_service_names=("workspace_api",),
     )
     registry.apply_remote_projection_snapshot(
@@ -298,7 +326,7 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
         port_allocator=_available_port,
     )
     forward = await manager.create(
-        old_workspace_id,
+        old_target.key,
         CreatePortForwardRequest(remote_port=5173, protocol="http"),
     )
     old_forward_process = processes[0]
@@ -306,21 +334,17 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
     new_connection = replace(
         old_connection,
         name="New remote",
-        remote_gateway_id="new-gateway",
+        remote_gateway_id=_REMOTE_GATEWAY_ID,
     )
     new_target = WorkspaceTarget(
-        workspace_id=build_projected_workspace_id(
-            connection_id, "new-remote-workspace"
-        ),
+        gateway_id=new_connection.remote_gateway_id,
+        workspace_id=_OTHER_WORKSPACE_ID,
         name="New remote workspace",
         root_path=None,
         backend_url=new_runtime.service_urls["workspace_api"],
         connection_kind="remote_gateway",
-        backend_workspace_id="00000000-0000-4000-8000-000000000003",
         owner="remote_projection",
-        connection_id=connection_id,
-        remote_gateway_connection_id=connection_id,
-        remote_workspace_id="new-remote-workspace",
+        remote_gateway_connection_ids=(connection_id,),
         remote_service_names=("workspace_api",),
     )
 
@@ -405,7 +429,7 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
             "remote registry observer failed after commit",
         )
         assert reconcile_calls == 1
-        assert registry.resolve(new_target.workspace_id).backend_url == "http://127.0.0.1:42000"
+        assert registry.resolve(new_target.key).backend_url == "http://127.0.0.1:42000"
         assert registry.registry_revision == previous_revision + 1
         assert state.get_registry_revision() == registry.registry_revision
         saved = state.load_workspace_registry()
@@ -419,7 +443,7 @@ async def test_add_remote_gateway_http_reconciles_published_projection_and_repor
             target["workspace_id"] == old_workspace_id
             for target in saved["targets"]
         )
-        assert not registry.has_target(old_workspace_id)
+        assert not registry.has_target(old_target.key)
         assert registry._remote_gateway_runtimes[connection_id] is new_runtime
         assert new_runtime.closed is False
         assert old_runtime.closed is True
@@ -441,12 +465,13 @@ async def test_batch_cleanup_preserves_failed_owner_and_retries_without_raw_erro
     close_error: OSError, caplog: pytest.LogCaptureFixture, tmp_path: Path, operation: str,
 ) -> None:
     registry, manager, processes = forward_cleanup
-    failed = await manager.create("workspace_remove", CreatePortForwardRequest(remote_port=5173))
-    healthy = await manager.create("workspace_sibling", CreatePortForwardRequest(remote_port=5174))
+    failed = await manager.create((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), CreatePortForwardRequest(remote_port=5173))
+    healthy = await manager.create((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID), CreatePortForwardRequest(remote_port=5174))
     processes[1].fail_next_close = False
     if operation == "reconcile_workspaces":
-        registry.remove("workspace_remove")
-        registry.remove("workspace_sibling")
+        registry.apply_remote_projection_snapshot(
+            connection=registry.remote_gateway_connection("rgw_cleanup"), projections=(),
+        )
     registry_before = (tmp_path / "workspaces.json").read_bytes()
     forwards_before = (tmp_path / "port-forwards.json").read_bytes()
     cleanup = getattr(manager, operation)

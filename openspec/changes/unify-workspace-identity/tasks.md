@@ -116,3 +116,7 @@
 
 - `test_projection_identity.py` 移除旧投影 ID 生成和双 UUID 断言，沿现有注册／配置／发现入口验证两个 Gateway 的同一 UUID 按复合 owner 隔离，以及同来源双连接合并为一个资源、歧义准入不泄漏占用和显式解绑。保留完整 SQLite 快照、活动归属、cursor 跳跃／回退、重复 owner 拒绝、stale CAS、租约／计数及冷恢复证明；HTTP／SSH 明确使用原单测替身。
 - 最终定向 4 passed／0.96 秒，Ruff、Pyright 和 diff 检查通过，旧字段类型诊断 7→0；准确命令、源码指纹、实际退出码和原失败保留于 `out/tests/temp/identity_projection_consumers_20261104/artifacts/` 的 `*-verified.*`。首轮新增断言误要求 CAS 前置拒绝写 journal、连接容器保持未约定迭代顺序，已按实际合同改为 journal 精确不变及 connection_id 全量值比较，原 SQLite payload 与连接成员顺序断言仍保留。生产指纹未变；另外三组旧消费者尚待迁齐，生产生成器未提前删除，不据此勾选宽任务或宣称真实网络验收完成。
+
+- 后续 registry 消费者定向 35 passed／1.41 秒，保留 SQLite 重开、cursor、CAS、排空和完整组归属断言，远端登记沿正式 snapshot/batch 发布。真实 Gateway 导航 CRUD、循环／非空拒绝与重启恢复 1 passed／51.54 秒，核对注册 UUID、目标端身份文件和嵌套 Gateway owner；下游使用原 HTTP 替身。两份测试 Ruff、Pyright 均退出 0，原件位于 `out/tests/temp/identity_local_consumers_20261104/artifacts/` 的 `registry-*-fixed-*`、`navigation-*-owners-*`；registry 最后仅调整空白并核 AST 相同。本轮不代表客户端或 Windows 验收，6.4 保持未完成。
+
+- 联邦及转发消费者迁齐后物理删除 `build_projected_workspace_id`，代码调用方清零。公开转发六接口沿原 `resolve_workspace_key` 解析目标 Gateway，保持原管理授权；同 UUID 的不同 Gateway 隔离，路径/头冲突在 manager 前拒绝。原错误对象、系统码、持久文件不变与清理重试断言迁到实际拥有转发删除的公开入口，manual CRUD 越过 `remote_projection` owner 仍拒绝。三份定向测试 131 passed，公开 schema 1 passed；最后成功回执仅增加非空断言，export 单项复验通过。四文件 Ruff 通过，联邦模块保留 5 条原有 TRY004；Pyright 两份生产文件无诊断，三份测试仍有 18 条替身/object/winerror 等类型诊断，不表述为全绿。准确命令、指纹、原始反例与结果在 `out/tests/temp/identity_federation_consumers_20261104/artifacts/`。连接删除协调转发清理仍未验收，本轮不代替实机 SSH/Web 或完整 6.4。

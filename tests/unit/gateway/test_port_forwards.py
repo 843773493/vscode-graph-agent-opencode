@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,13 +12,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.gateway.auth import verify_gateway_token
-from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes._shared import get_registry
 from app.gateway.runtime import port_forwarding
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from app.schemas.gateway.port_forwarding import CreatePortForwardRequest
+
+_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
+_OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000003"
+_REMOTE_GATEWAY_ID = "gateway_" + "a" * 32
+_OTHER_GATEWAY_ID = "gateway_" + "b" * 32
 
 
 class _FakeManagedProcess:
@@ -42,28 +49,28 @@ def _registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
             private_key_path="/keys/never-persist-content",
             ssh_config_host="development-alias",
             remote_gateway_port=8014,
-            remote_gateway_id="remote-gateway",
-            protocol_version=1,
+            remote_gateway_id=_REMOTE_GATEWAY_ID,
+            protocol_version=FEDERATION_PROTOCOL_VERSION,
             source_owner="manual",
         )
     )
-    for workspace_id, root_path in (
-        ("workspace_a", "/srv/a"),
-        ("workspace_b", "/srv/b"),
-    ):
-        registry.upsert(
+    projections = []
+    for workspace_id in (_WORKSPACE_ID, _OTHER_WORKSPACE_ID):
+        projections.append(
             WorkspaceTarget(
+                gateway_id=_REMOTE_GATEWAY_ID,
                 workspace_id=workspace_id,
                 name=workspace_id,
                 root_path=None,
                 backend_url="http://127.0.0.1:41000",
                 connection_kind="remote_gateway",
-                backend_workspace_id="00000000-0000-4000-8000-000000000002",
-                remote_gateway_connection_id="rgw_server",
-                remote_workspace_id=f"remote_{workspace_id}",
+                remote_gateway_connection_ids=("rgw_server",),
+                owner="remote_projection",
             ),
-            activate=False,
         )
+    registry.apply_remote_projection_snapshot(
+        connection=registry.remote_gateway_connection("rgw_server"), projections=tuple(projections),
+    )
     return registry
 
 
@@ -101,10 +108,11 @@ def _write_saved_forwards(
     storage_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "items": [
                     {
                         "forward_id": forward_id,
+                        "gateway_id": _REMOTE_GATEWAY_ID,
                         "workspace_id": workspace_id,
                         "connection_id": "rgw_server",
                         "remote_host": "127.0.0.1",
@@ -132,7 +140,7 @@ async def test_create_binds_forward_to_workspace_and_reuses_ssh_alias(
     manager = _manager(tmp_path, _registry(tmp_path), calls, processes)
 
     created = await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(
             remote_port=5173,
             protocol="http",
@@ -140,7 +148,8 @@ async def test_create_binds_forward_to_workspace_and_reuses_ssh_alias(
         ),
     )
 
-    assert created.workspace_id == "workspace_a"
+    assert created.workspace_id == _WORKSPACE_ID
+    assert created.gateway_id == _REMOTE_GATEWAY_ID
     assert created.connection_id == "rgw_server"
     assert created.local_port == 41234
     assert created.local_url == "http://127.0.0.1:41234"
@@ -155,7 +164,9 @@ async def test_create_binds_forward_to_workspace_and_reuses_ssh_alias(
     persisted = json.loads(
         (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
     )
-    assert persisted["items"][0]["workspace_id"] == "workspace_a"
+    assert persisted["items"][0]["workspace_id"] == _WORKSPACE_ID
+    assert persisted["items"][0]["gateway_id"] == _REMOTE_GATEWAY_ID
+    assert persisted["schema_version"] == 2
     assert persisted["items"][0]["desired_running"] is True
     assert "private_key" not in json.dumps(persisted)
     if os.name != "nt":
@@ -168,13 +179,13 @@ async def test_server_remote_port_has_single_workspace_owner(
 ) -> None:
     manager = _manager(tmp_path, _registry(tmp_path), [], [])
     await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, local_port=41235),
     )
 
-    with pytest.raises(ValueError, match="已归属于工作区 workspace_a"):
+    with pytest.raises(ValueError, match=f"已归属于工作区 {_WORKSPACE_ID}"):
         await manager.create(
-            "workspace_b",
+            (_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID),
             CreatePortForwardRequest(remote_port=5173, local_port=41236),
         )
 
@@ -187,12 +198,12 @@ async def test_change_local_port_restarts_same_forward_and_persists_new_port(
     processes: list[_FakeManagedProcess] = []
     manager = _manager(tmp_path, _registry(tmp_path), calls, processes)
     created = await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, local_port=41235),
     )
 
     changed = await manager.change_local_port(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         created.forward_id,
         41236,
     )
@@ -214,14 +225,14 @@ async def test_change_label_replaces_definition_and_persists_display_name(
 ) -> None:
     manager = _manager(tmp_path, _registry(tmp_path), [], [])
     created = await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, local_port=41236, label="旧名称"),
     )
 
-    changed = await manager.change_label("workspace_a", created.forward_id, "新名称")
+    changed = await manager.change_label((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), created.forward_id, "新名称")
 
     assert changed.label == "新名称"
-    assert (await manager.list("workspace_a"))[0].label == "新名称"
+    assert (await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)))[0].label == "新名称"
     persisted = json.loads(
         (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
     )
@@ -234,13 +245,13 @@ async def test_local_port_conflict_is_rejected_across_workspaces(
 ) -> None:
     manager = _manager(tmp_path, _registry(tmp_path), [], [])
     await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, local_port=41237),
     )
 
     with pytest.raises(ValueError, match="本地端口 .* 已被转发"):
         await manager.create(
-            "workspace_b",
+            (_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID),
             CreatePortForwardRequest(remote_port=8080, local_port=41237),
         )
 
@@ -252,14 +263,14 @@ async def test_delete_closes_process_before_removing_persisted_definition(
     processes: list[_FakeManagedProcess] = []
     manager = _manager(tmp_path, _registry(tmp_path), [], processes)
     created = await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, local_port=41238),
     )
 
-    await manager.delete("workspace_a", created.forward_id)
+    await manager.delete((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), created.forward_id)
 
     assert processes[0].closed is True
-    assert await manager.list("workspace_a") == []
+    assert await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)) == []
     persisted = json.loads(
         (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
     )
@@ -274,11 +285,14 @@ async def test_reconcile_removes_forward_owned_by_stale_projection(
     processes: list[_FakeManagedProcess] = []
     manager = _manager(tmp_path, registry, [], processes)
     await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, local_port=41241),
     )
 
-    registry.remove("workspace_a")
+    registry.apply_remote_projection_snapshot(
+        connection=registry.remote_gateway_connection("rgw_server"),
+        projections=(registry.resolve((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID)),),
+    )
     await manager.reconcile_workspaces()
 
     assert processes[0].closed is True
@@ -296,11 +310,12 @@ async def test_restore_failure_remains_visible_on_workspace_list(
     storage_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "items": [
                     {
                         "forward_id": "pf_stale",
-                        "workspace_id": "workspace_a",
+                        "gateway_id": _REMOTE_GATEWAY_ID,
+                        "workspace_id": _WORKSPACE_ID,
                         "connection_id": "rgw_replaced",
                         "remote_host": "127.0.0.1",
                         "remote_port": 5173,
@@ -322,7 +337,7 @@ async def test_restore_failure_remains_visible_on_workspace_list(
     )
 
     await manager.restore()
-    restored = await manager.list("workspace_a")
+    restored = await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
 
     assert restored[0].status == "error"
     assert "error_type=RuntimeError" in (restored[0].error or "")
@@ -338,8 +353,8 @@ async def test_restore_starts_saved_forwards_concurrently(tmp_path: Path) -> Non
     _write_saved_forwards(
         storage_path,
         [
-            ("pf_1", "workspace_a", 5173, 41250),
-            ("pf_2", "workspace_b", 3000, 41251),
+            ("pf_1", _WORKSPACE_ID, 5173, 41250),
+            ("pf_2", _OTHER_WORKSPACE_ID, 3000, 41251),
         ],
     )
     calls: list[dict[str, object]] = []
@@ -371,15 +386,15 @@ async def test_restore_starts_saved_forwards_concurrently(tmp_path: Path) -> Non
 
     assert sorted(entered_ports) == [41250, 41251]
     assert len(calls) == 2
-    assert [item.status for item in await manager.list("workspace_a")] == ["active"]
-    assert [item.status for item in await manager.list("workspace_b")] == ["active"]
+    assert [item.status for item in await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))] == ["active"]
+    assert [item.status for item in await manager.list((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID))] == ["active"]
 
 
 @pytest.mark.asyncio
 async def test_restore_cancellation_closes_started_forward(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
     storage_path = tmp_path / "port-forwards.json"
-    _write_saved_forwards(storage_path, [("pf_waiting", "workspace_a", 5173, 41252)])
+    _write_saved_forwards(storage_path, [("pf_waiting", _WORKSPACE_ID, 5173, 41252)])
     processes: list[_FakeManagedProcess] = []
     manager = _manager(tmp_path, registry, [], processes)
     readiness_started = asyncio.Event()
@@ -401,7 +416,7 @@ async def test_restore_cancellation_closes_started_forward(tmp_path: Path) -> No
 
     assert len(processes) == 1
     assert processes[0].closed is True
-    restored = await manager.list("workspace_a")
+    restored = await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
     assert restored[0].status == "error"
     assert restored[0].error == "SSH 端口转发启动被取消"
 
@@ -413,7 +428,7 @@ async def test_restore_limits_parallel_process_starts(tmp_path: Path) -> None:
     forwards = [
         (
             f"pf_{index}",
-            "workspace_a" if index % 2 == 0 else "workspace_b",
+            _WORKSPACE_ID if index % 2 == 0 else _OTHER_WORKSPACE_ID,
             1000 + index,
             41300 + index,
         )
@@ -488,7 +503,7 @@ async def test_failed_start_retains_process_when_close_fails(
 
     manager._wait_until_listening = readiness_failure  # type: ignore[method-assign]
     created = await manager.create(
-        "workspace_a",
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
         CreatePortForwardRequest(remote_port=5173, local_port=41253),
     )
 
@@ -498,7 +513,7 @@ async def test_failed_start_retains_process_when_close_fails(
     assert processes[0].closed is False
     assert manager._runtimes[created.forward_id].process is processes[0]
 
-    await manager.delete("workspace_a", created.forward_id)
+    await manager.delete((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), created.forward_id)
 
     assert close_attempts == 2
     assert processes[0].closed is True
@@ -567,7 +582,8 @@ def test_load_rejects_duplicate_persisted_local_port(tmp_path: Path) -> None:
     items = [
         {
             "forward_id": f"pf_{index}",
-            "workspace_id": f"workspace_{index}",
+            "gateway_id": _REMOTE_GATEWAY_ID,
+            "workspace_id": workspace_id,
             "connection_id": "rgw_server",
             "remote_host": "127.0.0.1",
             "remote_port": 5000 + index,
@@ -577,11 +593,11 @@ def test_load_rejects_duplicate_persisted_local_port(tmp_path: Path) -> None:
             "label": None,
             "desired_running": True,
         }
-        for index in range(2)
+        for index, workspace_id in enumerate((_WORKSPACE_ID, _OTHER_WORKSPACE_ID))
     ]
     storage_path = tmp_path / "port-forwards.json"
     storage_path.write_text(
-        json.dumps({"schema_version": 1, "items": items}),
+        json.dumps({"schema_version": 2, "items": items}),
         encoding="utf-8",
     )
 
@@ -598,12 +614,12 @@ async def test_local_workspace_is_rejected(tmp_path: Path) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="local",
+            gateway_id=registry.gateway_id,
+            workspace_id=_WORKSPACE_ID,
             name="Local",
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:8010",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
     )
     manager = SshPortForwardManager(
@@ -614,34 +630,32 @@ async def test_local_workspace_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="只支持远程 Gateway 投影工作区"):
         await manager.create(
-            "local",
+            _WORKSPACE_ID,
             CreatePortForwardRequest(remote_port=5173),
         )
 
 
-def test_create_api_returns_complete_workspace_forward_list(tmp_path: Path) -> None:
-    manager = _manager(tmp_path, _registry(tmp_path), [], [])
-    app.dependency_overrides[verify_gateway_token] = lambda: "test-token"
-    app.dependency_overrides[get_port_forward_manager] = lambda: manager
-    try:
-        response = TestClient(app).post(
-            "/api/gateway/workspaces/workspace_a/port-forwards",
-            headers={"X-Request-ID": "req-port-forward"},
-            json={
-                "remote_port": 5173,
-                "local_port": 41241,
-                "protocol": "https",
-                "label": "Preview",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
+def test_create_api_returns_complete_workspace_forward_list(
+    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
+) -> None:
+    client, _, _ = forward_http
+    response = client.post(
+        f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards",
+        headers={"X-Request-ID": "req-port-forward"},
+        json={
+            "remote_port": 5173,
+            "local_port": 41241,
+            "protocol": "https",
+            "label": "Preview",
+        },
+    )
 
     assert response.status_code == 200
     assert response.json()["request_id"] == "req-port-forward"
     items = response.json()["data"]["items"]
     assert len(items) == 1
-    assert items[0]["workspace_id"] == "workspace_a"
+    assert items[0]["workspace_id"] == _WORKSPACE_ID
+    assert items[0]["gateway_id"] == _REMOTE_GATEWAY_ID
     assert items[0]["connection_id"] == "rgw_server"
     assert items[0]["status"] == "active"
     assert items[0]["local_url"] == "https://127.0.0.1:41241"
@@ -652,14 +666,129 @@ def forward_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]]]:
     processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, _registry(tmp_path), [], processes)
+    registry = _registry(tmp_path)
+    manager = _manager(tmp_path, registry, [], processes)
     monkeypatch.setitem(app.dependency_overrides, verify_gateway_token, lambda: "test-token")
     monkeypatch.setitem(app.dependency_overrides, get_port_forward_manager, lambda: manager)
-    client = TestClient(app)
+    monkeypatch.setitem(app.dependency_overrides, get_registry, lambda: registry)
+    client = TestClient(app, headers={"X-BoxTeam-Target-Gateway-Id": _REMOTE_GATEWAY_ID})
     try:
         yield client, manager, processes
     finally:
         client.close()
+
+
+def test_http_routes_keep_same_uuid_owned_by_each_gateway(
+    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
+    tmp_path: Path,
+) -> None:
+    client, manager, processes = forward_http
+    registry = manager._registry
+    connection = replace(
+        registry.remote_gateway_connection("rgw_server"),
+        connection_id="rgw_other", remote_gateway_id=_OTHER_GATEWAY_ID,
+        host="other.example.com",
+    )
+    registry.apply_remote_projection_snapshot(
+        connection=connection,
+        projections=(WorkspaceTarget(
+            gateway_id=_OTHER_GATEWAY_ID, workspace_id=_WORKSPACE_ID,
+            name="Other source", root_path=None, backend_url="http://127.0.0.1:42000",
+            connection_kind="remote_gateway", owner="remote_projection",
+            remote_gateway_connection_ids=(connection.connection_id,),
+        ),),
+    )
+    endpoint = f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards"
+    other_headers = {"X-BoxTeam-Target-Gateway-Id": _OTHER_GATEWAY_ID}
+    first_response = client.post(endpoint, json={"remote_port": 5173, "local_port": 41243})
+    second_response = client.post(endpoint, headers=other_headers, json={"remote_port": 5173, "local_port": 41244})
+    assert first_response.status_code == second_response.status_code == 200
+    [first] = first_response.json()["data"]["items"]
+    [second] = second_response.json()["data"]["items"]
+    assert (first["gateway_id"], first["workspace_id"], first["connection_id"]) == (
+        _REMOTE_GATEWAY_ID, _WORKSPACE_ID, "rgw_server",
+    )
+    assert (second["gateway_id"], second["workspace_id"], second["connection_id"]) == (
+        _OTHER_GATEWAY_ID, _WORKSPACE_ID, "rgw_other",
+    )
+    assert client.get(endpoint).json()["data"]["items"] == [first]
+    assert client.get(endpoint, headers=other_headers).json()["data"]["items"] == [second]
+    saved = (tmp_path / "port-forwards.json").read_bytes()
+    assert {(item["gateway_id"], item["workspace_id"]) for item in json.loads(saved)["items"]} == {
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID), (_OTHER_GATEWAY_ID, _WORKSPACE_ID),
+    }
+    rejected = client.delete(f"{endpoint}/{first['forward_id']}", headers=other_headers)
+    assert rejected.status_code == 404
+    assert (tmp_path / "port-forwards.json").read_bytes() == saved
+    assert not any(process.closed for process in processes)
+
+    renamed = client.patch(f"{endpoint}/{first['forward_id']}/label", json={"label": "First preview"})
+    assert renamed.status_code == 200
+    first = {**first, "label": "First preview"}
+    assert renamed.json()["data"]["items"] == [first]
+    assert client.get(endpoint, headers=other_headers).json()["data"]["items"] == [second]
+    reconnected = client.post(f"{endpoint}/{first['forward_id']}/reconnect")
+    assert reconnected.status_code == 200
+    assert reconnected.json()["data"]["items"] == [first]
+    assert [process.closed for process in processes] == [True, False, False]
+
+    changed = client.patch(
+        f"{endpoint}/{second['forward_id']}/local-port", headers=other_headers,
+        json={"local_port": 41245},
+    )
+    assert changed.status_code == 200
+    second = {**second, "local_port": 41245, "local_url": "http://127.0.0.1:41245"}
+    assert changed.json()["data"]["items"] == [second]
+    assert client.get(endpoint).json()["data"]["items"] == [first]
+    assert [process.closed for process in processes] == [True, True, False, False]
+    deleted = client.delete(f"{endpoint}/{first['forward_id']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["items"] == []
+    assert client.get(endpoint, headers=other_headers).json()["data"]["items"] == [second]
+    assert [process.closed for process in processes] == [True, True, True, False]
+    assert [(item["gateway_id"], item["workspace_id"]) for item in json.loads(
+        (tmp_path / "port-forwards.json").read_bytes(),
+    )["items"]] == [(_OTHER_GATEWAY_ID, _WORKSPACE_ID)]
+
+
+@pytest.mark.parametrize(("method", "suffix", "payload"), [
+    ("GET", "", None),
+    ("POST", "", {"remote_port": 5173}),
+    ("DELETE", "/pf_unknown", None),
+    ("POST", "/pf_unknown/reconnect", None),
+    ("PATCH", "/pf_unknown/local-port", {"local_port": 41246}),
+    ("PATCH", "/pf_unknown/label", {"label": "Preview"}),
+])
+@pytest.mark.parametrize(("headers", "status"), [
+    ({"X-BoxTeam-Target-Gateway-Id": _REMOTE_GATEWAY_ID, "X-BoxTeam-Workspace-Id": _OTHER_WORKSPACE_ID}, 400),
+    ({"X-BoxTeam-Target-Gateway-Id": _OTHER_GATEWAY_ID}, 404),
+    ({"X-BoxTeam-Target-Gateway-Id": "gateway-invalid"}, 400),
+    ({}, 404),
+], ids=["workspace-conflict", "unknown-gateway", "invalid-gateway", "bare-uuid-is-local"])
+def test_http_identity_errors_are_rejected_before_forward_manager(
+    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
+    monkeypatch: pytest.MonkeyPatch,
+    method: str, suffix: str, payload: dict[str, object] | None,
+    headers: dict[str, str], status: int,
+) -> None:
+    client, manager, _ = forward_http
+    client.headers.pop("X-BoxTeam-Target-Gateway-Id")
+    manager_calls: list[tuple[object, ...]] = []
+
+    async def reject(*args: object) -> None:
+        manager_calls.append(args)
+        pytest.fail("无效工作区身份不得进入端口转发管理器")
+
+    for operation in ("create", "list", "delete", "reconnect", "change_local_port", "change_label"):
+        monkeypatch.setattr(manager, operation, reject)
+    response = client.request(
+        method, f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards{suffix}",
+        headers={**headers, "X-Request-ID": "req-forward-identity-rejected"}, json=payload,
+    )
+    assert response.status_code == status
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req-forward-identity-rejected"
+    assert manager_calls == []
+    assert manager._definitions == {} and not manager._storage_path.exists()
 
 
 @pytest.mark.parametrize("native_path", [
@@ -692,7 +821,7 @@ def test_error_response_excludes_native_location(
     monkeypatch.setattr(manager, "_process_starter", start)
     if stage == "readiness":
         monkeypatch.setattr(manager, "_wait_until_listening", failed_readiness)
-    endpoint = "/api/gateway/workspaces/workspace_a/port-forwards"
+    endpoint = f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards"
     headers = {"X-Request-ID": "req-forward-location"}
     response = client.post(endpoint, headers=headers, json={"remote_port": 5173, "local_port": 41241})
     assert response.status_code == 200
@@ -770,12 +899,12 @@ def test_request_failure_preserves_status_without_native_detail(
     native_path = "/srv/private/port-forwards.json"
     original_error = error_type(native_path)
 
-    async def fail(_: str) -> None:
+    async def fail(_: tuple[str, str]) -> None:
         raise original_error
 
     monkeypatch.setattr(manager, "list", fail)
     response = client.get(
-        "/api/gateway/workspaces/workspace_a/port-forwards",
+        f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards",
         headers={"X-Request-ID": "req-forward-rejected"},
     )
     assert response.status_code == status
