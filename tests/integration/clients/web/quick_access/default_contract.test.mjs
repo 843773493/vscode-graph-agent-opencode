@@ -6,6 +6,10 @@ import { buildSourcePlugin, pinnedUpstreamCommit, sourceTransform } from '../../
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/default_contract.test.mjs').prepare();
+const sharedWorkspaceId = '019a0000-0000-7000-8000-000000000001';
+const federatedOwners = ['gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']
+  .map(gateway_id => ({ gateway_id, workspace_id: sharedWorkspaceId }));
+const [ownerAKey, ownerBKey] = federatedOwners.map(owner => `${owner.gateway_id}/${owner.workspace_id}`);
 const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'default-contract.mjs');
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/default_contract.fixture.mjs')],
   outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
@@ -55,24 +59,24 @@ test('原非文本大纲前插保持身份，空匹配仍可续页，续页后�
   }
 });
 
-test('正文跨目标只请求 Gateway，快分支续页不被初始流收尾取消，失败分支独立重试', async () => {
+test('正文同 UUID 跨 Gateway 只请求中继，快分支续页不被初始流收尾取消，失败分支独立重试', async () => {
   const result = await exercise('contentBranchContract', 'retry');
   expect(result.requests).toHaveLength(3);
   expect(result.paths.every(path => ['/api/gateway/auth/local-credential', '/api/gateway/search'].includes(path))).toBe(true);
-  expect(result.requests[0].scope.owners.map(owner => owner.workspace_id)).toEqual(['A', 'B']);
+  expect(result.requests[0].scope.owners).toEqual(federatedOwners);
   for (const request of result.requests.slice(1)) {
     expect(request.scope.mode).toBe('resume');
     expect(request.scope.scope.owners).toEqual(result.requests[0].scope.owners);
     expect(request.continuations).toHaveLength(1);
   }
-  expect(result.requests[1].continuations[0].branch.owner.workspace_id).toBe('A');
+  expect(result.requests[1].continuations[0].branch.owner).toEqual(federatedOwners[0]);
   expect(result.requests[1].continuations[0].cursor).toBe('A-original-cursor');
-  expect(result.requests[2].continuations[0].branch.owner.workspace_id).toBe('B');
+  expect(result.requests[2].continuations[0].branch.owner).toEqual(federatedOwners[1]);
   expect(result.requests[2].continuations[0].cursor).toBeUndefined();
   expect(result.pendingPreserved).toBe(true);
   expect(result.partialFailure).toContain('B 原始读取失败');
   expect(result.originalPreserved).toBe(true);
-  expect(result.picks).toEqual([['A/2', 'A/4'], ['B/2']]);
+  expect(result.picks).toEqual([[`${ownerAKey}/2`, `${ownerAKey}/4`], [`${ownerBKey}/2`]]);
   expect(result.busy).toBe(false);
   expect(result.label).toBe('名称 A、名称 B');
   expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);
@@ -82,17 +86,20 @@ test('文件使用原 QueryBuilder 选项，一次联邦 A+B，快分支续原 c
   const result = await exercise('fileBranchContract', 'retry');
   expect(result.requests).toHaveLength(3);
   const first = result.requests[0], second = result.requests[1], retry = result.requests[2];
-  expect(first.scope.owners.map(owner => owner.workspace_id)).toEqual(['A', 'B']);
-  expect(first.queries[0].file_targets.map(item => item.target.uri)).toEqual(['A', 'B'].map(id => `boxteam://workspace/${id}/resources/files/root`));
+  expect(first.scope.owners).toEqual(federatedOwners);
+  expect(first.queries[0].file_targets.map(item => item.owner)).toEqual(federatedOwners);
+  expect(first.queries[0].file_targets.map(item => item.target.uri)).toEqual(federatedOwners
+    .map(owner => `boxteam://${owner.gateway_id}/workspace/${sharedWorkspaceId}/resources/files/root`));
   expect(first.queries[0].file_targets.every(item => item.target.search_options.ignore_mode === 'none')).toBe(true);
   expect(second.continuations).toEqual([{ branch: { owner: first.scope.owners[0], category: 'file', operation: 'name',
     resource_uri: first.queries[0].file_targets[0].target.uri }, cursor: 'A-original-cursor' }]);
   expect(second.queries[0].limit).toBe(first.queries[0].limit);
-  expect(retry.continuations[0].branch.owner.workspace_id).toBe('B'); expect(retry.continuations[0].cursor).toBeUndefined();
+  expect(retry.continuations[0].branch.owner).toEqual(federatedOwners[1]); expect(retry.continuations[0].cursor).toBeUndefined();
   expect(retry.queries[0].file_targets).toHaveLength(1);
   expect(result.pendingPreserved).toBe(true); expect(result.originalPreserved).toBe(true);
-  expect(result.picks).toEqual([['A/resource/needle-2.txt', 'A/resource/needle-4.txt'], ['B/resource/needle-2.txt']]);
+  expect(result.picks).toEqual([[`${ownerAKey}/resource/needle-2.txt`, `${ownerAKey}/resource/needle-4.txt`], [`${ownerBKey}/resource/needle-2.txt`]]);
   expect(result.paths.filter(path => path === '/api/v1/workspace/files/roots')).toHaveLength(2);
+  expect(result.rootRequests).toEqual(federatedOwners);
   expect(result.busy).toBe(false);
 });
 
@@ -113,7 +120,7 @@ test('正文流断开保留已完成 A，B 明确失败并显示原 request_id',
   expect(result.labels[0]).toContain('本次查询完成');
   expect(result.labels[1]).toContain('未收到完整终态');
   expect(result.details[1]).toBe('request_id: request-0');
-  expect(result.picks).toEqual([['A/2'], []]);
+  expect(result.picks).toEqual([[`${ownerAKey}/2`], []]);
 });
 
 test('URI 原样交原 Opener 并冻结发起组，校验前不创建侧边组，后台接受保持原选项', async () => {
@@ -201,7 +208,7 @@ for (const category of ['会话', 'Thread']) {
     const result = await exercise('nameBranchContract', { mode: 'retry', category });
     expect(result.requests).toHaveLength(3);
     expect(result.paths.every(path => ['/api/gateway/auth/local-credential', '/api/gateway/search'].includes(path))).toBe(true);
-    expect(result.requests[0].scope.owners.map(owner => owner.workspace_id)).toEqual(['A', 'B']);
+    expect(result.requests[0].scope.owners).toEqual(federatedOwners);
     expect(result.requests[0].queries).toEqual([{ category: category === '会话' ? 'catalog' : 'thread', operation: 'name',
       contract_version: 1, query: 'needle', match_mode: 'fuzzy', limit: 50, file_targets: [] }]);
     for (const request of result.requests.slice(1)) {
@@ -210,16 +217,16 @@ for (const category of ['会话', 'Thread']) {
       expect(request.continuations).toHaveLength(1);
     }
     expect(result.requests[1].continuations[0].cursor).toBe('A-original-cursor');
-    expect(result.requests[1].continuations[0].branch.owner.workspace_id).toBe('A');
-    expect(result.requests[2].continuations[0].branch.owner.workspace_id).toBe('B');
+    expect(result.requests[1].continuations[0].branch.owner).toEqual(federatedOwners[0]);
+    expect(result.requests[2].continuations[0].branch.owner).toEqual(federatedOwners[1]);
     expect(result.requests[2].continuations[0].cursor).toBeUndefined();
     expect(result.pendingPreserved).toBe(true);
     expect(result.partialFailure).toContain('B 原始读取失败');
     // 同名跨 owner 保留，folder 不被误作 Session，child 不改投 main；同分排序沿原 scorer。
     expect(result.picks).toEqual(category === '会话' ? [
-      ['A/folder/needle Folder 2', 'A/folder/needle Folder 4', 'A/session/needle Session 2', 'A/session/needle Session 4'],
-      ['B/folder/needle Folder 2', 'B/session/needle Session 2'],
-    ] : [['A/resource/needle Child 2', 'A/resource/needle Child 4'], ['B/resource/needle Child 2']]);
+      [`${ownerAKey}/folder/needle Folder 2`, `${ownerAKey}/folder/needle Folder 4`, `${ownerAKey}/session/needle Session 2`, `${ownerAKey}/session/needle Session 4`],
+      [`${ownerBKey}/folder/needle Folder 2`, `${ownerBKey}/session/needle Session 2`],
+    ] : [[`${ownerAKey}/resource/needle Child 2`, `${ownerAKey}/resource/needle Child 4`], [`${ownerBKey}/resource/needle Child 2`]]);
     expect(result.highlights.flat().every(highlights => highlights.label.length > 0)).toBe(true);
     expect(result.busy).toBe(false);
     expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);

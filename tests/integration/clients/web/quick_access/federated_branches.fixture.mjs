@@ -14,8 +14,12 @@ async function federatedBranchContract(mode, category) {
   const names = { '会话消息': 'message', '会话': 'catalog', 'Thread': 'thread', '文件': 'file' };
   const file = category === '文件';
   const content = category === '会话消息', operation = content ? 'content' : 'name';
-  const owners = ['A', 'B'].map(workspaceId => ({ gatewayId: 'gateway-a', workspaceId }));
-  const frozen = { version: 1, gateway_id: 'gateway-a', resolved_at: '2026-11-03T00:00:00Z', mode: 'selected',
+  const owners = ['gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']
+    .map(gatewayId => ({ gatewayId, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
+  const roots = owners.map(owner => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`);
+  const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
+    connection_kind: index === 0 ? 'local' : 'remote_gateway', status: 'ready', name: `名称 ${index === 0 ? 'A' : 'B'}` }));
+  const frozen = { version: 1, gateway_id: owners[0].gatewayId, resolved_at: '2026-11-03T00:00:00Z', mode: 'selected',
     owners: owners.map(owner => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId })) };
   const configuration = { editor: { wordSeparators: ' /' }, files: { encoding: 'utf8', exclude: {} },
     search: { useIgnoreFiles: false, useGlobalIgnoreFiles: false, useParentIgnoreFiles: false, followSymlinks: true } };
@@ -24,21 +28,22 @@ async function federatedBranchContract(mode, category) {
     [queryFixture.ILogService, new queryFixture.NullLogService()], [queryFixture.IPathService, { userHome: () => queryFixture.URI.parse('file:///home/native') }],
     [queryFixture.IUriIdentityService, { extUri: queryFixture.extUri, onDidChange: queryFixture.Event.None }],
   ), true) : undefined;
-  const lifetime = new DisposableStore(), token = new CancellationTokenSource(), connections = [], paths = [];
-  workspaceContext.publish({ ...before, gatewayId: 'gateway-a', workspaces: owners.map(owner => ({
-    workspace_id: `route-${owner.workspaceId}`, backend_workspace_id: owner.workspaceId, connection_kind: 'local', name: `名称 ${owner.workspaceId}`,
-  })) });
+  const lifetime = new DisposableStore(), token = new CancellationTokenSource(), connections = [], paths = [], rootRequests = [];
+  workspaceContext.publish({ ...before, gatewayId: owners[0].gatewayId, workspaces: targets });
   globalThis.fetch = async (url, init) => {
     const path = new URL(String(url), location.origin).pathname; paths.push(path);
     if (path === '/api/gateway/auth/local-credential') return Response.json({ data: { token: 'content-test' } });
     const metadata = data => Response.json({ code: 0, message: 'ok', data, request_id: 'metadata' }, { headers: { 'X-Request-ID': 'metadata' } });
     if (file && ['/api/gateway/users/current', '/api/gateway/users/guest'].includes(path)) return metadata({ kind: 'guest', user_id: null });
-    if (file && path === '/api/gateway/health') return metadata({ gateway_id: 'gateway-a' });
-    if (file && path === '/api/gateway/workspaces') return metadata({ items: owners.map(owner => ({ workspace_id: 'route-' + owner.workspaceId,
-      backend_workspace_id: owner.workspaceId, connection_kind: 'local', status: 'ready', name: '名称 ' + owner.workspaceId })) });
+    if (file && path === '/api/gateway/health') return metadata({ gateway_id: owners[0].gatewayId });
+    if (file && path === '/api/gateway/workspaces') return metadata({ items: targets, active_workspace: frozen.owners[0] });
     if (file && path === '/api/v1/workspace/files/roots') {
-      const route = new Headers(init.headers).get('X-BoxTeam-Workspace-Id');
-      return metadata({ workspace_uri: `boxteam://workspace/${route.slice('route-'.length)}/resources/files/root` });
+      const headers = new Headers(init.headers), requested = { gateway_id: headers.get('X-BoxTeam-Target-Gateway-Id'),
+        workspace_id: headers.get('X-BoxTeam-Workspace-Id') };
+      rootRequests.push(requested);
+      const index = owners.findIndex(owner => owner.gatewayId === requested.gateway_id && owner.workspaceId === requested.workspace_id);
+      if (index < 0) throw new Error('文件根请求丢失完整 owner');
+      return metadata({ workspace_uri: roots[index] });
     }
     if (path !== '/api/gateway/search') throw new Error(`正文搜索出现额外请求：${path}`);
     if (new Headers(init.headers).get('Content-Type') !== 'application/json') throw new Error('搜索请求缺少 JSON Content-Type');
@@ -58,8 +63,8 @@ async function federatedBranchContract(mode, category) {
     connection.controller.enqueue(new TextEncoder().encode(`id: ${sequence}\nevent: search\ndata: ${JSON.stringify({ sequence, request_id: connection.id, type, ...payload })}\n\n`));
   };
   const scope = connection => send(connection, 'scope', { scope: { scope: frozen,
-    branches: frozen.owners.map(owner => ({ owner, state: 'registered', target_id: owner.workspace_id })) } });
-  const state = (index, status = 'complete') => ({ branch: { owner: frozen.owners[index], category: names[category], operation, ...(file ? { resource_uri: `boxteam://workspace/${owners[index].workspaceId}/resources/files/root` } : {}) },
+    branches: frozen.owners.map(owner => ({ owner, state: 'registered' })) } });
+  const state = (index, status = 'complete') => ({ branch: { owner: frozen.owners[index], category: names[category], operation, ...(file ? { resource_uri: roots[index] } : {}) },
     state: status, retryable: status === 'failed', allocated_results: 50, returned_results: status === 'failed' ? 0 : 1,
     ...(status === 'limited' ? { code: 'result_limit', cursor: 'A-original-cursor' } : {}),
     ...(status === 'failed' ? { code: 'upstream_error', message: 'B 原始读取失败' } : {}) });
@@ -68,8 +73,8 @@ async function federatedBranchContract(mode, category) {
     send(connection, 'page', { branch: state(index, status), page: { provider_id: 'canonical-history', workspace_id: owners[index].workspaceId,
       category: names[category], operation, contract_version: 1, state: status,
       ...(status === 'limited' ? { limited_reason: 'result_limit' } : {}),
-      ...(file ? { files: { node: { uri: `boxteam://workspace/${owners[index].workspaceId}/resources/files/root`, resource_shape: 'directory', operations: ['search'] },
-        entries: [{ uri: `boxteam://workspace/${owners[index].workspaceId}/resources/files/root/needle-${start}.txt`, resource_shape: 'file', operations: ['read'] }],
+      ...(file ? { files: { node: { uri: roots[index], resource_shape: 'directory', operations: ['search'] },
+        entries: [{ uri: `${roots[index]}/needle-${start}.txt`, resource_shape: 'file', operations: ['read'] }],
         matches: [], contexts: [], view: 'live', truncated: status === 'limited', next_cursor: cursor } } : content ? { messages: { catalog_revision: 1, cursor, complete: status === 'complete', limited_reason: cursor ? 'result_limit' : null,
         scanned_sessions: 1, scanned_threads: 1, scanned_items: 1, scanned_bytes: 5,
         items: [{ thread: { workspace_id: owners[index].workspaceId, session_id: 'session', thread_id: 'thread',
@@ -96,7 +101,7 @@ async function federatedBranchContract(mode, category) {
   let busy = false, updates = 0, label;
   try {
     const branches = queryFederatedSearchBranches(owners, [category], content ? '😀命中' : 'needle', lifetime, token.token, {},
-      (item, owner) => ({ id: content ? `${owner.workspaceId}/${item.message.reference.start_codepoint}` : `${owner.workspaceId}/${item.kind}/${item.title}`, label: item.title, accept() {} }),
+      (item, owner) => ({ id: `${owner.gatewayId}/${owner.workspaceId}/${content ? item.message.reference.start_codepoint : `${item.kind}/${item.title}`}`, label: item.title, accept() {} }),
       () => updates++, value => { busy = value; }, value => { label = value; }, instantiation ?? {});
     await until(() => connections.length === 1); const first = connections[0]; scope(first);
     if (mode === 'cancel' || mode === 'late') {
@@ -122,7 +127,7 @@ async function federatedBranchContract(mode, category) {
     page(next, 0, 4); end(next, [state(0)]); await continuing;
     const retry = branches[1].status.trigger();
     await until(() => connections.length === 3); const last = connections[2]; scope(last); page(last, 1, 2); end(last, [state(1)]); await retry;
-    return { requests: connections.map(connection => connection.request), paths, pendingPreserved, partialFailure,
+    return { requests: connections.map(connection => connection.request), paths, rootRequests, pendingPreserved, partialFailure,
       originalPreserved: originalPick === branches[0].picks[0], picks: branches.map(branch => branch.picks.map(pick => pick.id)), busy, label,
       status: branches.map(branch => branch.status.detail), highlights: branches.map(branch => branch.picks.map(pick => pick.highlights)) };
   } finally { instantiation?.dispose(); lifetime.dispose(); token.dispose(true); globalThis.fetch = originalFetch; workspaceContext.publish(before); }

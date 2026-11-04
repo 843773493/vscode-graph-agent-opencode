@@ -131,7 +131,7 @@ export async function quickNavigateContract() {
   const registration = registry.registerQuickAccessProvider({ prefix: '_navigation-contract ', ctor: class {},
     helpEntries: [{ description: '不能混入历史的帮助', commandCenterOrder: 1 }] });
   globalThis.fetch = async input => { calls.push(String(input)); throw new Error('历史导航不得发起网络查询'); };
-  const thread = new ThreadInput({ ...owner, routeId: '', sessionId: 'session-a', threadId: 'thread-a', title: 'needle Thread' });
+  const thread = new ThreadInput({ ...owner, workspaceKey: '', sessionId: 'session-a', threadId: 'thread-a', title: 'needle Thread' });
   const first = { resource: uri('needle-recent.txt'), label: 'needle recent' };
   const history = [first, { resource: workspaceFileUri({ ...owner, workspaceId: 'workspace-b' },
     'boxteam://workspace/workspace-b/resources/files/root/needle-foreign.txt',
@@ -253,7 +253,7 @@ export function selectContract() {
   const received = [], observed = {};
   const f = defaultAccess({ searchOwner: owner, additionPicks: [{ label: '附件来源', kind: 'contextPick' }, { label: '隐藏项' }],
     filter: item => item.label !== '隐藏项', handleAccept: (item, background) => received.push({ label: item.label, kind: item.kind, background }) },
-  [{ resource: uri('history.txt') }, new ThreadInput({ ...owner, routeId: '', sessionId: 'session-a', threadId: 'thread-a', title: '历史 Thread' })]);
+  [{ resource: uri('history.txt') }, new ThreadInput({ ...owner, workspaceKey: '', sessionId: 'session-a', threadId: 'thread-a', title: '历史 Thread' })]);
   try {
     observed.labels = f.picker.items.filter(item => item.type !== 'separator').map(item => item.label);
     f.picker.activeItems = [f.picker.items[0]];
