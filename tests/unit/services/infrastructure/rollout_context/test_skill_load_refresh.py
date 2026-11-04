@@ -202,6 +202,10 @@ def test_last_explicit_selection_wins_before_seal_and_after_cold_restore(source_
     controls = {state.source_id: state for state in case.saver.load_context_source_control_states(case.owner)}
     assert controls["skill:demo"].selection_sequence == controls["skill:demo"].latest_visible_selection_sequence == 3
     assert controls["skill:alternate"].latest_visible_selection_sequence == 0
+    # 最新选择已封存时仍压住旧的未封存选择；不能只在 pending 之间比较序号。
+    restored = case.manager()
+    install_frozen_skill_catalog(restored, original, include_instructions=False, pending_catalog=original)
+    assert restored.prepare_pending() is None
 
 
 def test_catalog_rebind_keeps_pending_tracked_update_sealable(source_seal_case):

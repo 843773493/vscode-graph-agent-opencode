@@ -387,14 +387,21 @@ class SkillCatalogMixin:
 
         def restore_frozen_skill_selections(self, snapshot: SkillCatalogActivationSnapshot | None) -> None:
             """只从发起工具调用的封存目录恢复待选择正文，不消费下一请求的新目录。"""
+            pending = tuple(state for state in self._sources.values() if state.source_kind == "skill"
+                            and state.selection_sequence > state.latest_visible_selection_sequence)
+            if not pending:
+                return
+            # 同名比较只扫一次，且包括已封存的更新选择，避免复活更早的 pending。
+            latest: dict[str, int] = {}
+            for state in self._sources.values():
+                if state.source_kind == "skill":
+                    name = _normalize_skill_name(state.name)
+                    latest[name] = max(latest.get(name, 0), state.selection_sequence)
             bindings = {} if snapshot is None else {
                 f"skill:{binding.entry_identity}": binding for binding in snapshot.sources.values()
             }
-            for state in self._sources.values():
-                if state.source_kind != "skill" or state.selection_sequence <= state.latest_visible_selection_sequence:
-                    continue
-                if any(other.source_kind == "skill" and _normalize_skill_name(other.name) == _normalize_skill_name(state.name)
-                       and other.selection_sequence > state.selection_sequence for other in self._sources.values()):
+            for state in pending:
+                if state.selection_sequence < latest[_normalize_skill_name(state.name)]:
                     continue
                 binding = bindings.get(state.source_id)
                 if binding is None or binding.activation_revision != state.latest_revision:
