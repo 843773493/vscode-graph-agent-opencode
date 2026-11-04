@@ -76,7 +76,7 @@ class TurnProjectionReadMixin:
         self._require_v2_runtime(connection)
         if connection.execute("SELECT 1 FROM context_views WHERE view_id = ?", (view_id,)).fetchone() is None:
             raise KeyError(f"context view 不存在: {view_id}")
-        require_context_view_order_integrity(connection, view_id)
+        require_context_view_order_integrity(snapshot, view_id)
         turns = connection.execute(
             f"SELECT turn_id, first_message_sequence, last_message_sequence, final_message_sequence, final_message_id, status, created_at, updated_at FROM turns WHERE turn_id IN ({placeholders})",
             ids,

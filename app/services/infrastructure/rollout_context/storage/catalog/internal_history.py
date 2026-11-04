@@ -59,7 +59,7 @@ class InternalExecutionHistoryMixin:
             is None
         ):
             raise KeyError(f"context view 不存在: {view_id}")
-        require_context_view_order_integrity(connection, view_id)
+        require_context_view_order_integrity(snapshot, view_id)
         turn_row = connection.execute(
             "SELECT MAX(cvt.logical_turn_ordinal) "
             "FROM context_view_turns AS cvt "
