@@ -67,7 +67,7 @@
 - [x] 7.1 复用既有 sourceTransform 在原贡献登记处选择唯一空前缀及 `%` descriptor，保留原元数据；固定 commit、锚点恰好一次且失配失败，dev／预构建／build 使用同一管线。
 - [x] 7.2 基于原 PickerQuickAccessProvider 接入原 fuzzy scorer、历史和打开服务，非空按最近／Session／Thread／文件分组，组内排序与稳定去重符合配置。
 - [x] 7.3 在 Quick Input 聚焦前捕获发起上下文，空输入历史只限已选范围，名称／描述／详情、图标、高亮和行内动作准确，不枚举全部资源填空。
-- [ ] 7.4 保留 URI 粘贴、文件追加行列／符号、quickNavigate 和原 filesOnly／fileSearchDelegate、filter／additionPicks、handleAccept、按钮与 prefix 限制的真实调用语义。
+- [x] 7.4 保留 URI 粘贴、文件追加行列／符号、quickNavigate 和原 filesOnly／fileSearchDelegate、filter／additionPicks、handleAccept、按钮与 prefix 限制的真实调用语义。
 - [x] 7.5 接入 `?` 与 Command Center includeHelp 的原注册帮助、命令及选模式转接，保留发起范围与接收者，默认模式关闭递归帮助。
 - [x] 7.6 验证空文件编辑器的 delegate／cache 生命周期与原 Chat 二级 picker 取消返回，不将原 widget 接受动作转投项目 Composer。
 
@@ -104,7 +104,7 @@
 覆盖规范：Thread 大纲必须复用非文本编辑器导航语义；项目编辑器和视图必须进入原版导航机制。
 
 - [ ] 10.1 为 Thread 注册原 Outline creator，使用 quickPickDataSource、preview／reveal／captureViewState；披露历史覆盖并补取缺页，取消只恢复对应组展示态。
-- [ ] 10.2 保留文本 `:`／`::`／`@`／`@:` 语义；`#` 及 includeSymbols 仅接实际可限定根的符号服务，未具备时明确未启用，不伪造符号或查全局后过滤。
+- [x] 10.2 保留文本 `:`／`::`／`@`／`@:` 语义；`#` 及 includeSymbols 仅接实际可限定根的符号服务，未具备时明确未启用，不伪造符号或查全局后过滤。
 - [ ] 10.3 核对 `edt active `／`edt `／`edt mru ` 中 Thread／文件／Diff 的名称、类型、组、dirty 与关闭语义；同目标多组副本仍可准确选择。
 - [ ] 10.4 让 `view ` 发现并聚焦已有会话导航与工作区面板，保留原视图位置和归属；验证文本与 Thread 切换、大纲预览取消和未挂载历史。
 
@@ -839,3 +839,12 @@
 - 新浏览器合同装具先复现旧实现混入 addition／help／separator，再验证仅所选工作区的文件和 Thread、排除外部 owner／重复／隐藏项、零网络查询和原组接受。20 项检查／171 条断言通过（16.97 秒），原 URI／行列、delegate、身份取消、名称／正文续页、原调用接收者及帮助转接断言保持。前两次失败分别为装具漏传文件根和缺少 keybinding 服务方法，原始输出保留，不算产品缺陷。
 - 正式 Gateway／双托管 Backend／Workbench／Chromium 的原搜索组合验收通过（231.37 秒）：通过真实打开入口建立 B 的两个最近文件，再调用原 workbench.action.openPreviousEditorFromHistory，核 MRU 顺序、仅 B、原版第二项激活及真实 Enter 后 B 正文可见，全程零搜索请求。原跨范围、dirty 模型、SearchView／Search Editor、watcher、保存／恢复和停止目标断言均保持，pageErrors=[]。出站延迟故障点仍是原显式 Integration 装具，不将其称为原生服务故障。
 - 23 份转换源码的真实 Workbench 类型、正式 Web 构建、Python 定向类型、Ruff、ESM 语法及差异检查通过；共享构建44.93秒、退出0，main SHA256=0d89bf1181724e717a10196f9203065036e7bbdb988ef76ea88cc2fefa3e4ab7。命令、源码指纹、失败与通过输出、实际退出码及正式产物见 out/tests/temp/quick_navigate_20261104/artifacts/verification.json。本批未改变公开协议或后端产品，不重复生成／后端全套测试；未验证 Electron／Windows。文件符号等其余范围仍未闭环，7.4 保持未勾选。
+
+
+### 2026-11-04：文件符号往返与原文本定位前缀（7.4、10.2）
+
+- 对照固定上游及 reference_repo/vscode 的 lastGlobalPicks／文件符号入口，保存原候选和活动文件；无匹配符号不覆盖来源，退出符号恢复原第二项。名称查询按规范化查询拥有单一生命周期，追加行列／文件符号复用原请求及仍可用的分支操作；新名称、身份失效和浮层关闭取消原读取。迟到名称页只更新隐藏的原列表，不覆盖符号候选。删除重复 AbortController，预览装饰沿实际编辑器释放；不新增搜索缓存服务或持久索引。
+- 正式 Workbench、真实 Gateway／双托管后端与 Chromium 组合验收 1 passed／277.57 秒，pageErrors=[]。原 JSON 语言服务验证未打开文件的符号、无匹配后返回原第二项、忙碌时追加行列及符号往返零额外名称请求、真实 Enter 后 3:3、Esc 恢复原编辑器／光标和脏内容；慢 Thread 响应只由原出站装具延迟，释放后真实空结果继续更新，不将它表述为服务故障。原 `:`、`::`、`@`、`@:` 分别验证行列、字符偏移、实际 JSON 符号及分类预览取消，无领域搜索请求；既有跨范围、dirty model、SearchView／Search Editor、watcher、保存／恢复和停止目标断言保持。
+- 21 项调用合同／184 条断言、23 份实际转换源码的完整类型检查、Ruff、Python 定向类型及 ESM 语法通过。共享正式构建 53.71 秒、退出 0，main SHA256=193d38fc0a54e73a8f7850a1d255d6be514433726e5c62eec68a493639957289，复用 Web 的唯一构建管线。此前 URI／行列、delegate／filesOnly、filter／additionPicks、handleAccept、行内按钮、前缀限制及 quickNavigate 的已有证据与本次回归共同覆盖 7.4；`#`／includeSymbols 的明确未启用边界沿 5.5 证据保持。
+- 初轮脏文件清理超时、无效清理命令、两次类型诊断及过强的 Tab 删除预期均保留原件并分别归因。原 PickerEditorState 仅关闭仍为 transient 的输入；验收核原位置／焦点及草稿，不擅自强关已保留 Tab。清理改用实际已登记的 revertAndCloseActiveEditor，并同时保留原场景和清理错误。未验证 Electron／Windows；Thread Outline 仍由 10.1 跟踪，不借文本符号证据勾选。
+- 完整源码／构建指纹、准确命令、原始输出和退出码：out/tests/temp/file_symbols_20261104/artifacts/verification.json；最终页面原件：out/tests/integration/clients/web/quick_access/test_text_search/runs/run-42c01e1a3add/nodes/node-f4e408bf0b21/artifacts/search-result.json。

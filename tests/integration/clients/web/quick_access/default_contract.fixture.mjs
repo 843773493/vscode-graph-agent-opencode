@@ -1,6 +1,7 @@
 import { WorkspaceQuickAccess } from '../../../../../src/clients/workbench/src/search/quickAccess.js';
 import { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';
 import { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
+import { GotoSymbolQuickAccessProvider } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/codeEditor/browser/quickaccess/gotoSymbolQuickAccess.js';
 import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
@@ -19,19 +20,66 @@ const uri = name => workspaceFileUri(owner, root + '/' + name, root);
 
 /** 仅替原 Picker 事件和宿主服务；实际 Provider、取消及接受逻辑均来自生产源码。 */
 function defaultAccess(options, history = [], opener = { open() { throw new Error('delegate 不应被 URI opener 抢占'); } },
-  editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }, quickNavigate = false) {
+  editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }, quickNavigate = false, instantiation) {
   const changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
   const picker = { value: '', items: [], activeItems: [], selectedItems: [], keyMods: { alt: false, ctrlCmd: false },
     buttons: [], quickNavigate: quickNavigate ? { keybindings: [] } : undefined, onDidTriggerButton: Event.None,
     onDidHide: Event.None, onDidChangeActive: Event.None, onDidChangeValue: changes.event, onDidAccept: accepts.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
   const group = { id: 1 }, groups = { groups: [], activeGroup: group, getGroup: id => id === group.id ? group : undefined };
-  const provider = new WorkspaceQuickAccess({ createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
+  const provider = new WorkspaceQuickAccess(instantiation ?? { createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
     { getHistory: () => history }, { getValue: () => undefined }, {}, {}, { lookupKeybinding: () => undefined },
     opener, { error(error) { throw error; } }, { enabled: false }, {});
   const lifetime = provider.provide(picker, cancellation.token, options);
   return { picker, accepts, change(value) { picker.value = value; changes.fire(); },
     dispose() { cancellation.dispose(true); lifetime.dispose(); provider.dispose(); changes.dispose(); accepts.dispose(); } };
+}
+
+/** 只替换语言服务与模型引用，核真实 Provider 的模式转换和引用释放。 */
+export async function fileSymbolContract() {
+  const patterns = [], previews = [], symbols = [], releases = [], opened = [];
+  const files = [uri('symbol-a.json'), uri('symbol-b.json')];
+  const symbolProvider = { getSymbolPicks(model, filter) {
+    symbols.push({ resource: model.uri.toString(), filter });
+    return Promise.resolve(filter === 'missing' ? [] : [{ index: 0, label: 'beta',
+      range: { selection: { startLineNumber: 3, startColumn: 3, endLineNumber: 3, endColumn: 7 },
+        decoration: { startLineNumber: 3, startColumn: 1, endLineNumber: 4, endColumn: 1 } } }]);
+  } };
+  const editors = { openEditor(input, group) {
+    (input.options.transient ? previews : opened).push({ resource: input.resource.toString(), options: input.options, group });
+    return Promise.resolve();
+  } };
+  const instantiation = {
+    createInstance(ctor) {
+      if (ctor === PickerEditorState) return new PickerEditorState(editors, { groups: [] });
+      if (ctor === GotoSymbolQuickAccessProvider) return symbolProvider;
+      throw new Error('符号合同出现未登记的宿主服务');
+    },
+    invokeFunction(callback) { return callback({ get: () => ({ createModelReference: async resource => ({
+      object: { textEditorModel: { uri: resource } }, dispose() { releases.push(resource.toString()); },
+    }) }) }); },
+  };
+  const f = defaultAccess({ fileSearchDelegate: { search(pattern) {
+    patterns.push(pattern); return Promise.resolve({ results: files.map(resource => ({ resource })), messages: [] });
+  } } }, [], undefined, editors, false, instantiation);
+  let result;
+  try {
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    await settle();
+    f.change('symbol'); await settle();
+    const ids = f.picker.items.map(item => item.id);
+    f.picker.activeItems = [f.picker.items[1]];
+    f.change('symbol@beta'); await settle();
+    f.picker.activeItems = [f.picker.items[0]];
+    f.change('symbol@missing'); await settle();
+    f.change('symbol'); await settle();
+    result = { ids, restoredIds: f.picker.items.map(item => item.id), active: f.picker.activeItems[0]?.id };
+    f.change('symbol@beta'); await settle();
+    f.picker.activeItems = f.picker.selectedItems = [f.picker.items[0]];
+    f.accepts.fire({ inBackground: false });
+    await settle();
+  } finally { f.dispose(); }
+  return { ...result, patterns, previews, symbols, releases, opened, target: files[1].toString() };
 }
 
 export async function quickNavigateContract() {

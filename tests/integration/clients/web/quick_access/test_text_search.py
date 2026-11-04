@@ -56,6 +56,11 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
     (other / "mode-scope.txt").write_text("mode scope B quickmodeword\n", encoding="utf-8")
     (workspace / "quickdiscover-dir").mkdir()
     (workspace / "quickdiscover-dir/deep-file.txt").write_text("nested discover A\n", encoding="utf-8")
+    (workspace / "symbol-origin.txt").write_text("symbol origin\n", encoding="utf-8")
+    for name in ("a", "b"):
+        (workspace / f"symbol-target-{name}.json").write_text(
+            '{\n  "alpha": 1,\n  "beta": {"value": "owner A"}\n}\n', encoding="utf-8",
+        )
     (replacement / "quick-scope.txt").write_text("replacement-C quickscope\n", encoding="utf-8")
     (workspace / "context-lines.txt").write_text("A context before\ncontextbranchonly\ncontextbranchonly\nA context after", encoding="utf-8")
     (other / "context-lines.txt").write_text("B context before\ncontextbranchonly\nB context after", encoding="utf-8")
@@ -115,6 +120,11 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["defaultQuickAccess"]["helpKeepsInvocation"] is True
         assert receipt["quickNavigateHistory"]["zeroSearchRequests"] is True
         assert receipt["quickNavigateHistory"]["keyboardAccepted"] is True
+        assert receipt["fileSymbolCancel"]["zeroAdditionalSearch"] is True
+        assert receipt["fileSymbolCancel"]["dirtyPreserved"] is True
+        assert receipt["fileSymbolAccept"]["keyboardAccepted"] is True
+        assert receipt["originalTextNavigation"]["zeroSearchRequests"] is True
+        assert (workspace / "symbol-origin.txt").read_text(encoding="utf-8") == "symbol origin\n"
         assert len(receipt["defaultListPresentation"]) == 3
         assert receipt["workspaceSymbolsUnavailable"] is True
         assert receipt["defaultScope"]["cancelKeepsQueryAndSelection"] is True

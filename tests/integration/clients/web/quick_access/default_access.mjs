@@ -3,6 +3,7 @@ import { searchRequest } from '../../../../support/workbench/search-observation.
 import { searchFault } from './query_faults.mjs';
 import { readSavedSettings } from '../../../../support/workbench/settings.mjs';
 import { expectLastSearchStatus, verifyResourceOpenActions, verifyResourcePresentation } from './default_interactions.mjs';
+import { verifyFileSymbols } from './file_symbols.mjs';
 
 /** 名称状态通过产品创建入口生成；查询、打开及迟到结果均经过真实 Gateway。 */
 export async function verifyDefaultAccess({ page, command, api, result, fileUri, ownerA, ownerB }) {
@@ -66,6 +67,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expect(nested).toHaveClass(/focused/);
     await page.keyboard.press('Enter');
     await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('nested discover A');
+    await verifyFileSymbols({ page, command, result, fileUri, owner: ownerA, requests });
     const unopened = (await api('/api/v1/sessions', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': ownerA.route },
       body: JSON.stringify({ title: 'quick-id-unopened A' }) })).data;
     const main = (await api(`/api/v1/sessions/${unopened.session_id}/main-thread`, { headers: { 'X-BoxTeam-Workspace-Id': ownerA.route } })).data;

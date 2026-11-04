@@ -115,6 +115,23 @@ test('URI 原样交原 Opener 并冻结发起组，校验前不创建侧边组�
   expect(calls.every(call => call.group === 1 && call.side && call.pinned && call.preserveFocus)).toBe(true);
 });
 
+test('文件符号退出恢复原活动文件且不重查，无匹配不丢来源，模型引用随原生命周期释放', async () => {
+  const result = await exercise('fileSymbolContract');
+  expect(result.patterns).toEqual(['', 'symbol']);
+  expect(result.restoredIds).toEqual(result.ids);
+  expect(result.active).toBe(result.target);
+  expect(result.symbols.map(item => item.filter)).toEqual(['beta', 'missing', 'beta']);
+  expect(result.symbols.every(item => item.resource === result.target)).toBe(true);
+  expect(result.previews).toHaveLength(3);
+  expect(result.previews.every(item => item.resource === result.target && item.group === 1
+    && item.options.transient && item.options.preserveFocus)).toBe(true);
+  expect(result.opened).toHaveLength(1);
+  expect(result.opened[0].resource).toBe(result.target);
+  expect(result.opened[0].options.selection.startLineNumber).toBe(3);
+  expect(result.opened[0].options.selection.startColumn).toBe(3);
+  expect(result.releases.filter(item => item === result.target)).toHaveLength(3);
+});
+
 test('quickNavigate 只按所选 owner 的历史顺序导航，不混入补充项或帮助且不发查询', async () => {
   const result = await exercise('quickNavigateContract');
   expect(result.empty.map(item => item.id)).toEqual(result.resources);
