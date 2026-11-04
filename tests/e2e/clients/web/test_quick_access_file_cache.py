@@ -86,6 +86,10 @@ async def test_original_image_editor_revalidates_private_file_cache(
     for target, content in ((workspace, "原文件 A 🧪\n"), (other, "原文件 B 🧪\n")):
         (target / "cache-image.png").write_bytes(image_versions[0])
         (target / "cache-text.txt").write_text(content, encoding="utf-8")
+        owner = "B" if target == other else "A"
+        (target / "cache-model.txt").write_text(
+            "".join(f"{owner} source {index:02d}\n" for index in range(1, 31)), encoding="utf-8",
+        )
     result_path = context.artifacts_dir / "file-cache.json"
     gateway = await asyncio.to_thread(start_gateway_process,
         workspace_root=workspace, default_backend_url=None, port=cache_gateway_port,
@@ -113,5 +117,6 @@ async def test_original_image_editor_revalidates_private_file_cache(
             assert result["permissionFailureVisible"] and result["permissionRecovery"]
         assert result["staticCachePolicy"]
         assert result["textRevalidated"] and result["staleSaveRejected"] and result["errorsNoStore"]
+        assert result["textModels"]["ownerIsolated"] and result["textModels"]["dirtyExternalConflict"]
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

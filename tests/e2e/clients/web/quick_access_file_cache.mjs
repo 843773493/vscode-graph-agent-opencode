@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+import { verifyTextModelSharing } from './quick_access_text_models.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL, resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const workspace = process.env.BOXTEAM_CACHE_WORKSPACE, other = process.env.BOXTEAM_CACHE_OTHER;
@@ -32,7 +33,9 @@ try {
   cdp.on('Network.dataReceived', event => { record(event.requestId).encodedBodyBytes += event.encodedDataLength; });
   cdp.on('Network.loadingFinished', event => { record(event.requestId).finished = true; });
   await cdp.send('Network.enable');
-  const command = (id, ...args) => page.evaluate(async ({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+  const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
+    await globalThis.workbench.commands.executeCommand(id, ...args);
+  }, { id, args });
   const api = (path, init = {}) => page.evaluate(async ({ path, init }) => {
     const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
     const response = await fetch(path, { ...init, headers: { 'X-Local-Token': token, 'Content-Type': 'application/json', ...init.headers } });
@@ -224,6 +227,7 @@ try {
   result.deletedImageRecovery = true;
   result.receipts = { textCold, textWarm, changed, conflict, range, download, denied, wrongOwner, missing };
   result.errorsNoStore = true;
+  await verifyTextModelSharing({ page, command, api, result, targets, workspace, other });
   result.phase = 'passed';
 } catch (error) {
   failure = error; result.error = String(error?.stack ?? error);

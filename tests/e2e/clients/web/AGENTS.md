@@ -46,6 +46,7 @@ clients/web/
 
 - `test_quick_access_file_cache.py` 使用真实 Gateway、两个托管后端和原图片编辑器；只准备普通文件并通过实际外部文件改写触发更新。CDP记录实际条件头、网络200／304／206和正文传输量，不能以浏览器合成的fetch200或图片可见代替缓存证明。原watcher可能在建连后再验证，每次暖读都必须304及零正文；认证、错误owner、删除、原保存CAS及两个HTTP寻址载体继续按真实产品验证，不用响应替身或预写缓存。
   - POSIX撤销真实文件权限后核原延迟I/O的500及no-store、原图片撤下和错误可见，恢复权限后原Pane重新显示；删除及重建同样核失败与恢复。权限始终在finally恢复，不将原生I/O失败改称API授权403，不代替断连、认证切换、Webview或Electron验收。
+  - 文本模型场景复用同一正式页面及 A/B 后端；真实键盘编辑和剪贴板证明分屏正文共享、选区独立、关闭一组保留 dirty、外部改写冲突及最后关闭后重读。原 FileService 可以在 PUT 前拒绝 modified-since，核精确冲突提示与两侧正文，不强造网络写入；只读历史／Diff 和 Electron 另行验收。
 
 - Section 8 精确模型回放的唯一 owner 已迁至 `tests/integration/clients/web/conversation_lifecycle/`；完整 E2E suite 不再要求 Section 8 focus。
 

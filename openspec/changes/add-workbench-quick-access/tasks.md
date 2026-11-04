@@ -776,3 +776,11 @@
 - 旧产品真实页面回归失败：POSIX撤销文件读取权限后原raw返回500/no-store，界面仍显示1x1旧图且无错误。修复后真实Gateway＋双托管后端＋正式Workbench＋Chromium通过（1项／93.08秒）：权限失败／恢复、删除／重建均在原Pane可见；原冷热200／304零正文、外部更新、A/B隔离、静态资源、文本CAS及Range／下载／401等断言保持，pageErrors=[]。该原生延迟I/O沿原TraceMiddleware为500，不改写成授权403。
 - 10项源码转换／watcher检查通过（118条断言）；含20份真实转换源码的完整类型检查通过（49.71秒），本批正式页面构建退出0、40.83秒；复用与Web build相同的唯一构建管线，不重复打包。ESM、Ruff、Python类型、OpenSpec strict及差异检查通过；初次uv run pyright因工具未安装失败，改用仓库既有uvx入口后零诊断，保留原件。
 - 准确命令、源码及构建指纹、失败与通过输出及退出码：out/tests/temp/image_read_failures_20261103/artifacts/verification.json；最终真实页面原件：out/tests/e2e/clients/web/test_quick_access_file_cache/runs/run-c8d73ac5b960/nodes/node-1a9400b31e52/artifacts/file-cache.json。未重跑Webview／Electron；认证切换、route复用、断连与迟到加载等仍由17.4追踪，整项保持未勾选。
+
+### 2026-11-04：文本模型并发引用与真实释放（18.2 部分）
+
+- 真实 `FileEditorInput` 的计数装具复现并发取得两份引用、关闭只释放一份；固定上游及参考仓库均存在该时序。沿唯一源码转换共用在途获取，保留原 TextFileEditorModelManager／resolver、dirty 与关闭生命周期，失败后明确重试，不新增模型缓存或兼容链。
+- 正式 Workbench／真实 Gateway／A、B 托管后端／Chromium 验收通过：同 URI 并发分屏只读一次，键盘未保存正文两组共享而选区分别保留，关闭一组不丢编辑；外部改写触发原 modified-since 提示且正文及磁盘原件均保留，明确 revert、最后关闭和重开后实际重新读取，B 同路径不混入 A。原图片权限／删除／恢复、条件缓存及 API CAS 场景同时保留通过，pageErrors 为空。
+- 3 项原类引用检查、8 项转换／原查询回归、21 份实际转换源码的真实类型检查及 ESM 语法通过，正式页面复用同一源码的已验证新构建；最终浏览器 1 passed / 53.31 秒。Ruff 通过；fixture 类型检查的两条既存诊断与 HEAD 基线逐条一致，无新增。端口占用与错误要求 PUT 的两轮失败原件保留，未放宽版本冲突／dirty／owner 断言。
+- 重复的端口选择收敛到原 E2EProcessLease，9 项含真实 socket 的保护检查通过，独立提交 `911d49cf1`。完整证据、源码与构建指纹及准确命令：`out/tests/temp/text_model_lifecycle_20261103/artifacts/verification.json`。
+- TODO：只读来源、Diff／历史版本和打包 Electron 尚未验收，18.2 保持未勾选；不以此文本切片宣称整组完成。

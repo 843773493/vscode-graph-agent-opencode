@@ -16,6 +16,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/contrib/search/browser/searchTreeModel/match.ts',
   'src/vs/workbench/contrib/search/browser/searchView.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
+  'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   ...searchEditorSourcePaths,
 ];
@@ -65,6 +66,23 @@ if (input.resource.scheme === 'boxteam-file' && this._isCurrentLoad(loadId, inpu
 }
 return;
 }`);
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts')) {
+      const reference = 'private cachedTextFileModelReference: IReference<ITextFileEditorModel> | undefined = undefined;';
+      contents = replaceOnce(contents, reference, `${reference}
+private pendingTextFileModelReference: Promise<IReference<ITextFileEditorModel>> | undefined;`);
+      const acquire = `if (!this.cachedTextFileModelReference) {
+\t\t\t\tthis.cachedTextFileModelReference = await this.textModelService.createModelReference(this.resource) as IReference<ITextFileEditorModel>;
+\t\t\t}
+
+\t\t\tconst model = this.cachedTextFileModelReference.object;`;
+      // 分屏并发解析共用同一在途引用，只有取得引用的 Promise 写入缓存；关闭时仍由原 input 释放。
+      contents = replaceOnce(contents, acquire, `const reference = this.cachedTextFileModelReference ?? await (this.pendingTextFileModelReference ??=
+this.textModelService.createModelReference(this.resource).then(reference => {
+  this.cachedTextFileModelReference = reference as IReference<ITextFileEditorModel>;
+  return this.cachedTextFileModelReference;
+}).finally(() => { this.pendingTextFileModelReference = undefined; }));
+const model = reference.object;`);
     }
     if (path === join(upstream, 'src/vs/workbench/services/search/common/queryBuilder.ts')) {
       const commonQuery = 'private commonQuery(folderResources: (IWorkspaceFolderData | URI)[] = [], options: ICommonQueryBuilderOptions = {}): ICommonQueryProps<uri> {';
