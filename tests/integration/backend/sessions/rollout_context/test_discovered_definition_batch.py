@@ -100,6 +100,7 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
     load = RolloutCheckpointSaver.load_tool_call_resource_activation
     catalog = preparation.tool_catalog_from_activation
     read = RolloutCheckpointSaver.read_resource_activation_payload
+    source_values = tool_definitions.definition_source_values
     phases = []
 
     def observe_load(owner, *args, **kwargs):
@@ -116,12 +117,18 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
             phases[-1]["bodies"].append(binding.resource_id)
         return read(owner, frozen, binding, **kwargs)
 
+    def observe_source_values(assembly, retained=None):
+        for value, revision in source_values(assembly, retained):
+            phases[-1]["source_values"].append((assembly.assembly_id, value.tool_id, revision))
+            yield value, revision
+
     monkeypatch.setattr(RolloutCheckpointSaver, "load_tool_call_resource_activation", observe_load)
     monkeypatch.setattr(preparation, "tool_catalog_from_activation", observe_catalog)
     monkeypatch.setattr(RolloutCheckpointSaver, "read_resource_activation_payload", observe_read)
+    monkeypatch.setattr(tool_definitions, "definition_source_values", observe_source_values)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         for key, owner in (("restored", saver), ("successor", saver), ("cold", cold)):
-            phases.append({"phase": key, "calls": [], "catalogs": 0, "bodies": []})
+            phases.append({"phase": key, "calls": [], "catalogs": 0, "bodies": [], "source_values": []})
             wire, _ = guidance_prepare("batch-discovery-" + key, context_owner=owner)
             snapshot = wire["snapshot"]
             restored = [value for value, _revision in definition_source_values(snapshot)]
@@ -145,6 +152,43 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
     assert all(max(Counter(phase["calls"]).values()) == 1 for phase in phases)
     assert all(phase["catalogs"] == 1 for phase in phases)
     assert all(max(Counter(phase["bodies"]).values()) == 1 for phase in phases)
+    # 首次压缩从实际发现结果恢复；续读及冷读各验证前驱定义一次，
+    # 取得 previous revision 时不得再次解码并计算同一完整正文的摘要。
+    assert [len(phase["source_values"]) for phase in phases] == [0, source_count, source_count]
+    assert all(len(set(phase["source_values"])) == len(phase["source_values"]) for phase in phases)
+
+
+@pytest.mark.parametrize("same_retained", [False, True])
+async def test_previous_definition_revision_is_not_taken_from_a_partial_retained_set(
+    discovered_batch, guidance_prepare, registry_db, monkeypatch, same_retained,
+):
+    await discovered_batch(4, 1)
+    prepare = preparation.tool_definition_batch
+    captured = []
+
+    def observe_prepare(batch, **kwargs):
+        captured.append((batch, kwargs))
+        return prepare(batch, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(preparation, "tool_definition_batch", observe_prepare)
+        wire, _ = guidance_prepare("batch-revision-restored")
+    previous = wire["snapshot"]
+    expected = {value.discovered_from.resource_id: revision
+                for value, revision in definition_source_values(previous)}
+    assert len(expected) == 4
+    batch, options = captured[-1]
+    # 重放真实 prepare 冻结的发现输入：新前驱已封存这些定义，但保留来源
+    # 来自更早 assembly，或只保留同一 assembly 的空选集。
+    assert options["retained_assembly"] is not previous
+    options = {**options, "previous": previous}
+    if same_retained:
+        options.update(retained_assembly=previous, retained_source_refs=frozenset())
+    result = prepare(batch, **options)
+    assert {source.descriptor.source_id: source.applied_revision for source in result.sources
+            if source.descriptor.source_id in expected} == expected
+    # 完整前驱已有相同 revision，不能因受限来源丢失基准而补造 activation delta。
+    assert not [delta for delta in result.deltas if delta.source_id in expected]
 
 
 @pytest.mark.parametrize("compact", [False, True])

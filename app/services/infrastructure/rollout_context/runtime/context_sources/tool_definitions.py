@@ -171,9 +171,11 @@ def tool_definition_batch(
     """不建活动状态表；只产生既有 Saver 提交的来源 batch。"""
     discoveries: dict[str, DiscoveredToolRef] = {}
     prior_sources: dict[str, DefinitionSourceValue] = {}
-    for value, _revision in definition_source_values(retained_assembly, retained_source_refs):
+    retained_revisions: dict[str, str] = {}
+    for value, revision in definition_source_values(retained_assembly, retained_source_refs):
         discoveries[value.tool_id] = value.discovered_from
         prior_sources[value.tool_id] = value
+        retained_revisions[value.tool_id] = revision
     # 本次先解析压缩前历史，再解析当前选集；保留当前结果供后续判断，
     # 避免为确认 current 身份再次投影消息、解码 JSON 和校验 provenance。
     retained_entries = tuple(discovery_entries(retained_items))
@@ -201,7 +203,11 @@ def tool_definition_batch(
         raise ExtensionCatalogUnavailableError("定义恢复缺少完整有效策略")
     current_entries = {entry.ref for entry in current_discoveries}
     inline_refs = {entry.ref for entry in entries if entry.inline_payload is not None}
-    previous_revisions = {value.tool_id: revision for value, revision in definition_source_values(previous)}
+    # 普通续读已完整验证同一个前驱；复用本次提取的 revision，避免重解码、重算正文摘要。
+    # rebuild 的不同来源或受限选集不能代表完整前驱，仍独立验证 previous。
+    previous_revisions = retained_revisions if retained_assembly is previous and retained_source_refs is None else {
+        value.tool_id: revision for value, revision in definition_source_values(previous)
+    }
     sources, deltas = list(batch.sources), list(batch.deltas)
     for name, discovered in sorted(discoveries.items()):
         policy = policies[name]
