@@ -11,7 +11,7 @@ from stat import S_ISREG
 from typing import Never
 from uuid import UUID, uuid4
 
-from app.core.atomic_fs import native_io_path
+from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.failures import report_failure
 
 WORKSPACE_IDENTITY_FILE_NAME = "workspace-identity.json"
@@ -98,14 +98,13 @@ def read_workspace_id(workspace_root: Path) -> str:
 
 def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -> str:
     workspace_id = validate_workspace_id(workspace_id) if workspace_id else str(uuid4())
+    temporary_path = native_io_path(identity_path.with_name(f".{identity_path.name}.{uuid4().hex}.tmp"))
     try:
         descriptor = os.open(
-            native_io_path(identity_path),
+            temporary_path,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
             0o600,
         )
-    except FileExistsError:
-        return _read_workspace_id(identity_path)
     except OSError as error:
         raise _identity_io_error(identity_path, "create", error) from error
 
@@ -119,23 +118,43 @@ def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
+        # 同目录硬链接只发布完整正文，且绝不覆盖并发创建者的 UUID。
+        try:
+            os.link(temporary_path, native_io_path(identity_path))
+        except FileExistsError:
+            return _read_workspace_id(identity_path)
+        except OSError as error:
+            raise _identity_io_error(identity_path, "publish", error) from error
+        with _identity_access(identity_path, "sync_directory"):
+            fsync_directory(native_io_path(identity_path.parent))
+        return workspace_id
     except BaseException as error:
         primary_error = error
         raise
     finally:
+        cleanup_errors: list[BaseException] = []
         if descriptor is not None:
             try:
                 os.close(descriptor)
             except OSError as error:
                 cleanup_error = _identity_io_error(identity_path, "close_descriptor", error)
                 cleanup_error.__cause__ = error
-                if primary_error is not None:
-                    raise BaseExceptionGroup(
-                        "Workspace 身份创建与收尾均失败: artifact=workspace_identity, stage=close_descriptor",
-                        [primary_error, cleanup_error],
-                    ) from primary_error
-                raise cleanup_error from error
-    return workspace_id
+                cleanup_errors.append(cleanup_error)
+        try:
+            temporary_path.unlink()
+        except OSError as error:
+            cleanup_error = _identity_io_error(identity_path, "remove_candidate", error)
+            cleanup_error.__cause__ = error
+            cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            if primary_error is not None:
+                cleanup_errors.insert(0, primary_error)
+            if len(cleanup_errors) == 1:
+                raise cleanup_errors[0]
+            raise BaseExceptionGroup(
+                "Workspace 身份创建与收尾均失败: artifact=workspace_identity",
+                cleanup_errors,
+            ) from primary_error
 
 
 def _read_existing_workspace_id(identity_path: Path) -> str | None:

@@ -72,7 +72,7 @@ def test_invalid_identity_file_keeps_bytes_and_recovers_without_path_output(
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("stage", ["resolve", "read", "stat", "directory", "create", "flush"])
+@pytest.mark.parametrize("stage", ["resolve", "read", "stat", "directory", "create", "flush", "publish", "sync_directory"])
 @pytest.mark.parametrize("native_path", ["/private/workspace-marker", r"C:\private\workspace-marker", r"\\server\private\workspace-marker"])
 def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
@@ -82,7 +82,8 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
     expected = identity.load_or_create_workspace_id(tmp_path)
     path = identity.workspace_identity_path(tmp_path)
     original = path.read_bytes()
-    if stage == "create":
+    creating = stage in {"create", "flush", "publish", "sync_directory"}
+    if creating:
         path.unlink()
     before = path.read_bytes() if path.exists() else None
     raw = PermissionError(errno.EACCES, f"原生身份访问失败: {native_path}", native_path)
@@ -106,11 +107,17 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
         real_mkdir(target, mode=mode, parents=parents, exist_ok=exist_ok)
 
     def open_file(target, *args, **kwargs):
-        if target == path:
+        if target.parent == path.parent and target.name.startswith(f".{path.name}."):
             raise raw
         return real_open(target, *args, **kwargs)
 
     def flush(descriptor: int) -> None:
+        raise raw
+
+    def publish(source: Path, destination: Path) -> None:
+        raise raw
+
+    def sync_directory(directory: Path) -> None:
         raise raw
 
     def resolve(target: Path, strict: bool = False) -> Path:
@@ -129,10 +136,12 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
             patch.setattr(Path, "mkdir", mkdir)
         elif stage == "create":
             patch.setattr(identity.os, "open", open_file)
-        else:
-            # 真正首次创建进入原fsync；失败后的既有创建行为保持，不由测试回填UUID。
-            path.unlink()
+        elif stage == "flush":
             patch.setattr(identity.os, "fsync", flush)
+        elif stage == "publish":
+            patch.setattr(identity.os, "link", publish)
+        else:
+            patch.setattr(identity, "fsync_directory", sync_directory)
         with caplog.at_level(logging.ERROR), pytest.raises(PermissionError) as caught:
             identity.load_or_create_workspace_id(tmp_path)
         projected = caught.value
@@ -149,12 +158,18 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
             assert "diagnostic_sink_error=OSError" in str(projected)
             assert any(str(identity_log_failure) in note for note in raw.__notes__)
         assert "workspace-identity-log-secret" not in str(projected)
-    if stage != "flush":
+    if stage != "sync_directory":
         assert (path.read_bytes() if path.exists() else None) == before
+    else:
+        # 目录屏障失败也不能撤销或改写已经发布的完整 UUID。
+        before = path.read_bytes()
     recovered = identity.load_or_create_workspace_id(tmp_path)
     assert identity.read_workspace_id(tmp_path) == recovered
-    if stage not in {"create", "flush"}:
+    assert [item.name for item in path.parent.iterdir()] == [path.name]
+    if not creating:
         assert recovered == expected and path.read_bytes() == original
+    elif stage == "sync_directory":
+        assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("concurrent", [False, True])
@@ -240,6 +255,47 @@ def test_concurrent_creator_read_failure_keeps_read_stage_and_direct_cause(
         assert "workspace-identity-log-secret" not in str(caught.value)
     assert path.read_bytes() == original
     assert identity.load_or_create_workspace_id(tmp_path) == expected
+
+
+@pytest.mark.parametrize("publish_fails", [False, True], ids=["published", "not-published"])
+def test_candidate_cleanup_failure_preserves_publication_result_and_both_causes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publish_fails: bool,
+) -> None:
+    path = identity.workspace_identity_path(tmp_path)
+    publish_error = PermissionError(errno.EACCES, "发布身份失败", str(path))
+    cleanup_error = PermissionError(errno.EIO, "删除候选文件失败", str(path))
+    original_unlink = Path.unlink
+
+    def publish(source: Path, destination: Path) -> None:
+        raise publish_error
+
+    def unlink(target: Path, missing_ok: bool = False) -> None:
+        if target.name.startswith(f".{path.name}."):
+            raise cleanup_error
+        original_unlink(target, missing_ok=missing_ok)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", unlink)
+        if publish_fails:
+            patch.setattr(identity.os, "link", publish)
+        with pytest.raises(ExceptionGroup if publish_fails else PermissionError) as caught:
+            identity.load_or_create_workspace_id(tmp_path)
+    failure = caught.value
+    if publish_fails:
+        assert isinstance(failure, ExceptionGroup)
+        primary, failure = failure.exceptions
+        assert primary.__cause__ is publish_error
+        assert "stage=publish" in str(primary)
+    assert failure.__cause__ is cleanup_error
+    assert "stage=remove_candidate" in str(failure)
+    assert path.exists() is not publish_fails
+    candidates = list(path.parent.glob(f".{path.name}.*.tmp"))
+    assert len(candidates) == 1
+    candidates[0].unlink()
+    if not publish_fails:
+        before = path.read_bytes()
+        identity.load_or_create_workspace_id(tmp_path)
+        assert path.read_bytes() == before
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="真实Linux符号链接循环；不替代Windows原生验证")

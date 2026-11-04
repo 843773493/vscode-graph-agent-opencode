@@ -3,11 +3,15 @@ import logging
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from uuid import UUID
+from threading import Event
+from uuid import UUID, uuid4
 
 import pytest
 
+from app.core import workspace_identity as identity
 from app.core.workspace_identity import (
     load_or_create_workspace_id,
     validate_workspace_id,
@@ -43,6 +47,56 @@ def cli_workspace(request: pytest.FixtureRequest) -> Path:
     workspace_root.mkdir(parents=True)
     (workspace_root / ".boxteam").mkdir()
     return workspace_root
+
+
+@pytest.fixture
+def paused_identity_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[ThreadPoolExecutor, Event, Event]]:
+    started, release = Event(), Event()
+    original = identity.os.fdopen
+
+    def fdopen(descriptor: int, mode: str, *, encoding: str):
+        if not started.is_set():
+            started.set()
+            assert release.wait(10), "未释放暂停的身份写入者"
+        return original(descriptor, mode, encoding=encoding)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(identity.os, "fdopen", fdopen)
+        try:
+            yield executor, started, release
+        finally:
+            release.set()
+
+
+@pytest.mark.parametrize("bind", [False, True], ids=["create", "bind"])
+def test_concurrent_identity_creation_publishes_only_complete_winner(
+    cli_workspace: Path, paused_identity_writer: tuple[ThreadPoolExecutor, Event, Event],
+    bind: bool,
+) -> None:
+    executor, started, release = paused_identity_writer
+    expected = str(uuid4())
+    pending = (
+        executor.submit(identity.bind_workspace_id, cli_workspace, expected)
+        if bind else executor.submit(load_or_create_workspace_id, cli_workspace)
+    )
+    assert started.wait(10), "身份创建没有进入写入阶段"
+    try:
+        winner = load_or_create_workspace_id(cli_workspace)
+        before = workspace_identity_path(cli_workspace).read_bytes()
+    finally:
+        release.set()
+    if bind:
+        with pytest.raises(RuntimeError, match=f"expected={expected}, actual={winner}"):
+            pending.result(timeout=10)
+    else:
+        assert pending.result(timeout=10) == winner
+    assert identity.read_workspace_id(cli_workspace) == winner
+    assert workspace_identity_path(cli_workspace).read_bytes() == before
+    assert [path.name for path in (cli_workspace / ".boxteam").iterdir()] == [
+        identity.WORKSPACE_IDENTITY_FILE_NAME,
+    ]
 
 
 def test_workspace_identity_is_a_persistent_uuid4(tmp_path):
@@ -100,6 +154,19 @@ def test_identity_cli_prints_and_reuses_one_workspace_uuid(cli_workspace: Path) 
     assert json.loads(
         workspace_identity_path(cli_workspace).read_text(encoding="utf-8")
     ) == {"workspace_id": workspace_id}
+
+
+def test_concurrent_identity_cli_processes_reuse_one_uuid(cli_workspace: Path) -> None:
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        pending = [
+            executor.submit(_run_workspace_identity_cli, "--workspace-root", str(cli_workspace))
+            for _ in range(4)
+        ]
+        results = [future.result(timeout=15) for future in pending]
+    for result in results:
+        assert result.returncode == 0, result.stderr
+        assert result.stderr == ""
+    assert {result.stdout for result in results} == {identity.read_workspace_id(cli_workspace) + "\n"}
 
 
 def test_identity_cli_rejects_relative_workspace_root() -> None:

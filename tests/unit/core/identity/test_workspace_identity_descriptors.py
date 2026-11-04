@@ -93,8 +93,6 @@ def test_failed_identity_stream_closes_owned_descriptor_and_preserves_causes(
         assert primary.filename is None and "stage=flush" in str(primary)
     assert str(path) not in str(caught.value) and "身份流创建失败" not in str(caught.value)
 
-    # 创建已发生：后续入口必须拒绝残留空文件，不能替用户覆盖或生成新身份。
-    assert path.read_bytes() == b""
-    with pytest.raises(RuntimeError, match="不是有效 JSON"):
-        identity.load_or_create_workspace_id(tmp_path)
-    assert path.read_bytes() == b"" and len(opened) == 1 and closed == opened
+    # 失败的候选文件不能公开成身份，也不能留下半写入的最终文件。
+    assert not path.exists()
+    assert list(path.parent.iterdir()) == []
