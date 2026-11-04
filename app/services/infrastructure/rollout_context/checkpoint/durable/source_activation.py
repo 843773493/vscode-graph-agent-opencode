@@ -158,16 +158,18 @@ def _validate_definition_sources(
                     or extension_schema_hash(definition.input_schema) != definition.schema_hash):
                 raise ItemSchemaError("definition-source-conflict: 完整定义正文与冻结身份不一致")
         current[discovered.resource_id] = revision
-    if any(is_tool_definition_source(source.source_id) and source.source_id not in current
-           for source in snapshot.seal_binding.source_revisions):
+    # typed binding 已保证每个来源只有一条回执；本次事务一次索引，避免逐定义重扫整批。
+    receipts = {source.source_id: source for source in snapshot.seal_binding.source_revisions}
+    if any(is_tool_definition_source(source_id) and source_id not in current for source_id in receipts):
         raise ItemSchemaError("definition-source-conflict: 活动定义回执缺少真实 selected 来源")
     prior = {value.discovered_from.resource_id: revision for value, revision in definition_source_values(previous)}
     for source_id, revision in current.items():
-        applied = tuple(source for source in snapshot.seal_binding.source_revisions if source.source_id == source_id)
-        if len(applied) != int(prior.get(source_id) != revision) or any(
-            source.revision != revision or source.previous_revision != prior.get(source_id)
-            or source.expected_control_revision is not None for source in applied
-        ):
+        applied = receipts.get(source_id)
+        required = prior.get(source_id) != revision
+        if (applied is not None) != required or (applied is not None and (
+            applied.revision != revision or applied.previous_revision != prior.get(source_id)
+            or applied.expected_control_revision is not None
+        )):
             raise ItemSchemaError("definition-source-conflict: 活动定义 applied 回执与封存前驱不一致")
 
 

@@ -1,7 +1,9 @@
 """真实发现、压缩和冷恢复中，按原调用及 activation 批量读取冻结定义。"""
 
 import json
+import sys
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,7 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.epoch.seal_binding import AppliedSourceRevision
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.mcp.extension_catalog import ExtensionCatalogUnavailableError
 from app.services.infrastructure.mcp.tool_definitions import tool_catalog_from_activation
@@ -103,15 +106,28 @@ async def test_seal_reuses_exact_definition_and_discovery_proofs_in_its_transact
     thread = saver._storage.storage.main_thread_id(session)
     validate = source_activation._validate_definition_sources
     phases = []
+    active = []
+
+    def observe_receipt(source, name):
+        caller = sys._getframe(1).f_code
+        if (active and name == "source_id" and caller.co_filename == source_activation.__file__
+                and caller.co_qualname.startswith("_validate_definition_sources")):
+            active[-1]["receipt_identity_reads"] += 1
+        return receipt_attribute(source, name)
+
+    receipt_attribute = AppliedSourceRevision.__getattribute__
+    monkeypatch.setattr(AppliedSourceRevision, "__getattribute__", observe_receipt)
 
     def observe_validation(connection, snapshot, previous):
         statements = []
+        active.append({"receipt_identity_reads": 0, "receipts": len(snapshot.seal_binding.source_revisions)})
         connection.set_trace_callback(statements.append)
         try:
             return validate(connection, snapshot, previous)
         finally:
             connection.set_trace_callback(None)
             phases[-1]["validations"].append({
+                **active.pop(),
                 "bindings": [sql for sql in statements if sql.startswith("SELECT session_id,thread_id FROM resource_activation_bindings ")],
                 "discoveries": [sql for sql in statements if sql.startswith("SELECT tool.tool_call_id,item.projection_manifest_json FROM model_calls call ")],
             })
@@ -138,11 +154,59 @@ async def test_seal_reuses_exact_definition_and_discovery_proofs_in_its_transact
         json.dumps(phases, indent=2), encoding="utf-8",
     )
     print(f"definition seal SQL ({call_count=}): {[(phase['phase'], [(len(v['bindings']), len(v['discoveries'])) for v in phase['validations']]) for phase in phases]}")
+    print(f"definition receipt work ({call_count=}): {[(phase['phase'], [(v['receipt_identity_reads'], v['receipts']) for v in phase['validations']]) for phase in phases]}")
     for phase in phases:
         assert phase["validations"]
         for validation in phase["validations"]:
             assert len(validation["bindings"]) == len(set(validation["bindings"])) == 4
             assert len(validation["discoveries"]) == call_count
+            # typed binding 已保证来源身份唯一；同次定义校验只索引一次回执。
+            assert validation["receipt_identity_reads"] <= validation["receipts"]
+
+
+@pytest.mark.parametrize("damage", ["missing", "unknown", "revision", "previous_revision", "control_revision", "redundant"])
+async def test_seal_rejects_invalid_definition_receipts_atomically(
+    discovered_batch, guidance_prepare, registry_db, monkeypatch, damage,
+):
+    await discovered_batch(4, 1)
+    _saver, _session, connection, _accepted = registry_db
+    if damage == "redundant":
+        guidance_prepare("batch-receipt-already-applied")
+    before = connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall()
+    tables = ("context_assembly_selections", "resource_activation_assembly_bindings")
+    counts = tuple(connection.execute(f"SELECT count(*) FROM {table}").fetchone() for table in tables)
+    validate = source_activation._validate_definition_sources
+    injected = False
+
+    def damage_receipt(write_connection, snapshot, previous):
+        nonlocal injected
+        injected = True
+        binding = snapshot.seal_binding
+        candidates = previous.seal_binding.source_revisions if damage == "redundant" else binding.source_revisions
+        target = next(source for source in candidates
+                      if tool_definitions.is_tool_definition_source(source.source_id))
+        if damage == "redundant":
+            receipts = binding.source_revisions + (target,)
+        elif damage == "missing":
+            receipts = tuple(source for source in binding.source_revisions if source != target)
+        else:
+            changes = {
+                "unknown": {"source_id": "extension-tool-definition:v1:unselected"},
+                "revision": {"revision": "unselected-revision"},
+                "previous_revision": {"previous_revision": "unselected-predecessor"},
+                "control_revision": {"expected_control_revision": 1},
+            }[damage]
+            receipts = tuple(replace(source, **changes) if source == target else source
+                             for source in binding.source_revisions)
+        return validate(write_connection, replace(snapshot, seal_binding=replace(binding, source_revisions=receipts)), previous)
+
+    monkeypatch.setattr(source_activation, "_validate_definition_sources", damage_receipt)
+    message = "回执缺少真实 selected 来源" if damage == "unknown" else "applied 回执与封存前驱不一致"
+    with pytest.raises(ItemSchemaError, match=message):
+        guidance_prepare("batch-receipt-rejected:" + damage)
+    assert injected
+    assert connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall() == before
+    assert tuple(connection.execute(f"SELECT count(*) FROM {table}").fetchone() for table in tables) == counts
 
 
 @pytest.mark.parametrize("damage", ["binding", "discovery"])
