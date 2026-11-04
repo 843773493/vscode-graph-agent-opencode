@@ -16,7 +16,7 @@
 
 - [x] 3.1 将 managed Backend 成员、generation 启动合同及 mount 校验迁为单一 UUID，保留唯一原生 Gateway root binding 和唯一进程句柄。
 - [x] 3.2 迁齐 blockers、完整影响集合、force、配置 fan-out、移除、shutdown、preserve/adopt 与恢复，删除组生命周期中的工作区 ID 换算。
-- [ ] 3.3 经产品入口验证 sibling blocker、排空超时、显式 force、完整组恢复及辅助服务保留；缺失或错误 binding 必须拒绝部分 adopt。
+- [x] 3.3 经产品入口验证 sibling blocker、排空超时、显式 force、完整组恢复及辅助服务保留；缺失或错误 binding 必须拒绝部分 adopt。
 - [x] 3.4 用受进程外保护的独立 Backend 子进程验证不同 home 争用同一隔离工作区仍失败、释放锁后可接管且 UUID 与业务历史保持不变。Linux 真实 Backend A／B／C 使用三个独立 home，A 由消息入口产生执行历史，B 被物理锁拒绝且 A 继续服务；A 退出后 C 保留 Session／main Thread、完整历史条目与身份文件，并从原检查点续跑，实际规范化模型请求前缀完全相同。矩阵 `integration-workspace-process-exclusivity`：1 passed／64.69s，沿现有 model_stream 精确回放，Ruff／Pyright 通过；不代表跨 Gateway 身份迁移或 Windows 实机验收。
 
 ## 4. 联邦与连接身份分离
@@ -226,3 +226,8 @@
 
 - 运行时保留依据当前 active／draining 与另一个 serving generation 判断，删除“曾以候选启动就不能保留”的条件；未改变 Launcher 先启动新候选、晋升后再停旧进程的顺序，未扩展为非产品的冷交换流程。真实 SQLite 代次与正式配置 owner 的定向反例修复前普通来源通过、候选来源失败，修复后相关配置／lifespan 两文件 64 passed／62.14 秒。
 - 准确命令、原始反例、源码首尾指纹及类型／lint 对照在 `identity_registry_recovery_root/artifacts/promoted-handoff-*`；Ruff 7／7、Pyright 49／49 均为存量，新增零，生产 Pyright 2／2。不把该单测称为真实 managed 资源保留验收；双 Gateway 的真实 HTTP 测试也已改为产品的候选交接顺序，正在独立验证，3.3／4.4 仍未完成。
+
+### 2026-11-04：3.3 共享组恢复与辅助服务保留收口
+
+- 原真实双挂载历史恢复场景增加 Gateway 辅助服务健康入口观察，核两成员 UUID 和各自 Terminal／Browser 的四个真实 PID；Backend 组重启后四个 PID 保持不变。原 Session／Thread、消息顺序、规范化请求前缀、双工作区续跑及跨工作区 404 断言全部保留，1 passed／139.18 秒。原件 `identity_registry_recovery_root/artifacts/product-shared-history-auxiliary-owner-1793830635211828970.*`，生产与本场景源码稳定，只有并行独立联邦单测变化。
+- 结合上方真实工作台的完整组排空阻塞／force／CAS、候选失败恢复、此前启动／接管及真实身份 CLI 的非法 binding 零写入／零进程反例，3.3 完成 Linux 范围验收。Ruff 退出 0；本文件 Pyright 仍为与 HEAD 相同的四条存量诊断，新增观察逻辑零诊断。本项不扩展为 Windows 或真实 SSH 验收。
