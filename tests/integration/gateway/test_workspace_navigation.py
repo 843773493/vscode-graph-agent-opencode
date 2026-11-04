@@ -1,25 +1,24 @@
 from __future__ import annotations
 
-from app.gateway.workspace_ids import build_managed_local_workspace_id
-
 import json
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from tests.integration.stubs.http_stubs import generation_target_stub
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import workspace_backend_id_for_root
 
 
-def _node_for_workspace(nodes: list[dict[str, object]], workspace_id: str) -> dict[str, object]:
-    return next(node for node in nodes if node.get("workspace_id") == workspace_id)
+def _node_for_workspace(nodes: list[dict[str, object]], owner: dict[str, str]) -> dict[str, object]:
+    return next(node for node in nodes if node.get("workspace") == owner)
 
 
 @pytest.mark.asyncio
@@ -39,7 +38,7 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
     secondary_backend_port = port_block.port(1)
     with generation_target_stub(
         secondary_backend_port,
-        output_workspace_id="gw_stub_secondary",
+        output_workspace_id=secondary_backend_workspace_id,
         backend_workspace_id=secondary_backend_workspace_id,
     ):
         gateway = start_gateway_process(
@@ -55,9 +54,9 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
             )
             workspaces_response = await client.get("/api/gateway/workspaces")
             assert workspaces_response.status_code == 200, workspaces_response.text
-            default_workspace_id = workspaces_response.json()["data"][
-                "active_workspace_id"
-            ]
+            default_owner = workspaces_response.json()["data"]["active_workspace"]
+            default_workspace_id = default_owner["workspace_id"]
+            assert default_workspace_id == read_workspace_id(workspace_root)
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={
@@ -70,9 +69,17 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
             secondary_workspace_id = next(
                 item["workspace_id"]
                 for item in add_response.json()["data"]["items"]
-                if item["workspace_id"] == build_managed_local_workspace_id(str(secondary_workspace))
+                if item["workspace_id"] == read_workspace_id(secondary_workspace)
             )
-            assert secondary_workspace_id != secondary_backend_workspace_id
+            assert secondary_workspace_id == secondary_backend_workspace_id
+            secondary_owner = {
+                "gateway_id": default_owner["gateway_id"],
+                "workspace_id": secondary_workspace_id,
+            }
+            assert all(
+                item["gateway_id"] == default_owner["gateway_id"]
+                for item in add_response.json()["data"]["items"]
+            )
 
             initial_response = await client.get("/api/gateway/workspace-navigation")
             assert initial_response.status_code == 200, initial_response.text
@@ -80,10 +87,13 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
             assert initial_response.headers["X-Request-ID"]
             assert initial["revision"]
             assert {
-                node["workspace_id"]
+                (node["workspace"]["gateway_id"], node["workspace"]["workspace_id"])
                 for node in initial["nodes"]
                 if node["kind"] == "workspace_ref"
-            } == {default_workspace_id, secondary_workspace_id}
+            } == {
+                (default_owner["gateway_id"], default_workspace_id),
+                (default_owner["gateway_id"], secondary_workspace_id),
+            }
 
             root_folder_response = await client.post(
                 "/api/gateway/workspace-navigation/folders",
@@ -110,11 +120,11 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
             )
             default_ref = _node_for_workspace(
                 child_folder_response.json()["data"]["nodes"],
-                default_workspace_id,
+                default_owner,
             )
             secondary_ref = _node_for_workspace(
                 child_folder_response.json()["data"]["nodes"],
-                secondary_workspace_id,
+                secondary_owner,
             )
 
             move_default_response = await client.patch(
@@ -164,10 +174,10 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
                 node["node_id"] for node in recursively_deleted
             }
             assert _node_for_workspace(
-                recursively_deleted, default_workspace_id
+                recursively_deleted, default_owner
             )["parent_node_id"] is None
             assert _node_for_workspace(
-                recursively_deleted, secondary_workspace_id
+                recursively_deleted, secondary_owner
             )["parent_node_id"] is None
 
             recreated_response = await client.post(
