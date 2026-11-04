@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextlib import nullcontext
 
 from langchain_core.messages import BaseMessage, message_to_dict, messages_from_dict
 
@@ -389,12 +388,9 @@ class ContextOwnerMixin(
 
     def _committed_context_snapshot(
         self,
-        session_id: str,
-        thread_id: str,
         plan: ContextRequestPlan,
         *,
-        checkpoint_ns: str,
-        snapshot: RolloutReadSnapshot | None = None,
+        snapshot: RolloutReadSnapshot,
     ) -> CommittedContextSnapshot:
         """只允许投影 Saver 已提交的 assembly plan。
 
@@ -403,49 +399,39 @@ class ContextOwnerMixin(
         必须从 storage 读回并比较 plan identity/hash/selection，不能让业务层
         以自造的 plan 旁路 SQLite manifest 或 context reader。
         """
-        if plan.plan_state != "sealed" or plan.assembly_id is None:
-            self._require_context_plan_owner(session_id, thread_id, plan)
-            raise ValueError("context plan 未 sealed，不能进入 projector")
-        if snapshot is None:
-            self._require_context_plan_read_owner(
-                session_id, thread_id, plan, checkpoint_ns,
+        session_id, thread_id, checkpoint_ns = snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns
+        self._require_context_plan_read_owner(
+            session_id, thread_id, plan, checkpoint_ns, snapshot=snapshot,
+        )
+        with self._storage.storage.read_connection(
+            session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+        ) as connection:
+            persisted, _ = self._storage.assemblies._read_context_assembly_connection(
+                connection, session_id, thread_id,
+                assembly_id=plan.assembly_id, checkpoint_ns=checkpoint_ns,
             )
-        with (
-            self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns)
-            if snapshot is None else nullcontext(snapshot)
-        ) as read_snapshot:
-            self._require_context_plan_read_owner(
-                session_id, thread_id, plan, checkpoint_ns, snapshot=read_snapshot,
+        if (
+            persisted.plan_id != plan.plan_id
+            or persisted.plan_hash != plan.plan_hash()
+            or persisted.selection != plan.selection
+        ):
+            raise ValueError(
+                "plan-order-integrity: projector plan 与已提交 assembly 不一致"
             )
-            with self._storage.storage.read_connection(
-                session_id, thread_id, checkpoint_ns, snapshot=read_snapshot,
-            ) as connection:
-                persisted, _ = self._storage.assemblies._read_context_assembly_connection(
-                    connection, session_id, thread_id,
-                    assembly_id=plan.assembly_id, checkpoint_ns=checkpoint_ns,
-                )
-            if (
-                persisted.plan_id != plan.plan_id
-                or persisted.plan_hash != plan.plan_hash()
-                or persisted.selection != plan.selection
-            ):
-                raise ValueError(
-                    "plan-order-integrity: projector plan 与已提交 assembly 不一致"
-                )
-            activation = None
-            # 正式 wire v2 投影必须复用 sealed activation；纯 plan v1 保持自身合同。
-            if (persisted.projector_id, persisted.projector_version) == (
-                WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION,
-            ):
-                activation = self.load_sealed_resource_activation(
-                    session_id,
-                    thread_id=thread_id,
-                    assembly_id=persisted.assembly_id,
-                    plan_hash=persisted.plan_hash,
-                    request_hash=persisted.request_hash,
-                    checkpoint_ns=checkpoint_ns,
-                    snapshot=read_snapshot,
-                )
+        activation = None
+        # 正式 wire v2 投影必须复用 sealed activation；纯 plan v1 保持自身合同。
+        if (persisted.projector_id, persisted.projector_version) == (
+            WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION,
+        ):
+            activation = self.load_sealed_resource_activation(
+                session_id,
+                thread_id=thread_id,
+                assembly_id=persisted.assembly_id,
+                plan_hash=persisted.plan_hash,
+                request_hash=persisted.request_hash,
+                checkpoint_ns=checkpoint_ns,
+                snapshot=snapshot,
+            )
         return CommittedContextSnapshot(persisted, activation)
 
     def get_canonical_item(

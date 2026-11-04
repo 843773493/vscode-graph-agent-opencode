@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 
 from langchain_core.messages import BaseMessage
@@ -166,17 +167,22 @@ class ContextProjectionOwnerMixin:
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             self._require_context_plan_owner(session_id, thread_id, plan)
             raise ValueError("context plan 未 sealed，不能进入 projector")
-        self._require_context_plan_read_owner(
-            session_id, thread_id, plan, checkpoint_ns,
-        )
-        with self._storage.storage.open_read_snapshot(
-            session_id, thread_id, checkpoint_ns,
-        ) as read_snapshot:
+        with ExitStack() as cleanup:
+            try:
+                read_snapshot = cleanup.enter_context(self._storage.storage.open_read_snapshot(
+                    session_id, thread_id, checkpoint_ns,
+                ))
+            except RolloutNotMaterializedError as error:
+                if (plan.session_id, plan.thread_id) != (session_id, thread_id):
+                    raise ValueError(
+                        "source-mismatch: target rollout is not materialized; "
+                        "frozen history scope cannot be authorized"
+                    ) from error
+                raise
+            # 历史 owner 的准入与 assembly/正文共用下面这一个冻结快照；
+            # 提前另开快照只做归属预检，会让同一次投影重复全扫 commit/catalog。
             committed_snapshot = self._committed_context_snapshot(
-                session_id,
-                thread_id,
                 plan,
-                checkpoint_ns=checkpoint_ns,
                 snapshot=read_snapshot,
             )
             committed = committed_snapshot.assembly.as_sealed_plan()
