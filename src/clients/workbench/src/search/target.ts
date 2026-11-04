@@ -5,7 +5,7 @@ import { gatewayWorkspaceOwner, requireGatewayWorkspaceRoute, type WorkspaceOwne
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
 import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway } from '../agentApi.js';
-import { changeFileSource } from '../changeFiles.js';
+import { changeFileSource } from '../readonlyDocuments.js';
 import { ThreadInput } from '../threadInput.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';

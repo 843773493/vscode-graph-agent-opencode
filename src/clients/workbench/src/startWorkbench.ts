@@ -3,7 +3,11 @@ import { isCancellationError } from '../upstream/src/vs/base/common/errors.js';
 import { workspaceFolder } from './filesystem.js';
 import './thread.contribution.js';
 import './resourceOpener.js';
+import './changeFiles.js';
+import { installReadonlyDocumentSerialization } from './readonlyDocuments.js';
 import './search/nameModes.js';
+
+installReadonlyDocumentSerialization();
 
 export async function startWorkbench(): Promise<void> {
   function showError(error: unknown): void {

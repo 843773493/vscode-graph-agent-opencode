@@ -12,7 +12,7 @@ import { getWorkspaceResource, controlWorkspaceResource } from '../../../web/src
 import { buildGatewayAttachUrl } from '../../../web/src/utils/attachUrls.js';
 import { resourceFileRootUri } from '../../../web/src/utils/workspaceFileReferences.js';
 import { workspaceFileUri } from '../workspaceFiles.js';
-import { changeFileUri } from '../changeFiles.js';
+import { changeFileUri } from '../readonlyDocuments.js';
 import { ThreadInput } from '../threadInput.js';
 import type { AttachmentRef, InternalDisplayProvenance } from '../../../web/src/types/backend.js';
 import type { ChildThreadForkPoint } from '../../../web/src/components/panels/sessionPanels/ChildThreadConversation.js';

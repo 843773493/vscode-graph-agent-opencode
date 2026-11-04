@@ -791,3 +791,10 @@
 - 新增真实 Provider 请求链检查，HTTP 与路由为明确装具：404／403 后恢复重新 describe，A/B 同路径目标隔离；原 raw 建立基线后，外部更新再 stat，PUT 仍带读取时的原 revision。原 watcher 检查同时核同根引用、重连／overflow 与 B 独立连接；目录并发、失败、删除／迟到响应、局部收敛回归共 19 项／71 断言通过。
 - 旧根目录次数断言失败已按当前源代码归因：现有身份校验使用轻量 Workspace／roots API，不再拉目录正文。对照 Copilot 的工作区元数据职责后保持该单链路，改为核零额外根目录读取，并加强请求 route、写入 directory key 及原 revision 断言，不恢复冗余请求。失败及最后通过原件均保留。
 - 修改测试的真实 TypeScript 检查零诊断，ESM／差异检查通过；本批仅改验收，产品源码与先前 21 份转换类型检查、正式构建及真实 Gateway／Chromium 更新／删除／权限恢复／CAS 证据一致，复用而不重复构建。完整指纹、命令、原输出、边界和复用依据：`out/tests/temp/text_model_lifecycle_20261103/artifacts/metadata-verification.json`。18.10 的完整运行面验收仍未完成。
+
+### 2026-11-04：只读来源与更改模型共享、稳定身份及正常重载恢复（18.2、13.2 部分）
+
+- 更改前后侧和完整补丁统一进入原内容 Provider／TextModelResolverService，删除旧文件 Provider 的重复 stat／正文读取；相同变更集仅合并在途请求，不保存第二份历史正文。稳定投影仅含 Gateway／工作区／Session、changeset、edit 和阶段，原输入工厂一次迁移具备完整身份的旧引用；缺失身份明确报错。只读 serializer 仅保存来源／更改引用，正文和各组视图态仍由原服务负责。
+- 真实 Provider／resolver 的计数装具与原文件引用、查询转换共 17 项／181 条断言通过，覆盖并发共享、最后引用释放、失败重试、旧版本不改投、owner 隔离及创建／删除的空侧。装具只替换路由、HTTP 与底层文本存取，不替代真实页面证明。
+- 正式 Workbench、真实 Gateway／后端与 Chromium 验收 1 passed／80.21 秒：两轮真实执行生成创建／修改历史，原会话资源打开 Diff，前后侧一次读取、分屏零新增读取、只读与原完整补丁、旧引用归一均通过；产品正常 Reload Window 后 Diff 与来源恢复，最后关闭再打开重新读取，pageErrors 为空。统一模型协议使用 model_stream，未预写历史、浏览器存储或 HTTP 响应。浏览器强制导航未保证原异步存储提交，保留失败原件，不据此承诺异常退出恢复。
+- 22 份实际转换源码的完整类型检查、Ruff、ESM、OpenSpec strict 及差异检查通过；首轮正式构建通过／38.82 秒，之后仅改测试定位／等待，每轮核产品及 main 指纹后复用，未重复构建。环境缺少 `uv run pyright` 命令，保留退出 2；本批未改 Python 产品源码。完整命令、源码与构建指纹、失败归因及原始结果：`out/tests/temp/change_documents_20261104/artifacts/verification.json`；最终页面原件：`out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-c5e21a6912e0/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Electron 及其余历史／身份恢复尚未验收，18.2、13.2 保持未勾选。

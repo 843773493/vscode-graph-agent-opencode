@@ -5,7 +5,7 @@ import type { IAnythingQuickPickItem } from '../../upstream/src/vs/workbench/con
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { ThreadInput } from '../threadInput.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
-import { changeFileSource } from '../changeFiles.js';
+import { changeFileSource } from '../readonlyDocuments.js';
 import { sourceDocumentSource } from '../sourceDocuments.js';
 import type { IRange } from '../../upstream/src/vs/editor/common/core/range.js';
 

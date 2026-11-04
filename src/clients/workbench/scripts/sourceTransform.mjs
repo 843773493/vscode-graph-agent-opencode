@@ -17,6 +17,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/contrib/search/browser/searchView.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
+  'src/vs/workbench/services/textfile/common/textEditorService.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   ...searchEditorSourcePaths,
 ];
@@ -83,6 +84,11 @@ this.textModelService.createModelReference(this.resource).then(reference => {
   return this.cachedTextFileModelReference;
 }).finally(() => { this.pendingTextFileModelReference = undefined; }));
 const model = reference.object;`);
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/textfile/common/textEditorService.ts')) {
+      contents = replaceOnce(contents, 'const textResourceEditorInput = input as IUntypedFileEditorInput;',
+        'const textResourceEditorInput = normalizeReadonlyInput(input as IUntypedFileEditorInput);');
+      contents = `import { normalizeReadonlyInput } from ${JSON.stringify(join(root, 'src/readonlyDocuments.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/workbench/services/search/common/queryBuilder.ts')) {
       const commonQuery = 'private commonQuery(folderResources: (IWorkspaceFolderData | URI)[] = [], options: ICommonQueryBuilderOptions = {}): ICommonQueryProps<uri> {';
