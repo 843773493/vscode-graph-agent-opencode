@@ -523,6 +523,53 @@ def test_remote_gateway_runtime_retires_until_proxy_references_are_drained(
     assert events == ["terminate:old", "close:old"]
 
 
+def test_config_batch_cannot_take_over_manual_connection_or_its_projection(
+    tmp_path: Path, remote_registry_connection: RemoteGatewayConnection,
+) -> None:
+    connection = remote_registry_connection
+    target = WorkspaceTarget(
+        gateway_id=REMOTE_GATEWAY, workspace_id=REMOTE_WORKSPACE_ID, name="人工连接工作区",
+        root_path=None, backend_url="http://127.0.0.1:43100", connection_kind="remote_gateway",
+        owner="remote_projection", remote_gateway_connection_ids=(connection.connection_id,),
+        remote_service_names=("workspace_api",),
+    )
+    with GatewayStateStore(path=tmp_path / "gateway.sqlite") as state:
+        registry = GatewayWorkspaceRegistry(
+            gateway_id=LOCAL_GATEWAY, storage_path=tmp_path / "gateway.json", state_store=state,
+        )
+        try:
+            runtime = WorkspaceRuntime(service_urls={"workspace_api": target.backend_url})
+            registry.apply_remote_projection_snapshot(
+                connection=connection, runtime=runtime, projections=(target,), activate=True,
+            )
+            before = state.load_workspace_registry()
+            original_target = replace(registry.resolve(target.key))
+            revision = registry.registry_revision
+            with pytest.raises(ValueError, match="connection_id 与人工远程连接冲突"):
+                registry.apply_remote_projection_batch(
+                    connections=(replace(connection, source_owner="config"),),
+                    runtimes={connection.connection_id: WorkspaceRuntime(service_urls={"workspace_api": "http://127.0.0.1:43200"})},
+                    projections={connection.connection_id: (replace(target, backend_url="http://127.0.0.1:43200"),)},
+                )
+            assert state.load_workspace_registry() == before
+            assert registry.registry_revision == revision
+            assert registry.remote_gateway_connection(connection.connection_id) == connection
+            assert registry.resolve(target.key) == original_target
+            assert registry.active_workspace == target.key
+            assert registry._remote_gateway_runtimes[connection.connection_id] is runtime
+        finally:
+            registry.close()
+        reopened = GatewayWorkspaceRegistry(
+            gateway_id=LOCAL_GATEWAY, storage_path=tmp_path / "gateway.json", state_store=state,
+        )
+        try:
+            assert reopened.remote_gateway_connection(connection.connection_id) == connection
+            assert reopened.resolve(target.key) == original_target
+            assert reopened.active_workspace == target.key
+        finally:
+            reopened.close()
+
+
 def test_remote_projection_config_batch_is_atomic_and_respects_route_lease(
     tmp_path: Path,
 ) -> None:

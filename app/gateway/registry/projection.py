@@ -229,7 +229,6 @@ class RegistryProjectionMixin:
             connection_id: connection
             for connection_id, connection in previous_connections.items()
             if connection.source_owner == "manual"
-            and connection_id not in configured_connection_by_id
         }
         if set(manual_connections) & set(configured_connection_by_id):
             raise ValueError(
