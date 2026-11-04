@@ -111,3 +111,8 @@
 - 原路由 owner 在发布请求／流占用之前完成目标及唯一连接解析；同一来源有多连接时仍明确拒绝，不再遗留虚假占用阻塞用户解绑。普通和流两参数在修复前均复现泄漏，最终 registry 文件 8 passed／0.69 秒；保持相同 UUID 的本机租约、revision 与原资源归属。
 - 两个真实 Gateway＋两个真实 Backend 经产品注册同源第二连接，只保留一个工作区资源身份；歧义请求不进入下游，显式解绑第一连接后原 URI 恢复读取远端独有会话，request_id、目标／发送方及活动归属保持。最终 1 passed／62.05 秒，退出 0；仅 SSH 执行与隧道沿原测试明确替身，不代表真实 SSH、连接更新／离线、快照恢复或 4.4 全量验收。
 - 共享 skill-source fixture 迁为既有业务 UUID 和显式 Gateway 归属，移除已下线的 backend_workspace_id 参数，未绕过 managed_gateway 或认证。依赖它的 Agent/model_stream 文件错误双场景由 URI 切片重验 2 passed／88.31 秒。四个修改文件 Ruff 通过；Pyright 对完整 ce41fc18a 归档按文件／规则／完整消息及重数核对，240／243 项既有诊断，新增 0、消除 3，两个 Gateway 测试文件零诊断，不称全库类型全绿。准确命令、源码指纹、原始反例、实际退出码与比较见 `out/tests/temp/identity_convergence_20261104/artifacts/identity-route-admission-verification.json`；宽任务继续未勾选。
+
+### 2026-11-04：4.1／4.2／6.4 投影测试消费者迁齐
+
+- `test_projection_identity.py` 移除旧投影 ID 生成和双 UUID 断言，沿现有注册／配置／发现入口验证两个 Gateway 的同一 UUID 按复合 owner 隔离，以及同来源双连接合并为一个资源、歧义准入不泄漏占用和显式解绑。保留完整 SQLite 快照、活动归属、cursor 跳跃／回退、重复 owner 拒绝、stale CAS、租约／计数及冷恢复证明；HTTP／SSH 明确使用原单测替身。
+- 最终定向 4 passed／0.96 秒，Ruff、Pyright 和 diff 检查通过，旧字段类型诊断 7→0；准确命令、源码指纹、实际退出码和原失败保留于 `out/tests/temp/identity_projection_consumers_20261104/artifacts/` 的 `*-verified.*`。首轮新增断言误要求 CAS 前置拒绝写 journal、连接容器保持未约定迭代顺序，已按实际合同改为 journal 精确不变及 connection_id 全量值比较，原 SQLite payload 与连接成员顺序断言仍保留。生产指纹未变；另外三组旧消费者尚待迁齐，生产生成器未提前删除，不据此勾选宽任务或宣称真实网络验收完成。
