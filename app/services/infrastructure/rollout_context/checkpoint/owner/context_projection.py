@@ -18,7 +18,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
-from app.domain.itemized.plans.contributions import resolve_contribution_for_ref
+from app.domain.itemized.plans.contributions import ContextContribution, ContributionResolver
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
@@ -529,6 +529,7 @@ class ContextProjectionOwnerMixin:
         plan: ContextRequestPlan,
         ref: ContextRef,
         *,
+        contribution: ContextContribution | None,
         request_only_content: Mapping[str, object] | None = None,
     ) -> object:
         """编译与 detail binding 共用正向 draft 正文解析和 manifest 校验。"""
@@ -536,10 +537,6 @@ class ContextProjectionOwnerMixin:
             raise DetailUnavailableError(
                 f"detail-unavailable: request-only source unavailable: {ref.ref_id}"
             )
-        contribution = resolve_contribution_for_ref(
-            ref,
-            plan.contributions,
-        )
         content_key = (
             contribution.contribution_id if contribution is not None else ref.ref_id
         )
@@ -625,6 +622,7 @@ class ContextProjectionOwnerMixin:
             )
         prepared_details: list[PreparedDetail] = []
         pending: list[tuple[ContextRef, object]] = []
+        contribution_resolver = ContributionResolver(plan.contributions)
         for ref in plan.refs:
             if ref.ref_type != "request_only":
                 continue
@@ -638,6 +636,7 @@ class ContextProjectionOwnerMixin:
                 continue
             body = self._draft_request_body(
                 session_id, thread_id, checkpoint_ns, plan, ref,
+                contribution=contribution_resolver.resolve(ref),
                 request_only_content=request_only_content,
             )
             pending.append((ref, body))

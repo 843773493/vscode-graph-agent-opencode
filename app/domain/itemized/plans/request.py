@@ -24,7 +24,7 @@ from app.domain.itemized.identity.refs import (
 )
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    resolve_contribution_for_ref,
+    ContributionResolver,
     validate_included_overlay_chain,
 )
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -191,6 +191,7 @@ class ContextRequestPlan:
         ordered_selection(self.selection)
         if any(entry.assembly_id != self.assembly_id for entry in self.selection):
             raise ItemSchemaError("selection entry 必须绑定当前 plan assembly")
+        contribution_resolver = ContributionResolver(self.contributions if self.selection else ())
         for entry in self.selection:
             if not isinstance(entry, ContextSelectionEntry):
                 raise ItemSchemaError("ContextRequestPlan.selection 元素非法")
@@ -221,10 +222,7 @@ class ContextRequestPlan:
                 raise ItemSchemaError(
                     "plan-order-integrity: selection ContextRef manifest 不一致"
                 )
-            resolved_contribution = resolve_contribution_for_ref(
-                ref,
-                self.contributions,
-            ) if entry.included or entry.contribution_id in contribution_registry else None
+            resolved_contribution = contribution_resolver.resolve(ref) if entry.included or entry.contribution_id in contribution_registry else None
             if resolved_contribution is not None:
                 if entry.contribution_id != resolved_contribution.contribution_id:
                     if entry.included:
@@ -300,19 +298,14 @@ class ContextRequestPlan:
                     )
                 return self
             raise ItemSchemaError("ContextRequestPlan 只能从 unsealed seal 一次")
+        contribution_resolver = ContributionResolver(self.contributions if selection else ())
         for entry in selection:
             if not isinstance(entry.ref, ContextRef):
                 continue
             # omission 不解析 active source；只有已知的既有 binding 才校验 provenance。
-            if not entry.included and not any(
-                item.contribution_id == entry.contribution_id
-                for item in self.contributions
-            ):
+            if not entry.included and entry.contribution_id not in contribution_resolver:
                 continue
-            resolved_contribution = resolve_contribution_for_ref(
-                entry.ref,
-                self.contributions,
-            )
+            resolved_contribution = contribution_resolver.resolve(entry.ref)
             if resolved_contribution is None:
                 if entry.included and entry.contribution_id is not None:
                     raise ItemSchemaError(

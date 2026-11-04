@@ -122,11 +122,10 @@ def test_available_omitted_overlay_seals_without_resolving_contribution(
     def forbid_resolution(*args: object, **kwargs: object) -> None:
         pytest.fail("omitted entry 不得调用 active contribution resolver")
 
-    for module in ("plans.request", "assembly_snapshot"):
-        monkeypatch.setattr(
-            f"app.domain.itemized.{module}.resolve_contribution_for_ref",
-            forbid_resolution,
-        )
+    monkeypatch.setattr(
+        "app.domain.itemized.plans.contributions.ContributionResolver.resolve",
+        forbid_resolution,
+    )
     plan = ContextRequestPlan(
         session_id=omitted_snapshot.session_id,
         thread_id="thread-1",

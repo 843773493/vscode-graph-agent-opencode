@@ -26,7 +26,7 @@ from app.domain.itemized.identity.refs import (
 )
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    resolve_contribution_for_ref,
+    ContributionResolver,
 )
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -181,19 +181,13 @@ class ContextPlanComposer:
                 raise TypeError("source-mismatch: final detail 必须是 typed DetailRef")
             detail_ref.require_owner(session_id, thread_id, assembly_id)
 
-        def contribution_for_ref(
-            ref: ContextRef,
-        ) -> ContextContribution | None:
-            # 所有 request-only/overlay ref 统一走 domain binding resolver；
-            # 不允许 composer 与 detail binder 各自维护一套 alias 匹配规则。
-            return resolve_contribution_for_ref(ref, plan.contributions)
-
+        contribution_resolver = ContributionResolver(plan.contributions)
         selected_contribution_ids = {
             contribution.contribution_id
             for ref in registry_refs
             if ref.availability == "available"
             and selection_ref_identity(ref) not in omitted_identities
-            for contribution in (contribution_for_ref(ref),)
+            for contribution in (contribution_resolver.resolve(ref),)
             if contribution is not None
         }
         assembly_contributions = tuple(
@@ -225,7 +219,7 @@ class ContextPlanComposer:
             item.contribution_id: item for item in contributions
         }
         contribution_by_ref = {
-            selection_ref_identity(ref): contribution_for_ref(ref)
+            selection_ref_identity(ref): contribution_resolver.resolve(ref)
             for ref in registry_refs
         }
         selection_refs: list[ContextSelectionEntry] = []

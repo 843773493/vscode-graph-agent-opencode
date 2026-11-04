@@ -20,7 +20,7 @@ from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
     SourceBinding,
-    resolve_contribution_for_ref,
+    ContributionResolver,
 )
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
@@ -102,11 +102,33 @@ def test_contribution_alias_is_resolved_from_explicit_source_metadata(
         content_length=contribution.content_length,
         content_hash_value=contribution.content_hash,
     )
-    assert resolve_contribution_for_ref(ref, (contribution,)) == contribution
+    assert ContributionResolver((contribution,)).resolve(ref) == contribution
     with pytest.raises(ValueError, match="多个 contribution"):
-        resolve_contribution_for_ref(
-            ref, (contribution, replace(contribution, contribution_id="duplicate"))
-        )
+        ContributionResolver((contribution, replace(contribution, contribution_id="duplicate"))).resolve(ref)
+
+
+def test_direct_contribution_id_does_not_hide_conflicting_source_alias(prompt_contribution):
+    direct = prompt_contribution
+    aliased = replace(direct, contribution_id="other", source_binding=SourceBinding(source_ref="source:alias"))
+    ref = ContextRef.request_only_ref(
+        direct.contribution_id, session_id="session", thread_id="thread", plan_id="plan",
+        source_revision=direct.source_revision, source_ref="source:alias",
+        content_length=direct.content_length, content_hash_value=direct.content_hash,
+    )
+    with pytest.raises(ValueError, match="映射到多个 contribution"):
+        ContributionResolver((direct, aliased)).resolve(ref)
+
+
+@pytest.mark.parametrize("direct_id", [False, True])
+def test_ordinary_duplicate_id_keeps_last_matching_candidate(prompt_contribution, direct_id):
+    first = replace(prompt_contribution, source_binding=SourceBinding(source_ref="source:first"))
+    last = replace(first, source_binding=SourceBinding(source_ref="source:last"))
+    ref = ContextRef.request_only_ref(
+        first.contribution_id if direct_id else "alias-ref", session_id="session", thread_id="thread",
+        plan_id="plan", source_revision=first.source_revision, source_ref="source:first",
+        content_length=first.content_length, content_hash_value=first.content_hash,
+    )
+    assert ContributionResolver((first, last)).resolve(ref) is (last if direct_id else first)
 
 
 def test_plan_hash_uses_canonical_contribution_order_key(
@@ -186,11 +208,17 @@ def test_overlay_binding_requires_ref_role_and_epoch(
         overlay_to_revision="revision-after" if role == "delta" else None,
         overlay_diff_hash="sha256:jcs:v1:" + "a" * 64 if role == "delta" else None,
     )
-    assert resolve_contribution_for_ref(ref, (contribution,)) == contribution
+    assert ContributionResolver((contribution,)).resolve(ref) == contribution
     with pytest.raises(ValueError, match="缺少唯一 contribution"):
-        resolve_contribution_for_ref(
-            replace(ref, source_overlay_epoch=3), (contribution,)
-        )
+        ContributionResolver((contribution,)).resolve(replace(ref, source_overlay_epoch=3))
+    other_epoch = replace(contribution, source_binding=replace(contribution.source_binding, source_overlay_epoch=3))
+    assert ContributionResolver((other_epoch, contribution)).resolve(ref) is contribution
+    with pytest.raises(ValueError, match="映射到多个 contribution"):
+        ContributionResolver((contribution, contribution)).resolve(ref)
+    unavailable = replace(ref, availability="unavailable")
+    assert ContributionResolver((other_epoch,)).resolve(unavailable) is None
+    with pytest.raises(ValueError, match="缺少唯一 contribution"):
+        ContributionResolver((contribution,)).resolve(replace(ref, source_ref="source:other"))
 
 
 @pytest.mark.parametrize(

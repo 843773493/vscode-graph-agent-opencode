@@ -24,7 +24,7 @@ from app.domain.itemized.identity.refs import (
 )
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
-    resolve_contribution_for_ref,
+    ContributionResolver,
     validate_included_overlay_chain,
 )
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -238,6 +238,7 @@ class ContextAssemblySnapshot:
             raise ItemSchemaError("assembly refs 存在重复 identity")
         if len(tool_registry) != len(self.tool_set_refs):
             raise ItemSchemaError("assembly ToolSetRef 存在重复 identity")
+        contribution_resolver = ContributionResolver(self.contributions if self.selection else ())
         for entry in self.selection:
             if isinstance(entry.ref, ToolSetIdentityRef):
                 if (
@@ -258,10 +259,7 @@ class ContextAssemblySnapshot:
                 continue
             if ref_registry.get(selection_ref_identity(entry.ref)) != entry.ref:
                 raise ItemSchemaError("selection ContextRef manifest 不一致")
-            resolved_contribution = resolve_contribution_for_ref(
-                entry.ref,
-                self.contributions,
-            ) if entry.included or entry.contribution_id in contribution_registry else None
+            resolved_contribution = contribution_resolver.resolve(entry.ref) if entry.included or entry.contribution_id in contribution_registry else None
             if resolved_contribution is not None:
                 if entry.contribution_id != resolved_contribution.contribution_id:
                     if entry.included:

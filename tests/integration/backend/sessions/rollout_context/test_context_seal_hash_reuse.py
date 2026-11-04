@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.plans.contributions import ContextContribution
+from app.domain.itemized.plans import contributions as contribution_domain
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly import (
     manifest as assembly_manifest,
@@ -49,6 +51,59 @@ from tests.integration.backend.sessions.rollout_context.test_context_production_
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+
+
+@pytest.mark.parametrize("source_count", [1, 8])
+def test_prepare_matches_plan_contributions_with_linear_identity_work(
+    production_context, monkeypatch, request, source_count,
+):
+    saver, session, thread, _connection, manager, prepare = production_context
+    for index in range(1, source_count):
+        source_id = f"instruction:binding-{index}"
+        manager.register(ContextSourceDescriptor(
+            source_id=source_id, source_kind="agent_instructions", name=source_id,
+            description="贡献匹配装具", internal_locator=f"runtime:binding-{index}", root_placement="root_eligible",
+        ), tracking_status="tracked")
+        manager.observe(source_id, f"冻结来源 {index}", revision="binding:1")
+    post_init = ContextRequestPlan.__post_init__
+    attribute = ContextContribution.__getattribute__
+    calls, active = [], []
+
+    def observe_plan(plan):
+        call = {"sources": len(plan.contributions), "selections": len(plan.selection), "identity_reads": 0}
+        calls.append(call)
+        active.append(call)
+        try:
+            return post_init(plan)
+        finally:
+            active.pop()
+
+    def observe_attribute(contribution, name):
+        if name == "contribution_id" and active:
+            caller = sys._getframe(1).f_code
+            if caller.co_filename == contribution_domain.__file__ and caller.co_name in {
+                "resolve_contribution_for_ref", "__init__", "resolve", "<dictcomp>",
+            }:
+                active[-1]["identity_reads"] += 1
+        return attribute(contribution, name)
+
+    monkeypatch.setattr(ContextRequestPlan, "__post_init__", observe_plan)
+    monkeypatch.setattr(ContextContribution, "__getattribute__", observe_attribute)
+    first = prepare("binding-linear-first")["snapshot"]
+    second = prepare("binding-linear-second")["snapshot"]
+    assert len(first.contributions) == len(second.contributions) == source_count
+    for snapshot in (first, second):
+        assert canonical_json_bytes(saver.get_context_assembly(
+            session, thread, assembly_id=snapshot.assembly_id,
+        ).to_dict()) == canonical_json_bytes(snapshot.to_dict())
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"contribution-binding-{source_count}.json").write_text(
+        json.dumps(calls, indent=2), encoding="utf-8",
+    )
+    print(f"plan contribution binding work ({source_count} sources): {calls}")
+    assert any(call["sources"] == source_count and call["selections"] for call in calls)
+    # 只观察真实领域校验；每批来源建一次索引，不为每个 selection 再扫全部贡献。
+    assert all(call["identity_reads"] <= 2 * call["sources"] for call in calls)
 
 
 @pytest.mark.parametrize("source_count", [1, 8])

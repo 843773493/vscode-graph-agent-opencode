@@ -18,7 +18,7 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.plans.contributions import resolve_contribution_for_ref
+from app.domain.itemized.plans.contributions import ContributionResolver
 from app.domain.itemized.plans.request import ContextRequestPlan
 
 
@@ -102,13 +102,14 @@ def _validate_contribution_bindings(
 ) -> None:
     """omitted 可保留已存在的映射，但不能借跳过正文校验补造贡献身份。"""
     sources = {selection_ref_identity(ref): ref for ref in draft.refs}
+    contribution_resolver = ContributionResolver(draft.contributions)
     for entry in snapshot.selection:
         if entry.contribution_id is None:
             continue
         source = sources.get(selection_ref_identity(entry.ref))
         if source is None or source.ref_type != "request_only":
             raise ValueError("plan-order-integrity: contribution binding 缺少 request-only source")
-        contribution = resolve_contribution_for_ref(source, draft.contributions)
+        contribution = contribution_resolver.resolve(source)
         if contribution is None or contribution.contribution_id != entry.contribution_id:
             raise ValueError("plan-order-integrity: contribution binding 与 plan registry 不一致")
         for field in ("source_revision", "content_length", "content_hash"):

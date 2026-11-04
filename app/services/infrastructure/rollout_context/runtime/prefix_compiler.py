@@ -41,7 +41,7 @@ from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
     SourceBinding,
-    resolve_contribution_for_ref,
+    ContributionResolver,
 )
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
@@ -117,6 +117,7 @@ def compile_prefix_context(
 ) -> tuple[ContextRequestPlan, ContextSealPreparation]:
     """同 epoch 精确继承已封存 prefix，只在真实边界重编 root。"""
     tool_ref = plan.tool_set_refs[0]
+    contribution_resolver = ContributionResolver(plan.contributions)
     compatibility_key = tool_set.compatibility_key(tool_ref)
     previous_binding = previous.seal_binding if previous is not None else None
     provider_reprojection = False
@@ -168,10 +169,11 @@ def compile_prefix_context(
             prior_roots = {(source.source_identity, source.revision) for source in (
                 () if previous_binding.root is None else previous_binding.root.sources
             ) if source.included_reason != "toolset_policy"}
+            previous_contributions = ContributionResolver(previous.contributions)
             retained_source_refs |= frozenset(
                 (entry.ref.ref_id, source.source_revision)
                 for entry in previous.selection if entry.included
-                and (source := resolve_contribution_for_ref(entry.ref, previous.contributions)) is not None
+                and (source := previous_contributions.resolve(entry.ref)) is not None
                 and source.source_binding is not None and source.root_placement == "root_eligible"
                 and (source.source_binding.source_ref, source.source_revision) in prior_roots
             )
@@ -204,8 +206,9 @@ def compile_prefix_context(
                 (source.source_identity, source.revision): source
                 for source in (() if retained_binding.root is None else retained_binding.root.sources)
             }
+            retained_contributions = ContributionResolver(retained_source_assembly.contributions)
             for entry in retained_source_assembly.selection:
-                source = resolve_contribution_for_ref(entry.ref, retained_source_assembly.contributions)
+                source = retained_contributions.resolve(entry.ref)
                 if (not entry.included or source is None or source.source_binding is None
                         or source.contribution_kind != "prompt" or source.root_placement != "root_eligible"
                         or (entry.ref.ref_id, source.source_revision) not in retained_source_refs):
@@ -349,7 +352,7 @@ def compile_prefix_context(
                     continue
                 if ref_identity not in by_identity:
                     raise RuntimeError("checkpoint-context-state-conflict: retained source ref 已丢失")
-                source = resolve_contribution_for_ref(by_identity[ref_identity], plan.contributions)
+                source = contribution_resolver.resolve(by_identity[ref_identity])
                 revision_identity = (ref.source_identity, ref.source_revision)
                 if source is not None and source.contribution_kind == "prompt" and revision_identity in current_tail:
                     retained_body = blocks[index].body if blocks else frame.content
@@ -408,7 +411,7 @@ def compile_prefix_context(
         selected_identities.append(identity)
         if ref.availability != "available":
             continue
-        contribution = resolve_contribution_for_ref(ref, plan.contributions)
+        contribution = contribution_resolver.resolve(ref)
         if (contribution is None or contribution.source_binding is None
                 or contribution.source_binding.source_ref is None or contribution.source_binding.overlay_id is None):
             raise ValueError("source-mismatch: active overlay 缺少唯一 source binding")
@@ -455,7 +458,7 @@ def compile_prefix_context(
     selected_contribution_ids = {
         contribution.contribution_id
         for ref in selected_refs
-        if (contribution := resolve_contribution_for_ref(ref, plan.contributions)) is not None
+        if (contribution := contribution_resolver.resolve(ref)) is not None
     }
     selected_plan = replace(
         plan, refs=selected_refs,

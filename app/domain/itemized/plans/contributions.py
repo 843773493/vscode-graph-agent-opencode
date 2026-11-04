@@ -300,81 +300,67 @@ def parse_contribution_binding_manifest(value: object) -> dict[str, object]:
     return {"root_placement": value["root_placement"], "source_binding": binding.to_dict() if binding is not None else None, "extensions": dict(value["extensions"])}
 
 
-def resolve_contribution_for_ref(
-    ref: ContextRef,
-    contributions: Sequence[ContextContribution],
-) -> ContextContribution | None:
-    """解析一个 request-only ref 的唯一 contribution binding。
+class ContributionResolver:
+    """同一批贡献的唯一 binding 解析器；索引只在本次计算中使用，不跨快照缓存。"""
 
-    普通 request-only ref 以显式 ``contribution_id == ref_id`` 为首选，
-    ``source_ref`` 只用于有明确 provenance 的 source alias。overlay 则必须
-    同时匹配 role、source ref 和 source overlay epoch；不能把不同 epoch 的
-    历史 contribution 通过一个源 item id 合并。任何多重或缺失的 active
-    binding 都在这里 fail-closed，调用方不应自行实现第二套匹配规则。
-    """
-    if ref.ref_type != "request_only":
-        return None
-
-    if ref.base_delta_role in {BaseDeltaRole.BASE.value, BaseDeltaRole.DELTA.value}:
-        role = ref.base_delta_role
-        expected_contribution_kind = f"overlay_{role}"
-        matched_contribution = None
-        multiple_matches = False
+    def __init__(self, contributions: Sequence[ContextContribution]) -> None:
+        self._by_id: dict[str, ContextContribution] = {}
+        self._by_source: dict[str, dict[str, ContextContribution]] = {}
+        self._overlays: dict[tuple[str, str | None, str | None, str, int | None], list[ContextContribution]] = {}
+        # 一次登记所有候选；普通 alias 按 contribution_id 去重，overlay 保留重复
+        # 候选以拒绝歧义。不能用“先命中 ID 就返回”掩盖另一个 alias 候选。
         for contribution in contributions:
-            if contribution.contribution_kind != expected_contribution_kind:
-                continue
+            identity = contribution.contribution_id
+            self._by_id[identity] = contribution
             binding = contribution.source_binding
-            if (
-                binding is None
-                or binding.overlay_ref != ref.ref_id
-                or binding.source_ref != ref.source_ref
-                or binding.overlay_role != role
-                or binding.source_overlay_epoch != ref.source_overlay_epoch
-            ):
+            if binding is None:
                 continue
-            if matched_contribution is None:
-                matched_contribution = contribution
-            else:
-                multiple_matches = True
-        if multiple_matches:
-            raise ValueError(
-                "plan-order-integrity: ref 映射到多个 contribution: "
-                f"{ref.ref_id}"
-            )
-        if matched_contribution is None:
+            if binding.source_ref is not None:
+                self._by_source.setdefault(binding.source_ref, {})[identity] = contribution
+            if contribution.contribution_kind in {"overlay_base", "overlay_delta"}:
+                key = (contribution.contribution_kind, binding.overlay_ref, binding.source_ref,
+                       binding.overlay_role, binding.source_overlay_epoch)
+                self._overlays.setdefault(key, []).append(contribution)
+
+    def __contains__(self, contribution_id: str | None) -> bool:
+        return contribution_id in self._by_id
+
+    def resolve(self, ref: ContextRef) -> ContextContribution | None:
+        """只按显式 ID/alias 或 overlay 完整身份匹配，保留原缺失和歧义错误。"""
+        if ref.ref_type != "request_only":
+            return None
+        if ref.base_delta_role in {BaseDeltaRole.BASE.value, BaseDeltaRole.DELTA.value}:
+            matches = self._overlays.get((
+                f"overlay_{ref.base_delta_role}", ref.ref_id, ref.source_ref,
+                ref.base_delta_role, ref.source_overlay_epoch,
+            ), ())
+            if len(matches) > 1:
+                raise ValueError(
+                    "plan-order-integrity: ref 映射到多个 contribution: "
+                    f"{ref.ref_id}"
+                )
+            if matches:
+                return matches[0]
             if ref.availability == "available":
                 raise ValueError(
                     "plan-order-integrity: overlay ref 缺少唯一 contribution: "
                     f"{ref.ref_id}"
                 )
             return None
-        return matched_contribution
-
-    candidates_by_id = {
-        contribution.contribution_id: contribution
-        for contribution in contributions
-        if contribution.contribution_id == ref.ref_id
-        or (
-            ref.source_ref is not None
-            and contribution.source_binding is not None
-            and contribution.source_binding.source_ref == ref.source_ref
-        )
-    }
-    if len(candidates_by_id) > 1:
-        raise ValueError(
-            "plan-order-integrity: ref 映射到多个 contribution: "
-            f"{ref.ref_id}"
-        )
-    contribution = next(iter(candidates_by_id.values()), None)
-    if contribution is not None and contribution.contribution_kind in {
-        "overlay_base",
-        "overlay_delta",
-    }:
-        raise ValueError(
-            "plan-order-integrity: overlay contribution 必须绑定 overlay selection: "
-            f"{ref.ref_id}"
-        )
-    return contribution
+        aliases = self._by_source.get(ref.source_ref, {}) if ref.source_ref is not None else {}
+        direct = self._by_id.get(ref.ref_id)
+        if len(aliases) > 1 or (direct is not None and aliases and ref.ref_id not in aliases):
+            raise ValueError(
+                "plan-order-integrity: ref 映射到多个 contribution: "
+                f"{ref.ref_id}"
+            )
+        contribution = direct if direct is not None else next(iter(aliases.values()), None)
+        if contribution is not None and contribution.contribution_kind in {"overlay_base", "overlay_delta"}:
+            raise ValueError(
+                "plan-order-integrity: overlay contribution 必须绑定 overlay selection: "
+                f"{ref.ref_id}"
+            )
+        return contribution
 
 
 def validate_included_overlay_chain(

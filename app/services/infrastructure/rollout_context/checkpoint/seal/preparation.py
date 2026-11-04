@@ -31,7 +31,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
-from app.domain.itemized.plans.contributions import resolve_contribution_for_ref
+from app.domain.itemized.plans.contributions import ContributionResolver
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.business.resource_derivations.team import (
@@ -425,13 +425,15 @@ def prepare_registered_context(
                 )
                 validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
             overlay_bodies = {}
+            contribution_resolver = ContributionResolver(full_plan.contributions)
             for ref in full_plan.refs:
                 if ref.base_delta_role not in {"base", "delta"} or ref.availability != "available":
                     continue
+                contribution = contribution_resolver.resolve(ref)
                 body = owner._draft_request_body(
                     session_id, thread_id, checkpoint_ns, full_plan, ref,
+                    contribution=contribution,
                 )
-                contribution = resolve_contribution_for_ref(ref, full_plan.contributions)
                 overlay_bodies[ref.ref_id] = body
                 bodies[contribution.contribution_id] = body
             previous_bodies = {} if previous is None else owner._request_content_for_plan(

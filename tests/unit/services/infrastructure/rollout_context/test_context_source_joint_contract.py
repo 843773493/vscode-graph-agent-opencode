@@ -44,7 +44,7 @@ from app.domain.itemized.identity.item_projection import (
 from app.domain.itemized.plans.contributions import (
     ContextContribution,
     SourceBinding,
-    resolve_contribution_for_ref,
+    ContributionResolver,
     validate_included_overlay_chain,
 )
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -511,7 +511,7 @@ class TestMissingTypedFieldsFailClosed:
             source_ref="alias",
         )
         with pytest.raises(ValueError, match="映射到多个 contribution"):
-            resolve_contribution_for_ref(ref, (first, second))
+            ContributionResolver((first, second)).resolve(ref)
 
         overlay = _contribution(
             "overlay:ov:base",
