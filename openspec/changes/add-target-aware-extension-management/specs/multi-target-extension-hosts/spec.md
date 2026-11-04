@@ -1,0 +1,115 @@
+## Purpose
+
+定义 Web 与 Electron 共用工作台中的原版扩展安装、Web 宿主与多后端目标 Node 宿主，以及贡献和 API 的精确路由，使同屏多个 Gateway 工作区可以使用各自扩展，且不把浏览器或 Electron main 变成远端插件执行环境。
+
+## ADDED Requirements
+
+### Requirement: 扩展安装必须使用原版入口及明确兼容能力
+
+系统 SHALL 复用原扩展视图、详情、搜索与 VSIX 安装交互，支持经验证的可配置目录和明确本地 VSIX 来源。安装前 SHALL 按 manifest 的 extensionKind、browser／main、engines、信任条件、版本、目标平台、依赖及实际宿主能力判断可用性；目录未配置／失败及能力不支持须可辨认，MUST NOT 承诺任意市场或扩展均兼容。安装、激活和实际功能可用 SHALL 分别报告；要求本机 UI Node 语义但当前运行面不具备时，不得冒充 workspace 扩展放到任意远端。
+
+#### Scenario: 扩展需要目标不具备的 Node 或原生能力
+- **WHEN** 用户在纯 Web 宿主选择仅有 Node 入口的 VSIX，且没有可用目标宿主
+- **THEN** 明确说明所需能力和可选择的合法目标，不安装后伪报已可运行，也不在 Electron main 自动执行
+
+### Requirement: Web 与目标侧 Node 宿主必须分别归属
+
+browser 扩展 SHALL 在 Workbench 原 Web 宿主执行，需要 Node 的扩展 SHALL 在明确本地／远端后端目标侧宿主执行；Node 宿主不得由 Gateway 请求进程、Python Agent 或 Electron main 执行。Web 与 Electron SHALL 共用 renderer 贡献及目标协议；桌面仅承担已约定的窗口、生命周期及 profile。
+
+#### Scenario: 浏览器与 Electron 连接同一远端目标
+- **WHEN** 两种客户端分别激活 B 上的 Node 扩展
+- **THEN** 代码在 B 的目标侧执行，两者各有自己的客户端运行视图；客户端机器、Gateway 请求进程及 Electron main 没有另起该扩展的本地副本
+
+### Requirement: 多目标宿主必须保持明确工作区视图和代际
+
+一个 Node 宿主 SHALL 绑定一个客户端会话、一个稳定原生目标及明确挂接的同目标工作区集合，集合可使用原 multi-root 语义。其它目标的 workspace MUST NOT 隐式进入该宿主视图。全局活动工作区或单一 remoteAuthority 的切换不能替代多目标身份。工作区集合变化及宿主重启 SHALL 通过明确生命周期和 generation 更新，旧 generation 不得接受新调用或发布迟到结果。
+
+#### Scenario: 同屏 A 与 B 的同名工作区
+- **WHEN** 一个窗口同时打开 A1、A2、B1，而 A 宿主只挂接 A1/A2
+- **THEN** A 扩展看到的 workspace view 只有 A1/A2，B 扩展仅见其挂接集合，切换编辑器焦点不会修改任一宿主身份或泄露另一目标文件
+
+### Requirement: 内部扩展身份必须支持同一公开 ID 的多目标实例
+
+系统 SHALL 在原扩展服务内以公开 extension ID 与稳定安装目标区别内部实例，运行身份进一步带 view／generation，并迁齐 description registry、enablement、activation、running location、依赖和卸载消费者。公开 manifest／API ID MUST 保持不变；仅增加 Remote kind 字段、忽略重复 ID 或借另一目标同名依赖均不满足此要求。不同目标的版本可分别运行；窗口级声明冲突 SHALL 在启用前按原贡献语义诊断并要求选择可共存版本或不同窗口，不能静默覆盖。
+
+extensions.all／getExtension／exports SHALL 解析该 host 的合法实例集，不能按公开 ID 返回其它目标运行对象。
+
+#### Scenario: 同扩展不同版本跨目标独立激活
+- **WHEN** A/B 的同 ID 扩展使用不同版本但具有可共存声明，各自依赖同目标组件，随后 A 更新或停用
+- **THEN** 两实例曾真实独立激活，A 操作只撤销 A 的实例与依赖引用，B 的版本、贡献和运行保持不变
+
+### Requirement: Node 宿主文档与编辑器同步必须按视图投影
+
+初始模型、dirty buffer、textDocuments、visibleTextEditors、activeTextEditor、文档／编辑器／诊断／watcher 事件 SHALL 按 Node host 明确 workspace view 及资源归属发送，不能广播全窗口模型。焦点在其它 view 时该 host 的 active editor SHALL 为 undefined；版本、取消及 generation 须贯穿请求和结果。跨资源 WorkspaceEdit SHALL 在副作用前核验全部资源归属、映射与版本，拒绝错误目标，不声称新跨目标原子事务。此 API 视图约束不等于 Node 进程的文件系统沙箱。
+
+#### Scenario: A 与 B 的未保存文档同时打开
+- **WHEN** A/B 文件均有不同 dirty 内容，两个扩展枚举文档／可见编辑器并监听变化，用户在二者间切焦点
+- **THEN** 每 host 只得到自己 view 的模型、内容和事件，非所属 view 焦点表现为无 active editor；错误目标编辑在产生副作用前被拒绝，迟到旧代际结果不发布
+
+### Requirement: 扩展启用范围与版本激活必须区别于安装位置
+
+VSIX 安装位置 SHALL 与原 profile／workspace view 的启用状态分别表达；同一 multi-root view 不得伪报每文件夹独立运行隔离，需要不同启用集的业务工作区须使用不同明确宿主视图。版本更新、停用与卸载 SHALL 沿原宿主 reload／重启及引用规则，保留未结算旧进程／操作所需制品；安装新版本不得伪报运行实例已切换，操作失败不得改变其它目标的配置或版本。
+
+#### Scenario: 共享安装但使用不同扩展启用集
+- **WHEN** A1/A2 共享已安装版本但要求不同启用状态，且 A1 的旧宿主仍运行时安装新版
+- **THEN** 用独立明确视图表达不同启用集，显示新版安装与 A1 待 reload 的区别，A2/B 的状态不被隐式修改；有引用旧制品不被删除
+
+### Requirement: 同一扩展贡献必须按发起目标分派
+
+扩展 SHALL 继续使用原 manifest、命令 ID、菜单／快捷键及 activation 合同，内部注册须保留真实宿主及目标来源。同一扩展在多个目标注册同一命令时 SHALL 根据发起编辑器目标分派；全局入口存在多个合法目标时明确选择并冻结。资源 Provider SHALL 按资源稳定归属路由，不按最后注册覆盖或显示名匹配。
+
+每个 UI command ID SHALL 由单个窗口分派入口持有按来源登记的合法实例；扩展内调用优先继承原 host／view，activation 不向所有目标广播同名事件。TreeView／WebviewView resolver、setContext 与菜单状态 SHALL 保留 host／view 归属及明确展示绑定；dispose 按来源和 generation 撤销，只有最后来源消失才移除共享入口。静态贡献只登记一次，不重复注册互相覆盖。
+
+#### Scenario: 同一命令 ID 在 A 与 B 同时注册
+- **WHEN** A/B 安装相同扩展，用户从 B1 编辑器执行命令后立即切到 A1
+- **THEN** 只调用 B 宿主并读取 B1 资源，不因切焦点、注册顺序或同名文件改投 A；无发起目标的同一命令先选择目标
+
+#### Scenario: 扩展内调用与其它目标撤销贡献
+- **WHEN** 窗口焦点在 A，B 扩展调用同 ID 命令并提供同 ID TreeView／WebviewView，随后 A reload 并撤销其贡献
+- **THEN** 命令只进入 B，视图与上下文按明确目标绑定；撤销 A 不删除 B handler、resolver 或状态，B 的菜单不被 A 的 setContext 覆盖
+
+### Requirement: 扩展 API 必须使用实际目标服务并公布能力边界
+
+系统 SHALL 为文档／语言、文件与 watcher、工作区与配置、终端／任务／调试、Webview／端口、依赖及存储公布实际支持能力。支持的 API SHALL 保留原扩展 API 语义并访问真实目标；缺少能力须明确拒绝，MUST NOT 使用空成功、本地 IndexedDB 同名文件、浏览器 localhost 或其它宿主替代。权限与能力读取不得触发 Agent 或隐式连接其它目标。
+
+目标 Node 扩展取得的文件 URI／fsPath SHALL 可供该目标原生文件访问，跨宿主传递须沿唯一映射恢复原工作台稳定资源身份；不得向 Node 暴露只在浏览器 VFS 有意义的假路径或全局替换任意字符串。
+
+嵌套根 SHALL 沿原 folder 最长匹配规则；同一本机路径对应多个业务身份时须由已有请求／文档上下文消歧，无唯一结果则明确拒绝，不能任选根或另建路径注册表。
+
+#### Scenario: 远端扩展打开终端并读取配置
+- **WHEN** B 扩展通过受支持 API 打开终端、读取 B1 配置及文件，随后请求一个未支持的调试能力
+- **THEN** 前三者由 B 的真实服务处理，未支持能力明确失败；没有在 A、浏览器或 Electron main 创建替代终端或读取同名资源
+
+#### Scenario: Node 扩展原生路径与编辑器资源往返
+- **WHEN** B 的真实扩展分别使用 Node 文件 API 与扩展文件 API 读取 workspace 文件，再返回该文档位置
+- **THEN** 两次均读取 B 的真实内容，位置映射回 B 的同一编辑器身份；A 同名路径及浏览器内部虚拟根不被读取
+
+### Requirement: 宿主恢复与持久存储必须保持目标隔离
+
+宿主 SHALL 惰性创建并按有界客户端租约回收；断开、崩溃、后端重启及权限失效须停止新准入、撤销旧代际贡献并报告实际原因，不自动重放未知副作用。安装记录及持久状态不随宿主关闭删除。扩展全局状态 SHALL 按 profile／原生目标／扩展隔离，工作区状态进一步按稳定工作区视图区分，不以临时客户端 ID／endpoint 作为持久身份；凭据留实际消费侧。
+
+MainThreadStorage／ExtensionStorageService 等原存储 owner SHALL 迁齐上述身份、持久写入及变更通知，不能只改调用方 key。Node 的 globalStorageUri／storageUri／logUri／extensionUri SHALL 对应目标本机有效资源，包目录与可写状态分开；同身份客户端并发沿原存储写入／通知语义，不伪报逐字段事务合并或共享瞬时回调。
+
+#### Scenario: 两个客户端使用同一安装后分别关闭
+- **WHEN** 两个客户端在 B 激活同一版本扩展，关闭其中一个并重启另一个
+- **THEN** 关闭者的回调／工作区视图按租约回收，不撤销另一客户端贡献；稳定持久状态可恢复，A 的状态和秘密不被读取
+
+#### Scenario: 存储路径与同身份客户端同步
+- **WHEN** 同 profile 的 A/B 扩展写各自 globalState 和真实 storageUri，B 的另一客户端读取并重启
+- **THEN** 目标文件真实可写，A/B 不串值；B 的已确认持久结果按原通知和恢复语义可见，临时 host ID 变化不丢失状态
+
+### Requirement: 扩展管理必须通过原生目标管理权限
+
+远端安装、更新、卸载与 Node host 管理 SHALL 由原生目标校验相应能力，使用稳定登记和真实路由。失效目标、route 被其它目标复用、权限撤销与 API 版本不兼容须明确拒绝，不落到当前活动目标。实际安装／版本及引用 SHALL 由目标安装服务持有，Relay 与前端不得形成第二事实源。
+
+#### Scenario: 宿主地址被复用
+- **WHEN** 已安装目标 B 的旧连接地址被另一个目标接管，用户从历史入口激活 B 扩展
+- **THEN** 按稳定身份重新核验并拒绝不匹配连接，不向新目标发送扩展代码、凭据或命令
+
+### Requirement: 发行产物必须独立提供工作台资源与可验证宿主链
+
+Web 与 Electron 发行产物 SHALL 包含其所需静态资源与扩展资源定位，不依赖开发服务器或源码目录。目标侧 Node 宿主 SHALL 使用与固定上游及平台匹配的实际 runtime／组件，不借 Electron 内置 Node 假充远端能力。真实扩展激活及文件／命令操作、重启状态恢复必须分别通过产品入口验证，进程启动不能作为功能完成证明。
+
+#### Scenario: 打包 Electron 在源码目录外启动
+- **WHEN** 关闭开发服务器，将桌面产物移到独立目录后连接 B 并激活测试扩展
+- **THEN** 原界面资源、Web 扩展及目标 Node 操作均按真实支持能力工作；重启恢复稳定配置及状态，没有读取源码路径或启用额外原生 IPC
