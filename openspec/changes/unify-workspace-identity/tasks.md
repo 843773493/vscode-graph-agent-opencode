@@ -56,3 +56,9 @@
 - 在原 SQLite 只读事务内读取 `user_view_state` 的完整原主键，与 registry 共用同一快照；仅按登记旧 key 精确关联，保留用户、Session 及所有视图业务字段。不能根据 Backend UUID、显示名或当前活动项猜测归属；未登记引用和缺少 registry 的孤立行明确阻塞。
 - 原用户／视图 owner 生成多用户、多 Session、同 UUID 不同 Gateway 及多连接输入，核对原主键、全库逻辑不变与并发发布时的快照一致性。定向 97 passed；Ruff、项目解释器 Pyright、编译均退出 0，源码指纹与准确命令、原始日志、实际退出码位于 `out/tests/temp/identity_view_preflight_sol_20261104/artifacts/verification.json`，集成时指纹一致。
 - 本切片未实现 apply、引用写迁移、远端身份核验、旧 Generator、客户端恢复材料或可恢复原子发布，不提升 schema；6.1 保持未勾选。
+
+### 2026-11-04：1.3 本地 UUID／根冲突拒绝切片
+
+- 原 registry 准入、冷恢复和代次校验共用本机 UUID／物理根约束；同原生 Gateway 已登记 UUID 的不同根在发布前明确拒绝，保留原登记、活动项、代次及身份文件。远端投影不套用本机根约束，原受控 target 更新仍沿原 owner 流程。
+- 真实 Gateway 的 managed／external 注册均拒绝复制身份形成的根冲突，原工作区继续健康；连同已有身份损坏恢复共 3 passed／99.70s。定向 registry／managed 73 passed；扩大相关组 277 passed／13 failed，失败均为两个辅助用例不同根共用假 UUID，修正 fixture 后分别 12 passed 和 1 passed，未放宽错误归属、顺序或状态断言。
+- 静态对照完整原基线无新增诊断：生产切片存量 Pyright 42／Ruff 27，相关测试存量 Pyright 16。精确命令、实际退出码、失败归因与最终指纹见 `out/tests/temp/identity_root_binding_20261104/artifacts/verification.json`；尚未验证 symlink alias、受控换根及 generation 冲突实际触发。本切片仍使用待迁齐的原路由别名，1.3 保持未勾选，不代表完整身份统一。

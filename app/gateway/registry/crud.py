@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from app.core.failures import failure_detail
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
-from .core import _UNSET, WorkspaceTarget
+from .core import _UNSET, WorkspaceIdentityConflictError, WorkspaceTarget
 
 
 class RegistryCrudMixin:
@@ -97,8 +98,7 @@ class RegistryCrudMixin:
         self._save(owner=mutation_owner or target.owner)
         return target
 
-    @staticmethod
-    def _validate_target_identity(target: WorkspaceTarget) -> None:
+    def _validate_target_identity(self, target: WorkspaceTarget) -> None:
         if target.connection_kind == "local":
             if not isinstance(target.root_path, str) or not target.root_path or not Path(target.root_path).is_absolute():
                 raise ValueError(f"本地 target 缺少绝对 root binding: {target.workspace_id}")
@@ -125,6 +125,16 @@ class RegistryCrudMixin:
                 raise ValueError(
                     f"Gateway registry backend_workspace_id 非法: {error}"
                 ) from error
+            if target.connection_kind == "local":
+                for registered in self._targets.values():
+                    if (registered.workspace_id != target.workspace_id
+                        and registered.connection_kind == "local"
+                        and registered.backend_workspace_id == target.backend_workspace_id
+                        and Path(registered.root_path).resolve() != Path(cast(str, target.root_path)).resolve()):
+                        raise WorkspaceIdentityConflictError(
+                            f"工作区 UUID 已绑定另一物理根: workspace_id={target.backend_workspace_id}, "
+                            f"registered={registered.workspace_id}, root={registered.root_path}, requested={target.root_path}"
+                        )
         if (
             target.connection_kind == "remote_gateway"
             and target.backend_workspace_id is None

@@ -20,6 +20,12 @@ if TYPE_CHECKING:
 _REGISTRY_SCHEMA_VERSION = 13
 _UNSET = object()
 RegistryTargetOwner = Literal["config", "manual", "system", "remote_projection"]
+
+
+class WorkspaceIdentityConflictError(ValueError):
+    """同一原生 Gateway 的工作区 UUID 不能绑定到不同物理根。"""
+
+
 @dataclass(slots=True)
 class WorkspaceTarget:
     workspace_id: str

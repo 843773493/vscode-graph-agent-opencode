@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+from collections.abc import Iterator
 from contextlib import ExitStack, closing
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -25,25 +28,110 @@ from tests.support.processes.workspace import (
 )
 
 
+@pytest.fixture
+def identity_service_ports(request: pytest.FixtureRequest) -> Iterator[tuple[int, int]]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    ports = integration_port_block_for_file(Path(request.node.path))
+    with ExitStack() as leases:
+        backend_lease, backend_probes = E2EProcessLease.acquire_available(
+            context.runtime_root_for_node(request.node.nodeid) / "backend-port.json", range(ports.start, ports.port(50)),
+        )
+        leases.callback(backend_lease.release)
+        gateway_lease, gateway_probes = E2EProcessLease.acquire_available(
+            context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", range(ports.port(50), ports.end + 1),
+        )
+        leases.callback(gateway_lease.release)
+        (context.artifacts_dir / "port-allocation.json").write_text(json.dumps({
+            "backend": backend_probes, "gateway": gateway_probes,
+        }) + "\n")
+        yield backend_lease.ports[0], gateway_lease.ports[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("external", [False, True], ids=["managed", "external"])
+async def test_duplicate_native_uuid_registration_keeps_original_binding(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str, external: bool,
+    identity_service_ports: tuple[int, int],
+) -> None:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    primary = Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=primary)
+    backend_port, gateway_port = identity_service_ports
+    with ExitStack() as processes:
+        backend = start_backend_process(workspace_root=str(primary), port=backend_port, log_name="identity-original")
+        processes.callback(close_backend_process, backend)
+        gateway = start_gateway_process(
+            workspace_root=primary, default_backend_url=f"http://127.0.0.1:{backend.port}",
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+        )
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=45,
+        ) as client:
+            await acquire_gateway_guest(client)
+            listed = (await client.get("/api/gateway/workspaces", params={"check_health": False})).raise_for_status().json()
+            original, = listed["data"]["items"]
+            identity = primary / ".boxteam/workspace-identity.json"
+            original_identity = identity.read_bytes()
+            assert json.loads(original_identity)["workspace_id"] == original["backend_workspace_id"]
+            duplicate = primary / f"copied-identity-{'external' if external else 'managed'}"
+            (duplicate / ".boxteam").mkdir(parents=True, exist_ok=True)
+            duplicate_identity = duplicate / ".boxteam/workspace-identity.json"
+            # 模拟用户复制目录形成重复 UUID；首份身份与登记仍由产品入口生成。
+            shutil.copyfile(identity, duplicate_identity)
+            state = context.boxteam_home / "state/gateway/gateway.sqlite"
+            with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
+                before = tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry"))
+                metadata = connection.execute(
+                    "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+                ).fetchone()
+            payload: dict[str, object] = {"root_path": str(duplicate), "name": "UUID冲突副本"}
+            if external:
+                payload["backend_url"] = f"http://127.0.0.1:{backend.port}"
+            response = await client.post("/api/gateway/workspaces/local", json=payload,
+                                         headers={"X-Request-ID": "duplicate-native-uuid"})
+            assert response.status_code == 400, response.text
+            assert response.json()["detail"] == (
+                "工作区创建失败: stage=workspace_create, error=WorkspaceIdentityConflictError"
+            )
+            assert response.json()["request_id"] == response.headers["X-Request-ID"] == "duplicate-native-uuid"
+            assert duplicate_identity.read_bytes() == identity.read_bytes() == original_identity
+            with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
+                assert tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry")) == before
+                assert connection.execute(
+                    "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+                ).fetchone() == metadata
+            current = (await client.get("/api/gateway/workspaces", params={"check_health": True})).raise_for_status().json()
+            restored, = current["data"]["items"]
+            assert restored["workspace_id"] == original["workspace_id"]
+            assert restored["backend_workspace_id"] == original["backend_workspace_id"]
+            assert restored["status"] == "ready"
+            assert current["data"]["active_workspace_id"] == listed["data"]["active_workspace_id"]
+            (context.artifacts_dir / "duplicate-native-uuid.json").write_text(json.dumps({
+                "external": external, "rejection": response.json(), "retained": current,
+            }, ensure_ascii=False, indent=2) + "\n")
+
+
 @pytest.mark.asyncio
 async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
+    identity_service_ports: tuple[int, int],
 ) -> None:
     context = TestRunContext.from_test_file(Path(__file__)).prepare()
     primary = Path(integration_workspace_root_path)
     target = primary / "managed-private-root"
     target.mkdir()
     reset_gateway_persistent_state(workspace_root=primary)
-    ports = integration_port_block_for_file(Path(request.node.fspath))
+    backend_port, gateway_port = identity_service_ports
     evidence = {}
     with ExitStack() as processes:
         backend = start_backend_process(
-            workspace_root=str(primary), port=ports.port(0), log_name="primary-backend",
+            workspace_root=str(primary), port=backend_port, log_name="primary-backend",
         )
         processes.callback(close_backend_process, backend)
         gateway = start_gateway_process(
             workspace_root=primary, default_backend_url=f"http://127.0.0.1:{backend.port}",
-            port=ports.port(1), artifacts_dir=context.artifacts_dir,
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
         )
         processes.callback(close_gateway_process, gateway)
         async with httpx.AsyncClient(

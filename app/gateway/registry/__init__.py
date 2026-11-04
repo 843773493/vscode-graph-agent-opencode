@@ -52,6 +52,7 @@ from .core import _UNSET as _UNSET
 from .core import GatewayRegistryBatchHandle as GatewayRegistryBatchHandle
 from .core import RegistryCoreMixin
 from .core import RegistryTargetOwner as RegistryTargetOwner
+from .core import WorkspaceIdentityConflictError as WorkspaceIdentityConflictError
 from .core import WorkspaceRouteLease as WorkspaceRouteLease
 from .core import WorkspaceTarget as WorkspaceTarget
 from .crud import RegistryCrudMixin

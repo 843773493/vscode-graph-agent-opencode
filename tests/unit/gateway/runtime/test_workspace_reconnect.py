@@ -496,14 +496,14 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
         root_path="/external/reconnect-error",
         backend_url="http://127.0.0.1:43001",
         connection_kind="local",
-        backend_workspace_id=UUID_B,
+        backend_workspace_id="00000000-0000-4000-8000-000000000003",
         managed=False,
     )
     registry.upsert(
         target,
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": target.backend_url},
-            backend_workspace_id=UUID_B,
+            backend_workspace_id=target.backend_workspace_id,
         ),
         activate=False,
     )

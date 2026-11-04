@@ -59,11 +59,14 @@ async def test_external_registered_route_is_discoverable_without_health_requests
         **options, transport=httpx.MockTransport(unexpected_request),
     ))
     try:
-        for workspace, backend in (("external", "http://127.0.0.1:41000"), ("unconnected", "")):
+        for workspace, backend, workspace_uuid in (
+            ("external", "http://127.0.0.1:41000", "00000000-0000-4000-8000-000000000001"),
+            ("unconnected", "", "00000000-0000-4000-8000-000000000002"),
+        ):
             registry.upsert(WorkspaceTarget(
                 workspace_id=workspace, name=workspace, root_path=str(tmp_path / workspace),
                 connection_kind="local", managed=False, backend_url=backend,
-                backend_workspace_id="00000000-0000-4000-8000-000000000001",
+                backend_workspace_id=workspace_uuid,
             ), activate=False)
         items = {item.workspace_id: item for item in await registry.list_dtos(check_health=False)}
         assert items["external"].status == items["external"].services["workspace_api"].status == "ready"

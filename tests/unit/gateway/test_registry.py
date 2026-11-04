@@ -3,6 +3,7 @@ import json
 import re
 from dataclasses import asdict, replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -226,9 +227,11 @@ def test_registry_reopen_rejects_invalid_persisted_connection_fields(
 class _HealthResponse:
     status_code = 200
 
-    @staticmethod
-    def json() -> dict[str, str]:
-        return {"workspace_id": "00000000-0000-4000-8000-000000000001"}
+    def __init__(self, workspace_id: str) -> None:
+        self.workspace_id = workspace_id
+
+    def json(self) -> dict[str, str]:
+        return {"workspace_id": self.workspace_id}
 
 
 class _ConfigStatusResponse:
@@ -260,13 +263,16 @@ class _ConfigAwareHealthClient:
         return None
 
     async def get(self, url: str, *, headers: dict[str, str]):
+        port = urlparse(url).port
+        assert port is not None
+        workspace_id = f"00000000-0000-4000-8000-{port - 8099:012d}"
         assert headers == {
             "X-Local-Token": "local-dev-token",
-            "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000001",
+            "X-BoxTeam-Workspace-Id": workspace_id,
         }
         if url.endswith("/api/v1/config/reload-status"):
             return _ConfigStatusResponse()
-        return _HealthResponse()
+        return _HealthResponse(workspace_id)
 
 
 class _OrderedCloseProcess:
@@ -307,9 +313,12 @@ class _ConcurrentHealthClient:
 
     async def get(self, url: str, *, headers: dict[str, str]):
         assert url.endswith("/api/v1/health")
+        port = urlparse(url).port
+        assert port is not None
+        workspace_id = f"00000000-0000-4000-8000-{port - 8099:012d}"
         assert headers == {
             "X-Local-Token": "local-dev-token",
-            "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000001",
+            "X-BoxTeam-Workspace-Id": workspace_id,
         }
         type(self).active_requests += 1
         type(self).peak_requests = max(
@@ -318,7 +327,7 @@ class _ConcurrentHealthClient:
         )
         await asyncio.sleep(0.02)
         type(self).active_requests -= 1
-        return _HealthResponse()
+        return _HealthResponse(workspace_id)
 
 
 def test_gateway_workspace_ids_use_32_hex_characters():
@@ -856,7 +865,7 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
                 root_path=str(tmp_path / f"workspace-{index}"),
                 backend_url=f"http://127.0.0.1:{8100 + index}",
                 connection_kind="local",
-                backend_workspace_id="00000000-0000-4000-8000-000000000001",
+                backend_workspace_id=f"00000000-0000-4000-8000-{index + 1:012d}",
             ),
             runtime=WorkspaceRuntime(
                 service_urls={"workspace_api": f"http://127.0.0.1:{8100 + index}"},
@@ -1016,7 +1025,7 @@ def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
                 root_path=str(tmp_path / f"workspace-{index}"),
                 backend_url=f"http://127.0.0.1:{8100 + index}",
                 connection_kind="local",
-                backend_workspace_id="00000000-0000-4000-8000-000000000001",
+                backend_workspace_id=f"00000000-0000-4000-8000-{index + 1:012d}",
             ),
             runtime=WorkspaceRuntime(
                 service_urls={"workspace_api": f"http://127.0.0.1:{8100 + index}"}
@@ -1047,8 +1056,8 @@ async def test_list_dtos_checks_workspace_health_concurrently(
     ]
     assert [item.backend_workspace_id for item in result] == [
         "00000000-0000-4000-8000-000000000001",
-        "00000000-0000-4000-8000-000000000001",
-        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000003",
     ]
     assert all(item.status == "ready" for item in result)
     assert result[0].services["workspace_api"].local_port == 8100

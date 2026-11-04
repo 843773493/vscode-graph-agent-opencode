@@ -187,8 +187,8 @@ async def add_local_workspace(
             detail="所选本机工作区目录不存在或不是目录",
         )
 
-    if payload.backend_url is None:
-        try:
+    try:
+        if payload.backend_url is None:
             await create_direct_managed_workspace(
                 registry=registry,
                 project_root=get_project_root(),
@@ -198,48 +198,48 @@ async def add_local_workspace(
                 create_directory=False,
                 request_id=request_id,
             )
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
-    else:
-        backend_url = payload.backend_url.rstrip("/")
-        gateway_config = request.app.state.gateway_config
-        backend_workspace_id = await asyncio.to_thread(
-            resolve_backend_workspace_id,
-            get_project_root(),
-            workspace_root,
-        )
-        await wait_for_workspace_health(
-            f"{backend_url}/api/v1/health",
-            backend_workspace_id,
-            request_timeout_seconds=(
-                gateway_config.gateway_process_health_request_timeout_seconds
-            ),
-            poll_interval_seconds=(
-                gateway_config.gateway_process_health_poll_interval_seconds
-            ),
-        )
-        registry.upsert(
-            WorkspaceTarget(
-                workspace_id=build_workspace_id(
-                    "local",
-                    str(workspace_root),
-                    backend_url,
+        else:
+            backend_url = payload.backend_url.rstrip("/")
+            gateway_config = request.app.state.gateway_config
+            backend_workspace_id = await asyncio.to_thread(
+                resolve_backend_workspace_id,
+                get_project_root(),
+                workspace_root,
+            )
+            await wait_for_workspace_health(
+                f"{backend_url}/api/v1/health",
+                backend_workspace_id,
+                request_timeout_seconds=(
+                    gateway_config.gateway_process_health_request_timeout_seconds
                 ),
-                name=payload.name or _workspace_name(str(workspace_root)),
-                name_customized=bool(payload.name),
-                root_path=str(workspace_root),
-                backend_url=backend_url,
-                backend_workspace_id=backend_workspace_id,
-                connection_kind="local",
-                owner="manual",
-                managed=False,
-            ),
-            runtime=WorkspaceRuntime(
-                service_urls={"workspace_api": backend_url},
-                backend_workspace_id=backend_workspace_id,
-            ),
-            activate=False,
-        )
+                poll_interval_seconds=(
+                    gateway_config.gateway_process_health_poll_interval_seconds
+                ),
+            )
+            registry.upsert(
+                WorkspaceTarget(
+                    workspace_id=build_workspace_id(
+                        "local",
+                        str(workspace_root),
+                        backend_url,
+                    ),
+                    name=payload.name or _workspace_name(str(workspace_root)),
+                    name_customized=bool(payload.name),
+                    root_path=str(workspace_root),
+                    backend_url=backend_url,
+                    backend_workspace_id=backend_workspace_id,
+                    connection_kind="local",
+                    owner="manual",
+                    managed=False,
+                ),
+                runtime=WorkspaceRuntime(
+                    service_urls={"workspace_api": backend_url},
+                    backend_workspace_id=backend_workspace_id,
+                ),
+                activate=False,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,
