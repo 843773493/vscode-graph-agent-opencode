@@ -1,0 +1,336 @@
+"""真实双 Gateway／Backend 验证目标归属；仅 SSH 执行与隧道使用本机替身。"""
+
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import shutil
+import sys
+from collections.abc import AsyncIterator, Iterator
+from contextlib import ExitStack, asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TypedDict, cast
+from unittest.mock import patch
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from app.core.workspace_identity import (
+    load_or_create_workspace_id,
+    workspace_identity_path,
+)
+from app.gateway import federation, remote_gateway
+from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.lifespan import lifespan
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
+from app.gateway.runtime.workspace import WorkspaceRuntime
+from tests.harness.python.run_context import TestRunContext
+from tests.support.e2e_control.harness import E2EProcessLease
+from tests.support.ports import integration_port_block_for_file
+from tests.support.processes.gateway import (
+    LOCAL_TOKEN_HEADERS,
+    close_gateway_process,
+    start_gateway_process,
+)
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
+
+
+class HttpObservation(TypedDict):
+    method: str
+    path: str
+    request_id: str | None
+    sender_gateway_id: str | None
+    target_gateway_id: str | None
+    workspace_id: str | None
+    status: int
+    response_request_id: str | None
+
+
+class ObservedHttp:
+    """仅旁路记录真实 socket 入站头与响应；不改请求、响应或生产路由。"""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        self.path = Path(os.environ["BOXTEAM_TEST_TARGET_HTTP_LOG"])
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def observe(message: Message) -> None:
+            if scope["type"] == "http" and message["type"] == "http.response.start":
+                incoming = Headers(scope=scope)
+                outgoing = Headers(raw=message["headers"])
+                observation: HttpObservation = {
+                    "method": scope["method"], "path": scope["path"],
+                    "request_id": incoming.get("X-Request-ID"),
+                    "sender_gateway_id": incoming.get("X-BoxTeam-Gateway-Id"),
+                    "target_gateway_id": incoming.get(TARGET_GATEWAY_ID_HEADER),
+                    "workspace_id": incoming.get("X-BoxTeam-Workspace-Id"),
+                    "status": message["status"],
+                    "response_request_id": outgoing.get("X-Request-ID"),
+                }
+                with self.path.open("a", encoding="utf-8") as output:
+                    output.write(json.dumps(observation, ensure_ascii=False) + "\n")
+            await send(message)
+
+        await self.app(scope, receive, observe)
+
+
+def _loopback_pairing_command(*, remote_command: str, **_connection: object) -> list[str]:
+    """保留原配对凭据 CLI 与解析，仅把 SSH 的远程执行换成隔离 HOME 本机执行。"""
+    words = shlex.split(remote_command)
+    connection_id = words[words.index("--connection-id") + 1]
+    peer_gateway_id = words[words.index("--peer-gateway-id") + 1]
+    set_home_and_exec = (
+        "import os, sys\n"
+        "os.environ['BOXTEAM_HOME'] = sys.argv[1]\n"
+        "os.environ.pop('BOXTEAM_GATEWAY_ROOT', None)\n"
+        "os.execv(sys.argv[2], sys.argv[2:])\n"
+    )
+    return [
+        sys.executable, "-c", set_home_and_exec, os.environ["BOXTEAM_TEST_TARGET_REMOTE_HOME"],
+        sys.executable, "-m", "app.gateway.federation_pairing",
+        "--connection-id", connection_id, "--peer-gateway-id", peer_gateway_id, "--json",
+    ]
+
+
+async def _loopback_gateway_tunnel(
+    *, connection: RemoteGatewayConnection, **_options: object,
+) -> WorkspaceRuntime:
+    return WorkspaceRuntime(service_urls={
+        "workspace_api": f"http://127.0.0.1:{connection.remote_gateway_port}",
+    })
+
+
+@asynccontextmanager
+async def _loopback_lifespan(application: FastAPI) -> AsyncIterator[None]:
+    with patch.object(federation, "build_ssh_command", _loopback_pairing_command), patch.object(
+        remote_gateway, "start_remote_gateway_tunnel", _loopback_gateway_tunnel,
+    ):
+        async with lifespan(application):
+            yield
+
+
+def create_gateway_app() -> ASGIApp:
+    from app.gateway.main import app
+
+    if "BOXTEAM_TEST_TARGET_REMOTE_HOME" in os.environ:
+        app.router.lifespan_context = _loopback_lifespan
+    return ObservedHttp(app)
+
+
+def create_backend_app() -> ASGIApp:
+    from app.main import app
+
+    return ObservedHttp(app)
+
+
+@dataclass(frozen=True)
+class TargetGatewayNetwork:
+    context: TestRunContext
+    clients: tuple[httpx.Client, httpx.Client]
+    workspace_id: str
+    gateway_ids: tuple[str, str]
+    native_routes: tuple[str, str]
+    observation_paths: dict[str, Path]
+
+
+@pytest.fixture
+def target_gateway_network(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+) -> Iterator[TargetGatewayNetwork]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    workspace_a = Path(integration_workspace_root_path)
+    assert workspace_a == context.workspace_root
+    workspace_b = prepare_default_test_workspace(
+        workspace_root=context.output_root / "peer/workspace",
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    )
+    install_test_workspace_config(
+        workspace_root=workspace_b, config_path=workspace_a / ".boxteam/workspace.jsonc",
+        schema_path=workspace_a / ".boxteam/workspace_schema.jsonc",
+    )
+    workspace_id = load_or_create_workspace_id(workspace_a)
+    # 显式克隆 UUID，两个原生 Gateway 各有独立目录与 catalog，不共享运行进程。
+    shutil.copyfile(workspace_identity_path(workspace_a), workspace_identity_path(workspace_b))
+    runtime = context.runtime_root_for_node(request.node.nodeid)
+    runtime.mkdir(parents=True, exist_ok=True)
+    homes = (runtime / "gateway-a-home", runtime / "gateway-b-home")
+    observations = {role: context.artifacts_dir / role / "http.jsonl" for role in (
+        "gateway-a", "gateway-b", "backend-a", "backend-b",
+    )}
+    for path in observations.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    ports = integration_port_block_for_file(Path(request.node.path))
+    private_key = runtime / "pairing-key"
+    shutil.copyfile(Path.cwd() / "asset/gateway_ssh/boxteam_gateway_e2e_ed25519", private_key)
+    private_key.chmod(0o600)
+    with ExitStack() as cleanup:
+        lease = E2EProcessLease(runtime / "ports.json", tuple(ports.port(offset) for offset in (0, 1, 20, 21)))
+        lease.acquire()
+        cleanup.callback(lease.release)
+        backends = []
+        for index, (workspace, offset, home) in enumerate(zip((workspace_a, workspace_b), (0, 20), homes, strict=True)):
+            role = "backend-a" if index == 0 else "backend-b"
+            backend = start_backend_process(
+                workspace_root=str(workspace), port=ports.port(offset), log_name=role,
+                boxteam_home=home, artifacts_dir=observations[role].parent,
+                asgi_app=f"{__name__}:create_backend_app", env_unset=("BOXTEAM_GATEWAY_ROOT",),
+                env_overrides={
+                    "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}",
+                    "BOXTEAM_TEST_TARGET_HTTP_LOG": str(observations[role]),
+                },
+            )
+            cleanup.callback(close_backend_process, backend)
+            assert backend.workspace_id == workspace_id
+            backends.append(backend)
+        clients: dict[int, httpx.Client] = {}
+        gateway_ids: dict[int, str] = {}
+        routes: dict[int, str] = {}
+        # 先启动远端，A 的产品注册随后通过真实 HTTP 发现它。
+        for index, offset in ((1, 20), (0, 0)):
+            role = "gateway-b" if index else "gateway-a"
+            environment = {"BOXTEAM_TEST_TARGET_HTTP_LOG": str(observations[role])}
+            if index == 0:
+                environment["BOXTEAM_TEST_TARGET_REMOTE_HOME"] = str(homes[1])
+            gateway = start_gateway_process(
+                workspace_root=(workspace_a, workspace_b)[index],
+                default_backend_url=f"http://127.0.0.1:{backends[index].port}", port=ports.port(offset + 1),
+                boxteam_home=homes[index], artifacts_dir=observations[role].parent,
+                asgi_app=f"{__name__}:create_gateway_app", extra_env=environment,
+            )
+            cleanup.callback(close_gateway_process, gateway)
+            client = cleanup.enter_context(httpx.Client(
+                base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
+                timeout=25, trust_env=False,
+            ))
+            guest = client.post("/api/gateway/users/guest", json={"tracking": {"test": True}})
+            assert guest.status_code == 200, guest.text
+            health = client.get("/api/gateway/health")
+            assert health.status_code == 200, health.text
+            gateway_ids[index] = health.json()["data"]["gateway_id"]
+            registered = client.get("/api/gateway/workspaces")
+            assert registered.status_code == 200, registered.text
+            native, = registered.json()["data"]["items"]
+            assert native["backend_workspace_id"] == workspace_id
+            routes[index] = native["workspace_id"]
+            clients[index] = client
+        assert gateway_ids[0] != gateway_ids[1]
+        assert backends[0].process.pid != backends[1].process.pid
+        (context.artifacts_dir / "topology.json").write_text(json.dumps({
+            "workspace_id": workspace_id, "gateway_ids": gateway_ids, "native_routes": routes,
+            "ports": lease.ports, "backend_pids": [backend.process.pid for backend in backends],
+            "private_key": str(private_key), "transport_boundary": "SSH 执行改为原 pairing CLI 本机执行，隧道改为 loopback URL",
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        yield TargetGatewayNetwork(
+            context, (clients[0], clients[1]), workspace_id,
+            (gateway_ids[0], gateway_ids[1]), (routes[0], routes[1]), observations,
+        )
+
+
+def _observations(path: Path, request_id: str) -> list[HttpObservation]:
+    return [record for line in path.read_text(encoding="utf-8").splitlines()
+            if (record := cast(HttpObservation, json.loads(line)))["request_id"] == request_id]
+
+
+def test_real_gateways_keep_same_uuid_owners_and_target_carrier_distinct(
+    target_gateway_network: TargetGatewayNetwork,
+) -> None:
+    network = target_gateway_network
+    local = network.clients[0]
+    gateway_a, gateway_b = network.gateway_ids
+    native_a, native_b = network.native_routes
+    evidence: list[dict[str, object]] = []
+
+    def request(
+        client: httpx.Client, method: str, path: str, request_id: str, *,
+        headers: dict[str, str] | None = None, json: dict[str, object] | None = None,
+    ) -> httpx.Response:
+        response = client.request(method, path, headers={**(headers or {}), "X-Request-ID": request_id}, json=json)
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+        evidence.append({"request_id": request_id, "path": path, "status": response.status_code, "body": response.json()})
+        return response
+
+    try:
+        session_ids = []
+        for index, client in enumerate(network.clients):
+            created = request(client, "POST", "/api/v1/sessions", f"req_target_seed_{index}", json={"title": f"原生 Gateway {index}"})
+            assert created.status_code == 200, created.text
+            session_ids.append(created.json()["data"]["session_id"])
+        assert session_ids[0] != session_ids[1]
+        topology = json.loads((network.context.artifacts_dir / "topology.json").read_text(encoding="utf-8"))
+        registered = request(local, "POST", "/api/gateway/remote-gateways", "req_target_register", json={
+            "name": "真实 Gateway B", "host": "127.0.0.1", "port": 22, "username": "integration",
+            "private_key_path": topology["private_key"], "remote_gateway_port": topology["ports"][3],
+        })
+        assert registered.status_code == 200, registered.text
+        items = registered.json()["data"]["items"]
+        projected, = [item for item in items if item["connection_kind"] == "remote_gateway"]
+        projection = projected["workspace_id"]
+        assert projected["backend_workspace_id"] == network.workspace_id
+        discovery = request(local, "GET", "/api/gateway/search/workspaces", "req_target_discovery")
+        assert discovery.status_code == 200, discovery.text
+        owners = {item["target_id"]: item["owner"] for item in discovery.json()["data"]["items"]}
+        assert owners == {
+            native_a: {"gateway_id": gateway_a, "workspace_id": network.workspace_id},
+            projection: {"gateway_id": gateway_b, "workspace_id": network.workspace_id},
+        }
+        activated = request(local, "POST", f"/api/gateway/workspaces/{projection}/activate", "req_target_activate_remote")
+        assert activated.status_code == 200, activated.text
+        canonical = f"/api/v1/workspaces/{network.workspace_id}/sessions"
+        successes = [
+            ("req_target_native_a", canonical, {TARGET_GATEWAY_ID_HEADER: gateway_a}, 0),
+            ("req_target_native_b", canonical, {
+                TARGET_GATEWAY_ID_HEADER: gateway_b, "X-BoxTeam-Workspace-Id": native_a,
+                "X-BoxTeam-Gateway-Id": "gateway_" + "f" * 32,
+            }, 1),
+            ("req_target_implicit_remote", "/api/v1/sessions", {"X-BoxTeam-Workspace-Id": projection}, 1),
+        ]
+        for request_id, path, headers, index in successes:
+            response = request(local, "GET", path, request_id, headers=headers)
+            assert response.status_code == 200, response.text
+            assert [item["session_id"] for item in response.json()["data"]["items"]] == [session_ids[index]]
+            backend_role = "backend-b" if index else "backend-a"
+            downstream, = _observations(network.observation_paths[backend_role], request_id)
+            assert downstream["sender_gateway_id"] == (gateway_b if index else gateway_a)
+            assert downstream["target_gateway_id"] is None
+            assert downstream["workspace_id"] == network.workspace_id
+            assert downstream["response_request_id"] == request_id
+            assert _observations(network.observation_paths["backend-a" if index else "backend-b"], request_id) == []
+            remote_hop = _observations(network.observation_paths["gateway-b"], request_id)
+            if index:
+                forwarded, = remote_hop
+                assert forwarded["target_gateway_id"] == gateway_b
+                assert forwarded["sender_gateway_id"] == gateway_a
+                assert forwarded["workspace_id"] == native_b
+                assert forwarded["response_request_id"] == request_id
+            else:
+                assert remote_hop == []
+        failures = [
+            ("req_target_ambiguous", canonical, {}, 409),
+            ("req_target_unknown", canonical, {TARGET_GATEWAY_ID_HEADER: "gateway_" + "e" * 32}, 404),
+            ("req_target_mismatch", "/api/v1/sessions", {TARGET_GATEWAY_ID_HEADER: gateway_b, "X-BoxTeam-Workspace-Id": native_a}, 400),
+            ("req_target_empty", canonical, {TARGET_GATEWAY_ID_HEADER: ""}, 400),
+        ]
+        for request_id, path, headers, status in failures:
+            rejected = request(local, "GET", path, request_id, headers=headers)
+            assert rejected.status_code == status, rejected.text
+            for role in ("gateway-b", "backend-a", "backend-b"):
+                assert _observations(network.observation_paths[role], request_id) == []
+        final = request(local, "GET", "/api/gateway/workspaces", "req_target_final_state")
+        assert final.status_code == 200, final.text
+        assert final.json()["data"]["active_workspace_id"] == projection
+    finally:
+        (network.context.artifacts_dir / "target-routing-http.json").write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )

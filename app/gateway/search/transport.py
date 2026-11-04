@@ -83,7 +83,7 @@ class SearchTransport:
             url = self.registry.resolve_service_url(target_id, "workspace_api")
         except LookupError as error:
             raise SearchBranchError("target_unavailable", str(error), retryable=True) from error
-        headers = self.registry._target_headers(target)
+        headers = self.registry.target_request_headers(target)
         lease = self.registry.acquire_route_reference(target_id, streaming=False)
         operation = asyncio.create_task(self._read(job, url, headers))
         invalidated = asyncio.create_task(lease.invalidated.wait())

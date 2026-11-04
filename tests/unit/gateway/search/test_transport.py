@@ -11,15 +11,23 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.control.catalog_search import (
     GatewaySessionCatalogSearchService,
     _CatalogSnapshot,
 )
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    RemoteGatewayConnection,
+    WorkspaceTarget,
+)
 from app.gateway.registry.owners import workspace_owner
 from app.gateway.routes.search import router
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
@@ -169,12 +177,49 @@ async def test_only_explicit_a_b_receive_same_request_and_original_owner_cursor(
         assert request.url.path == "/api/v1/search"
         assert request.headers["X-Request-ID"] == "req_search"
         assert request.headers["X-BoxTeam-Gateway-Id"] == GATEWAY
+        assert TARGET_GATEWAY_ID_HEADER not in request.headers
+        assert "X-BoxTeam-Federation-Token" not in request.headers
         assert request.headers["X-BoxTeam-Workspace-Id"] == payload["workspace_id"]
         assert payload["deadline_at"] is not None and payload["limit"] == 50
     pages = [event for event in result if event.type == "page"]
     assert len(pages) == 2 and all(page.page.catalog.cursor == f"{page.branch.branch.owner.workspace_id}-cursor" for page in pages)
     assert result[-1].summary.state == "incomplete"
     assert all(search_http.registry.route_reference_counts(f"route_{index}") == (0, 0) for index in range(3))
+
+
+async def test_remote_search_keeps_target_owner_separate_from_sender_with_same_workspace_uuid(
+    search_http: SearchHTTP,
+) -> None:
+    remote_gateway_id = "gateway_" + "c" * 32
+    registry = search_http.registry
+    registry.upsert_remote_gateway(RemoteGatewayConnection(
+        connection_id="remote-query", name="远端", host="remote.test", port=22, username="unit",
+        private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
+        remote_gateway_id=remote_gateway_id, protocol_version=1, source_owner="manual",
+    ), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}))
+    registry.upsert(WorkspaceTarget(
+        workspace_id="remote-route", backend_workspace_id=OWNERS[0]["workspace_id"],
+        name="相同 UUID 的远端", root_path=None, backend_url="", connection_kind="remote_gateway",
+        remote_gateway_connection_id="remote-query", remote_workspace_id="native-route",
+        remote_service_names=("workspace_api",),
+    ), activate=False)
+    credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+        connection_id="remote-query", peer_gateway_id=GATEWAY,
+    )
+    owner = {**OWNERS[0], "gateway_id": remote_gateway_id}
+    result = events(await search_http.search([owner]))
+    outgoing, = search_http.requests
+    assert outgoing.url.host == "remote.test"
+    assert outgoing.headers[TARGET_GATEWAY_ID_HEADER] == remote_gateway_id
+    assert outgoing.headers["X-BoxTeam-Gateway-Id"] == GATEWAY
+    assert outgoing.headers["X-BoxTeam-Workspace-Id"] == "native-route"
+    assert outgoing.headers["X-BoxTeam-Federation-Token"] == credential.token
+    assert "X-Local-Token" not in outgoing.headers
+    assert outgoing.headers["X-Request-ID"] == "req_search"
+    page, = [event for event in result if event.type == "page"]
+    assert page.branch is not None
+    assert page.branch.branch.owner.model_dump() == owner
+    assert registry.route_reference_counts("remote-route") == (0, 0)
 
 
 async def test_unknown_owner_rejected_before_any_dispatch(search_http: SearchHTTP) -> None:

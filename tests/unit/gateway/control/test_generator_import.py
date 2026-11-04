@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -18,18 +17,19 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 def migration_case(tmp_path, monkeypatch):
     target = WorkspaceTarget(workspace_id="route", name="目标", root_path="/not-used", backend_url="http://workspace.test",
                              connection_kind="local", backend_workspace_id="00000000-0000-4000-8000-000000000001")
-    registry = Mock(spec=GatewayWorkspaceRegistry)
-    registry.resolve.side_effect = lambda value: target if value == "route" else (_ for _ in ()).throw(KeyError(value))
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    registry.upsert(target, activate=False)
+    root = tmp_path / "legacy"
     monkeypatch.setattr("app.gateway.control.resource_catalog.load_proxy_gateway_id", lambda: "gateway_local")
     created = datetime(2026, 10, 27, tzinfo=UTC).isoformat()
     definition = {"generator_id": "gen_old", "name": "原生成器", "execution_workspace_id": "route",
                   "placement": {"kind": "workspace", "workspace_id": "route"}, "created_at": created, "updated_at": created,
                   "config": {"prompt": "原提示"}, "trigger": {"type": "interval", "interval_seconds": 60}, "revision": 7,
                   "created_from": {"workspace_id": "route", "session_id": "ses_origin"}}
-    path = tmp_path / "generators/gen_old.json"
-    path.parent.mkdir()
+    path = root / "generators/gen_old.json"
+    path.parent.mkdir(parents=True)
     path.write_text(json.dumps(definition))
-    schedule = tmp_path / "generator-schedules/gen_old.json"
+    schedule = root / "generator-schedules/gen_old.json"
     schedule.parent.mkdir()
     schedule.write_text(json.dumps({"definition_revision": 7, "next_run_at": "2026-10-27T00:01:00Z"}))
     sent = []
@@ -39,7 +39,10 @@ def migration_case(tmp_path, monkeypatch):
         return httpx.Response(200, json={"data": {"task_id": payload["task_id"]}})
     client = httpx.AsyncClient(transport=httpx.MockTransport(receive))
     api = GatewayResourceCatalogService(registry=registry, http_client=client)
-    return tmp_path, registry, client, api, sent
+    try:
+        yield root, registry, client, api, sent
+    finally:
+        registry.close()
 
 
 async def migrate(case, *, preview=False):
@@ -102,7 +105,7 @@ async def test_retirement_crash_retries_deleted_prefix_without_second_publish(mi
 async def test_offline_or_changed_owner_never_falls_back(migration_case):
     root, registry, client, _api, sent = migration_case
     try:
-        registry.resolve.side_effect = KeyError("offline")
+        registry.remove("route")
         failed, = await migrate(migration_case)
         assert failed["status"] == "failed" and sent == []
         assert (root / "generators/gen_old.json").exists()

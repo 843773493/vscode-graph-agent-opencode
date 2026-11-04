@@ -13,10 +13,7 @@ import httpx
 
 from app.core.failures import failure_detail
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import get_gateway_root
-from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.control.storage import atomic_write_json, read_json_object
-from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.registry.owners import workspace_owner
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
@@ -327,39 +324,19 @@ class GatewaySessionCatalogSearchService:
         *,
         request_id: str,
     ) -> tuple[str, dict[str, str]]:
+        headers = self._registry.target_request_headers(target)
+        headers["X-BoxTeam-Gateway-Id"] = self._gateway_id
+        headers["X-Request-ID"] = request_id
         if target.connection_kind == "remote_gateway":
-            if (
-                target.remote_gateway_connection_id is None
-                or target.remote_workspace_id is None
-            ):
-                raise RuntimeError(
-                    f"远程工作区投影缺少路由信息: {target.workspace_id}"
-                )
-            credential = FederationCredentialStore(
-                storage_path=get_gateway_root() / "credentials" / "federation.json"
-            ).get(target.remote_gateway_connection_id)
+            assert target.remote_gateway_connection_id is not None
             return (
                 (f"{self._registry.remote_gateway_url(target.remote_gateway_connection_id)}"
                  "/api/v1/session-catalog/export"),
-                {
-                    "X-BoxTeam-Workspace-Id": target.remote_workspace_id,
-                    "X-BoxTeam-Federation-Token": credential.token,
-                    "X-BoxTeam-Gateway-Id": self._gateway_id,
-                    "X-Request-ID": request_id,
-                },
+                headers,
             )
         if not target.backend_url.strip():
             raise RuntimeError(f"工作区后端尚未连接: {target.workspace_id}")
-        if target.backend_workspace_id is None:
-            raise RuntimeError(
-                f"工作区后端缺少 backend UUID: {target.workspace_id}"
-            )
         return (
             f"{target.backend_url.rstrip('/')}/api/v1/session-catalog/export",
-            {
-                "X-Local-Token": LOCAL_TOKEN,
-                "X-BoxTeam-Workspace-Id": target.backend_workspace_id,
-                "X-BoxTeam-Gateway-Id": self._gateway_id,
-                "X-Request-ID": request_id,
-            },
+            headers,
         )

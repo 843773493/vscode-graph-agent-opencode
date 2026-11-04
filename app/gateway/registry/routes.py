@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, cast
 
 from app.core.path_utils import get_gateway_root
 from app.core.workspace_identity import validate_workspace_id
+from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.service_types import GatewayServiceName
 
 from .core import WorkspaceRouteLease, WorkspaceTarget
+
+if TYPE_CHECKING:
+    from . import GatewayWorkspaceRegistry
 
 
 class RegistryRoutesMixin:
@@ -169,8 +175,8 @@ class RegistryRoutesMixin:
         else:
             target.connection_error = error
             self._save(owner=target.owner)
-    @staticmethod
-    def _target_headers(target: WorkspaceTarget) -> dict[str, str]:
+    def target_request_headers(self, target: WorkspaceTarget) -> dict[str, str]:
+        """统一查询的定位和凭据；发送方身份与 request_id 由原调用方提供。"""
         if target.connection_kind != "remote_gateway":
             backend_workspace_id = target.backend_workspace_id
             if backend_workspace_id is None:
@@ -179,7 +185,7 @@ class RegistryRoutesMixin:
                     f"workspace_id={target.workspace_id}"
                 )
             return {
-                "X-Local-Token": "local-dev-token",
+                "X-Local-Token": LOCAL_TOKEN,
                 "X-BoxTeam-Workspace-Id": validate_workspace_id(backend_workspace_id),
             }
         connection_id = target.remote_gateway_connection_id
@@ -194,4 +200,5 @@ class RegistryRoutesMixin:
         return {
             "X-BoxTeam-Federation-Token": credential.token,
             "X-BoxTeam-Workspace-Id": remote_workspace_id,
+            TARGET_GATEWAY_ID_HEADER: cast("GatewayWorkspaceRegistry", self).remote_gateway_connection(connection_id).remote_gateway_id,
         }

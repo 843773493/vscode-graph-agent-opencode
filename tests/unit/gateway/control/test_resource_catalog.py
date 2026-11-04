@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import asdict, replace
 from pathlib import Path
-from unittest.mock import Mock
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.core.path_utils import get_gateway_root
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.credentials import FederationCredentialStore
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, load_proxy_gateway_id
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    RemoteGatewayConnection,
+    WorkspaceTarget,
+)
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 复用真实日志 I/O 故障。
@@ -30,6 +37,16 @@ def target() -> WorkspaceTarget:
 
 
 @pytest.fixture
+def registry(tmp_path: Path, target: WorkspaceTarget) -> Iterator[GatewayWorkspaceRegistry]:
+    result = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    result.upsert(target, activate=False)
+    try:
+        yield result
+    finally:
+        result.close()
+
+
+@pytest.fixture
 def resource_record() -> dict[str, object]:
     return {
         "resource_id": "browser_owned", "workspace_id": WORKSPACE_ID, "kind": "browser",
@@ -43,7 +60,7 @@ def resource_record() -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_catalog_loads_unassociated_workspace_browser_without_source_session(
-    target: WorkspaceTarget, resource_record: dict[str, object],
+    target: WorkspaceTarget, resource_record: dict[str, object], registry: GatewayWorkspaceRegistry,
 ) -> None:
     calls: list[str] = []
     def request(request: httpx.Request) -> httpx.Response:
@@ -51,7 +68,7 @@ async def test_catalog_loads_unassociated_workspace_browser_without_source_sessi
         assert request.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
         return httpx.Response(200, json={"data": {"workspace_id": WORKSPACE_ID, "items": [resource_record]}})
     async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as client:
-        service=GatewayResourceCatalogService(registry=Mock(spec=GatewayWorkspaceRegistry), http_client=client)
+        service=GatewayResourceCatalogService(registry=registry, http_client=client)
         resources, errors=await service._load_workspace(target, request_id="req_resources")
     assert errors == []
     assert len(resources) == 1
@@ -63,9 +80,9 @@ async def test_catalog_loads_unassociated_workspace_browser_without_source_sessi
 
 
 @pytest.mark.asyncio
-async def test_catalog_owner_failure_exposes_workspace_error(target: WorkspaceTarget) -> None:
+async def test_catalog_owner_failure_exposes_workspace_error(target: WorkspaceTarget, registry: GatewayWorkspaceRegistry) -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503))) as client:
-        service=GatewayResourceCatalogService(registry=Mock(spec=GatewayWorkspaceRegistry), http_client=client)
+        service=GatewayResourceCatalogService(registry=registry, http_client=client)
         resources, errors=await service._load_workspace(target, request_id="req_failed")
     assert resources == []
     assert len(errors) == 1
@@ -76,11 +93,10 @@ async def test_catalog_owner_failure_exposes_workspace_error(target: WorkspaceTa
 @pytest.mark.asyncio
 async def test_catalog_log_failure_keeps_healthy_resource_and_original_error(
     target: WorkspaceTarget, resource_record: dict[str, object],
-    diagnostic_sink: DiagnosticFailure,
+    diagnostic_sink: DiagnosticFailure, registry: GatewayWorkspaceRegistry,
 ) -> None:
     healthy = replace(target, workspace_id="gw_healthy", name="健康工作区", backend_url="http://healthy.test")
-    registry = Mock(spec=GatewayWorkspaceRegistry)
-    registry.targets.return_value = (target, healthy)
+    registry.upsert(healthy, activate=False)
     original = httpx.ReadError("目录读取失败: /private/catalog-marker/state.sqlite")
     diagnostic_sink.primary = original
     calls: list[httpx.Request] = []
@@ -128,10 +144,10 @@ async def test_catalog_log_failure_keeps_healthy_resource_and_original_error(
 @pytest.mark.parametrize("failure", ["envelope", "validation", "transport", "http-status"])
 async def test_catalog_failure_preserves_scope_and_diagnostics_without_raw_payload(
     target: WorkspaceTarget, native_path: str, failure: str, caplog: pytest.LogCaptureFixture,
+    registry: GatewayWorkspaceRegistry,
 ) -> None:
     healthy = replace(target, workspace_id="gw_healthy", name="健康工作区", backend_url="http://healthy.test")
-    registry = Mock(spec=GatewayWorkspaceRegistry)
-    registry.targets.return_value = (target, healthy)
+    registry.upsert(healthy, activate=False)
     calls: list[httpx.Request] = []
     transport_error = httpx.ReadError(f"目录传输失败: {native_path}")
     failed = True
@@ -190,20 +206,23 @@ async def test_catalog_failure_preserves_scope_and_diagnostics_without_raw_paylo
 @pytest.fixture(params=["local", "remote_gateway"])
 def owner_target(
     request: pytest.FixtureRequest, target: WorkspaceTarget, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-) -> tuple[WorkspaceTarget, Mock, str | None]:
-    registry = Mock(spec=GatewayWorkspaceRegistry)
+    registry: GatewayWorkspaceRegistry,
+) -> tuple[WorkspaceTarget, GatewayWorkspaceRegistry, str | None]:
     token = None
     if request.param == "remote_gateway":
         target = replace(target, connection_kind="remote_gateway", root_path=None, managed=False,
                          remote_gateway_connection_id="rgw_owner", remote_workspace_id="route_on_peer")
-        registry.remote_gateway_connection.return_value.name = "远端 Gateway"
-        registry.remote_gateway_url.return_value = "http://peer.test"
-        monkeypatch.setattr("app.gateway.control.resource_catalog.get_gateway_root", lambda: tmp_path)
-        credential = FederationCredentialStore(storage_path=tmp_path / "credentials/federation.json").issue(
-            connection_id="rgw_owner", peer_gateway_id="gateway_peer",
+        monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(tmp_path / "gateway"))
+        registry.upsert_remote_gateway(RemoteGatewayConnection(
+            connection_id="rgw_owner", name="远端 Gateway", host="peer.test", port=22,
+            username="unit", private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
+            remote_gateway_id="gateway_" + "c" * 32, protocol_version=1, source_owner="manual",
+        ), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://peer.test"}))
+        credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+            connection_id="rgw_owner", peer_gateway_id=load_proxy_gateway_id(),
         )
         token = credential.token
-    registry.targets.return_value = (target,)
+    registry.upsert(target, activate=False)
     return target, registry, token
 
 
@@ -214,7 +233,7 @@ def owner_target(
     r"C:\private\catalog-owner-marker\state.sqlite", r"\\server\catalog-owner-marker\state.sqlite",
 ], ids=["other-workspace", "posix", "drive", "unc"])
 async def test_catalog_rejects_foreign_owner_before_publishing_any_target_items(
-    owner_target: tuple[WorkspaceTarget, Mock, str | None], resource_record: dict[str, object],
+    owner_target: tuple[WorkspaceTarget, GatewayWorkspaceRegistry, str | None], resource_record: dict[str, object],
     position: str, foreign_owner: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
     target, registry, token = owner_target
@@ -228,6 +247,12 @@ async def test_catalog_rejects_foreign_owner_before_publishing_any_target_items(
         assert request.headers["X-BoxTeam-Workspace-Id"] == ("route_on_peer" if token else WORKSPACE_ID)
         if token:
             assert request.headers["X-BoxTeam-Federation-Token"] == token
+            assert request.headers[TARGET_GATEWAY_ID_HEADER] == "gateway_" + "c" * 32
+            assert request.headers["X-BoxTeam-Gateway-Id"] == load_proxy_gateway_id()
+            assert "X-Local-Token" not in request.headers
+        else:
+            assert TARGET_GATEWAY_ID_HEADER not in request.headers
+            assert "X-BoxTeam-Federation-Token" not in request.headers
         if not failed:
             data = {"workspace_id": WORKSPACE_ID, "items": [resource_record]}
         elif position == "item-after-valid":

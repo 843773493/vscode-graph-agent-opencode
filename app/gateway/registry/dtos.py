@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 class RegistryDtosMixin:
     async def list_dtos(self, *, check_health: bool = True) -> list[GatewayWorkspaceDTO]:
+        registry = cast("GatewayWorkspaceRegistry", self)
         active_workspace_id = self._active_workspace_id
         targets = list(self._targets.values())
         backend_owners = tuple((owner, owner.contract) for owner in self._backend_owners.values())
@@ -110,7 +111,7 @@ class RegistryDtosMixin:
                             )
                         response = await client.get(
                             f"{backend_url.rstrip('/')}/api/v1/health",
-                            headers=self._target_headers(target),
+                            headers=registry.target_request_headers(target),
                         )
                         if response.status_code == 200:
                             health_payload = validate_workspace_health_identity(
@@ -151,7 +152,7 @@ class RegistryDtosMixin:
                     try:
                         config_response = await client.get(
                             f"{backend_url.rstrip('/')}/api/v1/config/reload-status",
-                            headers=self._target_headers(target),
+                            headers=registry.target_request_headers(target),
                         )
                         if config_response.status_code != 200:
                             raise RuntimeError(
@@ -229,7 +230,7 @@ class RegistryDtosMixin:
                     try:
                         response = await client.get(
                             f"{service_url.rstrip('/')}{health_path}",
-                            headers=self._target_headers(target),
+                            headers=registry.target_request_headers(target),
                         )
                         service_statuses[service] = service_dto(
                             service,

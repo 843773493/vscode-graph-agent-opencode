@@ -90,3 +90,10 @@
 - 私有 HTTP 头部构造器接收本请求已读取的本跳身份，移除新增链路中的重复身份文件读取，迁齐直接及参数化消费者。旧导航歧义 fixture 改为同 UUID、同物理根的重复路由，保留原 409 和不回退 active 的断言，不放宽先前根冲突约束。
 - 最新主线定向 61 passed；较广代理／导航批次的其余通过结果按未变源码复用，辅助批次 205 passed、最终新增场景 35 passed，重叠场景不相加。扩大检查曾出现一次未改流取消用例超时；完整 HEAD archive 单例及组合均通过，当前组合也通过，保留原始失败，不据此改公共清理逻辑。Ruff／Python 3.12 Pyright 与完整 HEAD archive 对照分别为 7／7、25／25 项存量诊断，新增为零；独立只读复核未发现本切片问题。准确命令、退出码、指纹及全部原始结果见 `out/tests/temp/target_gateway_carrier_20261104/artifacts/verification.json` 和 `out/tests/temp/auxiliary_target_gateway_20261104/artifacts/verification.json`。
 - 本轮仍保留待整体迁移的 alias／Backend UUID 合同，未实现复合 registry 键、远程生命周期／目录／Generator 与客户端迁移；无真实双 Gateway／SSH 或 Windows 新验收，2.2／4.3／4.4 保持未勾选。
+
+### 2026-11-04：2.2／4.3 查询出站收敛与双 Gateway HTTP 验证
+
+- 注册表 `target_request_headers` 统一健康、领域搜索、会话目录镜像、资源目录及间接 Generator 导入的工作区定位／凭据；远端目标头取自原登记连接。物理删除 `_target_headers` 和两套目录凭据拼装，发送方与 request_id 仍由各调用边界提供，本机查询不带目标头。无 schema 或公开 DTO 变更，完整 UUID／复合键迁移仍未完成。
+- 主组 235 passed；间接导入补查发现旧单测 fixture 使用 Mock registry，已迁为真实 registry，登记与旧迁移输入分目录，离线用原 owner 移除登记，原备份／顺序／丢应答断言均保留，7 passed。Ruff 全部通过；修改文件 Pyright 与完整 HEAD archive 比较为 73／76 项存量诊断，新增零、消除三项，导入测试单独为零。独立只读复核确认查询和间接消费链；准确命令、源码指纹、原始失败与最终结果见 `out/tests/temp/target_query_headers_20261104/artifacts/verification.json`。
+- 两个真实 Gateway＋两个真实 Backend 经产品入口创建独有会话、注册远端并发现 owner；相同 UUID 按目标分别读取独有会话，客户端伪造 sender 被覆盖，A→B 为 target=B／sender=A，B→Backend 剥离 target／sender=B；错误、空和歧义目标不进入下游，不改变 active，request_id 全链一致。最终精确源码运行 1 passed／51.65s、退出 0，16 份源码首尾指纹一致；新测试 Ruff／Python 3.12 Pyright 均通过。原混合源码窗口运行另存，不作最终版本证据。
+- 实网测试只替换 SSH 执行为原 pairing CLI 的隔离本机执行、隧道为 loopback URL；注册、凭据解析、HTTP 发现／投影／路由仍是真实链路。已登记 `integration-target-gateway-routing`（180 秒／4GiB），原 runner 列表校验通过，业务通过来自受相同保护的直接 pytest。原件见 `out/tests/temp/target_gateway_network_20261104/artifacts/verification.json`，正式产物在 `out/tests/integration/gateway/test_target_gateway_routing/`。本轮不代表真实 SSH／跨机、UI、辅助服务网络或 4.4 完整迁移验收，2.2／4.3／4.4 仍未勾选。

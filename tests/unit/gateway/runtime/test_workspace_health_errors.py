@@ -35,6 +35,7 @@ def invalid_backend_identity(request: pytest.FixtureRequest) -> str:
 @pytest.mark.parametrize("entry", ["wait", "config-wait", "adopt", "proxy", "terminal", "browser"])
 async def test_invalid_bound_identity_is_rejected_without_io_or_public_input(
     invalid_backend_identity: str, entry: str, tmp_path: Path,
+    registry: GatewayWorkspaceRegistry,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     def unexpected_io(*_args: object, **_kwargs: object) -> None:
@@ -53,7 +54,7 @@ async def test_invalid_bound_identity_is_rejected_without_io_or_public_input(
         elif entry == "adopt":
             await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=invalid_backend_identity, log_dir=tmp_path / "logs")
         elif entry == "proxy":
-            GatewayWorkspaceRegistry._target_headers(WorkspaceTarget(
+            registry.target_request_headers(WorkspaceTarget(
                 workspace_id="bound-target", name="目标", root_path=str(tmp_path),
                 backend_url=URL, backend_workspace_id=invalid_backend_identity, connection_kind="local",
             ))

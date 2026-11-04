@@ -6,9 +6,6 @@ import logging
 import httpx
 
 from app.core.failures import report_failure
-from app.core.path_utils import get_gateway_root
-from app.gateway.auth import LOCAL_TOKEN
-from app.gateway.credentials import FederationCredentialStore
 from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.schemas.gateway_control import (
@@ -128,35 +125,19 @@ class GatewayResourceCatalogService:
         *,
         request_id: str,
     ) -> tuple[str, dict[str, str]]:
+        headers = self._registry.target_request_headers(target)
+        headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
+        headers["X-Request-ID"] = request_id
         if target.connection_kind == "remote_gateway":
             connection_id = target.remote_gateway_connection_id
-            remote_workspace_id = target.remote_workspace_id
-            if connection_id is None or remote_workspace_id is None:
-                raise RuntimeError(f"远程工作区投影缺少路由信息: {target.workspace_id}")
-            credential = FederationCredentialStore(
-                storage_path=get_gateway_root() / "credentials" / "federation.json"
-            ).get(connection_id)
+            assert connection_id is not None
             return (
                 f"{self._registry.remote_gateway_url(connection_id).rstrip('/')}/api/v1/{path}",
-                {
-                    "X-BoxTeam-Workspace-Id": remote_workspace_id,
-                    "X-BoxTeam-Federation-Token": credential.token,
-                    "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
-                    "X-Request-ID": request_id,
-                },
-            )
-        if target.backend_workspace_id is None:
-            raise RuntimeError(
-                f"工作区后端缺少 backend UUID: {target.workspace_id}"
+                headers,
             )
         return (
             f"{target.backend_url.rstrip('/')}/api/v1/{path}",
-            {
-                "X-Local-Token": LOCAL_TOKEN,
-                "X-BoxTeam-Workspace-Id": target.backend_workspace_id,
-                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
-                "X-Request-ID": request_id,
-            },
+            headers,
         )
 
     def _gateway_name(self, target: WorkspaceTarget) -> str:

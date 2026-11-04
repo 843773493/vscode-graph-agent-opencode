@@ -9,17 +9,69 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.core.path_utils import get_gateway_root
 from app.gateway.control import catalog_search
 from app.gateway.control.catalog_search import (
     GatewaySessionCatalogSearchService,
     _CatalogSnapshot,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    RemoteGatewayConnection,
+    WorkspaceTarget,
+)
+from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 
 OWNER = GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_catalog_test", workspace_id="00000000-0000-4000-8000-000000000001")
+
+
+@pytest.mark.asyncio
+async def test_remote_catalog_sync_uses_registered_target_gateway_and_original_sender(tmp_path: Path) -> None:
+    remote_gateway_id = "gateway_" + "c" * 32
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    registry.upsert_remote_gateway(RemoteGatewayConnection(
+        connection_id="catalog-query", name="远端", host="remote.test", port=22, username="unit",
+        private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
+        remote_gateway_id=remote_gateway_id, protocol_version=1, source_owner="manual",
+    ), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}))
+    registry.upsert(WorkspaceTarget(
+        workspace_id="remote-route", backend_workspace_id=OWNER.workspace_id,
+        name="远端目录", root_path=None, backend_url="", connection_kind="remote_gateway",
+        remote_gateway_connection_id="catalog-query", remote_workspace_id="native-route",
+    ), activate=False)
+    credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
+        connection_id="catalog-query", peer_gateway_id=OWNER.gateway_id,
+    )
+    requests: list[httpx.Request] = []
+
+    def receive(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": {"revision": "revision-one", "catalog_revision": 1, "items": []}})
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(receive)) as client:
+            service = GatewaySessionCatalogSearchService(
+                registry=registry, http_client=client, cache_dir=tmp_path / "indexes", gateway_id=OWNER.gateway_id,
+            )
+            await service._sync_all()
+            request, = requests
+            assert str(request.url) == "http://remote.test/api/v1/session-catalog/export"
+            assert request.headers[TARGET_GATEWAY_ID_HEADER] == remote_gateway_id
+            assert request.headers["X-BoxTeam-Gateway-Id"] == OWNER.gateway_id
+            assert request.headers["X-BoxTeam-Workspace-Id"] == "native-route"
+            assert request.headers["X-BoxTeam-Federation-Token"] == credential.token
+            assert "X-Local-Token" not in request.headers
+            assert request.headers["X-Request-ID"].startswith("req_")
+            snapshot, = service._snapshots.values()
+            assert snapshot.owner == GatewaySearchWorkspaceOwnerDTO(gateway_id=remote_gateway_id, workspace_id=OWNER.workspace_id)
+            assert service._workspace_errors == {}
+    finally:
+        registry.close()
 
 
 @pytest.fixture
