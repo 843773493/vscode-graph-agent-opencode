@@ -43,15 +43,9 @@ export class ResourceOpener extends Disposable implements IOpener {
     if (workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('发起打开的 Gateway 身份已改变，请重新打开资源');
     if (address.scope !== 'workspace') throw new Error(`此资源尚未接入编辑器：${address.scope}/${address.kind}`);
     const owner = { gatewayId: address.gateway_id, workspaceId: address.scope_id };
-    // TODO：配置来源及更改的统一投影继续由同一入口补齐；音视频 Webview 宿主条件见 startWorkbench。
     let input: ThreadInput | IResourceEditorInput;
     let reference: IReference<IResolvedTextEditorModel> | undefined;
-    if (['agent-spec', 'skills'].includes(address.kind)) {
-      input = { resource: sourceDocumentUri(owner, address.uri), description: `${owner.workspaceId} · ${address.kind}` };
-      // 沿原 resolver 先取得引用：一次重解路由及读取即可完成核验，失败时不创建空分屏。
-      reference = await this.models.createModelReference(input.resource);
-    } else {
-      if (!address.session_id && !address.file_root_uri) throw new Error(`此资源尚未接入编辑器：${address.kind}`);
+    if (address.session_id || address.file_root_uri) {
       const target = await gateway.resolveWorkspaceTarget(owner);
       if (target.status !== 'ready') throw new Error(`目标工作区当前不可用（${target.status}），请明确启动或连接`);
       input = address.session_id
@@ -59,6 +53,11 @@ export class ResourceOpener extends Disposable implements IOpener {
           threadId: address.thread_id ?? (await gateway.mainThread(target.workspace_id, address.session_id)).thread_id,
           title: address.thread_id ?? address.session_id })
         : { resource: workspaceFileUri(owner, address.uri, address.file_root_uri!) };
+    } else {
+      // 单文件来源（包括 Session 产物）交原导航 owner 核验读取能力，不在客户端重复 URI 模板。
+      input = { resource: sourceDocumentUri(owner, address.uri), description: `${owner.workspaceId} · ${address.kind}` };
+      // 沿原 resolver 先取得引用：一次重解路由及读取即可完成核验，失败时不创建空分屏。
+      reference = await this.models.createModelReference(input.resource);
     }
     try {
       const source = this.groups.getGroup(groupId);

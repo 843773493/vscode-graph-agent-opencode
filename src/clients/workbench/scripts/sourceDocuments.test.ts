@@ -17,8 +17,12 @@ const owner = { gatewayId: 'gateway-source', workspaceId: 'workspace-source' };
 const uri = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/skills/skill-a/中文%20%25.md`;
 const resource = sourceDocumentUri(owner, uri);
 const result = { node: { uri, resource_shape: 'file' }, content: '# 原来源', content_encoding: 'utf-8', media_type: 'text', truncated: false };
+const sessionSource = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/session/ses_00000000400070008000000000000000`;
+const sources = [{ name: 'Skill', uri, kind: 'skills' },
+  { name: '工具结果', uri: `${sessionSource}/tool-results/tool_${'a'.repeat(24)}.txt`, kind: 'session' },
+  { name: 'Session 文本附件', uri: `${sessionSource}/attachments/att_${'b'.repeat(32)}`, kind: 'session' }];
 
-function setup() {
+function setup(resource = sourceDocumentUri(owner, uri)) {
   let provider: ITextModelContentProvider | undefined;
   const model = { uri: resource } as ITextModel;
   const created: { content: string; uri: URI }[] = [];
@@ -43,20 +47,22 @@ describe('只读来源文档的原内容 Provider', () => {
     expect(() => sourceDocumentSource(resource.with({ query: 'route=old' }))).toThrow('完整归属');
   });
 
-  test('只向重新解析的 ready owner 发一次原导航读取，完整正文进入同一个模型', async () => {
-    const fixture = setup();
-    const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue({ workspace_id: 'new-route', status: 'ready' } as Awaited<ReturnType<typeof gateway.resolveWorkspaceTarget>>);
-    const request = spyOn(gateway, 'request').mockResolvedValue(result);
-    try {
-      expect(await fixture.read()).toBe(fixture.model);
-      expect(resolve.mock.calls[0][0]).toEqual({ ...owner, uri });
-      expect(request.mock.calls).toHaveLength(1);
-      expect(request.mock.calls[0][0]).toBe('/api/v1/resources/navigation');
-      expect(request.mock.calls[0][2]).toBe('new-route');
-      expect(JSON.parse(String(request.mock.calls[0][1]?.body))).toMatchObject({ uri, operation: 'read', read_format: 'auto' });
-      expect(fixture.created).toEqual([{ content: '# 原来源', uri: resource }]);
-    } finally { fixture.documents.dispose(); resolve.mockRestore(); request.mockRestore(); }
-  });
+  for (const source of sources) {
+    test(`${source.name} 只向重新解析的 ready owner 发一次原导航读取，完整正文进入同一个模型`, async () => {
+      const resource = sourceDocumentUri(owner, source.uri), fixture = setup(resource);
+      const resolve = spyOn(gateway, 'resolveWorkspaceTarget').mockResolvedValue({ workspace_id: 'new-route', status: 'ready' } as Awaited<ReturnType<typeof gateway.resolveWorkspaceTarget>>);
+      const request = spyOn(gateway, 'request').mockResolvedValue({ ...result, node: { ...result.node, uri: source.uri } });
+      try {
+        expect(await fixture.read()).toBe(fixture.model);
+        expect(resolve.mock.calls[0][0]).toEqual({ ...owner, uri: source.uri });
+        expect(request.mock.calls).toHaveLength(1);
+        expect(request.mock.calls[0][0]).toBe('/api/v1/resources/navigation');
+        expect(request.mock.calls[0][2]).toBe('new-route');
+        expect(JSON.parse(String(request.mock.calls[0][1]?.body))).toMatchObject({ uri: source.uri, operation: 'read', read_format: 'auto' });
+        expect(fixture.created).toEqual([{ content: '# 原来源', uri: resource }]);
+      } finally { fixture.documents.dispose(); resolve.mockRestore(); request.mockRestore(); }
+    });
+  }
 
   test('截断／非文本／错误归属不伪装为完整来源模型', async () => {
     const fixture = setup();
@@ -89,33 +95,43 @@ describe('只读来源文档的原内容 Provider', () => {
 });
 
 describe('来源打开沿原模型引用核验', () => {
-  for (const scenario of ['success', 'read-failure', 'open-failure'] as const) {
-    test(`原 Opener ${scenario} 不重复重解路由，引用失败不建组、打开结束释放预读引用`, async () => {
+  for (const source of sources) for (const scenario of ['success', 'read-failure', 'open-failure'] as const) {
+    test(`原 Opener ${source.name} ${scenario} 沿来源能力核验，失败不改投或建组，完成后释放预读引用`, async () => {
       const snapshot = spyOn(workspaceContext, 'getSnapshot').mockReturnValue({ ...workspaceContext.getSnapshot(), gatewayId: owner.gatewayId });
-      const request = spyOn(gateway, 'request').mockResolvedValue({ uri, gateway_id: owner.gatewayId,
-        scope: 'workspace', scope_id: owner.workspaceId, kind: 'skills' });
+      const request = spyOn(gateway, 'request').mockResolvedValue({ uri: source.uri, gateway_id: owner.gatewayId,
+        scope: 'workspace', scope_id: owner.workspaceId, kind: source.kind });
       const resolve = spyOn(gateway, 'resolveWorkspaceTarget');
       const dispose = mock(() => {}), addGroup = mock(() => ({ id: 8 }));
       const openEditor = mock(async () => { if (scenario === 'open-failure') throw new Error('打开失败'); });
       const createModelReference = mock(async (target: URI) => {
-        expect(sourceDocumentSource(target)).toEqual({ ...owner, uri });
+        expect(sourceDocumentSource(target)).toEqual({ ...owner, uri: source.uri });
         if (scenario === 'read-failure') throw new Error('读取失败');
         return { object: {}, dispose };
       });
+      const getGroup = mock(() => ({ id: 7 }));
       const opener = new ResourceOpener({ registerOpener() { return { dispose() {} }; } } as unknown as IOpenerService,
         { openEditor } as unknown as IEditorService,
-        { activeGroup: { id: 7 }, getGroup: () => ({ id: 7 }), findGroup: () => undefined, addGroup } as unknown as IEditorGroupsService,
+        { activeGroup: { id: 9 }, getGroup, findGroup: () => undefined, addGroup } as unknown as IEditorGroupsService,
         { getValue: () => 'right' } as unknown as IConfigurationService,
         { createModelReference } as unknown as ITextModelService);
+      const options = { boxteamTargetGroup: 7, openToSide: true, editorOptions: { pinned: true, preserveFocus: true,
+        selection: { startLineNumber: 4, startColumn: 2 } } };
       try {
-        if (scenario === 'success') expect(await opener.open(uri, { openToSide: true })).toBe(true);
-        else await expect(opener.open(uri, { openToSide: true })).rejects.toThrow(scenario === 'read-failure' ? '读取失败' : '打开失败');
+        if (scenario === 'success') expect(await opener.open(source.uri, options)).toBe(true);
+        else await expect(opener.open(source.uri, options)).rejects.toThrow(scenario === 'read-failure' ? '读取失败' : '打开失败');
         expect(createModelReference).toHaveBeenCalledTimes(1);
         expect(resolve).not.toHaveBeenCalled();
         expect(request).toHaveBeenCalledTimes(1);
+        expect(request.mock.calls[0][0]).toBe('/api/gateway/resource-addresses/parse');
+        expect(JSON.parse(String(request.mock.calls[0][1]?.body)).uri).toBe(source.uri);
         expect(addGroup).toHaveBeenCalledTimes(scenario === 'read-failure' ? 0 : 1);
         expect(openEditor).toHaveBeenCalledTimes(scenario === 'read-failure' ? 0 : 1);
         expect(dispose).toHaveBeenCalledTimes(scenario === 'read-failure' ? 0 : 1);
+        if (scenario !== 'read-failure') {
+          expect(getGroup).toHaveBeenCalledWith(7);
+          expect(openEditor).toHaveBeenCalledWith({ resource: sourceDocumentUri(owner, source.uri),
+            description: `${owner.workspaceId} · ${source.kind}`, options: options.editorOptions }, 8);
+        }
       } finally { opener.dispose(); snapshot.mockRestore(); request.mockRestore(); resolve.mockRestore(); }
     });
   }

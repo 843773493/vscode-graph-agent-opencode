@@ -882,3 +882,11 @@
 - Linux 正式便携包经摘要校验、解压及真实 ASAR 窗口验收 1 passed／182.92 秒，聊天／工具配对、文件 CAS 保存、图片304、只读 Diff 共享、正常退出重启及独立 profile 隔离保持；pageErrors、storageErrors、proxyErrors 均为空，后端正常关闭。浏览器完整聊天独立回归 1 passed／163.06 秒。原归档 SHA256=d850ee8a8a7da2fe04f8e81c878bdbf2154c9f4915ff65e5beb8c18a7ea6aa36。
 - 修复两处实际测试装配故障：Electron 在打包前沿原 E2EProcessLease 预留整组端口；Vite 直接启动产品 dev 命令指定的 Node 入口，使原 PID 探针观察实际 listener。原期限与所有业务断言保持，失败原件保留。Vite 源码页真实 Gateway 初始化、未注册目录编辑、设置保存／刷新及日志存储回归 1 passed／199.87 秒，未发生模型调用。
 - Ruff、ESM、OpenSpec strict、差异检查通过；新增静态测试和 Vite 装具 Pyright 零诊断，Electron 原有1条 raw object 索引诊断与 HEAD 基线一致。未改 TypeScript 或 sourceTransform 输入，复用同源码25份实际转换源码类型证明；本批正式构建及原生打包均实际完成。准确命令、源码／产物指纹、原始输出及退出码：`out/tests/temp/static_upgrade_20261104/artifacts/verification.json`。正式 Web 原件位于 `out/tests/integration/clients/web/quick_access/test_static_upgrade/runs/run-47251a73e3e1/`，原生原件位于 `out/tests/integration/clients/electron/test_packaged_workbench/runs/run-c8237bfdf925/`。HMR 源码变更、固定 v6 Webview 隔离宿主、Windows／macOS 及引擎内部代码缓存收益未验，18.7 保持未勾选。
+
+
+### 2026-11-04：规范工具结果沿原 Opener 打开（2.2、2.4、2.5 部分）
+
+- 原 Opener 按 Session／文件目标与单文件来源的实际能力分派，移除 agent-spec／skills 类型白名单；工具结果、文本附件等来源交同一只读 resolver 和导航 owner 核验，不复制 URI grammar、路由解析或正文。先取得原模型引用，失败不建空分屏，完成／失败沿原引用释放。
+- 来源与 Opener 15 项／140 条断言、25 份实际转换源码的真实 Workbench 类型检查、规定 Web 构建、Ruff、MJS 语法及严格规范校验通过。集成时生产指纹与构建一致，复用相同产物。正式 Gateway／后端／Workbench／Chromium 1 passed／72.47 秒：真实执行生成规范工具结果，核完整中段、只读、三组共享、正常刷新恢复和最后引用关闭后冷读；无普通文件读取、无额外执行，pageErrors=[]。
+- 集合能力负例通过原 `_workbench.open` 命令调用相同 Opener，核真实 403、领域 owner／原因、组不变与零回退。前序 Quick Input 鼠标接受未产生 parse 请求的失败原件保留，未归因或宣称修复，不以命令证据替代该交互。原更改导航 hover 超时未改动。Electron、媒体、配置和完整 Diff URI 场景尚未验证，2.2／2.4／2.5 整项不勾选。
+- 准确命令、源码指纹、构建及全部原始退出码见 `out/tests/temp/quick_access_sol_20261104/artifacts/verification.json`；正式页面原件位于 `out/tests/integration/clients/web/quick_access/test_resource_opener_sources/runs/run-bbec73388455/`。
