@@ -1308,7 +1308,9 @@ class MessageStreamStore:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: turn_stream_id={turn_stream_id}"
             )
-        state = copy.deepcopy(cached)
+        # 投影负责复制会改写的分支；这里只隔离 workspace_id 等顶层字段。
+        # 每个 delta 预先深拷贝整棵历史状态，会抵消 block.delta 的局部复制。
+        state = dict(cached)
         incoming_workspace_id = identity_fields["workspace_id"]
         stored_workspace_id = state.get("workspace_id")
         if (
@@ -1408,7 +1410,7 @@ class MessageStreamStore:
                 turn_stream_id,
                 job_id=job_id,
             )
-            state = copy.deepcopy(self._states[turn_stream_id])
+            state = self._states[turn_stream_id]
         next_seq = int(state["snapshot_seq"]) + 1
         event: dict[str, Any] = {
             "event_id": event_id or create_prefixed_id("evt"),
