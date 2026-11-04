@@ -29,4 +29,5 @@
 - Linux 当前以 Xvfb 和显式 `--no-sandbox` 启动，记录实际参数；WebPreferences 的 sandbox 配置不证明 Chromium 进程沙箱已启用。Windows／macOS、真实 Provider 和崩溃恢复另行验收。
 - 正式工作区、profile、日志、截图和归档只写 `out/tests/integration/clients/electron/test_packaged_workbench/`，按 run／node 隔离；矩阵提供外部超时和 4GiB 数据段保护。
 - 打包和原生驱动都必须登记完整进程组 owner，超时也回收子进程并保存实际退出回执；不得直接复制旧下载缓存的散列目录假设当前下载库仍使用同一键。
+- 打包开始前通过原 E2EProcessLease 预留 Backend、Gateway 和延迟代理整组端口，服务全部关闭后释放；不让启动前的网络请求抢占后续服务端口。
 - 构建和依赖仍使用 Bun。原生 Playwright Electron inspector 驱动暂用 Node：Bun 1.3.11 下连接不完成，同一 ASAR 在 Node 下可连接；保留 TODO 和原始对照证据，不增产品兼容层。Xvfb 等工具的临时目录也放入本次 runtime。

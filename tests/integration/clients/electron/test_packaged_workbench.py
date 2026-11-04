@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -18,9 +19,10 @@ import pytest
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import integration_port_block_for_file
+from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -59,7 +61,23 @@ def _run_process(
 
 
 @pytest.fixture(scope="module")
-def packaged_electron(request: pytest.FixtureRequest) -> Path:
+def electron_service_ports(request: pytest.FixtureRequest) -> Iterator[TestFilePortBlock]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    ports = integration_port_block_for_file(Path(request.node.path))
+    # 打包前保留整组绑定，避免客户端临时源端口抢占尚未启动的 Gateway 或代理。
+    lease = E2EProcessLease(
+        context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
+        tuple(ports.port(offset) for offset in (0, 20, 21)),
+    )
+    lease.acquire()
+    try:
+        yield ports
+    finally:
+        lease.release()
+
+
+@pytest.fixture(scope="module")
+def packaged_electron(request: pytest.FixtureRequest, electron_service_ports: TestFilePortBlock) -> Path:
     if sys.platform != "linux":
         pytest.fail("便携 Electron 原生回归当前仅验收 Linux；Windows/macOS 尚待各自平台验收")
     if shutil.which("xvfb-run") is None:
@@ -110,6 +128,7 @@ def packaged_electron(request: pytest.FixtureRequest) -> Path:
 async def test_packaged_electron_chat_files_and_restart_cache(
     request: pytest.FixtureRequest,
     packaged_electron: Path,
+    electron_service_ports: TestFilePortBlock,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
 ) -> None:
@@ -122,7 +141,7 @@ async def test_packaged_electron_chat_files_and_restart_cache(
     (workspace / "native-cache.png").write_bytes(base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
     ))
-    ports = integration_port_block_for_file(Path(request.node.path))
+    ports = electron_service_ports
     temporary = runtime / "tmp"
     node = shutil.which("node")
     assert node is not None, "Playwright 原生 Electron inspector 驱动需要 Node"

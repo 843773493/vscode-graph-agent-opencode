@@ -34,7 +34,7 @@ const workers = [
   ...['linux', 'darwin', 'win'].map(os => `vs/workbench/services/keybinding/browser/keyboardLayouts/layout.contribution.${os}`),
 ];
 const options = {
-  bundle: true, format: 'esm', platform: 'browser', target: 'es2024', metafile: true,
+  bundle: true, format: 'esm', platform: 'browser', target: 'es2024', metafile: true, minify: true,
   nodePaths: [join(root, 'node_modules')],
   tsconfig: join(root, 'tsconfig.jsonc'),
   // 宿主和复用组件必须共享同一 React 实例。
@@ -44,16 +44,18 @@ const options = {
 };
 const immutableAssets = new Set();
 function recordAssets(result) {
-  // 只登记本次 esbuild 文件 loader 产出的内容地址，不能按请求扩展名猜缓存期限。
+  // 仅本次 esbuild 产出的文件资源和明确带 hash 的分块拥有内容地址。
   for (const [path, output] of Object.entries(result.metafile.outputs)) {
-    if (!output.entryPoint && !['.js', '.css', '.map'].includes(extname(path))) {
-      immutableAssets.add(relative(dist, resolve(path)).split(sep).join('/'));
+    const resource = relative(dist, resolve(path)).split(sep).join('/');
+    if (resource.startsWith('out/chunks/') || (!output.entryPoint && !['.js', '.css', '.map'].includes(extname(path)))) {
+      immutableAssets.add(resource);
     }
   }
 }
 // Vite 直接转换业务入口；开发资源准备不再额外编译无人使用的发布版主包。
 if (!values['assets-only']) {
-  await build({ ...options, entryPoints: { main: entry }, outdir: join(dist, 'out') }).then(async result => {
+  await build({ ...options, entryPoints: { main: entry }, splitting: true, chunkNames: 'chunks/[name]-[hash]',
+    outdir: join(dist, 'out') }).then(async result => {
     recordAssets(result);
     await writeFile(join(dist, 'build-meta.json'), JSON.stringify(result.metafile));
   });

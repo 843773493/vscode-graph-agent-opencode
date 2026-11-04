@@ -31,3 +31,5 @@
 `test_request_content` 经真实消息执行生成请求日志，原页面定位后再核损坏／异查询／catalog变化的续点拒绝；正式Python搜索SDK消费同一Gateway联邦诊断，不在驱动内复制SSE解码。首次选择核活动稳定身份后走真实Enter，后续保留鼠标选择和精确位置断言。
 
 `test_trace_content` 通过执行及 fork 入口创建未打开 child 的真实事件；只选 Trace 后查询并定位原行，原事件面板显示有界上下文与码点高亮。核验同一编辑器接受另一位置、日志追加后的原行读取、旧版本拒绝及零全量 Trace 请求；正式搜索 SDK 继续核对原 owner 的独立续点拒绝。
+
+`test_static_upgrade` 复制正式 Workbench 产物，仅在副本的 main／原 editor Worker 追加可观测版本标记；同一真实 Gateway 和 Chromium 保留 HTTP 缓存，核对内容地址分块热读零正文、main／Worker 再验证304、升级后实际执行新版本及缺失 Worker 失败。副本改写是明确的 Integration 装具边界，不修改共享构建、不预写缓存、不替换响应，不代替打包 Electron 或 Webview 隔离宿主验收。

@@ -152,7 +152,10 @@ async def metadata_frontend(
     ]}
     allocation_path.write_text(json.dumps(allocation, ensure_ascii=False, indent=2) + "\n")
     base_url = f"http://127.0.0.1:{port}"
-    command = ["bun", "run", "dev", "--port", str(port), "--gateway", str(client.base_url).rstrip("/"),
+    node = shutil.which("node")
+    assert node is not None, "Workbench 源码开发入口需要 Node"
+    # 与产品 dev 命令一致，直接持有实际监听的 Node，不把包管理器包装进程交给 PID 探针。
+    command = [node, "scripts/dev.mjs", "--port", str(port), "--gateway", str(client.base_url).rstrip("/"),
                "--outdir", str(runtime / "vite-assets" / "dist"), "--cache", str(runtime / "vite-cache")]
     log_path = context.artifacts_dir / "vite.log"
     with log_path.open("x", encoding="utf-8") as log, capture_test_processes():

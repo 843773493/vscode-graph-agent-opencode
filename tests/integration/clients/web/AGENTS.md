@@ -51,6 +51,7 @@ web/
 - 历史边界及元数据初始化页面也使用正式 Workbench 产物；Thread 内正文通过可穿透 ShadowRoot 的作用域 locator 读取，不能以 document 全局查询的空结果证明成功。元数据在打开对应 Thread 后核对；边界状态、工具顺序及清理失败断言保持。
   - 元数据场景同时覆盖 Gateway 静态产物和真实 Workbench Vite 源码入口；业务工作区与未注册目录按 run／测试节点隔离，两个参数不能共用目录。Vite 与 Gateway 在本测试获分配的端口块内使用 E2EProcessLease 选择并持续保留空闲绑定，服务关闭后再释放，将探测写入同一 port-allocation.json，不终止未知进程或更改宿主端口设置。Vite 变体显式指定本用例 runtime 的静态资源输出及派生缓存，核 JSON health、Vite 客户端、源码首页和三条真实 Gateway 初始化接口，再复用相同的浏览器文件／设置／刷新／日志持久化断言。Vite 子进程组取得后立即登记回收，不允许以静态首页回退掩盖开发入口失败。
   - 元数据场景还通过原版工作区设置编辑器连续三次保存并直接刷新，核对 JSON 与实际编辑器字体恢复；不预写 IndexedDB，不提前调用关闭 flush。设置可能使用原版 modal editor，按对话框与可见代码行定位；存储关闭错误仍须审计，不能由已知原版关闭日志豁免。
+  - Vite 场景直接启动产品 dev 命令指定的 Node／scripts/dev.mjs，让 PID 监听探针观察实际服务 owner；不把 bun run 包装进程冒充监听者，也不移除监听归属检查或放宽原期限。
   - 主题迁移通过真实 Gateway 控制中心保存网络背景，使用隔离 Gateway 中不存在的合法资源摘要取得原始 404／request_id，核对原版通知 toast 和导航／精确 Thread 宿主的无图片主题；恢复默认背景后聊天仍可操作。没有图片 HTTP 替身或数据库预写，组件 collector 不能代替此接线验收。
   - 元数据 Chromium／context 取得后立即交给既有 TestRunContext；执行、截图、结果写入和清理失败须同时保留，截图失败不能阻止 JSON 落盘或浏览器关闭。失败 JSON 包含未完成资源请求及原始页面／console 错误；准备和诊断故障验收复用 test_boundary_display_fixture_lifetime.py，不替代真实产品页面。
   - 元数据场景末尾显式合成 beforeunload/pagehide，使原文档继续存活到延迟日志写入完成；只读真实日志 store，核关闭日志计数增加且无存储错误。该受控检查用于稳定暴露提前关闭连接，不替代前面的真实刷新，也不宣称浏览器强杀时日志必然落盘。
