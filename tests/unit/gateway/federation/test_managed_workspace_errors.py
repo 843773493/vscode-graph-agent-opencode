@@ -39,11 +39,12 @@ def managed_list() -> dict[str, object]:
 @pytest.fixture
 def blocked_removal() -> dict[str, object]:
     return {
+        "gateway_id": "gateway_remote",
         "workspace_id": "remote-workspace", "backend_generation": "generation-original",
         "affected_workspace_ids": ["remote-workspace", "remote-sibling"], "status": "blocked",
-        "blockers": [{"kind": "job", "workspace_id": "remote-sibling", "resource_id": "job-original",
+        "blockers": [{"kind": "job", "gateway_id": "gateway_remote", "workspace_id": "remote-sibling", "resource_id": "job-original",
                       "session_id": "session-original", "status": "running", "detail": "原执行仍在运行"}],
-        "workspaces": {"active_workspace_id": None, "items": []},
+        "workspaces": {"active_workspace": None, "items": []},
     }
 
 
