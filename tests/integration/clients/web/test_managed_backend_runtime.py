@@ -53,6 +53,7 @@ async def test_complete_backend_group_confirmation_and_runtime_actions(
         **os.environ,
         "BOXTEAM_BROWSER_BASE_URL": str(case.client.base_url).rstrip("/"),
         "BOXTEAM_BROWSER_FIXTURE": json.dumps({
+            "gatewayId": primary["gateway_id"],
             "primaryId": primary["workspace_id"], "primaryName": primary["name"],
             "secondaryId": secondary["workspace_id"], "secondaryName": secondary["name"],
         }, ensure_ascii=False),

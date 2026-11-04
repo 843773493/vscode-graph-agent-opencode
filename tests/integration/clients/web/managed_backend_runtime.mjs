@@ -3,6 +3,7 @@ import process from "node:process";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
+import { gatewayWorkspaceKey } from "../../../../src/clients/web/src/api/workspaceIdentity.ts";
 
 function required(name) {
   const value = process.env[name];
@@ -228,7 +229,7 @@ try {
   phase = "delete-last-member";
   await api(`/api/gateway/workspaces/${fixture.secondaryId}/runtime/start`, { method: "POST" });
   await page.getByRole("button", { name: "关闭 Gateway 控制中心", exact: true }).click();
-  const row = page.getByTestId(`workspace-node-${fixture.secondaryId}`);
+  const row = page.getByTestId(`workspace-node-${gatewayWorkspaceKey({ gatewayId: fixture.gatewayId, workspaceId: fixture.secondaryId })}`);
   await row.waitFor({ state: "visible", timeout: 30_000 });
   await row.click({ button: "right" });
   await page.getByRole("menuitem", { name: "删除工作区", exact: true }).click();

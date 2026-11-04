@@ -9,6 +9,7 @@ import re
 import signal
 import sqlite3
 from collections.abc import AsyncIterator
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -157,10 +159,13 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
             agent["model"]["fallback_providers"] = []
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
-    with model_stream_replay(
+    with ExitStack() as resources, model_stream_replay(
         context.artifacts_dir / request.node.name, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="shared-backend-mount-isolation-and-controlled-exit",
     ) as replay:
+        gateway_lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", (ports.port(20),))
+        gateway_lease.acquire()
+        resources.callback(gateway_lease.release)
         gateway = await asyncio.to_thread(
             start_gateway_process, workspace_root=roots[0], default_backend_url=None, port=ports.port(20),
             boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir / "gateway",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,17 +14,26 @@ from app.core.mounted_workspaces import (
 )
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.runtime.local_workspace import start_managed_backend_runtime
+from app.gateway.runtime.local_workspace import (
+    start_managed_backend_runtime,
+    wait_for_workspace_health,
+)
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
     ManagedBackendOwner,
 )
+from app.gateway.runtime.process_lifecycle import ManagedProcess
+from app.gateway.runtime.workspace_process import start_local_backend_process
+from tests.support.e2e_control.harness import E2EProcessLease
+from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
+
+GATEWAY_ID = "gateway_" + "a" * 32
 
 
 @dataclass(frozen=True, slots=True)
 class _Backend:
-    process: asyncio.subprocess.Process
+    process: ManagedProcess
     workspace_root: Path
     workspace_id: str
     port: int
@@ -36,68 +44,30 @@ class _Backend:
 @pytest.fixture
 async def adopted_backend(
     integration_workspace_root_path: str,
+    integration_backend_port: int,
+    tmp_path: Path,
 ) -> AsyncIterator[_Backend]:
     workspace_root = Path(integration_workspace_root_path)
     workspace_id = load_or_create_workspace_id(workspace_root)
     generation = "backend_generation_adoption"
     digest = mounted_workspace_manifest_digest((MountedWorkspace(workspace_id, workspace_root),))
-    # 独立 HTTP 替身提供真实健康身份；父进程关闭 stdin 时服务随之停止，
-    # 测试 runner 保留对子进程的归属，超时清理可覆盖完整进程树。
-    server_source = """
-import json
-import os
-import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
-
-workspace_id, generation, digest = sys.argv[1:4]
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path != "/api/v1/health":
-            self.send_error(404)
-            return
-        body = json.dumps({"workspace_id": workspace_id, "process_id": os.getpid(), "status": "ok", "backend_generation": generation, "mount_manifest_digest": digest}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-server = HTTPServer(("127.0.0.1", 0), Handler)
-
-def watch_owner():
-    sys.stdin.buffer.read()
-    server.shutdown()
-
-Thread(target=watch_owner, daemon=True).start()
-print(server.server_address[1], flush=True)
-server.serve_forever()
-server.server_close()
-"""
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        server_source,
-        workspace_id,
-        generation,
-        digest,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-    )
+    lease = E2EProcessLease(tmp_path / "backend-port.json", (integration_backend_port,))
+    lease.acquire()
     try:
-        assert process.stdout is not None
-        port_line = await asyncio.wait_for(process.stdout.readline(), timeout=3)
-        assert port_line, "托管测试 Workspace API 未启动"
-        yield _Backend(process, workspace_root, workspace_id, int(port_line), generation, digest)
-    finally:
-        assert process.stdin is not None
-        process.stdin.close()
+        # 使用正式启动、健康与日志证明，不再手写一份不完整的 Backend HTTP 协议。
+        process = start_local_backend_process(
+            project_root=Path.cwd(), mounts=(MountedWorkspace(workspace_id, workspace_root),),
+            backend_generation=generation, port=integration_backend_port, log_dir=tmp_path / "logs",
+        )
         try:
-            await asyncio.wait_for(process.wait(), timeout=3)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
+            await wait_for_workspace_health(
+                f"http://127.0.0.1:{integration_backend_port}/api/v1/health", workspace_id, process.process,
+            )
+            yield _Backend(process, workspace_root, workspace_id, integration_backend_port, generation, digest)
+        finally:
+            await asyncio.to_thread(process.close)
+    finally:
+        lease.release()
 
 
 @pytest.mark.asyncio
@@ -124,15 +94,14 @@ async def test_preferred_port_mismatch_rejects_without_stopping_adopted_backend(
     )
 
     owner = ManagedBackendOwner(ManagedBackendContract(
-        "backend_owner_adoption", backend.generation,
-        (ManagedBackendMember("registered-target", backend.workspace_id),),
-        f"http://127.0.0.1:{backend.port}",
+        gateway_id=GATEWAY_ID, owner_id="backend_owner_adoption", generation=backend.generation,
+        members=(ManagedBackendMember(backend.workspace_id),),
+        backend_url=f"http://127.0.0.1:{backend.port}",
     ))
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json", gateway_id=GATEWAY_ID)
     registry.upsert(WorkspaceTarget(
-        workspace_id="registered-target", name="Adopted", root_path=str(backend.workspace_root),
+        gateway_id=GATEWAY_ID, workspace_id=backend.workspace_id, name="Adopted", root_path=str(backend.workspace_root),
         backend_url=owner.contract.backend_url, connection_kind="local", managed=True,
-        backend_workspace_id=backend.workspace_id,
     ))
     registry.register_backend_owner(owner)
     with pytest.raises(RuntimeError, match="端口与首选端口不匹配") as raised:
@@ -143,9 +112,12 @@ async def test_preferred_port_mismatch_rejects_without_stopping_adopted_backend(
 
     assert f"actual={backend.port}" in str(raised.value)
     assert f"preferred={preferred_backend_port}" in str(raised.value)
-    assert backend.process.returncode is None
-    async with httpx.AsyncClient(timeout=2) as client:
-        response = await client.get(f"http://127.0.0.1:{backend.port}/api/v1/health")
+    assert backend.process.is_alive()
+    async with httpx.AsyncClient(timeout=2, headers=LOCAL_TOKEN_HEADERS) as client:
+        response = await client.get(
+            f"http://127.0.0.1:{backend.port}/api/v1/health",
+            headers={"X-BoxTeam-Workspace-Id": backend.workspace_id},
+        )
     assert response.status_code == 200
     assert response.json()["workspace_id"] == backend.workspace_id
     assert response.json()["process_id"] == backend.process.pid

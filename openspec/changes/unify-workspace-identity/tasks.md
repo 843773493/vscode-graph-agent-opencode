@@ -21,15 +21,15 @@
 
 ## 4. 联邦与连接身份分离
 
-- [ ] 4.1 将 manifest、projection 和远程代理迁为来源 `(gateway_id, workspace_id)`，移除投影 ID 生成及远程 UUID 换算，保留 cursor、CAS 与 lease。
-- [ ] 4.2 迁齐连接配置对账和工作区关联，同一来源多连接只保留一个资源身份，删除连接不误删其他关联；保留 generation 排空和独立凭据边界。
-- [ ] 4.3 接通独立目标 Gateway 载体，迁齐远程生命周期、目录和 Generator 引用，不改变发送方身份头、管理授权或有界联邦规则。
+- [x] 4.1 将 manifest、projection 和远程代理迁为来源 `(gateway_id, workspace_id)`，移除投影 ID 生成及远程 UUID 换算，保留 cursor、CAS 与 lease。
+- [x] 4.2 迁齐连接配置对账和工作区关联，同一来源多连接只保留一个资源身份，删除连接不误删其他关联；保留 generation 排空和独立凭据边界。
+- [x] 4.3 接通独立目标 Gateway 载体，迁齐远程生命周期、目录和 Generator 引用，不改变发送方身份头、管理授权或有界联邦规则。
 - [ ] 4.4 通过两个真实 Gateway 验证同 UUID 不同归属、多连接同来源、连接更新／离线、快照恢复及不兼容协议拒绝，检查请求 UUID 不经换算。
 
 ## 5. 客户端引用与持久恢复
 
-- [ ] 5.1 迁齐共享 owner、Gateway 请求、工作区选择、目录／搜索 scope、缓存键及相关客户端运行面，删除路由 ID 到 Backend UUID 的转换函数和调用方。
-- [ ] 5.2 迁齐编辑器 serializer、活动选择、导航／Generator 与用户视图态的持久引用；按 Gateway 归属保存同一 UUID。
+- [x] 5.1 迁齐共享 owner、Gateway 请求、工作区选择、目录／搜索 scope、缓存键及相关客户端运行面，删除路由 ID 到 Backend UUID 的转换函数和调用方。
+- [x] 5.2 迁齐编辑器 serializer、活动选择、导航／Generator 与用户视图态的持久引用；按 Gateway 归属保存同一 UUID。
 - [x] 5.3 接入显式迁移恢复材料，准确升级旧客户端引用；无法确认的项逐项报告并保留可重试信息，不切到当前工作区或清空有效状态。
 - [ ] 5.4 运行受影响客户端真实类型检查及 Workbench 构建，以真实 Gateway 和隔离浏览器验证两工作区切换、远程选择、文件打开、搜索及重载恢复。
 
@@ -198,7 +198,7 @@
 ### 2026-11-04：3.2 生命周期迁齐与 3.3 产品补验
 
 - 完整组动作、配置应用、关闭及 preserve/adopt 消费同一 UUID 和原生 Gateway；未保留组内身份换算。reconnect／managed／config 集中收集 265 项，90 秒保护在完成前 247 项后终止，剩余 18 项精确补验通过；shutdown／启动／adopt 的此前 66 项证据继续适用，不把截断运行称为整组退出 0。原件见 `identity_registry_recovery_root/artifacts/canonical-group-*` 及上方 3.1 索引。
-- 真实候选进程失败恢复完整旧组 1 passed／96.11 秒；双挂载由消息入口产生历史后重启 Backend，两工作区原 Thread、消息顺序、规范化请求前缀及续跑隔离通过。原件为同目录 `product-shared-candidate-after-gate-release-1793828578895237626.*`、`product-shared-history-and-workbench-lifecycle-1793828754894097214.*`。后一批另一个 Web 项在浏览器前因缺少 fixture 接线报错，不能计成功；改为直接导入原装具后 Ruff／Pyright 通过，正式 Workbench 构建通过，补跑又在宿主 `/proc/<pid>/fd` 的 psutil.AccessDenied 处停止，尚未进入浏览器。两次失败均保留，不修改系统权限或绕过监听身份检查，3.3 保持未完成。
+- 真实候选进程失败恢复完整旧组 1 passed／96.11 秒；双挂载由消息入口产生历史后重启 Backend，两工作区原 Thread、消息顺序、规范化请求前缀及续跑隔离通过。原件为同目录 `product-shared-candidate-after-gate-release-1793828578895237626.*`、`product-shared-history-and-workbench-lifecycle-1793828754894097214.*`。后一批另一个 Web 项在浏览器前因缺少 fixture 接线报错；直接导入原装具后，补跑在监听探测时报 psutil.AccessDenied，进一步核对原 Gateway 日志确认首因是 46720 的 EADDRINUSE。复用已有端口租约预留后进入真实页面，最终旧 UUID 选择器失败已按完整 owner 修正。原始失败均保留，不更改宿主权限或跳过监听身份检查。
 
 - 通信 startup 装具迁为完整 owner，新增同 UUID 错误 Gateway 归属拒绝，原期限、错误 cause、HTTP 分类与诊断断言保留，57 passed／3.51 秒。Ruff 通过，Pyright 当前／实际 HEAD 均两条原异常联合类型诊断，无新增；原件在同目录 `communication-owner-readiness-*`、`communication-readiness-baseline-types-*`。此处 HTTP 使用原请求替身，不代替真实通信恢复或完整 6.4 验收。
 
@@ -211,3 +211,13 @@
 
 - inventory 装具直接消费公开 Gateway／Workspace owner、`active_workspace` 与 `remote_gateways`，删除旧双身份 helper 和绕过 DTO 校验的旧字段注入。保留分页预算、顺序、动态 checked_at 不改 revision、名称变化和 cursor 失效；同 UUID 分属不同 Gateway 的分页与活动归属切换不混用资源。同步修正 Gateway 控制与公开 schema 的过时目录指引，避免重新引入双身份。
 - 单文件 18 passed／1.70 秒，Ruff／Pyright 退出 0，原 15 条类型诊断消除；Root 核对差异及最终指纹。准确命令、原始输出和源码指纹见 `out/tests/temp/identity_context_inventory_current/artifacts/verification-1793829922390166468.json`。本切片仅改测试和目录指引，不代表真实远端或完整客户端 5.4 验收。
+
+### 2026-11-04：3.3 工作台完整组及接管拒绝补验
+
+- 正式 Workbench 经真实 Gateway 完成取消、合并、sibling SSE 阻塞、显式 force、旧流失效、陈旧确认 CAS、成员移出、空组退出与最后成员删除。删除行复用产品的完整 owner key，不修改产品选择器或放宽身份断言。Web 项 1 passed，原件在 `identity_registry_recovery_root/artifacts/product-workbench-owner-and-real-adoption-1793829953190433344.*`；同批接管项因最终探针漏传显式 UUID 返回 400，未计成功。产品／驱动源码稳定，仅并行的独立集成和单测文件发生变化。
+- 接管装具删除手写 Backend HTTP 服务，直接使用正式 Backend 启动、健康与受认证日志证明；首选端口不符仍拒绝，不启动候选或辅助进程，原 PID／UUID 继续服务。补齐最终探针 owner 后单项通过，原件 `product-real-adoption-owner-health-1793830280394796427.*`，源码首尾一致。Ruff 通过；Web／接管静态零诊断，共享生命周期装具仍有与 HEAD 相同的四条存量类型诊断。完整辅助资源保留和部分 adopt 拒绝仍待核齐，3.3 不提前勾选。
+
+### 2026-11-04：4.1／4.2／4.3／5.1／5.2 实现项独立收口
+
+- 只读复核及 Root 核对确认：manifest、投影、代理及连接关系使用来源 Gateway／UUID；多连接合并和解绑复用唯一 registry CAS，连接歧义不隐式选路。目标头与发送方身份分开，生命周期、目录和当前 Generator 沿原授权与 owner 执行；旧 Generator 的升级前退休边界保持。
+- 客户端选择、HTTP、搜索 scope、历史／文件缓存、Thread serializer、活动选择和目录 outbox 均消费完整 owner；旧字段限于显式迁移输入，原生 UUID 读取入口不是别名换算。相关定向回归、协议生成一致性、真实 sourceTransform 类型检查及完整 Workbench 构建沿上方各切片证据复用。本次勾选实现项，不将只读审查当作双 Gateway、全部浏览器恢复或 Windows 验收；4.4／5.4／6.3／6.4 保持未完成。
