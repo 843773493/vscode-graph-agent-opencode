@@ -13,11 +13,13 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.mcp.extension_catalog import ExtensionCatalogUnavailableError
 from app.services.infrastructure.mcp.tool_definitions import tool_catalog_from_activation
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
+from app.services.infrastructure.rollout_context.checkpoint.durable import source_activation
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import definition_source_values
 from app.services.infrastructure.rollout_context.runtime.context_sources import tool_definitions
 from tests.harness.python.run_context import TestRunContext
@@ -37,7 +39,7 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
     thread = saver._storage.storage.main_thread_id(session)
     admission = saver.execution_admission(session, thread_id=thread, execution_id=accepted["initial_execution_id"])
 
-    async def create(source_count, call_count, *, damage=None, compact=True):
+    async def create(source_count, call_count, *, damage=None, compact=True, split_calls=False):
         wire, activation = guidance_prepare("batch-discovery-start")
         snapshot = wire["snapshot"]
         catalog = tool_catalog_from_activation(activation, lambda frozen, binding: saver.read_resource_activation_payload(
@@ -48,9 +50,12 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
             definition.metadata.tool_id: resolver.resolve(definition.metadata) for definition in frozen.definitions
         })
         targets = ("ci_logs", "ci_runs", "notes", "mcp__mini__echo")[:source_count]
-        payload = json.loads(await tool.ainvoke({"tool_ids": targets, "max_response_bytes": 65536}))
-        assert [entry["tool_id"] for entry in payload["results"]] == list(targets)
-        originals = {entry["tool_id"]: entry for entry in payload["results"]}
+        groups = [targets[index::call_count] if split_calls else targets for index in range(call_count)]
+        payloads = [json.loads(await tool.ainvoke({"tool_ids": group, "max_response_bytes": 65536})) for group in groups]
+        for group, payload in zip(groups, payloads, strict=True):
+            assert [entry["tool_id"] for entry in payload["results"]] == list(group)
+        originals = {entry["tool_id"]: entry for payload in payloads for entry in payload["results"]}
+        payload = payloads[-1]
         if damage == "activation":
             payload["results"][-1]["provenance"]["activation_snapshot_id"] = "different-activation"
         elif damage == "revision":
@@ -59,12 +64,12 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
             payload["results"][-1]["description"] = "被改写的发现正文"
         messages = [AIMessage(content="", id="batch-discovery-assistant",
             response_metadata={"model_call_id": snapshot.model_call_id},
-            tool_calls=[{"name": "search_tools", "id": f"batch-discovery-{index}", "args": {"tool_ids": targets}}
-                        for index in range(call_count)])]
+            tool_calls=[{"name": "search_tools", "id": f"batch-discovery-{index}", "args": {"tool_ids": group}}
+                        for index, group in enumerate(groups)])]
         messages.extend(ToolMessage(
             content=json.dumps(payload), id=f"batch-discovery-result-{index}", name="search_tools",
             tool_call_id=f"batch-discovery-{index}", response_metadata={"model_call_id": snapshot.model_call_id},
-        ) for index in range(call_count))
+        ) for index, payload in enumerate(payloads))
         checkpoint = empty_checkpoint()
         checkpoint["id"] = "batch-discovery-checkpoint"
         checkpoint["channel_values"] = {"messages": messages}
@@ -87,6 +92,104 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
         return originals, activation.activation_snapshot_id
 
     return create
+
+
+@pytest.mark.parametrize("call_count", [1, 2])
+async def test_seal_reuses_exact_definition_and_discovery_proofs_in_its_transaction(
+    discovered_batch, guidance_prepare, registry_db, monkeypatch, request, call_count,
+):
+    originals, _activation_id = await discovered_batch(4, call_count, split_calls=True)
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    validate = source_activation._validate_definition_sources
+    phases = []
+
+    def observe_validation(connection, snapshot, previous):
+        statements = []
+        connection.set_trace_callback(statements.append)
+        try:
+            return validate(connection, snapshot, previous)
+        finally:
+            connection.set_trace_callback(None)
+            phases[-1]["validations"].append({
+                "bindings": [sql for sql in statements if sql.startswith("SELECT session_id,thread_id FROM resource_activation_bindings ")],
+                "discoveries": [sql for sql in statements if sql.startswith("SELECT tool.tool_call_id,item.projection_manifest_json FROM model_calls call ")],
+            })
+
+    monkeypatch.setattr(source_activation, "_validate_definition_sources", observe_validation)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        for key, owner in (("restored", saver), ("successor", saver), ("cold", cold)):
+            phases.append({"phase": key, "validations": []})
+            wire, _ = guidance_prepare("batch-sql-" + key, context_owner=owner)
+            restored = [value for value, _ in definition_source_values(wire["snapshot"])]
+            assert [value.tool_id for value in restored] == sorted(originals)
+            assert {value.discovered_from.tool_call_id for value in restored} == {
+                f"batch-discovery-{index}" for index in range(call_count)
+            }
+            for value in restored:
+                assert value.definition is not None
+                assert value.definition.input_schema == originals[value.tool_id]["input_schema"]
+                assert value.definition.provenance.model_dump() == originals[value.tool_id]["provenance"]
+            assert cold.get_context_assembly(
+                session, thread, assembly_id=wire["snapshot"].assembly_id,
+            ).to_dict() == wire["snapshot"].to_dict()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"definition-seal-sql-{call_count}.json").write_text(
+        json.dumps(phases, indent=2), encoding="utf-8",
+    )
+    print(f"definition seal SQL ({call_count=}): {[(phase['phase'], [(len(v['bindings']), len(v['discoveries'])) for v in phase['validations']]) for phase in phases]}")
+    for phase in phases:
+        assert phase["validations"]
+        for validation in phase["validations"]:
+            assert len(validation["bindings"]) == len(set(validation["bindings"])) == 4
+            assert len(validation["discoveries"]) == call_count
+
+
+@pytest.mark.parametrize("damage", ["binding", "discovery"])
+async def test_seal_does_not_reuse_proofs_for_another_resource_or_tool_call(
+    discovered_batch, guidance_prepare, registry_db, monkeypatch, damage,
+):
+    originals, activation_id = await discovered_batch(4, 2, split_calls=True)
+    _saver, _session, connection, _accepted = registry_db
+    before_assemblies = connection.execute("SELECT count(*) FROM context_assemblies").fetchone()
+    before_bindings = connection.execute(
+        "SELECT * FROM resource_activation_bindings WHERE activation_snapshot_id=? ORDER BY resource_id", (activation_id,),
+    ).fetchall()
+    before_calls = connection.execute("SELECT * FROM tool_calls ORDER BY tool_call_id").fetchall()
+    validate = source_activation._validate_definition_sources
+    injected = False
+
+    def damage_before_validation(write_connection, snapshot, previous):
+        nonlocal injected
+        assert not injected
+        injected = True
+        # 在真实 seal 事务内注入损坏，首个资源/调用的成功证明不能授权后面的不同身份。
+        if damage == "binding":
+            changed = write_connection.execute(
+                "UPDATE resource_activation_bindings SET availability='unavailable' "
+                "WHERE activation_snapshot_id=? AND resource_id=?",
+                (activation_id, originals["notes"]["provenance"]["resource_id"]),
+            )
+        else:
+            call_id, = next(row for row in write_connection.execute("SELECT tool_call_id FROM tool_calls")
+                            if row[0].endswith("batch-discovery-1"))
+            changed = write_connection.execute(
+                "UPDATE tool_calls SET tool_name='removed_search_tools' WHERE tool_call_id=?", (call_id,),
+            )
+        assert changed.rowcount == 1
+        return validate(write_connection, snapshot, previous)
+
+    monkeypatch.setattr(source_activation, "_validate_definition_sources", damage_before_validation)
+    message = "冻结定义缺失或身份不唯一" if damage == "binding" else "原发现调用不属于所指冻结请求"
+    with pytest.raises(ItemSchemaError, match=message):
+        guidance_prepare("batch-sql-rejected")
+    assert injected
+    assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before_assemblies
+    # 新请求的 freeze 在 seal 前独立提交；本事务必须回滚对原冻结 binding 的注入。
+    assert connection.execute(
+        "SELECT * FROM resource_activation_bindings WHERE activation_snapshot_id=? ORDER BY resource_id", (activation_id,),
+    ).fetchall() == before_bindings
+    assert connection.execute("SELECT * FROM tool_calls ORDER BY tool_call_id").fetchall() == before_calls
 
 
 @pytest.mark.parametrize("source_count", [1, 4])

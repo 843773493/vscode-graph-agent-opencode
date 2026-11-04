@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from functools import cache
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -32,7 +33,6 @@ from app.services.infrastructure.rollout_context.checkpoint.durable.context_sour
     _state_from_row,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
-    DefinitionProvenance,
     definition_source_values,
     is_tool_definition_source,
 )
@@ -107,17 +107,37 @@ def _validate_definition_sources(
     previous: ContextAssemblySnapshot | None,
 ) -> None:
     """与 assembly 同事务校验冻结定义；不创建或更新 CSM 控制行。"""
-    def require_definition(ref: DefinitionProvenance) -> tuple[str, str]:
+    # 缓存仅存在于本次事务校验：相同冻结 binding 或原调用不重复查库，
+    # activation、资源、revision、owner 与调用身份不同的事实仍分别核验。
+    @cache
+    def require_definition(activation_snapshot_id: str, resource_id: str, revision: str) -> tuple[str, str]:
         rows = connection.execute(
             "SELECT session_id,thread_id FROM resource_activation_bindings "
             "WHERE activation_snapshot_id=? AND resource_id=? AND revision=? "
             "AND content_hash=? AND resource_kind='mcp_tool_catalog' AND facet='definition' AND availability='available'",
-            (ref.activation_snapshot_id, ref.resource_id, ref.revision, ref.revision),
+            (activation_snapshot_id, resource_id, revision, revision),
         ).fetchall()
         if len(rows) != 1:
             raise ItemSchemaError("definition-source-conflict: 冻结定义缺失或身份不唯一")
         require_historical_scope(connection, *rows[0], current_owner=(snapshot.session_id, snapshot.thread_id))
         return tuple(rows[0])
+
+    @cache
+    def require_discovery(model_call_id: str, owner: tuple[str, str], activation_snapshot_id: str, tool_call_id: str) -> None:
+        rows = connection.execute(
+            "SELECT tool.tool_call_id,item.projection_manifest_json FROM model_calls call "
+            "JOIN resource_activation_assembly_bindings activation ON activation.assembly_id=call.assembly_id "
+            "JOIN item_catalog item ON json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id')=call.model_call_id "
+            "JOIN messages message ON message.jsonl_offset=item.jsonl_offset AND message.jsonl_length=item.jsonl_length "
+            "JOIN tool_calls tool ON tool.assistant_message_sequence=message.message_sequence "
+            "WHERE call.model_call_id=? AND call.session_id=? AND call.thread_id=? "
+            "AND activation.activation_snapshot_id=? AND tool.tool_name='search_tools' AND tool.result_message_sequence IS NOT NULL",
+            (model_call_id, *owner, activation_snapshot_id),
+        ).fetchall()
+        if not any(matches_tool_call_id(
+            ItemProjectionIdentity.from_dict(json.loads(manifest)["projection_identity"]), call_id, tool_call_id,
+        ) for call_id, manifest in rows):
+            raise ItemSchemaError("definition-source-conflict: 原发现调用不属于所指冻结请求")
 
     assert snapshot.seal_binding is not None
     if any(is_tool_definition_source(source.source_identity) for source in (
@@ -127,24 +147,12 @@ def _validate_definition_sources(
     current: dict[str, str] = {}
     for value, revision in definition_source_values(snapshot):
         discovered = value.discovered_from
-        original_owner = require_definition(discovered)
-        rows = connection.execute(
-            "SELECT tool.tool_call_id,item.projection_manifest_json FROM model_calls call "
-            "JOIN resource_activation_assembly_bindings activation ON activation.assembly_id=call.assembly_id "
-            "JOIN item_catalog item ON json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id')=call.model_call_id "
-            "JOIN messages message ON message.jsonl_offset=item.jsonl_offset AND message.jsonl_length=item.jsonl_length "
-            "JOIN tool_calls tool ON tool.assistant_message_sequence=message.message_sequence "
-            "WHERE call.model_call_id=? AND call.session_id=? AND call.thread_id=? "
-            "AND activation.activation_snapshot_id=? AND tool.tool_name='search_tools' AND tool.result_message_sequence IS NOT NULL",
-            (discovered.model_call_id, *original_owner, discovered.activation_snapshot_id),
-        ).fetchall()
-        if not any(matches_tool_call_id(
-            ItemProjectionIdentity.from_dict(json.loads(manifest)["projection_identity"]), call_id, discovered.tool_call_id,
-        ) for call_id, manifest in rows):
-            raise ItemSchemaError("definition-source-conflict: 原发现调用不属于所指冻结请求")
+        original_owner = require_definition(discovered.activation_snapshot_id, discovered.resource_id, discovered.revision)
+        require_discovery(discovered.model_call_id, original_owner, discovered.activation_snapshot_id, discovered.tool_call_id)
         if value.definition is not None:
             definition = value.definition
-            require_definition(definition.provenance)
+            provenance = definition.provenance
+            require_definition(provenance.activation_snapshot_id, provenance.resource_id, provenance.revision)
             if (definition.provenance.resource_id != discovered.resource_id
                     or sha256_jcs(definition.payload()) != definition.provenance.revision
                     or extension_schema_hash(definition.input_schema) != definition.schema_hash):
