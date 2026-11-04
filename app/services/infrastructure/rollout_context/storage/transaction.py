@@ -103,6 +103,127 @@ def validate_commit_contract(
         raise ItemSchemaError("completed_empty terminal convergence 必须是 metadata-only")
 
 
+STORED_COMMIT_COLUMNS = ",".join(
+    "commit_record." + column for column in (
+        "commit_id", "jsonl_start_offset", "jsonl_end_offset", "jsonl_offset_before",
+        "jsonl_offset_after", "jsonl_record_count", "status", "commit_kind", "commit_mode",
+        "outcome", "metadata_json", "jsonl_fsync_at",
+    )
+) + " "
+
+
+def validate_stored_commit(
+    commit: Sequence[object], *, validated_metadata: set[str] | None = None,
+) -> tuple[int, int, int, int]:
+    """读取与恢复共用单条提交合同；不在普通读取中遍历整条历史链。"""
+    commit_id = strict_non_negative_int(
+        commit[0], field="storage_commits.commit_id"
+    )
+    start = strict_non_negative_int(
+        commit[1], field=f"storage commit jsonl_start_offset: {commit_id}"
+    )
+    end = strict_non_negative_int(
+        commit[2], field=f"storage commit jsonl_end_offset: {commit_id}"
+    )
+    before = strict_non_negative_int(
+        commit[3], field=f"storage commit jsonl_start_offset: {commit_id}"
+    )
+    after = strict_non_negative_int(
+        commit[4], field=f"storage commit jsonl_offset_after: {commit_id}"
+    )
+    record_count = strict_non_negative_int(
+        commit[5], field=f"storage commit jsonl_record_count: {commit_id}"
+    )
+    status = strict_text(commit[6], field=f"storage commit status: {commit_id}")
+    if status != "committed":
+        raise RuntimeError(f"v2 storage commit 未收敛: commit_id={commit_id}")
+    commit_kind = strict_text(
+        commit[7], field=f"storage commit kind: {commit_id}"
+    )
+    commit_mode = strict_text(
+        commit[8], field=f"storage commit mode: {commit_id}"
+    )
+    if commit_kind not in _COMMIT_KIND_VALUES:
+        raise RuntimeError(
+            f"v2 storage commit kind 非法: commit_id={commit_id}, kind={commit_kind}"
+        )
+    if commit_mode not in _COMMIT_MODE_VALUES:
+        raise RuntimeError(
+            f"v2 storage commit mode 非法: commit_id={commit_id}, mode={commit_mode}"
+        )
+    outcome = commit[9]
+    if outcome is not None and not isinstance(outcome, str):
+        raise RuntimeError(
+            f"v2 storage commit outcome 必须是字符串或 null: commit_id={commit_id}"
+        )
+    try:
+        validate_commit_contract(
+            commit_kind=commit_kind,
+            commit_mode=commit_mode,
+            item_count=record_count,
+            outcome=outcome,
+        )
+    except (ItemSchemaError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"v2 storage commit contract 非法: commit_id={commit_id}: {error}"
+        ) from error
+    metadata_json = commit[10]
+    if not isinstance(metadata_json, str) or not metadata_json:
+        raise RuntimeError(
+            f"v2 storage commit metadata_json 必须是非空字符串: commit_id={commit_id}"
+        )
+    # 仅在本次完整校验内复用相同字节的纯解析结果；每条 commit 的合同和边界仍独立校验。
+    if validated_metadata is None or metadata_json not in validated_metadata:
+        try:
+            metadata_value = json.loads(metadata_json)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"v2 storage commit metadata_json 非法: commit_id={commit_id}"
+            ) from error
+        if not isinstance(metadata_value, Mapping) or _json(metadata_value) != metadata_json:
+            raise RuntimeError(
+                "v2 storage commit metadata_json 不是 RFC 8785 JCS object: "
+                f"commit_id={commit_id}"
+            )
+        if "physical_record_count" in metadata_value or "compacted" in metadata_value:
+            raise RuntimeError(
+                "immutable JSONL 不允许已提交记录被物理压缩或重写: "
+                f"commit_id={commit_id}"
+            )
+        if validated_metadata is not None:
+            validated_metadata.add(metadata_json)
+    if start != before or end != after or end < start:
+        raise RuntimeError(
+            "v2 storage commit JSONL offset 链断裂（offset 字段不一致）: "
+            f"commit_id={commit_id}, before={before}, start={start}, "
+            f"end={end}, after={after}"
+        )
+    if (
+        commit_mode == CommitMode.ITEM_BEARING.value
+        and not isinstance(commit[11], str)
+    ):
+        raise RuntimeError(
+            f"item-bearing commit 缺少 JSONL fsync barrier: commit_id={commit_id}"
+        )
+    if commit[11] is not None and (
+        not isinstance(commit[11], str) or not commit[11]
+    ):
+        raise RuntimeError(
+            f"v2 storage commit fsync timestamp 非法: commit_id={commit_id}"
+        )
+    if commit_mode == CommitMode.METADATA_ONLY.value and (
+        start != end or record_count != 0
+    ):
+        raise RuntimeError(
+            f"metadata-only commit 不得推进 JSONL offset: commit_id={commit_id}"
+        )
+    if commit_mode == CommitMode.ITEM_BEARING.value and record_count <= 0:
+        raise RuntimeError(
+            f"item-bearing commit 必须包含 item: commit_id={commit_id}"
+        )
+    return commit_id, start, end, record_count
+
+
 def default_idempotency_key(
     *,
     commit_kind: str,

@@ -35,6 +35,11 @@ from app.services.infrastructure.rollout_context.storage.catalog.integrity impor
     read_catalog_body,
     validate_catalog_projection,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.item_reader import (
+    CATALOG_READ_COLUMNS,
+    CATALOG_READ_JOINS,
+    validate_catalog_read_boundary,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     find_message_locator,
     read_message_group,
@@ -460,16 +465,16 @@ class RolloutItemsMixin:
             ) as read_connection:
                 self._require_v2_readable(read_connection)
                 # None 请求全部；显式空选集仍须过滤，不得读回全部历史。
+                query = (
+                    "SELECT item.item_sequence,item.item_id,item.content_hash,item.payload_length,"
+                    "item.source_revision,item.jsonl_offset,item.jsonl_length,item.projection_manifest_json,"
+                    "item.tool_call_id," + CATALOG_READ_COLUMNS + CATALOG_READ_JOINS
+                )
                 if item_ids is not None:
-                    placeholders = ",".join("?" for _ in values)
-                    rows = read_connection.execute(
-                        f"SELECT item_sequence, item_id, content_hash, payload_length, source_revision, jsonl_offset, jsonl_length, projection_manifest_json, tool_call_id FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence",
-                        values,
-                    ).fetchall()
-                else:
-                    rows = read_connection.execute(
-                        "SELECT item_sequence, item_id, content_hash, payload_length, source_revision, jsonl_offset, jsonl_length, projection_manifest_json, tool_call_id FROM item_catalog ORDER BY item_sequence"
-                    ).fetchall()
+                    query += f"WHERE item.item_id IN ({','.join('?' for _ in values)}) "
+                rows = read_connection.execute(
+                    query + "ORDER BY item.item_sequence", values,
+                ).fetchall()
                 if values:
                     found_ids = {
                         _strict_db_text(row[1], field="item_catalog.item_id")
@@ -495,14 +500,8 @@ class RolloutItemsMixin:
                     relations_by_item.setdefault(owner, []).append(
                         (ordinal, relation, source, target)
                     )
-                committed_row = read_connection.execute(
-                    "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1"
-                ).fetchone()
-                if committed_row is None:
-                    raise RuntimeError("database_meta 缺少 committed_jsonl_offset")
-                committed = strict_non_negative_int(
-                    committed_row[0], field="database_meta.committed_jsonl_offset"
-                )
+                validated_commits: set[int] = set()
+                validated_scopes: set[tuple[str, str]] = set()
                 result: list[CanonicalItemRecord] = []
                 with self.jsonl_path(
                     session_id,
@@ -519,6 +518,7 @@ class RolloutItemsMixin:
                         length_value,
                         expected_projection_manifest,
                         expected_tool_call_id,
+                        *boundary,
                     ) in rows:
                         sequence = strict_non_negative_int(
                             sequence_value,
@@ -550,8 +550,10 @@ class RolloutItemsMixin:
                             raise RuntimeError(
                                 f"item_catalog.jsonl_length 必须大于 0: {item_id}"
                             )
-                        if offset + length > committed:
-                            raise RuntimeError(f"item 超出已提交 JSONL offset: {item_id}")
+                        validate_catalog_read_boundary(
+                            read_connection, boundary, item_id=item_id, offset=offset, length=length,
+                            validated_commits=validated_commits, validated_scopes=validated_scopes,
+                        )
                         stream.seek(offset)
                         raw = stream.read(length)
                         if len(raw) != length:

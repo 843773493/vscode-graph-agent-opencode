@@ -3703,10 +3703,10 @@ async def test_inherited_plan_projections_use_one_fresh_authority_snapshot(
             owners.clear()
             projected = getattr(cold, port)(target_id, target_thread, plan, **options)
             assert projected == expected[port]
-            audits = sum("FROM storage_commits commit_record ORDER BY" in sql for sql in statements)
+            audits = sum("FROM storage_commits commit_record ORDER BY" in sql and "LIMIT" not in sql for sql in statements)
             measurements.append({"port": port, "attempt": attempt, "full_audits": audits})
             assert owners == [(target_id, target_thread)]
-            assert audits == 1
+            assert audits == 0
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     (context.artifacts_dir / "inherited-plan-projection-audits.json").write_text(
         json.dumps(measurements, indent=2), encoding="utf-8",

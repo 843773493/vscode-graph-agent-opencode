@@ -199,7 +199,7 @@ def test_valid_commit_chain_reclaims_only_uncommitted_tail(
     ]
 
 
-@pytest.mark.parametrize("operation", ["initialize", "snapshot"])
+@pytest.mark.parametrize("operation", ["initialize", "integrity_snapshot"])
 @pytest.mark.parametrize(("corruption", "match"), [
     (
         "UPDATE storage_commits SET commit_kind = 'invalid-kind' WHERE commit_kind = 'acceptance'",
@@ -244,7 +244,7 @@ def test_warm_owner_revalidates_commit_catalog_and_metadata_before_reclaiming_ta
         if operation == "initialize":
             storage.initialize(rollout.session_id, thread_id=thread_id)
         else:
-            with storage.open_read_snapshot(rollout.session_id, thread_id):
+            with storage.open_read_snapshot(rollout.session_id, thread_id, validate_integrity=True):
                 pytest.fail("后续 commit/catalog 损坏不得复用先前的校验结果")
     assert rollout.jsonl.read_bytes() == before
 
@@ -507,3 +507,44 @@ def test_startup_rejects_unpublished_migration_without_resetting_target(
         assert connection.execute(
             "SELECT database_state FROM database_meta"
         ).fetchone() == ("migrating",)
+
+
+@pytest.mark.parametrize("reader", ["items", "request_groups"])
+@pytest.mark.parametrize("corruption", [
+    "UPDATE storage_commits SET commit_kind='invalid-kind' WHERE commit_kind='acceptance'",
+    "UPDATE item_catalog SET commit_id=NULL WHERE jsonl_offset=0",
+    "UPDATE executions SET thread_id='foreign-thread'",
+])
+def test_ordinary_read_checks_consumed_commit_and_owner_without_auditing_old_history(
+    committed_rollout: CommittedRollout, reader: str, corruption: str,
+) -> None:
+    rollout = committed_rollout
+    storage = RolloutCheckpointSaver(rollout.sessions)._storage.storage
+    thread = storage.main_thread_id(rollout.session_id)
+    with sqlite3.connect(rollout.index) as connection:
+        item_id, turn_id, execution_id, message_id = connection.execute(
+            "SELECT item.item_id,item.turn_id,item.execution_id,message.message_id "
+            "FROM item_catalog item JOIN messages message "
+            "ON message.jsonl_offset=item.jsonl_offset AND message.jsonl_length=item.jsonl_length "
+            "WHERE item.jsonl_offset=0"
+        ).fetchone()
+
+    def consume(snapshot):
+        if reader == "items":
+            return storage.read_items(rollout.session_id, thread, item_ids=[item_id], snapshot=snapshot)
+        return storage.read_request_groups(
+            rollout.session_id, thread, turn_id=turn_id, execution_id=execution_id,
+            message_locators=[(message_id, item_id)], writer_connection=snapshot.connection,
+        )
+
+    with storage.open_read_snapshot(rollout.session_id, thread) as snapshot:
+        assert consume(snapshot)
+    with sqlite3.connect(rollout.index) as connection:
+        connection.execute(corruption)
+    with rollout.jsonl.open("ab") as stream:
+        stream.write(b"uncommitted-tail")
+    before = rollout.jsonl.read_bytes()
+    with storage.open_read_snapshot(rollout.session_id, thread) as snapshot:
+        with pytest.raises((RuntimeError, ValueError)):
+            consume(snapshot)
+    assert rollout.jsonl.read_bytes() == before

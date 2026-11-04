@@ -7,18 +7,66 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from typing import BinaryIO
 
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import require_historical_scope
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
     read_catalog_body,
     validate_catalog_projection,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
+    STORED_COMMIT_COLUMNS,
     strict_non_negative_int,
     strict_optional_text,
     strict_text,
+    validate_stored_commit,
 )
+
+
+# 与正文 locator 同次查询提交和 owner；按 item 主键选集做索引连接，不扫描未消费历史。
+CATALOG_READ_COLUMNS = (
+    STORED_COMMIT_COLUMNS
+    + ",execution.session_id,execution.thread_id,turn.session_id,turn.thread_id,"
+    "meta.session_id,meta.thread_id,meta.committed_jsonl_offset"
+)
+CATALOG_READ_JOINS = (
+    " FROM item_catalog item "
+    "LEFT JOIN storage_commits commit_record ON commit_record.commit_id=item.commit_id "
+    "LEFT JOIN executions execution ON execution.execution_id=item.execution_id "
+    "LEFT JOIN turn_records turn ON turn.turn_id=item.turn_id "
+    "JOIN database_meta meta ON meta.singleton_id=1 "
+)
+
+
+def validate_catalog_read_boundary(
+    connection: sqlite3.Connection, boundary: Sequence[object], *,
+    item_id: str, offset: int, length: int,
+    validated_commits: set[int], validated_scopes: set[tuple[str, str]],
+) -> None:
+    """只核实际消费 item 的提交与历史授权；校验结果仅在本次读取内共用。"""
+    commit_id = strict_non_negative_int(boundary[0], field=f"item_catalog storage commit: {item_id}")
+    if commit_id not in validated_commits:
+        validate_stored_commit(boundary[:12])
+        validated_commits.add(commit_id)
+    start = strict_non_negative_int(boundary[1], field="storage commit jsonl_start_offset")
+    end = strict_non_negative_int(boundary[2], field="storage commit jsonl_end_offset")
+    committed = strict_non_negative_int(boundary[18], field="database_meta.committed_jsonl_offset")
+    if not start <= offset < offset + length <= end <= committed:
+        raise RuntimeError(f"storage commit 的 item catalog offset 不在已提交边界内: item_id={item_id}")
+    execution_scope = tuple(boundary[12:14]) if boundary[12] is not None else None
+    turn_scope = tuple(boundary[14:16]) if boundary[14] is not None else None
+    if execution_scope is not None and turn_scope is not None and execution_scope != turn_scope:
+        raise ValueError(f"source-mismatch: canonical item 的 Turn/execution 历史 owner 不一致: {item_id}")
+    owner = (strict_text(boundary[16], field="database_meta.session_id"),
+             strict_text(boundary[17], field="database_meta.thread_id"))
+    scope = execution_scope or turn_scope or owner
+    item_owner = (strict_text(scope[0], field="item owner session_id"),
+                  strict_text(scope[1], field="item owner thread_id"))
+    if item_owner not in validated_scopes:
+        require_historical_scope(connection, *item_owner, current_owner=owner)
+        validated_scopes.add(item_owner)
 
 
 class RolloutCanonicalReadMixin:
@@ -49,8 +97,9 @@ class RolloutCanonicalReadMixin:
         if len(raw) != length:
             raise RuntimeError(f"v2 item locator 超出 JSONL: sequence={sequence}")
         catalog = connection.execute(
-            "SELECT item_id, content_hash, jsonl_offset, jsonl_length, projection_manifest_json, "
-            "tool_call_id, payload_length, source_revision FROM item_catalog WHERE item_sequence = ?",
+            "SELECT item.item_id,item.content_hash,item.jsonl_offset,item.jsonl_length,"
+            "item.projection_manifest_json,item.tool_call_id,item.payload_length,item.source_revision,"
+            + CATALOG_READ_COLUMNS + CATALOG_READ_JOINS + "WHERE item.item_sequence=?",
             (sequence,),
         ).fetchone()
         if catalog is None:
@@ -70,6 +119,10 @@ class RolloutCanonicalReadMixin:
             raise RuntimeError(
                 f"v2 item catalog 与 JSONL locator/hash 不一致: {item_id}"
             )
+        validate_catalog_read_boundary(
+            connection, catalog[8:], item_id=item_id, offset=offset, length=length,
+            validated_commits=set(), validated_scopes=set(),
+        )
         item = read_catalog_body(
             raw, sequence=sequence, item_id=item_id,
             catalog_hash=strict_text(catalog[1], field="item_catalog.content_hash"),

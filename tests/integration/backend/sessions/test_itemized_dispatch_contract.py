@@ -1995,10 +1995,10 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
             owners.clear()
             assembly_reads.clear()
             payload = restarted.read_context_for_dispatch(reference)
-            audits = sum("FROM storage_commits commit_record ORDER BY" in sql for sql in statements)
+            audits = sum("FROM storage_commits commit_record ORDER BY" in sql and "LIMIT" not in sql for sql in statements)
             measurement = {"attempt": attempt, "full_audits": audits, "assembly_reads": len(assembly_reads)}
             print(f"cold dispatch audits ({target_format}): {measurement}")
-            assert audits == 1
+            assert audits == 0
             assert owners == [(case.session, case.thread)]
             assert assembly_reads == [snapshot.assembly_id]
             if first_payload is None:

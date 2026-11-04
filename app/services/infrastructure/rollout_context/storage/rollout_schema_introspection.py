@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
-from collections.abc import Mapping
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from app.domain.itemized.enums import (
-    CommitMode,
-)
 from app.domain.itemized.errors import (
     FormatDispatchError,
-    ItemSchemaError,
 )
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -37,17 +31,13 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
     validate_schema_journal,
 )
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_text as _json,
-)
 from app.services.infrastructure.rollout_context.storage.transaction import (
-    _COMMIT_KIND_VALUES,
-    _COMMIT_MODE_VALUES,
+    STORED_COMMIT_COLUMNS,
     strict_non_negative_int,
     strict_optional_non_negative_int,
     strict_optional_text,
     strict_text,
-    validate_commit_contract,
+    validate_stored_commit,
 )
 
 _DEFAULT_NAMESPACE = ""
@@ -319,10 +309,8 @@ class RolloutSchemaIntrospectionMixin:
         validate_jsonl_items: bool = True,
     ) -> None:
         """校验 committed offset 的单一权威和 storage commit 链。"""
-        # TODO(性能): 初始化与普通快照仍全扫历史 commit/catalog，完整初始化仍读取全部正文。
-        # 相同正文的解析、JCS 和 payload hash 已由存储实例内的有界回执复用，正文按条流式读取。
-        # 改为恢复时全量审计、在线增量校验前，须保留后续外部改写检测及校验失败不截断尾部的行为；
-        # 不能仅按 last_commit_id 复用结果，也不能通过关闭正文检查掩盖这个热点。
+        # 完整历史审计只用于恢复、迁移与显式完整校验；普通快照只检查当前提交边界。
+        # 必须先审计成功再回收未提交尾部，损坏历史不得触发截断。
         columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(database_meta)")
         }
@@ -344,16 +332,14 @@ class RolloutSchemaIntrospectionMixin:
         )
         jsonl_size = jsonl_path.stat().st_size
         commits = connection.execute(
-            "SELECT commit_record.commit_id, jsonl_start_offset, jsonl_end_offset, "
-            "jsonl_offset_before, jsonl_offset_after, jsonl_record_count, status, "
-            "commit_kind, commit_mode, outcome, metadata_json, jsonl_fsync_at "
-            "FROM storage_commits commit_record ORDER BY commit_record.commit_id"
+            "SELECT " + STORED_COMMIT_COLUMNS
+            + "FROM storage_commits commit_record ORDER BY commit_record.commit_id"
         )
         previous = 0
         last_seen_commit_id: int | None = None
         validated_metadata: set[str] = set()
         # item_sequence 是 INTEGER PRIMARY KEY；合法历史的序号与物理 offset 必须同序。
-        # 沿主键扫描后逐条核 offset 连续性，避免每次快照按未索引的 offset 全量排序。
+        # 沿主键扫描后逐条核 offset 连续性，避免完整审计按未索引的 offset 全量排序。
         item_rows = connection.execute(
             "SELECT item.item_sequence,item.item_id,item.content_hash,item.jsonl_offset,item.jsonl_length,"
             "item.commit_id,item.payload_length,item.source_revision,"
@@ -376,115 +362,13 @@ class RolloutSchemaIntrospectionMixin:
             )
             pending_item = next(catalog_items, None)
             for commit in commits:
-                commit_id = strict_non_negative_int(
-                    commit[0], field="storage_commits.commit_id"
+                commit_id, start, end, record_count = validate_stored_commit(
+                    commit, validated_metadata=validated_metadata,
                 )
-                start = strict_non_negative_int(
-                    commit[1], field=f"storage commit jsonl_start_offset: {commit_id}"
-                )
-                end = strict_non_negative_int(
-                    commit[2], field=f"storage commit jsonl_end_offset: {commit_id}"
-                )
-                before = strict_non_negative_int(
-                    commit[3], field=f"storage commit jsonl_start_offset: {commit_id}"
-                )
-                after = strict_non_negative_int(
-                    commit[4], field=f"storage commit jsonl_offset_after: {commit_id}"
-                )
-                record_count = strict_non_negative_int(
-                    commit[5], field=f"storage commit jsonl_record_count: {commit_id}"
-                )
-                status = strict_text(commit[6], field=f"storage commit status: {commit_id}")
-                if status != "committed":
-                    raise RuntimeError(f"v2 storage commit 未收敛: commit_id={commit_id}")
-                commit_kind = strict_text(
-                    commit[7], field=f"storage commit kind: {commit_id}"
-                )
-                commit_mode = strict_text(
-                    commit[8], field=f"storage commit mode: {commit_id}"
-                )
-                if commit_kind not in _COMMIT_KIND_VALUES:
-                    raise RuntimeError(
-                        f"v2 storage commit kind 非法: commit_id={commit_id}, kind={commit_kind}"
-                    )
-                if commit_mode not in _COMMIT_MODE_VALUES:
-                    raise RuntimeError(
-                        f"v2 storage commit mode 非法: commit_id={commit_id}, mode={commit_mode}"
-                    )
-                outcome = commit[9]
-                if outcome is not None and not isinstance(outcome, str):
-                    raise RuntimeError(
-                        f"v2 storage commit outcome 必须是字符串或 null: commit_id={commit_id}"
-                    )
-                try:
-                    validate_commit_contract(
-                        commit_kind=commit_kind,
-                        commit_mode=commit_mode,
-                        item_count=record_count,
-                        outcome=outcome,
-                    )
-                except (ItemSchemaError, TypeError, ValueError) as error:
-                    raise RuntimeError(
-                        f"v2 storage commit contract 非法: commit_id={commit_id}: {error}"
-                    ) from error
-                metadata_json = commit[10]
-                if not isinstance(metadata_json, str) or not metadata_json:
-                    raise RuntimeError(
-                        f"v2 storage commit metadata_json 必须是非空字符串: commit_id={commit_id}"
-                    )
-                # 仅在本次完整校验内复用相同字节的纯解析结果；每条 commit 的合同和边界仍独立校验。
-                if metadata_json not in validated_metadata:
-                    try:
-                        metadata_value = json.loads(metadata_json)
-                    except (TypeError, json.JSONDecodeError) as error:
-                        raise RuntimeError(
-                            f"v2 storage commit metadata_json 非法: commit_id={commit_id}"
-                        ) from error
-                    if not isinstance(metadata_value, Mapping) or _json(metadata_value) != metadata_json:
-                        raise RuntimeError(
-                            "v2 storage commit metadata_json 不是 RFC 8785 JCS object: "
-                            f"commit_id={commit_id}"
-                        )
-                    if "physical_record_count" in metadata_value or "compacted" in metadata_value:
-                        raise RuntimeError(
-                            "immutable JSONL 不允许已提交记录被物理压缩或重写: "
-                            f"commit_id={commit_id}"
-                        )
-                    validated_metadata.add(metadata_json)
-                if start != before or end != after:
-                    raise RuntimeError(
-                        "v2 storage commit JSONL offset 链断裂（offset 字段不一致）: "
-                        f"commit_id={commit_id}, before={before}, start={start}, "
-                        f"end={end}, after={after}"
-                    )
-                if before != previous or after < before:
+                if start != previous:
                     raise RuntimeError(
                         "v2 storage commit JSONL offset 链断裂: "
-                        f"commit_id={commit_id}, previous={previous}, before={before}, "
-                        f"start={start}, end={end}, after={after}"
-                    )
-                if (
-                    commit_mode == CommitMode.ITEM_BEARING.value
-                    and not isinstance(commit[11], str)
-                ):
-                    raise RuntimeError(
-                        f"item-bearing commit 缺少 JSONL fsync barrier: commit_id={commit_id}"
-                    )
-                if commit[11] is not None and (
-                    not isinstance(commit[11], str) or not commit[11]
-                ):
-                    raise RuntimeError(
-                        f"v2 storage commit fsync timestamp 非法: commit_id={commit_id}"
-                    )
-                if commit_mode == CommitMode.METADATA_ONLY.value and (
-                    start != end or record_count != 0
-                ):
-                    raise RuntimeError(
-                        f"metadata-only commit 不得推进 JSONL offset: commit_id={commit_id}"
-                    )
-                if commit_mode == CommitMode.ITEM_BEARING.value and record_count <= 0:
-                    raise RuntimeError(
-                        f"item-bearing commit 必须包含 item: commit_id={commit_id}"
+                        f"commit_id={commit_id}, previous={previous}, start={start}, end={end}"
                     )
                 commit_start, commit_end = start, end
                 catalog_count = 0
@@ -590,7 +474,7 @@ class RolloutSchemaIntrospectionMixin:
                         f"commit_id={commit_id}, catalog={catalog_count}, "
                         f"record_count={record_count}"
                     )
-                previous = after
+                previous = commit_end
                 last_seen_commit_id = commit_id
             if pending_item is not None:
                 raise RuntimeError(

@@ -13,7 +13,7 @@ import pytest
 from app.core.identifier import create_uuid_hex
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.storage import rollout_schema_introspection
+from app.services.infrastructure.rollout_context.storage import transaction
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.harness.python.run_context import TestRunContext
 
@@ -78,15 +78,16 @@ def test_snapshot_catalog_audit_does_not_sort_all_historical_locators(audit_roll
     monkeypatch.setattr(storage, "_connect", observe)
     with storage.open_read_snapshot(session_id, thread_id) as snapshot:
         assert snapshot.session_id == session_id
-    # commit 数量校验应消费同一次 catalog 顺序流，不应再全表 GROUP BY 一遍。
+    # 普通读取只查询 catalog 末尾一条，不能排序或遍历全部 locator。
     catalog_queries = [statement for statement in statements if "FROM item_catalog" in statement]
     assert len(catalog_queries) == 1
+    assert "DESC LIMIT 1" in catalog_queries[0]
     with storage._connect(thread_id, session_id=session_id, read_only=True) as connection:
         plan = connection.execute("EXPLAIN QUERY PLAN " + catalog_queries[0]).fetchall()
     assert not any("TEMP B-TREE FOR ORDER BY" in row[3] for row in plan), plan
 
 
-@pytest.mark.parametrize("operation", ["initialize", "snapshot"])
+@pytest.mark.parametrize("operation", ["initialize", "integrity_snapshot"])
 def test_audit_rejects_reordered_locators_without_reclaiming_tail(audit_rollout, operation):
     storage, session_id, thread_id = audit_rollout
     storage.initialize(session_id, thread_id=thread_id)
@@ -105,7 +106,7 @@ def test_audit_rejects_reordered_locators_without_reclaiming_tail(audit_rollout,
         if operation == "initialize":
             storage.initialize(session_id, thread_id=thread_id)
         else:
-            with storage.open_read_snapshot(session_id, thread_id):
+            with storage.open_read_snapshot(session_id, thread_id, validate_integrity=True):
                 pytest.fail("不能接受正文位置与 item 顺序不一致的历史")
     assert jsonl.read_bytes() == before
 
@@ -165,7 +166,7 @@ def test_snapshot_audit_does_not_retain_all_commit_boundaries(commit_history_fac
     assert measurements[1]["peak_traced_bytes"] < measurements[0]["peak_traced_bytes"] + 128 * 1024
 
 
-@pytest.mark.parametrize("operation", ["initialize", "snapshot"])
+@pytest.mark.parametrize("operation", ["initialize", "integrity_snapshot"])
 def test_commit_audit_reuses_closed_enums_while_rechecking_every_record(
     commit_history_factory, monkeypatch, operation,
 ):
@@ -180,7 +181,7 @@ def test_commit_audit_reuses_closed_enums_while_rechecking_every_record(
             storage._commit_connection(connection)
     scans = {CommitKind: 0, CommitMode: 0, ControlOutcome: 0}
     enum_iter = type(CommitKind).__iter__
-    contract = rollout_schema_introspection.validate_commit_contract
+    contract = transaction.validate_commit_contract
     checked = 0
 
     def observe_enum(enum):
@@ -194,14 +195,15 @@ def test_commit_audit_reuses_closed_enums_while_rechecking_every_record(
         return contract(**values)
 
     monkeypatch.setattr(type(CommitKind), "__iter__", observe_enum)
-    monkeypatch.setattr(rollout_schema_introspection, "validate_commit_contract", observe_contract)
+    monkeypatch.setattr(transaction, "validate_commit_contract", observe_contract)
     if operation == "initialize":
         storage.initialize(session_id, thread_id=thread_id)
     else:
-        with storage.open_read_snapshot(session_id, thread_id):
+        with storage.open_read_snapshot(session_id, thread_id, validate_integrity=True):
             pass
     print(f"commit audit enum scans ({operation}): {[(enum.__name__, count) for enum, count in scans.items()]}; checked={checked}")
-    assert checked == 4097
+    # 显式全检之后还核当前快照边界；恢复只进行历史审计。
+    assert checked == (4097 if operation == "initialize" else 4098)
     assert not any(scans.values())
 
 
@@ -217,7 +219,7 @@ def test_valid_mixed_commits_validate_bodies_and_reclaim_only_uncommitted_tail(c
         assert snapshot.session_id == session_id
 
 
-@pytest.mark.parametrize("operation", ["initialize", "snapshot"])
+@pytest.mark.parametrize("operation", ["initialize", "integrity_snapshot"])
 @pytest.mark.parametrize("corruption", [
     "UPDATE storage_commits SET jsonl_record_count=2 WHERE commit_id=(SELECT MIN(commit_id) FROM storage_commits)",
     "UPDATE item_catalog SET commit_id=commit_id+1 WHERE item_sequence=1",
@@ -238,6 +240,81 @@ def test_mixed_commit_audit_rejects_counts_and_wrong_owners_without_reclaiming_t
         if operation == "initialize":
             storage.initialize(session_id, thread_id=thread_id)
         else:
-            with storage.open_read_snapshot(session_id, thread_id):
+            with storage.open_read_snapshot(session_id, thread_id, validate_integrity=True):
                 pytest.fail("不能接受 commit 数量或 item 归属损坏的历史")
+    assert jsonl.read_bytes() == before
+
+
+def test_snapshot_work_is_bounded_as_commit_history_grows(commit_history_factory, monkeypatch, request):
+    measurements = []
+    for count in (64, 4096):
+        storage, session_id, thread_id = commit_history_factory(count)
+        connect = storage._connect
+        steps = 0
+
+        def progress():
+            nonlocal steps
+            steps += 1
+            return 0
+
+        def observe(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connection.set_progress_handler(progress, 1)
+            return connection
+
+        with monkeypatch.context() as patch:
+            patch.setattr(storage, "_connect", observe)
+            with storage.open_read_snapshot(session_id, thread_id):
+                pass
+        measurements.append({"commits": count, "sqlite_vm_steps": steps})
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "snapshot-work.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
+    print(f"snapshot bounded work: {measurements}")
+    assert measurements[1]["sqlite_vm_steps"] <= measurements[0]["sqlite_vm_steps"] + 100
+
+
+@pytest.mark.parametrize("corruption", [
+    "UPDATE storage_commits SET commit_kind='broken' WHERE commit_id=(SELECT MIN(commit_id) FROM storage_commits)",
+    "UPDATE item_catalog SET commit_id=commit_id+1 WHERE item_sequence=1",
+    "UPDATE item_catalog SET commit_id=NULL WHERE item_sequence=1",
+    "UPDATE item_catalog SET jsonl_offset=1 WHERE item_sequence=1",
+])
+def test_old_corruption_is_detected_when_consumed_or_explicitly_audited(commit_history_factory, corruption):
+    storage, session_id, thread_id = commit_history_factory(64)
+    jsonl = storage.jsonl_path(session_id, thread_id=thread_id)
+    with jsonl.open("ab") as stream:
+        stream.write(b"uncommitted-tail")
+    before = jsonl.read_bytes()
+    with sqlite3.connect(storage.index_path(session_id, thread_id=thread_id)) as connection:
+        connection.execute(corruption)
+    # 未读取的旧损坏不再拖慢或阻断普通 snapshot；消费它或显式全检必须报错。
+    with storage.open_read_snapshot(session_id, thread_id) as snapshot:
+        assert storage.read_items(session_id, thread_id, item_ids=["audit-32"], snapshot=snapshot)[0].item_id == "audit-32"
+        with pytest.raises((RuntimeError, ValueError)):
+            storage.read_items(session_id, thread_id, item_ids=["audit-1"], snapshot=snapshot)
+    with pytest.raises((RuntimeError, ValueError)):
+        with storage.open_read_snapshot(session_id, thread_id, validate_integrity=True):
+            pytest.fail("完整校验必须检查旧历史")
+    assert jsonl.read_bytes() == before
+
+
+@pytest.mark.parametrize("corruption", [
+    "UPDATE database_meta SET last_commit_id=999999",
+    "UPDATE database_meta SET committed_jsonl_offset=committed_jsonl_offset-1",
+    "UPDATE database_meta SET last_item_sequence=last_item_sequence+1",
+    "UPDATE storage_commits SET jsonl_offset_before=1 WHERE commit_id=(SELECT MAX(commit_id) FROM storage_commits)",
+    "UPDATE storage_commits SET status='prepared' WHERE commit_id=(SELECT MAX(commit_id) FROM storage_commits)",
+    "DELETE FROM item_catalog WHERE item_sequence=32",
+])
+def test_snapshot_rejects_current_boundary_corruption_without_touching_tail(commit_history_factory, corruption):
+    storage, session_id, thread_id = commit_history_factory(64)
+    jsonl = storage.jsonl_path(session_id, thread_id=thread_id)
+    with jsonl.open("ab") as stream:
+        stream.write(b"uncommitted-tail")
+    before = jsonl.read_bytes()
+    with sqlite3.connect(storage.index_path(session_id, thread_id=thread_id)) as connection:
+        connection.execute(corruption)
+    with pytest.raises((RuntimeError, ValueError)):
+        with storage.open_read_snapshot(session_id, thread_id):
+            pytest.fail("普通 snapshot 必须检查当前边界")
     assert jsonl.read_bytes() == before

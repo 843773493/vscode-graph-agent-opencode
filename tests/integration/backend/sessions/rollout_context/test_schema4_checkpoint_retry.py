@@ -79,6 +79,14 @@ def test_snapshot_retry_reads_assembly_and_detail_in_one_fresh_authority_snapsho
     before = _state(saver, session, connection)
     with (RolloutCheckpointSaver(saver._detail_store.sessions_dir) if restart else nullcontext(saver)) as reader:
         audits = []
+        snapshots = []
+        open_snapshot = reader._storage.storage.open_read_snapshot
+
+        def observe_snapshot(*args, **kwargs):
+            snapshots.append(kwargs.get("validate_integrity", False))
+            return open_snapshot(*args, **kwargs)
+
+        monkeypatch.setattr(reader._storage.storage, "open_read_snapshot", observe_snapshot)
         maintenance = reader._storage.storage._maintenance_owner
         validate = maintenance._validate_v2_commit_offsets
 
@@ -92,7 +100,8 @@ def test_snapshot_retry_reads_assembly_and_detail_in_one_fresh_authority_snapsho
             assert reader.seal_context_assembly(session, thread, snapshot, **options) == commit
             # 注册读取、assembly/detail 的同次读取、写前恢复各一次，后续重试仍 fresh。
             print(f"snapshot retry audits: detail={with_detail}, restart={restart}, attempt={attempt}, audits={audits}")
-            assert audits == [False, False, True] * (attempt + 1)
+            assert audits == [True] * (attempt + 1)
+            assert snapshots == [False, False] * (attempt + 1)
     assert _state(saver, session, connection) == before
 
 
