@@ -50,9 +50,10 @@ def test_seal_matches_applied_sources_with_one_prefix_pass(
 
     def observe_apply(context_store, connection, snapshot, *, previous):
         binding = snapshot.seal_binding
-        call = {"identity_reads": 0, "applied": len(binding.source_revisions),
+        call = {"identity_reads": 0, "guidance_identity_reads": 0, "applied": len(binding.source_revisions),
                 "root_sources": len(binding.root.sources) if binding.root else 0,
-                "prefix_refs": sum(len(frame.item_refs) for frame in binding.prefix.state.frames)}
+                "prefix_refs": sum(len(frame.item_refs) for frame in binding.prefix.state.frames),
+                "previous_prefix_refs": sum(len(frame.item_refs) for frame in previous.seal_binding.prefix.state.frames)}
         calls.append(call)
         active.append(call)
         try:
@@ -63,9 +64,11 @@ def test_seal_matches_applied_sources_with_one_prefix_pass(
     def observe_attribute(original):
         def read(value, name):
             caller = sys._getframe(1).f_code
-            if (active and name == "source_identity" and caller.co_filename == source_activation.__file__
-                    and caller.co_qualname.startswith("ContextSourceActivationMixin._apply_sealed_context_sources")):
-                active[-1]["identity_reads"] += 1
+            if active and name == "source_identity" and caller.co_filename == source_activation.__file__:
+                if caller.co_qualname.startswith("ContextSourceActivationMixin._apply_sealed_context_sources"):
+                    active[-1]["identity_reads"] += 1
+                elif caller.co_qualname.startswith(("_validate_activation_guidance", "_latest_guidance_frames")):
+                    active[-1]["guidance_identity_reads"] += 1
             return original(value, name)
         return read
 
@@ -89,6 +92,8 @@ def test_seal_matches_applied_sources_with_one_prefix_pass(
     # 同次 seal 最多遍历一次完整前缀；空回执不建立选集索引。
     assert calls[0]["identity_reads"] <= calls[0]["root_sources"] + calls[0]["prefix_refs"]
     assert calls[1]["identity_reads"] == 0
+    # 各 activation facet 共享本次当前/前驱选集索引，不各自重扫两份历史前缀。
+    assert all(call["guidance_identity_reads"] <= call["prefix_refs"] + call["previous_prefix_refs"] for call in calls)
 
 
 def test_root_only_seal_does_not_scan_prefix_refs(production_context, monkeypatch):

@@ -8,6 +8,7 @@ from functools import cache
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.prefix_epoch import AppendedItemRef, ProviderProfileItemFrame
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
@@ -40,10 +41,27 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     require_historical_scope,
 )
 
+_GUIDANCE_SOURCE_IDS = frozenset((MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()))
+
+
+def _latest_guidance_frames(
+    snapshot: ContextAssemblySnapshot | None,
+) -> dict[str, tuple[ProviderProfileItemFrame, AppendedItemRef]]:
+    """只索引各指引最后选中的帧，不读取正文，也不保存中间历史版本。"""
+    latest: dict[str, tuple[ProviderProfileItemFrame, AppendedItemRef]] = {}
+    if snapshot is not None and snapshot.seal_binding is not None:
+        for frame in snapshot.seal_binding.prefix.state.frames:
+            for ref in frame.item_refs:
+                identity = ref.source_identity
+                if identity is not None and identity in _GUIDANCE_SOURCE_IDS:
+                    latest[identity] = (frame, ref)
+    return latest
+
 
 def _validate_activation_guidance(
     connection: sqlite3.Connection, snapshot: ContextAssemblySnapshot,
-    previous: ContextAssemblySnapshot | None,
+    frames: dict[str, tuple[ProviderProfileItemFrame, AppendedItemRef]],
+    previous_frames: dict[str, tuple[ProviderProfileItemFrame, AppendedItemRef]],
     *, resource_id: str = MCP_TOOL_CATALOG_RESOURCE_ID, source_id: str = MCP_GUIDANCE_SOURCE_ID,
 ) -> None:
     """同一 assembly 事务核 exact guidance 与唯一 activation 父行，不更新 CSM 控制行。"""
@@ -57,16 +75,13 @@ def _validate_activation_guidance(
     if len(rows) > 1:
         raise ItemSchemaError("context-source-seal-conflict: MCP activation parent 不唯一")
     binding = snapshot.seal_binding
-    frames = tuple((frame, ref) for frame in binding.prefix.state.frames for ref in frame.item_refs if ref.source_identity == source_id)
-    previous_frames = () if previous is None or previous.seal_binding is None else tuple(
-        (frame, ref) for frame in previous.seal_binding.prefix.state.frames for ref in frame.item_refs
-        if ref.source_identity == source_id
-    )
-    if not rows and not previous_frames and not frames:
+    selected = frames.get(source_id)
+    previous_selected = previous_frames.get(source_id)
+    if not rows and previous_selected is None and selected is None:
         return
-    if not frames:
+    if selected is None:
         raise ItemSchemaError("context-source-seal-conflict: activation guidance 缺少 selected frame")
-    frame, ref = frames[-1]
+    frame, ref = selected
     content = frame.content
     if frame.source_protocol is not None:
         blocks = parse_source_blocks(content, expected_version=frame.source_protocol)
@@ -88,7 +103,7 @@ def _validate_activation_guidance(
         or any(source.source_identity == source_id for source in (() if binding.root is None else binding.root.sources))
     ):
         raise ItemSchemaError("context-source-seal-conflict: guidance 正文/revision 与冻结 activation 不一致")
-    previous_revision = previous_frames[-1][1].source_revision if previous_frames else None
+    previous_revision = previous_selected[1].source_revision if previous_selected is not None else None
     applied = tuple(source for source in binding.source_revisions if source.source_id == source_id)
     # 新 epoch 复用相同 activation revision 时仍校验完整指引帧，
     # 但它没有推进来源 revision，不得伪造一份重复 applied 回执。
@@ -271,17 +286,21 @@ class ContextSourceActivationMixin:
                 raise ItemSchemaError("context-seal-epoch-conflict: rebuild ordinal 必须连续")
         elif binding.prefix.state.epoch.ordinal != 1 or binding.prefix.parent is not None:
             raise ItemSchemaError("context-seal-epoch-conflict: 首个 assembly 必须是 initial epoch")
-        _validate_activation_guidance(connection, snapshot, previous)
+        # 当前与前驱前缀在同次 seal 内不可变，MCP/团队 facet 共用一次身份扫描。
+        # 这里只缓存定位；正文、版本、activation 父行与回执仍逐 facet 完整校验。
+        guidance_frames = _latest_guidance_frames(snapshot)
+        previous_guidance_frames = _latest_guidance_frames(previous)
+        _validate_activation_guidance(connection, snapshot, guidance_frames, previous_guidance_frames)
         _validate_definition_sources(connection, snapshot, previous)
         for facet in TEAM_FACETS:
-            _validate_activation_guidance(connection, snapshot, previous,
+            _validate_activation_guidance(connection, snapshot, guidance_frames, previous_guidance_frames,
                                           resource_id=TEAM_RESOURCE_IDS[facet], source_id=TEAM_SOURCE_IDS[facet])
         latest_skill_selections: dict[str, int] | None = None
         selected_source_versions: set[tuple[str | None, str | None]] | None = None
         selected_frames_indexed = False
         for source in binding.source_revisions:
             if (is_tool_definition_source(source.source_id)
-                    or source.source_id in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}):
+                    or source.source_id in _GUIDANCE_SOURCE_IDS):
                 continue
             row = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
