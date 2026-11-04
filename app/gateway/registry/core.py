@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from app.core.identifier import validate_gateway_id
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.runtime.managed_backend import ManagedBackendOwner
 from app.gateway.runtime.workspace import WorkspaceRuntime
@@ -17,9 +20,23 @@ if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
 
 
-_REGISTRY_SCHEMA_VERSION = 13
+_REGISTRY_SCHEMA_VERSION = 14
+WorkspaceKey = tuple[str, str]
+WorkspaceSelector = str | WorkspaceKey
 _UNSET = object()
 RegistryTargetOwner = Literal["config", "manual", "system", "remote_projection"]
+
+
+def workspace_owner_payload(key: WorkspaceKey | None) -> dict[str, str] | None:
+    return {"gateway_id": key[0], "workspace_id": key[1]} if key is not None else None
+
+
+def workspace_owner_key(value: object) -> WorkspaceKey | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"gateway_id", "workspace_id"}:
+        raise TypeError("工作区 owner 必须完整包含 gateway_id 和 workspace_id")
+    return validate_gateway_id(value["gateway_id"]), validate_workspace_id(value["workspace_id"])
 
 
 class WorkspaceIdentityConflictError(ValueError):
@@ -28,12 +45,13 @@ class WorkspaceIdentityConflictError(ValueError):
 
 @dataclass(slots=True)
 class WorkspaceTarget:
+    gateway_id: str
     workspace_id: str
     name: str
     root_path: str | None
     backend_url: str
     connection_kind: GatewayConnectionKind
-    parent_workspace_id: str | None = None
+    parent_workspace: WorkspaceKey | None = None
     owner: RegistryTargetOwner = "manual"
     target_namespace: str = "gateway"
     connection_id: str | None = None
@@ -46,31 +64,34 @@ class WorkspaceTarget:
     removable: bool = True
     system_default: bool = False
     desired_running: bool = False
-    remote_gateway_connection_id: str | None = None
-    remote_workspace_id: str | None = None
-    remote_config_event_cursor: int | None = None
+    remote_gateway_connection_ids: tuple[str, ...] = ()
     remote_service_names: tuple[GatewayServiceName, ...] = ()
     remote_backend_generation: str | None = None
     remote_affected_workspace_ids: tuple[str, ...] = ()
     local_service_urls: dict[str, str] = field(default_factory=dict)
     connection_error: str | None = None
-    backend_workspace_id: str | None = None
+
+    @property
+    def key(self) -> WorkspaceKey:
+        return self.gateway_id, self.workspace_id
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceRouteLease:
+    gateway_id: str
     workspace_id: str
     revision: int
     invalidated: asyncio.Event
 
     @property
     def token(self) -> str:
-        return f"{self.workspace_id}:{self.revision}"
+        return f"{self.gateway_id}:{self.workspace_id}:{self.revision}"
 @dataclass(slots=True)
 class GatewayRegistryBatchHandle:
     """一次 registry batch 的 promotion/rollback 句柄。"""
 
     registry: GatewayWorkspaceRegistry
     previous_snapshot: dict[str, object]
-    previous_signatures: dict[str, tuple[object, ...]]
+    previous_signatures: dict[WorkspaceKey, tuple[object, ...]]
     previous_remote_runtimes: dict[str, WorkspaceRuntime]
     previous_retired_remote_runtimes: dict[str, list[WorkspaceRuntime]]
     staged_runtimes: dict[str, WorkspaceRuntime]
@@ -116,13 +137,15 @@ class RegistryCoreMixin:
         *,
         storage_path: Path,
         state_store: GatewayStateStore | None = None,
+        gateway_id: str | None = None,
         runtime_logging_config: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         self._storage_path = storage_path
         self._state_store = state_store
         self._runtime_logging_config = runtime_logging_config
-        self._targets: dict[str, WorkspaceTarget] = {}
-        self._active_workspace_id: str | None = None
+        self.gateway_id = validate_gateway_id(gateway_id) if gateway_id is not None else load_or_create_gateway_id(storage_path.with_name("identity.json"))
+        self._targets: dict[WorkspaceKey, WorkspaceTarget] = {}
+        self._active_workspace: WorkspaceKey | None = None
         self._registry_revision = 0
         self._order_customized = False
         self._runtimes: dict[str, WorkspaceRuntime] = {}
@@ -132,11 +155,11 @@ class RegistryCoreMixin:
         self._remote_gateway_runtimes: dict[str, WorkspaceRuntime] = {}
         self._retired_remote_gateway_runtimes: dict[str, list[WorkspaceRuntime]] = {}
         self._runtime_generation: str | None = None
-        self._route_revisions: dict[str, int] = {}
-        self._route_change_events: dict[str, asyncio.Event] = {}
-        self._route_reference_counts: dict[str, tuple[int, int]] = {}
-        self._route_reference_connections: dict[str, set[str]] = {}
-        self._route_signatures: dict[str, tuple[object, ...]] = {}
+        self._route_revisions: dict[WorkspaceKey, int] = {}
+        self._route_change_events: dict[WorkspaceKey, asyncio.Event] = {}
+        self._route_reference_counts: dict[WorkspaceKey, tuple[int, int]] = {}
+        self._route_reference_connections: dict[WorkspaceKey, set[str]] = {}
+        self._route_signatures: dict[WorkspaceKey, tuple[object, ...]] = {}
         self._commit_observers: list[Callable[[], None]] = []
         self._load()
         self._route_signatures = {
@@ -145,8 +168,17 @@ class RegistryCoreMixin:
         }
         self._last_committed_snapshot = self._capture_registry_state()
     @property
-    def active_workspace_id(self) -> str | None:
-        return self._active_workspace_id
+    def active_workspace(self) -> WorkspaceKey | None:
+        return self._active_workspace
+
+    def workspace_key(self, selector: WorkspaceSelector) -> WorkspaceKey:
+        """裸 UUID 仅表示本机；跨 Gateway 必须显式给出完整 owner。"""
+        if isinstance(selector, str):
+            return self.gateway_id, validate_workspace_id(selector)
+        if not isinstance(selector, tuple) or len(selector) != 2:
+            raise TypeError("工作区选择必须是 UUID 或 (gateway_id, workspace_id)")
+        return validate_gateway_id(selector[0]), validate_workspace_id(selector[1])
+
 
     def runtime_logging_startup(self) -> dict[str, object] | None:
         """在生命周期锁内取得当前权威配置，不缓存等待启动期间可能失效的副本。"""

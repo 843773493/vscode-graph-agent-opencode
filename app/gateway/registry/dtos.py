@@ -12,6 +12,7 @@ from app.core.mounted_workspaces import mounted_workspace_manifest_digest
 from app.gateway.runtime.local_workspace import validate_workspace_health_identity
 from app.gateway.service_types import GatewayServiceName
 from app.schemas.gateway.config import GatewayConfigReloadStatusDTO
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.workspaces import (
     GatewayRemoteConnectionSummaryDTO,
     GatewayServiceStatus,
@@ -28,13 +29,18 @@ if TYPE_CHECKING:
 
 
 class RegistryDtosMixin:
+    @property
+    def active_workspace_dto(self) -> GatewaySearchWorkspaceOwnerDTO | None:
+        key = self._active_workspace
+        return GatewaySearchWorkspaceOwnerDTO(gateway_id=key[0], workspace_id=key[1]) if key is not None else None
+
     async def list_dtos(self, *, check_health: bool = True) -> list[GatewayWorkspaceDTO]:
         registry = cast("GatewayWorkspaceRegistry", self)
-        active_workspace_id = self._active_workspace_id
+        active_workspace = self._active_workspace
         targets = list(self._targets.values())
         backend_owners = tuple((owner, owner.contract) for owner in self._backend_owners.values())
         backend_by_workspace_id = {
-            workspace_id: (owner, contract)
+            (contract.gateway_id, workspace_id): (owner, contract)
             for owner, contract in backend_owners
             for workspace_id in contract.workspace_ids
         }
@@ -55,15 +61,15 @@ class RegistryDtosMixin:
         async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
             async def build_dto(target: WorkspaceTarget) -> GatewayWorkspaceDTO:
                 backend_owner, backend_contract = backend_by_workspace_id.get(
-                    target.workspace_id, (None, None)
+                    target.key, (None, None)
                 )
-                runtime = self._runtimes.get(target.workspace_id)
+                runtime = self._runtimes.get(target.workspace_id) if target.gateway_id == self.gateway_id else None
                 runtime_service_urls = (
                     dict(runtime.service_urls) if runtime is not None else {}
                 )
                 if target.connection_kind == "local" and not target.managed and target.backend_url:
                     # 外部编排没有 Gateway runtime，列表与原代理复用已登记路由。
-                    runtime_service_urls["workspace_api"] = self.resolve_service_url(target.workspace_id, "workspace_api")
+                    runtime_service_urls["workspace_api"] = self.resolve_service_url(target.key, "workspace_api")
                 if target.connection_kind == "remote_gateway":
                     for service in (
                         "workspace_api",
@@ -72,7 +78,7 @@ class RegistryDtosMixin:
                     ):
                         try:
                             runtime_service_urls[service] = self.resolve_service_url(
-                                target.workspace_id,
+                                target.key,
                                 service,
                             )
                         except LookupError:
@@ -106,7 +112,7 @@ class RegistryDtosMixin:
                             backend_url = backend_contract.backend_url
                         else:
                             backend_url = self.resolve_service_url(
-                                target.workspace_id,
+                                target.key,
                                 "workspace_api",
                             )
                         response = await client.get(
@@ -115,7 +121,7 @@ class RegistryDtosMixin:
                         )
                         if response.status_code == 200:
                             health_payload = validate_workspace_health_identity(
-                                response.json(), target.backend_workspace_id,
+                                response.json(), target.workspace_id,
                             )
                             if backend_owner is not None and (
                                 health_payload.get("backend_generation")
@@ -250,24 +256,17 @@ class RegistryDtosMixin:
                                 label=f"辅助服务健康检查失败: workspace_id={target.workspace_id}, service={service}",
                             ),
                         )
-                remote_connection = (
-                    self.remote_gateway_connection(
-                        target.remote_gateway_connection_id
-                    )
-                    if target.remote_gateway_connection_id is not None
-                    else None
-                )
                 return GatewayWorkspaceDTO(
                     workspace_id=target.workspace_id,
-                    backend_workspace_id=target.backend_workspace_id,
+                    gateway_id=target.gateway_id,
                     backend_generation=backend_contract.generation if backend_contract is not None else target.remote_backend_generation,
                     affected_workspace_ids=list(backend_contract.workspace_ids) if backend_contract is not None else list(target.remote_affected_workspace_ids) if target.remote_backend_generation is not None else [target.workspace_id],
-                    parent_workspace_id=target.parent_workspace_id,
+                    parent_workspace=GatewaySearchWorkspaceOwnerDTO(gateway_id=target.parent_workspace[0], workspace_id=target.parent_workspace[1]) if target.parent_workspace is not None else None,
                     name=target.name,
                     backend_url=target.backend_url,
                     connection_kind=target.connection_kind,
                     status=status,
-                    active=target.workspace_id == active_workspace_id,
+                    active=target.key == active_workspace,
                     managed=target.managed,
                     removable=target.removable,
                     system_default=target.system_default,
@@ -293,10 +292,9 @@ class RegistryDtosMixin:
                         )
                     ),
                     config_reload=config_reload,
-                    remote=(
+                    remote_gateways=[
                         GatewayRemoteConnectionSummaryDTO(
                             gateway_connection_id=remote_connection.connection_id,
-                            remote_workspace_id=target.remote_workspace_id,
                             gateway_id=remote_connection.remote_gateway_id,
                             name=remote_connection.name,
                             host=remote_connection.host,
@@ -311,23 +309,21 @@ class RegistryDtosMixin:
                             restart_required=remote_connection.remote_restart_required,
                             candidate_ref=remote_connection.remote_candidate_ref,
                         )
-                        if target.connection_kind == "remote_gateway"
-                        and remote_connection is not None
-                        and target.remote_workspace_id is not None
-                        else None
-                    ),
+                        for connection_id in target.remote_gateway_connection_ids
+                        for remote_connection in (self.remote_gateway_connection(connection_id),)
+                    ],
                     connection_error=target.connection_error,
                     services=service_statuses,
                     checked_at=datetime.now(UTC).isoformat(),
                 )
 
             items = list(await asyncio.gather(*(build_dto(target) for target in targets)))
-            by_id = {item.workspace_id: item for item in items}
+            by_id = {(item.gateway_id, item.workspace_id): item for item in items}
             for owner, contract in backend_owners:
                 failed = [
-                    by_id[workspace_id] for workspace_id in contract.workspace_ids
-                    if by_id[workspace_id].status != "ready"
-                    or any(service.status == "offline" for service in by_id[workspace_id].services.values())
+                    by_id[(contract.gateway_id, workspace_id)] for workspace_id in contract.workspace_ids
+                    if by_id[(contract.gateway_id, workspace_id)].status != "ready"
+                    or any(service.status == "offline" for service in by_id[(contract.gateway_id, workspace_id)].services.values())
                 ]
                 if failed:
                     error = owner.error or "; ".join(
@@ -341,7 +337,7 @@ class RegistryDtosMixin:
                     ):
                         self.mark_backend_error(owner, error)
                     for workspace_id in contract.workspace_ids:
-                        item = by_id[workspace_id]
+                        item = by_id[(contract.gateway_id, workspace_id)]
                         item.status = "offline"
                         item.connection_error = error
                         item.services["workspace_api"].status = "offline"

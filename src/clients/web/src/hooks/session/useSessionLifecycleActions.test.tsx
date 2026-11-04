@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Session, SessionForkRequest, SessionStreamEvent } from "../../types/backend";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
@@ -20,7 +21,7 @@ import {
 } from "../../tests/fixtures/session/sessionCatalogOutbox";
 import { mountSessionLifecycleActions } from "../../tests/fixtures/session/sessionLifecycleActions";
 
-const WORKSPACE_ID = "gw_read_state";
+const WORKSPACE_ID = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" });
 const SESSION_ID = "ses_read_state";
 const CACHE_KEY = sessionScopeKey(WORKSPACE_ID, SESSION_ID);
 
@@ -32,9 +33,9 @@ function session(
 ): Session {
   return {
     session_id: sessionId,
-    workspace_id: "ws_local",
+    workspace_id: "00000000-0000-0000-0000-000000000001",
     resource_identity: `fixture-${sessionId}`,
-    uri: `boxteam://workspace/ws_local/resources/session/${sessionId}`,
+    uri: `boxteam://workspace/00000000-0000-0000-0000-000000000001/resources/session/${sessionId}`,
     scope: "workspace",
     title,
     title_source: "user",
@@ -125,14 +126,14 @@ describe("会话已读状态", () => {
 
 // —— 竞态与失败补偿：生命周期写动作的一致性守卫 ——
 
-const RACE_WORKSPACE = "gw_lifecycle_race";
+const RACE_WORKSPACE = WORKSPACE_ID;
 
 function raceSession(sessionId: string, agentId = "default"): Session {
   return {
     session_id: sessionId,
-    workspace_id: "ws_local",
+    workspace_id: "00000000-0000-0000-0000-000000000001",
     resource_identity: `fixture-${sessionId}`,
-    uri: `boxteam://workspace/ws_local/resources/session/${sessionId}`,
+    uri: `boxteam://workspace/00000000-0000-0000-0000-000000000001/resources/session/${sessionId}`,
     scope: "workspace",
     title: sessionId,
     title_source: "user",
@@ -149,7 +150,7 @@ function raceState(current: Session | null, sessions: Session[]) {
     currentSession: current,
     sessions,
     gatewayWorkspaces: [
-      { workspace_id: RACE_WORKSPACE, name: "ws" },
+      { gateway_id: "gateway-test", workspace_id: workspaceOwnerFromKey(RACE_WORKSPACE).workspaceId, name: "ws" },
     ],
   });
 }
@@ -213,20 +214,20 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("fork 只更新 URI 指定目标 scope，迟到成功不抢 A→B→A 状态", async () => {
     const source = raceSession("ses_same");
     const other = raceSession("ses_other");
-    const target = { ...source, workspace_id: "ws_target", title: "目标 owner" };
-    const targetRoute = "gateway_target";
+    const target = { ...source, workspace_id: "00000000-0000-0000-0000-000000000003", title: "目标 owner" };
+    const targetRoute = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000003" });
     let release!: (response: Response) => void;
     let started = false;
     installGatewayFetch(({ path }) => {
-      if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "gateway_test" });
+      if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "gateway-test" });
       if (path.endsWith("/fork-context")) return new Promise<Response>((resolve) => { started = true; release = resolve; });
       return undefined;
     });
     const initial = raceState(source, [source, other]);
     initial.sessionsByWorkspace.set(targetRoute, [target]);
     const mounted = mountLifecycle(source, initial, undefined, [
-      { workspace_id: RACE_WORKSPACE, backend_workspace_id: "ws_local", connection_kind: "local" },
-      { workspace_id: targetRoute, backend_workspace_id: "ws_target", connection_kind: "local" },
+      { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" },
+      { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000003" },
     ]);
     const operation = mounted.actions.forkSessionContext(RACE_WORKSPACE, source.session_id, forkRequest(source));
     for (let i = 0; i < 100 && !started; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
@@ -236,8 +237,8 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     const selectedStatus = mounted.state().status;
     release(apiSuccessResponse({
       session: target, thread_id: "thr_target_child",
-      thread_uri: `boxteam://gateway_test/workspace/ws_target/resources/session/${target.session_id}/threads/thr_target_child`,
-      target_gateway_id: "gateway_test",
+      thread_uri: `boxteam://gateway-test/workspace/00000000-0000-0000-0000-000000000003/resources/session/${target.session_id}/threads/thr_target_child`,
+      target_gateway_id: "gateway-test",
       creation_kind: "new_child_thread", source_uri: source.uri,
       source_view_id: "view-selected", source_view_revision: 1, anchor_item_id: "item-selected",
       mode: "view_prefix_fork", resources: [], goal_id: null,
@@ -253,15 +254,15 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     const current = session();
     let abortCount = 0;
     installGatewayFetch(({ path }) => path.endsWith("/fork-context") ? apiSuccessResponse({
-      session: current, thread_id: "tid_fork_child", thread_uri: `boxteam://gateway_test/workspace/ws_local/resources/session/${current.session_id}/threads/tid_fork_child`,
-      target_gateway_id: "gateway_test",
+      session: current, thread_id: "tid_fork_child", thread_uri: `boxteam://gateway-test/workspace/00000000-0000-0000-0000-000000000001/resources/session/${current.session_id}/threads/tid_fork_child`,
+      target_gateway_id: "gateway-test",
       creation_kind: "new_child_thread", source_uri: `${current.uri}/thread/tid_source`,
       source_view_id: "view-selected", source_view_revision: 1, anchor_item_id: "item-selected",
       mode: "view_prefix_fork", resources: [], goal_id: null,
-    }) : path === "/api/gateway/health" ? apiSuccessResponse({ gateway_id: "gateway_test" }) : undefined);
+    }) : path === "/api/gateway/health" ? apiSuccessResponse({ gateway_id: "gateway-test" }) : undefined);
     const mounted = mountSessionLifecycleActions({
       apiPort: 8014, currentSession: current, workspaceId: WORKSPACE_ID, state: state(current),
-      workspaceRequestTargets: [{ workspace_id: WORKSPACE_ID, backend_workspace_id: "ws_local", connection_kind: "local" }],
+      workspaceRequestTargets: [{ gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" }],
       abortCurrentStream: () => { abortCount += 1; },
     });
     const initialNonce = mounted.state().sessionHistoryReloadNonce;
@@ -315,7 +316,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("W5 fork 失败时补偿重取失败不覆盖原始错误", async () => {
     const sesA = raceSession("ses_a");
     installGatewayFetch(({ path }) => {
-      if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "gateway_test" });
+      if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "gateway-test" });
       if (path.endsWith("/fork-context")) {
         return apiSuccessResponse({ message: "上下文快照损坏" }, 422);
       }
@@ -603,15 +604,14 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
         "/api/v1/sessions", `/api/v1/sessions/${deleted.session_id}`,
         `/api/v1/sessions/${deleted.session_id}/main-thread/pending-requests`,
       ].includes(path)) return undefined;
-      expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(RACE_WORKSPACE);
+      expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(workspaceOwnerFromKey(RACE_WORKSPACE).workspaceId);
       return new Promise<Response>((resolve) => {
         releases.set(path, resolve);
         if (releases.size === 3) readsStarted();
       });
     });
     const mounted = mountLifecycle(surviving, initial);
-    const target: GatewayWorkspaceRequestTarget = { workspace_id: RACE_WORKSPACE,
-      backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" };
+    const target: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" };
     const oldList = refreshWorkspaceSessionList(8014, target, mounted.setState);
     const events = ["session_auto_title_updated", "pending_request_added"].map((reason): SessionStreamEvent => ({
       event_id: `evt_${reason}`, session_id: deleted.session_id, thread_id: "thr_00000000700070008000000000000001", job_id: "job_before_delete",
@@ -700,7 +700,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
   });
 
   test("W9-a Agent 切换失败后用后端真值校准 current_agent_id", async () => {
-    const before = raceSession(RACE_WORKSPACE, "agent_old");
+    const before = raceSession("ses_lifecycle", "agent_old");
     let getCalls = 0;
     installGatewayFetch(({ path, method }) => {
       if (path === "/api/v1/sessions/" + before.session_id && method === "PATCH") {
@@ -725,7 +725,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
   });
 
   test("W9-b 会话命名只有提交并对账后才更新会话镜像", async () => {
-    const before = raceSession(RACE_WORKSPACE, "default");
+    const before = raceSession("ses_lifecycle", "default");
     before.title = "旧标题";
     let getCalls = 0;
     installGatewayFetch(({ path, method }) => {
@@ -755,7 +755,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
   });
 
   test("提交后的会话重命名以后端返回的完整对象替换镜像", async () => {
-    const before = raceSession(RACE_WORKSPACE, "default");
+    const before = raceSession("ses_lifecycle", "default");
     before.title = "旧标题";
     const committed = { ...before, title: "新标题", updated_at: "2026-10-04T00:00:00Z" };
     installGatewayFetch(({ path, method }) => {
@@ -775,7 +775,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
   });
 
   test("W9-b2 会话命名空标题也走统一失败上报", async () => {
-    const before = raceSession(RACE_WORKSPACE, "default");
+    const before = raceSession("ses_lifecycle", "default");
     installGatewayFetch(() => undefined);
 
     const { state: readState, actions } = mountRace(before, [before]);
@@ -828,7 +828,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
   });
 
   test("W12-a 创建会话空标题走统一失败上报", async () => {
-    const before = raceSession(RACE_WORKSPACE, "default");
+    const before = raceSession("ses_lifecycle", "default");
     installGatewayFetch(() => undefined);
 
     const { state: readState, actions } = mountRace(before, [before]);
@@ -838,7 +838,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
   });
 
   test("W12-b 打开未知工作区的会话时显式失败而不是沿用旧工作区元数据", () => {
-    const current = raceSession(RACE_WORKSPACE, "default");
+    const current = raceSession("ses_lifecycle", "default");
     const target = raceSession("ses_other", "default");
     installGatewayFetch(() => undefined);
 
@@ -858,7 +858,7 @@ describe("会话生命周期失败后的后端重取校准", () => {
 
 // —— 跨工作区边界：活动工作区之外的工作区列表收敛不得污染全局镜像 ——
 
-const OTHER_WORKSPACE = "gw_other";
+const OTHER_WORKSPACE = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000002" });
 
 /** 全局 sessions 镜像归属活动工作区，sessionsByWorkspace 同时持有另一工作区。 */
 function crossWorkspaceState(current: Session) {
@@ -867,8 +867,8 @@ function crossWorkspaceState(current: Session) {
     currentSession: current,
     sessions: [current],
     gatewayWorkspaces: [
-      { workspace_id: RACE_WORKSPACE, name: "ws" },
-      { workspace_id: OTHER_WORKSPACE, name: "other" },
+      { gateway_id: "gateway-test", workspace_id: workspaceOwnerFromKey(RACE_WORKSPACE).workspaceId, name: "ws" },
+      { gateway_id: "gateway-test", workspace_id: workspaceOwnerFromKey(OTHER_WORKSPACE).workspaceId, name: "other" },
     ],
     sessionsByWorkspace: new Map([
       [RACE_WORKSPACE, [current]],
@@ -891,8 +891,8 @@ function mountDuplicateSessionOwners(
   initial.eventQueuesBySession.set(otherKey, []);
   return {
     ...mountLifecycle(active, initial, sessionCatalogOutboxRuntime, [
-      { workspace_id: RACE_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" },
-      { workspace_id: OTHER_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000002", connection_kind: "local" },
+      { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" },
+      { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000002" },
     ]),
     activeKey,
     otherKey,
@@ -928,8 +928,8 @@ describe("会话列表收敛的活动工作区边界", () => {
       initial.eventQueuesBySession.set(activeKey, []);
       const runtime = createSessionCatalogOutboxTestRuntime();
       const mounted = mountLifecycle(active, initial, runtime.runtime, [
-        { workspace_id: RACE_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" },
-        { workspace_id: OTHER_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000002", connection_kind: "local" },
+        { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" },
+        { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000002" },
       ]);
       const pending = mounted.actions.renameSession(target.session_id, "新标题", OTHER_WORKSPACE);
       for (let index = 0; index < 100 && !started; index += 1) {
@@ -942,7 +942,7 @@ describe("会话列表收敛的活动工作区边界", () => {
       releaseGet();
       await pending;
       const next = mounted.state();
-      expect(requests).toEqual([OTHER_WORKSPACE]);
+      expect(requests).toEqual([workspaceOwnerFromKey(OTHER_WORKSPACE).workspaceId]);
       expect(runtime.submitted[0]?.workspaceId).toBe(OTHER_WORKSPACE);
       expect(next.currentSession).toEqual(selectWhilePending ? selected : active);
       expect(next.currentSessionWorkspaceId).toBe(RACE_WORKSPACE);
@@ -995,7 +995,7 @@ describe("会话列表收敛的活动工作区边界", () => {
     await pending;
 
     const next = mounted.state();
-    expect(requests).toEqual([RACE_WORKSPACE]);
+    expect(requests).toEqual([workspaceOwnerFromKey(RACE_WORKSPACE).workspaceId]);
     expect(runtime.submitted[0]?.workspaceId).toBe(RACE_WORKSPACE);
     expect(next.status).toBe(statusAfterSelection);
     expect(next.currentSession).toEqual(selected);
@@ -1043,7 +1043,7 @@ describe("会话列表收敛的活动工作区边界", () => {
     await pending;
 
     const next = mounted.state();
-    expect(requests).toEqual([RACE_WORKSPACE]);
+    expect(requests).toEqual([workspaceOwnerFromKey(RACE_WORKSPACE).workspaceId]);
     expect(next.status).toBe(statusAfterSelection);
     expect(next.currentSession).toEqual(selected);
     expect(next.sessions).toEqual([selected]);
@@ -1094,7 +1094,7 @@ describe("会话列表收敛的活动工作区边界", () => {
     await pending;
 
     const next = mounted.state();
-    expect(requests).toEqual([RACE_WORKSPACE]);
+    expect(requests).toEqual([workspaceOwnerFromKey(RACE_WORKSPACE).workspaceId]);
     expect(next.status).toBe(statusAfterSelection);
     expect(next.currentSession).toEqual(selected);
     expect(next.sessions).toEqual([selected]);
@@ -1116,8 +1116,8 @@ describe("会话列表收敛的活动工作区边界", () => {
 
     const runtime = createSessionCatalogOutboxTestRuntime();
     const { state: readState, actions } = mountLifecycle(active, initial, runtime.runtime, [
-      { workspace_id: RACE_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" },
-      { workspace_id: OTHER_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000002", connection_kind: "local" },
+      { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" },
+      { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000002" },
     ]);
     await actions.deleteSession(otherInOther.session_id, OTHER_WORKSPACE);
 

@@ -33,6 +33,7 @@ class ChangePortForwardLabelRequest(BaseModel):
 
 class PortForwardDTO(BaseModel):
     forward_id: str
+    gateway_id: str
     workspace_id: str
     connection_id: str
     remote_host: Literal["127.0.0.1"]

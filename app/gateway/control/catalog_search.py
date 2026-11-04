@@ -70,7 +70,7 @@ class GatewaySessionCatalogSearchService:
         self._max_concurrency = max_concurrency
         self._request_timeout_seconds = request_timeout_seconds
         self._snapshots: dict[GatewaySearchWorkspaceOwnerDTO, _CatalogSnapshot] = {}
-        self._workspace_errors: dict[str, str] = {}
+        self._workspace_errors: dict[tuple[str, str], str] = {}
         self._sync_locks: tuple[asyncio.Lock, ...] = tuple(
             asyncio.Lock() for _ in range(_SYNC_LOCK_SHARDS)
         )
@@ -208,7 +208,7 @@ class GatewaySessionCatalogSearchService:
         # 会话目录快照/新鲜度/错误表都按 workspace_id 累积，工作区删除后
         # 若只增不减，长驻进程内存会随历史工作区无界增长（快照含全部会话节点）。
         # 每轮同步以权威 registry 存活集为界回收，用集合差而非再扫一遍 targets。
-        live_workspace_ids = {target.workspace_id for target in targets}
+        live_workspace_ids = {target.key for target in targets}
         live_owners = {workspace_owner(target, self._registry, self._gateway_id) for target in targets}
         for owner in self._snapshots.keys() - live_owners:
             self._snapshots.pop(owner)
@@ -217,7 +217,7 @@ class GatewaySessionCatalogSearchService:
         for target in targets:
             if target.connection_kind != "remote_gateway" and not target.backend_url.strip():
                 message = f"工作区后端尚未连接: {target.workspace_id}"
-                self._workspace_errors[target.workspace_id] = message
+                self._workspace_errors[target.key] = message
                 logger.info(
                     "跳过尚未连接工作区的会话目录同步: workspace_id=%s",
                     target.workspace_id,
@@ -234,7 +234,7 @@ class GatewaySessionCatalogSearchService:
         )
         for (target, request_id), result in zip(sync_requests, results, strict=True):
             if isinstance(result, BaseException):
-                self._workspace_errors[target.workspace_id] = failure_detail(
+                self._workspace_errors[target.key] = failure_detail(
                     result, stage="session_catalog_sync",
                     label=(f"会话目录同步失败: workspace_id={target.workspace_id}, request_id={request_id}"
                            + (f", status={result.response.status_code}" if isinstance(result, httpx.HTTPStatusError) else "")),
@@ -246,7 +246,7 @@ class GatewaySessionCatalogSearchService:
         *,
         request_id: str,
     ) -> _CatalogSnapshot:
-        lock = self._sync_lock_for(target.workspace_id)
+        lock = self._sync_lock_for(target.key)
         async with lock:
             owner = workspace_owner(target, self._registry, self._gateway_id)
             url, headers = self._target_request(target, request_id=request_id)
@@ -260,8 +260,8 @@ class GatewaySessionCatalogSearchService:
             nodes_by_id = {node.node_id: node for node in exported.items}
             if len(nodes_by_id) != len(exported.items):
                 raise RuntimeError(f"工作区目录导出包含重复 node_id: {target.workspace_id}")
-            if (not self._registry.has_target(target.workspace_id)
-                or workspace_owner(self._registry.resolve(target.workspace_id), self._registry, self._gateway_id) != owner):
+            if (not self._registry.has_target(target.key)
+                or workspace_owner(self._registry.resolve(target.key), self._registry, self._gateway_id) != owner):
                 raise RuntimeError(f"会话目录同步期间登记归属已改变: {target.workspace_id}")
             snapshot = _CatalogSnapshot(
                 owner=owner, catalog_revision=exported.catalog_revision, revision=exported.revision,
@@ -269,14 +269,14 @@ class GatewaySessionCatalogSearchService:
             )
             self._save_snapshot(snapshot)
             self._snapshots[owner] = snapshot
-            self._workspace_errors.pop(target.workspace_id, None)
+            self._workspace_errors.pop(target.key, None)
             return snapshot
 
-    def _sync_lock_for(self, workspace_id: str) -> asyncio.Lock:
+    def _sync_lock_for(self, workspace_id: tuple[str, str]) -> asyncio.Lock:
         # 分片锁池：同一 workspace_id 恒得同一把锁（保住同一工作区同步互斥），
         # 池大小恒定（有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入
         # hash 随机化导致的锁分布漂移。
-        shard = zlib.crc32(workspace_id.encode("utf-8")) % len(self._sync_locks)
+        shard = zlib.crc32("\0".join(workspace_id).encode("utf-8")) % len(self._sync_locks)
         return self._sync_locks[shard]
 
     def _load_snapshot(self, owner: GatewaySearchWorkspaceOwnerDTO) -> _CatalogSnapshot | None:
@@ -328,9 +328,9 @@ class GatewaySessionCatalogSearchService:
         headers["X-BoxTeam-Gateway-Id"] = self._gateway_id
         headers["X-Request-ID"] = request_id
         if target.connection_kind == "remote_gateway":
-            assert target.remote_gateway_connection_id is not None
+            assert self._registry.remote_connection_for_target(target).connection_id is not None
             return (
-                (f"{self._registry.remote_gateway_url(target.remote_gateway_connection_id)}"
+                (f"{self._registry.remote_gateway_url(self._registry.remote_connection_for_target(target).connection_id)}"
                  "/api/v1/session-catalog/export"),
                 headers,
             )

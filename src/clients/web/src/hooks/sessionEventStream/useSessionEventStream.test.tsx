@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -12,6 +13,9 @@ import { INITIAL_APP_STATE } from "../app/appStateSeed";
 import type { Session, SessionStreamEvent } from "../../types/backend";
 import { useSessionLifecycleActions } from "../session/useSessionLifecycleActions";
 import { createSessionHookState } from "../../tests/fixtures/session/appState";
+import { sessionScopeKey } from "../../state/session/sessionScope";
+
+const workspaceKey = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
 
 test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 payload", () => {
   const sessionId = "ses_same_attachments";
@@ -37,11 +41,8 @@ test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 p
 const originalFetch = globalThis.fetch;
 
 function workspaceRequestTarget(workspaceId: string) {
-  return {
-    workspace_id: workspaceId,
-    backend_workspace_id: "00000000-0000-0000-0000-000000000001",
-    connection_kind: "local" as const,
-  };
+  const owner = workspaceOwnerFromKey(workspaceId);
+  return { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId };
 }
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -89,9 +90,9 @@ async function mountSessionStream(
     useSessionEventStream({
       apiPort: 49_902,
       sessionId: "session-reconnect",
-      workspaceId: "workspace-reconnect",
-      workspaceRequestTarget: workspaceRequestTarget("workspace-reconnect"),
-      sessionCacheKey: "workspace-reconnect::session-reconnect",
+      workspaceId: workspaceKey("workspace-reconnect"),
+      workspaceRequestTarget: workspaceRequestTarget(workspaceKey("workspace-reconnect")),
+      sessionCacheKey: sessionScopeKey(workspaceKey("workspace-reconnect"), "session-reconnect"),
       activeJobId: null,
       timelineReady: true,
       initialEventCursor: null,
@@ -121,13 +122,13 @@ for (const entry of ["session", "workspace"] as const) {
     installWindow();
     const sessionA = { session_id: "ses_selection_a", title: "会话 A" } as Session;
     const sessionB = { session_id: "ses_selection_b", title: "会话 B" } as Session;
-    const workspaceA = "gw_selection_a";
-    const workspaceB = entry === "workspace" ? "gw_selection_b" : workspaceA;
+    const workspaceA = workspaceKey("gw_selection_a");
+    const workspaceB = entry === "workspace" ? workspaceKey("gw_selection_b") : workspaceA;
     const targets = [workspaceRequestTarget(workspaceA), workspaceRequestTarget(workspaceB)];
     const initial = createSessionHookState({
       workspaceId: workspaceA, currentSession: sessionA, sessions: [sessionA, sessionB],
       gatewayWorkspaces: targets.map((target) => ({
-        workspace_id: target.workspace_id, name: target.workspace_id,
+        gateway_id: target.gateway_id, workspace_id: target.workspace_id, name: target.workspace_id,
       })),
     });
     initial.sessionsByWorkspace.set(workspaceB, workspaceB === workspaceA ? [sessionA, sessionB] : [sessionB]);
@@ -161,8 +162,8 @@ for (const entry of ["session", "workspace"] as const) {
       const workspaceId = current.currentSessionWorkspaceId ?? current.activeGatewayWorkspaceId;
       const { abortCurrentStream } = useSessionEventStream({
         apiPort: 49_908, sessionId: current.currentSession?.session_id ?? null,
-        workspaceId, workspaceRequestTarget: targets.find((target) => target.workspace_id === workspaceId) ?? null,
-        sessionCacheKey: `${workspaceId}::${current.currentSession?.session_id}`,
+        workspaceId, workspaceRequestTarget: targets.find((target) => gatewayWorkspaceKey(target) === workspaceId) ?? null,
+        sessionCacheKey: current.currentSession ? sessionScopeKey(workspaceId, current.currentSession.session_id) : null,
         activeJobId: null, timelineReady: true, initialEventCursor: null,
         refreshTurnHistory, loadTerminalJobTurn, setState,
       });
@@ -202,7 +203,7 @@ for (const entry of ["session", "workspace"] as const) {
         timestamp: "2026-10-14T00:00:00Z", raw: {},
       }, "cursor_selection_a"));
       await flush();
-      expect(latest.eventQueuesBySession.get(`${workspaceA}::${sessionA.session_id}`)?.some(
+      expect(latest.eventQueuesBySession.get(sessionScopeKey(workspaceA, sessionA.session_id))?.some(
         (event) => event.kind === "trace" && event.event.event_id === "evt_selection_a",
       )).toBe(true);
       act(() => select(workspaceB, sessionB.session_id));
@@ -234,9 +235,9 @@ describe("useSessionEventStream readiness", () => {
       useSessionEventStream({
         apiPort: 49_401,
         sessionId: "session-partial",
-        workspaceId: "workspace-partial",
-        workspaceRequestTarget: workspaceRequestTarget("workspace-partial"),
-        sessionCacheKey: "workspace-partial::session-partial",
+        workspaceId: workspaceKey("workspace-partial"),
+        workspaceRequestTarget: workspaceRequestTarget(workspaceKey("workspace-partial")),
+        sessionCacheKey: sessionScopeKey(workspaceKey("workspace-partial"), "session-partial"),
         activeJobId: null,
         timelineReady: false,
         initialEventCursor: null,
@@ -324,9 +325,9 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
       useSessionEventStream({
         apiPort: 49_903,
         sessionId: "session-cursor-gone",
-        workspaceId: "workspace-cursor-gone",
-        workspaceRequestTarget: workspaceRequestTarget("workspace-cursor-gone"),
-        sessionCacheKey: "workspace-cursor-gone::session-cursor-gone",
+        workspaceId: workspaceKey("workspace-cursor-gone"),
+        workspaceRequestTarget: workspaceRequestTarget(workspaceKey("workspace-cursor-gone")),
+        sessionCacheKey: sessionScopeKey(workspaceKey("workspace-cursor-gone"), "session-cursor-gone"),
         activeJobId: null,
         timelineReady,
         initialEventCursor: "stale-cursor",
@@ -380,9 +381,9 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
       useSessionEventStream({
         apiPort: 49_904,
         sessionId: "session-cursor-gone-active",
-        workspaceId: "workspace-cursor-gone-active",
-        workspaceRequestTarget: workspaceRequestTarget("workspace-cursor-gone-active"),
-        sessionCacheKey: "workspace-cursor-gone-active::session-cursor-gone-active",
+        workspaceId: workspaceKey("workspace-cursor-gone-active"),
+        workspaceRequestTarget: workspaceRequestTarget(workspaceKey("workspace-cursor-gone-active")),
+        sessionCacheKey: sessionScopeKey(workspaceKey("workspace-cursor-gone-active"), "session-cursor-gone-active"),
         activeJobId: null,
         timelineReady,
         initialEventCursor: "stale-cursor",
@@ -416,10 +417,12 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
 
 test("同源端口 0 的两个 Thread 各自连接并在卸载时取消自身订阅", async () => {
   installWindow();
+  const workspace = workspaceKey("00000000-0000-0000-0000-000000000001");
   const signals: AbortSignal[] = [];
   const calls: string[] = [];
   const stream = spyOn(traceStream, "streamSessionEvents").mockImplementation(async (port, sessionId, options) => {
     expect(port).toBe(0); expect(sessionId).toBe("ses_parallel");
+    expect(options?.workspaceId).toBe(workspace);
     calls.push(options!.threadId!); signals.push(options!.signal!);
     await new Promise<void>(resolve => options!.signal!.addEventListener("abort", () => resolve(), { once: true }));
   });
@@ -428,7 +431,7 @@ test("同源端口 0 的两个 Thread 各自连接并在卸载时取消自身订
   const setState = () => undefined;
   function Thread({ id }: { id: string }) {
     useSessionEventStream({ apiPort: 0, sessionId: "ses_parallel", threadId: id,
-      workspaceId: "gw_parallel", workspaceRequestTarget: null, sessionCacheKey: `gw_parallel::ses_parallel::${id}`,
+      workspaceId: workspace, workspaceRequestTarget: workspaceRequestTarget(workspace), sessionCacheKey: `${sessionScopeKey(workspace, "ses_parallel")}::${id}`,
       activeJobId: null, timelineReady: true, initialEventCursor: null,
       refreshTurnHistory: refresh, loadTerminalJobTurn: load, setState });
     return null;

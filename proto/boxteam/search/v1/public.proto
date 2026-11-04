@@ -2,11 +2,11 @@ syntax = "proto3";
 
 package boxteam.search.v1;
 
-import "boxteam/gateway/v1/public.proto";
+import "boxteam/gateway/v2/public.proto";
 import "boxteam/workspace/v2/public.proto";
 
 message FederatedFileSearchTargetDTO {
-  boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+  boxteam.gateway.v2.GatewaySearchWorkspaceOwnerDTO owner = 1;
   boxteam.workspace.v2.WorkspaceFileSearchTargetDTO target = 2;
 }
 
@@ -24,7 +24,7 @@ message FederatedSearchQueryDTO {
 }
 
 message FederatedSearchBranchKeyDTO {
-  boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+  boxteam.gateway.v2.GatewaySearchWorkspaceOwnerDTO owner = 1;
   string category = 2;
   string operation = 3;
   optional string resource_uri = 4;
@@ -36,7 +36,7 @@ message FederatedSearchContinuationDTO {
 }
 
 message FederatedSearchRequest {
-  boxteam.gateway.v1.GatewaySearchScopeRequest scope = 1;
+  boxteam.gateway.v2.GatewaySearchScopeRequest scope = 1;
   repeated FederatedSearchQueryDTO queries = 2;
   repeated FederatedSearchContinuationDTO continuations = 3;
   int32 max_results = 4;
@@ -78,7 +78,7 @@ message FederatedSearchEventDTO {
   int32 sequence = 1;
   string request_id = 2;
   string type = 3;
-  boxteam.gateway.v1.GatewaySearchScopeResolutionDTO scope = 4;
+  boxteam.gateway.v2.GatewaySearchScopeResolutionDTO scope = 4;
   FederatedSearchBranchDTO branch = 5;
   boxteam.workspace.v2.WorkspaceSearchResultDTO page = 6;
   FederatedSearchSummaryDTO summary = 7;

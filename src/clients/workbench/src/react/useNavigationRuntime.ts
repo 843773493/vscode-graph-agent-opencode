@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useGatewayAccessHeartbeat } from "../../../web/src/hooks/settings/useGatewayAccessHeartbeat.js";
 import { browserGatewayId, getBrowserUiSettings } from "../../../web/src/hooks/settings/browserUiSettings.js";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -27,7 +28,7 @@ import { workspaceContext } from '../workspaceContext.js';
 
 /** 导航持有目录镜像；聊天与流式运行状态仍由各个 Editor 的显式 owner 管理。 */
 export function useNavigationRuntime(
-  onSessionCreated: (session: Session, routeId: string | null) => Promise<void>,
+  onSessionCreated: (session: Session, workspaceKey: string | null) => Promise<void>,
   onError: (message: string) => void,
   refreshSessionOwner: (target: GatewayWorkspaceRequestTarget, signal: AbortSignal) => Promise<void>,
   currentSessionCacheKey: string | null,
@@ -58,17 +59,17 @@ export function useNavigationRuntime(
     const [workspaces, access, settings, browserViewScope] = await queue.enqueue(() => Promise.all([
       listGatewayWorkspaces(0), ensureGatewayUserAccess(0), getBrowserUiSettings(0), browserGatewayId(0),
     ]));
-    const routeId = workspaces.active_workspace_id;
-    const sessions = routeId ? await gateway.sessions(routeId) : [];
+    const workspaceKey = nullableGatewayWorkspaceKey(workspaces.active_workspace);
+    const sessions = workspaceKey ? await gateway.sessions(workspaceKey) : [];
     if (request !== gatewayListRequestRef.current) return null;
     setState(previous => {
       const next = cloneMaps(withFreshGatewayWorkspaceList(previous, workspaces.items));
-      if (routeId) next.sessionsByWorkspace.set(routeId, sessions);
-      return { ...next, activeGatewayWorkspaceId: routeId, sessions,
-        workspaceName: workspaces.items.find(item => item.workspace_id === routeId)?.name ?? '',
+      if (workspaceKey) next.sessionsByWorkspace.set(workspaceKey, sessions);
+      return { ...next, activeGatewayWorkspaceId: workspaceKey, sessions,
+        workspaceName: workspaces.items.find(item => gatewayWorkspaceKey(item) === workspaceKey)?.name ?? '',
         gatewayUserAccess: access, browserViewScope, uiSettings: settings, uiSettingsLoaded: true, isBootstrapping: false };
     });
-    return routeId;
+    return workspaceKey;
   }, [queue]);
   useEffect(() => {
     void refreshSessions().catch(cause => reportError(`导航初始化失败：${String(cause)}`));
@@ -96,7 +97,7 @@ export function useNavigationRuntime(
   const setWorkspaceParent = useGatewayWorkspaceHierarchy(0, setState, gatewayListRequestRef, queue.enqueue, selectionIntentRef);
   const context = { apiPort: 0, currentSession: state.currentSession, activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
     currentSessionGatewayWorkspaceId: state.currentSessionWorkspaceId,
-    defaultGatewayWorkspaceId: state.gatewayWorkspaces.find(item => item.system_default)?.workspace_id ?? null,
+    defaultGatewayWorkspaceId: nullableGatewayWorkspaceKey(state.gatewayWorkspaces.find(item => item.system_default)),
     readState, setState, abortCurrentStream: invalidateWorkspaceRefreshes, invalidateAgentState: invalidateWorkspaceRefreshes,
     sessionCatalogOutboxRuntime: catalog, gatewayUserAccess: state.gatewayUserAccess,
     workspaceRequestTargets: state.gatewayWorkspaces, selectionIntentRef, onSessionCreated };
@@ -108,10 +109,10 @@ export function useNavigationRuntime(
     activeSessionRequest.current += 1;
     setState(previous => ({ ...previous, currentSession: null, currentSessionWorkspaceId: null }));
   }, []);
-  const setActiveSession = useCallback(async (routeId: string, sessionId: string) => {
+  const setActiveSession = useCallback(async (workspaceKey: string, sessionId: string) => {
     const request = ++activeSessionRequest.current;
-    const session = await getSession(0, sessionId, routeId);
-    if (request === activeSessionRequest.current) setState(previous => ({ ...previous, currentSession: session, currentSessionWorkspaceId: routeId }));
+    const session = await getSession(0, sessionId, workspaceKey);
+    if (request === activeSessionRequest.current) setState(previous => ({ ...previous, currentSession: session, currentSessionWorkspaceId: workspaceKey }));
     return session;
   }, []);
   useUnreadSessionTracking({ unreadSessionKeys: state.unreadSessionKeys, currentSessionCacheKey, setState });

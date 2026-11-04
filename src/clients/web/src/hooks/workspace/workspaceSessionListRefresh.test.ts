@@ -32,11 +32,7 @@ const session = {
 };
 
 function workspaceTarget(workspaceId: string) {
-  return {
-    workspace_id: workspaceId,
-    backend_workspace_id: "00000000-0000-0000-0000-000000000001",
-    connection_kind: "local" as const,
-  };
+  return { gateway_id: "gateway-test", workspace_id: workspaceId };
 }
 
 describe("工作区会话列表快照", () => {

@@ -26,7 +26,7 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes import federation, workspaces
 from app.gateway.routes._shared import get_registry
 from app.protocol import openapi
-from app.protocol.generated.boxteam.gateway.v1 import public_pb2
+from app.protocol.generated.boxteam.gateway.v2 import public_pb2
 from app.protocol.schema import descriptor_pool_from_set
 from app.schemas.gateway.federation import FederationProtocolManifestDTO
 from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
@@ -73,7 +73,7 @@ def test_federation_schema_requires_exported_roots(gateway_openapi: JsonSchemaVa
     ("FederationProtocolManifestDTO", "config_event_cursor", {"type": "string"}),
     ("FederationProtocolManifestDTO", "config_reload_restart_required", {"type": "integer"}),
     ("GatewayWorkspaceListDTO", "items", {"type": "object"}),
-    ("GatewayWorkspaceDTO", "remote", {"type": "string"}),
+    ("GatewayWorkspaceDTO", "remote_gateways", {"type": "string"}),
     ("GatewayRemoteConnectionSummaryDTO", "config_event_cursor", {"type": "string"}),
     ("GatewayRemoteConnectionSummaryDTO", "restart_required", {"type": "integer"}),
     ("GatewayRuntimeRestartResultDTO", "workspaces", {"type": "string"}),
@@ -139,21 +139,22 @@ async def test_real_federation_http_serialization_survives_generated_consumers(
 ) -> None:
     application, config_owner, registry = federated_gateway
     # 本测试只核查询序列化；远端发现结果按明确装具登记，不声称SSH或重启验收。
-    registry.upsert_remote_gateway(RemoteGatewayConnection(
+    connection = RemoteGatewayConnection(
         connection_id="rgw_contract", name="Remote", host="remote.example", port=22,
         username="developer", private_key_path=None, ssh_config_host=None,
-        remote_gateway_port=8014, remote_gateway_id="gateway_remote",
+        remote_gateway_port=8014, remote_gateway_id="gateway_00000000000040008000000000000002",
         protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
         remote_config_event_cursor=0 if pending else None,
         remote_config_state="pending_restart" if pending else None,
         remote_restart_required=pending, remote_candidate_ref="candidate-remote" if pending else None,
-    ))
-    registry.upsert(WorkspaceTarget(
-        workspace_id="projected-contract", name="Remote workspace", root_path=None,
+    )
+    registry.apply_remote_projection_snapshot(connection=connection, projections=(WorkspaceTarget(
+        gateway_id="gateway_00000000000040008000000000000002",
+        workspace_id="00000000-0000-4000-8000-000000000002", name="Remote workspace", root_path=None,
         backend_url="http://remote.invalid", connection_kind="remote_gateway",
-        backend_workspace_id="00000000-0000-4000-8000-000000000002", owner="remote_projection",
-        connection_id="rgw_contract", remote_gateway_connection_id="rgw_contract", remote_workspace_id="remote-workspace",
-    ))
+        owner="remote_projection",
+        connection_id="rgw_contract", remote_gateway_connection_ids=("rgw_contract",),
+    ),))
     path = get_user_gateway_config_path()
     payload = read_jsonc_object(path)
     logging = payload.setdefault("logging", {})
@@ -178,19 +179,22 @@ async def test_real_federation_http_serialization_survives_generated_consumers(
     assert manifest["config_event_cursor"] > 0 and manifest["config_reload_state"] == "active"
     assert manifest["config_reload_restart_required"] is False
     workspace = samples["GatewayWorkspaceListDTO"]["items"][0]
-    remote = workspace["remote"]
+    remote, = workspace["remote_gateways"]
     assert remote["config_event_cursor"] == (0 if pending else None)
     assert remote["restart_required"] is pending
     assert remote["config_reload_state"] == ("pending_restart" if pending else None)
     assert remote["candidate_ref"] == ("candidate-remote" if pending else None)
-    assert workspace["backend_workspace_id"] == "00000000-0000-4000-8000-000000000002"
+    assert workspace["workspace_id"] == "00000000-0000-4000-8000-000000000002"
+    assert workspace["gateway_id"] == remote["gateway_id"] == "gateway_00000000000040008000000000000002"
+    assert "backend_workspace_id" not in workspace
     manifest_message = ParseDict(manifest, public_pb2.FederationProtocolManifestDTO())
     assert manifest_message.HasField("config_reload_restart_required")
     assert manifest_message.config_reload_restart_required is False
     workspace_message = ParseDict(workspace, public_pb2.GatewayWorkspaceDTO())
-    assert workspace_message.remote.HasField("config_event_cursor") is pending
-    assert workspace_message.remote.HasField("restart_required")
-    assert workspace_message.remote.restart_required is pending
+    remote_message, = workspace_message.remote_gateways
+    assert remote_message.HasField("config_event_cursor") is pending
+    assert remote_message.HasField("restart_required")
+    assert remote_message.restart_required is pending
     receipt = tmp_path / "http.json"
     receipt.write_text(json.dumps(samples, ensure_ascii=False))
     command = ["bun", "tests/contracts/gateway_config_consumer.mjs", str(receipt)]

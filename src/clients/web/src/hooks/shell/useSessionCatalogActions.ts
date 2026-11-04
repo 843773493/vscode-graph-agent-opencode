@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { useCallback, useMemo, useState } from "react";
 import { catalogOutboxParentCreation } from "../../state/session/sessionCatalogOutbox";
 import {
@@ -122,8 +123,7 @@ export function useSessionCatalogActions({
     // 才回退到系统默认 home，避免从测试/远程工作区误建到 home。
     const targetWorkspaceId = workspaceId
       ?? activeGatewayWorkspaceId
-      ?? gatewayWorkspaces.find((workspace) => workspace.system_default)
-        ?.workspace_id;
+      ?? nullableGatewayWorkspaceKey(gatewayWorkspaces.find((workspace) => workspace.system_default));
     if (!targetWorkspaceId) {
       const error = new Error("未找到默认 home 工作区，无法创建会话");
       setStatus(`创建会话失败: ${error.message}`);
@@ -205,24 +205,24 @@ export function useSessionCatalogActions({
     void (async () => {
       let groupRequest: GatewayRuntimeGroupRequest | undefined;
       let impact = "";
-      const displayed = gatewayWorkspaces.find((item) => item.workspace_id === workspaceId);
+      const displayed = gatewayWorkspaces.find((item) => gatewayWorkspaceKey(item) === workspaceId);
       if (displayed?.managed && displayed.connection_kind === "local") {
         const snapshot = await listGatewayWorkspaces(apiPort);
-        const target = snapshot.items.find((item) => item.workspace_id === workspaceId);
+        const target = snapshot.items.find((item) => gatewayWorkspaceKey(item) === workspaceId);
         if (!target?.managed) throw new Error("工作区已变化，请刷新后重新删除");
         if (target.backend_generation) {
           const members = target.affected_workspace_ids;
-          if (!members.length || !members.includes(workspaceId)
+          if (!members.length || !members.includes(target.workspace_id)
             || new Set(members).size !== members.length) {
             throw new Error("Backend 完整成员合同缺失");
           }
           groupRequest = {
             expected_backend_generation: target.backend_generation,
             expected_workspace_ids: members,
-            desired_workspace_ids: members.filter((id) => id !== workspaceId),
+            desired_workspace_ids: members.filter((id) => id !== target.workspace_id),
           };
           const names = members.map((id) => {
-            const member = snapshot.items.find((item) => item.workspace_id === id);
+            const member = snapshot.items.find((item) => item.gateway_id === target.gateway_id && item.workspace_id === id);
             if (!member) throw new Error(`Backend 成员未登记：${id}`);
             return `• ${member.name}（${id}）`;
           });
@@ -254,7 +254,8 @@ export function useSessionCatalogActions({
           && Array.isArray(error.detail.affected_workspace_ids)
           ? error.detail.affected_workspace_ids
           : null;
-        if (!("workspace_id" in error.detail) || error.detail.workspace_id !== workspaceId
+        if (!("workspace_id" in error.detail) || error.detail.workspace_id !== workspaceOwnerFromKey(workspaceId).workspaceId
+          || !("gateway_id" in error.detail) || error.detail.gateway_id !== workspaceOwnerFromKey(workspaceId).gatewayId
           || !("backend_generation" in error.detail) || error.detail.backend_generation !== groupRequest.expected_backend_generation
           || !affectedWorkspaceIds
           || affectedWorkspaceIds.length !== groupRequest.expected_workspace_ids.length

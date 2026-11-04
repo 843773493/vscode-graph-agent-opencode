@@ -2,9 +2,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { create, fromBinary, fromJson, toBinary, toJson } from "@bufbuild/protobuf";
-import * as node from "../../src/workspace-services/protocol/generated/boxteam/gateway/v1/public_pb.js";
-import * as web from "../../src/clients/web/src/types/protocol_buf_generated/boxteam/gateway/v1/public_pb.js";
-import * as json from "../../src/clients/web/src/types/protocol_generated/boxteam/gateway/v1/public.ts";
+import * as node from "../../src/workspace-services/protocol/generated/boxteam/gateway/v2/public_pb.js";
+import * as web from "../../src/clients/web/src/types/protocol_buf_generated/boxteam/gateway/v2/public_pb.js";
+import * as json from "../../src/clients/web/src/types/protocol_generated/boxteam/gateway/v2/public.ts";
 
 const input = JSON.parse(await readFile(process.argv[2], "utf8"));
 function compare(original, result) {

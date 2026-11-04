@@ -371,9 +371,9 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const open = async (mods: IKeyMods, background: boolean, side = false) => {
       this.assertAccess(run);
       const group = this.targetGroup(run, mods, side);
-      const routeId = await gateway.resolveWorkspace(owner);
-      const main = await gateway.mainThread(routeId, sessionId);
-      await this.open(run, new ThreadInput({ ...owner, routeId, sessionId, threadId: main.thread_id, title }), mods, background, false, group, undefined, requestLog);
+      const workspaceKey = await gateway.resolveWorkspace(owner);
+      const main = await gateway.mainThread(workspaceKey, sessionId);
+      await this.open(run, new ThreadInput({ ...owner, workspaceKey, sessionId, threadId: main.thread_id, title }), mods, background, false, group, undefined, requestLog);
     };
     return { id: requestLog ? `request:${searchOwnerKey(owner)}/${sessionId}/${requestLog.reference!.file_name}/${requestLog.reference!.start_codepoint}` : `session:${searchOwnerKey(owner)}/${sessionId}`, label: title, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.commentDiscussion),

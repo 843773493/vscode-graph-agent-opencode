@@ -16,6 +16,6 @@
 # 规范
 
 - 手写类型应保持与后端 schema 语义一致。
-- Gateway结构来自 `proto/boxteam/gateway/v1/public.proto`，HTTP空值及业务值域与 `app/schemas/gateway/` 同步；配置状态只在具名适配处补null和reason值域，不再逐字段重复公开结构。不得把临时运行态字段误当成可持久化重连来源。
+- Gateway结构来自 `proto/boxteam/gateway/v2/public.proto`，HTTP空值及业务值域与 `app/schemas/gateway/` 同步；配置状态只在具名适配处补null和reason值域，不再逐字段重复公开结构。不得把临时运行态字段误当成可持久化重连来源。
 - 生成类型的修改需要确认来源和生成命令。
 - 修改本目录后需要运行前端静态检查和 `bun run build`。

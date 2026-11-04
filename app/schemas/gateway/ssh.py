@@ -9,7 +9,7 @@ class AddRemoteGatewayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str | None = Field(default=None, description="远程 Gateway 显示名称")
-    connection_workspace_id: str | None = Field(
+    connection_id: str | None = Field(
         default=None,
         description="复用已连接远程 Gateway 的 SSH 主机和凭据",
     )
@@ -38,7 +38,7 @@ class AddRemoteGatewayRequest(BaseModel):
         connection_source_count = sum(
             bool(value)
             for value in (
-                self.connection_workspace_id,
+                self.connection_id,
                 self.ssh_config_host,
                 has_explicit_source,
             )
@@ -59,7 +59,6 @@ class SshConnectionOptionDTO(BaseModel):
     host: str
     port: int
     username: str
-    workspace_id: str | None = None
     ssh_config_host: str | None = None
     initial_path: str | None = None
 

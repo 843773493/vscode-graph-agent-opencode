@@ -12,8 +12,8 @@ export function installWorkspaceFileIntentStoreMock() {
   const mocks = [
     spyOn(store, "load").mockImplementation(async (scope) => [...records.values()]
       .filter((record) => record.scopeKey === storage.fileIntentScopeKey(scope))),
-    spyOn(store, "loadForWorkspace").mockImplementation(async (id) => [...records.values()]
-      .filter((record) => record.scope.gatewayWorkspaceId === id)),
+    spyOn(store, "loadForWorkspace").mockImplementation(async (owner) => [...records.values()]
+      .filter((record) => record.scope.gatewayId === owner.gatewayId && record.scope.workspaceId === owner.workspaceId)),
     spyOn(store, "insert").mockImplementation(async (input) => {
       const record: storage.StoredFileIntent = {
         scopeKey: storage.fileIntentScopeKey(input.scope), scope: input.scope,

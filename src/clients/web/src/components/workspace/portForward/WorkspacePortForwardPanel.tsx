@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   changeWorkspacePortForwardLabel,
@@ -130,7 +131,7 @@ export default function WorkspacePortForwardPanel({
   const [isTableMenuOpen, setIsTableMenuOpen] = useState(false);
   const filterInputRef = useRef<HTMLInputElement>(null);
   const requestRevisionRef = useRef(0);
-  const workspaceId = workspace?.workspace_id ?? null;
+  const workspaceId = nullableGatewayWorkspaceKey(workspace);
   const isRemoteWorkspace = workspace?.connection_kind === "remote_gateway";
   const currentWorkspaceIdRef = useRef(workspaceId);
   currentWorkspaceIdRef.current = workspaceId;
@@ -186,14 +187,9 @@ export default function WorkspacePortForwardPanel({
     isRemoteWorkspace,
     refresh,
     workspace?.connection_error,
-    workspace?.remote?.gateway_connection_id,
-    workspace?.remote?.gateway_id,
-    workspace?.remote?.host,
-    workspace?.remote?.port,
-    workspace?.remote?.remote_gateway_port,
-    workspace?.remote?.remote_workspace_id,
-    workspace?.remote?.ssh_config_host,
-    workspace?.remote?.username,
+    workspace?.gateway_id,
+    workspace?.workspace_id,
+    workspace?.remote_gateways,
     workspace?.status,
     workspaceId,
   ]);
@@ -225,7 +221,7 @@ export default function WorkspacePortForwardPanel({
       setError(errorMessage(validationError));
       return;
     }
-    const workspaceId = workspace.workspace_id;
+    const workspaceId = gatewayWorkspaceKey(workspace);
     setSubmitting(true);
     setError(null);
     setCopyRetryId(null);
@@ -258,7 +254,7 @@ export default function WorkspacePortForwardPanel({
           danger: true,
         });
     if (!accepted) return;
-    const workspaceId = workspace.workspace_id;
+    const workspaceId = gatewayWorkspaceKey(workspace);
     setStoppingId(forward.forward_id);
     setError(null);
     setCopyRetryId(null);
@@ -300,7 +296,7 @@ export default function WorkspacePortForwardPanel({
 
   const handleReconnect = async (forward: GatewayPortForward) => {
     if (!workspace) return;
-    const workspaceId = workspace.workspace_id;
+    const workspaceId = gatewayWorkspaceKey(workspace);
     setReconnectingId(forward.forward_id);
     setError(null);
     setCopyRetryId(null);
@@ -326,7 +322,7 @@ export default function WorkspacePortForwardPanel({
       setError(errorMessage(validationError));
       return;
     }
-    const workspaceId = workspace.workspace_id;
+    const workspaceId = gatewayWorkspaceKey(workspace);
     setChangingLocalPortId(forward.forward_id);
     setError(null);
     setCopyRetryId(null);
@@ -355,7 +351,7 @@ export default function WorkspacePortForwardPanel({
   const handleChangeLabel = async (event: FormEvent<HTMLFormElement>, forward: GatewayPortForward) => {
     event.preventDefault();
     if (!workspace || !api.changeLabel) return;
-    const workspaceId = workspace.workspace_id;
+    const workspaceId = gatewayWorkspaceKey(workspace);
     setChangingLabelId(forward.forward_id);
     setError(null);
     setCopyRetryId(null);

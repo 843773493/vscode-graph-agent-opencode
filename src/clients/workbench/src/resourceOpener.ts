@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../web/src/api/workspaceIdentity.js";
 import { Disposable, type IReference } from '../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { ITextModelService, type IResolvedTextEditorModel } from '../upstream/src/vs/editor/common/services/resolverService.js';
@@ -7,7 +8,7 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/
 import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
-import type { GatewayResourceAddressDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v1/public.js';
+import type { GatewayResourceAddressDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { ThreadInput } from './threadInput.js';
 import { workspaceFileUri } from './workspaceFiles.js';
@@ -49,8 +50,8 @@ export class ResourceOpener extends Disposable implements IOpener {
       const target = await gateway.resolveWorkspaceTarget(owner);
       if (target.status !== 'ready') throw new Error(`目标工作区当前不可用（${target.status}），请明确启动或连接`);
       input = address.session_id
-        ? new ThreadInput({ ...owner, routeId: target.workspace_id, sessionId: address.session_id,
-          threadId: address.thread_id ?? (await gateway.mainThread(target.workspace_id, address.session_id)).thread_id,
+        ? new ThreadInput({ ...owner, workspaceKey: gatewayWorkspaceKey(target), sessionId: address.session_id,
+          threadId: address.thread_id ?? (await gateway.mainThread(gatewayWorkspaceKey(target), address.session_id)).thread_id,
           title: address.thread_id ?? address.session_id })
         : { resource: workspaceFileUri(owner, address.uri, address.file_root_uri!) };
     } else {

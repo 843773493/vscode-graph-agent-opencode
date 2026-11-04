@@ -1,7 +1,11 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { renameGatewayWorkspace } from "../../../gatewayApi";
 import type { GatewayWorkspace } from "../../../types/backend";
 import { workspaceHoverTitle } from "../../agentSessions/agentSessionsUtils";
 import { groupGatewayWorkspaces } from "./GatewayControlCenter";
+
+const WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
+const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway_dev", workspace_id: WORKSPACE_ID });
 
 const originalFetch = globalThis.fetch;
 let requestUrl = "";
@@ -31,7 +35,7 @@ globalThis.fetch = Object.assign(
         code: 0,
         message: "ok",
         request_id: "req_test",
-        data: { active_workspace_id: "gw_ssh", items: [] },
+        data: { active_workspace: { gateway_id: "gateway_dev", workspace_id: WORKSPACE_ID }, items: [] },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
@@ -40,9 +44,13 @@ globalThis.fetch = Object.assign(
 );
 
 try {
-  await renameGatewayWorkspace(8014, "gw/ssh", { name: "远程开发" });
-  if (!requestUrl.endsWith("/api/gateway/workspaces/gw%2Fssh")) {
+  await renameGatewayWorkspace(8014, WORKSPACE_KEY, { name: "远程开发" });
+  if (!requestUrl.endsWith(`/api/gateway/workspaces/${WORKSPACE_ID}`)) {
     throw new Error(`重命名接口路径错误: ${requestUrl}`);
+  }
+  const headers = new Headers(requestInit?.headers);
+  if (headers.get("X-BoxTeam-Workspace-Id") !== WORKSPACE_ID || headers.get("X-BoxTeam-Target-Gateway-Id") !== "gateway_dev") {
+    throw new Error("工作区重命名没有发送原生 Gateway／UUID 归属");
   }
   if (requestInit?.method !== "PATCH") {
     throw new Error(`重命名接口方法错误: ${requestInit?.method}`);
@@ -55,7 +63,8 @@ try {
 }
 
 const remoteGatewayWorkspace: GatewayWorkspace = {
-  workspace_id: "gw_ssh",
+  gateway_id: "gateway_dev",
+    workspace_id: WORKSPACE_ID,
   name: "远程开发",
   backend_url: "http://127.0.0.1:42000",
   connection_kind: "remote_gateway",
@@ -75,17 +84,7 @@ const remoteGatewayWorkspace: GatewayWorkspace = {
     deferred_paths: [],
     layer_digests: {},
   },
-  remote: {
-    gateway_connection_id: "remote_gateway_dev",
-    gateway_id: "gateway_dev",
-    remote_workspace_id: "workspace_dev",
-    name: "开发服务器",
-    host: "192.0.2.10",
-    port: 22,
-    username: "developer",
-    ssh_config_host: "dev-server",
-    remote_gateway_port: 8014,
-  },
+  remote_gateways: [{ gateway_connection_id: "remote_gateway_dev", gateway_id: "gateway_dev", name: "开发服务器", host: "192.0.2.10", port: 22, username: "developer", ssh_config_host: "dev-server", remote_gateway_port: 8014, restart_required: false }],
   services: {},
   checked_at: "2026-07-16T00:00:00Z",
 };
@@ -97,9 +96,10 @@ if (hoverTitle !== "远程开发\nhostname: 192.0.2.10") {
 
 const localHoverTitle = workspaceHoverTitle({
   ...remoteGatewayWorkspace,
-  workspace_id: "gw_local",
+  gateway_id: "gateway-test",
+    workspace_id: "00000000-0000-4000-8000-000000000002",
   connection_kind: "local",
-  remote: null,
+  remote_gateways: [],
 });
 if (localHoverTitle !== "远程开发") {
   throw new Error(`本地工作区悬停提示与展示合同不符: ${localHoverTitle}`);
@@ -109,7 +109,7 @@ const grouped = groupGatewayWorkspaces([
   remoteGatewayWorkspace,
   {
     ...remoteGatewayWorkspace,
-    workspace_id: "gw_ssh_second",
+    workspace_id: "00000000-0000-4000-8000-000000000002",
     name: "远程后端",
   },
 ]);

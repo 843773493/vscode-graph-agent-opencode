@@ -54,8 +54,8 @@ export function useSessionAgentModelActions(
           // 请求在途期间用户已经切走的会话拉回来。
           const workspaceId =
             currentSessionGatewayWorkspaceId ??
-            prev.activeGatewayWorkspaceId ??
-            updatedSession.workspace_id;
+            prev.activeGatewayWorkspaceId;
+          if (!workspaceId) throw new Error("切换 Agent 缺少 Gateway／UUID 归属");
           const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
           if (currentSessionMatchesOwner(prev, statusOwner)) {
             next.status = `已切换 Agent: ${updatedSession.current_agent_id}`;
@@ -162,8 +162,8 @@ export function useSessionAgentModelActions(
             currentSessionGatewayWorkspaceId
             ?? activeGatewayWorkspaceId
             ?? defaultGatewayWorkspaceId
-            ?? prev.activeGatewayWorkspaceId
-            ?? updatedSession.workspace_id;
+            ?? prev.activeGatewayWorkspaceId;
+          if (!workspaceId) throw new Error("切换模型缺少 Gateway／UUID 归属");
           const cacheKey = sessionScopeKey(workspaceId, updatedSession.session_id);
           appendFrontendEvent(
             next.eventQueuesBySession,

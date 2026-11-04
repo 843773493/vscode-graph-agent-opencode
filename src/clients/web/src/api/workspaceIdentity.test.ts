@@ -1,116 +1,74 @@
 import { describe, expect, test } from "bun:test";
-import { gatewayWorkspaceRequestHeaders } from "./http";
-import { gatewayWorkspaceOwner, requireGatewayWorkspaceRoute, requireGatewayWorkspaceRequestTarget } from "./workspaceIdentity";
+import { gatewayWorkspaceRequestHeaders, workspaceHeader } from "./http";
+import {
+  gatewayWorkspaceKey,
+  gatewayWorkspaceOwner,
+  nullableGatewayWorkspaceKey,
+  requireGatewayWorkspaceRequestTarget,
+  workspaceOwnerFromKey,
+} from "./workspaceIdentity";
 
-const localWorkspace = {
-  workspace_id: "gateway-local",
-  backend_workspace_id: "00000000-0000-4000-8000-000000000001",
-  connection_kind: "local" as const,
-};
+const workspaceId = "00000000-0000-4000-8000-000000000001";
+const localWorkspace = { gateway_id: "gateway_a", workspace_id: workspaceId };
+const remoteWorkspace = { gateway_id: "gateway_c", workspace_id: workspaceId };
 
-describe("Gateway workspace 请求身份", () => {
-  test("local workspace 同时携带 Gateway target 与 backend UUID", () => {
-    const target = requireGatewayWorkspaceRequestTarget(
-      [localWorkspace],
-      localWorkspace.workspace_id,
-    );
-
-    expect(gatewayWorkspaceRequestHeaders(target)).toEqual({
-      "X-BoxTeam-Workspace-Id": "gateway-local",
-      "X-BoxTeam-Backend-Workspace-Id": localWorkspace.backend_workspace_id,
-    });
+describe("Gateway 与 UUID 的唯一工作区身份", () => {
+  test("同 UUID 在两个 Gateway 下分别选择和传输", () => {
+    for (const target of [localWorkspace, remoteWorkspace]) {
+      const key = gatewayWorkspaceKey(target);
+      expect(requireGatewayWorkspaceRequestTarget([localWorkspace, remoteWorkspace], key)).toBe(target);
+      expect(workspaceOwnerFromKey(key)).toEqual(gatewayWorkspaceOwner(target));
+      expect(gatewayWorkspaceRequestHeaders(target)).toEqual({
+        "X-BoxTeam-Target-Gateway-Id": target.gateway_id,
+        "X-BoxTeam-Workspace-Id": workspaceId,
+      });
+      expect(workspaceHeader(key)).toEqual(gatewayWorkspaceRequestHeaders(target));
+    }
+    expect(gatewayWorkspaceKey(localWorkspace)).not.toBe(gatewayWorkspaceKey(remoteWorkspace));
   });
 
-  test("Gateway target 缺失或 local backend UUID 缺失时响亮失败", () => {
-    expect(() => requireGatewayWorkspaceRequestTarget([], "gateway-local"))
-      .toThrow("Gateway workspace target 不存在");
-    expect(() => gatewayWorkspaceRequestHeaders({
-      ...localWorkspace,
-      backend_workspace_id: null,
-    })).toThrow("缺少 backend_workspace_id");
+  test("发布回执直接按 owner 解析，无需本机健康身份或连接别名", () => {
+    const owner = { gatewayId: "gateway_c", workspaceId };
+    expect(requireGatewayWorkspaceRequestTarget([localWorkspace, remoteWorkspace], owner)).toBe(remoteWorkspace);
+    expect(gatewayWorkspaceKey(owner)).toBe(gatewayWorkspaceKey(remoteWorkspace));
   });
 
-  test("remote gateway target 保留远端路由头，不伪造本地 backend UUID", () => {
-    const target = {
-      workspace_id: "gateway-remote",
-      backend_workspace_id: null,
-      connection_kind: "remote_gateway" as const,
-    };
-
-    expect(gatewayWorkspaceRequestHeaders(target)).toEqual({
-      "X-BoxTeam-Workspace-Id": "gateway-remote",
-    });
-  });
-});
-
-const owner = { workspaceId: localWorkspace.backend_workspace_id, gatewayId: "gateway_c" };
-const remoteForkWorkspace = {
-  workspace_id: "gateway-c-route",
-  backend_workspace_id: null,
-  connection_kind: "remote_gateway" as const,
-  remote: { gateway_id: "gateway_c", remote_workspace_id: localWorkspace.backend_workspace_id },
-};
-
-describe("fork 发布结果的完整目标路由", () => {
-  test("不同 Gateway 使用相同 backend UUID 时仍打开回执指定的远端", () => {
-    const otherRemote = {
-      ...remoteForkWorkspace, workspace_id: "gateway-b-route",
-      remote: { ...remoteForkWorkspace.remote, gateway_id: "gateway_b" },
-    };
-    expect(requireGatewayWorkspaceRoute(
-      [localWorkspace, otherRemote, remoteForkWorkspace], "gateway_a", owner,
-    )).toBe(remoteForkWorkspace);
+  test("未知 Gateway 不借用同 UUID 的其他登记", () => {
+    expect(() => requireGatewayWorkspaceRequestTarget([localWorkspace, remoteWorkspace], {
+      gatewayId: "gateway_unknown", workspaceId,
+    })).toThrow("缺少唯一已登记工作区");
   });
 
-  test("本地目标同时匹配实际 Gateway 身份和 backend UUID", () => {
-    const localResult = { ...owner, gatewayId: "gateway_a" };
-    expect(requireGatewayWorkspaceRoute(
-      [remoteForkWorkspace, localWorkspace], "gateway_a", localResult,
-    )).toBe(localWorkspace);
+  test("未知 UUID 不借用同 Gateway 的其他登记", () => {
+    expect(() => requireGatewayWorkspaceRequestTarget([remoteWorkspace], {
+      gatewayId: remoteWorkspace.gateway_id, workspaceId: "00000000-0000-4000-8000-000000000002",
+    })).toThrow("缺少唯一已登记工作区");
   });
 
-  test("未知 Gateway 不借用同 UUID 的已登记工作区", () => {
-    const unknown = { ...owner, gatewayId: "gateway_unknown" };
-    expect(() => requireGatewayWorkspaceRoute([localWorkspace, remoteForkWorkspace], "gateway_a", unknown))
-      .toThrow("缺少唯一的已登记路由");
+  test("同一完整 owner 重复登记时明确失败", () => {
+    expect(() => requireGatewayWorkspaceRequestTarget([remoteWorkspace, { ...remoteWorkspace }], gatewayWorkspaceKey(remoteWorkspace)))
+      .toThrow("缺少唯一已登记工作区");
   });
 
-  test.each(["", " "])("回执缺少目标 Gateway 身份时不补默认路由：%s", (gatewayId) => {
-    expect(() => requireGatewayWorkspaceRoute([remoteForkWorkspace], "gateway_a", { ...owner, gatewayId }))
-      .toThrow("资源目标缺少 Gateway／工作区身份");
+  test.each(["", " "])("Gateway 身份缺失时不补当前 Gateway：%s", gatewayId => {
+    expect(() => gatewayWorkspaceKey({ gatewayId, workspaceId })).toThrow("缺少完整");
+    expect(() => gatewayWorkspaceRequestHeaders({ ...remoteWorkspace, gateway_id: gatewayId })).toThrow("缺少");
   });
 
-  test("发布的目标工作区未登记时不借用其它同 Gateway 路由", () => {
-    expect(() => requireGatewayWorkspaceRoute([remoteForkWorkspace], "gateway_a", {
-      ...owner, workspaceId: "other-workspace",
-    })).toThrow("缺少唯一的已登记路由");
+  test.each(["gw_legacy", workspaceId, '["gateway_c"]', '["gateway_c",null]', '["", "uuid"]'])(
+    "不把缺少 owner 的旧选择交给当前工作区：%s", key => {
+      expect(() => workspaceHeader(key)).toThrow();
+    },
+  );
+
+  test("连接集合与顺序不能改写已登记 owner", () => {
+    const connected = { ...remoteWorkspace, remote_gateways: [{ connection_id: "second" }, { connection_id: "first" }] };
+    expect(gatewayWorkspaceOwner(connected)).toEqual({ gatewayId: "gateway_c", workspaceId });
+    expect(gatewayWorkspaceKey(connected)).toBe(gatewayWorkspaceKey(remoteWorkspace));
   });
 
-  test("相同完整目标存在重复登记时明确失败", () => {
-    expect(() => requireGatewayWorkspaceRoute(
-      [remoteForkWorkspace, { ...remoteForkWorkspace, workspace_id: "duplicate-route" }], "gateway_a", owner,
-    )).toThrow("缺少唯一的已登记路由");
-  });
-
-  test("Gateway 身份缺失时不猜本地目标", () => {
-    expect(() => requireGatewayWorkspaceRoute([remoteForkWorkspace], null, owner))
-      .toThrow("健康回执缺少身份");
-  });
-});
-
-
-describe("稳定工作区身份与临时路由", () => {
-  test("本地和远端登记保留真正所属的 Gateway 与工作区", () => {
-    expect(gatewayWorkspaceOwner(localWorkspace, "gateway_a")).toEqual({ gatewayId: "gateway_a", workspaceId: owner.workspaceId });
-    expect(gatewayWorkspaceOwner(remoteForkWorkspace, "gateway_a")).toEqual(owner);
-    expect(() => gatewayWorkspaceOwner({ ...remoteForkWorkspace, remote: null }, "gateway_a"))
-      .toThrow("缺少目标 Gateway／工作区身份");
-  });
-
-  test("路由改变并被其它工作区复用后仍按稳定身份解析", () => {
-    const changed = { ...remoteForkWorkspace, workspace_id: "new-route" };
-    const reused = { ...remoteForkWorkspace, remote: { ...remoteForkWorkspace.remote, remote_workspace_id: "other-workspace" } };
-    expect(requireGatewayWorkspaceRoute([reused, changed], "gateway_a", owner)).toBe(changed);
-    expect(() => requireGatewayWorkspaceRoute([reused], "gateway_a", owner)).toThrow("缺少唯一的已登记路由");
+  test("只有空选择不生成目标头", () => {
+    expect(nullableGatewayWorkspaceKey(null)).toBeNull();
+    expect(workspaceHeader(null)).toEqual({});
   });
 });

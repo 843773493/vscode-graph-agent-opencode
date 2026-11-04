@@ -199,8 +199,8 @@ export function consumeWorkspaceObservation(
   options: Options,
 ): Promise<void> {
   if (options.signal?.aborted) return Promise.resolve();
-  const workspaceId = new Headers(headers).get("X-BoxTeam-Workspace-Id");
-  const key = JSON.stringify([port, workspaceId]);
+  const requestHeaders = new Headers(headers);
+  const key = JSON.stringify([port, requestHeaders.get("X-BoxTeam-Target-Gateway-Id"), requestHeaders.get("X-BoxTeam-Workspace-Id")]);
   let transport = transports.get(key);
   if (!transport) {
     transport = new WorkspaceObservationTransport(port, key);

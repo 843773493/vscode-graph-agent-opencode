@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import {
   probeExternalGatewayWorkspace,
   reconnectGatewayWorkspace,
@@ -7,6 +8,10 @@ import {
   startManagedGatewayWorkspaceBackend,
   stopManagedGatewayWorkspaceBackend,
 } from "../../../gatewayApi";
+
+const WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
+const SIBLING_ID = "00000000-0000-4000-8000-000000000002";
+const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: WORKSPACE_ID });
 
 const requestedPaths: string[] = [];
 const requestedBodies: unknown[] = [];
@@ -27,6 +32,12 @@ globalThis.fetch = Object.assign(
       );
     }
     requestedPaths.push(path);
+    if (path.startsWith("/api/gateway/workspaces/")) {
+      const headers = new Headers(init?.headers);
+      if (headers.get("X-BoxTeam-Workspace-Id") !== WORKSPACE_ID || headers.get("X-BoxTeam-Target-Gateway-Id") !== "gateway-test") {
+        throw new Error("生命周期请求丢失原生 Gateway／UUID 归属");
+      }
+    }
     if (/\/runtime\/(restart-safe|restart-force|start|stop)$/.test(path)) {
       requestedBodies.push(JSON.parse(String(init?.body)));
     }
@@ -39,14 +50,14 @@ globalThis.fetch = Object.assign(
         message: "ok",
         request_id: "req_runtime_action",
         data: {
-          workspace_id: "gw/test",
+          gateway_id: "gateway-test", workspace_id: WORKSPACE_ID,
           status: path.endsWith("/start") ? "started" : path.endsWith("/stop") ? "stopped" : "restarted",
           forced: path.endsWith("/restart-force"),
           backend_generation: "generation-2",
-          affected_workspace_ids: ["gw/test", "gw/sibling"],
+          affected_workspace_ids: [WORKSPACE_ID, SIBLING_ID],
           blockers: [],
           workspaces: {
-            active_workspace_id: "gw/test",
+            active_gateway_id: "gateway-test", workspace_id: WORKSPACE_ID,
             items: [],
           },
         },
@@ -62,37 +73,37 @@ globalThis.fetch = Object.assign(
 
 const groupRequest = {
   expected_backend_generation: "generation-1",
-  expected_workspace_ids: ["gw/test", "gw/sibling"],
-  desired_workspace_ids: ["gw/test"],
+  expected_workspace_ids: [WORKSPACE_ID, SIBLING_ID],
+  desired_workspace_ids: [WORKSPACE_ID],
 };
 try {
-  const safe = await safeRestartManagedGatewayWorkspaceBackend(8014, "gw/test", groupRequest);
-  const force = await forceRestartManagedGatewayWorkspaceBackend(8014, "gw/test", groupRequest);
-  const started = await startManagedGatewayWorkspaceBackend(8014, "gw/test", groupRequest);
-  const stopped = await stopManagedGatewayWorkspaceBackend(8014, "gw/test", groupRequest);
+  const safe = await safeRestartManagedGatewayWorkspaceBackend(8014, WORKSPACE_KEY, groupRequest);
+  const force = await forceRestartManagedGatewayWorkspaceBackend(8014, WORKSPACE_KEY, groupRequest);
+  const started = await startManagedGatewayWorkspaceBackend(8014, WORKSPACE_KEY, groupRequest);
+  const stopped = await stopManagedGatewayWorkspaceBackend(8014, WORKSPACE_KEY, groupRequest);
   for (const result of [safe, force, started, stopped]) {
     if (result.backend_generation !== "generation-2"
-      || result.affected_workspace_ids.join(",") !== "gw/test,gw/sibling") {
+      || result.affected_workspace_ids.join(",") !== `${WORKSPACE_ID},${SIBLING_ID}`) {
       throw new Error("完整 Backend generation/affected 响应丢失");
     }
   }
   if (!force.forced || safe.forced || started.status !== "started" || stopped.status !== "stopped") {
     throw new Error("完整 Backend 生命周期回执不匹配");
   }
-  await reconnectGatewayWorkspace(8014, "gw/test");
-  await probeExternalGatewayWorkspace(8014, "gw/test");
+  await reconnectGatewayWorkspace(8014, WORKSPACE_KEY);
+  await probeExternalGatewayWorkspace(8014, WORKSPACE_KEY);
   await restartDevelopmentRuntime(8014);
 } finally {
   globalThis.fetch = originalFetch;
 }
 
 const expectedPaths = [
-  "/api/gateway/workspaces/gw%2Ftest/runtime/restart-safe",
-  "/api/gateway/workspaces/gw%2Ftest/runtime/restart-force",
-  "/api/gateway/workspaces/gw%2Ftest/runtime/start",
-  "/api/gateway/workspaces/gw%2Ftest/runtime/stop",
-  "/api/gateway/workspaces/gw%2Ftest/reconnect",
-  "/api/gateway/workspaces/gw%2Ftest/probe",
+  `/api/gateway/workspaces/${WORKSPACE_ID}/runtime/restart-safe`,
+  `/api/gateway/workspaces/${WORKSPACE_ID}/runtime/restart-force`,
+  `/api/gateway/workspaces/${WORKSPACE_ID}/runtime/start`,
+  `/api/gateway/workspaces/${WORKSPACE_ID}/runtime/stop`,
+  `/api/gateway/workspaces/${WORKSPACE_ID}/reconnect`,
+  `/api/gateway/workspaces/${WORKSPACE_ID}/probe`,
   "/api/gateway/runtime/restart-development",
 ];
 if (requestedPaths.join("\n") !== expectedPaths.join("\n")) {

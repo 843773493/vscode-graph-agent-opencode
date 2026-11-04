@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.services.infrastructure.config.state import ConfigConflictError
 
-from .core import GatewayRegistryBatchHandle, WorkspaceTarget
+from .core import GatewayRegistryBatchHandle, WorkspaceKey, WorkspaceTarget
 
 
 class RegistryProjectionMixin:
@@ -35,6 +36,57 @@ class RegistryProjectionMixin:
                 f"current={existing.remote_config_event_cursor}, "
                 f"incoming={incoming_cursor}"
             )
+    def _stage_remote_projections(
+        self, *, projections: dict[str, tuple[WorkspaceTarget, ...]],
+        connections: dict[str, RemoteGatewayConnection], replacing_connection_ids: set[str],
+    ) -> dict[WorkspaceKey, WorkspaceTarget]:
+        """按资源 owner 合并连接关系；单连接快照和配置批次使用同一条链路。"""
+        staged: dict[WorkspaceKey, WorkspaceTarget] = {}
+        for key, target in self._targets.items():
+            if target.connection_kind == "local":
+                staged[key] = target
+                continue
+            remaining = tuple(identity for identity in target.remote_gateway_connection_ids if identity not in replacing_connection_ids)
+            if remaining:
+                staged[key] = replace(target, remote_gateway_connection_ids=remaining)
+        for connection_id, incoming in projections.items():
+            connection = connections[connection_id]
+            seen: set[WorkspaceKey] = set()
+            for target in incoming:
+                self._validate_target_identity(target)
+                if target.gateway_id != connection.remote_gateway_id or target.remote_gateway_connection_ids != (connection_id,):
+                    raise PermissionError("远端快照归属必须与提交连接的原生 Gateway 完全一致")
+                if target.key in seen:
+                    raise ValueError(f"远端连接快照包含重复工作区 owner: {target.key}")
+                seen.add(target.key)
+                existing = self._targets.get(target.key)
+                if existing is not None and existing.owner != "remote_projection":
+                    raise PermissionError(f"远端快照不能覆盖其它 owner: {target.key}")
+                merged = staged.get(target.key)
+                links = set(merged.remote_gateway_connection_ids) if merged is not None else set()
+                links.add(connection_id)
+                staged[target.key] = replace(
+                    target, remote_gateway_connection_ids=tuple(sorted(links)), connection_id=None,
+                    parent_workspace=existing.parent_workspace if existing is not None else target.parent_workspace,
+                )
+        for key, target in staged.items():
+            existing = self._targets.get(key)
+            if existing is not None and self._route_signature(existing) == self._route_signature(target):
+                target.target_generation = target.target_generation or existing.target_generation
+                target.runtime_lease_id = target.runtime_lease_id or existing.runtime_lease_id
+            else:
+                if self._has_route_references(key):
+                    raise RuntimeError(f"远端快照不能替换仍有引用的 route: {key}")
+                target.target_generation = f"target_generation_{uuid4().hex}"
+                target.runtime_lease_id = f"runtime_lease_{uuid4().hex}"
+        for key in self._targets.keys() - staged.keys():
+            if self._has_route_references(key):
+                raise RuntimeError(f"远端快照不能删除仍有引用的 route: {key}")
+        for key, target in tuple(staged.items()):
+            if target.parent_workspace is not None and target.parent_workspace not in staged:
+                staged[key] = replace(target, parent_workspace=None)
+        return staged
+
     def apply_remote_projection_snapshot(
         self,
         *,
@@ -68,85 +120,17 @@ class RegistryProjectionMixin:
                 f"current={existing_connection.source_owner}, "
                 f"requested={connection.source_owner}"
             )
-        staged_targets: dict[str, WorkspaceTarget] = {}
-        for target in projections:
-            self._validate_target_identity(target)
-            if (
-                target.owner != "remote_projection"
-                or target.remote_gateway_connection_id != connection.connection_id
-            ):
-                raise PermissionError(
-                    "远程快照只能提交对应 connection 的 remote_projection target"
-                )
-            if target.workspace_id in staged_targets:
-                raise ValueError(
-                    "远程 Gateway 快照包含重复 workspace_id: "
-                    f"{target.workspace_id}"
-                )
-            existing = self._targets.get(target.workspace_id)
-            if existing is not None and existing.owner != "remote_projection":
-                raise PermissionError(
-                    "远程快照不能越过现有 target owner: "
-                    f"workspace_id={target.workspace_id}, current={existing.owner}"
-                )
-            if existing is not None:
-                if self._has_route_references(target.workspace_id) and (
-                    self._route_signature(existing) != self._route_signature(target)
-                ):
-                    raise RuntimeError(
-                        "远程快照不能替换仍有引用的 route: "
-                        f"workspace_id={target.workspace_id}"
-                    )
-                if not target.target_generation:
-                    target.target_generation = existing.target_generation
-                if target.runtime_lease_id is None:
-                    target.runtime_lease_id = existing.runtime_lease_id
-                if self._route_signature(existing) != self._route_signature(target):
-                    target.target_generation = f"target_generation_{uuid4().hex}"
-                    target.runtime_lease_id = f"runtime_lease_{uuid4().hex}"
-            else:
-                target.target_generation = (
-                    target.target_generation or f"target_generation_{uuid4().hex}"
-                )
-                target.runtime_lease_id = (
-                    target.runtime_lease_id or f"runtime_lease_{uuid4().hex}"
-                )
-            staged_targets[target.workspace_id] = target
-
-        stale_workspace_ids = {
-            target.workspace_id
-            for target in self._targets.values()
-            if target.owner == "remote_projection"
-            and target.remote_gateway_connection_id == connection.connection_id
-            and target.workspace_id not in staged_targets
-        }
-        blocked_stale = {
-            workspace_id
-            for workspace_id in stale_workspace_ids
-            if self._has_route_references(workspace_id)
-        }
-        if blocked_stale:
-            raise RuntimeError(
-                "远程快照不能删除仍有引用的 route: "
-                + ", ".join(sorted(blocked_stale))
-            )
-
-        self._targets = {
-            workspace_id: target
-            for workspace_id, target in self._targets.items()
-            if workspace_id not in stale_workspace_ids
-            and not (
-                target.owner == "remote_projection"
-                and target.remote_gateway_connection_id == connection.connection_id
-                and workspace_id in staged_targets
-            )
-        }
-        self._targets.update(staged_targets)
+        self._targets = self._stage_remote_projections(
+            projections={connection.connection_id: projections},
+            connections={connection.connection_id: connection},
+            replacing_connection_ids={connection.connection_id},
+        )
+        staged_targets = {target.key: target for target in projections}
         self._remote_gateway_connections[connection.connection_id] = connection
         if activate and staged_targets:
-            self._active_workspace_id = next(iter(staged_targets))
-        elif self._active_workspace_id not in self._targets:
-            self._active_workspace_id = self._default_workspace_id()
+            self._active_workspace = next(iter(staged_targets))
+        elif self._active_workspace not in self._targets:
+            self._active_workspace = self._default_workspace_key()
         self._validate_parent_graph()
         post_commit_error: BaseException | None = None
         try:
@@ -251,86 +235,16 @@ class RegistryProjectionMixin:
             **manual_connections,
             **configured_connection_by_id,
         }
-        staged_targets: dict[str, WorkspaceTarget] = {
-            workspace_id: target
-            for workspace_targets in projections.values()
-            for target in workspace_targets
-            for workspace_id in (target.workspace_id,)
-        }
-        if len(staged_targets) != sum(len(items) for items in projections.values()):
-            raise ValueError("Gateway registry 配置 batch 包含重复 projected workspace_id")
-
-        def is_config_projection(target: WorkspaceTarget) -> bool:
-            connection = previous_connections.get(
-                target.remote_gateway_connection_id
-            )
-            return (
-                target.owner == "remote_projection"
-                and connection is not None
-                and connection.source_owner == "config"
-            )
-
-        for target in staged_targets.values():
-            self._validate_target_identity(target)
-            if target.owner != "remote_projection":
-                raise PermissionError(
-                    "配置 batch 只能提交 remote_projection target: "
-                    f"workspace_id={target.workspace_id}, owner={target.owner}"
-                )
-            existing = self._targets.get(target.workspace_id)
-            if existing is not None and existing.owner != target.owner:
-                raise PermissionError(
-                    "配置 batch 不能越过现有 target owner: "
-                    f"workspace_id={target.workspace_id}, current={existing.owner}"
-                )
-            if existing is not None:
-                if self._has_route_references(target.workspace_id) and (
-                    self._route_signature(existing) != self._route_signature(target)
-                ):
-                    raise RuntimeError(
-                        "Gateway registry 配置 batch 不能替换仍有引用的 route: "
-                        f"workspace_id={target.workspace_id}"
-                    )
-                if not target.target_generation:
-                    target.target_generation = existing.target_generation
-                if target.runtime_lease_id is None:
-                    target.runtime_lease_id = existing.runtime_lease_id
-                if self._route_signature(existing) != self._route_signature(target):
-                    target.target_generation = f"target_generation_{uuid4().hex}"
-                    target.runtime_lease_id = f"runtime_lease_{uuid4().hex}"
-            else:
-                target.target_generation = (
-                    target.target_generation or f"target_generation_{uuid4().hex}"
-                )
-                target.runtime_lease_id = (
-                    target.runtime_lease_id or f"runtime_lease_{uuid4().hex}"
-                )
-
-        stale_workspace_ids = {
-            target.workspace_id
-            for target in self._targets.values()
-            if is_config_projection(target)
-            and target.workspace_id not in staged_targets
-        }
-        blocked_stale = {
-            workspace_id
-            for workspace_id in stale_workspace_ids
-            if self._has_route_references(workspace_id)
-        }
-        if blocked_stale:
-            raise RuntimeError(
-                "Gateway registry 配置 batch 不能删除仍有引用的 remote route: "
-                + ", ".join(sorted(blocked_stale))
-            )
-
-        self._targets = {
-            workspace_id: target
-            for workspace_id, target in self._targets.items()
-            if not is_config_projection(target) or workspace_id in staged_targets
-        }
-        self._targets.update(staged_targets)
+        self._targets = self._stage_remote_projections(
+            projections=projections,
+            connections=configured_connection_by_id,
+            replacing_connection_ids={
+                identity for identity, connection in previous_connections.items()
+                if connection.source_owner == "config"
+            } | set(configured_connection_by_id),
+        )
         self._remote_gateway_connections = dict(connection_by_id)
-        self._active_workspace_id = self._select_batch_active_workspace(
+        self._active_workspace = self._select_batch_active_workspace(
             activate_connection_ids=activate_connection_ids,
         )
         self._validate_parent_graph()
@@ -461,14 +375,14 @@ class RegistryProjectionMixin:
         self,
         *,
         activate_connection_ids: tuple[str, ...],
-    ) -> str | None:
+    ) -> WorkspaceKey | None:
         for connection_id in activate_connection_ids:
             for target in self._targets.values():
                 if (
                     target.owner == "remote_projection"
-                    and target.remote_gateway_connection_id == connection_id
+                    and connection_id in target.remote_gateway_connection_ids
                 ):
-                    return target.workspace_id
-        if self._active_workspace_id in self._targets:
-            return self._active_workspace_id
-        return self._default_workspace_id()
+                    return target.key
+        if self._active_workspace in self._targets:
+            return self._active_workspace
+        return self._default_workspace_key()

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from app.core.sqlite_state import utc_now_text
+from app.core.identifier import validate_gateway_id
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.user_access import UserAccessContext
 
@@ -12,6 +14,7 @@ from app.gateway.control.user_access import UserAccessContext
 @dataclass(frozen=True, slots=True)
 class UserViewStateRecord:
     user_id: str
+    gateway_id: str
     workspace_id: str
     session_id: str
     turn_anchor: str | None
@@ -70,36 +73,35 @@ class UserViewStateStore:
     @staticmethod
     def _record(row: sqlite3.Row) -> UserViewStateRecord:
         return UserViewStateRecord(
-            user_id=str(row[0]),
-            workspace_id=str(row[1]),
-            session_id=str(row[2]),
-            turn_anchor=str(row[3]) if row[3] is not None else None,
-            scroll_offset=float(row[4]),
-            follow_latest=bool(row[5]),
-            projection_version=int(row[6]),
-            tool_details_expanded=bool(row[7]),
-            updated_at=str(row[8]),
+            user_id=str(row["user_id"]), gateway_id=str(row["gateway_id"]), workspace_id=str(row["workspace_id"]),
+            session_id=str(row["session_id"]), turn_anchor=str(row["turn_anchor"]) if row["turn_anchor"] is not None else None,
+            scroll_offset=float(row["scroll_offset"]), follow_latest=bool(row["follow_latest"]),
+            projection_version=int(row["projection_version"]), tool_details_expanded=bool(row["tool_details_expanded"]),
+            updated_at=str(row["updated_at"]),
         )
 
     def get(
         self,
         *,
         context: UserAccessContext,
+        gateway_id: str,
         workspace_id: str,
         session_id: str,
     ) -> UserViewStateRecord | None:
+        validate_gateway_id(gateway_id)
+        validate_workspace_id(workspace_id)
         connection = self._state.connection()
         try:
             user_id = self._assert_active_lease(connection, context)
             row = connection.execute(
                 """
-                SELECT user_id, workspace_id, session_id, turn_anchor,
+                SELECT user_id, gateway_id, workspace_id, session_id, turn_anchor,
                        scroll_offset, follow_latest, projection_version,
                        tool_details_expanded, updated_at
                 FROM user_view_state
-                WHERE user_id = ? AND workspace_id = ? AND session_id = ?
+                WHERE user_id = ? AND gateway_id = ? AND workspace_id = ? AND session_id = ?
                 """,
-                (user_id, workspace_id, session_id),
+                (user_id, gateway_id, workspace_id, session_id),
             ).fetchone()
             return self._record(row) if row is not None else None
         finally:
@@ -111,12 +113,12 @@ class UserViewStateStore:
             user_id = self._assert_active_lease(connection, context)
             row = connection.execute(
                 """
-                SELECT user_id, workspace_id, session_id, turn_anchor,
+                SELECT user_id, gateway_id, workspace_id, session_id, turn_anchor,
                        scroll_offset, follow_latest, projection_version,
                        tool_details_expanded, updated_at
                 FROM user_view_state
                 WHERE user_id = ?
-                ORDER BY updated_at DESC, workspace_id ASC, session_id ASC
+                ORDER BY updated_at DESC, gateway_id ASC, workspace_id ASC, session_id ASC
                 LIMIT 1
                 """,
                 (user_id,),
@@ -129,6 +131,7 @@ class UserViewStateStore:
         self,
         *,
         context: UserAccessContext,
+        gateway_id: str,
         workspace_id: str,
         session_id: str,
         turn_anchor: str | None,
@@ -137,6 +140,8 @@ class UserViewStateStore:
         projection_version: int,
         tool_details_expanded: bool,
     ) -> UserViewStateRecord:
+        validate_gateway_id(gateway_id)
+        validate_workspace_id(workspace_id)
         if scroll_offset < 0:
             raise ValueError("视图滚动偏移不能小于 0")
         if projection_version < 1:
@@ -150,10 +155,10 @@ class UserViewStateStore:
             connection.execute(
                 """
                 INSERT INTO user_view_state(
-                    user_id, workspace_id, session_id, turn_anchor, scroll_offset,
+                    user_id, gateway_id, workspace_id, session_id, turn_anchor, scroll_offset,
                     follow_latest, projection_version, tool_details_expanded, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(user_id, workspace_id, session_id) DO UPDATE SET
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, gateway_id, workspace_id, session_id) DO UPDATE SET
                     turn_anchor=excluded.turn_anchor,
                     scroll_offset=excluded.scroll_offset,
                     follow_latest=excluded.follow_latest,
@@ -163,6 +168,7 @@ class UserViewStateStore:
                 """,
                 (
                     user_id,
+                    gateway_id,
                     workspace_id,
                     session_id,
                     turn_anchor,
@@ -175,13 +181,13 @@ class UserViewStateStore:
             )
             row = connection.execute(
                 """
-                SELECT user_id, workspace_id, session_id, turn_anchor,
+                SELECT user_id, gateway_id, workspace_id, session_id, turn_anchor,
                        scroll_offset, follow_latest, projection_version,
                        tool_details_expanded, updated_at
                 FROM user_view_state
-                WHERE user_id = ? AND workspace_id = ? AND session_id = ?
+                WHERE user_id = ? AND gateway_id = ? AND workspace_id = ? AND session_id = ?
                 """,
-                (user_id, workspace_id, session_id),
+                (user_id, gateway_id, workspace_id, session_id),
             ).fetchone()
             if row is None:
                 raise RuntimeError("用户视图状态写入后无法读取")

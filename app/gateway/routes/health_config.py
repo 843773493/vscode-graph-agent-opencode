@@ -102,7 +102,7 @@ async def health(
     return APIResponse(
         data=GatewayHealthDTO(
             gateway_id=request.app.state.gateway_id,
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             process_id=os.getpid(),
             development_restart_available=(
                 resolve_development_restart_command() is not None

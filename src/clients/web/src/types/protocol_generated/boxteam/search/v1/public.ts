@@ -9,7 +9,7 @@ import {
   GatewaySearchScopeRequest,
   GatewaySearchScopeResolutionDTO,
   GatewaySearchWorkspaceOwnerDTO,
-} from "../../gateway/v1/public.js";
+} from "../../gateway/v2/public.js";
 import {
   ContextGrantTarget,
   WorkspaceContextSearchOptionsDTO,

@@ -15,7 +15,7 @@ interface ThreadViewState {
   fileTreeExpandedPaths: string[];
 }
 
-type ThreadTarget = Omit<ThreadOwner, 'routeId' | 'title'>;
+type ThreadTarget = Omit<ThreadOwner, 'workspaceKey' | 'title'>;
 interface StoredThread {
   version: 2;
   target: ThreadTarget;
@@ -51,14 +51,14 @@ export class ThreadInput extends EditorInput {
     const [workspaceId, sessionId, threadId, extra] = resource.path.slice(1).split('/');
     if (resource.scheme !== 'boxteam-thread' || !resource.authority || !workspaceId || !sessionId || !threadId
       || extra !== undefined || resource.query || resource.fragment) throw new Error('Thread 编辑器资源缺少稳定 Gateway／工作区／Session／Thread 身份，或包含过时路由');
-    const input = new ThreadInput({ gatewayId: resource.authority, workspaceId, sessionId, threadId, routeId: '', title: title ?? threadId });
+    const input = new ThreadInput({ gatewayId: resource.authority, workspaceId, sessionId, threadId, workspaceKey: '', title: title ?? threadId });
     input.restoreViewState(viewState);
     return input;
   }
   async resolveOwner(): Promise<ThreadOwner> {
     if (!this.resolving) {
-      this.resolving = gateway.resolveWorkspace(this.owner).then(routeId => {
-        this.owner.routeId = routeId;
+      this.resolving = gateway.resolveWorkspace(this.owner).then(workspaceKey => {
+        this.owner.workspaceKey = workspaceKey;
         return this.owner;
       }).finally(() => { this.resolving = undefined; });
     }
@@ -117,7 +117,7 @@ export class ThreadSerializer implements IEditorSerializer {
     if (data.unavailable) return new UnavailableThreadInput(data.unavailable, data.reason ?? 'Thread 记录无法恢复', data.title);
     if (!data.target || Object.values(data.target).some(value => typeof value !== 'string' || !value.trim())
       || !data.target.gatewayId || !data.target.workspaceId || !data.target.sessionId || !data.target.threadId) throw new Error('Thread 编辑器恢复数据缺少精确 owner');
-    const input = new ThreadInput({ ...data.target, title: data.title, routeId: '' });
+    const input = new ThreadInput({ ...data.target, title: data.title, workspaceKey: '' });
     input.restoreViewState(data.viewState);
     return input;
   }

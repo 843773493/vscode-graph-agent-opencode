@@ -11,7 +11,8 @@ import WorkspacePortForwardPanel, {
 } from "./WorkspacePortForwardPanel";
 
 const remoteWorkspace: GatewayWorkspace = {
-  workspace_id: "gw_remote_project",
+  gateway_id: "gateway_dev",
+    workspace_id: "gw_remote_project",
   name: "远程项目",
   backend_url: "http://127.0.0.1:8010",
   connection_kind: "remote_gateway",
@@ -21,16 +22,7 @@ const remoteWorkspace: GatewayWorkspace = {
   affected_workspace_ids: [],
   removable: true,
   system_default: false,
-  remote: {
-    gateway_connection_id: "remote_dev",
-    remote_workspace_id: "remote_project",
-    gateway_id: "gateway_dev",
-    name: "开发服务器",
-    host: "dev.example",
-    port: 22,
-    username: "developer",
-    remote_gateway_port: 8014,
-  },
+  remote_gateways: [{ gateway_connection_id: "remote_dev", gateway_id: "gateway_dev", name: "开发服务器", host: "dev.example", port: 22, username: "developer", remote_gateway_port: 8014, restart_required: false }],
   services: {},
   checked_at: "2026-08-02T00:00:00Z",
 };

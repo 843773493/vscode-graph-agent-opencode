@@ -53,7 +53,9 @@ from .core import GatewayRegistryBatchHandle as GatewayRegistryBatchHandle
 from .core import RegistryCoreMixin
 from .core import RegistryTargetOwner as RegistryTargetOwner
 from .core import WorkspaceIdentityConflictError as WorkspaceIdentityConflictError
+from .core import WorkspaceKey as WorkspaceKey
 from .core import WorkspaceRouteLease as WorkspaceRouteLease
+from .core import WorkspaceSelector as WorkspaceSelector
 from .core import WorkspaceTarget as WorkspaceTarget
 from .crud import RegistryCrudMixin
 from .dtos import RegistryDtosMixin

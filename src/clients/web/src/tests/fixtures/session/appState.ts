@@ -21,7 +21,7 @@ interface SessionHookStateOverrides {
   workspaceId: string;
   currentSession: Session | null;
   sessions: Session[];
-  gatewayWorkspaces?: { workspace_id: string; name: string }[];
+  gatewayWorkspaces?: { gateway_id: string; workspace_id: string; name: string }[];
   sessionsByWorkspace?: Map<string, Session[]>;
   sessionGatewayWorkspaceById?: Map<string, string>;
   eventQueuesBySession?: Map<string, unknown>;

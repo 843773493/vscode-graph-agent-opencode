@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
@@ -25,9 +26,13 @@ import {
 import {
   getGatewayUserViewState,
   getLatestGatewayUserViewState,
+  putGatewayUserViewState,
 } from "../gateway/userViewState";
 import { requestJson } from "../../api";
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from "../http";
+
+const WORKSPACE_UUID = "00000000-0000-4000-8000-000000000001";
+const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: WORKSPACE_UUID });
 
 const originalFetch = globalThis.fetch;
 const DIRECTORY_URI = "boxteam://gateway/gateway_00000000000070008000000000000001/resources/files/00000000000070008000000000000001";
@@ -219,13 +224,13 @@ describe("手动创建会话连接", () => {
     const thread = { session_id: "ses_manual", thread_id: "thr_manual" };
     const terminal = await createSessionConnection(
       49_901,
-      "gw_manual",
+      WORKSPACE_KEY,
       thread,
       "terminal",
     );
     const browser = await createSessionConnection(
       49_901,
-      "gw_manual",
+      WORKSPACE_KEY,
       thread,
       "browser",
     );
@@ -236,7 +241,7 @@ describe("手动创建会话连接", () => {
     expect(requests[0].url).toContain(
       "/api/v1/resources/terminals",
     );
-    expect(requests[0].workspaceId).toBe("gw_manual");
+    expect(requests[0].workspaceId).toBe(WORKSPACE_UUID);
     expect(requests[0].body).toMatchObject({ session_id: "ses_manual", thread_id: "thr_manual", retention_scope: "thread" });
     expect(requests[1].url).toContain(
       "/api/v1/resources/browsers",
@@ -247,7 +252,7 @@ describe("手动创建会话连接", () => {
       retention_scope: "thread",
       url: "about:blank",
     });
-    expect(requests[1].workspaceId).toBe("gw_manual");
+    expect(requests[1].workspaceId).toBe(WORKSPACE_UUID);
   });
 });
 
@@ -423,7 +428,7 @@ describe("Gateway 工作区列表", () => {
           return Response.json({ data: { token: "workspace-list-token" } });
         }
         return Response.json({
-          data: { active_workspace_id: "gw_fast", items: [] },
+          data: { active_workspace: { gateway_id: "gateway-test", workspace_id: WORKSPACE_UUID }, items: [] },
           request_id: "req_workspace_list",
         });
       },
@@ -730,14 +735,14 @@ describe("用户视图状态的信封校验", () => {
   test("request_id 为非空字符串时允许权威 data 为 null", async () => {
     stubViewStateFetch("req_view_state");
 
-    expect(await getGatewayUserViewState(49_930, "ws-1", "ses-1")).toBeNull();
+    expect(await getGatewayUserViewState(49_930, WORKSPACE_KEY, "ses-1")).toBeNull();
     expect(await getLatestGatewayUserViewState(49_930)).toBeNull();
   });
 
   test("request_id 缺失或非字符串时响亮失败，不再被弱校验放过", async () => {
     for (const requestId of [undefined, 123, true, {}]) {
       stubViewStateFetch(requestId);
-      await expect(getGatewayUserViewState(49_931, "ws-1", "ses-1")).rejects.toThrow(
+      await expect(getGatewayUserViewState(49_931, WORKSPACE_KEY, "ses-1")).rejects.toThrow(
         "后端响应缺少 request_id",
       );
     }
@@ -746,10 +751,30 @@ describe("用户视图状态的信封校验", () => {
   test("data 字段整个缺失时响亮失败，不把缺字段伪装成 null", async () => {
     stubViewStateFetch("req_view_state_missing_data", false);
 
-    await expect(getGatewayUserViewState(49_932, "ws-1", "ses-1")).rejects.toThrow(
+    await expect(getGatewayUserViewState(49_932, WORKSPACE_KEY, "ses-1")).rejects.toThrow(
       "后端响应缺少 data 字段",
     );
   });
+});
+
+test("用户视图读写以 query 保留完整 owner，PUT 只传视图内容", async () => {
+  const calls: Array<{ method: string; query: Record<string, string>; body: unknown }> = [];
+  const payload = { turn_anchor: "turn-a", scroll_offset: 12, follow_latest: false, projection_version: 2 };
+  globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const [input, init] = args;
+    const url = new URL(String(input));
+    if (url.pathname === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "view-owner-token" } });
+    if (url.pathname === "/api/gateway/users/current") return Response.json({ data: { kind: "guest", user_id: null }, request_id: "current-view-owner" });
+    calls.push({ method: init?.method ?? "GET", query: Object.fromEntries(url.searchParams), body: init?.body ? JSON.parse(String(init.body)) : null });
+    return Response.json({ data: { gateway_id: url.searchParams.get("gateway_id"), workspace_id: WORKSPACE_UUID, session_id: "session-a", ...payload }, request_id: "view-owner" });
+  }, { preconnect: originalFetch.preconnect });
+  await getGatewayUserViewState(49_963, WORKSPACE_KEY, "session-a");
+  const other = gatewayWorkspaceKey({ gateway_id: "gateway-other", workspace_id: WORKSPACE_UUID });
+  await putGatewayUserViewState(49_963, other, "session-a", payload);
+  expect(calls).toEqual([
+    { method: "GET", query: { gateway_id: "gateway-test", workspace_id: WORKSPACE_UUID, session_id: "session-a" }, body: null },
+    { method: "PUT", query: { gateway_id: "gateway-other", workspace_id: WORKSPACE_UUID, session_id: "session-a" }, body: payload },
+  ]);
 });
 
 describe("显式切换用户与在途初始化的时序", () => {
@@ -914,7 +939,7 @@ describe("Gateway 背景图上传的前置校验", () => {
 
 
 test("受控 DELETE 原样传入完整成员与空目标，force 通过 query 显式传递", async () => {
-  const request = { expected_backend_generation: "generation-1", expected_workspace_ids: ["gw/test"], desired_workspace_ids: [] };
+  const request = { expected_backend_generation: "generation-1", expected_workspace_ids: [WORKSPACE_UUID], desired_workspace_ids: [] };
   const captured: Array<{ method: string | undefined; url: string; body: unknown }> = [];
   globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
     const [input, init] = args;
@@ -923,13 +948,13 @@ test("受控 DELETE 原样传入完整成员与空目标，force 通过 query �
       return Response.json({ data: { token: "delete-test-token" } });
     }
     captured.push({ method: init?.method, url, body: JSON.parse(String(init?.body)) });
-    return Response.json({ code: 0, message: "ok", request_id: "delete-test", data: { active_workspace_id: null, items: [] } });
+    return Response.json({ code: 0, message: "ok", request_id: "delete-test", data: { active_workspace: null, items: [] } });
   }, { preconnect: originalFetch.preconnect });
-  const result = await removeGatewayWorkspace(49_924, "gw/test", request, true);
-  expect(result).toEqual({ active_workspace_id: null, items: [] });
+  const result = await removeGatewayWorkspace(49_924, WORKSPACE_KEY, request, true);
+  expect(result).toEqual({ active_workspace: null, items: [] });
   expect(captured).toHaveLength(1);
   expect(captured[0]?.method).toBe("DELETE");
-  expect(new URL(captured[0]!.url).pathname).toBe("/api/gateway/workspaces/gw%2Ftest");
+  expect(new URL(captured[0]!.url).pathname).toBe(`/api/gateway/workspaces/${WORKSPACE_UUID}`);
   expect(new URL(captured[0]!.url).searchParams.get("force")).toBe("true");
   expect(captured[0]?.body).toEqual(request);
 });

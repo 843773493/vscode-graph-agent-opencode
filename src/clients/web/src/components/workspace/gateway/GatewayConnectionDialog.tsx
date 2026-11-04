@@ -50,9 +50,9 @@ const INITIAL_MANUAL_SSH_FORM: ManualSshForm = {
 export function buildSelectedSshConnectionRequest(
   connection: SshConnectionOption,
 ): AddSshGatewayWorkspaceRequest {
-  if (connection.source === "boxteam" && connection.workspace_id) {
+  if (connection.source === "boxteam") {
     return {
-      connection_workspace_id: connection.workspace_id,
+      connection_id: connection.connection_id,
       remote_gateway_port: 8014,
     };
   }

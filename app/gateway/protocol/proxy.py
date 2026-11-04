@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from app.protocol.generated.boxteam.gateway.v1 import proxy_pb2
+from app.protocol.generated.boxteam.gateway.v2 import proxy_pb2
 
 
 def proxy_target_to_proto(
     *,
+    gateway_id: str,
     workspace_id: str,
     service: str,
     path: str,
 ) -> proxy_pb2.ProxyTarget:
+    if not gateway_id:
+        raise ValueError("Gateway ProxyTarget 缺少 gateway_id")
     if not workspace_id:
         raise ValueError("Gateway ProxyTarget 缺少 workspace_id")
     if not service:
@@ -16,6 +19,7 @@ def proxy_target_to_proto(
     if not path.startswith("/"):
         raise ValueError(f"Gateway ProxyTarget path 必须以 / 开头: {path}")
     return proxy_pb2.ProxyTarget(
+        gateway_id=gateway_id,
         workspace_id=workspace_id,
         service=service,
         path=path,

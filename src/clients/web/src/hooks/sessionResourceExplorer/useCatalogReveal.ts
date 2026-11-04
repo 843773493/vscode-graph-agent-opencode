@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback, useEffect, useState } from 'react';
 import { getSessionCatalogBreadcrumb } from '../../api/session/sessionCatalog';
 import type { GatewayWorkspaceRequestTarget } from '../../api/workspaceIdentity';
@@ -31,7 +32,7 @@ export function useCatalogReveal(apiPort: number, request: CatalogRevealRequest 
         if (breadcrumb.items.at(-1)?.node_id !== request.nodeId || breadcrumb.items.at(-1)?.kind !== 'folder') {
           throw new Error(`文件夹命中已失效：${request.nodeId}`);
         }
-        await revealSearchResult(request.target.workspace_id, breadcrumb.items.map(item => item.node_id), 'folder');
+        await revealSearchResult(gatewayWorkspaceKey(request.target), breadcrumb.items.map(item => item.node_id), 'folder');
         if (active && !request.signal.aborted) setMountedRequest(request);
       })
       .catch(error => { if (active) request.fail(error); });
@@ -45,5 +46,5 @@ export function useCatalogReveal(apiPort: number, request: CatalogRevealRequest 
     if (request.focus) element.focus({ preventScroll: true });
     request.complete();
   }, [mountedRequest, request]);
-  return { workspaceId: request?.target.workspace_id, nodeId: request?.nodeId, reveal };
+  return { workspaceId: request ? gatewayWorkspaceKey(request.target) : undefined, nodeId: request?.nodeId, reveal };
 }

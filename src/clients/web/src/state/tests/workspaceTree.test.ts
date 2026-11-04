@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { buildVisibleWorkspaceTree } from "../../components/agentSessions/agentSessionsUtils";
 import type { GatewayWorkspace } from "../../types/backend";
 
@@ -6,8 +7,9 @@ function workspace(
   parentWorkspaceId: string | null = null,
 ): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: workspaceId,
-    parent_workspace_id: parentWorkspaceId,
+    parent_workspace: parentWorkspaceId ? { gateway_id: "gateway-test", workspace_id: parentWorkspaceId } : null,
     name: workspaceId,
     backend_url: "http://127.0.0.1:8010",
     connection_kind: "local",
@@ -27,7 +29,7 @@ function workspace(
       deferred_paths: [],
       layer_digests: {},
     },
-    remote: null,
+    remote_gateways: [],
     services: {},
     checked_at: "2026-07-17T00:00:00Z",
   };
@@ -49,7 +51,7 @@ if (
 
 const collapsed = buildVisibleWorkspaceTree(
   [parent, child, sibling],
-  new Set(["gw_parent"]),
+  new Set([gatewayWorkspaceKey(parent)]),
 );
 if (
   collapsed.map((node) => node.workspace.workspace_id).join(",")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,8 @@ import pytest
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+
+GATEWAY_ID = "gateway_00000000000040008000000000000001"
 
 
 @dataclass
@@ -48,13 +51,13 @@ def invoke_runtime(
 ) -> Callable[[], Awaitable[object]]:
     monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(tmp_path / "gateway"))
     controller = GatewayWorkspaceRuntimeController(
-        registry=GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json"),
+        registry=GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "registry.json"),
         project_root=tmp_path, log_dir=tmp_path / "logs",
     )
-    target = WorkspaceTarget(
-        workspace_id="workspace_protocol", name="协议测试", root_path=str(tmp_path),
+    target = WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id='00000000-0000-4000-8000-000000000001', name="协议测试", root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000", connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
+
     )
     client_class = httpx.AsyncClient
 
@@ -117,6 +120,7 @@ async def test_http_rejection_keeps_structured_blockers(
     invoke_runtime: Callable[[], Awaitable[object]], runtime_reply: RuntimeReply,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.WARNING)
     runtime_reply.status = 409
     runtime_reply.payload = {"detail": {"status": "blocked", "blockers": [{"reason": "运行中"}]}}
     with pytest.raises(httpx.HTTPStatusError) as caught:

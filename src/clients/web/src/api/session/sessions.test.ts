@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { afterEach, describe, expect, test } from "bun:test";
 import { HttpRequestError } from "../http";
 import {
@@ -38,7 +39,7 @@ describe("main thread API", () => {
       });
     });
 
-    const result = await getSessionMainThread(48_310, "ses/owner", { workspace_id: "workspace-1", backend_workspace_id: "backend-1", connection_kind: "local" });
+    const result = await getSessionMainThread(48_310, "ses/owner", { gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" });
 
     expect(result.thread_id).toBe("thr_00000000700070008000000000000001");
     expect(requestUrl).toContain("/api/v1/sessions/ses%2Fowner/main-thread");
@@ -53,7 +54,7 @@ describe("main thread API", () => {
       request_id: "req-main-thread-mismatch",
     }));
 
-    await expect(getSessionMainThread(48_311, "ses_owner", { workspace_id: "workspace-1", backend_workspace_id: "backend-1", connection_kind: "local" }))
+    await expect(getSessionMainThread(48_311, "ses_owner", { gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }))
       .rejects.toThrow("main thread 协议响应");
   });
 });
@@ -87,7 +88,7 @@ describe("child thread 列表 API", () => {
       });
     });
 
-    const list = await listChildThreads(48_301, "ses/needs encoding", "workspace-1");
+    const list = await listChildThreads(48_301, "ses/needs encoding", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }));
     expect(list.parent_session_id).toBe("ses_parent");
     expect(list.total).toBe(1);
     expect(list.items[0]?.thread_id).toBe("thr_child_1");
@@ -97,7 +98,7 @@ describe("child thread 列表 API", () => {
       "/api/v1/sessions/ses%2Fneeds%20encoding/child-threads",
     );
     expect(new Headers(requestInit?.headers).get("X-BoxTeam-Workspace-Id"))
-      .toBe("workspace-1");
+      .toBe("00000000-0000-4000-8000-000000000001");
   });
 
   test("协议状态未知时直接失败", async () => {
@@ -116,7 +117,7 @@ describe("child thread 列表 API", () => {
     }));
 
     await expect(
-      listChildThreads(48_304, "ses_parent", "workspace-1"),
+      listChildThreads(48_304, "ses_parent", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" })),
     ).rejects.toThrow("child thread status 协议值无效");
   });
 
@@ -127,7 +128,7 @@ describe("child thread 列表 API", () => {
     ));
 
     try {
-      await listChildThreads(48_302, "ses_missing", "workspace-1");
+      await listChildThreads(48_302, "ses_missing", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }));
       throw new Error("listChildThreads 应当抛出错误");
     } catch (error: unknown) {
       expect(error).toBeInstanceOf(HttpRequestError);
@@ -143,7 +144,7 @@ describe("child thread 列表 API", () => {
     ));
 
     try {
-      await listChildThreads(48_303, "ses_parent", "workspace-1");
+      await listChildThreads(48_303, "ses_parent", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }));
       throw new Error("listChildThreads 应当抛出错误");
     } catch (error: unknown) {
       expect(error).toBeInstanceOf(HttpRequestError);
@@ -167,7 +168,7 @@ describe("会话上下文 Fork API", () => {
     const point = await getSessionForkSourcePoint(48_309, "ses/display", {
       threadId: "thread/display", itemId: "item/display",
       sourceViewId: "view/display", sourceViewRevision: 0,
-    }, "workspace-display");
+    }, gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000002" }));
 
     const url = new URL(requestUrl);
     expect(url.pathname).toBe("/api/v1/sessions/ses%2Fdisplay/fork-source-point");
@@ -176,7 +177,7 @@ describe("会话上下文 Fork API", () => {
       source_view_id: "view/display", source_view_revision: "0",
     });
     expect(new Headers(requestInit?.headers).get("X-BoxTeam-Workspace-Id"))
-      .toBe("workspace-display");
+      .toBe("00000000-0000-4000-8000-000000000002");
     expect([point.source_view_id, point.source_view_revision, point.anchor_item_id])
       .toEqual(["view/display", 0, "item/display"]);
   });
@@ -198,13 +199,13 @@ describe("会话上下文 Fork API", () => {
       target_container_uri: "boxteam://workspace/ws_source/resources/session/ses_parent",
       creation_kind: "new_child_thread" as const, relationship: "detached" as const, resources: [],
     };
-    await forkSessionContext(48_308, "ses parent", payload, "workspace-1");
+    await forkSessionContext(48_308, "ses parent", payload, gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }));
 
     expect(requestUrl).toContain("/api/v1/sessions/ses%20parent/fork-context");
     expect(requestInit?.method).toBe("POST");
     expect(JSON.parse(String(requestInit?.body))).toEqual(payload);
     expect(new Headers(requestInit?.headers).get("X-BoxTeam-Workspace-Id"))
-      .toBe("workspace-1");
+      .toBe("00000000-0000-4000-8000-000000000001");
   });
 });
 
@@ -215,7 +216,7 @@ describe("会话列表 API 的 CursorPage 契约", () => {
       request_id: "req-sessions-empty",
     }));
 
-    await expect(listSessions(48_305, "workspace-1")).resolves.toEqual({
+    await expect(listSessions(48_305, gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }))).resolves.toEqual({
       items: [],
       next_cursor: null,
       has_more: false,
@@ -228,7 +229,7 @@ describe("会话列表 API 的 CursorPage 契约", () => {
       request_id: "req-sessions-broken-items",
     }));
 
-    await expect(listSessions(48_306, "workspace-1")).rejects
+    await expect(listSessions(48_306, gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }))).rejects
       .toThrow("会话列表响应 items 必须是数组，实际为 string");
   });
 
@@ -239,7 +240,7 @@ describe("会话列表 API 的 CursorPage 契约", () => {
       request_id: "req-sessions-null-data",
     }));
 
-    await expect(listSessions(48_307, "workspace-1")).rejects
+    await expect(listSessions(48_307, gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }))).rejects
       .toThrow("后端响应缺少 data 字段: boom");
   });
 });

@@ -9,6 +9,10 @@ import {
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
 import SessionResourceExplorer from "./SessionResourceExplorer";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+
+const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
+const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: WORKSPACE_ID });
 
 afterEach(restoreGatewayTestEnvironment);
 
@@ -19,32 +23,14 @@ function navigationNode(workspaceId: string, name: string) {
     kind: "workspace_ref",
     name,
     parent_node_id: null,
-    workspace_id: workspaceId,
+    workspace: { gateway_id: "gateway-test", workspace_id: workspaceId },
     position: 0,
     parent_path: null,
   };
 }
 
 function gatewayWorkspace(workspaceId: string): GatewayWorkspace {
-  return {
-    workspace_id: workspaceId,
-    backend_workspace_id: "00000000-0000-0000-0000-000000000001",
-    parent_workspace_id: null,
-    name: workspaceId,
-    backend_url: "http://127.0.0.1:9000",
-    connection_kind: "local",
-    status: "ready",
-    active: false,
-    managed: true,
-    affected_workspace_ids: [],
-    removable: true,
-    system_default: false,
-    runtime_action: "safe_restart_managed_backend",
-    remote: null,
-    services: {},
-    connection_error: null,
-    checked_at: "2026-07-31T00:00:00Z",
-  };
+  return { gateway_id: "gateway-test", workspace_id: workspaceId, parent_workspace: null, name: workspaceId, backend_url: "http://127.0.0.1:9000", connection_kind: "local", status: "ready", active: false, managed: true, affected_workspace_ids: [], removable: true, system_default: false, runtime_action: "safe_restart_managed_backend", remote_gateways: [], services: {}, connection_error: null, checked_at: "2026-07-31T00:00:00Z" };
 }
 
 /** 渲染导航树 + 一个契约被破坏的会话目录节点，展开工作区后返回渲染器。 */
@@ -55,7 +41,7 @@ async function renderWithBranchItem(
   installGatewayTestWindow(80_141);
   installGatewayFetch((request) => {
     if (request.path.includes("/api/gateway/workspace-navigation")) {
-      return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode("gw_1", "gw_1")] });
+      return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode(WORKSPACE_ID, "工作区")] });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
       return apiSuccessResponse({
@@ -75,7 +61,7 @@ async function renderWithBranchItem(
     tree = create(
       <SessionResourceExplorer
         apiPort={80_141}
-        workspaces={[gatewayWorkspace("gw_1")]}
+        workspaces={[gatewayWorkspace(WORKSPACE_ID)]}
         activeWorkspaceId={null}
         currentSessionId=""
         searchOpen={false}
@@ -120,7 +106,7 @@ async function renderWithBranchItem(
 }
 
 function catalogNodeRow(tree: ReactTestRenderer, nodeId: string) {
-  return tree.root.findByProps({ "data-testid": `catalog-node-gw_1-${nodeId}` });
+  return tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-${nodeId}` });
 }
 
 /** 右键菜单的可见失败出口：会话资源区的 actionError 横幅。 */

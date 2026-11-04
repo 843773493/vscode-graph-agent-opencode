@@ -6,7 +6,7 @@ from google.protobuf.descriptor import Descriptor
 from google.protobuf.descriptor_pool import Default, DescriptorPool
 from pydantic.json_schema import JsonSchemaValue
 
-from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_public_pb2
+from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
 from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public_pb2
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (

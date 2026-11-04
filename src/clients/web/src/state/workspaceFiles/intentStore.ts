@@ -7,8 +7,7 @@ import type { WorkspaceUploadEntry } from "../../api/workspaceFilesystem";
 
 export interface FileIntentScope {
   gatewayId: string;
-  gatewayWorkspaceId: string;
-  backendWorkspaceId: string;
+  workspaceId: string;
   workspaceRoot: string;
   actor: "local";
 }
@@ -47,7 +46,7 @@ export function fileIntentScopeKey(scope: FileIntentScope): string {
     if (!value || value.includes("\u0000")) throw new Error("文件意图的固定目标身份无效");
   }
   if (!scope.workspaceRoot.startsWith("boxteam://")) throw new Error("文件意图的资源根必须使用 URI");
-  return [scope.gatewayId, scope.gatewayWorkspaceId, scope.backendWorkspaceId,
+  return [scope.gatewayId, scope.workspaceId,
     scope.workspaceRoot, scope.actor].join("\u0000");
 }
 
@@ -121,11 +120,11 @@ export function operationDependencyFrontier(
 export class WorkspaceFileIntentStore {
   constructor(private readonly database: IDBDatabase) {}
 
-  async loadForWorkspace(gatewayWorkspaceId: string): Promise<StoredFileIntent[]> {
+  async loadForWorkspace(owner: Pick<FileIntentScope, "gatewayId" | "workspaceId">): Promise<StoredFileIntent[]> {
     const transaction = this.database.transaction(RECORDS, "readonly");
     const done = complete(transaction);
-    const records = await result(transaction.objectStore(RECORDS).index("gatewayWorkspaceId")
-      .getAll(gatewayWorkspaceId) as IDBRequest<StoredFileIntent[]>);
+    const records = await result(transaction.objectStore(RECORDS).index("workspaceOwner")
+      .getAll([owner.gatewayId, owner.workspaceId]) as IDBRequest<StoredFileIntent[]>);
     await done;
     return records;
   }
@@ -142,7 +141,7 @@ export class WorkspaceFileIntentStore {
       validateReferences(value.directoryPath, value.intent.directory_key, value.command);
       if (value.scopeKey !== fileIntentScopeKey(value.scope)
         || value.scopeKey !== scopeKey
-        || value.intent.directory_key.workspace_id !== scope.backendWorkspaceId) {
+        || value.intent.directory_key.workspace_id !== scope.workspaceId) {
         throw new Error("文件意图存储的原目标身份不一致，拒绝改投");
       }
     }
@@ -152,7 +151,7 @@ export class WorkspaceFileIntentStore {
   async insert(input: NewFileIntent): Promise<StoredFileIntent> {
     validateReferences(input.directoryPath, input.directoryKey, input.command);
     const scopeKey = fileIntentScopeKey(input.scope);
-    if (input.directoryKey.workspace_id !== input.scope.backendWorkspaceId) {
+    if (input.directoryKey.workspace_id !== input.scope.workspaceId) {
       throw new Error("目录键与固定后端工作区不一致");
     }
     const transaction = this.database.transaction([RECORDS, SEQUENCES], "readwrite");
@@ -242,14 +241,31 @@ export function openWorkspaceFileIntentStore(): Promise<WorkspaceFileIntentStore
   if (opening) return opening;
   if (typeof indexedDB === "undefined") return Promise.reject(new Error("缺少 IndexedDB，不能持久受理文件操作"));
   opening = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, 1);
-    request.onupgradeneeded = () => {
-      const records = request.result.createObjectStore(RECORDS, { keyPath: ["scopeKey", "intent.client_operation_id"] });
-      records.createIndex("scopeKey", "scopeKey");
-      records.createIndex("gatewayWorkspaceId", "scope.gatewayWorkspaceId");
-      request.result.createObjectStore(SEQUENCES, { keyPath: "scopeKey" });
+    const request = indexedDB.open(DATABASE_NAME, 2);
+    let upgradeError: Error | null = null;
+    request.onupgradeneeded = (event) => {
+      const transaction = request.transaction!;
+      if (event.oldVersion === 0) {
+        const records = request.result.createObjectStore(RECORDS, { keyPath: ["scopeKey", "intent.client_operation_id"] });
+        records.createIndex("scopeKey", "scopeKey");
+        records.createIndex("workspaceOwner", ["scope.gatewayId", "scope.workspaceId"]);
+        request.result.createObjectStore(SEQUENCES, { keyPath: "scopeKey" });
+        return;
+      }
+      const records = transaction.objectStore(RECORDS);
+      const count = records.count();
+      count.onsuccess = () => {
+        // TODO：旧 alias 意图需显式解析原 owner 后迁移；保留原库，不能借当前工作区改投。
+        if (count.result > 0) {
+          upgradeError = new Error("存在旧身份的未确认文件操作，原记录已保留；请先完成原 Gateway／UUID 归属迁移");
+          transaction.abort();
+          return;
+        }
+        records.deleteIndex("gatewayWorkspaceId");
+        records.createIndex("workspaceOwner", ["scope.gatewayId", "scope.workspaceId"]);
+      };
     };
-    request.onerror = () => { opening = null; reject(new Error(`打开文件意图存储失败: ${request.error?.message}`)); };
+    request.onerror = () => { opening = null; reject(upgradeError ?? new Error(`打开文件意图存储失败: ${request.error?.message}`)); };
     request.onsuccess = () => {
       request.result.onversionchange = () => { request.result.close(); opening = null; };
       resolve(new WorkspaceFileIntentStore(request.result));

@@ -7,6 +7,7 @@ function createWorkspace(
   overrides: Partial<GatewayWorkspace>,
 ): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: "workspace-1",
     name: "workspace",
     backend_url: "http://127.0.0.1:8010",
@@ -17,7 +18,7 @@ function createWorkspace(
     affected_workspace_ids: [],
     removable: true,
     system_default: false,
-    remote: null,
+    remote_gateways: [],
     services: {},
     checked_at: "2026-07-30T00:00:00Z",
     ...overrides,
@@ -41,17 +42,7 @@ describe("工作区设备选项", () => {
     const choices = buildWorkspaceAddGatewayChoices([
       createWorkspace({
         connection_kind: "remote_gateway",
-        remote: {
-          gateway_connection_id: "connection-1",
-          remote_workspace_id: "remote-workspace-1",
-          gateway_id: "gateway-1",
-          name: "127.0.0.1",
-          host: "127.0.0.1",
-          port: 22222,
-          username: "boxteam",
-          ssh_config_host: "boxteam-gateway-e2e",
-          remote_gateway_port: 8014,
-        },
+        remote_gateways: [{ gateway_connection_id: "connection-1", gateway_id: "gateway-1", name: "127.0.0.1", host: "127.0.0.1", port: 22222, username: "boxteam", ssh_config_host: "boxteam-gateway-e2e", remote_gateway_port: 8014, restart_required: false }],
       }),
     ]);
 
@@ -68,16 +59,7 @@ describe("工作区设备选项", () => {
       createWorkspace({
         connection_kind: "remote_gateway",
         connection_error: "SSH 握手超时",
-        remote: {
-          gateway_connection_id: "connection-2",
-          remote_workspace_id: "remote-workspace-2",
-          gateway_id: "gateway-2",
-          name: "10.0.0.8",
-          host: "10.0.0.8",
-          port: 22,
-          username: "dev",
-          remote_gateway_port: 8014,
-        },
+        remote_gateways: [{ gateway_connection_id: "connection-2", gateway_id: "gateway-2", name: "10.0.0.8", host: "10.0.0.8", port: 22, username: "dev", remote_gateway_port: 8014, restart_required: false }],
       }),
     ]);
 

@@ -14,7 +14,7 @@ class WorkspaceRuntime:
     adopted_process_names: set[str] = field(default_factory=set)
     backend_owner: ManagedBackendOwner | None = None
     gateway_generation: str | None = None
-    backend_workspace_id: str | None = None
+    workspace_id: str | None = None
 
     def __post_init__(self) -> None:
         if "workspace_api" in self.processes or "workspace_api" in self.adopted_process_names:

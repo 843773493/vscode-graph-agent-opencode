@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -15,21 +16,25 @@ import { registerWorkspaceObservation } from "../workspace/workspaceObservationL
 import { useGatewayWorkspaceRuntimeLifecycle } from "./useGatewayWorkspaceRuntimeLifecycle";
 import { createSerialTaskQueue } from "../runtime/serialTaskQueue";
 
+const workspaceKey = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
+const workspaceTarget = (key: string) => { const owner = workspaceOwnerFromKey(key); return { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }; };
+
 const API_PORT = 49_630;
-const WORKSPACE_ID = "ws-action";
-const SIBLING_WORKSPACE_ID = "ws-sibling";
+const WORKSPACE_ID = workspaceKey("ws-action");
+const SIBLING_WORKSPACE_ID = workspaceKey("ws-sibling");
 const GROUP_REQUEST: GatewayRuntimeGroupRequest = {
   expected_backend_generation: "generation-1",
-  expected_workspace_ids: [WORKSPACE_ID, SIBLING_WORKSPACE_ID],
-  desired_workspace_ids: [WORKSPACE_ID, SIBLING_WORKSPACE_ID],
+  expected_workspace_ids: [workspaceOwnerFromKey(WORKSPACE_ID).workspaceId, workspaceOwnerFromKey(SIBLING_WORKSPACE_ID).workspaceId],
+  desired_workspace_ids: [workspaceOwnerFromKey(WORKSPACE_ID).workspaceId, workspaceOwnerFromKey(SIBLING_WORKSPACE_ID).workspaceId],
 };
 
 function gatewayWorkspace(
   overrides: Partial<GatewayWorkspace> = {},
 ): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: "ws-old",
-    parent_workspace_id: null,
+    parent_workspace: null,
     name: "测试工作区",
     backend_url: "http://127.0.0.1:41000",
     connection_kind: "local",
@@ -40,7 +45,7 @@ function gatewayWorkspace(
     removable: true,
     system_default: false,
     runtime_action: "safe_restart_managed_backend",
-    remote: null,
+    remote_gateways: [],
     services: {},
     connection_error: null,
     checked_at: "2026-10-14T00:00:00Z",
@@ -52,13 +57,13 @@ function workspaceList(
   activeWorkspaceId: string | null,
   items: GatewayWorkspace[],
 ): GatewayWorkspaceList {
-  return { active_workspace_id: activeWorkspaceId, items };
+  return { active_workspace: activeWorkspaceId ? workspaceTarget(activeWorkspaceId) : null, items };
 }
 
 function responseWorkspaces(): GatewayWorkspaceList {
-  return workspaceList("ws-next", [
-    gatewayWorkspace({ workspace_id: WORKSPACE_ID, name: "操作后的工作区" }),
-    gatewayWorkspace({ workspace_id: SIBLING_WORKSPACE_ID, name: "完整组成员" }),
+  return workspaceList(workspaceKey("ws-next"), [
+    gatewayWorkspace({ workspace_id: workspaceOwnerFromKey(WORKSPACE_ID).workspaceId, name: "操作后的工作区" }),
+    gatewayWorkspace({ workspace_id: workspaceOwnerFromKey(SIBLING_WORKSPACE_ID).workspaceId, name: "完整组成员" }),
     gatewayWorkspace({ workspace_id: "ws-next", name: "刷新后的活动工作区" }),
   ]);
 }
@@ -69,7 +74,8 @@ function blocker(
   resourceId: string,
 ): GatewayRuntimeBlocker {
   return {
-    workspace_id: workspaceId,
+    gateway_id: "gateway-test",
+    workspace_id: workspaceOwnerFromKey(workspaceId).workspaceId,
     kind,
     resource_id: resourceId,
     session_id: "session-running",
@@ -84,9 +90,10 @@ function restartResult(
   blockers: GatewayRuntimeBlocker[] = [],
 ): GatewayRuntimeRestartResult {
   return {
-    workspace_id: WORKSPACE_ID,
+    gateway_id: "gateway-test",
+    workspace_id: workspaceOwnerFromKey(WORKSPACE_ID).workspaceId,
     backend_generation: "generation-2",
-    affected_workspace_ids: [WORKSPACE_ID, SIBLING_WORKSPACE_ID],
+    affected_workspace_ids: [workspaceOwnerFromKey(WORKSPACE_ID).workspaceId, workspaceOwnerFromKey(SIBLING_WORKSPACE_ID).workspaceId],
     status,
     forced,
     blockers,
@@ -99,9 +106,10 @@ function stateResult(
   blockers: GatewayRuntimeBlocker[] = [],
 ): GatewayRuntimeStateResult {
   return {
-    workspace_id: WORKSPACE_ID,
+    gateway_id: "gateway-test",
+    workspace_id: workspaceOwnerFromKey(WORKSPACE_ID).workspaceId,
     backend_generation: "generation-2",
-    affected_workspace_ids: [WORKSPACE_ID, SIBLING_WORKSPACE_ID],
+    affected_workspace_ids: [workspaceOwnerFromKey(WORKSPACE_ID).workspaceId, workspaceOwnerFromKey(SIBLING_WORKSPACE_ID).workspaceId],
     status,
     blockers,
     workspaces: responseWorkspaces(),
@@ -110,7 +118,7 @@ function stateResult(
 
 function appState(): AppState {
   return {
-    activeGatewayWorkspaceId: "ws-old",
+    activeGatewayWorkspaceId: workspaceKey("ws-old"),
     gatewayWorkspaces: [gatewayWorkspace()],
     gatewayWorkspacesStale: true,
     workspaceSwitching: false,
@@ -328,7 +336,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
     const listSpy = spyOnGatewayApi("listGatewayWorkspaces").mockImplementation(() => pendingList.promise);
     const { hook, state, calls, queue } = await mountHook({
       finishUsesQueue: true,
-      finishWorkspaceRefresh: async () => authority.active_workspace_id,
+      finishWorkspaceRefresh: async () => nullableGatewayWorkspaceKey(authority.active_workspace),
     });
     let competingTaskStarted = false;
     const reconnect = hook.reconnectGatewayWorkspace(WORKSPACE_ID);
@@ -351,7 +359,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
     expect(competingTaskStarted).toBe(true);
     expect(state().gatewayWorkspaces).toBe(authority.items);
     expect(state().gatewayWorkspacesStale).toBe(false);
-    expect(state().activeGatewayWorkspaceId).toBe(authority.active_workspace_id);
+    expect(state().activeGatewayWorkspaceId).toBe(nullableGatewayWorkspaceKey(authority.active_workspace));
     expect(calls.finish).toBe(1);
     expect(state().gatewayError).toBe(postError.message);
     expect(state().status).toContain("已读取最新工作区状态");
@@ -422,7 +430,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
       updateState((prev) => ({
         ...prev,
         gatewayWorkspaces: newerItems,
-        activeGatewayWorkspaceId: "ws-owner",
+        activeGatewayWorkspaceId: workspaceKey("ws-owner"),
         gatewayError: "新 owner 错误",
         status: "新 owner 状态",
       }));
@@ -435,7 +443,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
       expect(state().gatewayWorkspaces).toBe(
         supersession === "generation" ? newerItems : authority.items,
       );
-      expect(state().activeGatewayWorkspaceId).toBe("ws-owner");
+      expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-owner"));
       expect(state().gatewayWorkspacesStale).toBe(supersession === "generation");
       expect(state().gatewayError).toBe("新 owner 错误");
       expect(state().status).toContain("新 owner 状态");
@@ -474,7 +482,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
           ...prev,
           gatewayWorkspaces: newerItems,
           gatewayWorkspacesStale: false,
-          activeGatewayWorkspaceId: "ws-owner",
+          activeGatewayWorkspaceId: workspaceKey("ws-owner"),
           gatewayError: "新 owner 错误",
           status: "新 owner 状态",
         }));
@@ -485,13 +493,13 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
 
       expect(deferredStateUpdaterCount()).toBe(1);
       expect(state().gatewayWorkspaces).toBe(newerItems);
-      expect(state().activeGatewayWorkspaceId).toBe("ws-owner");
+      expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-owner"));
       expect(calls.finish).toBe(0);
       flushDeferredStateUpdaters();
       expect(state().gatewayWorkspaces).toBe(
         supersession === "generation" ? newerItems : authority.items,
       );
-      expect(state().activeGatewayWorkspaceId).toBe("ws-owner");
+      expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-owner"));
       expect(state().gatewayWorkspacesStale).toBe(false);
       expect(state().gatewayError).toBe("新 owner 错误");
       expect(state().status).toContain("新 owner 状态");
@@ -514,7 +522,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
     expect(listSpy).not.toHaveBeenCalled();
     expect(state().gatewayWorkspaces).toBe(result.items);
     expect(state().gatewayWorkspacesStale).toBe(false);
-    expect(state().activeGatewayWorkspaceId).toBe(result.active_workspace_id);
+    expect(state().activeGatewayWorkspaceId).toBe(nullableGatewayWorkspaceKey(result.active_workspace));
     expect(state().gatewayError).toContain("已重新连接，但界面同步失败");
     expect(state().gatewayError).toContain(refreshError.message);
     expect(state().status).toBe(state().gatewayError ?? "");
@@ -546,7 +554,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
       finishWorkspaceRefresh: async ({ gatewayListRequestRef }) => {
         await Promise.resolve();
         gatewayListRequestRef.current += 1;
-        return authority.active_workspace_id;
+        return nullableGatewayWorkspaceKey(authority.active_workspace);
       },
     });
 
@@ -554,14 +562,14 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
 
     expect(calls.finish).toBe(1);
     expect(state().gatewayWorkspaces).toBe(authority.items);
-    expect(state().activeGatewayWorkspaceId).toBe(authority.active_workspace_id);
+    expect(state().activeGatewayWorkspaceId).toBe(nullableGatewayWorkspaceKey(authority.active_workspace));
     expect(state().gatewayError).toBeNull();
     expect(state().status).toContain("工作区刷新结果已被更新的请求取代");
     expect(state().status).toContain(postError.message);
   });
 
   test("不接受列表中不存在的 active ID", async () => {
-    const result = workspaceList("ws-missing", [gatewayWorkspace({ workspace_id: WORKSPACE_ID })]);
+    const result = workspaceList(workspaceKey("ws-missing"), [gatewayWorkspace({ workspace_id: workspaceOwnerFromKey(WORKSPACE_ID).workspaceId })]);
     spyOnGatewayApi("reconnectGatewayWorkspace").mockResolvedValue(result);
     const { hook, state, calls } = await mountHook();
 
@@ -569,7 +577,7 @@ describe("Gateway 工作区 reconnect 权威收敛", () => {
 
     expect(state().gatewayWorkspaces).toBe(result.items);
     expect(state().gatewayWorkspacesStale).toBe(true);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-old");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-old"));
     expect(state().gatewayError).toContain("活动工作区不在工作区列表中");
     expect(calls.finish).toBe(0);
   });
@@ -595,7 +603,7 @@ describe("Gateway 工作区运行时生命周期收尾", () => {
       expect(observations.map((controller) => controller.signal.aborted)).toEqual([true, true]);
       expectObservationsResumed();
       expect(state().gatewayWorkspaces).toBe(result.workspaces.items);
-      expect(state().activeGatewayWorkspaceId).toBe(result.workspaces.active_workspace_id);
+      expect(state().activeGatewayWorkspaceId).toBe(nullableGatewayWorkspaceKey(result.workspaces.active_workspace));
       expect(state().gatewayWorkspacesStale).toBe(false);
       expect(state().gatewayError).toContain("刷新 Gateway 状态失败");
       expect(state().gatewayError).toContain(refreshFailure.message);
@@ -639,7 +647,7 @@ describe("Gateway 工作区运行时生命周期收尾", () => {
       expect(observations.map((controller) => controller.signal.aborted)).toEqual([true, true]);
       expectObservationsResumed();
       expect(state().gatewayWorkspaces).toBe(result.workspaces.items);
-      expect(state().activeGatewayWorkspaceId).toBe(result.workspaces.active_workspace_id);
+      expect(state().activeGatewayWorkspaceId).toBe(nullableGatewayWorkspaceKey(result.workspaces.active_workspace));
       expect(state().status).toContain("ws-action: 仍在运行");
       expect(state().status).toContain("ws-sibling: 仍在运行");
       expect(state().gatewayError).toBeNull();
@@ -661,7 +669,7 @@ describe("Gateway 工作区运行时生命周期收尾", () => {
     expect(observations.map((controller) => controller.signal.aborted)).toEqual([true, true]);
     expectObservationsResumed();
     expect(state().gatewayWorkspaces).toBe(result.workspaces.items);
-    expect(state().activeGatewayWorkspaceId).toBe(result.workspaces.active_workspace_id);
+    expect(state().activeGatewayWorkspaceId).toBe(nullableGatewayWorkspaceKey(result.workspaces.active_workspace));
     expect(state().gatewayError).toContain("未关闭");
     expect(state().status).toContain("关闭工作区失败: 工作区仍有");
     expect(calls.finish).toBe(0);

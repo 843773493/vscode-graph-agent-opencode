@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { useCallback, type MutableRefObject } from "react";
 import {
   listGatewayWorkspaces,
@@ -24,13 +25,14 @@ export function useGatewayWorkspaceHierarchy(
       const selectionIntent = selectionIntentRef.current;
       await runGatewayWorkspaceListTask(async () => {
         try {
+          const parent = parentWorkspaceId ? workspaceOwnerFromKey(parentWorkspaceId) : null;
           const workspaceList = await updateGatewayWorkspace(
             apiPort,
             workspaceId,
-            { parent_workspace_id: parentWorkspaceId },
+            { parent_workspace: parent ? { gateway_id: parent.gatewayId, workspace_id: parent.workspaceId } : null },
           );
           const updatedWorkspace = workspaceList.items.find(
-            (workspace) => workspace.workspace_id === workspaceId,
+            (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
           );
           if (!updatedWorkspace) {
             throw new Error(`Gateway 更新响应缺少工作区: ${workspaceId}`);

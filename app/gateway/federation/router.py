@@ -79,8 +79,6 @@ async def discover_communication_target(payload: CommunicationDiscoveryRequest, 
     try:
         service.session_main.require_local_source(service.gateway_id, asdict(payload.source))
         workspace = payload.workspace_id
-        if workspace is not None and payload.gateway_id in {None, service.gateway_id}:
-            workspace = service.session_main.canonical_workspace_id(workspace)
         result = await service.resolve_session_target(session_id=payload.session_id, workspace_id=workspace, gateway_id=payload.gateway_id)
     except FederationError as error:
         raise HTTPException(status_code=409, detail=error.to_wire()) from error

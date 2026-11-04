@@ -37,7 +37,6 @@ from app.gateway.routes.workspaces_managed import router as managed_workspaces_r
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
@@ -187,7 +186,7 @@ async def _join_group(case: SharedBackendCase):
     added = await case.data("POST", "/api/gateway/workspaces/local", json={
         "root_path": str(case.roots[1]), "name": "Secondary",
     })
-    secondary = next(item for item in added["items"] if item["workspace_id"] == build_managed_local_workspace_id(str(case.roots[1])))
+    secondary = next(item for item in added["items"] if item["name"] == "Secondary")
     assert secondary["status"] == "ready", "普通新增必须自动启动独立 singleton"
     assert secondary["backend_generation"] != primary["backend_generation"]
     await case.data("POST", f"/api/gateway/workspaces/{secondary['workspace_id']}/runtime/stop")
@@ -265,10 +264,10 @@ async def test_workspace_startup_log_keeps_owner_without_native_roots_in_diagnos
     case = shared_backend_case
     targets = await case.data("GET", "/api/gateway/workspaces")
     target = next(item for item in targets["items"] if item["system_default"])
-    workspace_id, backend_workspace_id = target["workspace_id"], target["backend_workspace_id"]
+    workspace_id = target["workspace_id"]
     health = await case.client.get("/api/v1/health", headers={"X-BoxTeam-Workspace-Id": workspace_id})
     assert health.status_code == 200, health.text
-    assert health.json()["workspace_id"] == backend_workspace_id
+    assert health.json()["workspace_id"] == workspace_id
     log_id = f"workspace:{workspace_id}:workspace_api"
     receipts = []
     for route, owner_field, headers in (
@@ -288,8 +287,8 @@ async def test_workspace_startup_log_keeps_owner_without_native_roots_in_diagnos
         log = next(item for item in data["logs"] if item["log_id"] == log_id)
         assert log["status"] == "available"
         assert log["workspace_id"] == workspace_id
-        assert f"Workspace 挂载 ready: workspace_id={backend_workspace_id}" in log["tail"]
-        assert f"Workspace 启动阶段 end: workspace_id={backend_workspace_id}" in log["tail"]
+        assert f"Workspace 挂载 ready: workspace_id={workspace_id}" in log["tail"]
+        assert f"Workspace 启动阶段 end: workspace_id={workspace_id}" in log["tail"]
         # 核实真实启动 producer 与两个诊断 consumer，不用伪造日志代替产品启动。
         for native_root in (*case.roots, case.boxteam_home, Path.cwd()):
             assert str(native_root) not in response.text
@@ -419,10 +418,10 @@ async def test_real_peer_admin_root_binding_survives_restart_and_revocation(
         "root_path": str(case.roots[1]), "name": "Peer managed root",
     })
     assert registered.status_code == 200, registered.text
-    target_id = build_managed_local_workspace_id(str(case.roots[1]))
     native = await case.data("GET", "/api/gateway/workspaces")
-    target = next(item for item in native["items"] if item["workspace_id"] == target_id)
-    backend_id = target["backend_workspace_id"]
+    target = next(item for item in native["items"] if item["name"] == "Peer managed root")
+    target_id = target["workspace_id"]
+    backend_id = target["workspace_id"]
     assert target["status"] == "ready"
     for forbidden in (str(case.roots[1]), root_binding_peer_credential.token):
         assert forbidden not in registered.text
@@ -441,7 +440,7 @@ async def test_real_peer_admin_root_binding_survives_restart_and_revocation(
     await case.restart_gateway()
     restored = await case.data("GET", "/api/gateway/workspaces")
     restored_target = next(item for item in restored["items"] if item["workspace_id"] == target_id)
-    assert restored_target["backend_workspace_id"] == backend_id
+    assert restored_target["workspace_id"] == backend_id
     await read_bound_root()
 
     # 撤权在实际调用前生效；目标注册和物理根不得被源端 allow 覆盖。
@@ -485,10 +484,10 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
                 })
                 assert response.status_code == 400, response.text
                 assert response.headers["X-Request-ID"] == response.json()["request_id"] == "shared-backend-header-rejected"
-                assert response.json()["detail"] == "Workspace 后端工作区 ID 必须是标准 UUID"
+                assert "X-BoxTeam-Backend-Workspace-Id" in response.json()["detail"]
                 assert "backend-header-marker" not in response.text
         recovered = await case.data("GET", "/api/v1/workspace", headers={
-            "X-BoxTeam-Workspace-Id": identity, "X-BoxTeam-Backend-Workspace-Id": health["workspace_id"],
+            "X-BoxTeam-Workspace-Id": identity,
         })
         assert recovered["workspace_id"] == health["workspace_id"]
         assert recovered["runtime"]["pid"] == health["runtime"]["pid"]
@@ -503,7 +502,7 @@ async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(sha
         assert response.json()["data"]["node"]["uri"] == uri
         assert str(root) not in response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
-    assert (await case.data("GET", "/api/gateway/workspaces"))["active_workspace_id"] == secondary
+    assert (await case.data("GET", "/api/gateway/workspaces"))["active_workspace"] == {"gateway_id": joined["gateway_id"], "workspace_id": secondary}
     backend_healths = []
     sessions = []
     for index, identity in enumerate(ids):
@@ -704,7 +703,7 @@ async def _add_nondefault_singleton(case: SharedBackendCase):
     added = await case.data("POST", "/api/gateway/workspaces/local", json={
         "root_path": str(case.roots[1]), "name": "Exit Secondary",
     })
-    return next(item for item in added["items"] if item["workspace_id"] == build_managed_local_workspace_id(str(case.roots[1])))
+    return next(item for item in added["items"] if item["name"] == "Exit Secondary")
 
 
 def _managed_owner_snapshot(case: SharedBackendCase):
@@ -838,7 +837,7 @@ async def test_real_stopped_shared_delete_persists_remaining_contract_then_start
     added = await case.data("POST", "/api/gateway/workspaces/local", json={
         "root_path": str(nondefault_third_root), "name": "Stopped Exit Third",
     })
-    third = next(item for item in added["items"] if item["workspace_id"] == build_managed_local_workspace_id(str(nondefault_third_root)))
+    third = next(item for item in added["items"] if item["name"] == "Stopped Exit Third")
     first_id, remaining_id = secondary["workspace_id"], third["workspace_id"]
     await case.data("POST", f"/api/gateway/workspaces/{remaining_id}/runtime/stop")
     joined = await case.data("POST", f"/api/gateway/workspaces/{first_id}/runtime/restart-safe", json={
@@ -886,20 +885,20 @@ async def test_real_stopped_shared_delete_persists_remaining_contract_then_start
     published_owner = next(owner for owner in _managed_owner_snapshot(case) if any(member["workspace_id"] == remaining_id for member in owner["members"]))
     assert [member["workspace_id"] for member in published_owner["members"]] == [remaining_id]
     assert published_owner["members"] == [{
-        "workspace_id": remaining_id, "backend_workspace_id": third["backend_workspace_id"],
+        "workspace_id": remaining_id,
     }]
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
         binding = json.loads(connection.execute(
             "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (remaining_id,),
         ).fetchone()[0])
-    assert binding["backend_workspace_id"] == third["backend_workspace_id"]
+    assert binding["workspace_id"] == third["workspace_id"]
     assert Path(binding["root_path"]) == nondefault_third_root.resolve()
     assert str(nondefault_third_root.resolve()) not in json.dumps(published_owner)
     mount = MountedWorkspace(
-        binding["backend_workspace_id"], Path(binding["root_path"]),
+        binding["workspace_id"], Path(binding["root_path"]),
         binding["local_service_urls"]["terminal_manager"], binding["local_service_urls"]["browser_manager"],
     )
-    assert health["workspace_id"] == third["backend_workspace_id"] == mount.workspace_id
+    assert health["workspace_id"] == third["workspace_id"] == mount.workspace_id
     assert mount.workspace_root == nondefault_third_root.resolve()
     assert health["backend_generation"] == published_owner["generation"] == started["backend_generation"]
     assert health["mount_manifest_digest"] == mounted_workspace_manifest_digest((mount,))

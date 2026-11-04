@@ -1,10 +1,10 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { getWorkspace } from "../../api/workspace";
 import { HttpRequestError } from "../../api/http";
 import {
   fetchSessionCatalogSnapshot,
   listSessionCatalogNavigationEvents,
 } from "../../api/session/sessionCatalogOperations";
-import { getGatewayHealth } from "../../gatewayApi";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import type { GatewayUserAccess } from "../../types/backend";
 import { errorMessage, ReportedError } from "../../utils/errorMessage";
@@ -172,7 +172,6 @@ export function createSessionCatalogOutboxRuntime(
   const terminalOperations = new Map<string, CatalogOutboxOperation>();
   const reportedFailures = new Set<string>();
   let snapshot: SessionCatalogOutboxSnapshot = new Map();
-  let gatewayIdPromise: Promise<string> | null = null;
   let persistencePromise: Promise<CatalogOutboxPersistencePort> | null = null;
   let broadcast: ReturnType<typeof createCatalogOutboxBroadcaster> | null = null;
   let unsubscribeBroadcast: (() => void) | null = null;
@@ -402,14 +401,6 @@ export function createSessionCatalogOutboxRuntime(
     }, options.reconcileIntervalMs ?? RECONCILE_INTERVAL_MS);
   };
 
-  const getGatewayId = (): Promise<string> => {
-    if (!gatewayIdPromise) {
-      gatewayIdPromise = getGatewayHealth(options.apiPort)
-        .then((health) => requireGatewayId(health.gateway_id));
-    }
-    return gatewayIdPromise;
-  };
-
   const getPersistence = (): Promise<CatalogOutboxPersistencePort> => {
     persistencePromise ??= options.openPersistence
       ? options.openPersistence()
@@ -422,9 +413,9 @@ export function createSessionCatalogOutboxRuntime(
     access,
   ) => {
     if (disposed) throw new Error("会话目录 outbox runtime 已停止");
-    const gatewayWorkspaceId = workspaceTarget.workspace_id;
+    const gatewayWorkspaceId = gatewayWorkspaceKey(workspaceTarget);
     if (!gatewayWorkspaceId) {
-      throw new Error("建立会话目录 outbox 需要 Gateway workspace route ID");
+      throw new Error("建立会话目录 outbox 需要 Gateway 与工作区 UUID");
     }
     const principal = principalFor(access);
     if (activePrincipal !== principal) {
@@ -446,16 +437,15 @@ export function createSessionCatalogOutboxRuntime(
 
     const pending = (async (): Promise<RuntimeDriver> => {
       const [gatewayId, workspace] = await Promise.all([
-        getGatewayId(),
+        Promise.resolve(requireGatewayId(workspaceTarget.gateway_id)),
         getWorkspace(options.apiPort, gatewayWorkspaceId),
       ]);
       assertActivePrincipal(principal, generation);
       const backendWorkspaceId = requireBackendWorkspaceId(workspace.workspace_id);
-      if (workspaceTarget.backend_workspace_id
-        && backendWorkspaceId !== workspaceTarget.backend_workspace_id) {
+      if (backendWorkspaceId !== workspaceTarget.workspace_id) {
         throw new Error(
           `Gateway workspace backend 身份不匹配: route=${gatewayWorkspaceId}, `
-          + `target=${workspaceTarget.backend_workspace_id}, actual=${backendWorkspaceId}`,
+          + `target=${workspaceTarget.workspace_id}, actual=${backendWorkspaceId}`,
         );
       }
       const partition: CatalogOutboxPartition = {
@@ -467,7 +457,7 @@ export function createSessionCatalogOutboxRuntime(
       const currentByPartition = driversByPartition.get(partitionKey);
       if (currentByPartition && currentByPartition.gatewayWorkspaceId !== gatewayWorkspaceId) {
         throw new Error(
-          `同一 outbox 分区映射到多个 Gateway workspace route: ${currentByPartition.gatewayWorkspaceId}, ${gatewayWorkspaceId}`,
+          `同一 outbox 分区映射到多个工作区选择: ${currentByPartition.gatewayWorkspaceId}, ${gatewayWorkspaceId}`,
         );
       }
       startBroadcast();

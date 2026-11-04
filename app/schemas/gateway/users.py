@@ -51,9 +51,10 @@ class GatewayUserAccessDTO(BaseModel):
 
 
 class GatewayUserViewStateDTO(BaseModel):
-    """视图状态键为 `(user_id, workspace_id, session_id)`，只用于 Session 主聊天 main thread；child thread 使用独立视图，新 Session（含 fork）不继承来源状态。无锚点时 writer 记录当前 `scrollTop`，恢复忽略该像素偏移并回到最新尾部。"""
+    """视图状态按用户、Gateway、工作区和 Session 归属，只用于主聊天 main thread。"""
 
     user_id: str
+    gateway_id: str
     workspace_id: str
     session_id: str
     turn_anchor: str | None = Field(

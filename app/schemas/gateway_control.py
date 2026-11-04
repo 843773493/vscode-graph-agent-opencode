@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.gateway.workspaces import GatewayConnectionKind
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
 
 WorkspaceNavigationNodeKind = Literal["workspace_folder", "workspace_ref"]
@@ -16,15 +17,15 @@ class WorkspaceNavigationNodeDTO(BaseModel):
     kind: WorkspaceNavigationNodeKind
     name: str
     parent_node_id: str | None = None
-    workspace_id: str | None = None
+    workspace: GatewaySearchWorkspaceOwnerDTO | None = None
     position: int = 0
 
     @model_validator(mode="after")
     def validate_target(self) -> WorkspaceNavigationNodeDTO:
-        if self.kind == "workspace_ref" and self.workspace_id is None:
-            raise ValueError("workspace_ref 缺少 workspace_id")
-        if self.kind == "workspace_folder" and self.workspace_id is not None:
-            raise ValueError("workspace_folder 不能包含 workspace_id")
+        if self.kind == "workspace_ref" and self.workspace is None:
+            raise ValueError("workspace_ref 缺少 workspace owner")
+        if self.kind == "workspace_folder" and self.workspace is not None:
+            raise ValueError("workspace_folder 不能包含 workspace owner")
         return self
 
 
@@ -93,9 +94,10 @@ class GatewayResourceScopeErrorDTO(BaseModel):
 
 
 class GatewayResourceDTO(BaseModel):
+    gateway_id: str
     gateway_connection_id: str | None = None
     gateway_name: str
-    # Gateway 注册表中的路由工作区 ID；内层 resource.workspace_id 是后端 owner UUID。
+    # 与内层 resource.workspace_id 一致的工作区 UUID。
     workspace_id: str
     workspace_name: str
     connection_kind: GatewayConnectionKind

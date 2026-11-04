@@ -89,10 +89,10 @@ def _bundle(root: Path, definition: GeneratorDefinitionDTO, registry: GatewayWor
 
     def workspace(value: str) -> str:
         target = registry.resolve(value)
-        if target.backend_workspace_id is None:
+        if target.workspace_id is None:
             raise ValueError(f"旧生成器目标缺少后端稳定身份: {value}")
-        mappings[value] = target.backend_workspace_id
-        return target.backend_workspace_id
+        mappings[value] = target.workspace_id
+        return target.workspace_id
 
     owner = workspace(definition.execution_workspace_id)
     placement = definition.placement.model_dump(mode="json")
@@ -109,7 +109,7 @@ def _bundle(root: Path, definition: GeneratorDefinitionDTO, registry: GatewayWor
         origin_target = registry.resolve(created_from.workspace_id)
         origin_gateway = local_gateway_id
         if origin_target.connection_kind == "remote_gateway":
-            connection_id = origin_target.remote_gateway_connection_id
+            connection_id = registry.remote_connection_for_target(origin_target).connection_id
             assert connection_id is not None
             origin_gateway = registry.remote_gateway_connection(connection_id).remote_gateway_id
             if not origin_gateway:
@@ -226,7 +226,7 @@ async def _install(root: Path, backup: Path, snapshot: GeneratorImportSnapshot, 
     _, received = _verified_snapshot(root, backup, snapshot)
     if not received:
         target = registry.resolve(snapshot.workspace_id)
-        if target.backend_workspace_id != snapshot.owner:
+        if target.workspace_id != snapshot.owner:
             raise ValueError("旧生成器的路由已改绑，拒绝迁入其他工作区")
         url, headers = api.target_request(target, "persistent-tasks/imports/session-generators", request_id=request_id)
         response = await http_client.post(url, headers=headers, json=bundle.model_dump(mode="json"), timeout=60)
@@ -259,14 +259,14 @@ async def _import_all(*, root: Path, registry: GatewayWorkspaceRegistry,
             target = registry.resolve(item.workspace_id)
             target_gateway = gateway_id
             if target.connection_kind == "remote_gateway":
-                connection_id = target.remote_gateway_connection_id
+                connection_id = registry.remote_connection_for_target(target).connection_id
                 assert connection_id is not None
                 target_gateway = registry.remote_gateway_connection(connection_id).remote_gateway_id
                 if not target_gateway:
                     raise ValueError("旧生成器远端 Gateway 缺少稳定身份")
             bundle, sources = _bundle(root, item.definition, registry, target_gateway, local_gateway_id=gateway_id)
             snapshot = GeneratorImportSnapshot.model_validate({"request": bundle, "workspace_id": item.workspace_id,
-                        "owner": target.backend_workspace_id,
+                        "owner": target.workspace_id,
                         "files": {source.relative_to(root).as_posix(): hashlib.sha256(raw).hexdigest() for source, raw in sources.items()}})
             backup = pending / bundle.source_hash
             for archived in backup.rglob("*"):

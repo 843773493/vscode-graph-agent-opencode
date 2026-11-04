@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { resolveCatalogSearchTarget } from "../../api/gateway/catalogSearch";
 import { useState, type ReactNode } from "react";
 import { useSessionResourceExplorer } from "../../hooks/session/useSessionResourceExplorer";
@@ -151,7 +152,7 @@ export default function SessionResourceExplorer({
     gatewayUserAccess,
   });
   const workspacesById = new Map(
-    workspaces.map((workspace) => [workspace.workspace_id, workspace]),
+    workspaces.map((workspace) => [gatewayWorkspaceKey(workspace), workspace]),
   );
   const catalogTarget = useCatalogReveal(apiPort, catalogReveal, explorer);
   const navigationNodes = explorer.navigation?.nodes ?? [];
@@ -230,13 +231,13 @@ export default function SessionResourceExplorer({
 
   const workspaceRefsByWorkspaceId = new Map(
     navigationNodes
-      .filter((node) => node.kind === "workspace_ref" && node.workspace_id)
-      .map((node) => [node.workspace_id as string, node]),
+      .filter((node) => node.kind === "workspace_ref" && node.workspace)
+      .map((node) => [gatewayWorkspaceKey(node.workspace!), node]),
   );
   const workspaceChildren = new Map<string, WorkspaceNavigationNode[]>();
   for (const workspace of workspaces) {
-    const parentWorkspaceId = workspace.parent_workspace_id ?? null;
-    const reference = workspaceRefsByWorkspaceId.get(workspace.workspace_id);
+    const parentWorkspaceId = nullableGatewayWorkspaceKey(workspace.parent_workspace);
+    const reference = workspaceRefsByWorkspaceId.get(gatewayWorkspaceKey(workspace));
     if (!parentWorkspaceId || !reference || !workspaceRefsByWorkspaceId.has(parentWorkspaceId)) {
       continue;
     }
@@ -615,7 +616,7 @@ export default function SessionResourceExplorer({
   };
 
   const renderWorkspace = (node: WorkspaceNavigationNode, depth: number): ReactNode => {
-    const workspaceId = node.workspace_id;
+    const workspaceId = nullableGatewayWorkspaceKey(node.workspace);
     if (!workspaceId) {
       return null;
     }
@@ -636,7 +637,7 @@ export default function SessionResourceExplorer({
       nodeId: node.node_id,
       workspaceId,
       navigationParentNodeId: node.parent_node_id ?? null,
-      parentWorkspaceId: workspace?.parent_workspace_id ?? null,
+      parentWorkspaceId: nullableGatewayWorkspaceKey(workspace?.parent_workspace),
     };
     const targetKey = sessionResourceDropTargetKey(target);
     const childWorkspaces = workspaceChildren.get(workspaceId) ?? [];
@@ -654,7 +655,7 @@ export default function SessionResourceExplorer({
             kind: "workspace",
             nodeId: node.node_id,
             workspaceId,
-            parentWorkspaceId: workspace?.parent_workspace_id ?? null,
+            parentWorkspaceId: nullableGatewayWorkspaceKey(workspace?.parent_workspace),
             parentNodeId: node.parent_node_id ?? null,
           })}
           onDragOver={(event) => handleDragOver(event, target)}
@@ -736,12 +737,12 @@ export default function SessionResourceExplorer({
 
   const renderNavigationNode = (node: WorkspaceNavigationNode, depth: number): ReactNode => {
     if (node.kind === "workspace_ref") {
-      const workspace = node.workspace_id
-        ? workspacesById.get(node.workspace_id)
+      const workspace = node.workspace
+        ? workspacesById.get(gatewayWorkspaceKey(node.workspace))
         : undefined;
       if (
-        workspace?.parent_workspace_id &&
-        workspaceRefsByWorkspaceId.has(workspace.parent_workspace_id)
+        workspace?.parent_workspace &&
+        workspaceRefsByWorkspaceId.has(gatewayWorkspaceKey(workspace.parent_workspace))
       ) {
         return null;
       }

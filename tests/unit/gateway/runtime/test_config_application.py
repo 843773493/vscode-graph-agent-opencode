@@ -52,6 +52,8 @@ from app.services.infrastructure.workspace_file_watch_service import (
 from tests.harness.python.run_context import TestRunContext
 from tests.support.gateway_managed_backends import ProcessProbe
 
+GATEWAY_ID = "gateway_00000000000040008000000000000001"
+
 
 @dataclass
 class SkillApplicationCase:
@@ -346,14 +348,14 @@ def logging_application(
         monkeypatch.setattr(logger, "level", logger.level)
         monkeypatch.setattr(logger, "propagate", logger.propagate)
     configure_application_logging(service="gateway", stream=io.StringIO(), revision=config.service.config.revision)
-    registry = GatewayWorkspaceRegistry(
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID,
         storage_path=config.path.parent / "workspaces.json",
         runtime_logging_config=lambda: {"revision": config.app.state.gateway_config.revision},
     )
-    targets = tuple(WorkspaceTarget(
-        workspace_id=f"logging-{index}", name=f"workspace-{index}",
+    targets = tuple(WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=f'00000000-0000-4000-8000-00000000000{index}', name=f"workspace-{index}",
         root_path=str(config.path.parent / f"workspace-{index}"), backend_url="http://127.0.0.1:42000",
-        backend_workspace_id=f"00000000-0000-4000-8000-00000000000{index}",
+
         connection_kind="local", managed=True,
     ) for index in (1, 2))
     for target in targets:
@@ -367,10 +369,7 @@ def logging_application(
     )
     graph.publish(registry)
     # 即使地址在本机，未受管的外部 Backend 也不参加日志控制。
-    registry.upsert(WorkspaceTarget(
-        "external", "external", str(config.path.parent / "external"), "http://127.0.0.1:49999", "local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000003",
-    ))
+    registry.upsert(WorkspaceTarget(gateway_id=GATEWAY_ID, workspace_id='00000000-0000-4000-8000-000000000003', name='external', root_path=str(config.path.parent / 'external'), backend_url='http://127.0.0.1:49999', connection_kind='local'))
     roles: tuple[tuple[int, RuntimeLoggingService], ...] = ((20, "launcher"), (21, "backend"), (22, "terminal"), (23, "browser"), (24, "terminal"), (25, "browser"))
     states = {pid: RuntimeLoggingStatus(
         service=role, pid=pid, runtime_instance_id=f"instance-{pid}",
@@ -433,7 +432,8 @@ async def test_logging_diagnostics_uses_shared_owners_and_keeps_paths_in_raw_log
     processes = await _logging_process_diagnostics(case.registry, None, candidates)
     assert len(processes) == 7
     backend, = [process for process in processes if process.service == "backend"]
-    assert backend.workspace_ids == ["logging-1", "logging-2"]
+    workspace_ids = list(case.registry.backend_owners()[0].contract.workspace_ids)
+    assert backend.workspace_ids == workspace_ids
     public = json.dumps([process.model_dump(mode="json") for process in processes])
     assert str(case.config.path.parent) not in public
     if failed:
@@ -446,9 +446,9 @@ async def test_logging_diagnostics_uses_shared_owners_and_keeps_paths_in_raw_log
         assert backend.state.log_sink.owner_id == "test-log-owner"
     assert all(process.output_mode == "stdout-only" for process in processes if process.service != "backend")
     assert not case.calls, "只读诊断不能应用或补偿设置"
-    scoped = await _logging_process_diagnostics(case.registry, "logging-2", candidates)
+    scoped = await _logging_process_diagnostics(case.registry, workspace_ids[1], candidates)
     assert len(scoped) == 5
-    assert all(not process.workspace_ids or "logging-2" in process.workspace_ids for process in scoped)
+    assert all(not process.workspace_ids or workspace_ids[1] in process.workspace_ids for process in scoped)
     assert not case.registry.backend_topology_lock.locked()
 
 

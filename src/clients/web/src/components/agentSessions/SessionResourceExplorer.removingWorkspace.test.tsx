@@ -14,6 +14,11 @@ import {
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
 import SessionResourceExplorer from "./SessionResourceExplorer";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+
+const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
+const OTHER_WORKSPACE_ID = "00000000-0000-0000-0000-000000000002";
+const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: WORKSPACE_ID });
 
 // 工作区删除期间（removingGatewayWorkspaceIds 已写入、删除请求在途）这一行的契约：
 // 必须先给出可见的「正在删除」状态，并且立刻失去激活、拖拽与右键菜单能力；
@@ -25,8 +30,9 @@ afterEach(restoreGatewayTestEnvironment);
 
 function gatewayWorkspace(workspaceId: string): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: workspaceId,
-    parent_workspace_id: null,
+    parent_workspace: null,
     name: workspaceId,
     backend_url: "http://127.0.0.1:9000",
     connection_kind: "local",
@@ -37,7 +43,7 @@ function gatewayWorkspace(workspaceId: string): GatewayWorkspace {
     removable: true,
     system_default: false,
     runtime_action: "safe_restart_managed_backend",
-    remote: null,
+    remote_gateways: [],
     services: {},
     connection_error: null,
     checked_at: "2026-07-31T00:00:00Z",
@@ -50,7 +56,7 @@ function navigationNode(workspaceId: string, name: string): WorkspaceNavigationN
     kind: "workspace_ref",
     name,
     parent_node_id: null,
-    workspace_id: workspaceId,
+    workspace: { gateway_id: "gateway-test", workspace_id: workspaceId },
     position: 0,
     parent_path: null,
   } as unknown as WorkspaceNavigationNode;
@@ -146,8 +152,8 @@ describe("删除中的工作区在资源树里必须可见且不可交互", () =
   test("删除中：显示正在删除，禁用激活与拖拽，右键不再打开工作区菜单", async () => {
     let menuCalls = 0;
     const tree = await mountExplorer({
-      workspaceId: "gw_removing",
-      removingWorkspaceIds: new Set(["gw_removing"]),
+      workspaceId: WORKSPACE_ID,
+      removingWorkspaceIds: new Set([WORKSPACE_KEY]),
       onOpenWorkspaceMenu: () => {
         menuCalls += 1;
       },
@@ -174,7 +180,7 @@ describe("删除中的工作区在资源树里必须可见且不可交互", () =
   test("未删除：仍可激活与拖拽，右键仍打开工作区菜单（对照，保证上面的禁用不是无差别禁用）", async () => {
     let menuCalls = 0;
     const tree = await mountExplorer({
-      workspaceId: "gw_ready",
+      workspaceId: OTHER_WORKSPACE_ID,
       removingWorkspaceIds: new Set<string>(),
       onOpenWorkspaceMenu: () => {
         menuCalls += 1;

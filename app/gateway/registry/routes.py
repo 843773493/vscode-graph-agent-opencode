@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from app.core.path_utils import get_gateway_root
 from app.core.workspace_identity import validate_workspace_id
@@ -10,10 +10,10 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.service_types import GatewayServiceName
 
-from .core import WorkspaceRouteLease, WorkspaceTarget
+from .core import WorkspaceRouteLease, WorkspaceSelector, WorkspaceTarget
 
 if TYPE_CHECKING:
-    from . import GatewayWorkspaceRegistry
+    pass
 
 
 class RegistryRoutesMixin:
@@ -22,11 +22,11 @@ class RegistryRoutesMixin:
         return (
             target.connection_kind,
             target.backend_url.rstrip("/"),
-            target.backend_workspace_id,
-            target.remote_gateway_connection_id,
-            target.remote_workspace_id,
+            target.key,
+            target.remote_gateway_connection_ids,
         )
-    def route_lease(self, workspace_id: str) -> WorkspaceRouteLease:
+    def route_lease(self, workspace_id: WorkspaceSelector) -> WorkspaceRouteLease:
+        workspace_id = self.workspace_key(workspace_id)
         self.resolve(workspace_id)
         revision = self._route_revisions.get(workspace_id, 0)
         invalidated = self._route_change_events.get(workspace_id)
@@ -34,18 +34,20 @@ class RegistryRoutesMixin:
             invalidated = asyncio.Event()
             self._route_change_events[workspace_id] = invalidated
         return WorkspaceRouteLease(
-            workspace_id=workspace_id,
+            gateway_id=workspace_id[0],
+            workspace_id=workspace_id[1],
             revision=revision,
             invalidated=invalidated,
         )
     def acquire_route_reference(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
         *,
         streaming: bool,
     ) -> WorkspaceRouteLease:
         """为代理请求保留路由引用，直到响应体或长连接真正结束。"""
 
+        workspace_id = self.workspace_key(workspace_id)
         lease = self.route_lease(workspace_id)
         requests, streams = self._route_reference_counts.get(workspace_id, (0, 0))
         if streaming:
@@ -53,7 +55,8 @@ class RegistryRoutesMixin:
         else:
             requests += 1
         self._route_reference_counts[workspace_id] = (requests, streams)
-        target_connection_id = self.resolve(workspace_id).remote_gateway_connection_id
+        target = self.resolve(workspace_id)
+        target_connection_id = self.remote_connection_for_target(target).connection_id if target.connection_kind == "remote_gateway" else None
         if target_connection_id is not None:
             self._route_reference_connections.setdefault(workspace_id, set()).add(
                 target_connection_id
@@ -61,12 +64,13 @@ class RegistryRoutesMixin:
         return lease
     def release_route_reference(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
         *,
         streaming: bool,
     ) -> None:
         """释放代理请求引用；计数不写入 registry 持久化快照。"""
 
+        workspace_id = self.workspace_key(workspace_id)
         requests, streams = self._route_reference_counts.get(workspace_id, (0, 0))
         if streaming:
             if streams == 0:
@@ -83,14 +87,17 @@ class RegistryRoutesMixin:
             connection_ids = self._route_reference_connections.pop(workspace_id, set())
             for connection_id in connection_ids:
                 self._cleanup_remote_gateway_if_unused(connection_id)
-    def route_reference_counts(self, workspace_id: str) -> tuple[int, int]:
+    def route_reference_counts(self, workspace_id: WorkspaceSelector) -> tuple[int, int]:
         """返回当前 Gateway 代理持有的普通请求数与长连接数。"""
 
+        workspace_id = self.workspace_key(workspace_id)
         self.resolve(workspace_id)
         return self._route_reference_counts.get(workspace_id, (0, 0))
-    def _has_route_references(self, workspace_id: str) -> bool:
+    def _has_route_references(self, workspace_id: WorkspaceSelector) -> bool:
+        workspace_id = self.workspace_key(workspace_id)
         return any(self._route_reference_counts.get(workspace_id, (0, 0)))
-    def _assert_route_references_drained(self, workspace_id: str) -> None:
+    def _assert_route_references_drained(self, workspace_id: WorkspaceSelector) -> None:
+        workspace_id = self.workspace_key(workspace_id)
         request_count, stream_count = self._route_reference_counts.get(
             workspace_id,
             (0, 0),
@@ -101,8 +108,9 @@ class RegistryRoutesMixin:
                 f"workspace_id={workspace_id}, requests={request_count}, "
                 f"streams={stream_count}"
             )
-    def invalidate_route(self, workspace_id: str) -> None:
+    def invalidate_route(self, workspace_id: WorkspaceSelector) -> None:
         """使现有代理租约失效，强制长连接重新解析当前工作区路由。"""
+        workspace_id = self.workspace_key(workspace_id)
         self._route_revisions[workspace_id] = (
             self._route_revisions.get(workspace_id, 0) + 1
         )
@@ -112,15 +120,12 @@ class RegistryRoutesMixin:
         self._route_change_events[workspace_id] = asyncio.Event()
     def resolve_service_url(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
         service: GatewayServiceName,
     ) -> str:
         target = self.resolve(workspace_id)
         if target.connection_kind == "remote_gateway":
-            connection_id = target.remote_gateway_connection_id
-            remote_workspace_id = target.remote_workspace_id
-            if connection_id is None or remote_workspace_id is None:
-                raise RuntimeError(f"远程投影工作区缺少所属 Gateway 信息: {workspace_id}")
+            connection_id = self.remote_connection_for_target(target).connection_id
             gateway_url = self.remote_gateway_url(connection_id)
             if service not in target.remote_service_names:
                 raise LookupError(
@@ -135,7 +140,7 @@ class RegistryRoutesMixin:
             )
             return (
                 f"{gateway_url}/api/gateway/workspaces/"
-                f"{remote_workspace_id}/{service_path}"
+                f"{target.workspace_id}/{service_path}"
             )
         if (
             not target.managed
@@ -150,7 +155,7 @@ class RegistryRoutesMixin:
             raise LookupError(f"工作区运行时尚未连接: {workspace_id}")
         if target.managed:
             owner = runtime.backend_owner
-            if owner is None or self.backend_owner(workspace_id) is not owner:
+            if owner is None or self.backend_owner(target.key) is not owner:
                 raise RuntimeError("managed target 缺少唯一完整 Backend owner")
             if owner.lock.locked():
                 raise LookupError(f"Backend 完整组正在切换路由: workspace_id={workspace_id}")
@@ -163,11 +168,19 @@ class RegistryRoutesMixin:
                 f"工作区未提供服务: workspace_id={workspace_id}, service={service}"
             )
         return service_url
+    def resolve_request_target(self, workspace_id: str | None, gateway_id: str | None = None) -> WorkspaceTarget:
+        """请求中的裸 UUID 使用本机语义，目标头只补充明确的原生归属。"""
+        target = self.resolve((gateway_id, workspace_id) if gateway_id is not None and workspace_id is not None else workspace_id)
+        if gateway_id is not None and target.gateway_id != gateway_id:
+            raise ValueError("目标 Gateway 与选定工作区归属冲突")
+        return target
+
     def targets(self) -> tuple[WorkspaceTarget, ...]:
         return tuple(self._targets.values())
-    def has_target(self, workspace_id: str) -> bool:
+    def has_target(self, workspace_id: WorkspaceSelector) -> bool:
+        workspace_id = self.workspace_key(workspace_id)
         return workspace_id in self._targets
-    def mark_connection_error(self, workspace_id: str, error: str) -> None:
+    def mark_connection_error(self, workspace_id: WorkspaceSelector, error: str) -> None:
         target = self.resolve(workspace_id)
         backend_owner = self.backend_owner(workspace_id)
         if backend_owner is not None:
@@ -177,28 +190,20 @@ class RegistryRoutesMixin:
             self._save(owner=target.owner)
     def target_request_headers(self, target: WorkspaceTarget) -> dict[str, str]:
         """统一查询的定位和凭据；发送方身份与 request_id 由原调用方提供。"""
-        if target.connection_kind != "remote_gateway":
-            backend_workspace_id = target.backend_workspace_id
-            if backend_workspace_id is None:
-                raise RuntimeError(
-                    "本地 Gateway target 缺少 backend UUID: "
-                    f"workspace_id={target.workspace_id}"
-                )
+        validate_workspace_id(target.workspace_id)
+        if target.connection_kind == "local":
+            if target.gateway_id != self.gateway_id:
+                raise ValueError("本机工作区归属不属于当前 Gateway")
             return {
                 "X-Local-Token": LOCAL_TOKEN,
-                "X-BoxTeam-Workspace-Id": validate_workspace_id(backend_workspace_id),
+                "X-BoxTeam-Workspace-Id": target.workspace_id,
             }
-        connection_id = target.remote_gateway_connection_id
-        remote_workspace_id = target.remote_workspace_id
-        if connection_id is None or remote_workspace_id is None:
-            raise RuntimeError(
-                f"远程投影工作区缺少连接信息: {target.workspace_id}"
-            )
+        connection = self.remote_connection_for_target(target)
         credential = FederationCredentialStore(
             storage_path=get_gateway_root() / "credentials" / "federation.json"
-        ).get(connection_id)
+        ).get(connection.connection_id)
         return {
             "X-BoxTeam-Federation-Token": credential.token,
-            "X-BoxTeam-Workspace-Id": remote_workspace_id,
-            TARGET_GATEWAY_ID_HEADER: cast("GatewayWorkspaceRegistry", self).remote_gateway_connection(connection_id).remote_gateway_id,
+            "X-BoxTeam-Workspace-Id": target.workspace_id,
+            TARGET_GATEWAY_ID_HEADER: target.gateway_id,
         }

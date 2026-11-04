@@ -23,7 +23,6 @@ class FederationWorkspaceDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: str
-    backend_workspace_id: str
     backend_generation: str | None = None
     affected_workspace_ids: list[str] = Field(default_factory=list)
     name: str
@@ -33,9 +32,9 @@ class FederationWorkspaceDTO(BaseModel):
         Field(default_factory=list)
     )
 
-    @field_validator("backend_workspace_id")
+    @field_validator("workspace_id")
     @classmethod
-    def backend_uuid(cls, value: str) -> str:
+    def workspace_uuid(cls, value: str) -> str:
         try:
             return validate_workspace_id(value)
         except RuntimeError as error:

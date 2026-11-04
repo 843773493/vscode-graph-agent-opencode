@@ -15,7 +15,7 @@ from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import GatewayConfig, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import build_remote_gateway_connection_id
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceKey, WorkspaceTarget
 from app.gateway.remote_gateway import (
     reconcile_configured_remote_gateways,
     reconnect_remote_gateway,
@@ -28,9 +28,6 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
     ManagedBackendOwner,
-)
-from app.gateway.workspace_ids import (
-    build_managed_local_workspace_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,7 +116,7 @@ async def _restore_managed_local_runtimes(
                     error, stage="backend_restore",
                     label=f"Gateway 启动恢复完整 Backend 失败: owner={owner.contract.owner_id}",
                 ))
-                if registry.active_workspace_id in ids and registry.has_target(default_workspace_id):
+                if registry.active_workspace in {(registry.gateway_id, member_id) for member_id in ids} and registry.has_target(default_workspace_id):
                     registry.activate(default_workspace_id)
                     logger.warning("Gateway 完整组恢复失败，已回退到默认工作区: owner=%s", owner.contract.owner_id)
 
@@ -146,14 +143,16 @@ async def create_registry(
     )
     persisted_targets = registry.targets()
     persisted_targets_by_id = {
-        target.workspace_id: target for target in persisted_targets
+        target.key: target for target in persisted_targets
     }
-    persisted_active_workspace_id = registry.active_workspace_id
+    persisted_active_workspace = registry.active_workspace
     await asyncio.to_thread(registry.validate_local_root_bindings, get_project_root())
     default_root_path = _default_workspace_root()
     root_path = str(default_root_path)
-    default_workspace_id = build_managed_local_workspace_id(root_path)
-    persisted_default = persisted_targets_by_id.get(default_workspace_id)
+    default_workspace_id = await asyncio.to_thread(
+        registry.resolve_local_workspace_identity, get_project_root(), default_root_path, create_directory=True,
+    )
+    persisted_default = persisted_targets_by_id.get((registry.gateway_id, default_workspace_id))
     if persisted_default is None:
         persisted_default = next(
             (
@@ -167,9 +166,8 @@ async def create_registry(
         return await _complete_registry_startup(
             resolved_gateway_config=resolved_gateway_config,
             registry=registry,
-            persisted_targets_by_id=persisted_targets_by_id,
             persisted_default=persisted_default,
-            persisted_active_workspace_id=persisted_active_workspace_id,
+            persisted_active_workspace=persisted_active_workspace,
             default_root_path=default_root_path,
             root_path=root_path,
             default_workspace_id=default_workspace_id,
@@ -192,20 +190,14 @@ async def _complete_registry_startup(
     *,
     resolved_gateway_config: GatewayConfig,
     registry: GatewayWorkspaceRegistry,
-    persisted_targets_by_id: dict[str, WorkspaceTarget],
     persisted_default: WorkspaceTarget | None,
-    persisted_active_workspace_id: str | None,
+    persisted_active_workspace: WorkspaceKey | None,
     default_root_path: Path,
     root_path: str,
     default_workspace_id: str,
     preserve_existing_managed_runtimes: bool,
 ) -> GatewayWorkspaceRegistry:
     external_backend_url = _external_default_backend_url()
-    backend_workspace_id = await asyncio.to_thread(
-        registry.resolve_local_workspace_identity, get_project_root(), default_root_path, create_directory=True,
-    )
-    if persisted_default is not None and persisted_default.backend_workspace_id != backend_workspace_id:
-        raise RuntimeError("默认工作区 Backend UUID 与 registry 不匹配")
     owner = registry.backend_owner(default_workspace_id) if registry.has_target(default_workspace_id) else None
     if external_backend_url is not None and owner is not None:
         if len(owner.contract.members) != 1:
@@ -214,23 +206,24 @@ async def _complete_registry_startup(
         owner = None
     registry.upsert(
         WorkspaceTarget(
+            gateway_id=registry.gateway_id,
             workspace_id=default_workspace_id,
             name=persisted_default.name if persisted_default is not None and persisted_default.name_customized else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home",
             name_customized=persisted_default.name_customized if persisted_default is not None else False,
             root_path=root_path, backend_url=external_backend_url or (owner.contract.backend_url if owner is not None else ""),
-            backend_workspace_id=backend_workspace_id, connection_kind="local", owner="system",
+            connection_kind="local", owner="system",
             managed=external_backend_url is None, removable=False, system_default=True,
             desired_running=external_backend_url is None,
             local_service_urls=persisted_default.local_service_urls if persisted_default is not None else {},
-        ), activate=persisted_active_workspace_id is None,
+        ), activate=persisted_active_workspace is None,
     )
     if external_backend_url is None:
         if owner is None:
             owner = ManagedBackendOwner(ManagedBackendContract(
-                f"backend_owner_{uuid4().hex}", f"backend_generation_{uuid4().hex}",
-                (ManagedBackendMember(default_workspace_id, backend_workspace_id),),
-                persisted_default.backend_url if persisted_default is not None else "",
-                _default_backend_debug_port(),
+                gateway_id=registry.gateway_id, owner_id=f"backend_owner_{uuid4().hex}", generation=f"backend_generation_{uuid4().hex}",
+                members=(ManagedBackendMember(workspace_id=default_workspace_id),),
+                backend_url=persisted_default.backend_url if persisted_default is not None else "",
+                debug_port=_default_backend_debug_port(),
             ))
             registry.register_backend_owner(owner)
         contract, runtimes = await start_managed_backend_runtime(
@@ -261,14 +254,14 @@ async def _complete_registry_startup(
             raise
     else:
         await wait_for_workspace_health(
-            f"{external_backend_url}/api/v1/health", backend_workspace_id,
+            f"{external_backend_url}/api/v1/health", default_workspace_id,
             request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
             poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,
         )
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
     )
-    configured_active_workspace_id: str | None = None
+    configured_active_workspace: WorkspaceKey | None = None
     await reconcile_configured_remote_gateways(
         registry=registry,
         configured_workspaces=resolved_gateway_config.workspaces,
@@ -302,8 +295,8 @@ async def _complete_registry_startup(
         if item.activate
     }
     for target in registry.targets():
-        if target.remote_gateway_connection_id in configured_active_connection_ids:
-            configured_active_workspace_id = target.workspace_id
+        if set(target.remote_gateway_connection_ids) & configured_active_connection_ids:
+            configured_active_workspace = target.key
             break
 
     for connection in registry.remote_gateway_connections():
@@ -327,13 +320,13 @@ async def _complete_registry_startup(
                 label=f"恢复远程 Gateway 失败: connection_id={connection.connection_id}",
             )
             for target in registry.targets():
-                if target.remote_gateway_connection_id == connection.connection_id:
-                    registry.mark_connection_error(target.workspace_id, message)
+                if connection.connection_id in target.remote_gateway_connection_ids:
+                    registry.mark_connection_error(target.key, message)
 
     requested_active_workspace_id = (
-        configured_active_workspace_id
-        or persisted_active_workspace_id
-        or default_workspace_id
+        configured_active_workspace
+        or persisted_active_workspace
+        or (registry.gateway_id, default_workspace_id)
     )
     if requested_active_workspace_id and registry.has_target(
         requested_active_workspace_id

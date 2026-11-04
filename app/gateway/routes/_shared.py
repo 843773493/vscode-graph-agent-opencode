@@ -33,7 +33,8 @@ from app.gateway.control.user_access import (
 from app.gateway.control.user_profile import UserProfileStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.managed_workspaces import list_direct_managed_workspaces
-from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceKey
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.schemas.gateway.directory import (
     GatewayDirectoryEntryDTO,
@@ -250,3 +251,16 @@ def get_workspace_runtime_controller(
     if not isinstance(controller, GatewayWorkspaceRuntimeController):
         raise TypeError("Gateway 工作区运行时控制器尚未初始化")
     return controller
+
+
+def resolve_workspace_key(request: Request, workspace_id: str, registry: GatewayWorkspaceRegistry) -> WorkspaceKey:
+    """管理路径与业务代理采用同样的原生 UUID 与目标归属规则。"""
+    try:
+        header_id = request.headers.get("X-BoxTeam-Workspace-Id")
+        if header_id is not None and header_id != workspace_id:
+            raise ValueError("路径与请求头的工作区 UUID 不一致")
+        return registry.resolve_request_target(workspace_id, parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER))).key
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error

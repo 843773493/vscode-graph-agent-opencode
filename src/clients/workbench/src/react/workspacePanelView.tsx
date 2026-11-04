@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { getWorkspace } from '../../../web/src/api/workspace.js';
 import type { GatewayWorkspace } from '../../../web/src/types/backend.js';
@@ -31,14 +32,14 @@ const toolbar = (tools: ReactNode) => <div className="native-workspace-panel-too
 function WorkspaceConnections({ workspace, input, active, kind }: {
   workspace: GatewayWorkspace; input: ThreadInput | null; active: boolean; kind: 'terminal' | 'browser';
 }) {
-  const controller = useWorkspaceResources(0, workspace.workspace_id, kind, active);
+  const controller = useWorkspaceResources(0, gatewayWorkspaceKey(workspace), kind, active);
   const [selected, setSelected] = useState<string | null>(null);
   const currentThread = input ? { session_id: input.owner.sessionId, thread_id: input.owner.threadId } : null;
-  if (kind === 'browser') return <WarmConfirmProvider><BrowserContent controller={controller} workspaceId={workspace.workspace_id}
+  if (kind === 'browser') return <WarmConfirmProvider><BrowserContent controller={controller} workspaceId={gatewayWorkspaceKey(workspace)}
     currentThread={currentThread} renderToolbar={toolbar} /></WarmConfirmProvider>;
   return <section className="terminal-panel native-workspace-panel-product" data-testid="terminal-panel">
     <TerminalContent controller={controller} currentThread={currentThread}
-      threadTargetUnavailable={false} workspaceId={workspace.workspace_id} workspaceName={workspace.name}
+      threadTargetUnavailable={false} workspaceId={gatewayWorkspaceKey(workspace)} workspaceName={workspace.name}
       selectedTerminalId={selected} onSelectTerminal={setSelected} renderToolbar={toolbar} />
   </section>;
 }
@@ -46,25 +47,25 @@ function WorkspaceConnections({ workspace, input, active, kind }: {
 function WorkspaceProduct({ kind, workspace, editors, active, input }: {
   kind: PanelKind; workspace: GatewayWorkspace; editors: IEditorService; active: boolean; input: ThreadInput | null;
 }) {
-  const [owner, setOwner] = useState<{ routeId: string; workspaceId: string } | null>(null);
+  const [owner, setOwner] = useState<{ workspaceKey: string; workspaceId: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     let disposed = false;
     setOwner(null); setError(null);
-    void getWorkspace(0, workspace.workspace_id).then(value => {
-      if (workspace.connection_kind === 'local' && value.workspace_id !== workspace.backend_workspace_id) throw new Error('面板的工作区路由归属已改变');
-      if (!disposed) setOwner({ routeId: workspace.workspace_id, workspaceId: value.workspace_id });
+    void getWorkspace(0, gatewayWorkspaceKey(workspace)).then(value => {
+      if (value.workspace_id !== workspace.workspace_id) throw new Error('面板的工作区路由归属已改变');
+      if (!disposed) setOwner({ workspaceKey: gatewayWorkspaceKey(workspace), workspaceId: value.workspace_id });
     }).catch((cause: unknown) => { if (!disposed) setError(String(cause)); });
     return () => { disposed = true; };
-  }, [workspace.workspace_id, workspace.backend_workspace_id, workspace.connection_kind, revision]);
+  }, [workspace.gateway_id, workspace.workspace_id, revision]);
   if (error) return <div role="alert">工作区初始化失败：{error}<button onClick={() => setRevision(value => value + 1)}>重试工作区初始化</button></div>;
   if (!owner) return <p role="status">正在确认工作区…</p>;
   switch (kind) {
     case 'automation': return <TaskView owner={owner} editors={editors} active={active} goalSessionId={input?.owner.sessionId ?? null} />;
     case 'terminal': case 'browser': return <WorkspaceConnections workspace={workspace} input={input} active={active} kind={kind} />;
     case 'output': return <section className="gateway-log-panel native-workspace-panel-product" data-testid="gateway-log-panel">
-      <GatewayLogContent apiPort={0} workspaceId={workspace.workspace_id} active={active} renderToolbar={toolbar} />
+      <GatewayLogContent apiPort={0} workspaceId={gatewayWorkspaceKey(workspace)} active={active} renderToolbar={toolbar} />
     </section>;
     case 'ports': return <WarmConfirmProvider><WorkspacePortForwardPanel apiPort={0} workspace={workspace} active={active} /></WarmConfirmProvider>;
     case 'mcp': return <McpConnections apiPort={0} target={workspace} active={active} />;
@@ -82,11 +83,11 @@ function WorkspacePanelView({ editors, kind, visible, onTheme }: {
     return () => listener.dispose();
   }, [editors]);
   useEffect(() => { if (visible) void workspaceContext.refresh(); }, [visible]);
-  const current = !snapshot.loading && !snapshot.error ? snapshot.workspaces.find(item => item.workspace_id === snapshot.activeId) : undefined;
+  const current = !snapshot.loading && !snapshot.error ? snapshot.workspaces.find(item => gatewayWorkspaceKey(item) === snapshot.activeId) : undefined;
   useEffect(() => {
-    if (current) setVisited(previous => new Map(previous).set(current.workspace_id, current));
+    if (current) setVisited(previous => new Map(previous).set(gatewayWorkspaceKey(current), current));
     // 已移除的工作区不再保留观察者或未保存表单。
-    if (!snapshot.loading && !snapshot.error) setVisited(previous => new Map([...previous].filter(([id]) => snapshot.workspaces.some(item => item.workspace_id === id))));
+    if (!snapshot.loading && !snapshot.error) setVisited(previous => new Map([...previous].filter(([id]) => snapshot.workspaces.some(item => gatewayWorkspaceKey(item) === id))));
   }, [current, snapshot.workspaces, snapshot.loading, snapshot.error]);
   useEffect(() => {
     const theme = snapshot.settings?.theme.resolved_theme;
@@ -99,9 +100,9 @@ function WorkspacePanelView({ editors, kind, visible, onTheme }: {
     {snapshot.error ? <p role="alert">读取当前工作区失败：{snapshot.error}</p> : snapshot.loading ? <p role="status">正在切换工作区…</p>
       : !current ? <p>请先在主侧栏选择工作区。</p> : null}
     {[...visited.values()].map(workspace => {
-      const selected = current?.workspace_id === workspace.workspace_id;
-      const input = activeEditor instanceof ThreadInput && activeEditor.owner.routeId === workspace.workspace_id ? activeEditor : null;
-      return <section key={workspace.workspace_id} className="native-workspace-panel-content" hidden={!selected} aria-label={`${kind}：${workspace.name}`}>
+      const selected = current?.gateway_id === workspace.gateway_id && current.workspace_id === workspace.workspace_id;
+      const input = activeEditor instanceof ThreadInput && activeEditor.owner.workspaceKey === gatewayWorkspaceKey(workspace) ? activeEditor : null;
+      return <section key={gatewayWorkspaceKey(workspace)} className="native-workspace-panel-content" hidden={!selected} aria-label={`${kind}：${workspace.name}`}>
         <WorkspaceProduct kind={kind} workspace={workspace} editors={editors} active={visible && selected} input={input} />
       </section>;
     })}

@@ -1,5 +1,6 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../workspaceIdentity";
 import type { APIResponse, WorkspaceNavigationTree } from "../../types/backend";
-import type { GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO, GatewayWorkspaceDiscoveryResultsDTO } from "../../types/protocol_generated/boxteam/gateway/v1/public";
+import type { GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO, GatewayWorkspaceDiscoveryResultsDTO } from "../../types/protocol_generated/boxteam/gateway/v2/public";
 import type { FederatedSearchSourceDTO } from "../../types/protocol_generated/boxteam/search/v1/public";
 import { requestJson, unwrapApiData } from "../http";
 import { searchBranchKey, streamFederatedSearch } from "../stream/federatedSearch";
@@ -28,9 +29,10 @@ export async function resolveCatalogSearchTarget(port: number, owner: GatewaySea
   const scope = unwrapApiData(await requestJson<APIResponse<GatewaySearchScopeResolutionDTO>>(port, "/api/gateway/search/resolve", {
     method: "POST", body: JSON.stringify({ mode: "origin", origin: owner }),
   }));
-  const route = scope.branches[0]?.target_id;
-  if (!route) throw new Error("原目录结果的 owner 已无可用登记路由");
-  return route;
+  const branch = scope.branches[0];
+  if (!branch?.owner || branch.state !== "registered") throw new Error("原目录结果的 owner 已无可用登记工作区");
+  if (branch.owner.gateway_id !== owner.gateway_id || branch.owner.workspace_id !== owner.workspace_id) throw new Error("目录解析返回了其它 owner");
+  return gatewayWorkspaceKey(branch.owner);
 }
 
 export async function searchCatalogView(port: number, query: string, navigation: WorkspaceNavigationTree | null,
@@ -38,7 +40,7 @@ export async function searchCatalogView(port: number, query: string, navigation:
 ): Promise<void> {
   const controller = new AbortController();
   const querySignal = AbortSignal.any([signal, controller.signal]);
-  const labels = new Map(navigation?.nodes.filter(node => node.kind === "workspace_ref").map(node => [node.workspace_id, node.name]));
+  const labels = new Map(navigation?.nodes.filter(node => node.kind === "workspace_ref").map(node => [nullableGatewayWorkspaceKey(node.workspace), node.name]));
   const pages = new Map<string, CatalogSearchItem[]>();
   const branches = new Map<string, CatalogSearchView["workspaces"][number]>();
   let controls: CatalogSearchItem[] = [], controlLimited = false;
@@ -53,7 +55,7 @@ export async function searchCatalogView(port: number, query: string, navigation:
     ).then(response => {
       const discovery = unwrapApiData(response);
       controls = [
-        ...discovery.items.map(item => ({ workspace_id: item.target_id, workspace_name: item.name, owner: item.owner,
+        ...discovery.items.map(item => ({ workspace_id: gatewayWorkspaceKey(item.owner!), workspace_name: item.name, owner: item.owner,
           node_id: item.navigation_node_id, node_kind: "workspace" as const, name: item.name,
           relative_path: item.breadcrumb_names.join("/"), breadcrumb_node_ids: item.breadcrumb_node_ids })),
         ...discovery.folders.map(item => ({ workspace_id: "gateway-navigation", workspace_name: "工作区目录",
@@ -69,7 +71,7 @@ export async function searchCatalogView(port: number, query: string, navigation:
       if (event.type === "scope") {
         for (const branch of event.scope?.branches ?? []) {
           if (!branch.owner) throw new Error("目录范围缺少稳定 owner");
-          const route = branch.target_id ?? branch.owner.workspace_id;
+          const route = gatewayWorkspaceKey(branch.owner);
           branches.set(searchBranchKey({ owner: branch.owner, category: "catalog", operation: "name" }), {
             workspace_id: route, workspace_name: labels.get(route) ?? route, status: "searching", limited: false,
           });

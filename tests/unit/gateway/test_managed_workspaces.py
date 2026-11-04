@@ -32,8 +32,9 @@ from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.managed_backend import ManagedBackendOwner
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.support.gateway_managed_backends import ProcessProbe
+
+GATEWAY_ID = "gateway_00000000000040008000000000000001"
 
 
 @dataclass
@@ -63,7 +64,7 @@ def creation_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         member = owner.contract.members[0]
         runtime = WorkspaceRuntime(
             service_urls={"terminal_manager": "http://127.0.0.1:42001", "browser_manager": "http://127.0.0.1:42002"},
-            backend_owner=owner, backend_workspace_id=backend_id,
+            backend_owner=owner, workspace_id=backend_id,
         )
         owner.unpublished_runtimes[member.workspace_id] = runtime
         if boundary.error is not None:
@@ -86,7 +87,7 @@ def creation_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture
 def creation_registry(tmp_path: Path):
     with GatewayStateStore(path=tmp_path / "gateway.sqlite") as store:
-        yield GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", state_store=store)
+        yield GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json", state_store=store)
 
 
 @pytest.fixture
@@ -94,7 +95,7 @@ def creation_app(creation_registry: GatewayWorkspaceRegistry, tmp_path: Path, mo
     from app.gateway.main import gateway_http_exception_handler
 
     application = FastAPI()
-    application.state.gateway_id = "gateway_00000000000070008000000000000001"
+    application.state.gateway_id = creation_registry.gateway_id
     application.state.registry = creation_registry
     application.add_middleware(TraceMiddleware)
     application.exception_handler(HTTPException)(gateway_http_exception_handler)
@@ -129,10 +130,10 @@ async def test_reregister_known_root_never_reinitializes_or_rebinds_identity(
     root = tmp_path / "registered"
     root.mkdir()
     original_id = load_or_create_workspace_id(root)
-    target = creation_registry.upsert(WorkspaceTarget(
-        workspace_id=build_managed_local_workspace_id(str(root)), name="原登记",
+    target = creation_registry.upsert(WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=original_id, name="原登记",
         root_path=str(root), backend_url="http://127.0.0.1:43001",
-        backend_workspace_id=original_id, connection_kind="local", managed=False,
+         connection_kind="local", managed=False,
     ))
     identity = workspace_identity_path(root)
     if damage in {"missing", "root_missing"}:
@@ -176,7 +177,7 @@ async def test_reregister_known_root_never_reinitializes_or_rebinds_identity(
             )
     assert (identity.read_bytes() if identity.exists() else None) == before
     assert state.load_workspace_registry() == saved and creation_registry.registry_revision == revision
-    assert creation_registry.resolve(target.workspace_id).backend_workspace_id == original_id
+    assert creation_registry.resolve(target.workspace_id).workspace_id == original_id
     assert later_calls == []
     assert root.exists() is (damage != "root_missing")
 
@@ -219,7 +220,7 @@ async def test_creation_http_keeps_owner_failure_facts_and_recovers_by_original_
         else:
             assert creation_boundary.processes[0].closed
         assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
-        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
+        cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store)
         assert cold.resolve(target.workspace_id).connection_error == expected
         cold_owner = cold.backend_owner(target.workspace_id)
         assert cold_owner is not None and cold_owner.contract == owner.contract
@@ -265,7 +266,7 @@ async def test_creation_observer_failure_keeps_published_runtime_and_original_ex
         assert owner.process is process and not process.closed
         assert not owner.unpublished_runtimes
         assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
-        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
+        cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store)
         assert cold.resolve(target.workspace_id).connection_error is None
         cold_owner = cold.backend_owner(target.workspace_id)
         assert cold_owner is not None and cold_owner.contract == owner.contract
@@ -373,7 +374,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     monkeypatch: pytest.MonkeyPatch,
     controlled_controller_factory,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json")
     workspace_root = tmp_path / "created" / "workspace"
     monkeypatch.setattr(
         "app.gateway.registry.runtime.resolve_backend_workspace_id",
@@ -387,7 +388,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
         contract = replace(owner.contract, backend_url="http://127.0.0.1:42000")
         runtime = WorkspaceRuntime(
             service_urls={"terminal_manager": "http://127.0.0.1:42001", "browser_manager": "http://127.0.0.1:42002"},
-            backend_owner=owner, backend_workspace_id=member.backend_workspace_id,
+            backend_owner=owner, workspace_id=member.workspace_id,
         )
         owner.unpublished_runtimes[member.workspace_id] = runtime
         return contract, {member.workspace_id: runtime}
@@ -429,13 +430,13 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     assert str(workspace_root) not in str(duplicate.value)
 
     registry.upsert(
-        WorkspaceTarget(
-            workspace_id="kept",
+        WorkspaceTarget(gateway_id=GATEWAY_ID,
+            workspace_id='00000000-0000-4000-8000-000000000002',
             name="Kept",
             root_path=str(tmp_path / "kept"),
             backend_url="http://127.0.0.1:41235",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
+
             managed=True,
         ),
         activate=False,
@@ -456,7 +457,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
 async def test_create_direct_managed_workspace_requires_existing_directory_when_disabled(
     tmp_path: Path,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json")
 
     with pytest.raises(FileNotFoundError, match="目录不存在"):
         await create_direct_managed_workspace(
@@ -485,56 +486,56 @@ async def test_create_direct_managed_workspace_requires_existing_directory_when_
 async def test_remove_direct_managed_workspace_rejects_default_and_external_targets(
     tmp_path: Path, controlled_controller_factory,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json")
     registry.upsert(
-        WorkspaceTarget(
-            workspace_id="default",
+        WorkspaceTarget(gateway_id=GATEWAY_ID,
+            workspace_id='00000000-0000-4000-8000-000000000001',
             name="Default",
             root_path=str(tmp_path / "default"),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+
             managed=True,
             removable=False,
             system_default=True,
         )
     )
     registry.upsert(
-        WorkspaceTarget(
-            workspace_id="external",
+        WorkspaceTarget(gateway_id=GATEWAY_ID,
+            workspace_id='00000000-0000-4000-8000-000000000002',
             name="External",
             root_path=str(tmp_path / "external"),
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
+
             managed=False,
         ),
         activate=False,
     )
 
     with pytest.raises(PermissionError, match="默认工作区"):
-        await remove_direct_managed_workspace(registry, "default", controller=controlled_controller_factory(registry), request_id="default")
+        await remove_direct_managed_workspace(registry, "00000000-0000-4000-8000-000000000001", controller=controlled_controller_factory(registry), request_id="default")
     with pytest.raises(ValueError, match="直接托管"):
-        await remove_direct_managed_workspace(registry, "external", controller=controlled_controller_factory(registry), request_id="external")
+        await remove_direct_managed_workspace(registry, "00000000-0000-4000-8000-000000000002", controller=controlled_controller_factory(registry), request_id="external")
 
 
 @pytest.mark.asyncio
 async def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path, controlled_controller_factory) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json")
     registry.upsert(
-        WorkspaceTarget(
-            workspace_id="only",
+        WorkspaceTarget(gateway_id=GATEWAY_ID,
+            workspace_id='00000000-0000-4000-8000-000000000001',
             name="Only",
             root_path=str(tmp_path / "only"),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+
             managed=True,
         )
     )
 
     with pytest.raises(ValueError, match="至少需要保留"):
-        await remove_direct_managed_workspace(registry, "only", controller=controlled_controller_factory(registry), request_id="only")
+        await remove_direct_managed_workspace(registry, "00000000-0000-4000-8000-000000000001", controller=controlled_controller_factory(registry), request_id="only")
 
 
 @pytest.mark.asyncio

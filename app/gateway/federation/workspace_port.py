@@ -68,12 +68,6 @@ class FederationSpokeDirectory:
         return self._provider()
 
 
-@dataclass(frozen=True, slots=True)
-class _WorkspaceBackendEndpoint:
-    backend_url: str
-    backend_workspace_id: str
-
-
 class WorkspaceCatalogPort:
     """按 backend_url 只读查询各本地工作区的 cold session catalog。"""
 
@@ -82,43 +76,34 @@ class WorkspaceCatalogPort:
     ) -> None:
         self._http_client = http_client
         self._request_timeout = request_timeout
-        self._backend_endpoint_by_gateway_workspace_id: dict[
-            str, _WorkspaceBackendEndpoint
-        ] = {}
+        self._backend_urls: dict[str, str] = {}
 
     def project_workspaces(
         self,
-        workspaces: tuple[tuple[str, str, str], ...],
+        workspaces: tuple[tuple[str, str], ...],
     ) -> None:
         """整体重建本地工作区路由表；远端子工作区不参与。"""
 
-        self._backend_endpoint_by_gateway_workspace_id = {
-            gateway_workspace_id: _WorkspaceBackendEndpoint(
-                backend_url=backend_url.rstrip("/"),
-                backend_workspace_id=backend_workspace_id,
-            )
-            for gateway_workspace_id, backend_url, backend_workspace_id in workspaces
-        }
+        self._backend_urls = {workspace_id: backend_url.rstrip("/") for workspace_id, backend_url in workspaces}
+
 
     async def _fetch_session_catalog_export(
-        self, *, gateway_workspace_id: str
+        self, *, workspace_id: str
     ) -> dict[str, object]:
         request_id = require_current_request_id("联邦 cold catalog")
-        backend_endpoint = self._backend_endpoint_by_gateway_workspace_id.get(
-            gateway_workspace_id
-        )
-        if backend_endpoint is None:
+        backend_url = self._backend_urls.get(workspace_id)
+        if backend_url is None:
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
                 "本地工作区后端未连接，无法查询 cold catalog: "
-                f"{gateway_workspace_id}",
-                detail={"workspace_id": gateway_workspace_id},
+                f"{workspace_id}",
+                detail={"workspace_id": workspace_id},
             )
         response = await self._http_client.get(
-            f"{backend_endpoint.backend_url}/api/v1/session-catalog/export",
+            f"{backend_url}/api/v1/session-catalog/export",
             headers={
                 "X-Local-Token": LOCAL_TOKEN,
-                "X-BoxTeam-Workspace-Id": backend_endpoint.backend_workspace_id,
+                "X-BoxTeam-Workspace-Id": workspace_id,
                 "X-Request-ID": request_id,
                 # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
                 "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
@@ -126,16 +111,16 @@ class WorkspaceCatalogPort:
             timeout=self._request_timeout,
         )
         if response.status_code >= 400:
-            logger.error("cold catalog HTTP 拒绝: workspace_id=%s, request_id=%s, status=%s；原始响应=%s", backend_endpoint.backend_workspace_id, request_id, response.status_code, response.text[:2000])
+            logger.error("cold catalog HTTP 拒绝: workspace_id=%s, request_id=%s, status=%s；原始响应=%s", workspace_id, request_id, response.status_code, response.text[:2000])
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
                 f"工作区 cold catalog 查询失败: status={response.status_code}",
-                detail={"workspace_id": gateway_workspace_id},
+                detail={"workspace_id": workspace_id},
             )
         try:
             body = response.json()
         except json.JSONDecodeError as error:
-            detail = f"cold catalog 响应不是 JSON: workspace_id={backend_endpoint.backend_workspace_id}, request_id={request_id}, stage=response_json, error_type={type(error).__name__}"
+            detail = f"cold catalog 响应不是 JSON: workspace_id={workspace_id}, request_id={request_id}, stage=response_json, error_type={type(error).__name__}"
             logger.error("%s；原始响应=%s", detail, response.text[:2000], exc_info=error)
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, detail) from error
         data = body.get("data") if isinstance(body, dict) else None
@@ -152,18 +137,18 @@ class WorkspaceCatalogPort:
         """返回包含该 session 的本地工作区；未授权与不存在不可区分。"""
 
         backend_workspace_ids: list[str] = []
-        for gateway_workspace_id in sorted(
-            self._backend_endpoint_by_gateway_workspace_id
+        for workspace_id in sorted(
+            self._backend_urls
         ):
             try:
                 data = await self._fetch_session_catalog_export(
-                    gateway_workspace_id=gateway_workspace_id
+                    workspace_id=workspace_id
                 )
             except FederationError:
                 raise
             except Exception as error:  # 不可达即显式失败，不静默
                 detail = (
-                    f"本地工作区 cold catalog 不可达: gateway_workspace_id={gateway_workspace_id}, "
+                    f"本地工作区 cold catalog 不可达: workspace_id={workspace_id}, "
                     f"request_id={require_current_request_id('联邦 cold catalog 失败')}, stage=catalog_request, error_type={type(error).__name__}"
                 )
                 logger.error("%s；完整诊断见异常链", detail, exc_info=error)
@@ -181,11 +166,7 @@ class WorkspaceCatalogPort:
                 isinstance(item, dict) and item.get("session_id") == session_id
                 for item in items
             ):
-                backend_workspace_ids.append(
-                    self._backend_endpoint_by_gateway_workspace_id[
-                        gateway_workspace_id
-                    ].backend_workspace_id
-                )
+                backend_workspace_ids.append(workspace_id)
         return tuple(backend_workspace_ids)
 
 
@@ -205,7 +186,6 @@ class WorkspaceSessionMainPort:
         self._search_service = search_service
         self._context_query = GatewayContextQueryService(transport=self)
         self._backend_urls: dict[str, str] = {}
-        self._backend_workspace_ids: dict[str, str] = {}
 
     async def search_gateway_context(self, request: GatewayContextSearchRequest) -> GatewayContextSearchResultDTO:
         from contextlib import aclosing
@@ -223,19 +203,12 @@ class WorkspaceSessionMainPort:
         async with aclosing(execution.events) as events:
             return GatewayContextSearchResultDTO(events=[event async for event in events])
 
-    def project_workspaces(self, workspaces: tuple[tuple[str, str, str], ...]) -> None:
-        projected = {backend_id: url.rstrip("/") for _route_id, url, backend_id in workspaces}
-        if len(projected) != len(workspaces):
-            raise RuntimeError("多个本地 Gateway route 指向同一稳定 workspace identity")
-        self._backend_urls = projected
-        self._backend_workspace_ids = {route_id: backend_id for route_id, _url, backend_id in workspaces}
+    def project_workspaces(self, workspaces: tuple[tuple[str, str], ...]) -> None:
+        self._backend_urls = {workspace_id: url.rstrip("/") for workspace_id, url in workspaces}
 
     def require_local_source(self, gateway_id: str, source: dict[str, object]) -> None:
         if source.get("gateway_id") != gateway_id or source.get("workspace_id") not in self._backend_urls:
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "origin 不属于当前 Gateway 注册的本地 workspace")
-
-    def canonical_workspace_id(self, workspace_id: str) -> str:
-        return self._backend_workspace_ids.get(workspace_id, workspace_id)
 
     async def _request(self, *, workspace_id: str, method: str, path: str, origin: str, body: dict[str, object] | None = None, timeout: float | None = None,
                        navigation_deadline_at: float | None = None) -> dict[str, object]:

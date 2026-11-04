@@ -4,6 +4,7 @@ import type {
 } from "../../types/backend";
 import { isRecord, jsonCandidates } from "../../utils/jsonDisplay";
 import { errorMessage } from "../../utils/errorMessage";
+import { gatewayWorkspaceOwner } from "../../api/workspaceIdentity";
 
 export const SESSION_INFORMATION_KIND = "session_diagnostic_snapshot" as const;
 
@@ -32,7 +33,7 @@ export interface SessionInformationDump {
     id: string;
     title: string;
     agent_id: string;
-    backend_workspace_id: string;
+    workspace_id: string;
     parent_session_id: string | null;
     title_truncated: boolean;
     created_at: string;
@@ -40,8 +41,8 @@ export interface SessionInformationDump {
   };
   relations: SessionInformationSnapshot["relations"];
   workspace: {
-    id: string;
-    backend_workspace_id: string;
+    gateway_id: string;
+    workspace_id: string;
     name: string;
     active: boolean;
     status: GatewayWorkspace["status"];
@@ -64,13 +65,9 @@ function buildConnection(workspace: GatewayWorkspace): SessionConnection {
       ...common,
     };
   }
-  if (!workspace.remote) {
-    throw new Error("远程 Gateway 工作区信息缺少连接摘要");
-  }
-
   return {
     kind: "remote_gateway",
-    gateway_id: workspace.remote.gateway_id,
+    gateway_id: workspace.gateway_id,
     ...common,
   };
 }
@@ -79,6 +76,7 @@ export function buildSessionInformationDump(
   information: SessionInformationSnapshot,
   gatewayWorkspace: GatewayWorkspace,
 ): SessionInformationDump {
+  const owner = gatewayWorkspaceOwner(gatewayWorkspace);
   if (information.kind !== SESSION_INFORMATION_KIND) {
     throw new Error(`不支持的会话信息 kind: ${information.kind}`);
   }
@@ -88,9 +86,9 @@ export function buildSessionInformationDump(
         `workspace=${information.workspace.workspace_id}`,
     );
   }
-  if (gatewayWorkspace.backend_workspace_id !== information.workspace.workspace_id) {
+  if (gatewayWorkspace.workspace_id !== information.workspace.workspace_id) {
     throw new Error(
-      `Gateway 与工作区后端 ID 不一致: gateway=${gatewayWorkspace.backend_workspace_id}, ` +
+      `Gateway 与工作区后端 ID 不一致: gateway=${gatewayWorkspace.workspace_id}, ` +
         `backend=${information.workspace.workspace_id}`,
     );
   }
@@ -103,7 +101,7 @@ export function buildSessionInformationDump(
       id: information.session.session_id,
       title: information.session.title,
       agent_id: information.session.current_agent_id,
-      backend_workspace_id: information.session.workspace_id,
+      workspace_id: information.session.workspace_id,
       parent_session_id: information.session.parent_session_id ?? null,
       title_truncated: information.session.title_truncated ?? false,
       created_at: information.session.created_at,
@@ -111,8 +109,8 @@ export function buildSessionInformationDump(
     },
     relations: information.relations,
     workspace: {
-      id: gatewayWorkspace.workspace_id,
-      backend_workspace_id: information.workspace.workspace_id,
+      gateway_id: owner.gatewayId,
+      workspace_id: information.workspace.workspace_id,
       name: gatewayWorkspace.name,
       active: gatewayWorkspace.active,
       status: gatewayWorkspace.status,

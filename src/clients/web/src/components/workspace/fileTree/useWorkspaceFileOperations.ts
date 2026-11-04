@@ -10,7 +10,7 @@ import {
   resolveWorkspaceFileReferences,
   uploadWorkspaceFileEntries,
 } from "../../../api";
-import { getGatewayHealth } from "../../../gatewayApi";
+import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../../api/workspaceIdentity";
 import { HttpRequestError } from "../../../api/http";
 import { NAVIGATION_MUTATION_TERMINAL_STATES } from "../../../api/session/sessionCatalogOperations";
 import type { WorkspaceDirectoryKey, WorkspaceDirectoryRevision, WorkspaceFileList, WorkspaceFileOperationReceipt } from "../../../types/backend";
@@ -61,15 +61,15 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
     if (!workspaceId) throw new Error("文件操作需要固定的 Gateway 工作区身份");
     if (!driver.current) {
       driver.current = (async () => {
-        const [gatewayHealth, backendWorkspace, fileRoots, store] = await Promise.all([
-          getGatewayHealth(port), getWorkspace(port, workspaceId), getWorkspaceFileRoots(port, workspaceId),
+        const [backendWorkspace, fileRoots, store] = await Promise.all([
+          getWorkspace(port, workspaceId), getWorkspaceFileRoots(port, workspaceId),
           openWorkspaceFileIntentStore(),
         ]);
-        if (!gatewayHealth.gateway_id || !backendWorkspace.workspace_id || !fileRoots.workspace_uri) {
+        const owner = workspaceOwnerFromKey(workspaceId);
+        if (backendWorkspace.workspace_id !== owner.workspaceId || !fileRoots.workspace_uri) {
           throw new Error("缺少固定 Gateway/工作区身份，拒绝受理文件操作");
         }
-        return { store, scope: { gatewayId: gatewayHealth.gateway_id, gatewayWorkspaceId: workspaceId,
-          backendWorkspaceId: backendWorkspace.workspace_id, workspaceRoot: fileRoots.workspace_uri, actor: "local" } };
+        return { store, scope: { ...owner, workspaceRoot: fileRoots.workspace_uri, actor: "local" } };
       })();
     }
     return await driver.current;
@@ -83,20 +83,17 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       const target = await open();
       if (!current()) return;
       const records = await target.store.load(target.scope);
-      const oldOwners = (await target.store.loadForWorkspace(target.scope.gatewayWorkspaceId))
+      const oldOwners = (await target.store.loadForWorkspace(target.scope))
         .filter((record) => record.scopeKey !== records[0]?.scopeKey
           && (record.scope.gatewayId !== target.scope.gatewayId
-            || record.scope.backendWorkspaceId !== target.scope.backendWorkspaceId
+            || record.scope.workspaceId !== target.scope.workspaceId
             || record.scope.workspaceRoot !== target.scope.workspaceRoot));
       if (oldOwners.length > 0) callbacks.current.onError("存在原 Gateway/工作区的未确认文件操作，保留原目标等待恢复");
       if (records.length === 0) { setPendingCreations([]); return; }
       // 查询与重试前重新核固定 route，Gateway 或工作区重连不能改投原 intent。
-      const [gatewayHealth, backendWorkspace] = await Promise.all([
-        getGatewayHealth(port), getWorkspace(port, target.scope.gatewayWorkspaceId),
-      ]);
+      const backendWorkspace = await getWorkspace(port, gatewayWorkspaceKey(target.scope));
       if (!current()) return;
-      if (gatewayHealth.gateway_id !== target.scope.gatewayId
-        || backendWorkspace.workspace_id !== target.scope.backendWorkspaceId) {
+      if (backendWorkspace.workspace_id !== target.scope.workspaceId) {
         throw new Error("文件意图原 Gateway/工作区已变化，保留原请求等待原目标恢复");
       }
       const updatePending = (values: StoredFileIntent[]) => {
@@ -121,7 +118,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
         try {
         let receipt: WorkspaceFileOperationReceipt;
         try {
-          const status = await getWorkspaceFileOperations(port, [record.intent.client_operation_id], target.scope.gatewayWorkspaceId, target.scope.backendWorkspaceId);
+          const status = await getWorkspaceFileOperations(port, [record.intent.client_operation_id], gatewayWorkspaceKey(target.scope), target.scope.workspaceId);
           if (!current()) return;
           if (status.worker_state === "failed") throw new Error(`文件 worker 已停止: ${status.worker_error}`);
           const found = status.operations.find((value) => value.operation_id === record.intent.client_operation_id);
@@ -135,19 +132,19 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
             const command = record.command;
             switch (command.kind) {
               case "create": receipt = await createWorkspaceFileEntry(port, record.directoryPath,
-                { name: command.name, kind: command.entryKind, intent: record.intent }, target.scope.gatewayWorkspaceId); break;
+                { name: command.name, kind: command.entryKind, intent: record.intent }, gatewayWorkspaceKey(target.scope)); break;
               case "copy": receipt = await copyWorkspaceFileEntry(port, record.directoryPath,
-                { source_path: command.sourcePath, source_scope: command.sourceScope, intent: record.intent }, target.scope.gatewayWorkspaceId); break;
+                { source_path: command.sourcePath, source_scope: command.sourceScope, intent: record.intent }, gatewayWorkspaceKey(target.scope)); break;
               case "paste": receipt = await pasteWorkspaceFileEntries(port, record.directoryPath,
-                { source_paths: command.sourcePaths, intent: record.intent }, target.scope.gatewayWorkspaceId); break;
+                { source_paths: command.sourcePaths, intent: record.intent }, gatewayWorkspaceKey(target.scope)); break;
               case "upload": receipt = await uploadWorkspaceFileEntries(port, record.directoryPath,
-                command.entries, record.intent, target.scope.gatewayWorkspaceId); break;
+                command.entries, record.intent, gatewayWorkspaceKey(target.scope)); break;
             }
           } catch (sendError) {
             if (!current()) return;
             // 4xx 也先查询原 ID：并发 tab 可能已受理，不能删除未知结果。
             try {
-              const status = await getWorkspaceFileOperations(port, [record.intent.client_operation_id], target.scope.gatewayWorkspaceId, target.scope.backendWorkspaceId);
+              const status = await getWorkspaceFileOperations(port, [record.intent.client_operation_id], gatewayWorkspaceKey(target.scope), target.scope.workspaceId);
               const found = status.operations.find((value) => value.operation_id === record.intent.client_operation_id);
               if (!found) throw new Error("重试查询缺少原文件操作");
               receipt = found;
@@ -207,7 +204,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
     const poll = async () => {
       try {
         const store = await openWorkspaceFileIntentStore();
-        if ((await store.loadForWorkspace(workspaceId)).length > 0) await run();
+        if ((await store.loadForWorkspace(workspaceOwnerFromKey(workspaceId))).length > 0) await run();
       }
       catch (error) { if (!stopped) callbacks.current.onError(errorDisplayMessage(error)); }
       if (!stopped) timer = setTimeout(() => void poll(), 500);
@@ -229,7 +226,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       if (!original || original.command.kind !== "create" || original.command.entryKind !== "directory") {
         throw new Error("原待创建目录不存在，请从后端文件树重新选择目标");
       }
-      const accepted = original.receipt ?? (await getWorkspaceFileOperations(port, [createdByOperationId], target.scope.gatewayWorkspaceId, target.scope.backendWorkspaceId)).operations[0];
+      const accepted = original.receipt ?? (await getWorkspaceFileOperations(port, [createdByOperationId], gatewayWorkspaceKey(target.scope), target.scope.workspaceId)).operations[0];
       if (!accepted || accepted.operation_id !== createdByOperationId || !accepted.created_path) {
         throw new Error("原目录尚未受理，请等待受理后再创建后继");
       }
@@ -238,17 +235,17 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       const cached = callbacks.current.directoryVersion(directoryPath);
       if (cached) { directoryKey = cached.key; revision = cached.revision; }
       else {
-        const snapshot = await getWorkspaceFiles(port, directoryPath, target.scope.gatewayWorkspaceId);
+        const snapshot = await getWorkspaceFiles(port, directoryPath, gatewayWorkspaceKey(target.scope));
         directoryKey = snapshot.directory_key;
         revision = snapshot.directory_revision;
       }
     }
     if (epoch !== generation.current) return;
     if (command.kind === "copy") {
-      const [sourcePath] = await resolveWorkspaceFileReferences(port, [command.sourcePath], target.scope.gatewayWorkspaceId);
+      const [sourcePath] = await resolveWorkspaceFileReferences(port, [command.sourcePath], gatewayWorkspaceKey(target.scope));
       command = { ...command, sourcePath };
     } else if (command.kind === "paste") {
-      command = { ...command, sourcePaths: await resolveWorkspaceFileReferences(port, command.sourcePaths, target.scope.gatewayWorkspaceId) };
+      command = { ...command, sourcePaths: await resolveWorkspaceFileReferences(port, command.sourcePaths, gatewayWorkspaceKey(target.scope)) };
     }
     if (epoch !== generation.current) return;
     await target.store.insert({ scope: target.scope, directoryPath: directoryKey.path, directoryKey,

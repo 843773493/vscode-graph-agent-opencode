@@ -118,7 +118,9 @@ def remote_diagnostics(monkeypatch: pytest.MonkeyPatch) -> Iterator[
     tuple[Mock, list[httpx.Response | httpx.RequestError], list[httpx.Request]]
 ]:
     registry = Mock(spec=GatewayWorkspaceRegistry)
-    registry.remote_gateway_connection.return_value = SimpleNamespace(name="原远端")
+    registry.remote_gateway_connection.return_value = SimpleNamespace(
+        name="原远端", remote_gateway_id="gateway_00000000000040008000000000000002",
+    )
     registry.remote_gateway_url.return_value = "http://diagnostics.test"
     credentials = Mock(spec=FederationCredentialStore)
     credentials.get.return_value = FederationCredential(
@@ -224,3 +226,22 @@ async def test_remote_diagnostics_preflight_preserves_business_rejection(
         )
     assert caught.value.status_code == status and caught.value.detail == str(error)
     assert caught.value.__cause__ is error and not requests
+
+
+@pytest.mark.parametrize("target_gateway_id", [
+    "gateway_00000000000040008000000000000001", "", "/private/diagnostic-target",
+])
+async def test_remote_diagnostics_rejects_conflicting_or_invalid_gateway_before_upstream(
+    remote_diagnostics: tuple[Mock, list[httpx.Response | httpx.RequestError], list[httpx.Request]],
+    target_gateway_id: str,
+) -> None:
+    registry, _, requests = remote_diagnostics
+    with pytest.raises(HTTPException) as caught:
+        await control_router.get_gateway_diagnostics(
+            gateway_connection_id="rgw_diagnostics", workspace_id=None, log_id=None,
+            tail_lines=300, _="local-token", request_id="req_diagnostics_target",
+            registry=registry, target_gateway_id=target_gateway_id,
+        )
+    assert caught.value.status_code == 400
+    registry.remote_gateway_url.assert_not_called()
+    assert not requests

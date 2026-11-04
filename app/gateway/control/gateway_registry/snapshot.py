@@ -25,15 +25,4 @@ def read_workspace_registry(connection: sqlite3.Connection) -> dict[str, object]
         if not isinstance(payload, dict):
             raise ValueError("Gateway SQLite 工作区注册记录必须是对象")  # noqa: TRY004 -- 保留既有拒绝类型。
         targets.append(payload)
-    return {
-        "schema_version": int(metadata.get("schema_version", 10)),
-        "registry_revision": int(metadata.get("registry_revision", 0)),
-        "active_workspace_id": metadata.get("active_workspace_id"),
-        "order_customized": bool(metadata.get("order_customized", False)),
-        "runtime_generation": metadata.get("runtime_generation"),
-        "remote_gateway_connections": metadata.get("remote_gateway_connections", []),
-        "managed_backends": metadata.get("managed_backends", []),
-        "targets": targets,
-    }
-
-
+    return {**metadata, "targets": targets}

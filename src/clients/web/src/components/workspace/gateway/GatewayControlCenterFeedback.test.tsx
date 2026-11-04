@@ -16,7 +16,7 @@ afterEach(restoreGatewayTestEnvironment);
 function installHealthyGateway(): void {
   const health: GatewayHealth = {
     status: "ok",
-    active_workspace_id: "",
+    active_workspace: null,
     process_id: 10,
     development_restart_available: false,
     gateway_id: "gateway_local",
@@ -46,7 +46,6 @@ function gatewayControlCenter(
         gatewayError={gatewayError}
         onAddSsh={noop}
         onRefresh={onRefresh}
-        onReconnect={noop}
         onStart={noop}
         onStop={noop}
         onSafeRestart={noop}

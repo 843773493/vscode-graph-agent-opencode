@@ -94,30 +94,23 @@ async def _navigate_target(
         payload = payload.model_copy(update={"uri": resource.display_uri})
         if backend_workspace_id is not None:
             registry = _registry(request)
-            targets = [target for target in registry.targets() if target.backend_workspace_id == backend_workspace_id]
-            if not targets:
-                raise HTTPException(404, detail="workspace 未注册或不存在")
-            owner_gateway_id = resource.gateway_authority or requested_gateway_id
-            if resource.scope == "gateway":
-                owner_gateway_id = owner_gateway_id or gateway_id
-                if resource.scope_id != owner_gateway_id:
-                    raise ResourceUriResolveError("scope_mismatch", "导航 URI 与目标 Gateway 不一致")
-            if owner_gateway_id is not None:
-                targets = [target for target in targets
-                           if workspace_owner(target, registry, gateway_id).gateway_id == owner_gateway_id]
-                if not targets:
-                    raise ResourceUriResolveError("scope_mismatch", "导航 URI 与固定 Workspace 路由不一致")
-            if len(targets) != 1:
-                raise FederationError(FEDERATION_TARGET_AMBIGUOUS, "多个 Gateway route 指向同一导航 workspace")
-            workspace_target = targets[0]
-            owner_gateway_id = workspace_owner(workspace_target, registry, gateway_id).gateway_id
+            header_workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+            if header_workspace_id is not None and header_workspace_id != backend_workspace_id:
+                raise HTTPException(400, detail="路径与请求头的工作区 UUID 不一致")
+            owner_gateway_id = resource.gateway_authority or requested_gateway_id or gateway_id
+            if resource.scope == "gateway" and resource.scope_id != owner_gateway_id:
+                raise ResourceUriResolveError("scope_mismatch", "导航 URI 与目标 Gateway 不一致")
+            try:
+                workspace_target = registry.resolve_request_target(backend_workspace_id, owner_gateway_id)
+            except LookupError as error:
+                raise HTTPException(404, detail="workspace 未注册或不存在") from error
             if resource.gateway_authority not in {None, owner_gateway_id} or (resource.scope == "workspace" and resource.scope_id != backend_workspace_id):
                 raise ResourceUriResolveError("scope_mismatch", "导航 URI 与固定 Workspace 路由不一致")
             if workspace_target.connection_kind != "remote_gateway":
                 return await _proxy_workspace_request(
                     f"workspaces/{backend_workspace_id}/resources/navigation", request,
                     auth=auth, user_access=user_access, include_credentials=True,
-                    target_workspace_id=workspace_target.workspace_id,
+                    target_workspace_id=workspace_target.key,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                     navigation_deadline_at=navigation_deadline_at(deadline),
                 )
@@ -129,14 +122,14 @@ async def _navigate_target(
         if requested_gateway_id is not None and requested_gateway_id != (resource.gateway_authority or gateway_id):
             raise HTTPException(400, detail="目标 Gateway 与导航 URI 归属不一致")
         if resource.gateway_authority is None and resource.scope == "workspace":
-            targets = [target for target in _registry(request).targets() if target.connection_kind == "local" and target.backend_workspace_id == resource.scope_id]
+            targets = [target for target in _registry(request).targets() if target.connection_kind == "local" and target.workspace_id == resource.scope_id]
             if not targets:
                 raise ResourceUriResolveError("unknown_resource", "workspace 未注册或不存在")
             if len(targets) != 1:
                 raise FederationError(FEDERATION_TARGET_AMBIGUOUS, "多个本地 Gateway route 指向同一导航 workspace")
             return await _proxy_workspace_request(
                 "resources/navigation", request, auth=auth, user_access=user_access,
-                include_credentials=True, target_workspace_id=targets[0].workspace_id,
+                include_credentials=True, target_workspace_id=targets[0].key,
                 request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                 navigation_deadline_at=navigation_deadline_at(deadline),
             )
@@ -151,16 +144,15 @@ async def _navigate_target(
                         for target in _registry(request).targets()
                         if target.connection_kind == "local"
                         and target.backend_url.strip()
-                        and target.backend_workspace_id is not None
                     ),
-                    key=lambda target: target.backend_workspace_id,
+                    key=lambda target: target.workspace_id,
                     default=None,
                 )
                 if file_owner is None:
                     raise ResourceUriResolveError("unknown_resource", "原生目录没有可用的同机文件 owner")
                 return await _proxy_workspace_request(
                     "resources/navigation", request, auth=auth, user_access=user_access,
-                    include_credentials=True, target_workspace_id=file_owner.workspace_id,
+                    include_credentials=True, target_workspace_id=file_owner.key,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                     navigation_deadline_at=navigation_deadline_at(deadline),
                 )
@@ -228,7 +220,7 @@ async def navigate_from_workspace(
     source_workspace_id: str, payload: ResourceNavigationRequest, request: Request,
 ) -> Response:
     """已注册本机 Workspace 的服务调用；不伪造浏览器登录态。"""
-    if not any(target.connection_kind == "local" and target.backend_workspace_id == source_workspace_id
+    if not any(target.connection_kind == "local" and target.workspace_id == source_workspace_id
                for target in _registry(request).targets()):
         raise HTTPException(403, detail="文件导航来源不是当前 Gateway 的本机 Workspace")
     return await _navigate(payload, request, auth=None, user_access=None)

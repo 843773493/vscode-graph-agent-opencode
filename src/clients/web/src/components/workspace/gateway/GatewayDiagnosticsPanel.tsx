@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../../../gatewayApi";
 import type {
@@ -65,7 +66,7 @@ export default function GatewayDiagnosticsPanel({
         (group) =>
           (gatewayConnectionId === null && group.key === "local") ||
           group.key === `remote:${gatewayConnectionId}`,
-      ) ?? groups[0],
+      ),
     [gatewayConnectionId, groups],
   );
 
@@ -101,7 +102,7 @@ export default function GatewayDiagnosticsPanel({
   useEffect(() => {
     if (!selectedGroup) return;
     const stillExists = selectedGroup.workspaces.some(
-      (workspace) => workspace.workspace_id === workspaceId,
+      (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
     );
     if (workspaceId && !stillExists) setWorkspaceId("");
   }, [selectedGroup, workspaceId]);
@@ -125,7 +126,7 @@ export default function GatewayDiagnosticsPanel({
   }, [diagnostics?.workspaces]);
 
   const diagnosticWorkspaceFor = (workspace: GatewayWorkspace) => {
-    const diagnosticWorkspaceId = workspace.remote?.remote_workspace_id ?? workspace.workspace_id;
+    const diagnosticWorkspaceId = workspace.workspace_id;
     return diagnosticWorkspacesById.get(diagnosticWorkspaceId);
   };
 
@@ -175,7 +176,7 @@ export default function GatewayDiagnosticsPanel({
           <select value={workspaceId} onChange={(event) => selectWorkspace(event.target.value)}>
             <option value="">Gateway 日志 / 全部工作区</option>
             {selectedGroup?.workspaces.map((workspace) => (
-              <option key={workspace.workspace_id} value={workspace.workspace_id}>
+              <option key={gatewayWorkspaceKey(workspace)} value={gatewayWorkspaceKey(workspace)}>
                 {workspace.name}{workspace.managed ? " · 托管" : " · 外部"}
               </option>
             ))}
@@ -237,9 +238,9 @@ export default function GatewayDiagnosticsPanel({
               {selectedGroup?.workspaces.map((workspace) => (
                 <button
                   type="button"
-                  key={workspace.workspace_id}
-                  className={workspace.workspace_id === workspaceId ? "active" : undefined}
-                  onClick={() => selectWorkspace(workspace.workspace_id)}
+                  key={gatewayWorkspaceKey(workspace)}
+                  className={gatewayWorkspaceKey(workspace) === workspaceId ? "active" : undefined}
+                  onClick={() => selectWorkspace(gatewayWorkspaceKey(workspace))}
                 >
                   <span className={`gateway-diagnostics-status-dot ${diagnosticWorkspaceFor(workspace)?.status ?? workspace.status}`} />
                   {workspace.name}

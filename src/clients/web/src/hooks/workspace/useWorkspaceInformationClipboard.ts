@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback } from "react";
 import {
   buildWorkspaceInformationDump,
@@ -12,7 +13,7 @@ export function useWorkspaceInformationClipboard(
   return useCallback(
     async (workspaceId: string): Promise<void> => {
       const workspace = workspaces.find(
-        (candidate) => candidate.workspace_id === workspaceId,
+        (candidate) => gatewayWorkspaceKey(candidate) === workspaceId,
       );
       if (!workspace) {
         throw new Error(`Gateway 不存在目标工作区: ${workspaceId}`);

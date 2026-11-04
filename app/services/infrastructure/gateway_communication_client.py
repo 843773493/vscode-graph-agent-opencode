@@ -78,7 +78,7 @@ class GatewayCommunicationClient:
                     items = data.get("items")
                     if not isinstance(items, list):
                         raise TypeError("通信 startup 恢复缺少工作区就绪列表")
-                    matches = [item for item in items if isinstance(item, dict) and item.get("connection_kind") == "local" and item.get("backend_workspace_id") == workspace_id]
+                    matches = [item for item in items if isinstance(item, dict) and item.get("connection_kind") == "local" and item.get("workspace_id") == workspace_id and item.get("gateway_id") == gateway_id]
                     if len(matches) != 1:
                         raise RuntimeError("通信 startup 恢复的源 backend 身份未唯一注册")
                     status = matches[0].get("status")

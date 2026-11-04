@@ -95,8 +95,8 @@ export function replaceSessionMetadata(
     sessionsByWorkspace: new Map(state.sessionsByWorkspace),
     sessionGatewayWorkspaceById: new Map(state.sessionGatewayWorkspaceById),
   };
-  const workspaceId =
-    workspaceIdOverride ?? state.activeGatewayWorkspaceId ?? updatedSession.workspace_id;
+  const workspaceId = workspaceIdOverride ?? state.activeGatewayWorkspaceId;
+  if (!workspaceId) throw new Error("更新会话元数据缺少 Gateway／UUID 归属");
   if (workspaceId === state.activeGatewayWorkspaceId) {
     next.sessions = state.sessions.map((session) =>
       session.session_id === updatedSession.session_id ? updatedSession : session,

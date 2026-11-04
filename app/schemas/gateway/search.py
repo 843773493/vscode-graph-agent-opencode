@@ -17,7 +17,6 @@ class GatewaySearchWorkspaceOwnerDTO(BaseModel, frozen=True):
 
 class GatewayWorkspaceDiscoveryHitDTO(BaseModel):
     owner: GatewaySearchWorkspaceOwnerDTO
-    target_id: str
     name: str
     navigation_node_id: str
     breadcrumb_node_ids: list[str]
@@ -84,7 +83,6 @@ class GatewaySearchScopeRequest(BaseModel):
 
 class GatewaySearchScopeBranchDTO(BaseModel):
     owner: GatewaySearchWorkspaceOwnerDTO
-    target_id: str | None = None
     state: Literal["registered", "unavailable", "ambiguous"]
     code: Literal["owner_unavailable", "owner_ambiguous"] | None = None
     message: str | None = None

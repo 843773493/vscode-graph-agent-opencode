@@ -28,7 +28,7 @@ from app.schemas.gateway.federation import FederationWorkspaceDTO
 
 logger = logging.getLogger(__name__)
 
-FEDERATION_PROTOCOL_VERSION = 1
+FEDERATION_PROTOCOL_VERSION = 2
 #: SSH 配对是有界等待：对端 TCP 吞包时必须在有限时间内响亮失败，绝不无限挂起
 #: （``to_thread`` 不可被取消，故上界必须落在 subprocess 自身）。
 PAIRING_SSH_TIMEOUT_SECONDS = 30.0

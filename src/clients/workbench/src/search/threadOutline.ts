@@ -82,7 +82,7 @@ class ThreadOutline extends Disposable implements IOutline<ThreadOutlineEntry> {
       const page = await loadSessionHistory(0, owner.sessionId, {
         direction: this.cursor && !this.restart ? 'before' : 'tail',
         cursor: this.restart ? undefined : this.cursor, turns: PAGE_TURNS, include: ['user', 'metadata'],
-      }, owner.routeId, this.controller.signal, owner.threadId);
+      }, owner.workspaceKey, this.controller.signal, owner.threadId);
       if (!this.isCurrent()) return;
       if (page.thread_id !== owner.threadId) throw new Error('Thread 大纲历史归属不一致');
       if (this.restart) this.entries = [];

@@ -19,7 +19,7 @@ export function CachedThreadHistory({ owner, timeline, error, onRetry }: {
     {error ? <ChatHistoryPageHeader projectionState="ready" hasOlderMessages={false}
       loadingOlderMessages={false} error={error} onRetry={onRetry} /> : null}
     <fieldset disabled className="native-thread-cached-content">
-      <ChatPanel apiPort={0} workspaceId={owner.routeId} sessionId={owner.sessionId} threadId={owner.threadId}
+      <ChatPanel apiPort={0} workspaceId={owner.workspaceKey} sessionId={owner.sessionId} threadId={owner.threadId}
         conversations={conversations} internalExecutions={timeline.internalExecutions} expandDetails={false}
         hasActiveSession={false} hasNewerMessages={false} hasOlderMessages={timeline.hasBefore} loadingNewerMessages={false}
         loadingOlderMessages={false} historyLoading projectionState="ready" historyError={null}

@@ -28,7 +28,7 @@ from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.routes.health_config import router
 from app.protocol import openapi
-from app.protocol.generated.boxteam.gateway.v1 import public_pb2
+from app.protocol.generated.boxteam.gateway.v2 import public_pb2
 from app.protocol.schema import descriptor_pool_from_set
 from app.schemas.gateway.config import (
     GatewayConfigPendingDiscardRequest,

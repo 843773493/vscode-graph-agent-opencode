@@ -9,7 +9,7 @@ const isTerminal = (phase: string) => ["delivered", "failed", "skipped"].include
 /** 由同一任务状态流触发读取，不另建生成器轮询或业务状态。初次读取只建立展示基线。 */
 export function useGenerationActivity(port: number, target: GatewayWorkspaceRequestTarget, items: PersistentTaskDTO[], loaded: boolean,
   callbacks: { onStatusChange: (text: string) => void; onOpenSession: (sessionId: string) => Promise<void> }) {
-  const owner = useMemo(() => ({ ...target }), [target.workspace_id, target.backend_workspace_id, target.connection_kind]);
+  const owner = useMemo(() => ({ ...target }), [target.gateway_id, target.workspace_id]);
   const seen = useMemo(() => new Map<string, Map<string, Activity>>(), [port, owner]);
   const actions = useRef(callbacks); actions.current = callbacks;
   const [error, setError] = useState({ seen, text: null as string | null });

@@ -67,9 +67,9 @@ class GatewayResourceCatalogService:
         try:
             data = await self._get_data(target, "resources", request_id=request_id)
             resources = WorkspaceResourceListDTO.model_validate(data)
-            if resources.workspace_id != target.backend_workspace_id:
+            if resources.workspace_id != target.workspace_id:
                 raise ValueError(
-                    f"资源目录工作区身份冲突: expected={target.backend_workspace_id}, actual={resources.workspace_id}"
+                    f"资源目录工作区身份冲突: expected={target.workspace_id}, actual={resources.workspace_id}"
                 )
             for resource in resources.items:
                 if resource.workspace_id != resources.workspace_id:
@@ -77,10 +77,10 @@ class GatewayResourceCatalogService:
                         f"资源工作区身份冲突: expected={resources.workspace_id}, actual={resource.workspace_id}"
                     )
         except (httpx.HTTPError, LookupError, RuntimeError, TypeError, ValueError) as error:
-            return [], [self._scope_error(target.workspace_id, workspace_label, error, request_id=request_id)]
+            return [], [self._scope_error(f"{target.gateway_id}/{target.workspace_id}", workspace_label, error, request_id=request_id)]
         return [
             GatewayResourceDTO(
-                gateway_connection_id=target.remote_gateway_connection_id,
+                gateway_id=target.gateway_id,                gateway_connection_id=self._registry.remote_connection_for_target(target).connection_id,
                 gateway_name=self._gateway_name(target),
                 workspace_id=target.workspace_id,
                 workspace_name=target.name,
@@ -129,7 +129,7 @@ class GatewayResourceCatalogService:
         headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
         headers["X-Request-ID"] = request_id
         if target.connection_kind == "remote_gateway":
-            connection_id = target.remote_gateway_connection_id
+            connection_id = self._registry.remote_connection_for_target(target).connection_id
             assert connection_id is not None
             return (
                 f"{self._registry.remote_gateway_url(connection_id).rstrip('/')}/api/v1/{path}",
@@ -143,10 +143,7 @@ class GatewayResourceCatalogService:
     def _gateway_name(self, target: WorkspaceTarget) -> str:
         if target.connection_kind != "remote_gateway":
             return "本机 Gateway"
-        connection_id = target.remote_gateway_connection_id
-        if connection_id is None:
-            return "远程 Gateway"
-        return self._registry.remote_gateway_connection(connection_id).name
+        return " / ".join(self._registry.remote_gateway_connection(identity).name for identity in target.remote_gateway_connection_ids)
 
     @staticmethod
     def _scope_error(

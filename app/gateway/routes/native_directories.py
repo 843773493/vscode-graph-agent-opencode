@@ -28,7 +28,7 @@ def _require_local_workspace_file_owner(
         raise HTTPException(403, "原生根绑定只提供给同机文件 owner")
     if not any(
         target.connection_kind == "local"
-        and target.backend_workspace_id == backend_workspace_id
+        and target.workspace_id == backend_workspace_id
         for target in registry.targets()
     ):
         raise HTTPException(403, "文件 owner 不属于本 Gateway 的本机工作区")

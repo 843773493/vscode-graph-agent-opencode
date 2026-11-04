@@ -3,13 +3,12 @@ import PersistentTasks from '../../../web/src/components/workspace/persistentTas
 import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmProvider.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { TaskThreadTargetDTO } from '../../../web/src/api/persistentTasks.js';
-import { getGatewayHealth } from '../../../web/src/gatewayApi.js';
 import { gateway, type ThreadOwner } from '../agentApi.js';
 import { ThreadInput } from '../threadInput.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 
 export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, editors, active }: {
-  owner: Pick<ThreadOwner, 'routeId' | 'workspaceId'>; sessionId?: string; goalSessionId?: string | null;
+  owner: Pick<ThreadOwner, 'workspaceKey' | 'workspaceId'>; sessionId?: string; goalSessionId?: string | null;
   editors: IEditorService; active: boolean;
 }) {
   const [target, setTarget] = useState<{ route: GatewayWorkspaceRequestTarget; gatewayId: string } | null>(null);
@@ -19,10 +18,9 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
     let disposed = false;
     void (async () => {
       await gateway.assertWorkspace(owner);
-      const [workspaces, health] = await Promise.all([gateway.workspaces(), getGatewayHealth(0)]);
-      const route = requireGatewayWorkspaceRequestTarget(workspaces.items, owner.routeId);
-      const workspace = workspaces.items.find(item => item.workspace_id === owner.routeId)!;
-      const identity = gatewayWorkspaceOwner(workspace, health.gateway_id);
+      const workspaces = await gateway.workspaces();
+      const route = requireGatewayWorkspaceRequestTarget(workspaces.items, owner.workspaceKey);
+      const identity = gatewayWorkspaceOwner(route);
       if (identity.workspaceId !== owner.workspaceId) throw new Error('任务编辑器的 Gateway 路由归属已改变');
       if (!disposed) setTarget({ route, gatewayId: identity.gatewayId });
     })().catch((cause: unknown) => { if (!disposed) setError(cause instanceof Error ? cause.message : String(cause)); });
@@ -37,7 +35,7 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
   };
   const openSession = async (sessionId: string) => {
     if (!target) throw new Error('任务编辑器尚未确定目标 Gateway 身份');
-    const main = await gateway.mainThread(owner.routeId, sessionId);
+    const main = await gateway.mainThread(owner.workspaceKey, sessionId);
     await editors.openEditor(new ThreadInput({ ...owner, gatewayId: target.gatewayId, sessionId, threadId: main.thread_id, title: sessionId }), { pinned: true });
   };
 

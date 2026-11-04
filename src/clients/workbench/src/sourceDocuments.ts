@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../web/src/api/workspaceIdentity.js";
 import { Disposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { basename } from '../upstream/src/vs/base/common/resources.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
@@ -45,7 +46,7 @@ export class SourceDocuments extends Disposable implements ITextModelContentProv
     const result = await gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/navigation', {
       method: 'POST', body: JSON.stringify({ uri: source.uri, operation: 'read', read_format: 'auto',
         max_bytes: 33554432, max_response_bytes: 50331648 }),
-    }, target.workspace_id);
+    }, gatewayWorkspaceKey(target));
     if (!result.node || result.node.uri !== source.uri || result.node.resource_shape !== 'file') throw new Error('来源响应未对应请求的文件资源');
     if (result.truncated) throw new Error(`来源文档未完整读取（${result.truncation_reason}），无法作为完整文档打开`);
     if (result.media_type !== 'text' || result.content_encoding !== 'utf-8' || result.content == null) {

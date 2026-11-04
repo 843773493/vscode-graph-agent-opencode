@@ -1,4 +1,5 @@
 import type { ResourceThreadRef } from "../api/workspaceResources";
+import { workspaceOwnerFromKey } from "../api/workspaceIdentity";
 
 export type AttachResourceKind = "terminal" | "browser";
 
@@ -15,8 +16,10 @@ export function buildGatewayAttachUrl(
   if (!resourceId) {
     throw new Error("打开后台连接需要 resource_id");
   }
+  const owner = workspaceOwnerFromKey(workspaceId);
   const url = new URL(`/api/gateway/attach/${kind}/`, window.location.origin);
-  url.searchParams.set("workspaceId", workspaceId);
+  url.searchParams.set("workspaceId", owner.workspaceId);
+  url.searchParams.set("target_gateway_id", owner.gatewayId);
   url.searchParams.set(kind === "terminal" ? "terminalId" : "browserId", resourceId);
   if (thread) {
     url.searchParams.set("sessionId", thread.session_id);

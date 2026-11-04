@@ -55,8 +55,12 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from tests.support.gateway_managed_backends import ManagedBackendGraph, ProcessProbe
 
+REMOTE_GATEWAY_ID = "gateway_00000000000040008000000000000002"
+GATEWAY_ID = "gateway_00000000000040008000000000000001"
+
 UUID_A = "00000000-0000-4000-8000-000000000001"
 UUID_B = "00000000-0000-4000-8000-000000000002"
+UUID_C = "00000000-0000-4000-8000-000000000003"
 
 
 @dataclass
@@ -146,16 +150,16 @@ def process_boundary(monkeypatch: pytest.MonkeyPatch) -> ProcessBoundary:
 
 @pytest.fixture
 def single_workspace_graph(tmp_path: Path, managed_backend_factory, process_boundary: ProcessBoundary) -> ManagedBackendGraph:
-    target = WorkspaceTarget(
-        workspace_id="member-a", name="A", root_path=str(tmp_path),
+    target = WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=UUID_A, name="A", root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000", connection_kind="local",
-        backend_workspace_id=UUID_A, managed=True,
+         managed=True,
     )
     graph = managed_backend_factory(
         (target,), backend_url=target.backend_url, process=ProcessProbe("old"),
-        auxiliary_processes={"member-a": {"terminal_manager": ProcessProbe("terminal"), "browser_manager": ProcessProbe("browser")}},
+        auxiliary_processes={"00000000-0000-4000-8000-000000000001": {"terminal_manager": ProcessProbe("terminal"), "browser_manager": ProcessProbe("browser")}},
     )
-    registry = GatewayWorkspaceRegistry(
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID,
         storage_path=tmp_path / "single-workspace-registry.json"
     )
     registry.upsert(target)
@@ -166,7 +170,7 @@ def single_workspace_graph(tmp_path: Path, managed_backend_factory, process_boun
 
 @pytest.fixture
 def single_workspace_registry(tmp_path: Path, single_workspace_graph: ManagedBackendGraph):
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "runtime-registry.json")
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "runtime-registry.json")
     registry.upsert(single_workspace_graph.targets[0])
     single_workspace_graph.publish(registry)
     return registry
@@ -187,12 +191,12 @@ def workspace_runtime_controller_case(tmp_path: Path, managed_backend_factory, p
     for name, identity in (("a", UUID_A), ("b", UUID_B)):
         root = tmp_path / name
         root.mkdir()
-        targets.append(WorkspaceTarget(
-            workspace_id=f"member-{name}", name=name, root_path=str(root),
+        targets.append(WorkspaceTarget(gateway_id=GATEWAY_ID,
+            workspace_id=identity, name=name, root_path=str(root),
             backend_url="http://127.0.0.1:41000", connection_kind="local",
-            backend_workspace_id=identity, managed=True,
+             managed=True,
         ))
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json", state_store=controller_registry_store)
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json", state_store=controller_registry_store)
     for target in targets:
         registry.upsert(target, activate=False)
     graph = managed_backend_factory(
@@ -266,11 +270,10 @@ async def test_workspace_health_rejects_uuid_mismatch_without_retry(local_http) 
 
 @pytest.mark.asyncio
 async def test_reconnect_managed_local_workspace_keeps_stable_id(tmp_path: Path, single_workspace_graph, process_boundary, monkeypatch) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
-    member = single_workspace_graph.owner.contract.members[0]
-    target = WorkspaceTarget(
-        workspace_id=member.workspace_id, name="Managed", root_path=str(tmp_path),
-        backend_url=single_workspace_graph.owner.contract.backend_url, backend_workspace_id=UUID_A,
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json")
+    target = WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=UUID_A, name="Managed", root_path=str(tmp_path),
+        backend_url=single_workspace_graph.owner.contract.backend_url,
         connection_kind="local", managed=True, connection_error="旧连接失败",
     )
     registry.upsert(target)
@@ -323,24 +326,24 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
         private_key_path=None,
         ssh_config_host="reconnect",
         remote_gateway_port=8014,
-        remote_gateway_id="reconnect-gateway",
+        remote_gateway_id=REMOTE_GATEWAY_ID,
         protocol_version=1,
         source_owner="manual",
     )
-    workspace_id = "reconnect-http-workspace"
+    workspace_id = UUID_B
     old_runtime = _TrackingRuntime("http://127.0.0.1:41001")
     new_runtime = _TrackingRuntime("http://127.0.0.1:42001")
-    old_target = WorkspaceTarget(
-        workspace_id=workspace_id,
+    old_target = WorkspaceTarget(gateway_id=REMOTE_GATEWAY_ID,
+        workspace_id=UUID_B,
         name="Reconnect HTTP workspace",
         root_path=None,
         backend_url=old_runtime.service_urls["workspace_api"],
         connection_kind="remote_gateway",
-        backend_workspace_id=UUID_B,
+
         owner="remote_projection",
         connection_id=connection.connection_id,
-        remote_gateway_connection_id=connection.connection_id,
-        remote_workspace_id="remote-workspace",
+        remote_gateway_connection_ids=(connection.connection_id,),
+
         remote_service_names=("workspace_api",),
     )
     registry.apply_remote_projection_snapshot(
@@ -396,13 +399,13 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
                 ) as cancelled:
                     await client.post(
                         f"/api/gateway/workspaces/{workspace_id}/reconnect",
-                        headers={"X-Request-ID": "reconnect-postcommit-01"},
+                        headers={"X-Request-ID": "reconnect-postcommit-01", "X-BoxTeam-Target-Gateway-Id": REMOTE_GATEWAY_ID},
                     )
                 assert cancelled.value.__context__ is primary_error
             else:
                 response = await client.post(
                     f"/api/gateway/workspaces/{workspace_id}/reconnect",
-                    headers={"X-Request-ID": "reconnect-postcommit-01"},
+                    headers={"X-Request-ID": "reconnect-postcommit-01", "X-BoxTeam-Target-Gateway-Id": REMOTE_GATEWAY_ID},
                 )
                 assert response.status_code == 502, response.text
                 assert response.headers["X-Request-ID"] == "reconnect-postcommit-01"
@@ -419,8 +422,8 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
             "observer failed after remote projection commit",
         )
         assert reconcile_calls == 1
-        assert registry.resolve(workspace_id).backend_url == "http://127.0.0.1:42001"
-        assert registry.resolve(workspace_id).connection_error is None
+        assert registry.resolve((REMOTE_GATEWAY_ID, workspace_id)).backend_url == "http://127.0.0.1:42001"
+        assert registry.resolve((REMOTE_GATEWAY_ID, workspace_id)).connection_error is None
         assert registry.remote_gateway_url(connection.connection_id) == "http://127.0.0.1:42001"
         assert registry._remote_gateway_runtimes[connection.connection_id] is new_runtime
         assert registry.registry_revision == previous_revision + 1
@@ -460,7 +463,7 @@ async def test_reconnect_refusal_keeps_status_without_publishing_exception_body(
 
     monkeypatch.setattr(workspace_runtime_controller_case.controller, "reconnect_ssh", reject_reconnect)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
-        response = await client.post("/api/gateway/workspaces/member-a/reconnect", headers={"X-Request-ID": "reconnect-refusal-01"})
+        response = await client.post("/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/reconnect", headers={"X-Request-ID": "reconnect-refusal-01"})
     assert response.status_code == status
     assert response.json() == {
         "detail": f"工作区重连失败: stage=workspace_reconnect, error={error_type.__name__}" + (", errno=None" if error_type is PermissionError else ""),
@@ -468,7 +471,7 @@ async def test_reconnect_refusal_keeps_status_without_publishing_exception_body(
     }
     assert response.headers["X-Request-ID"] == "reconnect-refusal-01"
     assert registry._last_committed_snapshot is previous_commit
-    assert registry.resolve("member-a").connection_error is None
+    assert registry.resolve("00000000-0000-4000-8000-000000000001").connection_error is None
     assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
     assert error.args == (native_location,)
 
@@ -490,20 +493,20 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
 ) -> None:
     registry = workspace_runtime_controller_case.registry
     controller = workspace_runtime_controller_case.controller
-    target = WorkspaceTarget(
-        workspace_id="external-reconnect-error",
+    target = WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id='00000000-0000-4000-8000-000000000003',
         name="External workspace",
         root_path="/external/reconnect-error",
         backend_url="http://127.0.0.1:43001",
         connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000003",
+
         managed=False,
     )
     registry.upsert(
         target,
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": target.backend_url},
-            backend_workspace_id=target.backend_workspace_id,
+            workspace_id=target.workspace_id,
         ),
         activate=False,
     )
@@ -581,7 +584,7 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
     expected_record = None if record_fails else expected
     assert registry.resolve(target.workspace_id).connection_error == expected_record
     # 从真实 SQLite 重新加载并经 DTO 序列化，不能只证明路由的响应格式。
-    cold = GatewayWorkspaceRegistry(storage_path=tmp_path / "cold-registry.json", state_store=state)
+    cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "cold-registry.json", state_store=state)
     assert cold.resolve(target.workspace_id).connection_error == expected_record
     items = await cold.list_dtos(check_health=False)
     item = next(item for item in items if item.workspace_id == target.workspace_id)
@@ -591,20 +594,20 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
 
 @pytest.mark.asyncio
 async def test_runtime_controller_rejects_restart_for_external_backend(tmp_path: Path) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
-    registry.upsert(WorkspaceTarget(
-        workspace_id="external", name="External", root_path=str(tmp_path),
+    registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json")
+    registry.upsert(WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=UUID_A, name="External", root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000", connection_kind="local",
-        backend_workspace_id=UUID_A, managed=False,
+         managed=False,
     ))
     controller = GatewayWorkspaceRuntimeController(registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs")
     with pytest.raises(ValueError, match="Gateway 托管"):
-        await controller.safe_restart_managed_backend("external", request_id="req")
+        await controller.safe_restart_managed_backend(UUID_A, request_id="req")
 
 
 def test_runtime_controller_updates_health_controller_config(tmp_path: Path) -> None:
     controller = GatewayWorkspaceRuntimeController(
-        registry=GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json"),
+        registry=GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json"),
         project_root=tmp_path, log_dir=tmp_path / "logs",
     )
     controller.update_health_controller_config(request_timeout_seconds=4, poll_interval_seconds=1.5)
@@ -619,17 +622,17 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(workspace_
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
-    stopped = await controller.stop_managed_backend("member-a", request_id="stop", group_request=graph.group_request)
+    stopped = await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="stop", group_request=graph.group_request)
     assert stopped.status == "stopped"
     assert not any(registry.has_runtime(member_id) for member_id in graph.owner.contract.workspace_ids)
     assert graph.owner.process is None
-    started = await controller.start_managed_backend("member-b", request_id="start", group_request=graph.group_request)
+    started = await controller.start_managed_backend("00000000-0000-4000-8000-000000000002", request_id="start", group_request=graph.group_request)
     assert started.status == "started"
     assert len(process_boundary.starts) == 1
     assert all(registry.has_runtime(member_id) for member_id in graph.owner.contract.workspace_ids)
-    registry.resolve("member-a").system_default = True
+    registry.resolve("00000000-0000-4000-8000-000000000001").system_default = True
     with pytest.raises(PermissionError, match="默认工作区不能关闭"):
-        await controller.stop_managed_backend("member-b", request_id="default", group_request=graph.group_request)
+        await controller.stop_managed_backend("00000000-0000-4000-8000-000000000002", request_id="default", group_request=graph.group_request)
 
 
 @pytest.mark.asyncio
@@ -639,16 +642,16 @@ async def test_runtime_controller_blocks_stop_for_gateway_proxy_stream(workspace
     controller = workspace_runtime_controller_case.controller
     runtime_actions = workspace_runtime_controller_case.runtime_actions
     lifecycle_states = workspace_runtime_controller_case.lifecycle_states
-    registry.acquire_route_reference("member-b", streaming=True)
+    registry.acquire_route_reference("00000000-0000-4000-8000-000000000002", streaming=True)
     try:
-        blocked = await controller.stop_managed_backend("member-a", request_id="stream", group_request=graph.group_request)
+        blocked = await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="stream", group_request=graph.group_request)
         assert blocked.status == "blocked"
-        assert [(item.workspace_id, item.kind) for item in blocked.blockers] == [("member-b", "proxy_stream")]
+        assert [(item.workspace_id, item.kind) for item in blocked.blockers] == [("00000000-0000-4000-8000-000000000002", "proxy_stream")]
         assert all(state == "ready" for state in lifecycle_states.values())
         assert sum(path.endswith("/cancel") for _, path in runtime_actions) == 2
         assert graph.owner.process is not None
     finally:
-        registry.release_route_reference("member-b", streaming=True)
+        registry.release_route_reference("00000000-0000-4000-8000-000000000002", streaming=True)
 
 
 @pytest.mark.asyncio
@@ -659,13 +662,13 @@ async def test_shared_safe_restart_blocks_and_force_interrupts_every_member(work
     runtime_actions = workspace_runtime_controller_case.runtime_actions
     lifecycle_states = workspace_runtime_controller_case.lifecycle_states
     blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
-    blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
-    blocked = await controller.safe_restart_managed_backend("member-a", request_id="safe", group_request=graph.group_request)
-    assert blocked.status == "blocked" and blocked.blockers[0].workspace_id == "member-b"
+    blockers_by_workspace["00000000-0000-4000-8000-000000000002"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+    blocked = await controller.safe_restart_managed_backend("00000000-0000-4000-8000-000000000001", request_id="safe", group_request=graph.group_request)
+    assert blocked.status == "blocked" and blocked.blockers[0].workspace_id == "00000000-0000-4000-8000-000000000002"
     assert not process_boundary.starts
-    forced = await controller.force_restart_managed_backend("member-a", request_id="force", group_request=graph.group_request)
+    forced = await controller.force_restart_managed_backend("00000000-0000-4000-8000-000000000001", request_id="force", group_request=graph.group_request)
     assert forced.status == "restarted" and forced.forced
-    assert {member_id for member_id, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
+    assert {member_id for member_id, path in runtime_actions if path.endswith("/force")} == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
     assert len(process_boundary.starts) == 1
     assert all(registry.managed_runtime(member_id).backend_owner is graph.owner for member_id in lifecycle_states)
 
@@ -690,9 +693,9 @@ async def test_runtime_controller_serializes_managed_restarts(workspace_runtime_
     async def restart(member_id):
         await controller.safe_restart_managed_backend(member_id, request_id=member_id, group_request=graph.group_request)
     # 后一个完整合同在锁前已经取到；单成员兼容调用只适用于单工作区图。
-    first = asyncio.create_task(restart("member-a"))
+    first = asyncio.create_task(restart("00000000-0000-4000-8000-000000000001"))
     await asyncio.sleep(0.002)
-    second = asyncio.create_task(restart("member-b"))
+    second = asyncio.create_task(restart("00000000-0000-4000-8000-000000000002"))
     outcomes = await asyncio.gather(first, second, return_exceptions=True)
     assert peak == 1
     assert sum(isinstance(result, ValueError) for result in outcomes) == 1
@@ -720,7 +723,7 @@ async def test_runtime_controller_records_restart_failure_after_old_runtime_reco
     process_boundary.backend_outcomes[:] = [original, RuntimeError("旧组恢复失败") if recovery_fails else None]
     old = graph.owner.contract
     with pytest.raises(RuntimeError, match="候选启动失败"):
-        await controller.safe_restart_managed_backend("member-a", request_id="recovery", group_request=graph.group_request)
+        await controller.safe_restart_managed_backend("00000000-0000-4000-8000-000000000001", request_id="recovery", group_request=graph.group_request)
     assert recorded["old_runtime_recovered"] is not recovery_fails
     assert recorded["candidate_ref"] == "candidate"
     assert recorded["error"] is original
@@ -738,12 +741,12 @@ async def test_runtime_controller_resolves_pending_after_candidate_restart(tmp_p
         return httpx.Response(200, json={})
     local_http(response)
     controller = GatewayWorkspaceRuntimeController(
-        registry=GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json"),
+        registry=GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json"),
         project_root=tmp_path, log_dir=tmp_path / "logs",
     )
-    await controller._resolve_pending_restart(WorkspaceTarget(
-        workspace_id="candidate", name="Candidate", root_path=str(tmp_path),
-        backend_url="http://127.0.0.1:42000", connection_kind="local", backend_workspace_id=UUID_A,
+    await controller._resolve_pending_restart(WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=UUID_A, name="Candidate", root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:42000", connection_kind="local",
     ), candidate_ref="candidate-ref", request_id="request-id")
     assert captured["GET"].headers["X-BoxTeam-Workspace-Id"] == UUID_A
     assert captured["POST"].url.path == "/api/v1/config/pending/resolve"
@@ -755,7 +758,7 @@ async def test_runtime_controller_resolves_pending_after_candidate_restart(tmp_p
 async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_closes_owned_handles(
     single_workspace_graph, process_boundary, monkeypatch, tmp_path, single_workspace_registry) -> None:
     single_workspace_graph.owner.close()
-    runtime = single_workspace_graph.runtimes["member-a"]
+    runtime = single_workspace_graph.runtimes["00000000-0000-4000-8000-000000000001"]
     adopted = runtime.processes["terminal_manager"]
     runtime.processes.clear()
     async def adopt(**_):
@@ -805,7 +808,7 @@ def test_workspace_config_proof_expectation_redacts_fencing_token() -> None:
 async def test_backend_restart_preserves_terminal_and_browser(single_workspace_graph, process_boundary, tmp_path, single_workspace_registry) -> None:
     owner = single_workspace_graph.owner
     old_handle = owner.process
-    runtime = single_workspace_graph.runtimes["member-a"]
+    runtime = single_workspace_graph.runtimes["00000000-0000-4000-8000-000000000001"]
     auxiliary_handles = dict(runtime.processes)
     contract, runtimes = await rebuild_managed_backend_runtime(
         owner=owner, registry=single_workspace_registry, desired_members=owner.contract.members, runtimes=single_workspace_graph.runtimes,
@@ -813,7 +816,7 @@ async def test_backend_restart_preserves_terminal_and_browser(single_workspace_g
     )
     assert old_handle.closed and owner.process is process_boundary.handles[0]
     assert runtime.processes == auxiliary_handles and all(not handle.closed for handle in auxiliary_handles.values())
-    assert runtimes["member-a"] is runtime
+    assert runtimes["00000000-0000-4000-8000-000000000001"] is runtime
     assert contract.generation != owner.contract.generation
     assert "workspace_api" not in runtime.processes
 
@@ -836,7 +839,7 @@ async def test_backend_restart_failure_keeps_old_generation(single_workspace_gra
         await rebuild_managed_backend_runtime(
             owner=single_workspace_graph.owner, registry=single_workspace_registry, desired_members=old_contract.members, runtimes=single_workspace_graph.runtimes,
             project_root=tmp_path, log_dir=tmp_path / "logs",
-            startup_contracts={"member-a": startup} if failure == "config-proof" else None,
+            startup_contracts={"00000000-0000-4000-8000-000000000001": startup} if failure == "config-proof" else None,
         )
     assert old_handle.closed and process_boundary.handles[0].closed
     assert single_workspace_graph.owner.process is None
@@ -848,7 +851,7 @@ async def test_backend_restart_failure_keeps_old_generation(single_workspace_gra
     assert restored_contract == old_contract
     assert single_workspace_graph.owner.process is process_boundary.handles[1]
     assert single_workspace_graph.owner.contract == old_contract
-    assert single_workspace_graph.runtimes["member-a"].service_urls["workspace_api"] == old_contract.backend_url
+    assert single_workspace_graph.runtimes["00000000-0000-4000-8000-000000000001"].service_urls["workspace_api"] == old_contract.backend_url
 
 
 @pytest.mark.asyncio
@@ -874,7 +877,7 @@ async def test_gateway_adopts_matching_node_manager(local_http, service, port, t
             return httpx.Response(200, json={"data": logging_state})
         return httpx.Response(200, json={"workspace_id": UUID_A, "process_id": 43210})
     local_http(response)
-    adopted = await _adopt_local_node_service(service_url=f"http://127.0.0.1:{port}", service_name=service, backend_workspace_id=UUID_A, log_dir=tmp_path / "logs")
+    adopted = await _adopt_local_node_service(service_url=f"http://127.0.0.1:{port}", service_name=service, workspace_id=UUID_A, log_dir=tmp_path / "logs")
     assert adopted.pid == 43210 and adopted.log_ownership is ownership
     assert requests[1].url.path == "/internal/runtime-logging"
     assert requests[0].url.path == "/health"
@@ -883,7 +886,7 @@ async def test_gateway_adopts_matching_node_manager(local_http, service, port, t
 @pytest.mark.asyncio
 async def test_gateway_rejects_persisted_browser_manager_url_without_port(tmp_path) -> None:
     with pytest.raises(ValueError, match="缺少端口"):
-        await _adopt_local_node_service(service_url="http://127.0.0.1", service_name="browser_manager", backend_workspace_id=UUID_A, log_dir=tmp_path / "logs")
+        await _adopt_local_node_service(service_url="http://127.0.0.1", service_name="browser_manager", workspace_id=UUID_A, log_dir=tmp_path / "logs")
 
 
 @pytest.mark.asyncio
@@ -892,7 +895,7 @@ async def test_gateway_rejects_persisted_browser_manager_url_without_port(tmp_pa
 async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_http, service, identity, tmp_path) -> None:
     local_http(lambda _: httpx.Response(200, json={"workspace_id": identity, "process_id": 43211}))
     with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
-        await _adopt_local_node_service(service_url="http://127.0.0.1:42001", service_name=service, backend_workspace_id=UUID_A, log_dir=tmp_path / "logs")
+        await _adopt_local_node_service(service_url="http://127.0.0.1:42001", service_name=service, workspace_id=UUID_A, log_dir=tmp_path / "logs")
 
 
 @pytest.mark.asyncio
@@ -953,8 +956,8 @@ async def test_managed_runtime_adopts_or_reclaims_persisted_backend_once(single_
     contract, runtimes = await start_managed_backend_runtime(
         owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs", adopt_existing_backend=adopt_backend,
     )
-    assert contract.workspace_ids == ("member-a",)
-    assert runtimes["member-a"].processes == auxiliaries
+    assert contract.workspace_ids == ("00000000-0000-4000-8000-000000000001",)
+    assert runtimes["00000000-0000-4000-8000-000000000001"].processes == auxiliaries
     assert not process_boundary.nodes
     assert len(process_boundary.starts) == (0 if adopt_backend else 1)
     assert backend.closed is not adopt_backend
@@ -985,8 +988,8 @@ async def test_managed_runtime_reuses_browser_without_starting_replacement(singl
     monkeypatch.setattr(local_workspace, "_adopt_local_node_service", adopt)
     _, runtimes = await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs")
     assert [service for service, _ in process_boundary.nodes] == ["terminal"]
-    assert process_boundary.starts[0]["mounts"][0].browser_backend_url == runtimes["member-a"].service_urls["browser_manager"]
-    assert runtimes["member-a"].processes["browser_manager"] is adopted
+    assert process_boundary.starts[0]["mounts"][0].browser_backend_url == runtimes["00000000-0000-4000-8000-000000000001"].service_urls["browser_manager"]
+    assert runtimes["00000000-0000-4000-8000-000000000001"].processes["browser_manager"] is adopted
 
 
 @pytest.mark.asyncio
@@ -1021,7 +1024,7 @@ async def test_force_restart_invalidates_all_leases_after_durable_interrupt_and_
     release = asyncio.create_task(finish_old_streams())
     try:
         result = await controller.force_restart_managed_backend(
-            "member-a", request_id="force-streams", group_request=graph.group_request,
+            "00000000-0000-4000-8000-000000000001", request_id="force-streams", group_request=graph.group_request,
         )
         await release
     finally:
@@ -1046,11 +1049,11 @@ async def test_force_restart_unreleased_reference_fails_closed_then_full_start_r
     controller = workspace_runtime_controller_case.controller
     controller._connection_drain_timeout_seconds = 0.005
     old_process = graph.owner.process
-    lease = registry.acquire_route_reference("member-b", streaming=True)
+    lease = registry.acquire_route_reference("00000000-0000-4000-8000-000000000002", streaming=True)
     try:
-        with pytest.raises(RuntimeError, match="member-b.*旧路由"):
+        with pytest.raises(RuntimeError, match="00000000-0000-4000-8000-000000000002.*旧路由"):
             await controller.force_restart_managed_backend(
-                "member-a", request_id="force-timeout", group_request=graph.group_request,
+                "00000000-0000-4000-8000-000000000001", request_id="force-timeout", group_request=graph.group_request,
             )
         assert lease.invalidated.is_set()
         assert graph.owner.process is old_process and not old_process.closed
@@ -1060,9 +1063,9 @@ async def test_force_restart_unreleased_reference_fails_closed_then_full_start_r
             with pytest.raises(RuntimeError, match="stage=backend_group_action, error=RuntimeError"):
                 registry.resolve_service_url(member_id, "workspace_api")
     finally:
-        registry.release_route_reference("member-b", streaming=True)
+        registry.release_route_reference("00000000-0000-4000-8000-000000000002", streaming=True)
     result = await controller.start_managed_backend(
-        "member-a", request_id="recover-start", group_request=graph.group_request,
+        "00000000-0000-4000-8000-000000000001", request_id="recover-start", group_request=graph.group_request,
     )
     assert result.status == "started"
     assert old_process.closed and len(process_boundary.starts) == 1
@@ -1087,7 +1090,7 @@ async def test_commit_observer_error_keeps_published_contract_and_running_unique
     try:
         with pytest.raises(RuntimeError) as raised:
             method = controller.start_managed_backend if action == "start" else controller.safe_restart_managed_backend
-            await method("member-a", request_id="observer", group_request=graph.group_request)
+            await method("00000000-0000-4000-8000-000000000001", request_id="observer", group_request=graph.group_request)
         assert raised.value is failure
         assert graph.owner.contract is not old_contract
         assert graph.owner.error is None
@@ -1095,8 +1098,8 @@ async def test_commit_observer_error_keeps_published_contract_and_running_unique
         assert not graph.owner.process.closed
         assert not graph.owner.unpublished_runtimes
         assert all(registry.managed_runtime(member_id).backend_owner is graph.owner for member_id in graph.owner.contract.workspace_ids)
-        persisted = GatewayWorkspaceRegistry(storage_path=registry._storage_path)
-        assert persisted.backend_owner("member-a").contract == graph.owner.contract
+        persisted = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path)
+        assert persisted.backend_owner("00000000-0000-4000-8000-000000000001").contract == graph.owner.contract
         assert any("已提交" in note for note in failure.__notes__)
     finally:
         registry.remove_commit_observer(observer)
@@ -1109,7 +1112,7 @@ async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
-    runtime = graph.runtimes["member-b"]
+    runtime = graph.runtimes["00000000-0000-4000-8000-000000000002"]
     failed = runtime.processes["browser_manager"]
     failed.failure = RuntimeError("browser 清理失败")
     try:
@@ -1122,13 +1125,13 @@ async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent
     assert isinstance(original_error, RuntimeError) and "browser 清理失败" in str(original_error)
     assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
     assert graph.owner.process is None
-    assert not registry.has_runtime("member-a")
-    assert registry.managed_runtime("member-b") is runtime
+    assert not registry.has_runtime("00000000-0000-4000-8000-000000000001")
+    assert registry.managed_runtime("00000000-0000-4000-8000-000000000002") is runtime
     assert runtime.processes == {"browser_manager": failed}
     assert all(not registry.resolve(member_id).desired_running for member_id in graph.owner.contract.workspace_ids)
     assert all(registry.resolve(member_id).connection_error for member_id in graph.owner.contract.workspace_ids)
     failed.failure = None
-    result = await controller.start_managed_backend("member-a", request_id="repair-aux", group_request=graph.group_request)
+    result = await controller.start_managed_backend("00000000-0000-4000-8000-000000000001", request_id="repair-aux", group_request=graph.group_request)
     assert result.status == "started" and len(process_boundary.starts) == 1
     assert all(registry.resolve(member_id).desired_running for member_id in graph.owner.contract.workspace_ids)
     assert all(registry.resolve(member_id).connection_error is None for member_id in graph.owner.contract.workspace_ids)
@@ -1146,24 +1149,24 @@ async def test_empty_desired_releases_owner_once_without_empty_backend(workspace
     old = graph.owner.process
     auxiliaries = [handle for runtime in graph.runtimes.values() for handle in runtime.processes.values()]
     if forced:
-        blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+        blockers_by_workspace["00000000-0000-4000-8000-000000000002"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
     request = graph.group_request.model_copy(update={"desired_workspace_ids": []})
     method = controller.force_restart_managed_backend if forced else controller.safe_restart_managed_backend
-    result = await method("member-a", request_id="empty", group_request=request)
+    result = await method("00000000-0000-4000-8000-000000000001", request_id="empty", group_request=request)
     assert result.status == "stopped" and result.forced is forced
-    assert set(result.affected_workspace_ids) == {"member-a", "member-b"}
+    assert set(result.affected_workspace_ids) == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
     assert old.events.count("close:old") == 1 and old.closed
     assert all(handle.closed for handle in auxiliaries)
     assert not registry.backend_owners() and not process_boundary.starts
     assert not graph.owner.unpublished_runtimes
-    for identity in ("member-a", "member-b"):
+    for identity in ("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"):
         target = registry.resolve(identity)
         assert not target.desired_running and not target.local_service_urls and not target.backend_url
         assert not registry.has_runtime(identity) and registry.backend_owner(identity) is None
-    persisted = GatewayWorkspaceRegistry(storage_path=registry._storage_path)
+    persisted = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path)
     assert not persisted.backend_owners()
     if forced:
-        assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
+        assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
 
 
 @pytest.mark.asyncio
@@ -1172,16 +1175,16 @@ async def test_initiator_can_exit_while_sibling_keeps_unique_owner(workspace_run
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
     old = graph.owner.process
-    exiting = list(graph.runtimes["member-a"].processes.values())
-    kept = dict(graph.runtimes["member-b"].processes)
-    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
-    result = await controller.safe_restart_managed_backend("member-a", request_id="exit-initiator", group_request=request)
+    exiting = list(graph.runtimes["00000000-0000-4000-8000-000000000001"].processes.values())
+    kept = dict(graph.runtimes["00000000-0000-4000-8000-000000000002"].processes)
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]})
+    result = await controller.safe_restart_managed_backend("00000000-0000-4000-8000-000000000001", request_id="exit-initiator", group_request=request)
     assert result.status == "restarted" and old.closed and len(process_boundary.starts) == 1
-    assert graph.owner.contract.workspace_ids == ("member-b",)
-    assert registry.backend_owner("member-a") is None
-    assert registry.backend_owner("member-b") is graph.owner
+    assert graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",)
+    assert registry.backend_owner("00000000-0000-4000-8000-000000000001") is None
+    assert registry.backend_owner("00000000-0000-4000-8000-000000000002") is graph.owner
     assert all(handle.closed for handle in exiting)
-    assert graph.runtimes["member-b"].processes == kept and all(not handle.closed for handle in kept.values())
+    assert graph.runtimes["00000000-0000-4000-8000-000000000002"].processes == kept and all(not handle.closed for handle in kept.values())
 
 
 @pytest.mark.asyncio
@@ -1197,17 +1200,17 @@ async def test_safe_exit_blockers_preserve_complete_contract_intents_and_auxilia
     process = graph.owner.process
     runtimes = dict(graph.runtimes)
     auxiliaries = [handle for runtime in runtimes.values() for handle in runtime.processes.values()]
-    blockers_by_workspace["member-b"] = [{"kind": kind, "resource_id": "active", "session_id": "session-b", "status": "running"}]
+    blockers_by_workspace["00000000-0000-4000-8000-000000000002"] = [{"kind": kind, "resource_id": "active", "session_id": "session-b", "status": "running"}]
     result = await controller.safe_restart_managed_backend(
-        "member-a", request_id="blocked-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
+        "00000000-0000-4000-8000-000000000001", request_id="blocked-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
     )
-    assert result.status == "blocked" and result.blockers[0].workspace_id == "member-b"
+    assert result.status == "blocked" and result.blockers[0].workspace_id == "00000000-0000-4000-8000-000000000002"
     assert graph.owner.contract is contract and graph.owner.process is process
     assert not process.closed and not process_boundary.starts
     assert all(not handle.closed for handle in auxiliaries)
     assert all(registry.resolve(identity).desired_running and registry.managed_runtime(identity) is runtime for identity, runtime in runtimes.items())
     assert set(lifecycle_states.values()) == {"ready"}
-    assert {identity for identity, path in runtime_actions if path.endswith("/cancel")} == {"member-a", "member-b"}
+    assert {identity for identity, path in runtime_actions if path.endswith("/cancel")} == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
 
 
 @pytest.mark.asyncio
@@ -1216,21 +1219,15 @@ async def test_default_exit_and_duplicate_mount_identity_reject_before_drain(wor
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
     runtime_actions = workspace_runtime_controller_case.runtime_actions
-    registry.resolve("member-b").system_default = True
+    registry.resolve("00000000-0000-4000-8000-000000000002").system_default = True
     with pytest.raises(PermissionError, match="默认工作区"):
         await controller.safe_restart_managed_backend(
-            "member-a", request_id="default-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
+            "00000000-0000-4000-8000-000000000001", request_id="default-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
         )
-    registry.resolve("member-b").system_default = False
-    first = graph.owner.contract.members[0]
-    duplicate = WorkspaceTarget(
-        workspace_id="duplicate", name="Duplicate", root_path=str(registry.local_workspace_root(first.workspace_id, first.backend_workspace_id)),
-        backend_url="", connection_kind="local", backend_workspace_id=first.backend_workspace_id, managed=True,
-    )
-    registry.upsert(duplicate, activate=False)
+    registry.resolve("00000000-0000-4000-8000-000000000002").system_default = False
     with pytest.raises(ValueError, match="重复身份"):
         await controller.safe_restart_managed_backend(
-            "member-a", request_id="duplicate", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-a", "duplicate"]}),
+            "00000000-0000-4000-8000-000000000001", request_id="duplicate", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": [UUID_A, UUID_A]}),
         )
     assert not runtime_actions and not process_boundary.starts and not graph.owner.process.closed
 
@@ -1242,18 +1239,18 @@ async def test_controlled_delete_requires_group_confirmation_and_preserves_block
     controller = workspace_runtime_controller_case.controller
     runtime_actions = workspace_runtime_controller_case.runtime_actions
     blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
-    blocked = await controller.remove_managed_workspace("member-a", request_id="missing-contract")
+    blocked = await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="missing-contract")
     assert blocked.status == "blocked" and blocked.blockers[0].kind == "backend_group"
     assert not runtime_actions and not graph.owner.process.closed
-    blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
-    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
-    blocked = await controller.remove_managed_workspace("member-a", request_id="safe-delete", group_request=request)
-    assert blocked.status == "blocked" and registry.resolve("member-a").desired_running
-    blockers_by_workspace["member-b"] = []
-    result = await controller.remove_managed_workspace("member-a", request_id="delete", group_request=request)
-    assert result.status == "restarted" and graph.owner.contract.workspace_ids == ("member-b",)
+    blockers_by_workspace["00000000-0000-4000-8000-000000000002"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]})
+    blocked = await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="safe-delete", group_request=request)
+    assert blocked.status == "blocked" and registry.resolve("00000000-0000-4000-8000-000000000001").desired_running
+    blockers_by_workspace["00000000-0000-4000-8000-000000000002"] = []
+    result = await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="delete", group_request=request)
+    assert result.status == "restarted" and graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",)
     with pytest.raises(LookupError):
-        registry.resolve("member-a")
+        registry.resolve("00000000-0000-4000-8000-000000000001")
     assert len(process_boundary.starts) == 1
 
 
@@ -1265,17 +1262,17 @@ async def test_force_exit_failed_durable_ack_never_closes_owner(workspace_runtim
     old = graph.owner.process
     action = controller._runtime_action
     async def fail_second(target, path, **kwargs):
-        if target.workspace_id == "member-b" and path.endswith("/force"):
+        if target.workspace_id == "00000000-0000-4000-8000-000000000002" and path.endswith("/force"):
             runtime_actions.append((target.workspace_id, path))
-            raise RuntimeError("member-b durable interrupted 提交失败")
+            raise RuntimeError("00000000-0000-4000-8000-000000000002 durable interrupted 提交失败")
         return await action(target, path, **kwargs)
     monkeypatch.setattr(controller, "_runtime_action", fail_second)
     with pytest.raises(RuntimeError, match="durable interrupted"):
         await controller.force_restart_managed_backend(
-            "member-a", request_id="failed-ack", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
+            "00000000-0000-4000-8000-000000000001", request_id="failed-ack", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
         )
     assert graph.owner.process is old and not old.closed and not process_boundary.starts
-    assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
+    assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
 
 
 @pytest.mark.asyncio
@@ -1286,7 +1283,7 @@ async def test_exit_failure_recovers_complete_old_group(workspace_runtime_contro
     controller = workspace_runtime_controller_case.controller
     old_contract = graph.owner.contract
     if failure == "auxiliary":
-        handle = graph.runtimes["member-b"].processes["browser_manager"]
+        handle = graph.runtimes["00000000-0000-4000-8000-000000000002"].processes["browser_manager"]
         original = handle.close
         attempts = 0
         def close_once(**kwargs):
@@ -1305,13 +1302,13 @@ async def test_exit_failure_recovers_complete_old_group(workspace_runtime_contro
         monkeypatch.setattr(registry, "_save", fail_exit)
     with pytest.raises(RuntimeError, match="exit"):
         await controller.safe_restart_managed_backend(
-            "member-a", request_id="recover-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
+            "00000000-0000-4000-8000-000000000001", request_id="recover-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
         )
     assert graph.owner.contract == old_contract and graph.owner.error is None
     assert len(process_boundary.starts) == 1 and graph.owner.process is process_boundary.handles[-1]
     assert all(registry.backend_owner(identity) is graph.owner and registry.resolve(identity).desired_running for identity in old_contract.workspace_ids)
     assert all(set(registry.managed_runtime(identity).processes) == {"terminal_manager", "browser_manager"} for identity in old_contract.workspace_ids)
-    assert GatewayWorkspaceRegistry(storage_path=registry._storage_path).backend_owner("member-a").contract == old_contract
+    assert GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path).backend_owner("00000000-0000-4000-8000-000000000001").contract == old_contract
 
 
 @pytest.mark.asyncio
@@ -1319,9 +1316,9 @@ async def test_exit_after_stop_releases_contract_without_backend_start(workspace
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
-    await controller.stop_managed_backend("member-a", request_id="stop", group_request=graph.group_request)
+    await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="stop", group_request=graph.group_request)
     result = await controller.safe_restart_managed_backend(
-        "member-a", request_id="exit-stopped", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
+        "00000000-0000-4000-8000-000000000001", request_id="exit-stopped", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
     )
     assert result.status == "stopped" and not registry.backend_owners() and not process_boundary.starts
 
@@ -1338,11 +1335,11 @@ async def test_exit_commit_observer_error_cannot_restore_released_owner(workspac
     try:
         with pytest.raises(RuntimeError) as raised:
             await controller.safe_restart_managed_backend(
-                "member-a", request_id="exit-observer", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
+                "00000000-0000-4000-8000-000000000001", request_id="exit-observer", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
             )
         assert raised.value is failure and not registry.backend_owners() and not process_boundary.starts
         assert graph.owner.process is None and not graph.owner.unpublished_runtimes
-        assert not GatewayWorkspaceRegistry(storage_path=registry._storage_path).backend_owners()
+        assert not GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path).backend_owners()
     finally:
         registry.remove_commit_observer(observer)
 
@@ -1351,10 +1348,10 @@ def test_registry_cannot_bypass_controlled_managed_exit(workspace_runtime_contro
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     with pytest.raises(ValueError, match="受控退出"):
-        registry.remove("member-a")
+        registry.remove("00000000-0000-4000-8000-000000000001")
     with pytest.raises(ValueError, match="完整组"):
-        registry.upsert(replace(registry.resolve("member-a")), runtime=WorkspaceRuntime(service_urls={}))
-    assert registry.backend_owner("member-a") is graph.owner and not graph.owner.process.closed
+        registry.upsert(replace(registry.resolve("00000000-0000-4000-8000-000000000001")), runtime=WorkspaceRuntime(service_urls={}))
+    assert registry.backend_owner("00000000-0000-4000-8000-000000000001") is graph.owner and not graph.owner.process.closed
 
 
 @pytest.fixture
@@ -1365,6 +1362,7 @@ def deletion_http_application(workspace_runtime_controller_case, tmp_path, monke
     app.add_middleware(TraceMiddleware)
     app.add_exception_handler(HTTPException, gateway_http_exception_handler)
     app.state.registry = registry
+    app.state.gateway_id = registry.gateway_id
     app.state.workspace_runtime_controller = controller
     app.state.port_forward_manager = SshPortForwardManager(
         registry=registry, storage_path=tmp_path / "forwards.json", log_dir=tmp_path / "logs",
@@ -1400,35 +1398,35 @@ async def test_all_delete_http_callers_preserve_typed_blockers_and_consume_force
     graph = workspace_runtime_controller_case.graph
     runtime_actions = workspace_runtime_controller_case.runtime_actions
     blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
-    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}).model_dump(mode="json")
-    blockers_by_workspace["member-b"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}).model_dump(mode="json")
+    blockers_by_workspace["00000000-0000-4000-8000-000000000002"] = [{"kind": "job", "resource_id": "job-b", "session_id": "session-b", "status": "running"}]
     before = graph.owner.contract
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
-        response = await client.request("DELETE", f"{prefix}/member-a", json=request, headers={"X-Request-ID": "delete-blocked"})
+        response = await client.request("DELETE", f"{prefix}/00000000-0000-4000-8000-000000000001", json=request, headers={"X-Request-ID": "delete-blocked"})
         assert response.status_code == 409, response.text
         detail = response.json()["detail"]
         assert detail["status"] == "blocked" and detail["backend_generation"] == before.generation
-        assert set(detail["affected_workspace_ids"]) == {"member-a", "member-b"}
-        assert detail["blockers"][0]["workspace_id"] == "member-b"
+        assert set(detail["affected_workspace_ids"]) == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
+        assert detail["blockers"][0]["workspace_id"] == "00000000-0000-4000-8000-000000000002"
         assert detail["blockers"][0]["resource_id"] == "job-b"
-        assert {item["workspace_id"] for item in detail["workspaces"]["items"]} == {"member-a", "member-b"}
+        assert {item["workspace_id"] for item in detail["workspaces"]["items"]} == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
         assert response.headers["X-Request-ID"] == "delete-blocked"
-        assert registry.backend_owner("member-a") is graph.owner and graph.owner.contract is before
-        assert registry.resolve("member-a").desired_running and not process_boundary.starts
-        response = await client.request("DELETE", f"{prefix}/member-a?force=true", json=request, headers={"X-Request-ID": "delete-forced"})
+        assert registry.backend_owner("00000000-0000-4000-8000-000000000001") is graph.owner and graph.owner.contract is before
+        assert registry.resolve("00000000-0000-4000-8000-000000000001").desired_running and not process_boundary.starts
+        response = await client.request("DELETE", f"{prefix}/00000000-0000-4000-8000-000000000001?force=true", json=request, headers={"X-Request-ID": "delete-forced"})
         assert response.status_code == 200, response.text
         result = response.json()
         assert response.headers["X-Request-ID"] == result["request_id"] == "delete-forced"
-        assert [item["workspace_id"] for item in result["data"]["items"]] == ["member-b"]
-    assert graph.owner.contract.workspace_ids == ("member-b",) and len(process_boundary.starts) == 1
-    assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"member-a", "member-b"}
-    reopened = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
-    assert reopened.active_workspace_id == "member-b" and reopened.backend_owner("member-b").contract == graph.owner.contract
-    assert {item["workspace_id"] for item in registry._state_store.load_workspace_registry()["targets"]} == {"member-b"}
+        assert [item["workspace_id"] for item in result["data"]["items"]] == ["00000000-0000-4000-8000-000000000002"]
+    assert graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",) and len(process_boundary.starts) == 1
+    assert {identity for identity, path in runtime_actions if path.endswith("/force")} == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
+    reopened = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store)
+    assert reopened.active_workspace == (GATEWAY_ID, UUID_B) and reopened.backend_owner("00000000-0000-4000-8000-000000000002").contract == graph.owner.contract
+    assert {item["workspace_id"] for item in registry._state_store.load_workspace_registry()["targets"]} == {"00000000-0000-4000-8000-000000000002"}
     with pytest.raises(LookupError):
-        reopened.resolve("member-a")
+        reopened.resolve("00000000-0000-4000-8000-000000000001")
     with pytest.raises(LookupError):
-        registry.resolve("member-a")
+        registry.resolve("00000000-0000-4000-8000-000000000001")
 
 
 @pytest.mark.asyncio
@@ -1438,10 +1436,10 @@ async def test_delete_rejects_unrelated_desired_set_before_any_drain(workspace_r
     runtime_actions = workspace_runtime_controller_case.runtime_actions
     request = graph.group_request.model_copy(update={"desired_workspace_ids": []}).model_dump(mode="json")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
-        response = await client.request("DELETE", "/api/gateway/workspaces/member-a", json=request)
+        response = await client.request("DELETE", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001", json=request)
     assert response.status_code == 409
     assert response.json()["detail"] == "工作区删除失败: stage=workspace_remove, error=ValueError"
-    assert not runtime_actions and not graph.owner.process.closed and registry.resolve("member-a").desired_running
+    assert not runtime_actions and not graph.owner.process.closed and registry.resolve("00000000-0000-4000-8000-000000000001").desired_running
 
 
 @pytest.mark.asyncio
@@ -1457,19 +1455,19 @@ async def test_delete_force_failed_backend_ack_reports_detail_and_keeps_unique_p
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
     old = graph.owner.process
-    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}).model_dump(mode="json")
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}).model_dump(mode="json")
     action = controller._runtime_action
     async def failed_ack(target, path, **kwargs):
-        if target.workspace_id == "member-b" and path.endswith("/force"):
-            raise httpx.ConnectError("member-b durable ack 连接断开")
+        if target.workspace_id == "00000000-0000-4000-8000-000000000002" and path.endswith("/force"):
+            raise httpx.ConnectError("00000000-0000-4000-8000-000000000002 durable ack 连接断开")
         return await action(target, path, **kwargs)
     monkeypatch.setattr(controller, "_runtime_action", failed_ack)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
-        response = await client.request("DELETE", f"{prefix}/member-a?force=true", json=request)
+        response = await client.request("DELETE", f"{prefix}/00000000-0000-4000-8000-000000000001?force=true", json=request)
     assert response.status_code == 502, response.text
     assert response.json()["detail"] == "工作区删除失败: stage=workspace_remove, error=ConnectError"
     assert graph.owner.process is old and not old.closed and not process_boundary.starts
-    assert registry.backend_owner("member-a") is graph.owner and registry.resolve("member-a").desired_running
+    assert registry.backend_owner("00000000-0000-4000-8000-000000000001") is graph.owner and registry.resolve("00000000-0000-4000-8000-000000000001").desired_running
 
 
 @pytest.fixture
@@ -1478,7 +1476,7 @@ async def stopped_workspace_runtime_controller_case(workspace_runtime_controller
     controller = workspace_runtime_controller_case.controller
     runtime_actions = workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
-    await controller.stop_managed_backend("member-a", request_id="stopped-fixture", group_request=graph.group_request)
+    await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="stopped-fixture", group_request=graph.group_request)
     assert graph.owner.contract is previous and graph.owner.process is None
     assert not process_boundary.starts
     runtime_actions.clear()
@@ -1502,16 +1500,16 @@ async def test_stopped_delete_http_preserves_offline_contract_then_starts_only_r
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     stale = graph.group_request
-    request = stale.model_copy(update={"desired_workspace_ids": ["member-b"]}).model_dump(mode="json")
+    request = stale.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}).model_dump(mode="json")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
-        response = await client.request("DELETE", f"{prefix}/member-a?force={str(forced).lower()}", json=request)
+        response = await client.request("DELETE", f"{prefix}/00000000-0000-4000-8000-000000000001?force={str(forced).lower()}", json=request)
     assert response.status_code == 200, response.text
     items = response.json()["data"]["items"]
-    assert [item["workspace_id"] for item in items] == ["member-b"]
+    assert [item["workspace_id"] for item in items] == ["00000000-0000-4000-8000-000000000002"]
     assert items[0]["status"] == "offline"
     # 受管/联邦列表保留各自既有精简 DTO；完整生命周期投影取同一 registry 权威状态。
-    remaining = next(item.model_dump(mode="json") for item in await GatewayWorkspaceRegistry.list_dtos(registry, check_health=False) if item.workspace_id == "member-b")
-    assert remaining["status"] == "offline" and remaining["affected_workspace_ids"] == ["member-b"]
+    remaining = next(item.model_dump(mode="json") for item in await GatewayWorkspaceRegistry.list_dtos(registry, check_health=False) if item.workspace_id == "00000000-0000-4000-8000-000000000002")
+    assert remaining["status"] == "offline" and remaining["affected_workspace_ids"] == ["00000000-0000-4000-8000-000000000002"]
     assert all(service["local_url"] is None for service in remaining["services"].values())
     if prefix == "/api/gateway/workspaces":
         assert items[0]["backend_generation"] == remaining["backend_generation"]
@@ -1521,20 +1519,20 @@ async def test_stopped_delete_http_preserves_offline_contract_then_starts_only_r
     assert contract.owner_id == previous.owner_id and contract.generation != previous.generation
     assert contract.members == (previous.members[1],) and remaining["backend_generation"] == contract.generation
     assert graph.owner.process is None and not process_boundary.starts and not runtime_actions
-    assert not registry.has_runtime("member-b") and not registry.resolve("member-b").desired_running
-    assert registry.resolve("member-b").runtime_lease_id is None
-    restored = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
-    assert restored.backend_owner("member-b").contract == contract
-    assert not restored.resolve("member-b").desired_running and not restored.has_runtime("member-b")
+    assert not registry.has_runtime("00000000-0000-4000-8000-000000000002") and not registry.resolve("00000000-0000-4000-8000-000000000002").desired_running
+    assert registry.resolve("00000000-0000-4000-8000-000000000002").runtime_lease_id is None
+    restored = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store)
+    assert restored.backend_owner("00000000-0000-4000-8000-000000000002").contract == contract
+    assert not restored.resolve("00000000-0000-4000-8000-000000000002").desired_running and not restored.has_runtime("00000000-0000-4000-8000-000000000002")
     with pytest.raises(LookupError):
-        registry.resolve("member-a")
+        registry.resolve("00000000-0000-4000-8000-000000000001")
     with pytest.raises(ValueError, match="陈旧"):
-        await controller.start_managed_backend("member-b", request_id="stale", group_request=stale)
-    started = await controller.start_managed_backend("member-b", request_id="remaining-start", group_request=graph.group_request)
+        await controller.start_managed_backend("00000000-0000-4000-8000-000000000002", request_id="stale", group_request=stale)
+    started = await controller.start_managed_backend("00000000-0000-4000-8000-000000000002", request_id="remaining-start", group_request=graph.group_request)
     assert started.status == "started" and len(process_boundary.starts) == 1
     mounts = process_boundary.starts[0]["mounts"]
-    assert [(mount.workspace_id, mount.workspace_root) for mount in mounts] == [(UUID_B, registry.local_workspace_root("member-b", UUID_B))]
-    assert graph.owner.contract.workspace_ids == ("member-b",)
+    assert [(mount.workspace_id, mount.workspace_root) for mount in mounts] == [(UUID_B, registry.local_workspace_root(UUID_B))]
+    assert graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",)
     assert await verify_managed_backend_group(graph.owner.contract, mounts=registry.resolve_backend_mounts(graph.owner.contract)) == 7001
 
 
@@ -1547,12 +1545,12 @@ async def test_stopped_member_exit_keeps_registration_without_restarting_backend
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     result = await controller.safe_restart_managed_backend(
-        "member-a", request_id="offline-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}),
+        "00000000-0000-4000-8000-000000000001", request_id="offline-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}),
     )
-    assert result.status == "stopped" and result.affected_workspace_ids == ["member-a", "member-b"]
+    assert result.status == "stopped" and result.affected_workspace_ids == ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]
     assert graph.owner.contract.generation != previous.generation and graph.owner.contract.members == (previous.members[1],)
-    assert registry.backend_owner("member-a") is None and registry.backend_owner("member-b") is graph.owner
-    assert registry.resolve("member-a").backend_url == "" and not registry.resolve("member-a").local_service_urls
+    assert registry.backend_owner("00000000-0000-4000-8000-000000000001") is None and registry.backend_owner("00000000-0000-4000-8000-000000000002") is graph.owner
+    assert registry.resolve("00000000-0000-4000-8000-000000000001").backend_url == "" and not registry.resolve("00000000-0000-4000-8000-000000000001").local_service_urls
     assert all(not registry.resolve(identity).desired_running and registry.resolve(identity).runtime_lease_id is None for identity in previous.workspace_ids)
     assert all(item.status == "offline" for item in await GatewayWorkspaceRegistry.list_dtos(registry, check_health=False))
     assert not process_boundary.starts and not runtime_actions
@@ -1566,7 +1564,7 @@ async def test_stopped_same_member_set_preserves_generation(stopped_workspace_ru
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     result = await controller.safe_restart_managed_backend(
-        "member-a", request_id="same-offline-set", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b", "member-a"]}),
+        "00000000-0000-4000-8000-000000000001", request_id="same-offline-set", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000001"]}),
     )
     assert result.status == "stopped" and graph.owner.contract == previous
     assert graph.owner.contract.generation == previous.generation and graph.owner.process is None
@@ -1584,13 +1582,13 @@ async def test_stopped_delete_preflight_keeps_complete_old_contract(
     controller = stopped_workspace_runtime_controller_case.controller
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
-    target = registry.resolve("member-a")
-    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
+    target = registry.resolve("00000000-0000-4000-8000-000000000001")
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]})
     exception, message = ValueError, "陈旧"
     if invalid == "generation":
         request = request.model_copy(update={"expected_backend_generation": "stale"})
     elif invalid == "current":
-        request = request.model_copy(update={"expected_workspace_ids": ["member-b"]})
+        request = request.model_copy(update={"expected_workspace_ids": ["00000000-0000-4000-8000-000000000002"]})
         message = "精确匹配"
     elif invalid == "desired":
         request = request.model_copy(update={"desired_workspace_ids": []})
@@ -1602,14 +1600,14 @@ async def test_stopped_delete_preflight_keeps_complete_old_contract(
         monkeypatch.setattr(target, "owner", "attached")
         exception, message = PermissionError, "不能越过 target owner"
     elif invalid == "uuid":
-        monkeypatch.setattr(target, "backend_workspace_id", UUID_B)
-        exception, message = RuntimeError, "binding 身份不匹配"
+        process_boundary.identities[Path(target.root_path)] = UUID_B
+        exception, message = RuntimeError, "Backend UUID 不匹配"
     else:
         monkeypatch.setattr(target, "root_path", str(Path(target.root_path) / "changed"))
         exception, message = FileNotFoundError, "工作区目录不存在"
     with pytest.raises(exception, match=message):
-        await controller.remove_managed_workspace("member-a", request_id="offline-invalid", group_request=request)
-    assert graph.owner.contract is previous and registry.resolve("member-a") is target
+        await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="offline-invalid", group_request=request)
+    assert graph.owner.contract is previous and registry.resolve("00000000-0000-4000-8000-000000000001") is target
     assert graph.owner.process is None and not runtime_actions and not process_boundary.starts
     assert not target.desired_running
 
@@ -1624,8 +1622,8 @@ async def test_stopped_delete_safe_blocks_route_references_and_force_waits_for_f
     controller = stopped_workspace_runtime_controller_case.controller
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
-    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
-    streams = {"member-a": False, "member-b": True}
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]})
+    streams = {"00000000-0000-4000-8000-000000000001": False, "00000000-0000-4000-8000-000000000002": True}
     leases = {identity: registry.acquire_route_reference(identity, streaming=streaming) for identity, streaming in streams.items()}
     async def release_invalidated() -> None:
         await asyncio.gather(*(lease.invalidated.wait() for lease in leases.values()))
@@ -1634,22 +1632,22 @@ async def test_stopped_delete_safe_blocks_route_references_and_force_waits_for_f
             registry.release_route_reference(identity, streaming=streaming)
     release = None
     try:
-        blocked = await controller.remove_managed_workspace("member-a", request_id="offline-blocked", group_request=request)
-        assert blocked.status == "blocked" and {(item.workspace_id, item.kind) for item in blocked.blockers} == {("member-a", "proxy_request"), ("member-b", "proxy_stream")}
+        blocked = await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="offline-blocked", group_request=request)
+        assert blocked.status == "blocked" and {(item.workspace_id, item.kind) for item in blocked.blockers} == {("00000000-0000-4000-8000-000000000001", "proxy_request"), ("00000000-0000-4000-8000-000000000002", "proxy_stream")}
         assert graph.owner.contract is previous and not any(lease.invalidated.is_set() for lease in leases.values())
         release = asyncio.create_task(release_invalidated())
-        result = await controller.remove_managed_workspace("member-a", request_id="offline-force", force=True, group_request=request)
+        result = await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="offline-force", force=True, group_request=request)
         await release
         assert result.status == "stopped" and result.forced
         assert {item.workspace_id for item in result.blockers} == set(streams)
-        assert graph.owner.contract.workspace_ids == ("member-b",) and graph.owner.process is None
+        assert graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",) and graph.owner.process is None
         assert not process_boundary.starts and not runtime_actions
     finally:
         if release is not None and not release.done():
             release.cancel()
             await asyncio.gather(release, return_exceptions=True)
         for identity, streaming in streams.items():
-            if registry._route_reference_counts.get(identity, (0, 0))[int(streaming)]:
+            if registry._route_reference_counts.get((registry.gateway_id, identity), (0, 0))[int(streaming)]:
                 registry.release_route_reference(identity, streaming=streaming)
 
 
@@ -1662,19 +1660,19 @@ async def test_stopped_force_unreleased_route_keeps_old_generation_and_registrat
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     controller._connection_drain_timeout_seconds = 0.005
     previous = graph.owner.contract
-    lease = registry.acquire_route_reference("member-b", streaming=True)
+    lease = registry.acquire_route_reference("00000000-0000-4000-8000-000000000002", streaming=True)
     try:
         with pytest.raises(RuntimeError, match="旧路由引用未释放"):
             await controller.remove_managed_workspace(
-                "member-a", request_id="offline-route-timeout", force=True,
-                group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}),
+                "00000000-0000-4000-8000-000000000001", request_id="offline-route-timeout", force=True,
+                group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}),
             )
         assert lease.invalidated.is_set() and graph.owner.contract is previous
-        assert registry.resolve("member-a").connection_error and not registry.resolve("member-a").desired_running
+        assert registry.resolve("00000000-0000-4000-8000-000000000001").connection_error and not registry.resolve("00000000-0000-4000-8000-000000000001").desired_running
         assert not runtime_actions and not process_boundary.starts and graph.owner.process is None
-        assert GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store).backend_owner("member-a").contract == previous
+        assert GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store).backend_owner("00000000-0000-4000-8000-000000000001").contract == previous
     finally:
-        registry.release_route_reference("member-b", streaming=True)
+        registry.release_route_reference("00000000-0000-4000-8000-000000000002", streaming=True)
 
 
 @pytest.mark.asyncio
@@ -1691,46 +1689,46 @@ async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then
     failure = RuntimeError(f"offline-{failure_kind}-failure")
     failed_handle = None
     if failure_kind == "remaining_auxiliary":
-        failed_handle = graph.runtimes["member-b"].processes["browser_manager"]
+        failed_handle = graph.runtimes["00000000-0000-4000-8000-000000000002"].processes["browser_manager"]
         failed_handle.failure = failure
         with pytest.raises(RuntimeError, match="成员辅助服务关闭失败"):
-            await controller.stop_managed_backend("member-a", request_id="partial-stop", group_request=graph.group_request)
+            await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="partial-stop", group_request=graph.group_request)
     else:
-        await controller.stop_managed_backend("member-a", request_id="full-stop", group_request=graph.group_request)
+        await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="full-stop", group_request=graph.group_request)
     runtime_actions.clear()
     if failure_kind == "unpublished":
         failed_handle = ProcessProbe("unpublished", failure=failure)
-        graph.owner.unpublished_runtimes["member-a"] = WorkspaceRuntime(service_urls={}, processes={"browser_manager": failed_handle})
+        graph.owner.unpublished_runtimes["00000000-0000-4000-8000-000000000001"] = WorkspaceRuntime(service_urls={}, processes={"browser_manager": failed_handle})
     original_save = registry._save
     if failure_kind == "cas":
         def fail_candidate(**kwargs):
             contracts = kwargs.get("backend_contracts")
-            if contracts is not None and any(contract.owner_id == previous.owner_id and contract.workspace_ids == ("member-b",) for contract in contracts):
+            if contracts is not None and any(contract.owner_id == previous.owner_id and contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",) for contract in contracts):
                 raise failure
             return original_save(**kwargs)
         monkeypatch.setattr(registry, "_save", fail_candidate)
     targets = {identity: registry.resolve(identity) for identity in previous.workspace_ids}
     leases = {identity: target.runtime_lease_id for identity, target in targets.items()}
-    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]})
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]})
     try:
         with pytest.raises(RuntimeError, match=f"offline-{failure_kind}-failure"):
-            await controller.remove_managed_workspace("member-a", request_id="offline-failed", group_request=request)
+            await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="offline-failed", group_request=request)
         assert graph.owner.contract is previous and graph.owner.process is None
         assert all(registry.resolve(identity) is target and not target.desired_running and target.runtime_lease_id == leases[identity] for identity, target in targets.items())
-        assert GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store).backend_owner("member-a").contract == previous
+        assert GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store).backend_owner("00000000-0000-4000-8000-000000000001").contract == previous
         if failure_kind == "remaining_auxiliary":
-            assert registry.managed_runtime("member-b") is graph.runtimes["member-b"] and not failed_handle.closed
+            assert registry.managed_runtime("00000000-0000-4000-8000-000000000002") is graph.runtimes["00000000-0000-4000-8000-000000000002"] and not failed_handle.closed
         if failure_kind == "unpublished":
-            assert graph.owner.unpublished_runtimes["member-a"].processes["browser_manager"] is failed_handle
+            assert graph.owner.unpublished_runtimes["00000000-0000-4000-8000-000000000001"].processes["browser_manager"] is failed_handle
         assert not process_boundary.starts and not runtime_actions
     finally:
         if failed_handle is not None:
             failed_handle.failure = None
         monkeypatch.setattr(registry, "_save", original_save)
-    result = await controller.remove_managed_workspace("member-a", request_id="offline-retry", group_request=request)
-    assert result.status == "stopped" and graph.owner.contract.workspace_ids == ("member-b",)
+    result = await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="offline-retry", group_request=request)
+    assert result.status == "stopped" and graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",)
     assert graph.owner.contract.generation != previous.generation and graph.owner.error is None
-    assert not graph.owner.unpublished_runtimes and not registry.has_runtime("member-b") and not process_boundary.starts
+    assert not graph.owner.unpublished_runtimes and not registry.has_runtime("00000000-0000-4000-8000-000000000002") and not process_boundary.starts
 
 
 @pytest.mark.asyncio
@@ -1738,13 +1736,13 @@ async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then
 @pytest.mark.parametrize("native_location", ["/private/group-failure", r"C:\private\group-failure", r"\\server\private\group-failure"])
 @pytest.mark.parametrize("sink_fails", [False, True])
 @pytest.mark.parametrize(("fault", "path"), [
-    ("start", "/api/gateway/workspaces/member-a/runtime/start"),
-    ("stop", "/api/gateway/workspaces/member-a/runtime/stop"),
-    ("restart", "/api/gateway/workspaces/member-a/runtime/restart-safe"),
-    ("restart", "/api/gateway/workspaces/member-a/runtime/restart-force"),
-    ("offline-exit", "/api/gateway/workspaces/member-a"),
-    ("offline-exit", "/api/gateway/managed-workspaces/member-a"),
-    ("offline-exit", "/api/gateway/federation/managed-workspaces/member-a"),
+    ("start", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/start"),
+    ("stop", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/stop"),
+    ("restart", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/restart-safe"),
+    ("restart", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/restart-force"),
+    ("offline-exit", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001"),
+    ("offline-exit", "/api/gateway/managed-workspaces/00000000-0000-4000-8000-000000000001"),
+    ("offline-exit", "/api/gateway/federation/managed-workspaces/00000000-0000-4000-8000-000000000001"),
 ])
 async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
     workspace_runtime_controller_case: WorkspaceRuntimeControllerCase,
@@ -1761,11 +1759,11 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
     sink = OSError(5, "diagnostic sink failed", native_location)
     request = graph.group_request.model_dump(mode="json")
     original_save = registry._save
-    failed_handle = graph.runtimes["member-b"].processes["browser_manager"]
+    failed_handle = graph.runtimes["00000000-0000-4000-8000-000000000002"].processes["browser_manager"]
     assert isinstance(failed_handle, ProcessProbe)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         if fault in {"start", "offline-exit"}:
-            stopped = await client.post("/api/gateway/workspaces/member-a/runtime/stop", json=request)
+            stopped = await client.post("/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/stop", json=request)
             assert stopped.status_code == 200, stopped.text
         if fault == "start":
             process_boundary.backend_outcomes[:] = [primary]
@@ -1774,11 +1772,11 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
         elif fault == "stop":
             failed_handle.failure = primary
         else:
-            request["desired_workspace_ids"] = ["member-b"]
+            request["desired_workspace_ids"] = ["00000000-0000-4000-8000-000000000002"]
 
             def reject_candidate(**options):
                 contracts = options.get("backend_contracts")
-                if contracts is not None and any(contract.workspace_ids == ("member-b",) for contract in contracts):
+                if contracts is not None and any(contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",) for contract in contracts):
                     raise primary
                 return original_save(**options)
 
@@ -1822,14 +1820,14 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
             assert any(str(recovery) in note for note in primary.__notes__)
         for member_id in previous.workspace_ids:
             assert registry.backend_owner(member_id) is graph.owner
-            assert registry.resolve(member_id).backend_workspace_id == next(member.backend_workspace_id for member in previous.members if member.workspace_id == member_id)
+            assert registry.resolve(member_id).workspace_id == next(member.workspace_id for member in previous.members if member.workspace_id == member_id)
         stored_failure = controller_registry_store.load_workspace_registry()
         assert stored_failure is not None
         stored_targets = stored_failure["targets"]
         assert isinstance(stored_targets, list)
         assert all("group-failure" not in target["connection_error"] for target in stored_targets)
-        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=controller_registry_store)
-        cold_owner = cold.backend_owner("member-a")
+        cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=controller_registry_store)
+        cold_owner = cold.backend_owner("00000000-0000-4000-8000-000000000001")
         assert cold_owner is not None and cold_owner.contract == previous
         assert all(cold.resolve(member_id).connection_error == graph.owner.error for member_id in previous.workspace_ids)
         assert len(process_boundary.starts) == (2 if fault == "restart" else 1 if fault == "start" else 0)
@@ -1838,10 +1836,10 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
         failed_handle.failure = None
         monkeypatch.setattr(registry, "_save", original_save)
         process_boundary.backend_outcomes.clear()
-        retry = await client.request("DELETE" if fault == "offline-exit" else "POST", path if fault in {"start", "offline-exit"} else "/api/gateway/workspaces/member-a/runtime/start", json=request)
+        retry = await client.request("DELETE" if fault == "offline-exit" else "POST", path if fault in {"start", "offline-exit"} else "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/start", json=request)
         assert retry.status_code == 200, retry.text
         if fault == "offline-exit":
-            assert graph.owner.contract.workspace_ids == ("member-b",) and not registry.has_target("member-a")
+            assert graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",) and not registry.has_target("00000000-0000-4000-8000-000000000001")
             assert not process_boundary.starts
         else:
             assert graph.owner.process is process_boundary.handles[-1]
@@ -1872,12 +1870,11 @@ async def test_lifecycle_rejections_keep_status_and_have_no_runtime_side_effects
     previous = graph.owner.contract
     process = graph.owner.process
     request = graph.group_request.model_copy(update={"expected_backend_generation": "stale"})
-    endpoint = path.format(workspace_id="missing" if missing else "member-a")
+    endpoint = path.format(workspace_id="00000000-0000-4000-8000-000000000099" if missing else "00000000-0000-4000-8000-000000000001")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         response = await client.request("POST" if "/runtime/" in path or path.endswith("/probe") else "DELETE", endpoint, json=request.model_dump(mode="json"))
     assert response.status_code == (404 if missing else 409), response.text
-    expected_error = "KeyError" if path == "/api/gateway/workspaces/{workspace_id}" else "LookupError"
-    assert f"error={expected_error if missing else 'ValueError'}" in response.json()["detail"]
+    assert f"error={'LookupError' if missing else 'ValueError'}" in response.json()["detail"]
     assert graph.owner.contract is previous and graph.owner.process is process
     assert graph.owner.error is None and not process_boundary.starts
     assert not workspace_runtime_controller_case.runtime_actions
@@ -1895,14 +1892,16 @@ async def test_external_probe_failure_keeps_native_diagnostics_and_original_targ
     native_location: str, sink_fails: bool, fault_errno: int,
 ) -> None:
     registry = workspace_runtime_controller_case.registry
-    target = replace(registry.resolve("member-a"), workspace_id="external", managed=False)
+    external_root = Path(registry.resolve(UUID_A).root_path).with_name("external")
+    external_root.mkdir()
+    target = replace(registry.resolve(UUID_A), workspace_id=UUID_C, root_path=str(external_root), managed=False, desired_running=False)
     registry.upsert(target, activate=False)
     failure = OSError(fault_errno, "probe failed", native_location)
 
     async def probe(*_args: object, **_kwargs: object) -> None:
         raise failure
 
-    monkeypatch.setattr(runtime_controller_module, "resolve_backend_workspace_id", lambda *_args, **_kwargs: UUID_A)
+    monkeypatch.setattr(runtime_controller_module, "resolve_backend_workspace_id", lambda *_args, **_kwargs: UUID_C)
     monkeypatch.setattr(runtime_controller_module, "wait_for_workspace_health", probe)
     if sink_fails:
         def fail_log(*_args: object, **_kwargs: object) -> None:
@@ -1910,7 +1909,7 @@ async def test_external_probe_failure_keeps_native_diagnostics_and_original_targ
 
         monkeypatch.setattr(failures.logger, "error", fail_log)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
-        response = await client.post("/api/gateway/workspaces/external/probe", headers={"X-Request-ID": "external-probe-01"})
+        response = await client.post("/api/gateway/workspaces/00000000-0000-4000-8000-000000000003/probe", headers={"X-Request-ID": "external-probe-01"})
         expected = f"工作区探测失败: stage=workspace_probe, error={type(failure).__name__}, errno={fault_errno}"
         if sink_fails:
             expected += ", diagnostic_sink_error=RuntimeError"
@@ -1918,13 +1917,13 @@ async def test_external_probe_failure_keeps_native_diagnostics_and_original_targ
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "external-probe-01"
         # PermissionError 仍是原409拒绝；502写入失败事实，均不能改成托管目标。
         assert target.connection_error == (None if fault_errno == 13 else expected)
-        assert registry.resolve("external") is target
-        assert target.backend_workspace_id == UUID_A and not target.managed
+        assert registry.resolve(UUID_C) is target
+        assert target.workspace_id == UUID_C and not target.managed
         stored = controller_registry_store.load_workspace_registry()
         assert stored is not None
         assert "probe-failure" not in str(stored)
-        cold = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=controller_registry_store)
-        assert cold.resolve("external").connection_error == target.connection_error
+        cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=controller_registry_store)
+        assert cold.resolve(UUID_C).connection_error == target.connection_error
         if sink_fails:
             assert any("sink failed" in note for note in failure.__notes__)
         else:
@@ -1934,7 +1933,7 @@ async def test_external_probe_failure_keeps_native_diagnostics_and_original_targ
             return None
 
         monkeypatch.setattr(runtime_controller_module, "wait_for_workspace_health", healthy)
-        retry = await client.post("/api/gateway/workspaces/external/probe")
+        retry = await client.post("/api/gateway/workspaces/00000000-0000-4000-8000-000000000003/probe")
         assert retry.status_code == 200 and target.connection_error is None
 
 
@@ -1953,18 +1952,18 @@ async def test_stopped_delete_commit_observer_error_keeps_new_offline_authority(
     try:
         with pytest.raises(RuntimeError) as raised:
             await controller.remove_managed_workspace(
-                "member-a", request_id="offline-observer",
-                group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}),
+                "00000000-0000-4000-8000-000000000001", request_id="offline-observer",
+                group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}),
             )
         assert raised.value is failure and graph.owner.contract.generation != previous.generation
         assert graph.owner.contract.members == (previous.members[1],) and graph.owner.process is None and graph.owner.error is None
-        assert not registry.resolve("member-b").desired_running and registry.resolve("member-b").runtime_lease_id is None
+        assert not registry.resolve("00000000-0000-4000-8000-000000000002").desired_running and registry.resolve("00000000-0000-4000-8000-000000000002").runtime_lease_id is None
         with pytest.raises(LookupError):
-            registry.resolve("member-a")
-        restored = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
-        assert restored.backend_owner("member-b").contract == graph.owner.contract
+            registry.resolve("00000000-0000-4000-8000-000000000001")
+        restored = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store)
+        assert restored.backend_owner("00000000-0000-4000-8000-000000000002").contract == graph.owner.contract
         with pytest.raises(LookupError):
-            restored.resolve("member-a")
+            restored.resolve("00000000-0000-4000-8000-000000000001")
         assert not runtime_actions and not process_boundary.starts
     finally:
         registry.remove_commit_observer(observer)
@@ -1986,13 +1985,13 @@ async def test_stopped_publication_requires_closed_owner_and_both_locks(stopped_
     if boundary == "process":
         graph.owner.set_process(ProcessProbe("residual"))
     if boundary == "unpublished":
-        graph.owner.unpublished_runtimes["member-a"] = WorkspaceRuntime(service_urls={})
+        graph.owner.unpublished_runtimes["00000000-0000-4000-8000-000000000001"] = WorkspaceRuntime(service_urls={})
     try:
         exception = ValueError if boundary == "online_incomplete" else RuntimeError
         message = "完整成员 runtime" if boundary == "online_incomplete" else "受控关闭"
         with pytest.raises(exception, match=message):
             registry.publish_backend_runtime(graph.owner, previous, {} if boundary == "online_incomplete" else None)
-        assert graph.owner.contract is previous and not registry.resolve("member-a").desired_running
+        assert graph.owner.contract is previous and not registry.resolve("00000000-0000-4000-8000-000000000001").desired_running
     finally:
         if owner_locked:
             graph.owner.lock.release()
@@ -2020,9 +2019,9 @@ async def test_stopped_ordinary_action_without_desired_set_keeps_existing_reject
         "restart-force": controller.force_restart_managed_backend,
     }[action]
     with pytest.raises(ValueError, match="尚未启动"):
-        await invoke("member-a", request_id="ordinary-stopped", group_request=graph.group_request)
+        await invoke("00000000-0000-4000-8000-000000000001", request_id="ordinary-stopped", group_request=graph.group_request)
     assert graph.owner.contract is previous and graph.owner.error is None and graph.owner.process is None
-    assert registry.backend_owner("member-a") is graph.owner and not process_boundary.starts and not runtime_actions
+    assert registry.backend_owner("00000000-0000-4000-8000-000000000001") is graph.owner and not process_boundary.starts and not runtime_actions
 
 
 @pytest.mark.asyncio
@@ -2036,34 +2035,34 @@ async def test_stopped_delete_sqlite_atomically_detaches_other_owner_child_witho
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     other_root = tmp_path / "other-owner"
     other_root.mkdir()
-    other = WorkspaceTarget(
-        workspace_id="other-owner-member", name="Other owner", root_path=str(other_root),
+    other = WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id='00000000-0000-4000-8000-000000000003', name="Other owner", root_path=str(other_root),
         backend_url="http://127.0.0.1:41001", connection_kind="local", managed=True,
-        backend_workspace_id="00000000-0000-4000-8000-000000000003", owner="config", parent_workspace_id="member-a",
+         owner="config", parent_workspace=(GATEWAY_ID, '00000000-0000-4000-8000-000000000001'),
     )
     registry.upsert(other, activate=False)
     other_graph = managed_backend_factory((other,), backend_url=other.backend_url, process=ProcessProbe("other-backend"))
     other_graph.publish(registry)
     previous_other = registry.resolve(other.workspace_id)
     result = await controller.remove_managed_workspace(
-        "member-a", request_id="sqlite-exact-delete",
-        group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}),
+        "00000000-0000-4000-8000-000000000001", request_id="sqlite-exact-delete",
+        group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}),
     )
-    assert result.status == "stopped" and graph.owner.contract.workspace_ids == ("member-b",)
-    assert registry.resolve(other.workspace_id) == replace(previous_other, parent_workspace_id=None)
+    assert result.status == "stopped" and graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",)
+    assert registry.resolve(other.workspace_id) == replace(previous_other, parent_workspace=None)
     assert registry.backend_owner(other.workspace_id) is other_graph.owner
     assert registry.managed_runtime(other.workspace_id) is other_graph.runtimes[other.workspace_id]
     assert other_graph.owner.process.is_alive() and not other_graph.owner.process.closed
     saved = registry._state_store.load_workspace_registry()
-    assert {target["workspace_id"] for target in saved["targets"]} == {"member-b", other.workspace_id}
-    assert next(target for target in saved["targets"] if target["workspace_id"] == other.workspace_id)["parent_workspace_id"] is None
+    assert {target["workspace_id"] for target in saved["targets"]} == {"00000000-0000-4000-8000-000000000002", other.workspace_id}
+    assert next(target for target in saved["targets"] if target["workspace_id"] == other.workspace_id)["parent_workspace"] is None
     assert len(saved["managed_backends"]) == 2
-    reopened = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
+    reopened = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store)
     assert reopened.resolve(other.workspace_id) == registry.resolve(other.workspace_id)
     assert reopened.backend_owner(other.workspace_id).contract == other_graph.owner.contract
-    assert reopened.backend_owner("member-b").contract == graph.owner.contract
+    assert reopened.backend_owner("00000000-0000-4000-8000-000000000002").contract == graph.owner.contract
     with pytest.raises(LookupError):
-        reopened.resolve("member-a")
+        reopened.resolve("00000000-0000-4000-8000-000000000001")
     assert not process_boundary.starts and not runtime_actions
 
 
@@ -2078,13 +2077,13 @@ async def test_stopped_delete_sqlite_real_cas_failure_preserves_complete_old_aut
     runtime_actions = stopped_workspace_runtime_controller_case.runtime_actions
     previous = graph.owner.contract
     held_targets = {identity: registry.resolve(identity) for identity in previous.workspace_ids}
-    writer = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=registry._state_store)
-    writer.rename("member-b", "Concurrent rename")
+    writer = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store)
+    writer.rename("00000000-0000-4000-8000-000000000002", "Concurrent rename")
     committed = registry._state_store.load_workspace_registry()
     with pytest.raises(RuntimeError, match="CAS") as raised:
         await controller.remove_managed_workspace(
-            "member-a", request_id="sqlite-real-cas",
-            group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["member-b"]}),
+            "00000000-0000-4000-8000-000000000001", request_id="sqlite-real-cas",
+            group_request=graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]}),
         )
     assert graph.owner.contract is previous and graph.owner.process is None
     assert registry._state_store.load_workspace_registry() == committed
@@ -2144,7 +2143,7 @@ async def test_paired_peer_without_explicit_admin_has_zero_side_effects(
     root = tmp_path / "must-not-exist" / "new-workspace"
     path = "/api/gateway/federation/managed-workspaces"
     if method == "DELETE":
-        path += "/member-a"
+        path += "/00000000-0000-4000-8000-000000000001"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://target") as client:
         response = await client.request(method, path, headers=headers, json={"root_path": str(root), "create_directory": True} if method == "POST" else None)
     assert response.status_code == 403
@@ -2167,10 +2166,10 @@ async def test_admin_revocation_is_checked_before_delete_side_effects(
     policy = app.state.federation_policy_store
     policy.publish({"rules": [{"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": principal_ref_for_gateway("peer")}]})
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://target") as client:
-        blocked = await client.delete("/api/gateway/federation/managed-workspaces/member-a", headers=headers)
+        blocked = await client.delete("/api/gateway/federation/managed-workspaces/00000000-0000-4000-8000-000000000001", headers=headers)
         assert blocked.status_code == 409
         before = registry._storage_path.read_bytes()
         policy.publish({"rules": []})
-        denied = await client.delete("/api/gateway/federation/managed-workspaces/member-a", headers=headers)
+        denied = await client.delete("/api/gateway/federation/managed-workspaces/00000000-0000-4000-8000-000000000001", headers=headers)
     assert denied.status_code == 403 and registry._storage_path.read_bytes() == before
     assert not runtime_actions and not graph.owner.process.closed and not process_boundary.starts

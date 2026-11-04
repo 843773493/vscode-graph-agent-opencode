@@ -51,7 +51,7 @@ def test_resource_address_http_projection_uses_descriptor_and_fresh_message_root
 
     # 模拟本轮 proto 新增、旧 Python 绑定尚不存在的消息，不能跳过结构校验。
     document = deepcopy(gateway_openapi)
-    file = next(file for file in http_descriptor_bundle.file if file.package == "boxteam.gateway.v1" and file.name.endswith("public.proto"))
+    file = next(file for file in http_descriptor_bundle.file if file.package == "boxteam.gateway.v2" and file.name.endswith("public.proto"))
     name = "FutureResourceAddressDTO"
     message = file.message_type.add(name=name)
     message.field.add(name="uri", number=1, type=FieldDescriptorProto.TYPE_STRING)
@@ -286,7 +286,8 @@ def test_gateway_runtime_blocker_follows_lifecycle_routes_and_keeps_business_val
         assert schemas[model]["properties"]["blockers"]["items"]["$ref"].endswith("/GatewayRuntimeBlockerDTO")
     openapi.assert_gateway_http_schemas(gateway_openapi)
     assert gateway_openapi == original
-    blocker = GatewayRuntimeBlockerDTO(kind="job", workspace_id="workspace-a", resource_id="job-a",
+    blocker = GatewayRuntimeBlockerDTO(kind="job", gateway_id="gateway_00000000000040008000000000000001",
+                                      workspace_id="00000000-0000-4000-8000-000000000001", resource_id="job-a",
                                        session_id="session-a", status="running")
     assert blocker.detail is None
     with pytest.raises(ValidationError, match="kind"):
@@ -387,7 +388,7 @@ def test_export_rejects_gateway_proto_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, message_name: str,
     openapi_output: Path, openapi_export: Callable[[Path, Path], None],
 ) -> None:
-    file = next(file for file in http_descriptor_bundle.file if file.package == "boxteam.gateway.v1" and file.name.endswith("/public.proto"))
+    file = next(file for file in http_descriptor_bundle.file if file.package == "boxteam.gateway.v2" and file.name.endswith("/public.proto"))
     message = next(message for message in file.message_type if message.name == message_name)
     message.field.add(name="new_public_field", number=100, type=FieldDescriptorProto.TYPE_STRING)
     descriptor_set = tmp_path / "fresh.binpb"

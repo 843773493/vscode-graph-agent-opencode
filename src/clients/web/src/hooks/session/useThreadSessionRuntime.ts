@@ -23,7 +23,8 @@ import { useUiSettingsController } from "../settings/useUiSettingsController";
 import type { AppState } from "../../types/frontend";
 
 export interface ThreadSessionOwner {
-  routeId: string;
+  gatewayId: string;
+  workspaceKey: string;
   workspaceId: string;
   sessionId: string;
   threadId: string;
@@ -46,11 +47,11 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   onSessionCreated: (session: Session, workspaceId: string | null) => Promise<void>;
   onError: (message: string) => void;
 }) {
-  const scopeKey = JSON.stringify([owner.routeId, owner.sessionId, owner.threadId]);
+  const scopeKey = JSON.stringify([owner.workspaceKey, owner.sessionId, owner.threadId]);
   const [state, setState] = useState<AppState>(() => ({
     ...cloneMaps(INITIAL_APP_STATE), apiPort: 0, isBootstrapping: false,
-    currentSession: seed.session, currentSessionWorkspaceId: owner.routeId,
-    activeGatewayWorkspaceId: owner.routeId, agents: seed.agents,
+    currentSession: seed.session, currentSessionWorkspaceId: owner.workspaceKey,
+    activeGatewayWorkspaceId: owner.workspaceKey, agents: seed.agents,
     browserViewScope: seed.browserViewScope, gatewayWorkspaces: seed.workspaces, gatewayUserAccess: seed.access,
     uiSettings: seed.settings, uiSettingsLoaded: true,
     turnTimelinesBySession: new Map(seed.history ? [[scopeKey, seed.history]] : []),
@@ -59,10 +60,10 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   latestStateRef.current = state;
   const readState = useCallback(() => latestStateRef.current, []);
   const setStatus = useCallback((status: string) => setState(previous => ({ ...previous, status })), []);
-  const views = useSessionViewState({ host: { apiPort: 0, currentWorkspaceId: owner.routeId,
+  const views = useSessionViewState({ host: { apiPort: 0, currentWorkspaceId: owner.workspaceKey,
     currentSessionId: owner.sessionId, threadId: owner.threadId, scopeKey,
     gatewayUserViewStates: state.gatewayUserViewStates, expandDetails: state.expandDetails }, setState, onError });
-  useEffect(() => { void views.loadSessionViewState(owner.routeId, owner.sessionId); }, [views.loadSessionViewState, owner.routeId, owner.sessionId]);
+  useEffect(() => { void views.loadSessionViewState(owner.workspaceKey, owner.sessionId); }, [views.loadSessionViewState, owner.workspaceKey, owner.sessionId]);
   const selectionIntentRef = useRef(0);
   const [catalogRuntime] = useState(() => createSessionCatalogOutboxRuntime({ apiPort: 0, onError }));
   useEffect(() => {
@@ -70,8 +71,8 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
     return () => catalogRuntime.dispose();
   }, [catalogRuntime, seed.access]);
   const { currentTurnTimeline: timeline, getCurrentTurnTimeline } = useSessionTurnTimeline(state, latestStateRef, scopeKey);
-  const cacheOwner = useMemo(() => ({ gatewayId: seed.browserViewScope, workspaceId: owner.workspaceId,
-    sessionId: owner.sessionId, threadId: owner.threadId }), [seed.browserViewScope, owner.workspaceId, owner.sessionId, owner.threadId]);
+  const cacheOwner = useMemo(() => ({ gatewayId: owner.gatewayId, workspaceId: owner.workspaceId,
+    sessionId: owner.sessionId, threadId: owner.threadId }), [owner.gatewayId, owner.workspaceId, owner.sessionId, owner.threadId]);
   useLayoutEffect(() => {
     if (timeline) threadHistoryCache.remember(cacheOwner, timeline, error => onError(`保存历史缓存失败：${String(error)}`));
   }, [cacheOwner, timeline, onError]);
@@ -82,7 +83,7 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   }, [cacheOwner]);
   const history = useSessionTurnHistory({
     apiPort: 0, sessionId: owner.sessionId, threadId: owner.threadId,
-    workspaceId: owner.routeId, sessionCacheKey: scopeKey, getCurrentTimeline: getCurrentTurnTimeline,
+    workspaceId: owner.workspaceKey, sessionCacheKey: scopeKey, getCurrentTimeline: getCurrentTurnTimeline,
     reloadNonce: state.sessionHistoryReloadNonce, setState,
   });
   const activeJobId = state.activeJobIdsBySession.get(scopeKey) ?? null;
@@ -92,7 +93,7 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   });
   const { abortCurrentStream } = useSessionEventStream({
     apiPort: active ? 0 : null, sessionId: owner.sessionId, threadId: owner.threadId,
-    workspaceId: owner.routeId, workspaceRequestTarget: null, sessionCacheKey: scopeKey,
+    workspaceId: owner.workspaceKey, workspaceRequestTarget: null, sessionCacheKey: scopeKey,
     activeJobId, timelineReady: timeline?.phase === "ready" && timeline.projectionState === "ready",
     initialEventCursor: timeline?.eventCursor ?? null, refreshTurnHistory: history.refreshTurnHistory,
     loadTerminalJobTurn, setState,
@@ -100,7 +101,7 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   useSessionMessageStream({
     apiPort: active ? 0 : null, sessionId: owner.sessionId, threadId: owner.threadId,
     turnId: messageStreamTurnIdForSession(owner.sessionId, state, scopeKey),
-    workspaceId: owner.routeId, sessionCacheKey: scopeKey, setState,
+    workspaceId: owner.workspaceKey, sessionCacheKey: scopeKey, setState,
   });
   const wasActive = useRef(active);
   useEffect(() => {
@@ -108,12 +109,12 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
     wasActive.current = active;
   }, [active, history.refreshTurnHistory]);
   const content = useContentViewLoader({ apiPort: 0, currentSession: state.currentSession,
-    currentSessionGatewayWorkspaceId: owner.routeId, setState, displayChangesInChat: false });
+    currentSessionGatewayWorkspaceId: owner.workspaceKey, setState, displayChangesInChat: false });
   useContentViewEffects({ contentView: state.contentView, sessionId: owner.sessionId,
     refreshLLMRequestLogs: content.refreshLLMRequestLogs, refreshSessionChanges: content.refreshSessionChanges });
   const traceHistory = state.sessionTraceHistoryBySession.get(scopeKey) ?? null;
   const traces = useSessionTraceHistory({ apiPort: 0, currentSession: state.currentSession,
-    workspaceId: owner.routeId, threadId: owner.threadId, scopeKey,
+    workspaceId: owner.workspaceKey, threadId: owner.threadId, scopeKey,
     active: active && state.contentView === "events", history: traceHistory, setState });
   const receivedEvents = useMemo(() => [
     ...(traceHistory?.items ?? []).map(event => ({ id: `initial_load:${event.event_id}`, kind: "trace" as const,
@@ -122,28 +123,28 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   ], [traceHistory?.items, state.eventQueuesBySession, scopeKey, owner.sessionId]);
   const lifecycle = useSessionLifecycleActions({
     apiPort: 0, currentSession: state.currentSession,
-    activeGatewayWorkspaceId: owner.routeId, currentSessionGatewayWorkspaceId: owner.routeId,
-    defaultGatewayWorkspaceId: owner.routeId, readState, setState, abortCurrentStream,
+    activeGatewayWorkspaceId: owner.workspaceKey, currentSessionGatewayWorkspaceId: owner.workspaceKey,
+    defaultGatewayWorkspaceId: owner.workspaceKey, readState, setState, abortCurrentStream,
     invalidateAgentState: content.invalidateAgentState, sessionCatalogOutboxRuntime: catalogRuntime,
     gatewayUserAccess: seed.access, workspaceRequestTargets: seed.workspaces,
     selectionIntentRef, onSessionCreated,
   });
   const actions = useSessionRunActions({
     apiPort: 0, currentSession: state.currentSession, currentThreadId: owner.threadId,
-    activeGatewayWorkspaceId: owner.routeId, currentSessionGatewayWorkspaceId: owner.routeId,
-    currentSessionCacheKey: scopeKey, defaultGatewayWorkspaceId: owner.routeId,
+    activeGatewayWorkspaceId: owner.workspaceKey, currentSessionGatewayWorkspaceId: owner.workspaceKey,
+    currentSessionCacheKey: scopeKey, defaultGatewayWorkspaceId: owner.workspaceKey,
     contentView: state.contentView, setState, refreshAgentStateSnapshot: content.refreshAgentStateSnapshot,
     createSession: lifecycle.createSession,
   });
   const goal = useSessionGoalController({
     apiPort: 0, currentSessionId: owner.sessionId, currentMainThreadId: state.currentSession?.thread_id ?? null,
-    currentWorkspaceId: owner.routeId, setState,
+    currentWorkspaceId: owner.workspaceKey, setState,
   });
-  const refreshAgents = useCallback(async (routeId: string) => {
-    if (routeId !== owner.routeId) throw new Error("Agent 刷新请求与会话工作区不一致");
-    const agents = await listAgents(0, routeId);
+  const refreshAgents = useCallback(async (workspaceKey: string) => {
+    if (workspaceKey !== owner.workspaceKey) throw new Error("Agent 刷新请求与会话工作区不一致");
+    const agents = await listAgents(0, workspaceKey);
     setState(previous => ({ ...previous, agents }));
-  }, [owner.routeId]);
+  }, [owner.workspaceKey]);
   const applySettings = useCallback(async (uiSettings: WebUiSettings) => {
     setState(previous => ({ ...previous, uiSettings, uiSettingsLoaded: true }));
   }, []);

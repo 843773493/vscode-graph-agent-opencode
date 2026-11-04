@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import type { GatewayWorkspace, Session, SessionCatalogNode } from '../../types/backend';
 import { formatDateTime, formatTime } from '../../utils/format';
 
@@ -52,17 +53,14 @@ export function sessionCatalogTimePresentation(
 export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
   const lines = [workspace.name];
   if (workspace.connection_kind === 'remote_gateway') {
-    lines.push(`hostname: ${workspace.remote?.host ?? '<连接信息不可用>'}`);
+    lines.push(...workspace.remote_gateways.map(remote => `hostname: ${remote.host}`));
   }
   return lines.join('\n');
 }
 
 /** 远程 Gateway 展示名的唯一实现：优先 SSH 配置主机名。 */
 export function remoteGatewayName(workspace: GatewayWorkspace): string {
-  return workspace.remote?.ssh_config_host
-    ?? workspace.remote?.name
-    ?? workspace.remote?.host
-    ?? '远程 Gateway';
+  return workspace.remote_gateways.map(remote => remote.ssh_config_host ?? remote.name ?? remote.host).join('、') || '远程 Gateway';
 }
 
 export function workspaceFailurePresentation(
@@ -213,12 +211,12 @@ export function buildVisibleWorkspaceTree(
   collapsedWorkspaceIds: Set<string>,
 ): VisibleWorkspaceNode[] {
   const workspaceIds = new Set(
-    workspaces.map((workspace) => workspace.workspace_id),
+    workspaces.map((workspace) => gatewayWorkspaceKey(workspace)),
   );
   const childrenByParent = new Map<string, GatewayWorkspace[]>();
   const roots: GatewayWorkspace[] = [];
   for (const workspace of workspaces) {
-    const parentWorkspaceId = workspace.parent_workspace_id ?? null;
+    const parentWorkspaceId = nullableGatewayWorkspaceKey(workspace.parent_workspace);
     if (!parentWorkspaceId || !workspaceIds.has(parentWorkspaceId)) {
       roots.push(workspace);
       continue;
@@ -238,18 +236,18 @@ export function buildVisibleWorkspaceTree(
     depth: number,
     visible: boolean,
   ) => {
-    if (visited.has(workspace.workspace_id)) {
+    if (visited.has(gatewayWorkspaceKey(workspace))) {
       throw new Error(
-        `工作区父子关系形成循环: ${workspace.workspace_id}`,
+        `工作区父子关系形成循环: ${gatewayWorkspaceKey(workspace)}`,
       );
     }
-    visited.add(workspace.workspace_id);
+    visited.add(gatewayWorkspaceKey(workspace));
     if (visible) {
       result.push({ workspace, depth });
     }
     const childrenVisible =
-      visible && !collapsedWorkspaceIds.has(workspace.workspace_id);
-    for (const child of childrenByParent.get(workspace.workspace_id) ?? []) {
+      visible && !collapsedWorkspaceIds.has(gatewayWorkspaceKey(workspace));
+    for (const child of childrenByParent.get(gatewayWorkspaceKey(workspace)) ?? []) {
       visit(child, depth + 1, childrenVisible);
     }
   };
@@ -259,7 +257,7 @@ export function buildVisibleWorkspaceTree(
   }
   if (visited.size !== workspaces.length) {
     const unresolved = workspaces.find(
-      (workspace) => !visited.has(workspace.workspace_id),
+      (workspace) => !visited.has(gatewayWorkspaceKey(workspace)),
     );
     throw new Error(
       `工作区父子关系无法解析: ${unresolved?.workspace_id ?? "unknown"}`,

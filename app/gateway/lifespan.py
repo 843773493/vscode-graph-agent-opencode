@@ -190,7 +190,7 @@ async def lifespan(app: FastAPI):
     app.state.federation_control_store = federation_control
     async def federation_inventory() -> GatewayWorkspaceListDTO:
         return GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(check_health=False),
         )
 
@@ -300,7 +300,7 @@ async def lifespan(app: FastAPI):
             (target.workspace_id for target in registry.targets() if target.system_default),
             "",
         )
-        active_workspace_id = registry.active_workspace_id
+        active_workspace_id = registry.active_workspace
         active_workspace_target = (
             registry.resolve(active_workspace_id)
             if active_workspace_id is not None and registry.has_target(active_workspace_id)

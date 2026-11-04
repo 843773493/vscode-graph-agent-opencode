@@ -65,7 +65,7 @@ export default function AgentSessionsSessionTree({
     const expanded =
       node.children.length > 0 && !collapsedSessionIds.has(sessionId);
     const cacheKey = sessionScopeKey(
-      workspaceId ?? node.session.workspace_id,
+      workspaceId ?? null,
       sessionId,
     );
     return (

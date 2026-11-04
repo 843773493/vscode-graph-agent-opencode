@@ -42,6 +42,7 @@ from app.gateway.routes._shared import (
     get_registry,
     get_workspace_runtime_controller,
     resolve_management_directory,
+    resolve_workspace_key,
 )
 from app.gateway.routes.workspaces_managed import _remote_gateway_credential
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
@@ -56,7 +57,6 @@ from app.gateway.ssh_connections import (
     list_ssh_connection_options,
     resolve_ssh_connection_request,
 )
-from app.gateway.workspace_ids import build_workspace_id
 from app.schemas.gateway.directory import GatewayDirectoryListDTO
 from app.schemas.gateway.lifecycle import (
     GatewayRuntimeGroupRequest,
@@ -217,23 +217,19 @@ async def add_local_workspace(
             )
             registry.upsert(
                 WorkspaceTarget(
-                    workspace_id=build_workspace_id(
-                        "local",
-                        str(workspace_root),
-                        backend_url,
-                    ),
+                    gateway_id=registry.gateway_id,
+                    workspace_id=backend_workspace_id,
                     name=payload.name or _workspace_name(str(workspace_root)),
                     name_customized=bool(payload.name),
                     root_path=str(workspace_root),
                     backend_url=backend_url,
-                    backend_workspace_id=backend_workspace_id,
                     connection_kind="local",
                     owner="manual",
                     managed=False,
                 ),
                 runtime=WorkspaceRuntime(
                     service_urls={"workspace_api": backend_url},
-                    backend_workspace_id=backend_workspace_id,
+                    workspace_id=backend_workspace_id,
                 ),
                 activate=False,
             )
@@ -241,7 +237,7 @@ async def add_local_workspace(
         raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(),
         ),
         request_id=request_id,
@@ -325,7 +321,7 @@ async def add_remote_gateway(
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(),
         ),
         request_id=request_id,
@@ -352,16 +348,18 @@ async def reject_legacy_ssh_workspace(
 )
 async def activate_workspace(
     workspace_id: str,
+    request: Request,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        registry.activate(workspace_id)
+        registry.activate(workspace_key)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(
-        data=ActivateGatewayWorkspaceResultDTO(active_workspace_id=workspace_id),
+        data=ActivateGatewayWorkspaceResultDTO(active_workspace=registry.active_workspace_dto),
         request_id=request_id,
     )
 
@@ -372,6 +370,7 @@ async def activate_workspace(
 )
 async def reconnect_workspace(
     workspace_id: str,
+    request: Request,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -379,8 +378,9 @@ async def reconnect_workspace(
         get_workspace_runtime_controller
     ),
 ):
-    target_before = registry.resolve(workspace_id)
-    connection_id = target_before.remote_gateway_connection_id
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
+    target_before = registry.resolve(workspace_key)
+    connection_id = registry.remote_connection_for_target(target_before).connection_id if target_before.connection_kind == "remote_gateway" else None
     previous_commit = registry._last_committed_snapshot
     previous_revision = registry.registry_revision
     previous_runtime = (
@@ -389,7 +389,7 @@ async def reconnect_workspace(
         else None
     )
     try:
-        await controller.reconnect_ssh(workspace_id)
+        await controller.reconnect_ssh(workspace_key)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=failure_detail(
             error, stage="workspace_reconnect", label="工作区重连失败",
@@ -400,7 +400,7 @@ async def reconnect_workspace(
         )) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
         detail = failure_detail(error, stage="workspace_reconnect", label="工作区重连失败")
-        target = registry.resolve(workspace_id)
+        target = registry.resolve(workspace_key)
         current_runtime = (
             registry._remote_gateway_runtimes.get(connection_id)
             if connection_id is not None
@@ -408,7 +408,7 @@ async def reconnect_workspace(
         )
         published = (
             connection_id is not None
-            and target.remote_gateway_connection_id == connection_id
+            and connection_id in target.remote_gateway_connection_ids
             and registry._last_committed_snapshot is not previous_commit
             and (
                 registry._state_store is None
@@ -426,7 +426,7 @@ async def reconnect_workspace(
             and (target.connection_kind != "local" or not target.managed)
         ):
             try:
-                registry.mark_connection_error(workspace_id, detail)
+                registry.mark_connection_error(workspace_key, detail)
             # 同步 registry 写入普通失败附加原错，进程级异常继续直传。
             except Exception as secondary_error:  # noqa: BLE001
                 error.add_note("记录 connection_error 失败:\n" + "".join(format_exception(secondary_error)))
@@ -436,7 +436,7 @@ async def reconnect_workspace(
         raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(),
         ),
         request_id=request_id,
@@ -449,6 +449,7 @@ async def reconnect_workspace(
 )
 async def start_managed_workspace_backend(
     workspace_id: str,
+    request: Request,
     payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
@@ -457,14 +458,15 @@ async def start_managed_workspace_backend(
         get_workspace_runtime_controller
     ),
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
         if (
             auth.kind == "federation"
-            and registry.resolve(workspace_id).connection_kind != "local"
+            and registry.resolve(workspace_key).connection_kind != "local"
         ):
             raise ValueError("bounded federation 禁止委托嵌套远程工作区启动")
         result = await controller.start_managed_backend(
-            workspace_id,
+            workspace_key,
             request_id=request_id,
             group_request=payload,
         )
@@ -472,17 +474,17 @@ async def start_managed_workspace_backend(
         raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_start", label="工作区启动失败")) from error
     except PermissionError as error:
         detail = failure_detail(error, stage="workspace_start", label="工作区启动失败")
-        target = registry.resolve(workspace_id)
+        target = registry.resolve(workspace_key)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, detail)
+            registry.mark_connection_error(workspace_key, detail)
         raise HTTPException(status_code=409, detail=detail) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_start", label="工作区启动失败")) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
         detail = failure_detail(error, stage="workspace_start", label="工作区启动失败")
-        target = registry.resolve(workspace_id)
+        target = registry.resolve(workspace_key)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, detail)
+            registry.mark_connection_error(workspace_key, detail)
         raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -493,6 +495,7 @@ async def start_managed_workspace_backend(
 )
 async def stop_managed_workspace_backend(
     workspace_id: str,
+    request: Request,
     payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
@@ -501,14 +504,15 @@ async def stop_managed_workspace_backend(
         get_workspace_runtime_controller
     ),
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
         if (
             auth.kind == "federation"
-            and registry.resolve(workspace_id).connection_kind != "local"
+            and registry.resolve(workspace_key).connection_kind != "local"
         ):
             raise ValueError("bounded federation 禁止委托嵌套远程工作区关闭")
         result = await controller.stop_managed_backend(
-            workspace_id,
+            workspace_key,
             request_id=request_id,
             group_request=payload,
         )
@@ -527,6 +531,7 @@ async def stop_managed_workspace_backend(
 )
 async def safe_restart_managed_workspace_backend(
     workspace_id: str,
+    request: Request,
     payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
@@ -535,14 +540,15 @@ async def safe_restart_managed_workspace_backend(
         get_workspace_runtime_controller
     ),
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
         if (
             auth.kind == "federation"
-            and registry.resolve(workspace_id).connection_kind != "local"
+            and registry.resolve(workspace_key).connection_kind != "local"
         ):
             raise ValueError("bounded federation 禁止委托嵌套远程工作区重启")
         result = await controller.safe_restart_managed_backend(
-            workspace_id,
+            workspace_key,
             request_id=request_id,
             group_request=payload,
         )
@@ -552,9 +558,9 @@ async def safe_restart_managed_workspace_backend(
         raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_restart_safe", label="工作区安全重启失败")) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
         detail = failure_detail(error, stage="workspace_restart_safe", label="工作区安全重启失败")
-        target = registry.resolve(workspace_id)
+        target = registry.resolve(workspace_key)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, detail)
+            registry.mark_connection_error(workspace_key, detail)
         raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -565,6 +571,7 @@ async def safe_restart_managed_workspace_backend(
 )
 async def force_restart_managed_workspace_backend(
     workspace_id: str,
+    request: Request,
     payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
@@ -573,14 +580,15 @@ async def force_restart_managed_workspace_backend(
         get_workspace_runtime_controller
     ),
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
         if (
             auth.kind == "federation"
-            and registry.resolve(workspace_id).connection_kind != "local"
+            and registry.resolve(workspace_key).connection_kind != "local"
         ):
             raise ValueError("bounded federation 禁止委托嵌套远程工作区重启")
         result = await controller.force_restart_managed_backend(
-            workspace_id,
+            workspace_key,
             request_id=request_id,
             group_request=payload,
         )
@@ -590,9 +598,9 @@ async def force_restart_managed_workspace_backend(
         raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_restart_force", label="工作区强制重启失败")) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
         detail = failure_detail(error, stage="workspace_restart_force", label="工作区强制重启失败")
-        target = registry.resolve(workspace_id)
+        target = registry.resolve(workspace_key)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, detail)
+            registry.mark_connection_error(workspace_key, detail)
         raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -603,6 +611,7 @@ async def force_restart_managed_workspace_backend(
 )
 async def probe_external_workspace_backend(
     workspace_id: str,
+    request: Request,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -610,26 +619,27 @@ async def probe_external_workspace_backend(
         get_workspace_runtime_controller
     ),
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
         if (
             auth.kind == "federation"
-            and registry.resolve(workspace_id).connection_kind != "local"
+            and registry.resolve(workspace_key).connection_kind != "local"
         ):
             raise ValueError("bounded federation 禁止探测嵌套远程工作区")
-        await controller.probe_external_backend(workspace_id)
+        await controller.probe_external_backend(workspace_key)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_probe", label="工作区探测失败")) from error
     except (PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=failure_detail(error, stage="workspace_probe", label="工作区探测失败")) from error
     except (OSError, RuntimeError) as error:
         detail = failure_detail(error, stage="workspace_probe", label="工作区探测失败")
-        target = registry.resolve(workspace_id)
+        target = registry.resolve(workspace_key)
         if target.connection_kind != "local" or not target.managed:
-            registry.mark_connection_error(workspace_id, detail)
+            registry.mark_connection_error(workspace_key, detail)
         raise HTTPException(status_code=502, detail=detail) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(),
         ),
         request_id=request_id,
@@ -647,12 +657,12 @@ async def reorder_workspaces(
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
     try:
-        registry.reorder(payload.workspace_ids)
+        registry.reorder([(owner.gateway_id, owner.workspace_id) for owner in payload.workspaces])
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(),
         ),
         request_id=request_id,
@@ -665,25 +675,27 @@ async def reorder_workspaces(
 )
 async def update_workspace(
     workspace_id: str,
+    request: Request,
     payload: UpdateGatewayWorkspaceRequest,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        update_fields: dict[str, str | None] = {}
+        update_fields: dict[str, object] = {}
         if "name" in payload.model_fields_set:
             update_fields["name"] = payload.name
-        if "parent_workspace_id" in payload.model_fields_set:
-            update_fields["parent_workspace_id"] = payload.parent_workspace_id
-        registry.update(workspace_id, **update_fields)
+        if "parent_workspace" in payload.model_fields_set:
+            update_fields["parent_workspace"] = (payload.parent_workspace.gateway_id, payload.parent_workspace.workspace_id) if payload.parent_workspace is not None else None
+        registry.update(workspace_key, **update_fields)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(),
         ),
         request_id=request_id,
@@ -696,6 +708,7 @@ async def update_workspace(
 )
 async def remove_workspace(
     workspace_id: str,
+    request: Request,
     payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     force: bool = False,
     _: str = Depends(verify_gateway_token),
@@ -704,23 +717,24 @@ async def remove_workspace(
     port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
     controller: Annotated[GatewayWorkspaceRuntimeController, Depends(get_workspace_runtime_controller)] = None,
 ):
+    workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
-        target = registry.validate_target_removal(workspace_id, owner="manual_crud")
+        target = registry.validate_target_removal(workspace_key, owner="manual_crud")
         managed_local = target.connection_kind == "local" and target.managed
         if managed_local:
             result = await controller.remove_managed_workspace(
-                workspace_id, request_id=request_id, group_request=payload, force=force,
+                workspace_key, request_id=request_id, group_request=payload, force=force,
             )
             if result.status == "blocked":
                 raise HTTPException(status_code=409, detail=result.model_dump(mode="json"))
         try:
-            await port_forward_manager.remove_workspace(workspace_id)
+            await port_forward_manager.remove_workspace(workspace_key)
         except (LookupError, ValueError, OSError, RuntimeError, httpx.HTTPError) as error:
             raise port_forward_http_error(
                 error, stage="workspace_remove", permission_status_code=403,
             ) from error
         if not managed_local:
-            registry.remove(workspace_id, owner="manual_crud")
+            registry.remove(workspace_key, owner="manual_crud")
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     except LookupError as error:
@@ -731,7 +745,7 @@ async def remove_workspace(
         raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_remove", label="工作区删除失败")) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(),
         ),
         request_id=request_id,

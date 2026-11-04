@@ -1,5 +1,5 @@
 import type { APIResponse, CursorPage } from "../types/backend";
-import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
+import { gatewayWorkspaceOwner, workspaceOwnerFromKey, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "./workspaceIdentity";
 import { abortReason, awaitWithAbort } from "../utils/abortable";
 
 export const DEFAULT_BACKEND_HOST = "127.0.0.1";
@@ -217,24 +217,14 @@ function createRequestAbortState(
   };
 }
 
-export function workspaceHeader(workspaceId?: string | null): Record<string, string> {
-  return workspaceId ? { "X-BoxTeam-Workspace-Id": workspaceId } : {};
+export function workspaceHeader(selection?: string | WorkspaceOwner | null): Record<string, string> {
+  if (!selection) return {};
+  const owner = typeof selection === "string" ? workspaceOwnerFromKey(selection) : selection;
+  return { "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId };
 }
 
-export function gatewayWorkspaceRequestHeaders(
-  target: GatewayWorkspaceRequestTarget,
-): Record<string, string> {
-  const headers = workspaceHeader(target.workspace_id);
-  if (target.connection_kind === "local") {
-    const backendWorkspaceId = target.backend_workspace_id;
-    if (!backendWorkspaceId) {
-      throw new Error(
-        `Gateway workspace target 缺少 backend_workspace_id: ${target.workspace_id}`,
-      );
-    }
-    headers["X-BoxTeam-Backend-Workspace-Id"] = backendWorkspaceId;
-  }
-  return headers;
+export function gatewayWorkspaceRequestHeaders(target: GatewayWorkspaceRequestTarget): Record<string, string> {
+  return workspaceHeader(gatewayWorkspaceOwner(target));
 }
 
 export function getApiBaseUrl(port: number): string {

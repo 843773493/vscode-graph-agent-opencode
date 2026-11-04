@@ -1,3 +1,5 @@
+import { workspaceOwnerFromKey } from "../../api/workspaceIdentity";
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback, type MutableRefObject } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
@@ -87,8 +89,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       }
 
       const { workspaces } = result;
-      const activeWorkspaceIsListed = workspaces.active_workspace_id === null
-        || workspaces.items.some((item) => item.workspace_id === workspaces.active_workspace_id);
+      const activeWorkspaceIsListed = nullableGatewayWorkspaceKey(workspaces.active_workspace) === null
+        || workspaces.items.some((item) => gatewayWorkspaceKey(item) === nullableGatewayWorkspaceKey(workspaces.active_workspace));
       setState((prev) => {
         if (!generationIsCurrent()) return prev;
         return {
@@ -118,10 +120,10 @@ export function useGatewayWorkspaceRuntimeLifecycle({
     }
 
     const { workspaces } = outcome;
-    const activeWorkspaceIsListed = workspaces.active_workspace_id === null
-      || workspaces.items.some((item) => item.workspace_id === workspaces.active_workspace_id);
+    const activeWorkspaceIsListed = nullableGatewayWorkspaceKey(workspaces.active_workspace) === null
+      || workspaces.items.some((item) => gatewayWorkspaceKey(item) === nullableGatewayWorkspaceKey(workspaces.active_workspace));
     if (!activeWorkspaceIsListed) {
-      const detail = `Gateway 返回的活动工作区不在工作区列表中: ${workspaces.active_workspace_id}`;
+      const detail = `Gateway 返回的活动工作区不在工作区列表中: ${nullableGatewayWorkspaceKey(workspaces.active_workspace)}`;
       if (outcome.kind === "readback") {
         const message = `${errorMessage(outcome.postError)}；读取 Gateway 工作区列表失败: ${detail}`;
         setState((prev) => {
@@ -165,7 +167,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       if (appliedWorkspaceId === null) {
         throw new Error("工作区刷新未生效：本轮刷新已被更新的请求作废");
       }
-      if (appliedWorkspaceId !== workspaces.active_workspace_id) {
+      if (appliedWorkspaceId !== nullableGatewayWorkspaceKey(workspaces.active_workspace)) {
         throw new Error(`工作区刷新结果与 Gateway 活动工作区不一致: ${appliedWorkspaceId}`);
       }
       if (expectedListRequest !== gatewayListRequestRef.current || !selectionIsCurrent()) {
@@ -227,8 +229,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       const selectionIntent = selectionIntentRef.current;
       const resumeObservations = pauseWorkspaceObservations([
         workspaceId,
-        ...(groupRequest?.expected_workspace_ids ?? []),
-        ...(groupRequest?.desired_workspace_ids ?? []),
+        ...(groupRequest?.expected_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
+        ...(groupRequest?.desired_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
       ]);
       try {
         const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
@@ -297,8 +299,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       const selectionIntent = selectionIntentRef.current;
       const resumeObservations = pauseWorkspaceObservations([
         workspaceId,
-        ...(groupRequest?.expected_workspace_ids ?? []),
-        ...(groupRequest?.desired_workspace_ids ?? []),
+        ...(groupRequest?.expected_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
+        ...(groupRequest?.desired_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
       ]);
       try {
         const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
@@ -360,8 +362,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       const selectionIntent = selectionIntentRef.current;
       const resumeObservations = pauseWorkspaceObservations([
         workspaceId,
-        ...(groupRequest?.expected_workspace_ids ?? []),
-        ...(groupRequest?.desired_workspace_ids ?? []),
+        ...(groupRequest?.expected_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
+        ...(groupRequest?.desired_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
       ]);
       try {
         const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
@@ -438,8 +440,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       const selectionIntent = selectionIntentRef.current;
       const resumeObservations = pauseWorkspaceObservations([
         workspaceId,
-        ...(groupRequest?.expected_workspace_ids ?? []),
-        ...(groupRequest?.desired_workspace_ids ?? []),
+        ...(groupRequest?.expected_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
+        ...(groupRequest?.desired_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
       ]);
       try {
         const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;

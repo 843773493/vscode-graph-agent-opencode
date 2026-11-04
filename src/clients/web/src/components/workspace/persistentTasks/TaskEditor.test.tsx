@@ -15,7 +15,7 @@ test("编辑基础字段保留null比较值及未展开的全部高级配置", a
   const saved: PersistentTaskConfigurationDTO[] = [];
   let renderer!: ReactTestRenderer;
   try {
-    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ workspace_id: "route", backend_workspace_id: "ws", connection_kind: "local" }} configuration={config} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return true; }} />); });
+    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ gateway_id: "gateway-test", workspace_id: "ws" }} configuration={config} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return true; }} />); });
     const name = renderer.root.findAllByType("input").find((node) => node.props.maxLength === 200)!;
     await act(async () => { name.props.onChange({ target: { value: "只改名称" } }); });
     await act(async () => { await renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
@@ -27,7 +27,7 @@ test("重新选择规则时重置比较输入，不沿用已移除判断器的�
   let renderer!: ReactTestRenderer;
   const saved: PersistentTaskConfigurationDTO[] = [];
   try {
-    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ workspace_id: "route", backend_workspace_id: "ws", connection_kind: "local" }} configuration={config} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return true; }} />); });
+    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ gateway_id: "gateway-test", workspace_id: "ws" }} configuration={config} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return true; }} />); });
     const select = () => renderer.root.findAllByType("select").find((node) => node.props["aria-label"] === "判断方式")!;
     const toggle = () => renderer.root.findByProps({ "aria-label": "启用附加条件" });
     await act(async () => { toggle().props.onChange({ target: { checked: false } }); });
@@ -44,7 +44,7 @@ test("普通定时默认隐藏判断器，增加模型条件时保留时间、�
   const saved: PersistentTaskConfigurationDTO[] = [];
   let renderer!: ReactTestRenderer;
   try {
-    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ workspace_id: "route", backend_workspace_id: "ws", connection_kind: "local" }} configuration={original} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return false; }} />); });
+    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ gateway_id: "gateway-test", workspace_id: "ws" }} configuration={original} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return false; }} />); });
     expect(renderer.root.findAllByProps({ "aria-label": "判断方式" })).toHaveLength(0);
     await act(async () => { await renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
     expect(saved[0]).toEqual(original);
@@ -60,7 +60,7 @@ test("普通定时默认隐藏判断器，增加模型条件时保留时间、�
 test("未知组件版本明确不可编辑，不生成替代配置", async () => {
   let renderer!: ReactTestRenderer;
   try {
-    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ workspace_id: "route", backend_workspace_id: "ws", connection_kind: "local" }} configuration={{ ...config, context: { ...config.context!, version: "future" } }} busy={false} onCancel={() => {}} onSave={async () => { throw new Error("不得保存未知组件"); }} />); });
+    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ gateway_id: "gateway-test", workspace_id: "ws" }} configuration={{ ...config, context: { ...config.context!, version: "future" } }} busy={false} onCancel={() => {}} onSave={async () => { throw new Error("不得保存未知组件"); }} />); });
     expect(renderer.root.findAllByType("form")).toHaveLength(0);
     expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toContain("不支持的组件版本");
   } finally { act(() => renderer?.unmount()); }
@@ -73,7 +73,7 @@ test("会话动作保留三种策略、回报与UI选项，并保存同一完整
   const saved: PersistentTaskConfigurationDTO[] = [];
   let renderer!: ReactTestRenderer;
   try {
-    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ workspace_id: "route", backend_workspace_id: "backend-owner", connection_kind: "local" }} configuration={original} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return true; }} />); });
+    await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={{ gateway_id: "gateway-test", workspace_id: "backend-owner" }} configuration={original} busy={false} onCancel={() => {}} onSave={async (value) => { saved.push(value); return true; }} />); });
     const select = (name: string) => renderer.root.findByProps({ "aria-label": name });
     expect(select("会话策略").findAllByType("option").map((node) => node.props.value)).toEqual(["new_per_run", "continue_existing", "fork_new_and_report_back"]);
     await act(async () => { select("会话策略").props.onChange({ target: { value: "fork_new_and_report_back" } }); });
@@ -93,7 +93,7 @@ test("会话动作保留三种策略、回报与UI选项，并保存同一完整
 
 test("会话创建预填工作目标，编辑既有任务时保持其原目标", async () => {
   let renderer!: ReactTestRenderer;
-  const owner = { workspace_id: "route", backend_workspace_id: "ws", connection_kind: "local" as const };
+  const owner = { gateway_id: "gateway-test", workspace_id: "ws" };
   const defaultUri = "boxteam://workspace/ws/resources/session/current/threads/main";
   try {
     await act(async () => { renderer = create(<TaskEditor apiPort={8014} target={owner} initialTargetUri={defaultUri} busy={false} onCancel={() => {}} onSave={async () => true} />); });

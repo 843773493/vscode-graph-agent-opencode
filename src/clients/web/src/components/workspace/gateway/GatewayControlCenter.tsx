@@ -1,12 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   getGatewayHealth,
+  reconnectRemoteGatewayConnection,
   restartDevelopmentRuntime,
 } from "../../../gatewayApi";
 import type {
   AddSshGatewayWorkspaceRequest,
   GatewayHealth,
   GatewayWorkspace,
+  GatewayRemoteConnectionSummary,
   WebUiSettings,
   WebUiSettingsUpdate,
 } from "../../../types/backend";
@@ -29,7 +31,6 @@ interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
   gatewayError: string | null;
   onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
   onRefresh: () => Promise<void>;
-  onReconnect: (workspaceId: string) => Promise<void>;
   uiSettings: WebUiSettings;
   onUpdateUiSettings: (update: WebUiSettingsUpdate) => Promise<void>;
 }
@@ -40,7 +41,6 @@ export default function GatewayControlCenter({
   gatewayError,
   onAddSsh,
   onRefresh,
-  onReconnect,
   onStart, onStop, onSafeRestart, onForceRestart,
   uiSettings,
   onUpdateUiSettings,
@@ -129,24 +129,21 @@ export default function GatewayControlCenter({
     }
   };
 
-  const reconnect = async (workspace: GatewayWorkspace) => {
-    if (!workspace.remote) {
-      setOperationError(`远程连接 ${workspace.workspace_id} 缺少 Gateway 摘要`);
-      return;
-    }
+  const reconnect = async (remote: GatewayRemoteConnectionSummary) => {
     const accepted = await confirm({
       title: "重新连接远程 Gateway",
-      message: `重新连接“${workspace.remote.ssh_config_host ?? workspace.remote.host}”？\n\n该 Gateway 下的请求会短暂中断。`,
+      message: `重新连接“${remote.ssh_config_host ?? remote.host}”？\n\n该 Gateway 下的请求会短暂中断。`,
       confirmText: "重新连接",
     });
     if (!accepted) return;
-    setReconnectingId(workspace.remote.gateway_connection_id);
+    setReconnectingId(remote.gateway_connection_id);
     setOperationError(null);
     setOperationNotice(null);
     try {
-      await onReconnect(workspace.workspace_id);
+      await reconnectRemoteGatewayConnection(apiPort, remote.gateway_connection_id);
+      await onRefresh();
       await loadHealth();
-      setOperationNotice(`远程 Gateway「${workspace.remote.ssh_config_host ?? workspace.remote.host}」已重新连接。`);
+      setOperationNotice(`远程 Gateway「${remote.ssh_config_host ?? remote.host}」已重新连接。`);
     } catch (error) {
       setOperationError(errorMessage(error));
     } finally {
@@ -266,9 +263,8 @@ export default function GatewayControlCenter({
             {remoteGatewayGroups.length > 0 ? (
               <div className="gateway-remote-connection-list">
                 {remoteGatewayGroups.map((group) => {
-                  const workspace = group.workspaces[0];
-                  const remote = workspace?.remote;
-                  if (!workspace || !remote) throw new Error(`远程 Gateway 分组 ${group.key} 缺少连接摘要`);
+                  const remote = group.remote;
+                  if (!remote) throw new Error(`远程 Gateway 分组 ${group.key} 缺少连接摘要`);
                   const connectionError = group.workspaces.find(
                     (item) => item.connection_error,
                   )?.connection_error;
@@ -282,7 +278,7 @@ export default function GatewayControlCenter({
                         <small>{connectionError ?? group.connectionLabel}</small>
                         <code title={remote.gateway_id}>{remote.gateway_id}</code>
                       </div>
-                      <div className="gateway-remote-connection-meta"><span>{group.workspaces.length} 个工作区</span><button type="button" disabled={isReconnecting} onClick={() => void reconnect(workspace)}>{isReconnecting ? "连接中…" : "重新连接"}</button></div>
+                      <div className="gateway-remote-connection-meta"><span>{group.workspaces.length} 个工作区</span><button type="button" disabled={isReconnecting} onClick={() => void reconnect(remote)}>{isReconnecting ? "连接中…" : "重新连接"}</button></div>
                     </article>
                   );
                 })}

@@ -7,7 +7,7 @@ import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from '../../../web/src/api/http.js';
 import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
 import type { FederatedSearchBranchDTO, FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
-import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v1/public.js';
+import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import type { WorkspaceSearchResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
@@ -52,14 +52,14 @@ function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, labe
   });
   if (page.category === 'thread' && page.threads) return page.threads.items.map(item => {
     if (item.workspace_id !== owner.workspaceId) throw new Error('Thread 名称查询改变了工作区归属');
-    const input = new ThreadInput({ ...owner, routeId: '', sessionId: item.session_id, threadId: item.thread_id, title: item.title });
+    const input = new ThreadInput({ ...owner, workspaceKey: '', sessionId: item.session_id, threadId: item.thread_id, title: item.title });
     return { kind: 'resource', resource: input.resource, title: item.title,
       description: `${label} · ${item.session_title} · ${item.thread_id}`, detail: `${item.kind} Thread · ${item.session_id} / ${item.thread_id}` };
   });
   if (page.category === 'trace' && page.traces) return page.traces.items.map(item => {
     const reference = item.match?.reference;
     if (!reference || !item.session_uri) throw new Error('Trace 命中缺少精确 Thread 或事件位置');
-    const input = new ThreadInput({ ...owner, routeId: '', sessionId: reference.session_id, threadId: reference.thread_id, title: item.session_title });
+    const input = new ThreadInput({ ...owner, workspaceKey: '', sessionId: reference.session_id, threadId: reference.thread_id, title: item.session_title });
     return { kind: 'resource', resource: input.resource, trace: item.match, title: item.session_title,
       description: item.match!.preview.replace(/\s+/g, ' '),
       detail: `${label} · Trace ${item.match!.event_type} · ${reference.session_id} / ${reference.thread_id} · ${reference.event_id}` };
@@ -72,7 +72,7 @@ function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, labe
   });
   if ((page.category === 'message' || page.category === 'tool_result') && page.messages) return page.messages.items.map(({ thread, match }) => {
     if (!thread || !match?.reference || thread.workspace_id !== owner.workspaceId) throw new Error('消息命中缺少精确归属或位置');
-    const input = new ThreadInput({ ...owner, routeId: '', sessionId: thread.session_id, threadId: thread.thread_id, title: thread.title });
+    const input = new ThreadInput({ ...owner, workspaceKey: '', sessionId: thread.session_id, threadId: thread.thread_id, title: thread.title });
     return { kind: 'resource', resource: input.resource, message: match, title: thread.title, description: match.preview.replace(/\s+/g, ' '),
       detail: `${label} · ${thread.session_title} · ${match.role === 'tool' ? `工具结果 ${match.tool_name} · ${match.tool_call_id}` : match.role === 'user' ? '用户消息' : '助手消息'} · ${thread.session_id} / ${thread.thread_id} · ${match.turn_id}` };
   });
@@ -87,9 +87,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
   disposables.add(token.onCancellationRequested(() => abort.abort()));
   const alive = () => !abort.signal.aborted && !token.isCancellationRequested;
   const snapshot = workspaceContext.getSnapshot();
-  const ownerLabel = (owner: WorkspaceOwner) => snapshot.workspaces.find(target => target.connection_kind === 'local'
-    ? snapshot.gatewayId === owner.gatewayId && target.backend_workspace_id === owner.workspaceId
-    : target.remote?.gateway_id === owner.gatewayId && target.remote.remote_workspace_id === owner.workspaceId)?.name ?? owner.workspaceId;
+  const ownerLabel = (owner: WorkspaceOwner) => snapshot.workspaces.find(target => target.gateway_id === owner.gatewayId && target.workspace_id === owner.workspaceId)?.name ?? owner.workspaceId;
   scopeLabel(owners.map(ownerLabel).join('、'));
   const branches: SearchBranch<SearchCategory>[] = selected.flatMap(category => owners.map(owner => ({ owner, category,
     key: `${searchOwnerKey(owner)}/${category}`, label: owners.length === 1 ? category : `${ownerLabel(owner)} · ${category}`,

@@ -18,9 +18,8 @@ afterEach(() => {
 });
 
 const workspaceTarget = {
-  workspace_id: "workspace-1",
-  backend_workspace_id: "backend-workspace-1",
-  connection_kind: "local",
+  workspace_id: "00000000-0000-4000-8000-000000000001",
+  gateway_id: "gateway-test",
 } as const;
 
 describe("会话目录 operation 状态闭集", () => {
@@ -39,7 +38,7 @@ describe("会话目录批量入队协议", () => {
       request = captured;
       return Response.json({
         data: {
-          workspace_id: "workspace-1",
+          workspace_id: "00000000-0000-4000-8000-000000000001",
           accepted_count: 1,
           receipts: [{
             operation_id: "op_00000000000000000000000000000001",
@@ -73,9 +72,9 @@ describe("会话目录批量入队协议", () => {
     expect(request!.path).toBe("/api/v1/session-catalog/operations:enqueue");
     expect(request!.method).toBe("POST");
     expect(new Headers(request!.init?.headers).get("X-BoxTeam-Workspace-Id"))
-      .toBe("workspace-1");
-    expect(new Headers(request!.init?.headers).get("X-BoxTeam-Backend-Workspace-Id"))
-      .toBe("backend-workspace-1");
+      .toBe("00000000-0000-4000-8000-000000000001");
+    expect(new Headers(request!.init?.headers).get("X-BoxTeam-Target-Gateway-Id"))
+      .toBe("gateway-test");
     expect(JSON.parse(String(request!.init?.body))).toEqual({ intents: [{
       client_operation_id: "op_00000000000000000000000000000001",
       client_sequence: 1,
@@ -132,7 +131,7 @@ describe("会话目录按 ID 状态查询与 snapshot", () => {
   test("状态查询逐 ID 携带 query 并原样返回 unknown_operation_ids", async () => {
     installSessionApiFetchMock(() => Response.json({
       data: {
-        workspace_id: "workspace-1",
+        workspace_id: "00000000-0000-4000-8000-000000000001",
         catalog_revision: 12,
         items: [],
         unknown_operation_ids: ["op_00000000000000000000000000000009"],
@@ -156,7 +155,7 @@ describe("会话目录按 ID 状态查询与 snapshot", () => {
 
   test("snapshot 返回同一 revision 与事件水位", async () => {
     installSessionApiFetchMock(() => Response.json({
-      data: { workspace_id: "workspace-1", catalog_revision: 12, event_seq_watermark: 7, generation: 12 },
+      data: { workspace_id: "00000000-0000-4000-8000-000000000001", catalog_revision: 12, event_seq_watermark: 7, generation: 12 },
       request_id: "req-snapshot",
     }));
     const snapshot = await fetchSessionCatalogSnapshot(48_506, workspaceTarget);
@@ -172,11 +171,11 @@ describe("会话目录 navigation 事件 channel", () => {
       request = captured;
       return Response.json({
         data: {
-          workspace_id: "workspace-1",
+          workspace_id: "00000000-0000-4000-8000-000000000001",
           event_seq_watermark: 9,
           items: [{
             event_seq: 8,
-            workspace_id: "workspace-1",
+            workspace_id: "00000000-0000-4000-8000-000000000001",
             operation_id: "op_00000000000000000000000000000001",
             queue_seq: 1,
             kind: "rename_node",

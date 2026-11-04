@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.protocol.generated.boxteam.common.v1 import service_lifecycle_pb2
-from app.protocol.generated.boxteam.gateway.v1 import health_pb2
+from app.protocol.generated.boxteam.gateway.v2 import health_pb2
 from app.schemas.gateway.diagnostics import GatewayHealthDTO
 
 
@@ -16,6 +16,7 @@ def gateway_health_to_proto(
         process_id=value.process_id,
         development_restart_available=value.development_restart_available,
     )
-    if value.active_workspace_id is not None:
-        status.active_workspace_id = value.active_workspace_id
+    if value.active_workspace is not None:
+        status.active_workspace.gateway_id = value.active_workspace.gateway_id
+        status.active_workspace.workspace_id = value.active_workspace.workspace_id
     return status

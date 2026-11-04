@@ -11,11 +11,12 @@ from uuid import uuid4
 import httpx
 
 from app.core.failures import failure_detail
-from app.core.path_utils import get_gateway_root
 from app.gateway.auth import LOCAL_TOKEN
-from app.gateway.credentials import FederationCredentialStore
-from app.gateway.proxy_upstream import load_proxy_gateway_id
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    WorkspaceSelector,
+    WorkspaceTarget,
+)
 from app.gateway.remote_gateway import (
     reconnect_remote_gateway,
     refresh_remote_gateway_projections,
@@ -34,6 +35,7 @@ from app.schemas.gateway.lifecycle import (
     GatewayRuntimeRestartResultDTO,
     GatewayRuntimeStateResultDTO,
 )
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 
 _LOCK_SHARDS = 64
@@ -73,31 +75,31 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         )
 
     async def start_managed_backend(
-        self, workspace_id: str, *, request_id: str,
+        self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeStateResultDTO:
         return await self._managed_group_action(workspace_id, "start", request_id=request_id, group_request=group_request)
 
     async def stop_managed_backend(
-        self, workspace_id: str, *, request_id: str,
+        self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeStateResultDTO:
         return await self._managed_group_action(workspace_id, "stop", request_id=request_id, group_request=group_request)
 
     async def safe_restart_managed_backend(
-        self, workspace_id: str, *, request_id: str,
+        self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeRestartResultDTO:
         return await self._managed_group_action(workspace_id, "restart-safe", request_id=request_id, group_request=group_request)
 
     async def force_restart_managed_backend(
-        self, workspace_id: str, *, request_id: str,
+        self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeRestartResultDTO:
         return await self._managed_group_action(workspace_id, "restart-force", request_id=request_id, group_request=group_request)
 
     async def remove_managed_workspace(
-        self, workspace_id: str, *, request_id: str,
+        self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None, force: bool = False,
     ) -> GatewayRuntimeRestartResultDTO:
         return await self._managed_group_action(
@@ -179,7 +181,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 },
                 headers=self._backend_headers(
                     request_id,
-                    target.backend_workspace_id,
+                    target.workspace_id,
                 ),
             )
             response.raise_for_status()
@@ -198,12 +200,12 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 f"{target.backend_url.rstrip('/')}/api/v1/health",
                 headers=self._backend_headers(
                     request_id,
-                    target.backend_workspace_id,
+                    target.workspace_id,
                 ),
             )
             health_response.raise_for_status()
             health_payload = validate_workspace_health_identity(
-                health_response.json(), target.backend_workspace_id,
+                health_response.json(), target.workspace_id,
             )
             health_proof = health_payload.get("config_proof")
             if not isinstance(health_proof, dict):
@@ -214,7 +216,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 json=health_proof,
                 headers=self._backend_headers(
                     request_id,
-                    target.backend_workspace_id,
+                    target.workspace_id,
                 ),
             )
             resolve_response.raise_for_status()
@@ -230,7 +232,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 f"{target.backend_url.rstrip('/')}/api/v1/runtime/status",
                 headers=self._backend_headers(
                     request_id,
-                    target.backend_workspace_id,
+                    target.workspace_id,
                 ),
             )
             response.raise_for_status()
@@ -247,7 +249,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 f"{target.backend_url.rstrip('/')}/api/v1/config/reload-status",
                 headers=self._backend_headers(
                     request_id,
-                    target.backend_workspace_id,
+                    target.workspace_id,
                 ),
             )
         status_response.raise_for_status()
@@ -264,7 +266,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                     params={"candidate_ref": candidate_ref},
                     headers=self._backend_headers(
                         request_id,
-                        target.backend_workspace_id,
+                        target.workspace_id,
                     ),
                 )
                 retry_response.raise_for_status()
@@ -282,7 +284,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 params={"candidate_ref": candidate_ref},
                 headers=self._backend_headers(
                     request_id,
-                    target.backend_workspace_id,
+                    target.workspace_id,
                 ),
             )
             response.raise_for_status()
@@ -315,25 +317,22 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 f"{target.backend_url.rstrip('/')}{path}",
                 headers=self._backend_headers(
                     request_id,
-                    target.backend_workspace_id,
+                    target.workspace_id,
                 ),
             )
             response.raise_for_status()
         return self._response_data(response)
 
-    @staticmethod
     def _backend_headers(
+        self,
         request_id: str,
-        backend_workspace_id: str | None,
+        workspace_id: str,
     ) -> dict[str, str]:
-        if backend_workspace_id is None:
-            raise RuntimeError("Workspace API 调用缺少 backend UUID")
         return {
             "X-Local-Token": LOCAL_TOKEN,
             "X-Request-ID": request_id,
-            "X-BoxTeam-Workspace-Id": backend_workspace_id,
-            # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
-            "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
+            "X-BoxTeam-Workspace-Id": workspace_id,
+            "X-BoxTeam-Gateway-Id": self._registry.gateway_id,
         }
 
     @staticmethod
@@ -353,10 +352,12 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         return data
 
     @staticmethod
-    def _parse_blockers(value: object, workspace_id: str | None = None) -> list[GatewayRuntimeBlockerDTO]:
+    def _parse_blockers(value: object, target: WorkspaceTarget) -> list[GatewayRuntimeBlockerDTO]:
         if not isinstance(value, list):
             raise TypeError("Workspace API 生命周期响应缺少 blockers 数组")
-        return [GatewayRuntimeBlockerDTO.model_validate({**item, "workspace_id": workspace_id or item["workspace_id"]}) for item in value]
+        return [GatewayRuntimeBlockerDTO.model_validate({
+            **item, "gateway_id": target.gateway_id, "workspace_id": target.workspace_id,
+        }) for item in value]
 
     def _route_reference_blockers(
         self,
@@ -369,6 +370,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         if request_count:
             blockers.append(
                 GatewayRuntimeBlockerDTO(
+                    gateway_id=self._registry.gateway_id,
                     workspace_id=workspace_id,
                     kind="proxy_request",
                     resource_id=f"{workspace_id}:requests",
@@ -380,6 +382,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         if stream_count:
             blockers.append(
                 GatewayRuntimeBlockerDTO(
+                    gateway_id=self._registry.gateway_id,
                     workspace_id=workspace_id,
                     kind="proxy_stream",
                     resource_id=f"{workspace_id}:streams",
@@ -394,48 +397,52 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         self, target: WorkspaceTarget, data: dict[str, object], *,
         restart: bool = False, forced: bool = False,
     ) -> GatewayRuntimeStateResultDTO | GatewayRuntimeRestartResultDTO:
-        connection_id = target.remote_gateway_connection_id
-        if connection_id is None:
-            raise RuntimeError("远程生命周期响应缺少 Gateway 连接")
-        await refresh_remote_gateway_projections(registry=self._registry, connection_id=connection_id)
+        connection = self._registry.remote_connection_for_target(target)
+        if data.get("gateway_id") != target.gateway_id or data.get("workspace_id") != target.workspace_id:
+            raise RuntimeError("远程生命周期响应的工作区归属不匹配")
+        await refresh_remote_gateway_projections(registry=self._registry, connection_id=connection.connection_id)
         await self._reconcile_registry_dependents()
-        by_remote = {
-            item.remote_workspace_id: item.workspace_id for item in self._registry.targets()
-            if item.remote_gateway_connection_id == connection_id
-        }
 
-        def local_id(remote_id: object) -> str:
-            if not isinstance(remote_id, str) or remote_id not in by_remote:
-                raise RuntimeError(f"远程完整组响应包含未登记成员: {remote_id!r}")
-            return by_remote[remote_id]
+        def validate_member(workspace_id: object) -> str:
+            if not isinstance(workspace_id, str):
+                raise TypeError(f"远程完整组成员 UUID 非法: {workspace_id!r}")
+            member = self._registry.resolve((target.gateway_id, workspace_id))
+            member_connection = self._registry.remote_connection_for_target(member)
+            if member_connection.connection_id != connection.connection_id:
+                raise RuntimeError(f"远程完整组响应包含其他连接的成员: {member.key}")
+            return member.workspace_id
 
         raw_affected = data.get("affected_workspace_ids")
         if not isinstance(raw_affected, list):
             raise TypeError("远程完整组响应缺少 affected_workspace_ids")
-        affected = [local_id(member_id) for member_id in raw_affected]
-        blockers = [
-            blocker.model_copy(update={"workspace_id": local_id(blocker.workspace_id)})
-            for blocker in self._parse_blockers(data.get("blockers"))
-        ]
+        affected = [validate_member(member_id) for member_id in raw_affected]
+        raw_blockers = data.get("blockers")
+        if not isinstance(raw_blockers, list):
+            raise TypeError("远程完整组响应缺少 blockers 数组")
+        blockers = [GatewayRuntimeBlockerDTO.model_validate(item) for item in raw_blockers]
+        for blocker in blockers:
+            if blocker.gateway_id != target.gateway_id:
+                raise RuntimeError("远程完整组阻塞项的 Gateway 归属不匹配")
+            validate_member(blocker.workspace_id)
         result = {
-            "workspace_id": target.workspace_id, "status": data["status"],
+            "gateway_id": target.gateway_id, "workspace_id": target.workspace_id, "status": data["status"],
             "backend_generation": data.get("backend_generation"), "affected_workspace_ids": affected,
             "blockers": blockers,
             "workspaces": GatewayWorkspaceListDTO(
-                active_workspace_id=self._registry.active_workspace_id, items=await self._registry.list_dtos(),
+                active_workspace=GatewaySearchWorkspaceOwnerDTO(
+                    gateway_id=self._registry.active_workspace[0], workspace_id=self._registry.active_workspace[1],
+                ) if self._registry.active_workspace is not None else None,
+                items=await self._registry.list_dtos(),
             ),
         }
         return GatewayRuntimeRestartResultDTO.model_validate({**result, "forced": forced}) if restart else GatewayRuntimeStateResultDTO.model_validate(result)
 
-    async def reconnect_ssh(self, workspace_id: str) -> None:
+    async def reconnect_ssh(self, workspace_id: WorkspaceSelector) -> None:
         async with self._lock(workspace_id):
             target = self._registry.resolve(workspace_id)
-            if (
-                target.connection_kind != "remote_gateway"
-                or target.remote_gateway_connection_id is None
-            ):
+            if target.connection_kind != "remote_gateway":
                 raise ValueError("只有远程 Gateway 工作区可以重新连接 SSH 隧道")
-            connection_id = target.remote_gateway_connection_id
+            connection_id = self._registry.remote_connection_for_target(target).connection_id
             previous_commit = self._registry._last_committed_snapshot
             previous_revision = self._registry.registry_revision
             previous_runtime = self._registry._remote_gateway_runtimes.get(
@@ -478,7 +485,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 raise
             await self._reconcile_registry_dependents()
 
-    async def probe_external_backend(self, workspace_id: str) -> None:
+    async def probe_external_backend(self, workspace_id: WorkspaceSelector) -> None:
         async with self._lock(workspace_id):
             target = self._registry.resolve(workspace_id)
             if target.connection_kind == "remote_gateway":
@@ -488,51 +495,41 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
                 raise ValueError(
                     "只有外部本地后端可以执行重新探测"
                 )
-            if target.backend_workspace_id is None:
-                raise RuntimeError("外部 target 缺少 Backend UUID binding")
-            backend_workspace_id = await asyncio.to_thread(
+            actual_workspace_id = await asyncio.to_thread(
                 resolve_backend_workspace_id,
                 self._project_root,
-                self._registry.local_workspace_root(workspace_id, target.backend_workspace_id), initialize=False,
+                self._registry.local_workspace_root(target.workspace_id), initialize=False,
             )
-            if (
-                target.backend_workspace_id is not None
-                and target.backend_workspace_id != backend_workspace_id
-            ):
+            if target.workspace_id != actual_workspace_id:
                 raise RuntimeError(
-                    "外部 Workspace backend UUID 与 Gateway registry 不一致: "
-                    f"expected={target.backend_workspace_id}, actual={backend_workspace_id}"
+                    "外部 Workspace UUID 与 Gateway registry 不一致: "
+                    f"expected={target.workspace_id}, actual={actual_workspace_id}"
                 )
-            target.backend_workspace_id = backend_workspace_id
             await wait_for_workspace_health(
                 f"{target.backend_url.rstrip('/')}/api/v1/health",
-                backend_workspace_id,
+                target.workspace_id,
                 request_timeout_seconds=self._health_request_timeout_seconds,
                 poll_interval_seconds=self._health_poll_interval_seconds,
             )
             target.connection_error = None
             self._registry.upsert(target, activate=False)
 
-    def _lock(self, workspace_id: str) -> asyncio.Lock:
-        shard = zlib.crc32(workspace_id.encode("utf-8")) % _LOCK_SHARDS
+    def _lock(self, workspace_id: WorkspaceSelector) -> asyncio.Lock:
+        gateway_id, native_workspace_id = self._registry.workspace_key(workspace_id)
+        shard = zlib.crc32(f"{gateway_id}/{native_workspace_id}".encode()) % _LOCK_SHARDS
         return self._locks[shard]
 
     async def _delegated_probe(self, target: WorkspaceTarget) -> None:
-        connection_id = target.remote_gateway_connection_id
-        remote_workspace_id = target.remote_workspace_id
-        if connection_id is None or remote_workspace_id is None:
-            raise RuntimeError("远程投影工作区缺少所属 Gateway 信息")
-        credential = FederationCredentialStore(
-            storage_path=get_gateway_root() / "credentials" / "federation.json"
-        ).get(connection_id)
+        connection_id = self._registry.remote_connection_for_target(target).connection_id
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
                 (
                     f"{self._registry.remote_gateway_url(connection_id)}"
-                    f"/api/gateway/workspaces/{remote_workspace_id}/probe"
+                    f"/api/gateway/workspaces/{target.workspace_id}/probe"
                 ),
                 headers={
-                    "X-BoxTeam-Federation-Token": credential.token,
+                    **self._registry.target_request_headers(target),
+                    "X-BoxTeam-Gateway-Id": self._registry.gateway_id,
                 },
             )
             response.raise_for_status()
@@ -549,24 +546,19 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
     ) -> GatewayRuntimeRestartResultDTO:
         if not target.managed:
             raise ValueError("远程 Gateway 报告该后端不是托管目标，只能重新探测")
-        connection_id = target.remote_gateway_connection_id
-        remote_workspace_id = target.remote_workspace_id
-        if connection_id is None or remote_workspace_id is None:
-            raise RuntimeError("远程投影工作区缺少所属 Gateway 信息")
+        connection_id = self._registry.remote_connection_for_target(target).connection_id
         gateway_url = self._registry.remote_gateway_url(connection_id)
-        credential = FederationCredentialStore(
-            storage_path=get_gateway_root() / "credentials" / "federation.json"
-        ).get(connection_id)
         path = "restart-force" if forced else "restart-safe"
         async with httpx.AsyncClient(timeout=40) as client:
             response = await client.post(
                 (
                     f"{gateway_url}/api/gateway/workspaces/"
-                    f"{remote_workspace_id}/runtime/{path}"
+                    f"{target.workspace_id}/runtime/{path}"
                 ),
                 json=self._remote_group_request(target, group_request),
                 headers={
-                    "X-BoxTeam-Federation-Token": credential.token,
+                    **self._registry.target_request_headers(target),
+                    "X-BoxTeam-Gateway-Id": self._registry.gateway_id,
                     "X-Request-ID": request_id,
                 },
             )
@@ -587,22 +579,17 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
     ) -> GatewayRuntimeStateResultDTO:
         if not target.managed:
             raise ValueError("远程 Gateway 报告该工作区不是托管目标")
-        connection_id = target.remote_gateway_connection_id
-        remote_workspace_id = target.remote_workspace_id
-        if connection_id is None or remote_workspace_id is None:
-            raise RuntimeError("远程投影工作区缺少所属 Gateway 信息")
-        credential = FederationCredentialStore(
-            storage_path=get_gateway_root() / "credentials" / "federation.json"
-        ).get(connection_id)
+        connection_id = self._registry.remote_connection_for_target(target).connection_id
         async with httpx.AsyncClient(timeout=45) as client:
             response = await client.post(
                 (
                     f"{self._registry.remote_gateway_url(connection_id)}"
-                    f"/api/gateway/workspaces/{remote_workspace_id}/runtime/{action}"
+                    f"/api/gateway/workspaces/{target.workspace_id}/runtime/{action}"
                 ),
                 json=self._remote_group_request(target, group_request),
                 headers={
-                    "X-BoxTeam-Federation-Token": credential.token,
+                    **self._registry.target_request_headers(target),
+                    "X-BoxTeam-Gateway-Id": self._registry.gateway_id,
                     "X-Request-ID": request_id,
                 },
             )
@@ -618,19 +605,14 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
     def _remote_group_request(self, target: WorkspaceTarget, request: GatewayRuntimeGroupRequest | None) -> dict[str, object] | None:
         if request is None:
             return None
-        payload = request.model_dump()
-        for field in ("expected_workspace_ids", "desired_workspace_ids"):
-            ids = payload[field]
-            if ids is None:
-                continue
-            remote_ids = []
-            for workspace_id in ids:
-                member = self._registry.resolve(workspace_id)
-                if member.remote_gateway_connection_id != target.remote_gateway_connection_id or member.remote_workspace_id is None:
+        connection = self._registry.remote_connection_for_target(target)
+        for workspace_ids in (request.expected_workspace_ids, request.desired_workspace_ids):
+            for workspace_id in workspace_ids or ():
+                member = self._registry.resolve((target.gateway_id, workspace_id))
+                member_connection = self._registry.remote_connection_for_target(member)
+                if member_connection.connection_id != connection.connection_id:
                     raise ValueError("远端完整组成员必须属于同一已登记 Gateway 投影")
-                remote_ids.append(member.remote_workspace_id)
-            payload[field] = remote_ids
-        return payload
+        return request.model_dump()
 
     async def _reconcile_registry_dependents(self) -> None:
         if self._on_registry_reconciled is not None:
@@ -640,7 +622,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
 async def reconnect_gateway_workspace(
     *,
     registry: GatewayWorkspaceRegistry,
-    workspace_id: str,
+    workspace_id: WorkspaceSelector,
     project_root: Path,
     log_dir: Path,
     health_request_timeout_seconds: float = 2,
@@ -652,9 +634,7 @@ async def reconnect_gateway_workspace(
     target = registry.resolve(workspace_id)
 
     if target.connection_kind == "remote_gateway":
-        connection_id = target.remote_gateway_connection_id
-        if connection_id is None:
-            raise RuntimeError(f"远程工作区缺少 Gateway 连接信息: {workspace_id}")
+        connection_id = registry.remote_connection_for_target(target).connection_id
         await reconnect_remote_gateway(
             registry=registry,
             connection_id=connection_id,
@@ -672,40 +652,33 @@ async def reconnect_gateway_workspace(
             connection_drain_timeout_seconds=connection_drain_timeout_seconds,
             default_skill_groups=default_skill_groups,
         )
-        owner = registry.backend_owner(workspace_id)
+        owner = registry.backend_owner(target.key)
         request = GatewayRuntimeGroupRequest(
             expected_backend_generation=owner.contract.generation,
             expected_workspace_ids=list(owner.contract.workspace_ids),
         ) if owner is not None else None
-        await controller.start_managed_backend(workspace_id, request_id=f"reconnect_{uuid4().hex}", group_request=request)
+        await controller.start_managed_backend(target.key, request_id=f"reconnect_{uuid4().hex}", group_request=request)
         return
-    else:
-        if target.backend_workspace_id is None:
-            raise RuntimeError("外部 target 缺少 Backend UUID binding")
-        backend_workspace_id = await asyncio.to_thread(
-            resolve_backend_workspace_id,
-            project_root,
-            registry.local_workspace_root(workspace_id, target.backend_workspace_id), initialize=False,
+    actual_workspace_id = await asyncio.to_thread(
+        resolve_backend_workspace_id,
+        project_root,
+        registry.local_workspace_root(target.workspace_id), initialize=False,
+    )
+    if target.workspace_id != actual_workspace_id:
+        raise RuntimeError(
+            "外部 Workspace UUID 与 Gateway registry 不一致: "
+            f"expected={target.workspace_id}, actual={actual_workspace_id}"
         )
-        if (
-            target.backend_workspace_id is not None
-            and target.backend_workspace_id != backend_workspace_id
-        ):
-            raise RuntimeError(
-                "外部 Workspace backend UUID 与 Gateway registry 不一致: "
-                f"expected={target.backend_workspace_id}, actual={backend_workspace_id}"
-            )
-        target.backend_workspace_id = backend_workspace_id
-        await wait_for_workspace_health(
-            f"{target.backend_url.rstrip('/')}/api/v1/health",
-            backend_workspace_id,
-            request_timeout_seconds=health_request_timeout_seconds,
-            poll_interval_seconds=health_poll_interval_seconds,
-        )
-        runtime = WorkspaceRuntime(
-            service_urls={"workspace_api": target.backend_url},
-            backend_workspace_id=backend_workspace_id,
-        )
+    await wait_for_workspace_health(
+        f"{target.backend_url.rstrip('/')}/api/v1/health",
+        target.workspace_id,
+        request_timeout_seconds=health_request_timeout_seconds,
+        poll_interval_seconds=health_poll_interval_seconds,
+    )
+    runtime = WorkspaceRuntime(
+        service_urls={"workspace_api": target.backend_url},
+        workspace_id=target.workspace_id,
+    )
 
     target.connection_error = None
     registry.upsert(target, runtime=runtime, activate=False)

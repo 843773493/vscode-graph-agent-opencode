@@ -21,16 +21,18 @@ from app.gateway.runtime.workspace_process import (
     resolve_backend_workspace_ids,
 )
 
-from .core import WorkspaceIdentityConflictError
+from .core import WorkspaceIdentityConflictError, WorkspaceSelector
 
 if TYPE_CHECKING:
     from . import GatewayWorkspaceRegistry
 
 
 class RegistryRuntimeMixin:
-    def backend_owner(self, workspace_id: str) -> ManagedBackendOwner | None:
-        self.resolve(workspace_id)
-        return next((owner for owner in self._backend_owners.values() if workspace_id in owner.contract.workspace_ids), None)
+    def backend_owner(self, workspace_id: WorkspaceSelector) -> ManagedBackendOwner | None:
+        target = self.resolve(workspace_id)
+        if target.gateway_id != self.gateway_id:
+            return None
+        return next((owner for owner in self._backend_owners.values() if target.workspace_id in owner.contract.workspace_ids), None)
 
     def backend_owners(self) -> tuple[ManagedBackendOwner, ...]:
         return tuple(self._backend_owners.values())
@@ -49,18 +51,18 @@ class RegistryRuntimeMixin:
             root.mkdir(parents=True, exist_ok=True)
         workspace_id = resolve_backend_workspace_id(project_root, root, initialize=not bindings)
         for target in bindings:
-            if target.backend_workspace_id != workspace_id:
+            if target.workspace_id != workspace_id:
                 raise WorkspaceIdentityConflictError(
                     f"工作区原生根的 UUID 与原登记不匹配: registered={target.workspace_id}, "
-                    f"expected={target.backend_workspace_id}, actual={workspace_id}, root={root}"
+                    f"expected={target.workspace_id}, actual={workspace_id}, root={root}"
                 )
         return workspace_id
 
-    def local_workspace_root(self, workspace_id: str, backend_workspace_id: str) -> Path:
+    def local_workspace_root(self, workspace_id: str) -> Path:
         """只按精确 target/Backend 身份取得唯一 registry root binding。"""
         registry = cast("GatewayWorkspaceRegistry", self)
         target = registry.resolve(workspace_id)
-        if target.connection_kind != "local" or target.backend_workspace_id != backend_workspace_id:
+        if target.connection_kind != "local":
             raise RuntimeError(f"Gateway root binding 身份不匹配: workspace_id={workspace_id}")
         if not isinstance(target.root_path, str) or not target.root_path or not Path(target.root_path).is_absolute():
             raise RuntimeError(f"Gateway 缺少绝对 root binding: workspace_id={workspace_id}")
@@ -69,14 +71,16 @@ class RegistryRuntimeMixin:
     def resolve_backend_mounts(self, contract: ManagedBackendContract) -> tuple[MountedWorkspace, ...]:
         """组合同只给身份；根与辅助服务地址只从当前 registry 组装成启动输入。"""
         registry = cast("GatewayWorkspaceRegistry", self)
+        if contract.gateway_id != self.gateway_id:
+            raise ValueError("Backend 完整合同属于另一个原生 Gateway")
         mounts = []
         for member in contract.members:
             target = registry.resolve(member.workspace_id)
             if not target.managed:
                 raise RuntimeError(f"Backend 成员不是托管 target: {member.workspace_id}")
             mounts.append(MountedWorkspace(
-                member.backend_workspace_id,
-                self.local_workspace_root(member.workspace_id, member.backend_workspace_id),
+                member.workspace_id,
+                self.local_workspace_root(member.workspace_id),
                 target.local_service_urls.get("terminal_manager"),
                 target.local_service_urls.get("browser_manager"),
             ))
@@ -97,11 +101,11 @@ class RegistryRuntimeMixin:
         for target in registry.targets():
             if target.connection_kind != "local":
                 continue
-            if target.backend_workspace_id is None:
+            if target.workspace_id is None:
                 raise RuntimeError(f"本地 root binding 缺少 Backend UUID: {target.workspace_id}")
-            root = self.local_workspace_root(target.workspace_id, target.backend_workspace_id)
+            root = self.local_workspace_root(target.workspace_id)
             local_root_bindings.append(
-                (target.workspace_id, target.backend_workspace_id, root)
+                (target.workspace_id, target.workspace_id, root)
             )
 
         actual_ids = resolve_backend_workspace_ids(
@@ -129,7 +133,7 @@ class RegistryRuntimeMixin:
             target = self.resolve(member.workspace_id)
             if self.backend_owner(member.workspace_id) is not None:
                 raise ValueError("Backend 成员已属于其它 owner")
-            if target.connection_kind != "local" or not target.managed or target.backend_workspace_id != member.backend_workspace_id:
+            if target.connection_kind != "local" or not target.managed or target.workspace_id != member.workspace_id:
                 raise ValueError("Backend 完整合同与已登记 target 不匹配")
         previous_commit = getattr(self, "_last_committed_snapshot", None)
         self._backend_owners[owner.contract.owner_id] = owner
@@ -190,7 +194,7 @@ class RegistryRuntimeMixin:
             target = self.resolve(member.workspace_id)
             if target.connection_kind != "local" or not target.managed:
                 raise ValueError("Backend 成员必须是已登记 local managed target")
-            self.local_workspace_root(member.workspace_id, member.backend_workspace_id)
+            self.local_workspace_root(member.workspace_id)
             other = self.backend_owner(member.workspace_id)
             if other is not None and other is not owner:
                 if other.process is not None or other.unpublished_runtimes:
@@ -202,11 +206,11 @@ class RegistryRuntimeMixin:
                 runtime = published_runtimes[member.workspace_id]
                 if any(not runtime.service_urls.get(name) for name in ("terminal_manager", "browser_manager")):
                     raise RuntimeError("Backend 完整 runtime 缺少辅助服务地址")
-                if runtime.backend_workspace_id != member.backend_workspace_id:
+                if runtime.workspace_id != member.workspace_id:
                     raise RuntimeError("Backend runtime 与完整成员 UUID 不匹配")
                 runtime_urls[member.workspace_id] = {**runtime.service_urls, "workspace_api": contract.backend_url}
                 staged_runtimes[member.workspace_id] = runtime
-            staged_targets[member.workspace_id] = replace(
+            staged_targets[(self.gateway_id, member.workspace_id)] = replace(
                 target, backend_url=contract.backend_url,
                 local_service_urls=target.local_service_urls if stopped else {
                     name: published_runtimes[member.workspace_id].service_urls[name]
@@ -227,16 +231,16 @@ class RegistryRuntimeMixin:
                 runtime.close()
             staged_runtimes.pop(workspace_id, None)
             if workspace_id not in desired_ids:
-                staged_targets[workspace_id] = replace(
+                staged_targets[(self.gateway_id, workspace_id)] = replace(
                     self.resolve(workspace_id), backend_url="", local_service_urls={},
                     desired_running=False, connection_error=None, runtime_lease_id=None,
                     target_generation=f"target_generation_{uuid4().hex}",
                 )
         if removed_target_id is not None:
-            staged_targets.pop(removed_target_id)
+            staged_targets.pop((self.gateway_id, removed_target_id))
             for workspace_id, target in tuple(staged_targets.items()):
-                if target.parent_workspace_id == removed_target_id:
-                    staged_targets[workspace_id] = replace(target, parent_workspace_id=None)
+                if target.parent_workspace == (self.gateway_id, removed_target_id):
+                    staged_targets[workspace_id] = replace(target, parent_workspace=None)
         if contract is None:
             staged_owners.pop(previous_contract.owner_id)
         else:
@@ -281,7 +285,7 @@ class RegistryRuntimeMixin:
     def mark_backend_error(self, owner: ManagedBackendOwner, error: str) -> None:
         staged_targets = dict(self._targets)
         for workspace_id in owner.contract.workspace_ids:
-            staged_targets[workspace_id] = replace(self.resolve(workspace_id), connection_error=error)
+            staged_targets[(self.gateway_id, workspace_id)] = replace(self.resolve(workspace_id), connection_error=error)
 
         def publish() -> None:
             owner.error = error
@@ -316,8 +320,8 @@ class RegistryRuntimeMixin:
             target = self.resolve(workspace_id)
             target.desired_running = False
             target.connection_error = None
-        if self._active_workspace_id in owner.contract.workspace_ids:
-            self._active_workspace_id = self._default_workspace_id()
+        if self._active_workspace in {(self.gateway_id, member_id) for member_id in owner.contract.workspace_ids}:
+            self._active_workspace = self._default_workspace_key()
         if errors:
             owner.error = "完整 Backend 已停止，成员辅助服务关闭失败: " + "; ".join(details)
             for workspace_id in owner.contract.workspace_ids:
@@ -326,21 +330,21 @@ class RegistryRuntimeMixin:
         if errors:
             raise RuntimeError(owner.error) from ExceptionGroup("Backend 成员辅助服务关闭失败", errors)
 
-    def managed_runtime(self, workspace_id: str) -> WorkspaceRuntime:
+    def managed_runtime(self, workspace_id: WorkspaceSelector) -> WorkspaceRuntime:
         target = self.resolve(workspace_id)
         if not target.managed:
             raise ValueError(f"工作区不由 Gateway 托管: {workspace_id}")
-        runtime = self._runtimes.get(workspace_id)
+        runtime = self._runtimes.get(target.workspace_id) if target.gateway_id == self.gateway_id else None
         if runtime is None:
             raise RuntimeError(f"托管工作区缺少运行时: {workspace_id}")
         return runtime
-    def has_runtime(self, workspace_id: str) -> bool:
-        self.resolve(workspace_id)
-        return workspace_id in self._runtimes
-    def runtime_service_urls(self, workspace_id: str) -> dict[str, str]:
+    def has_runtime(self, workspace_id: WorkspaceSelector) -> bool:
+        target = self.resolve(workspace_id)
+        return target.gateway_id == self.gateway_id and target.workspace_id in self._runtimes
+    def runtime_service_urls(self, workspace_id: WorkspaceSelector) -> dict[str, str]:
         """返回当前 Gateway 直接持有的工作区服务地址快照。"""
-        self.resolve(workspace_id)
-        runtime = self._runtimes.get(workspace_id)
+        target = self.resolve(workspace_id)
+        runtime = self._runtimes.get(target.workspace_id) if target.gateway_id == self.gateway_id else None
         return dict(runtime.service_urls) if runtime is not None else {}
     def assert_runtime_consumers_healthy(self) -> None:
         """确认 Workspace process 与配置驱动 remote projection 已可服务。"""
@@ -368,7 +372,7 @@ class RegistryRuntimeMixin:
             projection_errors = [
                 target.workspace_id
                 for target in self._targets.values()
-                if target.remote_gateway_connection_id == connection.connection_id
+                if connection.connection_id in target.remote_gateway_connection_ids
                 and target.connection_error is not None
             ]
             if projection_errors:
@@ -443,8 +447,7 @@ class RegistryRuntimeMixin:
                     )
                 for target in self._targets.values():
                     if (
-                        target.remote_gateway_connection_id
-                        == connection.connection_id
+                        connection.connection_id in target.remote_gateway_connection_ids
                     ):
                         remote_targets += 1
                         if target.connection_error is not None:

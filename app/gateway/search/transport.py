@@ -12,7 +12,6 @@ from app.core.failures import report_failure
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.registry.owners import workspace_owner
 from app.gateway.search.scheduler import SearchBranchError, SearchJob, SearchPage
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
@@ -34,12 +33,9 @@ class SearchTransport:
         self.catalog_mirror = catalog_mirror
 
     async def query(self, job: SearchJob) -> SearchPage:
-        target_id = job.scope_branch.target_id
-        if target_id is None or not self.registry.has_target(target_id):
+        key = (job.key.owner.gateway_id, job.key.owner.workspace_id)
+        if not self.registry.has_target(key):
             raise SearchBranchError("owner_unavailable", "搜索目标已移除", retryable=True)
-        target = self.registry.resolve(target_id)
-        if workspace_owner(target, self.registry, self.gateway_id) != job.key.owner:
-            raise SearchBranchError("owner_unavailable", "登记路由的稳定归属已经改变", retryable=True)
         try:
             return SearchPage(await self._query_owner(job))
         except SearchBranchError as error:
@@ -76,8 +72,7 @@ class SearchTransport:
         ))
 
     async def _query_owner(self, job: SearchJob) -> WorkspaceSearchResultDTO:
-        target_id = job.scope_branch.target_id
-        assert target_id is not None
+        target_id = (job.key.owner.gateway_id, job.key.owner.workspace_id)
         target = self.registry.resolve(target_id)
         try:
             url = self.registry.resolve_service_url(target_id, "workspace_api")

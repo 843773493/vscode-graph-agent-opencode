@@ -46,7 +46,7 @@ async def list_workspaces(
     await _wait_for_managed_runtime_restores(request)
     return APIResponse(
         data=GatewayWorkspaceListDTO(
-            active_workspace_id=registry.active_workspace_id,
+            active_workspace=registry.active_workspace_dto,
             items=await registry.list_dtos(check_health=check_health),
         ),
         request_id=request_id,

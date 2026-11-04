@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import React from "react";
 import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -9,7 +10,7 @@ import { useSkillUntrackCommand } from "./useSkillUntrackCommand";
 
 const sessionId = "ses_0199b54c12a17a919abc123456789012";
 const threadId = "thr_0199b54c12a17a919abc123456789013";
-const target = { workspace_id: "gateway-workspace", backend_workspace_id: "backend-workspace", connection_kind: "local" as const };
+const target = { gateway_id: "gateway-test", workspace_id: "backend-workspace" };
 const endpoint = `/api/v1/sessions/${sessionId}/threads/${threadId}/skills/untrack`;
 const renderers: ReactTestRenderer[] = [];
 
@@ -38,7 +39,7 @@ function harness() {
   let run!: (args: string) => Promise<void>;
   function Harness({ scopeKey }: { scopeKey: string }) {
     run = useSkillUntrackCommand({
-      state, sessionId, workspaceId: workspace.workspace_id, scopeKey,
+      state, sessionId, workspaceId: gatewayWorkspaceKey(workspace), scopeKey,
       setNotice: (message) => notices.push(message), setError: (message) => errors.push(message),
     });
     return null;
@@ -61,7 +62,7 @@ test("默认主线程从后端取得，等待期间路由冻结，切换会话�
     calls.push(path);
     const headers = new Headers(init?.headers);
     expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
-    expect(headers.get("X-BoxTeam-Backend-Workspace-Id")).toBe(target.backend_workspace_id);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
     if (path === `/api/v1/sessions/${sessionId}/main-thread`) {
       mainRequested();
       await barrier;
@@ -75,7 +76,7 @@ test("默认主线程从后端取得，等待期间路由冻结，切换会话�
   const ui = harness();
   const pending = ui.run('"review skill"');
   await mainSeen;
-  ui.workspace.backend_workspace_id = "changed-backend";
+  ui.workspace.workspace_id = "changed-backend";
   ui.switchScope();
   release();
   await pending;

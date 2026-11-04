@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback } from "react";
 import { listGatewayWorkspaces } from "../../gatewayApi";
 import { useWarmConfirm } from "../../components/shell/WarmConfirmProvider";
@@ -23,10 +24,10 @@ export function useManagedBackendConfirmation({
   ): Promise<void> => {
     try {
       const snapshot = await listGatewayWorkspaces(apiPort);
-      const target = snapshot.items.find((item) => item.workspace_id === workspaceId);
+      const target = snapshot.items.find((item) => gatewayWorkspaceKey(item) === workspaceId);
       if (!target?.managed) throw new Error("工作区未登记为托管目标，请刷新 Gateway");
-      const members = target.backend_generation ? target.affected_workspace_ids : [workspaceId];
-      if (!members.length || !members.includes(workspaceId)) throw new Error("Backend 完整成员合同缺失");
+      const members = target.backend_generation ? target.affected_workspace_ids : [target.workspace_id];
+      if (!members.length || !members.includes(target.workspace_id)) throw new Error("Backend 完整成员合同缺失");
       if (selectedRequest && (
         selectedRequest.expected_backend_generation !== target.backend_generation
         || selectedRequest.expected_workspace_ids.length !== members.length
@@ -34,7 +35,7 @@ export function useManagedBackendConfirmation({
       )) throw new Error("Backend 成员或 generation 已变化，请刷新后重新选择");
       const affected = [...new Set([...members, ...(selectedRequest?.desired_workspace_ids ?? [])])];
       const names = affected.map((id) => {
-        const member = snapshot.items.find((item) => item.workspace_id === id);
+        const member = snapshot.items.find((item) => item.gateway_id === target.gateway_id && item.workspace_id === id);
         if (!member) throw new Error(`Backend 成员未登记：${id}`);
         return `• ${member.name}（${id}）`;
       });

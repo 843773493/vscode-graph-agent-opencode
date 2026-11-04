@@ -382,17 +382,12 @@ export type WorkspaceNavigationNodeUpdateRequest =
 export type WorkspaceNavigationPlacementRequest =
   GeneratedWorkspaceNavigationPlacementRequest;
 
-export type GatewayWorkspace = Omit<
-  Required<GatewayWorkspaceDTO>,
-  "backend_workspace_id" | "backend_generation" | "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error" | "remote"
-> & {
-  backend_workspace_id?: string | null;
+export type GatewayWorkspace = Omit<Required<GatewayWorkspaceDTO>, "backend_generation" | "parent_workspace" | "runtime_action" | "config_reload" | "connection_error"> & {
   backend_generation?: string | null;
-  parent_workspace_id?: string | null;
+  parent_workspace?: GatewayWorkspaceDTO["parent_workspace"];
   runtime_action?: GatewayWorkspaceDTO["runtime_action"];
   config_reload?: GatewayConfigReloadStatus;
   connection_error?: string | null;
-  remote?: GatewayRemoteConnectionSummaryDTO | null;
 };
 export type GatewayUserLease = Required<GatewayUserLeaseDTO>;
 export type GatewayUser = Omit<Required<GatewayUserDTO>, "lease"> & {
@@ -524,9 +519,9 @@ interface AddSshGatewayWorkspaceRequestBase {
   remote_gateway_port: number;
 }
 
-export interface AddSshGatewayWorkspaceFromWorkspaceRequest
+export interface AddSshGatewayWorkspaceFromConnectionRequest
   extends AddSshGatewayWorkspaceRequestBase {
-  connection_workspace_id: string;
+  connection_id: string;
 }
 
 export interface AddSshGatewayWorkspaceFromConfigRequest
@@ -543,7 +538,7 @@ export interface AddSshGatewayWorkspaceManualRequest
 }
 
 export type AddSshGatewayWorkspaceRequest =
-  | AddSshGatewayWorkspaceFromWorkspaceRequest
+  | AddSshGatewayWorkspaceFromConnectionRequest
   | AddSshGatewayWorkspaceFromConfigRequest
   | AddSshGatewayWorkspaceManualRequest;
 

@@ -1,4 +1,4 @@
-from boxteam.gateway.v1 import public_pb2 as _public_pb2
+from boxteam.gateway.v2 import public_pb2 as _public_pb2
 from boxteam.workspace.v2 import public_pb2 as _public_pb2_1
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor

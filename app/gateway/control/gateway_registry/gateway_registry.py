@@ -26,7 +26,9 @@ import json
 import sqlite3
 from typing import cast
 
+from app.core.identifier import validate_gateway_id
 from app.core.sqlite_state import SQLiteStateDatabase, utc_now_text
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.gateway_registry.snapshot import read_workspace_registry
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -56,6 +58,10 @@ def _registry_connection_index(value: object) -> dict[str, dict[str, object]]:
             raise ValueError(f"Gateway registry 远程连接 identity 重复: {identity}")
         result[identity] = entry
     return result
+
+
+def _target_key(target: dict[str, object]) -> tuple[str, str]:
+    return validate_gateway_id(cast(str, target.get("gateway_id"))), validate_workspace_id(cast(str, target.get("workspace_id")))
 
 
 class GatewayRegistryMixin:
@@ -323,7 +329,8 @@ class GatewayRegistryMixin:
         metadata = {
             "schema_version": int(cast(int, payload.get("schema_version", 10))),
             "registry_revision": int(cast(int, payload.get("registry_revision", 0))),
-            "active_workspace_id": payload.get("active_workspace_id"),
+            "gateway_id": payload.get("gateway_id"),
+            "active_workspace": payload.get("active_workspace"),
             "order_customized": bool(payload.get("order_customized", False)),
             "runtime_generation": payload.get("runtime_generation"),
             "remote_gateway_connections": remote_connections,
@@ -350,17 +357,17 @@ class GatewayRegistryMixin:
                     )
                 existing_rows = connection.execute(
                     """
-                    SELECT workspace_id, payload_json
+                    SELECT gateway_id, workspace_id, payload_json
                     FROM gateway_workspace_registry
                     ORDER BY position ASC, workspace_id ASC
                     """
                 ).fetchall()
-                existing_targets: dict[str, dict[str, object]] = {}
+                existing_targets: dict[tuple[str, str], dict[str, object]] = {}
                 for row in existing_rows:
-                    existing_payload = json.loads(str(row[1]))
+                    existing_payload = json.loads(str(row[2]))
                     if not isinstance(existing_payload, dict):
                         raise ValueError("Gateway SQLite 已有工作区注册记录必须是对象")
-                    existing_targets[str(row[0])] = existing_payload
+                    existing_targets[(str(row[0]), str(row[1]))] = existing_payload
 
                 scope_owner = {
                     "config": "config",
@@ -443,13 +450,9 @@ class GatewayRegistryMixin:
                     for target in targets:
                         if not isinstance(target, dict):
                             raise ValueError("Gateway SQLite 工作区注册记录必须是对象")
-                        target_workspace_id = target.get("workspace_id")
+                        target_workspace_id = _target_key(target)
                         target_owner = target.get("owner", "manual")
-                        existing_target = (
-                            existing_targets.get(target_workspace_id)
-                            if isinstance(target_workspace_id, str)
-                            else None
-                        )
+                        existing_target = existing_targets.get(target_workspace_id)
                         existing_owner = (
                             existing_target.get("owner", "manual")
                             if existing_target is not None
@@ -470,8 +473,7 @@ class GatewayRegistryMixin:
                                     "managed",
                                     "removable",
                                     "system_default",
-                                    "remote_gateway_connection_id",
-                                    "remote_workspace_id",
+                                    "remote_gateway_connection_ids",
                                 )
                             )
                         )
@@ -492,8 +494,7 @@ class GatewayRegistryMixin:
                                     "managed",
                                     "removable",
                                     "system_default",
-                                    "remote_gateway_connection_id",
-                                    "remote_workspace_id",
+                                    "remote_gateway_connection_ids",
                                 )
                             )
                         )
@@ -511,15 +512,11 @@ class GatewayRegistryMixin:
                                 f"target={target_owner}"
                             )
 
-                incoming_targets: dict[str, dict[str, object]] = {}
+                incoming_targets: dict[tuple[str, str], dict[str, object]] = {}
                 for target in targets:
                     if not isinstance(target, dict):
                         raise ValueError("Gateway SQLite 工作区注册记录必须是对象")
-                    workspace_id = target.get("workspace_id")
-                    if not isinstance(workspace_id, str) or not workspace_id:
-                        raise ValueError(
-                            "Gateway SQLite 工作区注册记录缺少 workspace_id"
-                        )
+                    workspace_id = _target_key(target)
                     if workspace_id in incoming_targets:
                         raise ValueError(
                             f"Gateway SQLite 工作区注册记录 workspace_id 重复: {workspace_id}"
@@ -566,27 +563,34 @@ class GatewayRegistryMixin:
                         *preserved_targets,
                     ]
 
-                final_target_ids: set[str] = set()
-                target_identity_keys: set[tuple[str, str, str | None, str]] = set()
+                if scope_owner is not None:
+                    for key in existing_targets.keys() | incoming_targets.keys():
+                        before = existing_targets.get(key, {})
+                        after = incoming_targets.get(key, {})
+                        if before.get("owner") != "remote_projection" and after.get("owner") != "remote_projection":
+                            continue
+                        old_links = set(cast(list[str], before.get("remote_gateway_connection_ids", [])))
+                        new_links = set(cast(list[str], after.get("remote_gateway_connection_ids", [])))
+                        if (old_links ^ new_links) - connection_scope:
+                            raise PermissionError(f"Gateway registry 批处理不能解绑其它连接: owner={key}")
+                        if not (old_links | new_links) & connection_scope and dump_json(before) != dump_json(after):
+                            raise PermissionError(f"Gateway registry 批处理不能改写其它连接的工作区: owner={key}")
+                final_target_ids: set[tuple[str, str]] = set()
                 for position, target in enumerate(final_targets):
-                    if (
-                        target.get("connection_kind") == "remote_gateway"
-                        and target.get("remote_gateway_connection_id")
-                        not in final_connections
-                    ):
-                        raise ValueError(
-                            "Gateway registry 远程投影工作区引用未知 Gateway 连接: "
-                            + str(target.get("remote_gateway_connection_id"))
-                        )
-                    workspace_id = target.get("workspace_id")
-                    if not isinstance(workspace_id, str) or not workspace_id:
-                        raise ValueError(
-                            "Gateway SQLite 工作区注册记录缺少 workspace_id"
-                        )
+                    workspace_id = _target_key(target)
+                    links = target.get("remote_gateway_connection_ids", [])
+                    if not isinstance(links, (list, tuple)) or len(links) != len(set(links)):
+                        raise ValueError("Gateway registry 远端关联必须为无重复连接列表")
+                    for identity in links:
+                        entry = final_connections.get(identity)
+                        if entry is None or entry["remote_gateway_id"] != workspace_id[0]:
+                            raise ValueError(f"Gateway registry 连接关联缺失或归属错误: owner={workspace_id}, connection={identity}")
+                    if target.get("connection_kind") == "local" and (workspace_id[0] != metadata["gateway_id"] or links):
+                        raise ValueError("本机 registry 工作区必须属于当前 Gateway")
+                    if target.get("connection_kind") == "remote_gateway" and not links:
+                        raise ValueError("远端 registry 工作区必须保留连接关联")
                     if workspace_id in final_target_ids:
-                        raise ValueError(
-                            f"Gateway SQLite 最终注册记录 workspace_id 重复: {workspace_id}"
-                        )
+                        raise ValueError(f"Gateway registry 工作区 owner 重复: {workspace_id}")
                     final_target_ids.add(workspace_id)
                     target_owner = target.get("owner", "manual")
                     if target_owner not in {
@@ -613,56 +617,31 @@ class GatewayRegistryMixin:
                             "Gateway SQLite 工作区注册记录 connection_id 无效: "
                             f"workspace_id={workspace_id}"
                         )
-                    identity_value = (
-                        target.get("remote_workspace_id")
-                        if target_owner == "remote_projection"
-                        else connection_id or workspace_id
-                    )
-                    if not isinstance(identity_value, str) or not identity_value:
-                        raise ValueError(
-                            "Gateway SQLite 工作区注册记录缺少稳定 identity: "
-                            f"workspace_id={workspace_id}"
-                        )
-                    identity_key = (
-                        str(target_owner),
-                        namespace,
-                        # 远端工作区身份仅在所属连接内唯一，不能跨 Gateway 去重。
-                        connection_id if target_owner == "remote_projection" else None,
-                        identity_value,
-                    )
-                    if identity_key in target_identity_keys:
-                        raise ValueError(
-                            "Gateway SQLite 工作区注册记录 owner/namespace/identity 重复: "
-                            f"{identity_key}"
-                        )
-                    target_identity_keys.add(identity_key)
                     connection.execute(
                         """
                         INSERT INTO gateway_workspace_registry(
-                            workspace_id, position, active, payload_json, updated_at
-                        ) VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(workspace_id) DO UPDATE SET
+                            gateway_id, workspace_id, position, active, payload_json, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(gateway_id, workspace_id) DO UPDATE SET
                             position=excluded.position,
                             active=excluded.active,
                             payload_json=excluded.payload_json,
                             updated_at=excluded.updated_at
                         """,
                         (
-                            workspace_id,
+                            workspace_id[0],
+                            workspace_id[1],
                             position,
-                            int(workspace_id == metadata["active_workspace_id"]),
+                            int({"gateway_id": workspace_id[0], "workspace_id": workspace_id[1]} == metadata["active_workspace"]),
                             json.dumps(target, ensure_ascii=False, sort_keys=True),
                             utc_now_text(),
                         ),
                     )
                 stale_ids = set(existing_targets) - final_target_ids
-                if stale_ids:
-                    placeholders = ",".join("?" for _ in stale_ids)
+                for stale_gateway_id, stale_workspace_id in stale_ids:
                     connection.execute(
-                        "DELETE FROM gateway_workspace_registry WHERE workspace_id IN ("
-                        + placeholders
-                        + ")",
-                        tuple(stale_ids),
+                        "DELETE FROM gateway_workspace_registry WHERE gateway_id = ? AND workspace_id = ?",
+                        (stale_gateway_id, stale_workspace_id),
                     )
                 next_revision = current_revision + 1
                 metadata["registry_revision"] = next_revision

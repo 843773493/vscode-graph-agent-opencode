@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
-import type { GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v1/public_pb.js";
+import type { GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v2/public_pb.js";
 import type { ContextGrantTarget, WorkspaceContextSearchOptionsDTO, WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
 
 /**
@@ -17,7 +17,7 @@ export declare const file_boxteam_search_v1_public: GenFile;
  */
 export declare type FederatedFileSearchTargetDTO = Message<"boxteam.search.v1.FederatedFileSearchTargetDTO"> & {
   /**
-   * @generated from field: boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+   * @generated from field: boxteam.gateway.v2.GatewaySearchWorkspaceOwnerDTO owner = 1;
    */
   owner?: GatewaySearchWorkspaceOwnerDTO | undefined;
 
@@ -96,7 +96,7 @@ export declare const FederatedSearchQueryDTOSchema: GenMessage<FederatedSearchQu
  */
 export declare type FederatedSearchBranchKeyDTO = Message<"boxteam.search.v1.FederatedSearchBranchKeyDTO"> & {
   /**
-   * @generated from field: boxteam.gateway.v1.GatewaySearchWorkspaceOwnerDTO owner = 1;
+   * @generated from field: boxteam.gateway.v2.GatewaySearchWorkspaceOwnerDTO owner = 1;
    */
   owner?: GatewaySearchWorkspaceOwnerDTO | undefined;
 
@@ -148,7 +148,7 @@ export declare const FederatedSearchContinuationDTOSchema: GenMessage<FederatedS
  */
 export declare type FederatedSearchRequest = Message<"boxteam.search.v1.FederatedSearchRequest"> & {
   /**
-   * @generated from field: boxteam.gateway.v1.GatewaySearchScopeRequest scope = 1;
+   * @generated from field: boxteam.gateway.v2.GatewaySearchScopeRequest scope = 1;
    */
   scope?: GatewaySearchScopeRequest | undefined;
 
@@ -336,7 +336,7 @@ export declare type FederatedSearchEventDTO = Message<"boxteam.search.v1.Federat
   type: string;
 
   /**
-   * @generated from field: boxteam.gateway.v1.GatewaySearchScopeResolutionDTO scope = 4;
+   * @generated from field: boxteam.gateway.v2.GatewaySearchScopeResolutionDTO scope = 4;
    */
   scope?: GatewaySearchScopeResolutionDTO | undefined;
 

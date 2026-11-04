@@ -4,7 +4,7 @@ import * as api from "../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { useGenerationActivity } from "./useGenerationActivity";
 
-const target: GatewayWorkspaceRequestTarget = { workspace_id: "route-one", backend_workspace_id: "owner-one", connection_kind: "local" };
+const target: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: "owner-one" };
 const task: api.PersistentTaskDTO = {
   task_id: "gen_imported", workspace_id: "owner-one", revision: 1, definition_revision: 1,
   application_type: "automation", application_version: "1", lifecycle: "active", phase: "waiting_trigger", recovering: false,
@@ -43,7 +43,7 @@ function Probe({ owner, loaded = true }: { owner: GatewayWorkspaceRequestTarget;
   return null;
 }
 async function update(owner = target, loaded = true) {
-  items = [{ ...task, workspace_id: owner.backend_workspace_id! }];
+  items = [{ ...task, workspace_id: owner.workspace_id! }];
   await act(async () => { renderer.update(<Probe owner={owner} loaded={loaded} />); });
 }
 beforeEach(async () => {
@@ -72,7 +72,7 @@ test("切换工作区后同名历史只建立新基线，旧请求迟到不能�
   reader.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
   await update();
   const signal = reader.mock.calls[reader.mock.calls.length - 1][3];
-  const other = { ...target, workspace_id: "route-two", backend_workspace_id: "owner-two" };
+  const other = { ...target, workspace_id: "owner-two" };
   history = [run("delivered", "session-old-in-two")]; await update(other);
   expect(signal?.aborted).toBe(true);
   expect(open).not.toHaveBeenCalled(); expect(status).not.toHaveBeenCalled();
@@ -87,6 +87,6 @@ test("切换工作区后同名历史只建立新基线，旧请求迟到不能�
 test("切换尚未加载的工作区时立即清除原工作区读取错误", async () => {
   reader.mockRejectedValueOnce(new Error("原工作区读取失败"));
   await update(); expect(error).toContain("原工作区读取失败");
-  await update({ ...target, backend_workspace_id: "owner-two" }, false);
+  await update({ ...target, workspace_id: "owner-two" }, false);
   expect(error).toBeNull();
 });

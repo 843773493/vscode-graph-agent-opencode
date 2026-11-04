@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useCallback } from "react";
 import type { Session } from "../../../types/backend";
 import { cloneMaps } from "../../../state/appStateMaps";
@@ -78,7 +79,7 @@ export function useSessionSelectionActions(context: SessionLifecycleContext) {
         (session) => session.session_id === sessionId,
       );
       const workspaceKnown = workspaceId === snapshot.activeGatewayWorkspaceId
-        || snapshot.gatewayWorkspaces.some((workspace) => workspace.workspace_id === workspaceId);
+        || snapshot.gatewayWorkspaces.some((workspace) => gatewayWorkspaceKey(workspace) === workspaceId);
       if (!alreadyCurrent && (!selected || !workspaceKnown)) {
         abortCurrentStream();
         invalidateAgentState();
@@ -101,7 +102,7 @@ export function useSessionSelectionActions(context: SessionLifecycleContext) {
         }
 
         const workspace = prev.gatewayWorkspaces.find(
-          (item) => item.workspace_id === workspaceId,
+          (item) => gatewayWorkspaceKey(item) === workspaceId,
         );
         if (!workspace && workspaceId !== prev.activeGatewayWorkspaceId) {
           // 未知身份不能沿用上一个工作区的展示信息。

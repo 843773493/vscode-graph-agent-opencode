@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useState, type FormEvent } from "react";
 import { getWorkspace } from "../../../api/workspace";
 import { getSessionMainThread } from "../../../api/session/sessions";
@@ -133,7 +134,7 @@ export default function TaskEditor({ apiPort, target, configuration, initialTarg
           setDraft({ ...draft, action: { type_id: "builtin.runtime_source", version: "1", target_uri: initialTargetUri ?? "", delivery_mode: "context_and_run", delivery_policy: "after_turn" } });
         } else {
           setResolving(true); setError(null);
-          void getWorkspace(apiPort, target.workspace_id).then((workspace) => {
+          void getWorkspace(apiPort, gatewayWorkspaceKey(target)).then((workspace) => {
             setDraft({ ...draft, context: { ...context, mode: "event" }, action: { type_id: "builtin.session_generation", version: "1", generation: initialGeneration(workspace.workspace_id) } });
           }).catch((cause: unknown) => setError(errorMessage(cause))).finally(() => setResolving(false));
         }

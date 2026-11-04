@@ -65,47 +65,17 @@ function gatewayWorkspace(
   connectionKind: "local" | "remote_gateway",
 ): GatewayWorkspace {
   return {
-    workspace_id: "gateway_workspace",
-    backend_workspace_id: "ws_local",
-    name: "project",
-    backend_url: "http://127.0.0.1:41001",
-    connection_kind: connectionKind,
-    status: "ready",
-    active: true,
-    managed: true,
-    affected_workspace_ids: [],
-    removable: true,
-    system_default: false,
-    runtime_action:
-      connectionKind === "remote_gateway"
-        ? "reconnect_remote_gateway"
-        : "safe_restart_managed_backend",
-    config_reload: {
-      available: true,
-      healthy: true,
-      restart_required: false,
-      changed_sections: [],
-      applied_paths: [],
-      deferred_paths: [],
-      layer_digests: {},
-    },
-    remote:
-      connectionKind === "remote_gateway"
-        ? {
-            gateway_connection_id: "remote_gateway_dev",
-            gateway_id: "gateway_dev",
-            remote_workspace_id: "workspace_dev",
-            name: "开发服务器",
-            host: "192.0.2.10",
-            port: 22,
-            username: "developer",
-            ssh_config_host: "dev-server",
-            remote_gateway_port: 8014,
-          }
-      : null,
-    services: {},
-    connection_error: null,
-    checked_at: "2026-07-16T00:00:00Z",
+    gateway_id: connectionKind === "remote_gateway" ? "gateway_dev" : "gateway-test",
+    workspace_id: "ws_local", name: "project", backend_url: "http://127.0.0.1:41001",
+    connection_kind: connectionKind, status: "ready", active: true, managed: true,
+    affected_workspace_ids: [], removable: true, system_default: false,
+    runtime_action: connectionKind === "remote_gateway" ? "reconnect_remote_gateway" : "safe_restart_managed_backend",
+    remote_gateways: connectionKind === "remote_gateway" ? [{
+      gateway_connection_id: "remote_gateway_dev", gateway_id: "gateway_dev", name: "开发服务器",
+      host: "192.0.2.10", port: 22, username: "developer", ssh_config_host: "dev-server",
+      remote_gateway_port: 8014, restart_required: false,
+    }] : [],
+    services: {}, connection_error: null, checked_at: "2026-07-16T00:00:00Z",
   };
 }
 
@@ -144,12 +114,12 @@ describe("通用会话信息", () => {
     expect(text).not.toContain("storage_path");
   });
 
-  test("远程 Gateway 权威字段缺失时明确失败", () => {
+  test("Gateway owner 缺失时明确失败", () => {
     const invalidWorkspace = gatewayWorkspace("remote_gateway");
-    invalidWorkspace.remote = null;
+    invalidWorkspace.gateway_id = "";
     expect(() =>
       buildSessionInformationDump(information(), invalidWorkspace),
-    ).toThrow("远程 Gateway 工作区信息缺少连接摘要");
+    ).toThrow("已登记工作区缺少 Gateway／UUID 归属");
   });
 
   test("会话与当前后端工作区标识不一致时明确失败", () => {
@@ -161,9 +131,9 @@ describe("通用会话信息", () => {
     ).toThrow("会话信息中的工作区 ID 不一致");
   });
 
-  test("Gateway route 必须绑定相同后端工作区身份", () => {
+  test("Gateway owner 必须绑定相同工作区 UUID", () => {
     const mismatched = gatewayWorkspace("local");
-    mismatched.backend_workspace_id = "other-workspace";
+    mismatched.workspace_id = "other-workspace";
     expect(() => buildSessionInformationDump(information(), mismatched)).toThrow(
       "Gateway 与工作区后端 ID 不一致",
     );

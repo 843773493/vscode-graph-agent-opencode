@@ -73,25 +73,26 @@ def backend_graph(
     generation: str | None = None,
     owner_id: str | None = None,
 ) -> ManagedBackendGraph:
+    if not targets or len({target.gateway_id for target in targets}) != 1:
+        raise ValueError("测试完整合同必须属于一个原生 Gateway")
     members = []
     runtimes = {}
     for index, target in enumerate(targets):
-        if target.backend_workspace_id is None:
-            raise ValueError("测试完整合同必须明确 Backend UUID")
         services = {
             "terminal_manager": target.local_service_urls.get("terminal_manager", f"http://127.0.0.1:{42001 + index * 2}"),
             "browser_manager": target.local_service_urls.get("browser_manager", f"http://127.0.0.1:{42002 + index * 2}"),
         }
-        members.append(ManagedBackendMember(target.workspace_id, target.backend_workspace_id))
+        members.append(ManagedBackendMember(target.workspace_id))
         runtimes[target.workspace_id] = WorkspaceRuntime(
             service_urls={"workspace_api": backend_url, **services},
             processes=dict((auxiliary_processes or {}).get(target.workspace_id, {})),
-            backend_workspace_id=target.backend_workspace_id,
+            workspace_id=target.workspace_id,
         )
     owner = ManagedBackendOwner(ManagedBackendContract(
-        owner_id or f"backend_owner_{uuid4().hex}",
-        generation or f"backend_generation_{uuid4().hex}",
-        tuple(members), backend_url,
+        gateway_id=targets[0].gateway_id,
+        owner_id=owner_id or f"backend_owner_{uuid4().hex}",
+        generation=generation or f"backend_generation_{uuid4().hex}",
+        members=tuple(members), backend_url=backend_url,
     ))
     if process is not None:
         owner.set_process(process)

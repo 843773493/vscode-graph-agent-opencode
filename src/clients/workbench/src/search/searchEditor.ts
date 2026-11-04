@@ -150,10 +150,9 @@ export class ScopedSearchEditor extends SearchEditor {
     const input = this.input, generation = this.inputGeneration;
     const snapshot = workspaceContext.getSnapshot();
     if (snapshot.loading || snapshot.error || !snapshot.gatewayId) throw new Error(snapshot.error ?? '工作区登记信息尚未加载');
-    const gatewayId = snapshot.gatewayId;
     const current = input instanceof SearchEditorInput ? parseSearchEditorScope(input.tryReadConfigSync()?.scope) : undefined;
     const picks = snapshot.workspaces.map(target => {
-      const owner = gatewayWorkspaceOwner(target, gatewayId);
+      const owner = gatewayWorkspaceOwner(target);
       return { label: target.name, description: target.status, target: owner, picked: current?.kind === 'workspace'
         && current.workspaces.some(item => item.workspaceId === owner.workspaceId && item.gatewayId === owner.gatewayId) };
     });

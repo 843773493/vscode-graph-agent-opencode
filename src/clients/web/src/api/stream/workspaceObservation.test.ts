@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { HttpRequestError } from "../http";
 import { streamSessionActivity } from "../session/sessionActivity";
 import { SessionStreamIdleTimeoutError, streamSessionEvents, TraceCursorGoneError } from "./sessionTraceStream";
@@ -83,16 +84,17 @@ function files(cursor: number): string {
     invalidated_roots: [], snapshots: [], changes: [] })}\n\n`;
 }
 
-function readers(port: number, workspaceId = "workspace", traceTimeout?: number) {
+function readers(port: number, workspaceId = "workspace", traceTimeout?: number, gatewayId = "gateway-test") {
   const controllers = { activity: new AbortController(), trace: new AbortController(), files: new AbortController() };
   const received = { activity: [] as number[], trace: [] as string[], files: [] as number[] };
-  const target = { workspace_id: workspaceId, backend_workspace_id: `backend-${workspaceId}`, connection_kind: "local" } as const;
+  const target = { gateway_id: gatewayId, workspace_id: workspaceId } as const;
+  const workspaceKey = gatewayWorkspaceKey(target);
   const promises = {
     activity: streamSessionActivity(port, target, { after: 4, signal: controllers.activity.signal,
       onEvent: (_event, cursor) => { received.activity.push(cursor); } }),
-    trace: streamSessionEvents(port, "session", { workspaceId, afterCursor: "tc1.4", idleTimeoutMs: traceTimeout,
+    trace: streamSessionEvents(port, "session", { workspaceId: workspaceKey, afterCursor: "tc1.4", idleTimeoutMs: traceTimeout,
       signal: controllers.trace.signal, onEvent: (_event, cursor) => { received.trace.push(cursor); } }),
-    files: streamWorkspaceFileEvents(port, ["shortcut"], { workspaceId, signal: controllers.files.signal,
+    files: streamWorkspaceFileEvents(port, ["shortcut"], { workspaceId: workspaceKey, signal: controllers.files.signal,
       onBatch: (batch) => { received.files.push(batch.event_id); } }),
   };
   const outcomes = {
@@ -117,7 +119,7 @@ describe("Workspace 单物理 SSE 观察者", () => {
       const connection = connections[0];
       expect(connection.subscriptions).toHaveLength(3);
       expect(connection.headers.get("X-BoxTeam-Workspace-Id")).toBe("workspace");
-      expect(connection.headers.get("X-BoxTeam-Backend-Workspace-Id")).toBe("backend-workspace");
+      expect(connection.headers.get("X-BoxTeam-Target-Gateway-Id")).toBe("gateway-test");
       expect(owner(connection, "session_activity").activity_after).toBe(4);
       expect(owner(connection, "session_trace").trace_after).toBe("tc1.4");
       send(connection, "session_activity", activity(5));
@@ -236,7 +238,7 @@ describe("Workspace 单物理 SSE 观察者", () => {
     } finally { await Promise.all([previous.stop(), current.stop()]); }
   });
 
-  test("Catalog离开后仍保准确后端身份，新冲突身份明确失败", async () => {
+  test("Catalog 离开后保留完整 owner，同 UUID 的另一 Gateway 建独立连接", async () => {
     const connections = installBackend();
     const active = readers(49_107);
     try {
@@ -244,12 +246,19 @@ describe("Workspace 单物理 SSE 观察者", () => {
       active.controllers.activity.abort();
       await active.outcomes.activity;
       await waitUntil(() => connections.length === 2);
-      expect(connections[1].headers.get("X-BoxTeam-Backend-Workspace-Id")).toBe("backend-workspace");
-      await expect(streamSessionActivity(49_107, { ...active.target, backend_workspace_id: "other-backend" }))
-        .rejects.toThrow("Workspace 观察者目标身份冲突");
+      expect(connections[1].headers.get("X-BoxTeam-Target-Gateway-Id")).toBe("gateway-test");
+      expect(connections[1].headers.get("X-BoxTeam-Workspace-Id")).toBe("workspace");
+      const other = readers(49_107, "workspace", undefined, "gateway-other");
+      try {
+        await waitUntil(() => connections.length === 3);
+        expect(connections[2].headers.get("X-BoxTeam-Target-Gateway-Id")).toBe("gateway-other");
+        send(connections[2], "session_activity", activity(9));
+        await waitUntil(() => other.received.activity.length === 1);
+        expect(active.received.activity).toEqual([]);
+      } finally { await other.stop(); }
       send(connections[1], "session_trace", trace("tc1.5"));
       await waitUntil(() => active.received.trace.length === 1);
-      expect(connections).toHaveLength(2);
+      expect(connections).toHaveLength(3);
     } finally { await active.stop(); }
   });
 });

@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.workspace_discovery import discover_workspaces
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.registry.owners import workspace_owner
 from app.schemas.gateway.search import (
     MAX_SEARCH_WORKSPACES,
     GatewaySearchScopeBranchDTO,
@@ -58,27 +57,14 @@ def resolve_search_scope(
             gateway_id=gateway_id, resolved_at=datetime.now(UTC), mode=request.mode, owners=owners,
         )
 
-    # 范围中不保存 route：重命名、换路由和重启不改变 owner；同名或被复用的 route 不能改投目标。
-    by_owner: dict[GatewaySearchWorkspaceOwnerDTO, list[str]] = {owner: [] for owner in scope.owners}
-    workspace_ids = {owner.workspace_id for owner in scope.owners}
-    for target in registry.targets():
-        if target.backend_workspace_id not in workspace_ids:
-            continue
-        owner = workspace_owner(target, registry, gateway_id)
-        if owner in by_owner:
-            by_owner[owner].append(target.workspace_id)
-
     branches: list[GatewaySearchScopeBranchDTO] = []
-    for owner, routes in by_owner.items():
-        if len(routes) == 1:
-            branches.append(GatewaySearchScopeBranchDTO(owner=owner, target_id=routes[0], state="registered"))
+    for owner in scope.owners:
+        key = (owner.gateway_id, owner.workspace_id)
+        if registry.has_target(key):
+            branches.append(GatewaySearchScopeBranchDTO(owner=owner, state="registered"))
             continue
-        ambiguous = len(routes) > 1
-        code = "owner_ambiguous" if ambiguous else "owner_unavailable"
-        message = f"工作区归属{'对应多个登记路由' if ambiguous else '未登记或已移除'}: {owner.gateway_id}/{owner.workspace_id}"
+        message = f"工作区归属未登记或已移除: {owner.gateway_id}/{owner.workspace_id}"
         if request.mode != "resume":
-            raise SearchScopeError(code, message, status_code=409 if ambiguous else 404)
-        branches.append(GatewaySearchScopeBranchDTO(
-            owner=owner, state="ambiguous" if ambiguous else "unavailable", code=code, message=message,
-        ))
+            raise SearchScopeError("owner_unavailable", message, status_code=404)
+        branches.append(GatewaySearchScopeBranchDTO(owner=owner, state="unavailable", code="owner_unavailable", message=message))
     return GatewaySearchScopeResolutionDTO(scope=scope, branches=branches)

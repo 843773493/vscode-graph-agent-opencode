@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import type { Session } from "../../../types/backend";
 import type { AppState } from "../../../types/frontend";
 import { getSession as apiGetSession } from "../../../api";
@@ -17,7 +18,7 @@ export async function refreshCurrentSessionCatalogOwner(
 ): Promise<void> {
   const before = readState();
   const sessionId = before.currentSession?.session_id;
-  const workspaceId = workspaceTarget.workspace_id;
+  const workspaceId = gatewayWorkspaceKey(workspaceTarget);
   if (!sessionId || (before.currentSessionWorkspaceId ?? before.activeGatewayWorkspaceId) !== workspaceId) {
     return;
   }
@@ -31,7 +32,7 @@ export async function refreshCurrentSessionCatalogOwner(
   try {
     updatedSession = await apiGetSession(apiPort, sessionId, workspaceId, { signal });
     if (updatedSession.session_id !== sessionId
-      || updatedSession.workspace_id !== workspaceTarget.backend_workspace_id) {
+      || updatedSession.workspace_id !== workspaceTarget.workspace_id) {
       throw new Error(`当前会话目录对账返回了其它 owner: ${workspaceId}/${sessionId}`);
     }
   } catch (error: unknown) {

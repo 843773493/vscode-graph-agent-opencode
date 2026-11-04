@@ -34,9 +34,8 @@ afterEach(() => {
 });
 
 const workspaceTarget = {
-  workspace_id: "workspace-1",
-  backend_workspace_id: "backend-workspace-1",
-  connection_kind: "local",
+  workspace_id: "00000000-0000-4000-8000-000000000001",
+  gateway_id: "gateway-test",
 } as const;
 
 async function flushMicrotasks(rounds = 50): Promise<void> {
@@ -70,9 +69,9 @@ describe("Workspace 会话活动 API", () => {
     const page = await listSessionActivity(48_201, workspaceTarget, { after: 6 });
     expect(page.items[0]?.event_seq).toBe(7);
     expect(new Headers(request?.headers).get("X-BoxTeam-Workspace-Id"))
-      .toBe("workspace-1");
-    expect(new Headers(request?.headers).get("X-BoxTeam-Backend-Workspace-Id"))
-      .toBe("backend-workspace-1");
+      .toBe("00000000-0000-4000-8000-000000000001");
+    expect(new Headers(request?.headers).get("X-BoxTeam-Target-Gateway-Id"))
+      .toBe("gateway-test");
   });
 
   test("SSE 活动事件解析 id 并转发游标", async () => {

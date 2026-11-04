@@ -8,10 +8,9 @@ export function searchOwnerKey(owner: WorkspaceOwner): string { return `${owner.
 export async function chooseSearchOwners(quickInput: IQuickInputService, current: readonly WorkspaceOwner[]): Promise<WorkspaceOwner[] | undefined> {
   const snapshot = workspaceContext.getSnapshot();
   if (snapshot.loading || snapshot.error || !snapshot.gatewayId) throw new Error(snapshot.error ?? '工作区登记信息尚未加载');
-  const gatewayId = snapshot.gatewayId;
   const selected = new Set(current.map(searchOwnerKey));
   const picks = snapshot.workspaces.map(target => {
-    const owner = gatewayWorkspaceOwner(target, gatewayId);
+    const owner = gatewayWorkspaceOwner(target);
     return { label: target.name, description: `${owner.gatewayId} · ${target.status}`, detail: owner.workspaceId,
       picked: selected.has(searchOwnerKey(owner)), owner };
   });

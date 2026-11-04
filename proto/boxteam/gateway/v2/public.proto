@@ -1,0 +1,853 @@
+syntax = "proto3";
+
+package boxteam.gateway.v2;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Gateway 控制面公开 DTO 的 Protobuf 初始版本；后续以本文件为协议源维护。
+
+// 只投影唯一 URI grammar；不表示资源存在、可读或已获得能力。
+message GatewayResourceAddressRequest {
+  string uri = 1;
+  // 打开发起时的 Gateway 身份；防止异步期间重连改变无 authority 引用的含义。
+  string local_gateway_id = 2;
+}
+
+message GatewayResourceAddressDTO {
+  string uri = 1;
+  string gateway_id = 2;
+  string scope = 3;
+  string scope_id = 4;
+  string kind = 5;
+  optional string file_root_uri = 6;
+  optional string session_id = 7;
+  optional string thread_id = 8;
+}
+// WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
+
+message AcquireGatewayUserRequest {
+  optional string client_label = 1;
+}
+
+// 同机认证控制链专用，不作为普通文件响应或联邦资源投影。
+message NativeDirectoryBindRequest {
+  string native_root = 1;
+}
+message NativeDirectoryBindingDTO {
+  string uri = 1;
+}
+message NativeDirectoryResolveDTO {
+  string uri = 1;
+  string native_root = 2;
+}
+
+message ActivateGatewayWorkspaceResultDTO {
+  reserved 1;
+  reserved "active_workspace_id";
+  GatewaySearchWorkspaceOwnerDTO active_workspace = 2;
+}
+
+message AddLocalWorkspaceRequest {
+  string root_path = 1;
+  optional string name = 2;
+  optional string backend_url = 3;
+}
+
+message AddRemoteGatewayRequest {
+  reserved 2;
+  reserved "connection_workspace_id";
+  optional string name = 1;
+  optional string ssh_config_host = 3;
+  optional string host = 4;
+  optional int64 port = 5;
+  optional string username = 6;
+  optional string private_key_path = 7;
+  optional int64 remote_gateway_port = 8;
+  optional string connection_id = 9;
+}
+
+message ChangePortForwardLabelRequest {
+  optional string label = 1;
+}
+
+message ChangePortForwardLocalPortRequest {
+  int64 local_port = 1;
+}
+
+message CreateFederationManagedWorkspaceRequest {
+  string root_path = 1;
+  optional string name = 2;
+  optional bool create_directory = 3;
+}
+
+message CreateGatewayGuestRequest {
+  optional google.protobuf.Struct tracking = 1;
+}
+
+message CreateGatewayManagedWorkspaceRequest {
+  string root_path = 1;
+  optional string name = 2;
+  optional bool create_directory = 3;
+  optional string gateway_connection_id = 4;
+}
+
+message CreateGatewayUserRequest {
+  string display_name = 1;
+  optional string user_id = 2;
+}
+
+message CreatePortForwardRequest {
+  int64 remote_port = 1;
+  optional int64 local_port = 2;
+  optional string protocol = 3;
+  optional string label = 4;
+}
+
+message DevelopmentRuntimeRestartDTO {
+  optional string status = 1;
+  int64 previous_process_id = 2;
+  int64 helper_process_id = 3;
+  int64 delay_ms = 4;
+}
+
+message FederationProtocolManifestDTO {
+  int64 protocol_version = 1;
+  string gateway_id = 2;
+  optional int64 federation_depth = 3;
+  repeated string capabilities = 4;
+  optional int64 config_event_cursor = 5;
+  optional string config_reload_state = 6;
+  optional bool config_reload_restart_required = 7;
+  optional string config_reload_candidate_ref = 8;
+}
+
+message FederationWorkspaceDTO {
+  reserved 3, 7;
+  reserved "root_path", "backend_workspace_id";
+  string workspace_id = 1;
+  string name = 2;
+  bool managed = 4;
+  string connection_kind = 5;
+  repeated string services = 6;
+  optional string backend_generation = 8;
+  repeated string affected_workspace_ids = 9;
+}
+
+message FederationWorkspaceListDTO {
+  int64 protocol_version = 1;
+  string gateway_id = 2;
+  repeated FederationWorkspaceDTO items = 3;
+  repeated string excluded = 4;
+  bool identities_verified = 5;
+}
+
+message GatewayConfigReloadStatusDTO {
+  optional bool available = 1;
+  optional bool healthy = 2;
+  optional string revision = 3;
+  optional bool restart_required = 4;
+  optional string reason = 5;
+  repeated string changed_sections = 6;
+  optional string last_error = 7;
+  optional string error = 8;
+  optional string state = 9;
+  optional int64 active_revision = 10;
+  optional int64 pending_revision = 11;
+  optional string candidate_id = 12;
+  optional string candidate_ref = 13;
+  optional string attempt_id = 14;
+  optional string apply_id = 15;
+  // HTTP 保留来源缺失时的显式 null；字符串摘要的业务约束仍由配置 owner 校验。
+  map<string, google.protobuf.Value> layer_digests = 16;
+  repeated string applied_paths = 17;
+  repeated string deferred_paths = 18;
+}
+
+message GatewayConfigPendingHealthProofRequest {
+  optional string config_domain = 1;
+  string candidate_ref = 2;
+  string candidate_id = 3;
+  string generation = 4;
+  string loaded_source = 5;
+  optional int64 active_revision = 6;
+  int64 pending_revision = 7;
+  string candidate_digest = 8;
+  string effective_digest = 9;
+  string secret_binding_digest = 10;
+  string fencing_token_digest = 11;
+  string health_digest = 12;
+  string gateway_id = 13;
+  map<string, string> consumer_health_digests = 14;
+}
+
+message GatewayConfigPendingDiscardRequest {
+  int64 expected_active_revision = 1;
+  string expected_active_digest = 2;
+}
+
+message GatewayConfigEventDTO {
+  int64 event_seq = 1;
+  string event_id = 2;
+  string config_domain = 3;
+  optional string candidate_id = 4;
+  optional string attempt_id = 5;
+  optional string apply_id = 6;
+  optional string idempotency_key = 7;
+  optional int64 commit_revision = 8;
+  optional int64 active_revision = 9;
+  optional int64 pending_revision = 10;
+  string source = 11;
+  string result = 12;
+  optional string activation_scope = 13;
+  repeated string changed_paths = 14;
+  repeated string applied_paths = 15;
+  repeated string deferred_paths = 16;
+  optional string error = 17;
+  string occurred_at = 18;
+}
+
+message GatewayConfigEventsDTO {
+  int64 cursor = 1;
+  repeated GatewayConfigEventDTO events = 2;
+  optional bool has_more = 3;
+}
+
+message GatewayConfigSourceDTO {
+  reserved 1;
+  reserved "path";
+
+  // 逻辑来源闭集：inline、user、user_local、workspace、runtime_override。
+  // SQLite 仅为内部 carrier。
+  string layer = 2;
+  int64 precedence = 3;
+  bool loaded = 4;
+  optional string source_key = 5;
+  string presence = 6;
+  optional int64 layer_revision = 7;
+  optional string layer_digest = 8;
+  optional int64 source_generation = 9;
+  // 可寻址来源文件的 URI；没有稳定文件位置时不设置。
+  optional string uri = 10;
+}
+
+message GatewayConfigSourcesDTO {
+  reserved 2;
+  reserved "schema_path";
+
+  string revision = 1;
+  repeated GatewayConfigSourceDTO sources = 3;
+  // 配置 schema 文件的 URI；没有可寻址 schema 时不设置。
+  optional string schema_uri = 4;
+  repeated google.protobuf.Struct policy_manifest = 5;
+}
+
+message GatewayDiagnosticLogDTO {
+  string log_id = 1;
+  string source = 2;
+  optional string workspace_id = 3;
+  optional string workspace_name = 4;
+  string service = 5;
+  string label = 6;
+  string status = 7;
+  optional string tail = 8;
+  optional bool truncated = 9;
+  optional int64 line_count = 10;
+  optional int64 size_bytes = 11;
+  optional string updated_at = 12;
+  optional string error = 13;
+}
+
+message GatewayDiagnosticWorkspaceDTO {
+  reserved 3;
+  reserved "root_path";
+  string workspace_id = 1;
+  string name = 2;
+  string connection_kind = 4;
+  string status = 5;
+  bool managed = 6;
+  bool system_default = 7;
+  optional string connection_error = 8;
+}
+
+// 管理入口使用日志选择 ID 与文件身份，真实路径仅保留在原始日志中。
+message GatewayDiagnosticLogSinkDTO {
+  optional string log_id = 1;
+  string owner_id = 2;
+  string role = 3;
+  string source = 4;
+  string device = 5;
+  string inode = 6;
+}
+
+message GatewayDiagnosticLoggingStateDTO {
+  string service = 1;
+  int64 pid = 2;
+  string runtime_instance_id = 3;
+  optional string applied_revision = 4;
+  string level = 5;
+  bool pretty = 6;
+  optional GatewayDiagnosticLogSinkDTO log_sink = 7;
+}
+
+message GatewayDiagnosticProcessDTO {
+  string service = 1;
+  repeated string workspace_ids = 2;
+  optional GatewayDiagnosticLoggingStateDTO state = 3;
+  string output_mode = 4;
+  optional string error = 5;
+}
+
+message GatewayDiagnosticsDTO {
+  string gateway_id = 1;
+  string gateway_name = 2;
+  optional string gateway_connection_id = 3;
+  string connection_kind = 4;
+  string status = 5;
+  string checked_at = 6;
+  optional string selected_workspace_id = 7;
+  optional string selected_log_id = 8;
+  repeated GatewayDiagnosticWorkspaceDTO workspaces = 9;
+  repeated GatewayDiagnosticLogDTO logs = 10;
+  repeated GatewayDiagnosticProcessDTO processes = 11;
+}
+
+message GatewayDirectoryEntryDTO {
+  string name = 1;
+  string path = 2;
+}
+
+message GatewayDirectoryListDTO {
+  string path = 1;
+  optional string parent_path = 2;
+  string home_path = 3;
+  repeated GatewayDirectoryEntryDTO entries = 4;
+  optional bool truncated = 5;
+  int64 limit = 6;
+  string name = 7;
+}
+
+message GatewayHealthDTO {
+  reserved 2;
+  reserved "active_workspace_id";
+  optional string status = 1;
+  int64 process_id = 3;
+  optional bool development_restart_available = 4;
+  string gateway_id = 5;
+  GatewaySearchWorkspaceOwnerDTO active_workspace = 6;
+}
+
+message GatewayInboundAccessListDTO {
+  string gateway_id = 1;
+  repeated GatewayInboundPeerDTO peers = 2;
+  repeated GatewayInboundWorkspaceDTO items = 3;
+}
+
+message GatewayInboundPeerDTO {
+  string connection_id = 1;
+  string peer_gateway_id = 2;
+  string credential_expires_at = 3;
+}
+
+message GatewayInboundWorkspaceDTO {
+  reserved 3;
+  reserved "root_path";
+  string workspace_id = 1;
+  string name = 2;
+  string status = 4;
+  bool managed = 5;
+  bool system_default = 6;
+}
+
+message GatewayManagedWorkspaceDTO {
+  string gateway_id = 9;
+  reserved 3;
+  reserved "root_path";
+  string workspace_id = 1;
+  string name = 2;
+  string status = 4;
+  bool removable = 5;
+  bool system_default = 6;
+}
+
+message GatewayManagedWorkspaceListDTO {
+  optional string gateway_connection_id = 1;
+  string gateway_id = 2;
+  string gateway_name = 3;
+  string connection_kind = 4;
+  repeated GatewayManagedWorkspaceDTO items = 5;
+}
+
+message GatewayRemoteConnectionSummaryDTO {
+  reserved 2;
+  reserved "remote_workspace_id";
+  string gateway_connection_id = 1;
+  string gateway_id = 3;
+  string name = 4;
+  string host = 5;
+  int64 port = 6;
+  string username = 7;
+  optional string ssh_config_host = 8;
+  int64 remote_gateway_port = 9;
+  optional int64 config_event_cursor = 10;
+  optional string config_reload_state = 11;
+  optional bool restart_required = 12;
+  optional string candidate_ref = 13;
+}
+
+message GatewayResourceDTO {
+  optional string gateway_connection_id = 1;
+  string gateway_name = 2;
+  // 目标工作区的原生 UUID，与 resource.workspace_id 属于同一身份。
+  string workspace_id = 3;
+  string workspace_name = 4;
+  string connection_kind = 5;
+  string session_id = 6;
+  string session_title = 7;
+  google.protobuf.Struct resource = 8;
+  string gateway_id = 9;
+}
+
+message GatewayResourceListDTO {
+  repeated GatewayResourceDTO items = 1;
+  repeated GatewayResourceScopeErrorDTO errors = 2;
+}
+
+message GatewayResourceScopeErrorDTO {
+  string scope_key = 1;
+  string label = 2;
+  string message = 3;
+}
+
+message GatewayRuntimeDesiredWorkspaceSet {
+  repeated string workspace_ids = 1;
+}
+
+message GatewayRuntimeGroupRequest {
+  optional string expected_backend_generation = 1;
+  repeated string expected_workspace_ids = 2;
+  reserved 3;
+  GatewayRuntimeDesiredWorkspaceSet desired_workspace_ids = 4;
+}
+
+message GatewayRuntimeBlockerDTO {
+  string kind = 1;
+  string resource_id = 2;
+  string session_id = 3;
+  string status = 4;
+  optional string detail = 5;
+  string workspace_id = 6;
+  string gateway_id = 7;
+}
+
+message GatewayRuntimeRestartResultDTO {
+  string workspace_id = 1;
+  string status = 2;
+  bool forced = 3;
+  repeated GatewayRuntimeBlockerDTO blockers = 4;
+  GatewayWorkspaceListDTO workspaces = 5;
+  optional string backend_generation = 6;
+  repeated string affected_workspace_ids = 7;
+  string gateway_id = 8;
+}
+
+message GatewayRuntimeStateResultDTO {
+  string workspace_id = 1;
+  string status = 2;
+  repeated GatewayRuntimeBlockerDTO blockers = 3;
+  GatewayWorkspaceListDTO workspaces = 4;
+  optional string backend_generation = 5;
+  repeated string affected_workspace_ids = 6;
+  string gateway_id = 7;
+}
+
+message GatewayServiceStatusDTO {
+  string status = 1;
+  string health_path = 2;
+  optional string local_url = 3;
+  optional int64 local_port = 4;
+  optional string remote_host = 5;
+  optional int64 remote_port = 6;
+  optional string error = 7;
+}
+
+// 只来自控制面登记与导航；不表示工作区在线或其领域正文已经查询。
+message GatewaySearchWorkspaceOwnerDTO {
+  string gateway_id = 1;
+  // 稳定后端 UUID；target_id 与远端 route 均不参与 owner 身份。
+  string workspace_id = 2;
+}
+
+message GatewayWorkspaceDiscoveryHitDTO {
+  reserved 2;
+  reserved "target_id";
+  GatewaySearchWorkspaceOwnerDTO owner = 1;
+  string name = 3;
+  string navigation_node_id = 4;
+  repeated string breadcrumb_node_ids = 5;
+  repeated string breadcrumb_names = 6;
+}
+
+message GatewayNavigationFolderDiscoveryHitDTO {
+  string name = 1;
+  string navigation_node_id = 2;
+  repeated string breadcrumb_node_ids = 3;
+  repeated string breadcrumb_names = 4;
+}
+
+message GatewayWorkspaceDiscoveryResultsDTO {
+  string gateway_id = 1;
+  string query = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+  string source = 4;
+  repeated GatewayWorkspaceDiscoveryHitDTO items = 5;
+  optional string cursor = 6;
+  bool complete = 7;
+  repeated GatewayNavigationFolderDiscoveryHitDTO folders = 8;
+}
+
+// 只冻结实际范围，不保存路由别名、凭据或全域 cursor；续查仍由各 owner 核验原页。
+message GatewaySearchScopeDTO {
+  int64 version = 1;
+  string gateway_id = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+  string mode = 4;
+  repeated GatewaySearchWorkspaceOwnerDTO owners = 5;
+}
+
+message GatewaySearchScopeRequest {
+  string mode = 1;
+  optional GatewaySearchWorkspaceOwnerDTO origin = 2;
+  repeated GatewaySearchWorkspaceOwnerDTO owners = 3;
+  optional GatewaySearchScopeDTO scope = 4;
+}
+
+message GatewaySearchScopeBranchDTO {
+  reserved 2;
+  reserved "target_id";
+  GatewaySearchWorkspaceOwnerDTO owner = 1;
+  string state = 3;
+  optional string code = 4;
+  optional string message = 5;
+}
+
+message GatewaySearchScopeResolutionDTO {
+  GatewaySearchScopeDTO scope = 1;
+  repeated GatewaySearchScopeBranchDTO branches = 2;
+}
+
+message GatewayThemeBackgroundDTO {
+  string type = 1;
+  optional string url = 2;
+  optional string asset_id = 3;
+  optional string position = 4;
+  optional string size = 5;
+  optional string repeat = 6;
+  optional string appearance = 7;
+  optional string overlay = 8;
+}
+
+message GatewayThemeCatalogDTO {
+  string current_theme_id = 1;
+  repeated GatewayThemeOptionDTO items = 2;
+  ResolvedGatewayThemeDTO current_theme = 3;
+}
+
+message GatewayThemeOptionDTO {
+  string id = 1;
+  string label = 2;
+  string extends = 3;
+  string source = 4;
+  google.protobuf.Struct preview_tokens = 5;
+  optional string background_image_url = 6;
+}
+
+message GatewayUIAssetDTO {
+  string asset_id = 1;
+  string original_filename = 2;
+  string content_type = 3;
+  int64 size = 4;
+  string sha256 = 5;
+  string imported_at = 6;
+  string url = 7;
+  repeated string referenced_theme_ids = 8;
+}
+
+message GatewayUIAssetListDTO {
+  repeated GatewayUIAssetDTO items = 1;
+}
+
+message GatewayUserAccessDTO {
+  string kind = 1;
+  optional string user_id = 2;
+  int64 lease_generation = 3;
+  optional string expires_at = 4;
+  optional bool takeover = 5;
+}
+
+message GatewayUserDTO {
+  string user_id = 1;
+  string display_name = 2;
+  string created_at = 3;
+  optional GatewayUserLeaseDTO lease = 4;
+}
+
+message GatewayUserLeaseDTO {
+  optional bool occupied = 1;
+  optional string client_label = 2;
+  optional string heartbeat_at = 3;
+  optional string expires_at = 4;
+}
+
+message GatewayUserListDTO {
+  repeated GatewayUserDTO items = 1;
+}
+
+// 视图状态按用户、Gateway、工作区与 Session 归属，仅用于主聊天 main thread。
+// 无锚点时 writer 记录当前 scrollTop，恢复忽略该像素偏移并回到最新尾部。
+message GatewayUserViewStateDTO {
+  string user_id = 1;
+  string workspace_id = 2;
+  string session_id = 3;
+  // 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
+  optional string turn_anchor = 4;
+  // 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
+  double scroll_offset = 5;
+  // 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
+  optional bool follow_latest = 6;
+  int64 projection_version = 7;
+  optional bool tool_details_expanded = 8;
+  string updated_at = 9;
+  string gateway_id = 10;
+}
+
+// PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。
+message GatewayUserViewStateUpdateRequest {
+  // 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
+  optional string turn_anchor = 1;
+  // 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
+  optional double scroll_offset = 2;
+  // 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
+  optional bool follow_latest = 3;
+  optional int64 projection_version = 4;
+  optional bool tool_details_expanded = 5;
+}
+
+message GatewayWorkspaceDTO {
+  reserved 2, 4, 14, 18;
+  reserved "root_path", "parent_workspace_id", "remote", "backend_workspace_id";
+  string workspace_id = 1;
+  string name = 3;
+  string backend_url = 5;
+  string connection_kind = 6;
+  string status = 7;
+  optional bool active = 8;
+  optional bool managed = 9;
+  optional bool removable = 10;
+  optional bool system_default = 11;
+  string runtime_action = 12;
+  optional GatewayConfigReloadStatusDTO config_reload = 13;
+  optional google.protobuf.Struct services = 15;
+  optional string connection_error = 16;
+  string checked_at = 17;
+  optional string backend_generation = 19;
+  repeated string affected_workspace_ids = 20;
+  string gateway_id = 21;
+  GatewaySearchWorkspaceOwnerDTO parent_workspace = 22;
+  repeated GatewayRemoteConnectionSummaryDTO remote_gateways = 23;
+}
+
+message GatewayWorkspaceListDTO {
+  reserved 1;
+  reserved "active_workspace_id";
+  repeated GatewayWorkspaceDTO items = 2;
+  GatewaySearchWorkspaceOwnerDTO active_workspace = 3;
+}
+
+message PortForwardDTO {
+  string gateway_id = 14;
+  string forward_id = 1;
+  string workspace_id = 2;
+  string connection_id = 3;
+  string remote_host = 4;
+  int64 remote_port = 5;
+  string local_host = 6;
+  int64 local_port = 7;
+  string protocol = 8;
+  string label = 9;
+  string status = 10;
+  string error = 11;
+  string local_url = 12;
+}
+
+message PortForwardListDTO {
+  repeated PortForwardDTO items = 1;
+}
+
+message ReorderGatewayWorkspacesRequest {
+  reserved 1;
+  reserved "workspace_ids";
+  repeated GatewaySearchWorkspaceOwnerDTO workspaces = 2;
+}
+
+message ResolvedGatewayThemeDTO {
+  string id = 1;
+  string label = 2;
+  string color_scheme = 3;
+  google.protobuf.Struct tokens = 4;
+  optional string background_image_url = 5;
+}
+
+message SshConnectionOptionDTO {
+  reserved 7;
+  reserved "workspace_id";
+  string connection_id = 1;
+  string source = 2;
+  string label = 3;
+  string host = 4;
+  int64 port = 5;
+  string username = 6;
+  optional string ssh_config_host = 8;
+  optional string initial_path = 9;
+}
+
+message SshConnectionOptionListDTO {
+  repeated SshConnectionOptionDTO items = 1;
+}
+
+message UpdateGatewayWorkspaceRequest {
+  reserved 2;
+  reserved "parent_workspace_id";
+  optional string name = 1;
+  GatewaySearchWorkspaceOwnerDTO parent_workspace = 3;
+}
+
+message WebUIGatewayConsoleSettingsDTO {
+  optional string view = 1;
+}
+
+message WebUILayoutSettingsDTO {
+  optional string workbench_view = 1;
+  optional bool agent_sessions_panel_open = 2;
+  optional bool chat_visible = 3;
+  optional bool auxiliary_visible = 4;
+  optional bool panel_visible = 5;
+  optional string auxiliary_tab = 6;
+  repeated string auxiliary_tab_order = 7;
+  optional WebUIMainAreaRatiosDTO main_area_ratios = 8;
+  optional google.protobuf.Struct bottom_panel_by_workspace = 9;
+  optional bool workspace_preview_visible = 10;
+  optional bool workspace_preview_maximized = 11;
+  repeated string workspace_preview_file_paths = 12;
+  optional string workspace_preview_active_file_path = 13;
+  optional bool customizations_collapsed = 14;
+  optional int64 customizations_height = 15;
+  optional int64 panel_height = 16;
+  optional string content_view = 17;
+  optional string delivery_policy_default = 18;
+}
+
+message WebUIMainAreaRatiosDTO {
+  optional double agent_sessions = 1;
+  optional double chat = 2;
+  optional double workspace_preview = 3;
+  optional double auxiliary = 4;
+}
+
+message WebUISessionSidebarSettingsDTO {
+  optional string filter_mode = 1;
+  optional string sort_mode = 2;
+  optional string grouping_mode = 3;
+  optional bool workspace_group_capped = 4;
+  repeated string collapsed_workspace_ids = 5;
+  repeated string collapsed_session_ids = 6;
+  repeated string expanded_root_tree_ids = 7;
+  repeated string collapsed_section_ids = 8;
+}
+
+message WebUISettingsDTO {
+  reserved 6;
+  reserved "recent_local_workspace_paths";
+  optional WebUILayoutSettingsDTO layout = 1;
+  optional WebUISessionSidebarSettingsDTO session_sidebar = 2;
+  optional WebUIWorkspaceFileTreeSettingsDTO workspace_file_tree = 3;
+  optional WebUIGatewayConsoleSettingsDTO gateway_console = 4;
+  optional WebUIThemeSettingsDTO theme = 5;
+}
+
+message WebUISettingsUpdateDTO {
+  reserved 6;
+  reserved "recent_local_workspace_paths";
+  optional WebUILayoutSettingsDTO layout = 1;
+  optional WebUISessionSidebarSettingsDTO session_sidebar = 2;
+  optional WebUIWorkspaceFileTreeSettingsDTO workspace_file_tree = 3;
+  optional WebUIGatewayConsoleSettingsDTO gateway_console = 4;
+  optional WebUIThemeSettingsUpdateDTO theme = 5;
+}
+
+message WebUIThemeSettingsDTO {
+  optional string theme_id = 1;
+  optional GatewayThemeBackgroundDTO background = 2;
+  optional ResolvedGatewayThemeDTO resolved_theme = 3;
+}
+
+message WebUIThemeSettingsUpdateDTO {
+  optional string theme_id = 1;
+  optional GatewayThemeBackgroundDTO background = 2;
+}
+
+message WebUIWorkspaceBottomPanelSettingsDTO {
+  optional bool visible = 1;
+  optional int64 height = 2;
+  optional string tab = 3;
+  optional string terminal_id = 4;
+}
+
+message WebUIWorkspaceFileTreeSettingsDTO {
+  optional google.protobuf.Struct expanded_paths_by_workspace = 1;
+}
+
+message WorkspaceFolderCreateRequest {
+  string name = 1;
+  optional string parent_node_id = 2;
+  optional int64 position = 3;
+}
+
+message WorkspaceNavigationBreadcrumbDTO {
+  string revision = 1;
+  repeated WorkspaceNavigationNodeDTO items = 2;
+}
+
+message WorkspaceNavigationNodeDTO {
+  reserved 5;
+  reserved "workspace_id";
+  string node_id = 1;
+  string kind = 2;
+  string name = 3;
+  optional string parent_node_id = 4;
+  optional int64 position = 6;
+  GatewaySearchWorkspaceOwnerDTO workspace = 7;
+}
+
+message WorkspaceNavigationNodeUpdateRequest {
+  optional string name = 1;
+  optional string parent_node_id = 2;
+  optional int64 position = 3;
+}
+
+message WorkspaceNavigationPlacementRequest {
+  string node_id = 1;
+  optional string parent_node_id = 2;
+  string mode = 3;
+  optional string target_node_id = 4;
+}
+
+message WorkspaceNavigationReorderRequest {
+  optional string parent_node_id = 1;
+  repeated string node_ids = 2;
+}
+
+message WorkspaceNavigationTreeDTO {
+  string revision = 1;
+  repeated WorkspaceNavigationNodeDTO nodes = 2;
+}

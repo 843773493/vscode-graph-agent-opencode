@@ -1,7 +1,7 @@
 import React, { useSyncExternalStore } from "react";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { useSessionResourceExplorer } from "../../../hooks/session/useSessionResourceExplorer";
-import { testWorkspaceRequestTargetsFor } from "./gatewayEnvironment";
+import { TEST_GATEWAY_WORKSPACE_KEY, testWorkspaceRequestTargetsFor } from "./gatewayEnvironment";
 import { mountReactTestHarness } from "./reactHarness";
 
 type ResourceExplorerProps = Parameters<typeof useSessionResourceExplorer>[0];
@@ -15,7 +15,7 @@ export function createSessionResourceExplorerProps(
   overrides: Partial<ResourceExplorerProps> = {},
 ): ResourceExplorerProps {
   const activeWorkspaceId = overrides.activeWorkspaceId === undefined
-    ? "ws-test"
+    ? TEST_GATEWAY_WORKSPACE_KEY
     : overrides.activeWorkspaceId;
   return {
     apiPort: 49_400,
@@ -24,7 +24,7 @@ export function createSessionResourceExplorerProps(
     searchOpen: false,
     searchQuery: "",
     currentSessionId: "",
-    workspaceNavigationSyncKey: "ws-test",
+    workspaceNavigationSyncKey: TEST_GATEWAY_WORKSPACE_KEY,
     catalogSyncKeys: new Map(),
     catalogRefreshVersions: new Map(),
     ...overrides,
@@ -82,14 +82,14 @@ export function createLiveSessionResourceExplorerHarness(options: {
   workspaceNavigationSyncKey?: string;
   onExplorer: (explorer: SessionResourceExplorerController) => void;
 }): (props: { syncKey?: string; currentSessionId?: string }) => React.ReactNode {
-  const activeWorkspaceId = options.activeWorkspaceId ?? "ws-test";
+  const activeWorkspaceId = options.activeWorkspaceId ?? TEST_GATEWAY_WORKSPACE_KEY;
   return function Explorer(props): React.ReactNode {
     const explorer = useSessionResourceExplorer({
       ...createSessionResourceExplorerProps({
         apiPort: options.apiPort,
         activeWorkspaceId,
         workspaceNavigationSyncKey:
-          props.syncKey ?? options.workspaceNavigationSyncKey ?? "ws-test",
+          props.syncKey ?? options.workspaceNavigationSyncKey ?? TEST_GATEWAY_WORKSPACE_KEY,
         currentSessionId: props.currentSessionId ?? "",
       }),
     });

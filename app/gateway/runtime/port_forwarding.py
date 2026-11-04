@@ -7,9 +7,15 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.identifier import validate_gateway_id
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.federation import RemoteGatewayConnection
-from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    WorkspaceKey,
+    WorkspaceSelector,
+)
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.gateway.runtime.process_ports import (
@@ -27,7 +33,7 @@ from app.schemas.gateway.port_forwarding import (
     PortForwardStatus,
 )
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _LOCAL_HOST = "127.0.0.1"
 _REMOTE_HOST = "127.0.0.1"
 _READY_TIMEOUT_SECONDS = 10.0
@@ -50,6 +56,7 @@ def port_forward_failure(error: Exception, *, stage: str) -> str:
 @dataclass(frozen=True, slots=True)
 class _PortForwardDefinition:
     forward_id: str
+    gateway_id: str
     workspace_id: str
     connection_id: str
     remote_host: str
@@ -59,6 +66,10 @@ class _PortForwardDefinition:
     protocol: PortForwardProtocol
     label: str | None
     desired_running: bool
+
+    @property
+    def key(self) -> WorkspaceKey:
+        return self.gateway_id, self.workspace_id
 
 
 @dataclass(slots=True)
@@ -220,18 +231,18 @@ class SshPortForwardManager:
             )
         self._runtime_generation = previous_generation
 
-    async def list(self, workspace_id: str) -> list[PortForwardDTO]:
+    async def list(self, workspace_id: WorkspaceSelector) -> list[PortForwardDTO]:
         async with self._lock:
             self._resolve_remote_workspace(workspace_id)
             return [
                 self._dto(definition)
                 for definition in self._definitions.values()
-                if definition.workspace_id == workspace_id
+                if definition.key == self._registry.workspace_key(workspace_id)
             ]
 
     async def create(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
         payload: CreatePortForwardRequest,
     ) -> PortForwardDTO:
         async with self._lock:
@@ -247,7 +258,8 @@ class SshPortForwardManager:
             forward_id = f"pf_{uuid4().hex}"
             definition = _PortForwardDefinition(
                 forward_id=forward_id,
-                workspace_id=workspace_id,
+                gateway_id=self._registry.workspace_key(workspace_id)[0],
+                workspace_id=self._registry.workspace_key(workspace_id)[1],
                 connection_id=connection.connection_id,
                 remote_host=_REMOTE_HOST,
                 remote_port=payload.remote_port,
@@ -270,7 +282,7 @@ class SshPortForwardManager:
                 )
             return self._dto(definition)
 
-    async def delete(self, workspace_id: str, forward_id: str) -> None:
+    async def delete(self, workspace_id: WorkspaceSelector, forward_id: str) -> None:
         async with self._lock:
             self._resolve_remote_workspace(workspace_id)
             definition = self._owned_definition(workspace_id, forward_id)
@@ -279,7 +291,7 @@ class SshPortForwardManager:
             self._runtimes.pop(definition.forward_id, None)
             self._save()
 
-    async def reconnect(self, workspace_id: str, forward_id: str) -> PortForwardDTO:
+    async def reconnect(self, workspace_id: WorkspaceSelector, forward_id: str) -> PortForwardDTO:
         async with self._lock:
             connection = self._resolve_remote_workspace(workspace_id)
             definition = self._owned_definition(workspace_id, forward_id)
@@ -297,7 +309,7 @@ class SshPortForwardManager:
 
     async def change_label(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
         forward_id: str,
         label: str | None,
     ) -> PortForwardDTO:
@@ -311,7 +323,7 @@ class SshPortForwardManager:
 
     async def change_local_port(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
         forward_id: str,
         local_port: int,
     ) -> PortForwardDTO:
@@ -340,12 +352,12 @@ class SshPortForwardManager:
                 )
             return self._dto(updated_definition)
 
-    async def remove_workspace(self, workspace_id: str) -> None:
+    async def remove_workspace(self, workspace_id: WorkspaceSelector) -> None:
         async with self._lock:
             definitions = [
                 definition
                 for definition in self._definitions.values()
-                if definition.workspace_id == workspace_id
+                if definition.key == self._registry.workspace_key(workspace_id)
             ]
             for definition in definitions:
                 await self._stop_runtime(definition.forward_id)
@@ -360,7 +372,7 @@ class SshPortForwardManager:
             stale_definitions = [
                 definition
                 for definition in self._definitions.values()
-                if not self._registry.has_target(definition.workspace_id)
+                if not self._registry.has_target(definition.key)
             ]
             errors: list[str] = []
             removed_any = False
@@ -397,7 +409,7 @@ class SshPortForwardManager:
 
     def _resolve_remote_workspace(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
     ) -> RemoteGatewayConnection:
         target = self._registry.resolve(workspace_id)
         if target.connection_kind != "remote_gateway":
@@ -405,19 +417,13 @@ class SshPortForwardManager:
                 "SSH 端口转发只支持远程 Gateway 投影工作区: "
                 f"workspace_id={workspace_id}"
             )
-        if target.remote_gateway_connection_id is None:
-            raise RuntimeError(
-                f"远程投影工作区缺少 Gateway 连接 ID: {workspace_id}"
-            )
-        return self._registry.remote_gateway_connection(
-            target.remote_gateway_connection_id
-        )
+        return self._registry.remote_connection_for_target(target)
 
     def _connection_for_definition(
         self,
         definition: _PortForwardDefinition,
     ) -> RemoteGatewayConnection:
-        connection = self._resolve_remote_workspace(definition.workspace_id)
+        connection = self._resolve_remote_workspace(definition.key)
         if connection.connection_id != definition.connection_id:
             raise RuntimeError(
                 "端口转发绑定的远程 Gateway 已变化: "
@@ -442,11 +448,11 @@ class SshPortForwardManager:
 
     def _owned_definition(
         self,
-        workspace_id: str,
+        workspace_id: WorkspaceSelector,
         forward_id: str,
     ) -> _PortForwardDefinition:
         definition = self._definitions.get(forward_id)
-        if definition is None or definition.workspace_id != workspace_id:
+        if definition is None or definition.key != self._registry.workspace_key(workspace_id):
             raise LookupError(
                 "工作区端口转发不存在: "
                 f"workspace_id={workspace_id}, forward_id={forward_id}"
@@ -613,6 +619,7 @@ class SshPortForwardManager:
         )
         return PortForwardDTO(
             forward_id=definition.forward_id,
+            gateway_id=definition.gateway_id,
             workspace_id=definition.workspace_id,
             connection_id=definition.connection_id,
             remote_host=_REMOTE_HOST,
@@ -666,7 +673,8 @@ class SshPortForwardManager:
             self._storage_path,
             default={"schema_version": _SCHEMA_VERSION, "items": []},
         )
-        if payload.get("schema_version") != _SCHEMA_VERSION:
+        version = payload.get("schema_version")
+        if version not in {1, _SCHEMA_VERSION}:
             raise ValueError(
                 "Gateway 端口转发持久化版本不受支持: "
                 f"{payload.get('schema_version')!r}"
@@ -674,14 +682,19 @@ class SshPortForwardManager:
         raw_items = payload.get("items")
         if not isinstance(raw_items, list):
             raise TypeError("Gateway 端口转发持久化 items 必须是数组")
+        if version == 1 and raw_items:
+            raise RuntimeError("旧端口转发缺少原生 Gateway/UUID 归属，请先执行 workspace-identity 显式迁移")
         claimed_local_ports: set[int] = set()
         claimed_remote_ports: set[tuple[str, str, int]] = set()
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 raise TypeError("Gateway 端口转发持久化条目必须是对象")
+            workspace_id = validate_workspace_id(raw_item["workspace_id"])
+            gateway_id = validate_gateway_id(raw_item["gateway_id"])
             definition = _PortForwardDefinition(
                 forward_id=str(raw_item["forward_id"]),
-                workspace_id=str(raw_item["workspace_id"]),
+                gateway_id=gateway_id,
+                workspace_id=workspace_id,
                 connection_id=str(raw_item["connection_id"]),
                 remote_host=str(raw_item["remote_host"]),
                 remote_port=int(raw_item["remote_port"]),
@@ -720,6 +733,8 @@ class SshPortForwardManager:
             self._definitions[definition.forward_id] = definition
             claimed_local_ports.add(definition.local_port)
             claimed_remote_ports.add(remote_key)
+        if version == 1:
+            self._save()
 
     @staticmethod
     def _parse_protocol(value: object) -> PortForwardProtocol:
@@ -735,6 +750,8 @@ class SshPortForwardManager:
 
     @staticmethod
     def _validate_definition(definition: _PortForwardDefinition) -> None:
+        validate_gateway_id(definition.gateway_id)
+        validate_workspace_id(definition.workspace_id)
         if definition.remote_host != _REMOTE_HOST:
             raise ValueError(
                 f"Gateway 端口转发远端地址必须是 {_REMOTE_HOST}"

@@ -1,3 +1,5 @@
+import { workspaceOwnerFromKey } from "../../api/workspaceIdentity";
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback, useRef, type MutableRefObject } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
@@ -72,7 +74,7 @@ export function useGatewayWorkspaceMutations({
         }
         try {
           const workspaces = await apiListGatewayWorkspaces(resolvedApiPort);
-          activeWorkspaceChanged = workspaces.active_workspace_id !== activeWorkspaceIdAtStart;
+          activeWorkspaceChanged = nullableGatewayWorkspaceKey(workspaces.active_workspace) !== activeWorkspaceIdAtStart;
           setState((prev) => listRequest === gatewayListRequestRef.current ? ({
             ...withFreshGatewayWorkspaceList(prev, workspaces.items),
             ...(selectionIntent === selectionIntentRef.current
@@ -273,8 +275,8 @@ export function useGatewayWorkspaceMutations({
   const removeGatewayWorkspace = useCallback(
     async (workspaceId: string, groupRequest?: GatewayRuntimeGroupRequest, force = false) => {
       const resumeObservations = pauseWorkspaceObservations([
-        workspaceId, ...(groupRequest?.expected_workspace_ids ?? []),
-        ...(groupRequest?.desired_workspace_ids ?? []),
+        workspaceId, ...(groupRequest?.expected_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
+        ...(groupRequest?.desired_workspace_ids ?? []).map(id => gatewayWorkspaceKey({ gatewayId: workspaceOwnerFromKey(workspaceId).gatewayId, workspaceId: id })),
       ]);
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
       const removedActiveWorkspace = workspaceId === activeGatewayWorkspaceId;
@@ -310,7 +312,7 @@ export function useGatewayWorkspaceMutations({
         postCommitFailureStage = "删除响应处理";
         if (!listRequestIsCurrent()) return;
         activeWorkspaceChanged =
-          workspaceList.active_workspace_id !== activeGatewayWorkspaceId;
+          nullableGatewayWorkspaceKey(workspaceList.active_workspace) !== activeGatewayWorkspaceId;
         if (selectionIntent === selectionIntentRef.current && (removedActiveWorkspace || activeWorkspaceChanged)) {
           abortCurrentStream();
         }
@@ -329,9 +331,9 @@ export function useGatewayWorkspaceMutations({
             ...reconciledState,
             ...activeGatewayWorkspaceFields(workspaceList),
             workspaceSwitching: true,
-            sessions: workspaceList.active_workspace_id
+            sessions: nullableGatewayWorkspaceKey(workspaceList.active_workspace)
               ? reconciledState.sessionsByWorkspace.get(
-                  workspaceList.active_workspace_id,
+                  nullableGatewayWorkspaceKey(workspaceList.active_workspace)!,
                 ) ?? []
               : [],
             currentSession: null,
@@ -464,7 +466,7 @@ export function useGatewayWorkspaceMutations({
       return runGatewayWorkspaceListTask(async () => {
         try {
           const workspaceList = await apiReorderGatewayWorkspaces(resolvedApiPort, {
-            workspace_ids: workspaceIds,
+            workspaces: workspaceIds.map(key => { const owner = workspaceOwnerFromKey(key); return { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }; }),
           });
           setState((prev) => listRequest === gatewayListRequestRef.current ? {
             ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
@@ -513,7 +515,7 @@ export function useGatewayWorkspaceMutations({
             { name },
           );
           const renamedWorkspace = workspaceList.items.find(
-            (workspace) => workspace.workspace_id === workspaceId,
+            (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
           );
           if (!renamedWorkspace) {
             throw new Error(`Gateway 重命名响应缺少工作区: ${workspaceId}`);

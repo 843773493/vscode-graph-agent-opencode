@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 
@@ -98,6 +99,19 @@ def _migrate_gateway_config_into_source_layers(
         )
 
 
+def _migrate_workspace_owner_schema(connection: sqlite3.Connection) -> None:
+    """普通启动只升级空库；存量值和引用必须由显式维护入口先核验。"""
+    row = connection.execute("SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'").fetchone()
+    if row is not None and json.loads(row[0]).get("schema_version") != 14:
+        raise RuntimeError("工作区身份合同需要显式迁移；停止 Gateway 后运行 workspace-identity 维护入口")
+    if row is None and connection.execute("SELECT 1 FROM gateway_workspace_registry UNION ALL SELECT 1 FROM user_view_state LIMIT 1").fetchone() is not None:
+        raise RuntimeError("工作区身份迁移缺少 registry metadata，禁止按当前工作区猜测归属")
+    assert __package__ is not None
+    for statement in load_sql(__package__, "sql/019.sql").split(";"):
+        if statement.strip():
+            connection.execute(statement)
+
+
 assert __package__ is not None
 
 _GATEWAY_MIGRATIONS = (
@@ -122,4 +136,5 @@ _GATEWAY_MIGRATIONS = (
     _migrate_gateway_config_into_source_layers,
     load_sql(__package__, "sql/017.sql"),
     load_sql(__package__, "sql/018.sql"),
+    _migrate_workspace_owner_schema,
 )

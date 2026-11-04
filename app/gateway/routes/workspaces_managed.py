@@ -31,7 +31,7 @@ from app.gateway.managed_workspaces import (
     remove_direct_managed_workspace,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.remote_gateway import refresh_remote_gateway_projections
+from app.gateway.remote_gateway import reconnect_remote_gateway, refresh_remote_gateway_projections
 from app.gateway.routes._shared import (
     _gateway_root,
     _managed_workspace_list,
@@ -54,6 +54,7 @@ from app.schemas.gateway.lifecycle import (
 from app.schemas.gateway.workspaces import (
     CreateGatewayManagedWorkspaceRequest,
     GatewayManagedWorkspaceListDTO,
+    GatewayWorkspaceListDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
 
@@ -326,3 +327,45 @@ async def remove_gateway_managed_workspace(
         data=await _managed_workspace_list(registry),
         request_id=request_id,
     )
+
+
+@router.post("/api/gateway/remote-gateways/{connection_id}/reconnect", response_model=APIResponse[GatewayWorkspaceListDTO])
+async def reconnect_gateway_connection(
+    connection_id: str,
+    request: Request,
+    _: Annotated[str, Depends(verify_gateway_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+):
+    config = request.app.state.gateway_config
+    try:
+        await reconnect_remote_gateway(
+            registry=registry, connection_id=connection_id, log_dir=get_runtime_log_root(),
+            health_request_timeout_seconds=config.gateway_process_health_request_timeout_seconds,
+            health_poll_interval_seconds=config.gateway_process_health_poll_interval_seconds,
+        )
+    except LookupError as error:
+        raise HTTPException(404, detail=str(error)) from error
+    except (PermissionError, ValueError) as error:
+        raise HTTPException(409, detail=str(error)) from error
+    except (OSError, RuntimeError, httpx.HTTPError) as error:
+        raise HTTPException(502, detail=failure_detail(error, stage="gateway_connection_reconnect", label="远端 Gateway 连接重连失败")) from error
+    return APIResponse(data=GatewayWorkspaceListDTO(active_workspace=registry.active_workspace_dto, items=await registry.list_dtos()), request_id=request_id)
+
+
+@router.delete("/api/gateway/remote-gateways/{connection_id}", response_model=APIResponse[GatewayWorkspaceListDTO])
+async def remove_gateway_connection(
+    connection_id: str,
+    _: Annotated[str, Depends(verify_gateway_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+):
+    try:
+        registry.remove_remote_gateway(connection_id)
+    except LookupError as error:
+        raise HTTPException(404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(403, detail=str(error)) from error
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(409, detail=str(error)) from error
+    return APIResponse(data=GatewayWorkspaceListDTO(active_workspace=registry.active_workspace_dto, items=await registry.list_dtos()), request_id=request_id)

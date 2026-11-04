@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -39,11 +40,7 @@ async function mountHook(options: {
     hook = useWorkspaceRefreshOrchestration({
       apiPort: API_PORT,
       selectionIntentRef,
-      gatewayWorkspaces: [{
-        workspace_id: "workspace-c",
-        backend_workspace_id: "00000000-0000-0000-0000-000000000001",
-        connection_kind: "local",
-      }],
+      gatewayWorkspaces: [{ gateway_id: "gateway-test", workspace_id: "workspace-c" }],
       setState: (update) => {
         current = typeof update === "function"
           ? (update as (previous: AppState) => AppState)(current)
@@ -200,7 +197,7 @@ describe("useWorkspaceRefreshOrchestration", () => {
     const mounted = await mountHook({ refreshSessions: async () => "workspace-a" });
 
     await act(async () => {
-      await mounted.hook.refreshGatewayWorkspaceSessions("workspace-c");
+      await mounted.hook.refreshGatewayWorkspaceSessions(gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "workspace-c" }));
     });
     await flush();
 

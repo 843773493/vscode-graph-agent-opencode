@@ -186,9 +186,8 @@ describe("requestJson 请求取消", () => {
     await expect(
       listSessionCatalogChildren(port, {
         workspace_id: "workspace-test",
-        backend_workspace_id: "backend-workspace-test",
-        connection_kind: "local",
-      }),
+        gateway_id: "gateway-test",
+              }),
     ).resolves.toMatchObject({ revision: "revision-recovered", items: [] });
     expect(currentCalls).toBe(2);
     expect(guestCalls).toBe(1);

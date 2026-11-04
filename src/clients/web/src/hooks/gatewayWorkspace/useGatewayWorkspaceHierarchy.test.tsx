@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -7,14 +8,18 @@ import type { AppState } from "../../types/frontend";
 import { useGatewayWorkspaceHierarchy } from "./useGatewayWorkspaceHierarchy";
 import { createSerialTaskQueue } from "../runtime/serialTaskQueue";
 
+const workspaceKey = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
+const workspaceTarget = (key: string) => { const owner = workspaceOwnerFromKey(key); return { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }; };
+
 const API_PORT = 49_631;
 
 function gatewayWorkspace(
   overrides: Partial<GatewayWorkspace> = {},
 ): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: "ws-1",
-    parent_workspace_id: null,
+    parent_workspace: null,
     name: "工作区一",
     backend_url: "http://127.0.0.1:41000",
     connection_kind: "local",
@@ -25,7 +30,7 @@ function gatewayWorkspace(
     removable: true,
     system_default: false,
     runtime_action: "safe_restart_managed_backend",
-    remote: null,
+    remote_gateways: [],
     services: {},
     connection_error: null,
     checked_at: "2026-09-10T00:00:00Z",
@@ -37,13 +42,13 @@ function workspaceList(
   activeWorkspaceId: string | null,
   items: GatewayWorkspace[],
 ): GatewayWorkspaceList {
-  return { active_workspace_id: activeWorkspaceId, items };
+  return { active_workspace: activeWorkspaceId ? workspaceTarget(activeWorkspaceId) : null, items };
 }
 
 function appState(overrides: Partial<AppState> = {}): AppState {
   return {
     gatewayWorkspaces: [],
-    activeGatewayWorkspaceId: "ws-active",
+    activeGatewayWorkspaceId: workspaceKey("ws-active"),
     workspaceName: "陈旧的工作区",
     gatewayError: null,
     error: null,
@@ -98,7 +103,7 @@ test("失败对账时工作区根路径与名称跟着活动工作区一起替�
   // workspaceName，文件树与预览就会按新工作区 id 去读旧根路径。
   spyOnGatewayApi("updateGatewayWorkspace").mockRejectedValue(new Error("父工作区不存在"));
   const list = spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(
-    workspaceList("ws-other", [
+    workspaceList(workspaceKey("ws-other"), [
       gatewayWorkspace({
         workspace_id: "ws-other",
         name: "对账后的活动工作区",
@@ -109,13 +114,13 @@ test("失败对账时工作区根路径与名称跟着活动工作区一起替�
     workspaceSwitching: true,
   } as Partial<AppState>));
 
-  await expect(hook("ws-1", "ws-missing")).rejects.toThrow(
+  await expect(hook(workspaceKey("ws-1"), workspaceKey("ws-missing"))).rejects.toThrow(
     "父工作区不存在",
   );
 
   expect(list).toHaveBeenCalledWith(API_PORT);
   const next = state();
-  expect(next.activeGatewayWorkspaceId).toBe("ws-other");
+  expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-other"));
   expect(next.workspaceName).toBe("对账后的活动工作区");
   expect(next.gatewayError).toBe("父工作区不存在");
   expect(next.status).toBe("更新工作区父子关系失败: 父工作区不存在");
@@ -128,7 +133,7 @@ test("父子关系更新与列表对账都失败时保留原始错误并标记�
   const list = spyOnGatewayApi("listGatewayWorkspaces").mockRejectedValue(reconciliationError);
   const { hook, state } = await mountHook(appState({ gatewayWorkspacesStale: false }));
 
-  await expect(hook("ws-1", "ws-missing")).rejects.toBe(operationError);
+  await expect(hook(workspaceKey("ws-1"), workspaceKey("ws-missing"))).rejects.toBe(operationError);
 
   expect(update).toHaveBeenCalledTimes(1);
   expect(list).toHaveBeenCalledTimes(1);
@@ -149,7 +154,7 @@ test("列表对账成功期间选择意图改变时仍替换完整列表并保�
     markReadStarted();
     return readResult;
   });
-  const reconciledList = workspaceList("ws-reconciled", [
+  const reconciledList = workspaceList(workspaceKey("ws-reconciled"), [
     gatewayWorkspace({
       workspace_id: "ws-reconciled",
       name: "对账后的工作区",
@@ -164,13 +169,13 @@ test("列表对账成功期间选择意图改变时仍替换完整列表并保�
     gatewayWorkspacesStale: false,
   }));
 
-  const operation = hook("ws-1", "ws-missing");
+  const operation = hook(workspaceKey("ws-1"), workspaceKey("ws-missing"));
   await readStarted;
   act(() => {
     selectionIntentRef.current += 1;
     setState((previous) => ({
       ...previous,
-      activeGatewayWorkspaceId: "ws-new-selection",
+      activeGatewayWorkspaceId: workspaceKey("ws-new-selection"),
       workspaceName: "较新的选择",
       gatewayError: "较新的错误状态",
       status: "用户已切换到较新工作区",
@@ -186,11 +191,11 @@ test("列表对账成功期间选择意图改变时仍替换完整列表并保�
   expect(list).toHaveBeenCalledTimes(1);
   const next = state();
   expect(next.gatewayWorkspaces).toEqual(reconciledList.items);
-  expect(next.gatewayWorkspaces.map((workspace) => workspace.workspace_id)).toEqual([
-    "ws-reconciled",
-    "ws-sibling",
+  expect(next.gatewayWorkspaces.map(gatewayWorkspaceKey)).toEqual([
+    workspaceKey("ws-reconciled"),
+    workspaceKey("ws-sibling"),
   ]);
-  expect(next.activeGatewayWorkspaceId).toBe("ws-new-selection");
+  expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-new-selection"));
   expect(next.workspaceName).toBe("较新的选择");
   expect(next.gatewayError).toBe("较新的错误状态");
   expect(next.status).toBe("用户已切换到较新工作区");
@@ -213,13 +218,13 @@ test("列表对账失败期间选择意图改变时仍标记列表过期并保�
     gatewayWorkspacesStale: false,
   }));
 
-  const operation = hook("ws-1", "ws-missing");
+  const operation = hook(workspaceKey("ws-1"), workspaceKey("ws-missing"));
   await readStarted;
   act(() => {
     selectionIntentRef.current += 1;
     setState((previous) => ({
       ...previous,
-      activeGatewayWorkspaceId: "ws-new-selection",
+      activeGatewayWorkspaceId: workspaceKey("ws-new-selection"),
       workspaceName: "较新的选择",
       gatewayError: "较新的错误状态",
       status: "用户已切换到较新工作区",
@@ -235,18 +240,18 @@ test("列表对账失败期间选择意图改变时仍标记列表过期并保�
   expect(list).toHaveBeenCalledTimes(1);
   const next = state();
   expect(next.gatewayWorkspacesStale).toBe(true);
-  expect(next.activeGatewayWorkspaceId).toBe("ws-new-selection");
+  expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-new-selection"));
   expect(next.workspaceName).toBe("较新的选择");
   expect(next.gatewayError).toBe("较新的错误状态");
   expect(next.status).toBe("用户已切换到较新工作区");
 });
 
 test("成功时整体替换工作区列表与活动工作区派生字段", async () => {
-  const updatedList = workspaceList("ws-1", [
+  const updatedList = workspaceList(workspaceKey("ws-1"), [
     gatewayWorkspace({
       workspace_id: "ws-1",
       name: "工作区一",
-      parent_workspace_id: "ws-parent",
+      parent_workspace: workspaceTarget(workspaceKey("ws-parent")),
     }),
     gatewayWorkspace({
       workspace_id: "ws-2",
@@ -260,15 +265,15 @@ test("成功时整体替换工作区列表与活动工作区派生字段", async
     gatewayWorkspaces: [gatewayWorkspace({ workspace_id: "ws-obsolete", name: "旧工作区" })],
   }));
 
-  await hook("ws-1", "ws-parent");
+  await hook(workspaceKey("ws-1"), workspaceKey("ws-parent"));
 
   const next = state();
   expect(next.gatewayWorkspaces).toEqual(updatedList.items);
-  expect(next.gatewayWorkspaces.map((workspace) => workspace.workspace_id)).toEqual([
-    "ws-1",
-    "ws-2",
+  expect(next.gatewayWorkspaces.map(gatewayWorkspaceKey)).toEqual([
+    workspaceKey("ws-1"),
+    workspaceKey("ws-2"),
   ]);
-  expect(next.activeGatewayWorkspaceId).toBe("ws-1");
+  expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-1"));
   expect(next.workspaceName).toBe("工作区一");
   expect(next.gatewayError).toBeNull();
   expect(next.error).toBeNull();

@@ -6,6 +6,7 @@ import { getGatewayHealth, getGatewayUiSettings, resolveGatewayUiSettings } from
 import { browserViewKey, readBrowserView, updateBrowserView } from "../../state/browserViewStore";
 import { normalizeWebUiSettings } from "../../state/uiSettings/preferences";
 import type { WebUiSettings, WebUiSettingsUpdate } from "../../types/backend";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 
 const gatewayIds = new Map<number, Promise<string>>();
 
@@ -38,8 +39,8 @@ export async function getBrowserUiSettings(port: number): Promise<WebUiSettings>
     const previous = await getLatestGatewayUserViewState(port);
     if (previous) {
       const { user_id: _userId, ...view } = previous;
-      await updateBrowserView<SessionViewState>(browserViewKey(gatewayId, "session", view.workspace_id, view.session_id, "main"), current => current ?? view);
-      await updateBrowserView<SessionSelection>(browserViewKey(gatewayId, "selection"), current => current ?? { workspace_id: view.workspace_id, session_id: view.session_id });
+      await updateBrowserView<SessionViewState>(browserViewKey(gatewayId, "session", gatewayWorkspaceKey(view), view.session_id, "main"), current => current ?? view);
+      await updateBrowserView<SessionSelection>(browserViewKey(gatewayId, "selection"), current => current ?? { gateway_id: view.gateway_id, workspace_id: view.workspace_id, session_id: view.session_id });
     }
   }
   return (await updateBrowserView<WebUiSettings>(key, current => current ?? initial))!;

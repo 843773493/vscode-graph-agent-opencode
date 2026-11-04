@@ -1,3 +1,4 @@
+import { workspaceOwnerFromKey } from "../../../api/workspaceIdentity";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../../../gatewayApi";
@@ -20,7 +21,7 @@ function getWorkspaceLogs(
   fallbackWorkspaceId: string | null,
 ): GatewayDiagnosticLog[] {
   if (!diagnostics) return [];
-  const selectedWorkspaceId = diagnostics.selected_workspace_id ?? fallbackWorkspaceId;
+  const selectedWorkspaceId = diagnostics.selected_workspace_id ?? (fallbackWorkspaceId ? workspaceOwnerFromKey(fallbackWorkspaceId).workspaceId : null);
   return diagnostics.logs.filter(
     (log) => log.source === "workspace" && log.workspace_id === selectedWorkspaceId,
   );

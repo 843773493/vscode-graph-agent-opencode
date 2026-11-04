@@ -1,7 +1,7 @@
 import type { MutableRefObject } from "react";
 import type { GatewayUserAccess, Session } from "../../../types/backend";
 import type { AppState } from "../../../types/frontend";
-import type { GatewayWorkspaceRoute } from "../../../api/workspaceIdentity";
+import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import type { SetAppState } from "../../contentViewLoaderTypes";
 import type { SessionCatalogOutboxRuntime } from "../sessionCatalogOutboxRuntime";
 
@@ -18,6 +18,6 @@ export type SessionLifecycleContext = {
   invalidateAgentState: () => void;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
   gatewayUserAccess?: GatewayUserAccess | null;
-  workspaceRequestTargets: readonly GatewayWorkspaceRoute[];
+  workspaceRequestTargets: readonly GatewayWorkspaceRequestTarget[];
   selectionIntentRef: MutableRefObject<number>;
 };

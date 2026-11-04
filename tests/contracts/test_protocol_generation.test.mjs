@@ -136,10 +136,38 @@ test("公开诊断字段没有真实定位，通信目标的三种 destination �
 });
 
 
+test("Gateway v2 在两套客户端绑定中保留同 UUID 的完整 owner 与连接集合", async () => {
+  const workspaceId = "00000000-0000-4000-8000-000000000001";
+  for (const binding of [
+    await import("../../src/workspace-services/protocol/generated/boxteam/gateway/v2/public_pb.js"),
+    await import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/gateway/v2/public_pb.js"),
+  ]) {
+    const owners = ["gateway-a", "gateway-b"].map(gatewayId => ({ gatewayId, workspaceId }));
+    const schema = binding.GatewayWorkspaceListDTOSchema;
+    const value = create(schema, {
+      activeWorkspace: owners[1],
+      items: owners.map((owner, index) => ({ ...owner,
+        parentWorkspace: index ? owners[0] : undefined,
+        remoteGateways: ["connection-first", "connection-second"].map(gatewayConnectionId => ({
+          gatewayConnectionId, gatewayId: owner.gatewayId,
+        })),
+      })),
+    });
+    const decoded = fromBinary(schema, toBinary(schema, value));
+    expect(decoded.items.map(item => [item.gatewayId, item.workspaceId])).toEqual(owners.map(owner => [owner.gatewayId, workspaceId]));
+    expect([decoded.activeWorkspace.gatewayId, decoded.activeWorkspace.workspaceId]).toEqual(["gateway-b", workspaceId]);
+    expect(decoded.items[1].parentWorkspace.gatewayId).toBe("gateway-a");
+    expect(decoded.items[1].remoteGateways.map(remote => remote.gatewayConnectionId)).toEqual(["connection-first", "connection-second"]);
+    const reorder = create(binding.ReorderGatewayWorkspacesRequestSchema, { workspaces: owners.toReversed() });
+    const reordered = fromBinary(binding.ReorderGatewayWorkspacesRequestSchema, toBinary(binding.ReorderGatewayWorkspacesRequestSchema, reorder));
+    expect(reordered.workspaces.map(owner => owner.gatewayId)).toEqual(["gateway-b", "gateway-a"]);
+  }
+});
+
 test("Gateway 完整组请求、blocker 与两种客户端绑定往返保持成员和 generation", async () => {
   const bindings = await Promise.all([
-    import("../../src/workspace-services/protocol/generated/boxteam/gateway/v1/public_pb.js"),
-    import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/gateway/v1/public_pb.js"),
+    import("../../src/workspace-services/protocol/generated/boxteam/gateway/v2/public_pb.js"),
+    import("../../src/clients/web/src/types/protocol_buf_generated/boxteam/gateway/v2/public_pb.js"),
   ]);
   for (const binding of bindings) {
     const schema = binding.GatewayRuntimeGroupRequestSchema;

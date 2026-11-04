@@ -20,13 +20,14 @@ class GatewayRuntimeGroupRequest(BaseModel):
             raise ValueError("必须同时提供 expected_backend_generation 和完整 expected_workspace_ids")
         for values in (self.expected_workspace_ids, self.desired_workspace_ids):
             if values is not None and len(values) != len(set(values)):
-                raise ValueError("Backend 完整成员集合不得包含重复 Gateway target ID")
+                raise ValueError("Backend 完整成员集合不得包含重复工作区 UUID")
         if self.desired_workspace_ids is not None and self.expected_backend_generation is None:
             raise ValueError("成员变更必须提交完整组前置条件")
         return self
 
 
 class GatewayRuntimeBlockerDTO(BaseModel):
+    gateway_id: str
     kind: Literal[
         "backend_group",
         "job",
@@ -43,6 +44,7 @@ class GatewayRuntimeBlockerDTO(BaseModel):
 
 
 class GatewayRuntimeRestartResultDTO(BaseModel):
+    gateway_id: str
     workspace_id: str
     backend_generation: str | None = None
     affected_workspace_ids: list[str] = Field(default_factory=list)
@@ -53,6 +55,7 @@ class GatewayRuntimeRestartResultDTO(BaseModel):
 
 
 class GatewayRuntimeStateResultDTO(BaseModel):
+    gateway_id: str
     workspace_id: str
     backend_generation: str | None = None
     affected_workspace_ids: list[str] = Field(default_factory=list)

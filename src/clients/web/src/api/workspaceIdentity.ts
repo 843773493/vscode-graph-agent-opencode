@@ -1,64 +1,43 @@
 import type { GatewayWorkspace } from "../types/backend";
 
-export type GatewayWorkspaceRequestTarget = Pick<
-  GatewayWorkspace,
-  "workspace_id" | "backend_workspace_id" | "connection_kind"
->;
-
-export type GatewayWorkspaceRoute = GatewayWorkspaceRequestTarget & {
-  remote?: Pick<NonNullable<GatewayWorkspace["remote"]>, "gateway_id" | "remote_workspace_id"> | null;
-};
+export type GatewayWorkspaceRequestTarget = Pick<GatewayWorkspace, "gateway_id" | "workspace_id">;
 
 export interface WorkspaceOwner {
   gatewayId: string;
   workspaceId: string;
 }
 
-export function gatewayWorkspaceOwner(workspace: GatewayWorkspaceRoute, localGatewayId: string): WorkspaceOwner {
-  const gatewayId = workspace.connection_kind === "local" ? localGatewayId : workspace.remote?.gateway_id;
-  const workspaceId = workspace.connection_kind === "local" ? workspace.backend_workspace_id : workspace.remote?.remote_workspace_id;
-  if (!gatewayId?.trim() || !workspaceId?.trim()) throw new Error("已登记路由缺少目标 Gateway／工作区身份");
-  return { gatewayId, workspaceId };
+/** 仅供展示选择和内存 Map 使用；线上字段始终是原生 Gateway ID 与 UUID。 */
+export function gatewayWorkspaceKey(workspace: GatewayWorkspaceRequestTarget | WorkspaceOwner): string {
+  const owner = "gateway_id" in workspace ? gatewayWorkspaceOwner(workspace) : workspace;
+  if (!owner.gatewayId?.trim() || !owner.workspaceId?.trim()) throw new Error("工作区缺少完整 Gateway／UUID 归属");
+  return JSON.stringify([owner.gatewayId, owner.workspaceId]);
 }
 
-export function requireGatewayWorkspaceRequestTarget(
-  workspaces: readonly GatewayWorkspaceRequestTarget[],
-  gatewayWorkspaceId: string,
-): GatewayWorkspaceRequestTarget {
-  const target = workspaces.find(
-    (workspace) => workspace.workspace_id === gatewayWorkspaceId,
-  );
-  if (!target) {
-    throw new Error(
-      `Gateway workspace target 不存在，无法解析 backend_workspace_id: ${gatewayWorkspaceId}`,
-    );
-  }
-  if (target.connection_kind === "local" && !target.backend_workspace_id) {
-    throw new Error(
-      `Gateway workspace target 缺少 backend_workspace_id: ${gatewayWorkspaceId}`,
-    );
-  }
-  return target;
+export function nullableGatewayWorkspaceKey(workspace: GatewayWorkspaceRequestTarget | null | undefined): string | null {
+  return workspace ? gatewayWorkspaceKey(workspace) : null;
 }
 
-export function requireGatewayWorkspaceRoute<T extends GatewayWorkspaceRoute>(
-  workspaces: readonly T[],
-  localGatewayId: string | null | undefined,
-  owner: WorkspaceOwner,
+export function workspaceOwnerFromKey(key: string): WorkspaceOwner {
+  // TODO：旧 selection／IndexedDB／outbox 的别名恢复需显式迁移；不能借当前 active 补归属。
+  const value: unknown = JSON.parse(key);
+  if (!Array.isArray(value) || value.length !== 2 || !value.every(item => typeof item === "string" && item.trim())) {
+    throw new Error("工作区选择缺少完整 Gateway／UUID 归属，请从工作区导航重新选择");
+  }
+  return { gatewayId: value[0] as string, workspaceId: value[1] as string };
+}
+
+export function gatewayWorkspaceOwner(workspace: GatewayWorkspaceRequestTarget): WorkspaceOwner {
+  if (!workspace.gateway_id?.trim() || !workspace.workspace_id?.trim()) throw new Error("已登记工作区缺少 Gateway／UUID 归属");
+  return { gatewayId: workspace.gateway_id, workspaceId: workspace.workspace_id };
+}
+
+export function requireGatewayWorkspaceRequestTarget<T extends GatewayWorkspaceRequestTarget>(
+  workspaces: readonly T[], selection: string | WorkspaceOwner,
 ): T {
-  if (!localGatewayId?.trim()) {
-    throw new Error("Gateway 健康回执缺少身份，无法解析目标路由");
-  }
-  const { gatewayId, workspaceId } = owner;
-  if (!gatewayId?.trim() || !workspaceId?.trim()) {
-    throw new Error("资源目标缺少 Gateway／工作区身份");
-  }
-  const targets = workspaces.filter((workspace) => workspace.connection_kind === "local"
-    ? gatewayId === localGatewayId && workspace.backend_workspace_id === workspaceId
-    : workspace.remote?.gateway_id === gatewayId && workspace.remote.remote_workspace_id === workspaceId);
+  const owner = typeof selection === "string" ? workspaceOwnerFromKey(selection) : selection;
+  const targets = workspaces.filter(workspace => workspace.gateway_id === owner.gatewayId && workspace.workspace_id === owner.workspaceId);
   const [target] = targets;
-  if (!target || targets.length !== 1) {
-    throw new Error("目标 Gateway／工作区缺少唯一的已登记路由，无法打开资源");
-  }
+  if (!target || targets.length !== 1) throw new Error("目标 Gateway／UUID 缺少唯一已登记工作区");
   return target;
 }

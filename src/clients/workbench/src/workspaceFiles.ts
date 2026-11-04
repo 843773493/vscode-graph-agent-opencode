@@ -53,10 +53,10 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   private readonly revisions = new Map<string, string>();
   private readonly watches = new Map<string, FileWatch>();
 
-  private async access<T>(resource: URI, action: (routeId: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  private async access<T>(resource: URI, action: (workspaceKey: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const source = workspaceFileSource(resource);
-    const routeId = await gateway.resolveWorkspace(source, signal);
-    try { return await action(routeId); }
+    const workspaceKey = await gateway.resolveWorkspace(source, signal);
+    try { return await action(workspaceKey); }
     catch (error) {
       if (error instanceof GatewayRequestError && error.status === 404) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotFound);
       if (error instanceof GatewayRequestError && error.status === 403) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.NoPermissions);
@@ -64,7 +64,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     }
   }
   private request<T>(resource: URI, endpoint: string, options: RequestInit = {}): Promise<T> {
-    return this.access(resource, routeId => gateway.request<T>(endpoint, options, routeId));
+    return this.access(resource, workspaceKey => gateway.request<T>(endpoint, options, workspaceKey));
   }
   private async content(resource: URI, options: RequestInit = {}): Promise<WorkspaceFileContentDTO> {
     const source = workspaceFileSource(resource);
@@ -94,7 +94,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     const range = options.position !== undefined || options.length !== undefined
       ? { start, end: options.length === undefined ? undefined : start + options.length - 1 } : undefined;
     const source = workspaceFileSource(resource);
-    const blob = await this.access(resource, routeId => getWorkspaceRawFileBlob(0, source.path, routeId, signal, range), signal);
+    const blob = await this.access(resource, workspaceKey => getWorkspaceRawFileBlob(0, source.path, workspaceKey, signal, range), signal);
     const bytes = new Uint8Array(await blob.arrayBuffer());
     if (!range) {
       // 复用后端 expected_revision 的原字节 SHA-256；不额外请求文本正文或重读磁盘。
@@ -154,12 +154,12 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   /** 同一规范根只订阅一次原 watcher／SSE；通知不读正文或推进保存基线。 */
   private async watchRoot(source: ReturnType<typeof workspaceFileSource>, watch: FileWatch): Promise<void> {
     const signal = watch.controller.signal;
-    const routeId = await gateway.resolveWorkspace(source, signal);
+    const workspaceKey = await gateway.resolveWorkspace(source, signal);
     if (signal.aborted) return;
     const invalidate = () => this.changes.fire([...watch.resources.values()].map(({ resource }) => ({ resource, type: FileChangeType.UPDATED })));
     let connected = false;
     await streamWorkspaceFileEvents(0, [source.root], {
-      workspaceId: routeId, signal,
+      workspaceId: workspaceKey, signal,
       // 首次注册不是文件变化；连接重建可能漏掉事件，届时才重新核实已打开资源。
       onConnected: () => { if (connected) invalidate(); connected = true; },
       onBatch: batch => {

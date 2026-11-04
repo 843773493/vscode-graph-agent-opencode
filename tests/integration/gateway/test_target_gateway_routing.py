@@ -222,7 +222,9 @@ def target_gateway_network(
             registered = client.get("/api/gateway/workspaces")
             assert registered.status_code == 200, registered.text
             native, = registered.json()["data"]["items"]
-            assert native["backend_workspace_id"] == workspace_id
+            assert native["workspace_id"] == workspace_id
+            assert native["gateway_id"] == gateway_ids[index]
+            assert "backend_workspace_id" not in native
             routes[index] = native["workspace_id"]
             clients[index] = client
         assert gateway_ids[0] != gateway_ids[1]
@@ -277,15 +279,18 @@ def test_real_gateways_keep_same_uuid_owners_and_target_carrier_distinct(
         items = registered.json()["data"]["items"]
         projected, = [item for item in items if item["connection_kind"] == "remote_gateway"]
         projection = projected["workspace_id"]
-        assert projected["backend_workspace_id"] == network.workspace_id
+        assert projection == native_a == native_b == network.workspace_id
+        assert projected["gateway_id"] == gateway_b
+        assert "backend_workspace_id" not in projected
         discovery = request(local, "GET", "/api/gateway/search/workspaces", "req_target_discovery")
         assert discovery.status_code == 200, discovery.text
-        owners = {item["target_id"]: item["owner"] for item in discovery.json()["data"]["items"]}
+        owners = {(item["owner"]["gateway_id"], item["owner"]["workspace_id"]) for item in discovery.json()["data"]["items"]}
         assert owners == {
-            native_a: {"gateway_id": gateway_a, "workspace_id": network.workspace_id},
-            projection: {"gateway_id": gateway_b, "workspace_id": network.workspace_id},
+            (gateway_a, network.workspace_id),
+            (gateway_b, network.workspace_id),
         }
-        activated = request(local, "POST", f"/api/gateway/workspaces/{projection}/activate", "req_target_activate_remote")
+        activated = request(local, "POST", f"/api/gateway/workspaces/{projection}/activate", "req_target_activate_remote",
+                            headers={TARGET_GATEWAY_ID_HEADER: gateway_b})
         assert activated.status_code == 200, activated.text
         canonical = f"/api/v1/workspaces/{network.workspace_id}/sessions"
         successes = [
@@ -294,7 +299,8 @@ def test_real_gateways_keep_same_uuid_owners_and_target_carrier_distinct(
                 TARGET_GATEWAY_ID_HEADER: gateway_b, "X-BoxTeam-Workspace-Id": native_a,
                 "X-BoxTeam-Gateway-Id": "gateway_" + "f" * 32,
             }, 1),
-            ("req_target_implicit_remote", "/api/v1/sessions", {"X-BoxTeam-Workspace-Id": projection}, 1),
+            ("req_target_native_uuid", "/api/v1/sessions", {"X-BoxTeam-Workspace-Id": network.workspace_id}, 0),
+            ("req_target_active_remote", "/api/v1/sessions", {}, 1),
         ]
         for request_id, path, headers, index in successes:
             response = request(local, "GET", path, request_id, headers=headers)
@@ -317,9 +323,11 @@ def test_real_gateways_keep_same_uuid_owners_and_target_carrier_distinct(
             else:
                 assert remote_hop == []
         failures = [
-            ("req_target_ambiguous", canonical, {}, 409),
             ("req_target_unknown", canonical, {TARGET_GATEWAY_ID_HEADER: "gateway_" + "e" * 32}, 404),
-            ("req_target_mismatch", "/api/v1/sessions", {TARGET_GATEWAY_ID_HEADER: gateway_b, "X-BoxTeam-Workspace-Id": native_a}, 400),
+            ("req_target_mismatch", canonical, {
+                TARGET_GATEWAY_ID_HEADER: gateway_b,
+                "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000099",
+            }, 400),
             ("req_target_empty", canonical, {TARGET_GATEWAY_ID_HEADER: ""}, 400),
         ]
         for request_id, path, headers, status in failures:
@@ -329,7 +337,7 @@ def test_real_gateways_keep_same_uuid_owners_and_target_carrier_distinct(
                 assert _observations(network.observation_paths[role], request_id) == []
         final = request(local, "GET", "/api/gateway/workspaces", "req_target_final_state")
         assert final.status_code == 200, final.text
-        assert final.json()["data"]["active_workspace_id"] == projection
+        assert final.json()["data"]["active_workspace"] == {"gateway_id": gateway_b, "workspace_id": network.workspace_id}
     finally:
         (network.context.artifacts_dir / "target-routing-http.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",

@@ -20,7 +20,7 @@ function RunDetail({ apiPort, target, run, onOpenThread }: {
       if (!controller.signal.aborted) setDetail(value);
     }, (cause: unknown) => { if (!controller.signal.aborted) setError(errorMessage(cause)); });
     return () => controller.abort();
-  }, [apiPort, target.workspace_id, target.backend_workspace_id, target.connection_kind, run.task_id, run.run_id, run.updated_at, version]);
+  }, [apiPort, target.gateway_id, target.workspace_id, run.task_id, run.run_id, run.updated_at, version]);
   const open = async (thread: TaskThreadTargetDTO) => {
     setError(null);
     try { await onOpenThread(thread); }

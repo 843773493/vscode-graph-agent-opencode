@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback } from "react";
 import { getSessionInformation } from "../../api";
 import { listGatewayWorkspaces } from "../../gatewayApi";
@@ -15,7 +16,7 @@ export function useSessionInformationClipboard(apiPort: number) {
         listGatewayWorkspaces(apiPort),
       ]).then(([information, workspaceList]) => {
         const gatewayWorkspace = workspaceList.items.find(
-          (workspace) => workspace.workspace_id === workspaceId,
+          (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
         );
         if (!gatewayWorkspace) {
           throw new Error(`Gateway 不存在目标工作区: ${workspaceId}`);

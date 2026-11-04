@@ -1,6 +1,6 @@
 // Gateway JSON 类型适配层。
-// 字段结构来自 gateway/v1/public.proto；这里补回 JSON API 的 null 约定和字符串枚举。
-import type * as GatewayProtocol from "./protocol_generated/boxteam/gateway/v1/public";
+// 字段结构来自 gateway/v2/public.proto；这里补回 JSON API 的 null 约定和字符串枚举。
+import type * as GatewayProtocol from "./protocol_generated/boxteam/gateway/v2/public";
 import type { ConfigSourceLayer } from "./protocol";
 
 type OptionalFields<T> = T extends readonly (infer Item)[]
@@ -18,7 +18,9 @@ type NullableOptionalFields<T, Keys extends keyof T = keyof T> = {
     : T[Key];
 };
 
-export type ActivateGatewayWorkspaceResultDTO = OptionalFields<GatewayProtocol.ActivateGatewayWorkspaceResultDTO>;
+export type ActivateGatewayWorkspaceResultDTO = Omit<OptionalFields<GatewayProtocol.ActivateGatewayWorkspaceResultDTO>, "active_workspace"> & {
+  active_workspace: GatewayProtocol.GatewaySearchWorkspaceOwnerDTO;
+};
 export type AddLocalWorkspaceRequest = OptionalFields<GatewayProtocol.AddLocalWorkspaceRequest>;
 export type AddRemoteGatewayRequest = OptionalFields<GatewayProtocol.AddRemoteGatewayRequest>;
 export type CreateFederationManagedWorkspaceRequest = OptionalFields<GatewayProtocol.CreateFederationManagedWorkspaceRequest>;
@@ -137,19 +139,19 @@ export type GatewayUserViewStateDTO = Omit<
 export type GatewayUserViewStateUpdateRequest = Omit<OptionalFields<GatewayProtocol.GatewayUserViewStateUpdateRequest>, "turn_anchor"> & {
   turn_anchor?: string | null;
 };
-export type GatewayWorkspaceDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceDTO>, "backend_workspace_id" | "backend_generation" | "parent_workspace_id" | "connection_kind" | "status" | "runtime_action" | "remote"> & {
-  backend_workspace_id?: string | null;
+export type GatewayWorkspaceDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceDTO>, "backend_generation" | "parent_workspace" | "connection_kind" | "status" | "runtime_action" | "remote_gateways"> & {
   backend_generation?: string | null;
-  parent_workspace_id?: string | null;
+  parent_workspace?: GatewayProtocol.GatewaySearchWorkspaceOwnerDTO | null;
   connection_kind: "local" | "remote_gateway";
   status: "ready" | "offline";
   runtime_action: "start_managed_backend" | "safe_restart_managed_backend" | "force_restart_managed_backend" | "reconnect_remote_gateway" | "probe_external_backend";
-  remote?: GatewayRemoteConnectionSummaryDTO | null;
+  remote_gateways: GatewayRemoteConnectionSummaryDTO[];
 };
-export type GatewayWorkspaceListDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceListDTO>, "active_workspace_id" | "items"> & {
-  active_workspace_id?: string | null;
-  items?: GatewayWorkspaceDTO[];
+export type GatewayWorkspaceListDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceListDTO>, "active_workspace" | "items"> & {
+  active_workspace: GatewayProtocol.GatewaySearchWorkspaceOwnerDTO | null;
+  items: GatewayWorkspaceDTO[];
 };
+
 export type GatewayConfigReloadStatusDTO = Omit<
   NullableOptionalFields<GatewayProtocol.GatewayConfigReloadStatusDTO>, "reason" | "layer_digests"
 > & {
@@ -176,9 +178,9 @@ export type ResolvedGatewayThemeDTO = Omit<OptionalFields<GatewayProtocol.Resolv
 };
 export type SshConnectionOptionDTO = OptionalFields<GatewayProtocol.SshConnectionOptionDTO>;
 export type SshConnectionOptionListDTO = OptionalFields<GatewayProtocol.SshConnectionOptionListDTO>;
-export type UpdateGatewayWorkspaceRequest = Omit<OptionalFields<GatewayProtocol.UpdateGatewayWorkspaceRequest>, "name" | "parent_workspace_id"> & {
+export type UpdateGatewayWorkspaceRequest = Omit<OptionalFields<GatewayProtocol.UpdateGatewayWorkspaceRequest>, "name" | "parent_workspace"> & {
   name?: string | null;
-  parent_workspace_id?: string | null;
+  parent_workspace?: GatewayProtocol.GatewaySearchWorkspaceOwnerDTO | null;
 };
 export type WebUIGatewayConsoleSettingsDTO = OptionalFields<GatewayProtocol.WebUIGatewayConsoleSettingsDTO>;
 export type WebUIMainAreaRatiosDTO = OptionalFields<GatewayProtocol.WebUIMainAreaRatiosDTO>;
@@ -234,10 +236,10 @@ export type WebUIWorkspaceFileTreeSettingsDTO = OptionalFields<GatewayProtocol.W
 export type GatewayResourceDTO = OptionalFields<GatewayProtocol.GatewayResourceDTO>;
 export type GatewayResourceListDTO = OptionalFields<GatewayProtocol.GatewayResourceListDTO>;
 export type GatewayResourceScopeErrorDTO = OptionalFields<GatewayProtocol.GatewayResourceScopeErrorDTO>;
-export type WorkspaceNavigationNodeDTO = Omit<OptionalFields<GatewayProtocol.WorkspaceNavigationNodeDTO>, "kind" | "parent_node_id" | "workspace_id"> & {
+export type WorkspaceNavigationNodeDTO = Omit<OptionalFields<GatewayProtocol.WorkspaceNavigationNodeDTO>, "kind" | "parent_node_id" | "workspace"> & {
   kind: "workspace_folder" | "workspace_ref";
   parent_node_id?: string | null;
-  workspace_id?: string | null;
+  workspace?: GatewayProtocol.GatewaySearchWorkspaceOwnerDTO | null;
 };
 export type WorkspaceFolderCreateRequest = Omit<OptionalFields<GatewayProtocol.WorkspaceFolderCreateRequest>, "parent_node_id" | "position"> & {
   parent_node_id?: string | null;

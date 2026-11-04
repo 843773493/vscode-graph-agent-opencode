@@ -1,3 +1,4 @@
+import { nullableGatewayWorkspaceKey } from "../api/workspaceIdentity";
 import type { GatewayWorkspaceList, Session } from "../types/backend";
 
 interface GatewayWorkspaceRemovalState {
@@ -47,7 +48,7 @@ export function applyGatewayWorkspaceListAfterRemoval<
 
   return {
     ...withFreshGatewayWorkspaceList(state, workspaceList.items),
-    ...(applySelection ? { activeGatewayWorkspaceId: workspaceList.active_workspace_id } : {}),
+    ...(applySelection ? { activeGatewayWorkspaceId: nullableGatewayWorkspaceKey(workspaceList.active_workspace) } : {}),
     sessionsByWorkspace,
     sessionGatewayWorkspaceById,
     removingGatewayWorkspaceIds,

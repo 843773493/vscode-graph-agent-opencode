@@ -7,16 +7,13 @@ import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "../sessionEventStream/ses
 import type { AppState } from "../../types/frontend";
 import type { SessionActivity } from "../../types/backend";
 import { useWorkspaceSessionActivity } from "./useWorkspaceSessionActivity";
-import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
+import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 
 const API_PORT = 49_712;
-const WORKSPACE_ID = "ws-activity";
-const WORKSPACE_TARGET = {
-  workspace_id: WORKSPACE_ID,
-  backend_workspace_id: "00000000-0000-0000-0000-000000000001",
-  connection_kind: "local" as const,
-};
+const WORKSPACE_TARGET = { gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000001" };
+const WORKSPACE_ID = gatewayWorkspaceKey(WORKSPACE_TARGET);
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -77,15 +74,7 @@ function appState(
 }
 
 function gatewayWorkspace(backendWorkspaceId: string): AppState["gatewayWorkspaces"][number] {
-  return {
-    workspace_id: WORKSPACE_ID,
-    backend_workspace_id: backendWorkspaceId,
-    connection_kind: "local",
-    name: "测试工作区",
-    backend_url: "http://127.0.0.1:8010",
-    affected_workspace_ids: [], active: false, managed: true, removable: true, system_default: false, services: {}, checked_at: "2026-10-19",
-    status: "ready",
-  } as AppState["gatewayWorkspaces"][number];
+  return { gateway_id: "gateway-test", workspace_id: backendWorkspaceId, connection_kind: "local", name: "测试工作区", backend_url: "http://127.0.0.1:8010", affected_workspace_ids: [], active: false, managed: true, removable: true, system_default: false, services: {}, checked_at: "2026-10-19", status: "ready" } as AppState["gatewayWorkspaces"][number];
 }
 
 let renderer: ReactTestRenderer | undefined;
@@ -199,29 +188,29 @@ describe("useWorkspaceSessionActivity 重连与卸载", () => {
 
     await act(async () => { emitActivity(activity("evt-2"), 2); });
 
-    expect(latestState.unreadSessionKeys.has(`${WORKSPACE_ID}::session-1`)).toBe(true);
+    expect(latestState.unreadSessionKeys.has(sessionScopeKey(WORKSPACE_ID, "session-1"))).toBe(true);
     expect(commitCount).toBe(afterFirstActivity);
 
     await act(async () => { clearUnread(); });
     const afterRead = commitCount;
     await act(async () => { emitActivity(activity("evt-2"), 2); });
 
-    expect(latestState.unreadSessionKeys.has(`${WORKSPACE_ID}::session-1`)).toBe(false);
+    expect(latestState.unreadSessionKeys.has(sessionScopeKey(WORKSPACE_ID, "session-1"))).toBe(false);
     expect(commitCount).toBe(afterRead);
   });
 
-  test("AppState 重新加载后只重建一次订阅，并使用新 backend UUID", async () => {
+  test("AppState 切换工作区 owner 后只重建一次订阅，并使用新 UUID", async () => {
     installWindow();
     const listedBackendWorkspaceIds: Array<string | null | undefined> = [];
     const streamedBackendWorkspaceIds: Array<string | null | undefined> = [];
     const listSpy = spyOn(sessionActivityApi, "listSessionActivity")
       .mockImplementation(async (_apiPort, target) => {
-        listedBackendWorkspaceIds.push(target.backend_workspace_id);
+        listedBackendWorkspaceIds.push(target.workspace_id);
         return { items: [], next_cursor: 0 } as never;
       });
     const streamSpy = spyOn(sessionActivityApi, "streamSessionActivity")
       .mockImplementation(async (_apiPort, target, options) => {
-        streamedBackendWorkspaceIds.push(target.backend_workspace_id);
+        streamedBackendWorkspaceIds.push(target.workspace_id);
         return await new Promise<void>((resolve) => {
           options?.signal?.addEventListener("abort", () => resolve(), { once: true });
         });
@@ -237,7 +226,7 @@ describe("useWorkspaceSessionActivity 重连与卸载", () => {
         appState([gatewayWorkspace("00000000-0000-0000-0000-000000000001")]),
       );
       reloadGatewayWorkspaces = (workspaces) => {
-        setState((previous) => ({ ...previous, gatewayWorkspaces: workspaces }));
+        setState((previous) => ({ ...previous, gatewayWorkspaces: workspaces, activeGatewayWorkspaceId: gatewayWorkspaceKey(workspaces[0]!) }));
       };
       updateUnrelatedState = () => {
         setState((previous) => ({ ...previous, status: "其他状态更新" }));

@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AgentSessionsPanel from '../../../web/src/components/panels/sessionPanels/AgentSessionsPanel.js';
 import WarmConfirmProvider, { useWarmConfirm } from '../../../web/src/components/shell/WarmConfirmProvider.js';
@@ -8,9 +9,8 @@ import { useSessionCatalogActions } from '../../../web/src/hooks/shell/useSessio
 import { useSessionInformationClipboard } from '../../../web/src/hooks/session/useSessionInformationClipboard.js';
 import { useWorkspaceInformationClipboard } from '../../../web/src/hooks/workspace/useWorkspaceInformationClipboard.js';
 import { resolveAgentSessionsPreferences } from '../../../web/src/state/uiSettings/preferences.js';
-import { gatewayWorkspaceOwner, requireGatewayWorkspaceRoute } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
-import { getGatewayHealth } from '../../../web/src/gatewayApi.js';
 import { getSession } from '../../../web/src/api.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import type { Session } from '../../../web/src/types/backend.js';
@@ -43,17 +43,17 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
   const [activeEditor, setActiveEditor] = useState(() => editors.activeEditor);
   const gesture = useRef({ pinned: false, sideBySide: false });
   const openRequests = useRef(new Map<number, number>());
-  const created = useCallback(async (session: Session, routeId: string | null) => {
-    if (!routeId || !session.thread_id) throw new Error('新建会话回执缺少工作区路由或主 Thread');
-    await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(routeId, session.workspace_id),
+  const created = useCallback(async (session: Session, workspaceKey: string | null) => {
+    if (!workspaceKey || !session.thread_id) throw new Error('新建会话回执缺少工作区路由或主 Thread');
+    await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
       sessionId: session.session_id, threadId: session.thread_id, title: session.title }), { pinned: true });
   }, [editors]);
   const notifyError = useCallback((message: string) => { notifications.error(message); }, [notifications]);
   const refreshEditors = useCallback(async (target: GatewayWorkspaceRequestTarget, signal: AbortSignal) => {
     const snapshot = workspaceContext.getSnapshot();
-    const workspace = snapshot.workspaces.find(item => item.workspace_id === target.workspace_id);
+    const workspace = snapshot.workspaces.find(item => gatewayWorkspaceKey(item) === gatewayWorkspaceKey(target));
     if (!workspace || !snapshot.gatewayId) throw new Error('编辑器目录对账缺少工作区登记身份');
-    const owner = gatewayWorkspaceOwner(workspace, snapshot.gatewayId);
+    const owner = gatewayWorkspaceOwner(workspace);
     const matchingEditors = () => editors.getEditors(EditorsOrder.SEQUENTIAL).filter((entry): entry is IEditorIdentifier & { editor: ThreadInput } =>
       entry.editor instanceof ThreadInput && entry.editor.owner.gatewayId === owner.gatewayId
         && entry.editor.owner.workspaceId === owner.workspaceId);
@@ -61,7 +61,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
     await Promise.all([...sessionIds].map(async sessionId => {
       let session: Session;
       try {
-        session = await getSession(0, sessionId, target.workspace_id, { signal });
+        session = await getSession(0, sessionId, gatewayWorkspaceKey(target), { signal });
       } catch (cause) {
         signal.throwIfAborted();
         if (!(cause instanceof HttpRequestError) || cause.status !== 404) throw cause;
@@ -82,8 +82,8 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
       }
     }));
   }, [editors, storage]);
-  const activeSessionCacheKey = activeEditor instanceof ThreadInput && activeEditor.owner.routeId
-    ? sessionScopeKey(activeEditor.owner.routeId, activeEditor.owner.sessionId) : null;
+  const activeSessionCacheKey = activeEditor instanceof ThreadInput && activeEditor.owner.workspaceKey
+    ? sessionScopeKey(activeEditor.owner.workspaceKey, activeEditor.owner.sessionId) : null;
   const runtime = useNavigationRuntime(created, notifyError, refreshEditors, activeSessionCacheKey);
   const { state, setStatus, reportError, setActiveSession, clearActiveSession } = runtime;
   const backendActions = useManagedBackendConfirmation({ apiPort: 0,
@@ -91,15 +91,15 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
     onSafeRestart: runtime.safeRestartManagedGatewayWorkspaceBackend, onForceRestart: runtime.forceRestartManagedGatewayWorkspaceBackend,
     onRefresh: runtime.refreshGatewayState });
   useEffect(() => { if (state.status) console.info('导航状态：', state.status); }, [state.status]);
-  const openSession = useCallback(async (routeId: string, sessionId: string, options = gesture.current) => {
+  const openSession = useCallback(async (workspaceKey: string, sessionId: string, options = gesture.current) => {
     // 点击时冻结目标组和打开意图，不能让异步完成后的焦点改变会话归属。
     const group = options.sideBySide ? SIDE_GROUP : groups.activeGroup.id;
     const request = (openRequests.current.get(group) ?? 0) + 1;
     openRequests.current.set(group, request);
-    const session = await setActiveSession(routeId, sessionId);
-    const main = await gateway.mainThread(routeId, sessionId);
+    const session = await setActiveSession(workspaceKey, sessionId);
+    const main = await gateway.mainThread(workspaceKey, sessionId);
     if (openRequests.current.get(group) !== request) return;
-    await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(routeId, session.workspace_id),
+    await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
       sessionId, threadId: main.thread_id, title: session.title }), { pinned: options.pinned }, group);
   }, [editors, groups, setActiveSession]);
   useEffect(() => {
@@ -115,7 +115,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
       clearActiveSession();
       if (input instanceof ThreadInput) void input.resolveOwner().then(owner => {
         if (editors.activeEditor !== input || groups.activeGroup.id !== group || selection?.editor !== input || selection.group !== group) return;
-        return setActiveSession(owner.routeId, owner.sessionId);
+        return setActiveSession(owner.workspaceKey, owner.sessionId);
       }).catch(cause => {
         if (editors.activeEditor === input && groups.activeGroup.id === group) reportError(String(cause));
       });
@@ -133,9 +133,8 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
     deleteSession: runtime.deleteSession, renameSession: runtime.renameSession, forkSessionContext: runtime.forkSessionContext,
     readSessionSelectionIntent: () => runtime.selectionIntentRef.current, setSessionParent: runtime.setSessionParent,
     onForkCreated: async (_source, result) => {
-      const health = await getGatewayHealth(0);
-      const target = requireGatewayWorkspaceRoute(state.gatewayWorkspaces, health.gateway_id, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id });
-      await editors.openEditor(new ThreadInput({ gatewayId: result.target_gateway_id, routeId: target.workspace_id, workspaceId: result.session.workspace_id,
+      const target = requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id });
+      await editors.openEditor(new ThreadInput({ gatewayId: result.target_gateway_id, workspaceKey: gatewayWorkspaceKey(target), workspaceId: result.session.workspace_id,
         sessionId: result.session.session_id, threadId: result.thread_id, title: result.session.title }), { pinned: true });
     },
   });
@@ -154,12 +153,12 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
       onReconnectWorkspace={runtime.reconnectGatewayWorkspace} onStartWorkspace={backendActions.start}
       onStopWorkspace={backendActions.stop} onRenameWorkspace={runtime.renameGatewayWorkspace}
       onCopySessionInformation={copySession} onCopyWorkspaceInformation={copyWorkspace} onSelectWorkspaceSession={openSession}
-      onPinSession={(routeId, sessionId) => { void openSession(routeId, sessionId, { pinned: true, sideBySide: gesture.current.sideBySide }).catch(cause => reportError(String(cause))); }}
+      onPinSession={(workspaceKey, sessionId) => { void openSession(workspaceKey, sessionId, { pinned: true, sideBySide: gesture.current.sideBySide }).catch(cause => reportError(String(cause))); }}
       activeSession={state.currentSession} sessionAttachmentSummaries={state.sessionAttachmentSummaries}
       activeJobIdsBySession={state.activeJobIdsBySession} unreadSessionKeys={state.unreadSessionKeys}
       onCreateSession={actions.createSessionInCatalog} onCreateSessionInFolder={actions.createSessionInFolder}
-      onCreateSessionFolder={actions.createSessionFolder} onSessionFolderDeleted={async routeId => {
-        await runtime.refreshGatewayWorkspaceSessions(routeId); actions.invalidateSessionCatalog(routeId);
+      onCreateSessionFolder={actions.createSessionFolder} onSessionFolderDeleted={async workspaceKey => {
+        await runtime.refreshGatewayWorkspaceSessions(workspaceKey); actions.invalidateSessionCatalog(workspaceKey);
       }} onInvalidateSessionCatalog={actions.invalidateSessionCatalog} catalogSyncKeys={actions.sessionCatalogSyncKeys}
       catalogRefreshVersions={actions.sessionCatalogRefreshVersions} sessionCatalogOutboxRuntime={runtime.catalog}
       sessionCatalogOutboxSnapshot={runtime.catalogSnapshot} gatewayUserAccess={state.gatewayUserAccess} flexRatio={1}
@@ -172,7 +171,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
     {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label="Gateway 控制中心">
       <button type="button" className="sidebar-icon-button" aria-label="关闭 Gateway 控制中心" onClick={() => setGatewayOpen(false)}><span className="codicon codicon-close" /></button>
       <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
-        onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState} onReconnect={runtime.reconnectGatewayWorkspace}
+        onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
         onStart={backendActions.start} onStop={backendActions.stop}
         onSafeRestart={backendActions.safeRestart} onForceRestart={backendActions.forceRestart}
         uiSettings={state.uiSettings} onUpdateUiSettings={runtime.updateUiSettings} />

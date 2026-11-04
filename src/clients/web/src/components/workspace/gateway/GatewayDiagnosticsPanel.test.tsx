@@ -23,7 +23,8 @@ afterEach(() => {
 });
 
 const workspace: GatewayWorkspace = {
-  workspace_id: "gw_local",
+  gateway_id: "gateway-test",
+    workspace_id: "gw_local",
   name: "本地项目",
   backend_url: "http://127.0.0.1:8010",
   connection_kind: "local",
@@ -33,7 +34,7 @@ const workspace: GatewayWorkspace = {
   affected_workspace_ids: [],
   removable: true,
   system_default: true,
-  remote: null,
+  remote_gateways: [],
   services: {},
   checked_at: "2026-08-02T00:00:00Z",
 };

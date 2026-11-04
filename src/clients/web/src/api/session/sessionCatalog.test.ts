@@ -21,9 +21,8 @@ afterEach(() => {
 });
 
 const workspaceTarget = {
-  workspace_id: "workspace-1",
-  backend_workspace_id: "backend-workspace-1",
-  connection_kind: "local",
+  workspace_id: "00000000-0000-4000-8000-000000000001",
+  gateway_id: "gateway-test",
 } as const;
 
 describe("会话目录节点合法性校验", () => {
@@ -38,9 +37,9 @@ describe("会话目录节点合法性校验", () => {
     const page = await listSessionCatalogChildren(48_401, workspaceTarget);
     expect(page.items[0]?.node_id).toBe("cnode_1");
     expect(new Headers(request?.headers).get("X-BoxTeam-Workspace-Id"))
-      .toBe("workspace-1");
-    expect(new Headers(request?.headers).get("X-BoxTeam-Backend-Workspace-Id"))
-      .toBe("backend-workspace-1");
+      .toBe("00000000-0000-4000-8000-000000000001");
+    expect(new Headers(request?.headers).get("X-BoxTeam-Target-Gateway-Id"))
+      .toBe("gateway-test");
   });
 
   test("缺少 node_id 的子节点必须响亮失败而不是留给 React 警告", async () => {

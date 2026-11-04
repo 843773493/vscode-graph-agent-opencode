@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import * as ReactDOM from "react-dom";
@@ -9,6 +10,8 @@ import { HttpRequestError } from "../../api/http";
 import type { GatewayRuntimeGroupRequest, GatewayWorkspace, SessionForkRequest, SessionForkResult, SessionForkSourcePoint } from "../../types/backend";
 import SessionContextForkDialog from "../../components/overlays/SessionContextForkDialog";
 import { useSessionCatalogActions } from "./useSessionCatalogActions";
+
+const workspaceKey = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
 
 /**
  * 会话目录编排链路的契约：新建会话只在没有激活工作区时才回退系统默认 home；
@@ -40,6 +43,7 @@ afterEach(() => {
 
 function workspace(overrides: Partial<GatewayWorkspace>): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: "ws",
     name: "工作区",
     system_default: false,
@@ -66,7 +70,7 @@ function mountHook(options: MountOptions = {}) {
       apiPort: 8014,
       activeGatewayWorkspaceId: "activeGatewayWorkspaceId" in options
         ? options.activeGatewayWorkspaceId!
-        : "ws-active",
+        : workspaceKey("ws-active"),
       activeSessionId: "activeSessionId" in options
         ? options.activeSessionId!
         : "ses-active",
@@ -153,9 +157,9 @@ describe("会话目录编排链路", () => {
       await mounted.hook().createSessionInCatalog();
     });
 
-    expect(mounted.created).toEqual([["新会话", "ws-home", undefined]]);
+    expect(mounted.created).toEqual([["新会话", workspaceKey("ws-home"), undefined]]);
     // 当前没有激活工作区，创建前必须先把它激活成当前工作区。
-    expect(mounted.activated).toEqual(["ws-home"]);
+    expect(mounted.activated).toEqual([workspaceKey("ws-home")]);
   });
 
   test("没有激活工作区也没有默认 home 时响亮失败，不静默建到别处", async () => {
@@ -175,25 +179,25 @@ describe("会话目录编排链路", () => {
   });
 
   test("指定其它工作区时先激活再创建，失败文案写入状态", async () => {
-    const mounted = mountHook({ activeGatewayWorkspaceId: "ws-active" });
+    const mounted = mountHook({ activeGatewayWorkspaceId: workspaceKey("ws-active") });
     await mounted.mount();
 
     await act(async () => {
-      await mounted.hook().createSessionInCatalog("ws-remote");
+      await mounted.hook().createSessionInCatalog(workspaceKey("ws-remote"));
     });
 
-    expect(mounted.activated).toEqual(["ws-remote"]);
-    expect(mounted.created).toEqual([["新会话", "ws-remote", undefined]]);
+    expect(mounted.activated).toEqual([workspaceKey("ws-remote")]);
+    expect(mounted.created).toEqual([["新会话", workspaceKey("ws-remote"), undefined]]);
   });
 
   test("重命名对话框：失败时错误留在对话框且不关闭", async () => {
     const mounted = mountHook();
     await mounted.mount();
 
-    act(() => mounted.hook().openRenameDialog("ses-1", "旧标题", "ws-1"));
+    act(() => mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1")));
     expect(mounted.hook().nameDialog).toEqual({
       sessionId: "ses-1",
-      workspaceId: "ws-1",
+      workspaceId: workspaceKey("ws-1"),
       initialTitle: "旧标题",
     });
 
@@ -204,7 +208,7 @@ describe("会话目录编排链路", () => {
       await Promise.resolve();
     });
 
-    expect(mounted.renamed).toEqual([["ses-1", "新标题", "ws-1"]]);
+    expect(mounted.renamed).toEqual([["ses-1", "新标题", workspaceKey("ws-1")]]);
     expect(mounted.hook().nameDialogError).toBe("重命名被后端拒绝");
     expect(mounted.hook().nameDialog).not.toBeNull();
     expect(mounted.hook().nameDialogSubmitting).toBe(false);
@@ -214,8 +218,8 @@ describe("会话目录编排链路", () => {
     const mounted = mountHook();
     await mounted.mount();
 
-    const before = mounted.hook().sessionCatalogRefreshVersions.get("ws-1") ?? 0;
-    act(() => mounted.hook().openRenameDialog("ses-1", "旧标题", "ws-1"));
+    const before = mounted.hook().sessionCatalogRefreshVersions.get(workspaceKey("ws-1")) ?? 0;
+    act(() => mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1")));
     await act(async () => {
       mounted.hook().submitNameDialog("新标题");
       await Promise.resolve();
@@ -223,14 +227,14 @@ describe("会话目录编排链路", () => {
     });
 
     expect(mounted.hook().nameDialog).toBeNull();
-    expect(mounted.hook().sessionCatalogRefreshVersions.get("ws-1")).toBe(before + 1);
+    expect(mounted.hook().sessionCatalogRefreshVersions.get(workspaceKey("ws-1"))).toBe(before + 1);
   });
 
   test("删除工作区必须等用户确认后才发起", async () => {
     const declined = mountHook({ confirmResult: false });
     await declined.mount();
     await act(async () => {
-      declined.hook().removeWorkspace("ws-1", "工作区一");
+      declined.hook().removeWorkspace(workspaceKey("ws-1"), "工作区一");
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -239,11 +243,11 @@ describe("会话目录编排链路", () => {
     const accepted = mountHook({ confirmResult: true });
     await accepted.mount();
     await act(async () => {
-      accepted.hook().removeWorkspace("ws-1", "工作区一");
+      accepted.hook().removeWorkspace(workspaceKey("ws-1"), "工作区一");
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(accepted.removed).toEqual(["ws-1"]);
+    expect(accepted.removed).toEqual([workspaceKey("ws-1")]);
   });
 
   test("owner 删除复合失败保留原反馈，提交前快照失败仍由 caller 显示", async () => {
@@ -260,7 +264,7 @@ describe("会话目录编排链路", () => {
     );
     const precommitFailure = new Error("读取工作区快照失败");
     const snapshot = spyOn(gatewayApi, "listGatewayWorkspaces")
-      .mockResolvedValueOnce({ active_workspace_id: "ws-active", items: [managed] })
+      .mockResolvedValueOnce({ active_workspace: { gateway_id: "gateway-test", workspace_id: "ws-active" }, items: [managed] })
       .mockRejectedValueOnce(precommitFailure);
     spies.push(snapshot);
     const ownerFailureMount = mountHook({
@@ -270,19 +274,19 @@ describe("会话目录编排链路", () => {
     await ownerFailureMount.mount();
 
     await act(async () => {
-      ownerFailureMount.hook().removeWorkspace("ws-managed", "工作区");
+      ownerFailureMount.hook().removeWorkspace(workspaceKey("ws-managed"), "工作区");
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(ownerFailureMount.removed).toEqual(["ws-managed"]);
+    expect(ownerFailureMount.removed).toEqual([workspaceKey("ws-managed")]);
     expect(ownerFailureMount.statuses).toEqual([]);
 
     const precommitMount = mountHook({ gatewayWorkspaces: [managed] });
     await precommitMount.mount();
 
     await act(async () => {
-      precommitMount.hook().removeWorkspace("ws-managed", "工作区");
+      precommitMount.hook().removeWorkspace(workspaceKey("ws-managed"), "工作区");
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -293,7 +297,7 @@ describe("会话目录编排链路", () => {
       `删除工作区失败: ${precommitFailure.message}`,
     ]);
     expect(precommitMount.errors).toEqual([
-      `删除工作区失败 (ws-managed): ${precommitFailure.message}`,
+      `删除工作区失败 (${workspaceKey("ws-managed")}): ${precommitFailure.message}`,
     ]);
     expect(ownerFailureMount.errors).toEqual([]);
   });
@@ -303,15 +307,15 @@ describe("会话目录编排链路", () => {
     await mounted.mount();
 
     await act(async () => {
-      mounted.hook().removeSession("ses-1", "标题", "ws-1");
+      mounted.hook().removeSession("ses-1", "标题", workspaceKey("ws-1"));
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(mounted.deleted).toEqual([["ses-1", "ws-1"]]);
+    expect(mounted.deleted).toEqual([["ses-1", workspaceKey("ws-1")]]);
     // §10.3 前端半边：删除成功路径 MUST NOT 无条件重拉会话列表或强制刷新目录树；
     // 会话列表已在 deleteSession 内本地收敛，目录树由会话集合派生的 sync key 驱动。
-    expect(mounted.hook().sessionCatalogRefreshVersions.get("ws-1")).toBeUndefined();
+    expect(mounted.hook().sessionCatalogRefreshVersions.get(workspaceKey("ws-1"))).toBeUndefined();
   });
 
   test("删除会话外层提示保留排空修复与分支刷新两项失败", async () => {
@@ -321,14 +325,14 @@ describe("会话目录编排链路", () => {
     const mounted = mountHook({ deleteSession: async () => { throw failure; } });
     await mounted.mount();
     await act(async () => {
-      mounted.hook().removeSession("ses-1", "标题", "ws-1");
+      mounted.hook().removeSession("ses-1", "标题", workspaceKey("ws-1"));
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(mounted.deleted).toEqual([["ses-1", "ws-1"]]);
+    expect(mounted.deleted).toEqual([["ses-1", workspaceKey("ws-1")]]);
     expect(mounted.statuses[mounted.statuses.length - 1]).toBe(`删除会话失败: ${failure.message}`);
-    expect(mounted.errors).toEqual([`删除会话失败 (ws-1/ses-1): ${failure.message}`]);
-    expect(mounted.hook().sessionCatalogRefreshVersions.get("ws-1")).toBeUndefined();
+    expect(mounted.errors).toEqual([`删除会话失败 (${workspaceKey("ws-1")}/ses-1): ${failure.message}`]);
+    expect(mounted.hook().sessionCatalogRefreshVersions.get(workspaceKey("ws-1"))).toBeUndefined();
   });
 
   test.each([false, true])("删除错误已报告后，新增回读失败仍须可见：%s", async (refreshReported) => {
@@ -338,12 +342,12 @@ describe("会话目录编排链路", () => {
     const mounted = mountHook({ deleteSession: async () => { throw failure; } });
     await mounted.mount();
     await act(async () => {
-      mounted.hook().removeSession("ses-source", "标题", "ws-source");
+      mounted.hook().removeSession("ses-source", "标题", workspaceKey("ws-source"));
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(mounted.errors).toEqual(refreshReported ? [] : [
-      `删除会话失败 (ws-source/ses-source): ${failure.message}`,
+      `删除会话失败 (${workspaceKey("ws-source")}/ses-source): ${failure.message}`,
     ]);
     expect(mounted.statuses[mounted.statuses.length - 1]).toBe(`删除会话失败: ${failure.message}`);
   });
@@ -364,11 +368,11 @@ describe("上下文分支候选与冻结重试", () => {
       .mockRejectedValue(new HttpRequestError(409, "source-mismatch: 展示快照已失效",
         { reason: "source-mismatch" }, "/api/v1/sessions/ses-source/fork-source-point", null));
     spies.push(read);
-    const mounted = mountHook({ activeSessionId: "ses-other", activeGatewayWorkspaceId: "ws-other" });
+    const mounted = mountHook({ activeSessionId: "ses-other", activeGatewayWorkspaceId: workspaceKey("ws-other") });
     await mounted.mount();
     const selection = { threadId: "tid-source", turnId: "turn-source", sourceViewId: "view-display", sourceViewRevision: 8 };
-    await act(async () => { await mounted.hook().forkSession("ws-source", "ses-source", selection); });
-    expect(read.mock.calls).toEqual([[8014, "ses-source", selection, "ws-source"]]);
+    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", selection); });
+    expect(read.mock.calls).toEqual([[8014, "ses-source", selection, workspaceKey("ws-source")]]);
     expect(mounted.hook().forkDialog!.sourcePoint).toBeNull();
     expect(mounted.hook().forkDialog!.error).toContain("展示快照已失效");
     expect(mounted.hook().forkDialog!.sourceThreadId).toBe("tid-source");
@@ -390,7 +394,7 @@ describe("上下文分支候选与冻结重试", () => {
       throw new Error("目标暂时不可达");
     } });
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession("ws-route", "ses-source", {
+    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source", {
       threadId: "tid-source", itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
     }); });
     let pendingOld!: Promise<void>;
@@ -434,7 +438,7 @@ describe("上下文分支候选与冻结重试", () => {
     spies.push(read);
     const mounted = mountHook();
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession("ws-route", "ses-source", {
+    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source", {
       itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
     }); });
     await act(async () => { await mounted.hook().updateForkDialogSelection({ mode: "full_rollout_copy" }); });
@@ -460,7 +464,7 @@ describe("上下文分支候选与冻结重试", () => {
       throw new Error("保留原请求");
     } });
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession("ws-route", "ses-source"); });
+    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-route"), "ses-source"); });
     const request: SessionForkRequest = {
       idempotency_key: mounted.hook().forkDialog!.idempotencyKey, source_uri: sourcePointFixture().source_uri,
       source_view_id: "view-source", source_view_revision: 9, anchor_item_id: null,
@@ -484,7 +488,7 @@ describe("上下文分支候选与冻结重试", () => {
     spies.push(read);
     const mounted = mountHook({});
     await mounted.mount();
-    await act(async () => { await mounted.hook().forkSession("ws-source", "ses-source", {
+    await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", {
       threadId: "tid-source", itemId: "item-source", sourceViewId: "view-source", sourceViewRevision: 9,
     }); });
     expect(mounted.hook().forkDialog!.error).toBeNull();
@@ -532,13 +536,13 @@ describe("上下文分支候选与冻结重试", () => {
     }, onForkCreated: async (_workspace, created) => { opened.push(created); } });
     try {
       await mounted.mount();
-      await act(async () => { await mounted.hook().forkSession("ws-source", "ses-source"); });
+      await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source"); });
       const checkbox = () => mounted.renderer().root.findByProps({ "aria-label": "关联终端 term-live" });
       expect(checkbox().props.checked).toBe(false);
       await act(async () => { mounted.renderer().root.findByType("form").props.onSubmit({ preventDefault() {} }); });
       expect(submitted[0]!.resources).toEqual([]);
       await act(async () => { mounted.hook().closeForkDialog(); });
-      await act(async () => { await mounted.hook().forkSession("ws-source", "ses-source"); });
+      await act(async () => { await mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source"); });
       await act(async () => { checkbox().props.onChange({ target: { checked: true } }); });
       await act(async () => { mounted.renderer().root.findByType("form").props.onSubmit({ preventDefault() {} }); });
       const selected = submitted[1]!;
@@ -568,20 +572,20 @@ describe("托管工作区删除的完整组确认", () => {
     workspace({ workspace_id: "ws-b", name: "B", managed: true, connection_kind: "local", backend_generation: "generation-1", affected_workspace_ids: ["ws-a", "ws-b"] }),
   ];
   function snapshot() {
-    const spy = spyOn(gatewayApi, "listGatewayWorkspaces").mockResolvedValue({ active_workspace_id: "ws-b", items: members });
+    const spy = spyOn(gatewayApi, "listGatewayWorkspaces").mockResolvedValue({ active_workspace: { gateway_id: "gateway-test", workspace_id: "ws-b" }, items: members });
     spies.push(spy);
     return spy;
   }
   const blocked = () => new HttpRequestError(409, "删除被阻塞", {
-    workspace_id: "ws-a", status: "blocked", backend_generation: "generation-1", affected_workspace_ids: ["ws-a", "ws-b"],
-    blockers: [{ workspace_id: "ws-b", kind: "job", resource_id: "job-b", detail: "Job 正在执行" }],
+    gateway_id: "gateway-test", workspace_id: "ws-a", status: "blocked", backend_generation: "generation-1", affected_workspace_ids: ["ws-a", "ws-b"],
+    blockers: [{ gateway_id: "gateway-test", workspace_id: "ws-b", kind: "job", resource_id: "job-b", detail: "Job 正在执行" }],
   }, "/api/gateway/workspaces/ws-a", null);
   test("完整确认后 safe 请求移除发起成员，并保留其余成员", async () => {
     snapshot();
     const mounted = mountHook({ gatewayWorkspaces: members });
     await mounted.mount();
-    await act(async () => { mounted.hook().removeWorkspace("ws-a", "A"); });
-    expect(mounted.removalRequests).toEqual([["ws-a", {
+    await act(async () => { mounted.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
+    expect(mounted.removalRequests).toEqual([[workspaceKey("ws-a"), {
       expected_backend_generation: "generation-1", expected_workspace_ids: ["ws-a", "ws-b"], desired_workspace_ids: ["ws-b"],
     }, undefined]]);
     expect(mounted.confirmations[0]?.message).toContain("ws-b");
@@ -590,7 +594,7 @@ describe("托管工作区删除的完整组确认", () => {
     const listed = snapshot();
     const mounted = mountHook({ gatewayWorkspaces: members, removalFailure: blocked(), confirmResults: [true, true] });
     await mounted.mount();
-    await act(async () => { mounted.hook().removeWorkspace("ws-a", "A"); });
+    await act(async () => { mounted.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
     expect(listed).toHaveBeenCalledTimes(1);
     expect(mounted.removalRequests.length).toBe(2);
     expect(mounted.removalRequests[1]?.[1]).toBe(mounted.removalRequests[0]?.[1]);
@@ -607,18 +611,19 @@ describe("托管工作区删除的完整组确认", () => {
       confirmResults: [true, true],
     });
     await mounted.mount();
-    await act(async () => { mounted.hook().removeWorkspace("ws-a", "A"); });
+    await act(async () => { mounted.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
     expect(mounted.removalRequests.map(([, , force]) => force)).toEqual([undefined, true]);
     expect(mounted.statuses).toEqual([]);
   });
   test("阻塞回执重复成员时拒绝 force 确认", async () => {
     snapshot();
     const duplicateMemberFailure = new HttpRequestError(409, "删除被阻塞", {
+      gateway_id: "gateway-test",
       workspace_id: "ws-a",
       status: "blocked",
       backend_generation: "generation-1",
       affected_workspace_ids: ["ws-a", "ws-a"],
-      blockers: [{ workspace_id: "ws-b", kind: "job", resource_id: "job-b", detail: "Job 正在执行" }],
+      blockers: [{ gateway_id: "gateway-test", workspace_id: "ws-b", kind: "job", resource_id: "job-b", detail: "Job 正在执行" }],
     }, "/api/gateway/workspaces/ws-a", null);
     const mounted = mountHook({
       gatewayWorkspaces: members,
@@ -627,7 +632,7 @@ describe("托管工作区删除的完整组确认", () => {
     });
     await mounted.mount();
 
-    await act(async () => { mounted.hook().removeWorkspace("ws-a", "A"); });
+    await act(async () => { mounted.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
 
     expect(mounted.removalRequests).toHaveLength(1);
     expect(mounted.removalRequests[0]?.[2]).toBeUndefined();
@@ -640,11 +645,11 @@ describe("托管工作区删除的完整组确认", () => {
     snapshot();
     const declined = mountHook({ gatewayWorkspaces: members, removalFailure: blocked(), confirmResults: [true, false] });
     await declined.mount();
-    await act(async () => { declined.hook().removeWorkspace("ws-a", "A"); });
+    await act(async () => { declined.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
     expect(declined.removalRequests.length).toBe(1);
     const stale = mountHook({ gatewayWorkspaces: members, removalFailure: new HttpRequestError(409, "generation 已陈旧", "generation 已陈旧", "/api/gateway/workspaces/ws-a", null) });
     await stale.mount();
-    await act(async () => { stale.hook().removeWorkspace("ws-a", "A"); });
+    await act(async () => { stale.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
     expect(stale.removalRequests.length).toBe(1);
     expect(stale.confirmations.length).toBe(1);
     expect(stale.statuses).toEqual([]);

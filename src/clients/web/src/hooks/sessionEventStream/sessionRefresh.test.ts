@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { afterEach, expect, test } from "bun:test";
 import type { Session } from "../../types/backend";
 import { sessionScopeKey } from "../../state/session/sessionScope";
@@ -17,7 +18,7 @@ const sessions = Array.from({ length: 21 }, (_, index): Session => ({
 
 for (const hasMore of [true, false]) {
   test(`${hasMore ? "首页外仍存活的" : "完整列表确认移除的"}当前会话按分页事实收敛`, async () => {
-    const workspaceId = `gw_page_${hasMore}`;
+    const workspaceId = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "backend-workspace" });
     const selected = sessions[20]!;
     const selectedKey = sessionScopeKey(workspaceId, selected.session_id);
     const first = { ...sessions[0]!, title: "后端返回的新标题", updated_at: "2026-10-19T01:00:00Z" };
@@ -36,8 +37,7 @@ for (const hasMore of [true, false]) {
     }, { preconnect: originalFetch.preconnect });
     let state = createSessionHookState({ workspaceId, currentSession: selected, sessions });
     state.sessionAttachmentSummaries.set(selectedKey, { count: 1, names: ["附件.txt"], latestAt: null });
-    await refreshWorkspaceSessionList(49_751, { workspace_id: workspaceId,
-      backend_workspace_id: "backend-workspace", connection_kind: "local" }, (update) => {
+    await refreshWorkspaceSessionList(49_751, { gateway_id: "gateway-test", workspace_id: "backend-workspace" }, (update) => {
       state = typeof update === "function" ? update(state) : update;
     });
     expect(state.sessions[0]).toEqual(first);
@@ -51,8 +51,8 @@ for (const hasMore of [true, false]) {
 
 for (const currentWorkspace of ["active", "other", "implicit"] as const) {
   test(`完整列表刷新按会话owner收敛：${currentWorkspace}`, async () => {
-    const workspaceId = `gw_owner_${currentWorkspace}`;
-    const otherWorkspaceId = `${workspaceId}_other`;
+    const workspaceId = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "backend-workspace" });
+    const otherWorkspaceId = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "backend-other-workspace" });
     const original = sessions[20]!;
     const replacement = sessions[0]!;
     const otherSession: Session = {
@@ -88,9 +88,7 @@ for (const currentWorkspace of ["active", "other", "implicit"] as const) {
     const otherKey = sessionScopeKey(otherWorkspaceId, otherSession.session_id);
     const otherAttachments = { count: 1, names: ["另一工作区.txt"], latestAt: null };
     state.sessionAttachmentSummaries.set(otherKey, otherAttachments);
-    const refresh = refreshWorkspaceSessionList(49_752, {
-      workspace_id: workspaceId, backend_workspace_id: "backend-workspace", connection_kind: "local",
-    }, (update) => { state = typeof update === "function" ? update(state) : update; });
+    const refresh = refreshWorkspaceSessionList(49_752, { gateway_id: "gateway-test", workspace_id: "backend-workspace" }, (update) => { state = typeof update === "function" ? update(state) : update; });
     // 请求在途时切换查看对象，回执只能收敛其精确工作区的会话。
     await requestStarted;
     expect(respond).toBeDefined();

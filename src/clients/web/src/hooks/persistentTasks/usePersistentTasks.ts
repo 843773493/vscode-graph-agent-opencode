@@ -4,7 +4,7 @@ import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity"
 import { errorMessage } from "../../utils/errorMessage";
 
 export function usePersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, sessionId?: string, active = true) {
-  const owner = useMemo(() => ({ ...target }), [target.workspace_id, target.backend_workspace_id, target.connection_kind]);
+  const owner = useMemo(() => ({ ...target }), [target.gateway_id, target.workspace_id]);
   const scope = useMemo(() => ({ controller: new AbortController(), reader: new AbortController(), busy: false }), [port, owner, sessionId]);
   const current = useRef(scope);
   current.current = scope;

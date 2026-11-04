@@ -10,7 +10,7 @@ import { DEFAULT_MAX_SEARCH_RESULTS, IFileMatch, IFileQuery, IFolderQuery, isFil
 import type { ResourceNavigationContextDTO, ResourceNavigationMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
 import type { FederatedSearchContinuationDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
-import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v1/public.js';
+import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
 import { fileOptions, openResources, resourceInFolder, validateQuery, validateTextQuery } from './query.js';
 

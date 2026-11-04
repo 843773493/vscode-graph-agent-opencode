@@ -4,7 +4,7 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
@@ -17,6 +17,7 @@ from app.gateway.control.workspace_discovery import discover_workspaces
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.diagnostics import collect_gateway_diagnostics
 from app.gateway.federation import request_remote_gateway_management
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import get_registry, get_workspace_navigation_store
 from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
@@ -71,7 +72,20 @@ async def get_gateway_diagnostics(
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    target_gateway_id: Annotated[str | None, Header(alias=TARGET_GATEWAY_ID_HEADER)] = None,
 ):
+    target_gateway_id = parse_target_gateway_id(target_gateway_id)
+    if gateway_connection_id is None and workspace_id is not None:
+        try:
+            target = registry.resolve_request_target(workspace_id, target_gateway_id)
+            if target.connection_kind == "remote_gateway":
+                gateway_connection_id = registry.remote_connection_for_target(target).connection_id
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    if gateway_connection_id is None and target_gateway_id is not None and target_gateway_id != registry.gateway_id:
+        raise HTTPException(status_code=400, detail="远端 Gateway 诊断需要明确连接或工作区归属")
     if gateway_connection_id is None:
         try:
             result = await collect_gateway_diagnostics(
@@ -88,24 +102,23 @@ async def get_gateway_diagnostics(
 
     try:
         connection = registry.remote_gateway_connection(gateway_connection_id)
-        remote_workspace_id: str | None = None
+        if target_gateway_id is not None and target_gateway_id != connection.remote_gateway_id:
+            raise ValueError("目标 Gateway 与所选诊断连接归属不一致")
         if workspace_id is not None:
-            target = registry.resolve(workspace_id)
+            target = registry.resolve((connection.remote_gateway_id, workspace_id))
             if (
                 target.connection_kind != "remote_gateway"
-                or target.remote_gateway_connection_id != gateway_connection_id
-                or target.remote_workspace_id is None
+                or gateway_connection_id not in target.remote_gateway_connection_ids
             ):
                 raise ValueError("所选工作区不属于当前远程 Gateway")
-            remote_workspace_id = target.remote_workspace_id
         credential = FederationCredentialStore(
             storage_path=get_gateway_root() / "credentials" / "federation.json"
         ).get(gateway_connection_id)
         params = {
             "tail_lines": str(tail_lines),
             **(
-                {"remote_workspace_id": remote_workspace_id}
-                if remote_workspace_id is not None
+                {"workspace_id": workspace_id}
+                if workspace_id is not None
                 else {}
             ),
             **({"log_id": log_id} if log_id is not None else {}),

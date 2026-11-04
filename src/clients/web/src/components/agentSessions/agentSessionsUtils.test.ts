@@ -9,8 +9,9 @@ import {
 
 function workspace(overrides: Partial<GatewayWorkspace>): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: "gw_test",
-    parent_workspace_id: null,
+    parent_workspace: null,
     name: "home",
     backend_url: "http://127.0.0.1:9000",
     connection_kind: "local",
@@ -21,7 +22,7 @@ function workspace(overrides: Partial<GatewayWorkspace>): GatewayWorkspace {
     removable: true,
     system_default: false,
     runtime_action: "safe_restart_managed_backend",
-    remote: null,
+    remote_gateways: [],
     services: {},
     connection_error: null,
     checked_at: "2026-07-31T00:00:00Z",
@@ -35,17 +36,7 @@ describe("工作区故障展示", () => {
       connection_kind: "remote_gateway",
       status: "offline",
       connection_error: "LookupError: 远程 Gateway 隧道尚未连接: rgw_secret",
-      remote: {
-        gateway_connection_id: "rgw_secret",
-        remote_workspace_id: "gw_remote",
-        gateway_id: "gateway_remote",
-        name: "GPU Gateway",
-        host: "10.0.0.8",
-        port: 22,
-        username: "user",
-        ssh_config_host: "gpu-dev",
-        remote_gateway_port: 8014,
-      },
+      remote_gateways: [{ gateway_connection_id: "rgw_secret", gateway_id: "gateway_remote", name: "GPU Gateway", host: "10.0.0.8", port: 22, username: "user", ssh_config_host: "gpu-dev", remote_gateway_port: 8014, restart_required: false }],
     });
 
     expect(workspaceFailurePresentation(remote, remote.connection_error!)).toEqual({

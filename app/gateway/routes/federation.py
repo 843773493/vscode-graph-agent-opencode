@@ -141,7 +141,6 @@ async def federation_workspaces(
     direct = [
         FederationWorkspaceDTO(
             workspace_id=target.workspace_id,
-            backend_workspace_id=target.backend_workspace_id,
             backend_generation=registry.backend_owner(target.workspace_id).contract.generation if registry.backend_owner(target.workspace_id) is not None else None,
             affected_workspace_ids=list(registry.backend_owner(target.workspace_id).contract.workspace_ids) if registry.backend_owner(target.workspace_id) is not None else [target.workspace_id],
             name=target.name,
@@ -174,7 +173,7 @@ async def federation_workspaces(
     response_model=APIResponse[GatewayDiagnosticsDTO],
 )
 async def federation_diagnostics(
-    remote_workspace_id: str | None = Query(default=None),
+    workspace_id: str | None = Query(default=None),
     log_id: str | None = Query(default=None),
     tail_lines: int = Query(default=300, ge=20, le=1000),
     _: object = Depends(verify_federation_token),
@@ -184,7 +183,7 @@ async def federation_diagnostics(
     try:
         result = await collect_gateway_diagnostics(
             registry,
-            selected_workspace_id=remote_workspace_id,
+            selected_workspace_id=workspace_id,
             selected_log_id=log_id,
             tail_lines=tail_lines,
         )

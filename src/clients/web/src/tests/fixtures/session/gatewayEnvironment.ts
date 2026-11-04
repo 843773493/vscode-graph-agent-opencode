@@ -2,7 +2,7 @@ import type {
   GatewayUserAccess,
   Session,
 } from "../../../types/backend";
-import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
+import { gatewayWorkspaceKey, workspaceOwnerFromKey, type GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 
 /** Gateway fetch 路由、响应和测试用 API 默认值。 */
 
@@ -19,17 +19,17 @@ const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(
 );
 
 export const TEST_GATEWAY_WORKSPACE_REQUEST_TARGET: GatewayWorkspaceRequestTarget = {
-  workspace_id: "ws-test",
-  backend_workspace_id: "00000000-0000-0000-0000-000000000001",
-  connection_kind: "local",
+  gateway_id: "gateway-test",
+  workspace_id: "00000000-0000-0000-0000-000000000001",
 };
+export const TEST_GATEWAY_WORKSPACE_KEY = gatewayWorkspaceKey(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET);
 
 const DEFAULT_WORKSPACE_REQUEST_TARGETS = [TEST_GATEWAY_WORKSPACE_REQUEST_TARGET] as const;
 
 const TEST_WORKSPACE_TARGETS_BY_GATEWAY_ID = new Map<
   string,
   readonly GatewayWorkspaceRequestTarget[]
->([[TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id, DEFAULT_WORKSPACE_REQUEST_TARGETS]]);
+>([[TEST_GATEWAY_WORKSPACE_KEY, DEFAULT_WORKSPACE_REQUEST_TARGETS]]);
 
 export function testWorkspaceRequestTargetsFor(
   gatewayWorkspaceId: string | null,
@@ -37,7 +37,8 @@ export function testWorkspaceRequestTargetsFor(
   if (gatewayWorkspaceId === null) return DEFAULT_WORKSPACE_REQUEST_TARGETS;
   const cached = TEST_WORKSPACE_TARGETS_BY_GATEWAY_ID.get(gatewayWorkspaceId);
   if (cached) return cached;
-  const targets = [{ ...TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, workspace_id: gatewayWorkspaceId }];
+  const owner = workspaceOwnerFromKey(gatewayWorkspaceId);
+  const targets = [{ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }];
   TEST_WORKSPACE_TARGETS_BY_GATEWAY_ID.set(gatewayWorkspaceId, targets);
   return targets;
 }

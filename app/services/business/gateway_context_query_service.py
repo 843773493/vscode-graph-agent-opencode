@@ -110,9 +110,9 @@ class GatewayContextQueryService:
             SessionContextItemDTO(
                 kind="workspace",
                 resource_identity=workspace_session_inventory_identity(
-                    _backend_workspace_id(item)
+                    item.workspace_id
                 ),
-                uri=workspace_session_inventory_uri(_backend_workspace_id(item), gateway_authority=_workspace_gateway_authority(item, resource)),
+                uri=workspace_session_inventory_uri(item.workspace_id, gateway_authority=_workspace_gateway_authority(item, resource)),
                 scope="workspace",
                 data=_workspace_public_data(item),
             )
@@ -214,12 +214,12 @@ def _require_within_budget(returned_chars: int, max_chars: int) -> None:
 def _workspace_inventory_revision(inventory: GatewayWorkspaceListDTO) -> str:
     return _content_revision(
         {
-            "active_workspace_id": inventory.active_workspace_id,
+            "active_workspace": inventory.active_workspace.model_dump(mode="json") if inventory.active_workspace is not None else None,
             "items": [
                 {
                     "workspace_id": item.workspace_id,
-                    "backend_workspace_id": item.backend_workspace_id,
-                    "parent_workspace_id": item.parent_workspace_id,
+                    "gateway_id": item.gateway_id,
+                    "parent_workspace": item.parent_workspace.model_dump(mode="json") if item.parent_workspace is not None else None,
                     "name": item.name,
                     "backend_url": item.backend_url,
                     "connection_kind": item.connection_kind,
@@ -227,11 +227,7 @@ def _workspace_inventory_revision(inventory: GatewayWorkspaceListDTO) -> str:
                     "managed": item.managed,
                     "removable": item.removable,
                     "system_default": item.system_default,
-                    "remote": (
-                        item.remote.model_dump(mode="json")
-                        if item.remote is not None
-                        else None
-                    ),
+                    "remote_gateways": [entry.model_dump(mode="json") for entry in item.remote_gateways],
                     "service_names": sorted(item.services),
                 }
                 for item in inventory.items
@@ -278,29 +274,13 @@ def require_gateway_inventory(
 def _workspace_gateway_authority(
     item: GatewayWorkspaceDTO, inventory: ParsedSessionContextResource,
 ) -> str | None:
-    if item.connection_kind == "remote_gateway":
-        if item.remote is None:
-            raise WorkspaceSessionContextAccessError(
-                f"远端工作区缺少所属 Gateway 身份: workspace_id={item.workspace_id}"
-            )
-        return item.remote.gateway_id
-    return inventory.gateway_authority
-
-
-def _backend_workspace_id(item: GatewayWorkspaceDTO) -> str:
-    backend_workspace_id = item.backend_workspace_id
-    if not isinstance(backend_workspace_id, str) or not backend_workspace_id:
-        raise WorkspaceSessionContextAccessError(
-            "Gateway workspace 缺少真实 backend_workspace_id，无法构造 Workspace URI: "
-            f"workspace_id={item.workspace_id}"
-        )
-    return backend_workspace_id
+    return item.gateway_id if item.connection_kind == "remote_gateway" else inventory.gateway_authority
 
 
 def _workspace_public_data(item: GatewayWorkspaceDTO) -> dict[str, object]:
     return {
         "workspace_id": item.workspace_id,
-        "backend_workspace_id": _backend_workspace_id(item),
+        "gateway_id": item.gateway_id,
         "name": item.name,
         "connection_kind": item.connection_kind,
         "status": item.status,

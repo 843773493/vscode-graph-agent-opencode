@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.gateway.config import GatewayConfigReloadStatusDTO
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 
 GatewayConnectionKind = Literal["local", "remote_gateway"]
 
@@ -36,7 +37,6 @@ class GatewayServiceStatusDTO(BaseModel):
 
 class GatewayRemoteConnectionSummaryDTO(BaseModel):
     gateway_connection_id: str
-    remote_workspace_id: str
     gateway_id: str
     name: str
     host: str
@@ -51,11 +51,11 @@ class GatewayRemoteConnectionSummaryDTO(BaseModel):
 
 
 class GatewayWorkspaceDTO(BaseModel):
+    gateway_id: str
     workspace_id: str
-    backend_workspace_id: str | None = None
     backend_generation: str | None = None
     affected_workspace_ids: list[str] = Field(default_factory=list)
-    parent_workspace_id: str | None = None
+    parent_workspace: GatewaySearchWorkspaceOwnerDTO | None = None
     name: str
     backend_url: str
     connection_kind: GatewayConnectionKind
@@ -68,13 +68,14 @@ class GatewayWorkspaceDTO(BaseModel):
     config_reload: GatewayConfigReloadStatusDTO = Field(
         default_factory=GatewayConfigReloadStatusDTO
     )
-    remote: GatewayRemoteConnectionSummaryDTO | None = None
+    remote_gateways: list[GatewayRemoteConnectionSummaryDTO] = Field(default_factory=list)
     services: dict[str, GatewayServiceStatusDTO] = Field(default_factory=dict)
     connection_error: str | None = None
     checked_at: str
 
 
 class GatewayManagedWorkspaceDTO(BaseModel):
+    gateway_id: str
     workspace_id: str
     name: str
     status: GatewayWorkspaceStatus
@@ -109,7 +110,7 @@ class CreateGatewayManagedWorkspaceRequest(CreateFederationManagedWorkspaceReque
 
 
 class GatewayWorkspaceListDTO(BaseModel):
-    active_workspace_id: str | None = None
+    active_workspace: GatewaySearchWorkspaceOwnerDTO | None = None
     items: list[GatewayWorkspaceDTO] = Field(default_factory=list)
 
 
@@ -123,8 +124,8 @@ class AddLocalWorkspaceRequest(BaseModel):
 
 
 class ReorderGatewayWorkspacesRequest(BaseModel):
-    workspace_ids: list[str] = Field(
-        description="按目标展示顺序排列的全部 Gateway 工作区 ID"
+    workspaces: list[GatewaySearchWorkspaceOwnerDTO] = Field(
+        description="按展示顺序排列的全部 Gateway／工作区归属"
     )
 
 
@@ -132,9 +133,9 @@ class UpdateGatewayWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str | None = Field(default=None, description="工作区显示名称")
-    parent_workspace_id: str | None = Field(
+    parent_workspace: GatewaySearchWorkspaceOwnerDTO | None = Field(
         default=None,
-        description="父工作区 ID；显式传入 null 表示移出父工作区",
+        description="父工作区归属；显式传入 null 表示移出父工作区",
     )
 
     @model_validator(mode="after")
@@ -147,4 +148,4 @@ class UpdateGatewayWorkspaceRequest(BaseModel):
 
 
 class ActivateGatewayWorkspaceResultDTO(BaseModel):
-    active_workspace_id: str
+    active_workspace: GatewaySearchWorkspaceOwnerDTO

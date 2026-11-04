@@ -1,5 +1,6 @@
 /** 纯展示数据由当前浏览器保存，不携带 Gateway 用户或租约身份。 */
 export interface SessionViewState {
+  gateway_id: string;
   workspace_id: string;
   session_id: string;
   turn_anchor: string | null;
@@ -10,4 +11,4 @@ export interface SessionViewState {
   updated_at: string;
 }
 
-export type SessionSelection = Pick<SessionViewState, "workspace_id" | "session_id">;
+export type SessionSelection = Pick<SessionViewState, "gateway_id" | "workspace_id" | "session_id">;

@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "./workspaceIdentity";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
@@ -171,7 +172,7 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
       }),
     });
 
-    const blob = await getWorkspaceRawFileBlob(48_610, "docs/a.png", "workspace-raw");
+    const blob = await getWorkspaceRawFileBlob(48_610, "docs/a.png", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }));
 
     expect(blob.size).toBe(3);
     expect(backend.businessRequests).toEqual([
@@ -185,7 +186,7 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
       businessResponse: () => new Response(new Uint8Array([9, 9]), { status: 200 }),
     });
 
-    const blob = await getSessionAttachmentBlob(48_611, "ses_a", "file_a", "workspace-raw");
+    const blob = await getSessionAttachmentBlob(48_611, "ses_a", "file_a", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }));
 
     expect(blob.size).toBe(2);
     expect(backend.businessRequests).toHaveLength(2);
@@ -203,14 +204,14 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
       { preconnect: originalFetch.preconnect },
     );
 
-    await expect(getWorkspaceRawFileBlob(48_612, "missing.png", "workspace-raw"))
+    await expect(getWorkspaceRawFileBlob(48_612, "missing.png", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" })))
       .rejects.toBeInstanceOf(HttpRequestError);
   });
 
   test("streamSessionMessageEvents 凭据轮换后重试再消费流", async () => {
     const backend = installRotatingCredentialBackend({ businessResponse: emptySseStream });
 
-    await streamSessionMessageEvents(48_620, "ses_a", "turn_a", { threadId: "thr_00000000400070008000000000000002", workspaceId: "w" });
+    await streamSessionMessageEvents(48_620, "ses_a", "turn_a", { threadId: "thr_00000000400070008000000000000002", workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }) });
 
     expect(backend.businessRequests).toEqual([
       "/api/v1/sessions/ses_a/turns/turn_a/message-stream#stale-token",
@@ -221,7 +222,7 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
   test("streamSessionEvents 凭据轮换后重试再消费流", async () => {
     const backend = installRotatingCredentialBackend({ businessResponse: emptySseStream });
 
-    await streamSessionEvents(48_621, "ses_a", { workspaceId: "w" });
+    await streamSessionEvents(48_621, "ses_a", { workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }) });
 
     expect(backend.businessRequests).toEqual([
       "/api/v1/workspace/observations/stream#stale-token",
@@ -233,10 +234,9 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
     const backend = installRotatingCredentialBackend({ businessResponse: emptySseStream });
 
     await streamSessionActivity(48_622, {
-      workspace_id: "w",
-      backend_workspace_id: "backend-w",
-      connection_kind: "local",
-    }, {});
+      workspace_id: "00000000-0000-4000-8000-000000000001",
+      gateway_id: "gateway-test",
+          }, {});
 
     expect(backend.businessRequests).toEqual([
       "/api/v1/workspace/observations/stream#stale-token",
@@ -247,7 +247,7 @@ describe("二进制与流式路径共享统一凭据刷新屏障", () => {
   test("streamWorkspaceFileEvents 凭据轮换后重试再消费流", async () => {
     const backend = installRotatingCredentialBackend({ businessResponse: emptySseStream });
 
-    await streamWorkspaceFileEvents(48_623, ["/tmp/a.ts"], { workspaceId: "w" });
+    await streamWorkspaceFileEvents(48_623, ["/tmp/a.ts"], { workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }) });
 
     expect(backend.businessRequests).toEqual([
       "/api/v1/workspace/observations/stream#stale-token",
@@ -260,19 +260,18 @@ describe("原始响应入口的响应头等待有界", () => {
   // 六个「自行消费响应体」的入口：SSE 实时流四处 + 二进制下载两处。
   const rawEntryPoints: Array<[string, (port: number) => Promise<unknown>]> = [
     ["streamWorkspaceFileEvents", (port) => streamWorkspaceFileEvents(port, ["/tmp/a.ts"], {
-      workspaceId: "w",
+      workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }),
     })],
-    ["streamSessionEvents", (port) => streamSessionEvents(port, "ses_a", { workspaceId: "w" })],
+    ["streamSessionEvents", (port) => streamSessionEvents(port, "ses_a", { workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }) })],
     ["streamSessionActivity", (port) => streamSessionActivity(port, {
-      workspace_id: "w",
-      backend_workspace_id: "backend-w",
-      connection_kind: "local",
-    }, {})],
+      workspace_id: "00000000-0000-4000-8000-000000000001",
+      gateway_id: "gateway-test",
+          }, {})],
     ["streamSessionMessageEvents", (port) =>
-      streamSessionMessageEvents(port, "ses_a", "turn_a", { threadId: "thr_00000000400070008000000000000002", workspaceId: "w" })],
-    ["getWorkspaceRawFileBlob", (port) => getWorkspaceRawFileBlob(port, "docs/a.png", "w")],
+      streamSessionMessageEvents(port, "ses_a", "turn_a", { threadId: "thr_00000000400070008000000000000002", workspaceId: gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }) })],
+    ["getWorkspaceRawFileBlob", (port) => getWorkspaceRawFileBlob(port, "docs/a.png", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }))],
     ["getSessionAttachmentBlob", (port) =>
-      getSessionAttachmentBlob(port, "ses_a", "file_a", "w")],
+      getSessionAttachmentBlob(port, "ses_a", "file_a", gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-4000-8000-000000000001" }))],
   ];
 
   test.each(rawEntryPoints)(

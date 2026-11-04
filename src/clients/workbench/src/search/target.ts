@@ -1,7 +1,8 @@
+import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { Limiter } from '../../upstream/src/vs/base/common/async.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { gatewayWorkspaceOwner, requireGatewayWorkspaceRoute, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
 import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway } from '../agentApi.js';
@@ -50,21 +51,21 @@ export function captureSearchOwner(editors: IEditorService): WorkspaceOwner {
     return { gatewayId, workspaceId };
   }
   const snapshot = workspaceContext.getSnapshot();
-  const target = snapshot.workspaces.find(workspace => workspace.workspace_id === snapshot.activeId);
+  const target = snapshot.workspaces.find(workspace => gatewayWorkspaceKey(workspace) === snapshot.activeId);
   if (snapshot.error || snapshot.loading || !target || !snapshot.gatewayId) throw new Error(snapshot.error ?? '没有明确搜索工作区，请先选择工作区');
-  return gatewayWorkspaceOwner(target, snapshot.gatewayId);
+  return gatewayWorkspaceOwner(target);
 }
 
 export async function loadSearchRoots(owners: readonly WorkspaceOwner[], signal: AbortSignal): Promise<PromiseSettledResult<SearchScope['workspaces'][number]>[]> {
   if (!owners.length) throw new Error('请先选择明确搜索工作区');
-  const routes = await gateway.workspaceRoutes(signal), limiter = new Limiter<SearchScope['workspaces'][number]>(3);
+  const routes = await gateway.workspaces(false, signal), limiter = new Limiter<SearchScope['workspaces'][number]>(3);
   try {
     return await Promise.allSettled(owners.map(owner => limiter.queue(async () => {
       signal.throwIfAborted();
-      const target = requireGatewayWorkspaceRoute(routes.items, routes.gatewayId, owner);
+      const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
       if (target.status !== 'ready') throw new Error(`工作区 ${target.name} 当前不可查询（${target.status}），请明确启动或连接后再搜索`);
       const roots = await gateway.request<WorkspaceFileRootsDTO>('/api/v1/workspace/files/roots',
-        { signal, headers: gatewayWorkspaceRequestHeaders(target) }, target.workspace_id);
+        { signal, headers: gatewayWorkspaceRequestHeaders(target) }, gatewayWorkspaceKey(target));
       return { ...owner, rootUri: roots.workspace_uri, label: target.name };
     })));
   } finally { limiter.dispose(); }

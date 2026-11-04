@@ -1,3 +1,4 @@
+import { workspaceOwnerFromKey } from "../workspaceIdentity";
 import type {
   APIResponse,
   GatewayUserViewState,
@@ -5,8 +6,10 @@ import type {
 } from "../../types/backend";
 import { requestJson, unwrapApiData, unwrapApiDataOrNull } from "../http";
 
-function userViewStatePath(workspaceId: string, sessionId: string): string {
-  return `/api/gateway/users/current/view-state?workspace_id=${encodeURIComponent(workspaceId)}&session_id=${encodeURIComponent(sessionId)}`;
+function userViewStatePath(workspaceKey: string, sessionId: string): string {
+  const owner = workspaceOwnerFromKey(workspaceKey);
+  const query = new URLSearchParams({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, session_id: sessionId });
+  return `/api/gateway/users/current/view-state?${query}`;
 }
 
 export async function getGatewayUserViewState(

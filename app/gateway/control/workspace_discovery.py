@@ -66,7 +66,7 @@ def discover_workspaces(
             raise ValueError("工作区发现 cursor 与查询、Gateway 或登记导航版本不符，请重新发现")
         state = previous
 
-    by_target = {target.workspace_id: target for target in targets}
+    by_target = {target.key: target for target in targets}
     children: dict[str | None, list[WorkspaceNavigationNodeDTO]] = {}
     for node in tree.nodes:
         children.setdefault(node.parent_node_id, []).append(node)
@@ -82,7 +82,7 @@ def discover_workspaces(
         frontier.extend((child, ids, names) for child in reversed(children.get(node.node_id, [])))
         if node.kind != "workspace_ref" and not include_folders:
             continue
-        target = by_target[node.workspace_id] if node.workspace_id is not None else None
+        target = by_target[(node.workspace.gateway_id, node.workspace.workspace_id)] if node.workspace is not None else None
         owner = workspace_owner(target, registry, gateway_id) if target is not None else None
         terms = (node.name, node.node_id, "/".join(names))
         if target is not None and owner is not None:
@@ -94,7 +94,7 @@ def discover_workspaces(
             continue
         if target is not None and owner is not None:
             matches.append(GatewayWorkspaceDiscoveryHitDTO(
-                owner=owner, target_id=target.workspace_id, name=target.name,
+                owner=owner, name=target.name,
                 navigation_node_id=node.node_id, breadcrumb_node_ids=ids, breadcrumb_names=names,
             ))
         else:

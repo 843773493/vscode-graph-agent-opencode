@@ -6,6 +6,7 @@ import type { GatewayWorkspace, SessionCatalogNode } from "../../types/backend";
 import type { CatalogOutboxPersistencePort, CatalogOutboxStoredOperation } from "../../state/session/sessionCatalogOutboxStore";
 import { createSessionCatalogOutboxRuntime, type SessionCatalogOutboxSnapshot } from "./sessionCatalogOutboxRuntime";
 import { applyCatalogOutboxOperationReceipt, catalogOutboxBatchToIntents } from "../../state/session/sessionCatalogOutbox";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useSessionCatalogActions } from "../shell/useSessionCatalogActions";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
 import {
@@ -14,6 +15,7 @@ import {
   installGatewayFetch,
   restoreGatewayTestEnvironment,
   testGatewayUserAccess,
+  TEST_GATEWAY_WORKSPACE_KEY,
   TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
   withDefaultGatewayApiResponses,
 } from "../../tests/fixtures/session/gatewayEnvironment";
@@ -21,6 +23,8 @@ import {
   createSessionResourceExplorerProps,
 } from "../../tests/fixtures/session/sessionResourceExplorer";
 import { flushReactEffects } from "../../tests/fixtures/session/asyncControl";
+
+const OTHER_WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "00000000-0000-0000-0000-000000000002" });
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -86,18 +90,18 @@ async function mountPendingParent(options: {
   let nextExportMutation: (() => void) | undefined;
   const refreshReads: string[] = [];
   installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
-    if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "pending-parent-gateway" });
+    if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "gateway-test" });
     if (path === "/api/v1/workspace") {
-      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id });
+      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id });
     }
     if (path === "/api/v1/session-catalog/snapshot") {
       if (readFailure === "snapshot") return apiErrorResponse(500, "权威 snapshot 读取失败");
-      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id,
         catalog_revision: revision,
         event_seq_watermark: revision - 7, generation: 1 });
     }
     if (path === "/api/v1/session-catalog/navigation-events") {
-      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id,
+      return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id,
         event_seq_watermark: revision - 7, items: [], next_cursor: null,
         has_more: false, cursor_gone: revision > 7 });
     }
@@ -158,13 +162,13 @@ async function mountPendingParent(options: {
         });
         if (acceptance) await acceptance;
         statusReceiptsVisible = true;
-        return { workspace_id: target.backend_workspace_id!, accepted_count: accepted.length,
+        return { workspace_id: target.workspace_id!, accepted_count: accepted.length,
           receipts: accepted, created_node_ids: Object.fromEntries(accepted
             .filter((receipt) => receipt.created_node_id)
             .map((receipt) => [receipt.operation_id, receipt.created_node_id!])) };
       },
       queryStatus: async (_port, target, ids) => ({
-        workspace_id: target.backend_workspace_id!, catalog_revision: revision,
+        workspace_id: target.workspace_id!, catalog_revision: revision,
         items: statusReceiptsVisible ? ids.flatMap((id) => receipts.get(id) ? [receipts.get(id)!] : []) : [],
         unknown_operation_ids: ids.filter((id) => !statusReceiptsVisible || !receipts.has(id)),
       }),
@@ -187,7 +191,7 @@ async function mountPendingParent(options: {
       gatewayUserAccess: access,
     }) });
     actions = useSessionCatalogActions({
-      apiPort: 49_459, activeGatewayWorkspaceId: "ws-test", activeSessionId: null,
+      apiPort: 49_459, activeGatewayWorkspaceId: TEST_GATEWAY_WORKSPACE_KEY, activeSessionId: null,
       sessionsByWorkspace: sessions, gatewayWorkspaces: workspaces,
       confirm: async () => true, setStatus: (message) => statuses.push(message), onError: (message) => errors.push(message),
       sessionCatalogOutboxRuntime: runtime, gatewayUserAccess: access,
@@ -258,26 +262,26 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
     test(`${receiptEntry} 回执换成预留 ID 时迁移展开父子，确认清理后仍可展开`, async () => {
       const mounted = await mountPendingParent({ deferAcceptance: true });
       await act(async () => {
-        await mounted.explorer().createSessionFolder("ws-test", "父目录");
+        await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "父目录");
       });
       const parent = mounted.handle.driver.current().operations[0]!;
-      const localParentKey = `catalog:ws-test:${parent.client_operation_id}`;
+      const localParentKey = `catalog:${TEST_GATEWAY_WORKSPACE_KEY}:${parent.client_operation_id}`;
       await act(async () => {
-        mounted.explorer().toggleExpanded(localParentKey, "ws-test", parent.client_operation_id);
-        await mounted.actions().createSessionFolder("ws-test", parent.client_operation_id, "子目录");
+        mounted.explorer().toggleExpanded(localParentKey, TEST_GATEWAY_WORKSPACE_KEY, parent.client_operation_id);
+        await mounted.actions().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, parent.client_operation_id, "子目录");
       });
       const child = mounted.handle.driver.current().operations[1]!;
-      const localChildKey = `catalog:ws-test:${child.client_operation_id}`;
-      const otherWorkspaceKey = `catalog:ws-other:${parent.client_operation_id}`;
+      const localChildKey = `catalog:${TEST_GATEWAY_WORKSPACE_KEY}:${child.client_operation_id}`;
+      const otherWorkspaceKey = `catalog:${OTHER_WORKSPACE_KEY}:${parent.client_operation_id}`;
       await act(async () => {
-        mounted.explorer().toggleExpanded(localChildKey, "ws-test", child.client_operation_id);
+        mounted.explorer().toggleExpanded(localChildKey, TEST_GATEWAY_WORKSPACE_KEY, child.client_operation_id);
         mounted.explorer().toggleExpanded(otherWorkspaceKey);
-        await mounted.explorer().createSessionFolder("ws-test", "关闭目录");
+        await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "关闭目录");
       });
       const closed = mounted.handle.driver.current().operations[2]!;
       expect(parent.created_node_id).toBeNull();
       expect(child.created_node_id).toBeNull();
-      expect(mounted.explorer().branches.get(`ws-test:${parent.client_operation_id}`)?.items[0]?.node_id)
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:${parent.client_operation_id}`)?.items[0]?.node_id)
         .toBe(child.client_operation_id);
       // enqueue 路径故意不消费受理/提交的中间镜像，让成功 prune 先删掉最后一份映射。
       if (receiptEntry === "enqueue") mounted.holdSnapshotUntilPrune();
@@ -293,7 +297,7 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       });
       mounted.releaseAcceptance();
       const reservedParent = mounted.handle.driver.current().operations[0]!;
-      const canonicalParentKey = `catalog:ws-test:${reservedParent.created_node_id}`;
+      const canonicalParentKey = `catalog:${TEST_GATEWAY_WORKSPACE_KEY}:${reservedParent.created_node_id}`;
       expect(reservedParent.state).toBe("accepted");
       expect(reservedParent.created_node_id).not.toBeNull();
       if (receiptEntry === "status") {
@@ -303,7 +307,7 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
         expect(mounted.explorer().expandedIds.has(localParentKey)).toBe(true);
       }
       expect(mounted.explorer().expandedIds.has(otherWorkspaceKey)).toBe(true);
-      expect(mounted.explorer().expandedIds.has(`catalog:ws-test:${closed.client_operation_id}`)).toBe(false);
+      expect(mounted.explorer().expandedIds.has(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:${closed.client_operation_id}`)).toBe(false);
       expect(mounted.childQueries).not.toContain(reservedParent.created_node_id);
       await act(async () => {
         mounted.releaseAcceptance();
@@ -312,21 +316,21 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       });
       const acceptedChild = mounted.handle.driver.current().operations[1]!;
       const acceptedClosed = mounted.handle.driver.current().operations[2]!;
-      const canonicalChildKey = `catalog:ws-test:${acceptedChild.created_node_id}`;
+      const canonicalChildKey = `catalog:${TEST_GATEWAY_WORKSPACE_KEY}:${acceptedChild.created_node_id}`;
       expect(acceptedChild.state).toBe("accepted");
       if (receiptEntry === "status") {
         expect(mounted.explorer().expandedIds.has(canonicalChildKey)).toBe(true);
         expect(mounted.explorer().expandedIds.has(localChildKey)).toBe(false);
       }
-      expect(mounted.explorer().expandedIds.has(`catalog:ws-test:${acceptedClosed.created_node_id}`)).toBe(false);
+      expect(mounted.explorer().expandedIds.has(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:${acceptedClosed.created_node_id}`)).toBe(false);
       if (receiptEntry === "status") {
-        expect(mounted.explorer().branches.get(`ws-test:${reservedParent.created_node_id}`)?.items[0]?.node_id)
+        expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:${reservedParent.created_node_id}`)?.items[0]?.node_id)
           .toBe(acceptedChild.created_node_id!);
       }
       await mounted.settle();
       // shell 创建入口不持有目录页；由同一 explorer owner 读取真实 canonical 父分支后清理。
       await act(async () => {
-        await mounted.explorer().reconcileCatalogBranches("ws-test", [null, reservedParent.created_node_id],
+        await mounted.explorer().reconcileCatalogBranches(TEST_GATEWAY_WORKSPACE_KEY, [null, reservedParent.created_node_id],
           [parent.client_operation_id, child.client_operation_id, closed.client_operation_id]);
         await flushReactEffects();
       });
@@ -336,7 +340,7 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       expect(mounted.explorer().expandedIds.has(canonicalChildKey)).toBe(true);
       expect(mounted.explorer().expandedIds.has(localParentKey)).toBe(false);
       expect(mounted.explorer().expandedIds.has(localChildKey)).toBe(false);
-      expect(mounted.explorer().branches.get(`ws-test:${reservedParent.created_node_id}`)?.items[0]?.folder_id)
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:${reservedParent.created_node_id}`)?.items[0]?.folder_id)
         .toBe(acceptedChild.created_node_id);
       expect(mounted.errors).toEqual([]);
     });
@@ -346,8 +350,8 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
     test(`${entry} 保留创建依赖、本地父子投影和提交后的真实父 ID`, async () => {
       const mounted = await mountPendingParent();
       const createFolder = (name: string, parent: string | null) => entry === "explorer"
-        ? mounted.explorer().createSessionFolder("ws-test", name, parent)
-        : mounted.actions().createSessionFolder("ws-test", parent, name);
+        ? mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, name, parent)
+        : mounted.actions().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, parent, name);
       await act(async () => { await createFolder("父目录", null); });
       const parent = mounted.handle.driver.current().operations[0]!;
       const parentId = parent.created_node_id!;
@@ -358,12 +362,12 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       expect(child.created_by_operation_id).toBe(parent.client_operation_id);
       expect(child.depends_on).toEqual([parent.client_operation_id]);
       expect(child.parent_node_id).toBeNull();
-      expect(mounted.explorer().branches.get("ws-test:root")?.total).toBe(0);
-      const projectedParent = mounted.explorer().branches.get("ws-test:root")?.items[0]!;
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.total).toBe(0);
+      const projectedParent = mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items[0]!;
       expect(projectedParent.node_id).toBe(parentId);
       expect(projectedParent.client_ref).toBe(parent.client_operation_id);
       expect(projectedParent.folder_id).toBeNull();
-      const local = mounted.explorer().branches.get(`ws-test:${parentId}`)!;
+      const local = mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:${parentId}`)!;
       expect(local.local_pending).toBe(true);
       expect(local.catalog_revision).toBeUndefined();
       expect(local.revision).toBe("");
@@ -371,8 +375,8 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       expect(local.items.map((item) => [item.name, item.parent_node_id, item.pending_state]))
         .toEqual([["子目录", parentId, "accepted"]]);
       await act(async () => {
-        await mounted.explorer().loadBranch("ws-test", parentId);
-        await mounted.explorer().loadBranch("ws-test", parent.client_operation_id);
+        await mounted.explorer().loadBranch(TEST_GATEWAY_WORKSPACE_KEY, parentId);
+        await mounted.explorer().loadBranch(TEST_GATEWAY_WORKSPACE_KEY, parent.client_operation_id);
       });
       expect(mounted.childQueries).not.toContain(parentId);
       expect(mounted.childQueries).not.toContain(parent.client_operation_id);
@@ -381,10 +385,10 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       ]);
       await mounted.settle();
       expect(mounted.childQueries).toContain(parentId);
-      expect(mounted.explorer().branches.get(`ws-test:${parentId}`)?.items[0]?.name).toBe("子目录");
-      expect(mounted.explorer().branches.get(`ws-test:${parentId}`)?.local_pending).toBeUndefined();
-      expect(mounted.explorer().branches.has(`ws-test:${parent.client_operation_id}`)).toBe(false);
-      const confirmedParent = mounted.explorer().branches.get("ws-test:root")?.items[0]!;
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:${parentId}`)?.items[0]?.name).toBe("子目录");
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:${parentId}`)?.local_pending).toBeUndefined();
+      expect(mounted.explorer().branches.has(`${TEST_GATEWAY_WORKSPACE_KEY}:${parent.client_operation_id}`)).toBe(false);
+      const confirmedParent = mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items[0]!;
       expect(confirmedParent.folder_id).toBe(parentId);
       expect(confirmedParent.client_ref).toBeNull();
       expect(mounted.errors).toEqual([]);
@@ -393,16 +397,16 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
 
   test("父创建失败时子项终结，权威重读保留独立成功目录", async () => {
     const mounted = await mountPendingParent();
-    await act(async () => { await mounted.explorer().createSessionFolder("ws-test", "父目录"); });
+    await act(async () => { await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "父目录"); });
     const parent = mounted.handle.driver.current().operations[0]!;
     await act(async () => {
-      await mounted.actions().createSessionFolder("ws-test", parent.created_node_id, "子目录");
-      await mounted.explorer().createSessionFolder("ws-test", "独立目录");
+      await mounted.actions().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, parent.created_node_id, "子目录");
+      await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "独立目录");
     });
     await mounted.settle(true);
-    expect(mounted.explorer().branches.get("ws-test:root")?.items.map((item) => item.name))
+    expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items.map((item) => item.name))
       .toEqual(["独立目录"]);
-    expect(mounted.explorer().branches.has(`ws-test:${parent.created_node_id}`)).toBe(false);
+    expect(mounted.explorer().branches.has(`${TEST_GATEWAY_WORKSPACE_KEY}:${parent.created_node_id}`)).toBe(false);
     expect(mounted.errors.some((error) => error.includes("父目录创建被明确拒绝"))).toBe(true);
     expect([...mounted.receipts.values()].map((receipt) => receipt.state))
       .toEqual(["rejected", "dependency_failed", "committed"]);
@@ -423,17 +427,17 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       folder("first-root", null), folder("outside", null),
     ] });
     await act(async () => {
-      for (const id of ["host", "deleted-child", "moved", "outside"]) await mounted.explorer().loadBranch("ws-test", id);
-      mounted.explorer().toggleExpanded("catalog:ws-test:moved");
-      await mounted.explorer().createSessionFolder("ws-test", "失败父目录", "host");
+      for (const id of ["host", "deleted-child", "moved", "outside"]) await mounted.explorer().loadBranch(TEST_GATEWAY_WORKSPACE_KEY, id);
+      mounted.explorer().toggleExpanded(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:moved`);
+      await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "失败父目录", "host");
       const parent = mounted.handle.driver.current().operations[0]!;
-      await mounted.actions().createSessionFolder("ws-test", parent.created_node_id, "失败子目录");
-      await mounted.explorer().createSessionFolder("ws-test", "独立目录");
+      await mounted.actions().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, parent.created_node_id, "失败子目录");
+      await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "独立目录");
     });
     const expanded = [...mounted.explorer().expandedIds];
     const release = mounted.delayChildRead("deleted-child");
     let lateRead!: Promise<unknown>;
-    await act(async () => { lateRead = mounted.explorer().loadBranch("ws-test", "deleted-child"); await flushReactEffects(); });
+    await act(async () => { lateRead = mounted.explorer().loadBranch(TEST_GATEWAY_WORKSPACE_KEY, "deleted-child"); await flushReactEffects(); });
     mounted.nodes.delete("host");
     mounted.nodes.delete("deleted-child");
     mounted.nodes.set("moved", { ...mounted.nodes.get("moved")!, parent_node_id: "outside", node_revision: 2 });
@@ -441,27 +445,27 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
     try {
       mounted.setReadFailure("export");
       await expect(mounted.settle(true)).rejects.toThrow("权威 export 读取失败");
-      expect(mounted.explorer().branches.has("ws-test:host")).toBe(true);
+      expect(mounted.explorer().branches.has(`${TEST_GATEWAY_WORKSPACE_KEY}:host`)).toBe(true);
       expect(mounted.handle.driver.current().operations.map((operation) => operation.state)).toEqual(["accepted", "accepted", "accepted"]);
       mounted.setReadFailure(null);
       await mounted.settle(true);
       expect(mounted.childQueries.slice(queryOffset)).not.toContain("host");
       expect(mounted.childQueries.slice(queryOffset)).not.toContain("deleted-child");
-      expect(mounted.explorer().branches.has("ws-test:host")).toBe(false);
-      expect(mounted.explorer().branches.has("ws-test:deleted-child")).toBe(false);
-      expect(mounted.explorer().branches.get("ws-test:moved")?.items.map((node) => node.node_id)).toEqual(["kept-child"]);
-      expect(mounted.explorer().branches.get("ws-test:outside")?.items.map((node) => node.node_id)).toEqual(["moved"]);
-      expect(mounted.explorer().branches.get("ws-test:root")?.cursor).toBe("root-more");
-      expect(mounted.explorer().branches.get("ws-test:root")?.items.map((node) => node.node_id)).toEqual(["first-root"]);
+      expect(mounted.explorer().branches.has(`${TEST_GATEWAY_WORKSPACE_KEY}:host`)).toBe(false);
+      expect(mounted.explorer().branches.has(`${TEST_GATEWAY_WORKSPACE_KEY}:deleted-child`)).toBe(false);
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:moved`)?.items.map((node) => node.node_id)).toEqual(["kept-child"]);
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:outside`)?.items.map((node) => node.node_id)).toEqual(["moved"]);
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.cursor).toBe("root-more");
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items.map((node) => node.node_id)).toEqual(["first-root"]);
       release(); await lateRead;
       mounted.afterNextExport(() => mounted.nodes.set("outside", {
         ...mounted.nodes.get("outside")!, name: "另一客户端的最新根名称", node_revision: 2,
       }));
       await act(async () => { await flushReactEffects(); await mounted.explorer().refreshResourceTree(); });
       expect(mounted.refreshReads.slice(-2)).toEqual(["export", "refresh"]);
-      expect(mounted.explorer().branches.has("ws-test:deleted-child")).toBe(false);
-      expect(mounted.explorer().branches.get("ws-test:root")?.cursor).toBeNull();
-      expect(mounted.explorer().branches.get("ws-test:root")?.items.map((node) => node.name)).toEqual(["first-root", "另一客户端的最新根名称", "独立目录"]);
+      expect(mounted.explorer().branches.has(`${TEST_GATEWAY_WORKSPACE_KEY}:deleted-child`)).toBe(false);
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.cursor).toBeNull();
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items.map((node) => node.name)).toEqual(["first-root", "另一客户端的最新根名称", "独立目录"]);
       expect([...mounted.explorer().expandedIds]).toEqual(expanded);
       expect(mounted.handle.driver.current().operations).toEqual([]);
     } finally {
@@ -474,7 +478,7 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       catalogOutboxPartitionKey, catalogOutboxBatchToIntents, createCatalogOutbox, markCatalogOutboxOperationPersisted } =
       await import('../../state/session/sessionCatalogOutbox');
     const ids = ['a', 'b', 'd', 'c'].map((suffix) => 'op_' + suffix.repeat(32));
-    const partition = { gatewayId: 'failure-gateway', workspaceId: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.backend_workspace_id!, principal: 'guest' };
+    const partition = { gatewayId: 'gateway-test', workspaceId: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id!, principal: 'guest' };
     let seed = createCatalogOutbox(partition);
     const intents = [
       { kind: 'rename_node' as const, targetNodeId: 'cnode_a', name: 'A已提交' },
@@ -562,16 +566,16 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       onError: (message) => errors.push(message), adapter: {
         queryStatus: async (_port, target) => {
           await statusGate;
-          return { workspace_id: target.backend_workspace_id!, catalog_revision: 12,
+          return { workspace_id: target.workspace_id!, catalog_revision: 12,
             items: [receipt(0, 'committed'), receipt(1, 'rejected'), receipt(2, 'dependency_failed')],
             unknown_operation_ids: [ids[3]!] };
         },
         enqueue: async (_port, target, submitted) => {
           dispatchedFacts.push({ intents: submitted,
-            names: explorer.branches.get('ws-test:root')?.items.map((node) => node.name) ?? [],
+            names: explorer.branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items.map((node) => node.name) ?? [],
             removed: deleted.map((group) => [...group]) });
           dispatched();
-          return { workspace_id: target.backend_workspace_id!, accepted_count: submitted.length,
+          return { workspace_id: target.workspace_id!, accepted_count: submitted.length,
             receipts: [receipt(3, 'queued')], created_node_ids: {} };
         },
       } });
@@ -587,11 +591,11 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
     }
     try {
       await act(async () => { renderer = create(<Harness />); await flushReactEffects(); });
-      await act(async () => { await explorer.loadBranch('ws-test'); });
+      await act(async () => { await explorer.loadBranch(TEST_GATEWAY_WORKSPACE_KEY); });
       const handle = await runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, access);
-      await act(async () => { explorer.toggleExpanded("catalog:ws-test:cnode_external"); });
+      await act(async () => { explorer.toggleExpanded(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:cnode_external`); });
       const expandedBefore = [...explorer.expandedIds];
-      expect(expandedBefore).toContain("catalog:ws-test:cnode_external");
+      expect(expandedBefore).toContain(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:cnode_external`);
       refreshing = true;
       await act(async () => { releaseStatus(); await branchStarted; });
       expect(dispatchedFacts).toEqual([]);
@@ -605,8 +609,8 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       expect(dispatchedFacts[0]!.names).toContain('A已提交');
       expect(dispatchedFacts[0]!.names).toContain('C独立pending');
       expect(dispatchedFacts[0]!.removed.flat()).toEqual(expect.arrayContaining([ids[1]!, ids[2]!]));
-      expect(explorer.branches.get('ws-test:root')?.catalog_revision).toBe(12);
-      expect(explorer.branches.get('ws-test:root')?.items.map((node) => node.name)).not.toContain('B失败目录');
+      expect(explorer.branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.catalog_revision).toBe(12);
+      expect(explorer.branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items.map((node) => node.name)).not.toContain('B失败目录');
       expect([...explorer.expandedIds]).toEqual(expandedBefore);
       const currentC = handle.driver.current().operations.find((operation) => operation.client_operation_id === ids[3])!;
       expect(catalogOutboxBatchToIntents([currentC])).toEqual(catalogOutboxBatchToIntents([originalC]));
@@ -625,12 +629,12 @@ describe("真实 confirmed owner 刷新失败的恢复", () => {
   for (const stage of ["snapshot", "children"] as const) {
     test(`${stage} 读取失败保留 accepted 及依赖，恢复后只清失败闭包`, async () => {
       const mounted = await mountPendingParent();
-      await act(async () => { await mounted.explorer().createSessionFolder("ws-test", "父目录"); });
+      await act(async () => { await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "父目录"); });
       const parent = mounted.handle.driver.current().operations[0]!;
       await act(async () => {
-        await mounted.actions().createSessionFolder("ws-test", parent.created_node_id, "子目录");
-        await mounted.explorer().createSessionFolder("ws-test", "独立目录");
-        mounted.explorer().toggleExpanded("catalog:ws-test:kept-expansion");
+        await mounted.actions().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, parent.created_node_id, "子目录");
+        await mounted.explorer().createSessionFolder(TEST_GATEWAY_WORKSPACE_KEY, "独立目录");
+        mounted.explorer().toggleExpanded(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:kept-expansion`);
       });
       const accepted = catalogOutboxBatchToIntents(mounted.handle.driver.current().operations);
       mounted.setReadFailure(stage);
@@ -642,14 +646,14 @@ describe("真实 confirmed owner 刷新失败的恢复", () => {
       expect(catalogOutboxBatchToIntents(mounted.handle.driver.current().operations)).toEqual(accepted);
       expect(mounted.handle.driver.current().operations.map((operation) => operation.state)).toEqual(["accepted", "accepted", "accepted"]);
       expect(mounted.errors.join("；")).toContain("父目录创建被明确拒绝");
-      const confirmedRevision = mounted.explorer().branches.get("ws-test:root")?.catalog_revision;
+      const confirmedRevision = mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.catalog_revision;
       if (stage === "children") expect(confirmedRevision).toBe(7);
       else expect(confirmedRevision).toBeGreaterThanOrEqual(7);
       mounted.setReadFailure(null);
       await mounted.settle(true);
-      expect(mounted.explorer().branches.get("ws-test:root")?.items.map((node) => node.name)).toEqual(["独立目录"]);
-      expect(mounted.explorer().expandedIds.has("catalog:ws-test:kept-expansion")).toBe(true);
-      expect(mounted.explorer().branches.has(`ws-test:${parent.created_node_id}`)).toBe(false);
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items.map((node) => node.name)).toEqual(["独立目录"]);
+      expect(mounted.explorer().expandedIds.has(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:kept-expansion`)).toBe(true);
+      expect(mounted.explorer().branches.has(`${TEST_GATEWAY_WORKSPACE_KEY}:${parent.created_node_id}`)).toBe(false);
       expect(mounted.handle.driver.current().operations.every((operation) => operation.state === "committed")).toBe(true);
     });
   }

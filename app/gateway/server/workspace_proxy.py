@@ -12,17 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.core.history_loading import HistoryLoadingConfig
-from app.core.path_utils import get_gateway_root
 from app.core.resource_uri import ResourceUriGrammarError
 from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
-from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
 from app.gateway.control.user_access import (
     USER_ACCESS_COOKIE_NAME,
     UserAccessContext,
     UserAccessService,
 )
-from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.errors import FederationError
 from app.gateway.federation.grants import ContextGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
@@ -41,6 +38,7 @@ from app.gateway.proxy_upstream import (
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceRouteLease,
+    WorkspaceSelector,
     WorkspaceTarget,
 )
 from app.gateway.registry.owners import workspace_owner
@@ -59,12 +57,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
-BACKEND_WORKSPACE_ID_HEADER = "x-boxteam-backend-workspace-id"
 # 工作区 API 代理在逐跳头部之外还要剥离会话加载策略与浏览器 Cookie；Gateway 凭据
 # 与目标选择头部共用代理的同一份集合。
 PROXY_ONLY_DROPPED_HEADERS = GATEWAY_PROXY_DROPPED_HEADERS | {
     HISTORY_LOADING_HEADER,
-    BACKEND_WORKSPACE_ID_HEADER,
+    "x-boxteam-backend-workspace-id",
     "cookie",
 }
 MESSAGE_STREAM_AVAILABILITY_RETRY_DELAYS_SECONDS = (0.05,)
@@ -191,30 +188,12 @@ def _proxy_headers(
     if isinstance(history_loading, HistoryLoadingConfig):
         # 每一跳都覆盖入站策略，确保会话所属 Gateway 是最终权威来源。
         headers["X-BoxTeam-History-Loading"] = history_loading.as_header_value()
-    if target is not None and target.connection_kind == "remote_gateway":
-        connection_id = target.remote_gateway_connection_id
-        remote_workspace_id = target.remote_workspace_id
-        if connection_id is None or remote_workspace_id is None:
-            raise RuntimeError("远程投影工作区缺少 Gateway 连接信息")
-        if target_gateway_id is None:
-            raise RuntimeError("远程投影请求缺少明确目标 Gateway 归属")
-        headers[TARGET_GATEWAY_ID_HEADER] = target_gateway_id
-        headers["X-BoxTeam-Workspace-Id"] = remote_workspace_id
+    if target is not None:
+        headers["X-BoxTeam-Workspace-Id"] = target.workspace_id
+        if target.connection_kind == "remote_gateway":
+            headers[TARGET_GATEWAY_ID_HEADER] = target.gateway_id
         if include_credentials:
-            credential = FederationCredentialStore(
-                storage_path=get_gateway_root() / "credentials" / "federation.json"
-            ).get(connection_id)
-            headers["X-BoxTeam-Federation-Token"] = credential.token
-    elif target is not None:
-        backend_workspace_id = target.backend_workspace_id
-        if backend_workspace_id is None:
-            raise RuntimeError(
-                "本地 Gateway target 缺少 backend UUID，拒绝代理: "
-                f"workspace_id={target.workspace_id}"
-            )
-        headers["X-BoxTeam-Workspace-Id"] = backend_workspace_id
-        if include_credentials:
-            headers["X-Local-Token"] = LOCAL_TOKEN
+            headers.update(_registry(request).target_request_headers(target))
     elif include_credentials:
         headers["X-Local-Token"] = LOCAL_TOKEN
     return headers
@@ -378,53 +357,35 @@ async def _proxy_workspace_request(
     auth: GatewayAuthContext | None,
     user_access: UserAccessContext | None,
     include_credentials: bool,
-    target_workspace_id: str | None = None,
+    target_workspace_id: WorkspaceSelector | None = None,
     request_body: bytes | None = None,
     navigation_deadline_at: float | None = None,
 ) -> Response:
+    if "X-BoxTeam-Backend-Workspace-Id" in request.headers:
+        raise HTTPException(status_code=400, detail="旧 Backend 工作区身份头已失效，请使用同一工作区 UUID")
     requested_gateway_id = parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER))
-    requested_backend_workspace_id = request.headers.get(BACKEND_WORKSPACE_ID_HEADER)
-    if requested_backend_workspace_id is not None:
-        try:
-            validate_workspace_id(requested_backend_workspace_id)
-        except RuntimeError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
     registry = _registry(request)
     local_gateway_id = load_proxy_gateway_id()
-    if path.startswith("workspaces/"):
-        backend_workspace_id = path.split("/", 2)[1]
-        targets = [
-            target for target in registry.targets()
-            if target.backend_workspace_id == backend_workspace_id
-            and (target_workspace_id is None or target.workspace_id == target_workspace_id)
-            and (requested_gateway_id is None or workspace_owner(target, registry, local_gateway_id).gateway_id == requested_gateway_id)
-        ]
-        if not targets:
-            raise HTTPException(status_code=404, detail="workspace 未注册或不存在")
-        if len(targets) != 1:
-            raise HTTPException(status_code=409, detail="多个 Gateway target 指向同一 workspace")
-        # canonical 路径固定归属，普通选择头或当前激活态不能改选上游。
-        target_workspace_id = targets[0].workspace_id
-    workspace_id = target_workspace_id or request.headers.get("X-BoxTeam-Workspace-Id")
+    header_workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+    path_workspace_id = path.split("/", 2)[1] if path.startswith("workspaces/") else None
+    if path_workspace_id is not None and header_workspace_id is not None and path_workspace_id != header_workspace_id:
+        raise HTTPException(status_code=400, detail="路径与请求头的工作区 UUID 不一致")
+    requested_workspace_id = path_workspace_id if path_workspace_id is not None else header_workspace_id
     try:
-        target = registry.resolve(workspace_id)
+        if target_workspace_id is not None:
+            target = registry.resolve(target_workspace_id)
+            if requested_workspace_id is not None and target.workspace_id != requested_workspace_id:
+                raise ValueError("明确工作区目标与请求 UUID 不一致")
+            if requested_gateway_id is not None and target.gateway_id != requested_gateway_id:
+                raise ValueError("目标 Gateway 与选定工作区归属冲突")
+        else:
+            target = registry.resolve_request_target(requested_workspace_id, requested_gateway_id)
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    if requested_gateway_id is not None and requested_gateway_id != workspace_owner(target, registry, local_gateway_id).gateway_id:
-        raise HTTPException(status_code=400, detail="目标 Gateway 与选定工作区归属不一致")
-    if requested_backend_workspace_id is not None and (
-        target.connection_kind != "local"
-        or requested_backend_workspace_id != target.backend_workspace_id
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Gateway target 与 backend_workspace_id 不一致: "
-                f"workspace_id={target.workspace_id}, "
-                f"backend_workspace_id={requested_backend_workspace_id!r}"
-            ),
-        )
     proxy_target_to_proto(
+        gateway_id=target.gateway_id,
         workspace_id=target.workspace_id,
         service="workspace_api",
         path=f"/{path}",
@@ -479,7 +440,7 @@ async def _proxy_workspace_request(
     reference_streaming = False
     route_reference_released = False
     route_reference_handed_off = False
-    route_workspace_id = target.workspace_id
+    route_workspace_id = target.key
     route_lease = registry.acquire_route_reference(
         route_workspace_id,
         streaming=False,
@@ -500,7 +461,7 @@ async def _proxy_workspace_request(
             if attempt > 0:
                 await asyncio.sleep(retry_delays[attempt - 1])
                 target = registry.resolve(route_workspace_id)
-                route_workspace_id = target.workspace_id
+                route_workspace_id = target.key
                 release_route_reference()
                 route_lease = registry.acquire_route_reference(
                     route_workspace_id,
@@ -510,12 +471,11 @@ async def _proxy_workspace_request(
                 route_reference_released = False
             if (
                 target.connection_kind == "remote_gateway"
-                and target.remote_gateway_connection_id is not None
             ):
                 try:
                     target_url = build_upstream_url(
                         registry.remote_gateway_url(
-                            target.remote_gateway_connection_id
+                            registry.remote_connection_for_target(target).connection_id
                         ),
                         ("api", "v1"),
                         path,
@@ -529,7 +489,7 @@ async def _proxy_workspace_request(
                 await _wait_for_workspace_runtime(request, target)
                 try:
                     backend_url = registry.resolve_service_url(
-                        target.workspace_id,
+                        target.key,
                         "workspace_api",
                     )
                 except LookupError as error:
@@ -721,7 +681,7 @@ async def _proxy_context_request(
         if resource.gateway_authority is None and resource.scope == "workspace":
             targets = [
                 target for target in _registry(request).targets()
-                if target.connection_kind == "local" and target.backend_workspace_id == resource.scope_id
+                if target.connection_kind == "local" and target.workspace_id == resource.scope_id
             ]
             if not targets:
                 raise HTTPException(status_code=404, detail="上下文 workspace 未注册或不存在")

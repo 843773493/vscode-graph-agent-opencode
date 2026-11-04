@@ -43,37 +43,16 @@ def list_ssh_connection_options(
 ) -> list[SshConnectionOptionDTO]:
     options: list[SshConnectionOptionDTO] = []
     seen_boxteam_connections: set[tuple[str, int, str, str | None]] = set()
-    for target in registry.targets():
-        if (
-            target.connection_kind != "remote_gateway"
-            or target.remote_gateway_connection_id is None
-        ):
-            continue
-        connection = registry.remote_gateway_connection(
-            target.remote_gateway_connection_id
-        )
-        signature = (
-            connection.host,
-            connection.port,
-            connection.username,
-            connection.ssh_config_host,
-        )
+    for connection in registry.remote_gateway_connections():
+        signature = (connection.host, connection.port, connection.username, connection.ssh_config_host)
         if signature in seen_boxteam_connections:
             continue
         seen_boxteam_connections.add(signature)
-        options.append(
-            SshConnectionOptionDTO(
-                connection_id=f"boxteam:{target.workspace_id}",
-                source="boxteam",
-                label=target.name,
-                host=connection.host,
-                port=connection.port,
-                username=connection.username,
-                workspace_id=target.workspace_id,
-                ssh_config_host=connection.ssh_config_host,
-                initial_path=target.root_path,
-            )
-        )
+        options.append(SshConnectionOptionDTO(
+            connection_id=connection.connection_id, source="boxteam", label=connection.name,
+            host=connection.host, port=connection.port, username=connection.username,
+            ssh_config_host=connection.ssh_config_host,
+        ))
     for host in list_user_ssh_hosts():
         options.append(
             SshConnectionOptionDTO(
@@ -93,16 +72,8 @@ def resolve_ssh_connection_request(
     payload: AddRemoteGatewayRequest,
     registry: GatewayWorkspaceRegistry,
 ) -> ResolvedSshConnection:
-    if payload.connection_workspace_id:
-        target = registry.resolve(payload.connection_workspace_id)
-        if (
-            target.connection_kind != "remote_gateway"
-            or target.remote_gateway_connection_id is None
-        ):
-            raise ValueError("所选工作区不属于远程 Gateway 连接")
-        connection = registry.remote_gateway_connection(
-            target.remote_gateway_connection_id
-        )
+    if payload.connection_id:
+        connection = registry.remote_gateway_connection(payload.connection_id)
         return ResolvedSshConnection(
             host=connection.host,
             port=connection.port,

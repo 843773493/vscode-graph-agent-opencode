@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { listSessions } from "../../api";
 import type { Session } from "../../types/backend";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
@@ -30,7 +31,7 @@ export async function fetchWorkspaceSessionListSnapshot(
   workspaceTarget: GatewayWorkspaceRequestTarget,
   options: { force?: boolean } = {},
 ): Promise<WorkspaceSessionListSnapshot> {
-  const workspaceId = workspaceTarget.workspace_id;
+  const workspaceId = gatewayWorkspaceKey(workspaceTarget);
   const scopeKey = workspaceSessionScopeKey(apiPort, workspaceId);
   const inFlight = inFlightRequests.get(scopeKey);
   if (inFlight) {

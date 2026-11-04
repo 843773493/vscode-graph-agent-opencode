@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useState } from "react";
 import type { PersistentTaskDTO, TaskThreadTargetDTO } from "../../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
@@ -39,7 +40,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
     try {
       let targetUri: string | undefined;
       if (sessionId) {
-        const [workspace, main] = await Promise.all([getWorkspace(apiPort, target.workspace_id), getSessionMainThread(apiPort, sessionId, target)]);
+        const [workspace, main] = await Promise.all([getWorkspace(apiPort, gatewayWorkspaceKey(target)), getSessionMainThread(apiPort, sessionId, target)]);
         targetUri = `boxteam://workspace/${encodeURIComponent(workspace.workspace_id)}/resources/session/${encodeURIComponent(main.session_id)}/threads/${encodeURIComponent(main.thread_id)}`;
       }
       setEditor({ task: null, key: crypto.randomUUID(), template, targetUri });
@@ -84,7 +85,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
           {!newGoalSessionId ? <p className="persistent-task-hint">创建 Goal 前，请先选择当前工作区的会话。</p> : null}
           {preparing ? <p role="status">正在取得当前会话的工作目标…</p> : null}
           <button disabled={preparing} onClick={() => setEditor(null)}>取消新建</button>
-        </section> : editor?.template === "goal" && newGoalSessionId ? <TaskGoalDetail key={`${target.workspace_id}:${newGoalSessionId}`} apiPort={apiPort} workspaceId={target.workspace_id} sessionId={newGoalSessionId} revision={state.items.find((item) => item.goal?.session_id === newGoalSessionId)?.revision} />
+        </section> : editor?.template === "goal" && newGoalSessionId ? <TaskGoalDetail key={`${gatewayWorkspaceKey(target)}:${newGoalSessionId}`} apiPort={apiPort} workspaceId={gatewayWorkspaceKey(target)} sessionId={newGoalSessionId} revision={state.items.find((item) => item.goal?.session_id === newGoalSessionId)?.revision} />
         : editor && editor.template && editor.template !== "goal" ? <TaskEditor apiPort={apiPort} target={target} key={editor.key} template={editor.template} initialTargetUri={editor.targetUri} configuration={editor.task?.configuration ?? undefined} busy={state.busy}
           onCancel={() => setEditor(null)} onSave={async (configuration) => {
             // 首次提交冻结编辑开始时的版本；失败重读后，用户重试才采用最新版本，草稿不重建。
@@ -110,7 +111,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
             <dl><dt>触发方式</dt><dd>{taskSchedule(task)}</dd><dt>工作目标</dt><dd><code>{editable.action?.target_uri ?? editable.action?.generation?.session_strategy?.mode}</code></dd><dt>下次触发</dt><dd>{time(task.next_run_at)}</dd><dt>提示内容（当前定义）</dt><dd><pre>{editable.context?.content || "（由生成动作构造）"}</pre></dd></dl>
             <details><summary>高级信息与完整定义</summary><p>试运行会实际执行所属工作区的脚本或判断 Thread 的模型，仅检查条件，不执行后续工作动作。</p><code>任务 ID：{task.task_id}</code><pre>{JSON.stringify(editable, null, 2)}</pre></details>
           </> : task.goal ? <>
-            <TaskGoalDetail key={`${target.workspace_id}:${task.goal.session_id}`} apiPort={apiPort} workspaceId={target.workspace_id} sessionId={task.goal.session_id} revision={task.revision} />
+            <TaskGoalDetail key={`${gatewayWorkspaceKey(target)}:${task.goal.session_id}`} apiPort={apiPort} workspaceId={gatewayWorkspaceKey(target)} sessionId={task.goal.session_id} revision={task.revision} />
             <p className="persistent-task-hint">工作目标：关联会话的主线程</p>
             <button type="button" onClick={() => {
               setNavigationError(null);

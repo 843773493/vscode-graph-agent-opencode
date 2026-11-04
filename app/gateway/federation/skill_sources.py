@@ -45,7 +45,7 @@ class GatewaySkillSourcePort:
 
     def accepts_workspace(self, workspace_id: str) -> bool:
         return any(
-            target.connection_kind == "local" and target.backend_workspace_id == workspace_id
+            target.connection_kind == "local" and target.workspace_id == workspace_id
             for target in self._registry.targets()
         )
 

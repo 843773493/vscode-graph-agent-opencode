@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { describe, expect, test } from "bun:test";
 import { HttpRequestError } from "../../api/http";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
@@ -28,17 +29,13 @@ import {
 
 const BACKEND_WORKSPACE_ID = "ca3f2988-8632-4b4b-bcba-055e6f3d8a21";
 const PARTITION = {
-  gatewayId: "local:8014",
+  gatewayId: "gateway-test",
   workspaceId: BACKEND_WORKSPACE_ID,
   principal: "guest",
 };
 const PARTITION_KEY = `${PARTITION.gatewayId}\u0000${PARTITION.workspaceId}\u0000${PARTITION.principal}`;
-const GATEWAY_WORKSPACE_ID = "gateway-route-42";
-const WORKSPACE_TARGET: GatewayWorkspaceRequestTarget = {
-  workspace_id: GATEWAY_WORKSPACE_ID,
-  backend_workspace_id: BACKEND_WORKSPACE_ID,
-  connection_kind: "local",
-};
+const WORKSPACE_TARGET: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: BACKEND_WORKSPACE_ID };
+const GATEWAY_WORKSPACE_ID = gatewayWorkspaceKey(WORKSPACE_TARGET);
 const PORT = 48_901;
 type StoredCatalogOutboxOperation = CatalogOutboxStoredOperation["operation"];
 

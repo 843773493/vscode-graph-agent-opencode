@@ -17,29 +17,23 @@ export function buildWorkspaceAddGatewayChoices(
 ): WorkspaceAddGatewayChoice[] {
   let localWorkspaceCount = 0;
   const remoteGroups = new Map<string, {
-    remote: GatewayWorkspace["remote"];
+    remote: GatewayWorkspace["remote_gateways"][number];
     workspaceCount: number;
     hasReadyWorkspace: boolean;
     connectionError: string | null;
   }>();
   for (const workspace of workspaces) {
     if (workspace.connection_kind === "local") localWorkspaceCount += 1;
-    const connectionId = workspace.remote?.gateway_connection_id;
-    if (workspace.connection_kind !== "remote_gateway" || !connectionId) continue;
-    let group = remoteGroups.get(connectionId);
-    if (!group) {
-      group = {
-        remote: workspace.remote,
-        workspaceCount: 0,
-        hasReadyWorkspace: false,
-        connectionError: null,
-      };
-      remoteGroups.set(connectionId, group);
-    }
-    group.workspaceCount += 1;
-    if (!workspace.connection_error) group.hasReadyWorkspace = true;
-    if (group.connectionError === null && workspace.connection_error) {
-      group.connectionError = workspace.connection_error;
+    for (const remote of workspace.remote_gateways) {
+      const connectionId = remote.gateway_connection_id;
+      let group = remoteGroups.get(connectionId);
+      if (!group) {
+        group = { remote, workspaceCount: 0, hasReadyWorkspace: false, connectionError: null };
+        remoteGroups.set(connectionId, group);
+      }
+      group.workspaceCount += 1;
+      if (!workspace.connection_error) group.hasReadyWorkspace = true;
+      if (group.connectionError === null && workspace.connection_error) group.connectionError = workspace.connection_error;
     }
   }
 

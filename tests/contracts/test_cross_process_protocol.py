@@ -18,7 +18,7 @@ from app.protocol.codecs.workspace_events import (
     file_change_batch_to_proto,
 )
 from app.protocol.generated.boxteam.browser.v1 import browser_pb2
-from app.protocol.generated.boxteam.gateway.v1 import proxy_pb2
+from app.protocol.generated.boxteam.gateway.v2 import proxy_pb2
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
@@ -147,12 +147,14 @@ def test_representative_boundaries_round_trip_through_protobuf_wire() -> None:
     assert browser_page_to_json(decoded_browser) == browser_value
 
     proxy_wire = proxy_target_to_proto(
-        workspace_id="workspace_123",
+        gateway_id="gateway_00000000000040008000000000000001",
+        workspace_id="00000000-0000-4000-8000-000000000001",
         service="terminal",
         path="/api/terminals/terminal_123",
     ).SerializeToString()
     decoded_proxy = proxy_pb2.ProxyTarget.FromString(proxy_wire)
-    assert decoded_proxy.workspace_id == "workspace_123"
+    assert decoded_proxy.gateway_id == "gateway_00000000000040008000000000000001"
+    assert decoded_proxy.workspace_id == "00000000-0000-4000-8000-000000000001"
     assert decoded_proxy.service == "terminal"
     assert decoded_proxy.path == "/api/terminals/terminal_123"
 

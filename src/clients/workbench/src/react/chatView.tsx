@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTraceNavigation } from '../../../web/src/hooks/runtime/useTraceNavigation.js';
 import { useRequestLogNavigation } from '../../../web/src/hooks/runtime/useRequestLogNavigation.js';
@@ -35,8 +36,7 @@ import { HttpRequestError } from '../../../web/src/api/http.js';
 import { CachedThreadHistory } from './cachedThreadHistory.js';
 import SessionContextForkDialog from '../../../web/src/components/overlays/SessionContextForkDialog.js';
 import { useSessionForkDialog } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
-import { requireGatewayWorkspaceRoute } from '../../../web/src/api/workspaceIdentity.js';
-import { getGatewayHealth } from '../../../web/src/gatewayApi.js';
+import { requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { InternalDisplayProvenance } from '../../../web/src/types/backend.js';
 import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
@@ -61,18 +61,18 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
   const [resourceRatio, setResourceRatio] = useState(input.resourceRatio);
   const stopResize = useRef<(() => void) | null>(null);
   useEffect(() => () => stopResize.current?.(), []);
-  const onSessionCreated = useCallback(async (session: Session, routeId: string | null) => {
-    if (routeId !== owner.routeId || session.workspace_id !== owner.workspaceId || !session.thread_id) throw new Error('新建会话的工作区或主 Thread 归属不一致');
+  const onSessionCreated = useCallback(async (session: Session, workspaceKey: string | null) => {
+    if (workspaceKey !== owner.workspaceKey || session.workspace_id !== owner.workspaceId || !session.thread_id) throw new Error('新建会话的工作区或主 Thread 归属不一致');
     await editors.openEditor(new ThreadInput({ ...owner, sessionId: session.session_id, threadId: session.thread_id, title: session.title }), { pinned: true });
   }, [owner, editors]);
   const runtime = useThreadSessionRuntime({ owner, seed, active, onSessionCreated, onError });
   const { timeline, history, actions, state, content } = runtime;
   const [dismissedRequest, setDismissedRequest] = useState<LLMRequestLogMatchDTO>();
   const selectedRequest = requestLogNavigation !== dismissedRequest ? requestLogNavigation : undefined;
-  const requestNavigation = useRequestLogNavigation(0, owner.routeId, owner.sessionId, selectedRequest);
+  const requestNavigation = useRequestLogNavigation(0, owner.workspaceKey, owner.sessionId, selectedRequest);
   const [dismissedTrace, setDismissedTrace] = useState<TraceMatchDTO>();
   const selectedTrace = traceNavigation !== dismissedTrace ? traceNavigation : undefined;
-  const traceLocation = useTraceNavigation(0, owner.routeId, owner.sessionId, owner.threadId, selectedTrace);
+  const traceLocation = useTraceNavigation(0, owner.workspaceKey, owner.sessionId, owner.threadId, selectedTrace);
   const [outlinePreview, setOutlinePreview] = useState(false);
   const contentView = outlinePreview ? 'default' : traceLocation ? 'events' : requestNavigation ? 'requests' : state.contentView;
   const connectViewport = useCallback((controller: TurnViewportController | undefined) => {
@@ -90,14 +90,13 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
     } : undefined);
   }, [content.switchContentView, onError, onViewportReady, outlinePreview, requestLogNavigation, state.contentView, traceNavigation]);
   const fork = useSessionForkDialog({ apiPort: 0,
-    sessionsByWorkspace: new Map([[owner.routeId, state.currentSession ? [state.currentSession] : []]]),
+    sessionsByWorkspace: new Map([[owner.workspaceKey, state.currentSession ? [state.currentSession] : []]]),
     forkSessionContext: runtime.lifecycle.forkSessionContext,
     readSessionSelectionIntent: () => runtime.selectionIntentRef.current,
     invalidateSessionCatalog: () => { void content.refreshSessionResources(owner.sessionId, { force: true }); },
     onForkCreated: async (_source, result) => {
-      const health = await getGatewayHealth(0);
-      const target = requireGatewayWorkspaceRoute(state.gatewayWorkspaces, health.gateway_id, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id });
-      await editors.openEditor(new ThreadInput({ gatewayId: result.target_gateway_id, routeId: target.workspace_id, workspaceId: result.session.workspace_id,
+      const target = requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id });
+      await editors.openEditor(new ThreadInput({ gatewayId: result.target_gateway_id, workspaceKey: gatewayWorkspaceKey(target), workspaceId: result.session.workspace_id,
         sessionId: result.session.session_id, threadId: result.thread_id, title: result.session.title }), { pinned: true });
     },
   });
@@ -117,7 +116,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
     error={timeline.error}
     onRetry={history.refreshTurnHistory} />;
   return <WarmConfirmProvider><ComposerContext.Provider value={runtime.composerValue}>
-    <WorkspaceFileReferenceProvider apiPort={0} workspaceId={owner.routeId} onOpen={(file, reference) => {
+    <WorkspaceFileReferenceProvider apiPort={0} workspaceId={owner.workspaceKey} onOpen={(file, reference) => {
       const root = resourceFileRootUri(file.path);
       if (!root) throw new Error('消息引用文件缺少后端资源根 URI');
       void editors.openEditor({ resource: workspaceFileUri(owner, file.path, root), options: {
@@ -130,7 +129,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
         {contentView === 'agent' ? '会话主线程上下文' : '会话级 LLM 请求记录'} · {state.currentSession?.title ?? owner.title}
       </div> : null}
       <ContentViewSlots error={null} isBootstrapping={false} onRetryGatewayState={async () => { history.refreshTurnHistory(); }}
-        contentView={contentView} apiPort={0} workspaceId={owner.routeId}
+        contentView={contentView} apiPort={0} workspaceId={owner.workspaceKey}
         session={state.currentSession} sessionId={owner.sessionId} hasActiveSession activeSessionCacheKey={runtime.scopeKey}
         expandedDetails={state.expandDetails}
         agentStateJsonl={state.agentStateJsonl} agentStateMessageCount={state.agentStateMessageCount}
@@ -154,8 +153,8 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
         onLoadAgentStateMessageRawContent={content.loadAgentStateMessageRawContent}
         onRetryHistory={history.refreshTurnHistory} onReplayTurn={actions.replayTurn} onOpenChanges={openChanges}
         onForkConversation={point => {
-          if (point.workspaceId !== owner.routeId || point.sessionId !== owner.sessionId || point.threadId !== owner.threadId) throw new Error('消息分支来源与当前 Thread 不一致');
-          void fork.forkSession(owner.routeId, owner.sessionId, point);
+          if (point.workspaceId !== owner.workspaceKey || point.sessionId !== owner.sessionId || point.threadId !== owner.threadId) throw new Error('消息分支来源与当前 Thread 不一致');
+          void fork.forkSession(owner.workspaceKey, owner.sessionId, point);
         }}
         onOpenChildReport={source => {
           if (source.source_session_id !== owner.sessionId || !source.source_thread_id || !source.source_execution_id) throw new Error('报告来源不属于当前会话的精确子线程执行');
@@ -183,7 +182,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
         }, () => { stopResize.current = null; });
       }} /> : null}
       <ResourceView input={input} runtime={runtime} editors={editors} active={active} attachment={attachment} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
-        reportRequest={reportRequest} onForkThread={(threadId, point) => { void fork.forkSession(owner.routeId, owner.sessionId, { ...point, threadId }); }} /></div>
+        reportRequest={reportRequest} onForkThread={(threadId, point) => { void fork.forkSession(owner.workspaceKey, owner.sessionId, { ...point, threadId }); }} /></div>
     <SessionContextForkDialog state={fork.forkDialog} onCancel={fork.closeForkDialog} onSubmit={fork.submitForkDialog} onSelectionChange={fork.updateForkDialogSelection} />
     </WorkspaceFileReferenceProvider>
   </ComposerContext.Provider></WarmConfirmProvider>;
@@ -200,9 +199,9 @@ function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, o
     let disposed = false;
     let cacheOwner: ThreadHistoryOwner | undefined;
     setError(null);
-    const cacheLoad = browserGatewayId(0).then(async gatewayId => {
-      cacheOwner = { gatewayId, workspaceId: owner.workspaceId, sessionId: owner.sessionId, threadId: owner.threadId };
-      const timeline = await threadHistoryCache.read(cacheOwner, JSON.stringify([owner.routeId, owner.sessionId, owner.threadId]));
+    const cacheLoad = Promise.resolve().then(async () => {
+      cacheOwner = { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId, sessionId: owner.sessionId, threadId: owner.threadId };
+      const timeline = await threadHistoryCache.read(cacheOwner, JSON.stringify([owner.workspaceKey, owner.sessionId, owner.threadId]));
       if (!disposed) setCached(timeline);
       return timeline;
     }).catch((cause: unknown) => {
@@ -212,7 +211,7 @@ function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, o
     const initialize = async () => {
       await gateway.assertWorkspace(owner);
       const [session, agents, access, workspaces, settings, browserViewScope] = await Promise.all([
-        getSession(0, owner.sessionId, owner.routeId), listAgents(0, owner.routeId),
+        getSession(0, owner.sessionId, owner.workspaceKey), listAgents(0, owner.workspaceKey),
         ensureGatewayUserAccess(0), gateway.workspaces(), getBrowserUiSettings(0), browserGatewayId(0),
       ]);
       if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error('会话编辑器初始化归属不一致');

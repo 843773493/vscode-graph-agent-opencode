@@ -47,20 +47,20 @@ logger = logging.getLogger(__name__)
 
 
 def validate_workspace_health_identity(
-    payload: object, backend_workspace_id: str,
+    payload: object, workspace_id: str,
 ) -> dict[str, object]:
     """健康身份校验只公开已绑定的 UUID，响应原值留在 Gateway 诊断。"""
 
     if not isinstance(payload, dict):
         raise TypeError("Workspace 健康响应必须是 JSON 对象")
     actual_workspace_id = payload.get("workspace_id")
-    if actual_workspace_id != backend_workspace_id:
+    if actual_workspace_id != workspace_id:
         logger.error(
             "Workspace 健康响应 backend UUID 不匹配: expected=%s, actual=%r",
-            backend_workspace_id, actual_workspace_id,
+            workspace_id, actual_workspace_id,
         )
         raise RuntimeError(
-            f"Workspace 健康响应 backend UUID 不匹配: expected={backend_workspace_id}"
+            f"Workspace 健康响应 backend UUID 不匹配: expected={workspace_id}"
         )
     return payload
 
@@ -96,14 +96,14 @@ async def wait_for_workspace_config_proof(
     url: str,
     process: object | None,
     *,
-    backend_workspace_id: str,
+    workspace_id: str,
     expected_proof: dict[str, object],
     request_timeout_seconds: float = 2,
     poll_interval_seconds: float = 0.5,
 ) -> None:
     """等待 Workspace 返回身份及 pending candidate 均匹配的健康证明。"""
 
-    _validate_backend_workspace_id(backend_workspace_id)
+    _validate_workspace_id(workspace_id)
     deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
     async with httpx.AsyncClient(timeout=request_timeout_seconds, trust_env=False) as client:
@@ -114,7 +114,7 @@ async def wait_for_workspace_config_proof(
             try:
                 response = await client.get(
                     url,
-                    headers=_workspace_backend_headers(backend_workspace_id),
+                    headers=_workspace_backend_headers(workspace_id),
                 )
             except httpx.HTTPError as error:
                 last_error = error
@@ -123,7 +123,7 @@ async def wait_for_workspace_config_proof(
                     logger.error("Workspace config 健康检查失败: url=%s, status=%s, body=%s", url, response.status_code, response.text)
                     last_error = RuntimeError(f"健康检查返回 {response.status_code}")
                 else:
-                    payload = validate_workspace_health_identity(response.json(), backend_workspace_id)
+                    payload = validate_workspace_health_identity(response.json(), workspace_id)
                     proof = payload.get("config_proof")
                     if not isinstance(proof, dict):
                         raise TypeError("Workspace 健康响应缺少 config_proof")
@@ -148,7 +148,7 @@ async def wait_for_workspace_config_proof(
 
 async def wait_for_workspace_health(
     url: str,
-    backend_workspace_id: str,
+    workspace_id: str,
     process: object | None = None,
     *,
     request_timeout_seconds: float = 2,
@@ -156,7 +156,7 @@ async def wait_for_workspace_health(
 ) -> dict[str, object]:
     """等待显式寻址的 Workspace API 健康，并核对后端 UUID。"""
 
-    _validate_backend_workspace_id(backend_workspace_id)
+    _validate_workspace_id(workspace_id)
     deadline = asyncio.get_running_loop().time() + GATEWAY_PROCESS_READY_TIMEOUT_SECONDS
     last_error: Exception | None = None
     async with httpx.AsyncClient(timeout=request_timeout_seconds, trust_env=False) as client:
@@ -167,7 +167,7 @@ async def wait_for_workspace_health(
             try:
                 response = await client.get(
                     url,
-                    headers=_workspace_backend_headers(backend_workspace_id),
+                    headers=_workspace_backend_headers(workspace_id),
                 )
             except httpx.HTTPError as error:
                 last_error = error
@@ -176,7 +176,7 @@ async def wait_for_workspace_health(
                     logger.error("Workspace 健康检查失败: url=%s, status=%s, body=%s", url, response.status_code, response.text)
                     last_error = RuntimeError(f"健康检查返回 {response.status_code}")
                 else:
-                    return validate_workspace_health_identity(response.json(), backend_workspace_id)
+                    return validate_workspace_health_identity(response.json(), workspace_id)
             await asyncio.sleep(poll_interval_seconds)
     detail = f"，最后错误: {last_error}" if last_error else ""
     raise TimeoutError(
@@ -185,7 +185,7 @@ async def wait_for_workspace_health(
     )
 
 
-def _validate_backend_workspace_id(workspace_id: str) -> str:
+def _validate_workspace_id(workspace_id: str) -> str:
     try:
         return validate_workspace_id(workspace_id)
     except RuntimeError as error:
@@ -195,7 +195,7 @@ def _validate_backend_workspace_id(workspace_id: str) -> str:
 def _workspace_backend_headers(workspace_id: str) -> dict[str, str]:
     return {
         "X-Local-Token": "local-dev-token",
-        "X-BoxTeam-Workspace-Id": _validate_backend_workspace_id(workspace_id),
+        "X-BoxTeam-Workspace-Id": _validate_workspace_id(workspace_id),
     }
 
 
@@ -239,10 +239,10 @@ async def _adopt_local_node_service(
     *,
     service_url: str,
     service_name: str,
-    backend_workspace_id: str,
+    workspace_id: str,
     log_dir: Path,
 ) -> AdoptedManagedProcess | None:
-    _validate_backend_workspace_id(backend_workspace_id)
+    _validate_workspace_id(workspace_id)
     parsed = urlparse(service_url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
         raise ValueError(
@@ -264,11 +264,11 @@ async def _adopt_local_node_service(
     payload = response.json()
     if not isinstance(payload, dict):
         raise TypeError(f"持久化 {service_name} 健康响应必须是 JSON 对象: {service_url}")
-    if payload.get("workspace_id") != backend_workspace_id:
-        logger.error("持久化 %s backend UUID 不匹配: expected=%s, actual=%r", service_name, backend_workspace_id, payload.get("workspace_id"))
+    if payload.get("workspace_id") != workspace_id:
+        logger.error("持久化 %s backend UUID 不匹配: expected=%s, actual=%r", service_name, workspace_id, payload.get("workspace_id"))
         raise RuntimeError(
             f"持久化 {service_name} backend UUID 不匹配: "
-            f"url={service_url}, expected={backend_workspace_id}"
+            f"url={service_url}, expected={workspace_id}"
         )
     process_id = payload.get("process_id")
     if isinstance(process_id, bool) or not isinstance(process_id, int):
@@ -331,7 +331,7 @@ async def verify_managed_backend_group(
     request_timeout_seconds: float = 2, poll_interval_seconds: float = 0.5,
 ) -> int:
     """只在完整集合的 UUID、根摘要、generation、健康与候选 proof 全部通过后返回。"""
-    if tuple(mount.workspace_id for mount in mounts) != tuple(member.backend_workspace_id for member in contract.members):
+    if tuple(mount.workspace_id for mount in mounts) != tuple(member.workspace_id for member in contract.members):
         raise RuntimeError("Backend 启动输入与完整成员身份不匹配")
     manifest_digest = mounted_workspace_manifest_digest(mounts)
     process_id = None
@@ -388,7 +388,7 @@ async def _start_member_auxiliary_services(
     preserve_mount_urls: bool = False,
     logging_startup: dict[str, object] | None = None,
 ) -> WorkspaceRuntime:
-    runtime = runtime or WorkspaceRuntime(service_urls={}, backend_workspace_id=mount.workspace_id)
+    runtime = runtime or WorkspaceRuntime(service_urls={}, workspace_id=mount.workspace_id)
     started: list[str] = []
     try:
         for service, url, node_service in (
@@ -401,7 +401,7 @@ async def _start_member_auxiliary_services(
                 existing = None
             if existing is None:
                 adopted = await _adopt_local_node_service(
-                    service_url=url, service_name=service, backend_workspace_id=mount.workspace_id,
+                    service_url=url, service_name=service, workspace_id=mount.workspace_id,
                     log_dir=log_dir,
                 ) if url else None
                 # 同一 generation 的恢复必须保持原完整 manifest 的辅助服务地址。
@@ -461,6 +461,8 @@ async def start_managed_backend_runtime(
 ) -> tuple[ManagedBackendContract, dict[str, WorkspaceRuntime]]:
     """唯一 owner 持有启动句柄；完整候选合同仅由 registry 公布。"""
     previous = mount_contract or owner.contract
+    if previous.gateway_id != registry.gateway_id:
+        raise RuntimeError("managed Backend 完整组不属于当前 Gateway")
     mounts = registry.resolve_backend_mounts(previous)
     await validate_managed_backend_bindings(mounts, project_root)
     if owner.process is not None or owner.unpublished_runtimes:
@@ -492,7 +494,7 @@ async def start_managed_backend_runtime(
         for member, mount in zip(previous.members, mounts, strict=True):
             runtime = runtimes.get(member.workspace_id)
             if runtime is None:
-                runtime = WorkspaceRuntime(service_urls={}, backend_workspace_id=member.backend_workspace_id)
+                runtime = WorkspaceRuntime(service_urls={}, workspace_id=member.workspace_id)
                 owner.unpublished_runtimes[member.workspace_id] = runtime
                 runtimes[member.workspace_id] = runtime
             await _start_member_auxiliary_services(

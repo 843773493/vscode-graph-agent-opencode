@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useCallback } from "react";
 import {
   createSession as apiCreateSession,
@@ -5,7 +6,6 @@ import {
   forkSessionContext as apiForkSessionContext,
   listSessions as apiListSessions,
 } from "../../../api";
-import { getGatewayHealth } from "../../../gatewayApi";
 import type { SessionForkRequest } from "../../../types/backend";
 import { cloneMaps } from "../../../state/appStateMaps";
 import { sessionScopeKey } from "../../../state/session/sessionScope";
@@ -13,7 +13,7 @@ import { appendFrontendEvent } from "../../../state/traceEvents";
 import { resetAgentStateFields } from "../../runtime/useAgentStateSnapshot";
 import { resetSessionScopedFields } from "../sessionScopedState";
 import { errorMessage } from "../../../utils/errorMessage";
-import { requireGatewayWorkspaceRoute } from "../../../api/workspaceIdentity";
+import { requireGatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import type { SessionLifecycleContext } from "./sessionLifecycleContext";
 import {
   currentSessionMatchesOwner,
@@ -51,7 +51,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
           const resolvedWorkspaceId =
             targetWorkspaceId ?? prev.activeGatewayWorkspaceId;
           const workspace = prev.gatewayWorkspaces.find(
-            (item) => item.workspace_id === resolvedWorkspaceId,
+            (item) => gatewayWorkspaceKey(item) === resolvedWorkspaceId,
           );
           const previousWorkspaceSessions = resolvedWorkspaceId
             ? prev.sessionsByWorkspace.get(resolvedWorkspaceId) ?? []
@@ -126,16 +126,15 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
       }));
 
       try {
-        const health = await getGatewayHealth(apiPort);
         const result = await apiForkSessionContext(
           apiPort,
           sourceSessionId,
           request,
           workspaceId,
         );
-        const targetWorkspaceId = requireGatewayWorkspaceRoute(
-          workspaceRequestTargets, health.gateway_id, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id },
-        ).workspace_id;
+        const targetWorkspaceId = gatewayWorkspaceKey(requireGatewayWorkspaceRequestTarget(
+          workspaceRequestTargets, { gatewayId: result.target_gateway_id, workspaceId: result.session.workspace_id },
+        ));
         setState((prev) => {
           const next = cloneMaps(prev);
           const sessions = prev.sessionsByWorkspace.get(targetWorkspaceId) ?? [];

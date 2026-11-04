@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { getSession } from "../../api/session/sessions";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { applySessionListConvergence, hasSessionOwner, mergeSessionListPage, replaceSessionMetadata } from "../../state/session/sessions";
@@ -60,7 +61,7 @@ export async function refreshWorkspaceSessionList(
   if (!workspaceTarget) {
     throw new Error("刷新工作区会话列表时缺少 workspace_id");
   }
-  const workspaceId = workspaceTarget.workspace_id;
+  const workspaceId = gatewayWorkspaceKey(workspaceTarget);
   const snapshot = await fetchWorkspaceSessionListSnapshot(
     apiPort,
     workspaceTarget,

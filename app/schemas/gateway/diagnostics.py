@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.gateway.workspaces import GatewayConnectionKind, GatewayWorkspaceStatus
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.runtime_logging import RuntimeLoggingService
 
 GatewayDiagnosticStatus = Literal["ready", "degraded", "offline"]
@@ -19,7 +20,7 @@ GatewayDiagnosticLogSource = Literal["gateway", "workspace"]
 class GatewayHealthDTO(BaseModel):
     gateway_id: str
     status: Literal["ok"] = "ok"
-    active_workspace_id: str | None = None
+    active_workspace: GatewaySearchWorkspaceOwnerDTO | None = None
     process_id: int = Field(gt=0)
     development_restart_available: bool = False
 

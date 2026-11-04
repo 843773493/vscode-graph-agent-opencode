@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { OverlayRootContext } from "../overlays/OverlayRootContext";
@@ -19,7 +20,7 @@ export default function WorkspaceRenameDialog({
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const workspaceId = workspace?.workspace_id ?? null;
+  const workspaceId = nullableGatewayWorkspaceKey(workspace);
   const workspaceName = workspace?.name ?? null;
 
   useEffect(() => {
@@ -44,7 +45,7 @@ export default function WorkspaceRenameDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await onSubmit(workspace.workspace_id, normalizedName);
+      await onSubmit(gatewayWorkspaceKey(workspace), normalizedName);
       onClose();
     } catch (submitError) {
       setError(

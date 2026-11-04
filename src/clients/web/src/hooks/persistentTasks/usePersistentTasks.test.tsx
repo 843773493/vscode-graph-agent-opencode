@@ -4,7 +4,7 @@ import * as api from "../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { usePersistentTasks } from "./usePersistentTasks";
 
-const target: GatewayWorkspaceRequestTarget = { workspace_id: "gateway-one", backend_workspace_id: "backend-one", connection_kind: "local" };
+const target: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: "backend-one" };
 const original: api.PersistentTaskDTO = {
   task_id: "task-one", workspace_id: "backend-one", revision: 1, definition_revision: 1,
   application_type: "automation", application_version: "1", configuration: {
@@ -73,7 +73,7 @@ test("切换后端工作区后不保留旧详情，旧订阅和动作闭包均�
   const previous = value;
   const stream = streams[0];
   records = [{ ...original, workspace_id: "backend-two", task_id: "task-two" }];
-  await act(async () => { renderer.update(<Probe owner={{ ...target, backend_workspace_id: "backend-two" }} />); });
+  await act(async () => { renderer.update(<Probe owner={{ ...target, workspace_id: "backend-two" }} />); });
   expect(stream.signal.aborted).toBe(true);
   expect(value.selected).toBeNull();
   await act(async () => { stream.publish(snapshot([original])); await previous.control(original, "pause"); });

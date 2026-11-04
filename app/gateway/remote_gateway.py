@@ -16,7 +16,6 @@ from app.gateway.credentials import (
 from app.gateway.federation import (
     FEDERATION_PROTOCOL_VERSION,
     RemoteGatewayConnection,
-    build_projected_workspace_id,
     build_remote_gateway_connection_id,
     discover_remote_gateway,
     obtain_pairing_credential_over_ssh,
@@ -93,28 +92,16 @@ def _projected_workspace_targets(
             or str(remote["workspace_id"]) not in affected or not set(affected).issubset(remote_ids)
         ):
             raise ValueError("远程 Gateway 完整 Backend generation/成员合同非法")
-        remote_workspace_id = str(remote["workspace_id"])
-        workspace_id = build_projected_workspace_id(
-            connection.connection_id,
-            remote_workspace_id,
-        )
-        existing = (
-            registry.resolve(workspace_id)
-            if registry.has_target(workspace_id)
-            else None
-        )
+        workspace_id = str(remote["workspace_id"])
+        key = (connection.remote_gateway_id, workspace_id)
+        existing = registry.resolve(key) if registry.has_target(key) else None
         keep_existing_name = bool(
             preserve_custom_names and existing is not None and existing.name_customized
-        )
-        effective_cursor = (
-            remote_config_event_cursor
-            if remote_config_event_cursor is not None
-            else (existing.remote_config_event_cursor if existing is not None else None)
         )
         projected.append(
             WorkspaceTarget(
                 workspace_id=workspace_id,
-                backend_workspace_id=remote["backend_workspace_id"],
+                gateway_id=connection.remote_gateway_id,
                 name=(
                     existing.name
                     if keep_existing_name and existing is not None
@@ -129,14 +116,11 @@ def _projected_workspace_targets(
                 backend_url=gateway_url,
                 connection_kind="remote_gateway",
                 owner="remote_projection",
-                connection_id=connection.connection_id,
                 managed=bool(remote.get("managed", False)),
-                remote_gateway_connection_id=connection.connection_id,
-                remote_workspace_id=remote_workspace_id,
-                remote_config_event_cursor=effective_cursor,
+                remote_gateway_connection_ids=(connection.connection_id,),
                 remote_backend_generation=generation,
                 remote_affected_workspace_ids=tuple(
-                    build_projected_workspace_id(connection.connection_id, member_id) for member_id in affected
+                    str(member_id) for member_id in affected
                 ),
                 remote_service_names=tuple(
                     str(service)

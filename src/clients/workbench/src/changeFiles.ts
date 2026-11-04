@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../web/src/api/workspaceIdentity.js";
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { Disposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { ILanguageService } from '../upstream/src/vs/editor/common/languages/language.js';
@@ -37,7 +38,7 @@ export class ChangeDocuments extends Disposable implements ITextModelContentProv
         const target = await gateway.resolveWorkspaceTarget(owner);
         if (target.status !== 'ready') throw new Error(`更改工作区当前不可用（${target.status}），请明确启动或连接`);
         const data = await gateway.request<SessionChangesetDTO>(`/api/v1/sessions/${encodeURIComponent(owner.sessionId)}/changesets/${encodeURIComponent(changesetId)}`,
-          { headers: gatewayWorkspaceRequestHeaders(target) }, target.workspace_id);
+          { headers: gatewayWorkspaceRequestHeaders(target) }, gatewayWorkspaceKey(target));
         if (data.session_id !== owner.sessionId || data.changeset_id !== changesetId) throw new Error('更改响应 owner 不匹配');
         return data;
       })().finally(() => this.pending.delete(key));

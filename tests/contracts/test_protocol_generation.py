@@ -1,6 +1,6 @@
 from google.protobuf import descriptor_pb2
 
-from app.protocol.generated.boxteam.gateway.v1 import public_pb2 as gateway_pb2
+from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     job_pb2,
     public_pb2,
@@ -185,6 +185,46 @@ def test_communication_wire_uses_one_destination_for_existing_resource_and_fork_
     assert not navigation.HasField("fork_target")
     assert navigation.navigation_target.gateway_id == "gateway-navigation"
     assert navigation.navigation_target.uri == value.navigation_target.uri
+
+
+def test_gateway_v2_keeps_uuid_scoped_by_complete_owner() -> None:
+    workspace_id = "00000000-0000-4000-8000-000000000001"
+    owners = [
+        gateway_pb2.GatewaySearchWorkspaceOwnerDTO(gateway_id=gateway_id, workspace_id=workspace_id)
+        for gateway_id in ("gateway-a", "gateway-b")
+    ]
+    value = gateway_pb2.GatewayWorkspaceListDTO(
+        active_workspace=owners[1],
+        items=[gateway_pb2.GatewayWorkspaceDTO(
+            gateway_id=owner.gateway_id, workspace_id=owner.workspace_id,
+            parent_workspace=owners[0] if index else None,
+            remote_gateways=[
+                gateway_pb2.GatewayRemoteConnectionSummaryDTO(gateway_connection_id=connection_id, gateway_id=owner.gateway_id)
+                for connection_id in ("connection-first", "connection-second")
+            ],
+        ) for index, owner in enumerate(owners)],
+    )
+    decoded = type(value).FromString(value.SerializeToString())
+    assert decoded.DESCRIPTOR.file.package == "boxteam.gateway.v2"
+    assert [item.workspace_id for item in decoded.items] == [workspace_id, workspace_id]
+    assert [item.gateway_id for item in decoded.items] == ["gateway-a", "gateway-b"]
+    assert decoded.active_workspace == owners[1]
+    assert decoded.items[1].parent_workspace == owners[0]
+    assert [remote.gateway_connection_id for remote in decoded.items[1].remote_gateways] == [
+        "connection-first", "connection-second",
+    ]
+    reorder = gateway_pb2.ReorderGatewayWorkspacesRequest(workspaces=list(reversed(owners)))
+    assert type(reorder).FromString(reorder.SerializeToString()).workspaces == list(reversed(owners))
+    for message_type, removed_names in (
+        (gateway_pb2.GatewayWorkspaceDTO, {"backend_workspace_id", "parent_workspace_id", "remote"}),
+        (gateway_pb2.GatewayWorkspaceListDTO, {"active_workspace_id"}),
+        (gateway_pb2.ReorderGatewayWorkspacesRequest, {"workspace_ids"}),
+        (gateway_pb2.FederationWorkspaceDTO, {"backend_workspace_id"}),
+    ):
+        descriptor = descriptor_pb2.DescriptorProto()
+        message_type.DESCRIPTOR.CopyToProto(descriptor)
+        assert removed_names <= set(descriptor.reserved_name)
+        assert not removed_names.intersection(message_type.DESCRIPTOR.fields_by_name)
 
 
 def test_gateway_complete_backend_group_request_and_results_preserve_wire_contract() -> None:

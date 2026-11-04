@@ -21,6 +21,7 @@ import type {
   SessionCatalogOutboxSnapshot,
 } from "../../../hooks/session/sessionCatalogOutboxRuntime";
 import { errorMessage } from "../../../utils/errorMessage";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 
 export interface TestCatalogMutationResult {
   state?: "committed" | "rejected" | "cancelled" | "dependency_failed";
@@ -77,9 +78,7 @@ export function createSessionCatalogOutboxTestRuntime(options: {
     workspaceTarget,
     access,
   ) => {
-    const gatewayWorkspaceId = workspaceTarget.workspace_id;
-    const backendWorkspaceId = workspaceTarget.backend_workspace_id;
-    if (!backendWorkspaceId) throw new Error("测试 Gateway workspace target 缺少 backend_workspace_id");
+    const gatewayWorkspaceId = gatewayWorkspaceKey(workspaceTarget);
     const principal = access.kind === "guest"
       ? "guest"
       : access.user_id ? `user:${access.user_id}` : "";
@@ -89,8 +88,8 @@ export function createSessionCatalogOutboxTestRuntime(options: {
     if (existing) return existing;
 
     let outbox = createCatalogOutbox({
-      gatewayId: "gateway-test",
-      workspaceId: backendWorkspaceId,
+      gatewayId: workspaceTarget.gateway_id,
+      workspaceId: workspaceTarget.workspace_id,
       principal,
     });
     let handle!: SessionCatalogOutboxHandle;
@@ -169,7 +168,7 @@ export function createSessionCatalogOutboxTestRuntime(options: {
   ) => {
     const handle = await openWorkspace(workspaceTarget, access);
     const operationId = `test_catalog_operation_${nextOperationId++}`;
-    submitted.push({ workspaceId: workspaceTarget.workspace_id, intent, options: intentOptions });
+    submitted.push({ workspaceId: gatewayWorkspaceKey(workspaceTarget), intent, options: intentOptions });
     const { dispatch } = await handle.driver.applyIntent(operationId, intent, intentOptions);
     void dispatch.catch((error: unknown) => errors.push(String(error)));
     return {

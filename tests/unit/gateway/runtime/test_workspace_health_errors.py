@@ -18,6 +18,8 @@ from app.gateway.runtime.managed_backend import (
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.runtime.workspace_process import start_local_node_service_process
 
+GATEWAY_ID = "gateway_00000000000040008000000000000001"
+
 UUID = "00000000-0000-4000-8000-000000000001"
 URL = "http://127.0.0.1:41000"
 
@@ -50,13 +52,13 @@ async def test_invalid_bound_identity_is_rejected_without_io_or_public_input(
         if entry == "wait":
             await local_workspace.wait_for_workspace_health(URL, invalid_backend_identity)
         elif entry == "config-wait":
-            await local_workspace.wait_for_workspace_config_proof(URL, None, backend_workspace_id=invalid_backend_identity, expected_proof={})
+            await local_workspace.wait_for_workspace_config_proof(URL, None, workspace_id=invalid_backend_identity, expected_proof={})
         elif entry == "adopt":
-            await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=invalid_backend_identity, log_dir=tmp_path / "logs")
+            await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", workspace_id=invalid_backend_identity, log_dir=tmp_path / "logs")
         elif entry == "proxy":
-            registry.target_request_headers(WorkspaceTarget(
-                workspace_id="bound-target", name="目标", root_path=str(tmp_path),
-                backend_url=URL, backend_workspace_id=invalid_backend_identity, connection_kind="local",
+            registry.target_request_headers(WorkspaceTarget(gateway_id=GATEWAY_ID,
+                workspace_id=invalid_backend_identity, name="目标", root_path=str(tmp_path),
+                backend_url=URL,  connection_kind="local",
             ))
         else:
             start_local_node_service_process(
@@ -99,7 +101,7 @@ def health_http(monkeypatch: pytest.MonkeyPatch, health_payload: dict[str, objec
 
 @pytest.fixture
 def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
-    return GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
+    return GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json")
 
 
 @pytest.mark.asyncio
@@ -108,19 +110,19 @@ async def test_invalid_health_identity_is_rejected_before_followup_publication(
     health_http: list[httpx.Request], registry: GatewayWorkspaceRegistry,
     invalid_identity: object, entry: str, tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    target = WorkspaceTarget(
-        workspace_id="workspace-test", name="测试", root_path=str(tmp_path),
-        backend_workspace_id=UUID, backend_url=URL, connection_kind="local",
+    target = WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=UUID, name="测试", root_path=str(tmp_path),
+         backend_url=URL, connection_kind="local",
     )
     expected = f"Workspace 健康响应 backend UUID 不匹配: expected={UUID}"
     if entry == "list":
         registry.upsert(target, runtime=WorkspaceRuntime(service_urls={"workspace_api": URL}))
         item, = await registry.list_dtos()
         assert item.status == "offline"
-        assert item.backend_workspace_id == UUID
+        assert item.workspace_id == UUID
         assert item.services["workspace_api"].status == "offline"
         assert item.services["workspace_api"].error == (
-            "工作区健康检查失败: workspace_id=workspace-test: stage=workspace_health, error=RuntimeError"
+            "工作区健康检查失败: workspace_id=00000000-0000-4000-8000-000000000001: stage=workspace_health, error=RuntimeError"
         )
         record, = [record for record in caplog.records if record.name == "app.core.failures"]
         assert record.exc_info is not None
@@ -133,13 +135,13 @@ async def test_invalid_health_identity_is_rejected_before_followup_publication(
                 await local_workspace.wait_for_workspace_health(URL, UUID)
             elif entry == "config-wait":
                 await local_workspace.wait_for_workspace_config_proof(
-                    URL, None, backend_workspace_id=UUID, expected_proof={},
+                    URL, None, workspace_id=UUID, expected_proof={},
                 )
             elif entry == "pending":
                 controller = GatewayWorkspaceRuntimeController(registry=registry, project_root=tmp_path, log_dir=tmp_path)
                 await controller._resolve_pending_restart(target, candidate_ref="pending", request_id="health-test")
             else:
-                await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=UUID, log_dir=tmp_path / "logs")
+                await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", workspace_id=UUID, log_dir=tmp_path / "logs")
         message = str(failure.value)
         assert "backend UUID 不匹配" in message and f"expected={UUID}" in message
         assert "actual=" not in message and "private-health-marker" not in message
@@ -151,7 +153,7 @@ async def test_invalid_health_identity_is_rejected_before_followup_publication(
 
 @pytest.fixture
 def backend_contract() -> ManagedBackendContract:
-    return ManagedBackendContract("owner-test", "generation-test", (ManagedBackendMember("workspace-test", UUID),), URL)
+    return ManagedBackendContract(gateway_id=GATEWAY_ID, owner_id="owner-test", generation="generation-test", members=(ManagedBackendMember(UUID),), backend_url=URL)
 
 
 @pytest.mark.parametrize("field", ["workspace_id", "backend_generation", "mount_manifest_digest", "status"])
@@ -205,9 +207,9 @@ async def test_failed_http_body_remains_in_logs_only(
             await local_workspace.wait_for_workspace_health(URL, UUID, poll_interval_seconds=0.03)
         elif entry == "config-wait":
             await local_workspace.wait_for_workspace_config_proof(
-                URL, None, backend_workspace_id=UUID, expected_proof={}, poll_interval_seconds=0.03,
+                URL, None, workspace_id=UUID, expected_proof={}, poll_interval_seconds=0.03,
             )
         else:
-            await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", backend_workspace_id=UUID, log_dir=tmp_path / "logs")
+            await local_workspace._adopt_local_node_service(service_url=URL, service_name="browser_manager", workspace_id=UUID, log_dir=tmp_path / "logs")
     assert "503" in str(failure.value)
     assert body not in str(failure.value) and body in caplog.text

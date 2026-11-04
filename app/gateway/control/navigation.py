@@ -4,13 +4,13 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import cast
 
 from pydantic import ValidationError
 
 from app.core.identifier import create_prefixed_id
 from app.gateway.control.storage import atomic_write_json
-from app.gateway.registry import WorkspaceTarget
+from app.gateway.registry import WorkspaceKey, WorkspaceTarget
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway_control import (
     WorkspaceFolderCreateRequest,
     WorkspaceNavigationBreadcrumbDTO,
@@ -31,7 +31,7 @@ class WorkspaceNavigationStore:
     def list_tree(self, targets: tuple[WorkspaceTarget, ...]) -> WorkspaceNavigationTreeDTO:
         nodes = self.read_nodes()
         changed = self._synchronize_workspace_refs(nodes, targets)
-        self.validate_nodes(nodes, {target.workspace_id for target in targets})
+        self.validate_nodes(nodes, {target.key for target in targets})
         ordered = self._ordered(nodes)
         serialized_nodes = [node.model_dump(mode="json") for node in ordered]
         if changed:
@@ -123,7 +123,7 @@ class WorkspaceNavigationStore:
                 raise ValueError("导航节点只能挂在工作区文件夹下")
 
         node.parent_node_id = payload.parent_node_id
-        self.validate_nodes(nodes, {target.workspace_id for target in targets})
+        self.validate_nodes(nodes, {target.key for target in targets})
 
         siblings = self._siblings_in_position_order(
             nodes,
@@ -242,7 +242,7 @@ class WorkspaceNavigationStore:
         nodes: list[WorkspaceNavigationNodeDTO],
         targets: tuple[WorkspaceTarget, ...],
     ) -> WorkspaceNavigationTreeDTO:
-        valid_workspace_ids = {target.workspace_id for target in targets}
+        valid_workspace_ids = {target.key for target in targets}
         self.validate_nodes(nodes, valid_workspace_ids)
         ordered = self._ordered(nodes)
         serialized_nodes = [node.model_dump(mode="json") for node in ordered]
@@ -274,8 +274,8 @@ class WorkspaceNavigationStore:
         if not isinstance(payload, dict):
             raise RuntimeError("Gateway 工作区导航必须是 JSON 对象: artifact=workspace_navigation")  # noqa: TRY004 -- 保留原存储错误类别。
         version = payload.get("schema_version")
-        if type(version) is not int or version != 1:
-            raise ValueError("Gateway 工作区导航只支持 schema_version 1: artifact=workspace_navigation")
+        if type(version) is not int or version != 2:
+            raise ValueError("Gateway 工作区导航需要显式工作区身份迁移到 schema_version 2: artifact=workspace_navigation")
         raw_nodes = payload.get("nodes", [])
         if not isinstance(raw_nodes, list):
             raise RuntimeError("Gateway 工作区导航 nodes 必须是数组: artifact=workspace_navigation")  # noqa: TRY004 -- 保留原存储错误类别。
@@ -293,7 +293,7 @@ class WorkspaceNavigationStore:
         try:
             atomic_write_json(
                 self._storage_path,
-                {"schema_version": 1, "nodes": serialized_nodes},
+                {"schema_version": 2, "nodes": serialized_nodes},
             )
         except OSError as error:
             raise self._io_error("write", error) from error
@@ -314,11 +314,11 @@ class WorkspaceNavigationStore:
         targets: tuple[WorkspaceTarget, ...],
     ) -> bool:
         changed = False
-        targets_by_id = {target.workspace_id: target for target in targets}
+        targets_by_id = {target.key: target for target in targets}
         retained_nodes: list[WorkspaceNavigationNodeDTO] = []
         for node in nodes:
             if node.kind == "workspace_ref":
-                target = targets_by_id.get(cast(str, node.workspace_id))
+                target = targets_by_id.get((node.workspace.gateway_id, node.workspace.workspace_id)) if node.workspace is not None else None
                 if target is None:
                     changed = True
                     continue
@@ -328,21 +328,21 @@ class WorkspaceNavigationStore:
             retained_nodes.append(node)
         nodes[:] = retained_nodes
         existing_workspace_ids = {
-            node.workspace_id for node in nodes if node.kind == "workspace_ref"
+            (node.workspace.gateway_id, node.workspace.workspace_id) for node in nodes if node.workspace is not None
         }
         next_position = max(
             (node.position for node in nodes if node.parent_node_id is None),
             default=-1,
         ) + 1
         for target in targets:
-            if target.workspace_id in existing_workspace_ids:
+            if target.key in existing_workspace_ids:
                 continue
             nodes.append(
                 WorkspaceNavigationNodeDTO(
                     node_id=create_prefixed_id("gwn"),
                     kind="workspace_ref",
                     name=target.name,
-                    workspace_id=target.workspace_id,
+                    workspace=GatewaySearchWorkspaceOwnerDTO(gateway_id=target.gateway_id, workspace_id=target.workspace_id),
                     position=next_position,
                 )
             )
@@ -354,24 +354,25 @@ class WorkspaceNavigationStore:
     def validate_nodes(
         cls,
         nodes: list[WorkspaceNavigationNodeDTO],
-        valid_workspace_ids: set[str],
+        valid_workspace_ids: set[WorkspaceKey],
     ) -> None:
         nodes_by_id: dict[str, WorkspaceNavigationNodeDTO] = {}
-        workspace_refs: set[str] = set()
+        workspace_refs: set[WorkspaceKey] = set()
         for node in nodes:
             if node.node_id in nodes_by_id:
                 logger.error("Gateway 导航节点 ID 重复: node=%r", node)
                 raise ValueError("Gateway 导航节点 ID 重复")
             nodes_by_id[node.node_id] = node
             if node.kind == "workspace_ref":
-                assert node.workspace_id is not None
-                if node.workspace_id not in valid_workspace_ids:
+                assert node.workspace is not None
+                workspace_key = (node.workspace.gateway_id, node.workspace.workspace_id)
+                if workspace_key not in valid_workspace_ids:
                     logger.error("Gateway 导航引用未知工作区: node=%r", node)
                     raise ValueError("Gateway 导航引用未知工作区")
-                if node.workspace_id in workspace_refs:
+                if workspace_key in workspace_refs:
                     logger.error("Gateway 工作区存在重复规范引用: node=%r", node)
                     raise ValueError("Gateway 工作区存在重复规范引用")
-                workspace_refs.add(node.workspace_id)
+                workspace_refs.add(workspace_key)
         validated_acyclic_node_ids: set[str] = set()
         for node in nodes:
             if node.parent_node_id is not None:

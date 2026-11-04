@@ -1,3 +1,5 @@
+import { nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { searchCatalogView, type CatalogSearchView } from "../../api/gateway/catalogSearch";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -827,7 +829,7 @@ export function useSessionResourceExplorer({
   }, [readCatalogOutbox, refreshCatalogWorkspace]);
 
   failureRefreshRef.current = async (workspaceTarget, outbox, minimumCatalogRevision, signal) => {
-    const workspaceId = workspaceTarget.workspace_id;
+    const workspaceId = gatewayWorkspaceKey(workspaceTarget);
     const confirmedRevisions = [...branchesRef.current.entries()]
       .filter(([key]) => key.startsWith(`${workspaceId}:`))
       .map(([, branch]) => branch.catalog_revision ?? 0);
@@ -1026,7 +1028,7 @@ export function useSessionResourceExplorer({
     const idsToExpand = new Set<string>([`workspace:${workspaceId}`]);
     const currentNavigation = navigationRef.current;
     const workspaceRef = currentNavigation?.nodes.find(
-      (node) => node.kind === "workspace_ref" && node.workspace_id === workspaceId,
+      (node) => node.kind === "workspace_ref" && nullableGatewayWorkspaceKey(node.workspace) === workspaceId,
     );
     let navigationParentId = workspaceRef?.parent_node_id ?? null;
     while (navigationParentId) {

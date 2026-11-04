@@ -1,3 +1,4 @@
+import { TEST_GATEWAY_WORKSPACE_KEY } from "../../tests/fixtures/session/gatewayEnvironment";
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
@@ -38,7 +39,7 @@ function mountExplorer(apiPort: number) {
   function Harness(): React.ReactNode {
 
     explorer = useSessionResourceExplorer({
-      ...createSessionResourceExplorerProps({ apiPort, activeWorkspaceId: "ws-test" }),
+      ...createSessionResourceExplorerProps({ apiPort, activeWorkspaceId: TEST_GATEWAY_WORKSPACE_KEY }),
     });
     return null;
   }
@@ -71,7 +72,7 @@ describe("目录分支重试按错误类型判定", () => {
       await flushReactEffects();
     });
     expect(calls).toBe(3);
-    expect(explorer().branches.get("ws-test:root")?.error).toContain("503");
+    expect(explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.error).toContain("503");
     act(() => renderer.unmount());
   });
 
@@ -146,22 +147,22 @@ describe("迟到定位请求的失败不得覆盖新分支终态", () => {
     });
 
     await act(async () => {
-      void explorer().revealSearchResult("ws-test", ["folder-a"], "folder").catch(() => undefined);
+      void explorer().revealSearchResult(TEST_GATEWAY_WORKSPACE_KEY, ["folder-a"], "folder").catch(() => undefined);
       await flushReactEffects();
     });
     expect(pagingResolve).not.toBeNull();
 
     await act(async () => {
-      await explorer().loadBranch("ws-test", null);
+      await explorer().loadBranch(TEST_GATEWAY_WORKSPACE_KEY, null);
       await flushReactEffects();
     });
-    expect(explorer().branches.get("ws-test:root")?.revision).toBe("ok");
+    expect(explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.revision).toBe("ok");
 
     await act(async () => {
       pagingResolve!(apiSuccessResponse({ message: "分页崩了" }, 503));
       await flushReactEffects();
     });
-    const after = explorer().branches.get("ws-test:root");
+    const after = explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`);
     expect(after?.error).toBeNull();
     expect(after?.revision).toBe("ok");
     act(() => renderer.unmount());

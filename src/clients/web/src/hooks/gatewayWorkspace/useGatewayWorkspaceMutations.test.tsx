@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -16,18 +17,21 @@ import { registerWorkspaceObservation } from "../workspace/workspaceObservationL
 import { useGatewayWorkspaceMutations } from "./useGatewayWorkspaceMutations";
 import { createSerialTaskQueue } from "../runtime/serialTaskQueue";
 
+const workspaceKey = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
+const workspaceTarget = (key: string) => { const owner = workspaceOwnerFromKey(key); return { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }; };
+
 const API_PORT = 49_611;
 
 /** 覆盖 remove 链路里被读写的两个 UI 设置块，键名与 remove 测试用的工作区 ID 对齐。 */
 const fakeUiSettings = {
   session_sidebar: {
-    collapsed_workspace_ids: ["ws-active", "ws-other"],
-    expanded_root_tree_ids: ["workspace:ws-active", "workspace:ws-other"],
+    collapsed_workspace_ids: [workspaceKey("ws-active"), workspaceKey("ws-other")],
+    expanded_root_tree_ids: [`workspace:${workspaceKey("ws-active")}`, `workspace:${workspaceKey("ws-other")}`],
   },
   workspace_file_tree: {
     expanded_paths_by_workspace: {
-      "ws-active": ["boxteam://workspace/ws-active/resources/files/root"],
-      "ws-other": ["boxteam://workspace/ws-other/resources/files/root"],
+      [workspaceKey("ws-active")]: ["boxteam://workspace/ws-active/resources/files/root"],
+      [workspaceKey("ws-other")]: ["boxteam://workspace/ws-other/resources/files/root"],
     },
   },
 } as unknown as WebUiSettings;
@@ -36,8 +40,9 @@ function gatewayWorkspace(
   overrides: Partial<GatewayWorkspace> = {},
 ): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: "ws-1",
-    parent_workspace_id: null,
+    parent_workspace: null,
     name: "工作区一",
     backend_url: "http://127.0.0.1:41000",
     connection_kind: "local",
@@ -48,7 +53,7 @@ function gatewayWorkspace(
     removable: true,
     system_default: false,
     runtime_action: "safe_restart_managed_backend",
-    remote: null,
+    remote_gateways: [],
     services: {},
     connection_error: null,
     checked_at: "2026-09-10T00:00:00Z",
@@ -60,7 +65,7 @@ function workspaceList(
   activeWorkspaceId: string | null,
   items: GatewayWorkspace[],
 ): GatewayWorkspaceList {
-  return { active_workspace_id: activeWorkspaceId, items };
+  return { active_workspace: activeWorkspaceId ? workspaceTarget(activeWorkspaceId) : null, items };
 }
 
 function session(sessionId: string): Session {
@@ -81,7 +86,7 @@ function session(sessionId: string): Session {
 
 function appState(overrides: Partial<AppState> = {}): AppState {
   return {
-    activeGatewayWorkspaceId: "ws-active",
+    activeGatewayWorkspaceId: workspaceKey("ws-active"),
     gatewayWorkspaces: [],
     sessionsByWorkspace: new Map(),
     sessionGatewayWorkspaceById: new Map(),
@@ -262,25 +267,25 @@ describe("Gateway 工作区排序", () => {
     );
     const list = spyOnGatewayApi("listGatewayWorkspaces");
     const { hook, state } = await mountHook(appState({
-      activeGatewayWorkspaceId: "ws-fallback",
+      activeGatewayWorkspaceId: workspaceKey("ws-fallback"),
       workspaceName: "回退工作区",
     }));
 
-    await hook.reorderGatewayWorkspaces(["ws-2", "ws-1"]);
+    await hook.reorderGatewayWorkspaces([workspaceKey("ws-2"), workspaceKey("ws-1")]);
 
-    expect(reorder).toHaveBeenCalledWith(API_PORT, { workspace_ids: ["ws-2", "ws-1"] });
+    expect(reorder).toHaveBeenCalledWith(API_PORT, { workspaces: [workspaceKey("ws-2"), workspaceKey("ws-1")].map(workspaceTarget) });
     expect(list).not.toHaveBeenCalled();
     const next = state();
     expect(next.activeGatewayWorkspaceId).toBeNull();
     expect(next.workspaceName).toBeNull();
-    expect(next.gatewayWorkspaces.map((item) => item.workspace_id)).toEqual(["ws-1", "ws-2"]);
+    expect(next.gatewayWorkspaces.map(gatewayWorkspaceKey)).toEqual([workspaceKey("ws-1"), workspaceKey("ws-2")]);
     expect(next.status).toBe("工作区顺序已更新");
   });
 
   test("排序失败后读取权威完整列表，反馈失败且原样抛出排序错误", async () => {
     const failure = new Error("排序后端不可用");
     const reorder = spyOnGatewayApi("reorderGatewayWorkspaces").mockRejectedValue(failure);
-    const authoritativeList = workspaceList("ws-authoritative", [
+    const authoritativeList = workspaceList(workspaceKey("ws-authoritative"), [
       gatewayWorkspace({ workspace_id: "ws-authoritative", name: "权威工作区", }),
       gatewayWorkspace({ workspace_id: "ws-second", name: "第二个工作区" }),
     ]);
@@ -290,16 +295,16 @@ describe("Gateway 工作区排序", () => {
       gatewayWorkspacesStale: false,
     }));
 
-    await expect(hook.reorderGatewayWorkspaces(["ws-2", "ws-1"])).rejects.toBe(failure);
+    await expect(hook.reorderGatewayWorkspaces([workspaceKey("ws-2"), workspaceKey("ws-1")])).rejects.toBe(failure);
 
     expect(reorder).toHaveBeenCalledTimes(1);
-    expect(reorder).toHaveBeenCalledWith(API_PORT, { workspace_ids: ["ws-2", "ws-1"] });
+    expect(reorder).toHaveBeenCalledWith(API_PORT, { workspaces: [workspaceKey("ws-2"), workspaceKey("ws-1")].map(workspaceTarget) });
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith(API_PORT);
     const next = state();
     expect(next.gatewayWorkspaces).toBe(authoritativeList.items);
     expect(next.gatewayWorkspacesStale).toBe(false);
-    expect(next.activeGatewayWorkspaceId).toBe("ws-authoritative");
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-authoritative"));
     expect(next.workspaceName).toBe("权威工作区");
     expect(next.gatewayError).toBe("排序后端不可用");
     expect(next.error).toBeNull();
@@ -317,7 +322,7 @@ describe("Gateway 工作区排序", () => {
       gatewayWorkspacesStale: false,
     }));
 
-    await expect(hook.reorderGatewayWorkspaces(["ws-2", "ws-1"])).rejects.toBe(failure);
+    await expect(hook.reorderGatewayWorkspaces([workspaceKey("ws-2"), workspaceKey("ws-1")])).rejects.toBe(failure);
 
     expect(reorder).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledTimes(1);
@@ -330,10 +335,10 @@ describe("Gateway 工作区排序", () => {
 
   test("旧排序失败的权威读回不能覆盖其后排队排序的完整结果", async () => {
     const failure = new Error("第一次排序被拒绝");
-    const oldReadback = workspaceList("ws-old-readback", [
+    const oldReadback = workspaceList(workspaceKey("ws-old-readback"), [
       gatewayWorkspace({ workspace_id: "ws-old-readback", name: "过期读回" }),
     ]);
-    const latestList = workspaceList("ws-latest", [
+    const latestList = workspaceList(workspaceKey("ws-latest"), [
       gatewayWorkspace({ workspace_id: "ws-latest", name: "最新排序" }),
       gatewayWorkspace({ workspace_id: "ws-second", name: "第二工作区" }),
     ]);
@@ -359,7 +364,7 @@ describe("Gateway 工作区排序", () => {
       gatewayWorkspacesStale: false,
     }));
 
-    const first = hook.reorderGatewayWorkspaces(["ws-first", "ws-second"])
+    const first = hook.reorderGatewayWorkspaces([workspaceKey("ws-first"), workspaceKey("ws-second")])
       .catch((error: unknown) => error);
     await act(async () => {
       for (let index = 0; index < 4; index += 1) await Promise.resolve();
@@ -367,7 +372,7 @@ describe("Gateway 工作区排序", () => {
     expect(order).toEqual(["sort-first", "readback-first"]);
     expect(list).toHaveBeenCalledTimes(1);
 
-    const second = hook.reorderGatewayWorkspaces(["ws-latest", "ws-second"]);
+    const second = hook.reorderGatewayWorkspaces([workspaceKey("ws-latest"), workspaceKey("ws-second")]);
     await act(async () => { resolveReadback(oldReadback); });
     expect(await first).toBe(failure);
     expect(state().gatewayWorkspaces).toBe(previousWorkspaces);
@@ -379,7 +384,7 @@ describe("Gateway 工作区排序", () => {
     expect(reorder).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenCalledTimes(1);
     expect(state().gatewayWorkspaces).toBe(latestList.items);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-latest");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-latest"));
     expect(state().workspaceName).toBe("最新排序");
     expect(state().gatewayWorkspacesStale).toBe(false);
     expect(state().gatewayError).toBeNull();
@@ -389,8 +394,8 @@ describe("Gateway 工作区排序", () => {
 
 describe("Gateway 工作区重命名", () => {
   test("失败重命名的补偿读取与错误反馈完成后，队列才执行后续成功重命名", async () => {
-    const before = workspaceList("ws-active", [gatewayWorkspace({ workspace_id: "ws-active", name: "原名称" })]);
-    const after = workspaceList("ws-active", [gatewayWorkspace({ workspace_id: "ws-active", name: "第二次名称" })]);
+    const before = workspaceList(workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-active", name: "原名称" })]);
+    const after = workspaceList(workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-active", name: "第二次名称" })]);
     const failure = new Error("第一次被拒绝");
     let rejectFirst!: (error: Error) => void;
     let resolveRead!: (value: GatewayWorkspaceList) => void;
@@ -410,13 +415,13 @@ describe("Gateway 工作区重命名", () => {
       gatewayWorkspaces: before.items,
       gatewayWorkspacesStale: false,
     }));
-    const first = hook.renameGatewayWorkspace("ws-active", "第一次名称").catch((error: unknown) => error);
-    const second = hook.renameGatewayWorkspace("ws-active", "第二次名称");
+    const first = hook.renameGatewayWorkspace(workspaceKey("ws-active"), "第一次名称").catch((error: unknown) => error);
+    const second = hook.renameGatewayWorkspace(workspaceKey("ws-active"), "第二次名称");
     await act(async () => { await Promise.resolve(); rejectFirst(failure); await Promise.resolve(); await Promise.resolve(); });
     expect(rename).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledTimes(1);
     expect(order).toEqual(["rename-first", "reconcile-first"]);
-    await act(async () => { resolveRead(workspaceList("ws-stale", [gatewayWorkspace({ workspace_id: "ws-stale" })])); });
+    await act(async () => { resolveRead(workspaceList(workspaceKey("ws-stale"), [gatewayWorkspace({ workspace_id: "ws-stale" })])); });
     expect(await first).toBe(failure);
     expect(rename).toHaveBeenCalledTimes(2);
     expect(order).toEqual(["rename-first", "reconcile-first", "rename-second"]);
@@ -433,37 +438,37 @@ describe("Gateway 工作区重命名", () => {
 
   test("重命名响应缺少工作区时抛出明确错误并回滚读取工作区列表", async () => {
     const mutation = spyOnGatewayApi("renameGatewayWorkspace").mockResolvedValue(
-      workspaceList("ws-active", [gatewayWorkspace({ workspace_id: "ws-2", name: "工作区二" })]),
+      workspaceList(workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-2", name: "工作区二" })]),
     );
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(
-      workspaceList("ws-2", [gatewayWorkspace({ workspace_id: "ws-2", name: "工作区二", })]),
+      workspaceList(workspaceKey("ws-2"), [gatewayWorkspace({ workspace_id: "ws-2", name: "工作区二", })]),
     );
     const { hook, state } = await mountHook(appState());
 
-    await expect(hook.renameGatewayWorkspace("ws-1", "新名字")).rejects.toThrow(
-      "Gateway 重命名响应缺少工作区: ws-1",
+    await expect(hook.renameGatewayWorkspace(workspaceKey("ws-1"), "新名字")).rejects.toThrow(
+      `Gateway 重命名响应缺少工作区: ${workspaceKey("ws-1")}`,
     );
 
     expect(mutation).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith(API_PORT);
     const next = state();
-    expect(next.gatewayError).toBe("Gateway 重命名响应缺少工作区: ws-1");
-    expect(next.status).toBe("重命名工作区失败: Gateway 重命名响应缺少工作区: ws-1");
-    expect(next.activeGatewayWorkspaceId).toBe("ws-2");
+    expect(next.gatewayError).toBe(`Gateway 重命名响应缺少工作区: ${workspaceKey("ws-1")}`);
+    expect(next.status).toBe(`重命名工作区失败: Gateway 重命名响应缺少工作区: ${workspaceKey("ws-1")}`);
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-2"));
     expect(next.workspaceName).toBe("工作区二");
   });
 
   test("重命名失败后重取工作区列表完成回滚", async () => {
     const failure = new Error("名称冲突");
     const mutation = spyOnGatewayApi("renameGatewayWorkspace").mockRejectedValue(failure);
-    const authoritativeList = workspaceList("ws-active", [
+    const authoritativeList = workspaceList(workspaceKey("ws-active"), [
       gatewayWorkspace({ workspace_id: "ws-active", name: "回滚后活动工作区", }),
     ]);
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(authoritativeList);
     const { hook, state } = await mountHook(appState({ gatewayWorkspacesStale: true }));
 
-    await expect(hook.renameGatewayWorkspace("ws-1", "新名字")).rejects.toBe(failure);
+    await expect(hook.renameGatewayWorkspace(workspaceKey("ws-1"), "新名字")).rejects.toBe(failure);
 
     expect(mutation).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledTimes(1);
@@ -487,7 +492,7 @@ describe("Gateway 工作区重命名", () => {
       gatewayWorkspacesStale: false,
     }));
 
-    await expect(hook.renameGatewayWorkspace("ws-1", "新名字")).rejects.toBe(failure);
+    await expect(hook.renameGatewayWorkspace(workspaceKey("ws-1"), "新名字")).rejects.toBe(failure);
 
     expect(mutation).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledTimes(1);
@@ -502,7 +507,7 @@ describe("Gateway 工作区重命名", () => {
 
   test("补偿读取在新选择意图后仍刷新列表，但不覆盖当前选择反馈", async () => {
     const failure = new Error("名称冲突");
-    const authoritativeList = workspaceList("ws-reconciled", [
+    const authoritativeList = workspaceList(workspaceKey("ws-reconciled"), [
       gatewayWorkspace({ workspace_id: "ws-reconciled", name: "权威名称", }),
     ]);
     spyOnGatewayApi("renameGatewayWorkspace").mockRejectedValue(failure);
@@ -515,7 +520,7 @@ describe("Gateway 工作区重命名", () => {
       gatewayError: "新选择的错误反馈",
       status: "新选择状态",
     }));
-    const pending = hook.renameGatewayWorkspace("ws-1", "新名字").catch((error: unknown) => error);
+    const pending = hook.renameGatewayWorkspace(workspaceKey("ws-1"), "新名字").catch((error: unknown) => error);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(list).toHaveBeenCalledTimes(1);
 
@@ -525,7 +530,7 @@ describe("Gateway 工作区重命名", () => {
     expect(await pending).toBe(failure);
     expect(state().gatewayWorkspaces).toBe(authoritativeList.items);
     expect(state().gatewayWorkspacesStale).toBe(false);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-active");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-active"));
     expect(state().workspaceName).toBe("状态中的工作区");
     expect(state().gatewayError).toBe("新选择的错误反馈");
     expect(state().status).toBe("新选择状态");
@@ -533,8 +538,8 @@ describe("Gateway 工作区重命名", () => {
 
   test("新重命名代次使在途旧成功响应失效", async () => {
     const oldWorkspaces = [gatewayWorkspace({ workspace_id: "ws-active", name: "旧列表" })];
-    const firstList = workspaceList("ws-active", [gatewayWorkspace({ workspace_id: "ws-active", name: "第一次名称" })]);
-    const secondList = workspaceList("ws-active", [gatewayWorkspace({ workspace_id: "ws-active", name: "第二次名称" })]);
+    const firstList = workspaceList(workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-active", name: "第一次名称" })]);
+    const secondList = workspaceList(workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-active", name: "第二次名称" })]);
     let resolveFirst!: (value: GatewayWorkspaceList) => void;
     let resolveSecond!: (value: GatewayWorkspaceList) => void;
     const order: string[] = [];
@@ -549,8 +554,8 @@ describe("Gateway 工作区重命名", () => {
       });
     const list = spyOnGatewayApi("listGatewayWorkspaces");
     const { hook, state } = await mountHook(appState({ gatewayWorkspaces: oldWorkspaces }));
-    const first = hook.renameGatewayWorkspace("ws-active", "第一次名称");
-    const second = hook.renameGatewayWorkspace("ws-active", "第二次名称");
+    const first = hook.renameGatewayWorkspace(workspaceKey("ws-active"), "第一次名称");
+    const second = hook.renameGatewayWorkspace(workspaceKey("ws-active"), "第二次名称");
     await act(async () => { await Promise.resolve(); });
     expect(rename).toHaveBeenCalledTimes(1);
 
@@ -572,18 +577,18 @@ describe("Gateway 工作区删除", () => {
   test("删除非活动工作区不中断当前流，直接提前返回对账结果", async () => {
     const currentSession = session("ses-current");
     spyOnGatewayApi("removeGatewayWorkspace").mockResolvedValue(
-      workspaceList("ws-active", [
+      workspaceList(workspaceKey("ws-active"), [
         gatewayWorkspace({ workspace_id: "ws-active", name: "活动工作区" }),
       ]),
     );
     const { hook, state, calls } = await mountHook(appState({
-      activeGatewayWorkspaceId: "ws-active",
-      sessionsByWorkspace: new Map([["ws-other", [session("ses-other")]]]),
+      activeGatewayWorkspaceId: workspaceKey("ws-active"),
+      sessionsByWorkspace: new Map([[workspaceKey("ws-other"), [session("ses-other")]]]),
       currentSession,
-      currentSessionWorkspaceId: "ws-active",
+      currentSessionWorkspaceId: workspaceKey("ws-active"),
     }));
 
-    await hook.removeGatewayWorkspace("ws-other");
+    await hook.removeGatewayWorkspace(workspaceKey("ws-other"));
 
     const next = state();
     expect(calls.abort).toBe(0);
@@ -592,35 +597,35 @@ describe("Gateway 工作区删除", () => {
     expect(next.status).toBe("工作区已删除");
     expect(next.workspaceSwitching).toBe(false);
     expect(next.currentSession).toBe(currentSession);
-    expect(next.sessionsByWorkspace.has("ws-other")).toBe(false);
+    expect(next.sessionsByWorkspace.has(workspaceKey("ws-other"))).toBe(false);
     expect([...next.removingGatewayWorkspaceIds]).toEqual([]);
     const update = calls.updates[calls.updates.length - 1] as unknown;
     expect(update).toEqual({
       session_sidebar: {
-        collapsed_workspace_ids: ["ws-active"],
-        expanded_root_tree_ids: ["workspace:ws-active"],
+        collapsed_workspace_ids: [workspaceKey("ws-active")],
+        expanded_root_tree_ids: [`workspace:${workspaceKey("ws-active")}`],
       },
       workspace_file_tree: {
-        expanded_paths_by_workspace: { "ws-active": ["boxteam://workspace/ws-active/resources/files/root"] },
+        expanded_paths_by_workspace: { [workspaceKey("ws-active")]: ["boxteam://workspace/ws-active/resources/files/root"] },
       },
     });
   });
 
   test("删除活动工作区清空会话级状态并标记正在切换", async () => {
     spyOnGatewayApi("removeGatewayWorkspace").mockResolvedValue(
-      workspaceList("ws-2", [
+      workspaceList(workspaceKey("ws-2"), [
         gatewayWorkspace({ workspace_id: "ws-2", name: "新活动工作区", }),
       ]),
     );
     const nextSession = session("ses-two");
     const { hook, state, calls } = await mountHook(appState({
-      activeGatewayWorkspaceId: "ws-active",
+      activeGatewayWorkspaceId: workspaceKey("ws-active"),
       sessionsByWorkspace: new Map([
-        ["ws-active", [session("ses-current")]],
-        ["ws-2", [nextSession]],
+        [workspaceKey("ws-active"), [session("ses-current")]],
+        [workspaceKey("ws-2"), [nextSession]],
       ]),
       currentSession: session("ses-current"),
-      currentSessionWorkspaceId: "ws-active",
+      currentSessionWorkspaceId: workspaceKey("ws-active"),
       traceEvents: [{ id: "trace" } as never],
       llmRequestLogs: [{ id: "log" } as never],
       sessionResources: [{ id: "resource" } as never],
@@ -628,12 +633,12 @@ describe("Gateway 工作区删除", () => {
       agentStateMessageCount: 5,
     }));
 
-    await hook.removeGatewayWorkspace("ws-active");
+    await hook.removeGatewayWorkspace(workspaceKey("ws-active"));
 
     expect(calls.abort).toBe(1);
     expect(calls.finish).toBe(1);
     const next = state();
-    expect(next.activeGatewayWorkspaceId).toBe("ws-2");
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-2"));
     expect(next.workspaceSwitching).toBe(true);
     expect(next.workspaceName).toBe("新活动工作区");
     expect(next.sessions).toEqual([nextSession]);
@@ -650,13 +655,13 @@ describe("Gateway 工作区删除", () => {
   test("删除成功但新活动工作区加载失败时不给文案加删除失败前缀", async () => {
     const refreshFailure = new Error("刷新失败");
     spyOnGatewayApi("removeGatewayWorkspace").mockResolvedValue(
-      workspaceList("ws-2", [gatewayWorkspace({ workspace_id: "ws-2", name: "新活动工作区" })]),
+      workspaceList(workspaceKey("ws-2"), [gatewayWorkspace({ workspace_id: "ws-2", name: "新活动工作区" })]),
     );
     spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(
-      workspaceList("ws-2", [gatewayWorkspace({ workspace_id: "ws-2", name: "新活动工作区" })]),
+      workspaceList(workspaceKey("ws-2"), [gatewayWorkspace({ workspace_id: "ws-2", name: "新活动工作区" })]),
     );
     const { hook, state } = await mountHook(
-      appState({ activeGatewayWorkspaceId: "ws-active" }),
+      appState({ activeGatewayWorkspaceId: workspaceKey("ws-active") }),
       {
         finishWorkspaceRefresh: async (_preferredSessionId, refs) => {
           refs!.gatewayListRequestRef.current += 1;
@@ -665,7 +670,7 @@ describe("Gateway 工作区删除", () => {
       },
     );
 
-    await expect(hook.removeGatewayWorkspace("ws-active")).rejects.toBe(refreshFailure);
+    await expect(hook.removeGatewayWorkspace(workspaceKey("ws-active"))).rejects.toBe(refreshFailure);
 
     const message = "工作区已删除，但新活动工作区加载失败: 刷新失败";
     const next = state();
@@ -680,14 +685,14 @@ describe("Gateway 工作区删除", () => {
   test("非活动工作区删除已提交但界面设置清理失败时保留提交事实并标记陈旧列表", async () => {
     const settingsFailure = new Error("设置写入失败");
     const reconciliationFailure = new Error("列表不可用");
-    const committedList = workspaceList("ws-active", [
+    const committedList = workspaceList(workspaceKey("ws-active"), [
       gatewayWorkspace({ workspace_id: "ws-active", name: "仍活动的工作区" }),
     ]);
     const remove = spyOnGatewayApi("removeGatewayWorkspace").mockResolvedValue(committedList);
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockRejectedValue(reconciliationFailure);
     const { hook, state, calls } = await mountHook(
       appState({
-        activeGatewayWorkspaceId: "ws-active",
+        activeGatewayWorkspaceId: workspaceKey("ws-active"),
         gatewayWorkspaces: [
           gatewayWorkspace({ workspace_id: "ws-active" }),
           gatewayWorkspace({ workspace_id: "ws-other" }),
@@ -697,7 +702,7 @@ describe("Gateway 工作区删除", () => {
       { updateUiSettings: async () => { throw settingsFailure; } },
     );
 
-    await expect(hook.removeGatewayWorkspace("ws-other")).rejects.toBe(settingsFailure);
+    await expect(hook.removeGatewayWorkspace(workspaceKey("ws-other"))).rejects.toBe(settingsFailure);
 
     const message =
       "工作区已删除，但本地界面设置清理失败: 设置写入失败；重新读取工作区列表也失败: 列表不可用";
@@ -706,8 +711,8 @@ describe("Gateway 工作区删除", () => {
     expect(list).toHaveBeenCalledTimes(1);
     expect(calls.updates).toHaveLength(1);
     expect(calls.finish).toBe(0);
-    expect(next.gatewayWorkspaces.map((item) => item.workspace_id)).toEqual(["ws-active"]);
-    expect(next.activeGatewayWorkspaceId).toBe("ws-active");
+    expect(next.gatewayWorkspaces.map(gatewayWorkspaceKey)).toEqual([workspaceKey("ws-active")]);
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-active"));
     expect(next.gatewayError).toBe(message);
     expect(next.status).toBe(message);
     expect(next.gatewayWorkspacesStale).toBe(true);
@@ -719,24 +724,24 @@ describe("Gateway 工作区删除", () => {
     const failure = new Error("删除被拒绝");
     spyOnGatewayApi("removeGatewayWorkspace").mockRejectedValue(failure);
     spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(
-      workspaceList("ws-active", [
+      workspaceList(workspaceKey("ws-active"), [
         gatewayWorkspace({ workspace_id: "ws-active", name: "回滚后的活动工作区" }),
         gatewayWorkspace({ workspace_id: "ws-other", name: "仍然存在的工作区" }),
       ]),
     );
     const { hook, state } = await mountHook(appState({
-      removingGatewayWorkspaceIds: new Set(["ws-other", "ws-active"]),
+      removingGatewayWorkspaceIds: new Set([workspaceKey("ws-other"), workspaceKey("ws-active")]),
     }));
 
-    await expect(hook.removeGatewayWorkspace("ws-other")).rejects.toBe(failure);
+    await expect(hook.removeGatewayWorkspace(workspaceKey("ws-other"))).rejects.toBe(failure);
 
     const next = state();
     expect(next.gatewayError).toBe("删除被拒绝");
     expect(next.error).toBeNull();
     expect(next.status).toBe("删除工作区失败: 删除被拒绝");
-    expect(next.activeGatewayWorkspaceId).toBe("ws-active");
-    expect(next.gatewayWorkspaces.map((item) => item.workspace_id)).toEqual(["ws-active", "ws-other"]);
-    expect([...next.removingGatewayWorkspaceIds]).toEqual(["ws-active"]);
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-active"));
+    expect(next.gatewayWorkspaces.map(gatewayWorkspaceKey)).toEqual([workspaceKey("ws-active"), workspaceKey("ws-other")]);
+    expect([...next.removingGatewayWorkspaceIds]).toEqual([workspaceKey("ws-active")]);
     expect(next.workspaceSwitching).toBe(false);
   });
 
@@ -745,7 +750,7 @@ describe("Gateway 工作区删除", () => {
     // 的 workspaceName，文件树与预览就会按新工作区 id 去读旧根路径。
     spyOnGatewayApi("removeGatewayWorkspace").mockRejectedValue(new Error("删除被拒绝"));
     spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(
-      workspaceList("ws-other", [
+      workspaceList(workspaceKey("ws-other"), [
         gatewayWorkspace({
           workspace_id: "ws-other",
           name: "回滚后的新活动工作区",
@@ -753,14 +758,14 @@ describe("Gateway 工作区删除", () => {
       ]),
     );
     const { hook, state } = await mountHook(appState({
-      activeGatewayWorkspaceId: "ws-active",
+      activeGatewayWorkspaceId: workspaceKey("ws-active"),
       workspaceName: "陈旧的工作区",
     }));
 
-    await expect(hook.removeGatewayWorkspace("ws-other")).rejects.toThrow("删除被拒绝");
+    await expect(hook.removeGatewayWorkspace(workspaceKey("ws-other"))).rejects.toThrow("删除被拒绝");
 
     const next = state();
-    expect(next.activeGatewayWorkspaceId).toBe("ws-other");
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-other"));
     expect(next.workspaceName).toBe("回滚后的新活动工作区");
   });
 
@@ -769,10 +774,10 @@ describe("Gateway 工作区删除", () => {
     spyOnGatewayApi("removeGatewayWorkspace").mockRejectedValue(failure);
     spyOnGatewayApi("listGatewayWorkspaces").mockRejectedValue(new Error("列表不可用"));
     const { hook, state } = await mountHook(appState({
-      removingGatewayWorkspaceIds: new Set(["ws-other", "ws-active"]),
+      removingGatewayWorkspaceIds: new Set([workspaceKey("ws-other"), workspaceKey("ws-active")]),
     }));
 
-    await expect(hook.removeGatewayWorkspace("ws-other")).rejects.toBe(failure);
+    await expect(hook.removeGatewayWorkspace(workspaceKey("ws-other"))).rejects.toBe(failure);
 
     const message = "删除被拒绝；重新读取工作区列表也失败: 列表不可用";
     const next = state();
@@ -780,7 +785,7 @@ describe("Gateway 工作区删除", () => {
     expect(next.error).toBeNull();
     expect(next.status).toBe(`删除工作区失败: ${message}`);
     expect(next.gatewayWorkspacesStale).toBe(true);
-    expect([...next.removingGatewayWorkspaceIds]).toEqual(["ws-active"]);
+    expect([...next.removingGatewayWorkspaceIds]).toEqual([workspaceKey("ws-active")]);
     expect(next.workspaceSwitching).toBe(false);
   });
 
@@ -790,11 +795,11 @@ describe("Gateway 工作区删除", () => {
       gatewayWorkspace({ workspace_id: "ws-active" }),
       gatewayWorkspace({ workspace_id: "ws-other", name: "当前列表" }),
     ];
-    const firstRead = workspaceList("ws-active", [
+    const firstRead = workspaceList(workspaceKey("ws-active"), [
       gatewayWorkspace({ workspace_id: "ws-active" }),
       gatewayWorkspace({ workspace_id: "ws-other", name: "迟到回读" }),
     ]);
-    const nextList = workspaceList("ws-active", [gatewayWorkspace({ workspace_id: "ws-active" })]);
+    const nextList = workspaceList(workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-active" })]);
     let resolveRead!: (value: GatewayWorkspaceList) => void;
     const pendingRead = new Promise<GatewayWorkspaceList>((resolve) => { resolveRead = resolve; });
     let resolveSecondRemoval!: (value: GatewayWorkspaceList) => void;
@@ -812,7 +817,7 @@ describe("Gateway 工作区删除", () => {
     });
     const { hook, state } = await mountHook(appState({ gatewayWorkspaces: previousWorkspaces }));
 
-    const first = hook.removeGatewayWorkspace("ws-other");
+    const first = hook.removeGatewayWorkspace(workspaceKey("ws-other"));
     void first.catch(() => undefined);
     await act(async () => {
       for (let index = 0; index < 6; index += 1) await Promise.resolve();
@@ -820,10 +825,10 @@ describe("Gateway 工作区删除", () => {
     expect(list).toHaveBeenCalledTimes(1);
     let second!: Promise<void>;
     await act(async () => {
-      second = hook.removeGatewayWorkspace("ws-other");
+      second = hook.removeGatewayWorkspace(workspaceKey("ws-other"));
     });
 
-    expect(state().removingGatewayWorkspaceIds.has("ws-other")).toBe(true);
+    expect(state().removingGatewayWorkspaceIds.has(workspaceKey("ws-other"))).toBe(true);
     await act(async () => { resolveRead(firstRead); });
     await expect(first).rejects.toBe(failure);
     await act(async () => {
@@ -833,22 +838,22 @@ describe("Gateway 工作区删除", () => {
     expect(list).toHaveBeenCalledTimes(1);
     expect(state().gatewayWorkspaces).toBe(previousWorkspaces);
     expect(state().gatewayWorkspaces[1]?.name).toBe("当前列表");
-    expect(state().removingGatewayWorkspaceIds.has("ws-other")).toBe(true);
-    expect(state().status).toBe("正在删除工作区；工作区 ws-other 删除失败: 第一次删除被拒绝");
+    expect(state().removingGatewayWorkspaceIds.has(workspaceKey("ws-other"))).toBe(true);
+    expect(state().status).toBe(`正在删除工作区；工作区 ${workspaceKey("ws-other")} 删除失败: 第一次删除被拒绝`);
     expect(remove).toHaveBeenCalledTimes(2);
 
     await act(async () => { resolveSecondRemoval(nextList); });
     await second;
     expect(state().gatewayWorkspaces).toBe(nextList.items);
-    expect(state().removingGatewayWorkspaceIds.has("ws-other")).toBe(false);
+    expect(state().removingGatewayWorkspaceIds.has(workspaceKey("ws-other"))).toBe(false);
   });
 
   test("活动工作区删除刷新等待期间的新列表代次拥有最终列表与反馈", async () => {
     const refreshFailure = new Error("旧刷新失败");
-    const committedList = workspaceList("ws-next", [
+    const committedList = workspaceList(workspaceKey("ws-next"), [
       gatewayWorkspace({ workspace_id: "ws-next", name: "新活动工作区" }),
     ]);
-    const latestList = workspaceList("ws-next", [
+    const latestList = workspaceList(workspaceKey("ws-next"), [
       gatewayWorkspace({ workspace_id: "ws-next", name: "最新工作区名称" }),
     ]);
     let rejectRefresh!: (error: Error) => void;
@@ -857,7 +862,7 @@ describe("Gateway 工作区删除", () => {
     const rename = spyOnGatewayApi("renameGatewayWorkspace").mockResolvedValue(latestList);
     const list = spyOnGatewayApi("listGatewayWorkspaces");
     const { hook, state, gatewayListRequestRef, selectionIntentRef, calls } = await mountHook(
-      appState({ activeGatewayWorkspaceId: "ws-active", gatewayWorkspacesStale: false }),
+      appState({ activeGatewayWorkspaceId: workspaceKey("ws-active"), gatewayWorkspacesStale: false }),
       {
         finishWorkspaceRefresh: async (_preferredSessionId, refs) => {
           refs!.gatewayListRequestRef.current += 1;
@@ -866,7 +871,7 @@ describe("Gateway 工作区删除", () => {
       },
     );
 
-    const removal = hook.removeGatewayWorkspace("ws-active");
+    const removal = hook.removeGatewayWorkspace(workspaceKey("ws-active"));
     void removal.catch(() => undefined);
     await act(async () => {
       for (let index = 0; index < 6; index += 1) await Promise.resolve();
@@ -876,7 +881,7 @@ describe("Gateway 工作区删除", () => {
     expect(gatewayListRequestRef.current).toBe(2);
 
     selectionIntentRef.current += 1;
-    await hook.renameGatewayWorkspace("ws-next", "最新工作区名称");
+    await hook.renameGatewayWorkspace(workspaceKey("ws-next"), "最新工作区名称");
     expect(rename).toHaveBeenCalledTimes(1);
     expect(gatewayListRequestRef.current).toBe(3);
     expect(state().gatewayWorkspaces).toBe(latestList.items);
@@ -887,10 +892,10 @@ describe("Gateway 工作区删除", () => {
 
     expect(list).not.toHaveBeenCalled();
     expect(state().gatewayWorkspaces).toBe(latestList.items);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-next");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-next"));
     expect(state().gatewayError).toBeNull();
     expect(state().status).toBe(
-      "工作区已重命名为「最新工作区名称」；工作区 ws-active 删除已提交，但新活动工作区加载失败: 旧刷新失败",
+      `工作区已重命名为「最新工作区名称」；工作区 ${workspaceKey("ws-active")} 删除已提交，但新活动工作区加载失败: 旧刷新失败`,
     );
     expect(state().gatewayWorkspacesStale).toBe(false);
   });
@@ -909,13 +914,13 @@ describe("Gateway 工作区删除", () => {
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockRejectedValue(reconciliationFailure);
     const { hook, state, setState, selectionIntentRef, gatewayListRequestRef } = await mountHook(
       appState({
-        activeGatewayWorkspaceId: "ws-active",
+        activeGatewayWorkspaceId: workspaceKey("ws-active"),
         gatewayWorkspaces: previousWorkspaces,
         gatewayWorkspacesStale: false,
       }),
     );
 
-    const removal = hook.removeGatewayWorkspace("ws-other");
+    const removal = hook.removeGatewayWorkspace(workspaceKey("ws-other"));
     void removal.catch(() => undefined);
     await act(async () => {
       for (let index = 0; index < 6; index += 1) await Promise.resolve();
@@ -925,7 +930,7 @@ describe("Gateway 工作区删除", () => {
     selectionIntentRef.current += 1;
     setState((previous) => ({
       ...previous,
-      activeGatewayWorkspaceId: "ws-selected",
+      activeGatewayWorkspaceId: workspaceKey("ws-selected"),
       workspaceName: "选择中的工作区",
       gatewayError: "选择操作错误",
       error: "选择操作错误详情",
@@ -940,7 +945,7 @@ describe("Gateway 工作区删除", () => {
     expect(gatewayListRequestRef.current).toBe(generation);
     expect(list).toHaveBeenCalledTimes(1);
     expect(state().gatewayWorkspaces).toBe(previousWorkspaces);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-selected");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-selected"));
     expect(state().workspaceName).toBe("选择中的工作区");
     expect(state().gatewayError).toBe("选择操作错误");
     expect(state().error).toBe("选择操作错误详情");
@@ -948,7 +953,7 @@ describe("Gateway 工作区删除", () => {
     expect(state().isBootstrapping).toBe(true);
     expect(state().gatewayWorkspacesStale).toBe(true);
     expect(state().status).toBe(
-      "正在切换到选择中的工作区；工作区 ws-other 删除失败: 删除被拒绝；重新读取工作区列表也失败: 列表不可用",
+      `正在切换到选择中的工作区；工作区 ${workspaceKey("ws-other")} 删除失败: 删除被拒绝；重新读取工作区列表也失败: 列表不可用`,
     );
   });
 });
@@ -958,7 +963,7 @@ describe("Gateway 受管工作区新增", () => {
 
   beforeEach(() => {
     spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(workspaceList(
-      "ws-active", [gatewayWorkspace({ workspace_id: "ws-active", active: true })],
+      workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-active", active: true })],
     ));
   });
 
@@ -998,7 +1003,7 @@ describe("Gateway 受管工作区新增", () => {
   test("新增受管工作区接口失败时回读权威列表并原样抛出，活动工作区变化后刷新上下文", async () => {
     const failure = new Error("后端拒绝");
     spyOnGatewayApi("addManagedGatewayWorkspace").mockRejectedValue(failure);
-    const refreshedWorkspaces = workspaceList("ws-new-active", [
+    const refreshedWorkspaces = workspaceList(workspaceKey("ws-new-active"), [
       gatewayWorkspace({
         workspace_id: "ws-new-active",
         name: "新活动工作区",
@@ -1012,11 +1017,11 @@ describe("Gateway 受管工作区新增", () => {
         refs!.setState((previous) => ({
           ...previous,
           gatewayWorkspaces: refreshedWorkspaces.items,
-          activeGatewayWorkspaceId: refreshedWorkspaces.active_workspace_id,
+          activeGatewayWorkspaceId: nullableGatewayWorkspaceKey(refreshedWorkspaces.active_workspace),
           workspaceName: "新活动工作区",
           gatewayWorkspacesStale: false,
         }));
-        return refreshedWorkspaces.active_workspace_id;
+        return nullableGatewayWorkspaceKey(refreshedWorkspaces.active_workspace);
       },
     });
 
@@ -1030,7 +1035,7 @@ describe("Gateway 受管工作区新增", () => {
     expect(next.workspaceSwitching).toBe(false);
     expect(next.isBootstrapping).toBe(false);
     expect(next.gatewayWorkspaces).toBe(refreshedWorkspaces.items);
-    expect(next.activeGatewayWorkspaceId).toBe("ws-new-active");
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-new-active"));
     expect(calls.finish).toBe(1);
     expect(calls.updates).toEqual([]);
   });
@@ -1056,7 +1061,7 @@ describe("Gateway 受管工作区新增", () => {
     const failure = new Error("后端拒绝");
     const refreshFailure = new Error("新工作区加载失败");
     spyOnGatewayApi("addManagedGatewayWorkspace").mockRejectedValue(failure);
-    const authoritativeList = workspaceList("ws-new-active", [
+    const authoritativeList = workspaceList(workspaceKey("ws-new-active"), [
       gatewayWorkspace({ workspace_id: "ws-new-active", }),
     ]);
     spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(authoritativeList);
@@ -1071,7 +1076,7 @@ describe("Gateway 受管工作区新增", () => {
 
     expect(calls.finish).toBe(1);
     expect(state().gatewayWorkspaces).toBe(authoritativeList.items);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-new-active");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-new-active"));
     expect(state().gatewayError).toBe("后端拒绝；刷新工作区列表失败: 新工作区加载失败");
     expect(state().status).toBe(
       "添加工作区失败: 后端拒绝；刷新工作区列表失败: 新工作区加载失败",
@@ -1101,19 +1106,19 @@ describe("Gateway 受管工作区新增", () => {
     setState((previous) => ({
       ...previous,
       gatewayWorkspaces: [gatewayWorkspace({ workspace_id: "ws-latest", name: "最新列表" })],
-      activeGatewayWorkspaceId: "ws-latest",
+      activeGatewayWorkspaceId: workspaceKey("ws-latest"),
       workspaceName: "最新列表",
       gatewayError: "更新操作错误",
       status: "更新操作状态",
     }));
     await act(async () => {
-      resolveList(workspaceList("ws-stale", [gatewayWorkspace({ workspace_id: "ws-stale" })]));
+      resolveList(workspaceList(workspaceKey("ws-stale"), [gatewayWorkspace({ workspace_id: "ws-stale" })]));
     });
     await expect(operation).rejects.toBe(failure);
 
     expect(calls.finish).toBe(0);
     expect(state().gatewayWorkspaces[0]?.workspace_id).toBe("ws-latest");
-    expect(state().activeGatewayWorkspaceId).toBe("ws-latest");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-latest"));
     expect(state().gatewayError).toBe("更新操作错误");
     expect(state().status).toContain("更新操作状态；工作区 root_path=\"/tmp/new-workspace\" 添加失败:");
     expect(state().status).toContain("当前列表请求或工作区选择已更新");
@@ -1124,7 +1129,7 @@ describe("Gateway 受管工作区新增", () => {
     let rejectAdd!: (error: Error) => void;
     const pendingAdd = new Promise<never>((_resolve, reject) => { rejectAdd = reject; });
     spyOnGatewayApi("addManagedGatewayWorkspace").mockImplementation(async () => await pendingAdd);
-    const authoritativeList = workspaceList("ws-server-active", [
+    const authoritativeList = workspaceList(workspaceKey("ws-server-active"), [
       gatewayWorkspace({ workspace_id: "ws-server-active", }),
     ]);
     spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(authoritativeList);
@@ -1140,7 +1145,7 @@ describe("Gateway 受管工作区新增", () => {
     selectionIntentRef.current += 1;
     setState((previous) => ({
       ...previous,
-      activeGatewayWorkspaceId: "ws-selected",
+      activeGatewayWorkspaceId: workspaceKey("ws-selected"),
       workspaceName: "用户选择的工作区",
       gatewayError: "选择错误",
       status: "正在切换工作区",
@@ -1152,7 +1157,7 @@ describe("Gateway 受管工作区新增", () => {
 
     expect(calls.finish).toBe(0);
     expect(state().gatewayWorkspaces).toBe(authoritativeList.items);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-selected");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-selected"));
     expect(state().workspaceName).toBe("用户选择的工作区");
     expect(state().gatewayError).toBe("选择错误");
     expect(state().workspaceSwitching).toBe(true);
@@ -1163,7 +1168,7 @@ describe("Gateway 受管工作区新增", () => {
   test("已提交后的列表读取失败只有刷新实际应用新状态时才解除诊断", async () => {
     const add = spyOnGatewayApi("addManagedGatewayWorkspace").mockResolvedValue({} as never);
     spyOnGatewayApi("listGatewayWorkspaces").mockRejectedValue(new Error("完整列表不可用"));
-    const refreshedWorkspaces = workspaceList("ws-active", [
+    const refreshedWorkspaces = workspaceList(workspaceKey("ws-active"), [
       gatewayWorkspace({ workspace_id: "ws-active", name: "刷新后的活动工作区", active: true }),
     ]);
     const { hook, state, calls } = await mountHook(appState({ gatewayWorkspacesStale: false }), {
@@ -1172,11 +1177,11 @@ describe("Gateway 受管工作区新增", () => {
         refs!.setState((previous) => ({
           ...previous,
           gatewayWorkspaces: refreshedWorkspaces.items,
-          activeGatewayWorkspaceId: refreshedWorkspaces.active_workspace_id,
+          activeGatewayWorkspaceId: nullableGatewayWorkspaceKey(refreshedWorkspaces.active_workspace),
           workspaceName: "刷新后的活动工作区",
           gatewayWorkspacesStale: false,
         }));
-        return refreshedWorkspaces.active_workspace_id;
+        return nullableGatewayWorkspaceKey(refreshedWorkspaces.active_workspace);
       },
     });
 
@@ -1214,7 +1219,7 @@ describe("Gateway 远程工作区新增", () => {
       throw failure;
     });
     const previousWorkspaces = [gatewayWorkspace({ workspace_id: "ws-old" })];
-    const authoritativeList = workspaceList("ws-current", [
+    const authoritativeList = workspaceList(workspaceKey("ws-current"), [
       gatewayWorkspace({ workspace_id: "ws-current", }),
     ]);
     const list = spyOnGatewayApi("listGatewayWorkspaces").mockImplementation(async () => {
@@ -1242,7 +1247,7 @@ describe("Gateway 远程工作区新增", () => {
     const next = state();
     expect(next.gatewayWorkspaces).toBe(authoritativeList.items);
     expect(next.gatewayWorkspacesStale).toBe(false);
-    expect(next.activeGatewayWorkspaceId).toBe("ws-current");
+    expect(next.activeGatewayWorkspaceId).toBe(workspaceKey("ws-current"));
     expect(next.gatewayError).toBe("连接被拒绝");
     expect(next.error).toBeNull();
     expect(next.status).toBe("连接远程 Gateway 失败: 连接被拒绝");
@@ -1303,13 +1308,13 @@ describe("Gateway 远程工作区新增", () => {
 
     gatewayListRequestRef.current += 1;
     await act(async () => {
-      resolveList(workspaceList("ws-late", [gatewayWorkspace({ workspace_id: "ws-late" })]));
+      resolveList(workspaceList(workspaceKey("ws-late"), [gatewayWorkspace({ workspace_id: "ws-late" })]));
       await Promise.resolve();
     });
 
     expect(await pending).toBe(failure);
     expect(state().gatewayWorkspaces).toBe(previousWorkspaces);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-active");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-active"));
     expect(state().gatewayWorkspacesStale).toBe(false);
     expect(state().gatewayError).toBeNull();
   });
@@ -1340,13 +1345,13 @@ describe("Gateway 远程工作区新增", () => {
 
     selectionIntentRef.current += 1;
     await act(async () => {
-      resolveList(workspaceList("ws-late", [gatewayWorkspace({ workspace_id: "ws-late" })]));
+      resolveList(workspaceList(workspaceKey("ws-late"), [gatewayWorkspace({ workspace_id: "ws-late" })]));
       await Promise.resolve();
     });
 
     expect(await pending).toBe(failure);
     expect(state().gatewayWorkspaces).toBe(previousWorkspaces);
-    expect(state().activeGatewayWorkspaceId).toBe("ws-active");
+    expect(state().activeGatewayWorkspaceId).toBe(workspaceKey("ws-active"));
     expect(state().gatewayWorkspacesStale).toBe(false);
     expect(state().gatewayError).toBeNull();
   });
@@ -1378,7 +1383,7 @@ describe("Gateway 远程工作区新增", () => {
 
 test("apiPort 为空时使用默认工作区后端端口", async () => {
   const reorder = spyOnGatewayApi("reorderGatewayWorkspaces").mockResolvedValue(
-    workspaceList("ws-active", [gatewayWorkspace({ workspace_id: "ws-active" })]),
+    workspaceList(workspaceKey("ws-active"), [gatewayWorkspace({ workspace_id: "ws-active" })]),
   );
   let hook: ReturnType<typeof useGatewayWorkspaceMutations> | undefined;
   let current = appState();
@@ -1392,13 +1397,13 @@ test("apiPort 为空时使用默认工作区后端端口", async () => {
       gatewayListRequestRef,
       runGatewayWorkspaceListTask: queue.enqueue,
       apiPort: null,
-      activeGatewayWorkspaceId: "ws-active",
+      activeGatewayWorkspaceId: workspaceKey("ws-active"),
       setState: (update) => {
         current = typeof update === "function" ? update(current) : update;
       },
       abortCurrentStream: () => undefined,
       invalidateWorkspaceRefreshes: () => undefined,
-      finishWorkspaceRefresh: async () => "ws-refreshed",
+      finishWorkspaceRefresh: async () => workspaceKey("ws-refreshed"),
       resetWorkspaceScopedState: () => undefined,
       updateUiSettings: async () => undefined,
     });
@@ -1411,9 +1416,9 @@ test("apiPort 为空时使用默认工作区后端端口", async () => {
   });
   mountedRenderers.push(renderer!);
 
-  await hook!.reorderGatewayWorkspaces(["ws-active"]);
+  await hook!.reorderGatewayWorkspaces([workspaceKey("ws-active")]);
 
-  expect(reorder).toHaveBeenCalledWith(DEFAULT_BACKEND_PORT, { workspace_ids: ["ws-active"] });
+  expect(reorder).toHaveBeenCalledWith(DEFAULT_BACKEND_PORT, { workspaces: [workspaceKey("ws-active")].map(workspaceTarget) });
 });
 
 
@@ -1421,22 +1426,22 @@ test("受控删除对整个已确认组暂停观察，409后完整对账并释�
   const failure = new HttpRequestError(409, "Job 阻塞", { status: "blocked", blockers: [] }, "/api/gateway/workspaces/ws-other", null);
   const group = { expected_backend_generation: "generation-1", expected_workspace_ids: ["ws-other", "ws-sibling"], desired_workspace_ids: ["ws-sibling"] };
   const controllers = [new AbortController(), new AbortController()];
-  const releases = controllers.map((controller, index) => registerWorkspaceObservation(group.expected_workspace_ids[index]!, controller));
+  const releases = controllers.map((controller, index) => registerWorkspaceObservation(workspaceKey(group.expected_workspace_ids[index]!), controller));
   const remove = spyOnGatewayApi("removeGatewayWorkspace").mockImplementation(async () => {
     expect(controllers.every((controller) => controller.signal.aborted)).toBe(true);
     throw failure;
   });
-  spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(workspaceList("ws-active", [
+  spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(workspaceList(workspaceKey("ws-active"), [
     gatewayWorkspace({ workspace_id: "ws-other", backend_generation: "generation-1" }),
     gatewayWorkspace({ workspace_id: "ws-sibling", backend_generation: "generation-1" }),
   ]));
   const { hook, state } = await mountHook(appState());
-  await expect(hook.removeGatewayWorkspace("ws-other", group, true)).rejects.toBe(failure);
-  expect(remove).toHaveBeenCalledWith(API_PORT, "ws-other", group, true);
-  expect(state().gatewayWorkspaces.map((item) => item.workspace_id)).toEqual(["ws-other", "ws-sibling"]);
+  await expect(hook.removeGatewayWorkspace(workspaceKey("ws-other"), group, true)).rejects.toBe(failure);
+  expect(remove).toHaveBeenCalledWith(API_PORT, workspaceKey("ws-other"), group, true);
+  expect(state().gatewayWorkspaces.map(gatewayWorkspaceKey)).toEqual([workspaceKey("ws-other"), workspaceKey("ws-sibling")]);
   for (const identity of group.expected_workspace_ids) {
     const next = new AbortController();
-    const release = registerWorkspaceObservation(identity, next);
+    const release = registerWorkspaceObservation(workspaceKey(identity), next);
     expect(next.signal.aborted).toBe(false);
     release();
   }

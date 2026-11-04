@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from app.core.identifier import validate_gateway_id
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.runtime.process_lifecycle import ManagedProcessHandle
 
@@ -17,14 +18,14 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class ManagedBackendMember:
     workspace_id: str
-    backend_workspace_id: str
 
     def to_payload(self) -> dict[str, object]:
-        return {"workspace_id": self.workspace_id, "backend_workspace_id": self.backend_workspace_id}
+        return {"workspace_id": self.workspace_id}
 
 
 @dataclass(frozen=True, slots=True)
 class ManagedBackendContract:
+    gateway_id: str
     owner_id: str
     generation: str
     members: tuple[ManagedBackendMember, ...]
@@ -32,6 +33,7 @@ class ManagedBackendContract:
     debug_port: int | None = None
 
     def __post_init__(self) -> None:
+        validate_gateway_id(self.gateway_id)
         if not self.owner_id or not self.generation or not self.members:
             raise ValueError("managed Backend 必须有 owner、generation 和完整非空成员")
         if not isinstance(self.owner_id, str) or not isinstance(self.generation, str):
@@ -45,15 +47,9 @@ class ManagedBackendContract:
             if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
                 raise ValueError(f"managed Backend URL 必须为带端口的本机 HTTP 地址: {self.backend_url}")
         for member in self.members:
-            if not isinstance(member.workspace_id, str) or not member.workspace_id:
-                raise ValueError("managed Backend 成员缺少 Gateway target ID")
-            validate_workspace_id(member.backend_workspace_id)
-        for values in (
-            [member.workspace_id for member in self.members],
-            [member.backend_workspace_id for member in self.members],
-        ):
-            if len(values) != len(set(values)):
-                raise ValueError("managed Backend 完整成员合同含重复身份")
+            validate_workspace_id(member.workspace_id)
+        if len(self.workspace_ids) != len(set(self.workspace_ids)):
+            raise ValueError("managed Backend 完整成员合同含重复身份")
 
     @property
     def workspace_ids(self) -> tuple[str, ...]:
@@ -61,6 +57,7 @@ class ManagedBackendContract:
 
     def to_payload(self) -> dict[str, object]:
         return {
+            "gateway_id": self.gateway_id,
             "owner_id": self.owner_id, "generation": self.generation,
             "members": [member.to_payload() for member in self.members],
             "backend_url": self.backend_url, "debug_port": self.debug_port,

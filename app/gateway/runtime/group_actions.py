@@ -10,7 +10,11 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from app.core.failures import failure_detail
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    WorkspaceSelector,
+    WorkspaceTarget,
+)
 from app.gateway.runtime.local_workspace import (
     rebuild_managed_backend_runtime,
     start_managed_backend_runtime,
@@ -29,6 +33,7 @@ from app.schemas.gateway.lifecycle import (
     GatewayRuntimeRestartResultDTO,
     GatewayRuntimeStateResultDTO,
 )
+from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 
 
@@ -54,7 +59,7 @@ class ManagedBackendGroupActions:
         return True
 
     async def _managed_group_action(
-        self, workspace_id: str, action: Literal["start", "stop", "restart-safe", "restart-force"],
+        self, workspace_id: WorkspaceSelector, action: Literal["start", "stop", "restart-safe", "restart-force"],
         *, request_id: str, group_request: GatewayRuntimeGroupRequest | None,
         remove_target: bool = False,
     ) -> GatewayRuntimeStateResultDTO | GatewayRuntimeRestartResultDTO:
@@ -65,8 +70,9 @@ class ManagedBackendGroupActions:
             if action in {"start", "stop"}:
                 return await self._delegated_runtime_state(target, action, request_id=request_id, group_request=group_request)
             return await self._delegated_restart(target, request_id=request_id, forced=action == "restart-force", group_request=group_request)
-        if target.connection_kind != "local" or not target.managed:
+        if target.gateway_id != self._registry.gateway_id or target.connection_kind != "local" or not target.managed:
             raise ValueError("只有 Gateway 托管本地工作区可以操作 Backend")
+        workspace_id = target.workspace_id
         # 拓扑操作先串行，随后在唯一 owner 锁内重核合同；成员不能各拿 shard 锁。
         async with self._registry.backend_topology_lock:
             target = self._registry.resolve(workspace_id)
@@ -81,20 +87,21 @@ class ManagedBackendGroupActions:
                 self._registry.remove(workspace_id, owner="manual_crud")
                 return await self._group_result(workspace_id, "stopped", None, [workspace_id], restart=True, forced=action == "restart-force")
             if owner is None:
-                if target.backend_workspace_id is None:
-                    raise RuntimeError("Gateway target 缺少 Backend UUID binding")
-                backend_id = await asyncio.to_thread(
+                actual_workspace_id = await asyncio.to_thread(
                     resolve_backend_workspace_id, self._project_root,
-                    self._registry.local_workspace_root(workspace_id, target.backend_workspace_id), initialize=False,
+                    self._registry.local_workspace_root(workspace_id), initialize=False,
                 )
-                if target.backend_workspace_id != backend_id:
+                if workspace_id != actual_workspace_id:
                     raise RuntimeError("Gateway target 与根的 Backend UUID 不匹配")
                 owner = ManagedBackendOwner(ManagedBackendContract(
-                    f"backend_owner_{uuid4().hex}", f"backend_generation_{uuid4().hex}",
-                    (ManagedBackendMember(workspace_id, backend_id),), target.backend_url,
+                    gateway_id=target.gateway_id,
+                    owner_id=f"backend_owner_{uuid4().hex}", generation=f"backend_generation_{uuid4().hex}",
+                    members=(ManagedBackendMember(workspace_id),), backend_url=target.backend_url,
                 ))
                 self._registry.register_backend_owner(owner)
             async with owner.lock:
+                if owner.contract.gateway_id != self._registry.gateway_id:
+                    raise RuntimeError("managed Backend 完整组不属于当前 Gateway")
                 allowed = self._validate_group_request(owner, group_request)
                 if remove_target and action == "restart-force" and (
                     group_request is None or group_request.expected_backend_generation is None
@@ -105,6 +112,7 @@ class ManagedBackendGroupActions:
                 forced = action == "restart-force"
                 if not allowed:
                     blockers = [GatewayRuntimeBlockerDTO(
+                        gateway_id=target.gateway_id,
                         workspace_id=workspace_id, kind="backend_group", resource_id=owner.contract.owner_id,
                         session_id="gateway-runtime", status="confirmation_required",
                         detail="共享 Backend 需要确认完整成员与 generation",
@@ -136,9 +144,7 @@ class ManagedBackendGroupActions:
                     else:
                         if self._registry.has_runtime(member_id):
                             raise ValueError("加入项仍持有成员辅助运行时；先完成原组受控清理")
-                        if member_target.backend_workspace_id is None:
-                            raise RuntimeError("加入项缺少 Backend UUID binding")
-                        members.append(ManagedBackendMember(member_id, member_target.backend_workspace_id))
+                        members.append(ManagedBackendMember(member_id))
                 affected = sorted(set(owner.contract.workspace_ids) | set(desired_ids))
                 if action == "start":
                     if owner.process is not None and owner.process.is_alive() and owner.error is None:
@@ -231,7 +237,7 @@ class ManagedBackendGroupActions:
                         blockers = []
                         for member_target in targets:
                             status = await self._runtime_status(member_target, request_id=request_id)
-                            blockers.extend(self._parse_blockers(status.get("blockers"), member_target.workspace_id))
+                            blockers.extend(self._parse_blockers(status.get("blockers"), member_target))
                         for member_id in affected:
                             blockers.extend(self._route_reference_blockers(member_id))
                         if not blockers or forced:
@@ -357,8 +363,14 @@ class ManagedBackendGroupActions:
         blockers: list[GatewayRuntimeBlockerDTO] | None = None,
     ) -> GatewayRuntimeStateResultDTO | GatewayRuntimeRestartResultDTO:
         data = {
+            "gateway_id": self._registry.gateway_id,
             "workspace_id": workspace_id, "status": status, "backend_generation": owner.contract.generation if owner is not None else None,
             "affected_workspace_ids": affected, "blockers": blockers or [],
-            "workspaces": GatewayWorkspaceListDTO(active_workspace_id=self._registry.active_workspace_id, items=await self._registry.list_dtos()),
+            "workspaces": GatewayWorkspaceListDTO(
+                active_workspace=GatewaySearchWorkspaceOwnerDTO(
+                    gateway_id=self._registry.active_workspace[0], workspace_id=self._registry.active_workspace[1],
+                ) if self._registry.active_workspace is not None else None,
+                items=await self._registry.list_dtos(),
+            ),
         }
         return GatewayRuntimeRestartResultDTO.model_validate({**data, "forced": forced}) if restart else GatewayRuntimeStateResultDTO.model_validate(data)

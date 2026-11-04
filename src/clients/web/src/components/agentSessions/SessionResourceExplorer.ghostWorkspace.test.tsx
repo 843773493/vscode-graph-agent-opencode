@@ -17,6 +17,12 @@ import {
 import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
 import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
 import SessionResourceExplorer from "./SessionResourceExplorer";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+
+const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
+const OTHER_WORKSPACE_ID = "00000000-0000-0000-0000-000000000002";
+const GONE_WORKSPACE_ID = "00000000-0000-0000-0000-000000000003";
+const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: WORKSPACE_ID });
 
 // 用真实 useSessionResourceExplorer + fetch 桩渲染导航树。不再替换 hook 与浮层模块：
 // bun 的 mock.module 是进程级且不可撤销的，会污染同一进程后续所有测试文件看到的
@@ -39,7 +45,7 @@ function navigationNode(workspaceId: string, name: string) {
     kind: "workspace_ref",
     name,
     parent_node_id: null,
-    workspace_id: workspaceId,
+    workspace: { gateway_id: "gateway-test", workspace_id: workspaceId },
     position: 0,
     parent_path: null,
   };
@@ -50,25 +56,7 @@ function gatewayWorkspace(
   status: "ready" | "offline",
   connectionError: string | null = null,
 ): GatewayWorkspace {
-  return {
-    workspace_id: workspaceId,
-    backend_workspace_id: "00000000-0000-0000-0000-000000000001",
-    parent_workspace_id: null,
-    name: workspaceId,
-    backend_url: "http://127.0.0.1:9000",
-    connection_kind: "local",
-    status,
-    active: false,
-    managed: true,
-    affected_workspace_ids: [],
-    removable: true,
-    system_default: false,
-    runtime_action: "safe_restart_managed_backend",
-    remote: null,
-    services: {},
-    connection_error: connectionError,
-    checked_at: "2026-07-31T00:00:00Z",
-  };
+  return { gateway_id: "gateway-test", workspace_id: workspaceId, parent_workspace: null, name: workspaceId, backend_url: "http://127.0.0.1:9000", connection_kind: "local", status, active: false, managed: true, affected_workspace_ids: [], removable: true, system_default: false, runtime_action: "safe_restart_managed_backend", remote_gateways: [], services: {}, connection_error: connectionError, checked_at: "2026-07-31T00:00:00Z" };
 }
 
 /** 导航树渲染：喂入指定节点与工作区，等 effect 收敛后返回渲染出的 HTML。 */
@@ -138,7 +126,7 @@ async function renderExplorer(options: {
       <SessionResourceExplorer
         apiPort={8014}
         workspaces={options.workspaces}
-        activeWorkspaceId={options.activeWorkspaceId ?? null}
+        activeWorkspaceId={options.activeWorkspaceId ? gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: options.activeWorkspaceId }) : null}
         currentSessionId={options.currentSessionId ?? ""}
         searchOpen={false}
         searchQuery=""
@@ -192,7 +180,7 @@ async function expandFirstWorkspace(tree: ReactTestRenderer): Promise<void> {
 describe("工作区导航树对已消失工作区的渲染", () => {
   test("导航索引残留但工作区已不在列表时明确标记不可用并禁用激活", async () => {
     const { html } = await renderExplorer({
-      nodes: [navigationNode("gw_gone", "已删除的工作区")],
+      nodes: [navigationNode(GONE_WORKSPACE_ID, "已删除的工作区")],
       workspaces: [],
     });
     expect(html).toContain("已不可用");
@@ -203,8 +191,8 @@ describe("工作区导航树对已消失工作区的渲染", () => {
 
   test("工作区仍在列表且就绪时不显示不可用提示", async () => {
     const { html } = await renderExplorer({
-      nodes: [navigationNode("gw_ok", "正常的工作区")],
-      workspaces: [gatewayWorkspace("gw_ok", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "正常的工作区")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
     });
     expect(html).not.toContain("已不可用");
     expect(html).toContain("正常的工作区");
@@ -260,8 +248,8 @@ describe("工作区导航树的空态与加载态", () => {
 describe("会话目录分支的加载失败与空态", () => {
   test("分支加载失败时显示错误卡并保留技术详情", async () => {
     const { tree, diagnostics } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")],
-      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       branchError: "HTTP 500 内部错误",
     });
     await expandFirstWorkspace(tree);
@@ -275,8 +263,8 @@ describe("会话目录分支的加载失败与空态", () => {
 
   test("分支为空且无错时才显示暂无会话", async () => {
     const { tree } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")],
-      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
     });
     await expandFirstWorkspace(tree);
     expect(JSON.stringify(tree.toJSON())).toContain("暂无会话或会话文件夹");
@@ -285,8 +273,8 @@ describe("会话目录分支的加载失败与空态", () => {
 
   test("工作区离线且带连接错误、分支读取成功但为空时，不得把空态与错误卡并列", async () => {
     const { tree } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")],
-      workspaces: [gatewayWorkspace("gw_1", "offline", "SSH 连接已断开")],
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "offline", "SSH 连接已断开")],
     });
     await expandFirstWorkspace(tree);
     const html = JSON.stringify(tree.toJSON());
@@ -297,8 +285,8 @@ describe("会话目录分支的加载失败与空态", () => {
 
   test("节点缺 node_id 时显示可见错误卡，而不是走 React key 警告或无限递归", async () => {
     const { tree, diagnostics } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")],
-      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       branchItems: [{ kind: "folder", name: "坏文件夹", has_children: true }],
     });
     await expandFirstWorkspace(tree);
@@ -310,8 +298,8 @@ describe("会话目录分支的加载失败与空态", () => {
 
   test("同级节点重复 node_id 时显示可见错误卡", async () => {
     const { tree, diagnostics } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")],
-      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       branchItems: [
         { node_id: "dup", kind: "session", name: "甲", session_id: "s-a", has_children: false },
         { node_id: "dup", kind: "session", name: "乙", session_id: "s-b", has_children: false },
@@ -351,8 +339,8 @@ describe("会话目录更新保持树行稳定", () => {
       pages.get("parent")!.total = 20;
     }
     const { tree } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")], workspaces: [gatewayWorkspace("gw_1", "ready")],
-      activeWorkspaceId: "gw_1",
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
+      activeWorkspaceId: WORKSPACE_ID,
       branchResponse: (parent) => apiSuccessResponse(pages.get(parent)),
       catalogItems: [...pages.values()].flatMap((page) => page.items),
     });
@@ -361,13 +349,13 @@ describe("会话目录更新保持树行稳定", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
     });
     const access = testGatewayUserAccess();
-    const base = createCatalogOutbox({ gatewayId: "local:8014", workspaceId: "gw_1", principal: "guest" });
+    const base = createCatalogOutbox({ gatewayId: "gateway-test", workspaceId: WORKSPACE_ID, principal: "guest" });
     const props = tree.root.findByType(SessionResourceExplorer).props as React.ComponentProps<typeof SessionResourceExplorer>;
     const updateOutbox = async (outbox: typeof base) => {
       await act(async () => {
         tree.update(<SessionResourceExplorer {...props} gatewayUserAccess={access}
-          sessionCatalogOutboxSnapshot={new Map([[sessionCatalogOutboxScopeKey("gw_1", access), {
-            gatewayWorkspaceId: "gw_1", principal: "guest", partitionKey: catalogOutboxPartitionKey(outbox.partition), outbox,
+          sessionCatalogOutboxSnapshot={new Map([[sessionCatalogOutboxScopeKey(WORKSPACE_KEY, access), {
+            gatewayWorkspaceId: WORKSPACE_KEY, principal: "guest", partitionKey: catalogOutboxPartitionKey(outbox.partition), outbox,
           }]])} />);
       });
     };
@@ -378,23 +366,23 @@ describe("会话目录更新保持树行稳定", () => {
     for (const otherChildren of [false, true]) {
       test(`${kind} 移出${otherChildren ? "其中一个" : "最后一个"}子项不插入提示行，回退保留原展开状态`, async () => {
         const { tree, base, updateOutbox } = await mountCatalog(kind, otherChildren);
-        const stable = tree.root.findByProps({ "data-testid": "catalog-node-gw_1-stable" });
+        const stable = tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-stable` });
         const moving = addCatalogOutboxIntent(base, "op_00000000000000000000000000000001",
           { kind: "move_node", targetNodeId: "child", parentNodeId: null },
           { baseCatalogRevision: 3, expectedRevision: 1 });
         await updateOutbox(moving);
-        expect(tree.root.findAllByProps({ "data-testid": "catalog-node-gw_1-child" })).toHaveLength(1);
+        expect(tree.root.findAllByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` })).toHaveLength(1);
         expect(tree.root.findByProps({ "data-pending-state": "pending_local" })).toBeDefined();
-        expect(tree.root.findByProps({ "data-testid": "catalog-node-gw_1-stable" })).toBe(stable);
-        const parent = tree.root.findByProps({ "data-testid": "catalog-node-gw_1-parent" }).parent!;
+        expect(tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-stable` })).toBe(stable);
+        const parent = tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-parent` }).parent!;
         expect(parent.props["aria-expanded"]).toBe(true);
         expect(parent.findAllByProps({ role: "treeitem" }).filter((item) => item !== parent)).toHaveLength(otherChildren ? 1 : 0);
         expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
         expect(JSON.stringify(tree.toJSON())).not.toContain("正在加载…");
         await updateOutbox(base);
-        expect(tree.root.findByProps({ "data-testid": "catalog-node-gw_1-parent" }).parent!.props["aria-expanded"]).toBe(true);
-        expect(parent.findAllByProps({ "data-testid": "catalog-node-gw_1-child" })).toHaveLength(1);
-        expect(tree.root.findByProps({ "data-testid": "catalog-node-gw_1-stable" })).toBe(stable);
+        expect(tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-parent` }).parent!.props["aria-expanded"]).toBe(true);
+        expect(parent.findAllByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` })).toHaveLength(1);
+        expect(tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-stable` })).toBe(stable);
         act(() => tree.unmount());
       });
     }
@@ -413,7 +401,7 @@ describe("会话目录更新保持树行稳定", () => {
   test("首次展开未加载分支仍显示加载提示，不能提前显示空态", async () => {
     const deferred = createDeferredResult<Response>();
     const { tree } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")], workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       branchResponse: () => deferred.promise,
     });
     await expandFirstWorkspace(tree);
@@ -426,11 +414,11 @@ describe("会话目录更新保持树行稳定", () => {
 
   test("后台刷新保留行身份与展开状态，不追加加载行", async () => {
     const { tree, pages } = await mountCatalog("folder");
-    const child = tree.root.findByProps({ "data-testid": "catalog-node-gw_1-child" });
+    const child = tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` });
     const deferred = createDeferredResult<Response>();
     installGatewayFetch(({ path }) => {
       if (path === "/api/gateway/workspace-navigation") {
-        return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode("gw_1", "gw_1")] });
+        return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode(WORKSPACE_ID, "gw_1")] });
       }
       if (path === "/api/v1/session-catalog/export") {
         return apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3,
@@ -447,18 +435,18 @@ describe("会话目录更新保持树行稳定", () => {
     // 根分支和展开分支一起刷新，结果在同一批次发布前均保持 busy。
     expect(tree.root.findAllByProps({ role: "group", "aria-busy": true })).toHaveLength(2);
     expect(JSON.stringify(tree.toJSON())).not.toContain("正在加载…");
-    expect(tree.root.findByProps({ "data-testid": "catalog-node-gw_1-child" })).toBe(child);
+    expect(tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` })).toBe(child);
     await act(async () => {
       deferred.release(apiSuccessResponse(catalogPage("parent", [catalogNode("child", "session", "parent")])));
     });
     expect(tree.root.findAllByProps({ role: "group", "aria-busy": true })).toHaveLength(0);
-    expect(tree.root.findByProps({ "data-testid": "catalog-node-gw_1-child" })).toBe(child);
+    expect(tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` })).toBe(child);
     act(() => tree.unmount());
   });
 
   test("后端确认会话无子项后去掉箭头，不插入空态行", async () => {
     const { tree } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "gw_1")], workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       branchResponse: (parent) => apiSuccessResponse(catalogPage(parent, parent === null ? [catalogNode("parent", "session")] : [])),
       catalogItems: [catalogNode("parent", "session")],
     });
@@ -476,9 +464,9 @@ describe("会话目录更新保持树行稳定", () => {
 describe("定位当前会话失败的错误归属", () => {
   test("导航加载成功但定位当前会话失败时，不得误报工作区列表不可用", async () => {
     const { html, tree, diagnostics } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "正常的工作区")],
-      workspaces: [gatewayWorkspace("gw_1", "ready")],
-      activeWorkspaceId: "gw_1",
+      nodes: [navigationNode(WORKSPACE_ID, "正常的工作区")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
+      activeWorkspaceId: WORKSPACE_ID,
       currentSessionId: "s-hidden",
       breadcrumbFails: "面包屑读取炸了",
     });
@@ -496,10 +484,10 @@ describe("定位当前会话失败的错误归属", () => {
 describe("工作区错误提示合并与恢复", () => {
   test("切换与目录失败在同一工作区合并，日志保留两个请求的详情", async () => {
     const { tree, diagnostics } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "目标工作区")],
-      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "目标工作区")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       branchError: "请求超时: /api/v1/session-catalog/children",
-      onActivateWorkspace: async () => { throw new Error("请求超时: /api/gateway/workspaces/gw_1/activate"); },
+      onActivateWorkspace: async () => { throw new Error(`请求超时: /api/gateway/workspaces/${WORKSPACE_ID}/activate`); },
     });
     await expandFirstWorkspace(tree);
     await act(async () => {
@@ -509,8 +497,8 @@ describe("工作区错误提示合并与恢复", () => {
     expect(JSON.stringify(tree.toJSON())).toContain("切换工作区失败");
     expect(JSON.stringify(tree.toJSON())).not.toContain("请求超时:");
     viewDiagnostic(tree);
-    expect(diagnostics[0].title).toContain("gw_1");
-    expect(diagnostics[0].detail).toContain("/api/gateway/workspaces/gw_1/activate");
+    expect(diagnostics[0].title).toContain(WORKSPACE_ID);
+    expect(diagnostics[0].detail).toContain(`/api/gateway/workspaces/${WORKSPACE_ID}/activate`);
     expect(diagnostics[0].detail).toContain("/api/v1/session-catalog/children");
     act(() => tree.unmount());
   });
@@ -518,8 +506,8 @@ describe("工作区错误提示合并与恢复", () => {
   test("目标未展开时切换失败仍可见，重试成功后清除提示", async () => {
     let attempts = 0;
     const { tree } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "目标工作区")],
-      workspaces: [gatewayWorkspace("gw_1", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "目标工作区")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       onActivateWorkspace: async () => {
         if (++attempts === 1) throw new Error("网络已断开");
       },
@@ -539,10 +527,10 @@ describe("工作区错误提示合并与恢复", () => {
 
   test("另一工作区的目录错误仍独立显示，刷新不叠加全局错误横幅", async () => {
     const { tree } = await renderExplorer({
-      nodes: [navigationNode("gw_1", "甲"), navigationNode("gw_2", "乙")],
-      workspaces: [gatewayWorkspace("gw_1", "ready"), gatewayWorkspace("gw_2", "ready")],
+      nodes: [navigationNode(WORKSPACE_ID, "甲"), navigationNode(OTHER_WORKSPACE_ID, "乙")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready"), gatewayWorkspace(OTHER_WORKSPACE_ID, "ready")],
       branchError: "目录请求失败",
-      activeWorkspaceId: "gw_2",
+      activeWorkspaceId: OTHER_WORKSPACE_ID,
       onActivateWorkspace: async () => { throw new Error("切换请求失败"); },
     });
     await act(async () => {

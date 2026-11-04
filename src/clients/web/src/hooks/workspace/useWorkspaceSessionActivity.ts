@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useEffect, useRef } from "react";
 import {
   registerWorkspaceObservation,
@@ -54,13 +55,13 @@ export function useWorkspaceSessionActivity({
   currentSessionCacheKey: string | null;
   setState: SetAppState;
 }): void {
-  const observationState = useWorkspaceObservationState(workspaceTarget?.workspace_id ?? null);
+  const observationState = useWorkspaceObservationState(nullableGatewayWorkspaceKey(workspaceTarget));
   const currentSessionCacheKeyRef = useRef(currentSessionCacheKey);
   currentSessionCacheKeyRef.current = currentSessionCacheKey;
 
   useEffect(() => {
     if (apiPort === null || !workspaceTarget || observationState.paused) return;
-    const workspaceId = workspaceTarget.workspace_id;
+    const workspaceId = gatewayWorkspaceKey(workspaceTarget);
     const controller = new AbortController();
     const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
     let cursor = 0;

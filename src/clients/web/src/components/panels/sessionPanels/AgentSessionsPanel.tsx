@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AddManagedGatewayWorkspaceRequest,
@@ -322,9 +323,9 @@ export default function AgentSessionsPanel({
   const openWorkspaceMenu = (workspace: GatewayWorkspace, x: number, y: number) => {
     setContextMenu(null);
     setWorkspaceContextMenu({
-      workspaceId: workspace.workspace_id,
+      workspaceId: gatewayWorkspaceKey(workspace),
       name: workspace.name,
-      parentWorkspaceId: workspace.parent_workspace_id ?? null,
+      parentWorkspaceId: nullableGatewayWorkspaceKey(workspace.parent_workspace),
       removable: workspace.removable,
       managed: workspace.managed,
       systemDefault: workspace.system_default,
@@ -557,8 +558,6 @@ export default function AgentSessionsPanel({
                             active
                             workspaceId={
                               activeGatewayWorkspaceId
-                              ?? activeSession?.workspace_id
-                              ?? 'ws_local'
                             }
                             activeJobIdsBySession={activeJobIdsBySession}
                             unreadSessionKeys={unreadSessionKeys}
@@ -573,9 +572,7 @@ export default function AgentSessionsPanel({
                             onOpenMenu={(session, x, y) =>
                               openSessionMenu(
                                 session,
-                                activeGatewayWorkspaceId ??
-                                  activeSession?.workspace_id ??
-                                  'ws_local',
+                                activeGatewayWorkspaceId ?? (() => { throw new Error('会话菜单缺少 Gateway／UUID 归属'); })(),
                                 x,
                                 y,
                               )
@@ -644,7 +641,7 @@ export default function AgentSessionsPanel({
           onCopySessionInformation={onCopySessionInformation}
           onRenameWorkspace={(workspaceId) => {
             const workspace = gatewayWorkspaces.find(
-              (candidate) => candidate.workspace_id === workspaceId,
+              (candidate) => gatewayWorkspaceKey(candidate) === workspaceId,
             );
             if (!workspace) {
               onError(`无法重命名未知工作区: ${workspaceId}`);

@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useCallback, useEffect, useState } from 'react';
 import WorkspaceEditorHeader from '../../../web/src/components/workspace/WorkspaceEditorHeader.js';
 import WorkspaceAuxiliaryPanel, { type WorkspaceAuxiliaryTab } from '../../../web/src/components/workspace/WorkspaceAuxiliaryPanel.js';
@@ -55,30 +56,30 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
   const visible = input.resourcesVisible && active;
   const [markdownSource, setMarkdownSource] = useState(false);
   const persistPreview = useCallback((layout: WebUiLayoutSettings) => { input.filePreviewLayout = layout; }, [input]);
-  const filePreview = useWorkspacePreviewTabs({ apiPort: 0, workspaceId: owner.routeId,
+  const filePreview = useWorkspacePreviewTabs({ apiPort: 0, workspaceId: owner.workspaceKey,
     settingsLoaded: state.uiSettingsLoaded, restoredLayout: input.filePreviewLayout,
     onPersistLayout: persistPreview, onStatusChange: reportResourceStatus });
   const filePreviewVisible = tab === 'files' && filePreview.visible;
-  const debug = useNodeDebugController({ apiPort: 0, workspaceId: owner.routeId, sessionId: owner.sessionId,
+  const debug = useNodeDebugController({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId,
     threadId: owner.threadId, enabled: visible && tab === 'debug', onStatusChange: reportResourceStatus });
-  const children = useChildThreadLoader({ apiPort: 0, workspaceId: owner.routeId, sessionId: owner.sessionId, enabled: visible && tab === 'resources' });
-  const childConversation = useChildThreadConversation({ apiPort: 0, workspaceId: owner.routeId, sessionId: owner.sessionId,
+  const children = useChildThreadLoader({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId, enabled: visible && tab === 'resources' });
+  const childConversation = useChildThreadConversation({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId,
     threads: children.threads, enabled: visible && tab === 'resources' });
   const { selectThreadForOwner } = childConversation;
   useEffect(() => {
     if (!reportRequest) return;
     if (reportRequest.source_session_id !== owner.sessionId || !reportRequest.source_thread_id || !reportRequest.source_execution_id) throw new Error('报告请求与会话资源归属不一致');
-    selectThreadForOwner({ workspaceId: owner.routeId, sessionId: owner.sessionId }, reportRequest.source_thread_id, 'report', reportRequest.source_execution_id);
-  }, [reportRequest, owner.routeId, owner.sessionId, selectThreadForOwner]);
+    selectThreadForOwner({ workspaceId: owner.workspaceKey, sessionId: owner.sessionId }, reportRequest.source_thread_id, 'report', reportRequest.source_execution_id);
+  }, [reportRequest, owner.workspaceKey, owner.sessionId, selectThreadForOwner]);
   useEffect(() => {
     if (!visible) return;
     if (tab === 'changes') void content.refreshSessionChanges(owner.sessionId);
   }, [tab, visible, owner.sessionId, content.refreshSessionChanges]);
-  useSessionResourcePolling({ active: visible && tab === 'resources', workspaceId: owner.routeId,
+  useSessionResourcePolling({ active: visible && tab === 'resources', workspaceId: owner.workspaceKey,
     sessionId: owner.sessionId, refresh: content.refreshSessionResources, onStatusChange: reportResourceStatus });
   const openRuntime = (kind: 'terminal' | 'browser', id: string) => {
     const path = `${kind}://${id}`;
-    const base = { path, name: id, attachUrl: buildGatewayAttachUrl(kind, owner.routeId, id, true, thread) };
+    const base = { path, name: id, attachUrl: buildGatewayAttachUrl(kind, owner.workspaceKey, id, true, thread) };
     setPreview(kind === 'terminal' ? { ...base, previewType: kind, terminalId: id } : { ...base, previewType: kind, browserId: id });
     input.resourceTab = 'connections'; onUpdate();
   };
@@ -98,7 +99,7 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
     }} />
     <div className={`workspace-editor-body${filePreviewVisible ? ' has-shared-preview' : ''}`}>
     {filePreviewVisible ? <WorkspaceFilePreviewArea context="files" visible flexRatio={1} apiPort={0}
-      workspaceId={owner.routeId} workspaceName={state.gatewayWorkspaces.find(item => item.workspace_id === owner.routeId)?.name ?? ''}
+      workspaceId={owner.workspaceKey} workspaceName={state.gatewayWorkspaces.find(item => gatewayWorkspaceKey(item) === owner.workspaceKey)?.name ?? ''}
       sessionTitle={state.currentSession?.title ?? owner.title} tabs={filePreview.tabs} activePath={filePreview.activePath}
       loadingPath={filePreview.loadingPath} error={filePreview.error} editingPath={filePreview.editingPath}
       draftContent={filePreview.draftContent} savingPath={filePreview.savingPath} hasUnsavedEdit={filePreview.hasUnsavedEdit}
@@ -107,8 +108,8 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
       onCancelEdit={() => void filePreview.cancelWorkspaceFileEdit()} onSaveEdit={filePreview.saveWorkspaceFileEdit}
       onOpenWorkspacePath={filePreview.openWorkspaceFilePath}
       onClose={() => { if (filePreview.activePath) void filePreview.closeWorkspaceFilePreview(filePreview.activePath); }} /> : null}
-    <WorkspaceAuxiliaryPanel visible={input.resourcesVisible} flexRatio={1} tab={tab} apiPort={0} workspaceId={owner.routeId}
-      workspaceFileTreeReady={visible} workspaceName={state.gatewayWorkspaces.find(item => item.workspace_id === owner.routeId)?.name ?? ''}
+    <WorkspaceAuxiliaryPanel visible={input.resourcesVisible} flexRatio={1} tab={tab} apiPort={0} workspaceId={owner.workspaceKey}
+      workspaceFileTreeReady={visible} workspaceName={state.gatewayWorkspaces.find(item => gatewayWorkspaceKey(item) === owner.workspaceKey)?.name ?? ''}
       sessionId={owner.sessionId} sessionTitle={state.currentSession?.title ?? owner.title} activeFilePath={filePreview.activePath}
       sessionChangesets={state.sessionChangesets} selectedChangesetId={state.selectedChangesetId} activeChangeset={state.activeChangeset}
       sessionChangesLoading={state.sessionChangesLoading} sessionChangesError={state.sessionChangesError} sessionChangesLoadedAt={state.sessionChangesLoadedAt}
@@ -124,32 +125,32 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
         void editors.openEditor({ original: { resource: changeFileUri(owner, id, file, 'before') }, modified: { resource: changeFileUri(owner, id, file, 'after') }, label: file.file_path, options: { pinned: true } }).catch((cause: unknown) => onError(`打开更改审阅失败：${String(cause)}`));
       }}
       onOpenFile={filePreview.openWorkspaceFilePreview} onFileOpenMenu={onFileOpenMenu} onStatusChange={reportResourceStatus}
-      attachmentPreview={attachment ? <WorkspaceAttachmentPreview attachment={attachment} apiPort={0} workspaceId={owner.routeId} sessionId={owner.sessionId}
+      attachmentPreview={attachment ? <WorkspaceAttachmentPreview attachment={attachment} apiPort={0} workspaceId={owner.workspaceKey} sessionId={owner.sessionId}
         onDirectoryShortcutUpdated={() => setFileTreeSettingsVersion(value => value + 1)} /> : null}
       taskPanel={<TaskView owner={owner} sessionId={owner.sessionId} editors={editors} active={visible && tab === 'goal'} />}
       runtimePreview={preview ? <WorkspaceRuntimePreviewArea tab={preview} onClose={async () => setPreview(null)} /> : null}
-      debugPanel={<NodeDebugWorkbench apiPort={0} workspaceId={owner.routeId} sessionId={owner.sessionId}
+      debugPanel={<NodeDebugWorkbench apiPort={0} workspaceId={owner.workspaceKey} sessionId={owner.sessionId}
         threadId={owner.threadId} mainThreadId={state.currentSession?.thread_id ?? null} activeFilePath={null}
         nodeDebugController={debug} sessions={state.currentSession ? [state.currentSession] : []} compact
         onSelectThread={openDebugThread}
         onOpenWorkspacePath={async path => {
-          const file = await revealWorkspaceFileEntry(0, path, owner.routeId);
+          const file = await revealWorkspaceFileEntry(0, path, owner.workspaceKey);
           const root = resourceFileRootUri(file.path);
           if (!root) throw new Error('调试源码定位响应缺少后端文件根 URI');
           await editors.openEditor({ resource: workspaceFileUri(owner, file.path, root) });
         }} onStatusChange={reportResourceStatus} />}
       resourcePanel={<><ResourcePanel inlinePreview resources={resourceItems} loading={state.sessionResourcesLoading} error={state.sessionResourcesError}
-        loadedAt={state.sessionResourcesLoadedAt} sessionId={owner.sessionId} workspaceId={owner.routeId} mainThread={thread}
+        loadedAt={state.sessionResourcesLoadedAt} sessionId={owner.sessionId} workspaceId={owner.workspaceKey} mainThread={thread}
         activePreviewPath={preview?.path ?? null} onRefresh={() => void content.refreshSessionResources(owner.sessionId)}
         onControl={content.controlSessionResource} onOpenTerminalPreview={id => openRuntime('terminal', id)} onOpenBrowserPreview={id => openRuntime('browser', id)}
         onCloseResourcePreview={async () => setPreview(null)}
         onOwnerControl={async (id, action, target) => {
-          try { await controlWorkspaceResource(0, owner.routeId, await getWorkspaceResource(0, owner.routeId, id), action, target ?? thread); }
+          try { await controlWorkspaceResource(0, owner.workspaceKey, await getWorkspaceResource(0, owner.workspaceKey, id), action, target ?? thread); }
           finally { await content.refreshSessionResources(owner.sessionId, { force: true }); }
         }}
         onCreateConnection={async (kind, target) => {
           if (target.session_id !== owner.sessionId || target.thread_id !== owner.threadId) throw new Error('新建连接的 Thread 归属不一致');
-          const created = await createSessionConnection(0, owner.routeId, target, kind);
+          const created = await createSessionConnection(0, owner.workspaceKey, target, kind);
           const result = await content.refreshSessionResources(owner.sessionId, { force: true });
           if (result !== 'loaded') throw new Error('连接已创建，但资源重读未完成');
           openRuntime(created.kind, created.resourceId);

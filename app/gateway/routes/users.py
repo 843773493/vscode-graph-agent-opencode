@@ -96,6 +96,7 @@ def _release_replaced_user_access(
 def _view_state_dto(record: UserViewStateRecord) -> GatewayUserViewStateDTO:
     return GatewayUserViewStateDTO(
         user_id=record.user_id,
+        gateway_id=record.gateway_id,
         workspace_id=record.workspace_id,
         session_id=record.session_id,
         turn_anchor=record.turn_anchor,
@@ -378,6 +379,7 @@ async def delete_gateway_user(
 @router.get("/api/gateway/users/current/view-state")
 async def get_gateway_user_view_state(
     request: Request,
+    gateway_id: str = Query(min_length=1, max_length=256),
     workspace_id: str = Query(min_length=1, max_length=256),
     session_id: str = Query(min_length=1, max_length=256),
     _: str = Depends(verify_gateway_token),
@@ -389,6 +391,7 @@ async def get_gateway_user_view_state(
     try:
         record = store.get(
             context=context,
+            gateway_id=gateway_id,
             workspace_id=workspace_id,
             session_id=session_id,
         )
@@ -423,6 +426,7 @@ async def get_latest_gateway_user_view_state(
 async def put_gateway_user_view_state(
     payload: GatewayUserViewStateUpdateRequest,
     request: Request,
+    gateway_id: str = Query(min_length=1, max_length=256),
     workspace_id: str = Query(min_length=1, max_length=256),
     session_id: str = Query(min_length=1, max_length=256),
     _: str = Depends(verify_gateway_token),
@@ -434,6 +438,7 @@ async def put_gateway_user_view_state(
     try:
         record = store.put(
             context=context,
+            gateway_id=gateway_id,
             workspace_id=workspace_id,
             session_id=session_id,
             turn_anchor=payload.turn_anchor,

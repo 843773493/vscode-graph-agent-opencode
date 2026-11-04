@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react-test-renderer";
 import type {
@@ -50,13 +51,9 @@ import { CatalogReadSupersededError } from "../sessionResourceExplorer/resourceT
 
 const API_PORT = 49_441;
 const GATEWAY_ID = "gateway-test";
-const GATEWAY_WORKSPACE_ID = "gateway-route-test";
 const BACKEND_WORKSPACE_ID = "c6dd923e-4a7c-4db3-8c63-110ea072d3a4";
-const WORKSPACE_TARGET: GatewayWorkspaceRequestTarget = {
-  workspace_id: GATEWAY_WORKSPACE_ID,
-  backend_workspace_id: BACKEND_WORKSPACE_ID,
-  connection_kind: "local",
-};
+const WORKSPACE_TARGET: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: BACKEND_WORKSPACE_ID };
+const GATEWAY_WORKSPACE_ID = gatewayWorkspaceKey(WORKSPACE_TARGET);
 const OPERATION_ID = "op_00000000000000000000000000000001";
 
 function navigationEvent(sequence: number): SessionCatalogNavigationEvent {

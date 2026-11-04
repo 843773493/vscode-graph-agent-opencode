@@ -4,7 +4,7 @@ import * as api from "../../api/mcpConnections";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { useMcpConnections } from "./useMcpConnections";
 
-const target: GatewayWorkspaceRequestTarget = { workspace_id: "gateway-one", backend_workspace_id: "backend-one", connection_kind: "local" };
+const target: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: "backend-one" };
 const operation: api.McpConnectionOperationDTO = { operation_id: "original", connection_id: "connection", server_id: "secure", action: "connect", status: "waiting_user", stage: "authorize", created_at: 1, updated_at: 1, deadline: Date.now() / 1000 + 60 };
 const server: api.McpServerDTO = { server_id: "secure", status: "authorization_required", transport: "streamable_http", enabled: true, tools: [] };
 let renderer: ReactTestRenderer;
@@ -43,14 +43,14 @@ test("同名 Server 切换 backend 后丢弃旧在途读取，旧动作不可再
   const pending = deferred<api.McpServerDTO[]>();
   let oldSignal: AbortSignal | undefined;
   spyOn(api, "listMcpServers").mockImplementation(async (_port, owner, signal) => {
-    if (owner.backend_workspace_id === "backend-one") { oldSignal = signal; return pending.promise; }
+    if (owner.workspace_id === "backend-one") { oldSignal = signal; return pending.promise; }
     return [{ ...server, status: "ready" }];
   });
   const submit = spyOn(api, "submitMcpOperation").mockResolvedValue(operation);
   restores.push(() => submit.mockRestore());
   await mount();
   const old = value;
-  await act(async () => { renderer.update(<Probe owner={{ ...target, backend_workspace_id: "backend-two" }} />); });
+  await act(async () => { renderer.update(<Probe owner={{ ...target, workspace_id: "backend-two" }} />); });
   expect(oldSignal?.aborted).toBe(true);
   expect(value.servers[0].status).toBe("ready");
   await act(async () => { pending.resolve([server]); await old.submit("secure", "connect"); });

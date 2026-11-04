@@ -5,7 +5,7 @@ import { errorMessage } from "../../utils/errorMessage";
 import { authorizeMcpInWindow } from "./authorizationWindow";
 
 export function useMcpConnections(port: number, target: GatewayWorkspaceRequestTarget, enabled = true) {
-  const requestTarget = useMemo(() => ({ ...target }), [target.workspace_id, target.backend_workspace_id, target.connection_kind]);
+  const requestTarget = useMemo(() => ({ ...target }), [target.gateway_id, target.workspace_id]);
   const scope = useMemo(() => ({ controller: new AbortController(), generation: 0, busy: false, reading: 0 }), [port, requestTarget]);
   const [view, setView] = useState({ scope, servers: [] as McpServerDTO[], operations: [] as McpConnectionOperationDTO[], error: null as string | null, busy: false, loaded: false });
   const current = useRef(scope);

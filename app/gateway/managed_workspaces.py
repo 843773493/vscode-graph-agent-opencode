@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    WorkspaceSelector,
+    WorkspaceTarget,
+)
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.schemas.gateway.lifecycle import (
     GatewayRuntimeGroupRequest,
     GatewayRuntimeRestartResultDTO,
@@ -23,6 +26,7 @@ async def list_direct_managed_workspaces(
     ]
     return [
         GatewayManagedWorkspaceDTO(
+            gateway_id=workspace.gateway_id,
             workspace_id=workspace.workspace_id,
             name=workspace.name,
             status=workspace.status,
@@ -55,23 +59,22 @@ async def create_direct_managed_workspace(
         raise ValueError("所选工作区资源不是目录")
     if not workspace_root.exists() and not create_directory:
         raise FileNotFoundError("所选工作区目录不存在")
-    backend_workspace_id = await asyncio.to_thread(
+    workspace_id = await asyncio.to_thread(
         registry.resolve_local_workspace_identity,
         project_root,
         workspace_root,
         create_directory=create_directory,
     )
 
-    workspace_id = build_managed_local_workspace_id(str(workspace_root))
-    if any(target.workspace_id == workspace_id for target in registry.targets()):
+    if registry.has_target(workspace_id):
         raise ValueError("所选工作区已经由当前 Gateway 托管")
     target = WorkspaceTarget(
+        gateway_id=registry.gateway_id,
         workspace_id=workspace_id,
         name=name or workspace_root.name or "workspace",
         name_customized=bool(name),
         root_path=str(workspace_root),
         backend_url="",
-        backend_workspace_id=backend_workspace_id,
         connection_kind="local",
         owner="manual",
         managed=True,
@@ -86,12 +89,12 @@ async def create_direct_managed_workspace(
 
 async def remove_direct_managed_workspace(
     registry: GatewayWorkspaceRegistry,
-    workspace_id: str,
+    workspace_id: WorkspaceSelector,
     *, controller: GatewayWorkspaceRuntimeController, request_id: str,
     group_request: GatewayRuntimeGroupRequest | None = None, force: bool = False,
 ) -> GatewayRuntimeRestartResultDTO:
     target = registry.resolve(workspace_id)
-    if target.connection_kind != "local" or not target.managed:
+    if target.gateway_id != registry.gateway_id or target.connection_kind != "local" or not target.managed:
         raise ValueError(f"工作区不属于当前 Gateway 的直接托管目标: {workspace_id}")
     if not target.removable or target.system_default:
         raise PermissionError(f"默认工作区不能删除: {target.name}")
@@ -103,5 +106,5 @@ async def remove_direct_managed_workspace(
     if len(direct_managed_targets) == 1:
         raise ValueError("Gateway 至少需要保留一个直接托管工作区")
     return await controller.remove_managed_workspace(
-        workspace_id, request_id=request_id, group_request=group_request, force=force,
+        target.key, request_id=request_id, group_request=group_request, force=force,
     )

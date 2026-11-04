@@ -1,11 +1,15 @@
+import { gatewayWorkspaceKey } from "../api/workspaceIdentity";
 import {
   applyGatewayWorkspaceListAfterRemoval,
   withFreshGatewayWorkspaceList,
 } from "./gatewayWorkspaceState";
 import type { GatewayWorkspace, Session } from "../types/backend";
 
+const key = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
+
 function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
   return {
+    gateway_id: "gateway-test",
     workspace_id: workspaceId,
     name: workspaceId,
     backend_url: "http://127.0.0.1:8010",
@@ -26,7 +30,7 @@ function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
       deferred_paths: [],
       layer_digests: {},
     },
-    remote: null,
+    remote_gateways: [],
     services: {},
     checked_at: "2026-07-16T00:00:00Z",
   };
@@ -53,34 +57,34 @@ function session(sessionId: string): Session {
   const removedSession = session("removed-session");
   const previous = {
     gatewayWorkspaces: [workspace("kept", true), workspace("removed", false)],
-    activeGatewayWorkspaceId: "kept",
+    activeGatewayWorkspaceId: key("kept"),
     sessionsByWorkspace: new Map([
-      ["kept", [keptSession]],
-      ["removed", [removedSession]],
+      [key("kept"), [keptSession]],
+      [key("removed"), [removedSession]],
     ]),
     sessionGatewayWorkspaceById: new Map([
-      ["kept:kept-session", "kept"],
-      ["removed:removed-session", "removed"],
+      ["kept:kept-session", key("kept")],
+      ["removed:removed-session", key("removed")],
     ]),
-    removingGatewayWorkspaceIds: new Set(["removed"]),
+    removingGatewayWorkspaceIds: new Set([key("removed")]),
     gatewayError: "旧错误",
     error: "旧错误",
     status: "正在删除工作区",
     unrelatedValue: "保持不变",
   };
 
-  const next = applyGatewayWorkspaceListAfterRemoval(previous, "removed", {
-    active_workspace_id: "kept",
+  const next = applyGatewayWorkspaceListAfterRemoval(previous, key("removed"), {
+    active_workspace: { gateway_id: "gateway-test", workspace_id: "kept" },
     items: [workspace("kept", true)],
   }, true);
 
   if (next.gatewayWorkspaces.map((item) => item.workspace_id).join(",") !== "kept") {
     throw new Error("删除后未采用后端返回的完整工作区列表");
   }
-  if ([...next.sessionsByWorkspace.keys()].join(",") !== "kept") {
+  if ([...next.sessionsByWorkspace.keys()].join(",") !== key("kept")) {
     throw new Error("删除后未清理目标工作区的会话缓存");
   }
-  if ([...next.sessionGatewayWorkspaceById.values()].join(",") !== "kept") {
+  if ([...next.sessionGatewayWorkspaceById.values()].join(",") !== key("kept")) {
     throw new Error("删除后未清理目标工作区的会话索引");
   }
   if (next.removingGatewayWorkspaceIds.size !== 0) {

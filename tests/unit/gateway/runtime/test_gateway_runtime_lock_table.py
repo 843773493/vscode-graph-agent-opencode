@@ -1,15 +1,18 @@
 import asyncio
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 
+GATEWAY_ID = "gateway_00000000000040008000000000000001"
+
 
 def _controller(tmp_path: Path) -> GatewayWorkspaceRuntimeController:
     return GatewayWorkspaceRuntimeController(
-        registry=GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json"),
+        registry=GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json"),
         project_root=tmp_path,
         log_dir=tmp_path / "logs",
     )
@@ -22,7 +25,7 @@ def test_runtime_lock_table_stays_bounded_across_many_workspace_ids(
 
     controller = _controller(tmp_path)
     for index in range(5000):
-        controller._lock(f"gw_probe_{index}")
+        controller._lock(str(UUID(int=index)))
     assert len(controller._locks) <= 64
 
 
@@ -33,8 +36,9 @@ async def test_runtime_lock_is_stable_and_serializes_same_workspace(
     """同一 workspace_id 恒得同一把锁，且该锁对同工作区仍是真互斥。"""
 
     controller = _controller(tmp_path)
-    assert controller._lock("gw_x") is controller._lock("gw_x")
-    lock = controller._lock("gw_x")
+    assert controller._lock("00000000-0000-4000-8000-000000000001") is controller._lock("00000000-0000-4000-8000-000000000001")
+    assert controller._lock("00000000-0000-4000-8000-000000000001") is controller._lock((GATEWAY_ID, "00000000-0000-4000-8000-000000000001"))
+    lock = controller._lock("00000000-0000-4000-8000-000000000001")
     peak = 0
     active = 0
 

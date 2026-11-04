@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useMemo, useState } from "react";
 import type { GatewayRuntimeGroupRequest, GatewayWorkspace } from "../../../types/backend";
 import { errorMessage } from "../../../utils/errorMessage";
@@ -22,7 +23,7 @@ export default function GatewayBackendRuntimePanel({
   const workspaceById = useMemo(() => {
     const index = new Map<string, GatewayWorkspace>();
     for (const workspace of workspaces) {
-      if (!index.has(workspace.workspace_id)) index.set(workspace.workspace_id, workspace);
+      index.set(gatewayWorkspaceKey(workspace), workspace);
     }
     return index;
   }, [workspaces]);
@@ -33,7 +34,7 @@ export default function GatewayBackendRuntimePanel({
   const runtimeGroups = useMemo(() => {
     const groups = new Map<string, GatewayWorkspace[]>();
     for (const workspace of managedWorkspaces) {
-      const groupKey = `${workspace.remote?.gateway_connection_id ?? "local"}:${workspace.backend_generation ?? workspace.workspace_id}`;
+      const groupKey = JSON.stringify([workspace.gateway_id, workspace.backend_generation ?? workspace.workspace_id]);
       const groupMembers = groups.get(groupKey) ?? [];
       groupMembers.push(workspace);
       groups.set(groupKey, groupMembers);
@@ -44,11 +45,10 @@ export default function GatewayBackendRuntimePanel({
         ? groupTarget.affected_workspace_ids
         : [groupTarget.workspace_id];
       const memberWorkspaceIdSet = new Set(memberWorkspaceIds);
-      const memberWorkspaces = memberWorkspaceIds.map((workspaceId) => workspaceById.get(workspaceId));
+      const memberWorkspaces = memberWorkspaceIds.map((workspaceId) => workspaceById.get(gatewayWorkspaceKey({ gateway_id: groupTarget.gateway_id, workspace_id: workspaceId })));
       const candidateWorkspaces = managedWorkspaces.filter((workspace) =>
-        memberWorkspaceIdSet.has(workspace.workspace_id)
-        || (workspace.status === "offline" && workspace.affected_workspace_ids.length <= 1
-          && workspace.remote?.gateway_connection_id === groupTarget.remote?.gateway_connection_id),
+        workspace.gateway_id === groupTarget.gateway_id && (memberWorkspaceIdSet.has(workspace.workspace_id)
+        || (workspace.status === "offline" && workspace.affected_workspace_ids.length <= 1)),
       );
       return {
         groupKey,
@@ -83,7 +83,7 @@ export default function GatewayBackendRuntimePanel({
         candidateWorkspaces,
       } = runtimeGroup;
       const isMemberSelectionOpen = memberSelection?.backendGeneration === groupTarget.backend_generation
-        && memberSelection?.targetWorkspaceId === groupTarget.workspace_id;
+        && memberSelection?.targetWorkspaceId === gatewayWorkspaceKey(groupTarget);
       const desiredWorkspaceIds = isMemberSelectionOpen && memberSelection
         ? memberSelection.desiredWorkspaceIds
         : memberWorkspaceIds;
@@ -96,34 +96,34 @@ export default function GatewayBackendRuntimePanel({
         <h2>{memberWorkspaces.map((workspace, index) => workspace?.name ?? memberWorkspaceIds[index]).join("、")}</h2>
         <p>{allMembersReady ? "运行中" : "离线或异常"} · {memberWorkspaceIds.length} 个工作区共用一个 Backend</p>
         <div className="gateway-control-actions">
-          <button type="button" disabled={actionBusy || allMembersReady} onClick={() => void runRuntimeAction(() => onStart(groupTarget.workspace_id))}>启动完整组</button>
-          <button type="button" disabled={actionBusy || !allMembersReady || hasProtectedMember} onClick={() => void runRuntimeAction(() => onStop(groupTarget.workspace_id))}>关闭完整组</button>
-          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onSafeRestart(groupTarget.workspace_id))}>安全重启</button>
-          <button type="button" className="danger-soft" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onForceRestart(groupTarget.workspace_id))}>强制重启</button>
+          <button type="button" disabled={actionBusy || allMembersReady} onClick={() => void runRuntimeAction(() => onStart(gatewayWorkspaceKey(groupTarget)))}>启动完整组</button>
+          <button type="button" disabled={actionBusy || !allMembersReady || hasProtectedMember} onClick={() => void runRuntimeAction(() => onStop(gatewayWorkspaceKey(groupTarget)))}>关闭完整组</button>
+          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget)))}>安全重启</button>
+          <button type="button" className="danger-soft" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget)))}>强制重启</button>
           <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => setMemberSelection(
             isMemberSelectionOpen ? null : {
               backendGeneration: groupTarget.backend_generation!,
-              targetWorkspaceId: groupTarget.workspace_id,
+              targetWorkspaceId: gatewayWorkspaceKey(groupTarget),
               desiredWorkspaceIds: memberWorkspaceIds,
             },
           )}>调整成员</button>
         </div>
         {isMemberSelectionOpen ? <fieldset disabled={actionBusy}>
           <legend>重启后的完整成员</legend>
-          {candidateWorkspaces.map((workspace) => <label key={workspace.workspace_id} style={{ display: "block" }}>
+          {candidateWorkspaces.map((workspace) => <label key={gatewayWorkspaceKey(workspace)} style={{ display: "block" }}>
             <input type="checkbox" checked={desiredWorkspaceIds.includes(workspace.workspace_id)}
               disabled={workspace.system_default || !workspace.removable}
               onChange={(event) => setMemberSelection({
                 backendGeneration: groupTarget.backend_generation!,
-                targetWorkspaceId: groupTarget.workspace_id,
+                targetWorkspaceId: gatewayWorkspaceKey(groupTarget),
                 desiredWorkspaceIds: event.target.checked
                   ? [...desiredWorkspaceIds, workspace.workspace_id]
                   : desiredWorkspaceIds.filter((workspaceId) => workspaceId !== workspace.workspace_id),
               })} /> {workspace.name}{workspace.system_default ? "（默认工作区）" : ""}
           </label>)}
           <p>加入前请先关闭另一个 singleton；移出全部成员将关闭 Backend，其余变更会一起受控重启。</p>
-          <button type="button" onClick={() => void runRuntimeAction(() => onSafeRestart(groupTarget.workspace_id, groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并安全重启" : "排空并退出全部成员"}</button>
-          <button type="button" className="danger-soft" onClick={() => void runRuntimeAction(() => onForceRestart(groupTarget.workspace_id, groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并强制重启" : "中断任务并退出全部成员"}</button>
+          <button type="button" onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并安全重启" : "排空并退出全部成员"}</button>
+          <button type="button" className="danger-soft" onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并强制重启" : "中断任务并退出全部成员"}</button>
         </fieldset> : null}
       </article>;
     })}
