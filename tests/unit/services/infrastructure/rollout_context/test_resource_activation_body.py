@@ -256,6 +256,27 @@ def test_payload_read_rejects_wrong_owner_and_retention_tombstone(
     assert error.value.code == BODY_UNAVAILABLE_CODE
 
 
+def test_payload_binding_still_checks_the_verified_body_digest(activation_body_store) -> None:
+    storage, body_store, thread_id = activation_body_store
+    expected, changed = {"name": "demo"}, {"name": "evil"}
+    assert len(canonical_json_bytes(expected)) == len(canonical_json_bytes(changed))
+    # 通用 detail 允许业务 revision 不同于正文摘要；构造有效 envelope 和 SQL
+    # manifest，证明 activation 仍拒绝与自身 binding hash 不符的实际正文。
+    record = body_store._detail_store.write(
+        session_id=SESSION_ID, thread_id=thread_id, assembly_id=SNAPSHOT_ID,
+        detail_kind=PAYLOAD_DETAIL_KIND, retention_class=PAYLOAD_RETENTION_CLASS,
+        visibility="internal", detail=changed, required=True, sensitive=True,
+        source_revision=sha256_jcs(expected),
+    )
+    storage.assemblies.register_context_plan_details((record,))
+    snapshot, binding = _snapshot_with_detail(record.detail_ref, expected, thread_id)
+    before = storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=record.detail_ref)
+    with pytest.raises(ResourceActivationStoreError, match="activation payload hash/length 与 catalog binding 不一致") as error:
+        body_store.read_payload(snapshot=snapshot, binding=binding, storage_owner=(SESSION_ID, thread_id))
+    assert error.value.code == HASH_MISMATCH_CODE
+    assert storage.assemblies.get_context_plan_detail(SESSION_ID, thread_id, detail_ref=record.detail_ref) == before
+
+
 def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspace: Path) -> None:
     sessions_root = body_workspace / ".boxteam" / "sessions"
     bundle = seed_catalog_session_bundle(sessions_root, SESSION_ID)
@@ -445,7 +466,7 @@ def test_batch_failure_keeps_existing_data_and_preserves_bodies_after_registrati
 
 
 def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
-    activation_body_store,
+    activation_body_store, monkeypatch,
 ) -> None:
     storage, body_store, thread_id = activation_body_store
     accepted = storage.executions.accept_turn(
@@ -490,9 +511,21 @@ def test_same_turn_resume_payload_reuse_verifies_complete_protected_members(
     )
     store.save_snapshot(retry)
     assert retry.bindings == first.bindings
-    assert body_store.read_payload(
-        snapshot=retry, binding=binding, storage_owner=(SESSION_ID, thread_id),
-    ) == payload
+    snapshots = []
+    open_snapshot = storage.storage.open_read_snapshot
+
+    def observe_snapshot(*args, **kwargs):
+        opened = open_snapshot(*args, **kwargs)
+        snapshots.append(opened)
+        return opened
+
+    with monkeypatch.context() as read_patch:
+        read_patch.setattr(storage.storage, "open_read_snapshot", observe_snapshot)
+        assert body_store.read_payload(
+            snapshot=retry, binding=binding, storage_owner=(SESSION_ID, thread_id),
+        ) == payload
+    # 同 Turn 的旧正文还需读 protected lineage，仍借用同一个目标快照。
+    assert len(snapshots) == 1 and snapshots[0].closed
 
     for changed in (
         replace(member, revision="catalog-revision-2"),

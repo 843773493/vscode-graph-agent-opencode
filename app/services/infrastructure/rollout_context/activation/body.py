@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.hashing import canonical_json_bytes_and_hash
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -98,76 +97,76 @@ class ResourceActivationBodyStore:
         """按 catalog 恢复出的 snapshot binding 校验并读取 payload。"""
 
         lineage_body = ActivationLineageBodyStore(self._storage, self._detail_store)
-        with self._storage.storage._connect(
-            storage_owner[1], checkpoint_ns, session_id=storage_owner[0], read_only=True,
-        ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
-            require_resource_activation_schema(connection)
+        # binding、重试 lineage、manifest 与正文共用当前读取快照，避免各层重开连接。
+        with self._storage.storage.open_read_snapshot(
+            storage_owner[0], storage_owner[1], checkpoint_ns,
+        ) as read_snapshot:
+            require_resource_activation_schema(read_snapshot.connection)
             expected_assembly_id = binding_assembly_id(
-                connection, snapshot, binding, storage_owner=storage_owner,
+                read_snapshot.connection, snapshot, binding, storage_owner=storage_owner,
                 read_lineage_manifest=lambda ref: lineage_body.read_lineage_manifest(
                     detail_ref=ref, checkpoint_ns=checkpoint_ns, storage_owner=storage_owner,
+                    snapshot=read_snapshot,
                 ),
             )
-        detail_ref = binding.detail_ref
-        if detail_ref is None:
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
-                f"resource 没有 payload detail_ref: {binding.resource_id}",
+            detail_ref = binding.detail_ref
+            if detail_ref is None:
+                raise ResourceActivationStoreError(
+                    HASH_MISMATCH_CODE,
+                    f"resource 没有 payload detail_ref: {binding.resource_id}",
+                )
+            detail_ref.require_owner(
+                snapshot.owner_session_id,
+                snapshot.owner_thread_id,
+                expected_assembly_id,
             )
-        detail_ref.require_owner(
-            snapshot.owner_session_id,
-            snapshot.owner_thread_id,
-            expected_assembly_id,
-        )
-        if binding.content_hash is None:
-            raise ResourceActivationStoreError(
-                BODY_UNAVAILABLE_CODE,
-                f"resource payload 没有可校验的 canonical content hash: {binding.resource_id}",
-            )
-        try:
-            raw = self._storage.assemblies.get_context_plan_detail(
-                storage_owner[0],
-                storage_owner[1],
-                detail_ref=detail_ref,
-                checkpoint_ns=checkpoint_ns,
-            )
-            record = detail_record_from_mapping(raw)
-            self._validate_record(
-                record,
-                detail_ref=detail_ref,
-                owner_session_id=snapshot.owner_session_id,
-                owner_thread_id=snapshot.owner_thread_id,
-                activation_snapshot_id=expected_assembly_id,
-                content_hash=binding.content_hash,
-                content_length=binding.content_length,
-                resource_id=binding.resource_id,
-                activation_ordinal=binding.activation_ordinal,
-            )
-            value = self._detail_store.read(
-                session_id=storage_owner[0],
-                thread_id=storage_owner[1],
-                record=record,
-                include_sensitive=True,
-            )
-        except (KeyError, DetailUnavailableError) as error:
-            raise ResourceActivationStoreError(
-                BODY_UNAVAILABLE_CODE,
-                f"敏感 activation payload 正文不可用: {binding.resource_id}",
-            ) from error
+            if binding.content_hash is None:
+                raise ResourceActivationStoreError(
+                    BODY_UNAVAILABLE_CODE,
+                    f"resource payload 没有可校验的 canonical content hash: {binding.resource_id}",
+                )
+            try:
+                raw = self._storage.assemblies.get_context_plan_detail(
+                    storage_owner[0],
+                    storage_owner[1],
+                    detail_ref=detail_ref,
+                    checkpoint_ns=checkpoint_ns,
+                    snapshot=read_snapshot,
+                )
+                record = detail_record_from_mapping(raw)
+                self._validate_record(
+                    record,
+                    detail_ref=detail_ref,
+                    owner_session_id=snapshot.owner_session_id,
+                    owner_thread_id=snapshot.owner_thread_id,
+                    activation_snapshot_id=expected_assembly_id,
+                    content_hash=binding.content_hash,
+                    content_length=binding.content_length,
+                    resource_id=binding.resource_id,
+                    activation_ordinal=binding.activation_ordinal,
+                )
+                value = self._detail_store.read(
+                    session_id=storage_owner[0],
+                    thread_id=storage_owner[1],
+                    record=record,
+                    include_sensitive=True,
+                    snapshot=read_snapshot,
+                )
+            except (KeyError, DetailUnavailableError) as error:
+                raise ResourceActivationStoreError(
+                    BODY_UNAVAILABLE_CODE,
+                    f"敏感 activation payload 正文不可用: {binding.resource_id}",
+                ) from error
 
-        payload = value.get("detail")
-        canonical_payload_bytes, payload_hash = canonical_json_bytes_and_hash(payload)
-        if (
-            payload_hash != binding.content_hash
-            or len(canonical_payload_bytes) != binding.content_length
-        ):
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
-                "activation payload hash/length 与 catalog binding 不一致: "
-                f"{binding.resource_id}#{binding.activation_ordinal}",
-            )
-        return payload
+            # detail parser 已逐字节核验正文摘要、长度及 envelope 与 SQL manifest；
+            # 长度已与 binding 对齐，直接比对已验证摘要，避免再次编码同一正文。
+            if value["detail_content_hash"] != binding.content_hash:
+                raise ResourceActivationStoreError(
+                    HASH_MISMATCH_CODE,
+                    "activation payload hash/length 与 catalog binding 不一致: "
+                    f"{binding.resource_id}#{binding.activation_ordinal}",
+                )
+            return value["detail"]
 
     @staticmethod
     def _validate_record(
