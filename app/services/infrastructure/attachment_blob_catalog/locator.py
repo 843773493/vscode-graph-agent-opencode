@@ -1,20 +1,14 @@
-"""workspace 附件 store 的受检 locator 解析（8.3 附件链）。
+"""附件工作目录、staging、不可变版本及冻结 capture 的受检路径 owner。
 
-本模块是附件物理路径的唯一生产者与解析者：调用方只能传 catalog 中已冻结
-的受检 relative locator（或由 :mod:`blob_identity` 从 blob-id + 首次 UTC
-日期生成的 locator），**绝不接受调用方拼出的字符串路径**。staging
-locator 与最终 blob locator 是两个互不重叠的命名空间：staging 位于
-``<attachments>/.staging/<ingest-id>``，最终正文位于
-``<attachments>/YYYY/MM/DD/<blob-id>``。目录资源使用
-``<attachments>/YYYY/MM/DD/<attachment-id>``，日期来自冻结创建时间，
-与不可变正文摘要独立；当前先供离线迁移使用。各命名空间都不允许扫盘枚举定位。
+工作目录只按 catalog 冻结的 ``YYYY/MM/DD/<attachment-id>`` 定位，日期来自
+创建 intent，与正文摘要独立。staging 使用独立的 ``.staging/<ingest-id>``
+命名空间；旧 blob 仅保留封存 capture 的只读定位。各命名空间均不扫盘猜测位置。
 
 错误分类：``TypeError`` 类型错、``ValueError`` 形态非法。
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
 from datetime import date, datetime
 from pathlib import Path, PureWindowsPath
@@ -23,17 +17,14 @@ from app.core.session_catalog_store import validate_path_budget
 from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     utc_bucket_date,
     validate_blob_id,
-    validate_blob_relative_locator,
     validate_digest,
 )
 
 __all__ = [
     "STAGING_DIRECTORY_NAME",
     "attachment_directory_relative_locator",
-    "fork_import_ingest_id",
     "ingest_staging_relative_locator",
     "resolve_attachment_directory",
-    "resolve_blob_path",
     "resolve_captured_attachment",
     "resolve_staging_path",
     "validate_attachment_directory_relative_locator",
@@ -145,18 +136,6 @@ def validate_ingest_staging_relative_locator(locator: str) -> None:
         )
 
 
-def resolve_blob_path(attachments_root: Path, relative_locator: str) -> Path:
-    """把已冻结的受检 blob locator 解析为绝对路径。
-
-    先过形态校验与完整路径预算，再拼接；不做任何清洗、截断或大小写归一。
-    """
-    if not isinstance(attachments_root, Path):
-        raise TypeError(f"attachments_root 必须是 Path: {attachments_root!r}")
-    validate_blob_relative_locator(relative_locator)
-    validate_path_budget(attachments_root, relative_locator)
-    return attachments_root / relative_locator
-
-
 def resolve_staging_path(attachments_root: Path, relative_locator: str) -> Path:
     """把 record 冻结的受控 staging locator 解析为绝对路径。"""
     if not isinstance(attachments_root, Path):
@@ -164,11 +143,6 @@ def resolve_staging_path(attachments_root: Path, relative_locator: str) -> Path:
     validate_ingest_staging_relative_locator(relative_locator)
     validate_path_budget(attachments_root, relative_locator)
     return attachments_root / relative_locator
-
-
-def fork_import_ingest_id(copy_operation_id: str, blob_id: str) -> str:
-    """导入与清理共用原 operation/blob preimage，不改写已有 staging 身份。"""
-    return "ing_" + hashlib.sha256(f"fork-import:{copy_operation_id}:{blob_id}".encode()).hexdigest()[:32]
 
 
 def resolve_captured_attachment(captured_root: Path, blob_id: str) -> Path:
