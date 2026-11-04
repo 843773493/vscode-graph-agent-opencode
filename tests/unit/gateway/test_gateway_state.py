@@ -21,18 +21,30 @@ from app.services.infrastructure.config.state import (
 
 
 @pytest.fixture
-def registry_remote_connection_payload():
+def registry_owner() -> dict[str, str]:
     return {
-        "schema_version": 11,
+        "gateway_id": "gateway_11111111111111111111111111111111",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+    }
+
+
+@pytest.fixture
+def registry_remote_connection_payload(registry_owner):
+    return {
+        "schema_version": 14,
+        "gateway_id": registry_owner["gateway_id"],
+        "active_workspace": None,
         "targets": [],
         "remote_gateway_connections": [
             {
                 "connection_id": "config",
+                "remote_gateway_id": "gateway_22222222222222222222222222222222",
                 "source_owner": "config",
                 "remote_config_event_cursor": 1,
             },
             {
                 "connection_id": "manual",
+                "remote_gateway_id": "gateway_22222222222222222222222222222222",
                 "source_owner": "manual",
                 "remote_config_event_cursor": 1,
             },
@@ -102,7 +114,7 @@ def test_gateway_registry_connection_scope_persists_without_overwriting_peers(
     [
         ("source_owner", PermissionError, "改变 connection source owner"),
         ("foreign_connection", PermissionError, "其他 connection owner"),
-        ("missing_connection", ValueError, "引用未知 Gateway 连接"),
+        ("missing_connection", ValueError, "连接关联缺失或归属错误"),
         ("stale_revision", ConfigConflictError, "revision CAS"),
     ],
 )
@@ -117,13 +129,12 @@ def test_gateway_registry_failed_connection_publication_is_atomic(
     payload = deepcopy(registry_remote_connection_payload)
     payload["targets"] = [
         {
-            "workspace_id": "projection",
+            "gateway_id": "gateway_22222222222222222222222222222222",
+            "workspace_id": "11111111-1111-4111-8111-111111111111",
             "owner": "remote_projection",
             "target_namespace": "remote",
             "connection_kind": "remote_gateway",
-            "connection_id": "manual",
-            "remote_gateway_connection_id": "manual",
-            "remote_workspace_id": "remote-workspace",
+            "remote_gateway_connection_ids": ["manual"],
         }
     ]
     with GatewayStateStore(path=path) as state:
@@ -153,7 +164,7 @@ def test_gateway_registry_failed_connection_publication_is_atomic(
 
 
 def test_gateway_config_source_mirror_migrates_but_keeps_control_plane_kv(
-    tmp_path,
+    tmp_path, registry_owner,
 ):
     """legacy ``gateway_config`` 的 config 来源层镜像行并入权威 layer 表；
     控制面独有 KV（``workspace_registry_meta``/``gateway_connection_ids``）必须留下。"""
@@ -175,7 +186,7 @@ def test_gateway_config_source_mirror_migrates_but_keeps_control_plane_kv(
                 "('gateway_connection_ids', 3, ?, '2026-01-01T00:00:00+00:00')",
                 (
                     json.dumps({"ui": {"theme": "dark"}}),
-                    json.dumps({"registry_revision": 2}),
+                    json.dumps({"schema_version": 14, "gateway_id": registry_owner["gateway_id"], "registry_revision": 2}),
                     json.dumps({"entries": []}),
                 ),
             )
@@ -437,16 +448,18 @@ def test_gateway_source_owner_guard_applies_inside_sync_transaction(tmp_path):
         state.close()
 
 
-def test_gateway_registry_uses_sqlite_without_mixing_session_indexes(tmp_path):
+def test_gateway_registry_uses_sqlite_without_mixing_session_indexes(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         registry = GatewayWorkspaceRegistry(
             storage_path=tmp_path / "workspaces.json",
             state_store=state,
+            gateway_id=registry_owner["gateway_id"],
         )
         registry.upsert(
             WorkspaceTarget(
-                workspace_id="workspace-a",
+                gateway_id=registry_owner["gateway_id"],
+                workspace_id=registry_owner["workspace_id"],
                 name="A",
                 root_path=str(tmp_path / "workspace-a"),
                 backend_url="http://127.0.0.1:8010",
@@ -456,15 +469,16 @@ def test_gateway_registry_uses_sqlite_without_mixing_session_indexes(tmp_path):
         restored = GatewayWorkspaceRegistry(
             storage_path=tmp_path / "workspaces.json",
             state_store=state,
+            gateway_id=registry_owner["gateway_id"],
         )
-        assert [target.workspace_id for target in restored.targets()] == ["workspace-a"]
+        assert [target.key for target in restored.targets()] == [(registry_owner["gateway_id"], registry_owner["workspace_id"])]
         assert state.diagnostics().path.endswith("gateway.sqlite")
         assert not (tmp_path / "workspace-a" / "rollout" / "index.sqlite").exists()
     finally:
         state.close()
 
 
-def test_gateway_restart_intent_requires_matching_candidate_and_proof(tmp_path):
+def test_gateway_restart_intent_requires_matching_candidate_and_proof(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         state.create_pending_config_candidate(
@@ -493,18 +507,18 @@ def test_gateway_restart_intent_requires_matching_candidate_and_proof(tmp_path):
             old_generation="gateway-generation-old",
             target_generation="gateway-generation-new",
             requested_by="test",
-            gateway_id="gateway-test",
+            gateway_id=registry_owner["gateway_id"],
         )
         assert intent.state == "pending"
-        assert intent.gateway_id == "gateway-test"
+        assert intent.gateway_id == registry_owner["gateway_id"]
         assert state.load_gateway_pending_candidate(
             candidate_ref="candidate-ref-1",
-            gateway_id="gateway-test",
+            gateway_id=registry_owner["gateway_id"],
         ).candidate_id == "candidate_1_hash"
         with pytest.raises(ConfigConflictError, match="不属于当前 Gateway"):
             state.load_gateway_pending_candidate(
                 candidate_ref="candidate-ref-1",
-                gateway_id="another-gateway",
+                gateway_id="gateway_22222222222222222222222222222222",
             )
         connection = state.connection()
         try:
@@ -519,7 +533,7 @@ def test_gateway_restart_intent_requires_matching_candidate_and_proof(tmp_path):
         with pytest.raises(ConfigConflictError, match="缺少 gateway_id"):
             state.load_gateway_pending_candidate(
                 candidate_ref="candidate-ref-1",
-                gateway_id="gateway-test",
+                gateway_id=registry_owner["gateway_id"],
             )
         connection = state.connection()
         try:
@@ -527,7 +541,7 @@ def test_gateway_restart_intent_requires_matching_candidate_and_proof(tmp_path):
                 "UPDATE gateway_restart_intent SET gateway_id = ?, expires_at = ? "
                 "WHERE candidate_ref = ?",
                 (
-                    "gateway-test",
+                    registry_owner["gateway_id"],
                     "1970-01-01T00:00:00+00:00",
                     "candidate-ref-1",
                 ),
@@ -538,7 +552,7 @@ def test_gateway_restart_intent_requires_matching_candidate_and_proof(tmp_path):
         with pytest.raises(ConfigConflictError, match="已过期"):
             state.load_gateway_pending_candidate(
                 candidate_ref="candidate-ref-1",
-                gateway_id="gateway-test",
+                gateway_id=registry_owner["gateway_id"],
             )
         pending = state.get_pending_config_candidate(
             config_domain="gateway",
@@ -880,7 +894,7 @@ def test_gateway_restart_recovery_rotates_generation_and_fencing_token(tmp_path)
         state.close()
 
 
-def test_expired_gateway_pending_restart_can_be_explicitly_retried(tmp_path):
+def test_expired_gateway_pending_restart_can_be_explicitly_retried(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         state.create_pending_config_candidate(
@@ -908,7 +922,7 @@ def test_expired_gateway_pending_restart_can_be_explicitly_retried(tmp_path):
             old_generation="gateway-generation-before",
             target_generation="gateway-generation-old",
             requested_by="test",
-            gateway_id="gateway-test",
+            gateway_id=registry_owner["gateway_id"],
         )
         with state.connection() as connection:
             connection.execute(
@@ -1533,16 +1547,17 @@ def test_gateway_config_event_relay_is_independent_per_consumer(tmp_path):
         state.close()
 
 
-def test_gateway_registry_apply_journal_commits_with_registry_revision(tmp_path):
+def test_gateway_registry_apply_journal_commits_with_registry_revision(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         revision = state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "workspace-a",
+                "schema_version": 14,
+                "gateway_id": registry_owner["gateway_id"],
+                "active_workspace": registry_owner,
                 "targets": [
                     {
-                        "workspace_id": "workspace-a",
+                        **registry_owner,
                         "owner": "manual",
                         "target_namespace": "gateway",
                     }
@@ -1562,7 +1577,7 @@ def test_gateway_registry_apply_journal_commits_with_registry_revision(tmp_path)
         state.close()
 
 
-def test_gateway_pending_registry_baseline_rebases_only_startup_owned_changes(tmp_path):
+def test_gateway_pending_registry_baseline_rebases_only_startup_owned_changes(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         state.ensure_active_config_snapshot(
@@ -1603,11 +1618,12 @@ def test_gateway_pending_registry_baseline_rebases_only_startup_owned_changes(tm
         )
         state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "system-default",
+                "schema_version": 14,
+                "gateway_id": registry_owner["gateway_id"],
+                "active_workspace": registry_owner,
                 "targets": [
                     {
-                        "workspace_id": "system-default",
+                        **registry_owner,
                         "owner": "system",
                         "target_namespace": "gateway",
                     }
@@ -1628,16 +1644,18 @@ def test_gateway_pending_registry_baseline_rebases_only_startup_owned_changes(tm
 
         state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "system-default",
+                "schema_version": 14,
+                "gateway_id": registry_owner["gateway_id"],
+                "active_workspace": registry_owner,
                 "targets": [
                     {
-                        "workspace_id": "system-default",
+                        **registry_owner,
                         "owner": "system",
                         "target_namespace": "gateway",
                     },
                     {
-                        "workspace_id": "manual-target",
+                        "gateway_id": registry_owner["gateway_id"],
+                        "workspace_id": "22222222-2222-4222-8222-222222222222",
                         "owner": "manual",
                         "target_namespace": "gateway-manual",
                     },
@@ -1656,15 +1674,16 @@ def test_gateway_pending_registry_baseline_rebases_only_startup_owned_changes(tm
         state.close()
 
 
-def test_gateway_system_registry_update_preserves_manual_target_owner(tmp_path):
+def test_gateway_system_registry_update_preserves_manual_target_owner(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         initial_payload = {
-            "schema_version": 10,
-            "active_workspace_id": "manual-target",
+            "schema_version": 14,
+            "gateway_id": registry_owner["gateway_id"],
+            "active_workspace": registry_owner,
             "targets": [
                 {
-                    "workspace_id": "manual-target",
+                    **registry_owner,
                     "owner": "manual",
                     "target_namespace": "gateway-manual",
                     "backend_url": "http://127.0.0.1:18010",
@@ -1718,7 +1737,7 @@ def test_gateway_system_registry_update_preserves_manual_target_owner(tmp_path):
         state.close()
 
 
-def test_gateway_registry_normalizes_legacy_null_owner(tmp_path):
+def test_gateway_registry_normalizes_legacy_null_owner(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         connection = state.connection()
@@ -1726,13 +1745,15 @@ def test_gateway_registry_normalizes_legacy_null_owner(tmp_path):
             connection.execute(
                 """
                 INSERT INTO gateway_workspace_registry(
-                    workspace_id, position, active, payload_json, updated_at
-                ) VALUES ('legacy-system', 0, 1, ?, ?)
+                    gateway_id, workspace_id, position, active, payload_json, updated_at
+                ) VALUES (?, ?, 0, 1, ?, ?)
                 """,
                 (
+                    registry_owner["gateway_id"],
+                    registry_owner["workspace_id"],
                     json.dumps(
                         {
-                            "workspace_id": "legacy-system",
+                            **registry_owner,
                             "owner": None,
                             "target_namespace": "gateway",
                         },
@@ -1747,11 +1768,12 @@ def test_gateway_registry_normalizes_legacy_null_owner(tmp_path):
 
         revision = state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "legacy-system",
+                "schema_version": 14,
+                "gateway_id": registry_owner["gateway_id"],
+                "active_workspace": registry_owner,
                 "targets": [
                     {
-                        "workspace_id": "legacy-system",
+                        **registry_owner,
                         "owner": "system",
                         "target_namespace": "gateway",
                     }
@@ -1767,7 +1789,7 @@ def test_gateway_registry_normalizes_legacy_null_owner(tmp_path):
         assert restored is not None
         assert restored["targets"] == [
             {
-                "workspace_id": "legacy-system",
+                **registry_owner,
                 "owner": "system",
                 "target_namespace": "gateway",
             }
@@ -1801,13 +1823,14 @@ def test_gateway_registry_apply_journal_recovery_is_explicit(tmp_path):
         state.close()
 
 
-def test_gateway_registry_rejects_non_list_targets_and_connections(tmp_path):
+def test_gateway_registry_rejects_non_list_targets_and_connections(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         with pytest.raises(ValueError, match="payload 结构无效"):
             state.replace_workspace_registry(
                 {
-                    "schema_version": 10,
+                    "schema_version": 14,
+                    "gateway_id": registry_owner["gateway_id"],
                     "targets": "not-a-list",
                     "remote_gateway_connections": [],
                 },
@@ -1817,7 +1840,8 @@ def test_gateway_registry_rejects_non_list_targets_and_connections(tmp_path):
         with pytest.raises(ValueError, match="payload 结构无效"):
             state.replace_workspace_registry(
                 {
-                    "schema_version": 10,
+                    "schema_version": 14,
+                    "gateway_id": registry_owner["gateway_id"],
                     "targets": [],
                     "remote_gateway_connections": "not-a-list",
                 },
@@ -1833,34 +1857,52 @@ def test_gateway_registry_allows_multiple_remote_workspaces_per_connection(tmp_p
     try:
         state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "remote-a",
+                "schema_version": 14,
+                "gateway_id": "gateway_11111111111111111111111111111111",
+                "active_workspace": {
+                    "gateway_id": "gateway_22222222222222222222222222222222",
+                    "workspace_id": "11111111-1111-4111-8111-111111111111",
+                },
                 "targets": [
                     {
-                        "workspace_id": "remote-a",
+                        "gateway_id": "gateway_22222222222222222222222222222222",
+                        "workspace_id": "11111111-1111-4111-8111-111111111111",
                         "owner": "remote_projection",
                         "target_namespace": "remote:connection-1",
-                        "connection_id": "connection-1",
-                        "remote_workspace_id": "remote-a",
+                        "connection_kind": "remote_gateway",
+                        "remote_gateway_connection_ids": ["connection-1"],
                     },
                     {
-                        "workspace_id": "remote-b",
+                        "gateway_id": "gateway_22222222222222222222222222222222",
+                        "workspace_id": "22222222-2222-4222-8222-222222222222",
                         "owner": "remote_projection",
                         "target_namespace": "remote:connection-1",
-                        "connection_id": "connection-1",
-                        "remote_workspace_id": "remote-b",
+                        "connection_kind": "remote_gateway",
+                        "remote_gateway_connection_ids": ["connection-1"],
                     },
                 ],
-                "remote_gateway_connections": [],
+                "remote_gateway_connections": [{
+                    "connection_id": "connection-1",
+                    "remote_gateway_id": "gateway_22222222222222222222222222222222",
+                    "source_owner": "manual",
+                }],
             },
             expected_revision=0,
         )
-        assert len(state.load_workspace_registry()["targets"]) == 2
+        restored = state.load_workspace_registry()
+        assert restored is not None
+        targets = restored["targets"]
+        assert isinstance(targets, list)
+        assert [(target["gateway_id"], target["workspace_id"]) for target in targets] == [
+            ("gateway_22222222222222222222222222222222", "11111111-1111-4111-8111-111111111111"),
+            ("gateway_22222222222222222222222222222222", "22222222-2222-4222-8222-222222222222"),
+        ]
+        assert all(target["remote_gateway_connection_ids"] == ["connection-1"] for target in targets)
     finally:
         state.close()
 
 
-def test_gateway_registry_revision_rejects_out_of_band_meta_clear(tmp_path):
+def test_gateway_registry_revision_rejects_out_of_band_meta_clear(tmp_path, registry_owner):
     """registry_meta 被外部清空时必须响亮报错，不能静默退化为 revision 0。"""
 
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
@@ -1868,11 +1910,12 @@ def test_gateway_registry_revision_rejects_out_of_band_meta_clear(tmp_path):
         assert (
             state.replace_workspace_registry(
                 {
-                    "schema_version": 10,
-                    "active_workspace_id": "workspace-a",
+                    "schema_version": 14,
+                    "gateway_id": registry_owner["gateway_id"],
+                    "active_workspace": registry_owner,
                     "targets": [
                         {
-                            "workspace_id": "workspace-a",
+                            **registry_owner,
                             "owner": "manual",
                             "target_namespace": "gateway",
                         }
@@ -1908,13 +1951,14 @@ def test_gateway_registry_revision_is_zero_for_untouched_registry(tmp_path):
         state.close()
 
 
-def test_gateway_registry_start_journal_rejects_stale_expected_revision(tmp_path):
+def test_gateway_registry_start_journal_rejects_stale_expected_revision(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         assert (
             state.replace_workspace_registry(
                 {
-                    "schema_version": 10,
+                    "schema_version": 14,
+                    "gateway_id": registry_owner["gateway_id"],
                     "targets": [],
                     "remote_gateway_connections": [],
                 },
@@ -1926,7 +1970,8 @@ def test_gateway_registry_start_journal_rejects_stale_expected_revision(tmp_path
         with pytest.raises(ConfigConflictError, match="revision CAS 冲突"):
             state.replace_workspace_registry(
                 {
-                    "schema_version": 10,
+                    "schema_version": 14,
+                    "gateway_id": registry_owner["gateway_id"],
                     "targets": [],
                     "remote_gateway_connections": [],
                 },
@@ -1940,23 +1985,24 @@ def test_gateway_registry_start_journal_rejects_stale_expected_revision(tmp_path
         state.close()
 
 
-def test_gateway_registry_rejects_duplicate_owner_namespace_identity(tmp_path):
+def test_gateway_registry_rejects_duplicate_workspace_owner(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        with pytest.raises(ValueError, match="owner/namespace/identity 重复"):
+        with pytest.raises(ValueError, match="工作区注册记录 workspace_id 重复"):
             state.replace_workspace_registry(
                 {
-                    "schema_version": 10,
-                    "active_workspace_id": "config-a",
+                    "schema_version": 14,
+                    "gateway_id": registry_owner["gateway_id"],
+                    "active_workspace": registry_owner,
                     "targets": [
                         {
-                            "workspace_id": "config-a",
+                            **registry_owner,
                             "owner": "config",
                             "target_namespace": "gateway-config",
                             "connection_id": "same-connection",
                         },
                         {
-                            "workspace_id": "config-b",
+                            **registry_owner,
                             "owner": "config",
                             "target_namespace": "gateway-config",
                             "connection_id": "same-connection",
@@ -1974,22 +2020,24 @@ def test_gateway_registry_rejects_duplicate_owner_namespace_identity(tmp_path):
         state.close()
 
 
-def test_gateway_registry_scoped_batch_preserves_other_owners(tmp_path):
+def test_gateway_registry_scoped_batch_preserves_other_owners(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "config-old",
+                "schema_version": 14,
+                "gateway_id": registry_owner["gateway_id"],
+                "active_workspace": registry_owner,
                 "targets": [
                     {
-                        "workspace_id": "config-old",
+                        **registry_owner,
                         "owner": "config",
                         "target_namespace": "gateway-config",
                         "connection_id": "connection-old",
                     },
                     {
-                        "workspace_id": "manual-1",
+                        "gateway_id": registry_owner["gateway_id"],
+                        "workspace_id": "22222222-2222-4222-8222-222222222222",
                         "owner": "manual",
                         "target_namespace": "gateway-manual",
                     },
@@ -2002,11 +2050,16 @@ def test_gateway_registry_scoped_batch_preserves_other_owners(tmp_path):
 
         revision = state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "config-new",
+                "schema_version": 14,
+                "gateway_id": registry_owner["gateway_id"],
+                "active_workspace": {
+                    "gateway_id": registry_owner["gateway_id"],
+                    "workspace_id": "33333333-3333-4333-8333-333333333333",
+                },
                 "targets": [
                     {
-                        "workspace_id": "config-new",
+                        "gateway_id": registry_owner["gateway_id"],
+                        "workspace_id": "33333333-3333-4333-8333-333333333333",
                         "owner": "config",
                         "target_namespace": "gateway-config",
                         "connection_id": "connection-new",
@@ -2021,20 +2074,25 @@ def test_gateway_registry_scoped_batch_preserves_other_owners(tmp_path):
         assert revision == 2
         restored = state.load_workspace_registry()
         assert restored is not None
-        assert [target["workspace_id"] for target in restored["targets"]] == [
-            "config-new",
-            "manual-1",
+        assert [(target["gateway_id"], target["workspace_id"]) for target in restored["targets"]] == [
+            (registry_owner["gateway_id"], "33333333-3333-4333-8333-333333333333"),
+            (registry_owner["gateway_id"], "22222222-2222-4222-8222-222222222222"),
         ]
         assert restored["targets"][1]["owner"] == "manual"
 
         with pytest.raises(PermissionError, match="改变 target owner"):
             state.replace_workspace_registry(
                 {
-                    "schema_version": 10,
-                    "active_workspace_id": "manual-1",
+                    "schema_version": 14,
+                    "gateway_id": registry_owner["gateway_id"],
+                    "active_workspace": {
+                        "gateway_id": registry_owner["gateway_id"],
+                        "workspace_id": "22222222-2222-4222-8222-222222222222",
+                    },
                     "targets": [
                         {
-                            "workspace_id": "manual-1",
+                            "gateway_id": registry_owner["gateway_id"],
+                            "workspace_id": "22222222-2222-4222-8222-222222222222",
                             "owner": "config",
                             "target_namespace": "gateway-config",
                             "connection_id": "connection-manual",
@@ -2049,18 +2107,20 @@ def test_gateway_registry_scoped_batch_preserves_other_owners(tmp_path):
         state.close()
 
 
-def test_gateway_registry_manual_mutation_preserves_config_targets(tmp_path):
+def test_gateway_registry_manual_mutation_preserves_config_targets(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         registry = GatewayWorkspaceRegistry(
             storage_path=tmp_path / "workspaces.json",
             state_store=state,
+            gateway_id=registry_owner["gateway_id"],
         )
         registry.upsert(
             WorkspaceTarget(
-                workspace_id="config-target",
+                gateway_id=registry_owner["gateway_id"],
+                workspace_id=registry_owner["workspace_id"],
                 name="配置目标",
-                root_path="/workspace/config-target",
+                root_path=str(tmp_path / "config-target"),
                 backend_url="http://127.0.0.1:18010",
                 connection_kind="local",
                 owner="config",
@@ -2068,29 +2128,32 @@ def test_gateway_registry_manual_mutation_preserves_config_targets(tmp_path):
         )
         registry.upsert(
             WorkspaceTarget(
-                workspace_id="manual-target",
+                gateway_id=registry_owner["gateway_id"],
+                workspace_id="22222222-2222-4222-8222-222222222222",
                 name="手动目标",
-                root_path="/workspace/manual-target",
+                root_path=str(tmp_path / "manual-target"),
                 backend_url="http://127.0.0.1:18011",
                 connection_kind="local",
                 owner="manual",
             )
         )
 
-        registry.rename("manual-target", "手动目标（已改名）")
-        registry.activate("config-target")
-        registry.reorder(["manual-target", "config-target"])
+        config_key = (registry_owner["gateway_id"], registry_owner["workspace_id"])
+        manual_key = (registry_owner["gateway_id"], "22222222-2222-4222-8222-222222222222")
+        registry.rename(manual_key, "手动目标（已改名）")
+        registry.activate(config_key)
+        registry.reorder([manual_key, config_key])
 
-        assert registry.resolve("config-target").owner == "config"
-        assert registry.resolve("manual-target").name == "手动目标（已改名）"
+        assert registry.resolve(config_key).owner == "config"
+        assert registry.resolve(manual_key).name == "手动目标（已改名）"
         with pytest.raises(PermissionError, match="不能越过 target owner"):
-            registry.remove("config-target", owner="manual_crud")
-        assert registry.has_target("config-target")
+            registry.remove(config_key, owner="manual_crud")
+        assert registry.has_target(config_key)
     finally:
         state.close()
 
 
-def test_gateway_config_promotion_rejects_registry_revision_race(tmp_path):
+def test_gateway_config_promotion_rejects_registry_revision_race(tmp_path, registry_owner):
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         state.ensure_active_config_snapshot(
@@ -2132,11 +2195,12 @@ def test_gateway_config_promotion_rejects_registry_revision_race(tmp_path):
 
         state.replace_workspace_registry(
             {
-                "schema_version": 10,
-                "active_workspace_id": "manual-1",
+                "schema_version": 14,
+                "gateway_id": registry_owner["gateway_id"],
+                "active_workspace": registry_owner,
                 "targets": [
                     {
-                        "workspace_id": "manual-1",
+                        **registry_owner,
                         "owner": "manual",
                         "target_namespace": "gateway-manual",
                     }
