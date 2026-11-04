@@ -6,7 +6,10 @@ import { testControl } from '../../../../support/e2e_control/browser_client.mjs'
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
-if (!base || !output || !screenshot) throw new Error('规范来源验收缺少隔离目标或产物目录');
+const expectedWorkspaceId = process.env.BOXTEAM_BROWSER_WORKSPACE_ID;
+if (!base || !output || !screenshot || !expectedWorkspaceId) throw new Error('规范来源验收缺少隔离目标、预期工作区身份或产物目录');
+const requestOwner = request => ({ gatewayId: request.headers()['x-boxteam-target-gateway-id'],
+  workspaceId: request.headers()['x-boxteam-workspace-id'] });
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_resource_opener_sources.py');
 const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], sources: [], links: [], addressRequests: [], fileReads: [], executions: [],
   boundary: '真实Gateway／后端／正式Workbench；model_stream精确回放；产品执行产生工具结果及规范引用，不预写历史、浏览器存储或HTTP响应' };
@@ -23,44 +26,58 @@ try {
     const path = new URL(request.url()).pathname;
     if (path === '/api/gateway/resource-addresses/parse') result.addressRequests.push({ phase: result.phase, body: request.postDataJSON() });
     if (path === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'read') {
-      result.sources.push({ phase: result.phase, body: request.postDataJSON(), route: request.headers()['x-boxteam-workspace-id'] });
+      result.sources.push({ phase: result.phase, body: request.postDataJSON(), ...requestOwner(request) });
     }
     if (/\/workspace\/files\/(raw|content)$/.test(path)) result.fileReads.push({ phase: result.phase, path });
-    if (path.endsWith('/messages') && request.method() === 'POST') result.executions.push({ phase: result.phase, path });
+    if (path.endsWith('/messages') && request.method() === 'POST') result.executions.push({ phase: result.phase, path, ...requestOwner(request) });
   });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  const api = (path, data) => page.evaluate(async ({ path, data }) => {
+  const api = (path, data, owner) => page.evaluate(async ({ path, data, owner }) => {
+    if (path.startsWith('/api/v1/') && !owner) throw new Error(`工作区请求缺少完整 owner：${path}`);
     const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
     const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST',
-      headers: { 'X-Local-Token': token, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
+      headers: { 'X-Local-Token': token, 'Content-Type': 'application/json', ...(owner ? {
+        'X-BoxTeam-Target-Gateway-Id': owner.gatewayId, 'X-BoxTeam-Workspace-Id': owner.workspaceId,
+      } : {}) }, body: data === undefined ? undefined : JSON.stringify(data) });
     const payload = await response.json();
     if (!response.ok || payload.code !== 0 || payload.request_id !== response.headers.get('X-Request-ID')) {
       throw new Error(JSON.stringify({ path, status: response.status, payload }));
     }
     return payload.data;
-  }, { path, data });
+  }, { path, data, owner });
   await api('/api/gateway/users/guest', { tracking: { source: 'resource-opener-sources' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');
-  const workspace = await api('/api/v1/workspace');
-  const session = await api('/api/v1/sessions', { title: '规范工具结果来源验收' });
-  const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`);
-  const owner = { gatewayId: health.gateway_id, workspaceId: workspace.workspace_id, routeId: targets.active_workspace_id,
-    sessionId: session.session_id, threadId: main.thread_id };
+  const workspaceOwner = { gatewayId: health.gateway_id, workspaceId: expectedWorkspaceId };
+  const activeWorkspace = { gateway_id: workspaceOwner.gatewayId, workspace_id: workspaceOwner.workspaceId };
+  expect(health.gateway_id).toBeTruthy();
+  expect(health.active_workspace).toEqual(activeWorkspace);
+  expect(targets.active_workspace).toEqual(activeWorkspace);
+  expect(targets.items.filter(item => item.gateway_id === workspaceOwner.gatewayId && item.workspace_id === workspaceOwner.workspaceId)).toHaveLength(1);
+  const workspace = await api('/api/v1/workspace', undefined, workspaceOwner);
+  expect(workspace.workspace_id).toBe(workspaceOwner.workspaceId);
+  const session = await api('/api/v1/sessions', { title: '规范工具结果来源验收' }, workspaceOwner);
+  expect(session.workspace_id).toBe(workspaceOwner.workspaceId);
+  const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`, undefined, workspaceOwner);
+  expect(main.session_id).toBe(session.session_id);
+  const owner = { ...workspaceOwner, sessionId: session.session_id, threadId: main.thread_id };
   result.owner = owner;
   result.phase = 'execute-output';
   await testControl({ action: 'plan_model', session_id: owner.sessionId, thread_id: owner.threadId,
     interactions: JSON.parse(process.env.BOXTEAM_SOURCE_INTERACTIONS) });
   const accepted = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`,
-    { message: { content: '生成完整工具结果' }, run: {} });
+    { message: { content: '生成完整工具结果' }, run: {} }, owner);
+  expect(accepted.thread_id).toBe(owner.threadId);
   await expect.poll(async () => {
-    const job = await api(`/api/v1/jobs/${accepted.job_id}`);
+    const job = await api(`/api/v1/jobs/${accepted.job_id}`, undefined, owner);
+    expect(job.session_id).toBe(owner.sessionId);
+    expect(job.thread_id).toBe(owner.threadId);
     if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));
     return job.status;
   }, { timeout: 30_000 }).toBe('completed');
   const history = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`,
-    { turn_ids: [accepted.turn_id], include: ['tool_result'] });
+    { turn_ids: [accepted.turn_id], include: ['tool_result'] }, owner);
   const tool = history.items.flatMap(turn => turn.response_parts).find(part => part.kind === 'tool_result'
     && part.result?.includes('/tool-results/'));
   // 使用原执行历史真正返回的引用，不按 Session 或工具调用 ID 拼造 URI。
@@ -102,7 +119,8 @@ try {
   await expect(page.locator('section.boxteam-thread')).toHaveCount(0);
   await expect(groups.nth(1).locator('.tab.active')).toHaveAttribute('data-resource-name', /^tool_[0-9a-f]{24}\.txt$/);
   expect(result.sources.filter(read => read.phase === result.phase)).toEqual([
-    { phase: result.phase, route: owner.routeId, body: { uri: address.uri, operation: 'read', read_format: 'auto',
+    { phase: result.phase, gatewayId: owner.gatewayId, workspaceId: owner.workspaceId,
+      body: { uri: address.uri, operation: 'read', read_format: 'auto',
       max_bytes: 33554432, max_response_bytes: 50331648 } },
   ]);
   result.toolArtifactOpened = true;
@@ -156,8 +174,10 @@ try {
   result.unsupportedSourceRejected = true;
   expect(result.fileReads).toEqual([]);
   expect(result.executions).toEqual([{ phase: 'execute-output',
-    path: `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages` }]);
-  expect(result.sources.every(read => read.route === owner.routeId)).toBe(true);
+    path: `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`,
+    gatewayId: owner.gatewayId, workspaceId: owner.workspaceId }]);
+  expect(result.sources.every(read => read.gatewayId === owner.gatewayId && read.workspaceId === owner.workspaceId)).toBe(true);
+  expect(result.addressRequests.every(request => request.body.local_gateway_id === owner.gatewayId)).toBe(true);
   result.noExecutionOrFileFallback = true;
   expect(result.pageErrors).toEqual([]);
   result.phase = 'passed';

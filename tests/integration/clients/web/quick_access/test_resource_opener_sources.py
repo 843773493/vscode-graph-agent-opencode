@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
@@ -29,6 +30,7 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
     request: pytest.FixtureRequest, browser_backend: tuple[str, Path, ModelStreamReplay], web_workbench_assets: Path,
 ) -> None:
     backend, workspace, replay = browser_backend
+    workspace_id = read_workspace_id(workspace)
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "规范来源打开验收需要 Chromium"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -54,6 +56,7 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
             completed = await asyncio.to_thread(subprocess.run, supervised_command, cwd=context.project_root,
                 env={**os.environ, **temporary, **replay.environment, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
                     "BOXTEAM_SOURCE_INTERACTIONS": json.dumps(interactions), "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
+                    "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
                     "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "failure.png")},
                 capture_output=True, text=True, timeout=210, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_text(completed.stdout)
@@ -62,6 +65,11 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
             "supervised_command": supervised_command, "exit_code": completed.returncode}) + "\n")
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         result = json.loads(result_path.read_text())
+        assert result["owner"]["workspaceId"] == workspace_id
+        assert result["owner"]["gatewayId"]
+        assert all((source["gatewayId"], source["workspaceId"]) == (
+            result["owner"]["gatewayId"], workspace_id,
+        ) for source in result["sources"])
         for key in ("toolArtifactOpened", "toolArtifactReadonly", "toolArtifactSplitShared", "toolArtifactRestored",
                     "toolArtifactReopen", "unsupportedSourceRejected", "noExecutionOrFileFallback"):
             assert result[key], key
