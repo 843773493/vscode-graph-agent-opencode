@@ -13,6 +13,13 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
+LOCAL_GATEWAY_ID = "gateway_" + "1" * 32
+WORKSPACE_IDS = (
+    "00000000-0000-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000002",
+)
+UNPUBLISHED_WORKSPACE_ID = "00000000-0000-4000-8000-000000000003"
+
 
 class ProcessProbe:
     pid = 100_003
@@ -43,20 +50,31 @@ class ProcessProbe:
 def runtime_bundle(tmp_path: Path, managed_backend_factory):
     events: list[str] = []
     handles = {name: ProcessProbe(name, events) for name in (
-        "terminal_manager", "browser_manager", "workspace_api",
+        "terminal_manager", "browser_manager", "sibling-terminal_manager",
+        "sibling-browser_manager", "workspace_api",
     )}
-    target = WorkspaceTarget(
-        workspace_id="managed", name="managed", root_path=str(tmp_path),
+    targets = tuple(WorkspaceTarget(
+        gateway_id=LOCAL_GATEWAY_ID, workspace_id=workspace_id,
+        name=f"managed-{index}", root_path=str(tmp_path / str(index)),
         backend_url="http://127.0.0.1:41000", connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001", managed=True,
-    )
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
-    registry.upsert(target)
+        managed=True,
+    ) for index, workspace_id in enumerate(WORKSPACE_IDS))
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json", gateway_id=LOCAL_GATEWAY_ID)
+    for target in targets:
+        registry.upsert(target, activate=False)
     graph = managed_backend_factory(
-        (target,), backend_url=target.backend_url, process=handles["workspace_api"],
-        auxiliary_processes={"managed": {name: handles[name] for name in ("terminal_manager", "browser_manager")}},
+        targets, backend_url=targets[0].backend_url, process=handles["workspace_api"],
+        auxiliary_processes={workspace_id: {
+            name: handles[prefix + name] for name in ("terminal_manager", "browser_manager")
+        } for workspace_id, prefix in zip(WORKSPACE_IDS, ("", "sibling-"), strict=True)},
     )
     graph.publish(registry)
+    assert registry.backend_owners() == (graph.owner,)
+    assert graph.owner.contract.gateway_id == registry.gateway_id
+    assert graph.owner.contract.workspace_ids == WORKSPACE_IDS
+    assert graph.owner.process is handles["workspace_api"]
+    assert set(graph.runtimes) == set(WORKSPACE_IDS)
+    assert all(runtime.backend_owner is graph.owner and "workspace_api" not in runtime.processes for runtime in graph.runtimes.values())
     return registry, graph, handles, events
 
 
@@ -64,12 +82,13 @@ def test_auxiliary_services_survive_until_backend_has_completed_close(runtime_bu
     registry, graph, handles, events = runtime_bundle
     registry.close()
     backend_closed = events.index("close:workspace_api")
-    for name in ("terminal_manager", "browser_manager"):
+    assert events.count("close:workspace_api") == 1
+    for name in handles.keys() - {"workspace_api"}:
         assert all(index > backend_closed for index, event in enumerate(events) if event == f"terminate:{name}")
         assert events.index(f"close:{name}") > backend_closed
         assert not handles[name].alive
     assert graph.owner.process is None
-    assert graph.runtimes["managed"].processes == {}
+    assert {workspace_id: runtime.processes for workspace_id, runtime in graph.runtimes.items()} == {workspace_id: {} for workspace_id in WORKSPACE_IDS}
 
 
 def test_failed_backend_retains_all_handles_and_auxiliaries_for_retry(runtime_bundle) -> None:
@@ -78,27 +97,31 @@ def test_failed_backend_retains_all_handles_and_auxiliaries_for_retry(runtime_bu
     with pytest.raises(RuntimeError, match="workspace_api"):
         registry.close()
     assert graph.owner.process is handles["workspace_api"]
-    assert graph.runtimes["managed"].processes == {name: handles[name] for name in ("terminal_manager", "browser_manager")}
-    assert not any(event.endswith((":terminal_manager", ":browser_manager")) for event in events)
+    for workspace_id, prefix in zip(WORKSPACE_IDS, ("", "sibling-"), strict=True):
+        assert graph.runtimes[workspace_id].processes == {name: handles[prefix + name] for name in ("terminal_manager", "browser_manager")}
+    assert not any(event.endswith(tuple(f":{name}" for name in handles.keys() - {"workspace_api"})) for event in events)
     assert all(handle.alive for handle in handles.values())
     handles["workspace_api"].failure = False
     registry.close()
     assert graph.owner.process is None
-    assert graph.runtimes["managed"].processes == {}
+    assert {workspace_id: runtime.processes for workspace_id, runtime in graph.runtimes.items()} == {workspace_id: {} for workspace_id in WORKSPACE_IDS}
     assert all(not handle.alive for handle in handles.values())
 
 
 def test_registry_retains_failed_auxiliary_runtime_until_retry(runtime_bundle) -> None:
     registry, graph, handles, _ = runtime_bundle
-    runtime = graph.runtimes["managed"]
+    runtime = graph.runtimes[WORKSPACE_IDS[0]]
     handles["browser_manager"].failure = True
     with pytest.raises(RuntimeError, match="browser_manager"):
         registry.close()
-    assert registry._runtimes["managed"] is runtime
+    assert set(registry._runtimes) == {WORKSPACE_IDS[0]}
+    assert registry._runtimes[WORKSPACE_IDS[0]] is runtime
     assert runtime.processes == {"browser_manager": handles["browser_manager"]}
     assert graph.owner.process is None
     assert not handles["workspace_api"].alive
     assert not handles["terminal_manager"].alive
+    assert not handles["sibling-terminal_manager"].alive
+    assert not handles["sibling-browser_manager"].alive
     handles["browser_manager"].failure = False
     registry.close()
     assert registry._runtimes == {}
@@ -303,15 +326,16 @@ def test_unpublished_candidate_is_closed_before_auxiliary_cleanup_and_failure_is
     candidate = WorkspaceRuntime(
         service_urls={"terminal_manager": "http://127.0.0.1:41011"},
         processes={"terminal_manager": failed},
+        workspace_id=UNPUBLISHED_WORKSPACE_ID,
     )
-    graph.owner.unpublished_runtimes["new-member"] = candidate
+    graph.owner.unpublished_runtimes[UNPUBLISHED_WORKSPACE_ID] = candidate
     with pytest.raises(RuntimeError, match="candidate-terminal"):
         registry.close(preserve_workspace_backends=preserve_backend)
     assert graph.owner.process is None
     assert events.index("close:workspace_api") < events.index("close:candidate-terminal")
-    assert graph.owner.unpublished_runtimes == {"new-member": candidate}
+    assert graph.owner.unpublished_runtimes == {UNPUBLISHED_WORKSPACE_ID: candidate}
     assert candidate.processes == {"terminal_manager": failed}
-    assert handles["terminal_manager"].alive and handles["browser_manager"].alive
+    assert all(handle.alive for name, handle in handles.items() if name != "workspace_api")
     assert "detach:workspace_api" not in events
     failed.failure = False
     registry.close(preserve_workspace_backends=preserve_backend)

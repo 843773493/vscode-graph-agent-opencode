@@ -14,7 +14,7 @@
 
 ## 3. 共享 Backend 生命周期
 
-- [ ] 3.1 将 managed Backend 成员、generation 启动合同及 mount 校验迁为单一 UUID，保留唯一原生 Gateway root binding 和唯一进程句柄。
+- [x] 3.1 将 managed Backend 成员、generation 启动合同及 mount 校验迁为单一 UUID，保留唯一原生 Gateway root binding 和唯一进程句柄。
 - [ ] 3.2 迁齐 blockers、完整影响集合、force、配置 fan-out、移除、shutdown、preserve/adopt 与恢复，删除组生命周期中的工作区 ID 换算。
 - [ ] 3.3 经产品入口验证 sibling blocker、排空超时、显式 force、完整组恢复及辅助服务保留；缺失或错误 binding 必须拒绝部分 adopt。
 - [x] 3.4 用受进程外保护的独立 Backend 子进程验证不同 home 争用同一隔离工作区仍失败、释放锁后可接管且 UUID 与业务历史保持不变。Linux 真实 Backend A／B／C 使用三个独立 home，A 由消息入口产生执行历史，B 被物理锁拒绝且 A 继续服务；A 退出后 C 保留 Session／main Thread、完整历史条目与身份文件，并从原检查点续跑，实际规范化模型请求前缀完全相同。矩阵 `integration-workspace-process-exclusivity`：1 passed／64.69s，沿现有 model_stream 精确回放，Ruff／Pyright 通过；不代表跨 Gateway 身份迁移或 Windows 实机验收。
@@ -173,3 +173,9 @@
 - Gateway／Workspace 公开绑定统一为 v2，联邦协商为 2，旧重复身份字段保留为 reserved；现有 Python／Node／Web 绑定和 OpenAPI 共用 descriptor 校验。迁齐目录结构反例和快照两层代理装具，远端只通过正式快照发布连接关联，不再手填旧别名或 runtime 字典；每跳核 UUID、Gateway、request_id、查询参数及活动 owner 不变。联邦列表的序列化装具补带真实隔离本地凭据，保留生产授权。
 - 生成一致性、真实 sourceTransform 类型检查和完整 79 扩展 Workbench 构建退出 0，客户端及生成源码检查前后一致；构建期间只有并行测试文件变化。Node／Web 往返 5 passed，目录合同 34 passed，联邦真实 ASGI JSON→Python 绑定→两套 JS 消费者 2 passed，快照 7 passed；三个修改测试 Ruff／Pyright 零诊断。
 - Python 扩大回归共收集 262 项，原运行在完成 216 项后触发 90 秒外层超时（退出 124），不称整组全绿；余下联邦 10 项通过，两个认证装具失败修正后通过，目录组沿上述独立结果复用。原命令、失败、补验、收集顺序和源码指纹保留于 `out/tests/temp/identity_registry_recovery_root/artifacts/`，快照最终索引为 `out/tests/temp/identity_snapshot_contract_current/artifacts/verification-index-1793827109683158503.json`。该证据不代替真实双 Gateway、浏览器交互或 Windows 验收，5.4／6.4 继续未完成。
+
+### 2026-11-04：3.1 共享 Backend 成员合同收口
+
+- shutdown 装具迁为双 UUID 成员、唯一 owner／Backend 句柄，保留每成员辅助服务、关闭顺序、失败重试及未发布候选清理。启动入口验证完整两份 mount、generation 和原入口产生的身份文件，不保留别名／重复 UUID 字段；合法的目标侧 `resolve_backend_workspace_id` 仅读取原生 UUID，不是旧身份换算。
+- 两文件与直接 preserve／restore／adopt 组 9＋26＋31＝66 项通过；Ruff 通过，Pyright 6→4、新增零，剩余为既存诊断。准确命令与原件见 `out/tests/temp/identity_runtime_consumers_current/artifacts/verification-1793827324622743603.json`。
+- 真实 Gateway 经产品入口组建共享成员后，四种 sibling 生命周期请求都返回完整组 blocker，过期成员集合 409 且原 generation／完整成员仍 ready，1 passed／142.35 秒。原运行索引 `out/tests/temp/identity_registry_recovery_root/artifacts/product-shared-group-owner-cas-1793827095499456128.json`；生产首尾一致，只有并行单元测试文件变化。完整排空／force／组恢复及 Windows 的 3.2／3.3 继续未勾选。

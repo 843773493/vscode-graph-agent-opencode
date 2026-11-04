@@ -268,11 +268,15 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
         "app.gateway.runtime.workspace_process._spawn_logged_process",
         fake_spawn,
     )
-    workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir()
+    mounts = tuple(
+        MountedWorkspace(f"00000000-0000-4000-8000-{index + 1:012d}", tmp_path / f"workspace-{index}")
+        for index in range(2)
+    )
+    for mount in mounts:
+        mount.workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
-        mounts=(MountedWorkspace("00000000-0000-4000-8000-000000000001", workspace_root),),
+        mounts=mounts,
         backend_generation="test-backend-generation",
         port=41001,
         log_dir=tmp_path / "logs",
@@ -291,10 +295,10 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
         )
     )
     assert environment["WORKSPACE_ONLY_SETTING"] == "present"
-    assert json.loads(environment["BOXTEAM_MOUNTED_WORKSPACES"]) == [
-        MountedWorkspace("00000000-0000-4000-8000-000000000001", workspace_root).to_payload()
-    ]
+    assert json.loads(environment["BOXTEAM_MOUNTED_WORKSPACES"]) == [mount.to_payload() for mount in mounts]
     assert environment["BOXTEAM_BACKEND_GENERATION"] == "test-backend-generation"
+    for mount in mounts:
+        assert json.loads((mount.workspace_root / ".boxteam/workspace-identity.json").read_text()) == {"workspace_id": mount.workspace_id}
 
 
 @pytest.mark.parametrize("service", ["terminal", "browser"])
