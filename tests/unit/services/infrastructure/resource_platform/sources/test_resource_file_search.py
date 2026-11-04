@@ -203,22 +203,71 @@ async def test_model_coverage_excludes_body_before_read_count_and_cursor(navigat
     assert not exact.matches and not exact.entries and not reads
 
 
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("mode,query", [("content", "needle"), ("glob", "**/*")])
+async def test_independent_subtree_is_pruned_before_rules_bodies_and_pagination(navigation_case, monkeypatch, synchronous, mode, query):
+    owner, workspace, uri = navigation_case
+    directory = workspace / "partition"
+    excluded = directory / "a[child]"
+    excluded.mkdir(parents=True)
+    (excluded / ".ignore").write_bytes(b"\xffmust not read this rule")
+    (excluded / "hidden.txt").write_bytes(b"\xffmust not read this body")
+    for name in ("b.txt", "c.txt"):
+        (directory / name).write_text("needle", encoding="utf-8")
+    root = uri + "/partition"
+    reads = []
+    original = owner._read_bytes
+
+    def observed(path, *args, **kwargs):
+        reads.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "_read_bytes", observed)
+    payload = ResourceNavigationRequest(uri=root, operation="search", search_mode=mode, query=query, limit=1,
+        search_options=ResourceNavigationSearchOptions(ignore_mode="respect", files_only=True,
+            excluded_subtree_uris=(root + "/a%5Bchild%5D",)))
+
+    async def search(request):
+        return owner.navigate_sync(request, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+
+    first = await search(payload)
+    assert [node.uri for node in first.entries] == [root + "/b.txt"]
+    assert first.truncated and first.next_cursor
+    (excluded / "new.txt").write_text("needle", encoding="utf-8")
+    second = await search(payload.model_copy(update={"cursor": first.next_cursor}))
+    assert [node.uri for node in second.entries] == [root + "/c.txt"]
+    assert not second.truncated and second.next_cursor is None
+    assert not any(path.is_relative_to(excluded) for path in reads)
+    changed = ResourceNavigationRequest(**{**payload.model_dump(), "cursor": first.next_cursor, "search_options": {"files_only": True}})
+    with pytest.raises(ResourceFileOperationError) as failure:
+        await search(changed)
+    assert failure.value.reason == "invalid_cursor"
+
+
+@pytest.mark.parametrize("field", ["excluded_resource_uris", "excluded_subtree_uris"])
 @pytest.mark.parametrize("foreign", [
     "boxteam://workspace/another/resources/files/root/a.txt",
     "boxteam://another-gateway/workspace/{workspace}/resources/files/root/a.txt",
     "boxteam://workspace/{workspace}/resources/files/root/outside.txt",
 ])
-async def test_coverage_rejects_foreign_owner_or_root_before_body_read(navigation_case, monkeypatch, foreign):
+async def test_coverage_rejects_foreign_owner_or_root_before_body_read(navigation_case, monkeypatch, foreign, field):
     owner, workspace, uri = navigation_case
     (workspace / "coverage-root").mkdir()
     (workspace / "coverage-root/a.txt").write_text("needle")
     reads = []
     monkeypatch.setattr(owner, "_read_bytes", lambda *args, **kwargs: reads.append(args))
     request = ResourceNavigationRequest(uri=uri + "/coverage-root", operation="search", search_mode="content", query="needle",
-        search_options={"excluded_resource_uris": [foreign.format(workspace=owner._workspace_id)]})
+        search_options=ResourceNavigationSearchOptions.model_validate({field: [foreign.format(workspace=owner._workspace_id)]}))
     with pytest.raises(ResourceUriResolveError) as failure:
         await owner.navigate(request, local_gateway_id=GATEWAY_ID)
     assert failure.value.reason_code == "scope_mismatch" and not reads
+
+
+async def test_subtree_cannot_exclude_the_query_root(navigation_case):
+    owner, _, uri = navigation_case
+    with pytest.raises(ResourceUriResolveError, match="严格位于"):
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", query="needle",
+            search_options=ResourceNavigationSearchOptions(excluded_subtree_uris=(uri,))), local_gateway_id=GATEWAY_ID)
 
 
 def test_coverage_is_a_canonical_uri_set_only_for_content_queries():

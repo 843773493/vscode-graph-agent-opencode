@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -64,6 +65,11 @@ async def test_dirty_file_coverage_keeps_other_owner_and_paginated_matches(
         (target / "00-dirty.txt").write_text(f"{target.name} disk coverageword\n", encoding="utf-8")
     (workspaces[0] / "10-first.txt").write_text("A first coverageword\n", encoding="utf-8")
     (workspaces[0] / "20-tail.txt").write_text("A tail coverageword\n", encoding="utf-8")
+    (workspaces[0] / "nested").mkdir()
+    nested_files = {"parent.txt": "partitionword parent disk", "nested/keep.md": "partitionword child disk",
+                    "nested/drop.txt": "partitionword excluded child disk"}
+    for name, body in nested_files.items():
+        (workspaces[0] / name).write_text(body, encoding="utf-8")
     gateway = start_gateway_process(
         workspace_root=workspaces[0], default_backend_url=None, port=coverage_gateway_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
@@ -71,23 +77,28 @@ async def test_dirty_file_coverage_keeps_other_owner_and_paginated_matches(
     )
     result_path = context.artifacts_dir / "file-coverage.json"
     command = ["bun", "tests/e2e/clients/web/quick_access_file_coverage.mjs"]
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
+                          "--timeout-seconds", "150", "--", *command]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(
-                subprocess.run, command, cwd=context.project_root,
+                subprocess.run, supervised_command, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_COVERAGE_WORKSPACE_B": str(workspaces[1]),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
-                capture_output=True, text=True, timeout=150, check=False,
+                capture_output=True, text=True, timeout=180, check=False,
             )
         (context.artifacts_dir / "browser.stdout.raw").write_text(completed.stdout)
         (context.artifacts_dir / "browser.stderr.raw").write_text(completed.stderr)
-        (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": completed.returncode}) + "\n")
+        (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command,
+            "supervised_command": supervised_command, "exit_code": completed.returncode}) + "\n")
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
         assert receipt["singleOwnerNegativeCoverage"] is True
         assert receipt["smallQuotaAndContinuation"] is True
         assert receipt["coverageBindsCursor"] is True
+        assert receipt["partitioned"] and receipt["filteredModel"] and receipt["onlyOpenEditors"]
         assert receipt["pageErrors"] == []
         logs = context.boxteam_home_for_node(request.node.nodeid) / "state/logs/backend"
         backend_logs = [log.read_text() for log in logs.glob("*.log")]
@@ -98,8 +109,8 @@ async def test_dirty_file_coverage_keeps_other_owner_and_paginated_matches(
         }
         assert all(len(entries) == 1 for entries in owner_logs.values())
         observed_dispatch = []
-        for response in receipt["receipts"]:
-            expected = [branch["branch"]["owner"]["workspace_id"] for branch in response["summary"]["branches"]]
+        for response in [*receipt["receipts"], receipt["nestedReceipt"]]:
+            expected = list(dict.fromkeys(branch["branch"]["owner"]["workspace_id"] for branch in response["summary"]["branches"]))
             actual = [owner for owner, entries in owner_logs.items()
                       if any(f'request_id="{response["requestId"]}"' in line and '"POST /api/v1/search ' in line
                              for line in entries[0].splitlines())]
@@ -108,5 +119,7 @@ async def test_dirty_file_coverage_keeps_other_owner_and_paginated_matches(
         assert all(entry["actual"] == entry["expected"] for entry in observed_dispatch), observed_dispatch
         assert (workspaces[0] / "00-dirty.txt").read_text() == "A disk coverageword\n"
         assert (workspaces[1] / "00-dirty.txt").read_text() == "B disk coverageword\n"
+        for name, body in nested_files.items():
+            assert (workspaces[0] / name).read_text(encoding="utf-8") == body
     finally:
         close_gateway_process(gateway)

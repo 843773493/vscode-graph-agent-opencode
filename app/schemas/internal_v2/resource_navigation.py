@@ -55,8 +55,9 @@ class ResourceNavigationSearchOptions(BaseModel):
     ignore_mode: Literal["default", "none", "respect"] = "default"
     context_lines: int = Field(default=0, ge=0, le=100)
     excluded_resource_uris: tuple[NavigationResourceURI, ...] = Field(default=(), max_length=10000)
+    excluded_subtree_uris: tuple[NavigationResourceURI, ...] = Field(default=(), max_length=256)
 
-    @field_validator("excluded_resource_uris")
+    @field_validator("excluded_resource_uris", "excluded_subtree_uris")
     @classmethod
     def normalize_excluded_resources(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(sorted(set(values)))

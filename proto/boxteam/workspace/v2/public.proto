@@ -1906,6 +1906,8 @@ message ResourceNavigationSearchOptions {
   repeated string excluded_resource_uris = 11;
   // 文件搜索在输出计数和分页前排除目录；原树浏览不启用。
   optional bool files_only = 12;
+  // 交由独立目录分支查询的严格子树；遍历前剪枝，不读取其正文或 ignore 规则。
+  repeated string excluded_subtree_uris = 13;
 }
 
 message ResourceNavigationNodeDTO {

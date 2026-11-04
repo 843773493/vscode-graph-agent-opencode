@@ -1923,7 +1923,11 @@ export interface ResourceNavigationSearchOptions {
   /** 已由调用方模型覆盖的精确资源；只传身份，正文和草稿不出客户端。 */
   excluded_resource_uris: string[];
   /** 文件搜索在输出计数和分页前排除目录；原树浏览不启用。 */
-  files_only?: boolean | undefined;
+  files_only?:
+    | boolean
+    | undefined;
+  /** 交由独立目录分支查询的严格子树；遍历前剪枝，不读取其正文或 ignore 规则。 */
+  excluded_subtree_uris: string[];
 }
 
 export interface ResourceNavigationNodeDTO {
@@ -15439,6 +15443,7 @@ function createBaseResourceNavigationSearchOptions(): ResourceNavigationSearchOp
     context_lines: 0,
     excluded_resource_uris: [],
     files_only: undefined,
+    excluded_subtree_uris: [],
   };
 }
 
@@ -15463,6 +15468,9 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
         ? object.excluded_resource_uris.map((e: any) => globalThis.String(e))
         : [],
       files_only: isSet(object.files_only) ? globalThis.Boolean(object.files_only) : undefined,
+      excluded_subtree_uris: globalThis.Array.isArray(object?.excluded_subtree_uris)
+        ? object.excluded_subtree_uris.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -15504,6 +15512,9 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     if (message.files_only !== undefined) {
       obj.files_only = message.files_only;
     }
+    if (message.excluded_subtree_uris?.length) {
+      obj.excluded_subtree_uris = message.excluded_subtree_uris;
+    }
     return obj;
   },
 
@@ -15526,6 +15537,7 @@ export const ResourceNavigationSearchOptions: MessageFns<ResourceNavigationSearc
     message.context_lines = object.context_lines ?? 0;
     message.excluded_resource_uris = object.excluded_resource_uris?.map((e) => e) || [];
     message.files_only = object.files_only ?? undefined;
+    message.excluded_subtree_uris = object.excluded_subtree_uris?.map((e) => e) || [];
     return message;
   },
 };

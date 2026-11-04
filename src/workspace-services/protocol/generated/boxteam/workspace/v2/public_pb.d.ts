@@ -8285,6 +8285,13 @@ export declare type ResourceNavigationSearchOptions = Message<"boxteam.workspace
    * @generated from field: optional bool files_only = 12;
    */
   filesOnly?: boolean | undefined;
+
+  /**
+   * 交由独立目录分支查询的严格子树；遍历前剪枝，不读取其正文或 ignore 规则。
+   *
+   * @generated from field: repeated string excluded_subtree_uris = 13;
+   */
+  excludedSubtreeUris: string[];
 };
 
 /**

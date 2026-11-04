@@ -41,38 +41,20 @@ export function fileOptions(query: ICommonQueryProps<URI>, folder: IFolderQuery,
   return { case_mode: 'sensitive', is_regex: false, whole_word: false, is_multiline: false, all_matches: false, context_lines: 0,
     include_globs: [...new Set([...globalIncludes, ...folderIncludes])].sort(), exclude_globs: [...new Set([...patterns(query.excludePattern), ...excludes])].sort(),
     ignore_mode: folder.disregardIgnoreFiles === undefined ? 'default' : folder.disregardIgnoreFiles ? 'none' : 'respect',
-    excluded_resource_uris: [] };
+    excluded_resource_uris: [], excluded_subtree_uris: [...new Set(query.folderQueries
+      .filter(other => !identity.isEqual(other.folder, folder.folder) && identity.isEqualOrParent(other.folder, folder.folder))
+      .map(other => workspaceFileSource(other.folder).path))].sort() };
 }
 
-/** 准入前消除重复扫描；根相对过滤或 ignore 继承不同的重叠根必须明确拆开查询。 */
+/** 同根只保留一份；父子根分别查询，父根沿原文件 owner 剪去独立子树。 */
 function uniqueFolders(query: ICommonQueryProps<URI>, identity: IExtUri): IFolderQuery[] {
   const folders: IFolderQuery[] = [];
   for (const folder of query.folderQueries) {
-    const options = fileOptions(query, folder, identity);
-    let insertion = folders.length, duplicate = false;
-    for (let index = 0; index < folders.length; index++) {
-      const previous = folders[index];
-      const child = identity.isEqualOrParent(folder.folder, previous.folder);
-      const parent = identity.isEqualOrParent(previous.folder, folder.folder);
-      if (!child && !parent) continue;
-      const previousOptions = fileOptions(query, previous, identity);
-      if (JSON.stringify(options) !== JSON.stringify(previousOptions)) throw new Error('重叠搜索目录具有冲突的局部选项，请分别查询');
-      if (!identity.isEqual(folder.folder, previous.folder)) {
-        const relative = identity.relativePath(parent ? folder.folder : previous.folder, parent ? previous.folder : folder.folder)!;
-        if (options.include_globs.length || options.exclude_globs.length || options.ignore_mode === 'respect'
-          || (options.ignore_mode === 'default' && relative.split('/').some(part => ['.git', 'node_modules', '.boxteam'].includes(part)))) {
-          // TODO：支持重叠根的相对过滤和 ignore 继承时，须由同一文件 owner 分区扫描。
-          throw new Error('重叠搜索目录的相对过滤或 ignore 边界不同，请分别查询');
-        }
-      }
-      if (child) { duplicate = true; break; }
-      insertion = Math.min(insertion, index);
+    const previous = folders.find(item => identity.isEqual(item.folder, folder.folder));
+    if (!previous) folders.push(folder);
+    else if (JSON.stringify(fileOptions(query, folder, identity)) !== JSON.stringify(fileOptions(query, previous, identity))) {
+      throw new Error('同一搜索目录具有冲突的局部选项，请分别查询');
     }
-    if (duplicate) continue;
-    // 后出现的父根取代子根，保留该范围最初的分支次序。
-    const remaining = folders.filter(previous => !identity.isEqualOrParent(previous.folder, folder.folder));
-    remaining.splice(insertion, 0, folder);
-    folders.splice(0, folders.length, ...remaining);
   }
   return folders;
 }
@@ -117,18 +99,22 @@ export function validateTextQuery(query: ITextQuery, identity: IExtUri): ITextQu
 }
 
 export function resourceInQuery(resource: URI, query: ICommonQueryProps<URI>, identity: IExtUri): boolean {
+  return query.folderQueries.some(folder => resourceInFolder(resource, query, folder, identity));
+}
+
+export function resourceInFolder(resource: URI, query: ICommonQueryProps<URI>, folder: IFolderQuery, identity: IExtUri): boolean {
   if (resource.scheme !== fileScheme) return false;
-  return query.folderQueries.some(folder => {
-    if (!identity.isEqualOrParent(resource, folder.folder)) return false;
-    const relative = identity.relativePath(folder.folder, resource)!;
-    const options = fileOptions(query, folder, identity);
-    if ('contentPattern' in query && options.ignore_mode === 'default' && relative.split('/').some(part => ['.git', 'node_modules', '.boxteam'].includes(part))) return false;
-    // 与原文件 owner 的 glob 根语义一致，也排除已被目录模式剪枝的子项。
-    const match = (pattern: string, path: string) => glob.match('**/' + pattern.replace(/^\/+/, ''), path);
-    const ancestors = relative.split('/').map((_, index, parts) => parts.slice(0, index + 1).join('/'));
-    return (!options.include_globs.length || options.include_globs.some(pattern => match(pattern, relative)))
-      && !options.exclude_globs.some(pattern => ancestors.some(path => match(pattern, path) || match(pattern, path + '/')));
-  });
+  if (!identity.isEqualOrParent(resource, folder.folder)) return false;
+  if (query.folderQueries.some(other => !identity.isEqual(other.folder, folder.folder)
+    && identity.isEqualOrParent(other.folder, folder.folder) && identity.isEqualOrParent(resource, other.folder))) return false;
+  const relative = identity.relativePath(folder.folder, resource)!;
+  const options = fileOptions(query, folder, identity);
+  if ('contentPattern' in query && options.ignore_mode === 'default' && relative.split('/').some(part => ['.git', 'node_modules', '.boxteam'].includes(part))) return false;
+  // 与原文件 owner 的 glob 根语义一致，也排除已被目录模式剪枝的子项。
+  const match = (pattern: string, path: string) => glob.match('**/' + pattern.replace(/^\/+/, ''), path);
+  const ancestors = relative.split('/').map((_, index, parts) => parts.slice(0, index + 1).join('/'));
+  return (!options.include_globs.length || options.include_globs.some(pattern => match(pattern, relative)))
+    && !options.exclude_globs.some(pattern => ancestors.some(path => match(pattern, path) || match(pattern, path + '/')));
 }
 
 export function openResources(editors: IEditorService, query: ICommonQueryProps<URI>, identity: IExtUri): URI[] {

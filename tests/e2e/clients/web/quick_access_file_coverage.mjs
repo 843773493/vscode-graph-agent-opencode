@@ -5,6 +5,7 @@ import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 import { searchRequest, searchReceipt } from '../../../support/workbench/search-observation.mjs';
 import { writeWorkspaceSettings } from '../../../support/workbench/settings.mjs';
+import { verifyNestedSearchRoots } from './quick_access_nested_roots.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -146,6 +147,8 @@ try {
   result.cursorRejection = rejected;
   result.coverageBindsCursor = true;
   expect(JSON.stringify(result.requests)).not.toContain('A local removed query');
+  await verifyNestedSearchRoots({ page, command,
+    target: { gatewayId: ownerA.gateway_id, workspaceId: ownerA.workspace_id, rootUri: root, label: 'Partition' }, result });
   expect(errors).toEqual([]);
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';

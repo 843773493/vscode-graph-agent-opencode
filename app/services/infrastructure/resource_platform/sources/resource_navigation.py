@@ -255,7 +255,11 @@ class ResourceNavigation:
         artifact_reader: ResourceFileReader | None = None,
     ) -> ResourceNavigationResultDTO:
         self._check_deadline(deadline)
-        excluded = self._excluded_resources(parsed, request, gateway_id)
+        options = request.search_options or _DEFAULT_SEARCH_OPTIONS
+        excluded = self._excluded_resources(parsed, options.excluded_resource_uris, gateway_id)
+        subtrees = self._excluded_resources(parsed, options.excluded_subtree_uris, gateway_id)
+        if parsed.display_uri in subtrees:
+            raise ResourceUriResolveError("scope_mismatch", "独立查询子树必须严格位于当前查询根以内")
         if parsed.kind == "skills" and parsed.tail_segments[0].startswith("http_"):
             return self._navigate_owned_file(parsed, request, gateway_id, deadline, self._network_skill_reader,
                                              owner_id=self._workspace_id if self._workspace_root is not None else self._gateway_id)
@@ -289,7 +293,7 @@ class ResourceNavigation:
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
         ))
-        for child_node, hit, position in self._search_items(root, children, parsed, node, request, deadline, pattern, excluded, resume):
+        for child_node, hit, position in self._search_items(root, children, parsed, node, request, deadline, pattern, excluded, subtrees, resume):
             match = hit.match if hit is not None else None
             relative = parse_resource_uri(child_node.uri).tail_segments[len(parsed.tail_segments):]
             name = "/".join(relative) or parsed.tail_segments[-1]
@@ -438,27 +442,26 @@ class ResourceNavigation:
             raise ResourceFileOperationError("execution_failed", f"内容搜索正则无效: {error}", reason="invalid_search_pattern") from error
 
     @staticmethod
-    def _excluded_resources(parsed: ParsedResourceUri, request: ResourceNavigationRequest, gateway_id: str) -> frozenset[str]:
-        uris = request.search_options.excluded_resource_uris if request.search_options is not None else ()
+    def _excluded_resources(parsed: ParsedResourceUri, uris: tuple[str, ...], gateway_id: str) -> frozenset[str]:
         excluded: set[str] = set()
         for uri in uris:
             target = parse_resource_uri(uri, local_gateway_id=gateway_id)
             if (target.scope, target.scope_id, target.kind, target.gateway_authority) != (
                 parsed.scope, parsed.scope_id, parsed.kind, parsed.gateway_authority,
             ) or target.tail_segments[:len(parsed.tail_segments)] != parsed.tail_segments:
-                raise ResourceUriResolveError("scope_mismatch", "模型覆盖资源不属于本次文件查询根")
+                raise ResourceUriResolveError("scope_mismatch", "排除资源不属于本次文件查询根")
             excluded.add(target.display_uri)
         if excluded and (parsed.session_artifact_kind is not None or (parsed.kind == "skills" and parsed.tail_segments[0].startswith("http_"))):
-            raise ResourceUriResolveError("capability_denied", "私有产物或网络快照不接受文件模型覆盖")
+            raise ResourceUriResolveError("capability_denied", "私有产物或网络快照不接受文件查询排除项")
         return frozenset(excluded)
 
     def _search_items(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-        excluded: frozenset[str], resume: SearchPosition,
+        excluded: frozenset[str], subtrees: frozenset[str], resume: SearchPosition,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, ContentMatch | None, SearchPosition]]:
         path = self._contained(root, children, parsed)
-        candidates = self._walk(root, children, parsed, request, deadline) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
+        candidates = self._walk(root, children, parsed, request, deadline, subtrees) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
         root_stat = path.stat()
         prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
         prefix_checked = not resume.prefix
@@ -616,7 +619,7 @@ class ResourceNavigation:
 
     def _walk(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
-        request: ResourceNavigationRequest, deadline: float,
+        request: ResourceNavigationRequest, deadline: float, subtrees: frozenset[str],
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation]]:
         pending: list[tuple[tuple[str, ...], IgnoreScope | None]] = [(children, None)]
         visited: set[Path] = set()
@@ -669,6 +672,13 @@ class ResourceNavigation:
             for child in sorted(bounded_children, key=lambda item: item.name):
                 self._check_deadline(deadline)
                 child_parts = (*relative, child.name)
+                uri = resource_display_uri(
+                    scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+                    tail_segments=(parsed.tail_segments[0], *child_parts),
+                )
+                # 子根由自己的分支应用相对过滤及 ignore，不进入父根的扫描／输出配额。
+                if uri in subtrees:
+                    continue
                 # 私有存储不作为文件树 child 发布；直接请求和别名仍在 _contained 拒绝。
                 if parsed.kind in {"files", "attachments"} and self._file_paths.is_private(child, root_uri=parsed.display_uri):
                     continue
@@ -685,10 +695,6 @@ class ResourceNavigation:
                 if scope is not None and scope.excludes(child_parts, child.is_dir()):
                     continue
                 child_path = self._contained(root, child_parts, parsed)
-                uri = resource_display_uri(
-                    scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
-                    tail_segments=(parsed.tail_segments[0], *child_parts),
-                )
                 child_node = self._node(parse_resource_uri(uri), child_path)
                 # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
                 yield child_node, FileObservation(self._stat(child_path), scope.version if scope is not None else ())

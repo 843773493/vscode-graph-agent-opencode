@@ -865,3 +865,11 @@
 - `view ` 通过原 Provider 聚焦已有会话导航及工作区终端、输出、自动化、端口、MCP 连接和 Browser，核对原底部面板位置及精确工作区归属。来源／Diff 刷新恢复、最后引用关闭后重读及磁盘正文不变断言保留；正式 Gateway／后端／Workbench／Chromium 1 passed／95.53 秒，pageErrors=[]。只改验收，不新增产品导航链路。
 - 复用相同产品指纹的25份实际转换源码类型检查及正式构建；测试驱动的命令返回序列化、自动保存、关闭结算／Esc焦点、hover及视图标签定位问题和瞬时端口占用均保留原件，未扩大产品交互期限或放宽原业务断言。进程外240秒／4GiB保护，外层360秒；最终Ruff、项目解释器Pyright、ESM、OpenSpec strict与差异检查见证据收据。
 - 完整命令、指纹、失败归因、原始输出与退出码：`out/tests/temp/thread_outline_20261104/artifacts/verification.json`；页面原件：`out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-37c04fd66a4e/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Electron／Windows导航尚未验收，不以本批勾选整体运行面验收。
+
+### 2026-11-04：父子搜索根按原 owner 分区（16.19 部分）
+
+- 父子根分别保留 QueryBuilder 的相对过滤和 ignore 配置；父分支通过 typed `excluded_subtree_uris` 在递归、规则及正文读取前剪去独立子树。分区集合按原 URI 归属校验并绑定原 cursor，变化明确拒绝；不新增扫描器、索引或搜索状态。相同根去重，冲突选项仍拒绝。
+- 打开模型、负命中覆盖、远端结果和上下文使用相同分区；子根排除的模型不能借父根条件重新出现，精确已打开文件不携带兄弟子树排除。21 项真实搜索服务检查及最终 67 项文件 owner 检查通过，涵盖同步／异步、三层根、顺序、跨 owner、子树无效 UTF-8 规则／正文零读取和续页。
+- 正式 Workbench／真实 Gateway、A/B 后端及 Chromium 1 passed／99.86 秒；真实原 Search Editor 的 QueryBuilder 生成父 TXT／子 Markdown 分支，只有正确 dirty 模型和父磁盘命中，仅已打开搜索零后端请求。原 A/B 小配额续页、覆盖集改变使旧 cursor 拒绝、磁盘未保存及 request_id 分发回归保持，pageErrors=[]。原件：`out/tests/e2e/clients/web/test_quick_access_file_coverage/runs/run-f3c40b4f1bc7/`。
+- 真实 Workbench 类型检查（25 份实际转换源码）、本轮正式共享构建、Ruff、生成一致性、Buf breaking、OpenSpec strict 与差异检查通过。核心 Pyright 的 9 条诊断与 HEAD 原文逐条相同，schema 零诊断；初次检查误将 Git SHA 当 Buf 输入路径、误用未安装的 uv run pyright，均保留失败原件，改用正确 Git 输入及已有 uvx 工具后完成。
+- 命令、源码指纹、原始结果与退出码见 `out/tests/temp/quick_access_nested_roots_20261104/artifacts/verification.json`，前序静态／服务检查原件在 `out/tests/temp/overlapping_roots_20261104/artifacts/`。Windows canonical 和其余选项仍未齐，16.19 保持未勾选；不以 Web 结果替代 Electron 或 Windows 验收。
