@@ -19,6 +19,7 @@ from app.services.infrastructure.mcp.tool_definitions import tool_catalog_from_a
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import definition_source_values
+from app.services.infrastructure.rollout_context.runtime.context_sources import tool_definitions
 from tests.harness.python.run_context import TestRunContext
 from tests.unit.services.infrastructure.mcp import test_tool_search as search
 
@@ -36,7 +37,7 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
     thread = saver._storage.storage.main_thread_id(session)
     admission = saver.execution_admission(session, thread_id=thread, execution_id=accepted["initial_execution_id"])
 
-    async def create(source_count, call_count, *, damage=None):
+    async def create(source_count, call_count, *, damage=None, compact=True):
         wire, activation = guidance_prepare("batch-discovery-start")
         snapshot = wire["snapshot"]
         catalog = tool_catalog_from_activation(activation, lambda frozen, binding: saver.read_resource_activation_payload(
@@ -66,10 +67,12 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
         ) for index in range(call_count))
         checkpoint = empty_checkpoint()
         checkpoint["id"] = "batch-discovery-checkpoint"
-        checkpoint["channel_values"] = {"messages": messages, "_summarization_event": {
-            "cutoff_index": len(messages), "cutoff_message_id": messages[-1].id,
-            "summary_message": HumanMessage(content="已发现批次工具。", id="batch-discovery-summary"),
-        }}
+        checkpoint["channel_values"] = {"messages": messages}
+        if compact:
+            checkpoint["channel_values"]["_summarization_event"] = {
+                "cutoff_index": len(messages), "cutoff_message_id": messages[-1].id,
+                "summary_message": HumanMessage(content="已发现批次工具。", id="batch-discovery-summary"),
+            }
         checkpoint["channel_versions"] = {name: "1" for name in checkpoint["channel_values"]}
         checkpoint["updated_channels"] = list(checkpoint["channel_values"])
         with (
@@ -80,7 +83,7 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
                 model_call_id=snapshot.model_call_id, assembly_id=snapshot.assembly_id,
                 attempt=1, provider="fixture-model", dispatch_state="dispatched")
             saver.put(build_checkpoint_config(thread), checkpoint,
-                {"source": "compaction", "step": 1}, checkpoint["channel_versions"])
+                {"source": "compaction" if compact else "loop", "step": 1}, checkpoint["channel_versions"])
         return originals, activation.activation_snapshot_id
 
     return create
@@ -142,6 +145,48 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
     assert all(max(Counter(phase["calls"]).values()) == 1 for phase in phases)
     assert all(phase["catalogs"] == 1 for phase in phases)
     assert all(max(Counter(phase["bodies"]).values()) == 1 for phase in phases)
+
+
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("call_count", [1, 2])
+async def test_prepare_decodes_each_discovery_result_once(
+    discovered_batch, guidance_prepare, registry_db, monkeypatch, request, compact, call_count,
+):
+    originals, _activation_id = await discovered_batch(4, call_count, compact=compact)
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    project = tool_definitions.project_tool_result
+    phases = []
+
+    def observe_project(item):
+        phases[-1]["results"].append(item.item_id)
+        return project(item)
+
+    monkeypatch.setattr(tool_definitions, "project_tool_result", observe_project)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        for key, owner in (("successor", saver), ("cold", cold)):
+            phases.append({"phase": key, "results": []})
+            wire, _ = guidance_prepare("batch-decode-" + key, context_owner=owner)
+            values = [value for value, _revision in definition_source_values(wire["snapshot"])]
+            # 当前完整发现结果保持原引用；压缩后才恢复完整来源，不能改变注入时机。
+            assert [value.tool_id for value in values] == (sorted(originals) if compact else [])
+            for value in values:
+                assert value.definition is not None
+                assert value.definition.provenance.model_dump() == originals[value.tool_id]["provenance"]
+            assert cold.get_context_assembly(
+                session, thread, assembly_id=wire["snapshot"].assembly_id,
+            ).to_dict() == wire["snapshot"].to_dict()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"discovery-decode-{compact}-{call_count}.json").write_text(
+        json.dumps(phases, indent=2), encoding="utf-8",
+    )
+    print(f"discovery decode work ({compact=}, {call_count=}): {phases}")
+    # 同次 prepare 不重复投影、解析；普通续读及冷读仍重新验证当前结果。
+    # 压缩后的冷读继承封存来源，不重新读取已离开当前选集的原始结果。
+    for phase in phases:
+        expected_count = 0 if compact and phase["phase"] == "cold" else call_count
+        assert len(set(phase["results"])) == expected_count
+        assert len(phase["results"]) == expected_count
 
 
 @pytest.mark.parametrize("damage, message", [

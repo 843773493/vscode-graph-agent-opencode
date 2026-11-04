@@ -174,7 +174,11 @@ def tool_definition_batch(
     for value, _revision in definition_source_values(retained_assembly, retained_source_refs):
         discoveries[value.tool_id] = value.discovered_from
         prior_sources[value.tool_id] = value
-    entries = tuple(discovery_entries((*retained_items, *current_items)))
+    # 本次先解析压缩前历史，再解析当前选集；保留当前结果供后续判断，
+    # 避免为确认 current 身份再次投影消息、解码 JSON 和校验 provenance。
+    retained_entries = tuple(discovery_entries(retained_items))
+    current_discoveries = tuple(discovery_entries(current_items))
+    entries = (*retained_entries, *current_discoveries)
     for entry in entries:
         prior = discoveries.get(entry.ref.tool_id)
         if prior is not None and prior != entry.ref:
@@ -195,7 +199,7 @@ def tool_definition_batch(
     policies = policies_for(tuple(current.get(name, definition).metadata for name, definition in originals.items()))
     if set(policies) != set(originals):
         raise ExtensionCatalogUnavailableError("定义恢复缺少完整有效策略")
-    current_entries = {entry.ref for entry in discovery_entries(current_items)}
+    current_entries = {entry.ref for entry in current_discoveries}
     inline_refs = {entry.ref for entry in entries if entry.inline_payload is not None}
     previous_revisions = {value.tool_id: revision for value, revision in definition_source_values(previous)}
     sources, deltas = list(batch.sources), list(batch.deltas)
