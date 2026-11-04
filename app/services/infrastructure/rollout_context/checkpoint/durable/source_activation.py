@@ -275,6 +275,8 @@ class ContextSourceActivationMixin:
             _validate_activation_guidance(connection, snapshot, previous,
                                           resource_id=TEAM_RESOURCE_IDS[facet], source_id=TEAM_SOURCE_IDS[facet])
         latest_skill_selections: dict[str, int] | None = None
+        selected_source_versions: set[tuple[str | None, str | None]] | None = None
+        selected_frames_indexed = False
         for source in binding.source_revisions:
             if (is_tool_definition_source(source.source_id)
                     or source.source_id in {MCP_GUIDANCE_SOURCE_ID, *TEAM_SOURCE_IDS.values()}):
@@ -335,16 +337,21 @@ class ContextSourceActivationMixin:
                     "context-source-seal-conflict: observed/applied revision 已变化: "
                     + source.source_id
                 )
-            selected_source = any(
-                provenance.source_identity == source.source_id
-                and provenance.revision == source.revision
-                for provenance in (() if binding.root is None else binding.root.sources)
-            ) or any(
-                ref.source_identity == source.source_id
-                and ref.source_revision == source.revision
-                for frame in binding.prefix.state.frames for ref in frame.item_refs
-            )
-            if not selected_source:
+            # 同一 seal 的前缀不可变，按身份与版本一次索引，避免逐来源重扫历史。
+            # root 已命中时不遍历 frame；没有普通来源回执时也不建立索引。
+            if selected_source_versions is None:
+                selected_source_versions = {
+                    (provenance.source_identity, provenance.revision)
+                    for provenance in (() if binding.root is None else binding.root.sources)
+                }
+            identity = (source.source_id, source.revision)
+            if identity not in selected_source_versions and not selected_frames_indexed:
+                selected_source_versions.update(
+                    (ref.source_identity, ref.source_revision)
+                    for frame in binding.prefix.state.frames for ref in frame.item_refs
+                )
+                selected_frames_indexed = True
+            if identity not in selected_source_versions:
                 raise ItemSchemaError(
                     "context-source-seal-conflict: applied source 没有真实 selected frame: "
                     + source.source_id

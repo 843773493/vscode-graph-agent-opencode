@@ -175,6 +175,42 @@ def test_skill_seal_rejects_superseded_selection_and_rolls_back_batch(
         assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
 
 
+def test_seal_requires_the_selected_revision_not_only_source_identity(source_seal_case, monkeypatch):
+    case = source_seal_case
+    manager = case.manager()
+    manager.register(ContextSourceDescriptor(
+        source_id="instruction:versioned", source_kind="agent_instructions", name="版本化来源",
+        description="选集版本校验", internal_locator="runtime:versioned", root_placement="root_eligible",
+    ), tracking_status="tracked")
+    manager.observe("instruction:versioned", "初始正文", revision="version:1")
+    case.seal(manager)
+    manager.observe("instruction:versioned", "待封存正文", revision="version:2")
+    before = case.saver.load_context_source_control_states(case.owner)
+    pending = manager.prepare_pending()
+    apply_sources = source_activation.ContextSourceActivationMixin._apply_sealed_context_sources
+
+    def unselected_revision(context_store, connection, snapshot, *, previous):
+        # control 与回执自洽，但前缀只含 version:1/2；不能用身份相同冒充版本已选中。
+        connection.execute(
+            "UPDATE context_source_control_states SET latest_revision='version:unselected' "
+            "WHERE session_id=? AND thread_id=? AND source_id='instruction:versioned'",
+            (case.owner.session_id, case.owner.thread_id),
+        )
+        binding = replace(snapshot.seal_binding, source_revisions=tuple(
+            replace(source, revision="version:unselected") if source.source_id == "instruction:versioned" else source
+            for source in snapshot.seal_binding.source_revisions
+        ))
+        return apply_sources(context_store, connection, replace(snapshot, seal_binding=binding), previous=previous)
+
+    monkeypatch.setattr(source_activation.ContextSourceActivationMixin, "_apply_sealed_context_sources", unselected_revision)
+    with pytest.raises(ItemSchemaError, match="applied source 没有真实 selected frame"):
+        case.seal(manager)
+    assert case.saver.load_context_source_control_states(case.owner) == before
+    assert manager.prepare_pending() == pending
+    with closing(case.saver._storage.storage._connect(case.owner.thread_id, session_id=case.owner.session_id)) as connection:
+        assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (1,)
+
+
 @pytest.mark.parametrize(
     "root_placement,policy_key",
     [("root_eligible", "filesystem_rules"), ("tail_only", None)],
