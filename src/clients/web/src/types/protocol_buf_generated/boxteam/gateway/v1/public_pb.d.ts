@@ -564,6 +564,11 @@ export declare type FederationWorkspaceListDTO = Message<"boxteam.gateway.v1.Fed
    * @generated from field: repeated string excluded = 4;
    */
   excluded: string[];
+
+  /**
+   * @generated from field: bool identities_verified = 5;
+   */
+  identitiesVerified: boolean;
 };
 
 /**

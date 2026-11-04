@@ -74,3 +74,12 @@
 - 原 root-binding owner 统一负责本机注册身份：已有根只能只读核验 UUID 并与原登记精确匹配；真正新根才允许沿原入口建目录、初始化身份。managed、external 和默认工作区启动共用该入口，移除各自初始化调用；已登记根丢失时，即使要求创建目录也不能重建，更不能因重复注册生成新 UUID 后才报错。
 - 原行为的真实 CLI／入口反例为 3 failed／1 passed；修复后注册、冷恢复、默认工作区改名与新／已有身份共 114 passed／19.76s。真实 Gateway 文件 4 passed／130.19s，新增场景逐一核 managed／external 的身份缺件与 UUID 改写拒绝、原文件和 SQLite 登记／活动项／revision 不变，修复测试注入后原工作区保持健康；缺件保留原 Trace 500，UUID 冲突为 workspace_create 400。
 - 最终静态对照完整原基线：Pyright 91／91、Ruff 27／27，无新增诊断；独立只读复核确认写入与调用顺序，9 份 Python 内存编译通过。准确命令、指纹及原件见 `out/tests/temp/identity_known_root_20261104/artifacts/verification.json`。symlink alias、并发注册和 Windows 未作专门验收；现有路由别名与完整迁移仍属后续任务，1.3 不勾选。
+
+
+### 2026-11-04：6.1 远端原生身份显式核验切片
+
+- `preview-workspace-identity --verify-remote` 使用同一冻结登记中的连接与原远端路由、已有联邦凭据和短期 SSH 隧道，复用原 discover 链路；默认预检继续离线。不配对、启动目标或改登记，连接记录解析与 registry 冷恢复统一。报告不包含 SSH 参数或凭据，诊断日志沿显式 home 的共享日志布局。
+- 原 `/federation/workspaces` 增加显式只读核验选项，复用既有 `initialize=False` 身份 CLI 核验原生根并比较 registry revision，之后才标明 `identities_verified`；普通发现不增加磁盘探测。核验方严格要求同 Gateway／协议及布尔确认，旧服务仅返回缓存不能通过；原路由消失、UUID 改变、重复身份、凭据缺失／过期／归属错误均阻塞，不能按同 UUID 另一路由重绑。
+- 独审两处 P2 已闭合：Gateway 根统一展开规范化；发现／隧道健康检查被取消且关闭再次失败时保留原取消对象、以原因链保留清理错误，不继续下一连接。公共同步 worker 的原生失败优先合同保持，原 11 项用例通过。
+- 相关登记／联邦／预检回归 138 passed，最终远端及原生 proof 26 passed，公开合同 62 passed（场景重叠不相加）。原生 HTTP 使用 ASGI、真实认证／DTO／registry／只读 CLI；远端 SSH 和 HTTP 使用明确替身，不代表真实双 Gateway／SSH 或 Windows 验收。协议格式／lint／build／breaking／生成一致性、实际 sourceTransform 类型检查及完整 Workbench 构建均退出 0；静态与完整 HEAD archive 对照无新增诊断，Pyright 60／60、Ruff 12／12 为存量。
+- 准确命令、实际退出码、源码指纹及原始日志：`out/tests/temp/identity_remote_preflight_20261104/artifacts/verification.json`。完整 registry／持久引用／客户端迁移与可恢复发布仍未完成，`apply_available=false`，4.4／6.1 保持未勾选。

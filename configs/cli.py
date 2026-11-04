@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ from typing import cast
 
 from dotenv import load_dotenv
 
+from app.core.logging_contract import load_runtime_log_contract
 from app.core.path_utils import resolve_boxteam_home
 from app.core.user_storage_migration import migrate_user_storage_layout
 from configs.diagnostics import diagnose_configuration, diagnostic_error
@@ -195,6 +197,7 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
     parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--verify-remote", action="store_true", help="身份预检时通过既有凭据和 SSH 隧道只读核验远端，不自动配对或启动服务")
     parser.add_argument("--restore", action="store_true", help="恢复最近一次运行时配置迁移的原件")
     parser.add_argument("--level")
     parser.add_argument("--pretty", choices=("true", "false"))
@@ -205,6 +208,8 @@ def main() -> None:
         help="显式用普通静态模板重建 Gateway 与 Workspace 用户配置",
     )
     args = parser.parse_args()
+    if args.verify_remote and args.action != "preview-workspace-identity":
+        parser.error("--verify-remote 只用于 preview-workspace-identity")
     if args.action != "migrate-runtime-config" and (
         args.preview
         or args.restore
@@ -232,14 +237,21 @@ def main() -> None:
     if args.action == "preview-workspace-identity":
         from configs.workspace_identity_migration import (
             preview_workspace_identity_migration,
+            verify_remote_workspace_identities,
         )
 
         gateway_root = (Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) if os.environ.get("BOXTEAM_GATEWAY_ROOT")
                         else boxteam_home / "state/gateway")
         try:
-            report = preview_workspace_identity_migration(
+            preview = preview_workspace_identity_migration(
                 gateway_root=gateway_root, project_root=project_root or Path.cwd(),
-            ).report()
+            )
+            if args.verify_remote:
+                log_dir = load_runtime_log_contract(project_root).root_for(boxteam_home)
+                preview = asyncio.run(verify_remote_workspace_identities(
+                    preview, gateway_root=gateway_root, log_dir=log_dir,
+                ))
+            report = preview.report()
         except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error) as error:
             print(json.dumps({"action": args.action, "read_only": True,
                               "error": str(error),

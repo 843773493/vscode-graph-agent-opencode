@@ -48,6 +48,7 @@ class FederationWorkspaceListDTO(BaseModel):
     gateway_id: str
     items: list[FederationWorkspaceDTO] = Field(default_factory=list)
     excluded: list[str] = Field(default_factory=list)
+    identities_verified: bool = False
 
 
 class GatewayInboundPeerDTO(BaseModel):

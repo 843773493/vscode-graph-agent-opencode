@@ -17,6 +17,7 @@ from fastapi import (
 from app.core.env import get_project_root
 from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import GatewayAuthContext, verify_federation_token
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -113,10 +114,17 @@ async def federation_manifest(
     response_model=APIResponse[FederationWorkspaceListDTO],
 )
 async def federation_workspaces(
+    verify_identity: Annotated[bool, Query()] = False,
     _: object = Depends(verify_federation_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
 ):
+    if verify_identity:
+        revision = registry.registry_revision
+        await run_sync_shielded(registry.validate_local_root_bindings, get_project_root())
+        if registry.registry_revision != revision:
+            raise HTTPException(status_code=409, detail="原生工作区登记在身份核验期间变化，请重新预检")
+
     def services_for(workspace_id: str) -> list[str]:
         services = ["workspace_api"]
         for service, public_name in (
@@ -155,6 +163,7 @@ async def federation_workspaces(
             gateway_id=load_or_create_gateway_id(_gateway_root() / "identity.json"),
             items=direct,
             excluded=excluded,
+            identities_verified=verify_identity,
         ),
         request_id=request_id,
     )

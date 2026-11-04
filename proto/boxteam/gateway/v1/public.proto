@@ -136,6 +136,7 @@ message FederationWorkspaceListDTO {
   string gateway_id = 2;
   repeated FederationWorkspaceDTO items = 3;
   repeated string excluded = 4;
+  bool identities_verified = 5;
 }
 
 message GatewayConfigReloadStatusDTO {

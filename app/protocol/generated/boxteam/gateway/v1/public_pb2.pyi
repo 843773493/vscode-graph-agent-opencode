@@ -213,16 +213,18 @@ class FederationWorkspaceDTO(_message.Message):
     def __init__(self, workspace_id: _Optional[str] = ..., name: _Optional[str] = ..., managed: _Optional[bool] = ..., connection_kind: _Optional[str] = ..., services: _Optional[_Iterable[str]] = ..., backend_workspace_id: _Optional[str] = ..., backend_generation: _Optional[str] = ..., affected_workspace_ids: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class FederationWorkspaceListDTO(_message.Message):
-    __slots__ = ("protocol_version", "gateway_id", "items", "excluded")
+    __slots__ = ("protocol_version", "gateway_id", "items", "excluded", "identities_verified")
     PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     EXCLUDED_FIELD_NUMBER: _ClassVar[int]
+    IDENTITIES_VERIFIED_FIELD_NUMBER: _ClassVar[int]
     protocol_version: int
     gateway_id: str
     items: _containers.RepeatedCompositeFieldContainer[FederationWorkspaceDTO]
     excluded: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[FederationWorkspaceDTO, _Mapping]]] = ..., excluded: _Optional[_Iterable[str]] = ...) -> None: ...
+    identities_verified: bool
+    def __init__(self, protocol_version: _Optional[int] = ..., gateway_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[FederationWorkspaceDTO, _Mapping]]] = ..., excluded: _Optional[_Iterable[str]] = ..., identities_verified: _Optional[bool] = ...) -> None: ...
 
 class GatewayConfigReloadStatusDTO(_message.Message):
     __slots__ = ("available", "healthy", "revision", "restart_required", "reason", "changed_sections", "last_error", "error", "state", "active_revision", "pending_revision", "candidate_id", "candidate_ref", "attempt_id", "apply_id", "layer_digests", "applied_paths", "deferred_paths")

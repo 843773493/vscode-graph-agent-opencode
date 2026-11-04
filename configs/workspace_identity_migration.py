@@ -6,9 +6,11 @@ import json
 import sqlite3
 import subprocess
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal, cast
+
+import httpx
 
 from app.core.config_sources import config_revision
 from app.core.identifier import validate_gateway_id
@@ -19,7 +21,12 @@ from app.gateway.control.gateway_registry.snapshot import (
 )
 from app.gateway.control.generator_import import read_session_generator_inputs
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.credentials import load_or_create_gateway_id
+from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
+from app.gateway.federation import (
+    RemoteGatewayConnection,
+    discover_remote_gateway,
+    start_remote_gateway_tunnel,
+)
 from app.gateway.runtime.workspace_process import resolve_backend_workspace_ids
 from configs.diagnostics import diagnostic_error
 
@@ -62,6 +69,13 @@ class GeneratorImportPreflight:
 
 
 @dataclass(frozen=True, slots=True)
+class RemoteIdentityProbe:
+    connection: RemoteGatewayConnection
+    # 保留原投影引用，不能以 UUID 或显示名猜测远端旧路由。
+    workspace_routes: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceIdentityPreview:
     gateway_id: str | None
     registry_source: str | None
@@ -71,6 +85,7 @@ class WorkspaceIdentityPreview:
     blockers: tuple[IdentityMigrationBlocker, ...]
     references: tuple[WorkspaceIdentityReference, ...] = ()
     generator_imports: tuple[GeneratorImportPreflight, ...] = ()
+    remote_probes: tuple[RemoteIdentityProbe, ...] = field(default=(), repr=False)
 
     def report(self) -> dict[str, object]:
         return {
@@ -339,6 +354,7 @@ def preview_workspace_identity_migration(
         except (OSError, RuntimeError, TypeError, ValueError, subprocess.TimeoutExpired) as error:
             blockers.append(IdentityMigrationBlocker("local_identity_probe_failed", "workspace_identity_cli", diagnostic_error(error, stage="read_only_identity")))
     mappings: list[WorkspaceIdentityMapping] = []
+    remote_routes: dict[str, list[tuple[str, str]]] = {}
     local_owners: dict[str, str] = {}
     for identity, target in targets.items():
         kind = target.get("connection_kind")
@@ -370,7 +386,8 @@ def preview_workspace_identity_migration(
                 continue
             owner = validate_gateway_id(_text(connection, "remote_gateway_id"))
             mappings.append(WorkspaceIdentityMapping(gateway_id, identity, owner, workspace_id, connection_id, False))
-            # TODO(unify-workspace-identity 4.4/6.1)：通过原联邦 manifest 核验来源，不能把缓存声明当成已确认身份。
+            if isinstance(target.get("remote_workspace_id"), str) and target["remote_workspace_id"]:
+                remote_routes.setdefault(connection_id, []).append((identity, cast(str, target["remote_workspace_id"])))
             blockers.append(IdentityMigrationBlocker("remote_identity_unverified", identity, "远程来源尚需联邦入口核验；本地缓存不足以允许发布"))
         else:
             raise ValueError(f"工作区连接类型不在身份迁移支持范围: {kind}")
@@ -381,4 +398,72 @@ def preview_workspace_identity_migration(
         gateway_id, str(source), cast(int | None, payload.get("registry_revision")),
         config_revision(payload), tuple(mappings), (*blockers, *navigation_blockers, *view_blockers),
         (*references, *view_references), generator_imports,
+        tuple(RemoteIdentityProbe(RemoteGatewayConnection.from_registry_record(connections[key]), tuple(routes))
+              for key, routes in remote_routes.items()),
     )
+
+
+async def verify_remote_workspace_identities(
+    preview: WorkspaceIdentityPreview, *, gateway_root: Path, log_dir: Path,
+) -> WorkspaceIdentityPreview:
+    """只核验冻结登记中的远端来源；诊断日志独立写入，不配对、启动或更新登记。"""
+    credentials = FederationCredentialStore(storage_path=gateway_root.expanduser().resolve() / "credentials/federation.json")
+    mappings = {item.legacy_workspace_id: replace(item, verified=False) if item.connection_id is not None else item
+                for item in preview.mappings}
+    blockers = [item for item in preview.blockers if item.code != "remote_identity_unverified"]
+    for probe in preview.remote_probes:
+        connection = probe.connection
+        stage = "credentials"
+        try:
+            credential = credentials.get(connection.connection_id)
+            if credential.peer_gateway_id != preview.gateway_id:
+                raise ValueError("联邦凭据不属于当前登记 Gateway")
+            stage = "tunnel"
+            runtime = await start_remote_gateway_tunnel(connection=connection, log_dir=log_dir)
+            try:
+                stage = "discovery"
+                _, items = await discover_remote_gateway(
+                    gateway_url=runtime.service_urls["workspace_api"], credential=credential,
+                    expected_remote_gateway_id=connection.remote_gateway_id,
+                    verify_identity=True,
+                )
+                by_route = {str(item["workspace_id"]): item for item in items}
+                if len(by_route) != len(items):
+                    raise ValueError("远端原生工作区路由重复，无法确认来源")
+                owners: dict[str, str] = {}
+                for route, item in by_route.items():
+                    workspace_id = str(item["backend_workspace_id"])
+                    if workspace_id in owners:
+                        raise ValueError("远端同一 UUID 对应多个原生工作区登记")
+                    owners[workspace_id] = route
+            except BaseException as failure:
+                try:
+                    runtime.close()
+                except BaseException as cleanup_error:
+                    raise failure from cleanup_error
+                raise
+            else:
+                runtime.close()
+        except (OSError, RuntimeError, TypeError, ValueError, LookupError, httpx.HTTPError) as error:
+            for alias, _ in probe.workspace_routes:
+                blockers.append(IdentityMigrationBlocker(
+                    "remote_identity_probe_failed", alias,
+                    f"远端来源核验失败，保留原登记；{diagnostic_error(error, stage=f'remote_identity_{stage}')}",
+                ))
+            continue
+        for alias, route in probe.workspace_routes:
+            mapping = mappings[alias]
+            item = by_route.get(route)
+            if item is None:
+                blockers.append(IdentityMigrationBlocker("remote_workspace_missing", alias, "原远端路由未出现在已认证原生工作区列表中"))
+            elif item["backend_workspace_id"] != mapping.workspace_id:
+                blockers.append(IdentityMigrationBlocker("remote_workspace_identity_mismatch", alias, "远端原路由 UUID 与冻结登记不同，不能重新绑定来源"))
+            else:
+                mappings[alias] = replace(mapping, verified=True)
+    # 缺失原路由等不完整记录不能因其它连接核验通过而变成已确认。
+    for mapping in mappings.values():
+        if mapping.connection_id is not None and not mapping.verified and not any(
+            item.source == mapping.legacy_workspace_id for item in blockers
+        ):
+            blockers.append(IdentityMigrationBlocker("remote_identity_unverified", mapping.legacy_workspace_id, "远端登记缺少可核验的原路由"))
+    return replace(preview, mappings=tuple(mappings.values()), blockers=tuple(blockers))

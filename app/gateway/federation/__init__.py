@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import httpx
 
@@ -62,6 +62,72 @@ class RemoteGatewayConnection:
     remote_config_state: str | None = None
     remote_restart_required: bool = False
     remote_candidate_ref: str | None = None
+
+    @classmethod
+    def from_registry_record(cls, item: dict[str, object]) -> RemoteGatewayConnection:
+        """运行恢复与显式预检共用同一连接记录合同。"""
+        source_owner = item.get("source_owner")
+        if source_owner not in {"config", "manual"}:
+            raise ValueError(
+                "Gateway registry 远程 Gateway 连接 source_owner 非法，"
+                "只接受 config 或 manual: "
+                f"connection_id={item.get('connection_id')}, "
+                f"source_owner={source_owner!r}"
+            )
+        remote_config_event_cursor = item.get("remote_config_event_cursor")
+        if remote_config_event_cursor is not None and (
+            isinstance(remote_config_event_cursor, bool)
+            or not isinstance(remote_config_event_cursor, int)
+            or remote_config_event_cursor < 0
+        ):
+            raise ValueError(
+                "Gateway registry 远程连接 remote_config_event_cursor 必须是非负整数或 null"
+            )
+        for field in ("remote_config_state", "remote_candidate_ref"):
+            if item.get(field) is not None and not isinstance(item[field], str):
+                raise ValueError(
+                    f"Gateway registry 远程连接 {field} 必须是字符串或 null"
+                )
+        remote_restart_required = item.get("remote_restart_required", False)
+        if not isinstance(remote_restart_required, bool):
+            raise ValueError(
+                "Gateway registry 远程连接 remote_restart_required 必须是布尔值"
+            )
+        return cls(
+            connection_id=str(item["connection_id"]),
+            name=str(item["name"]),
+            host=str(item["host"]),
+            port=int(cast(int | str, item["port"])),
+            username=str(item["username"]),
+            private_key_path=(
+                str(item["private_key_path"])
+                if item.get("private_key_path") is not None
+                else None
+            ),
+            ssh_config_host=(
+                str(item["ssh_config_host"])
+                if item.get("ssh_config_host") is not None
+                else None
+            ),
+            remote_gateway_port=int(cast(int | str, item["remote_gateway_port"])),
+            remote_gateway_id=str(item["remote_gateway_id"]),
+            protocol_version=int(cast(int | str, item["protocol_version"])),
+            connection_error=(
+                str(item["connection_error"])
+                if item.get("connection_error") is not None
+                else None
+            ),
+            remote_pair_command=(
+                str(item["remote_pair_command"])
+                if item.get("remote_pair_command") is not None
+                else None
+            ),
+            source_owner=cast(Literal["config", "manual"], source_owner),
+            remote_config_event_cursor=remote_config_event_cursor,
+            remote_config_state=cast(str | None, item.get("remote_config_state")),
+            remote_restart_required=remote_restart_required,
+            remote_candidate_ref=cast(str | None, item.get("remote_candidate_ref")),
+        )
 
 
 def build_remote_gateway_connection_id(
@@ -193,8 +259,11 @@ async def start_remote_gateway_tunnel(
             request_timeout_seconds=health_request_timeout_seconds,
             poll_interval_seconds=health_poll_interval_seconds,
         )
-    except Exception:
-        tunnel.close()
+    except BaseException as failure:
+        try:
+            tunnel.close()
+        except BaseException as cleanup_error:
+            raise failure from cleanup_error
         raise
     return WorkspaceRuntime(
         service_urls={"workspace_api": forward.local_url},
@@ -207,6 +276,7 @@ async def discover_remote_gateway(
     gateway_url: str,
     credential: FederationCredential,
     expected_remote_gateway_id: str | None = None,
+    verify_identity: bool = False,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     headers = {
         "X-BoxTeam-Federation-Token": credential.token,
@@ -218,7 +288,7 @@ async def discover_remote_gateway(
                 headers={**headers, "X-Request-ID": create_prefixed_id("req")},
             ),
             client.get(
-                f"{gateway_url}/api/gateway/federation/workspaces",
+                f"{gateway_url}/api/gateway/federation/workspaces" + ("?verify_identity=true" if verify_identity else ""),
                 headers={**headers, "X-Request-ID": create_prefixed_id("req")},
             ),
         )
@@ -242,6 +312,12 @@ async def discover_remote_gateway(
         )
     if remote_gateway_id == credential.peer_gateway_id:
         raise RuntimeError("拒绝连接自身 Gateway，联邦连接会形成循环")
+    if verify_identity and (
+        workspaces.get("identities_verified") is not True
+        or workspaces.get("gateway_id") != remote_gateway_id
+        or workspaces.get("protocol_version") != remote_version
+    ):
+        raise RuntimeError("远端未提供同一 Gateway／协议的原生身份核验结果，不能以缓存登记替代")
     raw_items = workspaces.get("items")
     if not isinstance(raw_items, list):
         raise RuntimeError("远程 Gateway workspaces 响应缺少 items 数组")

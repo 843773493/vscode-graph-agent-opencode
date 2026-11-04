@@ -136,6 +136,7 @@ export interface FederationWorkspaceListDTO {
   gateway_id: string;
   items: FederationWorkspaceDTO[];
   excluded: string[];
+  identities_verified: boolean;
 }
 
 export interface GatewayConfigReloadStatusDTO {
@@ -1670,7 +1671,7 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
 };
 
 function createBaseFederationWorkspaceListDTO(): FederationWorkspaceListDTO {
-  return { protocol_version: 0, gateway_id: "", items: [], excluded: [] };
+  return { protocol_version: 0, gateway_id: "", items: [], excluded: [], identities_verified: false };
 }
 
 export const FederationWorkspaceListDTO: MessageFns<FederationWorkspaceListDTO> = {
@@ -1684,6 +1685,7 @@ export const FederationWorkspaceListDTO: MessageFns<FederationWorkspaceListDTO> 
       excluded: globalThis.Array.isArray(object?.excluded)
         ? object.excluded.map((e: any) => globalThis.String(e))
         : [],
+      identities_verified: isSet(object.identities_verified) ? globalThis.Boolean(object.identities_verified) : false,
     };
   },
 
@@ -1701,6 +1703,9 @@ export const FederationWorkspaceListDTO: MessageFns<FederationWorkspaceListDTO> 
     if (message.excluded?.length) {
       obj.excluded = message.excluded;
     }
+    if (message.identities_verified !== false) {
+      obj.identities_verified = message.identities_verified;
+    }
     return obj;
   },
 
@@ -1713,6 +1718,7 @@ export const FederationWorkspaceListDTO: MessageFns<FederationWorkspaceListDTO> 
     message.gateway_id = object.gateway_id ?? "";
     message.items = object.items?.map((e) => FederationWorkspaceDTO.fromPartial(e)) || [];
     message.excluded = object.excluded?.map((e) => e) || [];
+    message.identities_verified = object.identities_verified ?? false;
     return message;
   },
 };
