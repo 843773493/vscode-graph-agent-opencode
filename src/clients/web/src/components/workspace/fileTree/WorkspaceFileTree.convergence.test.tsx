@@ -86,6 +86,7 @@ interface Harness {
   renderer: ReactTestRenderer;
   window: DocumentedWindow;
   listingRequests: string[];
+  identityRequests: string[];
   directoryItems: Map<string, WorkspaceFileNode[]>;
 }
 
@@ -94,6 +95,7 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
   intentMocks.push(installWorkspaceFileIntentStoreMock());
   const windowHandle = installWindow(port, promptValue);
   const listingRequests: string[] = [];
+  const identityRequests: string[] = [];
   const directoryItems = new Map<string, WorkspaceFileNode[]>([
     [ROOT, [fileNode(`${ROOT}/src`, "directory"), fileNode(`${ROOT}/other`, "directory")]],
     [`${ROOT}/src`, [fileNode(`${ROOT}/src/old.ts`, "file")]],
@@ -102,6 +104,12 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
   const receipts = new Map<string, Record<string, unknown>>();
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
+    if (["/api/gateway/health", "/api/v1/workspace", "/api/v1/workspace/files/roots"].includes(url.pathname)) {
+      identityRequests.push(url.pathname);
+      if (url.pathname !== "/api/gateway/health") {
+        expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe("gw_conv");
+      }
+    }
     if (url.pathname === "/api/gateway/auth/local-credential") {
       return apiResponse({ token: "token" });
     }
@@ -134,6 +142,7 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
       directoryItems.set(path, next);
       const command = JSON.parse(String(init?.body));
       const key = command.intent.directory_key;
+      expect(key).toEqual({ workspace_id: "backend_files", scope: "workspace", root: ROOT, path: `${ROOT}/src` });
       expect(command.intent.expected_directory_revision).toBe(1);
       const snapshot = { root_path: ROOT, path, items: next, truncated: false, limit: 500,
         next_cursor: null, directory_key: key, directory_revision: 2 };
@@ -167,7 +176,7 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
     );
   });
   mountedRenderers.push(renderer);
-  return { renderer, window: windowHandle, listingRequests, directoryItems };
+  return { renderer, window: windowHandle, listingRequests, identityRequests, directoryItems };
 }
 
 function titlesOf(renderer: ReactTestRenderer): string[] {
@@ -252,6 +261,7 @@ describe("工作区文件树精确收敛", () => {
     expect(requestCount(handle, `${ROOT}/other`)).toBe(1);
     expect(requestCount(handle, ROOT)).toBe(1);
 
+    const identityBefore = handle.identityRequests.length;
     openMenu(handle.renderer, `${ROOT}/src`);
     await settle();
     clickLabel(handle.renderer, "新建文件");
@@ -259,11 +269,14 @@ describe("工作区文件树精确收敛", () => {
       await settle(10);
     }
 
-    // 目录内容直接消费权威快照；持久 intent 的三次根目录读取用于冻结与重验身份。
+    // 身份沿轻量接口核验；目录直接消费权威快照，不为冻结 intent 重拉根目录正文。
     expect(requestCount(handle, `${ROOT}/src`)).toBe(1);
     expect(requestCount(handle, `${ROOT}/other`)).toBe(1);
-    expect(requestCount(handle, ROOT)).toBe(4);
-    expect(handle.listingRequests).toEqual([ROOT, `${ROOT}/src`, `${ROOT}/other`, ROOT, ROOT, ROOT]);
+    expect(requestCount(handle, ROOT)).toBe(1);
+    expect(handle.listingRequests).toEqual([ROOT, `${ROOT}/src`, `${ROOT}/other`]);
+    expect(handle.identityRequests.slice(identityBefore)).toEqual(expect.arrayContaining([
+      "/api/gateway/health", "/api/v1/workspace", "/api/v1/workspace/files/roots",
+    ]));
     expect(titlesOf(handle.renderer)).toContain(`${ROOT}/src/new.ts`);
   });
 

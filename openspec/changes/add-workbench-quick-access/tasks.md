@@ -784,3 +784,10 @@
 - 3 项原类引用检查、8 项转换／原查询回归、21 份实际转换源码的真实类型检查及 ESM 语法通过，正式页面复用同一源码的已验证新构建；最终浏览器 1 passed / 53.31 秒。Ruff 通过；fixture 类型检查的两条既存诊断与 HEAD 基线逐条一致，无新增。端口占用与错误要求 PUT 的两轮失败原件保留，未放宽版本冲突／dirty／owner 断言。
 - 重复的端口选择收敛到原 E2EProcessLease，9 项含真实 socket 的保护检查通过，独立提交 `911d49cf1`。完整证据、源码与构建指纹及准确命令：`out/tests/temp/text_model_lifecycle_20261103/artifacts/verification.json`。
 - TODO：只读来源、Diff／历史版本和打包 Electron 尚未验收，18.2 保持未勾选；不以此文本切片宣称整组完成。
+
+### 2026-11-04：轻量文件观察与目录缓存边界（18.3）
+
+- 核实普通文件 stat 沿原导航 describe／Path.stat 实时读取，Provider 不缓存元数据或失败，不读取正文；原目录缓存仍由目录 key／revision、内存 LRU 和精确子树失效负责。stat／watcher 不推进原 SHA-256 保存基线，不新增 stat 缓存或 hash 预读。
+- 新增真实 Provider 请求链检查，HTTP 与路由为明确装具：404／403 后恢复重新 describe，A/B 同路径目标隔离；原 raw 建立基线后，外部更新再 stat，PUT 仍带读取时的原 revision。原 watcher 检查同时核同根引用、重连／overflow 与 B 独立连接；目录并发、失败、删除／迟到响应、局部收敛回归共 19 项／71 断言通过。
+- 旧根目录次数断言失败已按当前源代码归因：现有身份校验使用轻量 Workspace／roots API，不再拉目录正文。对照 Copilot 的工作区元数据职责后保持该单链路，改为核零额外根目录读取，并加强请求 route、写入 directory key 及原 revision 断言，不恢复冗余请求。失败及最后通过原件均保留。
+- 修改测试的真实 TypeScript 检查零诊断，ESM／差异检查通过；本批仅改验收，产品源码与先前 21 份转换类型检查、正式构建及真实 Gateway／Chromium 更新／删除／权限恢复／CAS 证据一致，复用而不重复构建。完整指纹、命令、原输出、边界和复用依据：`out/tests/temp/text_model_lifecycle_20261103/artifacts/metadata-verification.json`。18.10 的完整运行面验收仍未完成。

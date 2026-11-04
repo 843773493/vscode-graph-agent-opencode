@@ -1,6 +1,7 @@
-import { test, spyOn } from 'bun:test';
+import { afterAll, test, spyOn } from 'bun:test';
 import { expect } from 'playwright/test';
 import { writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../../../../../src/clients/workbench/node_modules/esbuild/lib/main.js';
@@ -12,7 +13,8 @@ const bundle = join(run.artifactsDir, 'file_watch.fixture.mjs'), root = resolve(
 await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/file_watch.fixture.ts')], outfile: bundle,
   bundle: true, format: 'esm', platform: 'browser', target: 'es2024', logLevel: 'silent',
   tsconfig: join(root, 'tsconfig.jsonc'), plugins: [buildSourcePlugin(root, sourceTransform(root, { commit: pinnedUpstreamCommit }, []))] });
-const { fileProvider, FileChangeType, gateway, workspaceFileUri, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
+const { fileProvider, FileChangeType, FileSystemProviderErrorCode, toFileSystemProviderErrorCode,
+  gateway, workspaceFileUri, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
 const owner = workspaceId => ({ gatewayId: 'gateway-test', workspaceId });
 const rootUri = id => `boxteam://workspace/${id}/resources/files/root`;
 const uri = (id, name, root = rootUri(id)) => workspaceFileUri(owner(id), root + '/' + name, root);
@@ -114,4 +116,70 @@ test('共享流重建只使已连接根重新核实，溢出保留失效且不�
   });
 });
 
-await writeFile(join(run.artifactsDir, 'watch-boundaries.json'), JSON.stringify(receipt, null, 2) + '\n');
+/** 元数据和 raw 使用真实请求链；只有 HTTP 数据、错误及路由解析为具名装具。 */
+async function withMetadata(callback) {
+  const provider = fileProvider(), calls = [], state = { status: 200, body: 'old A', size: 5, mtime: 1 };
+  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async target => target.workspaceId);
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  installSessionApiFetchMock(async ({ path, init, url, method }) => {
+    const owner = new Headers(init.headers).get('X-BoxTeam-Workspace-Id');
+    const body = method === 'POST' || method === 'PUT' ? JSON.parse(init.body) : undefined;
+    calls.push({ path, method, owner, body });
+    const requestId = 'metadata-' + calls.length;
+    const response = (data, status = 200) => Response.json({ code: status === 200 ? 0 : status,
+      message: status === 200 ? 'ok' : '明确的元数据拒绝', request_id: requestId, data },
+    { status, headers: { 'X-Request-ID': requestId } });
+    if (path === '/api/v1/resources/navigation') {
+      expect(body.operation).toBe('describe');
+      expect(body.uri).toBe(rootUri(owner) + '/same.txt');
+      if (state.status !== 200) return response(null, state.status);
+      return response({ node: { uri: body.uri, resource_shape: 'file', operations: ['read'],
+        stat: { size: state.size, modified_at_ms: state.mtime, changed_at_ms: state.mtime } } });
+    }
+    if (path === '/api/v1/workspace/files/raw') return new Response(state.body);
+    if (path === '/api/v1/workspace/files/content' && method === 'PUT') {
+      return response({ path: new URL(url, 'http://127.0.0.1').searchParams.get('path'), content: body.content, revision: hash(body.content) });
+    }
+    throw new Error(`元数据装具收到未声明请求: ${method} ${path}`);
+  });
+  try { await callback({ provider, state, calls, hash }); }
+  finally { unwrapSessionApiFetch(); routes.mockRestore(); }
+}
+
+test('stat 保持轻量实时描述，not-found／权限错误恢复后按原身份重新读取', async () => {
+  await withMetadata(async ({ provider, state, calls }) => {
+    const a = uri('A', 'same.txt'), b = uri('B', 'same.txt');
+    expect((await provider.stat(a)).size).toBe(5);
+    state.size = 17; state.mtime = 2;
+    expect((await provider.stat(a)).size).toBe(17);
+    for (const [status, code] of [[404, FileSystemProviderErrorCode.FileNotFound], [403, FileSystemProviderErrorCode.NoPermissions]]) {
+      state.status = status;
+      let rejection;
+      try { await provider.stat(a); } catch (error) { rejection = error; }
+      expect(rejection).toBeDefined();
+      expect(toFileSystemProviderErrorCode(rejection)).toBe(code);
+      state.status = 200;
+      expect((await provider.stat(a)).mtime).toBe(2);
+    }
+    expect((await provider.stat(b)).size).toBe(17);
+    expect(calls.map(call => call.owner)).toEqual(['A', 'A', 'A', 'A', 'A', 'A', 'B']);
+    expect(calls.every(call => call.path === '/api/v1/resources/navigation' && call.body.operation === 'describe')).toBe(true);
+    receipt.checks.push('stat无缓存且只describe；404/403恢复；A/B按完整URI隔离');
+  });
+});
+
+test('外部更新后的 stat 不读取正文或推进原保存 revision', async () => {
+  await withMetadata(async ({ provider, state, calls, hash }) => {
+    const a = uri('A', 'same.txt');
+    expect(new TextDecoder().decode(await provider.readFile(a))).toBe('old A');
+    state.body = 'new authoritative A'; state.size = state.body.length; state.mtime = 3;
+    expect((await provider.stat(a)).mtime).toBe(3);
+    await provider.writeFile(a, encoder.encode('user unsaved A'), { create: true, overwrite: true });
+    expect(calls.map(call => call.path)).toEqual(['/api/v1/workspace/files/raw', '/api/v1/resources/navigation', '/api/v1/workspace/files/content']);
+    expect(calls.at(-1).body.expected_revision).toBe(hash('old A'));
+    expect(calls.at(-1).body.expected_revision).not.toBe(hash(state.body));
+    receipt.checks.push('实际raw建立基线；更新后的describe零正文且不推进PUT expected_revision');
+  });
+});
+
+afterAll(() => writeFile(join(run.artifactsDir, 'watch-boundaries.json'), JSON.stringify(receipt, null, 2) + '\n'));

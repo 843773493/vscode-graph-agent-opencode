@@ -1,6 +1,6 @@
 import { installBackendFiles } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 import type { IFileService, IFileSystemProvider } from '../../../../../src/clients/workbench/upstream/src/vs/platform/files/common/files.js';
-export { FileChangeType } from '../../../../../src/clients/workbench/upstream/src/vs/platform/files/common/files.js';
+export { FileChangeType, FileSystemProviderErrorCode, toFileSystemProviderErrorCode } from '../../../../../src/clients/workbench/upstream/src/vs/platform/files/common/files.js';
 export { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
 export { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 export { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
