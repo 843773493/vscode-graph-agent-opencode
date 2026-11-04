@@ -38,7 +38,8 @@ class StartupClock:
 @dataclass
 class ReadyResponses:
     gateway_id: str = GATEWAY_ID
-    backend_workspace_id: str = WORKSPACE_ID
+    workspace_id: str = WORKSPACE_ID
+    workspace_gateway_id: str = GATEWAY_ID
     response_request_id: str = REQUEST_ID
     statuses: list[str] = field(default_factory=lambda: ["offline", "ready"])
     service_error: str = "backend 尚未监听"
@@ -58,7 +59,8 @@ class ReadyResponses:
             assert request.url.params["check_health"] == "true"
             status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
             data = {"items": [{
-                "connection_kind": "local", "backend_workspace_id": self.backend_workspace_id,
+                "connection_kind": "local", "workspace_id": self.workspace_id,
+                "gateway_id": self.workspace_gateway_id,
                 "status": status, "services": {"workspace_api": {"status": status, "error": self.service_error}},
             }]}
         response = httpx.Response(200, request=request, json={"data": data, "request_id": self.response_request_id}, headers={"X-Request-ID": self.response_request_id})
@@ -93,12 +95,14 @@ async def test_ready_gateway_does_not_skip_unreachable_source_backend(ready_resp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("drift", ["gateway", "backend", "request_id"])
+@pytest.mark.parametrize("drift", ["gateway", "workspace", "workspace_owner", "request_id"])
 async def test_startup_ready_rejects_identity_drift(ready_responses: ReadyResponses, drift: str) -> None:
     if drift == "gateway":
-        ready_responses.gateway_id = "other-gateway"
-    elif drift == "backend":
-        ready_responses.backend_workspace_id = "other-workspace"
+        ready_responses.gateway_id = "gateway_" + "2" * 32
+    elif drift == "workspace":
+        ready_responses.workspace_id = "00000000-0000-4000-8000-000000000002"
+    elif drift == "workspace_owner":
+        ready_responses.workspace_gateway_id = "gateway_" + "2" * 32
     else:
         ready_responses.response_request_id = "other-request"
     client = GatewayCommunicationClient(gateway_url="http://gateway-ready.test", timeout_seconds=1)

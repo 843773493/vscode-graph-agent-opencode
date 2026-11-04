@@ -15,7 +15,7 @@
 ## 3. 共享 Backend 生命周期
 
 - [x] 3.1 将 managed Backend 成员、generation 启动合同及 mount 校验迁为单一 UUID，保留唯一原生 Gateway root binding 和唯一进程句柄。
-- [ ] 3.2 迁齐 blockers、完整影响集合、force、配置 fan-out、移除、shutdown、preserve/adopt 与恢复，删除组生命周期中的工作区 ID 换算。
+- [x] 3.2 迁齐 blockers、完整影响集合、force、配置 fan-out、移除、shutdown、preserve/adopt 与恢复，删除组生命周期中的工作区 ID 换算。
 - [ ] 3.3 经产品入口验证 sibling blocker、排空超时、显式 force、完整组恢复及辅助服务保留；缺失或错误 binding 必须拒绝部分 adopt。
 - [x] 3.4 用受进程外保护的独立 Backend 子进程验证不同 home 争用同一隔离工作区仍失败、释放锁后可接管且 UUID 与业务历史保持不变。Linux 真实 Backend A／B／C 使用三个独立 home，A 由消息入口产生执行历史，B 被物理锁拒绝且 A 继续服务；A 退出后 C 保留 Session／main Thread、完整历史条目与身份文件，并从原检查点续跑，实际规范化模型请求前缀完全相同。矩阵 `integration-workspace-process-exclusivity`：1 passed／64.69s，沿现有 model_stream 精确回放，Ruff／Pyright 通过；不代表跨 Gateway 身份迁移或 Windows 实机验收。
 
@@ -194,3 +194,10 @@
 
 - 搜索初始与续点请求共用唯一 Gateway／Workspace 身份校验；非法旧别名、非规范 UUID 或 Gateway 在 DTO 边界返回 422，合法但未登记 owner 仍返回 404。联邦 DTO 复用同一校验，保留公开字段元数据及冻结范围、取消、失效、错误归属和部分失败语义。
 - 三份搜索测试 69 passed，公开目录／联邦合同另 39 passed；Ruff 与最终生成一致性退出 0。搜索单测 Pyright 49→29，无新增；生产剩两条原 Session／Thread 校验的存量诊断，函数 AST 与 HEAD 相同。测试后仅恢复原公开 Field 元数据并调整空白，未改行为。准确命令、原 500 反例及交付指纹见 `out/tests/temp/identity_search_consumers_current/artifacts/verification-1793828684093307646.json`；Root 最终静态及生成检查在 `identity_registry_recovery_root/artifacts/search-owner-final-*`。此项不代替真实浏览器或完整 5.1／6.4 验收。
+
+### 2026-11-04：3.2 生命周期迁齐与 3.3 产品补验
+
+- 完整组动作、配置应用、关闭及 preserve/adopt 消费同一 UUID 和原生 Gateway；未保留组内身份换算。reconnect／managed／config 集中收集 265 项，90 秒保护在完成前 247 项后终止，剩余 18 项精确补验通过；shutdown／启动／adopt 的此前 66 项证据继续适用，不把截断运行称为整组退出 0。原件见 `identity_registry_recovery_root/artifacts/canonical-group-*` 及上方 3.1 索引。
+- 真实候选进程失败恢复完整旧组 1 passed／96.11 秒；双挂载由消息入口产生历史后重启 Backend，两工作区原 Thread、消息顺序、规范化请求前缀及续跑隔离通过。原件为同目录 `product-shared-candidate-after-gate-release-1793828578895237626.*`、`product-shared-history-and-workbench-lifecycle-1793828754894097214.*`。后一批另一个 Web 项在浏览器前因缺少 fixture 接线报错，不能计成功；改为直接导入原装具后 Ruff／Pyright 通过，正式 Workbench 构建通过，补跑又在宿主 `/proc/<pid>/fd` 的 psutil.AccessDenied 处停止，尚未进入浏览器。两次失败均保留，不修改系统权限或绕过监听身份检查，3.3 保持未完成。
+
+- 通信 startup 装具迁为完整 owner，新增同 UUID 错误 Gateway 归属拒绝，原期限、错误 cause、HTTP 分类与诊断断言保留，57 passed／3.51 秒。Ruff 通过，Pyright 当前／实际 HEAD 均两条原异常联合类型诊断，无新增；原件在同目录 `communication-owner-readiness-*`、`communication-readiness-baseline-types-*`。此处 HTTP 使用原请求替身，不代替真实通信恢复或完整 6.4 验收。

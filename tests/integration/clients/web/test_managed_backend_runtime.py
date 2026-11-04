@@ -17,9 +17,10 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
 from tests.integration.test_shared_managed_backend_lifecycle import SharedBackendCase
+from tests.integration.test_shared_managed_backend_lifecycle import (
+    shared_backend_case as shared_backend_case,  # noqa: PLC0414 - 复用真实 Gateway／Backend 装具
+)
 from tests.support.paths import chromium_temporary_environment
-
-pytest_plugins = ("tests.integration.test_shared_managed_backend_lifecycle",)
 
 
 @pytest.fixture(autouse=True)
