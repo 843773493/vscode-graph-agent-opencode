@@ -6,23 +6,19 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import GatewayConfig
 from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes._shared import get_registry
+from app.gateway.runtime.managed_backend import ManagedBackendOwner
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import bootstrap
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.support.gateway_managed_backends import ProcessProbe
 
-
-@pytest.fixture(autouse=True)
-def _stub_workspace_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "app.gateway.registry.runtime.resolve_backend_workspace_id",
-        lambda *_, **__: "00000000-0000-4000-8000-000000000001",
-    )
+_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+_OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
 
 
 @pytest.fixture(autouse=True)
@@ -47,29 +43,32 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
         "no_proxy",
     ):
         monkeypatch.delenv(name, raising=False)
-def _local_target(workspace_id: str = "workspace-local") -> WorkspaceTarget:
+
+
+def _local_target(gateway_id: str) -> WorkspaceTarget:
     return WorkspaceTarget(
-        workspace_id=workspace_id,
+        gateway_id=gateway_id,
+        workspace_id=_WORKSPACE_ID,
         name="Old name",
         root_path="/workspace/local",
         backend_url="http://127.0.0.1:18010",
         connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
 
 def test_registry_rename_persists_across_reload(tmp_path: Path) -> None:
     storage_path = tmp_path / "workspaces.json"
     registry = GatewayWorkspaceRegistry(storage_path=storage_path)
-    registry.upsert(_local_target())
+    registry.upsert(_local_target(registry.gateway_id))
 
-    renamed = registry.rename("workspace-local", "  New name  ")
+    renamed = registry.rename(_WORKSPACE_ID, "  New name  ")
     restored = GatewayWorkspaceRegistry(storage_path=storage_path)
 
     assert renamed.name == "New name"
     assert renamed.name_customized is True
-    assert restored.resolve("workspace-local").name == "New name"
-    assert restored.resolve("workspace-local").name_customized is True
+    assert restored.resolve(_WORKSPACE_ID).name == "New name"
+    assert restored.resolve(_WORKSPACE_ID).name_customized is True
+    assert restored.resolve(_WORKSPACE_ID).key == (registry.gateway_id, _WORKSPACE_ID)
 
 
 @pytest.mark.asyncio
@@ -77,7 +76,7 @@ async def test_rename_workspace_endpoint_returns_complete_workspace_list(
     tmp_path: Path,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    registry.upsert(_local_target())
+    registry.upsert(_local_target(registry.gateway_id))
     app.dependency_overrides[get_registry] = lambda: registry
     try:
         async with httpx.AsyncClient(
@@ -85,7 +84,7 @@ async def test_rename_workspace_endpoint_returns_complete_workspace_list(
             base_url="http://gateway.test",
         ) as client:
             response = await client.patch(
-                "/api/gateway/workspaces/workspace-local",
+                f"/api/gateway/workspaces/{_WORKSPACE_ID}",
                 headers={"X-Local-Token": get_gateway_local_token()},
                 json={"name": "Renamed workspace"},
             )
@@ -93,7 +92,11 @@ async def test_rename_workspace_endpoint_returns_complete_workspace_list(
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json()["data"]["active_workspace_id"] == "workspace-local"
+    assert response.json()["data"]["active_workspace"] == {
+        "gateway_id": registry.gateway_id, "workspace_id": _WORKSPACE_ID,
+    }
+    assert response.json()["data"]["items"][0]["gateway_id"] == registry.gateway_id
+    assert response.json()["data"]["items"][0]["workspace_id"] == _WORKSPACE_ID
     assert response.json()["data"]["items"][0]["name"] == "Renamed workspace"
 
 
@@ -104,7 +107,7 @@ async def test_rename_workspace_endpoint_rejects_empty_name(
     name: str,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    registry.upsert(_local_target())
+    registry.upsert(_local_target(registry.gateway_id))
     app.dependency_overrides[get_registry] = lambda: registry
     try:
         async with httpx.AsyncClient(
@@ -112,7 +115,7 @@ async def test_rename_workspace_endpoint_rejects_empty_name(
             base_url="http://gateway.test",
         ) as client:
             response = await client.patch(
-                "/api/gateway/workspaces/workspace-local",
+                f"/api/gateway/workspaces/{_WORKSPACE_ID}",
                 headers={"X-Local-Token": get_gateway_local_token()},
                 json={"name": name},
             )
@@ -135,7 +138,7 @@ async def test_rename_workspace_endpoint_returns_not_found_for_unknown_workspace
             base_url="http://gateway.test",
         ) as client:
             response = await client.patch(
-                "/api/gateway/workspaces/unknown-workspace",
+                f"/api/gateway/workspaces/{_OTHER_WORKSPACE_ID}",
                 headers={"X-Local-Token": get_gateway_local_token()},
                 json={"name": "Renamed workspace"},
             )
@@ -143,7 +146,7 @@ async def test_rename_workspace_endpoint_returns_not_found_for_unknown_workspace
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
-    assert "未知 Gateway 工作区" in response.json()["detail"]
+    assert "Gateway 工作区不存在" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -151,7 +154,7 @@ async def test_rename_workspace_endpoint_rejects_extra_fields(
     tmp_path: Path,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    registry.upsert(_local_target())
+    registry.upsert(_local_target(registry.gateway_id))
     app.dependency_overrides[get_registry] = lambda: registry
     try:
         async with httpx.AsyncClient(
@@ -159,7 +162,7 @@ async def test_rename_workspace_endpoint_rejects_extra_fields(
             base_url="http://gateway.test",
         ) as client:
             response = await client.patch(
-                "/api/gateway/workspaces/workspace-local",
+                f"/api/gateway/workspaces/{_WORKSPACE_ID}",
                 headers={"X-Local-Token": get_gateway_local_token()},
                 json={
                     "name": "Renamed workspace",
@@ -170,7 +173,7 @@ async def test_rename_workspace_endpoint_rejects_extra_fields(
         app.dependency_overrides.clear()
 
     assert response.status_code == 422
-    assert registry.resolve("workspace-local").name == "Old name"
+    assert registry.resolve(_WORKSPACE_ID).name == "Old name"
 
 
 @pytest.mark.asyncio
@@ -182,55 +185,49 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     default_root = tmp_path / "default-workspace"
     default_root.mkdir()
     backend_url = "http://127.0.0.1:18010"
-    old_default_workspace_id = "gw_old_default"
-    default_workspace_id = build_managed_local_workspace_id(str(default_root))
+    default_workspace_id = load_or_create_workspace_id(default_root)
     persisted = GatewayWorkspaceRegistry(
         storage_path=gateway_root / "workspaces.json"
     )
     persisted.upsert(
         WorkspaceTarget(
-            workspace_id=old_default_workspace_id,
+            gateway_id=persisted.gateway_id,
+            workspace_id=default_workspace_id,
             name="boxteam_workspace",
             root_path=str(default_root),
             backend_url=backend_url,
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+            owner="system",
             removable=False,
             system_default=True,
         )
     )
     optional_root = tmp_path / "optional-workspace"
     optional_root.mkdir()
+    optional_workspace_id = load_or_create_workspace_id(optional_root)
     persisted.upsert(
         WorkspaceTarget(
-            workspace_id="optional",
+            gateway_id=persisted.gateway_id,
+            workspace_id=optional_workspace_id,
             name="Optional",
             root_path=str(optional_root),
             backend_url="http://127.0.0.1:18110",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             managed=True,
         ),
         activate=False,
     )
-    optional = persisted.resolve("optional")
+    optional = persisted.resolve(optional_workspace_id)
     graph = managed_backend_factory((optional,), backend_url=optional.backend_url)
     persisted.register_backend_owner(graph.owner)
+    gateway_id = persisted.gateway_id
     persisted.close()
     monkeypatch.delenv("BOXTEAM_DEFAULT_WORKSPACE_NAME", raising=False)
     monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
     monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
-    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
-    monkeypatch.setattr(
-        "app.gateway.registry.runtime.resolve_backend_workspace_ids",
-        lambda _project, roots, **__: tuple(
-            "00000000-0000-4000-8000-000000000001" if root == default_root else "00000000-0000-4000-8000-000000000002"
-            for root in roots
-        ),
-    )
 
-    async def start_default_runtime(*, owner, **_: object):
+    async def start_default_runtime(*, owner: ManagedBackendOwner, **_: object):
         owner.set_process(ProcessProbe("default"))
         runtime = WorkspaceRuntime(
             service_urls={
@@ -238,7 +235,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
                 "terminal_manager": "http://127.0.0.1:18012",
                 "browser_manager": "http://127.0.0.1:18015",
             },
-            backend_workspace_id=owner.contract.members[0].backend_workspace_id,
+            workspace_id=owner.contract.members[0].workspace_id,
             backend_owner=owner,
         )
         contract = replace(owner.contract, backend_url=backend_url)
@@ -248,13 +245,27 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", start_default_runtime)
 
     initial = await bootstrap.create_registry()
-    assert initial.active_workspace_id == default_workspace_id
+    assert initial.gateway_id == gateway_id
+    assert initial.active_workspace == (gateway_id, default_workspace_id)
     assert initial.resolve(default_workspace_id).name == "home"
     assert initial.resolve(default_workspace_id).managed is True
-    assert initial.has_runtime("optional") is False
+    assert initial.has_runtime(optional_workspace_id) is False
+    other = GatewayWorkspaceRegistry(storage_path=tmp_path / "other-gateway/workspaces.json")
+    other.upsert(WorkspaceTarget(
+        gateway_id=other.gateway_id, workspace_id=default_workspace_id,
+        name="Independent home", root_path=str(default_root), backend_url=backend_url,
+        connection_kind="local",
+    ))
+    assert other.gateway_id != gateway_id
     initial.rename(default_workspace_id, "My home")
+    assert other.resolve(default_workspace_id).name == "Independent home"
     initial.close()
 
     restored = await bootstrap.create_registry()
+    assert restored.gateway_id == gateway_id
+    assert restored.resolve(default_workspace_id).key == (gateway_id, default_workspace_id)
     assert restored.resolve(default_workspace_id).name == "My home"
+    assert restored.resolve(default_workspace_id).name_customized is True
+    assert other.resolve(default_workspace_id).key == (other.gateway_id, default_workspace_id)
+    other.close()
     restored.close()

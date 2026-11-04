@@ -183,7 +183,10 @@ class RegistryRoutesMixin:
             self.mark_backend_error(backend_owner, error)
         else:
             target.connection_error = error
-            self._save(owner=target.owner)
+            self._save(
+                owner=target.owner,
+                remote_gateway_connection_ids=target.remote_gateway_connection_ids,
+            )
     def target_request_headers(self, target: WorkspaceTarget) -> dict[str, str]:
         """统一查询的定位和凭据；发送方身份与 request_id 由原调用方提供。"""
         validate_workspace_id(target.workspace_id)

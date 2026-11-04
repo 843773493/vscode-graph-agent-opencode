@@ -19,7 +19,7 @@ from app.core.workspace_identity import (
 from app.gateway.auth import verify_gateway_token
 from app.gateway.config import GatewayConfig
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes import workspaces
 from app.gateway.runtime.managed_backend import (
@@ -29,7 +29,6 @@ from app.gateway.runtime.managed_backend import (
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import bootstrap
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.support.gateway_managed_backends import ProcessProbe
 
 
@@ -45,7 +44,7 @@ class StartupCase:
     auxiliary_failure: Exception | None = None
     bad_fields: bool = False
 
-    async def start(self, *, owner, registry, **options):
+    async def start(self, *, owner: ManagedBackendOwner, registry: GatewayWorkspaceRegistry, **options: object):
         mounts = registry.resolve_backend_mounts(owner.contract)
         for mount in mounts:
             if not mount.workspace_root.is_dir():
@@ -61,7 +60,7 @@ class StartupCase:
             terminal_url, browser_url = f"http://127.0.0.1:{port + index * 2 + 1}", f"http://127.0.0.1:{port + index * 2 + 2}"
             runtime = WorkspaceRuntime(
                 service_urls={"workspace_api": f"http://127.0.0.1:{port}", "terminal_manager": terminal_url, "browser_manager": browser_url},
-                backend_owner=owner, backend_workspace_id=member.backend_workspace_id,
+                backend_owner=owner, workspace_id=member.workspace_id,
                 processes={"terminal_manager": terminal} if index == 0 else {},
             )
             if self.bad_fields:
@@ -121,9 +120,9 @@ def persisted_targets(startup_case: StartupCase, managed_backend_factory, restor
                 count += 1
                 case.identities[root] = f"00000000-0000-4000-8000-{count:012d}"
             target = WorkspaceTarget(
-                workspace_id=build_managed_local_workspace_id(str(root)), name=name,
+                gateway_id=registry.gateway_id, workspace_id=case.identities[root], name=name,
                 root_path=str(root), backend_url="http://127.0.0.1:41000",
-                connection_kind="local", backend_workspace_id=case.identities[root], managed=True,
+                connection_kind="local", managed=True,
                 owner="system" if default else "manual", system_default=default, removable=not default,
                 desired_running=desired_running,
             )
@@ -197,9 +196,10 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(startup_cas
     external_root.mkdir()
     startup_case.identities[external_root] = "00000000-0000-4000-8000-000000000099"
     persisted.upsert(WorkspaceTarget(
-        workspace_id="external", name="External", root_path=str(external_root),
+        gateway_id=persisted.gateway_id, workspace_id=startup_case.identities[external_root],
+        name="External", root_path=str(external_root),
         backend_url="http://127.0.0.1:42000", connection_kind="local",
-        backend_workspace_id=startup_case.identities[external_root], managed=False,
+        managed=False,
     ), activate=False)
     expected_roots = tuple(Path(target.root_path) for target in persisted.targets())
     persisted.activate(running[1].workspace_id)
@@ -216,7 +216,7 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(startup_cas
     restored_owner = registry.backend_owner(running[0].workspace_id)
     assert restored_owner is registry.backend_owner(running[1].workspace_id)
     assert all(registry.managed_runtime(target.workspace_id).backend_owner is restored_owner for target in running)
-    assert registry.active_workspace_id == running[1].workspace_id
+    assert registry.active_workspace == (registry.gateway_id, running[1].workspace_id)
     assert not registry.has_runtime(stopped[0].workspace_id)
     assert registry.resolve(stopped[0].workspace_id).desired_running is False
     registry.close()
@@ -257,7 +257,7 @@ async def test_gateway_non_root_start_failure_keeps_intent_and_restores_other_ta
     else:
         assert any(record.exc_info and record.exc_info[1] is restore_error for record in caplog.records)
     assert registry.has_runtime(healthy[0].workspace_id)
-    assert registry.active_workspace_id == defaults[0].workspace_id
+    assert registry.active_workspace == (registry.gateway_id, defaults[0].workspace_id)
     assert any("已回退到默认工作区" in record.getMessage() for record in caplog.records)
     listed = await list_workspace_http(registry)
     assert native_restore_location not in listed.text
@@ -272,7 +272,7 @@ async def test_gateway_non_root_start_failure_keeps_intent_and_restores_other_ta
         for target in unavailable:
             restored = cold.resolve(target.workspace_id)
             assert restored.connection_error == expected
-            assert restored.desired_running and restored.backend_workspace_id == target.backend_workspace_id
+            assert restored.desired_running and restored.key == target.key
             assert restored.root_path == target.root_path
         assert native_restore_location not in (await list_workspace_http(cold)).text
         monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", startup_case.start)
@@ -302,14 +302,15 @@ async def test_gateway_remote_restore_persists_failure_facts_and_retries_origina
             connection_id="rgw_" + str(index) * 32, name=name,
             host=f"{name}.example.com", port=22, username="developer",
             private_key_path=None, ssh_config_host=name, remote_gateway_port=8014,
-            remote_gateway_id="gateway_" + str(index) * 32, protocol_version=1, source_owner="manual",
+            remote_gateway_id="gateway_" + str(index) * 32,
+            protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
         )
         targets = tuple(WorkspaceTarget(
-            workspace_id=f"{name}-{member}", name=f"{name}-{member}", root_path=None,
+            gateway_id=connection.remote_gateway_id,
+            workspace_id=f"00000000-0000-4000-8000-{member + 2:012d}",
+            name=f"{name}-{member}", root_path=None,
             backend_url=f"http://127.0.0.1:{43000 + index}", connection_kind="remote_gateway",
-            backend_workspace_id=f"00000000-0000-4000-8000-{index:012d}",
-            owner="remote_projection", connection_id=connection.connection_id,
-            remote_gateway_connection_id=connection.connection_id, remote_workspace_id=f"{name}-remote-{member}",
+            owner="remote_projection", remote_gateway_connection_ids=(connection.connection_id,),
             remote_service_names=("workspace_api",),
         ) for member in range(2 if name == "failed" else 1))
         projections[connection.connection_id] = targets
@@ -338,31 +339,34 @@ async def test_gateway_remote_restore_persists_failure_facts_and_retries_origina
         expected += ", errno=5"
     if restore_sink_error is not None:
         expected += ", diagnostic_sink_error=OSError"
-    failed_ids = tuple(target.workspace_id for target in projections[failed.connection_id])
-    assert all(registry.resolve(member_id).connection_error == expected for member_id in failed_ids)
-    assert registry.resolve_service_url(projections[healthy.connection_id][0].workspace_id, "workspace_api") == projections[healthy.connection_id][0].backend_url
+    failed_keys = tuple(target.key for target in projections[failed.connection_id])
+    assert all(registry.resolve(key).connection_error == expected for key in failed_keys)
+    healthy_target = projections[healthy.connection_id][0]
+    assert registry.resolve_service_url(healthy_target.key, "workspace_api") == healthy_target.backend_url
     if restore_sink_error is not None:
         assert any(str(restore_sink_error) in note for note in restore_error.__notes__)
     else:
         assert any(record.exc_info and record.exc_info[1] is restore_error for record in caplog.records)
     listed = await list_workspace_http(registry)
-    by_id = {item["workspace_id"]: item for item in listed.json()["data"]["items"]}
-    assert all(by_id[member_id]["connection_error"] == expected and by_id[member_id]["status"] == "offline" for member_id in failed_ids)
-    assert by_id[projections[healthy.connection_id][0].workspace_id]["status"] == "ready"
+    by_owner = {(item["gateway_id"], item["workspace_id"]): item for item in listed.json()["data"]["items"]}
+    assert all(by_owner[key]["connection_error"] == expected and by_owner[key]["status"] == "offline" for key in failed_keys)
+    assert by_owner[healthy_target.key]["status"] == "ready"
     assert native_restore_location not in listed.text
     registry.close()
     restore_state_store.close()
     with GatewayStateStore(path=startup_case.gateway_root / "restore.sqlite") as cold_state:
         cold = GatewayWorkspaceRegistry(storage_path=startup_case.gateway_root / "workspaces.json", state_store=cold_state)
-        assert all(cold.resolve(member_id).connection_error == expected for member_id in failed_ids)
+        assert all(cold.resolve(key).connection_error == expected for key in failed_keys)
         assert cold.remote_gateway_connection(failed.connection_id) == failed
         assert native_restore_location not in (await list_workspace_http(cold)).text
         fail_restore = False
         restored = await bootstrap.create_registry(state_store=cold_state)
         assert attempts == [failed.connection_id, healthy.connection_id] * 2
-        assert all(restored.resolve(member_id).connection_error is None for member_id in failed_ids)
-        assert all(restored.resolve_service_url(member_id, "workspace_api") == projections[failed.connection_id][0].backend_url for member_id in failed_ids)
-        assert all(restored.resolve(member_id).backend_workspace_id == projections[failed.connection_id][0].backend_workspace_id for member_id in failed_ids)
+        assert all(restored.resolve(key).connection_error is None for key in failed_keys)
+        assert all(restored.resolve_service_url(key, "workspace_api") == projections[failed.connection_id][0].backend_url for key in failed_keys)
+        assert all(restored.resolve(key).key == key for key in failed_keys)
+        assert all(restored.resolve(key).remote_gateway_connection_ids == (failed.connection_id,) for key in failed_keys)
+        assert restored.resolve(healthy_target.key).connection_error is None
         restored.close()
 
 
@@ -390,7 +394,7 @@ async def test_cold_restore_rejects_invalid_binding_before_any_write_or_process(
     assert registry._storage_path.read_bytes() == before
     assert registry.registry_revision == revision
     assert not startup_case.started and not startup_case.handles and not default_calls
-    assert registry.active_workspace_id == target.workspace_id
+    assert registry.active_workspace == (registry.gateway_id, target.workspace_id)
     assert registry.resolve(target.workspace_id).desired_running is desired_running
     assert not (Path(target.root_path) / ".boxteam").exists()
 
@@ -406,19 +410,20 @@ async def test_cold_restore_real_identity_cli_preserves_registry_on_invalid_bind
     gateway_root = tmp_path / "gateway"
     root = tmp_path / "registered"
     root.mkdir()
-    backend_id = load_or_create_workspace_id(root)
+    workspace_id = load_or_create_workspace_id(root)
     state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
     path = gateway_root / "workspaces.json"
     persisted = GatewayWorkspaceRegistry(storage_path=path, state_store=state if storage == "sqlite" else None)
     target = WorkspaceTarget(
-        workspace_id=build_managed_local_workspace_id(str(root)), name="Registered",
+        gateway_id=persisted.gateway_id, workspace_id=workspace_id, name="Registered",
         root_path=str(root), backend_url="", connection_kind="local", managed=True,
-        backend_workspace_id=backend_id, desired_running=desired_running,
+        desired_running=desired_running,
     )
     persisted.upsert(target)
     if failure != "owner-missing":
         persisted.register_backend_owner(ManagedBackendOwner(ManagedBackendContract(
-            "cold-owner", "cold-generation", (ManagedBackendMember(target.workspace_id, backend_id),), "",
+            gateway_id=persisted.gateway_id, owner_id="cold-owner", generation="cold-generation",
+            members=(ManagedBackendMember(target.workspace_id),), backend_url="",
         )))
     identity_path = workspace_identity_path(root)
     if failure in {"root-missing", "identity-missing"}:
@@ -468,7 +473,7 @@ async def test_restore_missing_owner_rejects_without_guessing_url_or_fallback(st
     assert registry._storage_path.read_bytes() == before
     assert not startup_case.started
     assert registry.backend_owner(orphan[0].workspace_id) is None
-    assert registry.active_workspace_id == orphan[0].workspace_id
+    assert registry.active_workspace == (registry.gateway_id, orphan[0].workspace_id)
 
 
 @pytest.mark.asyncio
@@ -478,7 +483,7 @@ async def test_startup_fallback_from_stopped_managed_workspace_logs_warning(star
     stopped, _ = add(("Stopped",), desired_running=False)
     persisted.activate(stopped[0].workspace_id)
     registry = await bootstrap.create_registry()
-    assert registry.active_workspace_id == defaults[0].workspace_id
+    assert registry.active_workspace == (registry.gateway_id, defaults[0].workspace_id)
     assert any(record.levelname == "WARNING" and "已回退到默认工作区" in record.getMessage() and stopped[0].workspace_id in record.getMessage() for record in caplog.records)
     registry.close()
 
@@ -583,7 +588,7 @@ async def test_restore_commit_observer_error_keeps_published_unique_owner(
         assert graph.owner.process is startup_case.handles[0][0]
         assert not graph.owner.process.closed
         assert not graph.owner.unpublished_runtimes
-        assert registry.active_workspace_id == running[1].workspace_id
+        assert registry.active_workspace == (registry.gateway_id, running[1].workspace_id)
         assert all(registry.resolve(target.workspace_id).connection_error is None for target in running)
         persisted = GatewayWorkspaceRegistry(storage_path=registry._storage_path)
         restored_owner = persisted.backend_owner(running[0].workspace_id)
@@ -610,8 +615,7 @@ async def test_default_publication_observer_error_defers_cleanup_to_startup_owne
         with pytest.raises(RuntimeError) as raised:
             await bootstrap._complete_registry_startup(
                 resolved_gateway_config=GatewayConfig(), registry=registry,
-                persisted_targets_by_id={target.workspace_id: target},
-                persisted_default=target, persisted_active_workspace_id=target.workspace_id,
+                persisted_default=target, persisted_active_workspace=target.key,
                 default_root_path=startup_case.default_root, root_path=target.root_path,
                 default_workspace_id=target.workspace_id,
                 preserve_existing_managed_runtimes=False,
