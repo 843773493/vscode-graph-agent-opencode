@@ -31,6 +31,12 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
 
+# 闭合枚举只在加载时展开一次，避免完整审计为每条历史 commit 重建集合。
+# 这里只复用固定合同；数据库里的 kind/mode/outcome 及其组合仍逐条重新校验。
+_COMMIT_KIND_VALUES = frozenset(value.value for value in CommitKind)
+_COMMIT_MODE_VALUES = frozenset(value.value for value in CommitMode)
+_CONTROL_OUTCOME_VALUES = frozenset(value.value for value in ControlOutcome)
+
 
 class CanonicalItemWriter(Protocol):
     """写入不可变源 item；commit_recorded_at 是本次提交记录时刻。"""
@@ -67,15 +73,15 @@ def validate_commit_contract(
         raise ItemSchemaError("storage commit item_count 必须是非负整数")
     if outcome is not None and not isinstance(outcome, str):
         raise ItemSchemaError("storage commit outcome 必须是字符串或 null")
-    if commit_kind not in {value.value for value in CommitKind}:
+    if commit_kind not in _COMMIT_KIND_VALUES:
         raise ItemSchemaError(f"未知 storage commit kind: {commit_kind}")
-    if commit_mode not in {value.value for value in CommitMode}:
+    if commit_mode not in _COMMIT_MODE_VALUES:
         raise ItemSchemaError(f"未知 storage commit mode: {commit_mode}")
     if commit_mode == CommitMode.ITEM_BEARING.value and item_count <= 0:
         raise ItemSchemaError("item-bearing commit 必须包含 canonical item")
     if commit_mode == CommitMode.METADATA_ONLY.value and item_count != 0:
         raise ItemSchemaError("metadata-only commit 不得包含 canonical item")
-    if outcome is not None and outcome not in {value.value for value in ControlOutcome}:
+    if outcome is not None and outcome not in _CONTROL_OUTCOME_VALUES:
         raise ItemSchemaError(f"未知 storage commit outcome: {outcome}")
     if commit_kind == CommitKind.ACCEPTANCE.value and commit_mode != CommitMode.ITEM_BEARING.value:
         raise ItemSchemaError("acceptance commit 必须是 item-bearing")

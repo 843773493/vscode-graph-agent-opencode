@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.domain.itemized.enums import (
-    CommitKind,
     CommitMode,
 )
 from app.domain.itemized.errors import (
@@ -42,6 +41,8 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
+    _COMMIT_KIND_VALUES,
+    _COMMIT_MODE_VALUES,
     strict_non_negative_int,
     strict_optional_non_negative_int,
     strict_optional_text,
@@ -350,8 +351,6 @@ class RolloutSchemaIntrospectionMixin:
         )
         previous = 0
         last_seen_commit_id: int | None = None
-        commit_kinds = {value.value for value in CommitKind}
-        commit_modes = {value.value for value in CommitMode}
         validated_metadata: set[str] = set()
         # item_sequence 是 INTEGER PRIMARY KEY；合法历史的序号与物理 offset 必须同序。
         # 沿主键扫描后逐条核 offset 连续性，避免每次快照按未索引的 offset 全量排序。
@@ -404,11 +403,11 @@ class RolloutSchemaIntrospectionMixin:
                 commit_mode = strict_text(
                     commit[8], field=f"storage commit mode: {commit_id}"
                 )
-                if commit_kind not in commit_kinds:
+                if commit_kind not in _COMMIT_KIND_VALUES:
                     raise RuntimeError(
                         f"v2 storage commit kind 非法: commit_id={commit_id}, kind={commit_kind}"
                     )
-                if commit_mode not in commit_modes:
+                if commit_mode not in _COMMIT_MODE_VALUES:
                     raise RuntimeError(
                         f"v2 storage commit mode 非法: commit_id={commit_id}, mode={commit_mode}"
                     )

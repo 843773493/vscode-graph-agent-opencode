@@ -11,7 +11,9 @@ from time import perf_counter
 import pytest
 
 from app.core.identifier import create_uuid_hex
+from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage import rollout_schema_introspection
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.harness.python.run_context import TestRunContext
 
@@ -161,6 +163,46 @@ def test_snapshot_audit_does_not_retain_all_commit_boundaries(commit_history_fac
     (context.artifacts_dir / "commit-audit-memory.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
     print(f"commit audit memory: {measurements}")
     assert measurements[1]["peak_traced_bytes"] < measurements[0]["peak_traced_bytes"] + 128 * 1024
+
+
+@pytest.mark.parametrize("operation", ["initialize", "snapshot"])
+def test_commit_audit_reuses_closed_enums_while_rechecking_every_record(
+    commit_history_factory, monkeypatch, operation,
+):
+    storage, session_id, thread_id = commit_history_factory(4096)
+    with storage._lock(thread_id, "", session_id=session_id):
+        with storage._connect(thread_id, session_id=session_id) as connection:
+            storage._append_v2_records_transaction(
+                connection, thread_id, "", (), session_id=session_id,
+                commit_kind="terminal_convergence", commit_mode="metadata_only",
+                outcome="completed_empty", idempotency_key="audit-terminal",
+            )
+            storage._commit_connection(connection)
+    scans = {CommitKind: 0, CommitMode: 0, ControlOutcome: 0}
+    enum_iter = type(CommitKind).__iter__
+    contract = rollout_schema_introspection.validate_commit_contract
+    checked = 0
+
+    def observe_enum(enum):
+        if enum in scans:
+            scans[enum] += 1
+        return enum_iter(enum)
+
+    def observe_contract(**values):
+        nonlocal checked
+        checked += 1
+        return contract(**values)
+
+    monkeypatch.setattr(type(CommitKind), "__iter__", observe_enum)
+    monkeypatch.setattr(rollout_schema_introspection, "validate_commit_contract", observe_contract)
+    if operation == "initialize":
+        storage.initialize(session_id, thread_id=thread_id)
+    else:
+        with storage.open_read_snapshot(session_id, thread_id):
+            pass
+    print(f"commit audit enum scans ({operation}): {[(enum.__name__, count) for enum, count in scans.items()]}; checked={checked}")
+    assert checked == 4097
+    assert not any(scans.values())
 
 
 def test_valid_mixed_commits_validate_bodies_and_reclaim_only_uncommitted_tail(commit_history_factory):

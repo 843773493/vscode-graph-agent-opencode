@@ -202,6 +202,18 @@ def test_valid_commit_chain_reclaims_only_uncommitted_tail(
 @pytest.mark.parametrize("operation", ["initialize", "snapshot"])
 @pytest.mark.parametrize(("corruption", "match"), [
     (
+        "UPDATE storage_commits SET commit_kind = 'invalid-kind' WHERE commit_kind = 'acceptance'",
+        "v2 storage commit kind 非法",
+    ),
+    (
+        "UPDATE storage_commits SET commit_mode = 'invalid-mode' WHERE commit_kind = 'acceptance'",
+        "v2 storage commit mode 非法",
+    ),
+    (
+        "UPDATE storage_commits SET outcome = 'invalid-outcome' WHERE commit_kind = 'terminal_convergence'",
+        "未知 storage commit outcome",
+    ),
+    (
         "UPDATE storage_commits SET jsonl_record_count = 2 WHERE commit_kind = 'acceptance'",
         "item catalog 数量不一致",
     ),
