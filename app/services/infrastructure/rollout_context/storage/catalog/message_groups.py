@@ -19,17 +19,25 @@ def find_message_locator(
     item_id: str | None = None, sequences: Sequence[int] | None = None,
 ) -> MessageLocator | None:
     """logical ID 只用于校验；已知 item/view 时必须按其冻结坐标解析版本。"""
+    predicates = ["message.message_id=?"]
+    parameters: list[object] = [message_id]
+    if item_id is not None:
+        predicates.append("item.item_id=?")
+        parameters.append(item_id)
+    if sequences is not None:
+        allowed = tuple(dict.fromkeys(sequences))
+        predicates.append(f"message.message_sequence IN ({','.join('?' for _ in allowed)})")
+        parameters.extend(allowed)
+    # 先按冻结 view 筛选版本，再连接 catalog；不能为一个旧版本遍历全部历史版本。
+    # 两条候选已足以证明歧义，禁止先物化完整版本集合再在 Python 过滤。
     rows = connection.execute(
         "SELECT message.message_sequence,message.turn_id,message.execution_id,"
         "message.jsonl_offset,message.jsonl_length,item.item_id "
         "FROM messages message LEFT JOIN item_catalog item "
         "ON item.jsonl_offset=message.jsonl_offset AND item.jsonl_length=message.jsonl_length "
-        "WHERE message.message_id=?" + (" AND item.item_id=?" if item_id is not None else ""),
-        (message_id, item_id) if item_id is not None else (message_id,),
+        "WHERE " + " AND ".join(predicates) + " LIMIT 2",
+        parameters,
     ).fetchall()
-    if sequences is not None:
-        allowed = set(sequences)
-        rows = [row for row in rows if row[0] in allowed]
     if len(rows) > 1:
         raise RuntimeError(f"message locator 版本歧义，必须提供精确 canonical item/view: {message_id}")
     if rows and rows[0][5] is None:

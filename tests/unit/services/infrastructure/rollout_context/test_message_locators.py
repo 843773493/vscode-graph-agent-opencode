@@ -19,9 +19,10 @@ def locator_database():
     with sqlite3.connect(":memory:") as connection:
         # 同 logical ID 的不可变版本用于局部消歧，不冒充完整执行存储。
         connection.executescript("""
-            CREATE TABLE messages(message_sequence INTEGER, message_id TEXT, turn_id TEXT,
+            CREATE TABLE messages(message_sequence INTEGER PRIMARY KEY, message_id TEXT, turn_id TEXT,
                 execution_id TEXT, jsonl_offset INTEGER, jsonl_length INTEGER);
-            CREATE TABLE item_catalog(item_id TEXT, jsonl_offset INTEGER, jsonl_length INTEGER);
+            CREATE TABLE item_catalog(item_id TEXT UNIQUE, jsonl_offset INTEGER, jsonl_length INTEGER);
+            CREATE INDEX messages_logical_identity ON messages(message_id,message_sequence);
             INSERT INTO messages VALUES (1,'logical','turn','execution-old',0,10),
                 (2,'logical','turn','execution-new',10,20),(3,'other','turn','execution-other',30,30);
             INSERT INTO item_catalog VALUES ('old-item',0,10),('new-item',10,20),('other-item',30,30);
@@ -69,3 +70,47 @@ def test_invalid_explicit_anchor_is_never_ignored(manifests):
         canonical_message_anchor({"data": {"id": "logical", "response_metadata": {
             "canonical_item_manifests": manifests,
         }}})
+
+
+@pytest.mark.parametrize("sequences", [[], [3], [1, 1]])
+def test_view_filter_keeps_empty_and_repeated_selections_exact(locator_database, sequences):
+    expected = (1, "turn", "execution-old", 0, 10) if 1 in sequences else None
+    assert find_message_locator(locator_database, "logical", sequences=sequences) == expected
+    if expected is None:
+        with pytest.raises(RuntimeError, match="缺少指定 canonical item"):
+            find_message_locator(locator_database, "logical", item_id="old-item", sequences=sequences)
+
+
+def test_view_filter_excludes_dangling_unselected_versions(locator_database):
+    locator_database.execute("DELETE FROM item_catalog WHERE item_id='new-item'")
+    assert find_message_locator(locator_database, "logical", sequences=[1]) == (1, "turn", "execution-old", 0, 10)
+    with pytest.raises(RuntimeError, match="缺少 canonical item"):
+        find_message_locator(locator_database, "logical", sequences=[2])
+    with pytest.raises(RuntimeError, match="版本歧义"):
+        find_message_locator(locator_database, "logical")
+
+
+def test_selected_message_version_does_not_join_every_historical_version(locator_database):
+    # 只造 locator 局部查询数据，不冒充 canonical 正文或执行历史。
+    locator_database.executemany(
+        "INSERT INTO messages VALUES (?,?,?,?,?,?)",
+        ((index, "logical", "turn", f"execution-{index}", index * 100, 10) for index in range(4, 1028)),
+    )
+    locator_database.executemany(
+        "INSERT INTO item_catalog VALUES (?,?,?)",
+        ((f"item-{index}", index * 100, 10) for index in range(4, 1028)),
+    )
+    instructions = 0
+
+    def progress():
+        nonlocal instructions
+        instructions += 1
+        return 0
+
+    locator_database.set_progress_handler(progress, 1)
+    try:
+        assert find_message_locator(locator_database, "logical", sequences=[1]) == (1, "turn", "execution-old", 0, 10)
+    finally:
+        locator_database.set_progress_handler(None, 0)
+    # 缺物理 locator 索引时单次连接仍扫描 catalog；不得为1026个版本重复扫描。
+    assert instructions < 20_000, instructions
