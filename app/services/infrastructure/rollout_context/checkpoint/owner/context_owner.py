@@ -13,6 +13,7 @@ from langchain_core.messages import BaseMessage, message_to_dict, messages_from_
 
 from app.agents.providers.wire_finalize import WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
@@ -278,7 +279,7 @@ class ContextOwnerMixin(
         self,
         session_id: str,
         thread_id: str,
-        plan: ContextRequestPlan,
+        expected: ContextRequestPlan | SealedContextDispatchRef,
         *,
         checkpoint_ns: str,
         include_runtime_notices: bool = False,
@@ -297,7 +298,7 @@ class ContextOwnerMixin(
         让不同调用方不能各自重新选择 history 或工具。
         """
         committed_snapshot, items, resolved_request_content = self._read_committed_context_projection(
-            session_id, thread_id, plan, checkpoint_ns=checkpoint_ns,
+            session_id, thread_id, expected, checkpoint_ns=checkpoint_ns,
             request_only_content=request_only_content, include_request_only=include_request_only,
         )
         return self._project_context_projection(
@@ -388,11 +389,11 @@ class ContextOwnerMixin(
 
     def _committed_context_snapshot(
         self,
-        plan: ContextRequestPlan,
+        expected: ContextRequestPlan | SealedContextDispatchRef,
         *,
         snapshot: RolloutReadSnapshot,
     ) -> CommittedContextSnapshot:
-        """只允许投影 Saver 已提交的 assembly plan。
+        """从当前快照核对已提交 assembly 与 plan 或派发引用。
 
         ``ContextRequestPlan`` 是不可变值对象，但调用方仍可能自行构造一个
         形式上 sealed 的对象。assembly snapshot 才是持久化授权边界；投影前
@@ -400,20 +401,25 @@ class ContextOwnerMixin(
         以自造的 plan 旁路 SQLite manifest 或 context reader。
         """
         session_id, thread_id, checkpoint_ns = snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns
-        self._require_context_plan_read_owner(
-            session_id, thread_id, plan, checkpoint_ns, snapshot=snapshot,
-        )
+        if isinstance(expected, ContextRequestPlan):
+            self._require_context_plan_read_owner(
+                session_id, thread_id, expected, checkpoint_ns, snapshot=snapshot,
+            )
         with self._storage.storage.read_connection(
             session_id, thread_id, checkpoint_ns, snapshot=snapshot,
         ) as connection:
             persisted, _ = self._storage.assemblies._read_context_assembly_connection(
                 connection, session_id, thread_id,
-                assembly_id=plan.assembly_id, checkpoint_ns=checkpoint_ns,
+                assembly_id=expected.assembly_id, checkpoint_ns=checkpoint_ns,
             )
-        if (
-            persisted.plan_id != plan.plan_id
-            or persisted.plan_hash != plan.plan_hash()
-            or persisted.selection != plan.selection
+        if isinstance(expected, SealedContextDispatchRef):
+            # 冷派发引用在同一次权威读取中核对全部 binding，再读取 activation 和正文。
+            # 不先读 assembly 再拿其 plan 重开快照，避免重复审计和重复展开 registry。
+            expected.validate_snapshot(persisted)
+        elif (
+            persisted.plan_id != expected.plan_id
+            or persisted.plan_hash != expected.plan_hash()
+            or persisted.selection != expected.selection
         ):
             raise ValueError(
                 "plan-order-integrity: projector plan 与已提交 assembly 不一致"

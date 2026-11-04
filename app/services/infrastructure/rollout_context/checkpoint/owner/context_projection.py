@@ -10,6 +10,7 @@ from langchain_core.messages import BaseMessage
 
 from app.abstractions.session_context import SessionContextHistoryProjection
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.hashing import (
     contribution_content_hash,
     payload_content_length,
@@ -157,15 +158,15 @@ class ContextProjectionOwnerMixin:
         self,
         session_id: str,
         thread_id: str,
-        plan: ContextRequestPlan,
+        expected: ContextRequestPlan | SealedContextDispatchRef,
         *,
         checkpoint_ns: str,
         request_only_content: Mapping[str, object] | None = None,
         include_request_only: bool = True,
     ) -> tuple[CommittedContextSnapshot, dict[tuple[str, str, str], CanonicalItemRecord], dict[str, object]]:
         """一次 fresh authority 读取冻结投影材料，关闭连接后才运行各 projector。"""
-        if plan.plan_state != "sealed" or plan.assembly_id is None:
-            self._require_context_plan_owner(session_id, thread_id, plan)
+        if isinstance(expected, ContextRequestPlan) and (expected.plan_state != "sealed" or expected.assembly_id is None):
+            self._require_context_plan_owner(session_id, thread_id, expected)
             raise ValueError("context plan 未 sealed，不能进入 projector")
         with ExitStack() as cleanup:
             try:
@@ -173,7 +174,7 @@ class ContextProjectionOwnerMixin:
                     session_id, thread_id, checkpoint_ns,
                 ))
             except RolloutNotMaterializedError as error:
-                if (plan.session_id, plan.thread_id) != (session_id, thread_id):
+                if (expected.session_id, expected.thread_id) != (session_id, thread_id):
                     raise ValueError(
                         "source-mismatch: target rollout is not materialized; "
                         "frozen history scope cannot be authorized"
@@ -182,7 +183,7 @@ class ContextProjectionOwnerMixin:
             # 历史 owner 的准入与 assembly/正文共用下面这一个冻结快照；
             # 提前另开快照只做归属预检，会让同一次投影重复全扫 commit/catalog。
             committed_snapshot = self._committed_context_snapshot(
-                plan,
+                expected,
                 snapshot=read_snapshot,
             )
             committed = committed_snapshot.assembly.as_sealed_plan()

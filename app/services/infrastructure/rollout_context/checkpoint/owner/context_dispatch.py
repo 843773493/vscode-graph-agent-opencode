@@ -100,9 +100,15 @@ class ContextDispatchOwnerMixin:
         @staticmethod
         def context_owner_namespace(checkpoint_ns: str) -> str: ...
 
-        def project_context_plan_for_dispatch(
-            self, session_id: str, thread_id: str, plan: ContextRequestPlan, *,
-            target_format: str, checkpoint_ns: str = "",
+        def _project_committed_context_plan(
+            self, session_id: str, thread_id: str,
+            expected: ContextRequestPlan | SealedContextDispatchRef, *,
+            checkpoint_ns: str, include_runtime_notices: bool = False,
+            include_summaries: bool = False,
+            request_only_content: Mapping[str, object] | None = None,
+            target_format: str | None = None,
+            collect_capability_losses: bool = False,
+            include_request_only: bool = True, include_native: bool = False,
         ) -> ContextProjectionResult: ...
 
     def issue_context_dispatch_ref(
@@ -123,15 +129,14 @@ class ContextDispatchOwnerMixin:
         if namespace != reference.checkpoint_ns:
             raise ValueError("sealed-assembly binding violation: namespace 不一致")
         with self._lock, self._storage.storage.catalog_body_validation_scope():
-            snapshot = self._storage.assemblies.get_context_assembly(
-                reference.session_id, reference.thread_id,
-                assembly_id=reference.assembly_id, checkpoint_ns=namespace,
+            projection = self._project_committed_context_plan(
+                reference.session_id, reference.thread_id, reference,
+                checkpoint_ns=namespace, target_format=reference.target_format,
+                include_runtime_notices=True, include_summaries=True,
+                collect_capability_losses=True,
+                include_native=reference.target_format == "responses",
             )
-            reference.validate_snapshot(snapshot)
-            projection = self.project_context_plan_for_dispatch(
-                reference.session_id, reference.thread_id, snapshot.as_sealed_plan(),
-                target_format=reference.target_format, checkpoint_ns=namespace,
-            )
+            snapshot = projection.assembly
         result: ContextDispatchPayload = {"snapshot": snapshot, "dispatch_ref": reference,
                   "assembly_id": snapshot.assembly_id, "plan": snapshot.as_sealed_plan(),
                   "execution_id": snapshot.execution_id,

@@ -1971,7 +1971,41 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
     monkeypatch.setattr(case.selection, "snapshot", unexpected)
     with RolloutCheckpointSaver(case.sessions) as restarted:
         monkeypatch.setattr(restarted, "prepare_context_for_provider", unexpected)
-        payload = restarted.read_context_for_dispatch(reference)
+        storage = restarted._storage.storage
+        connect = storage._connect
+        read_assembly = restarted._storage.assemblies._read_context_assembly_connection
+        statements, owners, assembly_reads = [], [], []
+
+        def observe_connection(thread_id, checkpoint_ns="", *, session_id, read_only=False):
+            owners.append((session_id, thread_id))
+            connection = connect(thread_id, checkpoint_ns, session_id=session_id, read_only=read_only)
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        def observe_assembly(*args, **kwargs):
+            assembly_reads.append(kwargs["assembly_id"])
+            return read_assembly(*args, **kwargs)
+
+        monkeypatch.setattr(storage, "_connect", observe_connection)
+        monkeypatch.setattr(restarted._storage.assemblies, "_read_context_assembly_connection", observe_assembly)
+        first_payload = None
+        # 冷入口每次从真实库重读；单次恢复不得为核引用和投影分别打开快照。
+        for attempt in range(2):
+            statements.clear()
+            owners.clear()
+            assembly_reads.clear()
+            payload = restarted.read_context_for_dispatch(reference)
+            audits = sum("FROM storage_commits commit_record ORDER BY" in sql for sql in statements)
+            measurement = {"attempt": attempt, "full_audits": audits, "assembly_reads": len(assembly_reads)}
+            print(f"cold dispatch audits ({target_format}): {measurement}")
+            assert audits == 1
+            assert owners == [(case.session, case.thread)]
+            assert assembly_reads == [snapshot.assembly_id]
+            if first_payload is None:
+                first_payload = payload
+            else:
+                assert payload["snapshot"] is not first_payload["snapshot"]
+                first_payload["snapshot"].request_hash_preimage["tools"].clear()
         assert payload["snapshot"] == snapshot
         assert payload["execution_id"] == snapshot.execution_id
         assert restarted._prepared_dispatches == {}
@@ -1981,6 +2015,21 @@ async def test_cold_dispatch_reference_reads_exact_payload_without_preparation(
         ):
             await case.model.bind_tools(payload["tools"]).ainvoke(payload["messages"])
         assert restarted.get_context_assembly(case.session, case.thread, assembly_id=snapshot.assembly_id) == snapshot
+        # 引用不匹配必须在 activation、canonical 正文和 detail 投影读取之前拒绝。
+        with monkeypatch.context() as mismatch_patch:
+            mismatch_patch.setattr(restarted, "load_sealed_resource_activation", unexpected)
+            mismatch_patch.setattr(storage, "read_ref_items", unexpected)
+            mismatch_patch.setattr(restarted._detail_store, "read", unexpected)
+            for field, value in {
+                "execution_id": "foreign-execution", "plan_hash": "foreign-plan",
+                "request_hash": "foreign-request", "provider_version": "foreign-provider",
+                "sealed_model_call_id": str(uuid4()), "prefix_hash": "foreign-prefix",
+                "frame_hashes": ("foreign-frame",), "tool_set_refs": (),
+                "reference_hash": "foreign-reference",
+            }.items():
+                with pytest.raises(ValueError, match="sealed-assembly binding violation"):
+                    restarted.read_context_for_dispatch(replace(reference, **{field: value}))
+                assert case.controller.transport.call_count == 2, field
     assert case.controller.transport.call_count == 2
     assert case.request(snapshot) == original_request
     assert sorted(case.controller.transport.hit_counts.values()) == [2]
