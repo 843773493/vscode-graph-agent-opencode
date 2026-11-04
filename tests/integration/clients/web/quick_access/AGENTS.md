@@ -29,3 +29,5 @@
 `configuration_cache.test.mjs` 使用真实 ConfigurationCache、FolderConfiguration、FileService 和内存 Provider，经唯一文件投影核对非本地配置更新／删除；仅在目录准备边界延迟或拒绝操作，验证单条目顺序、失败传播与独立 key。该检查不替代真实 IndexedDB、页面刷新或打包 Electron；本地设置保存／刷新由 `test_workspace_metadata_bootstrap.py` 的真实入口验证。
 
 `test_request_content` 经真实消息执行生成请求日志，原页面定位后再核损坏／异查询／catalog变化的续点拒绝；正式Python搜索SDK消费同一Gateway联邦诊断，不在驱动内复制SSE解码。首次选择核活动稳定身份后走真实Enter，后续保留鼠标选择和精确位置断言。
+
+`test_trace_content` 通过执行及 fork 入口创建未打开 child 的真实事件；只选 Trace 后查询并定位原行，原事件面板显示有界上下文与码点高亮。核验同一编辑器接受另一位置、日志追加后的原行读取、旧版本拒绝及零全量 Trace 请求；正式搜索 SDK 继续核对原 owner 的独立续点拒绝。

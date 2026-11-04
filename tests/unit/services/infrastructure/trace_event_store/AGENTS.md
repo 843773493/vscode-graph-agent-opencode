@@ -9,6 +9,7 @@ trace_event_store/
 ├── conftest.py                         # 每测试隔离的 TraceEventStore factory fixture
 ├── test_trace_event_recorder.py        # JobEventBus 到会话 trace 的持久化边界
 ├── test_trace_event_store.py           # 锁池、追加读取、流与诊断分页
+├── test_trace_search.py                # 原窗口预算、精确 Thread、Unicode 与完整行引用
 ├── test_trace_event_payloads.py        # 事件投影、消息事件与会话目录边界
 ├── test_trace_turn_index.py            # turn 快照、索引建立与提交恢复
 ├── test_trace_append_recovery.py       # 中断追加事务的恢复与尾部修复

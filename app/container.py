@@ -60,6 +60,7 @@ from app.services.business.search.providers import (
     register_history_search,
     register_llm_request_search,
     register_navigation_search,
+    register_trace_search,
 )
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_changes_service import SessionChangesService
@@ -1124,6 +1125,7 @@ def _build_app_container(
         path_resolver=session_path_resolver,
     )
     register_llm_request_search(workspace_search_service, session_catalog_service, session_service, llm_request_log_service)
+    register_trace_search(workspace_search_service, session_catalog_service, session_service, trace_event_store)
     log_service = LogService(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
     tool_test_service = ToolTestService(
         config_service=config_service,

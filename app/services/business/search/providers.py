@@ -13,6 +13,7 @@ from app.services.business.search.service import (
     SearchContractError,
     WorkspaceSearchService,
 )
+from app.services.business.search.traces import search_workspace_traces
 from app.services.business.session_navigation.read_service import (
     SessionCatalogReadService,
 )
@@ -25,6 +26,7 @@ from app.services.business.session_turn_history.workspace_search import (
     search_workspace_messages,
 )
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
 def register_navigation_search(
@@ -112,4 +114,25 @@ def register_llm_request_search(
         provider_id="llm-request-log", category="llm_request", operations=("content",), contract_version=1,
         supported_options=("query", "match_mode", "limit", "cursor", "deadline_at"),
         position_kind="request_log_codepoint", max_results=100, cache_policy="none", match_modes=("literal",),
+    ), content_search)
+
+
+def register_trace_search(
+    service: WorkspaceSearchService, catalog: SessionCatalogReadService, sessions: SessionService,
+    traces: TraceEventStore,
+) -> None:
+    async def content_search(request: WorkspaceSearchRequest, gateway_id: str | None) -> WorkspaceSearchResultDTO:
+        if gateway_id is None:
+            raise SearchContractError("owner_mismatch", "Trace 搜索缺少已认证 Gateway 身份")
+        page = await search_workspace_traces(catalog, sessions, traces, request, gateway_id=gateway_id)
+        return WorkspaceSearchResultDTO(
+            provider_id="trace-event-store", workspace_id=service.workspace_id, category="trace",
+            operation="content", contract_version=1, state="complete" if page.complete else "limited",
+            limited_reason=page.limited_reason, traces=page,
+        )
+
+    service.register(SearchProviderCapabilityDTO(
+        provider_id="trace-event-store", category="trace", operations=("content",), contract_version=1,
+        supported_options=("query", "match_mode", "limit", "cursor", "deadline_at"),
+        position_kind="trace_codepoint", max_results=100, cache_policy="none", match_modes=("literal",),
     ), content_search)

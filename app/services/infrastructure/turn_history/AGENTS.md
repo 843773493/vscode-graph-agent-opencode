@@ -19,3 +19,4 @@
 - manifest 是 active operation generation 和 projection epoch 的权威来源。
 - 损坏、越界或不一致必须快速失败，禁止扫描磁盘后猜测修复。
 - 单个实现文件尽量控制在 400 行以内。
+- `trace_search.py` 复用 `trace_page.py` 的完整事件窗口、解析与位置，按原存储锁搜索并定点核验一行；Thread 归属仍由原 Job 索引提供。只有命中行计算完整正文版本，不把传输游标的首尾采样摘要当作内容版本。

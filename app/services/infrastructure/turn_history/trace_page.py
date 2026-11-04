@@ -23,12 +23,28 @@ class TracePageBudgetExceededError(RuntimeError):
     """单条 Trace 事件超过诊断页固定读取预算。"""
 
 
+class TracePageBoundaryError(RuntimeError):
+    """指定读取上界没有落在完整 JSONL 事件边界。"""
+
+
+@dataclass(frozen=True, slots=True)
+class TraceEventRecord:
+    event: Event
+    start: int
+    end: int
+    line: bytes
+
+
 @dataclass(frozen=True, slots=True)
 class TraceEventPage:
-    events: list[Event]
+    records: list[TraceEventRecord]
     next_cursor: str | None
     has_more: bool
     bytes_read: int
+
+    @property
+    def events(self) -> list[Event]:
+        return [record.event for record in self.records]
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +113,7 @@ def read_trace_event_page(
     cursor: str | None,
     limit: int,
     max_bytes: int = TRACE_PAGE_MAX_BYTES,
+    before_offset: int | None = None,
 ) -> TraceEventPage:
     if limit < 1:
         raise ValueError("Trace page limit 必须大于 0")
@@ -105,27 +122,33 @@ def read_trace_event_page(
     if not file.is_file() or file.stat().st_size == 0:
         if cursor is not None:
             raise TraceCursorGoneError(session_id, cursor)
-        return TraceEventPage(events=[], next_cursor=None, has_more=False, bytes_read=0)
+        return TraceEventPage(records=[], next_cursor=None, has_more=False, bytes_read=0)
     try:
         page_end = (
             _validate_page_cursor(file, cursor)
             if cursor is not None
-            else file.stat().st_size
+            else before_offset if before_offset is not None else file.stat().st_size
         )
+        if not 0 <= page_end <= file.stat().st_size:
+            raise ValueError("Trace 页边界越过文件范围")
     except ValueError as error:
         raise TraceCursorGoneError(session_id, cursor or "") from error
     if page_end == 0:
-        return TraceEventPage(events=[], next_cursor=None, has_more=False, bytes_read=0)
+        return TraceEventPage(records=[], next_cursor=None, has_more=False, bytes_read=0)
 
     read_start = max(0, page_end - max_bytes)
     with file.open("rb") as stream:
         stream.seek(page_end - 1)
         if stream.read(1) != b"\n":
-            raise RuntimeError("Trace 诊断页边界不是完整 JSONL 行")
+            raise TracePageBoundaryError("Trace 诊断页边界不是完整 JSONL 行")
+        starts_at_boundary = read_start == 0
+        if read_start > 0:
+            stream.seek(read_start - 1)
+            starts_at_boundary = stream.read(1) == b"\n"
         stream.seek(read_start)
         payload = stream.read(page_end - read_start)
     bytes_read = len(payload)
-    if read_start > 0:
+    if not starts_at_boundary:
         first_newline = payload.find(b"\n")
         if first_newline < 0:
             raise TracePageBudgetExceededError(
@@ -160,23 +183,15 @@ def read_trace_event_page(
                 break
         line_end_offset = line_start_offset
     selected = list(reversed(selected_reversed))
-    events: list[Event] = []
-    for line_start, _, line in selected:
-        try:
-            events.append(_AnyEvent.model_validate_json(line).root)
-        except Exception as error:
-            raise RuntimeError(
-                "Trace 事件协议无效: "
-                f"session_id={session_id}, offset={line_start}, line={line[:200]!r}"
-            ) from error
+    records = [parse_trace_record(session_id, start, end, line) for start, end, line in selected]
     if not selected:
         return TraceEventPage(
-            events=[], next_cursor=None, has_more=False, bytes_read=bytes_read
+            records=[], next_cursor=None, has_more=False, bytes_read=bytes_read
         )
     oldest_line_start, oldest_line_end, oldest_line = selected[0]
     has_more = oldest_line_start > 0
     return TraceEventPage(
-        events=events,
+        records=records,
         next_cursor=(
             _encode_page_cursor(
                 line_start=oldest_line_start,
@@ -189,3 +204,14 @@ def read_trace_event_page(
         has_more=has_more,
         bytes_read=bytes_read,
     )
+
+
+def parse_trace_record(session_id: str, start: int, end: int, line: bytes) -> TraceEventRecord:
+    try:
+        event = _AnyEvent.model_validate_json(line).root
+    except Exception as error:
+        raise RuntimeError(
+            "Trace 事件协议无效: "
+            f"session_id={session_id}, offset={start}, line={line[:200]!r}"
+        ) from error
+    return TraceEventRecord(event=event, start=start, end=end, line=line)

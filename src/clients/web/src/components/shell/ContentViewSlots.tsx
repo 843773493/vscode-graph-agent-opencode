@@ -1,4 +1,5 @@
 import type { RequestLogNavigation } from "../../hooks/runtime/useRequestLogNavigation";
+import type { TraceNavigation } from "../../hooks/runtime/useTraceNavigation";
 import type { SessionViewState } from "../../state/sessionViewState";
 import {
   lazy,
@@ -78,6 +79,8 @@ interface ContentViewSlotsProps extends Pick<
   activeTraceHistory: SessionTraceHistoryState | null;
   onLoadOlderTraceHistory: () => Promise<number>;
   onRetryTraceHistory: () => Promise<void>;
+  traceNavigation?: TraceNavigation;
+  onCloseTraceNavigation?: () => void;
   requestLogNavigation?: RequestLogNavigation;
   onCloseRequestLogNavigation?: () => void;
   requestLogs: LLMRequestLogRecord[];
@@ -153,6 +156,8 @@ export default function ContentViewSlots({
   activeTraceHistory,
   onLoadOlderTraceHistory,
   onRetryTraceHistory,
+  traceNavigation,
+  onCloseTraceNavigation,
   requestLogNavigation,
   onCloseRequestLogNavigation,
   requestLogs,
@@ -233,6 +238,7 @@ export default function ContentViewSlots({
       </ContentViewSlot>
       <ContentViewSlot visible={contentView === "events"} mountAfterFirstVisit>
         <EventQueuePanel
+          navigation={traceNavigation} onCloseNavigation={onCloseTraceNavigation}
           items={receivedEvents}
           limit={FRONTEND_EVENT_QUEUE_LIMIT}
           sessionId={sessionId ?? ""}

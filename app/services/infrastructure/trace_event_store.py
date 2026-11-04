@@ -15,6 +15,7 @@ from app.abstractions.turn_history import (
 )
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import Event
+from app.schemas.internal_v2.trace_search import TraceLocationDTO, TraceReferenceDTO
 from app.services.infrastructure.turn_history.trace_cursor import (
     TraceCursorGoneError,
     encode_trace_cursor,
@@ -30,6 +31,13 @@ from app.services.infrastructure.turn_history.trace_page import (
     TRACE_PAGE_MAX_BYTES,
     TraceEventPage,
     read_trace_event_page,
+)
+from app.services.infrastructure.turn_history.trace_search import (
+    TraceSearchBudget,
+    TraceSearchPage,
+    TraceSearchPosition,
+    locate_trace_event,
+    search_trace_events,
 )
 from app.services.infrastructure.turn_history.trace_stream import (
     parse_trace_event_lines,
@@ -264,7 +272,7 @@ class TraceEventStore:
             owners = TraceTurnIndex(self._trace_file(session_id).parent).job_threads(session_id, job_ids)
         result = {}
         for event in events:
-            if event.type in {"goal_updated", "goal_cleared"}:
+            if event.type == "goal_updated" or event.type == "goal_cleared":
                 main = self._path_resolver.main_thread_id(session_id)
                 if event.payload.session_id != session_id or event.payload.thread_id != main:
                     raise ValueError("Goal 事件归属与 Session main Thread 不一致")
@@ -272,6 +280,20 @@ class TraceEventStore:
             else:
                 result[event.event_id] = owners[event.job_id]
         return result
+
+    def search_session_events(
+        self, session_id: str, query: str, *, limit: int,
+        position: TraceSearchPosition | None, budget: TraceSearchBudget,
+    ) -> TraceSearchPage:
+        with self._file_lock(session_id):
+            return search_trace_events(session_id, self._trace_file(session_id), query,
+                limit=limit, position=position, budget=budget,
+                event_threads=lambda events: self.event_threads(session_id, events))
+
+    def locate(self, reference: TraceReferenceDTO) -> TraceLocationDTO:
+        with self._file_lock(reference.session_id):
+            return locate_trace_event(self._trace_file(reference.session_id), reference,
+                event_threads=lambda events: self.event_threads(reference.session_id, events))
 
     def read_message_events(
         self,

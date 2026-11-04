@@ -20,6 +20,7 @@ from app.schemas.internal_v2.session_navigation import SessionCatalogSearchResul
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultsDTO,
 )
+from app.schemas.internal_v2.trace_search import WorkspaceTraceSearchResultsDTO
 from app.schemas.internal_v2.turn_search import WorkspaceMessageSearchResultsDTO
 
 
@@ -103,10 +104,11 @@ class WorkspaceSearchResultDTO(BaseModel):
     llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | None = None
     files: ResourceNavigationResultDTO | None = None
     context: SessionContextSearchResultDTO | None = None
+    traces: WorkspaceTraceSearchResultsDTO | None = None
 
     @property
-    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | ResourceNavigationResultDTO | SessionContextSearchResultDTO | None:
-        return self.catalog or self.threads or self.messages or self.llm_requests or self.files or self.context
+    def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | ResourceNavigationResultDTO | SessionContextSearchResultDTO | WorkspaceTraceSearchResultsDTO | None:
+        return self.catalog or self.threads or self.messages or self.llm_requests or self.files or self.context or self.traces
 
     @property
     def result_count(self) -> int:
@@ -134,7 +136,7 @@ class WorkspaceSearchResultDTO(BaseModel):
             return self
         expected = {"catalog": self.catalog, "thread": self.threads,
                     "message": self.messages, "tool_result": self.messages, "llm_request": self.llm_requests,
-                    "file": self.files, "context": self.context}.get(self.category)
-        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages, self.llm_requests, self.files, self.context)) == 1:
+                    "file": self.files, "context": self.context, "trace": self.traces}.get(self.category)
+        if expected is not None and sum(page is not None for page in (self.catalog, self.threads, self.messages, self.llm_requests, self.files, self.context, self.traces)) == 1:
             return self
         raise ValueError("搜索类别与领域结果不一致")

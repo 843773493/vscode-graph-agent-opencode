@@ -30,6 +30,7 @@ from app.api.deps import (
     get_session_skill_tracking_service,
     get_team_service,
     get_thread_residency_tracker,
+    get_trace_event_store,
     verify_local_token,
 )
 from app.api.errors import (
@@ -94,6 +95,7 @@ from app.schemas.internal_v2.session_resource import (
 )
 from app.schemas.internal_v2.sse import sse_responses
 from app.schemas.internal_v2.trace import TraceEventDTO
+from app.schemas.internal_v2.trace_search import TraceLocationDTO, TraceReferenceDTO
 from app.schemas.internal_v2.workspace import (
     FileTreeShortcutRequest,
     SessionFileTreeSettingsDTO,
@@ -128,10 +130,14 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.fork.source_capture import (
     IncompleteForkSourceCaptureError,
 )
-from app.services.infrastructure.trace_event_store import TraceCursorGoneError
+from app.services.infrastructure.trace_event_store import (
+    TraceCursorGoneError,
+    TraceEventStore,
+)
 from app.services.infrastructure.turn_history.trace_page import (
     TracePageBudgetExceededError,
 )
+from app.services.infrastructure.turn_history.trace_search import TraceSearchError
 from app.services.orchestration.persistent_tasks.goal import settle_goal_progress
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
@@ -540,6 +546,29 @@ async def list_session_traces(
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except (KeyError, NotFoundError) as exc:
         raise not_found_http_error(exc) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/{session_id}/traces/locate", response_model=APIResponse[TraceLocationDTO])
+async def locate_session_trace(
+    session_id: CanonicalSessionId,
+    reference: TraceReferenceDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    traces: Annotated[TraceEventStore, Depends(get_trace_event_store)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+):
+    if reference.session_id != session_id:
+        raise HTTPException(status_code=400, detail={"owner": "trace_event_store", "code": "owner_mismatch", "message": "Trace 引用不属于目标 Session"})
+    try:
+        async with sessions.session_read_admission(session_id):
+            result = await run_sync_shielded(traces.locate, reference)
+    except TraceSearchError as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

@@ -44,7 +44,7 @@ import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
 import type { ThreadEditorOptions } from '../threadPane.js';
-import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
@@ -234,7 +234,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       : run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
     const seen = new Set(recent.map(pick => pick.id));
     const branches = queryFederatedSearchBranches(run.owners, categories, filter, disposables, token, run.cache,
-      (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message)
+      (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message, item.trace)
         : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail, item.requestLog)
           : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
       branches => {
@@ -259,13 +259,14 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       const providerOptions: AccessOptions = { ...run.options, contentCategory: category, searchOwners: run.owners, searchGroup: run.group };
       this.quickInput.quickAccess.show(prefix + filter, { preserveValue: true, providerOptions });
     };
-    // TODO：Trace／运行日志尚待各自 owner 的正文查询与定位切片。
+    // TODO：工作区运行日志及 Gateway 自有诊断日志仍待各原 owner 的独立查询与权限切片。
     return [
       { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child', accept: () => select('content ', '会话消息') },
       { id: 'content-category-tool', label: '工具结果', description: 'canonical 结果及不可变完整输出 · 不重放工具', accept: () => select('content ', '工具结果') },
       { id: 'content-category-file', label: '文件', description: '转到 % 文件内容搜索，保留所选工作区', accept: () => select('%') },
       { id: 'content-category-request', label: 'LLM 请求记录', description: 'Session 级原请求／响应 · 精确记录定位', accept: () => select('content ', 'LLM 请求记录') },
-      { id: 'content-category-pending-logs', label: 'Trace／运行日志 · 尚未接入' },
+      { id: 'content-category-trace', label: 'Trace', description: '工作区原事件 · 精确 Thread／记录定位', accept: () => select('content ', 'Trace') },
+      { id: 'content-category-pending-logs', label: '运行日志 · 尚未接入' },
     ];
   }
 
@@ -324,11 +325,12 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private resourcePick(run: AccessRun, resource: URI, description?: string, title = basename(resource), detail?: string,
-    editor?: EditorInput | IResourceEditorInput, message?: TurnMessageMatchDTO): ResourcePick {
+    editor?: EditorInput | IResourceEditorInput, message?: TurnMessageMatchDTO, trace?: TraceMatchDTO): ResourcePick {
     const side = run.options.includeOpenToSideButton !== false;
     const dirty = editor && isEditorInput(editor) && editor.isDirty() && !editor.isSaving();
-    const input = editor ?? { resource, label: title, options: message ? { boxteamMessage: message } as ThreadEditorOptions : undefined };
-    return { id: message ? `${resource.toString()}#${message.reference!.item_id}/${message.reference!.start_codepoint}` : resource.toString(), resource, editor, label: title, description, detail,
+    const input = editor ?? { resource, label: title, options: message ? { boxteamMessage: message } as ThreadEditorOptions : trace ? { boxteamTrace: trace } as ThreadEditorOptions : undefined };
+    return { id: message ? `${resource.toString()}#${message.reference!.item_id}/${message.reference!.start_codepoint}`
+      : trace ? `${resource.toString()}#trace/${trace.reference!.event_id}/${trace.reference!.start_codepoint}` : resource.toString(), resource, editor, label: title, description, detail,
       ariaLabel: `${title} ${description ?? ''}${dirty ? '，未保存' : ''}`,
       iconClass: ThemeIcon.asClassName(resource.scheme === 'boxteam-thread' ? Codicon.commentDiscussion : Codicon.file),
       buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }] : []),

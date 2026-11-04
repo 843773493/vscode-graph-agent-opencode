@@ -1013,6 +1013,11 @@ export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.Wor
    * @generated from field: optional boxteam.workspace.v2.SessionContextSearchResultDTO context = 13;
    */
   context?: SessionContextSearchResultDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceTraceSearchResultsDTO traces = 14;
+   */
+  traces?: WorkspaceTraceSearchResultsDTO | undefined;
 };
 
 /**
@@ -2027,6 +2032,198 @@ export declare type WorkspaceLLMRequestLogSearchResultsDTO = Message<"boxteam.wo
  * Use `create(WorkspaceLLMRequestLogSearchResultsDTOSchema)` to create a new message.
  */
 export declare const WorkspaceLLMRequestLogSearchResultsDTOSchema: GenMessage<WorkspaceLLMRequestLogSearchResultsDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TraceReferenceDTO
+ */
+export declare type TraceReferenceDTO = Message<"boxteam.workspace.v2.TraceReferenceDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string event_id = 3;
+   */
+  eventId: string;
+
+  /**
+   * @generated from field: int64 line_start = 4;
+   */
+  lineStart: bigint;
+
+  /**
+   * @generated from field: int64 line_end = 5;
+   */
+  lineEnd: bigint;
+
+  /**
+   * @generated from field: string content_version = 6;
+   */
+  contentVersion: string;
+
+  /**
+   * @generated from field: int32 start_codepoint = 7;
+   */
+  startCodepoint: number;
+
+  /**
+   * @generated from field: int32 end_codepoint = 8;
+   */
+  endCodepoint: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TraceReferenceDTO.
+ * Use `create(TraceReferenceDTOSchema)` to create a new message.
+ */
+export declare const TraceReferenceDTOSchema: GenMessage<TraceReferenceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TraceMatchDTO
+ */
+export declare type TraceMatchDTO = Message<"boxteam.workspace.v2.TraceMatchDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.TraceReferenceDTO reference = 1;
+   */
+  reference?: TraceReferenceDTO | undefined;
+
+  /**
+   * @generated from field: string event_type = 2;
+   */
+  eventType: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp timestamp = 3;
+   */
+  timestamp?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string preview = 4;
+   */
+  preview: string;
+
+  /**
+   * @generated from field: int32 preview_start_codepoint = 5;
+   */
+  previewStartCodepoint: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TraceMatchDTO.
+ * Use `create(TraceMatchDTOSchema)` to create a new message.
+ */
+export declare const TraceMatchDTOSchema: GenMessage<TraceMatchDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TraceLocationDTO
+ */
+export declare type TraceLocationDTO = Message<"boxteam.workspace.v2.TraceLocationDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.TraceReferenceDTO reference = 1;
+   */
+  reference?: TraceReferenceDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TraceEventDTO record = 2;
+   */
+  record?: TraceEventDTO | undefined;
+
+  /**
+   * 原事件保留字段顺序、两空格缩进的 Unicode JSON；位置采用码点。
+   *
+   * @generated from field: string text = 3;
+   */
+  text: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TraceLocationDTO.
+ * Use `create(TraceLocationDTOSchema)` to create a new message.
+ */
+export declare const TraceLocationDTOSchema: GenMessage<TraceLocationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceTraceMatchDTO
+ */
+export declare type WorkspaceTraceMatchDTO = Message<"boxteam.workspace.v2.WorkspaceTraceMatchDTO"> & {
+  /**
+   * @generated from field: string session_uri = 1;
+   */
+  sessionUri: string;
+
+  /**
+   * @generated from field: string session_title = 2;
+   */
+  sessionTitle: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.TraceMatchDTO match = 3;
+   */
+  match?: TraceMatchDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceTraceMatchDTO.
+ * Use `create(WorkspaceTraceMatchDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceTraceMatchDTOSchema: GenMessage<WorkspaceTraceMatchDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceTraceSearchResultsDTO
+ */
+export declare type WorkspaceTraceSearchResultsDTO = Message<"boxteam.workspace.v2.WorkspaceTraceSearchResultsDTO"> & {
+  /**
+   * @generated from field: int64 catalog_revision = 1;
+   */
+  catalogRevision: bigint;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceTraceMatchDTO items = 2;
+   */
+  items: WorkspaceTraceMatchDTO[];
+
+  /**
+   * @generated from field: optional string cursor = 3;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: bool complete = 4;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: optional string limited_reason = 5;
+   */
+  limitedReason?: string | undefined;
+
+  /**
+   * @generated from field: int32 scanned_nodes = 6;
+   */
+  scannedNodes: number;
+
+  /**
+   * @generated from field: int32 scanned_records = 7;
+   */
+  scannedRecords: number;
+
+  /**
+   * @generated from field: int64 scanned_bytes = 8;
+   */
+  scannedBytes: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceTraceSearchResultsDTO.
+ * Use `create(WorkspaceTraceSearchResultsDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceTraceSearchResultsDTOSchema: GenMessage<WorkspaceTraceSearchResultsDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.McpServerDTO

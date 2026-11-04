@@ -194,7 +194,7 @@ Provider 由现有工作区服务装配／依赖注入持有，注册返回可�
 
 核心直接产出 typed 事件，HTTP 仅复用原 heartbeat／反缓存和 SSE OpenAPI 安装器编码：scope 最先、整页 page 与唯一 branch 终态、最后唯一 end。page 中的分支信息用于归属，只有 branch 事件结算该分支；end 只汇总状态和已交付计数，不重发领域正文。消费停顿不补新分支，最多保留 3 份已分配页；原十五秒总期限从准入起覆盖解析、排队和网络，迟到结果不再发布。断流缺 end 表示未完成，不自动回放。每个下游请求及事件沿用同一 request_id，明确续页／重试另用新请求。
 
-continuations 明确选择原冻结范围中的分支及原 owner cursor；省略 cursor 表示用户明确重查该分支，不能从活动工作区推断。Gateway 无跨请求搜索状态，重启后仍能续页；单分支版本冲突不影响其它分支。网络适配沿原 registry 解析并持有路由引用，路由失效取消原读取，结算并关闭响应后才释放引用，不改投新 owner。网络层按原始响应字节限制接收，不在调度核心重复 JSON 编码测量；实际输出只在 SSE 边界编码。编码边界反馈整页准入，调度核心统一结算状态、游标和唯一终态；编码器只保留下一帧及小型计量元数据，不另立查询生命周期。该边界已接入目录／Thread、canonical 消息／工具结果、文件、LLM 请求及原目录镜像；正文按实际命中区间计数并保留原 owner 续点。Trace／运行日志 Provider 与 Agent 工具／脚本的迁移仍未完成，不保留为可选的第二搜索引擎。
+continuations 明确选择原冻结范围中的分支及原 owner cursor；省略 cursor 表示用户明确重查该分支，不能从活动工作区推断。Gateway 无跨请求搜索状态，重启后仍能续页；单分支版本冲突不影响其它分支。网络适配沿原 registry 解析并持有路由引用，路由失效取消原读取，结算并关闭响应后才释放引用，不改投新 owner。网络层按原始响应字节限制接收，不在调度核心重复 JSON 编码测量；实际输出只在 SSE 边界编码。编码边界反馈整页准入，调度核心统一结算状态、游标和唯一终态；编码器只保留下一帧及小型计量元数据，不另立查询生命周期。该边界已接入目录／Thread、canonical 消息／工具结果、文件、LLM 请求、Trace 及原目录镜像；正文按实际命中区间计数并保留原 owner 续点。运行日志 Provider 与其余 Agent 工具／脚本的迁移仍由对应任务追踪，不保留为可选的第二搜索引擎。
 
 #### 数量、范围与诊断的可执行合同
 
@@ -400,6 +400,8 @@ Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，�
 工具结果使用上述两个历史搜索入口的显式 `category=tool_result`，省略仍为 `message`，引用和两级 cursor 都绑定类别。同一 Turn／ModelCall／规范 provider call ID 的 stream 与 checkpoint 载体择一，与原 activity 归并一样取 `item_sequence` 最早的可见载体；两者落盘先后不固定，不能按载体类型猜测详情身份。跨 ModelCall 的同裸调用 ID 不合并。位置与响应继续用原 canonical item 身份，不建立工具搜索表。内联正文沿原投影读取；已截断工具结果只沿 canonical `artifact.tool_output` 读取同一 ToolOutputStore 的完整版本，JSONL 与完整输出字节共同消费原 8 MiB 预算，完整输出不预读 stat、不重复读取。读取时核对既有字节量和 `content_sha256`，以免旧位置被应用到被改写的外部正文；这是原不可变版本核对，不增加每键资源请求。
 
 LLM 请求日志保持 Session 级原归属，以 `llm_request/content` 注册到同一工作区 SearchService；不猜测历史 Thread。原日志 owner 对 request、response、upstream 按固定字段顺序、两空格缩进、Unicode JSON 形成搜索文本，采用相同字面量／码点合同。每页最多检查 64 个 catalog 节点、128 条记录、8 MiB 正文及一秒正文调度预算，服从请求总期限；单条硬上限 1 MiB，每个目录最多枚举 512 个 JSON 文件。cursor 绑定 Gateway／工作区／原查询／catalog revision、当前日志目录元数据版本与页内正文版本。原 Session URI 和独立记录引用分别承担资源寻址和位置；接受后只读一个文件，核验正文版本再复用原 RequestLogCard，临时展示命中附近原文，不触发整批日志 loader，不写入聊天或缓存。当前正文已知不再匹配时，续点直接移到下一条记录，最后一条已穷尽即完成，不为已知空尾页重复请求。单项／目录超限不提供无法推进的 cursor，删除或留存裁剪明确失效。
+
+Trace 以独立 `trace/content` Provider 复用原 TraceEventStore、JSONL 页和已提交 Job／Thread 索引，Goal 沿原合同归 main；它不查询 Gateway／工作区运行日志。每页至多检查 64 个 catalog 节点、128 条事件、读取 8 MiB 窗口，并消费一秒正文调度及原总期限；单窗口／事件上限沿原 512 KiB。各 Session 从新到旧，单事件内按 Unicode 码点正序匹配原 schema 的两空格 Unicode JSON。只有命中或正在继续的事件计算一次完整行版本，没有匹配不查 Thread；同窗口候选批量解析归属。cursor 绑定归属、查询、catalog revision、当前文件观察版本和字节／正文位置；stat 观察不冒充任意修改的内容校验。命中使用原 Session URI及独立精确 Thread／事件／行区间／正文位置，接受时在同一 Session 读准入和文件锁内只读原行并核版本，不读取全量 Trace。追加使旧搜索 cursor 失效，但未变化原行仍可定位。原事件面板临时显示命中附近各最多 1000 字符和原详情，实际挂载后滚动；关闭释放，不写历史缓存或持久 contentView。运行日志来源仍须分别接入与验收，不能用 Trace 完成代替 9.6 整项。
 
 工具定位复用 `anchor_message`／`located_message`，around 在同一 snapshot 定点补取相应 ModelCall 限定调用的原工具详情。React 按 canonical item_id 找到原 ToolRow，展开其活动区与结果行后临时展示完整原文；mark 实际挂载通知原定位调度，原生 `scrollIntoView` 先揭示限高工具详情内的命中，再对齐外层虚拟列表。不得按同名工具或裸 call ID 猜测行。完整输出删除或改写明确转为 `stale_turn_reference`；权限与其它存储错误保留原错误归属。查询及打开均不触发模型或工具重放，关闭定位释放原文。
 

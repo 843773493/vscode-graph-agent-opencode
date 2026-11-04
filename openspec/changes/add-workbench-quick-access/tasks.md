@@ -95,6 +95,7 @@
 - [x] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
 - [x] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
 - [ ] 9.6 在原 Trace／运行日志 owner 实现分类正文查询及记录定位，区分工作区与 Gateway 日志，不越过明确范围与权限。
+  - Trace 已沿原事件存储接入独立 Provider、版本绑定续点及精确 Thread／原行定位，真实 Gateway／Workbench 验证见 2026-11-04 Trace 切片证据；工作区与 Gateway 运行日志仍未接入，整项保持未完成。
 - [ ] 9.7 将命中通过精确 owner、目标组与请求代际交给 React 虚拟列表／原详情加载，等待缺页与实际挂载后定位，失效记录明确报错而不回顶部。
 - [ ] 9.8 用各类独有词、未打开 child、未加载工具／日志、多行与 emoji、截断片段及已删除记录验证真实 owner 查询和位置，未选类别没有请求。
 
@@ -821,3 +822,12 @@
 - 服务／QueryBuilder 28 项、439 条断言通过：同模型或跨模型超限、零配额、精确上限有／无远端命中、模型监听释放、A/B隔离及取消均保留。旧产品失败原件留存，明确区分 Search Editor 的完成信息与单个 helper。
 - 真实 Gateway、A/B 托管后端、正式 Workbench 与 Chromium 1 passed／134.52 秒：原编辑器写入三条草稿而上限两条，A+B 查询零 HTTP 且显示受限；改为恰好两条后实际探测A/B、排除同草稿并确认完整无剩余命中。原代际取消、覆盖分页、停止C零查询、UTF-16与preview验证仍通过，pageErrors为空，磁盘未被保存。
 - 23份转换源码的完整类型检查、ESM、Ruff、OpenSpec strict和差异检查通过；正式Web构建退出0／60.37秒，复用唯一构建管线不重复打包。完整指纹、准确命令、失败及通过输出、退出码：`out/tests/temp/search_local_limit_20261104/artifacts/verification.json`；页面原件：`out/tests/integration/clients/web/quick_access/test_file_model_coverage/runs/run-c9555bd8dbcc/nodes/node-f238fd176e30/artifacts/model-coverage.json`。本批未重跑Electron，不承诺固定耗时比例；16.19、16.20其余场景保持未勾选。
+
+
+### 2026-11-04：Trace 正文查询与原事件定位（9.6、9.7、9.8、16.18 部分）
+
+- 独立 trace/content Provider 复用原 TraceEventStore、JSONL 分页及 Job／Thread 归属；查询不建正文副本、索引或第二扫描器。catalog／Session 准入、受保护 worker 结算、扫描／字节／时间预算、原行位置和具名 400／409 错误贯穿公开协议及 Gateway。未匹配事件不计算正文 hash、不查 Thread；候选按窗口批量查询归属，命中行完整版本只计算一次。
+- 原事件页改为持有完整行记录，既有 events 消费从同一记录派生；补正窗口恰好从完整行开头开始时错误丢弃该行的问题。Trace owner 及 Provider 78 项通过（18.65 秒），相关搜索服务和 API 72 项通过（9.27 秒，有重叠不相加）。覆盖恰好 512 KiB、字节／条目上限、跨 Session、真实 Thread、Unicode、取消等待、同长度保留 mtime 中部修改及 HTTP request_id／机器原因。
+- 正式 Gateway／Workbench／Chromium 通过真实消息、fork 和 child 执行生成事件；未选类别零正文查询、未打开 child 两处长正文命中、同 Pane 新位置、实际 mark 可见、追加后旧行读取、旧引用拒绝及零全量 Trace 请求均通过。正式 Python 搜索 SDK 核原 owner 的旧 cursor 409、原原因、零页和保留输入续点。联合消息／工具正文回归 2 passed／263.18 秒，pageErrors=[]；驱动清理收尾后的 Trace 定向再次通过（122.47 秒）。请求日志场景在本轮首批通过。名称与文件原有独立请求的测试现分别核冻结 owner、类别、文件根和续查描述，不再错误要求单请求。
+- 真实 Workbench 类型检查（23 份转换源码）、正式 Web 构建、协议生成一致性／Buf breaking、Ruff、ESM 语法和 OpenSpec strict 通过。Pyright 在原 sessions／container 保留 7 条既存诊断，基线同文，没有新增；不称全仓类型零诊断。正式构建44.99秒、退出0，main SHA256=b38a18307ac32a1af79d831abe6d01260553c12c16ba0b1fe60faa9b6827f013。
+- 初轮预算推进／空 owner 查询失败已修复，原件保留；浏览器初轮旧名称计数断言与新驱动误用 cleanup 的失败保留，新驱动使用原 close 并分别保存执行、诊断和清理错误。准确命令、指纹、退出码及正式产物见 out/tests/temp/trace_search_20261104/artifacts/verification.json。仅删除两份已记录指纹的临时基线源文件，正式产物与原始日志保留。本切片没有验证 Electron 或 Windows；工作区／Gateway 运行日志仍未实现，9.6 及相关整项不勾选。

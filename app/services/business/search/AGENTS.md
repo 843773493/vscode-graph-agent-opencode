@@ -6,6 +6,8 @@
 
 能力注册、请求准入与取消结算，以及调用既有领域查询的 Provider。`llm_requests.py` 在原 catalog／Session 读准入内限定日志来源，正文读取、版本和位置仍归原 LLMRequestLogService。
 
+`traces.py` 在同一 catalog／Session 准入内限定工作区 Trace 来源；调用原 TraceEventStore 的有界页和精确记录入口，不混入 Gateway 运行日志或创建正文索引。
+
 请求日志续点和精确定位共用原日志 owner 的 `LLMRequestLogError`，按实际校验点区分输入无效、版本失效及原因；API／Gateway 不解析消息文字或将它们合并为 owner_rejected。
 
 `files.py` 将文件名称／正文请求交原 ResourceNavigation；每根保留局部选项及原 cursor，默认根只从目标工作区身份生成。文件名额在原 owner 分页前排除目录，不在本层重新扫描、匹配或存储文件。

@@ -1,4 +1,5 @@
 import React from "react";
+import type { TraceNavigation } from "../../../hooks/runtime/useTraceNavigation";
 import { formatDateTime } from "../../../utils/format";
 import {
   boundedDisplayString,
@@ -335,6 +336,8 @@ const KeyTraceSummary = React.memo(function KeyTraceSummary({
 });
 
 export default function EventQueuePanel({
+  navigation,
+  onCloseNavigation,
   items,
   limit,
   sessionId,
@@ -347,6 +350,8 @@ export default function EventQueuePanel({
   onLoadOlderHistory,
   onRetryHistory,
 }: {
+  navigation?: TraceNavigation;
+  onCloseNavigation?: () => void;
   items: FrontendReceivedEvent[];
   limit: number;
   sessionId: string;
@@ -386,6 +391,9 @@ export default function EventQueuePanel({
   });
   const renderedItems = displayItems.slice(firstVisibleIndex);
   const hasOlderEvents = firstVisibleIndex > 0 || historyHasMore;
+
+  if (navigation) return <LocatedTrace key={`${navigation.match.reference?.event_id}/${navigation.match.reference?.start_codepoint}`}
+    navigation={navigation} onClose={onCloseNavigation} />;
 
   return (
     <section className="panel-view event-queue-panel">
@@ -460,4 +468,31 @@ export default function EventQueuePanel({
       )}
     </section>
   );
+}
+
+
+function LocatedTrace({ navigation, onClose }: { navigation: TraceNavigation; onClose?: () => void }) {
+  const mark = React.useRef<HTMLElement>(null);
+  const location = navigation.location;
+  React.useLayoutEffect(() => { mark.current?.scrollIntoView({ block: "center" }); }, [location]);
+  const source = React.useMemo(() => {
+    if (!location?.reference) return null;
+    const characters = Array.from(location.text);
+    const { start_codepoint: start, end_codepoint: end } = location.reference;
+    return { before: characters.slice(Math.max(0, start - 1000), start).join(""),
+      match: characters.slice(start, end).join(""), after: characters.slice(end, end + 1000).join(""),
+      hasBefore: start > 1000, hasAfter: end + 1000 < characters.length };
+  }, [location]);
+  return <section className="panel-view event-queue-panel" aria-label="Trace 搜索定位">
+    <div className="panel-header"><span>Thread Trace · {navigation.match.reference?.event_id}</span>
+      <button type="button" onClick={onClose}>关闭 Trace 定位</button></div>
+    {navigation.error ? <div className="empty-state error-state" role="alert">Trace 命中无法打开：{navigation.error}</div>
+      : location && source ? <div className="panel-list">
+        <section aria-label="Trace 命中原文"><p>命中原文（Unicode 码点 {location.reference!.start_codepoint}–{location.reference!.end_codepoint}；相邻上下文最多各 1000 字符）</p>
+          <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>
+        <EventQueueCard index={0} item={{ kind: "trace", id: location.record.event_id,
+          sessionId: location.record.session_id, receivedAt: new Date().toISOString(), source: "initial_load",
+          event: location.record }} />
+      </div> : <div className="empty-state" role="status">正在核验并读取命中的 Trace 记录…</div>}
+  </section>;
 }

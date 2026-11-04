@@ -64,6 +64,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.tool_service import ToolService
+from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -343,6 +344,10 @@ def get_session_turn_history_service(request: Request) -> SessionTurnHistoryServ
 
 def get_llm_request_log_service(request: Request) -> LLMRequestLogService:
     return _require_service(request, "llm_request_log_service", LLMRequestLogService, "LLMRequestLogService 尚未在应用启动阶段初始化")
+
+
+def get_trace_event_store(request: Request) -> TraceEventStore:
+    return _require_service(request, "trace_event_store", TraceEventStore, "TraceEventStore 尚未在应用启动阶段初始化")
 
 
 def get_log_service(request: Request) -> LogService:

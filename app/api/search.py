@@ -54,6 +54,7 @@ from app.services.infrastructure.turn_history import (
     StaleTurnCursorError,
     StaleTurnReferenceError,
 )
+from app.services.infrastructure.turn_history.trace_search import TraceSearchError
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -85,6 +86,9 @@ async def search_workspace(
                             detail=error.detail()) from error
     except LLMRequestLogError as error:
         raise HTTPException(status_code=400 if error.code == "invalid_request_log_cursor" else 409,
+                            detail=error.detail()) from error
+    except TraceSearchError as error:
+        raise HTTPException(status_code=400 if error.code == "invalid_trace_search_cursor" else 409,
                             detail=error.detail()) from error
     except SearchProviderReadError as error:
         raise HTTPException(status_code=500, detail=error.detail()) from error

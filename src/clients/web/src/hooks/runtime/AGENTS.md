@@ -9,6 +9,7 @@ runtime/
 ├── 请求数据装载
 │   ├── useRequestLogLoader.ts          当前会话的 LLM 请求日志
 │   ├── useRequestLogNavigation.ts      按命中核验单条原记录，隔离取消与迟到结果
+│   ├── useTraceNavigation.ts           按精确 Session／Thread 核验单条原事件，原文仅用于本次定位
 │   └── useAgentStateSnapshot.ts        Agent State 快照及按 message_id 取正文
 ├── 请求状态动作
 │   └── usePendingRequestActions.ts     待处理请求接受、拒绝和清理

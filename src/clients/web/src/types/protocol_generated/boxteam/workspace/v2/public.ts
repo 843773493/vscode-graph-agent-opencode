@@ -237,6 +237,7 @@ export interface WorkspaceSearchResultDTO {
   llm_requests: WorkspaceLLMRequestLogSearchResultsDTO | undefined;
   files: ResourceNavigationResultDTO | undefined;
   context?: SessionContextSearchResultDTO | undefined;
+  traces: WorkspaceTraceSearchResultsDTO | undefined;
 }
 
 export interface SessionThreadSearchResultDTO {
@@ -461,6 +462,51 @@ export interface WorkspaceLLMRequestLogMatchDTO {
 export interface WorkspaceLLMRequestLogSearchResultsDTO {
   catalog_revision: number;
   items: WorkspaceLLMRequestLogMatchDTO[];
+  cursor?: string | undefined;
+  complete: boolean;
+  limited_reason?: string | undefined;
+  scanned_nodes: number;
+  scanned_records: number;
+  scanned_bytes: number;
+}
+
+export interface TraceReferenceDTO {
+  session_id: string;
+  thread_id: string;
+  event_id: string;
+  line_start: number;
+  line_end: number;
+  content_version: string;
+  start_codepoint: number;
+  end_codepoint: number;
+}
+
+export interface TraceMatchDTO {
+  reference: TraceReferenceDTO | undefined;
+  event_type: string;
+  timestamp: string | undefined;
+  preview: string;
+  preview_start_codepoint: number;
+}
+
+export interface TraceLocationDTO {
+  reference: TraceReferenceDTO | undefined;
+  record:
+    | TraceEventDTO
+    | undefined;
+  /** 原事件保留字段顺序、两空格缩进的 Unicode JSON；位置采用码点。 */
+  text: string;
+}
+
+export interface WorkspaceTraceMatchDTO {
+  session_uri: string;
+  session_title: string;
+  match: TraceMatchDTO | undefined;
+}
+
+export interface WorkspaceTraceSearchResultsDTO {
+  catalog_revision: number;
+  items: WorkspaceTraceMatchDTO[];
   cursor?: string | undefined;
   complete: boolean;
   limited_reason?: string | undefined;
@@ -4739,6 +4785,7 @@ function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
     llm_requests: undefined,
     files: undefined,
     context: undefined,
+    traces: undefined,
   };
 }
 
@@ -4760,6 +4807,7 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
         : undefined,
       files: isSet(object.files) ? ResourceNavigationResultDTO.fromJSON(object.files) : undefined,
       context: isSet(object.context) ? SessionContextSearchResultDTO.fromJSON(object.context) : undefined,
+      traces: isSet(object.traces) ? WorkspaceTraceSearchResultsDTO.fromJSON(object.traces) : undefined,
     };
   },
 
@@ -4804,6 +4852,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
     if (message.context !== undefined) {
       obj.context = SessionContextSearchResultDTO.toJSON(message.context);
     }
+    if (message.traces !== undefined) {
+      obj.traces = WorkspaceTraceSearchResultsDTO.toJSON(message.traces);
+    }
     return obj;
   },
 
@@ -4836,6 +4887,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       : undefined;
     message.context = (object.context !== undefined && object.context !== null)
       ? SessionContextSearchResultDTO.fromPartial(object.context)
+      : undefined;
+    message.traces = (object.traces !== undefined && object.traces !== null)
+      ? WorkspaceTraceSearchResultsDTO.fromPartial(object.traces)
       : undefined;
     return message;
   },
@@ -6303,6 +6357,293 @@ export const WorkspaceLLMRequestLogSearchResultsDTO: MessageFns<WorkspaceLLMRequ
     const message = createBaseWorkspaceLLMRequestLogSearchResultsDTO();
     message.catalog_revision = object.catalog_revision ?? 0;
     message.items = object.items?.map((e) => WorkspaceLLMRequestLogMatchDTO.fromPartial(e)) || [];
+    message.cursor = object.cursor ?? undefined;
+    message.complete = object.complete ?? false;
+    message.limited_reason = object.limited_reason ?? undefined;
+    message.scanned_nodes = object.scanned_nodes ?? 0;
+    message.scanned_records = object.scanned_records ?? 0;
+    message.scanned_bytes = object.scanned_bytes ?? 0;
+    return message;
+  },
+};
+
+function createBaseTraceReferenceDTO(): TraceReferenceDTO {
+  return {
+    session_id: "",
+    thread_id: "",
+    event_id: "",
+    line_start: 0,
+    line_end: 0,
+    content_version: "",
+    start_codepoint: 0,
+    end_codepoint: 0,
+  };
+}
+
+export const TraceReferenceDTO: MessageFns<TraceReferenceDTO> = {
+  fromJSON(object: any): TraceReferenceDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
+      line_start: isSet(object.line_start) ? globalThis.Number(object.line_start) : 0,
+      line_end: isSet(object.line_end) ? globalThis.Number(object.line_end) : 0,
+      content_version: isSet(object.content_version) ? globalThis.String(object.content_version) : "",
+      start_codepoint: isSet(object.start_codepoint) ? globalThis.Number(object.start_codepoint) : 0,
+      end_codepoint: isSet(object.end_codepoint) ? globalThis.Number(object.end_codepoint) : 0,
+    };
+  },
+
+  toJSON(message: TraceReferenceDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.event_id !== "") {
+      obj.event_id = message.event_id;
+    }
+    if (message.line_start !== 0) {
+      obj.line_start = Math.round(message.line_start);
+    }
+    if (message.line_end !== 0) {
+      obj.line_end = Math.round(message.line_end);
+    }
+    if (message.content_version !== "") {
+      obj.content_version = message.content_version;
+    }
+    if (message.start_codepoint !== 0) {
+      obj.start_codepoint = Math.round(message.start_codepoint);
+    }
+    if (message.end_codepoint !== 0) {
+      obj.end_codepoint = Math.round(message.end_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TraceReferenceDTO>, I>>(base?: I): TraceReferenceDTO {
+    return TraceReferenceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TraceReferenceDTO>, I>>(object: I): TraceReferenceDTO {
+    const message = createBaseTraceReferenceDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.event_id = object.event_id ?? "";
+    message.line_start = object.line_start ?? 0;
+    message.line_end = object.line_end ?? 0;
+    message.content_version = object.content_version ?? "";
+    message.start_codepoint = object.start_codepoint ?? 0;
+    message.end_codepoint = object.end_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseTraceMatchDTO(): TraceMatchDTO {
+  return { reference: undefined, event_type: "", timestamp: undefined, preview: "", preview_start_codepoint: 0 };
+}
+
+export const TraceMatchDTO: MessageFns<TraceMatchDTO> = {
+  fromJSON(object: any): TraceMatchDTO {
+    return {
+      reference: isSet(object.reference) ? TraceReferenceDTO.fromJSON(object.reference) : undefined,
+      event_type: isSet(object.event_type) ? globalThis.String(object.event_type) : "",
+      timestamp: isSet(object.timestamp) ? globalThis.String(object.timestamp) : undefined,
+      preview: isSet(object.preview) ? globalThis.String(object.preview) : "",
+      preview_start_codepoint: isSet(object.preview_start_codepoint)
+        ? globalThis.Number(object.preview_start_codepoint)
+        : 0,
+    };
+  },
+
+  toJSON(message: TraceMatchDTO): unknown {
+    const obj: any = {};
+    if (message.reference !== undefined) {
+      obj.reference = TraceReferenceDTO.toJSON(message.reference);
+    }
+    if (message.event_type !== "") {
+      obj.event_type = message.event_type;
+    }
+    if (message.timestamp !== undefined) {
+      obj.timestamp = message.timestamp;
+    }
+    if (message.preview !== "") {
+      obj.preview = message.preview;
+    }
+    if (message.preview_start_codepoint !== 0) {
+      obj.preview_start_codepoint = Math.round(message.preview_start_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TraceMatchDTO>, I>>(base?: I): TraceMatchDTO {
+    return TraceMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TraceMatchDTO>, I>>(object: I): TraceMatchDTO {
+    const message = createBaseTraceMatchDTO();
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? TraceReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.event_type = object.event_type ?? "";
+    message.timestamp = object.timestamp ?? undefined;
+    message.preview = object.preview ?? "";
+    message.preview_start_codepoint = object.preview_start_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseTraceLocationDTO(): TraceLocationDTO {
+  return { reference: undefined, record: undefined, text: "" };
+}
+
+export const TraceLocationDTO: MessageFns<TraceLocationDTO> = {
+  fromJSON(object: any): TraceLocationDTO {
+    return {
+      reference: isSet(object.reference) ? TraceReferenceDTO.fromJSON(object.reference) : undefined,
+      record: isSet(object.record) ? TraceEventDTO.fromJSON(object.record) : undefined,
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+    };
+  },
+
+  toJSON(message: TraceLocationDTO): unknown {
+    const obj: any = {};
+    if (message.reference !== undefined) {
+      obj.reference = TraceReferenceDTO.toJSON(message.reference);
+    }
+    if (message.record !== undefined) {
+      obj.record = TraceEventDTO.toJSON(message.record);
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TraceLocationDTO>, I>>(base?: I): TraceLocationDTO {
+    return TraceLocationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TraceLocationDTO>, I>>(object: I): TraceLocationDTO {
+    const message = createBaseTraceLocationDTO();
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? TraceReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.record = (object.record !== undefined && object.record !== null)
+      ? TraceEventDTO.fromPartial(object.record)
+      : undefined;
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceTraceMatchDTO(): WorkspaceTraceMatchDTO {
+  return { session_uri: "", session_title: "", match: undefined };
+}
+
+export const WorkspaceTraceMatchDTO: MessageFns<WorkspaceTraceMatchDTO> = {
+  fromJSON(object: any): WorkspaceTraceMatchDTO {
+    return {
+      session_uri: isSet(object.session_uri) ? globalThis.String(object.session_uri) : "",
+      session_title: isSet(object.session_title) ? globalThis.String(object.session_title) : "",
+      match: isSet(object.match) ? TraceMatchDTO.fromJSON(object.match) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceTraceMatchDTO): unknown {
+    const obj: any = {};
+    if (message.session_uri !== "") {
+      obj.session_uri = message.session_uri;
+    }
+    if (message.session_title !== "") {
+      obj.session_title = message.session_title;
+    }
+    if (message.match !== undefined) {
+      obj.match = TraceMatchDTO.toJSON(message.match);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceTraceMatchDTO>, I>>(base?: I): WorkspaceTraceMatchDTO {
+    return WorkspaceTraceMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceTraceMatchDTO>, I>>(object: I): WorkspaceTraceMatchDTO {
+    const message = createBaseWorkspaceTraceMatchDTO();
+    message.session_uri = object.session_uri ?? "";
+    message.session_title = object.session_title ?? "";
+    message.match = (object.match !== undefined && object.match !== null)
+      ? TraceMatchDTO.fromPartial(object.match)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceTraceSearchResultsDTO(): WorkspaceTraceSearchResultsDTO {
+  return {
+    catalog_revision: 0,
+    items: [],
+    cursor: undefined,
+    complete: false,
+    limited_reason: undefined,
+    scanned_nodes: 0,
+    scanned_records: 0,
+    scanned_bytes: 0,
+  };
+}
+
+export const WorkspaceTraceSearchResultsDTO: MessageFns<WorkspaceTraceSearchResultsDTO> = {
+  fromJSON(object: any): WorkspaceTraceSearchResultsDTO {
+    return {
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => WorkspaceTraceMatchDTO.fromJSON(e))
+        : [],
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
+      scanned_nodes: isSet(object.scanned_nodes) ? globalThis.Number(object.scanned_nodes) : 0,
+      scanned_records: isSet(object.scanned_records) ? globalThis.Number(object.scanned_records) : 0,
+      scanned_bytes: isSet(object.scanned_bytes) ? globalThis.Number(object.scanned_bytes) : 0,
+    };
+  },
+
+  toJSON(message: WorkspaceTraceSearchResultsDTO): unknown {
+    const obj: any = {};
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => WorkspaceTraceMatchDTO.toJSON(e));
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.limited_reason !== undefined) {
+      obj.limited_reason = message.limited_reason;
+    }
+    if (message.scanned_nodes !== 0) {
+      obj.scanned_nodes = Math.round(message.scanned_nodes);
+    }
+    if (message.scanned_records !== 0) {
+      obj.scanned_records = Math.round(message.scanned_records);
+    }
+    if (message.scanned_bytes !== 0) {
+      obj.scanned_bytes = Math.round(message.scanned_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceTraceSearchResultsDTO>, I>>(base?: I): WorkspaceTraceSearchResultsDTO {
+    return WorkspaceTraceSearchResultsDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceTraceSearchResultsDTO>, I>>(
+    object: I,
+  ): WorkspaceTraceSearchResultsDTO {
+    const message = createBaseWorkspaceTraceSearchResultsDTO();
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.items = object.items?.map((e) => WorkspaceTraceMatchDTO.fromPartial(e)) || [];
     message.cursor = object.cursor ?? undefined;
     message.complete = object.complete ?? false;
     message.limited_reason = object.limited_reason ?? undefined;

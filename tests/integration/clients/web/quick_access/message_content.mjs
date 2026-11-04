@@ -95,11 +95,29 @@ try {
   await page.keyboard.press('Escape');
   await command('workbench.action.quickOpen', 'content ' + query);
   await expect(quick).toContainText('会话消息');
-  expect(result.nameSearches).toHaveLength(1);
-  expect(result.nameSearches[0].body.scope).toEqual({ mode: 'selected', owners: [{ gateway_id: health.gateway_id, workspace_id: target.backend_workspace_id }] });
+  // 名称立即提交，文件等待根元数据；两次请求必须保持同一冻结 owner。
+  expect(result.nameSearches).toHaveLength(2);
+  const owner = { gateway_id: health.gateway_id, workspace_id: target.backend_workspace_id };
+  expect(result.nameSearches[0].body.scope).toEqual({ mode: 'selected', owners: [owner] });
   expect(result.nameSearches[0].body.queries.map(({ category, operation, match_mode }) => ({ category, operation, match_mode }))).toEqual([
     { category: 'catalog', operation: 'name', match_mode: 'fuzzy' }, { category: 'thread', operation: 'name', match_mode: 'fuzzy' },
   ]);
+  const fileSearch = result.nameSearches[1];
+  expect(fileSearch.path).toBe('/api/gateway/search');
+  if (fileSearch.body.scope.mode === 'resume') {
+    expect(fileSearch.body.scope.scope).toMatchObject({ version: 1, gateway_id: health.gateway_id, mode: 'selected', owners: [owner] });
+  } else {
+    expect(fileSearch.body.scope).toEqual({ mode: 'selected', owners: [owner] });
+  }
+  expect(fileSearch.body.queries).toHaveLength(1);
+  const fileQuery = fileSearch.body.queries[0];
+  expect(fileQuery).toMatchObject({ category: 'file', operation: 'name', match_mode: 'fuzzy', query });
+  expect(fileQuery.file_targets).toHaveLength(1);
+  const rootUri = `boxteam://workspace/${owner.workspace_id}/resources/files/root`;
+  expect(fileQuery.file_targets[0]).toMatchObject({ owner, target: { uri: rootUri } });
+  if (fileSearch.body.scope.mode === 'resume') {
+    expect(fileSearch.body.continuations).toEqual([{ branch: { owner, category: 'file', operation: 'name', resource_uri: rootUri } }]);
+  }
   expect(result.searches).toHaveLength(0);
   result.unselectedHasNoContentQuery = true;
   await quick.locator('[data-quick-input-id="content-category-message"]').click();

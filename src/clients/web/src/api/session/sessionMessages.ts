@@ -12,7 +12,8 @@ import type {
   MessageRunRequest,
   DeliveryPolicy,
 } from "../../types/backend";
-import type { LLMRequestLogReferenceDTO, LLMRequestLogLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { LLMRequestLogReferenceDTO, LLMRequestLogLocationDTO, TraceLocationDTO, TraceReferenceDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { TraceEvent } from "../../types/backend";
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   normalizePageResult,
@@ -23,6 +24,17 @@ import {
 } from "../http";
 
 export const DEFAULT_AGENT_ID = "default";
+
+export type LocatedTrace = Omit<TraceLocationDTO, "record"> & { record: TraceEvent };
+
+export async function locateTrace(
+  apiPort: number, reference: TraceReferenceDTO, workspaceId: string, signal?: AbortSignal,
+): Promise<LocatedTrace> {
+  return unwrapApiData(await requestJson<APIResponse<LocatedTrace>>(
+    apiPort, `/api/v1/sessions/${encodeURIComponent(reference.session_id)}/traces/locate`,
+    { method: "POST", body: JSON.stringify(reference), headers: workspaceHeader(workspaceId), signal, timeoutMs: 10_000 },
+  ));
+}
 
 export type LocatedLLMRequestLog = Omit<LLMRequestLogLocationDTO, "record"> & { record: LLMRequestLogRecord };
 

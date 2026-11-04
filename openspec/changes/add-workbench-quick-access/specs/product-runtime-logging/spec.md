@@ -1,5 +1,27 @@
 ## ADDED Requirements
 
+### Requirement: Trace 正文查询复用原事件存储
+
+工作区搜索 SHALL 提供独立 `trace/content` 类别，由原 TraceEventStore 在 catalog 中发现 Session，复用原 JSONL 分页、事件解析、文件锁及 Job／Thread 归属索引。查询不读取 Gateway 自有运行日志，不触发执行恢复，不新增日志副本或持久搜索索引。匹配采用区分大小写的非重叠字面量，正文是原事件按现有 schema 字段顺序、两空格缩进且保留 Unicode 的 JSON；位置使用从零开始、右端不包含的 Unicode 码点区间。每个 Session 从最新完整事件向前读取，单事件内按正文位置正序返回。
+
+每页 SHALL 最多检查 64 个目录节点、128 条事件、读取 8 MiB 正文窗口，正文调度预算为一秒，并服从请求剩余总期限；沿用原 Trace 页的 512 KiB 单窗口／单事件读取上限。达到预算 SHALL 披露扫描量、原因和适用续点；无法跨过的单事件超限不返回循环 cursor。阻塞读取在取消后 SHALL 先结算，再释放 Session 读准入。
+
+续页 SHALL 绑定 Gateway、workspace、原查询、catalog revision、当前 Session 的文件观察版本及事件／正文位置。文件追加、删除或观察版本变化时明确拒绝；同一事件内继续时额外核对该行完整内容版本。文件观察版本不是整份历史的内容摘要，不承诺检测人为保留文件元数据的任意修改。各 Session 使用其实际读取时的快照，已完成 Session 的新增事件需重新查询。
+
+命中 SHALL 使用原 Session 资源 URI，独立携带 Session、实际 Thread、event ID、原行字节区间、完整行内容版本及正文码点位置。实际 Thread 来自原已提交 Job 事实，Goal 沿原合同归 main，不从裸 ID 或展示路径猜测。精确定位 SHALL 在原 Session 读准入和文件锁内只读该行，核验完整内容版本、事件、Thread 及位置，返回原 Trace 详情及临时搜索原文。删除、裁剪、改写、错误归属或越界 SHALL 明确拒绝，不改投最新事件或会话顶部；该定位不要求整份日志保持未追加。
+
+续点错误 SHALL 保留 `owner=trace_event_store`、`code`、`reason` 和原详细消息：输入错误使用 HTTP 400 `invalid_trace_search_cursor`，版本变化使用 HTTP 409 `stale_trace_search_cursor`，旧命中引用使用 HTTP 409 `stale_trace_reference`。Gateway 沿原分支保留原 HTTP 状态、输入续点及本次 request_id，不解析提示文字推断原因。
+
+#### Scenario: 未打开 Thread 的原事件命中
+
+- **WHEN** 用户明确选择 Trace 类别，查询尚未打开 Thread 的原事件正文
+- **THEN** 原 owner 返回精确事件与实际 Thread，打开时只读取目标记录并按码点高亮；未选日志来源不参与查询
+
+#### Scenario: 搜索续页与精确定位采用不同版本边界
+
+- **WHEN** 搜索后原日志追加了事件，或者目标行被同长度改写
+- **THEN** 追加使旧搜索续点明确失效，但未变化的目标行仍可精确打开；改写使旧目标引用失效，不用首尾采样摘要冒充完整内容版本
+
 ### Requirement: LLM 请求日志有界搜索与原记录定位
 
 工作区搜索 SHALL 由原请求日志 owner 按 catalog 中的 Session 有界查询已保留的 request、response、upstream 正文。请求记录保持现有 Session 归属，不推断 Thread，不作为聊天消息重复返回。正文采用固定字段顺序、两空格缩进、保留 Unicode 的 JSON 文本，匹配为区分大小写的非重叠字面量；位置采用从零开始、右端不包含的 Unicode 码点区间。搜索不新增正文副本或持久索引，不改变原日志留存规则。

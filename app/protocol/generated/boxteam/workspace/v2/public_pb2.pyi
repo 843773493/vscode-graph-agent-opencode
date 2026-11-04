@@ -370,7 +370,7 @@ class WorkspaceSearchRequest(_message.Message):
     def __init__(self, workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., cursor: _Optional[str] = ..., deadline_at: _Optional[float] = ..., file: _Optional[_Union[WorkspaceFileSearchTargetDTO, _Mapping]] = ..., context: _Optional[_Union[WorkspaceContextSearchOptionsDTO, _Mapping]] = ...) -> None: ...
 
 class WorkspaceSearchResultDTO(_message.Message):
-    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages", "llm_requests", "files", "context")
+    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages", "llm_requests", "files", "context", "traces")
     PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
@@ -384,6 +384,7 @@ class WorkspaceSearchResultDTO(_message.Message):
     LLM_REQUESTS_FIELD_NUMBER: _ClassVar[int]
     FILES_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_FIELD_NUMBER: _ClassVar[int]
+    TRACES_FIELD_NUMBER: _ClassVar[int]
     provider_id: str
     workspace_id: str
     category: str
@@ -397,7 +398,8 @@ class WorkspaceSearchResultDTO(_message.Message):
     llm_requests: WorkspaceLLMRequestLogSearchResultsDTO
     files: ResourceNavigationResultDTO
     context: SessionContextSearchResultDTO
-    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ..., llm_requests: _Optional[_Union[WorkspaceLLMRequestLogSearchResultsDTO, _Mapping]] = ..., files: _Optional[_Union[ResourceNavigationResultDTO, _Mapping]] = ..., context: _Optional[_Union[SessionContextSearchResultDTO, _Mapping]] = ...) -> None: ...
+    traces: WorkspaceTraceSearchResultsDTO
+    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ..., llm_requests: _Optional[_Union[WorkspaceLLMRequestLogSearchResultsDTO, _Mapping]] = ..., files: _Optional[_Union[ResourceNavigationResultDTO, _Mapping]] = ..., context: _Optional[_Union[SessionContextSearchResultDTO, _Mapping]] = ..., traces: _Optional[_Union[WorkspaceTraceSearchResultsDTO, _Mapping]] = ...) -> None: ...
 
 class SessionThreadSearchResultDTO(_message.Message):
     __slots__ = ("workspace_id", "session_id", "thread_id", "thread_uri", "kind", "title", "session_title", "created_at")
@@ -788,6 +790,80 @@ class WorkspaceLLMRequestLogSearchResultsDTO(_message.Message):
     scanned_records: int
     scanned_bytes: int
     def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceLLMRequestLogMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_nodes: _Optional[int] = ..., scanned_records: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
+
+class TraceReferenceDTO(_message.Message):
+    __slots__ = ("session_id", "thread_id", "event_id", "line_start", "line_end", "content_version", "start_codepoint", "end_codepoint")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
+    LINE_START_FIELD_NUMBER: _ClassVar[int]
+    LINE_END_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    START_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    END_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    thread_id: str
+    event_id: str
+    line_start: int
+    line_end: int
+    content_version: str
+    start_codepoint: int
+    end_codepoint: int
+    def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., event_id: _Optional[str] = ..., line_start: _Optional[int] = ..., line_end: _Optional[int] = ..., content_version: _Optional[str] = ..., start_codepoint: _Optional[int] = ..., end_codepoint: _Optional[int] = ...) -> None: ...
+
+class TraceMatchDTO(_message.Message):
+    __slots__ = ("reference", "event_type", "timestamp", "preview", "preview_start_codepoint")
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    EVENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    PREVIEW_FIELD_NUMBER: _ClassVar[int]
+    PREVIEW_START_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    reference: TraceReferenceDTO
+    event_type: str
+    timestamp: _timestamp_pb2.Timestamp
+    preview: str
+    preview_start_codepoint: int
+    def __init__(self, reference: _Optional[_Union[TraceReferenceDTO, _Mapping]] = ..., event_type: _Optional[str] = ..., timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., preview: _Optional[str] = ..., preview_start_codepoint: _Optional[int] = ...) -> None: ...
+
+class TraceLocationDTO(_message.Message):
+    __slots__ = ("reference", "record", "text")
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    RECORD_FIELD_NUMBER: _ClassVar[int]
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    reference: TraceReferenceDTO
+    record: TraceEventDTO
+    text: str
+    def __init__(self, reference: _Optional[_Union[TraceReferenceDTO, _Mapping]] = ..., record: _Optional[_Union[TraceEventDTO, _Mapping]] = ..., text: _Optional[str] = ...) -> None: ...
+
+class WorkspaceTraceMatchDTO(_message.Message):
+    __slots__ = ("session_uri", "session_title", "match")
+    SESSION_URI_FIELD_NUMBER: _ClassVar[int]
+    SESSION_TITLE_FIELD_NUMBER: _ClassVar[int]
+    MATCH_FIELD_NUMBER: _ClassVar[int]
+    session_uri: str
+    session_title: str
+    match: TraceMatchDTO
+    def __init__(self, session_uri: _Optional[str] = ..., session_title: _Optional[str] = ..., match: _Optional[_Union[TraceMatchDTO, _Mapping]] = ...) -> None: ...
+
+class WorkspaceTraceSearchResultsDTO(_message.Message):
+    __slots__ = ("catalog_revision", "items", "cursor", "complete", "limited_reason", "scanned_nodes", "scanned_records", "scanned_bytes")
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    LIMITED_REASON_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_NODES_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_RECORDS_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_BYTES_FIELD_NUMBER: _ClassVar[int]
+    catalog_revision: int
+    items: _containers.RepeatedCompositeFieldContainer[WorkspaceTraceMatchDTO]
+    cursor: str
+    complete: bool
+    limited_reason: str
+    scanned_nodes: int
+    scanned_records: int
+    scanned_bytes: int
+    def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceTraceMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_nodes: _Optional[int] = ..., scanned_records: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
 class McpServerDTO(_message.Message):
     __slots__ = ("server_id", "transport", "enabled", "status", "tools")

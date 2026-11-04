@@ -5,16 +5,16 @@ import { IUriIdentityService } from '../../upstream/src/vs/platform/uriIdentity/
 import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
 import { QueryBuilder } from '../../upstream/src/vs/workbench/services/search/common/queryBuilder.js';
 import type { FederatedSearchQueryDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
-import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { fileOptions, validateQuery } from './query.js';
 import { SearchWorkspaceContext, type SearchScope } from './scope.js';
 
 export type NameSearchCategory = '会话' | 'Thread' | '文件';
-export type ContentSearchCategory = '会话消息' | '工具结果' | 'LLM 请求记录';
+export type ContentSearchCategory = '会话消息' | '工具结果' | 'LLM 请求记录' | 'Trace';
 export type SearchCategory = NameSearchCategory | ContentSearchCategory;
 export type ResourceSearchItem = { title: string; description: string; detail: string } & (
-  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO } | { kind: 'session'; sessionId: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string }
+  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO; trace?: TraceMatchDTO } | { kind: 'session'; sessionId: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string }
 );
 
 /** 原 QueryBuilder 继续解释配置；只构建根局部条件，远端分发统一交 Gateway。 */

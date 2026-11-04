@@ -14,7 +14,7 @@
 
 ```text
 inspectionPanels/
-├── EventQueuePanel.tsx       会话事件筛选、Trace 顺序展示与旧页分页入口
+├── EventQueuePanel.tsx       会话事件筛选、Trace 顺序展示、旧页分页及已核验单事件定位
 ├── RequestLogPanel.tsx       请求日志排序、摘要、窗口化分页与已核验单条搜索定位
 ├── RequestLogCard.tsx        单条请求摘要、上游交互和懒展开详情
 ├── AgentStatePanel.tsx       Agent State 快照和冻结请求上下文入口

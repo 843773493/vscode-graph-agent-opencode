@@ -31,8 +31,8 @@ interface SearchBranch<Category extends SearchCategory = SearchCategory> {
 }
 
 
-const categories = { '文件': 'file', '会话': 'catalog', 'Thread': 'thread', '会话消息': 'message', '工具结果': 'tool_result', 'LLM 请求记录': 'llm_request' } as const;
-export function isContentSearchCategory(category: string): category is ContentSearchCategory { return category === '会话消息' || category === '工具结果' || category === 'LLM 请求记录'; }
+const categories = { '文件': 'file', '会话': 'catalog', 'Thread': 'thread', '会话消息': 'message', '工具结果': 'tool_result', 'LLM 请求记录': 'llm_request', 'Trace': 'trace' } as const;
+export function isContentSearchCategory(category: string): category is ContentSearchCategory { return category === '会话消息' || category === '工具结果' || category === 'LLM 请求记录' || category === 'Trace'; }
 
 /** 原领域页只投影为候选；网络、范围和分页统一交 Gateway。 */
 function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, label: string): ResourceSearchItem[] {
@@ -55,6 +55,14 @@ function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, labe
     const input = new ThreadInput({ ...owner, routeId: '', sessionId: item.session_id, threadId: item.thread_id, title: item.title });
     return { kind: 'resource', resource: input.resource, title: item.title,
       description: `${label} · ${item.session_title} · ${item.thread_id}`, detail: `${item.kind} Thread · ${item.session_id} / ${item.thread_id}` };
+  });
+  if (page.category === 'trace' && page.traces) return page.traces.items.map(item => {
+    const reference = item.match?.reference;
+    if (!reference || !item.session_uri) throw new Error('Trace 命中缺少精确 Thread 或事件位置');
+    const input = new ThreadInput({ ...owner, routeId: '', sessionId: reference.session_id, threadId: reference.thread_id, title: item.session_title });
+    return { kind: 'resource', resource: input.resource, trace: item.match, title: item.session_title,
+      description: item.match!.preview.replace(/\s+/g, ' '),
+      detail: `${label} · Trace ${item.match!.event_type} · ${reference.session_id} / ${reference.thread_id} · ${reference.event_id}` };
   });
   if (page.category === 'llm_request' && page.llm_requests) return page.llm_requests.items.map(item => {
     if (!item.match?.reference || !item.session_uri) throw new Error('请求日志命中缺少 Session 资源或记录位置');

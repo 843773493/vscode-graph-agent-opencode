@@ -239,6 +239,7 @@ message WorkspaceSearchResultDTO {
   WorkspaceLLMRequestLogSearchResultsDTO llm_requests = 11;
   ResourceNavigationResultDTO files = 12;
   optional SessionContextSearchResultDTO context = 13;
+  WorkspaceTraceSearchResultsDTO traces = 14;
 }
 
 message SessionThreadSearchResultDTO {
@@ -460,6 +461,49 @@ message WorkspaceLLMRequestLogMatchDTO {
 message WorkspaceLLMRequestLogSearchResultsDTO {
   int64 catalog_revision = 1;
   repeated WorkspaceLLMRequestLogMatchDTO items = 2;
+  optional string cursor = 3;
+  bool complete = 4;
+  optional string limited_reason = 5;
+  int32 scanned_nodes = 6;
+  int32 scanned_records = 7;
+  int64 scanned_bytes = 8;
+}
+
+message TraceReferenceDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  string event_id = 3;
+  int64 line_start = 4;
+  int64 line_end = 5;
+  string content_version = 6;
+  int32 start_codepoint = 7;
+  int32 end_codepoint = 8;
+}
+
+message TraceMatchDTO {
+  TraceReferenceDTO reference = 1;
+  string event_type = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string preview = 4;
+  int32 preview_start_codepoint = 5;
+}
+
+message TraceLocationDTO {
+  TraceReferenceDTO reference = 1;
+  TraceEventDTO record = 2;
+  // 原事件保留字段顺序、两空格缩进的 Unicode JSON；位置采用码点。
+  string text = 3;
+}
+
+message WorkspaceTraceMatchDTO {
+  string session_uri = 1;
+  string session_title = 2;
+  TraceMatchDTO match = 3;
+}
+
+message WorkspaceTraceSearchResultsDTO {
+  int64 catalog_revision = 1;
+  repeated WorkspaceTraceMatchDTO items = 2;
   optional string cursor = 3;
   bool complete = 4;
   optional string limited_reason = 5;
