@@ -199,6 +199,7 @@ export function useSessionResourceExplorer({
   searchOpen,
   searchQuery,
   currentSessionId,
+  currentSessionWorkspaceId,
   workspaceNavigationSyncKey,
   catalogSyncKeys,
   catalogRefreshVersions,
@@ -212,6 +213,7 @@ export function useSessionResourceExplorer({
   searchOpen: boolean;
   searchQuery: string;
   currentSessionId: string;
+  currentSessionWorkspaceId: string | null;
   workspaceNavigationSyncKey: string;
   catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
@@ -1231,7 +1233,7 @@ export function useSessionResourceExplorer({
     }
     const handle = await openCatalogOutbox(workspaceId);
     const node = confirmedNodeFor(workspaceId, folderId);
-    if (workspaceId === activeWorkspaceId && currentSessionId) {
+    if (workspaceId === currentSessionWorkspaceId && currentSessionId) {
       const breadcrumb = await getSessionCatalogBreadcrumb(
         apiPort,
         workspaceRequestTarget(workspaceId),
@@ -1302,10 +1304,10 @@ export function useSessionResourceExplorer({
     })();
     return { operationId: result.operationId, completion };
   }, [
-    activeWorkspaceId,
     apiPort,
     confirmedNodeFor,
     currentSessionId,
+    currentSessionWorkspaceId,
     openCatalogOutbox,
     refreshCatalogWorkspace,
     sessionCatalogOutboxRuntime,
@@ -1576,19 +1578,19 @@ export function useSessionResourceExplorer({
   }, [apiPort, catalogViewVersion, navigation, searchOpen, searchQuery]);
 
   useEffect(() => {
-    if (!activeWorkspaceId || !currentSessionId || !navigation) {
+    if (!currentSessionWorkspaceId || !currentSessionId || !navigation) {
       currentSessionRevealRequestRef.current += 1;
       currentSessionRevealKeyRef.current = null;
       setRevealError(null);
       return;
     }
-    const revealKey = `${activeWorkspaceId}:${currentSessionId}:${catalogViewVersion}`;
+    const revealKey = `${currentSessionWorkspaceId}:${currentSessionId}:${catalogViewVersion}`;
     if (currentSessionRevealKeyRef.current === revealKey) {
       return;
     }
     setRevealError(null);
     const currentSessionIsVisible = [...branchesRef.current.entries()].some(([key, branch]) =>
-      key.startsWith(`${activeWorkspaceId}:`)
+      key.startsWith(`${currentSessionWorkspaceId}:`)
       && branch.items.some((item) => item.session_id === currentSessionId),
     );
     if (currentSessionIsVisible && catalogViewVersion === 0) {
@@ -1600,7 +1602,7 @@ export function useSessionResourceExplorer({
     currentSessionRevealRequestRef.current = requestId;
     void getSessionCatalogBreadcrumb(
       apiPort,
-      workspaceRequestTarget(activeWorkspaceId),
+      workspaceRequestTarget(currentSessionWorkspaceId),
       currentSessionId,
     )
       .then(async (breadcrumb) => {
@@ -1608,7 +1610,7 @@ export function useSessionResourceExplorer({
           return;
         }
         await revealSearchResult(
-          activeWorkspaceId,
+          currentSessionWorkspaceId,
           breadcrumb.items.map((item) => item.node_id),
           "session",
         );
@@ -1620,10 +1622,10 @@ export function useSessionResourceExplorer({
         }
       });
   }, [
-    activeWorkspaceId,
     apiPort,
     catalogViewVersion,
     currentSessionId,
+    currentSessionWorkspaceId,
     navigation,
     revealSearchResult,
     workspaceRequestTarget,

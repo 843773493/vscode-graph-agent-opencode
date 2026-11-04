@@ -21,7 +21,7 @@ async function readBackups(page) {
   });
 }
 
-/** 真实备份、迟到 Pane 及真实控制面路由变更；不改写 Input 或伪造业务回执。 */
+/** 真实备份、迟到 Pane 及工作区搬迁；不改写 Input 或伪造业务回执。 */
 export async function verifySearchRecovery({ page, command, api, result, fileUri, ownerA, ownerB, oldRoot, replacementRoot }) {
   const groups = page.locator('.editor-group-container');
   const a = groups.first().locator('.search-editor'), b = groups.nth(1).locator('.search-editor');
@@ -107,10 +107,10 @@ export async function verifySearchRecovery({ page, command, api, result, fileUri
     result.editorLatePaneIsolation = true;
   } finally { release(); await page.unroute(pattern, delay); }
 
-  result.phase = 'original-route-reused-by-different-owner';
-  // 停止并移除原注册后才搬迁隔离装具；新旧 route 都经正式管理入口登记。
-  const registered = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(target => target.workspace_id === ownerB.route);
-  await api(`/api/gateway/managed-workspaces/${ownerB.route}?force=true`, { method: 'DELETE', body: JSON.stringify({
+  result.phase = 'original-path-reused-by-different-owner';
+  // 停止并移除原登记后搬迁；原路径上的新工作区不得继承 B 的 UUID。
+  const registered = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(target => target.workspace_id === ownerB.workspaceId && target.gateway_id === ownerB.gatewayId);
+  await api(`/api/gateway/managed-workspaces/${ownerB.workspaceId}?force=true`, { method: 'DELETE', body: JSON.stringify({
     expected_backend_generation: registered.backend_generation, expected_workspace_ids: registered.affected_workspace_ids,
   }) });
   const relocatedRoot = oldRoot + '-relocated';
@@ -120,11 +120,11 @@ export async function verifySearchRecovery({ page, command, api, result, fileUri
     body: JSON.stringify({ root_path: oldRoot, name: '替代工作区 C' }) });
   // 管理回执只给注册摘要，稳定身份必须从正式工作区 DTO 取得。
   const replacement = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(target => target.name === '替代工作区 C');
-  expect(replacement.workspace_id).toBe(ownerB.route);
-  expect(replacement.backend_workspace_id).toEqual(expect.any(String));
-  expect(replacement.backend_workspace_id).not.toBe(ownerB.workspaceId);
+  expect(replacement.gateway_id).toBe(ownerB.gatewayId);
+  expect(replacement.workspace_id).toEqual(expect.any(String));
+  expect(replacement.workspace_id).not.toBe(ownerB.workspaceId);
   const beforeMissing = result.searches.length;
-  // 只在出站边界观察：失效 owner 应在分发前被拒绝，不能查询复用 route 的 C。
+  // 只在出站边界观察：失效 owner 应在分发前被拒绝，不能查询复用原路径的 C。
   await searchFault(page, 'quickscope', 'fail', ['file']);
   const rejectedResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/search'
     && response.request().postDataJSON()?.queries.some(query => query.category === 'file' && query.query === 'quickscope'));
@@ -146,21 +146,20 @@ export async function verifySearchRecovery({ page, command, api, result, fileUri
   result.editorRejectedOwner = { gatewayId: ownerB.gatewayId, workspaceId: ownerB.workspaceId,
     status: rejected.status(), requestId: error.request_id, dispatched: 0 };
 
-  result.phase = 'stable-owner-resolves-new-route';
+  result.phase = 'stable-owner-resolves-relocated-root';
   await api('/api/gateway/managed-workspaces', { method: 'POST',
     body: JSON.stringify({ root_path: relocatedRoot, name: '迁移后的搜索隔离 B' }) });
   const relocated = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(target => target.name === '迁移后的搜索隔离 B');
-  expect(relocated.workspace_id).not.toBe(ownerB.route);
-  expect(relocated.backend_workspace_id).toBe(ownerB.workspaceId);
-  const moved = { ...ownerB, route: relocated.workspace_id };
-  await rerun(b, 'quickscope', 'foreign-buffer quickscope', moved);
+  expect(relocated.gateway_id).toBe(ownerB.gatewayId);
+  expect(relocated.workspace_id).toBe(ownerB.workspaceId);
+  await rerun(b, 'quickscope', 'foreign-buffer quickscope', ownerB);
   await expect(lines(b)).not.toContainText('replacement-C');
   await command('boxteam.flushViewState');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(b.locator('.boxteam-search-scope')).toContainText('迁移后的搜索隔离 B');
   await rerun(a, 'dirtyword', 'dirtyword quickscope', ownerA);
-  await rerun(b, 'quickscope', 'foreign-buffer quickscope', moved);
+  await rerun(b, 'quickscope', 'foreign-buffer quickscope', ownerB);
   await expect(lines(b)).not.toContainText('replacement-C');
-  result.editorRouteRecovery = { original: ownerB.route, replacementOwner: replacement.backend_workspace_id,
-    current: moved.route, stableOwner: moved.workspaceId };
+  result.editorOwnerRecovery = { original: ownerB.workspaceId, replacement: replacement.workspace_id,
+    current: relocated.workspace_id, gatewayId: relocated.gateway_id };
 }

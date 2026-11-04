@@ -28,7 +28,7 @@ export async function verifyFileWatch({ page, command, result, workspace, resour
     await writeFile(join(workspace, 'watch-contract.txt'), 'watch external Ω\n');
     await expect(editor.locator('.view-lines')).toContainText('watch external Ω');
     expect(reads.length).toBeGreaterThan(before);
-    expect(reads.every(receipt => receipt.route === owner.route && receipt.status === 200)).toBe(true);
+    expect(reads.every(receipt => receipt.route === owner.workspaceId && receipt.status === 200)).toBe(true);
 
     const body = editor.locator('[role="textbox"]');
     await body.focus();
@@ -40,7 +40,7 @@ export async function verifyFileWatch({ page, command, result, workspace, resour
     await expect(page.locator('.notifications-toasts')).toContainText(/newer|后端文件已变化/);
     await expect(editor.locator('.view-lines')).toContainText('watch dirty must survive');
     expect(await readFile(join(workspace, 'watch-contract.txt'), 'utf8')).toBe('watch newer external body\n');
-    expect(saves.every(receipt => receipt.route === owner.route && receipt.status === 409)).toBe(true);
+    expect(saves.every(receipt => receipt.route === owner.workspaceId && receipt.status === 409)).toBe(true);
     result.fileWatch = { idleContentReads, externalUpdate: true, dirtyConflict: true,
       reads, saves, conflictOwner: saves.length ? 'backend-cas' : 'original-file-service' };
     await command('workbench.action.files.revert');

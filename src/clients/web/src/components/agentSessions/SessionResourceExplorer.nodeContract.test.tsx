@@ -64,6 +64,7 @@ async function renderWithBranchItem(
         workspaces={[gatewayWorkspace(WORKSPACE_ID)]}
         activeWorkspaceId={null}
         currentSessionId=""
+        currentSessionWorkspaceId={null}
         searchOpen={false}
         searchQuery=""
         workspaceSwitching={false}

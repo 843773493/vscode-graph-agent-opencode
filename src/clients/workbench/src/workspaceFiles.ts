@@ -75,11 +75,12 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   }
   async stat(resource: URI): Promise<IStat> {
     const source = workspaceFileSource(resource);
-    const result = await this.request<ResourceNavigationResultDTO>(resource, '/api/v1/resources/navigation', {
+    const result = await this.request<ResourceNavigationResultDTO>(resource, `/api/v1/workspaces/${source.workspaceId}/resources/navigation`, {
       method: 'POST', body: JSON.stringify({ uri: source.path, operation: 'describe' }),
     });
     const { node } = result;
-    if (!node || node.uri !== source.path || !node.stat || !['file', 'directory'].includes(node.resource_shape)) {
+    // 固定工作区入口已核验完整 owner；远端响应会补齐 authority，不能按字符串拒绝等价 URI。
+    if (!node?.stat || !['file', 'directory'].includes(node.resource_shape)) {
       throw new Error('后端文件描述缺少配对的资源身份或真实 stat');
     }
     return { type: node.resource_shape === 'directory' ? FileType.Directory : FileType.File,

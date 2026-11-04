@@ -31,7 +31,7 @@
 - [x] 5.1 迁齐共享 owner、Gateway 请求、工作区选择、目录／搜索 scope、缓存键及相关客户端运行面，删除路由 ID 到 Backend UUID 的转换函数和调用方。
 - [x] 5.2 迁齐编辑器 serializer、活动选择、导航／Generator 与用户视图态的持久引用；按 Gateway 归属保存同一 UUID。
 - [x] 5.3 接入显式迁移恢复材料，准确升级旧客户端引用；无法确认的项逐项报告并保留可重试信息，不切到当前工作区或清空有效状态。
-- [ ] 5.4 运行受影响客户端真实类型检查及 Workbench 构建，以真实 Gateway 和隔离浏览器验证两工作区切换、远程选择、文件打开、搜索及重载恢复。
+- [x] 5.4 运行受影响客户端真实类型检查及 Workbench 构建，以真实 Gateway 和隔离浏览器验证两工作区切换、远程选择、文件打开、搜索及重载恢复。
 
 ## 6. 存量迁移与单链路收尾
 
@@ -249,3 +249,9 @@
 - 配置连接的普通冷启动在来源及全部连接参数未变时复用原恢复循环；离线连接保留原 owner、UUID、快照、活动选择和可见错误。新增／移除／参数变化、重复 ID、manual 来源及候选启动仍走原严格 batch，不新增第二恢复链。真实反例在 B 离线时导致 A 冷启退出 3，修复后同一完整场景通过。
 - 双真实 Gateway／Backend 完成两次候选先晋升后停止旧 PID 的交接、端口更新及旧 token 401、协议不兼容拒绝且原 lease／cursor 保留、B 离线后 A 冷重启及原 owner 重连，所有远端读取均核本机 Backend 零命中。第七轮 1 passed／266.03 秒（含独占锁等待）、退出 0，154 项依赖首尾指纹一致；原件为 `run-1a193ec1000b`。协议拒绝只注入正式发现端点的旧版本声明，不是完整旧版服务；SSH pairing／隧道沿原明确本机装具，不代表真实 SSH、Windows 或 Launcher 自动协调。
 - 启动恢复全文件 74 passed，关联批次 34 passed／3 个旧健康 fixture 构造失败，迁齐完整 owner 后仅补该文件 3 passed；manual 来源测试准确限定为必须进入 reconcile，再补单项通过。最终 Ruff／Pyright／编译退出 0，证据索引为 `out/tests/temp/identity_remote_recovery_current/artifacts/verification-index-1793832974572841795.json`。同 UUID 不同 Gateway 与同源多连接验收沿上方已通过实网场景复用；旧路由套件排除新长场景并单列 360 秒／4GiB 恢复套件，列表校验通过，未重复长跑。
+
+### 2026-11-04：5.4 正式工作台的跨 Gateway 文件、搜索与恢复收口
+
+- 文件 stat 沿已有固定工作区导航入口携完整 owner，远端返回补齐 authority 的等价 URI 不再被重复字符串比较拒绝。会话目录定位、高亮及删除判断从编辑器的会话 owner 取值，逐层显式传入；当前活动工作区改变时，不再把仍打开的另一 Gateway 会话发往新目标。
+- 双真实 Gateway／Backend、相同工作区 UUID 的正式 Workbench 经真实浏览器完成切换、文件打开、独立草稿、正文搜索、原标签重载恢复及 9 次 breadcrumb 请求归属核对；4 份完整 SSE 收据保留 owner，页面错误为空。最终单项 1 passed／142.22 秒、退出 0，依赖首尾指纹一致，原件为 `run-efd9469f6ee2`。准确命令、源码版本／指纹及原始日志在 `out/tests/temp/identity_browser_recovery_20261104/artifacts/integration-1793832896926473222.json`；沿原 SSH 本机装具，不声称真实跨机或 Windows 验收。
+- 文本搜索消费者迁为单 UUID 与完整 owner，原路径注册新工作区须为不同 UUID，原工作区搬迁再登记仍保留原 UUID；旧搜索失效时 404 且零下游，不误查新工作区，恢复后按原 owner 重查。与双 Gateway 首轮合跑 2 passed／444.55 秒（`owner-and-text-integration-1793832267838600683`），后续仅 breadcrumb 产品变更，双 Gateway 最新单项补验覆盖；未为无关源码重复整组长跑。文件 stat 单测 2 passed／29 断言，目录相关四文件 59 passed／276 断言；真实 sourceTransform 类型检查、JS 语法及 Python Ruff／Pyright 退出 0。最新产品测试完成同一正式 Workbench 构建，Web build 脚本也是该唯一构建入口，复用原构建产物与收据。

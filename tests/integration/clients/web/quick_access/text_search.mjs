@@ -69,11 +69,12 @@ try {
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), workspaces = await api('/api/gateway/workspaces');
-  const route = workspaces.data.active_workspace_id;
-  const headers = { 'X-BoxTeam-Workspace-Id': route };
+  const active = workspaces.data.active_workspace;
+  const headers = { 'X-BoxTeam-Workspace-Id': active.workspace_id, 'X-BoxTeam-Target-Gateway-Id': active.gateway_id };
   const workspace = await api('/api/v1/workspace', { headers }), roots = await api('/api/v1/workspace/files/roots', { headers });
   result.initialization = [health, workspaces, workspace, roots].map(body => ({ requestId: body.request_id }));
-  result.owner = { gatewayId: health.data.gateway_id, workspaceId: workspace.data.workspace_id, route, root: roots.data.workspace_uri };
+  expect(workspace.data.workspace_id).toBe(active.workspace_id);
+  result.owner = { gatewayId: active.gateway_id, workspaceId: active.workspace_id, root: roots.data.workspace_uri };
 
   result.phase = 'default-target-ignore-rules';
   await command('workbench.action.quickOpen', '%ignorescopeonly');
@@ -109,11 +110,12 @@ try {
   const other = registered.data.items.find(item => item.name === '搜索隔离 B');
   if (!other) throw new Error('注册回执缺少 B');
   expect(other.status).toBe('ready');
-  const otherHeaders = { 'X-BoxTeam-Workspace-Id': other.workspace_id };
+  const otherHeaders = { 'X-BoxTeam-Workspace-Id': other.workspace_id, 'X-BoxTeam-Target-Gateway-Id': other.gateway_id };
   const otherIdentity = await api('/api/v1/workspace', { headers: otherHeaders });
   const otherRoots = await api('/api/v1/workspace/files/roots', { headers: otherHeaders });
-  const otherOwner = { gatewayId: result.owner.gatewayId, workspaceId: otherIdentity.data.workspace_id,
-    root: otherRoots.data.workspace_uri, route: other.workspace_id };
+  expect(otherIdentity.data.workspace_id).toBe(other.workspace_id);
+  const otherOwner = { gatewayId: other.gateway_id, workspaceId: other.workspace_id,
+    root: otherRoots.data.workspace_uri };
   if (otherOwner.workspaceId === result.owner.workspaceId) throw new Error('隔离工作区身份重复');
   result.otherOwner = otherOwner;
   const fileUri = (owner, filename = 'quick-scope.txt') => page.evaluate(({ owner, filename }) => globalThis.workbench.URI.from({ scheme: 'boxteam-file', authority: owner.gatewayId,
@@ -146,11 +148,11 @@ try {
   await expect(text.locator('.view-lines')).toContainText('dirtyword');
 
   result.phase = 'cross-workspace-and-native-isolation';
-  const otherNavigation = page.getByTestId(`workspace-node-${other.workspace_id}`);
+  const otherNavigation = page.getByTestId(`workspace-node-${JSON.stringify([other.gateway_id, other.workspace_id])}`);
   await otherNavigation.getByRole('button', { name: '搜索隔离 B', exact: true }).click();
   await expect(otherNavigation).toHaveAttribute('aria-current', 'location');
   const switched = await api('/api/gateway/workspaces');
-  expect(switched.data.active_workspace_id).toBe(other.workspace_id);
+  expect(switched.data.active_workspace).toEqual({ gateway_id: other.gateway_id, workspace_id: other.workspace_id });
   await command('workbench.action.quickOpen', '%quickscope');
   await expect(quick).toContainText('dirtyword quickscope');
   await expect.poll(() => result.searches.some(request => request.query === 'quickscope')).toBe(true);

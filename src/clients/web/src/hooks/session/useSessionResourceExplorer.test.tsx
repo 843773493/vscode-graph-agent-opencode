@@ -4,6 +4,7 @@ import React from "react";
 import { act, create } from "react-test-renderer";
 import type { GatewayUserAccess, SessionCatalogNode, WorkspaceNavigationTree } from "../../types/backend";
 import { useSessionResourceExplorer } from './useSessionResourceExplorer';
+import { gatewayWorkspaceKey } from '../../api/workspaceIdentity';
 import type { SessionCatalogFailureOwner } from './sessionCatalogOutboxRuntime';
 import {
   apiSuccessResponse,
@@ -562,6 +563,36 @@ describe("useSessionResourceExplorer 自动同步", () => {
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 10));
     });
     unmount();
+  });
+
+  test("相同 UUID 的会话定位沿编辑器归属，不沿当前选择的 Gateway", async () => {
+    const ownerA = TEST_GATEWAY_WORKSPACE_REQUEST_TARGET;
+    const ownerB = { ...ownerA, gateway_id: "gateway-other" };
+    const keyA = gatewayWorkspaceKey(ownerA), keyB = gatewayWorkspaceKey(ownerB);
+    const reads: { gatewayId: string | null; workspaceId: string | null }[] = [];
+    installGatewayFetch(withDefaultGatewayApiResponses(({ path, init }) => {
+      if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
+        const headers = new Headers(init?.headers);
+        reads.push({ gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id"), workspaceId: headers.get("X-BoxTeam-Workspace-Id") });
+        return apiSuccessResponse({ items: [] });
+      }
+      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({ revision: "r1", catalog_revision: 1, items: [] });
+      if (path === "/api/v1/session-catalog/children") return catalogChildrenResponse("r1", [], null, 1);
+      return undefined;
+    }));
+    const props = createSessionResourceExplorerProps({ workspaces: [ownerA, ownerB], activeWorkspaceId: keyB,
+      currentSessionId: "same-session", currentSessionWorkspaceId: keyA });
+    function Harness({ workspaceKey }: { workspaceKey: string }) {
+      useSessionResourceExplorer({ ...props, currentSessionWorkspaceId: workspaceKey });
+      return null;
+    }
+    let renderer: ReturnType<typeof create> | undefined;
+    try {
+      await act(async () => { renderer = create(<Harness workspaceKey={keyA} />); await flushReactEffects(); await flushReactEffects(); });
+      expect(reads).toEqual([{ gatewayId: ownerA.gateway_id, workspaceId: ownerA.workspace_id }]);
+      await act(async () => { renderer!.update(<Harness workspaceKey={keyB} />); await flushReactEffects(); await flushReactEffects(); });
+      expect(reads).toEqual([ownerA, ownerB].map(owner => ({ gatewayId: owner.gateway_id, workspaceId: owner.workspace_id })));
+    } finally { act(() => renderer?.unmount()); }
   });
 
   test("当前会话定位复用已加载的根分支，不重复读取目录", async () => {

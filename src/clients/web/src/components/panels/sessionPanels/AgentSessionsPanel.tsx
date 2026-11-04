@@ -50,6 +50,7 @@ interface AgentSessionsPanelProps {
   apiPort: number;
   sessions: Session[];
   currentSessionId: string;
+  currentSessionWorkspaceId: string | null;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, currentTitle: string, workspaceId: string) => void;
   onDeleteSession: (sessionId: string, currentTitle: string, workspaceId: string) => void;
@@ -130,6 +131,7 @@ export default function AgentSessionsPanel({
   apiPort,
   sessions,
   currentSessionId,
+  currentSessionWorkspaceId,
   onSelectSession,
   onRenameSession,
   onDeleteSession,
@@ -496,6 +498,7 @@ export default function AgentSessionsPanel({
                 workspaces={gatewayWorkspaces}
                 activeWorkspaceId={activeGatewayWorkspaceId}
                 currentSessionId={currentSessionId}
+                currentSessionWorkspaceId={currentSessionWorkspaceId}
                 searchOpen={searchOpen}
                 searchQuery={searchQuery}
                 workspaceSwitching={workspaceSwitching}

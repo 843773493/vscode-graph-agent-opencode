@@ -42,6 +42,7 @@ interface SessionResourceExplorerProps {
   workspaces: GatewayWorkspace[];
   activeWorkspaceId: string | null;
   currentSessionId: string;
+  currentSessionWorkspaceId: string | null;
   searchOpen: boolean;
   searchQuery: string;
   workspaceSwitching: boolean;
@@ -95,6 +96,7 @@ export default function SessionResourceExplorer({
   workspaces,
   activeWorkspaceId,
   currentSessionId,
+  currentSessionWorkspaceId,
   searchOpen,
   searchQuery,
   workspaceSwitching,
@@ -144,6 +146,7 @@ export default function SessionResourceExplorer({
     searchOpen,
     searchQuery,
     currentSessionId,
+    currentSessionWorkspaceId,
     workspaceNavigationSyncKey: buildWorkspaceNavigationSyncKey(workspaces),
     catalogSyncKeys,
     catalogRefreshVersions,
@@ -432,7 +435,7 @@ export default function SessionResourceExplorer({
     const expanded = explorer.expandedIds.has(expansionId);
     const isFolder = node.kind === "folder";
     const canExpand = node.state !== "deleting" && (isFolder || node.has_children);
-    const isCurrent = node.session_id === currentSessionId && workspaceId === activeWorkspaceId;
+    const isCurrent = node.session_id === currentSessionId && workspaceId === currentSessionWorkspaceId;
     const sessionCacheKey = node.session_id
       ? sessionScopeKey(workspaceId, node.session_id)
       : null;

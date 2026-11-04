@@ -95,6 +95,7 @@ async function mountExplorer(options: {
         workspaces={[gatewayWorkspace(options.workspaceId)]}
         activeWorkspaceId={null}
         currentSessionId=""
+        currentSessionWorkspaceId={null}
         searchOpen={false}
         searchQuery=""
         workspaceSwitching={false}

@@ -9,11 +9,11 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
   await api('/api/gateway/managed-workspaces', { method: 'POST',
     body: JSON.stringify({ root_path: stoppedWorkspace, name: '范围隔离 C' }) });
   const registered = (await api('/api/gateway/workspaces?check_health=false')).data.items.find(item => item.name === '范围隔离 C');
-  if (!registered?.backend_workspace_id) throw new Error('C 注册回执缺少稳定工作区身份');
+  if (!registered?.workspace_id || !registered.gateway_id) throw new Error('C 注册回执缺少稳定工作区身份');
   const stopped = (await api(`/api/gateway/workspaces/${registered.workspace_id}/runtime/stop`, { method: 'POST' })).data;
   expect(stopped.status).toBe('stopped');
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId(`workspace-node-${registered.workspace_id}`)).toContainText('范围隔离 C');
+  await expect(page.getByTestId(`workspace-node-${JSON.stringify([registered.gateway_id, registered.workspace_id])}`)).toContainText('范围隔离 C');
   const requests = [], responses = [], lifecycle = [], responseReads = [], responseErrors = [], cancelled = [];
   result.defaultScope = { requests, responses, lifecycle, responseErrors, cancelled };
   const observe = request => {
@@ -66,7 +66,7 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await expect(quick).not.toContainText('quickdiscover B 会话');
     await expect(quick.locator('.monaco-list-row.focused [data-quick-input-id]')).toHaveAttribute('data-quick-input-id', activeId);
     expect(queryRequests(beforeCancel).every(item => item.path === '/api/gateway/search'
-      ? item.owners.length === 1 && item.owners[0] === ownerA.workspaceId : item.route === ownerA.route)).toBe(true);
+      ? item.owners.length === 1 && item.owners[0] === ownerA.workspaceId : item.route === ownerA.workspaceId)).toBe(true);
 
     await choose();
     const beforeConfirm = requests.length;
@@ -119,7 +119,7 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await expect(quick).toContainText('quickdiscover B 会话');
     await lastStatus('搜索隔离 B · 文件 · 本次查询完成');
     await choose();
-    await row(registered.backend_workspace_id).getByRole('checkbox').click();
+    await row(registered.workspace_id).getByRole('checkbox').click();
     const beforeStopped = requests.length;
     await quick.getByRole('button', { name: 'OK', exact: true }).click();
     await lastStatus('范围隔离 C 当前不可查询');

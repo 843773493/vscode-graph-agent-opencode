@@ -137,7 +137,10 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
             "backgroundPinned": True, "sourceGroupPreserved": True, "historyRemovalKeepsTabAndSession": True,
         }
         assert receipt["editorLatePaneIsolation"] is True
-        assert receipt["editorRouteRecovery"]["original"] != receipt["editorRouteRecovery"]["current"]
+        recovered = receipt["editorOwnerRecovery"]
+        assert recovered["original"] == recovered["current"]
+        assert recovered["replacement"] != recovered["current"]
+        assert recovered["gatewayId"] == receipt["otherOwner"]["gatewayId"]
         assert receipt["pageErrors"] == []
         assert (workspace / "quick-scope.txt").read_text(encoding="utf-8") == "diskword quickscope\n"
         assert (other / "quick-scope.txt").read_text(encoding="utf-8") == "replacement-C quickscope\n"

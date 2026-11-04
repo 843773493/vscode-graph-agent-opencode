@@ -24,6 +24,7 @@ export function createSessionResourceExplorerProps(
     searchOpen: false,
     searchQuery: "",
     currentSessionId: "",
+    currentSessionWorkspaceId: activeWorkspaceId,
     workspaceNavigationSyncKey: TEST_GATEWAY_WORKSPACE_KEY,
     catalogSyncKeys: new Map(),
     catalogRefreshVersions: new Map(),

@@ -103,7 +103,7 @@ export async function verifyResourceOpenActions({ page, command, api, result, ow
   await expect(history).toHaveCount(0);
   await expect(quick).toBeVisible();
   await expect(original.getByRole('tab', { name: /quickdiscover A 会话/ })).toBeVisible();
-  const retained = (await api(`/api/v1/sessions/${session.session_id}`, { headers: { 'X-BoxTeam-Workspace-Id': owner.route } })).data;
+  const retained = (await api(`/api/v1/sessions/${session.session_id}`, { headers: { 'X-BoxTeam-Workspace-Id': owner.workspaceId } })).data;
   expect(retained.session_id).toBe(session.session_id);
   await page.keyboard.press('Escape');
   result.defaultOpenActions = { keyboardSideButton: true, sidePreview: true, continuousBackground: true,

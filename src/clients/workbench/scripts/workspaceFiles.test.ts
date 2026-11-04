@@ -51,13 +51,17 @@ describe('后端文件目录根和稳定投影', () => {
     const resolve = spyOn(gateway, 'resolveWorkspace').mockResolvedValue('new-route');
     const request = spyOn(gateway, 'request');
     try {
-      for (const [path, shape, expectedType] of [[root, 'directory', FileType.Directory], [root + '/image.bin', 'file', FileType.File]] as const) {
-        request.mockResolvedValueOnce({ node: { uri: path, resource_shape: shape,
+      for (const [path, shape, expectedType] of [[root, 'directory', FileType.Directory], [root + '/image.bin', 'file', FileType.File],
+        [root.replace(`${owner.gatewayId}/`, ''), 'directory', FileType.Directory],
+        [root.replace(`${owner.gatewayId}/`, '') + '/image.bin', 'file', FileType.File]] as const) {
+        const sourceRoot = path.startsWith(root) ? root : root.replace(`${owner.gatewayId}/`, '');
+        const returnedUri = path.startsWith(root) ? path : path.replace('boxteam://', `boxteam://${owner.gatewayId}/`);
+        request.mockResolvedValueOnce({ node: { uri: returnedUri, resource_shape: shape,
           stat: { size: 73, modified_at_ms: 1200, changed_at_ms: 1100 } } });
-        const stat = await files.stat(workspaceFileUri(owner, path, root));
+        const stat = await files.stat(workspaceFileUri(owner, path, sourceRoot));
         expect(stat).toMatchObject({ isDirectory: expectedType === FileType.Directory, isFile: expectedType === FileType.File, size: 73, mtime: 1200, ctime: 1100 });
         const [endpoint, options, routeId] = request.mock.calls.at(-1)!;
-        expect(endpoint).toBe('/api/v1/resources/navigation');
+        expect(endpoint).toBe(`/api/v1/workspaces/${owner.workspaceId}/resources/navigation`);
         expect(options?.method).toBe('POST');
         expect(JSON.parse(String(options?.body))).toEqual({ uri: path, operation: 'describe' });
         expect(routeId).toBe('new-route');

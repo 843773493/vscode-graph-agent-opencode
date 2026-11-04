@@ -128,6 +128,7 @@ async function renderExplorer(options: {
         workspaces={options.workspaces}
         activeWorkspaceId={options.activeWorkspaceId ? gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: options.activeWorkspaceId }) : null}
         currentSessionId={options.currentSessionId ?? ""}
+        currentSessionWorkspaceId={options.activeWorkspaceId ? gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: options.activeWorkspaceId }) : null}
         searchOpen={false}
         searchQuery=""
         workspaceSwitching={false}

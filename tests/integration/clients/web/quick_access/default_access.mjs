@@ -15,9 +15,9 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     if (observed) requests.push(observed);
   };
   const belongs = (request, owner) => request.path === '/api/gateway/search'
-    ? request.owners.length === 1 && request.owners[0] === owner.workspaceId : request.route === owner.route;
+    ? request.owners.length === 1 && request.owners[0] === owner.workspaceId : request.route === owner.workspaceId;
   page.on('request', observe);
-  const create = async owner => (await api('/api/v1/sessions', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': owner.route },
+  const create = async owner => (await api('/api/v1/sessions', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': owner.workspaceId },
     body: JSON.stringify({ title: `quickdiscover ${owner === ownerA ? 'A' : 'B'} 会话` }) })).data;
   const sessionA = await create(ownerA), sessionB = await create(ownerB);
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
@@ -68,9 +68,9 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await page.keyboard.press('Enter');
     await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('nested discover A');
     await verifyFileSymbols({ page, command, result, fileUri, owner: ownerA, requests });
-    const unopened = (await api('/api/v1/sessions', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': ownerA.route },
+    const unopened = (await api('/api/v1/sessions', { method: 'POST', headers: { 'X-BoxTeam-Workspace-Id': ownerA.workspaceId },
       body: JSON.stringify({ title: 'quick-id-unopened A' }) })).data;
-    const main = (await api(`/api/v1/sessions/${unopened.session_id}/main-thread`, { headers: { 'X-BoxTeam-Workspace-Id': ownerA.route } })).data;
+    const main = (await api(`/api/v1/sessions/${unopened.session_id}/main-thread`, { headers: { 'X-BoxTeam-Workspace-Id': ownerA.workspaceId } })).data;
     await command('workbench.action.quickOpen', main.thread_id);
     const thread = quick.getByRole('option', { name: new RegExp(`^quick-id-unopened A .*${main.thread_id}`) });
     await expect(thread).toHaveCount(1);

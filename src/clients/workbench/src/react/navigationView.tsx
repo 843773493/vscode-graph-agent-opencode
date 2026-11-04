@@ -142,6 +142,7 @@ function NavigationView({ editors, groups, notifications, storage, onTheme, cata
   const copyWorkspace = useWorkspaceInformationClipboard(state.gatewayWorkspaces);
   return <div className="native-session-navigation" onClickCapture={event => { gesture.current = { pinned: event.detail > 1, sideBySide: event.altKey }; }}>
     <AgentSessionsPanel catalogReveal={catalogReveal} apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
+      currentSessionWorkspaceId={state.currentSessionWorkspaceId}
       onSelectSession={id => { if (state.activeGatewayWorkspaceId) void openSession(state.activeGatewayWorkspaceId, id).catch(cause => reportError(String(cause))); }}
       onRenameSession={actions.openRenameDialog} onDeleteSession={actions.removeSession} onSetSessionParent={actions.changeSessionParent}
       onForkSessionContext={actions.forkSession} onStatusChange={setStatus} onError={reportError} onOpenDiagnostic={(title, detail) => setDiagnostic({ title, detail })}
