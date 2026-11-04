@@ -65,6 +65,10 @@ class GatewayResourceCatalogService:
             f"{self._gateway_name(target)} · {target.name}"
         )
         try:
+            connection_id = (
+                self._registry.remote_connection_for_target(target).connection_id
+                if target.connection_kind == "remote_gateway" else None
+            )
             data = await self._get_data(target, "resources", request_id=request_id)
             resources = WorkspaceResourceListDTO.model_validate(data)
             if resources.workspace_id != target.workspace_id:
@@ -80,7 +84,8 @@ class GatewayResourceCatalogService:
             return [], [self._scope_error(f"{target.gateway_id}/{target.workspace_id}", workspace_label, error, request_id=request_id)]
         return [
             GatewayResourceDTO(
-                gateway_id=target.gateway_id,                gateway_connection_id=self._registry.remote_connection_for_target(target).connection_id,
+                gateway_id=target.gateway_id,
+                gateway_connection_id=connection_id,
                 gateway_name=self._gateway_name(target),
                 workspace_id=target.workspace_id,
                 workspace_name=target.name,

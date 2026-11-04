@@ -179,3 +179,8 @@
 - shutdown 装具迁为双 UUID 成员、唯一 owner／Backend 句柄，保留每成员辅助服务、关闭顺序、失败重试及未发布候选清理。启动入口验证完整两份 mount、generation 和原入口产生的身份文件，不保留别名／重复 UUID 字段；合法的目标侧 `resolve_backend_workspace_id` 仅读取原生 UUID，不是旧身份换算。
 - 两文件与直接 preserve／restore／adopt 组 9＋26＋31＝66 项通过；Ruff 通过，Pyright 6→4、新增零，剩余为既存诊断。准确命令与原件见 `out/tests/temp/identity_runtime_consumers_current/artifacts/verification-1793827324622743603.json`。
 - 真实 Gateway 经产品入口组建共享成员后，四种 sibling 生命周期请求都返回完整组 blocker，过期成员集合 409 且原 generation／完整成员仍 ready，1 passed／142.35 秒。原运行索引 `out/tests/temp/identity_registry_recovery_root/artifacts/product-shared-group-owner-cas-1793827095499456128.json`；生产首尾一致，只有并行单元测试文件变化。完整排空／force／组恢复及 Windows 的 3.2／3.3 继续未勾选。
+
+### 2026-11-04：4.3 目录 owner 消费者迁齐
+
+- 目录镜像与资源查询装具统一为 canonical UUID 和明确 Gateway，远端通过正式 snapshot 建立连接关系；保留旧合同拒绝、cursor、错误原实例与部分失败恢复。真实反例发现本机有资源时误取远程连接，现仅远端查询连接，本机 DTO 的连接为 null，连接错误仍归原 scope。
+- 两份单测 39＋35＝74 项通过；真实 Gateway 与独立下游 HTTP 的正常查询、错误隔离及恢复 2 项通过／104.12 秒。单测 Ruff 通过、Pyright 21→1，无新增；生产与 HTTP 测试静态零诊断。原件见 `out/tests/temp/identity_catalog_consumers_current/artifacts/verification-1793828004925186304.json` 及 `identity_registry_recovery_root/artifacts/catalog-product-http-recovery-1793827721836850898.*`；HTTP 首尾仅并行客户端／单测文件变化，生产与集成装具稳定。未将查询装具当作真实资源创建或完整 4.4 验收。

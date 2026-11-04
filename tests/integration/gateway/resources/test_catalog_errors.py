@@ -216,10 +216,15 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
                 "root_path": str(sibling), "name": "健康工作区", "backend_url": f"http://127.0.0.1:{upstream_port}",
             })
             assert added.status_code == 200, added.text
-            targets = {item["backend_workspace_id"]: item for item in added.json()["data"]["items"]}
+            targets = {item["workspace_id"]: item for item in added.json()["data"]["items"]}
             assert set(targets) == {failed_owner, sibling_owner}
+            failed_scope = f"{targets[failed_owner]['gateway_id']}/{failed_owner}"
             initial = await client.get("/api/gateway/resources")
             assert initial.status_code == 200 and initial.json()["data"]["errors"] == [], initial.text
+            assert {(item["gateway_id"], item["workspace_id"]) for item in initial.json()["data"]["items"]} == {
+                (target["gateway_id"], target["workspace_id"]) for target in targets.values()
+            }
+            assert all(item["gateway_connection_id"] is None for item in initial.json()["data"]["items"])
             healthy_resource, = [item for item in initial.json()["data"]["items"]
                                  if item["resource"]["workspace_id"] == sibling_owner]
             if sink_fails:
@@ -241,7 +246,7 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
                     assert item["workspace_id"] == targets[sibling_owner]["workspace_id"]
                     assert item["resource"]["workspace_id"] == sibling_owner
                     error, = body["data"]["errors"]
-                    assert error["scope_key"] == targets[failed_owner]["workspace_id"]
+                    assert error["scope_key"] == failed_scope
                     assert error["label"] == f"本机 Gateway · {targets[failed_owner]['name']}"
                     error_type = {"envelope": "ValueError", "validation": "ValidationError", "http-status": "HTTPStatusError", "owner-envelope": "ValueError", "owner-item": "ValueError"}[mode]
                     expected = f"工作区资源目录读取失败: {error_type}" + (", status=503" if mode == "http-status" else "")
@@ -264,7 +269,7 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
                 records = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
                 assert len(records) == 20
                 assert [record["request_id"] for record in records] == [body["request_id"] for body in evidence[:-1]]
-                assert all(record["workspace_id"] == targets[failed_owner]["workspace_id"] for record in records)
+                assert all(record["workspace_id"] == failed_scope for record in records)
                 assert all(record["error_type"] in {"ValueError", "ValidationError", "HTTPStatusError"} for record in records)
                 assert "catalog-marker" in audit.read_text(encoding="utf-8")
                 # 下游恢复后即使日志故障尚未解除，也不应再产生失败记录或影响资源查询。
@@ -303,7 +308,7 @@ async def test_context_search_validation_errors_keep_healthy_results_and_recover
                 "root_path": str(sibling), "name": "健康搜索工作区", "backend_url": f"http://127.0.0.1:{upstream_port}",
             })
             assert added.status_code == 200, added.text
-            assert {item["backend_workspace_id"] for item in added.json()["data"]["items"]} == {failed_owner, sibling_owner}
+            assert {item["workspace_id"] for item in added.json()["data"]["items"]} == {failed_owner, sibling_owner}
             query = GatewayContextSearchRequest.model_validate({
                 "source_gateway_id": gateway_id,
                 "resource_target": {"gateway_id": gateway_id,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,33 +19,38 @@ from app.gateway.control.catalog_search import (
 )
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
-    RemoteGatewayConnection,
     WorkspaceTarget,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 
-OWNER = GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_catalog_test", workspace_id="00000000-0000-4000-8000-000000000001")
+OWNER = GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_" + "a" * 32, workspace_id="00000000-0000-4000-8000-000000000001")
 
 
 @pytest.mark.asyncio
 async def test_remote_catalog_sync_uses_registered_target_gateway_and_original_sender(tmp_path: Path) -> None:
     remote_gateway_id = "gateway_" + "c" * 32
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
-    registry.upsert_remote_gateway(RemoteGatewayConnection(
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json", gateway_id=OWNER.gateway_id)
+    connection = RemoteGatewayConnection(
         connection_id="catalog-query", name="远端", host="remote.test", port=22, username="unit",
         private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
-        remote_gateway_id=remote_gateway_id, protocol_version=1, source_owner="manual",
-    ), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}))
-    registry.upsert(WorkspaceTarget(
-        workspace_id="remote-route", backend_workspace_id=OWNER.workspace_id,
+        remote_gateway_id=remote_gateway_id, protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
+    )
+    projection = WorkspaceTarget(
+        gateway_id=remote_gateway_id, workspace_id=OWNER.workspace_id,
         name="远端目录", root_path=None, backend_url="", connection_kind="remote_gateway",
-        remote_gateway_connection_id="catalog-query", remote_workspace_id="native-route",
-    ), activate=False)
+        owner="remote_projection", target_namespace="gateway-remote",
+        remote_gateway_connection_ids=(connection.connection_id,),
+    )
+    registry.apply_remote_projection_snapshot(
+        connection=connection, projections=(projection,),
+        runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}),
+    )
     credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
         connection_id="catalog-query", peer_gateway_id=OWNER.gateway_id,
     )
@@ -63,7 +70,7 @@ async def test_remote_catalog_sync_uses_registered_target_gateway_and_original_s
             assert str(request.url) == "http://remote.test/api/v1/session-catalog/export"
             assert request.headers[TARGET_GATEWAY_ID_HEADER] == remote_gateway_id
             assert request.headers["X-BoxTeam-Gateway-Id"] == OWNER.gateway_id
-            assert request.headers["X-BoxTeam-Workspace-Id"] == "native-route"
+            assert request.headers["X-BoxTeam-Workspace-Id"] == OWNER.workspace_id
             assert request.headers["X-BoxTeam-Federation-Token"] == credential.token
             assert "X-Local-Token" not in request.headers
             assert request.headers["X-Request-ID"].startswith("req_")
@@ -75,16 +82,21 @@ async def test_remote_catalog_sync_uses_registered_target_gateway_and_original_s
 
 
 @pytest.fixture
-def catalog_service(tmp_path: Path) -> GatewaySessionCatalogSearchService:
-    return GatewaySessionCatalogSearchService(
-        registry=GatewayWorkspaceRegistry(
+def catalog_service(tmp_path: Path) -> Iterator[GatewaySessionCatalogSearchService]:
+    with (
+        closing(GatewayStateStore(path=tmp_path / "gateway.sqlite")) as state_store,
+        closing(GatewayWorkspaceRegistry(
+            gateway_id=OWNER.gateway_id,
             storage_path=tmp_path / "workspaces.json",
-            state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-        ),
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        gateway_id="gateway_catalog_test",
-    )
+            state_store=state_store,
+        )) as registry,
+    ):
+        yield GatewaySessionCatalogSearchService(
+            registry=registry,
+            http_client=_FailingHttpClient(),  # type: ignore[arg-type]
+            cache_dir=tmp_path / "indexes",
+            gateway_id=OWNER.gateway_id,
+        )
 
 
 @pytest.fixture
@@ -280,63 +292,42 @@ class _FailingHttpClient:
 
 
 def test_catalog_runtime_config_updates_next_sync_and_wakes_loop(
-    tmp_path: Path,
+    catalog_service: GatewaySessionCatalogSearchService,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json",
-        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-    )
-    service = GatewaySessionCatalogSearchService(
-        registry=registry,
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        gateway_id="gateway_catalog_test",
-    )
-
-    service.update_runtime_config(
+    catalog_service.update_runtime_config(
         refresh_interval_seconds=3,
         max_concurrency=2,
         request_timeout_seconds=4,
     )
 
-    assert service._refresh_interval_seconds == 3
-    assert service._max_concurrency == 2
-    assert service._request_timeout_seconds == 4
-    assert service._wake_event.is_set()
+    assert catalog_service._refresh_interval_seconds == 3
+    assert catalog_service._max_concurrency == 2
+    assert catalog_service._request_timeout_seconds == 4
+    assert catalog_service._wake_event.is_set()
 
 
 def _offline_target() -> WorkspaceTarget:
     return WorkspaceTarget(
-        workspace_id="gw_offline_without_backend",
+        gateway_id=OWNER.gateway_id,
+        workspace_id=OWNER.workspace_id,
         name="未连接工作区",
         root_path="/tmp/offline-without-backend",
         backend_url="",
         connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
 
 
 @pytest.mark.asyncio
 async def test_catalog_sync_skips_local_workspace_without_backend_url(
-    tmp_path: Path,
+    catalog_service: GatewaySessionCatalogSearchService,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json",
-        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-    )
     target = _offline_target()
-    registry.upsert(target)
-    service = GatewaySessionCatalogSearchService(
-        registry=registry,
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        gateway_id="gateway_catalog_test",
-    )
+    catalog_service._registry.upsert(target)
 
-    await service._sync_all()
+    await catalog_service._sync_all()
 
-    assert service._workspace_errors[target.workspace_id] == (
+    assert catalog_service._workspace_errors[target.key] == (
         f"工作区后端尚未连接: {target.workspace_id}"
     )
 
@@ -346,33 +337,26 @@ def test_missing_mirror_does_not_sync(catalog_service: GatewaySessionCatalogSear
         catalog_service.search_mirror(OWNER, query="needle", limit=10, cursor=None, deadline_at=None)
 
 
-def test_catalog_sync_lock_pool_is_bounded_and_stable(tmp_path: Path) -> None:
-    """目录同步锁池必须恒定有界，且同一 workspace_id 恒得同一把锁。
+def test_catalog_sync_lock_pool_is_bounded_and_stable(catalog_service: GatewaySessionCatalogSearchService) -> None:
+    """目录同步锁池必须恒定有界，且同一完整工作区 owner 恒得同一把锁。
 
-    若退回按 workspace_id 键的 dict，删除工作区后键永不回收，进程内存随历史
+    若退回按完整 owner 键的 dict，删除工作区后键永不回收，进程内存随历史
     工作区无界增长；分片锁池则保证「同 id 同锁」的互斥红线且池大小恒定。
     """
 
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json",
-        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-    )
-    service = GatewaySessionCatalogSearchService(
-        registry=registry,
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        gateway_id="gateway_catalog_test",
-    )
-
-    assert service._sync_lock_for("ws-a") is service._sync_lock_for("ws-a")
-    distinct = {id(service._sync_lock_for(f"ws-{index}")) for index in range(5000)}
+    workspace_key = (OWNER.gateway_id, OWNER.workspace_id)
+    assert catalog_service._sync_lock_for(workspace_key) is catalog_service._sync_lock_for(workspace_key)
+    distinct = {
+        id(catalog_service._sync_lock_for((OWNER.gateway_id, f"00000000-0000-4000-8000-{index:012x}")))
+        for index in range(5000)
+    }
     assert len(distinct) <= 64
-    assert len(service._sync_locks) <= 64
+    assert len(catalog_service._sync_locks) <= 64
 
 
 @pytest.mark.asyncio
 async def test_catalog_caches_are_pruned_when_workspaces_are_removed(
-    tmp_path: Path,
+    catalog_service: GatewaySessionCatalogSearchService,
 ) -> None:
     """已删除工作区的目录快照/错误/新鲜度缓存必须回收，不随历史工作区无界增长。
 
@@ -380,62 +364,43 @@ async def test_catalog_caches_are_pruned_when_workspaces_are_removed(
     内存会随历史工作区单调增长。
     """
 
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json",
-        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-    )
-    service = GatewaySessionCatalogSearchService(
-        registry=registry,
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        gateway_id="gateway_catalog_test",
-    )
-
     # 直接准备同规模残留缓存；此处验证回收，不用6000次注册表写入替测试准备历史。
     for index in range(3000):
-        workspace_id = f"ws_pruned_{index}"
-        service._snapshots[GatewaySearchWorkspaceOwnerDTO(gateway_id="gateway_catalog_test", workspace_id=workspace_id)] = object()  # type: ignore[assignment]
-        service._workspace_errors[workspace_id] = "boom"
+        workspace_id = f"00000000-0000-4000-8000-{index:012x}"
+        catalog_service._snapshots[GatewaySearchWorkspaceOwnerDTO(gateway_id=OWNER.gateway_id, workspace_id=workspace_id)] = object()  # type: ignore[assignment]
+        catalog_service._workspace_errors[(OWNER.gateway_id, workspace_id)] = "boom"
 
     # 上一轮每工作区已留残留；同步一轮后必须全部回收（没有任何存活工作区）。
-    await service._sync_all()
+    await catalog_service._sync_all()
 
-    assert service._snapshots == {}
-    assert service._workspace_errors == {}
+    assert catalog_service._snapshots == {}
+    assert catalog_service._workspace_errors == {}
 
 
 @pytest.mark.asyncio
-async def test_catalog_caches_are_retained_for_live_workspaces(tmp_path: Path) -> None:
+async def test_catalog_caches_are_retained_for_live_workspaces(
+    catalog_service: GatewaySessionCatalogSearchService, tmp_path: Path,
+) -> None:
     """回收不得误删存活工作区的缓存：仍有 backend_url 的工作区状态必须保留语义。"""
 
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "workspaces.json",
-        state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
-    )
     live = WorkspaceTarget(
-        workspace_id="ws_live",
+        gateway_id=OWNER.gateway_id,
+        workspace_id=OWNER.workspace_id,
         name="存活工作区",
-        root_path="/tmp/ws_live",
+        root_path=str(tmp_path / "live"),
         backend_url="",
         connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
-    registry.upsert(live)
-    service = GatewaySessionCatalogSearchService(
-        registry=registry,
-        http_client=_FailingHttpClient(),  # type: ignore[arg-type]
-        cache_dir=tmp_path / "indexes",
-        gateway_id="gateway_catalog_test",
-    )
-    service._snapshots[OWNER] = object()  # type: ignore[assignment]
-    service._workspace_errors["ws_live"] = "旧错误先占位"
+    catalog_service._registry.upsert(live)
+    catalog_service._snapshots[OWNER] = object()  # type: ignore[assignment]
+    catalog_service._workspace_errors[live.key] = "旧错误先占位"
 
-    await service._sync_all()
+    await catalog_service._sync_all()
 
     # 存活工作区的快照保留；其 error 由本轮同步结果覆盖（无 backend_url → 记错误）。
-    assert OWNER in service._snapshots
-    assert service._workspace_errors["ws_live"] == (
+    assert OWNER in catalog_service._snapshots
+    assert catalog_service._workspace_errors[live.key] == (
         f"工作区后端尚未连接: {live.workspace_id}"
     )
 
@@ -453,7 +418,8 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     target = replace(_offline_target(), backend_url="http://failed.test")
-    healthy = replace(target, workspace_id="healthy", backend_workspace_id="00000000-0000-4000-8000-000000000002", backend_url="http://healthy.test")
+    healthy = replace(target, workspace_id="00000000-0000-4000-8000-000000000002",
+                      root_path="/tmp/catalog-healthy", backend_url="http://healthy.test")
     for item in (target, healthy):
         catalog_service._registry.upsert(item)
     calls: list[httpx.Request] = []
@@ -495,14 +461,14 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
         calls.clear()
         failed = True
         await catalog_service._sync_all()
-        message = catalog_service._workspace_errors[target.workspace_id]
+        message = catalog_service._workspace_errors[target.key]
         if entry == "refresh":
             page, _ = catalog_service.search_mirror(OWNER, query="needle", limit=10, cursor=None, deadline_at=None)
             assert page.items
         else:
             with pytest.raises(LookupError):
                 catalog_service.search_mirror(OWNER, query="needle", limit=10, cursor=None, deadline_at=None)
-        assert healthy.workspace_id not in catalog_service._workspace_errors
+        assert healthy.key not in catalog_service._workspace_errors
         assert "catalog-search-marker" not in message
         assert "stage=session_catalog_sync" in message and target.workspace_id in message
         diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
@@ -511,7 +477,8 @@ async def test_catalog_failures_preserve_target_and_snapshot_without_publishing_
         assert original is not None
         failed_request, = [request for request in calls if request.url.host == "failed.test"]
         assert failed_request.headers["X-Request-ID"] in diagnostic.getMessage()
-        expected_owners = {"failed.test": target.backend_workspace_id, "healthy.test": healthy.backend_workspace_id}
+        expected_owners = {"failed.test": target.workspace_id, "healthy.test": healthy.workspace_id}
+        assert len(calls) == 2 and {request.url.host for request in calls} == set(expected_owners)
         assert all(request.headers["X-BoxTeam-Workspace-Id"] == expected_owners[request.url.host] for request in calls)
         if failure == "transport":
             assert original is native_error
