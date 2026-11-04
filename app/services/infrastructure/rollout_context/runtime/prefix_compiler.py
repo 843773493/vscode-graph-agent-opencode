@@ -64,6 +64,10 @@ def full_source_id(source: ContextSourceSnapshot) -> str:
 
 def source_contributions(batch: PendingContextSourceBatch) -> tuple[ContextContribution, ...]:
     """先登记完整来源，registry 分配唯一 source ordinal；delta 使用独立不可变身份。"""
+    # 冻结批次已校验来源唯一且 delta 必有所属；仅有增量时建一次索引，避免逐条重扫。
+    root_placements = {
+        source.descriptor.source_id: source.descriptor.root_placement for source in batch.sources
+    } if batch.deltas else {}
     contributions = [
         ContextContribution(
             contribution_id=full_source_id(source),
@@ -87,8 +91,7 @@ def source_contributions(batch: PendingContextSourceBatch) -> tuple[ContextContr
             content_hash=contribution_content_hash("notice", delta.content),
             content_length=payload_content_length("structured_content", delta.content),
             source_binding=SourceBinding(source_ref=delta.source_id),
-            root_placement=next(source.descriptor.root_placement for source in batch.sources
-                                if source.descriptor.source_id == delta.source_id),
+            root_placement=root_placements[delta.source_id],
         )
         for delta in batch.deltas
     )
