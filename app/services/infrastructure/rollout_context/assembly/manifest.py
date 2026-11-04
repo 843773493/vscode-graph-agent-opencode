@@ -66,17 +66,16 @@ def _frozen_source_refs(
     selected = {
         ref_id: identity for ref_id, (identity, _) in selected_sources.items()
     }
+    # root 的身份、类别与完整 prompt 共同确定候选；一次索引避免逐 root 扫全部 selection。
+    root_refs: dict[tuple[str, str, str], list[str]] = {}
+    for ref_id, (identity, source) in selected_sources.items():
+        if source.contribution_kind == "prompt" and source.root_placement == "root_eligible":
+            root_refs.setdefault((*identity, source.source_kind), []).append(ref_id)
     sources: dict[str, tuple[str, str]] = {}
     roots = set()
     for provenance in (() if binding.root is None else binding.root.sources):
-        matches = [
-            ref_id for ref_id, (identity, source) in selected_sources.items()
-            if identity == (provenance.source_identity, provenance.revision)
-            # A→B→A 的通知可复用内容版本；root 只对应完整 prompt，不对应 notice。
-            and source.source_kind == provenance.source_kind
-            and source.contribution_kind == "prompt"
-            and source.root_placement == "root_eligible"
-        ]
+        # A→B→A 的通知可复用内容版本；root 只对应完整 prompt，不对应 notice。
+        matches = root_refs.get((provenance.source_identity, provenance.revision, provenance.source_kind), ())
         if len(matches) != 1:
             raise RuntimeError("source-cut-frontier-conflict: root 缺少唯一冻结 source selection")
         roots.add(matches[0])
@@ -202,15 +201,16 @@ class ContextAssemblyManifestMixin:
                 previous_frontiers[ref_id] = (kind, item_id)
             if set(previous_frontiers) != set(previous_sources):
                 raise RuntimeError("source-cut-frontier-conflict: predecessor 精确来源位置不完整")
+        # root 提升按原来源版本继承前沿；保留全部候选以继续拒绝歧义，不重复扫描前驱。
+        previous_refs: dict[tuple[str, str], list[str]] = {}
+        for previous_ref, identity in previous_sources.items():
+            previous_refs.setdefault(identity, []).append(previous_ref)
         frontiers = {}
         for ref_id, identity in sources.items():
             if previous_sources.get(ref_id) == identity:
                 frontiers[ref_id] = previous_frontiers[ref_id]
                 continue
-            promoted = [
-                previous_ref for previous_ref, previous_identity in previous_sources.items()
-                if ref_id in roots and previous_identity == identity
-            ]
+            promoted = previous_refs.get(identity, ()) if ref_id in roots else ()
             if len(promoted) > 1:
                 raise RuntimeError("source-cut-frontier-conflict: root revision 对应多个冻结来源 ref")
             frontiers[ref_id] = previous_frontiers[promoted[0]] if promoted else new_frontier

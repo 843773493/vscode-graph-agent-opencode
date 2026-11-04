@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 import rfc8785
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.root_compilation import CompiledRootSourceProvenance
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
@@ -17,6 +19,7 @@ from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly import (
+    manifest as assembly_manifest,
     sealing as assembly_writer,
 )
 from app.services.infrastructure.rollout_context.assembly.content_store import (
@@ -154,6 +157,110 @@ def test_prepare_restores_source_details_in_one_snapshot(
     assert all(call["prepared"] == source_count and call["owned"] == [] for call in prepared_reads)
     # 同时约束真实 prepare 的身份查找工作量，避免来源增多时退回逐份全表扫描。
     assert all(call["contribution_id_reads"] <= 3 * source_count for call in calls)
+
+
+@pytest.mark.parametrize("source_count", [1, 8])
+def test_prepare_promotes_source_frontiers_with_linear_identity_lookup(
+    production_context, monkeypatch, request, source_count,
+):
+    saver, session, thread, connection, manager, prepare = production_context
+    prepare("frontier-root-initial")
+    source_ids = {f"instruction:frontier-{index}" for index in range(source_count)}
+    for source_id in sorted(source_ids):
+        manager.register(ContextSourceDescriptor(
+            source_id=source_id, source_kind="agent_instructions", name=source_id,
+            description="来源前沿装具", internal_locator=f"instruction-producer://{source_id}",
+            root_placement="root_eligible",
+        ), tracking_status="tracked")
+        manager.observe(source_id, f"冻结来源 {source_id}", revision="frontier:1")
+    original_frozen = assembly_manifest._frozen_source_refs
+    original_attribute = CompiledRootSourceProvenance.__getattribute__
+    calls, active = [], []
+
+    class ObservedSources(dict):
+        def __init__(self, sources, call):
+            super().__init__(sources)
+            self.call = call
+
+        def items(self):
+            for item in super().items():
+                self.call["item_visits"] += 1
+                yield item
+
+    def observe_attribute(provenance, name):
+        if name == "source_identity" and active:
+            active[-1]["identity_reads"] += 1
+        return original_attribute(provenance, name)
+
+    def observe_frozen(snapshot):
+        call = {"identity_reads": 0, "item_visits": 0}
+        calls.append(call)
+        active.append(call)
+        try:
+            sources, roots = original_frozen(snapshot)
+        finally:
+            active.pop()
+        call.update(sources=len(sources), roots=len(roots))
+        return ObservedSources(sources, call), roots
+
+    monkeypatch.setattr(CompiledRootSourceProvenance, "__getattribute__", observe_attribute)
+    monkeypatch.setattr(assembly_manifest, "_frozen_source_refs", observe_frozen)
+    injected = prepare("frontier-injected")["snapshot"]
+    assert source_ids <= {
+        ref.source_identity for frame in injected.seal_binding.prefix.state.frames if frame.role == "user"
+        for ref in frame.item_refs if ref.ref_type == "source_item"
+    }
+    tools = ToolSetSnapshot(selection_revision=sha256_jcs("frontier-epoch-change"), tools=({
+        "type": "function", "function": {"name": "frontier_epoch", "parameters": {"type": "object"}},
+    },))
+    promoted = prepare(
+        "frontier-promoted", supplier=lambda: tools,
+        request_messages=(
+            AIMessage(
+                content="来源激活之后的 canonical 回答", id="frontier-later-answer",
+                response_metadata={"model_call_id": "frontier-later-model"},
+                tool_calls=[{"id": "frontier-later-tool", "name": "frontier_epoch", "args": {}}],
+            ),
+            ToolMessage(content="后续工具结果", id="frontier-later-result",
+                        tool_call_id="frontier-later-tool", name="frontier_epoch"),
+        ),
+    )["snapshot"]
+    assert source_ids <= {source.source_identity for source in promoted.seal_binding.root.sources}
+
+    def frontiers(snapshot):
+        contributions = {source.contribution_id: source for source in snapshot.contributions}
+        return {
+            contributions[entry.contribution_id].source_binding.source_ref: connection.execute(
+                "SELECT source_cut_position_kind,source_cut_item_id FROM context_assembly_selections "
+                "WHERE assembly_id=? AND ref_id=?", (snapshot.assembly_id, entry.ref.ref_id),
+            ).fetchone()
+            for entry in snapshot.selection if entry.included and entry.contribution_id in contributions
+            and contributions[entry.contribution_id].source_binding.source_ref in source_ids
+        }
+
+    root_item, = connection.execute(
+        "SELECT root_input_item_id FROM turn_records WHERE session_id=? AND thread_id=? AND turn_id=?",
+        (session, thread, injected.turn_id),
+    ).fetchone()
+    assert any(
+        entry.included and entry.ref.ref_type == "canonical_item"
+        and entry.ref.semantic_kind == "tool_result" and entry.ref.ref_id != root_item
+        for entry in promoted.selection
+    )
+    assert frontiers(injected) == frontiers(promoted) == dict.fromkeys(source_ids, ("after_canonical", root_item))
+    frozen = tuple(canonical_json_bytes(snapshot.to_dict()) for snapshot in (injected, promoted))
+    assert tuple(canonical_json_bytes(saver.get_context_assembly(
+        session, thread, assembly_id=snapshot.assembly_id,
+    ).to_dict()) for snapshot in (injected, promoted)) == frozen
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"source-frontier-lookups-{source_count}.json").write_text(
+        json.dumps(calls, indent=2), encoding="utf-8",
+    )
+    print(f"source frontier lookup work ({source_count} promoted): {calls}")
+    assert any(call["roots"] >= source_count for call in calls)
+    # 只观察真实计算，不替换来源事实；身份匹配与前驱遍历均应随来源数线性增长。
+    assert all(call["identity_reads"] <= call["sources"] + call["roots"] for call in calls)
+    assert all(call["item_visits"] <= 2 * call["sources"] for call in calls)
 
 
 @pytest.fixture
