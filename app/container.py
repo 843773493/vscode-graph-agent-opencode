@@ -97,13 +97,11 @@ from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
-from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
-    ATTACHMENT_ROOT_DIRECTORY_NAME,
-)
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
 )
 from app.services.infrastructure.attachment_blob_catalog.store import (
+    ATTACHMENT_ROOT_DIRECTORY_NAME,
     AttachmentBlobStore,
 )
 from app.services.infrastructure.background_work_handlers import (

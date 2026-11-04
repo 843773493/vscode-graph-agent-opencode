@@ -11,11 +11,11 @@ from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
 from app.core.shielded_cleanup import run_sync_shielded
-from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
-    ATTACHMENT_ROOT_DIRECTORY_NAME,
-)
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
+)
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    ATTACHMENT_ROOT_DIRECTORY_NAME,
 )
 from app.workspace_lifecycle import CloseAction
 
