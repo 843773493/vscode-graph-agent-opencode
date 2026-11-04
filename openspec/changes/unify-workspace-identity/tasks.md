@@ -206,3 +206,8 @@
 
 - 导航节点、父关系、持久 JSON 及公开请求／响应迁为完整 owner，保留排序、循环拒绝、原子失败和冷重开断言。Generator 保留原件、冻结 hash、接受／退休断点与请求重试的完整断言；当前版本仅处理 canonical 引用的旧文件格式，独立旧别名反例验证预览／应用均保全原件、零下游且不发布备份。仍有别名源或未结算快照的 registry 13 必须在升级前版本先完成显式退休，已在 design 明确；未新增普通请求别名表。
 - 三文件 16 passed，Ruff／Pyright 退出 0，原 17 条类型诊断消除，源码检查前后一致。原件见 `out/tests/temp/identity_navigation_consumers_current/artifacts/verification-1793829450550130776.json`；不把合法旧格式的 mock 导入称为真实旧服务升级验收，5.2／6.3 整体保持未完成。
+
+### 2026-11-04：5.1 Gateway inventory 消费者收口
+
+- inventory 装具直接消费公开 Gateway／Workspace owner、`active_workspace` 与 `remote_gateways`，删除旧双身份 helper 和绕过 DTO 校验的旧字段注入。保留分页预算、顺序、动态 checked_at 不改 revision、名称变化和 cursor 失效；同 UUID 分属不同 Gateway 的分页与活动归属切换不混用资源。同步修正 Gateway 控制与公开 schema 的过时目录指引，避免重新引入双身份。
+- 单文件 18 passed／1.70 秒，Ruff／Pyright 退出 0，原 15 条类型诊断消除；Root 核对差异及最终指纹。准确命令、原始输出和源码指纹见 `out/tests/temp/identity_context_inventory_current/artifacts/verification-1793829922390166468.json`。本切片仅改测试和目录指引，不代表真实远端或完整客户端 5.4 验收。

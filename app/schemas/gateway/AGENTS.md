@@ -37,4 +37,4 @@ gateway/
 
 - 消费者直接导入拥有该 DTO 的具体模块；同一类型只定义一处。
 - 普通结构搬迁保持公开字段、验证和序列化行为；已授权的共享 Backend 合同字段与全部消费者同批迁齐。
-- Backend UUID 与 Gateway target ID 保持各自已定命名空间；generation、完整影响集合和 blocker 归属使用生命周期 owner 的事实。
+- 工作区在 Gateway、Backend 与公开 DTO 中使用同一 UUID，跨 Gateway 引用保留完整 `(gateway_id, workspace_id)`；连接 ID、generation、完整影响集合和 blocker 各自消费其 owner 的事实，不新增工作区别名或换算字段。
