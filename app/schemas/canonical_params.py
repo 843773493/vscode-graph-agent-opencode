@@ -4,11 +4,30 @@ from __future__ import annotations
 
 from typing import Annotated, cast
 
-from pydantic import BeforeValidator
+from pydantic import AfterValidator, BeforeValidator
 
-from app.core.identifier import validate_session_id, validate_thread_id
+from app.core.identifier import (
+    validate_gateway_id,
+    validate_session_id,
+    validate_thread_id,
+)
+from app.core.workspace_identity import validate_workspace_id
 
-__all__ = ["CanonicalSessionId", "CanonicalThreadId"]
+__all__ = ["CanonicalGatewayId", "CanonicalSessionId", "CanonicalThreadId", "CanonicalWorkspaceId"]
+
+
+CanonicalGatewayId = Annotated[str, AfterValidator(validate_gateway_id)]
+
+
+def _validate_canonical_workspace_id(value: str) -> str:
+    """复用身份 owner，将运行时格式拒绝转换为 DTO 字段错误。"""
+    try:
+        return validate_workspace_id(value)
+    except RuntimeError as error:
+        raise ValueError(str(error)) from error
+
+
+CanonicalWorkspaceId = Annotated[str, AfterValidator(_validate_canonical_workspace_id)]
 
 
 def _validate_canonical_session_id(value: object) -> str:

@@ -19,10 +19,10 @@ from app.gateway.control.catalog_search import (
 )
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
-    RemoteGatewayConnection,
     WorkspaceTarget,
 )
 from app.gateway.registry.owners import workspace_owner
@@ -37,7 +37,7 @@ from app.schemas.internal_v2.session_navigation import (
 )
 from app.schemas.search_federation import FederatedSearchEventDTO
 
-GATEWAY = "gateway_search_transport"
+GATEWAY = "gateway_" + "a" * 32
 OWNERS = [{"gateway_id": GATEWAY, "workspace_id": f"00000000-0000-4000-8000-{index:012d}"} for index in range(1, 4)]
 
 
@@ -100,7 +100,7 @@ class SearchHTTP:
         if self.mode == "large":
             return httpx.Response(200, headers=headers, content=b"x" * (8 * 1024 * 1024 + 1))
         page = WorkspaceSearchResultDTO(
-            provider_id="session-catalog", workspace_id=payload["workspace_id"] if self.mode != "wrong-owner" else "wrong",
+            provider_id="session-catalog", workspace_id=payload["workspace_id"] if self.mode != "wrong-owner" else OWNERS[2]["workspace_id"],
             category=payload["category"], operation=payload["operation"], contract_version=1,
             state="limited", limited_reason="result_limit",
             catalog=SessionCatalogSearchResultsDTO(revision="r1", catalog_revision=1,
@@ -121,10 +121,10 @@ class SearchHTTP:
 @pytest.fixture
 async def search_http(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SearchHTTP]:
     monkeypatch.setattr("app.gateway.auth.get_gateway_local_token", lambda: "test-search-token")
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json", gateway_id=GATEWAY)
     for index, owner in enumerate(OWNERS):
         registry.upsert(WorkspaceTarget(
-            workspace_id=f"route_{index}", backend_workspace_id=owner["workspace_id"],
+            gateway_id=owner["gateway_id"], workspace_id=owner["workspace_id"],
             name=f"Same project {index}", root_path=str(tmp_path / f"unused-{index}"),
             backend_url=f"http://owner-{index}.test", connection_kind="local",
         ), activate=False)
@@ -184,7 +184,7 @@ async def test_only_explicit_a_b_receive_same_request_and_original_owner_cursor(
     pages = [event for event in result if event.type == "page"]
     assert len(pages) == 2 and all(page.page.catalog.cursor == f"{page.branch.branch.owner.workspace_id}-cursor" for page in pages)
     assert result[-1].summary.state == "incomplete"
-    assert all(search_http.registry.route_reference_counts(f"route_{index}") == (0, 0) for index in range(3))
+    assert all(search_http.registry.route_reference_counts((owner["gateway_id"], owner["workspace_id"])) == (0, 0) for owner in OWNERS)
 
 
 async def test_remote_search_keeps_target_owner_separate_from_sender_with_same_workspace_uuid(
@@ -192,17 +192,22 @@ async def test_remote_search_keeps_target_owner_separate_from_sender_with_same_w
 ) -> None:
     remote_gateway_id = "gateway_" + "c" * 32
     registry = search_http.registry
-    registry.upsert_remote_gateway(RemoteGatewayConnection(
+    connection = RemoteGatewayConnection(
         connection_id="remote-query", name="远端", host="remote.test", port=22, username="unit",
         private_key_path=None, ssh_config_host=None, remote_gateway_port=8014,
-        remote_gateway_id=remote_gateway_id, protocol_version=1, source_owner="manual",
-    ), runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}))
-    registry.upsert(WorkspaceTarget(
-        workspace_id="remote-route", backend_workspace_id=OWNERS[0]["workspace_id"],
+        remote_gateway_id=remote_gateway_id, protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
+    )
+    projection = WorkspaceTarget(
+        gateway_id=remote_gateway_id, workspace_id=OWNERS[0]["workspace_id"],
         name="相同 UUID 的远端", root_path=None, backend_url="", connection_kind="remote_gateway",
-        remote_gateway_connection_id="remote-query", remote_workspace_id="native-route",
+        owner="remote_projection", target_namespace="gateway-remote",
+        remote_gateway_connection_ids=(connection.connection_id,),
         remote_service_names=("workspace_api",),
-    ), activate=False)
+    )
+    registry.apply_remote_projection_snapshot(
+        connection=connection, projections=(projection,),
+        runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://remote.test"}),
+    )
     credential = FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
         connection_id="remote-query", peer_gateway_id=GATEWAY,
     )
@@ -212,18 +217,19 @@ async def test_remote_search_keeps_target_owner_separate_from_sender_with_same_w
     assert outgoing.url.host == "remote.test"
     assert outgoing.headers[TARGET_GATEWAY_ID_HEADER] == remote_gateway_id
     assert outgoing.headers["X-BoxTeam-Gateway-Id"] == GATEWAY
-    assert outgoing.headers["X-BoxTeam-Workspace-Id"] == "native-route"
+    assert outgoing.headers["X-BoxTeam-Workspace-Id"] == json.loads(outgoing.content)["workspace_id"] == owner["workspace_id"]
     assert outgoing.headers["X-BoxTeam-Federation-Token"] == credential.token
     assert "X-Local-Token" not in outgoing.headers
     assert outgoing.headers["X-Request-ID"] == "req_search"
     page, = [event for event in result if event.type == "page"]
     assert page.branch is not None
     assert page.branch.branch.owner.model_dump() == owner
-    assert registry.route_reference_counts("remote-route") == (0, 0)
+    assert registry.route_reference_counts(projection.key) == (0, 0)
+    assert registry.route_reference_counts((GATEWAY, owner["workspace_id"])) == (0, 0)
 
 
 async def test_unknown_owner_rejected_before_any_dispatch(search_http: SearchHTTP) -> None:
-    response = await search_http.search([{**OWNERS[0], "workspace_id": "unknown"}])
+    response = await search_http.search([{**OWNERS[0], "workspace_id": "00000000-0000-4000-8000-000000000099"}])
     assert response.status_code == 404 and not search_http.requests
     assert response.json()["detail"]["code"] == "owner_unavailable"
 
@@ -236,7 +242,7 @@ async def test_failed_branch_has_no_page_or_advanced_cursor(search_http: SearchH
     assert not any(event.type == "page" for event in result)
     assert result[-1].summary.branches[0].code == code
     assert result[-1].summary.branches[0].cursor is None
-    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+    assert search_http.registry.route_reference_counts((GATEWAY, OWNERS[0]["workspace_id"])) == (0, 0)
 
 
 async def test_provider_read_error_keeps_identity_cause_and_original_continuation(search_http: SearchHTTP) -> None:
@@ -315,7 +321,7 @@ async def test_network_failure_preserves_transport_reason_and_original_cursor(
     assert failure.cursor == previous.cursor and failure.returned_results == summary.returned_results == 0
     assert [event.branch for event in result if event.type == "branch"] == [failure]
     assert not any(event.type == "page" for event in result)
-    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+    assert search_http.registry.route_reference_counts((GATEWAY, OWNERS[0]["workspace_id"])) == (0, 0)
     search_http.network_error = None
     retried = events(await search_http.search(scope={"mode": "resume", "scope": scope.scope.model_dump(mode="json")},
         continuations=[{"branch": previous.branch.model_dump(mode="json"), "cursor": failure.cursor}]))
@@ -328,11 +334,11 @@ async def test_route_invalidation_closes_body_before_releasing_reference(search_
     search_http.mode = "paused"
     response = asyncio.create_task(search_http.search(OWNERS[:1]))
     await search_http.paused.entered.wait()
-    assert search_http.registry.route_reference_counts("route_0") == (1, 0)
-    search_http.registry.invalidate_route("route_0")
+    assert search_http.registry.route_reference_counts((GATEWAY, OWNERS[0]["workspace_id"])) == (1, 0)
+    search_http.registry.invalidate_route((GATEWAY, OWNERS[0]["workspace_id"]))
     result = events(await response)
     assert search_http.paused.closed.is_set()
-    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+    assert search_http.registry.route_reference_counts((GATEWAY, OWNERS[0]["workspace_id"])) == (0, 0)
     assert result[-1].summary.branches[0].code == "route_invalidated"
     assert not any(event.type == "page" for event in result)
 
@@ -345,7 +351,7 @@ async def test_cancellation_closes_body_and_releases_without_late_response(searc
     with pytest.raises(asyncio.CancelledError):
         await response
     assert search_http.paused.closed.is_set()
-    assert search_http.registry.route_reference_counts("route_0") == (0, 0)
+    assert search_http.registry.route_reference_counts((GATEWAY, OWNERS[0]["workspace_id"])) == (0, 0)
 
 
 async def test_zero_quota_and_missing_auth_do_not_read_owner(search_http: SearchHTTP) -> None:
@@ -394,7 +400,7 @@ async def test_control_budget_rejected_before_http_dispatch(search_http: SearchH
 @pytest.fixture
 def mirrored_owner(search_http: SearchHTTP) -> _CatalogSnapshot:
     assert search_http.mirror is not None
-    owner = workspace_owner(search_http.registry.resolve("route_0"), search_http.registry, GATEWAY)
+    owner = workspace_owner(search_http.registry.resolve((GATEWAY, OWNERS[0]["workspace_id"])), search_http.registry, GATEWAY)
     nodes = [SessionCatalogNodeDTO(node_id=f"folder-{index}", kind="folder", name=f"needle {index}", node_revision=1)
              for index in range(3)]
     snapshot = _CatalogSnapshot(owner=owner, revision="mirror-v1", catalog_revision=7,
@@ -449,17 +455,29 @@ async def test_mirror_cursor_rejection_keeps_original_owner_without_http_status(
     assert not any(event.type == "page" for event in rejected)
 
 
-async def test_mirror_never_masks_owner_rejection_or_route_reuse(search_http: SearchHTTP, mirrored_owner: _CatalogSnapshot) -> None:
+async def test_mirror_never_masks_owner_rejection_or_root_reuse(search_http: SearchHTTP, mirrored_owner: _CatalogSnapshot) -> None:
     query = {"category": "catalog", "query": "needle", "allow_catalog_mirror": True}
     search_http.mode = "error"
     rejected = events(await search_http.search(OWNERS[:1], queries=[query]))
     assert rejected[-1].summary.branches[0].code == "owner_rejected"
     assert not any(event.type == "page" for event in rejected)
     search_http.mode = "offline"
-    old = search_http.registry.resolve("route_0")
-    search_http.registry.upsert(replace(old, backend_workspace_id="00000000-0000-4000-8000-000000000099"))
+    old = search_http.registry.resolve((GATEWAY, OWNERS[0]["workspace_id"]))
+    search_http.registry.remove(old.key)
+    replacement = search_http.registry.upsert(replace(
+        old, workspace_id="00000000-0000-4000-8000-000000000099", target_generation="", runtime_lease_id=None,
+    ))
+    assert replacement.root_path == old.root_path and replacement.key != old.key
     response = await search_http.search(OWNERS[:1], queries=[query])
     assert response.status_code == 404 and response.json()["detail"]["code"] == "owner_unavailable"
+    replacement_result = events(await search_http.search([
+        {"gateway_id": replacement.gateway_id, "workspace_id": replacement.workspace_id},
+    ], queries=[query]))
+    assert replacement_result[-1].summary is not None
+    failure, = replacement_result[-1].summary.branches
+    assert failure.branch.owner.workspace_id == replacement.workspace_id and failure.code == "target_unavailable"
+    assert not any(event.type == "page" for event in replacement_result)
+    assert search_http.mirror is not None and search_http.mirror._snapshots == {mirrored_owner.owner: mirrored_owner}
 
 
 @pytest.mark.parametrize("sink_failed", [False, True])
@@ -484,4 +502,4 @@ async def test_invalid_provider_page_preserves_diagnostic_and_branch_failure(
         assert all("diagnostic_sink_error=OSError" in branch.message for branch in result[-1].summary.branches)
     else:
         assert any(record.exc_info and "broken-version" in str(record.exc_info[1]) for record in caplog.records)
-    assert all(search_http.registry.route_reference_counts(f"route_{index}") == (0, 0) for index in range(3))
+    assert all(search_http.registry.route_reference_counts((owner["gateway_id"], owner["workspace_id"])) == (0, 0) for owner in OWNERS)

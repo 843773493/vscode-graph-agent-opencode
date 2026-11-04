@@ -189,3 +189,8 @@
 
 - outbox 直接复用选定目标的完整 owner 建立原持久分区，删除仅为身份换算的工作区 GET、重复校验和不可能的分区映射冲突；生产净减 39 行。principal／generation、广播、迟到持久清理和接受队列保护保持，同 UUID 不同 Gateway 分区重开及零身份 GET 由行为测试核验。按 Copilot workspace owner 取值方式对照，未运行参考仓库测试。
 - runtime 24 项和原 driver 的 principal／取消核心 3 项通过。实际 sourceTransform 类型检查及完整 Workbench 构建均退出 0；构建期间只发生独立搜索单测变化。原 Web tsc 的 28 条外部既存诊断保留，修改两文件零诊断，不称全仓类型全绿。原件见 `out/tests/temp/identity_outbox_owner_current/artifacts/verification-index-1793828133506734641.json`，Root `identity_registry_recovery_root/artifacts/outbox-workbench-types-1793828047948199746.*` 与 `outbox-workbench-build-1793828133506377581.*`；未以此替代真实浏览器 5.4 验收。
+
+### 2026-11-04：5.1 搜索 owner 输入边界收口
+
+- 搜索初始与续点请求共用唯一 Gateway／Workspace 身份校验；非法旧别名、非规范 UUID 或 Gateway 在 DTO 边界返回 422，合法但未登记 owner 仍返回 404。联邦 DTO 复用同一校验，保留公开字段元数据及冻结范围、取消、失效、错误归属和部分失败语义。
+- 三份搜索测试 69 passed，公开目录／联邦合同另 39 passed；Ruff 与最终生成一致性退出 0。搜索单测 Pyright 49→29，无新增；生产剩两条原 Session／Thread 校验的存量诊断，函数 AST 与 HEAD 相同。测试后仅恢复原公开 Field 元数据并调整空白，未改行为。准确命令、原 500 反例及交付指纹见 `out/tests/temp/identity_search_consumers_current/artifacts/verification-1793828684093307646.json`；Root 最终静态及生成检查在 `identity_registry_recovery_root/artifacts/search-owner-final-*`。此项不代替真实浏览器或完整 5.1／6.4 验收。

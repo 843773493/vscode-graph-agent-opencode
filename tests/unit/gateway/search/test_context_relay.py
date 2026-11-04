@@ -79,10 +79,10 @@ class ContextRelay:
 async def relay(tmp_path: Path) -> AsyncIterator[ContextRelay]:
     gateway_token = set_current_gateway_id(GATEWAY)
     request_token = set_current_request_id("req_context_relay")
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json", gateway_id=GATEWAY)
     for index, owner in enumerate(OWNERS):
-        registry.upsert(WorkspaceTarget(workspace_id=f"route-{index}", name="same", root_path=str(tmp_path / str(index)),
-            backend_workspace_id=owner["workspace_id"], backend_url=f"http://owner-{index}.test", connection_kind="local"), activate=False)
+        registry.upsert(WorkspaceTarget(gateway_id=owner["gateway_id"], workspace_id=owner["workspace_id"],
+            name="same", root_path=str(tmp_path / str(index)), backend_url=f"http://owner-{index}.test", connection_kind="local"), activate=False)
     fixture = ContextRelay(registry=registry)
     async with httpx.AsyncClient(transport=httpx.MockTransport(fixture.receive)) as client:
         service = GatewaySearchService(registry, WorkspaceNavigationStore(storage_path=tmp_path / "navigation.json"), client, gateway_id=GATEWAY)
@@ -107,10 +107,14 @@ async def test_context_relay_delivers_owner_events_and_only_resumes_explicit_bra
     assert {request.url.host for request in relay.requests} == {"owner-0.test", "owner-1.test"}
     assert events[-1].summary is not None and events[0].scope is not None
     branches = events[-1].summary.branches
+    assert [branch.branch.owner.model_dump() for branch in branches] == OWNERS[:2]
     assert [branch.cursor for branch in branches] == [owner["workspace_id"] + "-cursor" for owner in OWNERS[:2]]
     for request in relay.requests:
         body = json.loads(request.content)
         assert request.url.path == "/api/v1/search" and request.headers["X-Request-ID"] == "req_context_relay"
+        expected_owner = OWNERS[0] if request.url.host == "owner-0.test" else OWNERS[1]
+        assert request.headers["X-BoxTeam-Gateway-Id"] == expected_owner["gateway_id"]
+        assert request.headers["X-BoxTeam-Workspace-Id"] == body["workspace_id"] == expected_owner["workspace_id"]
         assert body["context"]["sources"] == ["session_information"] and body["context"]["max_chars"] == 2048
     resumed = relay.query(scope={"mode": "resume", "scope": events[0].scope.scope},
                            continuations=[{"branch": branches[1].branch, "cursor": branches[1].cursor}])
@@ -119,7 +123,7 @@ async def test_context_relay_delivers_owner_events_and_only_resumes_explicit_bra
     assert len(relay.requests) == 1 and relay.requests[0].url.host == "owner-1.test"
     assert json.loads(relay.requests[0].content)["cursor"] == branches[1].cursor
     assert result.events[0].scope is not None and result.events[0].scope.scope == events[0].scope.scope
-    assert all(relay.registry.route_reference_counts(f"route-{index}") == (0, 0) for index in range(3))
+    assert all(relay.registry.route_reference_counts((owner["gateway_id"], owner["workspace_id"])) == (0, 0) for owner in OWNERS)
 
 
 @pytest.mark.parametrize("change", [{"category": "file"}, {"operation": "name"}])

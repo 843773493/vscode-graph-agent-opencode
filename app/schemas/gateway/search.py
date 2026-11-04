@@ -5,14 +5,16 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
+
 MAX_SEARCH_WORKSPACES = 64
 
 
 class GatewaySearchWorkspaceOwnerDTO(BaseModel, frozen=True):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    gateway_id: str = Field(min_length=1)
-    workspace_id: str = Field(min_length=1, description="目标后端的稳定 workspace UUID，不是任一 Gateway 的路由别名")
+    gateway_id: CanonicalGatewayId = Field(min_length=1)
+    workspace_id: CanonicalWorkspaceId = Field(min_length=1, description="目标后端的稳定 workspace UUID，不是任一 Gateway 的路由别名")
 
 
 class GatewayWorkspaceDiscoveryHitDTO(BaseModel):
@@ -47,7 +49,7 @@ class GatewaySearchScopeDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: Literal[1] = 1
-    gateway_id: str = Field(min_length=1)
+    gateway_id: CanonicalGatewayId = Field(min_length=1)
     resolved_at: AwareDatetime
     mode: Literal["origin", "selected", "all"]
     owners: tuple[GatewaySearchWorkspaceOwnerDTO, ...] = Field(min_length=1, max_length=MAX_SEARCH_WORKSPACES)

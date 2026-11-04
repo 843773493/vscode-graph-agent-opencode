@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.workspace_identity import validate_workspace_id
+from app.schemas.canonical_params import CanonicalWorkspaceId
 from app.schemas.gateway.workspaces import GatewayWorkspaceStatus
 
 
@@ -22,7 +22,7 @@ class FederationProtocolManifestDTO(BaseModel):
 class FederationWorkspaceDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str
+    workspace_id: CanonicalWorkspaceId
     backend_generation: str | None = None
     affected_workspace_ids: list[str] = Field(default_factory=list)
     name: str
@@ -31,15 +31,6 @@ class FederationWorkspaceDTO(BaseModel):
     services: list[Literal["workspace_api", "terminal_manager", "browser_manager"]] = (
         Field(default_factory=list)
     )
-
-    @field_validator("workspace_id")
-    @classmethod
-    def workspace_uuid(cls, value: str) -> str:
-        try:
-            return validate_workspace_id(value)
-        except RuntimeError as error:
-            # 将唯一 UUID 校验器的拒绝转成 DTO 字段错误，保留原错误详情。
-            raise ValueError(str(error)) from error
 
 
 class FederationWorkspaceListDTO(BaseModel):
