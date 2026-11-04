@@ -81,11 +81,11 @@ def catalog_network(request: pytest.FixtureRequest, integration_workspace_root_p
             cleanup.callback(close_backend_process, backend)
             backends.append(backend)
         state = GatewayStateStore(path=root / "gateway.sqlite")
-        registry = GatewayWorkspaceRegistry(storage_path=root / "workspaces.json", state_store=state)
+        registry = GatewayWorkspaceRegistry(storage_path=root / "workspaces.json", state_store=state, gateway_id=gateway_id)
         try:
             # primary 沿启动器原默认登记；只预登记第二目标，避免重复稳定身份。
             for index, backend in enumerate(backends[1:], start=1):
-                registry.upsert(WorkspaceTarget(workspace_id=f"catalog_{index}", backend_workspace_id=backend.workspace_id,
+                registry.upsert(WorkspaceTarget(gateway_id=gateway_id, workspace_id=backend.workspace_id,
                     name=f"Catalog workspace {index}", root_path=backend.workspace_root, backend_url=f"http://127.0.0.1:{backend.port}",
                     connection_kind="local", desired_running=False), activate=False)
         finally:

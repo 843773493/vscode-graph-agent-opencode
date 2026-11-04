@@ -74,8 +74,15 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             registry = await client.get(
                 "/api/gateway/workspaces", params={"check_health": False}
             )
-            route = registry.json()["data"]["active_workspace_id"]
-            client.headers["X-BoxTeam-Workspace-Id"] = route
+            assert health.status_code == registry.status_code == 200
+            for response in (health, registry):
+                assert response.headers["X-Request-ID"] == response.json()["request_id"]
+            owner = registry.json()["data"]["active_workspace"]
+            assert owner == {"gateway_id": health.json()["data"]["gateway_id"], "workspace_id": backend.workspace_id}
+            client.headers.update({
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+            })
             case.client = client
             session = await create_session(client, "Same Discovery Name🧪")
             sibling = await create_session(client, "Same Discovery Name🧪")
@@ -116,16 +123,17 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             assert capabilities.status_code == 200, capabilities.text
             assert capabilities.headers["X-Request-ID"] == capabilities.json()["request_id"]
             workspace_id = capabilities.json()["data"]["workspace_id"]
+            assert workspace_id == owner["workspace_id"]
             assert {(item["category"], operation) for item in capabilities.json()["data"]["providers"] for operation in item["operations"]} == {
                 ("catalog", "name"), ("thread", "name"), ("message", "content"), ("tool_result", "content"),
-                ("file", "name"), ("file", "content"), ("llm_request", "content"), ("context", "content"),
+                ("file", "name"), ("file", "content"), ("llm_request", "content"), ("context", "content"), ("trace", "content"),
             }
             assert {(item["category"], operation): item["match_modes"] for item in capabilities.json()["data"]["providers"]
                     for operation in item["operations"]} == {
                 ("catalog", "name"): ["fuzzy"], ("thread", "name"): ["fuzzy"],
                 ("message", "content"): ["literal"], ("tool_result", "content"): ["literal"],
                 ("file", "name"): ["path", "fuzzy", "glob"], ("file", "content"): ["literal", "regex"],
-                ("llm_request", "content"): ["literal"], ("context", "content"): ["literal", "regex"],
+                ("llm_request", "content"): ["literal"], ("context", "content"): ["literal", "regex"], ("trace", "content"): ["literal"],
             }
             payload = {"workspace_id": workspace_id, "category": "thread", "query": "SDN🧪", "limit": 1}
             unified = await client.post("/api/v1/search", json=payload)
@@ -133,7 +141,7 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             assert unified.json()["data"]["provider_id"] == "session-thread"
             assert unified.json()["data"]["state"] == "limited"
             for change, code in (
-                ({"workspace_id": "another-workspace"}, "owner_mismatch"),
+                ({"workspace_id": "019a0000-0000-7000-8000-000000000002"}, "owner_mismatch"),
                 ({"category": "unregistered"}, "provider_unavailable"),
                 ({"contract_version": 2}, "unsupported_version"),
                 ({"match_mode": "regex"}, "unsupported_option"),
@@ -168,7 +176,7 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
                 return events
 
             body_first = await federated({
-                "scope": {"mode": "origin", "origin": {"gateway_id": health.json()["data"]["gateway_id"], "workspace_id": workspace_id}},
+                "scope": {"mode": "origin", "origin": owner},
                 "queries": queries,
             }, "req_body_first")
             body_pages = [event for event in body_first if event["type"] == "page"]
