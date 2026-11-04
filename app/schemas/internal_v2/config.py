@@ -116,6 +116,76 @@ class ConfigReloadStatusDTO(BaseModel):
     mcp_cleanup: list[McpCleanupDTO] = Field(default_factory=list)
 
 
+class ConfigSourceEditRequest(BaseModel):
+    """编辑固定来源；JSONC 保持用户格式，三个独立 CAS 基线均须显式提供。"""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    gateway_id: str = Field(min_length=1)
+    workspace_id: str = Field(min_length=1)
+    source_key: str = Field(min_length=1)
+    jsonc: str
+    base_file_digest: str | None
+    base_layer_revision: int | None = Field(ge=1)
+    base_layer_digest: str | None
+    expected_active_revision: int | None = Field(ge=0)
+    expected_active_digest: str | None
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class ConfigSourceLayerViewDTO(BaseModel):
+    source_key: str
+    layer: ConfigSourceLayer
+    precedence: int
+    writable: bool
+    payload: dict[str, object]
+
+
+class ConfigSourceOriginDTO(BaseModel):
+    path: str
+    source_key: str
+    shadowed_sources: list[str]
+
+
+class ConfigSourceEditDTO(BaseModel):
+    idempotency_key: str
+    candidate_id: str
+    state: str
+    file_digest: str
+    source_saved: bool
+    layer_imported: bool
+
+
+class ConfigSourceDocumentDTO(BaseModel):
+    gateway_id: str
+    workspace_id: str
+    source_key: str
+    layer: ConfigSourceLayer
+    writable: bool
+    jsonc: str
+    file_presence: Literal["present", "absent"]
+    file_digest: str | None
+    layer_revision: int | None
+    layer_digest: str | None
+    source_generation: int | None
+    active_revision: int | None
+    active_digest: str | None
+    json_schema: dict[str, object]
+    effective: dict[str, object]
+    source_effective: dict[str, object]
+    layers: list[ConfigSourceLayerViewDTO]
+    origins: list[ConfigSourceOriginDTO]
+    status: ConfigReloadStatusDTO
+    edit: ConfigSourceEditDTO | None
+
+
+class ConfigSourcePreflightDTO(BaseModel):
+    document: ConfigSourceDocumentDTO
+    candidate: dict[str, object]
+    candidate_digest: str
+    changed_paths: list[str]
+
+
 class ConfigStartupContractDTO(BaseModel):
     """Workspace 启动 pending 所需的元数据；不返回候选 payload。"""
 

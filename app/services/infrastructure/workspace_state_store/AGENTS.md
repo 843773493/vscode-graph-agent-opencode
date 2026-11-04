@@ -21,6 +21,7 @@ workspace_state_store/
     ├── 021.sql          Goal任务应用状态、当前归属及一次性导入指纹
     ├── 022.sql          原任务运行内的会话动作进度
     ├── 023.sql          删除 pending 候选冗余的库物理位置
+    ├── 024.sql          原 pending 候选附来源编辑幂等 intent
     └── legacy_config/   仅供一次性旧表迁移的 SQL
 ```
 

@@ -528,6 +528,7 @@ class ConfigPendingCandidateRecord:
     last_apply_id: str | None = None
     candidate_ref: str | None = None
     secret_bindings: dict[str, object] = field(default_factory=dict)
+    source_edit: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -157,6 +157,7 @@ _WORKSPACE_MIGRATIONS = (
     load_sql(__package__, "workspace_state_sql/021.sql"),
     load_sql(__package__, "workspace_state_sql/022.sql"),
     load_sql(__package__, "workspace_state_sql/023.sql"),
+    load_sql(__package__, "workspace_state_sql/024.sql"),
 )
 
 

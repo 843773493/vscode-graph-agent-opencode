@@ -89,6 +89,28 @@ def start_workspace_message():
     return start
 
 
+@pytest.fixture
+def source_config_writer():
+    async def save(container, payload, key, expected_status=200):
+        path = f"/api/v1/workspaces/{container.workspace_id}/config/sources/workspace_root_mutable_override"
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
+            headers={**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Gateway-Id": "gateway_" + "9" * 32, "X-Request-ID": key}) as client:
+            current = await client.get(path)
+            assert current.status_code == 200, current.text
+            document = current.json()["data"]
+            response = await client.put(path, json={
+                "gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"],
+                "source_key": document["source_key"], "jsonc": json.dumps(payload),
+                "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
+                "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
+                "expected_active_digest": document["active_digest"], "idempotency_key": key,
+            })
+            assert response.status_code == expected_status, response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"] == key
+            return response
+    return save
+
+
 async def test_watcher_replacement_preserves_sealed_network_target_and_publishes_new_calls(
     mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch, start_workspace_message,
 ):
@@ -231,8 +253,8 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
     assert_closed(mounted_case)
 
 
-async def test_watcher_add_header_reference_replace_disable_remove_and_reenable_use_real_connections(
-    mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch,
+async def test_source_api_add_header_reference_replace_disable_remove_and_reenable_use_real_connections(
+    mounted_case: MountedCase, inprocess_model_replay, http_schema_endpoint_factory, monkeypatch, source_config_writer,
 ):
     replay, controller = inprocess_model_replay
     monkeypatch.setenv("MCP_TEST_OLD_CREDENTIAL", "test-old-credential")
@@ -264,7 +286,7 @@ async def test_watcher_add_header_reference_replace_disable_remove_and_reenable_
                     server = mcp_servers(payload)["schema"]
                     server["url"] = endpoint.url
                     server["headers"] = {"Authorization": "Bearer ${" + credential + "}"}
-                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    await source_config_writer(first, payload, marker)
                     status = await wait_status(service, lambda status, previous=previous:
                         status.healthy and owner.binding_snapshot() != previous)
                     assert status.state == "active" and not status.deferred_paths and not status.restart_required
@@ -280,29 +302,31 @@ async def test_watcher_add_header_reference_replace_disable_remove_and_reenable_
                     ]
                 generation = owner.binding_snapshot().resolve("mcp__schema__probe").connection_ref
                 mcp_servers(payload)["schema"]["enabled"] = False
-                path.write_text(json.dumps(payload), encoding="utf-8")
+                await source_config_writer(first, payload, "header-disabled")
                 status = await wait_status(service, lambda status: status.healthy and not owner.get_tool_ids())
                 assert status.applied_paths == ("/mcp/servers/schema/enabled",) and not status.deferred_paths
                 mcp_servers(payload).pop("schema")
-                path.write_text(json.dumps(payload), encoding="utf-8")
+                await source_config_writer(first, payload, "header-removed")
                 status = await wait_status(service, lambda status: status.healthy
                     and "schema" not in service.get_snapshot().to_dict()["mcp"]["servers"])
                 assert status.applied_paths == ("/mcp/servers/schema",) and not status.deferred_paths
                 mcp_servers(payload)["schema"] = {"enabled": True, "transport": "streamable_http", "url": new.url,
                     "headers": {"Authorization": "Bearer ${MCP_TEST_NEW_CREDENTIAL}"}}
-                path.write_text(json.dumps(payload), encoding="utf-8")
+                await source_config_writer(first, payload, "header-reenabled")
                 status = await wait_status(service, lambda status: status.healthy and bool(owner.get_tool_ids()))
                 assert status.applied_paths == ("/mcp/servers/schema",) and not status.deferred_paths
                 current = owner.binding_snapshot()
                 assert current.resolve("mcp__schema__probe").connection_ref != generation
+                # 拒绝入口前先收束已提交文件的独立 watcher 对账，保留对象身份断言。
+                await service.stop_watching()
                 # 未知字段必须在候选校验阶段拒绝，不得借 Server 根规则获得热应用。
                 active_snapshot = service.get_snapshot()
                 events = service.list_config_events()
+                source_bytes = path.read_bytes()
                 mcp_servers(payload)["schema"]["unknown"] = True
-                path.write_text(json.dumps(payload), encoding="utf-8")
-                invalid = await wait_status(service, lambda status: not status.healthy)
-                assert invalid.reason == "invalid_config" and invalid.state == "active"
-                assert invalid.active_revision == status.active_revision
+                rejected = await source_config_writer(first, payload, "header-invalid", 422)
+                assert "配置验证失败" in rejected.text and path.read_bytes() == source_bytes
+                assert service.get_reload_status().active_revision == status.active_revision
                 assert service.get_snapshot() is active_snapshot and service.list_config_events() == events
                 assert owner.binding_snapshot() is current
                 assert sibling.mcp_catalog_owner.binding_snapshot() == sibling_binding

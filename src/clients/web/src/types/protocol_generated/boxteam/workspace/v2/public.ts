@@ -71,6 +71,109 @@ export interface ConfigReloadStatusDTO {
   last_attempt_at: string;
   last_error?: string | undefined;
   mcp_cleanup: McpCleanupDTO[];
+  state?: string | undefined;
+  active_revision?: number | undefined;
+  pending_revision?: number | undefined;
+  candidate_id?: string | undefined;
+  candidate_ref?: string | undefined;
+  attempt_id?: string | undefined;
+  apply_id?: string | undefined;
+  layer_digests: { [key: string]: any | undefined };
+  applied_paths: string[];
+  deferred_paths: string[];
+}
+
+export interface ConfigReloadStatusDTO_LayerDigestsEntry {
+  key: string;
+  value: any | undefined;
+}
+
+/** 所选来源文件、SQLite layer 与 active 是三个独立基线；不接受任意物理路径。 */
+export interface ConfigSourceEditRequest {
+  gateway_id: string;
+  workspace_id: string;
+  source_key: string;
+  jsonc: string;
+  base_file_digest: any | undefined;
+  base_layer_revision: any | undefined;
+  base_layer_digest: any | undefined;
+  expected_active_revision: any | undefined;
+  expected_active_digest: any | undefined;
+  idempotency_key: string;
+}
+
+export interface ConfigSourceLayerViewDTO {
+  source_key: string;
+  layer: string;
+  precedence: number;
+  writable: boolean;
+  payload: { [key: string]: any } | undefined;
+}
+
+export interface ConfigSourceOriginDTO {
+  path: string;
+  source_key: string;
+  shadowed_sources: string[];
+}
+
+export interface ConfigSourceEditDTO {
+  idempotency_key: string;
+  candidate_id: string;
+  state: string;
+  file_digest: string;
+  source_saved: boolean;
+  layer_imported: boolean;
+}
+
+export interface ConfigSourceDocumentDTO {
+  gateway_id: string;
+  workspace_id: string;
+  source_key: string;
+  layer: string;
+  writable: boolean;
+  jsonc: string;
+  file_presence: string;
+  file_digest: any | undefined;
+  layer_revision: any | undefined;
+  layer_digest: any | undefined;
+  source_generation: any | undefined;
+  active_revision: any | undefined;
+  active_digest: any | undefined;
+  json_schema: { [key: string]: any } | undefined;
+  effective: { [key: string]: any } | undefined;
+  source_effective: { [key: string]: any } | undefined;
+  layers: ConfigSourceLayerViewDTO[];
+  origins: ConfigSourceOriginDTO[];
+  status: ConfigReloadStatusDTO | undefined;
+  edit?: ConfigSourceEditDTO | undefined;
+}
+
+export interface ConfigSourcePreflightDTO {
+  document: ConfigSourceDocumentDTO | undefined;
+  candidate: { [key: string]: any } | undefined;
+  candidate_digest: string;
+  changed_paths: string[];
+}
+
+export interface ConfigEventDTO {
+  event_seq: number;
+  event_id: string;
+  config_domain: string;
+  candidate_id?: string | undefined;
+  attempt_id?: string | undefined;
+  apply_id?: string | undefined;
+  idempotency_key?: string | undefined;
+  commit_revision?: number | undefined;
+  active_revision?: number | undefined;
+  pending_revision?: number | undefined;
+  source: string;
+  result: string;
+  activation_scope: string;
+  changed_paths: string[];
+  applied_paths: string[];
+  deferred_paths: string[];
+  error?: string | undefined;
+  occurred_at: string;
 }
 
 export interface McpCleanupDTO {
@@ -3750,6 +3853,16 @@ function createBaseConfigReloadStatusDTO(): ConfigReloadStatusDTO {
     last_attempt_at: "",
     last_error: undefined,
     mcp_cleanup: [],
+    state: undefined,
+    active_revision: undefined,
+    pending_revision: undefined,
+    candidate_id: undefined,
+    candidate_ref: undefined,
+    attempt_id: undefined,
+    apply_id: undefined,
+    layer_digests: {},
+    applied_paths: [],
+    deferred_paths: [],
   };
 }
 
@@ -3768,6 +3881,33 @@ export const ConfigReloadStatusDTO: MessageFns<ConfigReloadStatusDTO> = {
       last_error: isSet(object.last_error) ? globalThis.String(object.last_error) : undefined,
       mcp_cleanup: globalThis.Array.isArray(object?.mcp_cleanup)
         ? object.mcp_cleanup.map((e: any) => McpCleanupDTO.fromJSON(e))
+        : [],
+      state: isSet(object.state) ? globalThis.String(object.state) : undefined,
+      active_revision: isSet(object.active_revision) ? globalThis.Number(object.active_revision) : undefined,
+      pending_revision: isSet(object.pending_revision) ? globalThis.Number(object.pending_revision) : undefined,
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : undefined,
+      candidate_ref: isSet(object.candidate_ref) ? globalThis.String(object.candidate_ref) : undefined,
+      attempt_id: isSet(object.attempt_id) ? globalThis.String(object.attempt_id) : undefined,
+      apply_id: isSet(object.apply_id) ? globalThis.String(object.apply_id) : undefined,
+      layer_digests: isObject(object.layer_digests)
+        ? (globalThis.Object.entries(object.layer_digests) as [string, any][]).reduce(
+          (acc: { [key: string]: any | undefined }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: value as any | undefined,
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      applied_paths: globalThis.Array.isArray(object?.applied_paths)
+        ? object.applied_paths.map((e: any) => globalThis.String(e))
+        : [],
+      deferred_paths: globalThis.Array.isArray(object?.deferred_paths)
+        ? object.deferred_paths.map((e: any) => globalThis.String(e))
         : [],
     };
   },
@@ -3801,6 +3941,42 @@ export const ConfigReloadStatusDTO: MessageFns<ConfigReloadStatusDTO> = {
     if (message.mcp_cleanup?.length) {
       obj.mcp_cleanup = message.mcp_cleanup.map((e) => McpCleanupDTO.toJSON(e));
     }
+    if (message.state !== undefined) {
+      obj.state = message.state;
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = Math.round(message.active_revision);
+    }
+    if (message.pending_revision !== undefined) {
+      obj.pending_revision = Math.round(message.pending_revision);
+    }
+    if (message.candidate_id !== undefined) {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.candidate_ref !== undefined) {
+      obj.candidate_ref = message.candidate_ref;
+    }
+    if (message.attempt_id !== undefined) {
+      obj.attempt_id = message.attempt_id;
+    }
+    if (message.apply_id !== undefined) {
+      obj.apply_id = message.apply_id;
+    }
+    if (message.layer_digests) {
+      const entries = globalThis.Object.entries(message.layer_digests) as [string, any | undefined][];
+      if (entries.length > 0) {
+        obj.layer_digests = {};
+        entries.forEach(([k, v]) => {
+          obj.layer_digests[k] = v;
+        });
+      }
+    }
+    if (message.applied_paths?.length) {
+      obj.applied_paths = message.applied_paths;
+    }
+    if (message.deferred_paths?.length) {
+      obj.deferred_paths = message.deferred_paths;
+    }
     return obj;
   },
 
@@ -3818,6 +3994,636 @@ export const ConfigReloadStatusDTO: MessageFns<ConfigReloadStatusDTO> = {
     message.last_attempt_at = object.last_attempt_at ?? "";
     message.last_error = object.last_error ?? undefined;
     message.mcp_cleanup = object.mcp_cleanup?.map((e) => McpCleanupDTO.fromPartial(e)) || [];
+    message.state = object.state ?? undefined;
+    message.active_revision = object.active_revision ?? undefined;
+    message.pending_revision = object.pending_revision ?? undefined;
+    message.candidate_id = object.candidate_id ?? undefined;
+    message.candidate_ref = object.candidate_ref ?? undefined;
+    message.attempt_id = object.attempt_id ?? undefined;
+    message.apply_id = object.apply_id ?? undefined;
+    message.layer_digests = (globalThis.Object.entries(object.layer_digests ?? {}) as [string, any | undefined][])
+      .reduce((acc: { [key: string]: any | undefined }, [key, value]: [string, any | undefined]) => {
+        if (value !== undefined) {
+          acc[key] = value;
+        }
+        return acc;
+      }, {});
+    message.applied_paths = object.applied_paths?.map((e) => e) || [];
+    message.deferred_paths = object.deferred_paths?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseConfigReloadStatusDTO_LayerDigestsEntry(): ConfigReloadStatusDTO_LayerDigestsEntry {
+  return { key: "", value: undefined };
+}
+
+export const ConfigReloadStatusDTO_LayerDigestsEntry: MessageFns<ConfigReloadStatusDTO_LayerDigestsEntry> = {
+  fromJSON(object: any): ConfigReloadStatusDTO_LayerDigestsEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object?.value) ? object.value : undefined,
+    };
+  },
+
+  toJSON(message: ConfigReloadStatusDTO_LayerDigestsEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigReloadStatusDTO_LayerDigestsEntry>, I>>(
+    base?: I,
+  ): ConfigReloadStatusDTO_LayerDigestsEntry {
+    return ConfigReloadStatusDTO_LayerDigestsEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigReloadStatusDTO_LayerDigestsEntry>, I>>(
+    object: I,
+  ): ConfigReloadStatusDTO_LayerDigestsEntry {
+    const message = createBaseConfigReloadStatusDTO_LayerDigestsEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? undefined;
+    return message;
+  },
+};
+
+function createBaseConfigSourceEditRequest(): ConfigSourceEditRequest {
+  return {
+    gateway_id: "",
+    workspace_id: "",
+    source_key: "",
+    jsonc: "",
+    base_file_digest: undefined,
+    base_layer_revision: undefined,
+    base_layer_digest: undefined,
+    expected_active_revision: undefined,
+    expected_active_digest: undefined,
+    idempotency_key: "",
+  };
+}
+
+export const ConfigSourceEditRequest: MessageFns<ConfigSourceEditRequest> = {
+  fromJSON(object: any): ConfigSourceEditRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      jsonc: isSet(object.jsonc) ? globalThis.String(object.jsonc) : "",
+      base_file_digest: isSet(object?.base_file_digest) ? object.base_file_digest : undefined,
+      base_layer_revision: isSet(object?.base_layer_revision) ? object.base_layer_revision : undefined,
+      base_layer_digest: isSet(object?.base_layer_digest) ? object.base_layer_digest : undefined,
+      expected_active_revision: isSet(object?.expected_active_revision) ? object.expected_active_revision : undefined,
+      expected_active_digest: isSet(object?.expected_active_digest) ? object.expected_active_digest : undefined,
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+    };
+  },
+
+  toJSON(message: ConfigSourceEditRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.jsonc !== "") {
+      obj.jsonc = message.jsonc;
+    }
+    if (message.base_file_digest !== undefined) {
+      obj.base_file_digest = message.base_file_digest;
+    }
+    if (message.base_layer_revision !== undefined) {
+      obj.base_layer_revision = message.base_layer_revision;
+    }
+    if (message.base_layer_digest !== undefined) {
+      obj.base_layer_digest = message.base_layer_digest;
+    }
+    if (message.expected_active_revision !== undefined) {
+      obj.expected_active_revision = message.expected_active_revision;
+    }
+    if (message.expected_active_digest !== undefined) {
+      obj.expected_active_digest = message.expected_active_digest;
+    }
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceEditRequest>, I>>(base?: I): ConfigSourceEditRequest {
+    return ConfigSourceEditRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceEditRequest>, I>>(object: I): ConfigSourceEditRequest {
+    const message = createBaseConfigSourceEditRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.source_key = object.source_key ?? "";
+    message.jsonc = object.jsonc ?? "";
+    message.base_file_digest = object.base_file_digest ?? undefined;
+    message.base_layer_revision = object.base_layer_revision ?? undefined;
+    message.base_layer_digest = object.base_layer_digest ?? undefined;
+    message.expected_active_revision = object.expected_active_revision ?? undefined;
+    message.expected_active_digest = object.expected_active_digest ?? undefined;
+    message.idempotency_key = object.idempotency_key ?? "";
+    return message;
+  },
+};
+
+function createBaseConfigSourceLayerViewDTO(): ConfigSourceLayerViewDTO {
+  return { source_key: "", layer: "", precedence: 0, writable: false, payload: undefined };
+}
+
+export const ConfigSourceLayerViewDTO: MessageFns<ConfigSourceLayerViewDTO> = {
+  fromJSON(object: any): ConfigSourceLayerViewDTO {
+    return {
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
+      precedence: isSet(object.precedence) ? globalThis.Number(object.precedence) : 0,
+      writable: isSet(object.writable) ? globalThis.Boolean(object.writable) : false,
+      payload: isObject(object.payload) ? object.payload : undefined,
+    };
+  },
+
+  toJSON(message: ConfigSourceLayerViewDTO): unknown {
+    const obj: any = {};
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.layer !== "") {
+      obj.layer = message.layer;
+    }
+    if (message.precedence !== 0) {
+      obj.precedence = Math.round(message.precedence);
+    }
+    if (message.writable !== false) {
+      obj.writable = message.writable;
+    }
+    if (message.payload !== undefined) {
+      obj.payload = message.payload;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceLayerViewDTO>, I>>(base?: I): ConfigSourceLayerViewDTO {
+    return ConfigSourceLayerViewDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceLayerViewDTO>, I>>(object: I): ConfigSourceLayerViewDTO {
+    const message = createBaseConfigSourceLayerViewDTO();
+    message.source_key = object.source_key ?? "";
+    message.layer = object.layer ?? "";
+    message.precedence = object.precedence ?? 0;
+    message.writable = object.writable ?? false;
+    message.payload = object.payload ?? undefined;
+    return message;
+  },
+};
+
+function createBaseConfigSourceOriginDTO(): ConfigSourceOriginDTO {
+  return { path: "", source_key: "", shadowed_sources: [] };
+}
+
+export const ConfigSourceOriginDTO: MessageFns<ConfigSourceOriginDTO> = {
+  fromJSON(object: any): ConfigSourceOriginDTO {
+    return {
+      path: isSet(object.path) ? globalThis.String(object.path) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      shadowed_sources: globalThis.Array.isArray(object?.shadowed_sources)
+        ? object.shadowed_sources.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ConfigSourceOriginDTO): unknown {
+    const obj: any = {};
+    if (message.path !== "") {
+      obj.path = message.path;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.shadowed_sources?.length) {
+      obj.shadowed_sources = message.shadowed_sources;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceOriginDTO>, I>>(base?: I): ConfigSourceOriginDTO {
+    return ConfigSourceOriginDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceOriginDTO>, I>>(object: I): ConfigSourceOriginDTO {
+    const message = createBaseConfigSourceOriginDTO();
+    message.path = object.path ?? "";
+    message.source_key = object.source_key ?? "";
+    message.shadowed_sources = object.shadowed_sources?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseConfigSourceEditDTO(): ConfigSourceEditDTO {
+  return {
+    idempotency_key: "",
+    candidate_id: "",
+    state: "",
+    file_digest: "",
+    source_saved: false,
+    layer_imported: false,
+  };
+}
+
+export const ConfigSourceEditDTO: MessageFns<ConfigSourceEditDTO> = {
+  fromJSON(object: any): ConfigSourceEditDTO {
+    return {
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      file_digest: isSet(object.file_digest) ? globalThis.String(object.file_digest) : "",
+      source_saved: isSet(object.source_saved) ? globalThis.Boolean(object.source_saved) : false,
+      layer_imported: isSet(object.layer_imported) ? globalThis.Boolean(object.layer_imported) : false,
+    };
+  },
+
+  toJSON(message: ConfigSourceEditDTO): unknown {
+    const obj: any = {};
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.candidate_id !== "") {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.file_digest !== "") {
+      obj.file_digest = message.file_digest;
+    }
+    if (message.source_saved !== false) {
+      obj.source_saved = message.source_saved;
+    }
+    if (message.layer_imported !== false) {
+      obj.layer_imported = message.layer_imported;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceEditDTO>, I>>(base?: I): ConfigSourceEditDTO {
+    return ConfigSourceEditDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceEditDTO>, I>>(object: I): ConfigSourceEditDTO {
+    const message = createBaseConfigSourceEditDTO();
+    message.idempotency_key = object.idempotency_key ?? "";
+    message.candidate_id = object.candidate_id ?? "";
+    message.state = object.state ?? "";
+    message.file_digest = object.file_digest ?? "";
+    message.source_saved = object.source_saved ?? false;
+    message.layer_imported = object.layer_imported ?? false;
+    return message;
+  },
+};
+
+function createBaseConfigSourceDocumentDTO(): ConfigSourceDocumentDTO {
+  return {
+    gateway_id: "",
+    workspace_id: "",
+    source_key: "",
+    layer: "",
+    writable: false,
+    jsonc: "",
+    file_presence: "",
+    file_digest: undefined,
+    layer_revision: undefined,
+    layer_digest: undefined,
+    source_generation: undefined,
+    active_revision: undefined,
+    active_digest: undefined,
+    json_schema: undefined,
+    effective: undefined,
+    source_effective: undefined,
+    layers: [],
+    origins: [],
+    status: undefined,
+    edit: undefined,
+  };
+}
+
+export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
+  fromJSON(object: any): ConfigSourceDocumentDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
+      writable: isSet(object.writable) ? globalThis.Boolean(object.writable) : false,
+      jsonc: isSet(object.jsonc) ? globalThis.String(object.jsonc) : "",
+      file_presence: isSet(object.file_presence) ? globalThis.String(object.file_presence) : "",
+      file_digest: isSet(object?.file_digest) ? object.file_digest : undefined,
+      layer_revision: isSet(object?.layer_revision) ? object.layer_revision : undefined,
+      layer_digest: isSet(object?.layer_digest) ? object.layer_digest : undefined,
+      source_generation: isSet(object?.source_generation) ? object.source_generation : undefined,
+      active_revision: isSet(object?.active_revision) ? object.active_revision : undefined,
+      active_digest: isSet(object?.active_digest) ? object.active_digest : undefined,
+      json_schema: isObject(object.json_schema) ? object.json_schema : undefined,
+      effective: isObject(object.effective) ? object.effective : undefined,
+      source_effective: isObject(object.source_effective) ? object.source_effective : undefined,
+      layers: globalThis.Array.isArray(object?.layers)
+        ? object.layers.map((e: any) => ConfigSourceLayerViewDTO.fromJSON(e))
+        : [],
+      origins: globalThis.Array.isArray(object?.origins)
+        ? object.origins.map((e: any) => ConfigSourceOriginDTO.fromJSON(e))
+        : [],
+      status: isSet(object.status) ? ConfigReloadStatusDTO.fromJSON(object.status) : undefined,
+      edit: isSet(object.edit) ? ConfigSourceEditDTO.fromJSON(object.edit) : undefined,
+    };
+  },
+
+  toJSON(message: ConfigSourceDocumentDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.layer !== "") {
+      obj.layer = message.layer;
+    }
+    if (message.writable !== false) {
+      obj.writable = message.writable;
+    }
+    if (message.jsonc !== "") {
+      obj.jsonc = message.jsonc;
+    }
+    if (message.file_presence !== "") {
+      obj.file_presence = message.file_presence;
+    }
+    if (message.file_digest !== undefined) {
+      obj.file_digest = message.file_digest;
+    }
+    if (message.layer_revision !== undefined) {
+      obj.layer_revision = message.layer_revision;
+    }
+    if (message.layer_digest !== undefined) {
+      obj.layer_digest = message.layer_digest;
+    }
+    if (message.source_generation !== undefined) {
+      obj.source_generation = message.source_generation;
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = message.active_revision;
+    }
+    if (message.active_digest !== undefined) {
+      obj.active_digest = message.active_digest;
+    }
+    if (message.json_schema !== undefined) {
+      obj.json_schema = message.json_schema;
+    }
+    if (message.effective !== undefined) {
+      obj.effective = message.effective;
+    }
+    if (message.source_effective !== undefined) {
+      obj.source_effective = message.source_effective;
+    }
+    if (message.layers?.length) {
+      obj.layers = message.layers.map((e) => ConfigSourceLayerViewDTO.toJSON(e));
+    }
+    if (message.origins?.length) {
+      obj.origins = message.origins.map((e) => ConfigSourceOriginDTO.toJSON(e));
+    }
+    if (message.status !== undefined) {
+      obj.status = ConfigReloadStatusDTO.toJSON(message.status);
+    }
+    if (message.edit !== undefined) {
+      obj.edit = ConfigSourceEditDTO.toJSON(message.edit);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceDocumentDTO>, I>>(base?: I): ConfigSourceDocumentDTO {
+    return ConfigSourceDocumentDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceDocumentDTO>, I>>(object: I): ConfigSourceDocumentDTO {
+    const message = createBaseConfigSourceDocumentDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.source_key = object.source_key ?? "";
+    message.layer = object.layer ?? "";
+    message.writable = object.writable ?? false;
+    message.jsonc = object.jsonc ?? "";
+    message.file_presence = object.file_presence ?? "";
+    message.file_digest = object.file_digest ?? undefined;
+    message.layer_revision = object.layer_revision ?? undefined;
+    message.layer_digest = object.layer_digest ?? undefined;
+    message.source_generation = object.source_generation ?? undefined;
+    message.active_revision = object.active_revision ?? undefined;
+    message.active_digest = object.active_digest ?? undefined;
+    message.json_schema = object.json_schema ?? undefined;
+    message.effective = object.effective ?? undefined;
+    message.source_effective = object.source_effective ?? undefined;
+    message.layers = object.layers?.map((e) => ConfigSourceLayerViewDTO.fromPartial(e)) || [];
+    message.origins = object.origins?.map((e) => ConfigSourceOriginDTO.fromPartial(e)) || [];
+    message.status = (object.status !== undefined && object.status !== null)
+      ? ConfigReloadStatusDTO.fromPartial(object.status)
+      : undefined;
+    message.edit = (object.edit !== undefined && object.edit !== null)
+      ? ConfigSourceEditDTO.fromPartial(object.edit)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseConfigSourcePreflightDTO(): ConfigSourcePreflightDTO {
+  return { document: undefined, candidate: undefined, candidate_digest: "", changed_paths: [] };
+}
+
+export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
+  fromJSON(object: any): ConfigSourcePreflightDTO {
+    return {
+      document: isSet(object.document) ? ConfigSourceDocumentDTO.fromJSON(object.document) : undefined,
+      candidate: isObject(object.candidate) ? object.candidate : undefined,
+      candidate_digest: isSet(object.candidate_digest) ? globalThis.String(object.candidate_digest) : "",
+      changed_paths: globalThis.Array.isArray(object?.changed_paths)
+        ? object.changed_paths.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ConfigSourcePreflightDTO): unknown {
+    const obj: any = {};
+    if (message.document !== undefined) {
+      obj.document = ConfigSourceDocumentDTO.toJSON(message.document);
+    }
+    if (message.candidate !== undefined) {
+      obj.candidate = message.candidate;
+    }
+    if (message.candidate_digest !== "") {
+      obj.candidate_digest = message.candidate_digest;
+    }
+    if (message.changed_paths?.length) {
+      obj.changed_paths = message.changed_paths;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourcePreflightDTO>, I>>(base?: I): ConfigSourcePreflightDTO {
+    return ConfigSourcePreflightDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourcePreflightDTO>, I>>(object: I): ConfigSourcePreflightDTO {
+    const message = createBaseConfigSourcePreflightDTO();
+    message.document = (object.document !== undefined && object.document !== null)
+      ? ConfigSourceDocumentDTO.fromPartial(object.document)
+      : undefined;
+    message.candidate = object.candidate ?? undefined;
+    message.candidate_digest = object.candidate_digest ?? "";
+    message.changed_paths = object.changed_paths?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseConfigEventDTO(): ConfigEventDTO {
+  return {
+    event_seq: 0,
+    event_id: "",
+    config_domain: "",
+    candidate_id: undefined,
+    attempt_id: undefined,
+    apply_id: undefined,
+    idempotency_key: undefined,
+    commit_revision: undefined,
+    active_revision: undefined,
+    pending_revision: undefined,
+    source: "",
+    result: "",
+    activation_scope: "",
+    changed_paths: [],
+    applied_paths: [],
+    deferred_paths: [],
+    error: undefined,
+    occurred_at: "",
+  };
+}
+
+export const ConfigEventDTO: MessageFns<ConfigEventDTO> = {
+  fromJSON(object: any): ConfigEventDTO {
+    return {
+      event_seq: isSet(object.event_seq) ? globalThis.Number(object.event_seq) : 0,
+      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
+      config_domain: isSet(object.config_domain) ? globalThis.String(object.config_domain) : "",
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : undefined,
+      attempt_id: isSet(object.attempt_id) ? globalThis.String(object.attempt_id) : undefined,
+      apply_id: isSet(object.apply_id) ? globalThis.String(object.apply_id) : undefined,
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : undefined,
+      commit_revision: isSet(object.commit_revision) ? globalThis.Number(object.commit_revision) : undefined,
+      active_revision: isSet(object.active_revision) ? globalThis.Number(object.active_revision) : undefined,
+      pending_revision: isSet(object.pending_revision) ? globalThis.Number(object.pending_revision) : undefined,
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      result: isSet(object.result) ? globalThis.String(object.result) : "",
+      activation_scope: isSet(object.activation_scope) ? globalThis.String(object.activation_scope) : "",
+      changed_paths: globalThis.Array.isArray(object?.changed_paths)
+        ? object.changed_paths.map((e: any) => globalThis.String(e))
+        : [],
+      applied_paths: globalThis.Array.isArray(object?.applied_paths)
+        ? object.applied_paths.map((e: any) => globalThis.String(e))
+        : [],
+      deferred_paths: globalThis.Array.isArray(object?.deferred_paths)
+        ? object.deferred_paths.map((e: any) => globalThis.String(e))
+        : [],
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      occurred_at: isSet(object.occurred_at) ? globalThis.String(object.occurred_at) : "",
+    };
+  },
+
+  toJSON(message: ConfigEventDTO): unknown {
+    const obj: any = {};
+    if (message.event_seq !== 0) {
+      obj.event_seq = Math.round(message.event_seq);
+    }
+    if (message.event_id !== "") {
+      obj.event_id = message.event_id;
+    }
+    if (message.config_domain !== "") {
+      obj.config_domain = message.config_domain;
+    }
+    if (message.candidate_id !== undefined) {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.attempt_id !== undefined) {
+      obj.attempt_id = message.attempt_id;
+    }
+    if (message.apply_id !== undefined) {
+      obj.apply_id = message.apply_id;
+    }
+    if (message.idempotency_key !== undefined) {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.commit_revision !== undefined) {
+      obj.commit_revision = Math.round(message.commit_revision);
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = Math.round(message.active_revision);
+    }
+    if (message.pending_revision !== undefined) {
+      obj.pending_revision = Math.round(message.pending_revision);
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.result !== "") {
+      obj.result = message.result;
+    }
+    if (message.activation_scope !== "") {
+      obj.activation_scope = message.activation_scope;
+    }
+    if (message.changed_paths?.length) {
+      obj.changed_paths = message.changed_paths;
+    }
+    if (message.applied_paths?.length) {
+      obj.applied_paths = message.applied_paths;
+    }
+    if (message.deferred_paths?.length) {
+      obj.deferred_paths = message.deferred_paths;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    if (message.occurred_at !== "") {
+      obj.occurred_at = message.occurred_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigEventDTO>, I>>(base?: I): ConfigEventDTO {
+    return ConfigEventDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigEventDTO>, I>>(object: I): ConfigEventDTO {
+    const message = createBaseConfigEventDTO();
+    message.event_seq = object.event_seq ?? 0;
+    message.event_id = object.event_id ?? "";
+    message.config_domain = object.config_domain ?? "";
+    message.candidate_id = object.candidate_id ?? undefined;
+    message.attempt_id = object.attempt_id ?? undefined;
+    message.apply_id = object.apply_id ?? undefined;
+    message.idempotency_key = object.idempotency_key ?? undefined;
+    message.commit_revision = object.commit_revision ?? undefined;
+    message.active_revision = object.active_revision ?? undefined;
+    message.pending_revision = object.pending_revision ?? undefined;
+    message.source = object.source ?? "";
+    message.result = object.result ?? "";
+    message.activation_scope = object.activation_scope ?? "";
+    message.changed_paths = object.changed_paths?.map((e) => e) || [];
+    message.applied_paths = object.applied_paths?.map((e) => e) || [];
+    message.deferred_paths = object.deferred_paths?.map((e) => e) || [];
+    message.error = object.error ?? undefined;
+    message.occurred_at = object.occurred_at ?? "";
     return message;
   },
 };

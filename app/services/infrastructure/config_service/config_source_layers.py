@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import (
@@ -47,6 +47,9 @@ from configs.runtime import (
 
 
 class ConfigSourceLayersMixin:
+    if TYPE_CHECKING:
+        _RUNTIME_OVERRIDE_CONFIG_KEY: str
+
     def _resolve_schema_path(
         self,
         *,
@@ -100,12 +103,32 @@ class ConfigSourceLayersMixin:
 
     def _read_effective_config(
         self,
+        *,
+        workspace_source: dict[str, object] | None = None,
+        import_sources: bool = True,
+        source_payloads: dict[str, dict[str, object]] | None = None,
     ) -> tuple[
         dict[str, Any],
         tuple[Path, ...],
         tuple[ConfigSource, ...],
         Path,
     ]:
+        def read_override(*, config_key: str, path: Path) -> dict[str, object] | None:
+            if config_key == "workspace_root_mutable_override" and workspace_source is not None:
+                payload = workspace_source
+            elif import_sources:
+                payload = self._read_shared_override(config_key=config_key, path=path)
+            else:
+                require_settled_config_migration(path)
+                payload = parse_stable_config_file(read_stable_config_file(path))
+            if not import_sources and payload is not None:
+                require_current_workspace_config(payload, partial=True)
+                prepare_config_for_persistence(payload)
+                ConfigAgentToolsMixin._preflight_custom_tool_factories(payload)
+            if source_payloads is not None:
+                source_payloads[config_key] = payload or {}
+            return payload
+
         config_path = self._get_workspace_config_path()
         source_paths: list[Path] = [self._inline_config_path]
         source_details: list[ConfigSource] = [
@@ -117,8 +140,10 @@ class ConfigSourceLayersMixin:
             ),
         ]
         config = self._read_config_source(self._inline_config_path)
+        if source_payloads is not None:
+            source_payloads["inline"] = config
         source_configs = {self._inline_config_path: config}
-        user_override = self._read_shared_override(
+        user_override = read_override(
             config_key="workspace_mutable_override",
             path=config_path,
         )
@@ -137,7 +162,7 @@ class ConfigSourceLayersMixin:
             self._append_source_path(source_paths, config_path)
 
         local_config_path = self._get_workspace_local_config_path()
-        local_override = self._read_shared_override(
+        local_override = read_override(
             config_key="workspace_local_mutable_override",
             path=local_config_path,
         )
@@ -157,12 +182,13 @@ class ConfigSourceLayersMixin:
         schema_path: Path | None = None
         if self._workspace_root is not None:
             schema_path = self._resolve_schema_path(source_configs=source_configs)
-            migrate_legacy_workspace_configuration(
-                workspace_root=self._workspace_root,
-                workspace_schema_path=schema_path,
-            )
+            if import_sources:
+                migrate_legacy_workspace_configuration(
+                    workspace_root=self._workspace_root,
+                    workspace_schema_path=schema_path,
+                )
             workspace_path = get_workspace_config_path(self._workspace_root)
-            workspace_override = self._read_shared_override(
+            workspace_override = read_override(
                 config_key="workspace_root_mutable_override",
                 path=workspace_path,
             )
@@ -184,6 +210,8 @@ class ConfigSourceLayersMixin:
                 else {},
                 self._runtime_config_overrides,
             )
+        if source_payloads is not None:
+            source_payloads[self._RUNTIME_OVERRIDE_CONFIG_KEY] = {"ui": dict(self._runtime_config_overrides)}
         self._validate_agent_tool_policies(config)
         if schema_path is None:
             schema_path = self._resolve_schema_path(source_configs=source_configs)

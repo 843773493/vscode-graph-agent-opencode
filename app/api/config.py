@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -9,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import get_config_service, get_request_id, verify_local_token
 from app.api.errors import state_conflict_http_error
 from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
+from app.core.trace_middleware import require_current_gateway_id
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.config import (
     ConfigDTO,
@@ -18,11 +20,15 @@ from app.schemas.internal_v2.config import (
     ConfigPendingHealthProofRequest,
     ConfigReloadStatusDTO,
     ConfigRestartFailureRequest,
+    ConfigSourceDocumentDTO,
     ConfigSourceDTO,
+    ConfigSourceEditRequest,
+    ConfigSourcePreflightDTO,
     ConfigSourcesDTO,
     ConfigStartupContractDTO,
     ConfigUpdateRequest,
 )
+from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -31,33 +37,6 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.config_service import ConfigService
 
 router = APIRouter(prefix="/config", tags=["config"])
-
-
-def _reload_status_dto(config_service: ConfigService) -> ConfigReloadStatusDTO:
-    with config_service.publication_lock:
-        status = config_service.get_reload_status()
-        cleanup = config_service.get_mcp_cleanup_diagnostics()
-    return ConfigReloadStatusDTO(
-        healthy=status.healthy,
-        revision=status.revision,
-        restart_required=status.restart_required,
-        reason=status.reason,
-        changed_sections=list(status.changed_sections),
-        last_success_at=status.last_success_at.isoformat(),
-        last_attempt_at=status.last_attempt_at.isoformat(),
-        last_error=status.last_error,
-        state=status.state,
-        active_revision=status.active_revision,
-        pending_revision=status.pending_revision,
-        candidate_id=status.candidate_id,
-        candidate_ref=status.candidate_ref,
-        attempt_id=status.attempt_id,
-        apply_id=status.apply_id,
-        layer_digests=status.layer_digests or {},
-        applied_paths=list(status.applied_paths),
-        deferred_paths=list(status.deferred_paths),
-        mcp_cleanup=list(cleanup),
-    )
 
 
 @router.get("", response_model=APIResponse[ConfigDTO], summary="获取配置")
@@ -81,7 +60,7 @@ async def get_config_reload_status(
     config_service: ConfigService = Depends(get_config_service),
 ):
     return APIResponse(
-        data=_reload_status_dto(config_service),
+        data=config_service.get_reload_status_dto(),
         request_id=request_id,
     )
 
@@ -120,6 +99,60 @@ async def get_config_sources(
         ),
         request_id=request_id,
     )
+
+
+@router.get("/sources/{source_key}", response_model=APIResponse[ConfigSourceDocumentDTO], summary="读取配置来源正文")
+async def get_config_source_document(
+    source_key: str,
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    idempotency_key: str | None = Query(default=None),
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        result = config_service.get_source_document(source_key=source_key,
+            gateway_id=require_current_gateway_id("配置来源读取"), idempotency_key=idempotency_key)
+    except ConfigConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/sources/{source_key}/preflight", response_model=APIResponse[ConfigSourcePreflightDTO], summary="预检配置来源修改")
+async def preflight_config_source(
+    source_key: str,
+    payload: ConfigSourceEditRequest,
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        result = config_service.preflight_source_edit(source_key=source_key,
+            gateway_id=require_current_gateway_id("配置来源预检"), request=payload)
+    except ConfigConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.put("/sources/{source_key}", response_model=APIResponse[ConfigSourceDocumentDTO], summary="保存指定配置来源文件")
+async def save_config_source(
+    source_key: str,
+    payload: ConfigSourceEditRequest,
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    _: str = Depends(verify_local_token),
+    request_id: str = Depends(get_request_id),
+):
+    try:
+        result = await config_service.save_source_edit(source_key=source_key,
+            gateway_id=require_current_gateway_id("配置来源保存"), request=payload)
+    except ConfigConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ValueError, TypeError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get(
@@ -165,7 +198,7 @@ async def record_pending_restart_failure(
         )
     except (ConfigConflictError, ValueError) as error:
         raise state_conflict_http_error(error) from error
-    return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
+    return APIResponse(data=config_service.get_reload_status_dto(), request_id=request_id)
 
 
 @router.post(
@@ -183,7 +216,7 @@ async def retry_pending_restart(
         config_service.retry_pending_restart(candidate_ref=candidate_ref)
     except (ConfigConflictError, ValueError) as error:
         raise state_conflict_http_error(error) from error
-    return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
+    return APIResponse(data=config_service.get_reload_status_dto(), request_id=request_id)
 
 
 @router.post(
@@ -205,7 +238,7 @@ async def resolve_pending_restart(
         )
     except (ConfigConflictError, ValueError) as error:
         raise state_conflict_http_error(error) from error
-    return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
+    return APIResponse(data=config_service.get_reload_status_dto(), request_id=request_id)
 
 
 @router.post(
@@ -228,7 +261,7 @@ async def discard_pending_restart(
         )
     except (ConfigConflictError, ValueError) as error:
         raise state_conflict_http_error(error) from error
-    return APIResponse(data=_reload_status_dto(config_service), request_id=request_id)
+    return APIResponse(data=config_service.get_reload_status_dto(), request_id=request_id)
 
 
 @router.patch("", response_model=APIResponse[ConfigDTO], summary="更新配置")
@@ -241,8 +274,8 @@ async def update_config(
     try:
         result = await config_service.update(payload)
     except ConfigConflictError as error:
-        revision, schema_path, sources = config_service.get_source_diagnostics()
-        status = _reload_status_dto(config_service)
+        revision, _schema_path, sources = config_service.get_source_diagnostics()
+        status = config_service.get_reload_status_dto()
         raise HTTPException(
             status_code=409,
             detail={
@@ -325,6 +358,7 @@ async def get_config_events(
     "/events/stream",
     response_class=StreamingResponse,
     summary="订阅配置变化事件",
+    responses=sse_responses("工作区配置事件与明确读取拒绝", {"config": ConfigEventDTO, "error": SseErrorDTO}),
 )
 async def stream_config_events(
     request: Request,

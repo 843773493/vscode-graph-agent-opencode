@@ -85,6 +85,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionGenerationPreviewRequest", "SessionGenerationPreviewDTO",
         "SessionGenerationValidateRequest", "SessionGenerationValidationDTO",
         "RuntimeStatusDTO", "RuntimeDrainResultDTO", "UiSnapshotResultDTO",
+        "ConfigSourceEditRequest", "ConfigSourceDocumentDTO", "ConfigSourcePreflightDTO", "ConfigEventDTO",
     )
 } | MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS
 
@@ -118,6 +119,7 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
     "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
     "WorkspaceFileChangeBatchDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["WorkspaceFileChangeBatch"],

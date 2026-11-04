@@ -54,8 +54,13 @@ class ConfigSnapshotMixin:
         self,
         *,
         validate_schema: bool = True,
+        workspace_source: dict[str, object] | None = None,
+        import_sources: bool = True,
+        source_payloads: dict[str, dict[str, object]] | None = None,
     ) -> ConfigSnapshot:
-        config, source_paths, source_details, schema_path = self._read_effective_config()
+        config, source_paths, source_details, schema_path = self._read_effective_config(
+            workspace_source=workspace_source, import_sources=import_sources, source_payloads=source_payloads,
+        )
         require_current_workspace_config(config)
         schema = self._load_schema(schema_path)
         if validate_schema:
@@ -66,7 +71,7 @@ class ConfigSnapshotMixin:
         with self.use_snapshot(build_config_snapshot(
             config, source_paths=source_paths, source_details=source_details, schema_path=schema_path,
         )):
-            instruction_paths = self._instruction_inputs.load(config, schema=schema)
+            instruction_paths = (self._instruction_inputs.load if import_sources else self._instruction_inputs.preview)(config, schema=schema)
         if validate_schema:
             validate_config_payload(config, schema=schema)
         snapshot = build_config_snapshot(

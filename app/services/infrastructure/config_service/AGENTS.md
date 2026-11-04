@@ -6,7 +6,8 @@
 （`_get_effective_config`、`get`）与 5 个类常量；其余 100+ 方法按族逐字搬迁到同包各
 mixin，由 `ConfigService` 多继承装配并共享同一 `self` 与 `__init__` 槽位。
 
-本包承载的族：source-layer 读取与来源权威表（`config_source_layers.py`）、snapshot
+本包承载的族：source-layer 读取与来源权威表（`config_source_layers.py`）、精确来源文档
+读取、预检及原候选链保存（`config_source_edit.py`）、snapshot
 构建与 pending-restart 契约（`config_snapshot.py`）、事件游标与标量访问器
 （`config_runtime_accessors.py`）、reload 与 shadow 生命周期（`config_reload.py`）、
 公开配置与 provider/日志（`config_public.py`）、agent 身份与默认值

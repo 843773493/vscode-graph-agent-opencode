@@ -57,10 +57,13 @@
 
 - [ ] 7.1 在原 Settings Editor／命令接入目标及来源层选择，持续展示 scope、目标、可写能力与原发起上下文，切导航不改投未提交内容。
 - [ ] 7.2 在原 Gateway／Workspace 配置 owner 补现有 REST 缺失的合法来源层能力、脱敏正文、schema、完整 effective／遮蔽读取及 source writer，迁齐协议和消费者；区分 SQLite 物化与文件回写，无 writer 层明确只读，不以摘要或有限 runtime PATCH 冒充完整能力。
+  - 2026-11-04 Workspace 后端切片：原配置 API 提供按 source_key 的脱敏 JSONC、schema、各层正文、最终来源／遮蔽及 active 状态；仅工作区来源层提供 writer，其余层明确只读。原 proto／descriptor／OpenAPI／SSE 生成物已迁齐，未登记来源 URI 保持为空。Gateway 来源 writer、用户级 source fan-out 与设置界面尚未完成，本项不勾选。
 - [ ] 7.3 业务配置表单与 JSONC 共用原候选预检、CAS、幂等提交和新增来源 writer，支持删除选中层覆盖、格式保留、冲突重取与编辑内容保留；禁用通用文件保存旁路，不把脱敏占位写回秘密。
+  - 2026-11-04 Workspace 后端切片：预检复用原有效配置构建且不导入来源、不写文件或改变 readiness；保存核文件／来源层／active CAS，移除 JSONC 键即删除该层覆盖。秘密占位只在原字段及对象绑定还原，保留原秘密 token、注释和格式；普通正文前缀不触发占位协议。原 pending 行在文件替换前登记幂等意图，watcher／重试只认领匹配的原候选，pending_restart 等状态不重复执行资源副作用；有效配置未变化时不提升 active、不新增事件。表单及编辑器消费者尚未完成，本项不勾选。
 - [ ] 7.4 接入原配置 applied／deferred／restart 状态及 pending 管理入口，核真实健康证明；未登记字段不宣称热应用，不以保存成功代替运行生效。
 - [ ] 7.5 实现用户 Workspace source 影响预览与原 fan-out 汇总，保留逐 workspace 候选、版本和结果；验 B1 成功／B2 冲突／B3 停止追赶，不跨到 A 或伪造全局事务。
 - [ ] 7.6 远端设置透传到原生 owner 判权与提交，断流后查询原幂等提交；本地只保留原连接登记和显示投影，不增加可生效远端配置副本。
+  - 2026-11-04 双 Gateway／双 Backend 真实 socket HTTP：2 passed／128.88 秒，覆盖同 UUID 不同物理工作区、目标默认拒绝／精确主体读写／撤权、无权限零下游、预检零文件写入、同键并发只一次 applied、原键查询／重试及旧 CAS 409；只修改目标 B，A 保持原状态，request_id 与转发目标归属正确。复用原受控本机 SSH 执行／隧道替身，未验证真实 SSH、Windows 或设置界面，本项不勾选。完整命令、源码指纹、原 HTTP 响应及静态检查见 `out/tests/temp/configuration_federation_network_20261104/artifacts/network-final-evidence-1793813123212470975.json`；网络测试文件 Ruff／Pyright 均零诊断。
 - [ ] 7.7 将 Workbench 设置、会话设置、Gateway 用户视图和 registry 操作分别交原 owner，设置 UI 只导航合法对象；凭据沿原私有入口，不以 runtime candidate 包办所有状态。
 - [ ] 7.8 新增字段确需版本变化时补同族 schema、默认值及官方预览／备份／可恢复迁移；保留现有 JSONC 层语义，不自动重命名或清空用户配置。
 - [ ] 7.9 在原 Code OSS 配置服务迁齐 profile local／目标 remote user／稳定 view／folder／语言覆盖与 setting scope，按 host/view 路由原配置模型，经已登记目标 FileService／writer 访问 multi-root 原 `.code-workspace`；不轮换全窗口 workspace，扩展键不写业务 JSONC。验 get／inspect／update／change payload 投影、原缺省推导、非法资源拒绝和 A1/A2/B1 不随焦点改投。
@@ -83,4 +86,6 @@
 - [ ] 9.3 用真实 MCP 工具、真实 Web／Node 扩展完成调用／文件／配置／终端及不支持能力断言；覆盖并发、取消、冲突、断流、迟到结果和重启，不以进程启动代替业务验收。
 - [ ] 9.4 在源码目录外且关闭开发服务器的 Electron 打包产物验证静态资源、相同目标链、设置与扩展状态重启恢复；目标侧运行时独立发行可核，不增加 main/preload 原生能力。
 - [ ] 9.5 每批完成相关静态分析、真实类型检查、协议生成一致性及受影响构建；涉及浏览器前端完成 `bun run --cwd src/clients/web build`。测试统一使用现有 runner 或进程外超时／内存保护，复用同源码已有构建证据。
+  - 2026-11-04 Workspace 来源编辑切片：来源 API 恢复批 29 passed，启动／MCP／原故障合同批 22 passed，合法 pending 启动补验 1 passed，配置与旧库迁移单元批 128 passed；各批有重叠，不汇总相加。Buf 格式／lint／build／breaking、协议生成一致性、OpenAPI 导出及 Web 构建通过。Web 实际 tsc 退出 2，完整 HEAD 解包基线与当前均为相同 28 条诊断、无新增；新生产文件及 API／协议 Pyright 零诊断，其余生产组按真实 HEAD 对照无新增，调用方扩大类型检查被资源保护终止，未完成。
+  - 扩大协议／reload 合同批为 81 passed 后遇旧 ValueError 文案预期失败，完整 HEAD 单例同样失败。发行 SQL 单例先遇既有 Gateway schema 18 断言（实际及 HEAD 迁移均为 19），尚未执行到已迁齐的 Workspace schema 24 断言，不记作发行验收通过。本批最终证据及 39 个文件指纹见 `out/tests/temp/workspace_config_source_edit_20261104/artifacts/workspace-source-edit-final-evidence-20261104T174359459564Z.json`；Ruff 最终与原 HEAD 对照无新增，仅合并嵌套条件的修订按短路语义等价核验复用行为证据。不将本后端切片扩为整个设置模块、真实 Web 交互或原生目标验收。
 - [ ] 9.6 保留准确命令、源码指纹、原始输出、退出码、未验证阶段及真实兼容矩阵，按正式／临时目录规范落盘；交付前检查无双轨、静默失败、越权、无关改动和虚假完成，再按实际证据勾选。

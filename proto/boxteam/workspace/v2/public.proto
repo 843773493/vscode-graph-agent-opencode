@@ -71,6 +71,104 @@ message ConfigReloadStatusDTO {
   string last_attempt_at = 7;
   optional string last_error = 8;
   repeated McpCleanupDTO mcp_cleanup = 9;
+  optional string state = 10;
+  optional int64 active_revision = 11;
+  optional int64 pending_revision = 12;
+  optional string candidate_id = 13;
+  optional string candidate_ref = 14;
+  optional string attempt_id = 15;
+  optional string apply_id = 16;
+  map<string, google.protobuf.Value> layer_digests = 17;
+  repeated string applied_paths = 18;
+  repeated string deferred_paths = 19;
+}
+
+// 所选来源文件、SQLite layer 与 active 是三个独立基线；不接受任意物理路径。
+message ConfigSourceEditRequest {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string source_key = 3;
+  string jsonc = 4;
+  google.protobuf.Value base_file_digest = 5;
+  google.protobuf.Value base_layer_revision = 6;
+  google.protobuf.Value base_layer_digest = 7;
+  google.protobuf.Value expected_active_revision = 8;
+  google.protobuf.Value expected_active_digest = 9;
+  string idempotency_key = 10;
+}
+
+message ConfigSourceLayerViewDTO {
+  string source_key = 1;
+  string layer = 2;
+  int64 precedence = 3;
+  bool writable = 4;
+  google.protobuf.Struct payload = 5;
+}
+
+message ConfigSourceOriginDTO {
+  string path = 1;
+  string source_key = 2;
+  repeated string shadowed_sources = 3;
+}
+
+message ConfigSourceEditDTO {
+  string idempotency_key = 1;
+  string candidate_id = 2;
+  string state = 3;
+  string file_digest = 4;
+  bool source_saved = 5;
+  bool layer_imported = 6;
+}
+
+message ConfigSourceDocumentDTO {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string source_key = 3;
+  string layer = 4;
+  bool writable = 5;
+  string jsonc = 6;
+  string file_presence = 7;
+  google.protobuf.Value file_digest = 8;
+  google.protobuf.Value layer_revision = 9;
+  google.protobuf.Value layer_digest = 10;
+  google.protobuf.Value source_generation = 11;
+  google.protobuf.Value active_revision = 12;
+  google.protobuf.Value active_digest = 13;
+  google.protobuf.Struct json_schema = 14;
+  google.protobuf.Struct effective = 15;
+  google.protobuf.Struct source_effective = 16;
+  repeated ConfigSourceLayerViewDTO layers = 17;
+  repeated ConfigSourceOriginDTO origins = 18;
+  ConfigReloadStatusDTO status = 19;
+  optional ConfigSourceEditDTO edit = 20;
+}
+
+message ConfigSourcePreflightDTO {
+  ConfigSourceDocumentDTO document = 1;
+  google.protobuf.Struct candidate = 2;
+  string candidate_digest = 3;
+  repeated string changed_paths = 4;
+}
+
+message ConfigEventDTO {
+  int64 event_seq = 1;
+  string event_id = 2;
+  string config_domain = 3;
+  optional string candidate_id = 4;
+  optional string attempt_id = 5;
+  optional string apply_id = 6;
+  optional string idempotency_key = 7;
+  optional int64 commit_revision = 8;
+  optional int64 active_revision = 9;
+  optional int64 pending_revision = 10;
+  string source = 11;
+  string result = 12;
+  string activation_scope = 13;
+  repeated string changed_paths = 14;
+  repeated string applied_paths = 15;
+  repeated string deferred_paths = 16;
+  optional string error = 17;
+  string occurred_at = 18;
 }
 
 message McpCleanupDTO {

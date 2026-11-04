@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import closing
@@ -17,6 +18,8 @@ from pydantic_core import PydanticSerializationError
 from app.api import config as config_api
 from app.api.deps import get_config_service, verify_local_token
 from app.core import config_sources
+from app.core.mounted_workspaces import MountedWorkspace
+from app.core.resource_uri import resource_display_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -24,6 +27,9 @@ from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.schemas.internal_v2.config import ConfigSourcesDTO
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.config_service import (
+    config_source_edit as source_edit_module,
+)
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
@@ -80,6 +86,359 @@ async def config_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
     finally:
         await service.close()
         store.close()
+
+
+_SOURCE_KEY = "workspace_root_mutable_override"
+_SOURCE_URL = f"/api/v1/config/sources/{_SOURCE_KEY}"
+_SOURCE_GATEWAY = "gateway_" + "7" * 32
+
+
+@pytest.fixture
+async def source_edit_case(config_case: ConfigCase) -> AsyncIterator[tuple[ConfigCase, AsyncClient]]:
+    case = config_case
+    source = case.workspace / ".boxteam/workspace.jsonc"
+    llm = json.loads(json.dumps(case.payload["llm"]))
+    llm["providers"][0]["api_key"] = "literal-source-secret"
+    source.write_text("// 原来源注释\n" + json.dumps({
+        "ui": {"auto_summarize": True, "ignored_paths": ["source-only"]}, "llm": llm,
+        "mcp": {"servers": {"private": {"enabled": False, "transport": "streamable_http",
+            "url": "https://example.com/mcp", "headers": {"Authorization": "Bearer source-secret"}}}},
+    }, ensure_ascii=False, indent=2).replace('"literal-source-secret"', '"literal-source-secr\\u0065t"') + "\n", encoding="utf-8")
+    await case.service.reload()
+    async with AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test",
+                           headers={"X-BoxTeam-Gateway-Id": _SOURCE_GATEWAY, "X-Request-ID": "source-edit"}) as client:
+        yield case, client
+
+
+def _source_edit_request(document: dict[str, object], text: str, key: str) -> dict[str, object]:
+    return {"gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"],
+            "source_key": document["source_key"], "jsonc": text, "base_file_digest": document["file_digest"],
+            "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+            "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
+            "idempotency_key": key}
+
+
+def _source_rows(case: ConfigCase) -> tuple[str, ...]:
+    with closing(case.store.connection()) as connection:
+        return tuple(connection.iterdump())
+
+
+async def test_source_preflight_is_read_only_and_save_preserves_secrets_comments_and_layer_deletion(source_edit_case) -> None:
+    case, client = source_edit_case
+    source = case.workspace / ".boxteam/workspace.jsonc"
+    original, rows, snapshot = source.read_bytes(), _source_rows(case), case.service.get_snapshot()
+    readiness = (dict(case.service._instruction_inputs._paths), dict(case.service._instruction_inputs._failures),
+                 case.service._instruction_inputs._candidate_uris)
+    response = await client.get(_SOURCE_URL)
+    assert response.status_code == 200, response.text
+    document = response.json()["data"]
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "source-edit"
+    assert "literal-source-secret" not in response.text and "Bearer source-secret" not in response.text
+    assert "原来源注释" in document["jsonc"] and document["writable"] is True
+    assert document["json_schema"]["x-boxteam-config-domain"] == "workspace"
+    text = document["jsonc"].replace('"auto_summarize": true', '"auto_summarize": false').replace(
+        ',\n    "ignored_paths": [\n      "source-only"\n    ]', "")
+    request = _source_edit_request(document, text, "source-write-real")
+    checked = await client.post(_SOURCE_URL + "/preflight", json=request)
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["data"]["candidate"]["ui"]["auto_summarize"] is False
+    assert source.read_bytes() == original and _source_rows(case) == rows and case.service.get_snapshot() is snapshot
+    assert readiness == (case.service._instruction_inputs._paths, case.service._instruction_inputs._failures,
+                         case.service._instruction_inputs._candidate_uris)
+    saved = await client.put(_SOURCE_URL, json=request)
+    assert saved.status_code == 200, saved.text
+    result = saved.json()["data"]
+    assert result["status"]["state"] == "active" and result["effective"]["ui"]["auto_summarize"] is False
+    assert result["edit"]["source_saved"] and result["edit"]["layer_imported"]
+    assert "ignored_paths" not in json.loads(source.read_text().split("\n", 1)[1])["ui"]
+    assert result["effective"]["ui"]["ignored_paths"] == []
+    assert "原来源注释" in source.read_text() and "literal-source-secr\\u0065t" in source.read_text()
+    assert "Bearer source-secret" in source.read_text() and "boxteam-redacted:" not in source.read_text()
+    assert source.read_text() == original.decode("utf-8").replace(
+        '"auto_summarize": true', '"auto_summarize": false').replace(
+        ',\n    "ignored_paths": [\n      "source-only"\n    ]', "")
+    events, active = case.service.list_config_events(), case.store.get_active_config_snapshot("workspace")
+    replay = await client.put(_SOURCE_URL, json=request)
+    assert replay.status_code == 200 and replay.json()["data"]["edit"] == result["edit"]
+    assert case.service.list_config_events() == events and case.store.get_active_config_snapshot("workspace") == active
+    queried = await client.get(_SOURCE_URL, params={"idempotency_key": request["idempotency_key"]})
+    assert queried.json()["data"]["edit"] == result["edit"]
+
+
+@pytest.mark.parametrize("mutation", ["file", "layer", "active", "gateway", "workspace", "source", "invalid", "provider_endpoint", "provider_id"])
+async def test_source_edit_rejects_stale_or_misbound_input_without_writing(source_edit_case, mutation) -> None:
+    case, client = source_edit_case
+    source = case.workspace / ".boxteam/workspace.jsonc"
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    request = _source_edit_request(document, document["jsonc"], "source-rejected")
+    if mutation == "file":
+        source.write_text(source.read_text() + "// 外部并发编辑\n")
+    elif mutation == "layer":
+        request["base_layer_revision"] = document["layer_revision"] + 1
+    elif mutation == "active":
+        request["expected_active_revision"] = document["active_revision"] + 1
+    elif mutation == "gateway":
+        request["gateway_id"] = "gateway_" + "8" * 32
+    elif mutation == "workspace":
+        request["workspace_id"] = "00000000-0000-4000-8000-000000000001"
+    elif mutation == "source":
+        request["source_key"] = "workspace_mutable_override"
+    elif mutation == "invalid":
+        request["jsonc"] = '{"unknown_source_setting":true}'
+    else:
+        request["jsonc"] = document["jsonc"].replace(
+            '"endpoint": "https://example.com/v1"' if mutation == "provider_endpoint" else '"id": "primary"',
+            '"endpoint": "https://other.example/v1"' if mutation == "provider_endpoint" else '"id": "other"')
+    original, rows, snapshot = source.read_bytes(), _source_rows(case), case.service.get_snapshot()
+    response = await client.put(_SOURCE_URL, json=request)
+    assert response.status_code == (422 if mutation in {"invalid", "provider_endpoint", "provider_id"} else 409), response.text
+    assert source.read_bytes() == original and _source_rows(case) == rows and case.service.get_snapshot() is snapshot
+    assert "literal-source-secret" not in response.text and "Bearer source-secret" not in response.text
+
+
+@pytest.mark.parametrize("masked", [False, True])
+async def test_source_noop_keeps_active_and_events_and_uses_original_candidate_for_idempotency(source_edit_case, masked) -> None:
+    case, client = source_edit_case
+    if masked:
+        from app.schemas.internal_v2.config import ConfigUpdateRequest
+
+        await case.service.update(ConfigUpdateRequest(
+            config_layer="runtime_override", scope="workspace", base_layer_revision=None, base_layer_digest=None,
+            expected_active_revision=case.store.get_active_config_snapshot("workspace").active_revision,
+            expected_active_digest=case.service.get_snapshot().revision, idempotency_key="mask-source", auto_summarize=False,
+        ))
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    text = document["jsonc"].replace("原来源注释", "只改来源注释")
+    if masked:
+        text = text.replace('"auto_summarize": true', '"auto_summarize": false')
+    active, events = case.store.get_active_config_snapshot("workspace"), case.service.list_config_events()
+    request = _source_edit_request(document, text, f"source-unchanged-{masked}")
+    response = await client.put(_SOURCE_URL, json=request)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["edit"]["state"] == "active"
+    assert case.store.get_active_config_snapshot("workspace") == active and case.service.list_config_events() == events
+    assert (await client.put(_SOURCE_URL, json=request)).status_code == 200
+    assert case.store.get_active_config_snapshot("workspace") == active and case.service.list_config_events() == events
+
+
+async def test_source_saved_pending_is_observable_and_not_replayed(source_edit_case) -> None:
+    case, client = source_edit_case
+    attempts = []
+
+    async def require_restart(previous, candidate, scope, record):
+        attempts.append(candidate.revision)
+        raise ConfigRestartRequiredError("测试字段要求重启", changed_sections=("ui",))
+
+    case.service._candidate_applier = require_restart
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    request = _source_edit_request(document, document["jsonc"].replace('"auto_summarize": true', '"auto_summarize": false'), "source-pending")
+    active = case.store.get_active_config_snapshot("workspace")
+    response = await client.put(_SOURCE_URL, json=request)
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["edit"]["source_saved"] and data["edit"]["state"] == "pending_restart"
+    assert data["status"]["restart_required"] and data["effective"]["ui"]["auto_summarize"] is True
+    assert data["source_effective"]["ui"]["auto_summarize"] is False
+    pending_before = case.store.get_pending_config_candidate(config_domain="workspace", idempotency_key="source-pending")
+    events = case.service.list_config_events()
+    with closing(case.store.connection()) as connection:
+        candidate_count = connection.execute("SELECT count(*) FROM config_pending_candidate").fetchone()[0]
+    await case.service.start_watching(candidate_applier=require_restart)
+    assert case.store.get_pending_config_candidate(config_domain="workspace", idempotency_key="source-pending") == pending_before
+    assert case.service.list_config_events() == events
+    with closing(case.store.connection()) as connection:
+        assert connection.execute("SELECT count(*) FROM config_pending_candidate").fetchone()[0] == candidate_count
+    assert (await client.put(_SOURCE_URL, json=request)).status_code == 200
+    assert len(attempts) == 1 and case.store.get_active_config_snapshot("workspace") == active
+    assert pending_before is not None and pending_before.candidate_ref is not None
+    await case.service.stop_watching()
+    mount = MountedWorkspace(document["workspace_id"], case.workspace.resolve(),
+        config_candidate_ref=pending_before.candidate_ref, config_generation=pending_before.target_generation,
+        config_fencing_token=pending_before.fencing_token)
+    restarted = ConfigService(config_dir=Path.cwd() / "configs", config_path=case.config_path,
+        workspace_root=case.workspace, workspace_state_store=case.store, startup_mount=mount)
+    try:
+        restarted.validate_workspace_config()
+        assert restarted.get_snapshot().revision == pending_before.candidate_digest
+        await restarted.start_watching(candidate_applier=require_restart)
+        assert restarted._snapshot_store.status().healthy
+        proof = restarted.get_loaded_config_proof()
+        assert proof["loaded_source"] == "pending" and proof["candidate_id"] == pending_before.candidate_id
+        assert len(attempts) == 1 and case.store.get_active_config_snapshot("workspace") == active
+        assert case.store.get_pending_config_candidate(config_domain="workspace", idempotency_key="source-pending") == pending_before
+        assert case.service.list_config_events() == events
+    finally:
+        await restarted.close()
+
+
+async def test_source_preflight_reads_real_instruction_file_without_changing_readiness(source_edit_case, monkeypatch) -> None:
+    case, client = source_edit_case
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    original_prompt, preview_prompt = case.workspace / "active-prompt.txt", case.workspace / "preview-prompt.txt"
+    original_prompt.write_text("当前已生效的提示词正文", encoding="utf-8")
+    preview_prompt.write_text("只供预检读取的提示词正文", encoding="utf-8")
+    root_uri = resource_display_uri(scope="workspace", scope_id=document["workspace_id"], kind="files", tail_segments=("root",))
+    original_uri, preview_uri = root_uri + "/active-prompt.txt", root_uri + "/preview-prompt.txt"
+    paths = {root_uri: case.workspace, original_uri: original_prompt, preview_uri: preview_prompt}
+
+    def resolve_file(uri: str) -> tuple[Path, str]:
+        return paths[uri], uri
+
+    inputs = case.service._instruction_inputs
+    monkeypatch.setattr(inputs, "_resolve_file", resolve_file)
+    payload = json.loads(document["jsonc"].split("\n", 1)[1])
+    payload["agents"] = {"default": {"instructions": {"system_prompt_file": original_uri}}}
+    response = await client.put(_SOURCE_URL, json=_source_edit_request(document, json.dumps(payload), "source-instruction-active"))
+    assert response.status_code == 200, response.text
+    document = response.json()["data"]
+    assert document["effective"]["agents"]["default"]["instructions"]["system_prompt"] == original_prompt.read_text()
+    readiness = (dict(inputs._paths), dict(inputs._failures), inputs._candidate_uris)
+    source = case.workspace / ".boxteam/workspace.jsonc"
+    original, rows, snapshot = source.read_bytes(), _source_rows(case), case.service.get_snapshot()
+    request = _source_edit_request(document, document["jsonc"].replace(original_uri, preview_uri), "source-instruction-preview")
+    preview = await client.post(_SOURCE_URL + "/preflight", json=request)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["data"]["candidate"]["agents"]["default"]["instructions"]["system_prompt"] == preview_prompt.read_text()
+    preview_prompt.unlink()
+    failed = await client.post(_SOURCE_URL + "/preflight", json=request)
+    assert failed.status_code == 500 and failed.json()["request_id"] == failed.headers["X-Request-ID"] == "source-edit"
+    assert "StableSourceReadError" in failed.text and str(case.workspace) not in failed.text
+    assert (inputs._paths, inputs._failures, inputs._candidate_uris) == readiness
+    case.service.require_instruction_sources_available("default")
+    assert source.read_bytes() == original and _source_rows(case) == rows and case.service.get_snapshot() is snapshot
+
+
+@pytest.mark.parametrize("source_key", ["inline", "workspace_mutable_override", "workspace_local_mutable_override", "workspace_runtime_override"])
+async def test_source_layers_without_writer_are_readable_but_reject_save(source_edit_case, source_key) -> None:
+    case, client = source_edit_case
+    url = f"/api/v1/config/sources/{source_key}"
+    response = await client.get(url)
+    assert response.status_code == 200, response.text
+    document = response.json()["data"]
+    assert document["writable"] is False
+    rows, snapshot = _source_rows(case), case.service.get_snapshot()
+    response = await client.put(url, json=_source_edit_request(document, document["jsonc"], "no-writer"))
+    assert response.status_code == 422, response.text
+    assert _source_rows(case) == rows and case.service.get_snapshot() is snapshot
+
+
+async def test_source_normal_text_with_redaction_prefix_is_saved_literally(source_edit_case) -> None:
+    _case, client = source_edit_case
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    text = document["jsonc"].replace('"source-only"', '"boxteam-redacted:ordinary-path"')
+    response = await client.put(_SOURCE_URL, json=_source_edit_request(document, text, "source-normal-prefix"))
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["effective"]["ui"]["ignored_paths"] == ["boxteam-redacted:ordinary-path"]
+
+
+@pytest.mark.parametrize("phase", ["before_replace", "after_replace"])
+async def test_source_intent_survives_file_boundary_failure_and_reopens_in_same_candidate(source_edit_case, monkeypatch, phase) -> None:
+    case, client = source_edit_case
+    source = case.workspace / ".boxteam/workspace.jsonc"
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    request = _source_edit_request(document, document["jsonc"].replace('"auto_summarize": true', '"auto_summarize": false'), "source-interrupted")
+    active, events, original = case.store.get_active_config_snapshot("workspace"), case.service.list_config_events(), source.read_bytes()
+
+    def fail_before_replace(path: Path, content: bytes) -> NoReturn:
+        raise OSError(5, "原子替换前故障", str(path))
+
+    def fail_after_replace() -> NoReturn:
+        raise RuntimeError("原子替换后、来源导入前故障")
+
+    with monkeypatch.context() as fault:
+        if phase == "before_replace":
+            fault.setattr(source_edit_module, "atomic_write_bytes", fail_before_replace)
+        else:
+            fault.setattr(case.service._snapshot_store, "_candidate_builder", fail_after_replace)
+        response = await client.put(_SOURCE_URL, json=request)
+    assert response.status_code == 500, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "source-edit"
+    assert "literal-source-secret" not in response.text and str(case.workspace) not in response.text
+    pending = case.store.get_pending_config_candidate(config_domain="workspace", idempotency_key="source-interrupted")
+    assert pending is not None and pending.state == "candidate_validated" and pending.source_edit is not None
+    assert pending.source_edit["stage"] == "accepted" and "jsonc" not in pending.source_edit
+    assert (source.read_bytes() == original) == (phase == "before_replace")
+    assert case.store.get_active_config_snapshot("workspace") == active and case.service.list_config_events() == events
+
+    # 同库重建配置 owner 核验持久恢复；该证据不替代操作系统硬重启。
+    reopened = ConfigService(config_dir=Path.cwd() / "configs", config_path=case.config_path,
+                             workspace_root=case.workspace, workspace_state_store=case.store)
+    applications = []
+
+    async def apply_once(previous, candidate, scope, record):
+        applications.append(candidate.revision)
+        return lambda: None
+
+    try:
+        reopened.validate_workspace_config()
+        case.app.dependency_overrides[get_config_service] = lambda: reopened
+        queried = await client.get(_SOURCE_URL, params={"idempotency_key": "source-interrupted"})
+        assert queried.status_code == 200, queried.text
+        edit = queried.json()["data"]["edit"]
+        assert edit["candidate_id"] == pending.candidate_id and edit["source_saved"] == (phase == "after_replace")
+        assert edit["layer_imported"] is False
+        await reopened.start_watching(candidate_applier=apply_once)
+        assert applications == ([pending.candidate_digest] if phase == "after_replace" else [])
+        after_start = (await client.get(_SOURCE_URL, params={"idempotency_key": "source-interrupted"})).json()["data"]
+        assert after_start["edit"]["candidate_id"] == pending.candidate_id
+        assert after_start["edit"]["state"] == ("active" if phase == "after_replace" else "candidate_validated")
+        if phase == "before_replace":
+            assert source.read_bytes() == original and case.store.get_active_config_snapshot("workspace") == active
+        recovered = await client.put(_SOURCE_URL, json=request)
+        assert recovered.status_code == 200, recovered.text
+        result = recovered.json()["data"]
+        assert result["edit"]["candidate_id"] == pending.candidate_id and result["edit"]["state"] == "active"
+        assert result["edit"]["source_saved"] and result["edit"]["layer_imported"]
+        assert result["effective"]["ui"]["auto_summarize"] is False
+        assert applications == [pending.candidate_digest]
+        with closing(case.store.connection()) as connection:
+            assert connection.execute("SELECT count(*) FROM config_pending_candidate WHERE idempotency_key=?", ("source-interrupted",)).fetchone()[0] == 1
+    finally:
+        case.app.dependency_overrides[get_config_service] = lambda: case.service
+        await reopened.close()
+
+
+@pytest.mark.parametrize("mutation", ["file", "layer", "active"])
+async def test_source_interrupted_intent_rejects_changed_original_cas(source_edit_case, monkeypatch, mutation) -> None:
+    case, client = source_edit_case
+    source = case.workspace / ".boxteam/workspace.jsonc"
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    baseline_bytes = source.read_bytes()
+    request = _source_edit_request(document, document["jsonc"].replace('"auto_summarize": true', '"auto_summarize": false'), "source-interrupted-conflict")
+
+    def fail_before_replace(path: Path, content: bytes) -> NoReturn:
+        raise OSError(5, "原子替换前故障", str(path))
+
+    with monkeypatch.context() as fault:
+        fault.setattr(source_edit_module, "atomic_write_bytes", fail_before_replace)
+        assert (await client.put(_SOURCE_URL, json=request)).status_code == 500
+    source.write_text(source.read_text().replace("原来源注释", "外部已变更的来源注释"))
+    if mutation in {"layer", "active"}:
+        if mutation == "active":
+            source.write_text(source.read_text().replace('"auto_summarize": true', '"auto_summarize": false'))
+        await case.service.reload()
+        if mutation == "layer":
+            source.write_bytes(baseline_bytes)
+    original, rows, snapshot = source.read_bytes(), _source_rows(case), case.service.get_snapshot()
+    response = await client.put(_SOURCE_URL, json=request)
+    assert response.status_code == 409, response.text
+    assert source.read_bytes() == original and _source_rows(case) == rows and case.service.get_snapshot() is snapshot
+
+
+async def test_source_same_key_concurrent_requests_share_candidate_and_reject_different_intent(source_edit_case) -> None:
+    case, client = source_edit_case
+    document = (await client.get(_SOURCE_URL)).json()["data"]
+    request = _source_edit_request(document, document["jsonc"].replace('"auto_summarize": true', '"auto_summarize": false'), "source-concurrent")
+    responses = await asyncio.gather(client.put(_SOURCE_URL, json=request), client.put(_SOURCE_URL, json=request))
+    assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
+    candidate_ids = {response.json()["data"]["edit"]["candidate_id"] for response in responses}
+    assert len(candidate_ids) == 1
+    with closing(case.store.connection()) as connection:
+        assert connection.execute("SELECT count(*) FROM config_pending_candidate WHERE idempotency_key=?", ("source-concurrent",)).fetchone()[0] == 1
+    before = _source_rows(case)
+    conflict = await client.put(_SOURCE_URL, json={**request, "jsonc": str(request["jsonc"]) + "\n// 同键另一意图\n"})
+    assert conflict.status_code == 409, conflict.text
+    assert _source_rows(case) == before
 
 
 @pytest.mark.parametrize("field", ["schema_uri", "source_uri"])
@@ -316,8 +675,8 @@ async def test_gateway_restart_failure_posts_facts_to_real_workspace_owner(
             if sink_fails:
                 patch.setattr("app.core.failures.logger.error", reject_log)
             await controller._record_pending_restart_failure(
-                WorkspaceTarget(workspace_id="member", name="Member", root_path=str(case.workspace),
-                                backend_url="http://workspace-backend", backend_workspace_id=workspace_id, connection_kind="local"),
+                WorkspaceTarget(gateway_id=registry.gateway_id, workspace_id=workspace_id, name="Member", root_path=str(case.workspace),
+                                backend_url="http://workspace-backend", connection_kind="local"),
                 candidate_ref=pending.candidate_ref, error=original,
                 old_runtime_recovered=recovered, request_id="restart-failed",
             )

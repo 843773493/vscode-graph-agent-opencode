@@ -7,13 +7,16 @@ import os
 import shlex
 import shutil
 import sys
+import time
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict, cast
 from unittest.mock import patch
 
+import commentjson
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -26,6 +29,7 @@ from app.core.workspace_identity import (
 )
 from app.gateway import federation, remote_gateway
 from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.lifespan import lifespan
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.runtime.workspace import WorkspaceRuntime
@@ -143,6 +147,8 @@ class TargetGatewayNetwork:
     gateway_ids: tuple[str, str]
     native_routes: tuple[str, str]
     observation_paths: dict[str, Path]
+    workspace_roots: tuple[Path, Path]
+    gateway_config_paths: tuple[Path, Path]
 
 
 @pytest.fixture
@@ -237,6 +243,8 @@ def target_gateway_network(
         yield TargetGatewayNetwork(
             context, (clients[0], clients[1]), workspace_id,
             (gateway_ids[0], gateway_ids[1]), (routes[0], routes[1]), observations,
+            (workspace_a, workspace_b),
+            (homes[0] / "config/gateway.jsonc", homes[1] / "config/gateway.jsonc"),
         )
 
 
@@ -376,5 +384,145 @@ def test_real_gateways_keep_same_uuid_owners_and_target_carrier_distinct(
         assert final.json()["data"]["active_workspace"] == {"gateway_id": gateway_b, "workspace_id": network.workspace_id}
     finally:
         (network.context.artifacts_dir / "target-routing-http.json").write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+
+
+def test_real_gateways_authorize_source_edits_at_native_owner(
+    target_gateway_network: TargetGatewayNetwork,
+) -> None:
+    network = target_gateway_network
+    local, native = network.clients
+    gateway_a, gateway_b = network.gateway_ids
+    source_key = "workspace_root_mutable_override"
+    source_path = f"/api/v1/workspaces/{network.workspace_id}/config/sources/{source_key}"
+    target_headers = {TARGET_GATEWAY_ID_HEADER: gateway_b}
+    workspace_files = tuple(root / ".boxteam/workspace.jsonc" for root in network.workspace_roots)
+    originals = tuple(path.read_bytes() for path in workspace_files)
+    evidence: list[dict[str, object]] = []
+
+    def exchange(
+        client: httpx.Client, method: str, path: str, request_id: str, *,
+        remote: bool = False, body: dict[str, object] | None = None,
+    ) -> httpx.Response:
+        response = client.request(method, path, json=body, headers={
+            **(target_headers if remote else {}), "X-Request-ID": request_id,
+        })
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == request_id
+        evidence.append({"request_id": request_id, "path": path, "status": response.status_code, "body": response.json()})
+        return response
+
+    def publish_policy(rules: list[dict[str, str]], label: str) -> None:
+        # 本机用户编辑正式 JSONC，由真实 watcher 发布；不直接改内存策略或数据库。
+        config_path = network.gateway_config_paths[1]
+        before = exchange(native, "GET", "/api/gateway/config/reload-status", f"{label}-before").json()["data"]
+        config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("permissions", {})["federation"] = {"default_effect": "allow", "rules": rules}
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        deadline = time.monotonic() + 15
+        for attempt in range(76):
+            current = exchange(native, "GET", "/api/gateway/config/reload-status", f"{label}-poll-{attempt}").json()["data"]
+            if current["revision"] != before["revision"] and current["healthy"] is True:
+                assert current["state"] == "active" and current["restart_required"] is False
+                return
+            assert time.monotonic() < deadline, current
+            time.sleep(0.2)
+        raise AssertionError("配置 watcher 未在期限内发布策略")
+
+    try:
+        topology = json.loads((network.context.artifacts_dir / "topology.json").read_text(encoding="utf-8"))
+        registered = exchange(local, "POST", "/api/gateway/remote-gateways", "config-register-peer", body={
+            "name": "配置目标 B", "host": "127.0.0.1", "port": 22, "username": "config-integration",
+            "private_key_path": topology["private_key"], "remote_gateway_port": topology["ports"][3],
+        })
+        assert registered.status_code == 200, registered.text
+        projected, = [item for item in registered.json()["data"]["items"] if item["gateway_id"] == gateway_b]
+        assert projected["workspace_id"] == network.workspace_id
+
+        denied = exchange(local, "GET", source_path, "config-default-denied", remote=True)
+        assert denied.status_code == 403, denied.text
+        assert _observations(network.observation_paths["backend-b"], "config-default-denied") == []
+        baseline = exchange(native, "GET", source_path, "config-native-baseline")
+        assert baseline.status_code == 200, baseline.text
+        document = baseline.json()["data"]
+        assert (document["gateway_id"], document["workspace_id"], document["source_key"]) == (gateway_b, network.workspace_id, source_key)
+        edited = commentjson.loads(document["jsonc"])
+        edited.setdefault("ui", {})["ignored_paths"] = ["**/peer-only/**"]
+        intent = {
+            "gateway_id": gateway_b, "workspace_id": network.workspace_id, "source_key": source_key,
+            "jsonc": json.dumps(edited, ensure_ascii=False, indent=2) + "\n",
+            "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
+            "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
+            "expected_active_digest": document["active_digest"], "idempotency_key": "network-source-edit",
+        }
+        publish_policy([{"capability": "configuration_read", "effect": "allow"}], "config-wildcard")
+        wildcard = exchange(local, "GET", source_path, "config-wildcard-denied", remote=True)
+        assert wildcard.status_code == 403, wildcard.text
+        principal = principal_ref_for_gateway(gateway_a)
+        read_rule = {"capability": "configuration_read", "effect": "allow", "principal_ref": principal}
+        publish_policy([read_rule], "config-read-only")
+        readable = exchange(local, "GET", source_path, "config-read-allowed", remote=True)
+        assert readable.status_code == 200, readable.text
+        assert readable.json()["data"] == document
+        for method, suffix in (("POST", "/preflight"), ("PUT", "")):
+            rejected = exchange(local, method, source_path + suffix, f"config-read-only-{method}", remote=True, body=intent)
+            assert rejected.status_code == 403, rejected.text
+            assert _observations(network.observation_paths["backend-b"], f"config-read-only-{method}") == []
+        assert tuple(path.read_bytes() for path in workspace_files) == originals
+
+        publish_policy([read_rule, {"capability": "configuration_write", "effect": "allow", "principal_ref": principal}], "config-read-write")
+        preflight = exchange(local, "POST", source_path + "/preflight", "config-preflight", remote=True, body=intent)
+        assert preflight.status_code == 200, preflight.text
+        assert preflight.json()["data"]["candidate"]["ui"]["ignored_paths"] == ["**/peer-only/**"]
+        assert preflight.json()["data"]["changed_paths"] == ["/ui/ignored_paths"]
+        assert tuple(path.read_bytes() for path in workspace_files) == originals
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pending_saves = [executor.submit(
+                exchange, local, "PUT", source_path, request_id, remote=True, body=intent,
+            ) for request_id in ("config-save", "config-save-concurrent")]
+            saved, concurrent_save = [pending.result() for pending in pending_saves]
+        assert saved.status_code == concurrent_save.status_code == 200, (saved.text, concurrent_save.text)
+        results = [response.json()["data"] for response in (saved, concurrent_save)]
+        completed = [document for document in results if document["edit"]["state"] == "active"]
+        assert completed, results
+        result = completed[0]
+        for document in results:
+            assert document["edit"]["candidate_id"] == result["edit"]["candidate_id"]
+            assert document["edit"]["idempotency_key"] == intent["idempotency_key"]
+            assert document["edit"]["file_digest"] == result["edit"]["file_digest"]
+        assert result["status"]["state"] == "active" and result["status"]["restart_required"] is False
+        assert result["effective"]["ui"]["ignored_paths"] == ["**/peer-only/**"]
+        assert workspace_files[0].read_bytes() == originals[0]
+        assert commentjson.loads(workspace_files[1].read_text(encoding="utf-8"))["ui"]["ignored_paths"] == ["**/peer-only/**"]
+        for request_id in ("config-read-allowed", "config-preflight", "config-save"):
+            forwarded, = _observations(network.observation_paths["gateway-b"], request_id)
+            backend, = _observations(network.observation_paths["backend-b"], request_id)
+            assert (forwarded["sender_gateway_id"], forwarded["target_gateway_id"], forwarded["workspace_id"]) == (gateway_a, gateway_b, network.workspace_id)
+            assert (backend["sender_gateway_id"], backend["target_gateway_id"], backend["workspace_id"]) == (gateway_b, None, network.workspace_id)
+            assert _observations(network.observation_paths["backend-a"], request_id) == []
+        retried = exchange(local, "PUT", source_path, "config-save-retry", remote=True, body=intent)
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["data"]["edit"] == result["edit"]
+        recovered = exchange(local, "GET", source_path + "?idempotency_key=network-source-edit", "config-query-original", remote=True)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["data"]["edit"] == result["edit"]
+        stale = exchange(local, "PUT", source_path, "config-stale-baseline", remote=True, body={**intent, "idempotency_key": "network-stale-edit"})
+        assert stale.status_code == 409, stale.text
+        events = exchange(local, "GET", f"/api/v1/workspaces/{network.workspace_id}/config/events", "config-accepted-events", remote=True)
+        assert events.status_code == 200, events.text
+        committed = [event for event in events.json()["data"]["events"] if event["idempotency_key"] == intent["idempotency_key"]]
+        assert len(committed) == 1 and committed[0]["result"] == "applied"
+        assert committed[0]["candidate_id"] == result["edit"]["candidate_id"]
+
+        publish_policy([], "config-revoke")
+        revoked = exchange(local, "GET", source_path, "config-revoked-read", remote=True)
+        assert revoked.status_code == 403, revoked.text
+        assert _observations(network.observation_paths["backend-b"], "config-revoked-read") == []
+        assert workspace_files[0].read_bytes() == originals[0]
+        local_config = exchange(local, "GET", f"/api/v1/workspaces/{network.workspace_id}/config", "config-local-owner", body=None)
+        assert local_config.status_code == 200, local_config.text
+        assert local_config.json()["data"]["ignored_paths"] != ["**/peer-only/**"]
+    finally:
+        (network.context.artifacts_dir / "configuration-source-http.json").write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
         )

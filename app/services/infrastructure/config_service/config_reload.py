@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import hashlib
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeScope
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
         ConfigShadowLifecycleAdapter,
     )
     from app.services.infrastructure.config.store import ConfigSnapshotStore
+    from app.services.infrastructure.config_service import ConfigService
     from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
@@ -125,15 +127,32 @@ class ConfigReloadMixin:
         *,
         candidate_applier: ConfigCandidateApplier | None = None,
         idempotency_key: str | None = None,
+        before_build: Callable[[], bool] | None = None,
+        source_edit: dict[str, object] | None = None,
     ) -> bool:
         async def apply_through_shadow(
             previous: ConfigSnapshot,
             candidate: ConfigSnapshot,
             publish_snapshot: ConfigPublication,
         ) -> None:
+            nonlocal source_edit, idempotency_key
+            # 合法 candidate_ref 启动已加载相同 pending 正文时，只刷新原元数据。
+            if (
+                source_edit is None
+                and (saved := cast("ConfigService", self)._saved_source_edit_candidate(candidate)) is not None
+                and (saved.state == "candidate_validated" or candidate.revision != previous.revision)
+            ):
+                source_edit, idempotency_key = saved.source_edit, saved.idempotency_key
             if self._shadow_lifecycle.readiness == "cold":
                 await self._shadow_lifecycle.bootstrap(previous.to_dict())
             if candidate.revision == previous.revision:
+                if source_edit is not None:
+                    pending = self._prepare_candidate(previous, candidate, idempotency_key=idempotency_key, source_edit=source_edit)
+                    if self._workspace_state_store is None:
+                        raise ConfigConflictError("来源编辑必须使用原工作区状态库")
+                    self._workspace_state_store.complete_unchanged_config_candidate(
+                        config_domain=self._CONFIG_DOMAIN, candidate_id=pending.candidate_id,
+                    )
                 async def refresh_sources(_generation, publish_shadow: ConfigPublication) -> None:
                     with self._snapshot_store.publication_lock:
                         publish_snapshot()
@@ -146,7 +165,7 @@ class ConfigReloadMixin:
                 )
                 return
 
-            pending = self._prepare_candidate(previous, candidate, idempotency_key=idempotency_key)
+            pending = self._prepare_candidate(previous, candidate, idempotency_key=idempotency_key, source_edit=source_edit)
             changed_paths = changed_json_paths(previous.to_dict(), candidate.to_dict())
             attempt_id = new_config_id("attempt")
             apply_id = new_config_id("apply")
@@ -255,7 +274,7 @@ class ConfigReloadMixin:
                             active_revision=None,
                             pending_revision=pending.pending_revision,
                             source="workspace-config-service",
-                            result="applied",
+                            result="applied" if changed_paths else "unchanged",
                             activation_scope=workspace_config_policy().activation_scope_for(
                                 changed_paths
                             ),
@@ -329,6 +348,7 @@ class ConfigReloadMixin:
             return await self._snapshot_store.reload(
                 candidate_applier=apply_through_shadow,
                 apply_unchanged=True,
+                before_build=before_build,
             )
         finally:
             if self._watcher is not None:
@@ -340,6 +360,7 @@ class ConfigReloadMixin:
         snapshot: ConfigSnapshot,
         *,
         idempotency_key: str | None = None,
+        source_edit: dict[str, object] | None = None,
     ) -> ConfigPendingCandidateRecord:
         if self._workspace_state_store is None:
             payload = redact_config_payload(snapshot.to_dict())
@@ -370,6 +391,17 @@ class ConfigReloadMixin:
             self._CONFIG_DOMAIN
         )
         candidate_id = f"candidate_{source_generation}_{snapshot.revision}"
+        if source_edit is not None:
+            candidate_id = "candidate_source_" + hashlib.sha256(str(idempotency_key).encode()).hexdigest()
+            existing = self._workspace_state_store.get_pending_config_candidate(
+                config_domain=self._CONFIG_DOMAIN, candidate_id=candidate_id,
+            )
+            if existing is not None:
+                return self._workspace_state_store.bind_source_edit_config_candidate(
+                    candidate=existing, payload=payload, source_baseline=baseline,
+                    candidate_digest=snapshot.revision, source_generation=source_generation,
+                    source_edit=source_edit,
+                )
         pending = self._workspace_state_store.create_pending_config_candidate(
             config_domain=self._CONFIG_DOMAIN,
             candidate_id=candidate_id,
@@ -385,6 +417,7 @@ class ConfigReloadMixin:
             state="candidate_validated",
             base_active_revision=(active.active_revision if active is not None else None),
             source_generation=source_generation,
+            source_edit=source_edit,
         )
         if pending.source_baseline != baseline:
             raise ConfigConflictError(

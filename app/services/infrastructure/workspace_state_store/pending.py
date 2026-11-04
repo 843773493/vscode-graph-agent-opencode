@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from app.core.sqlite_state import utc_now_text
 from app.services.infrastructure.config.state import (
@@ -23,8 +23,30 @@ from app.services.infrastructure.config.state import (
 
 __all__ = ["WorkspaceStateStorePendingMixin"]
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+
 
 class WorkspaceStateStorePendingMixin:
+    def list_unfinished_source_edit_candidates(self, *, config_domain: str, candidate_digest: str) -> tuple[ConfigPendingCandidateRecord, ...]:
+        store = cast("WorkspaceStateStore", self)
+        connection = store._database.connection()
+        try:
+            rows = connection.execute(
+                "SELECT candidate_id FROM config_pending_candidate WHERE config_domain=? AND candidate_digest=? "
+                "AND source_edit_json IS NOT NULL AND state NOT IN ('active','discarded') ORDER BY pending_revision DESC",
+                (config_domain, candidate_digest),
+            ).fetchall()
+        finally:
+            connection.close()
+        candidates = []
+        for row in rows:
+            candidate = store.get_pending_config_candidate(config_domain=config_domain, candidate_id=str(row[0]))
+            if candidate is None:
+                raise RuntimeError("已登记的来源 pending candidate 读取时消失")
+            candidates.append(candidate)
+        return tuple(candidates)
+
     def get_pending_config_candidate(
         self,
         *,
@@ -44,7 +66,7 @@ class WorkspaceStateStorePendingMixin:
                            effective_digest, target_generation, fencing_token, state,
                            last_error, created_at, last_attempt_id, last_apply_id,
                            candidate_ref, base_active_revision,
-                           source_generation, secret_bindings_json
+                           source_generation, secret_bindings_json, source_edit_json
                     FROM config_pending_candidate
                     WHERE config_domain = ?
                     ORDER BY pending_revision DESC
@@ -64,7 +86,7 @@ class WorkspaceStateStorePendingMixin:
                            effective_digest, target_generation, fencing_token, state,
                            last_error, created_at, last_attempt_id, last_apply_id,
                            candidate_ref, base_active_revision,
-                           source_generation, secret_bindings_json
+                           source_generation, secret_bindings_json, source_edit_json
                     FROM config_pending_candidate
                     WHERE config_domain = ? AND {field} = ?
                     """,
@@ -98,6 +120,7 @@ class WorkspaceStateStorePendingMixin:
                 secret_bindings=load_json_object(
                     str(row[18]), field="pending candidate secret bindings"
                 ),
+                source_edit=(load_json_object(str(row[19]), field="pending candidate source edit") if row[19] is not None else None),
             )
         finally:
             connection.close()
@@ -120,6 +143,7 @@ class WorkspaceStateStorePendingMixin:
         base_active_revision: int | None = None,
         source_generation: int | None = None,
         secret_bindings: dict[str, object] | None = None,
+        source_edit: dict[str, object] | None = None,
         event: ConfigEventInput | None = None,
     ) -> ConfigPendingCandidateRecord:
         if state != "candidate_validated":
@@ -130,7 +154,7 @@ class WorkspaceStateStorePendingMixin:
             existing = connection.execute(
                 """
                 SELECT candidate_id, payload_json, candidate_digest, state,
-                       source_baseline_json, base_active_revision
+                       source_baseline_json, base_active_revision, source_edit_json
                 FROM config_pending_candidate
                 WHERE config_domain = ? AND idempotency_key = ?
                 """,
@@ -142,6 +166,7 @@ class WorkspaceStateStorePendingMixin:
                     or str(existing[1]) != dump_json(payload)
                     or str(existing[2]) != candidate_digest
                     or str(existing[4]) != dump_json(source_baseline)
+                    or (str(existing[6]) if existing[6] is not None else None) != (dump_json(source_edit) if source_edit is not None else None)
                     or (
                         existing[5] is not None
                         and int(existing[5]) != base_active_revision
@@ -185,8 +210,8 @@ class WorkspaceStateStorePendingMixin:
                         effective_digest, target_generation, fencing_token, state,
                         last_error, created_at, candidate_ref,
                         base_active_revision, source_generation,
-                        secret_bindings_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        secret_bindings_json, source_edit_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         config_domain,
@@ -208,6 +233,7 @@ class WorkspaceStateStorePendingMixin:
                         dump_json(
                             secret_bindings or build_secret_binding_summary(payload)
                         ),
+                        dump_json(source_edit) if source_edit is not None else None,
                     ),
                 )
                 if event is not None:
@@ -315,6 +341,93 @@ class WorkspaceStateStorePendingMixin:
         )
         if result is None:
             raise RuntimeError(f"pending candidate 更新后无法读取: {candidate_id}")
+        return result
+
+    def complete_unchanged_config_candidate(self, *, config_domain: str, candidate_id: str) -> None:
+        """仅完成来源幂等记录；有效配置未变时不提升 active、不产生配置事件。"""
+        connection = cast("WorkspaceStateStore", self)._database.connection()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT candidate_digest, base_active_revision, source_edit_json FROM config_pending_candidate "
+                "WHERE config_domain=? AND candidate_id=? AND state='candidate_validated'",
+                (config_domain, candidate_id),
+            ).fetchone()
+            active = connection.execute(
+                "SELECT effective_digest, active_revision FROM config_active_snapshot WHERE config_domain=?",
+                (config_domain,),
+            ).fetchone()
+            if row is None or row[2] is None or active is None or (row[0], row[1]) != (active[0], active[1]):
+                raise ConfigConflictError("无有效变化的来源候选与当前 active 不一致")
+            intent = load_json_object(str(row[2]), field="source edit intent")
+            source = connection.execute("SELECT layer_digest FROM config_source_layers WHERE config_key=?", (intent["source_key"],)).fetchone()
+            if source is None or source[0] != intent["file_digest"]:
+                raise ConfigConflictError("无有效变化的来源候选与当前 layer 不一致")
+            # 原状态机的两个转换在同一事务完成；这里没有待执行的运行资源副作用。
+            transitions: tuple[tuple[ConfigLifecycleState, ConfigLifecycleState], ...] = (("candidate_validated", "applying"), ("applying", "active"))
+            for previous, state in transitions:
+                validate_state_transition(previous, state)
+                connection.execute("UPDATE config_pending_candidate SET state=? WHERE config_domain=? AND candidate_id=? AND state=?",
+                                   (state, config_domain, candidate_id, previous))
+            connection.commit()
+        finally:
+            connection.close()
+
+    def bind_source_edit_config_candidate(
+        self, *, candidate: ConfigPendingCandidateRecord, payload: dict[str, object],
+        source_baseline: dict[str, object], candidate_digest: str, source_generation: int,
+        source_edit: dict[str, object],
+    ) -> ConfigPendingCandidateRecord:
+        """原来源 intent 绑定导入结果；尚未取得 claim 时才能推进同一候选行。"""
+        store = cast("WorkspaceStateStore", self)
+        connection = store._database.connection()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT state, source_edit_json FROM config_pending_candidate WHERE config_domain=? AND candidate_id=?",
+                (candidate.config_domain, candidate.candidate_id),
+            ).fetchone()
+            intent = load_json_object(str(row[1]), field="source edit intent") if row is not None and row[1] is not None else None
+            if (row is None or row[0] != "candidate_validated" or intent is None
+                    or intent.get("request_digest") != source_edit.get("request_digest")):
+                raise ConfigConflictError("来源 intent 仅能在原 candidate_validated 行绑定导入结果")
+            if candidate.candidate_digest != candidate_digest or candidate.payload != payload:
+                raise ConfigConflictError("来源 intent 的原预检内容已改变，禁止绑定另一份有效配置")
+            for key, baseline in candidate.source_baseline.items():
+                if key != intent["source_key"] and source_baseline.get(key) != baseline:
+                    raise ConfigConflictError("来源 intent 的其它来源层 CAS 基线已改变")
+            if connection.execute("SELECT 1 FROM config_apply_claim WHERE config_domain=?", (candidate.config_domain,)).fetchone() is not None:
+                raise ConfigConflictError("已有配置 apply claim，禁止重新绑定来源 intent")
+            active = connection.execute(
+                "SELECT active_revision, effective_digest FROM config_active_snapshot WHERE config_domain=?",
+                (candidate.config_domain,),
+            ).fetchone()
+            if active is None or (active[0], active[1]) != (intent["expected_active_revision"], intent["expected_active_digest"]):
+                raise ConfigConflictError("来源 intent 的原 active CAS 基线已改变")
+            source = connection.execute(
+                "SELECT layer_revision, layer_digest FROM config_source_layers WHERE config_key=?", (intent["source_key"],),
+            ).fetchone()
+            base_revision = intent["base_layer_revision"]
+            target_revision = (int(base_revision) if isinstance(base_revision, int) else 0) + (intent["base_layer_digest"] != intent["file_digest"])
+            if source is None or (source[0], source[1]) != (target_revision, intent["file_digest"]):
+                raise ConfigConflictError("来源 intent 的目标层尚未精确导入或已被其它写入改变")
+            imported = {**intent, "stage": "imported"}
+            updated = connection.execute(
+                "UPDATE config_pending_candidate SET payload_json=?, source_baseline_json=?, candidate_digest=?, "
+                "effective_digest=?, source_generation=?, secret_bindings_json=?, source_edit_json=? "
+                "WHERE config_domain=? AND candidate_id=? AND state='candidate_validated' AND source_edit_json=?",
+                (dump_json(payload), dump_json(source_baseline), candidate_digest, candidate_digest, source_generation,
+                 dump_json(build_secret_binding_summary(payload)), dump_json(imported), candidate.config_domain,
+                 candidate.candidate_id, dump_json(intent)),
+            )
+            if updated.rowcount != 1:
+                raise ConfigConflictError("来源 intent 导入结果绑定 CAS 冲突")
+            connection.commit()
+        finally:
+            connection.close()
+        result = store.get_pending_config_candidate(config_domain=candidate.config_domain, candidate_id=candidate.candidate_id)
+        if result is None:
+            raise RuntimeError("来源 intent 绑定后无法读取原 pending candidate")
         return result
 
     def load_pending_config_candidate(

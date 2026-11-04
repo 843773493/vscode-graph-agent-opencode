@@ -6,3 +6,4 @@ export const validateSseErrorDTO: { (value: unknown): boolean; errors?: Array<{ 
 export const validateWorkspaceObservationFrameDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validatePersistentTaskListDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateFederatedSearchEventDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
+export const validateConfigEventDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };

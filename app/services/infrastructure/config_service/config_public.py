@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from dataclasses import asdict
+from typing import TYPE_CHECKING, Any, cast
 
-from app.schemas.internal_v2.config import ConfigDTO, ConfigUpdateRequest
+from app.schemas.internal_v2.config import (
+    ConfigDTO,
+    ConfigReloadStatusDTO,
+    ConfigUpdateRequest,
+)
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -15,11 +20,22 @@ if TYPE_CHECKING:
     from app.services.infrastructure.config.instruction_inputs import (
         InstructionFileInputs,
     )
+    from app.services.infrastructure.config_service import ConfigService
 
 
 class ConfigPublicMixin:
     if TYPE_CHECKING:
         _instruction_inputs: InstructionFileInputs
+
+    def get_reload_status_dto(self) -> ConfigReloadStatusDTO:
+        service = cast("ConfigService", self)
+        with service.publication_lock:
+            status = service.get_reload_status()
+            payload = asdict(status)
+            payload.update(last_success_at=status.last_success_at.isoformat(),
+                           last_attempt_at=status.last_attempt_at.isoformat(),
+                           layer_digests=status.layer_digests or {}, mcp_cleanup=list(service.get_mcp_cleanup_diagnostics()))
+            return ConfigReloadStatusDTO.model_validate(payload)
 
     async def update(self, payload: ConfigUpdateRequest) -> ConfigDTO:
         runtime_keys = frozenset(

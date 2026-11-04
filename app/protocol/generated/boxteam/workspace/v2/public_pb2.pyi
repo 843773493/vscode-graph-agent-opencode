@@ -104,7 +104,14 @@ class ConfigDTO(_message.Message):
     def __init__(self, default_model: _Optional[str] = ..., default_orchestration: _Optional[str] = ..., max_concurrent_agents: _Optional[int] = ..., allow_shell_tools: _Optional[bool] = ..., ignored_paths: _Optional[_Iterable[str]] = ..., auto_summarize: _Optional[bool] = ..., metadata: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
 
 class ConfigReloadStatusDTO(_message.Message):
-    __slots__ = ("healthy", "revision", "restart_required", "reason", "changed_sections", "last_success_at", "last_attempt_at", "last_error", "mcp_cleanup")
+    __slots__ = ("healthy", "revision", "restart_required", "reason", "changed_sections", "last_success_at", "last_attempt_at", "last_error", "mcp_cleanup", "state", "active_revision", "pending_revision", "candidate_id", "candidate_ref", "attempt_id", "apply_id", "layer_digests", "applied_paths", "deferred_paths")
+    class LayerDigestsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: _struct_pb2.Value
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ...) -> None: ...
     HEALTHY_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     RESTART_REQUIRED_FIELD_NUMBER: _ClassVar[int]
@@ -114,6 +121,16 @@ class ConfigReloadStatusDTO(_message.Message):
     LAST_ATTEMPT_AT_FIELD_NUMBER: _ClassVar[int]
     LAST_ERROR_FIELD_NUMBER: _ClassVar[int]
     MCP_CLEANUP_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PENDING_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_REF_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    APPLY_ID_FIELD_NUMBER: _ClassVar[int]
+    LAYER_DIGESTS_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    DEFERRED_PATHS_FIELD_NUMBER: _ClassVar[int]
     healthy: bool
     revision: str
     restart_required: bool
@@ -123,7 +140,177 @@ class ConfigReloadStatusDTO(_message.Message):
     last_attempt_at: str
     last_error: str
     mcp_cleanup: _containers.RepeatedCompositeFieldContainer[McpCleanupDTO]
-    def __init__(self, healthy: _Optional[bool] = ..., revision: _Optional[str] = ..., restart_required: _Optional[bool] = ..., reason: _Optional[str] = ..., changed_sections: _Optional[_Iterable[str]] = ..., last_success_at: _Optional[str] = ..., last_attempt_at: _Optional[str] = ..., last_error: _Optional[str] = ..., mcp_cleanup: _Optional[_Iterable[_Union[McpCleanupDTO, _Mapping]]] = ...) -> None: ...
+    state: str
+    active_revision: int
+    pending_revision: int
+    candidate_id: str
+    candidate_ref: str
+    attempt_id: str
+    apply_id: str
+    layer_digests: _containers.MessageMap[str, _struct_pb2.Value]
+    applied_paths: _containers.RepeatedScalarFieldContainer[str]
+    deferred_paths: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, healthy: _Optional[bool] = ..., revision: _Optional[str] = ..., restart_required: _Optional[bool] = ..., reason: _Optional[str] = ..., changed_sections: _Optional[_Iterable[str]] = ..., last_success_at: _Optional[str] = ..., last_attempt_at: _Optional[str] = ..., last_error: _Optional[str] = ..., mcp_cleanup: _Optional[_Iterable[_Union[McpCleanupDTO, _Mapping]]] = ..., state: _Optional[str] = ..., active_revision: _Optional[int] = ..., pending_revision: _Optional[int] = ..., candidate_id: _Optional[str] = ..., candidate_ref: _Optional[str] = ..., attempt_id: _Optional[str] = ..., apply_id: _Optional[str] = ..., layer_digests: _Optional[_Mapping[str, _struct_pb2.Value]] = ..., applied_paths: _Optional[_Iterable[str]] = ..., deferred_paths: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ConfigSourceEditRequest(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id", "source_key", "jsonc", "base_file_digest", "base_layer_revision", "base_layer_digest", "expected_active_revision", "expected_active_digest", "idempotency_key")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    JSONC_FIELD_NUMBER: _ClassVar[int]
+    BASE_FILE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    BASE_LAYER_REVISION_FIELD_NUMBER: _ClassVar[int]
+    BASE_LAYER_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_ACTIVE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    source_key: str
+    jsonc: str
+    base_file_digest: _struct_pb2.Value
+    base_layer_revision: _struct_pb2.Value
+    base_layer_digest: _struct_pb2.Value
+    expected_active_revision: _struct_pb2.Value
+    expected_active_digest: _struct_pb2.Value
+    idempotency_key: str
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., source_key: _Optional[str] = ..., jsonc: _Optional[str] = ..., base_file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., base_layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., base_layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., expected_active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., expected_active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., idempotency_key: _Optional[str] = ...) -> None: ...
+
+class ConfigSourceLayerViewDTO(_message.Message):
+    __slots__ = ("source_key", "layer", "precedence", "writable", "payload")
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    LAYER_FIELD_NUMBER: _ClassVar[int]
+    PRECEDENCE_FIELD_NUMBER: _ClassVar[int]
+    WRITABLE_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    source_key: str
+    layer: str
+    precedence: int
+    writable: bool
+    payload: _struct_pb2.Struct
+    def __init__(self, source_key: _Optional[str] = ..., layer: _Optional[str] = ..., precedence: _Optional[int] = ..., writable: _Optional[bool] = ..., payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class ConfigSourceOriginDTO(_message.Message):
+    __slots__ = ("path", "source_key", "shadowed_sources")
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    SHADOWED_SOURCES_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    source_key: str
+    shadowed_sources: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, path: _Optional[str] = ..., source_key: _Optional[str] = ..., shadowed_sources: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ConfigSourceEditDTO(_message.Message):
+    __slots__ = ("idempotency_key", "candidate_id", "state", "file_digest", "source_saved", "layer_imported")
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    FILE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_SAVED_FIELD_NUMBER: _ClassVar[int]
+    LAYER_IMPORTED_FIELD_NUMBER: _ClassVar[int]
+    idempotency_key: str
+    candidate_id: str
+    state: str
+    file_digest: str
+    source_saved: bool
+    layer_imported: bool
+    def __init__(self, idempotency_key: _Optional[str] = ..., candidate_id: _Optional[str] = ..., state: _Optional[str] = ..., file_digest: _Optional[str] = ..., source_saved: _Optional[bool] = ..., layer_imported: _Optional[bool] = ...) -> None: ...
+
+class ConfigSourceDocumentDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id", "source_key", "layer", "writable", "jsonc", "file_presence", "file_digest", "layer_revision", "layer_digest", "source_generation", "active_revision", "active_digest", "json_schema", "effective", "source_effective", "layers", "origins", "status", "edit")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    LAYER_FIELD_NUMBER: _ClassVar[int]
+    WRITABLE_FIELD_NUMBER: _ClassVar[int]
+    JSONC_FIELD_NUMBER: _ClassVar[int]
+    FILE_PRESENCE_FIELD_NUMBER: _ClassVar[int]
+    FILE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    LAYER_REVISION_FIELD_NUMBER: _ClassVar[int]
+    LAYER_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    JSON_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    EFFECTIVE_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_EFFECTIVE_FIELD_NUMBER: _ClassVar[int]
+    LAYERS_FIELD_NUMBER: _ClassVar[int]
+    ORIGINS_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    EDIT_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    source_key: str
+    layer: str
+    writable: bool
+    jsonc: str
+    file_presence: str
+    file_digest: _struct_pb2.Value
+    layer_revision: _struct_pb2.Value
+    layer_digest: _struct_pb2.Value
+    source_generation: _struct_pb2.Value
+    active_revision: _struct_pb2.Value
+    active_digest: _struct_pb2.Value
+    json_schema: _struct_pb2.Struct
+    effective: _struct_pb2.Struct
+    source_effective: _struct_pb2.Struct
+    layers: _containers.RepeatedCompositeFieldContainer[ConfigSourceLayerViewDTO]
+    origins: _containers.RepeatedCompositeFieldContainer[ConfigSourceOriginDTO]
+    status: ConfigReloadStatusDTO
+    edit: ConfigSourceEditDTO
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., source_key: _Optional[str] = ..., layer: _Optional[str] = ..., writable: _Optional[bool] = ..., jsonc: _Optional[str] = ..., file_presence: _Optional[str] = ..., file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., source_generation: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., json_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., source_effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., layers: _Optional[_Iterable[_Union[ConfigSourceLayerViewDTO, _Mapping]]] = ..., origins: _Optional[_Iterable[_Union[ConfigSourceOriginDTO, _Mapping]]] = ..., status: _Optional[_Union[ConfigReloadStatusDTO, _Mapping]] = ..., edit: _Optional[_Union[ConfigSourceEditDTO, _Mapping]] = ...) -> None: ...
+
+class ConfigSourcePreflightDTO(_message.Message):
+    __slots__ = ("document", "candidate", "candidate_digest", "changed_paths")
+    DOCUMENT_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    CHANGED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    document: ConfigSourceDocumentDTO
+    candidate: _struct_pb2.Struct
+    candidate_digest: str
+    changed_paths: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, document: _Optional[_Union[ConfigSourceDocumentDTO, _Mapping]] = ..., candidate: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., candidate_digest: _Optional[str] = ..., changed_paths: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ConfigEventDTO(_message.Message):
+    __slots__ = ("event_seq", "event_id", "config_domain", "candidate_id", "attempt_id", "apply_id", "idempotency_key", "commit_revision", "active_revision", "pending_revision", "source", "result", "activation_scope", "changed_paths", "applied_paths", "deferred_paths", "error", "occurred_at")
+    EVENT_SEQ_FIELD_NUMBER: _ClassVar[int]
+    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_DOMAIN_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    APPLY_ID_FIELD_NUMBER: _ClassVar[int]
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    COMMIT_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PENDING_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    RESULT_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_SCOPE_FIELD_NUMBER: _ClassVar[int]
+    CHANGED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    DEFERRED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    OCCURRED_AT_FIELD_NUMBER: _ClassVar[int]
+    event_seq: int
+    event_id: str
+    config_domain: str
+    candidate_id: str
+    attempt_id: str
+    apply_id: str
+    idempotency_key: str
+    commit_revision: int
+    active_revision: int
+    pending_revision: int
+    source: str
+    result: str
+    activation_scope: str
+    changed_paths: _containers.RepeatedScalarFieldContainer[str]
+    applied_paths: _containers.RepeatedScalarFieldContainer[str]
+    deferred_paths: _containers.RepeatedScalarFieldContainer[str]
+    error: str
+    occurred_at: str
+    def __init__(self, event_seq: _Optional[int] = ..., event_id: _Optional[str] = ..., config_domain: _Optional[str] = ..., candidate_id: _Optional[str] = ..., attempt_id: _Optional[str] = ..., apply_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., commit_revision: _Optional[int] = ..., active_revision: _Optional[int] = ..., pending_revision: _Optional[int] = ..., source: _Optional[str] = ..., result: _Optional[str] = ..., activation_scope: _Optional[str] = ..., changed_paths: _Optional[_Iterable[str]] = ..., applied_paths: _Optional[_Iterable[str]] = ..., deferred_paths: _Optional[_Iterable[str]] = ..., error: _Optional[str] = ..., occurred_at: _Optional[str] = ...) -> None: ...
 
 class McpCleanupDTO(_message.Message):
     __slots__ = ("server_id", "connection_ref", "phase", "release_verified", "error_type")

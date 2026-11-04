@@ -64,7 +64,7 @@ for _ in range(2):
         assert control.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert control.connection.execute("SELECT revision FROM collaboration_ledger").fetchone()[0] == 0
     with closing(WorkspaceStateStore(workspace_root=Path("state/workspace"))) as workspace:
-        assert workspace.diagnostics().schema_version == 23
+        assert workspace.diagnostics().schema_version == 24
         with closing(workspace.connection()) as connection:
             assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert connection.execute("SELECT generation_json FROM persistent_task_runs").fetchall() == []

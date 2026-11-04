@@ -296,6 +296,56 @@ export declare type ConfigReloadStatusDTO = Message<"boxteam.workspace.v2.Config
    * @generated from field: repeated boxteam.workspace.v2.McpCleanupDTO mcp_cleanup = 9;
    */
   mcpCleanup: McpCleanupDTO[];
+
+  /**
+   * @generated from field: optional string state = 10;
+   */
+  state?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 active_revision = 11;
+   */
+  activeRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 pending_revision = 12;
+   */
+  pendingRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string candidate_id = 13;
+   */
+  candidateId?: string | undefined;
+
+  /**
+   * @generated from field: optional string candidate_ref = 14;
+   */
+  candidateRef?: string | undefined;
+
+  /**
+   * @generated from field: optional string attempt_id = 15;
+   */
+  attemptId?: string | undefined;
+
+  /**
+   * @generated from field: optional string apply_id = 16;
+   */
+  applyId?: string | undefined;
+
+  /**
+   * @generated from field: map<string, google.protobuf.Value> layer_digests = 17;
+   */
+  layerDigests: { [key: string]: Value };
+
+  /**
+   * @generated from field: repeated string applied_paths = 18;
+   */
+  appliedPaths: string[];
+
+  /**
+   * @generated from field: repeated string deferred_paths = 19;
+   */
+  deferredPaths: string[];
 };
 
 /**
@@ -303,6 +353,415 @@ export declare type ConfigReloadStatusDTO = Message<"boxteam.workspace.v2.Config
  * Use `create(ConfigReloadStatusDTOSchema)` to create a new message.
  */
 export declare const ConfigReloadStatusDTOSchema: GenMessage<ConfigReloadStatusDTO>;
+
+/**
+ * 所选来源文件、SQLite layer 与 active 是三个独立基线；不接受任意物理路径。
+ *
+ * @generated from message boxteam.workspace.v2.ConfigSourceEditRequest
+ */
+export declare type ConfigSourceEditRequest = Message<"boxteam.workspace.v2.ConfigSourceEditRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string source_key = 3;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: string jsonc = 4;
+   */
+  jsonc: string;
+
+  /**
+   * @generated from field: google.protobuf.Value base_file_digest = 5;
+   */
+  baseFileDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value base_layer_revision = 6;
+   */
+  baseLayerRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value base_layer_digest = 7;
+   */
+  baseLayerDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value expected_active_revision = 8;
+   */
+  expectedActiveRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value expected_active_digest = 9;
+   */
+  expectedActiveDigest?: Value | undefined;
+
+  /**
+   * @generated from field: string idempotency_key = 10;
+   */
+  idempotencyKey: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceEditRequest.
+ * Use `create(ConfigSourceEditRequestSchema)` to create a new message.
+ */
+export declare const ConfigSourceEditRequestSchema: GenMessage<ConfigSourceEditRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigSourceLayerViewDTO
+ */
+export declare type ConfigSourceLayerViewDTO = Message<"boxteam.workspace.v2.ConfigSourceLayerViewDTO"> & {
+  /**
+   * @generated from field: string source_key = 1;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: string layer = 2;
+   */
+  layer: string;
+
+  /**
+   * @generated from field: int64 precedence = 3;
+   */
+  precedence: bigint;
+
+  /**
+   * @generated from field: bool writable = 4;
+   */
+  writable: boolean;
+
+  /**
+   * @generated from field: google.protobuf.Struct payload = 5;
+   */
+  payload?: JsonObject | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceLayerViewDTO.
+ * Use `create(ConfigSourceLayerViewDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourceLayerViewDTOSchema: GenMessage<ConfigSourceLayerViewDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigSourceOriginDTO
+ */
+export declare type ConfigSourceOriginDTO = Message<"boxteam.workspace.v2.ConfigSourceOriginDTO"> & {
+  /**
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: string source_key = 2;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: repeated string shadowed_sources = 3;
+   */
+  shadowedSources: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceOriginDTO.
+ * Use `create(ConfigSourceOriginDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourceOriginDTOSchema: GenMessage<ConfigSourceOriginDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigSourceEditDTO
+ */
+export declare type ConfigSourceEditDTO = Message<"boxteam.workspace.v2.ConfigSourceEditDTO"> & {
+  /**
+   * @generated from field: string idempotency_key = 1;
+   */
+  idempotencyKey: string;
+
+  /**
+   * @generated from field: string candidate_id = 2;
+   */
+  candidateId: string;
+
+  /**
+   * @generated from field: string state = 3;
+   */
+  state: string;
+
+  /**
+   * @generated from field: string file_digest = 4;
+   */
+  fileDigest: string;
+
+  /**
+   * @generated from field: bool source_saved = 5;
+   */
+  sourceSaved: boolean;
+
+  /**
+   * @generated from field: bool layer_imported = 6;
+   */
+  layerImported: boolean;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceEditDTO.
+ * Use `create(ConfigSourceEditDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourceEditDTOSchema: GenMessage<ConfigSourceEditDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigSourceDocumentDTO
+ */
+export declare type ConfigSourceDocumentDTO = Message<"boxteam.workspace.v2.ConfigSourceDocumentDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string source_key = 3;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: string layer = 4;
+   */
+  layer: string;
+
+  /**
+   * @generated from field: bool writable = 5;
+   */
+  writable: boolean;
+
+  /**
+   * @generated from field: string jsonc = 6;
+   */
+  jsonc: string;
+
+  /**
+   * @generated from field: string file_presence = 7;
+   */
+  filePresence: string;
+
+  /**
+   * @generated from field: google.protobuf.Value file_digest = 8;
+   */
+  fileDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_revision = 9;
+   */
+  layerRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_digest = 10;
+   */
+  layerDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value source_generation = 11;
+   */
+  sourceGeneration?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value active_revision = 12;
+   */
+  activeRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value active_digest = 13;
+   */
+  activeDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct json_schema = 14;
+   */
+  jsonSchema?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct effective = 15;
+   */
+  effective?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct source_effective = 16;
+   */
+  sourceEffective?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ConfigSourceLayerViewDTO layers = 17;
+   */
+  layers: ConfigSourceLayerViewDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ConfigSourceOriginDTO origins = 18;
+   */
+  origins: ConfigSourceOriginDTO[];
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ConfigReloadStatusDTO status = 19;
+   */
+  status?: ConfigReloadStatusDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigSourceEditDTO edit = 20;
+   */
+  edit?: ConfigSourceEditDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceDocumentDTO.
+ * Use `create(ConfigSourceDocumentDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourceDocumentDTOSchema: GenMessage<ConfigSourceDocumentDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigSourcePreflightDTO
+ */
+export declare type ConfigSourcePreflightDTO = Message<"boxteam.workspace.v2.ConfigSourcePreflightDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.ConfigSourceDocumentDTO document = 1;
+   */
+  document?: ConfigSourceDocumentDTO | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct candidate = 2;
+   */
+  candidate?: JsonObject | undefined;
+
+  /**
+   * @generated from field: string candidate_digest = 3;
+   */
+  candidateDigest: string;
+
+  /**
+   * @generated from field: repeated string changed_paths = 4;
+   */
+  changedPaths: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourcePreflightDTO.
+ * Use `create(ConfigSourcePreflightDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourcePreflightDTOSchema: GenMessage<ConfigSourcePreflightDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigEventDTO
+ */
+export declare type ConfigEventDTO = Message<"boxteam.workspace.v2.ConfigEventDTO"> & {
+  /**
+   * @generated from field: int64 event_seq = 1;
+   */
+  eventSeq: bigint;
+
+  /**
+   * @generated from field: string event_id = 2;
+   */
+  eventId: string;
+
+  /**
+   * @generated from field: string config_domain = 3;
+   */
+  configDomain: string;
+
+  /**
+   * @generated from field: optional string candidate_id = 4;
+   */
+  candidateId?: string | undefined;
+
+  /**
+   * @generated from field: optional string attempt_id = 5;
+   */
+  attemptId?: string | undefined;
+
+  /**
+   * @generated from field: optional string apply_id = 6;
+   */
+  applyId?: string | undefined;
+
+  /**
+   * @generated from field: optional string idempotency_key = 7;
+   */
+  idempotencyKey?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 commit_revision = 8;
+   */
+  commitRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 active_revision = 9;
+   */
+  activeRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 pending_revision = 10;
+   */
+  pendingRevision?: bigint | undefined;
+
+  /**
+   * @generated from field: string source = 11;
+   */
+  source: string;
+
+  /**
+   * @generated from field: string result = 12;
+   */
+  result: string;
+
+  /**
+   * @generated from field: string activation_scope = 13;
+   */
+  activationScope: string;
+
+  /**
+   * @generated from field: repeated string changed_paths = 14;
+   */
+  changedPaths: string[];
+
+  /**
+   * @generated from field: repeated string applied_paths = 15;
+   */
+  appliedPaths: string[];
+
+  /**
+   * @generated from field: repeated string deferred_paths = 16;
+   */
+  deferredPaths: string[];
+
+  /**
+   * @generated from field: optional string error = 17;
+   */
+  error?: string | undefined;
+
+  /**
+   * @generated from field: string occurred_at = 18;
+   */
+  occurredAt: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigEventDTO.
+ * Use `create(ConfigEventDTOSchema)` to create a new message.
+ */
+export declare const ConfigEventDTOSchema: GenMessage<ConfigEventDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.McpCleanupDTO

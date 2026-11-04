@@ -141,6 +141,10 @@ class InstructionFileInputs:
             values[text_key] = contents[uri]
         return tuple(self._paths[uri][0] for uri in self._candidate_uris)
 
+    def preview(self, config: Mapping[str, object], *, schema: dict[str, object]) -> tuple[Path, ...]:
+        """预检复用相同读取与校验，不改动运行 owner 的句柄及 readiness。"""
+        return InstructionFileInputs(self._resolve_file).load(config, schema=schema)
+
     def watch_paths(
         self, config: Mapping[str, object], *, include_candidate: bool = False
     ) -> tuple[Path, ...]:

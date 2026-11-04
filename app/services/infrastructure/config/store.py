@@ -54,9 +54,12 @@ class ConfigSnapshotStore:
         *,
         candidate_applier: ConfigSnapshotPublisher | None = None,
         apply_unchanged: bool = False,
+        before_build: Callable[[], bool] | None = None,
     ) -> bool:
         async with self._reload_lock:
             previous = self.current()
+            if before_build is not None and not before_build():
+                return False
             try:
                 candidate = self._candidate_builder()
             except Exception as error:

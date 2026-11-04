@@ -64,6 +64,9 @@ from app.services.infrastructure.config_service.config_service_common import (
 from app.services.infrastructure.config_service.config_snapshot import (
     ConfigSnapshotMixin,
 )
+from app.services.infrastructure.config_service.config_source_edit import (
+    ConfigSourceEditMixin,
+)
 from app.services.infrastructure.config_service.config_source_layers import (
     ConfigSourceLayersMixin,
 )
@@ -73,6 +76,7 @@ from configs.installer import resolve_config_resource_source
 
 
 class ConfigService(ConfigSourceLayersMixin,
+    ConfigSourceEditMixin,
     ConfigSnapshotMixin,
     ConfigRuntimeAccessorsMixin,
     ConfigReloadMixin,
