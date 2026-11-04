@@ -31,7 +31,10 @@ from app.gateway.managed_workspaces import (
     remove_direct_managed_workspace,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.gateway.remote_gateway import reconnect_remote_gateway, refresh_remote_gateway_projections
+from app.gateway.remote_gateway import (
+    reconnect_remote_gateway,
+    refresh_remote_gateway_projections,
+)
 from app.gateway.routes._shared import (
     _gateway_root,
     _managed_workspace_list,
@@ -41,7 +44,10 @@ from app.gateway.routes._shared import (
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.gateway.server.port_forwarding import get_port_forward_manager
+from app.gateway.server.port_forwarding import (
+    get_port_forward_manager,
+    port_forward_http_error,
+)
 from app.schemas.gateway.federation import (
     GatewayInboundAccessListDTO,
     GatewayInboundPeerDTO,
@@ -359,8 +365,14 @@ async def remove_gateway_connection(
     _: Annotated[str, Depends(verify_gateway_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+    port_forward_manager: Annotated[SshPortForwardManager, Depends(get_port_forward_manager)],
 ):
     try:
+        registry.validate_remote_gateway_removal(connection_id)
+        try:
+            await port_forward_manager.reconcile_workspaces(removing_connection_id=connection_id)
+        except (OSError, RuntimeError) as error:
+            raise port_forward_http_error(error, stage="gateway_connection_remove") from error
         registry.remove_remote_gateway(connection_id)
     except LookupError as error:
         raise HTTPException(404, detail=str(error)) from error

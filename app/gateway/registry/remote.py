@@ -177,16 +177,21 @@ class RegistryRemoteMixin:
             else:
                 self._retired_remote_gateway_runtimes.pop(connection_id, None)
 
+    def validate_remote_gateway_removal(self, connection_id: str) -> tuple[WorkspaceTarget, ...]:
+        """清理转发与提交解绑共用同一份 owner、活动引用校验。"""
+        connection = self.remote_gateway_connection(connection_id)
+        if connection.source_owner != "manual":
+            raise PermissionError("配置管理的远端连接必须通过配置 owner 删除")
+        affected = tuple(target for target in self._targets.values() if connection_id in target.remote_gateway_connection_ids)
+        for target in affected:
+            self._assert_route_references_drained(target.key)
+        return affected
+
     def remove_remote_gateway(self, connection_id: str) -> None:
         """只解绑指定连接；其它连接仍引用的资源记录保持原 owner。"""
         from dataclasses import replace
 
-        connection = self.remote_gateway_connection(connection_id)
-        if connection.source_owner != "manual":
-            raise PermissionError("配置管理的远端连接必须通过配置 owner 删除")
-        affected = [target for target in self._targets.values() if connection_id in target.remote_gateway_connection_ids]
-        for target in affected:
-            self._assert_route_references_drained(target.key)
+        affected = self.validate_remote_gateway_removal(connection_id)
         previous = self._capture_registry_state()
         previous_commit = self._last_committed_snapshot
         for target in affected:

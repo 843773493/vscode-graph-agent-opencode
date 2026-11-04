@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import get_gateway_local_token, verify_gateway_token
@@ -19,14 +21,14 @@ from app.gateway.federation import (
     RemoteGatewayConnection,
     build_remote_gateway_connection_id,
 )
-from app.gateway.main import app
+from app.gateway.main import app, gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from app.gateway.routes import workspaces_lifecycle
+from app.gateway.routes import workspaces_lifecycle, workspaces_managed
 from app.gateway.routes._shared import get_workspace_runtime_controller
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
-from app.schemas.gateway.port_forwarding import CreatePortForwardRequest
+from app.schemas.gateway.port_forwarding import CreatePortForwardRequest, PortForwardDTO
 
 _WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
 _OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000003"
@@ -75,10 +77,19 @@ def close_error(request: pytest.FixtureRequest, native_path: str) -> OSError:
 
 
 @pytest.fixture
+def cleanup_state_store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[GatewayStateStore | None]:
+    if not getattr(request, "param", False):
+        yield None
+        return
+    with GatewayStateStore(path=tmp_path / "gateway.sqlite") as state:
+        yield state
+
+
+@pytest.fixture
 def forward_cleanup(
-    tmp_path: Path, close_error: OSError,
+    tmp_path: Path, close_error: OSError, cleanup_state_store: GatewayStateStore | None,
 ) -> Iterator[tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]]]:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", state_store=cleanup_state_store)
     registry.upsert_remote_gateway(
         RemoteGatewayConnection(
             connection_id="rgw_cleanup",
@@ -137,6 +148,53 @@ def forward_cleanup(
         for process in processes:
             if not process.closed:
                 process.listener.close()
+        registry.close()
+
+
+@pytest.fixture
+async def connection_cleanup_client(
+    forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
+) -> AsyncIterator[httpx.AsyncClient]:
+    registry, manager, _ = forward_cleanup
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.exception_handler(HTTPException)(gateway_http_exception_handler)
+    application.dependency_overrides[verify_gateway_token] = lambda: "local-test-token"
+    application.dependency_overrides[workspaces_managed.get_registry] = lambda: registry
+    application.dependency_overrides[get_port_forward_manager] = lambda: manager
+    application.include_router(workspaces_managed.router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://gateway.test",
+    ) as client:
+        yield client
+
+
+@pytest.fixture
+async def shared_connection_forwards(
+    forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
+) -> tuple[PortForwardDTO, PortForwardDTO, PortForwardDTO]:
+    registry, manager, processes = forward_cleanup
+    first = registry.remote_gateway_connection("rgw_cleanup")
+    target = registry.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
+    sibling = registry.resolve((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID))
+    removed = await manager.create(target.key, CreatePortForwardRequest(remote_port=5173))
+    second = replace(first, connection_id="rgw_second", host="second.example.com")
+    registry.apply_remote_projection_snapshot(
+        connection=second,
+        projections=(replace(target, remote_gateway_connection_ids=(second.connection_id,)),),
+    )
+    registry.apply_remote_projection_snapshot(connection=first, projections=(sibling,))
+    retained = await manager.create(target.key, CreatePortForwardRequest(remote_port=5174))
+    registry.apply_remote_projection_snapshot(connection=first, projections=(target, sibling))
+    third = replace(first, connection_id="rgw_third", host="third.example.com", remote_gateway_id=_OTHER_GATEWAY_ID)
+    registry.apply_remote_projection_snapshot(
+        connection=third,
+        projections=(replace(target, gateway_id=_OTHER_GATEWAY_ID, remote_gateway_connection_ids=(third.connection_id,)),),
+    )
+    other = await manager.create((_OTHER_GATEWAY_ID, _WORKSPACE_ID), CreatePortForwardRequest(remote_port=5173))
+    for process in processes:
+        process.fail_next_close = False
+    return removed, retained, other
 
 
 @pytest.mark.asyncio
@@ -507,3 +565,176 @@ async def test_batch_cleanup_preserves_failed_owner_and_retries_without_raw_erro
     else:
         assert manager._definitions == {} and manager._runtimes == {}
         assert json.loads((tmp_path / "port-forwards.json").read_text())["items"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["process", "persist"])
+async def test_delete_remote_connection_http_keeps_retry_facts_until_forward_cleanup_succeeds(
+    forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
+    connection_cleanup_client: httpx.AsyncClient, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, close_error: OSError,
+    caplog: pytest.LogCaptureFixture, failure_stage: str,
+) -> None:
+    registry, manager, processes = forward_cleanup
+    failed = await manager.create((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), CreatePortForwardRequest(remote_port=5173))
+    healthy = await manager.create((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID), CreatePortForwardRequest(remote_port=5174))
+    processes[1].fail_next_close = False
+    registry_before = (tmp_path / "workspaces.json").read_bytes()
+    forward_path = tmp_path / "port-forwards.json"
+    forwards_before = forward_path.read_bytes()
+    if failure_stage == "persist":
+        processes[0].fail_next_close = False
+        original_replace = os.replace
+        fail_save = True
+
+        def fail_first_forward_replace(source: str | Path, destination: str | Path) -> None:
+            nonlocal fail_save
+            if Path(destination) == forward_path and fail_save:
+                fail_save = False
+                raise close_error
+            original_replace(source, destination)
+
+        monkeypatch.setattr("app.gateway.control.storage.os.replace", fail_first_forward_replace)
+
+    endpoint = "/api/gateway/remote-gateways/rgw_cleanup"
+    response = await connection_cleanup_client.delete(endpoint, headers={"X-Request-ID": "delete-connection-failure"})
+
+    assert response.status_code == 502, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "delete-connection-failure"
+    assert "stage=gateway_connection_remove" in response.json()["detail"]
+    assert close_error.filename not in response.json()["detail"]
+    assert any(record.exc_info and record.exc_info[1] is close_error for record in caplog.records)
+    assert (tmp_path / "workspaces.json").read_bytes() == registry_before
+    assert registry.remote_gateway_connection("rgw_cleanup").connection_id == "rgw_cleanup"
+    expected_ids = {failed.forward_id} if failure_stage == "process" else {failed.forward_id, healthy.forward_id}
+    assert set(manager._definitions) == expected_ids
+    saved = json.loads(forward_path.read_text())["items"]
+    assert {item["forward_id"] for item in saved} == expected_ids
+    assert all(item["connection_id"] == "rgw_cleanup" for item in saved)
+    if failure_stage == "process":
+        assert manager._runtimes[failed.forward_id].process is processes[0]
+        assert not processes[0].closed and processes[1].closed
+        assert any(record.exc_info and record.exc_info[1] is not None and record.exc_info[1].__cause__ is close_error for record in caplog.records)
+    else:
+        assert forward_path.read_bytes() == forwards_before
+        assert all(process.closed for process in processes)
+        assert all(runtime.process is None for runtime in manager._runtimes.values())
+    with closing(GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")) as cold:
+        restored = SshPortForwardManager(registry=cold, storage_path=forward_path, log_dir=tmp_path / "logs")
+        assert set(restored._definitions) == expected_ids
+        assert cold.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)).remote_gateway_connection_ids == ("rgw_cleanup",)
+
+    retried = await connection_cleanup_client.delete(endpoint, headers={"X-Request-ID": "delete-connection-retry"})
+
+    assert retried.status_code == 200, retried.text
+    assert retried.headers["X-Request-ID"] == retried.json()["request_id"] == "delete-connection-retry"
+    assert retried.json()["data"] == {"active_workspace": None, "items": []}
+    assert [process.close_calls for process in processes] == ([2, 1] if failure_stage == "process" else [1, 1])
+    assert manager._definitions == {} and manager._runtimes == {}
+    assert json.loads(forward_path.read_text())["items"] == []
+    with closing(GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")) as cold:
+        assert cold.targets() == ()
+        with pytest.raises(LookupError, match="未知远程 Gateway 连接"):
+            cold.remote_gateway_connection("rgw_cleanup")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", ["unknown", "config", "request", "stream"])
+async def test_delete_remote_connection_http_checks_owner_and_route_references_before_cleanup(
+    forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
+    connection_cleanup_client: httpx.AsyncClient, tmp_path: Path, blocker: str,
+) -> None:
+    registry, manager, processes = forward_cleanup
+    connection_id = "rgw_cleanup"
+    key = (_REMOTE_GATEWAY_ID, _WORKSPACE_ID)
+    if blocker == "config":
+        connection = replace(
+            registry.remote_gateway_connection(connection_id), connection_id="rgw_config",
+            remote_gateway_id=_OTHER_GATEWAY_ID, source_owner="config",
+        )
+        registry.apply_remote_projection_snapshot(
+            connection=connection,
+            projections=(replace(registry.resolve(key), gateway_id=_OTHER_GATEWAY_ID, remote_gateway_connection_ids=(connection.connection_id,)),),
+        )
+        connection_id, key = connection.connection_id, (_OTHER_GATEWAY_ID, _WORKSPACE_ID)
+    forward = await manager.create(key, CreatePortForwardRequest(remote_port=5173))
+    if blocker in {"request", "stream"}:
+        registry.acquire_route_reference(key, streaming=blocker == "stream")
+    registry_before = (tmp_path / "workspaces.json").read_bytes()
+    forwards_before = (tmp_path / "port-forwards.json").read_bytes()
+    try:
+        response = await connection_cleanup_client.delete(
+            f"/api/gateway/remote-gateways/{'rgw_missing' if blocker == 'unknown' else connection_id}",
+            headers={"X-Request-ID": "delete-connection-rejected"},
+        )
+    finally:
+        if blocker in {"request", "stream"}:
+            registry.release_route_reference(key, streaming=blocker == "stream")
+
+    assert response.status_code == {"unknown": 404, "config": 403, "request": 409, "stream": 409}[blocker]
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "delete-connection-rejected"
+    assert processes[0].close_calls == 0 and not processes[0].closed
+    assert manager._runtimes[forward.forward_id].process is processes[0]
+    assert registry.remote_gateway_connection(connection_id).connection_id == connection_id
+    assert (tmp_path / "workspaces.json").read_bytes() == registry_before
+    assert (tmp_path / "port-forwards.json").read_bytes() == forwards_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_state_store", [True], indirect=True)
+@pytest.mark.parametrize("operation", ["delete", "reconcile"])
+async def test_connection_cleanup_preserves_other_connection_definitions_and_full_owners(
+    forward_cleanup: tuple[GatewayWorkspaceRegistry, SshPortForwardManager, list[_FakeManagedProcess]],
+    shared_connection_forwards: tuple[PortForwardDTO, PortForwardDTO, PortForwardDTO],
+    connection_cleanup_client: httpx.AsyncClient, cleanup_state_store: GatewayStateStore,
+    tmp_path: Path, operation: str,
+) -> None:
+    registry, manager, processes = forward_cleanup
+    removed, retained, other = shared_connection_forwards
+    forward_path = tmp_path / "port-forwards.json"
+    before = {item["forward_id"]: item for item in json.loads(forward_path.read_text())["items"]}
+    assert registry.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)).remote_gateway_connection_ids == ("rgw_cleanup", "rgw_second")
+    if operation == "delete":
+        response = await connection_cleanup_client.delete(
+            "/api/gateway/remote-gateways/rgw_cleanup", headers={"X-Request-ID": "delete-shared-source"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "delete-shared-source"
+        assert response.json()["data"]["active_workspace"] == {"gateway_id": _REMOTE_GATEWAY_ID, "workspace_id": _WORKSPACE_ID}
+        assert {(item["gateway_id"], item["workspace_id"]) for item in response.json()["data"]["items"]} == {
+            (_REMOTE_GATEWAY_ID, _WORKSPACE_ID), (_OTHER_GATEWAY_ID, _WORKSPACE_ID),
+        }
+        with pytest.raises(LookupError, match="未知远程 Gateway 连接"):
+            registry.remote_gateway_connection("rgw_cleanup")
+    else:
+        registry.apply_remote_projection_snapshot(connection=registry.remote_gateway_connection("rgw_cleanup"), projections=())
+        await manager.reconcile_workspaces()
+
+    assert [process.close_calls for process in processes] == [1, 0, 0]
+    assert processes[0].closed and all(not process.closed for process in processes[1:])
+    assert removed.forward_id not in manager._definitions
+    assert registry.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)).remote_gateway_connection_ids == ("rgw_second",)
+    assert registry.resolve((_OTHER_GATEWAY_ID, _WORKSPACE_ID)).remote_gateway_connection_ids == ("rgw_third",)
+    assert not registry.has_target((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID))
+    assert {item["forward_id"]: item for item in json.loads(forward_path.read_text())["items"]} == {
+        forward_id: before[forward_id] for forward_id in (retained.forward_id, other.forward_id)
+    }
+    saved = cleanup_state_store.load_workspace_registry()
+    assert saved is not None
+    saved_targets = saved["targets"]
+    assert isinstance(saved_targets, list)
+    assert {(item["gateway_id"], item["workspace_id"]) for item in saved_targets} == {
+        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID), (_OTHER_GATEWAY_ID, _WORKSPACE_ID),
+    }
+    await manager.reconcile_workspaces()
+    assert [process.close_calls for process in processes] == [1, 0, 0]
+    registry.close()
+    cleanup_state_store.close()
+    with (
+        GatewayStateStore(path=tmp_path / "gateway.sqlite") as cold_state,
+        closing(GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", state_store=cold_state)) as cold,
+    ):
+        assert cold.resolve((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)).remote_gateway_connection_ids == ("rgw_second",)
+        assert cold.resolve((_OTHER_GATEWAY_ID, _WORKSPACE_ID)).remote_gateway_connection_ids == ("rgw_third",)
+        restored = SshPortForwardManager(registry=cold, storage_path=forward_path, log_dir=tmp_path / "logs")
+        assert {definition.connection_id for definition in restored._definitions.values()} == {"rgw_second", "rgw_third"}

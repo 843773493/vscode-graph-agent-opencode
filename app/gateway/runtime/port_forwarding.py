@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.failures import report_failure
 from app.core.identifier import validate_gateway_id
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.storage import atomic_write_json, read_json_object
@@ -366,32 +367,49 @@ class SshPortForwardManager:
             if definitions:
                 self._save()
 
-    async def reconcile_workspaces(self) -> None:
-        """清理注册表中已不存在工作区所拥有的转发。"""
+    async def reconcile_workspaces(self, *, removing_connection_id: str | None = None) -> None:
+        """清理失效归属或待解绑连接的转发，失败定义保留以供重试。"""
         async with self._lock:
             stale_definitions = [
                 definition
                 for definition in self._definitions.values()
-                if not self._registry.has_target(definition.key)
+                if definition.connection_id == removing_connection_id
+                or not self._registry.has_target(definition.key)
+                or definition.connection_id not in self._registry.resolve(definition.key).remote_gateway_connection_ids
             ]
-            errors: list[str] = []
-            removed_any = False
+            previous_definitions = self._definitions.copy()
+            errors: list[tuple[str, Exception]] = []
+            removed_ids: list[str] = []
             for definition in stale_definitions:
                 try:
                     await self._stop_runtime(definition.forward_id)
-                except Exception as error:
-                    logger.exception("清理失效 SSH 端口转发失败: forward_id=%s", definition.forward_id)
-                    errors.append(f"{definition.forward_id}: {port_forward_failure(error, stage='reconcile')}")
+                except Exception as error:  # noqa: BLE001 — 逐项保留失败定义，继续清理同批其余转发。
+                    report_failure(
+                        error,
+                        detail=f"清理失效 SSH 端口转发失败: forward_id={definition.forward_id}",
+                        diagnostic_logger=logger,
+                    )
+                    errors.append((definition.forward_id, error))
                     continue
                 del self._definitions[definition.forward_id]
-                self._runtimes.pop(definition.forward_id, None)
-                removed_any = True
-            if removed_any:
-                self._save()
+                removed_ids.append(definition.forward_id)
+            if removed_ids:
+                try:
+                    self._save()
+                except BaseException as error:
+                    self._definitions = previous_definitions
+                    if errors:
+                        raise error from errors[0][1]
+                    raise
+                for forward_id in removed_ids:
+                    self._runtimes.pop(forward_id, None)
             if errors:
                 raise RuntimeError(
-                    "清理已移除工作区的 SSH 端口转发失败: " + "; ".join(errors)
-                )
+                    "清理失效归属的 SSH 端口转发失败: " + "; ".join(
+                        f"{forward_id}: {port_forward_failure(error, stage='reconcile')}"
+                        for forward_id, error in errors
+                    )
+                ) from errors[0][1]
 
     async def close(self) -> None:
         async with self._lock:

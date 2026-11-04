@@ -126,3 +126,9 @@
 - 恢复失败事实沿原 owner 补齐连接写入范围，未放宽 SQLite 授权；rename/restore 迁齐 UUID、完整 owner 和单一成员身份。删除旧模块后的定向测试 67 passed／17.22 秒，Ruff 通过。两份测试 Pyright 零诊断；`routes.py` 有 44 条 mixin 成员诊断，已对照改前同方法源码，未执行旧 HEAD 类型检查。修复提交 `243ebcdf5`，原件在 `out/tests/temp/identity_restore_consumers_20261104/artifacts/`。
 - 全仓迁齐本地生成器直接及间接消费者后，物理删除 `workspace_ids.py` 三个函数与 registry 再导出。14 个装配／消费者模块实际导入通过；SSH 装具原单测 17 passed。双工作区真实路由与 Session UUID、托管工作区重启恢复、跨工作区上下文工具三个场景分别通过；其中恢复／上下文合跑 2 passed／130.69 秒。旧恢复测试的重复 start 已删除，由创建结果 ready、generation 与完整成员断言承接。一次复验端口占用后未清理未知进程，确认端口可绑定才补跑失败及未执行场景；失败原件保留。
 - 身份准备真实权限拒绝、executable 启动失败及 actor 代理三项 3 passed／95.19 秒，五份消费者 Ruff／Pyright 均通过；未预建权限场景身份，明确验证无半登记 target／owner。其余启动失败参数、完整 Launcher/Web、Docker SSH 和真实 Provider E2E 未重跑。原件在 `out/tests/temp/identity_remaining_clients_20261104/artifacts/`；主线程命令、指纹、端口观察和结果在 `out/tests/temp/identity_routing_consumers_20261104/artifacts/`。主线程五文件 Pyright 仍有 22 条测试诊断，逐条源码与改前相同，未运行旧 HEAD 完整类型检查；生产 facade 与目标侧只读 helper 无诊断。独立只读审查未发现本批漏迁，不据此勾选完整 6.4。
+
+### 2026-11-04：4.2 连接删除与转发清理闭环
+
+- 公开连接 DELETE 在清理前共用 registry 的 owner／活动引用校验，清理成功后沿原 remove 复查并解绑。原转发对账同时识别已消失 owner、已失效连接关联和待删连接，不改绑另一连接；同来源其它有效连接及另一 Gateway 的同 UUID 转发保留。
+- 关闭失败保留原进程与定义；原子保存失败恢复定义内存并保留已停止运行态，原 DELETE 可重试且不重复关闭。公开入口保留未知 404、配置 owner 403、活动请求／流 409，核对 request_id、原异常因果、定义文件和 SQLite 冷恢复。
+- 四模块批次 176 passed／2 failed，失败均在原固定端口 41236 可用性检查；保留失败原件，确认真实 bind 可用后只补跑两例，2 passed。64 个新增参数场景全部通过。验证为 ASGITransport 进程内公开路由、真实 registry／SQLite／定义文件及 socket listener，进程关闭使用受控替身，不代表真实 HTTP 服务或 SSH 验收。Ruff 剩余 7 条与实际改前相同；Pyright 50 条均逐项归因于改前源码，未跑旧类型基线，不称类型全绿。最终源码与检查指纹一致，主线程复核差异；准确命令、原始结果及归因在 `out/tests/temp/identity_connection_cleanup_20261104/artifacts/connection-cleanup-final-evidence-1793809342971461555.json`。4.2／4.4／6.4 的整体迁移验收仍未完成。
