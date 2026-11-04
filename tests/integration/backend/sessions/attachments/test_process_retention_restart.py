@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import PurePosixPath
+from textwrap import dedent
 
 import psutil
 import pytest
@@ -64,14 +65,32 @@ async def test_process_retention_across_hard_restarts(
     directory = native_io_path((case.workspace / ".boxteam/attachments").joinpath(
         *PurePosixPath(str(initial["relative_locator"])).parts,
     ))
-    # 正式模型工具调用启动父/子进程，工具返回后两者仍在附件 derived 中运行。
-    program = (
-        "import json,os,subprocess,sys,time; from pathlib import Path; "
-        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(600)']); "
-        "Path('processes.json').write_text(json.dumps([os.getpid(),child.pid]),encoding='ascii'); "
-        "print('attachment-process-ready',flush=True); child.wait()"
-    )
-    arguments = [sys.executable, "-u", "-c", program]
+    baseline_entries = sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*"))
+    assert baseline_entries == ["derived", "original", "original/content", "preview"]
+    # 门控及进程回执放在附件外；工具返回、Thread 卸载后附件仍保持上传基线。
+    process_control = native_io_path(case.workspace / "process-control")
+    process_control.mkdir()
+    program = dedent("""\
+        import json
+        import os
+        import subprocess
+        import sys
+        import time
+        from pathlib import Path
+
+        control = Path(sys.argv[1])
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])
+        (control / 'processes.json').write_text(json.dumps([os.getpid(), child.pid]), encoding='ascii')
+        print('attachment-process-ready', flush=True)
+        while not (control / 'write').exists():
+            time.sleep(0.01)
+        Path('result.txt').write_text('delayed attachment result', encoding='utf-8')
+        (control / 'written').touch()
+        child.wait()
+    """)
+    process_script = process_control / "process.py"
+    process_script.write_text(program, encoding="utf-8")
+    arguments = [sys.executable, "-u", str(process_script), str(process_control)]
     calls = await case.plan(session, [
         _tool("exec_command", {
             "cmd": subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments),
@@ -91,9 +110,11 @@ async def test_process_retention_across_hard_restarts(
     result = json.loads(tool["content"])
     assert "exit_code" not in result and "attachment-process-ready" in result["output"], result
     rid = result["terminal_id"]
-    processes = [psutil.Process(pid) for pid in json.loads((directory / "derived/processes.json").read_bytes())]
+    processes = [psutil.Process(pid) for pid in json.loads((process_control / "processes.json").read_bytes())]
     identities = [{"pid": process.pid, "created_at": process.create_time()} for process in processes]
     assert len(processes) == 2 and all(process.is_running() for process in processes)
+    assert sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*")) == baseline_entries
+    assert (directory / "original/content").read_bytes() == b"process-retention-original"
     lease = directory_lease(case, attachment_id)
     assert lease["status"] == "active" and lease["operation_id"] == lease["turn_stream_id"] == rid
     assert lease["holder_session_id"] == session
@@ -103,8 +124,10 @@ async def test_process_retention_across_hard_restarts(
     # 硬退出不发 detach；新 Backend 释放旧 runtime 关联，但不能释放活 PTY 的原占用。
     await case.hard_restart()
     released = directory_snapshot(case)
-    assert released["association_state"] == "released" and released["binding_token"] == initial["binding_token"]
-    assert released["release_pending"] == 1 and released["availability"] == "available"
+    assert released == {
+        **initial, "association_state": "released", "release_pending": 1,
+        "release_reason": "真实操作仍占用附件目录，等待原 owner 核实结清",
+    }
     assert directory_lease(case, attachment_id) == lease
     assert all(process.is_running() for process in processes)
     response = await case.client.get(f"/api/v1/resources/{rid}")
@@ -118,10 +141,24 @@ async def test_process_retention_across_hard_restarts(
     assert directory_snapshot(case) == released
     assert directory_lease(case, attachment_id) == lease
     assert all(process.is_running() for process in processes)
+    assert sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*")) == baseline_entries
     assert (directory / "original/content").read_bytes() == b"process-retention-original"
     assert canonical.read_bytes() == frozen_history
     available = await case.client.get("/api/v1/workspace/files/content", params={"path": original["file_id"]})
     assert available.status_code == 200 and available.json()["data"]["content"] == "process-retention-original", available.text
+
+    # 原目录已在无修改状态下跨两次重启保活，现在才允许真实命令首次写处理结果。
+    assert not (process_control / "written").exists()
+    (process_control / "write").touch()
+
+    async def wait_for_result() -> None:
+        while not (process_control / "written").exists():
+            assert all(process.is_running() for process in processes)
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(wait_for_result(), timeout=15)
+    assert (directory / "derived/result.txt").read_bytes() == b"delayed attachment result"
+    assert directory_snapshot(case) == released and directory_lease(case, attachment_id) == lease
 
     # 使用同一资源的公开管理入口核实真实终态，不由测试杀 PID 或手填 settled。
     response = await case.client.get(f"/api/v1/resources/{rid}")
@@ -193,16 +230,17 @@ async def test_process_retention_across_hard_restarts(
     retained = directory_snapshot(case)
     assert retained == {**released, "release_pending": 0, "release_reason": "目录相对上传初始基线有修改，保留原位置与处理结果"}
     assert directory.is_dir() and directory_lease(case, attachment_id) == settled
-    assert json.loads((directory / "derived/processes.json").read_bytes()) == [process.pid for process in processes]
+    assert (directory / "derived/result.txt").read_bytes() == b"delayed attachment result"
     assert canonical.read_bytes() == frozen_history
     available = await case.client.get("/api/v1/workspace/files/content", params={"path": original["file_id"]})
     assert available.status_code == 200 and available.json()["data"]["content"] == "process-retention-original", available.text
     await case.hard_restart()
     assert directory_snapshot(case) == retained and directory.is_dir()
-    assert json.loads((directory / "derived/processes.json").read_bytes()) == [process.pid for process in processes]
+    assert (directory / "derived/result.txt").read_bytes() == b"delayed attachment result"
     assert directory_lease(case, attachment_id) == settled and canonical.read_bytes() == frozen_history
     case.record("process-retention-restart", {
         "resource_id": rid, "processes": identities, "initial": initial, "released": released,
         "retained": retained, "lease": lease, "settled": settled, "stopped": stopped, "recovery": recovery,
-        "scope": "真实Gateway/Backend/model_stream/Shell/PTY和硬退出，原占用持续保活，停止派发前或真实回执返回后硬退出，由新Backend核实原终态或新管理操作终止后保留处理结果；不证明不合作执行可强制终止",
+        "baseline_entries": baseline_entries, "delayed_result": "delayed attachment result",
+        "scope": "真实Gateway/Backend/model_stream/Shell/PTY和硬退出，Thread卸载且目录未修改时原占用持续保活，随后真实命令首次写入；停止派发前或真实回执返回后硬退出，由新Backend核实原终态或新管理操作终止后保留处理结果；不证明不合作执行可强制终止",
     })

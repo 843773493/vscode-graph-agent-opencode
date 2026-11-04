@@ -58,6 +58,8 @@
 
 `integration-attachment-file-access-lifecycle` 经真实消息、图卸载、文件 operation 和 ASGI 下载验证最后读取退出、排队交接、不同目录锁隔离及观察锁顺序，固定120秒/4GiB并沿原集成闸门；不代替独立 Backend 硬重启或 Windows。`unit-attachment-schema-upgrade` 从冻结旧 schema 4 输入验证原 owner 的 schema 5 转换及原件/结果保留，固定60秒/4GiB；schema 3 离线安装仍归其独立集成套件。
 
+`integration-attachment-working-copy-recovery` 经真实消息生成附件，在删除及重建发布前后硬退出并恢复，核原目录身份、字节及历史；四参数共用120秒/4GiB保护，不代替Windows或完整Backend关闭验收。
+
 `integration-thread-rewind-isolation` 经真实 Gateway/Backend 消息、fork 与 main regenerate 验证 child 完整存储和请求隔离、硬重启后的历史及 child 续聊；只读核对原封存请求与 owner/hash。固定180秒/4GiB及原集成独占闸门，不代替 compaction、Web、Windows 或完整8.3。
 
 `integration-thread-input-admission` 经 ASGI 消息、回退和手动摘要入口及真实 Agent/model_stream 验证同 Thread 的 acceptance→Job 登记互斥，以及同 Session 的 child 并行；关键历史与 child 经产品入口生成。固定180秒/4GiB及原集成独占闸门，不代替真实 Gateway 业务代理、Web、重启或 Windows 验收。

@@ -22,6 +22,6 @@
 
 同文件的 watch 场景从真实上传/卸载进入公开 SSE 适配器，核 locator 初始化不持正文 holder、最后 detach 可完成结清、released 根及目录形态、原 URI 重建事件、其它附件/私有状态过滤；原生 Shell 子进程以附件根为 cwd 将 derived 替换为文件后，公开 watch 必须按实际类型拒绝，仅实际缺失的固定布局保留虚拟目录语义，此定向场景不复验 PTY。原 operation 事件经真实 API 回放并区分显式订阅与私有事件。reveal 场景仅替换系统启动器派发边界，核解析/正文原 holder、卸载竞争及原件重建，不宣称已验证外部 GUI 窗口持续使用期。
 
-`test_process_retention_restart.py`由正式模型工具调用启动附件目录中的父子进程；原保活suite只运行`live`，停止恢复suite在真实派发前或正式回执返回后硬退出Backend。核对原lease、无自动重放、真实进程终态，以及多次重启后处理结果仍保留，不由测试终止处理进程或结算占用。同文件套件在同一机器串行；测试节点名保持简短以免Windows装具路径超限，不减少业务步骤或断言。
+`test_process_retention_restart.py`由正式模型工具调用启动附件目录中的父子进程；附件外门控和进程回执保证工具返回、Thread卸载及两次Backend硬重启时目录仍未修改，随后才允许真实命令首次写入处理结果。原保活suite只运行`live`，停止恢复suite在真实派发前或正式回执返回后硬退出Backend。核对原lease、无自动重放、真实进程终态，以及多次重启后处理结果仍保留，不由测试终止处理进程或结算占用。同文件套件在同一机器串行；测试节点名保持简短以免Windows装具路径超限，不减少业务步骤或断言。
 
 `test_startup_operation_restart.py`经真实消息上传和管理创建生成目录与原operation；复用Terminal启动故障装具及原SHELL配置启动真实父子进程，只丢停止证明。Backend硬重启及显式工作副本检查必须保留原unknown和精确占用，原管理停止核实后才结清并释放无修改目录；不手填账本或原生身份，不代替无身份接管、Windows或Web验收。

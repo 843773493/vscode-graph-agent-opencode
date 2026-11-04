@@ -36,7 +36,7 @@
 
 - [x] 6.1 通过产品上传/消息/卸载/原 URI 重开，验证无修改及仅系统预览目录释放、原件重建、稳定身份与原字节、真实缺件错误；关键状态由产品生成，不手填关联或恢复事实。
 - [x] 6.2 通过文件工具与原生 Shell 生成结果，验证修改保留、连续多次卸载/重启不丢失、删除结果回到基线可释放，以及 Session 删除后工作区处理结果保留。
-- [ ] 6.3 验证多 Thread、排队输入、真实后台处理/延迟写入、关联/准入竞争及原占用结清后处理；覆盖释放/重建中断与新代使用，保持原身份、冲突、顺序及错误归属断言。
+- [x] 6.3 验证多 Thread、排队输入、真实后台处理/延迟写入、关联/准入竞争及原占用结清后处理；覆盖释放/重建中断与新代使用，保持原身份、冲突、顺序及错误归属断言。
 - [ ] 6.4 验证同/跨工作区 fork、来源离线后的目标重建和历史请求 hash；按受影响实现补 Linux/Windows 文件及真实 PTY 检查，远端目录始终在目标机器解释。旧跨平台通过记录不能替代新策略验收。
 - [x] 6.5 完成相关静态检查、OpenSpec strict，以及实际受影响的协议生成一致性/前端类型和构建；测试带进程外超时/内存保护，保留准确命令、源码指纹、原始输出和实际退出码。无需为未改动运行面重复全仓长回归。
 - [ ] 6.6 核对唯一调用链及旧实现物理下线，确认新合同全部必做项有证据后同步主规范并归档；仅文档更新不归档、不把旧 30 天验收记作新策略通过。
@@ -88,6 +88,10 @@
 
 两条真实后端重启原件位于 `out/tests/temp/identity_convergence_20261104/artifacts/`：`attachment-process-live-final-1793794482374124887` 为真实后台父子处理进程跨 Backend 硬重启，1 passed、2 deselected，121.18s；`attachment-runtime-restart-final-1793794652556874428` 为 queued 输入与 stale runtime 重启对账，1 passed，100.65s。
 
-runtime/entry/Shell/terminal、离线转换/安装/回退及原目录释放中断的并行验证由各 owner 保留独立原件，不与上表重复相加。外部 GUI 持续使用期按上述 TODO 延期。6.3 继续未勾：附件占用与释放/重建中断的证据尚待按本轮实际改动核齐；通用进程接管、强停和完整关闭期限不作为补验要求。Linux 的 fork/历史及两条重启通过不能代替 Windows 新策略验证，6.4 与归档 6.6 保持未完成。
+runtime/entry/Shell/terminal、离线转换/安装/回退及原目录释放中断的并行验证由各 owner 保留独立原件，不与上表重复相加。外部 GUI 持续使用期按上述 TODO 延期。6.3 的附件占用与释放/重建中断已由下方补验证据核齐；通用进程接管、强停和完整关闭期限不作为补验要求。Linux 的 fork/历史及重启通过不能代替 Windows 新策略验证，6.4 与归档 6.6 保持未完成。
 
 2026-11-04 旧代码收敛：物理删除无生产调用的 blob 身份/去重/locator 生成 API、解析包装及对应死测试，保留迁移和冻结历史的只读校验，4 个文件净减 197 行。两份定向单测 104 passed（16.78 秒），Ruff、compileall 均退出 0；命令、外部保护、源码指纹和原始输出位于 `out/tests/temp/attachment_new_spec_cleanup_20261104/artifacts/`。本批无前端或协议改动，不追加 Web、Windows 和长集成回归。
+
+2026-11-04 6.3 补验：真实 Gateway/Backend、模型工具及父子 PTY 在附件目录未修改时跨两次硬重启保持原占用，随后由附件外门控允许首次写入，再经原管理入口停止并核结清、结果/locator/canonical 保留；`remaining-process-delayed-write-v3` 为 1 passed／130.35 秒。原 Shell 准入竞争 `remaining-shell-admission` 为 1 passed／21.83 秒。两项前后依赖指纹一致，最终 Ruff、Pyright、矩阵解析退出 0；原件在 `out/tests/temp/attachment_remaining_acceptance_20261104/artifacts/`。
+
+同目录 `working-copy-recovery-fixed` 的前三参数已完成，整组累计超出旧 90 秒预算，实际退出 3；同指纹 `working-copy-recovery-after-publish` 精确补验 1 passed／24.20 秒、退出 0，核齐四个释放/重建中断边界。该 suite 预算按实测约 95 秒调整为 120 秒，保留 4GiB 保护；未重新运行调整后的完整矩阵，不称整组退出 0。此次未重跑 before-stop/after-stop、Windows 或 Web，原失败与补验记录均保留。
