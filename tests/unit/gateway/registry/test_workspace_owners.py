@@ -1,14 +1,18 @@
 """统一 UUID 的 registry 权威键、连接关系和持久边界。"""
 
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from collections.abc import Iterator
 
 import pytest
 
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceIdentityConflictError, WorkspaceTarget
+from app.gateway.registry import (
+    GatewayWorkspaceRegistry,
+    WorkspaceIdentityConflictError,
+    WorkspaceTarget,
+)
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.services.infrastructure.config.state import ConfigConflictError
 
@@ -98,6 +102,38 @@ def test_multi_connection_single_record_and_explicit_unbind(registry: GatewayWor
     assert registry.remote_gateway_connection(second.connection_id) == second
 
 
+@pytest.mark.parametrize("streaming", [False, True], ids=["request", "stream"])
+def test_ambiguous_connection_admission_does_not_block_explicit_unbind(
+    registry: GatewayWorkspaceRegistry, local_target: WorkspaceTarget,
+    connection: RemoteGatewayConnection, streaming: bool,
+) -> None:
+    registry.upsert(local_target)
+    publish(registry, connection)
+    second = replace(connection, connection_id="connection-two")
+    publish(registry, second)
+    key = (REMOTE, WORKSPACE)
+    local_lease = registry.acquire_route_reference(local_target.key, streaming=False)
+    revision = registry.registry_revision
+    try:
+        with pytest.raises(LookupError, match="不能唯一确定"):
+            registry.acquire_route_reference(key, streaming=streaming)
+        assert registry.route_reference_counts(key) == (0, 0)
+        assert registry.registry_revision == revision
+        assert registry.route_reference_counts(local_target.key) == (1, 0)
+        assert not local_lease.invalidated.is_set()
+
+        # 拒绝的请求没有占用连接，用户可以解除歧义并继续使用原资源。
+        registry.remove_remote_gateway(connection.connection_id)
+        assert registry.resolve(key).remote_gateway_connection_ids == (second.connection_id,)
+        lease = registry.acquire_route_reference(key, streaming=streaming)
+        assert (lease.gateway_id, lease.workspace_id) == key
+        assert registry.route_reference_counts(key) == ((0, 1) if streaming else (1, 0))
+        registry.release_route_reference(key, streaming=streaming)
+        assert registry.route_reference_counts(key) == (0, 0)
+    finally:
+        registry.release_route_reference(local_target.key, streaming=False)
+
+
 def test_compound_active_parent_and_sqlite_reopen(registry: GatewayWorkspaceRegistry, local_target: WorkspaceTarget, connection: RemoteGatewayConnection, tmp_path: Path) -> None:
     registry.upsert(local_target)
     publish(registry, connection)
@@ -114,7 +150,9 @@ def test_compound_active_parent_and_sqlite_reopen(registry: GatewayWorkspaceRegi
     assert reopened.active_workspace == (REMOTE, WORKSPACE)
     assert reopened.resolve(WORKSPACE).parent_workspace == (REMOTE, WORKSPACE)
     assert len(reopened.targets()) == 2
-    assert all("backend_workspace_id" not in item and "remote_workspace_id" not in item for item in payload["targets"])
+    targets = payload["targets"]
+    assert isinstance(targets, list)
+    assert all("backend_workspace_id" not in item and "remote_workspace_id" not in item for item in targets)
 
 
 def test_failed_cas_keeps_previous_owner_graph(registry: GatewayWorkspaceRegistry, local_target: WorkspaceTarget, tmp_path: Path) -> None:

@@ -335,6 +335,42 @@ def test_real_gateways_keep_same_uuid_owners_and_target_carrier_distinct(
             assert rejected.status_code == status, rejected.text
             for role in ("gateway-b", "backend-a", "backend-b"):
                 assert _observations(network.observation_paths[role], request_id) == []
+
+        first_connection = projected["remote_gateways"][0]["gateway_connection_id"]
+        another = request(local, "POST", "/api/gateway/remote-gateways", "req_target_second_connection", json={
+            "name": "Gateway B 的另一条连接", "host": "127.0.0.1", "port": 22,
+            "username": "integration-alternate", "private_key_path": topology["private_key"],
+            "remote_gateway_port": topology["ports"][3],
+        })
+        assert another.status_code == 200, another.text
+        same_source, = [item for item in another.json()["data"]["items"]
+                        if item["gateway_id"] == gateway_b]
+        assert same_source["workspace_id"] == network.workspace_id
+        connection_ids = {item["gateway_connection_id"] for item in same_source["remote_gateways"]}
+        assert first_connection in connection_ids and len(connection_ids) == 2
+        assert same_source["status"] == same_source["services"]["workspace_api"]["status"] == "offline"
+        ambiguous = request(local, "GET", canonical, "req_target_ambiguous_connection",
+                            headers={TARGET_GATEWAY_ID_HEADER: gateway_b})
+        assert ambiguous.status_code == 500, ambiguous.text
+        for role in ("gateway-b", "backend-a", "backend-b"):
+            assert _observations(network.observation_paths[role], "req_target_ambiguous_connection") == []
+
+        # 请求没有取得占用时，管理入口仍可解除歧义；资源 owner 与 UUID 不变。
+        unbound = request(local, "DELETE", f"/api/gateway/remote-gateways/{first_connection}", "req_target_unbind")
+        assert unbound.status_code == 200, unbound.text
+        retained, = [item for item in unbound.json()["data"]["items"] if item["gateway_id"] == gateway_b]
+        assert retained["workspace_id"] == network.workspace_id
+        assert {item["gateway_connection_id"] for item in retained["remote_gateways"]} == connection_ids - {first_connection}
+        assert retained["status"] == "ready"
+        resumed = request(local, "GET", canonical, "req_target_after_unbind",
+                          headers={TARGET_GATEWAY_ID_HEADER: gateway_b})
+        assert resumed.status_code == 200, resumed.text
+        assert [item["session_id"] for item in resumed.json()["data"]["items"]] == [session_ids[1]]
+        forwarded, = _observations(network.observation_paths["gateway-b"], "req_target_after_unbind")
+        backend, = _observations(network.observation_paths["backend-b"], "req_target_after_unbind")
+        assert (forwarded["sender_gateway_id"], forwarded["target_gateway_id"], forwarded["workspace_id"]) == (gateway_a, gateway_b, network.workspace_id)
+        assert (backend["sender_gateway_id"], backend["target_gateway_id"], backend["workspace_id"]) == (gateway_b, None, network.workspace_id)
+        assert _observations(network.observation_paths["backend-a"], "req_target_after_unbind") == []
         final = request(local, "GET", "/api/gateway/workspaces", "req_target_final_state")
         assert final.status_code == 200, final.text
         assert final.json()["data"]["active_workspace"] == {"gateway_id": gateway_b, "workspace_id": network.workspace_id}

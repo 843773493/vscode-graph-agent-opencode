@@ -105,3 +105,9 @@
 - 发布完成后导出标准 UUID 的恢复材料；工作台显式入口可一次选择多个 Gateway 的材料，逐项恢复展示记录、编辑器及同事务队列，保留 Blob、操作身份、unknown 回执、顺序和独存高水位。缺来源、歧义、写入中断或旧窗口阻塞均保留原件，不增加运行时别名表。
 - 维护／中断／回退／来源冲突 14 项通过，原生身份 ASGI 5 项通过，预检与 Generator／远端核验 82 项通过；另以认证 HTTP MockTransport 贯通真实 CLI 核验、发布、导出与生产 registry 重开。原日志维护相关 62 项通过。准确命令、原始输出和指纹见 `out/tests/temp/identity_convergence_20261104/artifacts/` 及 `out/tests/temp/identity_client_recovery_20261104/artifacts/`，不是实机 SSH 证明。
 - 客户端恢复 10 项／85 断言、受影响原测试 41 项通过；实际 sourceTransform 类型检查及完整 79 扩展 Workbench 构建退出 0，真实 CLI 材料已由客户端 parser 消费。最终新增原件前缀为 `identity-multi-gateway-client-final-1793797585131750584`、`identity-multi-gateway-types-1793797600886220974`、`identity-multi-gateway-build-1793797718841380477`、`identity-real-cli-client-contract-1793797639022454499`。独立 Web tsconfig 的既有测试类型／lib 问题未改环境；尚无本切片浏览器重载、真实远端及 Windows 完整验收，5.4、6.3 与归档保持未完成。
+
+### 2026-11-04：4.2／4.4 多连接请求准入与显式解绑
+
+- 原路由 owner 在发布请求／流占用之前完成目标及唯一连接解析；同一来源有多连接时仍明确拒绝，不再遗留虚假占用阻塞用户解绑。普通和流两参数在修复前均复现泄漏，最终 registry 文件 8 passed／0.69 秒；保持相同 UUID 的本机租约、revision 与原资源归属。
+- 两个真实 Gateway＋两个真实 Backend 经产品注册同源第二连接，只保留一个工作区资源身份；歧义请求不进入下游，显式解绑第一连接后原 URI 恢复读取远端独有会话，request_id、目标／发送方及活动归属保持。最终 1 passed／62.05 秒，退出 0；仅 SSH 执行与隧道沿原测试明确替身，不代表真实 SSH、连接更新／离线、快照恢复或 4.4 全量验收。
+- 共享 skill-source fixture 迁为既有业务 UUID 和显式 Gateway 归属，移除已下线的 backend_workspace_id 参数，未绕过 managed_gateway 或认证。依赖它的 Agent/model_stream 文件错误双场景由 URI 切片重验 2 passed／88.31 秒。四个修改文件 Ruff 通过；Pyright 对完整 ce41fc18a 归档按文件／规则／完整消息及重数核对，240／243 项既有诊断，新增 0、消除 3，两个 Gateway 测试文件零诊断，不称全库类型全绿。准确命令、源码指纹、原始反例、实际退出码与比较见 `out/tests/temp/identity_convergence_20261104/artifacts/identity-route-admission-verification.json`；宽任务继续未勾选。

@@ -48,7 +48,6 @@ from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes.skill_sources import router as gateway_skill_sources_router
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
-from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.prompting import PromptSection, internal_message_factory
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.services.business.message_display import project_message_for_display
@@ -232,13 +231,13 @@ async def _managed_gateway_skill_source(
     skills_root = boxteam_home / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)
     owner = GatewaySkillSourceOwner(gateway_id=gateway_id, skills_root=skills_root)
-    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "skill-source-registry.json")
+    registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "skill-source-registry.json", gateway_id=gateway_id)
     registry.upsert(WorkspaceTarget(
-        workspace_id=build_managed_local_workspace_id(str(workspace.resolve())),
+        gateway_id=gateway_id,
+        workspace_id=workspace_id,
         name="runtime-source-pipeline",
         root_path=str(workspace.resolve()),
         backend_url="http://127.0.0.1:8010",
-        backend_workspace_id=workspace_id,
         connection_kind="local",
         owner="system",
         managed=False,

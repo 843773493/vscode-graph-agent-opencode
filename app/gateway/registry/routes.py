@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
 
 from app.core.path_utils import get_gateway_root
 from app.core.workspace_identity import validate_workspace_id
@@ -11,9 +10,6 @@ from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.service_types import GatewayServiceName
 
 from .core import WorkspaceRouteLease, WorkspaceSelector, WorkspaceTarget
-
-if TYPE_CHECKING:
-    pass
 
 
 class RegistryRoutesMixin:
@@ -48,6 +44,8 @@ class RegistryRoutesMixin:
         """为代理请求保留路由引用，直到响应体或长连接真正结束。"""
 
         workspace_id = self.workspace_key(workspace_id)
+        target = self.resolve(workspace_id)
+        target_connection_id = self.remote_connection_for_target(target).connection_id if target.connection_kind == "remote_gateway" else None
         lease = self.route_lease(workspace_id)
         requests, streams = self._route_reference_counts.get(workspace_id, (0, 0))
         if streaming:
@@ -55,8 +53,6 @@ class RegistryRoutesMixin:
         else:
             requests += 1
         self._route_reference_counts[workspace_id] = (requests, streams)
-        target = self.resolve(workspace_id)
-        target_connection_id = self.remote_connection_for_target(target).connection_id if target.connection_kind == "remote_gateway" else None
         if target_connection_id is not None:
             self._route_reference_connections.setdefault(workspace_id, set()).add(
                 target_connection_id
