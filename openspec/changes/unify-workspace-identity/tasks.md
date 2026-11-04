@@ -37,7 +37,7 @@
 
 - [x] 6.1 实现只读预览与显式可恢复迁移，核验完整映射、owner、引用和未结算状态；仅按实际结构变化提升 schema，离线或歧义时保留原记录并阻塞发布。
 - [x] 6.2 原子迁移 registry／metadata、root binding、managed_backends、活动选择、目录／Generator 和 user_view_state；保留有效 URI、canonical 正文、历史 hash 及 Session／Thread 身份。
-- [ ] 6.3 用受支持旧版本完整输入验证成功、重入、冲突、远端离线、写入中断恢复和维护窗口回退，检查迁移后真实重启与客户端恢复，不手工补齐产品应生成的关联。
+- [x] 6.3 用受支持旧版本完整输入验证成功、重入、冲突、远端离线、写入中断恢复和维护窗口回退，检查迁移后真实重启与客户端恢复，不手工补齐产品应生成的关联。
 - [ ] 6.4 迁齐后物理删除旧别名生成器、重复字段、换算接口、死代码和旧协议分支；完成全仓消费者核对、相关静态分析及定向回归，保留准确命令、源码版本与原始结果。所有测试使用既有矩阵或进程外超时／内存保护。
 
 ### 2026-11-04：6.1 只读登记身份预检切片
@@ -238,3 +238,8 @@
 - 直接对账的初始／已绑定代次参数反例修复前 1 passed／1 failed，同一原始错误；修复后联邦、消费者事务与投影身份共 43 passed／8.53 秒。Ruff 1／1、Pyright 16／16 与实际 HEAD 源码对照无新增；原件在 `identity_registry_recovery_root/artifacts/configured-remote-generation-*` 和 `configured-remote-generation-static-comparison.json`。双 Gateway 原失败及稳定指纹见 `identity_remote_recovery_current/artifacts/verification-third-run-1793830715947422744.json`；后续真实更新／离线恢复未通过，4.4 保持未完成。
 
 - 6.4 文件缓存合同收尾：普通预览的 Vary 删除退役 Backend 身份头，改按现行 Target-Gateway 分区；200／304 均核对完整 Vary，保留 Accept-Encoding 合并、读权限、Range、原弱 ETag 与缓存行为。原单文件 21 passed，Ruff／diff 退出 0；项目解释器下 Pyright 1／1 为原测试 disposition 类型诊断，生产零诊断。Root 复核两文件差异，准确命令／原始输出／指纹见 `identity_file_vary_current/artifacts/verification-1793830797593.json`。未把该响应头单测扩展为真实浏览器缓存验收。
+
+### 2026-11-04：6.3 完整旧产品输入迁移与两次重启
+
+- 完整归档受支持旧提交 `bf0f2e1d9d037efcb0210c458fa157fb4d54a27a`，使用该版真实 Gateway、Backend、HTTP 与现有 model_stream 生成 Session、main Thread、消息、封存请求、关联 Turn 的用户视图和导航文件夹；停止旧服务后确认 registry 13／SQLite 18。当前维护 CLI 完成迁移及两次幂等重入，再经两轮当前真实服务核原 UUID、导航、视图、消息、canonical 字节和 request_hash；未直接补写业务或恢复关联。
+- 单项 1 passed／226.44 秒、退出 0；此前维护／冲突／离线 proof／中断／回退负例及客户端恢复 parser 的证据沿上方 5.3／6.1／6.2 复用，负例的明确替身边界不变。准确命令、完整源码归档来源、指纹及原始输出见 `out/tests/temp/identity_migration_restart_20261104/artifacts/verification-1793832689136496966.json`，正式原件为 `run-45cea3b955a7`。产品通过后仅加强测试命令的中断回收，业务顶层 AST 未变；超时、中断和正常命令三项短探针确认整棵子进程树回收，最终 Ruff／Pyright 退出 0。新矩阵入口保留 420 秒／4GiB；未重新运行矩阵，不将列表校验记作业务通过。本项不代表真实 SSH、Windows 或浏览器 5.4 验收。
