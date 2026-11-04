@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
 
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.assembly import content_store
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
@@ -18,6 +22,12 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 from app.services.infrastructure.rollout_context.storage import (
     rollout_maintenance_owner,
@@ -45,6 +55,21 @@ pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True
 
 
 @pytest.fixture
+def canonical_files(monkeypatch):
+    opened = []
+    open_path = Path.open
+
+    def observe_open(path, *args, **kwargs):
+        stream = open_path(path, *args, **kwargs)
+        if path.name == "rollout.jsonl" and sys._getframe(1).f_code.co_filename == content_store.__file__:
+            opened.append(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", observe_open)
+    return opened
+
+
+@pytest.fixture
 def shared_assemblies(production_context):
     saver, session, thread, connection, manager, prepare = production_context
     tools = ToolSetSnapshot(selection_revision=sha256_jcs("shared-tools"), tools=({
@@ -57,7 +82,9 @@ def shared_assemblies(production_context):
     yield saver, session, thread, connection, manager, first, second, before
 
 
-def test_prepare_shares_tools_and_frozen_prefix_then_cold_reads_without_current_sources(shared_assemblies):
+def test_prepare_shares_tools_and_frozen_prefix_then_cold_reads_without_current_sources(
+    shared_assemblies, canonical_files,
+):
     saver, session, thread, connection, manager, first, second, before = shared_assemblies
     manifests = [json.loads(connection.execute("SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (s.assembly_id,)).fetchone()[0]) for s in (first, second)]
     assert manifests[0]["tool_snapshot"] == manifests[1]["tool_snapshot"]
@@ -66,11 +93,12 @@ def test_prepare_shares_tools_and_frozen_prefix_then_cold_reads_without_current_
     assert connection.execute("SELECT count(*) FROM assembly_content_nodes").fetchone()[0] > before
     # 当前源改变后，历史请求仍只使用封存节点，不能重新调用producer猜测旧输入。
     manager.observe("instruction:R01", "当前规则已经改变", revision="instructions:changed")
-    cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
-    for original in (first, second):
-        restored = cold.get_context_assembly(session, thread, assembly_id=original.assembly_id)
-        restored.validate_hashes()
-        assert restored.to_dict() == original.to_dict()
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        for original in (first, second):
+            restored = cold.get_context_assembly(session, thread, assembly_id=original.assembly_id)
+            restored.validate_hashes()
+            assert restored.to_dict() == original.to_dict()
+    assert canonical_files == []
 
 
 @pytest.fixture
@@ -193,6 +221,92 @@ def test_large_canonical_payload_is_referenced_once_and_exact_owner_is_required(
     }]
     connection.row_factory = original_factory
     connection.rollback()
+
+
+@pytest.mark.parametrize("item_count", [1, 4])
+def test_cold_assembly_shares_one_canonical_file_and_closes_after_damage(
+    production_context, frozen_provider_wire, frozen_provider_activation, monkeypatch, item_count, canonical_files,
+):
+    saver, session, thread, connection, _manager, _prepare = production_context
+    expected_items = set()
+    for index in range(item_count):
+        accepted = saver.accept_turn(
+            session, thread_id=thread,
+            accepted_ingress_id=f"canonical-file:{index}",
+            acceptance_idempotency_key=f"canonical-file-accept:{index}",
+            job_id=f"canonical-file-job:{index}", admission_idempotency_key=f"canonical-file-admit:{index}",
+            payload=f"canonical-file-body:{index}:" + "不可变的长历史正文。" * 40, payload_kind="text",
+        )
+        expected_items.add(accepted["root_input_item_id"])
+    admission = saver.execution_admission(session, thread_id=thread, execution_id=accepted["initial_execution_id"])
+    with (
+        session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+        execution_admission_scope(admission, langgraph_thread_id=thread),
+    ):
+        prepared = saver.prepare_context_for_provider(
+            session, thread, turn_id=accepted["turn_id"], execution_id=admission.execution_id,
+            plan_creation_idempotency_key="canonical-file-create", seal_idempotency_key="canonical-file-seal",
+            context_source_manager=ContextSourceManager(owner=ContextSourceOwnerKey(session, thread), control_state_port=saver),
+            tool_set_supplier=lambda: ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+            **frozen_provider_wire("canonical-file-provider", "chat_completions"),
+            **frozen_provider_activation(saver, plan_creation_idempotency_key="canonical-file-create"),
+        )
+    original = prepared["snapshot"]
+    captured = {value["item_id"] for row in connection.execute("SELECT body_json FROM assembly_content_nodes")
+                if (value := json.loads(row[0]))["kind"] == "canonical"}
+    # 从真实 prepare 取得引用，不手工给内容 reader 填 canonical metadata。
+    assert captured == expected_items
+    opened = canonical_files
+    opened.clear()
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.get_context_assembly(session, thread, assembly_id=original.assembly_id)
+        assert restored.to_dict() == original.to_dict()
+        assert len(opened) == 1
+        assert all(stream.closed for stream in opened)
+        opened.clear()
+        jsonl = saver._storage.storage.jsonl_path(session, thread_id=thread)
+        raw = jsonl.read_bytes()
+        damaged = raw.replace(b"canonical-file-body:0:", b"canonical-file-body:X:", 1)
+        assert damaged != raw
+        try:
+            jsonl.write_bytes(damaged)
+            with pytest.raises(RuntimeError, match="v2 item JSONL schema/content 非法"):
+                cold.get_context_assembly(session, thread, assembly_id=original.assembly_id)
+            assert len(opened) == 1
+            assert all(stream.closed for stream in opened)
+            assert jsonl.read_bytes() == damaged
+        finally:
+            jsonl.write_bytes(raw)
+
+    opened.clear()
+    # 封存入口传入 JSON 解码值；DTO 中的 tuple 先按相同序列化边界还原。
+    snapshot_value = json.loads(canonical_json_bytes(original.to_dict()))
+    with connection:
+        connection.execute("BEGIN IMMEDIATE")
+        encoded = store_snapshot(connection, snapshot_value)
+    assert len(opened) == 1
+    assert all(stream.closed for stream in opened)
+    assert encoded == connection.execute(
+        "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (original.assembly_id,),
+    ).fetchone()[0]
+    opened.clear()
+    assert content_store.snapshot_node_references(connection, encoded, owner=(session, thread))
+    assert opened == []
+    nodes = connection.execute("SELECT * FROM assembly_content_nodes ORDER BY node_id").fetchall()
+    encode = content_store._AssemblyContentStore.encode
+
+    def interrupted(store, value):
+        encode(store, value)
+        raise RuntimeError("canonical 文件打开后中断封存")
+
+    monkeypatch.setattr(content_store._AssemblyContentStore, "encode", interrupted)
+    with pytest.raises(RuntimeError, match="canonical 文件打开后中断封存"), connection:
+        connection.execute("BEGIN IMMEDIATE")
+        store_snapshot(connection, snapshot_value)
+    assert len(opened) == 1
+    assert all(stream.closed for stream in opened)
+    assert connection.execute("SELECT * FROM assembly_content_nodes ORDER BY node_id").fetchall() == nodes
+    assert jsonl.read_bytes() == raw
 
 
 def test_schema21_upgrade_preserves_historical_jcs_hashes_and_jsonl(shared_assemblies):

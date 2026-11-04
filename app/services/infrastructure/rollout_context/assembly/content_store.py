@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import ExitStack
 from copy import deepcopy
 from pathlib import Path
+from typing import BinaryIO
 
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
@@ -24,8 +26,9 @@ _FIELDS = ("request_hash_preimage", "tool_snapshot", "tool_set_refs", "seal_bind
 _FORMAT = "assembly_content_v1"
 
 
-class _AssemblyContentStore:
+class _AssemblyContentStore(ExitStack):
     def __init__(self, connection: sqlite3.Connection, session: str, thread: str) -> None:
+        super().__init__()
         require_historical_scope(connection, session, thread)
         self.connection = connection
         self.assembly_owner = (session, thread)
@@ -34,6 +37,7 @@ class _AssemblyContentStore:
         self.canonical_payloads: dict[tuple[str, str, str], object] = {}
         self.sources: dict[str, dict[str, object]] = {}
         self.dependencies: set[str] = set()
+        self._canonical_stream: BinaryIO | None = None
 
     def _canonical_item_payload(
         self, canonical_item_id: str, historical_owner: tuple[str, str],
@@ -54,11 +58,16 @@ class _AssemblyContentStore:
         if ((locator[5] is not None and locator[3:5] != historical_owner)
                 or (locator[5] is None and locator[6:] != ("ambient", None))):
             raise ValueError(f"source-mismatch: assembly canonical owner/locator 不一致: {canonical_item_id}")
-        database_path = next(name for _, schema, name in self.connection.execute("PRAGMA database_list") if schema == "main")
-        with Path(database_path).with_name("rollout.jsonl").open("rb") as stream:
-            item = RolloutCanonicalReadMixin._read_v2_item_at(
-                self.connection, stream, sequence=locator[0], offset=locator[1], length=locator[2],
-            )
+        stream = self._canonical_stream
+        if stream is None:
+            # 单次内容构建/恢复共用一个句柄；ExitStack 保证成功或异常退出都关闭。
+            # 每个 item 仍按原 locator、owner、正文与投影独立校验，不跨操作缓存文件。
+            database_path = next(name for _, schema, name in self.connection.execute("PRAGMA database_list") if schema == "main")
+            stream = self.enter_context(Path(database_path).with_name("rollout.jsonl").open("rb"))
+            self._canonical_stream = stream
+        item = RolloutCanonicalReadMixin._read_v2_item_at(
+            self.connection, stream, sequence=locator[0], offset=locator[1], length=locator[2],
+        )
         self.canonical_payloads[canonical_identity] = item.payload
         self.dependencies.add(canonical_item_id)
         return item.payload
@@ -217,12 +226,12 @@ def store_snapshot(connection: sqlite3.Connection, snapshot: dict[str, object]) 
     """仅在封存/显式迁移的原事务内发布节点及有序引用，不维护第二份完整请求。"""
     if not connection.in_transaction:
         raise RuntimeError("assembly content 写入必须位于封存事务内")
-    store = _AssemblyContentStore(connection, snapshot["session_id"], snapshot["thread_id"])
-    store.capture_sources(snapshot)
-    manifest = {**snapshot, "_storage_format": _FORMAT}
-    for field in _FIELDS:
-        manifest[field], _ = store.encode(snapshot[field])
-    return canonical_json_bytes(manifest).decode("utf-8")
+    with _AssemblyContentStore(connection, snapshot["session_id"], snapshot["thread_id"]) as store:
+        store.capture_sources(snapshot)
+        manifest = {**snapshot, "_storage_format": _FORMAT}
+        for field in _FIELDS:
+            manifest[field], _ = store.encode(snapshot[field])
+        return canonical_json_bytes(manifest).decode("utf-8")
 
 
 def _manifest(raw: str) -> dict[str, object]:
@@ -241,34 +250,34 @@ def snapshot_node_references(
     manifest = _manifest(raw)
     if (manifest["session_id"], manifest["thread_id"]) != owner:
         raise ValueError("source-mismatch: assembly content manifest owner不一致")
-    store = _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"])
-    pending = [manifest[field] for field in _FIELDS]
-    retained: set[tuple[str, str, str]] = set()
-    while pending:
-        reference = pending.pop()
-        if not isinstance(reference, dict):
-            raise TypeError("source-mismatch: assembly content 引用非法")
-        if set(reference) == {"literal"}:
-            continue
-        if set(reference) != {"node"} or not isinstance(reference["node"], str):
-            raise ValueError("source-mismatch: assembly content 引用非法")
-        identity = (*store.assembly_owner, reference["node"])
-        if identity in retained:
-            continue
-        node = store._node(reference["node"])
-        kind = node.get("kind")
-        if kind == "object" and set(node) == {"kind", "entries"} and isinstance(node["entries"], dict):
-            pending.extend(node["entries"].values())
-        elif kind == "prefix" and set(node) == {"kind", "parent", "value"}:
-            pending.append(node["value"])
-            if node["parent"] is not None:
-                pending.append(node["parent"])
-        elif kind == "canonical" and set(node) == {"kind", "item_id", "session_id", "thread_id", "path", "value_hash"}:
-            require_historical_scope(connection, node["session_id"], node["thread_id"])
-        elif kind != "value" or set(node) != {"kind", "value"}:
-            raise ValueError(f"source-mismatch: assembly content kind 非法: {kind!r}")
-        retained.add(identity)
-    return retained
+    with _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"]) as store:
+        pending = [manifest[field] for field in _FIELDS]
+        retained: set[tuple[str, str, str]] = set()
+        while pending:
+            reference = pending.pop()
+            if not isinstance(reference, dict):
+                raise TypeError("source-mismatch: assembly content 引用非法")
+            if set(reference) == {"literal"}:
+                continue
+            if set(reference) != {"node"} or not isinstance(reference["node"], str):
+                raise ValueError("source-mismatch: assembly content 引用非法")
+            identity = (*store.assembly_owner, reference["node"])
+            if identity in retained:
+                continue
+            node = store._node(reference["node"])
+            kind = node.get("kind")
+            if kind == "object" and set(node) == {"kind", "entries"} and isinstance(node["entries"], dict):
+                pending.extend(node["entries"].values())
+            elif kind == "prefix" and set(node) == {"kind", "parent", "value"}:
+                pending.append(node["value"])
+                if node["parent"] is not None:
+                    pending.append(node["parent"])
+            elif kind == "canonical" and set(node) == {"kind", "item_id", "session_id", "thread_id", "path", "value_hash"}:
+                require_historical_scope(connection, node["session_id"], node["thread_id"])
+            elif kind != "value" or set(node) != {"kind", "value"}:
+                raise ValueError(f"source-mismatch: assembly content kind 非法: {kind!r}")
+            retained.add(identity)
+        return retained
 
 
 def load_snapshot(
@@ -276,9 +285,9 @@ def load_snapshot(
 ) -> dict[str, object]:
     """schema22仅接受引用manifest；重建依赖历史内容，不访问当前文件或配置。"""
     manifest = _manifest(raw)
-    store = _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"])
-    for field in _FIELDS:
-        manifest[field] = store.decode(manifest[field])
-    if canonical_item_ids is not None:
-        canonical_item_ids.update(store.dependencies)
-    return manifest
+    with _AssemblyContentStore(connection, manifest["session_id"], manifest["thread_id"]) as store:
+        for field in _FIELDS:
+            manifest[field] = store.decode(manifest[field])
+        if canonical_item_ids is not None:
+            canonical_item_ids.update(store.dependencies)
+        return manifest
