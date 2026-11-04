@@ -249,11 +249,14 @@
 ### 协作方式
 
 1. 本项目在整个过程中由 vibe 编码辅助生成。代理的上下文和智能有限，因此如果遇到任何不符合开发标准的情况，请主动告知用户。
+<!-- 已按用户要求停用：旧团队技能与分层协调提示仅保留原文，不能作为执行指令。
 2. 团队的模型选择、并发人数、派单、独立审查、集成提交和运行台账统一维护在 `.codex/skills/` 的团队协作技能中，不在本文件绑定某个模型或调度策略：
    - [DeepSeek 团队协作](.codex/skills/team-collaboration-deepseek/SKILL.md)。
    - [GPT 团队协作](.codex/skills/team-collaboration-gpt/SKILL.md)。
    - 两者共用 [调度流程](.codex/skills/team-collaboration-gpt/memory/2026/10/10/team-collaboration-workflow.md) 与 [实时台账](.codex/skills/team-collaboration-gpt/memory/2026/10/10/team-collaboration-state.md)。
-3. 使用技能仍须遵守用户当前授权；仅整理文档不代表授权开始实施。多人改动不得相互覆盖，不得改写共享提交历史或擅自清空已有暂存内容。
+-->
+2. 不使用团队协作技能或分层协调流程；需要并发时，由主线程直接调用一到两名 GPT Sol，分配互不冲突的模块。
+3. 协作仍须遵守用户当前授权；仅整理文档不代表授权开始实施。多人改动不得相互覆盖，不得改写共享提交历史或擅自清空已有暂存内容。
 
 ### 环境配置
 
