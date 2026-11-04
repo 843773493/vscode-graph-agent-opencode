@@ -8,6 +8,7 @@ from datetime import (
     UTC,
     datetime,
 )
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import (
@@ -26,13 +27,16 @@ from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,
-    verify_gateway_token,
 )
 from app.gateway.config import (
     GatewayConfigReloadService,
     load_gateway_config,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.federation.policy import (
+    federation_capability_allowed,
+    require_federation_capability,
+)
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import (
     get_gateway_config_reload_service,
@@ -57,6 +61,7 @@ from app.schemas.gateway.diagnostics import (
     GatewayHealthDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -173,9 +178,10 @@ async def restart_development_runtime(
 )
 async def gateway_config_sources(
     request: Request,
-    _: str = Depends(verify_gateway_token),
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     request_id: str = Depends(get_request_id),
 ):
+    require_federation_capability(request, auth, "configuration_read")
     try:
         gateway_state = getattr(request.app.state, "gateway_state", None)
         config = (
@@ -190,6 +196,7 @@ async def gateway_config_sources(
         raise HTTPException(status_code=409, detail=str(error)) from error
     if config.schema_path is None:
         raise RuntimeError("Gateway 配置快照缺少 schema 来源")
+    require_federation_capability(request, auth, "configuration_read")
     return APIResponse(
         data=GatewayConfigSourcesDTO(
             revision=config.revision,
@@ -223,10 +230,12 @@ async def gateway_config_sources(
 )
 async def gateway_config_reload_status(
     request: Request,
-    _: str = Depends(verify_gateway_token),
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     request_id: str = Depends(get_request_id),
 ):
+    require_federation_capability(request, auth, "configuration_read")
     status = get_gateway_config_reload_service(request).status()
+    require_federation_capability(request, auth, "configuration_read")
     return APIResponse(
         data=GatewayConfigReloadStatusDTO(
             available=True,
@@ -257,10 +266,12 @@ async def gateway_config_reload_status(
 )
 async def retry_gateway_config_restart(
     request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     candidate_ref: str = Query(..., min_length=1),
-    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
 ):
+    require_federation_capability(request, auth, "configuration_write")
+    require_federation_capability(request, auth, "configuration_read")
     try:
         status = get_gateway_config_reload_service(request).retry_pending_restart(
             candidate_ref=candidate_ref,
@@ -268,6 +279,7 @@ async def retry_gateway_config_restart(
         )
     except (ConfigConflictError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    require_federation_capability(request, auth, "configuration_read")
     return APIResponse(
         data=GatewayConfigReloadStatusDTO(
             available=True,
@@ -299,10 +311,12 @@ async def retry_gateway_config_restart(
 async def resolve_gateway_config_restart(
     request: Request,
     payload: GatewayConfigPendingHealthProofRequest,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     candidate_ref: str = Query(..., min_length=1),
-    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
 ):
+    require_federation_capability(request, auth, "configuration_write")
+    require_federation_capability(request, auth, "configuration_read")
     try:
         status = get_gateway_config_reload_service(request).resolve_pending_restart(
             candidate_ref=candidate_ref,
@@ -310,6 +324,7 @@ async def resolve_gateway_config_restart(
         )
     except (ConfigConflictError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    require_federation_capability(request, auth, "configuration_read")
     return APIResponse(
         data=GatewayConfigReloadStatusDTO(
             available=True,
@@ -341,10 +356,12 @@ async def resolve_gateway_config_restart(
 async def discard_gateway_config_restart(
     request: Request,
     payload: GatewayConfigPendingDiscardRequest,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     candidate_ref: str = Query(..., min_length=1),
-    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
 ):
+    require_federation_capability(request, auth, "configuration_write")
+    require_federation_capability(request, auth, "configuration_read")
     try:
         status = get_gateway_config_reload_service(request).discard_pending_restart(
             candidate_ref=candidate_ref,
@@ -353,6 +370,7 @@ async def discard_gateway_config_restart(
         )
     except (ConfigConflictError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    require_federation_capability(request, auth, "configuration_read")
     return APIResponse(
         data=GatewayConfigReloadStatusDTO(
             available=True,
@@ -383,11 +401,12 @@ async def discard_gateway_config_restart(
 )
 async def gateway_config_events(
     request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     after: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=2000),
-    _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
 ):
+    require_federation_capability(request, auth, "configuration_read")
     service = get_gateway_config_reload_service(request)
     try:
         events = service.list_events(after=after, limit=limit)
@@ -400,6 +419,7 @@ async def gateway_config_events(
                 "first_available": error.first_available,
             },
         ) from error
+    require_federation_capability(request, auth, "configuration_read")
     return APIResponse(
         data=GatewayConfigEventsDTO(
             cursor=events[-1].event_seq if events else after,
@@ -413,13 +433,19 @@ async def gateway_config_events(
 @router.get(
     "/api/gateway/config/events/stream",
     response_class=StreamingResponse,
+    responses=sse_responses(
+        "SSE Gateway 配置事件流",
+        {"config": GatewayConfigEventDTO, "error": SseErrorDTO},
+        models={"GatewayConfigEventDTO": GatewayConfigEventDTO, "SseErrorDTO": SseErrorDTO},
+    ),
 )
 async def gateway_config_event_stream(
     request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     after: int = Query(default=0, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    _: str = Depends(verify_gateway_token),
 ):
+    require_federation_capability(request, auth, "configuration_read")
     if last_event_id is not None:
         try:
             header_cursor = int(last_event_id)
@@ -447,6 +473,10 @@ async def gateway_config_event_stream(
         cursor = after
         consumer_id = f"gateway-config-sse:{uuid4().hex}"
         while not await request.is_disconnected():
+            if not federation_capability_allowed(request, auth, "configuration_read"):
+                error = SseErrorDTO(message="目标 Gateway 已撤销 configuration_read")
+                yield f"event: error\ndata: {error.model_dump_json()}\n\n"
+                return
             # 空闲时不进 claim 写事务：先只读探测确有待消费事件，再 claim；
             # 否则无事的连接也会每秒 BEGIN IMMEDIATE + sweep，白白占用写事务。
             # 游标被裁剪时按原有续读语义交给 claim 处理。
@@ -465,6 +495,10 @@ async def gateway_config_event_stream(
             )
             if events:
                 for event in events:
+                    if not federation_capability_allowed(request, auth, "configuration_read"):
+                        error = SseErrorDTO(message="目标 Gateway 已撤销 configuration_read")
+                        yield f"event: error\ndata: {error.model_dump_json()}\n\n"
+                        return
                     cursor = event.event_seq
                     dto = _gateway_config_event_dto(event)
                     yield f"id: {cursor}\nevent: config\ndata: {dto.model_dump_json()}\n\n"

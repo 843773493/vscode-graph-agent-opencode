@@ -10,6 +10,7 @@ import pytest
 from jsonschema import ValidationError
 
 import app.gateway.config as gateway_config_module
+from app.gateway.auth import GatewayAuthContext
 from app.gateway.config import (
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
     GatewayConfig,
@@ -520,7 +521,7 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
         # state 上无 gateway_state，等价于拆分前模块级 app 的初始状态，
         # 走 load_gateway_config() 分支（已被 monkeypatch）。
         request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
-        _="gateway-token",
+        auth=GatewayAuthContext(kind="local"),
         request_id="req-gateway-config-sources",
     )
 
@@ -586,7 +587,7 @@ async def test_gateway_config_sources_schema_uri_only_for_release_inline_schema(
 
         response = await gateway_config_sources(
             request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
-            _="gateway-token",
+            auth=GatewayAuthContext(kind="local"),
             request_id="req-gateway-custom-schema",
         )
 

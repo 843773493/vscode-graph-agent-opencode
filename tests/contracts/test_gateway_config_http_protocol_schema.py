@@ -23,7 +23,7 @@ from app.core.path_utils import (
     get_user_gateway_schema_path,
 )
 from app.core.trace_middleware import TraceMiddleware
-from app.gateway.auth import verify_gateway_token
+from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.routes.health_config import router
@@ -139,7 +139,7 @@ def configuration_owner(tmp_path: Path) -> Iterator[tuple[FastAPI, GatewayConfig
         application.include_router(router)
         application.state.gateway_state = store
         application.state.gateway_config_reload = owner
-        application.dependency_overrides[verify_gateway_token] = lambda: "configuration-contract"
+        application.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
         yield application, owner
 
 

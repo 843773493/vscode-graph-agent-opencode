@@ -19,13 +19,15 @@ from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
-from app.gateway.auth import GatewayAuthContext, verify_federation_token
+from app.gateway.auth import (
+    GatewayAuthContext,
+    verify_federation_token,
+)
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.diagnostics import collect_gateway_diagnostics
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION
-from app.gateway.federation.policy import FederationPolicyStore
-from app.gateway.federation.ports import principal_ref_for_gateway
+from app.gateway.federation.policy import require_federation_capability
 from app.gateway.managed_workspaces import (
     create_direct_managed_workspace,
     remove_direct_managed_workspace,
@@ -62,16 +64,9 @@ def require_managed_workspace_admin(
     request: Request, auth: Annotated[GatewayAuthContext, Depends(verify_federation_token)],
 ) -> None:
     """目标 Gateway 在目录、registry 与 runtime 副作用前读取唯一 policy。"""
-    policy_store = request.app.state.federation_policy_store
-    if not isinstance(policy_store, FederationPolicyStore):
-        raise TypeError("Gateway federation policy 尚未初始化")
     if auth.kind != "federation" or not auth.peer_gateway_id:
         raise RuntimeError("federation 管理请求缺少认证 peer 身份")
-    if not policy_store.snapshot.evaluate(
-        capability="managed_workspace_admin", origin_gateway_id=auth.peer_gateway_id,
-        principal_ref=principal_ref_for_gateway(auth.peer_gateway_id),
-    ):
-        raise HTTPException(status_code=403, detail="目标 Gateway 未授权 managed_workspace_admin")
+    require_federation_capability(request, auth, "managed_workspace_admin")
 
 
 @router.get(

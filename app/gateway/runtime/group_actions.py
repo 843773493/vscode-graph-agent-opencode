@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal
@@ -62,6 +63,7 @@ class ManagedBackendGroupActions:
         self, workspace_id: WorkspaceSelector, action: Literal["start", "stop", "restart-safe", "restart-force"],
         *, request_id: str, group_request: GatewayRuntimeGroupRequest | None,
         remove_target: bool = False,
+        authorize_configuration_write: Callable[[], None] | None = None,
     ) -> GatewayRuntimeStateResultDTO | GatewayRuntimeRestartResultDTO:
         target = self._registry.resolve(workspace_id)
         if remove_target and target.connection_kind != "local":
@@ -224,7 +226,10 @@ class ManagedBackendGroupActions:
                     return await self._group_result(
                         workspace_id, "stopped", owner, affected, restart=True, forced=forced, blockers=blockers if forced else None,
                     )
-                startup_contract = await self._pending_startup_contract(target, request_id=request_id) if restart and workspace_id in desired_ids and not remove_target else None
+                startup_contract = await self._pending_startup_contract(
+                    target, request_id=request_id,
+                    authorize_configuration_write=authorize_configuration_write,
+                ) if restart and workspace_id in desired_ids and not remove_target else None
                 targets = [self._registry.resolve(member_id) for member_id in owner.contract.workspace_ids]
                 drained: list[WorkspaceTarget] = []
                 candidate_contract = None

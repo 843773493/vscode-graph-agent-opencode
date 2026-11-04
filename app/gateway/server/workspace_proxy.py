@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from functools import partial
 from typing import Annotated
+from urllib.parse import unquote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -23,6 +24,10 @@ from app.gateway.control.user_access import (
 from app.gateway.federation.errors import FederationError
 from app.gateway.federation.grants import ContextGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
+from app.gateway.federation.policy import (
+    federation_capability_allowed,
+    require_federation_capability,
+)
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,
@@ -48,6 +53,7 @@ from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )
+from app.schemas.internal_v2.sse import SseErrorDTO
 from app.services.business.session_context_resource import parse_session_context_ref
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
@@ -95,6 +101,17 @@ def _is_streaming_workspace_path(path: str) -> bool:
         or path.endswith("/message-stream")
         or path.endswith("/observations/stream")
     )
+
+
+def _is_configuration_path(path: str) -> bool:
+    """按上游最终路径识别两种配置 mount，编码不能绕过同一权限边界。"""
+    decoded = unquote(path)
+    while decoded != path:
+        path, decoded = decoded, unquote(decoded)
+    segments = [segment for segment in decoded.split("/") if segment and segment != "."]
+    if len(segments) >= 3 and segments[0] == "workspaces":
+        segments = segments[2:]
+    return bool(segments) and segments[0] == "config"
 
 
 def _is_retryable_message_stream_availability(
@@ -226,6 +243,7 @@ async def _stream_proxy_response(
     route_lease: WorkspaceRouteLease,
     user_access: UserAccessContext | None,
     on_close: Callable[[], None] | None = None,
+    can_disclose: Callable[[], bool] | None = None,
 ) -> AsyncIterator[bytes]:
     iterator = response.aiter_bytes()
     next_chunk = asyncio.create_task(anext(iterator))
@@ -253,6 +271,11 @@ async def _stream_proxy_response(
             try:
                 chunk = next_chunk.result()
             except StopAsyncIteration:
+                return
+            if can_disclose is not None and not can_disclose():
+                error = SseErrorDTO(message="目标 Gateway 已撤销 configuration_read")
+                # 上游 chunk 可能停在帧中间，先结束旧帧，保证 error 是独立 SSE 事件。
+                yield f"\n\nevent: error\ndata: {error.model_dump_json()}\n\n".encode()
                 return
             yield chunk
             next_chunk = asyncio.create_task(anext(iterator))
@@ -399,6 +422,13 @@ async def _proxy_workspace_request(
             status_code=400,
             detail="bounded federation 禁止通过远程 Gateway 继续代理嵌套工作区",
         )
+    configuration_request = _is_configuration_path(path)
+    if configuration_request:
+        if auth is None:
+            raise RuntimeError("配置代理请求缺少已认证 Gateway 主体")
+        require_federation_capability(request, auth, "configuration_read")
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            require_federation_capability(request, auth, "configuration_write")
     client = _http_client(
         request,
         streaming=_is_streaming_workspace_path(path),
@@ -538,6 +568,12 @@ async def _proxy_workspace_request(
                 content=request_content,
                 headers=headers,
             )
+            # 等待运行时之后再核写入准入；不能借旧策略继续提交。
+            if configuration_request:
+                assert auth is not None
+                require_federation_capability(request, auth, "configuration_read")
+                if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                    require_federation_capability(request, auth, "configuration_write")
             try:
                 response = await send_upstream_request(client, forwarded)
                 if retry_availability:
@@ -598,6 +634,15 @@ async def _proxy_workspace_request(
                 detail=f"工作区 availability 请求未获得响应: {target_url}",
             )
         media_type = response.headers.get("content-type")
+        if configuration_request and not (media_type and "text/event-stream" in media_type):
+            try:
+                body = await response.aread()
+            finally:
+                await response.aclose()
+            assert auth is not None
+            require_federation_capability(request, auth, "configuration_read")
+            return Response(content=body, status_code=response.status_code,
+                            headers=_response_headers(response), media_type=media_type)
         if navigation_deadline_at is not None:
             # 导航是有界 JSON；完整消费后再交付，避免流式响应绕过路由总期限。
             try:
@@ -628,6 +673,10 @@ async def _proxy_workspace_request(
                     route_lease,
                     user_access,
                     release_route_reference,
+                    (
+                        partial(federation_capability_allowed, request, auth, "configuration_read")
+                        if configuration_request and auth is not None else None
+                    ),
                 ),
                 status_code=response.status_code,
                 media_type=media_type,

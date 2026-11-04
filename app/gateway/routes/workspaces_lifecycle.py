@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from pathlib import Path
 from traceback import format_exception
 from typing import Annotated
@@ -31,6 +32,7 @@ from app.gateway.federation import (
     build_remote_gateway_connection_id,
     request_remote_gateway_management,
 )
+from app.gateway.federation.policy import require_federation_capability
 from app.gateway.managed_workspaces import create_direct_managed_workspace
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
@@ -540,6 +542,7 @@ async def safe_restart_managed_workspace_backend(
         get_workspace_runtime_controller
     ),
 ):
+    require_federation_capability(request, auth, "managed_workspace_admin")
     workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
         if (
@@ -551,6 +554,9 @@ async def safe_restart_managed_workspace_backend(
             workspace_key,
             request_id=request_id,
             group_request=payload,
+            authorize_configuration_write=partial(
+                require_federation_capability, request, auth, "configuration_write",
+            ),
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_restart_safe", label="工作区安全重启失败")) from error
@@ -580,6 +586,7 @@ async def force_restart_managed_workspace_backend(
         get_workspace_runtime_controller
     ),
 ):
+    require_federation_capability(request, auth, "managed_workspace_admin")
     workspace_key = resolve_workspace_key(request, workspace_id, registry)
     try:
         if (
@@ -591,6 +598,9 @@ async def force_restart_managed_workspace_backend(
             workspace_key,
             request_id=request_id,
             group_request=payload,
+            authorize_configuration_write=partial(
+                require_federation_capability, request, auth, "configuration_write",
+            ),
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=failure_detail(error, stage="workspace_restart_force", label="工作区强制重启失败")) from error

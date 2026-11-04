@@ -43,6 +43,7 @@ from app.gateway.federation.identity import (
     public_key_pem,
 )
 from app.gateway.federation.policy import (
+    Capability,
     FederationPolicyStore,
     default_policy_payload,
     normalize_policy,
@@ -88,6 +89,25 @@ def test_default_policy_allows_all_core_capabilities() -> None:
 def test_workspace_admin_requires_explicit_authenticated_peer_principal(rules, expected) -> None:
     snapshot = normalize_policy({"default_effect": "allow", "rules": rules})
     assert snapshot.evaluate(capability="managed_workspace_admin", origin_gateway_id="peer", principal_ref="peer-principal") is expected
+
+
+@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write"])
+@pytest.mark.parametrize("binding,expected", [
+    ({}, False),
+    ({"origin_gateway_id": "peer"}, False),
+    ({"principal_ref": "other"}, False),
+    ({"principal_ref": "peer-principal"}, True),
+])
+def test_configuration_management_requires_exact_authenticated_principal(
+    capability: Capability, binding: dict[str, str], expected: bool,
+) -> None:
+    rules = [{"capability": capability, "effect": "allow", **binding}]
+    snapshot = normalize_policy({"default_effect": "allow", "rules": rules})
+    assert snapshot.evaluate(capability=capability, origin_gateway_id="peer", principal_ref="peer-principal") is expected
+    other: Capability = "configuration_write" if capability == "configuration_read" else "configuration_read"
+    assert not snapshot.evaluate(capability=other, origin_gateway_id="peer", principal_ref="peer-principal")
+    revoked = normalize_policy({"rules": [*rules, {"capability": capability, "effect": "deny"}]})
+    assert not revoked.evaluate(capability=capability, origin_gateway_id="peer", principal_ref="peer-principal")
 
 
 def test_publish_advances_revision_atomically() -> None:

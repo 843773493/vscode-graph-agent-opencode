@@ -2173,3 +2173,66 @@ async def test_admin_revocation_is_checked_before_delete_side_effects(
         denied = await client.delete("/api/gateway/federation/managed-workspaces/00000000-0000-4000-8000-000000000001", headers=headers)
     assert denied.status_code == 403 and registry._storage_path.read_bytes() == before
     assert not runtime_actions and not graph.owner.process.closed and not process_boundary.starts
+
+
+@pytest.mark.parametrize("action", ["restart-safe", "restart-force"])
+@pytest.mark.parametrize("capabilities", [[], ["configuration_read", "configuration_write"]])
+async def test_federation_backend_restart_requires_original_admin_before_controller(
+    workspace_runtime_controller_case, paired_deletion_http_application, process_boundary, action, capabilities,
+) -> None:
+    case = workspace_runtime_controller_case
+    app, headers = paired_deletion_http_application
+    app.dependency_overrides.pop(verify_gateway_access)
+    app.state.federation_policy_store.publish({"rules": [
+        {"capability": capability, "effect": "allow", "principal_ref": principal_ref_for_gateway("peer")}
+        for capability in capabilities
+    ]})
+    process = case.graph.owner.process
+    contract = case.graph.owner.contract
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://target") as client:
+        response = await client.post(
+            f"/api/gateway/workspaces/{UUID_A}/runtime/{action}", headers=headers,
+            json=case.graph.group_request.model_dump(mode="json"),
+        )
+    assert response.status_code == 403 and "managed_workspace_admin" in response.json()["detail"]
+    assert case.graph.owner.process is process and case.graph.owner.contract is contract and not process.closed
+    assert not case.runtime_actions and not process_boundary.starts
+
+
+@pytest.mark.parametrize("action", ["restart-safe", "restart-force"])
+@pytest.mark.parametrize("recovery", [False, True])
+async def test_pending_candidate_write_is_checked_in_original_status_chain_before_retry_or_drain(
+    workspace_runtime_controller_case, paired_deletion_http_application, process_boundary, monkeypatch, action, recovery,
+) -> None:
+    case = workspace_runtime_controller_case
+    app, headers = paired_deletion_http_application
+    app.dependency_overrides.pop(verify_gateway_access)
+    controller = case.controller
+    monkeypatch.setattr(controller, "_pending_startup_contract", GatewayWorkspaceRuntimeController._pending_startup_contract.__get__(controller))
+    app.state.federation_policy_store.publish({"rules": [
+        {"capability": "managed_workspace_admin", "effect": "allow", "principal_ref": principal_ref_for_gateway("peer")},
+    ]})
+    requests: list[httpx.Request] = []
+    client_type = httpx.AsyncClient
+
+    def backend_response(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/api/v1/config/reload-status"
+        return httpx.Response(200, json={"data": {
+            "state": "recovery_required" if recovery else "pending", "restart_required": True, "candidate_ref": "candidate",
+        }})
+
+    monkeypatch.setattr(runtime_controller_module.httpx, "AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(backend_response),
+    ))
+    process = case.graph.owner.process
+    contract = case.graph.owner.contract
+    async with client_type(transport=httpx.ASGITransport(app=app), base_url="http://target") as client:
+        response = await client.post(
+            f"/api/gateway/workspaces/{UUID_A}/runtime/{action}", headers=headers,
+            json=case.graph.group_request.model_dump(mode="json"),
+        )
+    assert response.status_code == 403 and "configuration_write" in response.json()["detail"]
+    assert [(request.method, request.url.path) for request in requests] == [("GET", "/api/v1/config/reload-status")]
+    assert case.graph.owner.process is process and case.graph.owner.contract is contract and not process.closed
+    assert not case.runtime_actions and not process_boundary.starts

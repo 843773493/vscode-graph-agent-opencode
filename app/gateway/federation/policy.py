@@ -17,7 +17,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-Capability = Literal["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin"]
+from fastapi import HTTPException, Request
+
+from app.gateway.auth import GatewayAuthContext
+from app.gateway.federation.ports import principal_ref_for_gateway
+
+Capability = Literal["discovery", "send", "read", "wait", "reply", "transit", "fork_source", "fork_target", "file_write", "managed_workspace_admin", "configuration_read", "configuration_write"]
 Effect = Literal["allow", "deny"]
 
 CORE_CAPABILITIES: tuple[Capability, ...] = (
@@ -32,7 +37,10 @@ CORE_CAPABILITIES: tuple[Capability, ...] = (
     "file_write",
 )
 
-CAPABILITIES: tuple[Capability, ...] = (*CORE_CAPABILITIES, "managed_workspace_admin")
+ADMINISTRATIVE_CAPABILITIES: tuple[Capability, ...] = (
+    "managed_workspace_admin", "configuration_read", "configuration_write",
+)
+CAPABILITIES: tuple[Capability, ...] = (*CORE_CAPABILITIES, *ADMINISTRATIVE_CAPABILITIES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +97,7 @@ class FederationPolicySnapshot:
     ) -> bool:
         """返回该实际操作/披露点是否获准；规则命中优先于默认值。"""
 
-        administrative = capability == "managed_workspace_admin"
+        administrative = capability in ADMINISTRATIVE_CAPABILITIES
         effect = "deny" if administrative else self.default_effect
         for rule in self.rules:
             # 管理能力只接受精确认证主体的显式 allow；通配 allow 不授予它。
@@ -194,6 +202,31 @@ class FederationPolicyStore:
         return self._snapshot
 
 
+def federation_capability_allowed(
+    request: Request, auth: GatewayAuthContext, capability: Capability,
+) -> bool:
+    """只用本跳已认证主体和当前策略判权；本机访问沿原认证契约。"""
+    if auth.kind == "local":
+        return True
+    if auth.kind != "federation" or not auth.peer_gateway_id:
+        raise RuntimeError("federation 请求缺少认证 peer 身份")
+    policy_store = getattr(request.app.state, "federation_policy_store", None)
+    if not isinstance(policy_store, FederationPolicyStore):
+        raise TypeError("Gateway federation policy 尚未初始化")
+    return policy_store.snapshot.evaluate(
+        capability=capability,
+        origin_gateway_id=auth.peer_gateway_id,
+        principal_ref=principal_ref_for_gateway(auth.peer_gateway_id),
+    )
+
+
+def require_federation_capability(
+    request: Request, auth: GatewayAuthContext, capability: Capability,
+) -> None:
+    if not federation_capability_allowed(request, auth, capability):
+        raise HTTPException(status_code=403, detail=f"目标 Gateway 未授权 {capability}")
+
+
 def default_policy_payload() -> dict[str, object]:
     return {
         "default_effect": "allow",
@@ -210,5 +243,7 @@ __all__ = [
     "FederationPolicySnapshot",
     "FederationPolicyStore",
     "default_policy_payload",
+    "federation_capability_allowed",
     "normalize_policy",
+    "require_federation_capability",
 ]

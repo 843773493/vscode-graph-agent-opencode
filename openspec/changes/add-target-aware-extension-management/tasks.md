@@ -1,4 +1,4 @@
-本清单按 capability 与完整纵向链组织，编号用于依赖和证据定位，不代表所有工作必须串行。当前只完成规划，全部实施项保持未完成。每项勾选需对应真实源码／协议和适用验证；源码盘点、进程启动或原版接口存在不能代替产品行为证明。
+本清单按 capability 与完整纵向链组织，编号用于依赖和证据定位，不代表所有工作必须串行。实施项仅按已完成的闭包勾选，宽项的局部证据不代表整项完成。每项勾选需对应真实源码／协议和适用验证；源码盘点、进程启动或原版接口存在不能代替产品行为证明。
 
 ## 1. 既有 owner 与公共目标合同
 
@@ -6,6 +6,7 @@
 - [ ] 1.2 在现有协议 owner 明确安装目标、配置范围、宿主视图／generation、能力和操作状态的 typed 合同；稳定 Gateway／Backend／workspace 身份与临时 route 分开，不新建通用插件对象体系。
 - [ ] 1.3 迁齐目标管理 API、host 通道协商、proto／OpenAPI／生成客户端和消费者；验证实际序列化、未知类型／版本拒绝与单请求 request_id，全链真实类型检查先于产品验收。
 - [ ] 1.4 在原联邦 policy 登记安装／宿主管理能力及 configuration_read／configuration_write 与 schema，迁齐默认拒绝／认证主体规则和调用方；覆盖脱敏读取、订阅披露、预检／提交／pending 管理和独立重启权限，验证撤权、Relay 不提权、只有发现权限时无目标写入，不另建权限系统。
+  - 配置能力已沿原 policy／schema 接入 Gateway 自有配置路由与两种 workspace 代理 mount；安装／宿主管理能力和实网目标验收仍未完成，整项保持未勾选。
 - [ ] 1.5 实现绑定稳定目标的能力／状态发现及实际路由，区分离线镜像和实时状态；验证同名、route 变化／重用、停止和权限撤销，无隐式启动或本地 fallback。
 - [ ] 1.6 清点各功能将使用的既有 URI 与字段；在原配置／联邦／MCP owner 补本稿已明确需要的 source 读写、私有输入引用、受管 launch binding、管理能力正式 delta／schema／消费者；确需新增 URI 时补原寻址 owner delta，不在前端拼 grammar。
 
@@ -64,7 +65,9 @@
 - [ ] 7.8 新增字段确需版本变化时补同族 schema、默认值及官方预览／备份／可恢复迁移；保留现有 JSONC 层语义，不自动重命名或清空用户配置。
 - [ ] 7.9 在原 Code OSS 配置服务迁齐 profile local／目标 remote user／稳定 view／folder／语言覆盖与 setting scope，按 host/view 路由原配置模型，经已登记目标 FileService／writer 访问 multi-root 原 `.code-workspace`；不轮换全窗口 workspace，扩展键不写业务 JSONC。验 get／inspect／update／change payload 投影、原缺省推导、非法资源拒绝和 A1/A2/B1 不随焦点改投。
 - [ ] 7.10 设置搜索与 @modified／@ext／@lang 绑定冻结域／目标／来源层及真实注册 schema，验同 key 不同值、切焦点和旧查询取消，不将业务配置伪装成支持所有扩展过滤维度。
-- [ ] 7.11 落实 D3 权限表：pending retry／discard／resolve／失败记录核配置 write 和原证明／fencing，状态返回另核 read；实际 managed_backend_restart 核 managed_workspace_admin，消费候选再核 write。验配置权限不授予重启，Gateway restart-development 仍 local-only，不新增远端 Gateway 重启能力。
+- [x] 7.11 落实 D3 权限表：pending retry／discard／resolve／失败记录核配置 write 和原证明／fencing，状态返回另核 read；实际 managed_backend_restart 核 managed_workspace_admin，消费候选再核 write。验配置权限不授予重启，Gateway restart-development 仍 local-only，不新增远端 Gateway 重启能力。
+  - 2026-11-04：生产 ASGI 路由与受控上游验证 45 项通过，原 runtime 组 248 项通过，Gateway 序列化契约与认证迁移单例各 1 项通过。撤权后使用公开 `error`／`message` 事件，停止第二条配置披露、关闭上游并释放路由引用；原 controller 在 retry／drain／进程动作前拒绝缺少配置 write 的候选消费。该证据不代表真实网络或真实 SSH 验收。
+  - 原始命令、逐文件 SHA 与退出码：`out/tests/temp/configuration_federation_permissions_20261104/artifacts/configuration-permissions-final-evidence-1793811673988170281.json`。Ruff 42 条与实测改前逐项相同；Pyright 生产组 70 条与实测改前逐项相同，main 另 1 条位于未改 handler 且未独跑其改前基线，新增 ASGI 测试无类型诊断。扩大代理回归尚被旧 `backend_workspace_id` fixture 阻断；配置扩大检查及迁后 validation 检查超时，后者仅观察到 46 个通过点，完整回归未完成。
 
 ## 8. 界面、快速入口与单链路迁移
 

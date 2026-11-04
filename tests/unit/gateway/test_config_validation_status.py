@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.core.trace_middleware import TraceMiddleware
-from app.gateway.auth import verify_gateway_token
+from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.config import GatewayConfigReloadService, load_gateway_config
 from app.gateway.config import sources as gateway_sources
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -42,7 +42,7 @@ def validation_owner(tmp_path: Path):
         application.add_middleware(TraceMiddleware)
         application.include_router(router)
         application.state.gateway_config_reload = service
-        application.dependency_overrides[verify_gateway_token] = lambda: "validation-test"
+        application.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
         yield application, service, store, config_path, schema_path, original
 
 

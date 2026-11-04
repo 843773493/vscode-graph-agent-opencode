@@ -89,14 +89,16 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
     async def safe_restart_managed_backend(
         self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
+        authorize_configuration_write: Callable[[], None] | None = None,
     ) -> GatewayRuntimeRestartResultDTO:
-        return await self._managed_group_action(workspace_id, "restart-safe", request_id=request_id, group_request=group_request)
+        return await self._managed_group_action(workspace_id, "restart-safe", request_id=request_id, group_request=group_request, authorize_configuration_write=authorize_configuration_write)
 
     async def force_restart_managed_backend(
         self, workspace_id: WorkspaceSelector, *, request_id: str,
         group_request: GatewayRuntimeGroupRequest | None = None,
+        authorize_configuration_write: Callable[[], None] | None = None,
     ) -> GatewayRuntimeRestartResultDTO:
-        return await self._managed_group_action(workspace_id, "restart-force", request_id=request_id, group_request=group_request)
+        return await self._managed_group_action(workspace_id, "restart-force", request_id=request_id, group_request=group_request, authorize_configuration_write=authorize_configuration_write)
 
     async def remove_managed_workspace(
         self, workspace_id: WorkspaceSelector, *, request_id: str,
@@ -243,6 +245,7 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
         target: WorkspaceTarget,
         *,
         request_id: str,
+        authorize_configuration_write: Callable[[], None] | None = None,
     ) -> dict[str, object] | None:
         async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             status_response = await client.get(
@@ -254,6 +257,11 @@ class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
             )
         status_response.raise_for_status()
         status = self._response_data(status_response)
+        if (
+            status.get("state") == "recovery_required" or status.get("restart_required") is True
+        ) and authorize_configuration_write is not None:
+            # 候选接受发生在任何 retry、drain 或进程副作用之前；接受后沿原结算链完成。
+            authorize_configuration_write()
         if status.get("state") == "recovery_required":
             candidate_ref = status.get("candidate_ref")
             if not isinstance(candidate_ref, str) or not candidate_ref:
