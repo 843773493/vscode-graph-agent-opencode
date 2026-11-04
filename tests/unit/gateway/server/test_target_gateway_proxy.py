@@ -14,9 +14,9 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.core.trace_middleware import TraceMiddleware
-from app.gateway.auth import get_gateway_local_token
+from app.gateway.auth import LOCAL_TOKEN, get_gateway_local_token
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
-from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.federation.grants import (
     ContextGrantTarget,
     ResourceNavigationGrantTarget,
@@ -58,6 +58,7 @@ class Proxy:
     gateway_id: str
     requests: list[httpx.Request]
     relay: Relay
+    credentials: FederationCredentialStore
 
 
 @pytest.fixture
@@ -65,24 +66,25 @@ async def target_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
     root = tmp_path / "gateway"
     monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(root))
     gateway_id = load_or_create_gateway_id(root / "identity.json")
-    registry = GatewayWorkspaceRegistry(storage_path=root / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(storage_path=root / "workspaces.json", gateway_id=gateway_id)
     registry.upsert(WorkspaceTarget(
-        workspace_id="local-route", backend_workspace_id=WORKSPACE_ID, name="本机",
+        gateway_id=gateway_id, workspace_id=WORKSPACE_ID, name="本机",
         root_path=str(tmp_path / "native"), backend_url="http://local.test", connection_kind="local",
     ))
+    credentials = FederationCredentialStore(storage_path=root / "credentials/federation.json")
     for index, owner in enumerate(REMOTE_GATEWAY_IDS):
         connection_id = f"rgw_{index}"
-        registry.upsert_remote_gateway(RemoteGatewayConnection(
+        connection = RemoteGatewayConnection(
             connection_id=connection_id, name="远端", host=f"remote-{index}.test", port=22, username="unit",
             private_key_path=None, ssh_config_host=None, remote_gateway_port=8014, remote_gateway_id=owner,
-            protocol_version=1, source_owner="manual",
-        ), runtime=WorkspaceRuntime(service_urls={"workspace_api": f"http://remote-{index}.test"}))
-        registry.upsert(WorkspaceTarget(
-            workspace_id=f"remote-route-{index}", backend_workspace_id=WORKSPACE_ID, name="远端",
-            root_path=None, backend_url=f"http://remote-{index}.test", connection_kind="remote_gateway",
-            connection_id=connection_id, remote_gateway_connection_id=connection_id, remote_workspace_id=f"native-route-{index}",
-        ), activate=False)
-        FederationCredentialStore(storage_path=root / "credentials/federation.json").issue(
+            protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual", remote_config_event_cursor=1,
+        )
+        registry.apply_remote_projection_snapshot(connection=connection, projections=(WorkspaceTarget(
+            gateway_id=owner, workspace_id=WORKSPACE_ID, name="远端", root_path=None,
+            backend_url=f"http://remote-{index}.test", connection_kind="remote_gateway", owner="remote_projection",
+            remote_gateway_connection_ids=(connection_id,),
+        ),), runtime=WorkspaceRuntime(service_urls={"workspace_api": f"http://remote-{index}.test"}))
+        credentials.issue(
             connection_id=connection_id, peer_gateway_id=gateway_id,
         )
     forwarded: list[httpx.Request] = []
@@ -112,7 +114,7 @@ async def target_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test",
                                     headers={"X-Local-Token": get_gateway_local_token()}) as client:
             try:
-                yield Proxy(client, registry, gateway_id, forwarded, relay)
+                yield Proxy(client, registry, gateway_id, forwarded, relay, credentials)
             finally:
                 registry.close()
 
@@ -129,37 +131,78 @@ async def test_canonical_workspace_route_uses_target_gateway_without_merging_equ
     outgoing, = state.requests
     assert outgoing.url.host == ("local.test" if index is None else f"remote-{index}.test")
     assert outgoing.headers["X-BoxTeam-Gateway-Id"] == state.gateway_id
-    assert outgoing.headers["X-Request-ID"] == response.headers["X-Request-ID"] == "req_target_owner"
+    assert outgoing.headers["X-Request-ID"] == response.headers["X-Request-ID"] == response.json()["request_id"] == "req_target_owner"
     assert outgoing.url.path == f"/api/v1/workspaces/{WORKSPACE_ID}/workspace"
+    assert outgoing.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
     assert outgoing.headers.get(TARGET_GATEWAY_ID_HEADER) == (None if index is None else owner)
-    assert state.registry.active_workspace_id == "local-route"
-    assert all(state.registry.route_reference_counts(target.workspace_id) == (0, 0) for target in state.registry.targets())
+    if index is None:
+        assert outgoing.headers["X-Local-Token"] == LOCAL_TOKEN
+        assert "X-BoxTeam-Federation-Token" not in outgoing.headers
+    else:
+        assert outgoing.headers["X-BoxTeam-Federation-Token"] == state.credentials.get(f"rgw_{index}").token
+        assert "X-Local-Token" not in outgoing.headers
+    assert state.registry.active_workspace == (state.gateway_id, WORKSPACE_ID)
+    assert all(state.registry.route_reference_counts(target.key) == (0, 0) for target in state.registry.targets())
 
 
-async def test_equal_uuid_without_explicit_owner_still_reports_ambiguity(target_proxy: Proxy) -> None:
-    response = await target_proxy.client.get(f"/api/v1/workspaces/{WORKSPACE_ID}/workspace")
-    assert response.status_code == 409, response.text
-    assert target_proxy.requests == []
+@pytest.mark.parametrize("native_registered", [False, True])
+async def test_uuid_without_target_gateway_uses_native_owner_instead_of_remote_active(
+    target_proxy: Proxy, native_registered: bool,
+) -> None:
+    registry = target_proxy.registry
+    remote_key = REMOTE_GATEWAY_IDS[0], WORKSPACE_ID
+    registry.activate(remote_key)
+    if not native_registered:
+        registry.remove((target_proxy.gateway_id, WORKSPACE_ID))
+    before = registry._capture_registry_state()
+    response = await target_proxy.client.get(f"/api/v1/workspaces/{WORKSPACE_ID}/workspace",
+        headers={"X-Request-ID": "req_native_owner", "X-BoxTeam-Gateway-Id": REMOTE_GATEWAY_IDS[1]})
+    assert response.status_code == (200 if native_registered else 404), response.text
+    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req_native_owner"
+    if native_registered:
+        outgoing, = target_proxy.requests
+        assert outgoing.url.host == "local.test"
+        assert outgoing.url.path == f"/api/v1/workspaces/{WORKSPACE_ID}/workspace"
+        assert outgoing.headers["X-BoxTeam-Gateway-Id"] == target_proxy.gateway_id
+        assert outgoing.headers["X-Request-ID"] == "req_native_owner"
+        assert outgoing.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+        assert outgoing.headers["X-Local-Token"] == LOCAL_TOKEN
+        assert TARGET_GATEWAY_ID_HEADER not in outgoing.headers
+        assert "X-BoxTeam-Federation-Token" not in outgoing.headers
+    else:
+        assert target_proxy.requests == []
+    assert target_proxy.relay.calls == []
+    assert registry._capture_registry_state() == before
+    assert registry.active_workspace == remote_key
+    assert all(registry.route_reference_counts(target.key) == (0, 0) for target in registry.targets())
 
 
 @pytest.mark.parametrize("owner,status", [("", 400), ("http://remote.test", 400), ("gateway_" + "e" * 32, 404)])
 async def test_invalid_or_unregistered_target_gateway_never_uses_active_workspace(target_proxy: Proxy, owner: str, status: int) -> None:
-    before = target_proxy.registry.registry_revision
-    response = await target_proxy.client.get(f"/api/v1/workspaces/{WORKSPACE_ID}/workspace", headers={TARGET_GATEWAY_ID_HEADER: owner})
+    before = target_proxy.registry._capture_registry_state()
+    response = await target_proxy.client.get(f"/api/v1/workspaces/{WORKSPACE_ID}/workspace", headers={
+        TARGET_GATEWAY_ID_HEADER: owner, "X-Request-ID": "req_invalid_target",
+    })
     assert response.status_code == status, response.text
-    assert response.json()["request_id"] == response.headers["X-Request-ID"]
-    assert target_proxy.requests == []
-    assert target_proxy.registry.registry_revision == before
+    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req_invalid_target"
+    assert target_proxy.requests == target_proxy.relay.calls == []
+    assert target_proxy.registry._capture_registry_state() == before
+    assert target_proxy.registry.active_workspace == (target_proxy.gateway_id, WORKSPACE_ID)
+    assert all(target_proxy.registry.route_reference_counts(target.key) == (0, 0) for target in target_proxy.registry.targets())
 
 
 async def test_selected_workspace_and_gateway_conflict_is_rejected_before_proxy_admission(target_proxy: Proxy) -> None:
+    before = target_proxy.registry._capture_registry_state()
     response = await target_proxy.client.get("/api/v1/workspace", headers={
-        "X-BoxTeam-Workspace-Id": "local-route", TARGET_GATEWAY_ID_HEADER: REMOTE_GATEWAY_IDS[0],
+        TARGET_GATEWAY_ID_HEADER: REMOTE_GATEWAY_IDS[0], "X-Request-ID": "req_active_conflict",
     })
     assert response.status_code == 400, response.text
-    assert "归属不一致" in response.json()["detail"]
-    assert target_proxy.requests == []
-    assert target_proxy.registry.route_reference_counts("local-route") == (0, 0)
+    assert response.json()["detail"] == "目标 Gateway 与选定工作区归属冲突"
+    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req_active_conflict"
+    assert target_proxy.requests == target_proxy.relay.calls == []
+    assert target_proxy.registry._capture_registry_state() == before
+    assert target_proxy.registry.active_workspace == (target_proxy.gateway_id, WORKSPACE_ID)
+    assert all(target_proxy.registry.route_reference_counts(target.key) == (0, 0) for target in target_proxy.registry.targets())
 
 
 @pytest.mark.parametrize("index", [0, 1])
@@ -217,7 +260,7 @@ async def test_context_target_gateway_keeps_uri_owner_and_request_identity(
         assert TARGET_GATEWAY_ID_HEADER not in outgoing.headers
         assert json.loads(outgoing.content)["uri"] == workspace_session_inventory_uri(WORKSPACE_ID)
         assert target_proxy.relay.calls == []
-    assert all(target_proxy.registry.route_reference_counts(target.workspace_id) == (0, 0)
+    assert all(target_proxy.registry.route_reference_counts(target.key) == (0, 0)
                for target in target_proxy.registry.targets())
 
 
@@ -237,5 +280,5 @@ async def test_context_uri_cannot_be_retargeted_by_gateway_header(
     assert response.status_code == 400, response.text
     assert response.json()["detail"] == "目标 Gateway 与上下文 URI 归属不一致"
     assert target_proxy.requests == target_proxy.relay.calls == []
-    assert all(target_proxy.registry.route_reference_counts(target.workspace_id) == (0, 0)
+    assert all(target_proxy.registry.route_reference_counts(target.key) == (0, 0)
                for target in target_proxy.registry.targets())

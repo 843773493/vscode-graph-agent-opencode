@@ -140,3 +140,11 @@
 - root-binding 最终 20 passed／11.48 秒；复制身份的新根读取反例修复前 4 failed，修复后全部通过，保留 JSON／SQLite、初始化开关、原身份与登记不变、冷恢复损坏精确拒绝。真实 Gateway 的 managed／external 两个重复 UUID 场景通过；原登记身份缺件／改写及失败恢复两个场景补跑通过（90.31 秒）。managed 原组 34 passed，唯一被并行导入中断的参数补跑 1 passed；不将重复执行相加。
 - 并行 itemized 改动曾暂时删除仍被引用的函数，导致身份 CLI 导入失败；原始失败保留，确认导入恢复后才补跑失败项。最后产品补跑中两份 assembly／request 源码仍发生变化，本批身份与注册源码未变，因此这是共享工作区观察结果，不声称全仓冻结快照验收。Ruff 通过；本批三文件 Pyright 与改前按文件／规则／完整消息及重数核对为 148／148 条存量诊断，新增零；root-binding 测试单独零诊断。
 - 准确命令、指纹与原始结果见 `out/tests/temp/identity_registration_current/artifacts/` 和 `out/tests/temp/identity_root_binding_current/artifacts/verification-precise-1793822445037641024.json`。本项不代表完整 2.4／3.3／6.4 验收；symlink 同物理根、授权释放后搬根、generation 冲突与 Windows 本轮没有专门新增验收，后续对应范围继续保留。
+
+
+### 2026-11-04：2.2／4.3／6.4 目标代理与协议消费者迁齐
+
+- 目标代理测试移除旧本地／远端别名与重复 UUID 字段，使用正式快照发布连接关联；三种 Gateway 的同 UUID 保持独立。裸 UUID 只选本机，即使活动项是远端也不回退；错误目标、active／URI 冲突保持精确拒绝、零下游和零租约，并核对发送方、目标、request_id 及各自认证。
+- 真实 Gateway＋独立 HTTP 协议替身迁齐 canonical UUID、完整 blocked owner／活动选择及显式目标头。保留 HTTP 拒绝、非法 data、诊断原文、完整回执及原错误类别／日志断言；生命周期四动作的出站路径与 UUID 完全一致。远端投影、回执属于协议装具，不作为真实远端注册或 blocker 产生过程的验收。
+- 单元最终 23 passed／3.14 秒，Ruff／Pyright 均通过。HTTP 分两组 2 passed／63.51 秒、6 passed／172.87 秒，源码首尾指纹稳定；纠正装具投影 URL 元数据后，仅补直接读取该字段的删除场景 1 passed／30.44 秒，新增精确 URL 断言，其余不受影响的协议结果复用。重复场景不累加。HTTP 测试 Ruff 通过；Pyright 剩两条 Popen bytes／str 存量诊断，对应装具函数与改前 AST 完全相同，未运行旧版类型基线，不声称类型全绿。
+- 原始命令、实际退出码、失败与最终指纹见 `out/tests/temp/identity_target_proxy_consumers/artifacts/verification-final-1793823103774822530.json` 和 `out/tests/temp/identity_federation_protocol_current/artifacts/`。本轮未改生产、前端或共享运行 fixture，不代表真实 SSH、Windows、完整客户端和 2.2／4.3／6.4 全部验收。

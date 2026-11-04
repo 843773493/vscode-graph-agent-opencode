@@ -17,8 +17,9 @@ from fastapi.responses import JSONResponse
 
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
-from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.lifespan import lifespan
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from tests.harness.python.run_context import TestRunContext
@@ -37,8 +38,8 @@ from tests.support.processes.workspace import (
 
 CONNECTION_ID = "rgw_protocol_integration"
 REMOTE_GATEWAY_ID = "gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-PROJECTED_WORKSPACE_ID = "projected_protocol"
-REMOTE_WORKSPACE_ID = "remote_protocol"
+WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+SIBLING_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
 remote_stub_app = FastAPI()
 
 
@@ -50,14 +51,15 @@ async def stub_health() -> dict[str, str]:
 @remote_stub_app.get("/api/gateway/federation/directories")
 @remote_stub_app.get("/api/gateway/federation/diagnostics")
 @remote_stub_app.get("/api/gateway/federation/managed-workspaces")
-@remote_stub_app.post("/api/gateway/workspaces/remote_protocol/runtime/{action}")
+@remote_stub_app.post(f"/api/gateway/workspaces/{WORKSPACE_ID}/runtime/{{action}}")
 @remote_stub_app.post("/api/gateway/federation/managed-workspaces")
 @remote_stub_app.delete("/api/gateway/federation/managed-workspaces/{workspace_id}")
 async def stub_management(request: Request) -> JSONResponse:
     control = Path(os.environ["BOXTEAM_TEST_FEDERATION_REPLY"])
     response = json.loads(control.read_text())
     with control.with_suffix(".requests.jsonl").open("a") as log:
-        log.write(json.dumps({"path": request.url.path, "request_id": request.headers["X-Request-ID"]}) + "\n")
+        log.write(json.dumps({"path": request.url.path, "request_id": request.headers["X-Request-ID"],
+                              "target_gateway_id": request.headers.get(TARGET_GATEWAY_ID_HEADER)}) + "\n")
     return JSONResponse(content=response["body"], status_code=response["status"])
 
 
@@ -68,25 +70,24 @@ async def protocol_lifespan(application: FastAPI) -> AsyncIterator[None]:
         FederationCredentialStore(storage_path=get_gateway_root() / "credentials/federation.json").issue(
             connection_id=CONNECTION_ID, peer_gateway_id=load_or_create_gateway_id(get_gateway_root() / "identity.json"),
         )
-        application.state.registry.upsert_remote_gateway(
-            RemoteGatewayConnection(
-                connection_id=CONNECTION_ID, name="远端协议装具", host="127.0.0.1", port=22,
-                username="integration", private_key_path=None, ssh_config_host=None,
-                remote_gateway_port=int(os.environ["BOXTEAM_TEST_FEDERATION_PORT"]),
-                remote_gateway_id=REMOTE_GATEWAY_ID, protocol_version=1, source_owner="manual",
-            ),
+        connection = RemoteGatewayConnection(
+            connection_id=CONNECTION_ID, name="远端协议装具", host="127.0.0.1", port=22,
+            username="integration", private_key_path=None, ssh_config_host=None,
+            remote_gateway_port=int(os.environ["BOXTEAM_TEST_FEDERATION_PORT"]),
+            remote_gateway_id=REMOTE_GATEWAY_ID, protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
+        )
+        application.state.registry.apply_remote_projection_snapshot(
+            connection=connection,
+            projections=(WorkspaceTarget(
+                gateway_id=REMOTE_GATEWAY_ID, workspace_id=WORKSPACE_ID, name="远端协议工作区", root_path=None,
+                backend_url=f"http://127.0.0.1:{os.environ['BOXTEAM_TEST_FEDERATION_PORT']}",
+                connection_kind="remote_gateway", owner="remote_projection", managed=True,
+                remote_gateway_connection_ids=(CONNECTION_ID,), remote_service_names=("workspace_api",),
+            ),),
             runtime=WorkspaceRuntime(service_urls={
                 "workspace_api": f"http://127.0.0.1:{os.environ['BOXTEAM_TEST_FEDERATION_PORT']}",
             }),
         )
-        application.state.registry.upsert(WorkspaceTarget(
-            workspace_id=PROJECTED_WORKSPACE_ID, name="远端协议工作区", root_path=None,
-            backend_url=f"http://127.0.0.1:{os.environ['BOXTEAM_TEST_FEDERATION_PORT']}",
-            connection_kind="remote_gateway", owner="remote_projection", managed=True, connection_id=CONNECTION_ID,
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
-            remote_gateway_connection_id=CONNECTION_ID, remote_workspace_id=REMOTE_WORKSPACE_ID,
-            remote_service_names=("workspace_api",),
-        ))
         yield
 
 
@@ -158,7 +159,7 @@ async def test_remote_management_preserves_http_rejection_without_copying_remote
                 else:
                     response = await client.request(
                         "GET" if operation == "list" else "DELETE",
-                        "/api/gateway/managed-workspaces" + ("/remote_protocol" if operation == "remove" else ""),
+                        "/api/gateway/managed-workspaces" + (f"/{WORKSPACE_ID}" if operation == "remove" else ""),
                         headers={"X-Request-ID": request_id}, params={"gateway_connection_id": CONNECTION_ID},
                     )
                     prefix = "工作区清单失败: stage=workspace_list" if operation == "list" else "工作区删除失败: stage=workspace_remove"
@@ -181,11 +182,11 @@ async def test_remote_removal_conflict_preserves_complete_blocker_and_rejects_ma
     context, control, remote_port, gateway_port = remote_stub
     reset_gateway_persistent_state(workspace_root=context.workspace_root)
     blocked = {
-        "workspace_id": "remote_protocol", "backend_generation": "generation_original",
-        "affected_workspace_ids": ["remote_protocol", "remote_sibling"], "status": "blocked",
-        "blockers": [{"kind": "job", "workspace_id": "remote_sibling", "resource_id": "job_original",
+        "gateway_id": REMOTE_GATEWAY_ID, "workspace_id": WORKSPACE_ID, "backend_generation": "generation_original",
+        "affected_workspace_ids": [WORKSPACE_ID, SIBLING_WORKSPACE_ID], "status": "blocked",
+        "blockers": [{"gateway_id": REMOTE_GATEWAY_ID, "kind": "job", "workspace_id": SIBLING_WORKSPACE_ID, "resource_id": "job_original",
                       "session_id": "session_original", "status": "running", "detail": "原执行仍在运行"}],
-        "workspaces": {"active_workspace_id": None, "items": []},
+        "workspaces": {"active_workspace": None, "items": []},
     }
     evidence = []
     with ExitStack() as processes:
@@ -200,7 +201,7 @@ async def test_remote_removal_conflict_preserves_complete_blocker_and_rejects_ma
                 control.write_text(json.dumps({"status": 409, "body": body}))
                 request_id = f"req_removal_conflict_{index}"
                 response = await client.delete(
-                    "/api/gateway/managed-workspaces/remote_protocol", params={"gateway_connection_id": CONNECTION_ID},
+                    f"/api/gateway/managed-workspaces/{WORKSPACE_ID}", params={"gateway_connection_id": CONNECTION_ID},
                     headers={"X-Request-ID": request_id},
                 )
                 assert response.status_code == 409, response.text
@@ -212,7 +213,9 @@ async def test_remote_removal_conflict_preserves_complete_blocker_and_rejects_ma
                 evidence.append(response.json())
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            assert any(item["workspace_id"] == PROJECTED_WORKSPACE_ID for item in workspaces.json()["data"]["items"])
+            projected, = [item for item in workspaces.json()["data"]["items"]
+                          if (item["gateway_id"], item["workspace_id"]) == (REMOTE_GATEWAY_ID, WORKSPACE_ID)]
+            assert projected["backend_url"] == f"http://127.0.0.1:{remote_port}"
     requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
     assert [request["request_id"] for request in requests] == [f"req_removal_conflict_{index}" for index in range(3)]
     log = (context.artifacts_dir / "gateway.stderr.log").read_text()
@@ -387,7 +390,7 @@ async def test_remote_diagnostics_rejections_do_not_expand_the_raw_log_exception
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=20,
         ) as client:
-            params = {"gateway_connection_id": CONNECTION_ID, "workspace_id": PROJECTED_WORKSPACE_ID}
+            params = {"gateway_connection_id": CONNECTION_ID, "workspace_id": WORKSPACE_ID}
             denied = await client.get("/api/gateway/diagnostics", params=params, headers={"X-Local-Token": "invalid"})
             assert denied.status_code == 401, denied.text
             assert not control.with_suffix(".requests.jsonl").exists()
@@ -423,7 +426,7 @@ async def test_remote_diagnostics_rejections_do_not_expand_the_raw_log_exception
                     data = recovered.json()["data"]
                     assert data["logs"][0]["tail"] == tail
                     assert data["gateway_connection_id"] == CONNECTION_ID
-                    assert data["selected_workspace_id"] == PROJECTED_WORKSPACE_ID
+                    assert data["selected_workspace_id"] == WORKSPACE_ID
                     assert data["connection_kind"] == "remote_gateway"
                     expected_requests.append(recovered_id)
                     receipts.append(recovered.json())
@@ -463,8 +466,8 @@ async def test_remote_lifecycle_protocol_failure_keeps_error_type_without_respon
                     control.write_text(json.dumps({"status": 200, "body": payload}))
                     request_id = f"req_runtime_{action.replace('-', '_')}_{index}"
                     response = await client.post(
-                        f"/api/gateway/workspaces/{PROJECTED_WORKSPACE_ID}/runtime/{action}",
-                        headers={"X-Request-ID": request_id},
+                        f"/api/gateway/workspaces/{WORKSPACE_ID}/runtime/{action}",
+                        headers={"X-Request-ID": request_id, TARGET_GATEWAY_ID_HEADER: REMOTE_GATEWAY_ID},
                     )
                     assert response.status_code == 500, response.text
                     assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
@@ -478,9 +481,10 @@ async def test_remote_lifecycle_protocol_failure_keeps_error_type_without_respon
     assert "TypeError: Workspace API 生命周期响应缺少 data 对象: status=200" in log
     requests = [json.loads(line) for line in control.with_suffix(".requests.jsonl").read_text().splitlines()]
     assert len(requests) == 12
+    assert {request["target_gateway_id"] for request in requests} == {REMOTE_GATEWAY_ID}
     assert [request["request_id"] for request in requests] == list(evidence)
     assert {request["path"] for request in requests} == {
-        f"/api/gateway/workspaces/{REMOTE_WORKSPACE_ID}/runtime/{action}"
+        f"/api/gateway/workspaces/{WORKSPACE_ID}/runtime/{action}"
         for action in ("start", "stop", "restart-safe", "restart-force")
     }
     (context.artifacts_dir / "runtime-protocol-error-receipts.json").write_text(
