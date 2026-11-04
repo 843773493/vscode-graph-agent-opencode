@@ -14,6 +14,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly import (
     sealing as assembly_writer,
@@ -66,10 +67,11 @@ def test_prepare_restores_source_details_in_one_snapshot(
     read_manifest = saver._storage.assemblies.get_context_plan_detail
     read_body = saver._detail_store.read
     read_prepared = saver._detail_store.read_prepared
+    contribution_attribute = ContextContribution.__getattribute__
     calls, active = [], []
 
     def observe_content(*args, **kwargs):
-        call = {"owned": [], "borrowed": kwargs.get("snapshot"), "manifests": [], "bodies": [], "prepared": 0}
+        call = {"owned": [], "borrowed": kwargs.get("snapshot"), "manifests": [], "bodies": [], "prepared": 0, "contribution_id_reads": 0}
         calls.append(call)
         active.append(call)
         try:
@@ -98,11 +100,17 @@ def test_prepare_restores_source_details_in_one_snapshot(
             active[-1]["prepared"] += 1
         return read_prepared(*args, **kwargs)
 
+    def observe_contribution_attribute(contribution, name):
+        if name == "contribution_id" and active:
+            active[-1]["contribution_id_reads"] += 1
+        return contribution_attribute(contribution, name)
+
     monkeypatch.setattr(saver, "_request_content_for_plan", observe_content)
     monkeypatch.setattr(storage, "open_read_snapshot", observe_open)
     monkeypatch.setattr(saver._storage.assemblies, "get_context_plan_detail", observe_manifest)
     monkeypatch.setattr(saver._detail_store, "read", observe_body)
     monkeypatch.setattr(saver._detail_store, "read_prepared", observe_prepared)
+    monkeypatch.setattr(ContextContribution, "__getattribute__", observe_contribution_attribute)
     prepare("source-snapshot-first")
     second = prepare("source-snapshot-second")["snapshot"]
     second.validate_hashes()
@@ -124,7 +132,7 @@ def test_prepare_restores_source_details_in_one_snapshot(
     recovered.validate_hashes()
     assert canonical_json_bytes(saver.get_context_assembly(session, thread, assembly_id=second.assembly_id).to_dict()) == second_bytes
     measurements = [
-        {"opened": len(call["owned"]), "manifests": len(call["manifests"]), "bodies": len(call["bodies"]), "prepared": call["prepared"]}
+        {"opened": len(call["owned"]), "manifests": len(call["manifests"]), "bodies": len(call["bodies"]), "prepared": call["prepared"], "contribution_id_reads": call["contribution_id_reads"]}
         for call in calls
     ]
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -144,6 +152,8 @@ def test_prepare_restores_source_details_in_one_snapshot(
     prepared_reads = [call for call in calls if call["prepared"]]
     assert prepared_reads
     assert all(call["prepared"] == source_count and call["owned"] == [] for call in prepared_reads)
+    # 同时约束真实 prepare 的身份查找工作量，避免来源增多时退回逐份全表扫描。
+    assert all(call["contribution_id_reads"] <= 3 * source_count for call in calls)
 
 
 @pytest.fixture

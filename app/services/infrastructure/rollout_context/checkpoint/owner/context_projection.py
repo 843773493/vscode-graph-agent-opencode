@@ -282,9 +282,13 @@ class ContextProjectionOwnerMixin:
                 raise ValueError("source-mismatch: prepared detail identity 重复")
             prepared_by_ref[prepared.record.detail_ref] = prepared
         result: dict[str, object] = {}
+        # plan 已保证 contribution_id 唯一；同次恢复先索引，避免逐份 source 全表查找。
+        contributions_by_id = {}
         for contribution in plan.contributions:
+            contribution_id = contribution.contribution_id
+            contributions_by_id[contribution_id] = contribution
             if contribution.body is not None:
-                result.setdefault(contribution.contribution_id, contribution.body)
+                result.setdefault(contribution_id, contribution.body)
         if explicit_content is not None:
             result.update(explicit_content)
         selected_request_entries = {
@@ -364,13 +368,9 @@ class ContextProjectionOwnerMixin:
                     ref.payload_kind or "structured_content",
                     body,
                 )
-                contribution = next(
-                    (
-                        contribution
-                        for contribution in plan.contributions
-                        if contribution.contribution_id == selection_entry.contribution_id
-                    ),
-                    None,
+                contribution = (
+                    contributions_by_id.get(selection_entry.contribution_id)
+                    if selection_entry.contribution_id is not None else None
                 )
                 if (
                     contribution is not None
