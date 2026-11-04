@@ -40,13 +40,14 @@ web/
 - 服务替身和页面路由拦截必须显式记录，不能伪造成功状态。
 - 运行产物必须写入 `out/tests/integration/clients/web/`。
 - `test_basic_chat_tool_loop.py` 使用 `web_workbench_assets` 构建完整 Workbench，由真实 Gateway 提供静态资源；浏览器从会话树及资源面板打开 main/child，按原版编辑器组和精确 owner 定位 ShadowRoot 内控件。模型使用显式 model_stream 回放，因此属于 Integration；保留工具循环封存请求和双 Thread 并行输入隔离断言。
+  - 活动选择消费公开 `active_workspace`，与 health 的 Gateway 身份及工作区持久 UUID 交叉核验；业务请求同时携带 `X-BoxTeam-Target-Gateway-Id` 与同一 UUID。工作区及会话目录节点使用完整 owner 的复合键，证据不再保存路由／业务双 ID；原准备失败装具仍在业务访问之前触发。
   - 标签生命周期通过真实单击／双击核对预览替换与固定，原版关闭按钮按 Tab 内的可访问角色及名称定位，不依赖上游图标类；关闭后核后端会话仍存在并可从导航重开。分屏先验证同一 Thread 两组的资源展开状态独立，再验证 main／child 草稿、模型并行与回复隔离；新增检查不替代原封存请求、真实文件写入和磁盘哈希断言。
   - 删除刷新回归先真实保存同一 Session 的两个分屏标签，再执行真实目录删除并核 committed／settled、标签及宿主释放；随后立即刷新，不提前 flush、不额外等待保存，要求保留会话可操作且不重新读取已删除 Session。
   - 标签生命周期还延迟精确工作区／Session 的真实 main-thread GET，随后点击另一原版 Tab；放行真实响应并等待目录请求完成后，活动 Tab 必须保持用户的新选择。只用 route.continue，不伪造响应，核实际 owner 与 request_id；不能靠额外点击或延长期限掩盖迟到导航抢焦点。
   - Chromium 准备和场景执行使用同一资源作用域，取得 browser/context 后立即登记逆序释放；执行、诊断保存和清理同时失败时保留全部原因。失败 JSON 记录真实阶段、已取得的 owner、acceptance、SSE 和页面错误，不能填入未执行步骤的成功结果；仅在取得 page 后截图，诊断保存失败也必须显式报告。真实 Chromium 故障回收检查复用 `tests/integration/harness/test_boundary_display_fixture_lifetime.py`，不代替完整聊天验收，也不改变原业务等待期限。
   - 轮次错误通道通过真实消息菜单进入编辑，只对精确 owner 的一个 replay POST 声明显式 409 HTTP 替身；核错误可见、编辑与下一条草稿保留、聊天可操作，以及经真实 Gateway 返回的历史 owner／request_id／原 Turn 和投影 epoch。撤销替身后继续双 Thread 并行发送及原文件保存断言，原四次封存模型请求不变；不能将此拒绝替身称为后端 replay 事务失败验收。
   - 双 Thread 模型屏障持有期间，仅精确 main Thread 的 interrupt POST 使用显式409替身；失败后必须有真实队列200重读和request_id，核原job仍活动、所属Composer错误可见、另一Thread无该错误、下一条草稿保留，随后两侧原模型调用继续完成。不将该替身称为后端停止事务失败验收。
-  - 会话右键复制失败只替换浏览器Clipboard API及既有兼容复制为显式拒绝；从真实会话树打开菜单，核原版通知完整错误及发起路由／Session身份、单次调用与输入草稿保持，随后恢复原浏览器方法并继续原聊天断言。没有业务HTTP替身，不能将浏览器能力拒绝称为系统剪贴板权限验收。
+  - 会话右键复制失败只替换浏览器Clipboard API及既有兼容复制为显式拒绝；从真实会话树打开菜单，核原版通知完整错误及发起Gateway／工作区／Session身份、单次调用与输入草稿保持，随后恢复原浏览器方法并继续原聊天断言。没有业务HTTP替身，不能将浏览器能力拒绝称为系统剪贴板权限验收。
 
 - 历史边界及元数据初始化页面也使用正式 Workbench 产物；Thread 内正文通过可穿透 ShadowRoot 的作用域 locator 读取，不能以 document 全局查询的空结果证明成功。元数据在打开对应 Thread 后核对；边界状态、工具顺序及清理失败断言保持。
   - 元数据场景同时覆盖 Gateway 静态产物和真实 Workbench Vite 源码入口；业务工作区与未注册目录按 run／测试节点隔离，两个参数不能共用目录。Vite 与 Gateway 在本测试获分配的端口块内使用 E2EProcessLease 选择并持续保留空闲绑定，服务关闭后再释放，将探测写入同一 port-allocation.json，不终止未知进程或更改宿主端口设置。Vite 变体显式指定本用例 runtime 的静态资源输出及派生缓存，核 JSON health、Vite 客户端、源码首页和三条真实 Gateway 初始化接口，再复用相同的浏览器文件／设置／刷新／日志持久化断言。Vite 子进程组取得后立即登记回收，不允许以静态首页回退掩盖开发入口失败。

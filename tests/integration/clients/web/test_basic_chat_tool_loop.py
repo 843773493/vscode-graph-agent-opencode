@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
-from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.workspace_identity import load_or_create_workspace_id, read_workspace_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
@@ -153,10 +153,20 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
                 json={"tracking": {"source": "basic-chat-tool-loop-test"}},
             )
             assert guest.status_code == 200, guest.text
+            health = await client.get("/api/gateway/health")
+            assert health.status_code == 200, health.text
+            gateway_id = health.json()["data"]["gateway_id"]
+            assert isinstance(gateway_id, str) and gateway_id
+            workspace_id = read_workspace_id(workspace_root)
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            workspace_id = workspaces.json()["data"]["active_workspace_id"]
-            assert isinstance(workspace_id, str) and workspace_id
+            active_workspace = {"gateway_id": gateway_id, "workspace_id": workspace_id}
+            assert workspaces.json()["data"]["active_workspace"] == active_workspace
+            assert health.json()["data"]["active_workspace"] == active_workspace
+            assert len([
+                item for item in workspaces.json()["data"]["items"]
+                if (item["gateway_id"], item["workspace_id"]) == (gateway_id, workspace_id)
+            ]) == 1
 
         environment = os.environ.copy()
         responses = [
@@ -191,6 +201,7 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
                 "BOXTEAM_BROWSER_PARALLEL_INTERACTIONS": json.dumps(parallel_interactions),
                 "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                 "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
+                "BOXTEAM_BROWSER_GATEWAY_ID": gateway_id,
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
                 "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
@@ -222,6 +233,8 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
             f"结果: {result_path}\n截图: {screenshot_path}"
         )
         result = json.loads(result_path.read_text(encoding="utf-8"))
+        assert result["gatewayId"] == gateway_id
+        assert result["workspaceId"] == workspace_id
         assert result["composerSendRequest"] is True
         assert result["sentMessage"] == "请读取 README.md，然后告诉我工具调用是否完成。"
         assert result["traceSseConnected"] is True
@@ -232,7 +245,8 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         assert result["noPageErrors"] is True, result["pageErrors"]
         assert result["workbenchLoaded"] is True
         clipboard_failure = result["clipboardFailure"]
-        assert clipboard_failure["routeId"] == result["workspaceId"]
+        assert clipboard_failure["gatewayId"] == result["gatewayId"]
+        assert clipboard_failure["workspaceId"] == result["workspaceId"]
         assert clipboard_failure["sessionId"] == result["sessionId"]
         assert clipboard_failure["counts"] == {"write": 1, "fallback": 1}
         assert clipboard_failure["errorVisible"] is True
@@ -255,7 +269,8 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         assert replay_failure["chatOperable"] is True
         assert len(replay_failure["interceptions"]) == 1
         rejection = replay_failure["interceptions"][0]
-        assert rejection["routeId"] == result["workspaceId"]
+        assert rejection["gatewayId"] == result["gatewayId"]
+        assert rejection["workspaceId"] == result["workspaceId"]
         assert rejection["method"] == "POST"
         assert rejection["payload"]["action"] == "edit_and_continue"
         tabs = result["tabs"]
@@ -321,7 +336,7 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
         assert interrupt_failure["activeJobId"] == parallel["receipts"][0]["job_id"]
         assert interrupt_failure["interceptions"] == [{
             "path": f"/api/v1/sessions/{result['sessionId']}/interrupt",
-            "threadId": result["threadId"], "routeId": workspace_id,
+            "threadId": result["threadId"], "gatewayId": gateway_id, "workspaceId": workspace_id,
         }]
         calls = parallel["calls"]
         assert len(calls) == 2

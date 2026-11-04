@@ -88,6 +88,25 @@ function isSessionMessageRequest(request) {
     && /\/api\/v1\/sessions\/[^/]+\/threads\/[^/]+\/messages$/.test(new URL(request.url()).pathname);
 }
 
+function ownerHeaders(owner) {
+  return { "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId };
+}
+
+function hasWorkspaceOwner(request, owner) {
+  const headers = request.headers();
+  return headers["x-boxteam-target-gateway-id"] === owner.gatewayId
+    && headers["x-boxteam-workspace-id"] === owner.workspaceId;
+}
+
+function workspaceSelectionKey(owner) {
+  return JSON.stringify([owner.gatewayId, owner.workspaceId]);
+}
+
+function sessionRow(page, owner, sessionId = owner.sessionId) {
+  return page.getByTestId(`catalog-node-${workspaceSelectionKey(owner)}-${sessionId}`)
+    .locator(`button[data-session-id="${sessionId}"]`);
+}
+
 async function waitForCompletedJob(page, jobId, headers) {
   await waitUntil(async () => {
     const job = (await api(page, `/api/v1/jobs/${jobId}`, { headers })).data;
@@ -97,7 +116,7 @@ async function waitForCompletedJob(page, jobId, headers) {
 }
 
 async function verifyPreviewTabs(page, owner) {
-  const headers = { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": owner.routeId };
+  const headers = { "Content-Type": "application/json", ...ownerHeaders(owner) };
   const group = page.locator(".editor-group-container");
   await expect(group).toHaveCount(1);
   const tab = threadId => group.locator(`.tabs-container .tab[data-resource-name="${threadId}"]`);
@@ -110,8 +129,8 @@ async function verifyPreviewTabs(page, owner) {
   expect(spare.workspace_id).toBe(owner.workspaceId);
   const spareThread = (await api(page, `/api/v1/sessions/${spare.session_id}/main-thread`, { headers })).data;
   expect(spareThread.session_id).toBe(spare.session_id);
-  const spareRow = page.locator(`button[data-session-id="${spare.session_id}"]`);
-  const mainRow = page.locator(`button[data-session-id="${owner.sessionId}"]`);
+  const spareRow = sessionRow(page, owner, spare.session_id);
+  const mainRow = sessionRow(page, owner);
   const spareTab = tab(spareThread.thread_id);
   await spareRow.click();
   await expect(spareTab.locator(".tab-label.italic")).toBeVisible();
@@ -132,7 +151,7 @@ async function verifyPreviewTabs(page, owner) {
   const navigationUrl = url => url.pathname === `/api/v1/sessions/${owner.sessionId}/main-thread`;
   const holdNavigation = async route => {
     const request = route.request();
-    if (request.method() !== "GET" || request.headers()["x-boxteam-workspace-id"] !== owner.routeId) {
+    if (request.method() !== "GET" || !hasWorkspaceOwner(request, owner)) {
       await route.continue();
       return;
     }
@@ -147,7 +166,7 @@ async function verifyPreviewTabs(page, owner) {
     await spareTab.click();
     await expect(spareTab).toHaveClass(/\bactive\b/);
     const responsePromise = page.waitForResponse(response => navigationUrl(new URL(response.url()))
-      && response.request().headers()["x-boxteam-workspace-id"] === owner.routeId);
+      && hasWorkspaceOwner(response.request(), owner));
     release();
     const response = await responsePromise;
     expect(response.status()).toBe(200);
@@ -212,23 +231,24 @@ async function verifyClipboardFailure(page, owner, composer) {
     } };
   }, detail);
   try {
-    await page.locator(`button[data-session-id="${owner.sessionId}"]`).click({ button: "right" });
+    await sessionRow(page, owner).click({ button: "right" });
     await page.getByRole("menuitem", { name: "复制 ID", exact: true }).click();
-    const message = `复制会话 ID 失败 (${owner.routeId}/${owner.sessionId}): Clipboard API 失败：${detail}；兼容复制失败：浏览器拒绝复制文本`;
+    const message = `复制会话 ID 失败 (${workspaceSelectionKey(owner)}/${owner.sessionId}): Clipboard API 失败：${detail}；兼容复制失败：浏览器拒绝复制文本`;
     await expect(page.locator(".notifications-toasts").getByText(message, { exact: true })).toBeVisible();
     await expect(composer).toHaveValue(draft);
     const counts = await page.evaluate(() => ({ ...globalThis.clipboardFailureFixture.counts }));
     expect(counts).toEqual({ write: 1, fallback: 1 });
     await composer.fill("");
     return { boundary: "浏览器Clipboard API及兼容复制为显式拒绝替身，无业务HTTP替身",
-      routeId: owner.routeId, sessionId: owner.sessionId, message, counts, errorVisible: true, draftPreserved: true };
+      gatewayId: owner.gatewayId, workspaceId: owner.workspaceId, sessionId: owner.sessionId,
+      message, counts, errorVisible: true, draftPreserved: true };
   } finally {
     await page.evaluate(() => { globalThis.clipboardFailureFixture.restore(); delete globalThis.clipboardFailureFixture; });
   }
 }
 
 async function verifyParallelThreads(page, owner, initialJobId) {
-  const headers = { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": owner.routeId };
+  const headers = { "Content-Type": "application/json", ...ownerHeaders(owner) };
   await waitForCompletedJob(page, initialJobId, headers);
   const source = (await api(page, `/api/v1/sessions/${owner.sessionId}/fork-source-point`, { headers })).data;
   const fork = (await api(page, `/api/v1/sessions/${owner.sessionId}/fork-context`, {
@@ -240,10 +260,11 @@ async function verifyParallelThreads(page, owner, initialJobId) {
     }),
   })).data;
   expect(fork.session.session_id).toBe(owner.sessionId);
+  expect(fork.session.workspace_id).toBe(owner.workspaceId);
   expect(fork.thread_id).not.toBe(owner.threadId);
 
   // 固定主 Tab，再通过原版分屏命令和真实资源面板打开 child。
-  await page.locator(`button[data-session-id="${owner.sessionId}"]`).dblclick();
+  await sessionRow(page, owner).dblclick();
   await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.splitEditorRight"));
   const groups = page.locator(".editor-group-container");
   await expect(groups).toHaveCount(2);
@@ -292,7 +313,8 @@ async function verifyParallelThreads(page, owner, initialJobId) {
       await target.locator(webSelectors.sendButton).click();
       const sent = await response;
       expect(sent.status()).toBe(200);
-      expect(sent.request().headers()["x-boxteam-workspace-id"]).toBe(owner.routeId);
+      expect(sent.request().headers()["x-boxteam-workspace-id"]).toBe(owner.workspaceId);
+      expect(sent.request().headers()["x-boxteam-target-gateway-id"]).toBe(owner.gatewayId);
       expect(sent.request().postDataJSON().message.content).toBe(messages[index]);
       const receipt = (await sent.json()).data;
       expect(receipt.thread_id).toBe(calls[index].threadId);
@@ -333,10 +355,12 @@ async function verifyInterruptFailure(page, owner, main, child, receipt) {
   const reject = async route => {
     const request = route.request();
     expect(request.method()).toBe("POST");
-    expect(request.headers()["x-boxteam-workspace-id"]).toBe(owner.routeId);
+    expect(request.headers()["x-boxteam-workspace-id"]).toBe(owner.workspaceId);
+    expect(request.headers()["x-boxteam-target-gateway-id"]).toBe(owner.gatewayId);
     rejectedAt = Date.now();
     interceptions.push({ path, threadId: new URL(request.url()).searchParams.get("thread_id"),
-      routeId: request.headers()["x-boxteam-workspace-id"] });
+      gatewayId: request.headers()["x-boxteam-target-gateway-id"],
+      workspaceId: request.headers()["x-boxteam-workspace-id"] });
     await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail }) });
   };
   await page.route(url, reject);
@@ -348,7 +372,7 @@ async function verifyInterruptFailure(page, owner, main, child, receipt) {
       return rejectedAt && request.timing().startTime >= rejectedAt && request.method() === "GET"
         && target.pathname === `/api/v1/sessions/${owner.sessionId}/pending-requests`
         && target.searchParams.get("thread_id") === owner.threadId
-        && request.headers()["x-boxteam-workspace-id"] === owner.routeId && response.status() === 200;
+        && hasWorkspaceOwner(request, owner) && response.status() === 200;
     });
     await main.locator("#interruptButton").click();
     const response = await recovery, snapshot = await response.json();
@@ -372,7 +396,7 @@ async function verifyInterruptFailure(page, owner, main, child, receipt) {
 }
 
 async function verifyNativeFileEditor(page, owner) {
-  const headers = { "X-BoxTeam-Workspace-Id": owner.routeId };
+  const headers = ownerHeaders(owner);
   const listing = (await api(page, "/api/v1/workspace/files", { headers })).data;
   const file = listing.items.find(item => item.name === "README.md");
   expect(file).toBeDefined();
@@ -410,7 +434,8 @@ async function verifyNativeFileEditor(page, owner) {
   await editor.press("ControlOrMeta+S");
   const saved = await response;
   expect(saved.status()).toBe(200);
-  expect(saved.request().headers()["x-boxteam-workspace-id"]).toBe(owner.routeId);
+  expect(saved.request().headers()["x-boxteam-workspace-id"]).toBe(owner.workspaceId);
+  expect(saved.request().headers()["x-boxteam-target-gateway-id"]).toBe(owner.gatewayId);
   expect(saved.request().postDataJSON()).toEqual({ content, expected_revision: original.revision });
   const result = (await saved.json()).data;
   expect(result.path).toBe(file.path);
@@ -420,7 +445,7 @@ async function verifyNativeFileEditor(page, owner) {
 }
 
 async function verifyReplayFailure(page, owner, turnId, messageId, jobId) {
-  const headers = { "X-BoxTeam-Workspace-Id": owner.routeId };
+  const headers = ownerHeaders(owner);
   await waitForCompletedJob(page, jobId, headers);
   expect(typeof messageId).toBe("string");
   expect(messageId.length).toBeGreaterThan(0);
@@ -438,10 +463,12 @@ async function verifyReplayFailure(page, owner, turnId, messageId, jobId) {
   const rejectReplay = async route => {
     const request = route.request();
     expect(request.method()).toBe("POST");
-    expect(request.headers()["x-boxteam-workspace-id"]).toBe(owner.routeId);
+    expect(request.headers()["x-boxteam-workspace-id"]).toBe(owner.workspaceId);
+    expect(request.headers()["x-boxteam-target-gateway-id"]).toBe(owner.gatewayId);
     expect(request.postDataJSON()).toEqual({ action: "edit_and_continue", content: edited, acknowledge_context_only: true });
     interceptions.push({ method: request.method(), path: new URL(request.url()).pathname,
-      routeId: request.headers()["x-boxteam-workspace-id"], payload: request.postDataJSON() });
+      gatewayId: request.headers()["x-boxteam-target-gateway-id"],
+      workspaceId: request.headers()["x-boxteam-workspace-id"], payload: request.postDataJSON() });
     await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail }) });
   };
   const replayUrl = new URL(replayPath, baseUrl).href;
@@ -458,7 +485,7 @@ async function verifyReplayFailure(page, owner, turnId, messageId, jobId) {
       const url = new URL(request.url());
       return request.method() === "GET" && url.pathname === bootstrapPath
         && url.searchParams.get("thread_id") === owner.threadId
-        && request.headers()["x-boxteam-workspace-id"] === owner.routeId && response.status() === 200;
+        && hasWorkspaceOwner(request, owner) && response.status() === 200;
     }, { timeout: 30_000 });
     const [response] = await Promise.all([
       recovery, turn.getByRole("button", { name: "编辑并从此处继续", exact: true }).click(),
@@ -495,14 +522,14 @@ async function verifyReplayFailure(page, owner, turnId, messageId, jobId) {
 }
 
 async function verifyDeletionRefresh(page, owner, tabs) {
-  const headers = { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": owner.routeId };
+  const headers = { "Content-Type": "application/json", ...ownerHeaders(owner) };
   const source = { sessionId: tabs.spareSessionId, threadId: tabs.spareThreadId };
-  const row = page.locator(`button[data-session-id="${source.sessionId}"]`);
+  const row = sessionRow(page, owner, source.sessionId);
   await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.joinAllGroups"));
   const groups = page.locator(".editor-group-container");
   await expect(groups).toHaveCount(1);
   await row.dblclick();
-  await expect(groups.nth(0).locator(`section.boxteam-thread[data-session-id="${source.sessionId}"][data-thread-id="${source.threadId}"]`)
+  await expect(groups.nth(0).locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${source.sessionId}"][data-thread-id="${source.threadId}"]`)
     .getByTestId("composer-input")).toBeVisible();
   await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.splitEditorRight"));
   await expect(groups).toHaveCount(2);
@@ -529,7 +556,8 @@ async function verifyDeletionRefresh(page, owner, tabs) {
   const restoredReads = [];
   const record = request => {
     if (new URL(request.url()).pathname === `/api/v1/sessions/${source.sessionId}`) {
-      restoredReads.push({ url: request.url(), routeId: request.headers()["x-boxteam-workspace-id"] });
+      restoredReads.push({ url: request.url(), gatewayId: request.headers()["x-boxteam-target-gateway-id"],
+        workspaceId: request.headers()["x-boxteam-workspace-id"] });
     }
   };
   page.on("request", record);
@@ -537,10 +565,10 @@ async function verifyDeletionRefresh(page, owner, tabs) {
     // 此处验证用户直接刷新，不能提前 flush 替产品保存删除后的展示态。
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
-    await expect(page.locator(`button[data-session-id="${owner.sessionId}"]`)).toBeVisible();
+    await expect(sessionRow(page, owner)).toBeVisible();
     await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.focusFirstEditorGroup"));
-    await page.locator(`button[data-session-id="${owner.sessionId}"]`).dblclick();
-    await expect(groups.nth(0).locator(`section.boxteam-thread[data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`)
+    await sessionRow(page, owner).dblclick();
+    await expect(groups.nth(0).locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`)
       .getByTestId("composer-input")).toBeVisible();
     await expect(sourceTabs).toHaveCount(0);
     expect(restoredReads, "删除后立即刷新不得从旧布局恢复已删除 Session").toEqual([]);
@@ -575,27 +603,28 @@ try {
       if (response.url().includes("/workspace/observations/stream")) {
         const subscriptions = response.request().postDataJSON().subscriptions;
         if (response.headers()["content-type"]?.includes("text/event-stream")) {
-          traceStreams.push(...subscriptions.filter((entry) => entry.kind === "session_trace"));
+          traceStreams.push(...subscriptions.filter((entry) => entry.kind === "session_trace").map(entry => ({
+            ...entry, gatewayId: response.request().headers()["x-boxteam-target-gateway-id"],
+            workspaceId: response.request().headers()["x-boxteam-workspace-id"],
+          })));
         }
       }
     }
   });
   result.phase = "gateway-bootstrap";
   await ensureGuest(page);
+  const gatewayId = requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");
   const workspaces = await api(page, "/api/gateway/workspaces");
-  const workspaceId = workspaces?.data?.active_workspace_id;
-  if (workspaceId !== expectedWorkspaceId) {
-    throw new Error(
-      `Gateway active workspace 不一致: expected=${expectedWorkspaceId}, actual=${workspaceId}`,
-    );
-  }
+  const workspaceId = expectedWorkspaceId;
+  expect(workspaces.data.active_workspace).toEqual({ gateway_id: gatewayId, workspace_id: workspaceId });
+  expect(workspaces.data.items.filter(item => item.gateway_id === gatewayId && item.workspace_id === workspaceId)).toHaveLength(1);
 
   const workspaceHeaders = {
     "Content-Type": "application/json",
-    "X-BoxTeam-Workspace-Id": workspaceId,
+    ...ownerHeaders({ gatewayId, workspaceId }),
   };
   result.phase = "session-create";
-  result.workspaceId = workspaceId;
+  Object.assign(result, { gatewayId, workspaceId });
   const created = await api(page, "/api/v1/sessions", {
     method: "POST",
     headers: workspaceHeaders,
@@ -605,6 +634,7 @@ try {
   if (typeof sessionId !== "string" || !sessionId) {
     throw new Error("创建浏览器工具循环会话缺少 session_id");
   }
+  expect(created.data.workspace_id).toBe(workspaceId);
   const updated = await api(page, `/api/v1/sessions/${sessionId}`, {
     method: "PATCH",
     headers: workspaceHeaders,
@@ -614,8 +644,10 @@ try {
     throw new Error("浏览器工具循环会话没有切换到 primary provider");
   }
   const mainThread = await api(page, `/api/v1/sessions/${sessionId}/main-thread`, { headers: workspaceHeaders });
+  expect(mainThread.data.session_id).toBe(sessionId);
   const threadId = mainThread.data.thread_id;
-  Object.assign(result, { sessionId, threadId, businessWorkspaceId: created.data.workspace_id });
+  const owner = { gatewayId, workspaceId, sessionId, threadId };
+  Object.assign(result, { sessionId, threadId });
   const modelCallIds = await testControl({
     action: "plan_model", session_id: sessionId, thread_id: threadId,
     interactions: JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_MODEL_INTERACTIONS")),
@@ -624,24 +656,24 @@ try {
 
   result.phase = "thread-open";
   await page.reload({ waitUntil: "domcontentloaded" });
-  const sessionButton = page.locator(`button[data-session-id="${sessionId}"]`);
+  await expect(page.getByTestId(`workspace-node-${workspaceSelectionKey(owner)}`)).toBeVisible();
+  const sessionButton = sessionRow(page, owner);
   await sessionButton.waitFor({ state: "visible", timeout: 30_000 });
   await sessionButton.click();
-  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${created.data.workspace_id}"][data-session-id="${sessionId}"][data-thread-id="${threadId}"]`);
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${workspaceId}"][data-session-id="${sessionId}"][data-thread-id="${threadId}"]`);
   await thread.waitFor({ state: "visible", timeout: 30_000 });
   const composer = thread.locator(webSelectors.composer);
   await composer.waitFor({ state: "visible", timeout: 30_000 });
   await waitUntil(
-    async () => traceStreams.some((entry) => entry.session_id === sessionId),
+    async () => traceStreams.some(entry => entry.gatewayId === gatewayId && entry.workspaceId === workspaceId && entry.session_id === sessionId),
     "会话 trace SSE",
   );
   result.phase = "tab-lifecycle";
-  const tabs = await verifyPreviewTabs(page, { routeId: workspaceId,
-    workspaceId: created.data.workspace_id, sessionId, threadId });
+  const tabs = await verifyPreviewTabs(page, owner);
   result.tabs = tabs;
 
   result.phase = "navigation-clipboard-failure";
-  result.clipboardFailure = await verifyClipboardFailure(page, { routeId: workspaceId, sessionId }, composer);
+  result.clipboardFailure = await verifyClipboardFailure(page, owner, composer);
 
   result.phase = "send-message";
   const sendRequestPromise = page.waitForRequest(isSessionMessageRequest, {
@@ -658,7 +690,7 @@ try {
     sendResponsePromise,
   ]);
   const sentPayload = sendRequest.postDataJSON();
-  if (sendRequest.headers()["x-boxteam-workspace-id"] !== workspaceId
+  if (!hasWorkspaceOwner(sendRequest, owner)
     || new URL(sendRequest.url()).pathname !== `/api/v1/sessions/${sessionId}/threads/${threadId}/messages`) {
     throw new Error(`Composer 发送 owner 不一致: ${JSON.stringify(sentPayload)}`);
   }
@@ -713,7 +745,6 @@ try {
   }
 
   const completedToolVisible = await completedTool.isVisible();
-  const owner = { routeId: workspaceId, workspaceId: created.data.workspace_id, sessionId, threadId };
   result.phase = "replay-failure";
   result.replayFailure = await verifyReplayFailure(page, owner, turnId, accepted.message_id, accepted.job_id);
   result.phase = "parallel-threads";
@@ -733,7 +764,7 @@ try {
     modelCallIds,
     composerSendRequest: true,
     sentMessage: sentPayload.message.content,
-    traceSseConnected: traceStreams.some((entry) => entry.session_id === sessionId),
+    traceSseConnected: traceStreams.some(entry => entry.gatewayId === gatewayId && entry.workspaceId === workspaceId && entry.session_id === sessionId),
     messageSseConnected: streamResponses.some((url) => url.includes("/message-stream?")),
     completedToolVisible,
     completedToolText,
