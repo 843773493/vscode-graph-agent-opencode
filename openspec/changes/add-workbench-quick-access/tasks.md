@@ -103,7 +103,7 @@
 
 覆盖规范：Thread 大纲必须复用非文本编辑器导航语义；项目编辑器和视图必须进入原版导航机制。
 
-- [ ] 10.1 为 Thread 注册原 Outline creator，使用 quickPickDataSource、preview／reveal／captureViewState；披露历史覆盖并补取缺页，取消只恢复对应组展示态。
+- [x] 10.1 为 Thread 注册原 Outline creator，使用 quickPickDataSource、preview／reveal／captureViewState；披露历史覆盖并补取缺页，取消只恢复对应组展示态。
 - [x] 10.2 保留文本 `:`／`::`／`@`／`@:` 语义；`#` 及 includeSymbols 仅接实际可限定根的符号服务，未具备时明确未启用，不伪造符号或查全局后过滤。
 - [ ] 10.3 核对 `edt active `／`edt `／`edt mru ` 中 Thread／文件／Diff 的名称、类型、组、dirty 与关闭语义；同目标多组副本仍可准确选择。
 - [ ] 10.4 让 `view ` 发现并聚焦已有会话导航与工作区面板，保留原视图位置和归属；验证文本与 Thread 切换、大纲预览取消和未挂载历史。
@@ -848,3 +848,12 @@
 - 21 项调用合同／184 条断言、23 份实际转换源码的完整类型检查、Ruff、Python 定向类型及 ESM 语法通过。共享正式构建 53.71 秒、退出 0，main SHA256=193d38fc0a54e73a8f7850a1d255d6be514433726e5c62eec68a493639957289，复用 Web 的唯一构建管线。此前 URI／行列、delegate／filesOnly、filter／additionPicks、handleAccept、行内按钮、前缀限制及 quickNavigate 的已有证据与本次回归共同覆盖 7.4；`#`／includeSymbols 的明确未启用边界沿 5.5 证据保持。
 - 初轮脏文件清理超时、无效清理命令、两次类型诊断及过强的 Tab 删除预期均保留原件并分别归因。原 PickerEditorState 仅关闭仍为 transient 的输入；验收核原位置／焦点及草稿，不擅自强关已保留 Tab。清理改用实际已登记的 revertAndCloseActiveEditor，并同时保留原场景和清理错误。未验证 Electron／Windows；Thread Outline 仍由 10.1 跟踪，不借文本符号证据勾选。
 - 完整源码／构建指纹、准确命令、原始输出和退出码：out/tests/temp/file_symbols_20261104/artifacts/verification.json；最终页面原件：out/tests/integration/clients/web/quick_access/test_text_search/runs/run-42c01e1a3add/nodes/node-f4e408bf0b21/artifacts/search-result.json。
+
+
+### 2026-11-04：Thread 原非文本大纲与组内预览（10.1）
+
+- ThreadPane 注册原 Outline creator，`@` 继续使用原非文本 Provider 的过滤、预览与接受；只沿 canonical history owner 分页获取用户标题和 metadata。每页 20 轮，明确已覆盖／未加载、更早页读取与失败重读，不创建符号索引或第二历史缓存。原 Provider 通过唯一 sourceTransform 消费大纲更新，前插保持活动身份，续页动作保留浮层与查询；固定上游字节不变。
+- 临时预览与取消恢复复用原 around／Virtuoso 挂载及锚点调度，只操作发起编辑器组；预览不保存浏览器视图，取消会中止缺页读取并废弃迟到定位，接受才提交原持久展示态。空历史没有虚假滚动位置，错误保留原详细原因。
+- 正式 Workbench、真实 Gateway／后端与 Chromium 已通过产品执行及 fork 创建 23 轮 child 历史：空 Thread、main／child 隔离、20→23 轮明确分页、非法真实 cursor 后重读、未挂载轮次接受、两组隔离、真实滚轮位置恢复及预览零持久写入均通过，pageErrors=[]。仅错误续点场景改写请求的 cursor，由真实后端拒绝；没有替换响应、预写历史或浏览器状态。联合运行的大纲项通过，新增编辑器导航项另有测试驱动失败，未把联合退出 1 表述为全绿。
+- 60 项定向检查／466 条断言、25 份实际转换源码的真实 Workbench 类型检查、Ruff、显式项目解释器的 Pyright、ESM 与 OpenSpec strict 通过。正式构建退出 0／45.59 秒，main SHA256=93cf51d53051731437a1753e58ee9eb8d3edfc44b70dc5da85f0c2c9702dc32f；只改测试后核源码早于构建及全文指纹，复用同一构建。准确命令、指纹、原始失败与退出码：out/tests/temp/thread_outline_20261104/artifacts/verification.json；页面原件：out/tests/integration/clients/web/quick_access/test_thread_outline/runs/run-c114735ae099/nodes/node-8268691f3631/artifacts/thread-outline.json。
+- TODO：长历史产品执行准备仍有增长成本，24 次执行实测 8.29～18.83 秒；保留测量与代码 TODO，后续独立量化，不以手工历史替产品生成关键状态。Electron／Windows 的大纲尚未验收，其余正文和管理任务保持原状态。

@@ -40,6 +40,21 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+test('原非文本大纲前插保持身份，空匹配仍可续页，续页后取消恢复而接受保留位置', async () => {
+  for (const accept of [false, true]) {
+    const result = await exercise('outlineContract', accept);
+    expect(result.retained).toBe('second');
+    expect(result.controlVisibleWithoutMatches).toEqual(['more']);
+    expect(result.continuedWithoutHide).toBe(true);
+    expect(result.labels).toEqual(['first', 'second']);
+    expect(result.reveals).toEqual(accept ? ['more', 'first'] : ['more']);
+    expect(result.restored).toBe(accept ? 0 : 1);
+    expect(result.disposed).toBe(1);
+    expect(result.previews).toEqual(['second', 'cancel:second']);
+    expect(result.busy).toBe(false);
+  }
+});
+
 test('正文跨目标只请求 Gateway，快分支续页不被初始流收尾取消，失败分支独立重试', async () => {
   const result = await exercise('contentBranchContract', 'retry');
   expect(result.requests).toHaveLength(3);

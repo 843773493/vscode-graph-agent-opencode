@@ -58,6 +58,7 @@ interface ContentViewSlotsProps extends Pick<
   | "onViewStateChange"
   | "onViewStateRestoreStatus"
   | "messageNavigation"
+  | "onViewportReady"
 > {
   error: string | null;
   isBootstrapping: boolean;
@@ -175,6 +176,7 @@ export default function ContentViewSlots({
   onLoadNewerMessages,
   onLoadAroundTurn,
   messageNavigation,
+  onViewportReady,
   onLoadTurnDetails,
   onLoadToolDetails,
   onLoadAgentStateMessageRawContent,
@@ -288,6 +290,7 @@ export default function ContentViewSlots({
           onLoadNewerMessages={onLoadNewerMessages}
           onLoadAroundTurn={onLoadAroundTurn}
           messageNavigation={messageNavigation}
+          onViewportReady={onViewportReady}
           onLoadTurnDetails={onLoadTurnDetails}
           onLoadToolDetails={onLoadToolDetails}
           onLoadAgentStateMessageRawContent={onLoadAgentStateMessageRawContent}

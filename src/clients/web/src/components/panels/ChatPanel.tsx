@@ -25,7 +25,7 @@ import ChatTurn from "../chat/turn/ChatTurn";
 import InternalExecutionTranscriptItem from "../chat/InternalExecutionTranscriptItem";
 import ChatTurnErrorBoundary from "../chat/turn/ChatTurnErrorBoundary";
 import { chatTranscriptItems, type ChatTranscriptItem } from "../chat/transcriptItems";
-import { useTurnVirtualScroller } from "../chat/useTurnVirtualScroller";
+import { useTurnVirtualScroller, type TurnViewportController } from "../chat/useTurnVirtualScroller";
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat/turn/types";
 import { MessageSearchLocationContext } from "../chat/messageSearchLocation";
@@ -208,6 +208,7 @@ export default function ChatPanel({
   onViewStateChange,
   onViewStateRestoreStatus,
   messageNavigation,
+  onViewportReady,
 }: {
   apiPort: number;
   workspaceId?: string | null;
@@ -247,6 +248,7 @@ export default function ChatPanel({
   }) => void;
   onViewStateRestoreStatus?: (message: string) => void;
   messageNavigation?: TurnMessageMatchDTO;
+  onViewportReady?: (controller: TurnViewportController | undefined) => void;
 } & ChatTurnHandlers): React.ReactNode {
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
   const [pendingActionRunning, setPendingActionRunning] = React.useState(false);
@@ -295,6 +297,7 @@ export default function ChatPanel({
     onViewStateChange,
     onViewStateRestoreStatus,
     messageNavigation,
+    onViewportReady,
   });
   const sessionBusy = conversations.some(
     (conversation) => isLiveConversationView(conversation)

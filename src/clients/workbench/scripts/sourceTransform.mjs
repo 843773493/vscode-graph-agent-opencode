@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTransform.mjs';
+import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [
@@ -21,6 +22,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/services/configuration/common/configurationCache.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   ...searchEditorSourcePaths,
+  ...outlineSourcePaths,
 ];
 
 function replaceOnce(source, marker, replacement) {
@@ -219,6 +221,7 @@ try {
 }`);
       contents = `import { transferSearchContext } from ${JSON.stringify(join(root, 'src/search/scope.js'))};\n` + contents;
     }
+    contents = transformOutline(root, path, contents, replaceOnce);
     return transformSearchEditor(root, path, contents, replaceOnce);
   };
 }

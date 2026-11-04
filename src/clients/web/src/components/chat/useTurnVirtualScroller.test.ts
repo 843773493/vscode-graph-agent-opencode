@@ -10,6 +10,7 @@ import {
   requestTurnFollowLatestFrame,
   turnFollowOutput,
   useTurnVirtualScroller,
+  type TurnViewportController,
 } from "./useTurnVirtualScroller";
 
 const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -45,6 +46,8 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
   let scopeKey = "workspace/session/thread";
   let viewState: { turn_anchor: string | null; scroll_offset: number; follow_latest: boolean } | null = null;
   let current!: ReturnType<typeof useTurnVirtualScroller>;
+  let viewport: TurnViewportController | undefined;
+  const onViewportReady = (controller: TurnViewportController | undefined) => { viewport = controller; };
   let nextFrame = 0;
   const frames = new Map<number, FrameRequestCallback>();
   const heights = new Map(initial.map((item) => [item.key, 150]));
@@ -103,6 +106,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
       hasNewerMessages: false, hasOlderMessages: false, loadingNewerMessages: false, loadingOlderMessages: false,
       historyLoading: false, viewState, onViewStateChange: (position) => positions.push(position),
       onViewStateRestoreStatus: (message) => statuses.push(message),
+      onViewportReady,
     });
     current.streamRef.current = { scrollToIndex: (location: { index: number | "LAST"; align?: string }) => {
       scrolls.push(location);
@@ -123,7 +127,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
   };
   const settle = () => { flush(); act(() => current.scheduleAnchorAlignment()); flush(); };
   return {
-    state: () => current, scroller, scrolls, positions, statuses, heights, settle, flush,
+    state: () => current, viewport: () => viewport!, scroller, scrolls, positions, statuses, heights, settle, flush,
     update(nextItems = items, nextScopeKey = scopeKey) {
       items = nextItems; scopeKey = nextScopeKey;
       act(() => mounted!.update(React.createElement(Harness)));
@@ -150,6 +154,46 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
 }
 
 describe("Turn 虚拟列表滚动跟随", () => {
+  test("无滚动视口的空历史没有可保存位置", () => {
+    const h = navigationHarness([]);
+    act(() => h.state().bindScroller(null));
+    expect(h.viewport().capture()).toBeUndefined();
+  });
+  test("大纲预览和取消恢复只修改本视口，接受才发布真实定位状态", () => {
+    const h = navigationHarness([turn('first', 1), turn('second', 2), turn('last', 3)]);
+    h.settle();
+    const original = h.viewport().capture()!;
+    act(() => h.viewport().navigate({ turn_anchor: 'first', scroll_offset: 0, follow_latest: false }, true));
+    h.settle();
+    expect(h.state().navigation?.turnId).toBe('first');
+    expect(h.state().navigation?.phase).toBe('located');
+    expect(h.positions).toEqual([]);
+    act(() => h.viewport().navigate(original, true));
+    h.settle();
+    expect(h.viewport().capture()).toEqual(original);
+    expect(h.positions).toEqual([]);
+    act(() => h.state().navigateToTurn('second'));
+    h.settle();
+    expect(h.positions).toEqual([{ turn_anchor: 'second', scroll_offset: 0, follow_latest: false }]);
+  });
+
+  test("取消缺页预览会终止原 around 请求，迟到响应不覆盖恢复位置", async () => {
+    let signal: AbortSignal | undefined;
+    const wait = deferred();
+    const h = navigationHarness([turn('last', 3)], async (_id, requestSignal) => { signal = requestSignal; await wait.promise; });
+    h.settle();
+    const original = h.viewport().capture()!;
+    act(() => h.viewport().navigate({ turn_anchor: 'missing', scroll_offset: 0, follow_latest: false }, true));
+    expect(signal?.aborted).toBe(false);
+    act(() => h.viewport().cancel());
+    expect(signal?.aborted).toBe(true);
+    act(() => h.viewport().navigate(original, true));
+    await act(async () => wait.resolve());
+    h.settle();
+    expect(h.state().navigation).toBeNull();
+    expect(h.viewport().capture()).toEqual(original);
+    expect(h.positions).toEqual([]);
+  });
   test("用户离开底部后终态更新不得重新抢占滚动位置", () => {
     expect(turnFollowOutput(true, true)).toBe("auto");
     expect(turnFollowOutput(false, true)).toBe(false);

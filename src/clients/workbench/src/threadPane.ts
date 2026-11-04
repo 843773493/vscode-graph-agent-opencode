@@ -32,6 +32,9 @@ export class ThreadPane extends EditorPane {
   private toggle!: HTMLButtonElement;
   private conversation?: ChatSurface;
   private current?: ThreadInput;
+  get outlineTarget(): { input: ThreadInput; conversation: ChatSurface } | undefined {
+    return this.current && this.conversation ? { input: this.current, conversation: this.conversation } : undefined;
+  }
 
   constructor(group: IEditorGroup,
     @ITelemetryService telemetry: ITelemetryService,

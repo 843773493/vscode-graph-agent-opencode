@@ -14,6 +14,49 @@ import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 export { contentBranchContract, nameBranchContract, fileBranchContract } from './federated_branches.fixture.mjs';
 
+/** 原非文本 Provider 的分页更新，不替代真实 Thread 页面接线验收。 */
+export async function outlineContract(accept) {
+  const changes = new Emitter(), accepts = new Emitter(), active = new Emitter(), outlineChange = new Emitter();
+  const cancellation = new CancellationTokenSource(), reveals = [], previews = [];
+  const first = { id: 'first' }, second = { id: 'second' }, more = { id: 'more' };
+  let entries = [second, more], restored = 0, disposed = 0;
+  const outline = { onDidChange: outlineChange.event, dispose() { disposed++; },
+    captureViewState: () => ({ dispose() { restored++; } }),
+    preview: entry => { previews.push(entry.id); return { dispose() { previews.push('cancel:' + entry.id); } }; },
+    reveal: entry => { reveals.push(entry.id); if (entry === more) { entries = [first, second]; outlineChange.fire({}); } },
+    config: { quickPickDataSource: { getQuickPickElements: () => entries.map(entry => ({
+      element: entry, label: entry.id, acceptInPlace: entry === more,
+    })) } },
+  };
+  const provider = new GotoSymbolQuickAccessProvider({ activeEditorPane: { getControl() {} }, onDidActiveEditorChange: Event.None },
+    { getValue: () => ({}) }, {}, { canCreateOutline: () => true, createOutline: async () => outline }, {}, {});
+  const picker = { value: '@', items: [], selectedItems: [], activeItems: [], onDidChangeValue: changes.event,
+    onDidChangeActive: active.event, onDidAccept: accepts.event, hide() { this.hidden = true; } };
+  const lifetime = provider.provide(picker, cancellation.token);
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    picker.activeItems = [picker.items[0]];
+    active.fire();
+    // 原候选第二轮的身份在前插后仍保留，而不是按行号切成 first。
+    entries = [first, second, more]; outlineChange.fire({});
+    const retained = picker.activeItems[0].label;
+    picker.value = '@missing'; changes.fire();
+    const controlVisibleWithoutMatches = picker.items.map(item => item.label);
+    picker.selectedItems = [picker.items[0]]; accepts.fire();
+    const continuedWithoutHide = !picker.hidden && picker.selectedItems.length === 0;
+    picker.value = '@'; changes.fire();
+    if (accept) {
+      picker.selectedItems = [picker.items[0]]; accepts.fire();
+    }
+    lifetime.dispose();
+    return { retained, controlVisibleWithoutMatches, continuedWithoutHide, labels: picker.items.map(item => item.label),
+      reveals, previews, restored, disposed, busy: picker.busy };
+  } finally {
+    lifetime.dispose(); cancellation.dispose(true);
+    for (const event of [changes, accepts, active, outlineChange]) event.dispose();
+  }
+}
+
 const owner = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const root = 'boxteam://workspace/workspace-a/resources/files/root';
 const uri = name => workspaceFileUri(owner, root + '/' + name, root);

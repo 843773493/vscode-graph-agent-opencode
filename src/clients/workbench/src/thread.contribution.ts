@@ -7,6 +7,7 @@ import { ThreadPane } from './threadPane.js';
 import { Disposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
 import { IEditorResolverService, RegisteredEditorPriority } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
+import { ThreadOutlineCreator } from './search/threadOutline.js';
 
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
   EditorPaneDescriptor.create(ThreadPane, ThreadPane.ID, 'Thread'), [new SyncDescriptor(ThreadInput), new SyncDescriptor(UnavailableThreadInput)],
@@ -30,3 +31,4 @@ class ThreadEditorContribution extends Disposable {
   }
 }
 registerWorkbenchContribution2('boxteam.threadEditor', ThreadEditorContribution, WorkbenchPhase.BlockRestore);
+registerWorkbenchContribution2('boxteam.threadOutline', ThreadOutlineCreator, WorkbenchPhase.BlockRestore);

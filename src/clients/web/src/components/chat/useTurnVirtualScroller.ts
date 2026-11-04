@@ -13,6 +13,13 @@ import type { TurnMessageMatchDTO } from "../../types/protocol_generated/boxteam
 const SCROLL_POSITION_CHANGE_TOLERANCE_PX = 0.5;
 const NATIVE_SCROLLBAR_HIT_WIDTH_PX = 24;
 
+/** 编辑器组内的临时导航；预览不发布持久视图状态。 */
+export interface TurnViewportController {
+  capture(): TurnViewportPosition | undefined;
+  navigate(position: TurnViewportPosition, preview: boolean): void;
+  cancel(): void;
+}
+
 export function turnFollowOutput(
   followsLatest: boolean,
   isAtBottom: boolean,
@@ -65,6 +72,7 @@ export function useTurnVirtualScroller({
   onViewStateChange,
   onViewStateRestoreStatus,
   messageNavigation,
+  onViewportReady,
 }: {
   items: readonly ChatTranscriptItem[];
   scopeKey: string;
@@ -80,6 +88,7 @@ export function useTurnVirtualScroller({
   onViewStateChange?: (payload: TurnViewportPosition) => void;
   onViewStateRestoreStatus?: (message: string) => void;
   messageNavigation?: TurnMessageMatchDTO;
+  onViewportReady?: (controller: TurnViewportController | undefined) => void;
 }) {
   const streamRef = React.useRef<VirtuosoHandle | null>(null);
   const scrollerRef = React.useRef<HTMLElement | null>(null);
@@ -104,7 +113,9 @@ export function useTurnVirtualScroller({
     async () => undefined,
   );
   const viewStateTimerRef = React.useRef<number | null>(null);
+  const previewRef = React.useRef(false);
   if (virtualIndexRef.current?.scopeKey !== scopeKey) {
+    previewRef.current = false;
     followsLatestRef.current = true;
     userRequestedOlderRef.current = false;
     nativeScrollbarReleaseRef.current = null;
@@ -142,8 +153,39 @@ export function useTurnVirtualScroller({
     items, scopeKey, streamRef, scrollerRef, followsLatestRef,
     setShowJumpToLatest, onLoadAroundTurn, historyLoading,
     messageNavigation,
-    viewState, onViewStateChange, onViewStateRestoreStatus,
+    viewState, onViewStateChange: position => {
+      if (!previewRef.current) onViewStateChange?.(position);
+    }, onViewStateRestoreStatus,
   });
+  React.useEffect(() => { previewRef.current = false; }, [messageNavigation]);
+  const navigateFromUser = React.useCallback((...args: Parameters<typeof navigateToTurn>) => {
+    previewRef.current = false;
+    navigateToTurn(...args);
+  }, [navigateToTurn]);
+  const scrollFromUser = React.useCallback((...args: Parameters<typeof scrollToLatest>) => {
+    previewRef.current = false;
+    scrollToLatest(...args);
+  }, [scrollToLatest]);
+  const captureViewport = React.useCallback((): TurnViewportPosition | undefined => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return undefined;
+    const top = scroller.getBoundingClientRect().top;
+    const anchor = Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
+      .find(item => item.getBoundingClientRect().bottom > top);
+    return { turn_anchor: anchor?.dataset.turnId ?? null,
+      scroll_offset: anchor ? Math.max(0, top - anchor.getBoundingClientRect().top) : Math.max(0, scroller.scrollTop),
+      follow_latest: followsLatestRef.current };
+  }, []);
+  React.useLayoutEffect(() => {
+    if (historyLoading) return;
+    onViewportReady?.({ capture: captureViewport,
+      navigate(position, preview) {
+        previewRef.current = preview;
+        if (position.follow_latest) scrollToLatest();
+        else if (position.turn_anchor) navigateToTurn(position.turn_anchor, position.scroll_offset);
+      }, cancel: () => cancelAnchor(true) });
+    return () => onViewportReady?.(undefined);
+  }, [cancelAnchor, captureViewport, historyLoading, navigateToTurn, onViewportReady, scrollToLatest]);
   const followOutput = React.useCallback(
     (isAtBottom: boolean) => turnFollowOutput(
       followsLatestRef.current,
@@ -168,6 +210,7 @@ export function useTurnVirtualScroller({
     if (!scroller) return;
     scheduleAnchorAlignment();
     const handleUserWheel = (event: WheelEvent) => {
+      previewRef.current = false;
       cancelAnchor();
       if (event.deltaY >= 0) return;
       userRequestedOlderRef.current = true;
@@ -210,32 +253,18 @@ export function useTurnVirtualScroller({
       ) return;
       viewStateTimerRef.current = window.setTimeout(() => {
         viewStateTimerRef.current = null;
-        if (virtualIndexRef.current?.scopeKey !== scopeKey || anchorRef.current) return;
-        const scrollerTop = scroller.getBoundingClientRect().top;
-        let anchor: HTMLElement | null = null;
-        let anchorTop: number | null = null;
-        for (const item of scroller.querySelectorAll<HTMLElement>("[data-turn-id]")) {
-          const bounds = item.getBoundingClientRect();
-          if (bounds.bottom <= scrollerTop) continue;
-          anchor = item;
-          anchorTop = bounds.top;
-          break;
-        }
-        onViewStateChange({
-          turn_anchor: anchor?.dataset.turnId ?? null,
-          scroll_offset: anchorTop === null
-            ? Math.max(0, scroller.scrollTop)
-            : Math.max(0, scrollerTop - anchorTop),
-          follow_latest: followsLatestRef.current,
-        });
+        if (virtualIndexRef.current?.scopeKey !== scopeKey || anchorRef.current || previewRef.current) return;
+        const position = captureViewport();
+        if (position) onViewStateChange(position);
       }, 250);
     };
     scroller.ontouchstart = () => {
+      previewRef.current = false;
       cancelAnchor();
       followsLatestRef.current = false;
       setShowJumpToLatest(true);
     };
-  }, [anchorRef, cancelAnchor, onViewStateChange, onViewStateRestoreStatus, scheduleAnchorAlignment, scopeKey]);
+  }, [anchorRef, cancelAnchor, captureViewport, onViewStateChange, onViewStateRestoreStatus, scheduleAnchorAlignment, scopeKey]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -251,6 +280,7 @@ export function useTurnVirtualScroller({
         return;
       }
       userRequestedOlderRef.current = true;
+      previewRef.current = false;
       if (nativeScrollbarDragRef.current) return;
       nativeScrollbarWasFollowingRef.current = followsLatestRef.current;
       nativeScrollbarReleaseRef.current = null;
@@ -421,12 +451,12 @@ export function useTurnVirtualScroller({
     handleAtBottomChange,
     handleEndReached,
     handleStartReached,
-    navigateToTurn,
+    navigateToTurn: navigateFromUser,
     locatedMessage,
     cancelMessageNavigation: closeMessageNavigation,
     navigation,
     scheduleAnchorAlignment,
-    scrollToLatest,
+    scrollToLatest: scrollFromUser,
     showJumpToLatest,
     streamRef,
   };

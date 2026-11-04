@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTraceNavigation } from '../../../web/src/hooks/runtime/useTraceNavigation.js';
 import { useRequestLogNavigation } from '../../../web/src/hooks/runtime/useRequestLogNavigation.js';
+import type { TurnViewportController } from '../../../web/src/components/chat/useTurnVirtualScroller.js';
+import type { TurnViewportPosition } from '../../../web/src/components/chat/useTurnAnchorNavigation.js';
+import { toDisposable, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import ContentViewSlots from '../../../web/src/components/shell/ContentViewSlots.js';
 import PendingQueueBar from '../../../web/src/components/chat/pending/PendingQueueBar.js';
 import Composer from '../../../web/src/components/composer/Composer.js';
@@ -38,12 +41,16 @@ import type { InternalDisplayProvenance } from '../../../web/src/types/backend.j
 import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
 type SearchNavigation = { kind: 'message'; match: TurnMessageMatchDTO } | { kind: 'request'; match: LLMRequestLogMatchDTO } | { kind: 'trace'; match: TraceMatchDTO };
+interface ThreadViewportController extends TurnViewportController {
+  capturePresentation(): () => void;
+}
 
-function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation }: {
+function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady }: {
   input: ThreadInput; seed: ThreadSessionSeed; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void;
   onFileOpenMenu: FileOpenMenuHandler;
   onError: (message: string) => void;
   navigation?: SearchNavigation;
+  onViewportReady: (controller: ThreadViewportController | undefined) => void;
 }) {
   const owner = input.owner;
   const messageNavigation = navigation?.kind === 'message' ? navigation.match : undefined;
@@ -66,7 +73,22 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
   const [dismissedTrace, setDismissedTrace] = useState<TraceMatchDTO>();
   const selectedTrace = traceNavigation !== dismissedTrace ? traceNavigation : undefined;
   const traceLocation = useTraceNavigation(0, owner.routeId, owner.sessionId, owner.threadId, selectedTrace);
-  const contentView = traceLocation ? 'events' : requestNavigation ? 'requests' : state.contentView;
+  const [outlinePreview, setOutlinePreview] = useState(false);
+  const contentView = outlinePreview ? 'default' : traceLocation ? 'events' : requestNavigation ? 'requests' : state.contentView;
+  const connectViewport = useCallback((controller: TurnViewportController | undefined) => {
+    onViewportReady(controller ? { ...controller,
+      capturePresentation: () => () => setOutlinePreview(outlinePreview),
+      navigate(position, preview) {
+        if (preview) setOutlinePreview(true);
+        else {
+          setDismissedRequest(requestLogNavigation); setDismissedTrace(traceNavigation);
+          if (state.contentView !== 'default') void content.switchContentView('default').catch((error: unknown) => onError(String(error)));
+          setOutlinePreview(false);
+        }
+        controller.navigate(position, preview);
+      },
+    } : undefined);
+  }, [content.switchContentView, onError, onViewportReady, outlinePreview, requestLogNavigation, state.contentView, traceNavigation]);
   const fork = useSessionForkDialog({ apiPort: 0,
     sessionsByWorkspace: new Map([[owner.routeId, state.currentSession ? [state.currentSession] : []]]),
     forkSessionContext: runtime.lifecycle.forkSessionContext,
@@ -125,6 +147,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
         gatewayUserViewStates={state.gatewayUserViewStates}
         onLoadAroundTurn={history.loadAroundTurn} onLoadNewerMessages={history.loadNewerTurns} onLoadOlderMessages={history.loadOlderTurns}
         messageNavigation={messageNavigation}
+        onViewportReady={connectViewport}
         onViewStateChange={runtime.views.saveSessionViewState} onViewStateRestoreStatus={runtime.setStatus}
         onLoadTurnDetails={history.loadTurnDetails}
         onLoadToolDetails={(turnId, toolCallId) => history.loadTurnDetails([turnId], `tool:${turnId}:${toolCallId}`, false, ['tool_call', 'tool_result'], [toolCallId])}
@@ -166,7 +189,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
   </ComposerContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation }: { input: ThreadInput; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation }) {
+function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady }: { input: ThreadInput; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -211,7 +234,7 @@ function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, o
   }, [owner, attempt]);
   const retry = () => setAttempt(value => value + 1);
   return <>{cacheError ? <p role="alert">{cacheError}</p> : null}
-    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} onTheme={onTheme} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} />
+    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} onTheme={onTheme} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} />
       : cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? `会话同步失败：${error}` : null} onRetry={retry} />
         : error ? <p role="alert">会话初始化失败：{error}</p> : <p role="status">正在恢复会话…</p>}</>;
 }
@@ -220,6 +243,8 @@ export class ChatSurface {
   private readonly surface: ReactSurface;
   private active: boolean;
   private navigation?: SearchNavigation;
+  private viewport?: ThreadViewportController;
+  private previewGeneration = 0;
   constructor(container: HTMLElement, private readonly input: ThreadInput, private readonly editors: IEditorService, visible: boolean,
     private readonly onPresentationChange: () => void, private readonly onFileOpenMenu: FileOpenMenuHandler,
     private readonly notifications: INotificationService) {
@@ -231,10 +256,32 @@ export class ChatSurface {
   revealRequestLog(match: LLMRequestLogMatchDTO): void { this.navigation = { kind: 'request', match: { ...match } }; this.render(); }
   revealTrace(match: TraceMatchDTO): void { this.navigation = { kind: 'trace', match: { ...match } }; this.render(); }
   setVisible(visible: boolean): void { this.active = visible; this.render(); }
+  captureViewState(): IDisposable {
+    const position = this.requireViewport().capture();
+    const restore = this.requireViewport().capturePresentation();
+    return toDisposable(() => {
+      if (!this.viewport) return;
+      // 原 Provider 随后才释放旧预览；恢复属于新导航，不能被旧释放动作取消。
+      ++this.previewGeneration;
+      if (position) this.viewport.navigate(position, true);
+      restore();
+    });
+  }
+  revealTurn(turnId: string, preview = false): IDisposable {
+    const generation = ++this.previewGeneration;
+    const position: TurnViewportPosition = { turn_anchor: turnId, scroll_offset: 0, follow_latest: false };
+    this.requireViewport().navigate(position, preview);
+    return toDisposable(() => { if (generation === this.previewGeneration) this.viewport?.cancel(); });
+  }
+  private requireViewport(): ThreadViewportController {
+    if (!this.viewport) throw new Error('Thread 历史视口尚未就绪，请稍后重试');
+    return this.viewport;
+  }
+  private readonly onViewportReady = (controller: ThreadViewportController | undefined) => { this.viewport = controller; };
   focus(): void { this.surface.focus('textarea'); }
-  dispose(): void { this.surface.dispose(); }
+  dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.surface.dispose(); }
   private readonly onUpdate = () => { this.onPresentationChange(); this.render(); };
   private readonly onTheme = (theme: GatewayResolvedThemeConfig) => this.surface.applyTheme(theme, this.notifications);
   private readonly onError = (message: string) => this.notifications.error(`${this.input.owner.title} (${this.input.owner.sessionId}/${this.input.owner.threadId})：${message}`);
-  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} active={this.active} onTheme={this.onTheme} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} />); }
+  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} active={this.active} onTheme={this.onTheme} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} />); }
 }
