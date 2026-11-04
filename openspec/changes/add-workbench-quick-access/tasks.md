@@ -798,3 +798,10 @@
 - 真实 Provider／resolver 的计数装具与原文件引用、查询转换共 17 项／181 条断言通过，覆盖并发共享、最后引用释放、失败重试、旧版本不改投、owner 隔离及创建／删除的空侧。装具只替换路由、HTTP 与底层文本存取，不替代真实页面证明。
 - 正式 Workbench、真实 Gateway／后端与 Chromium 验收 1 passed／80.21 秒：两轮真实执行生成创建／修改历史，原会话资源打开 Diff，前后侧一次读取、分屏零新增读取、只读与原完整补丁、旧引用归一均通过；产品正常 Reload Window 后 Diff 与来源恢复，最后关闭再打开重新读取，pageErrors 为空。统一模型协议使用 model_stream，未预写历史、浏览器存储或 HTTP 响应。浏览器强制导航未保证原异步存储提交，保留失败原件，不据此承诺异常退出恢复。
 - 22 份实际转换源码的完整类型检查、Ruff、ESM、OpenSpec strict 及差异检查通过；首轮正式构建通过／38.82 秒，之后仅改测试定位／等待，每轮核产品及 main 指纹后复用，未重复构建。环境缺少 `uv run pyright` 命令，保留退出 2；本批未改 Python 产品源码。完整命令、源码与构建指纹、失败归因及原始结果：`out/tests/temp/change_documents_20261104/artifacts/verification.json`；最终页面原件：`out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-c5e21a6912e0/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Electron 及其余历史／身份恢复尚未验收，18.2、13.2 保持未勾选。
+
+### 2026-11-04：原配置缓存保存与删除顺序（18.4 部分）
+
+- 真实 ConfigurationCache＋FileService 复现三种错误：首个目录准备延迟导致旧保存覆盖后发保存、保存后删除被迟到写入复活，以及目录失败却返回保存成功。参考仓库和固定上游的实现一致；唯一 sourceTransform 将目录准备与正文写入一起放入原条目队列，删除重复 helper，沿 FileService 原幂等递归建目录及失败传播，不建第二缓存或全局队列。
+- 真实 FolderConfiguration 经唯一文件投影验证非本地配置读取、更新、删除后空设置及另一 Gateway 同路径的独立 key／正文；type／key／cacheHome 隔离、失败重试和原转换／查询回归合计 15 项／162 断言通过。本地 workbench 设置仍沿原 needsCaching 排除。计数装具只延迟／拒绝目录准备，内存 Provider 不代替 IndexedDB 验收；消费者把缺失设置缓存为 `{}` 的既有合同保持。
+- 正式 Workbench、真实 Gateway／后端与 Chromium 的元数据页面通过（1 passed／97.57 秒）：原设置编辑器连续三轮保存后直接刷新，正文及实际字体均恢复，受控关闭期间日志写入仍可提交，页面错误为空，无预写存储。该页面的模型回放未发生模型调用。23 份实际转换源码的完整类型检查、ESM、OpenSpec strict 和差异检查通过；同批正式构建通过／40.95 秒，复用 Web 的唯一构建管线。
+- 准确命令、源码与构建指纹、旧产品失败及测试归因：`out/tests/temp/configuration_cache_20261104/artifacts/verification.json`；最终页面原件：`out/tests/integration/clients/web/test_workspace_metadata_bootstrap/runs/run-b028fb3526ef/nodes/node-8954dc22de03/artifacts/workspace-metadata-browser.json`。本批未重跑 Vite 变体、打包 Electron、真实 profile 切换及全部配置诊断／关闭竞态，18.4 保持未勾选。

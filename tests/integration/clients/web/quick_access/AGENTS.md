@@ -26,4 +26,6 @@
 
 `change_documents.test.mjs` 使用真实只读 Provider、TextModelResolverService 和 TextResourceEditorModel，仅替换路由／HTTP及底层文本存取；核并发、版本、失败重试和最后引用释放。`test_change_documents.py` 复用 model_stream 通过真实执行创建更改，正式 Gateway 页面从会话资源打开原 Diff，验证分屏、完整补丁、旧引用归一及来源／Diff 刷新恢复，不预写历史或浏览器存储。
 
+`configuration_cache.test.mjs` 使用真实 ConfigurationCache、FolderConfiguration、FileService 和内存 Provider，经唯一文件投影核对非本地配置更新／删除；仅在目录准备边界延迟或拒绝操作，验证单条目顺序、失败传播与独立 key。该检查不替代真实 IndexedDB、页面刷新或打包 Electron；本地设置保存／刷新由 `test_workspace_metadata_bootstrap.py` 的真实入口验证。
+
 `test_request_content` 经真实消息执行生成请求日志，原页面定位后再核损坏／异查询／catalog变化的续点拒绝；正式Python搜索SDK消费同一Gateway联邦诊断，不在驱动内复制SSE解码。首次选择核活动稳定身份后走真实Enter，后续保留鼠标选择和精确位置断言。

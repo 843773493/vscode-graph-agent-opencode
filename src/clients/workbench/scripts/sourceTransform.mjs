@@ -18,6 +18,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
   'src/vs/workbench/services/textfile/common/textEditorService.ts',
+  'src/vs/workbench/services/configuration/common/configurationCache.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   ...searchEditorSourcePaths,
 ];
@@ -89,6 +90,35 @@ const model = reference.object;`);
       contents = replaceOnce(contents, 'const textResourceEditorInput = input as IUntypedFileEditorInput;',
         'const textResourceEditorInput = normalizeReadonlyInput(input as IUntypedFileEditorInput);');
       contents = `import { normalizeReadonlyInput } from ${JSON.stringify(join(root, 'src/readonlyDocuments.js'))};\n` + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/configuration/common/configurationCache.ts')) {
+      const save = `\tasync save(content: string): Promise<void> {
+\t\tconst created = await this.createCachedFolder();
+\t\tif (created) {
+\t\t\tawait this.queue.queue(async () => {
+\t\t\t\tawait this.fileService.writeFile(this.cachedConfigurationFileResource, VSBuffer.fromString(content));
+\t\t\t});
+\t\t}
+\t}`;
+      // 目录准备和写入共用原条目队列，避免迟到保存越过更新／删除；FileService 已负责幂等递归建目录。
+      contents = replaceOnce(contents, save, `\tasync save(content: string): Promise<void> {
+\t\tawait this.queue.queue(async () => {
+\t\t\tawait this.fileService.createFolder(this.cachedConfigurationFolderResource);
+\t\t\tawait this.fileService.writeFile(this.cachedConfigurationFileResource, VSBuffer.fromString(content));
+\t\t});
+\t}`);
+      const createFolder = `\n\tprivate async createCachedFolder(): Promise<boolean> {
+\t\tif (await this.fileService.exists(this.cachedConfigurationFolderResource)) {
+\t\t\treturn true;
+\t\t}
+\t\ttry {
+\t\t\tawait this.fileService.createFolder(this.cachedConfigurationFolderResource);
+\t\t\treturn true;
+\t\t} catch (error) {
+\t\t\treturn false;
+\t\t}
+\t}\n`;
+      contents = replaceOnce(contents, createFolder, '');
     }
     if (path === join(upstream, 'src/vs/workbench/services/search/common/queryBuilder.ts')) {
       const commonQuery = 'private commonQuery(folderResources: (IWorkspaceFolderData | URI)[] = [], options: ICommonQueryBuilderOptions = {}): ICommonQueryProps<uri> {';
