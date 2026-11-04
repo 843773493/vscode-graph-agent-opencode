@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from asyncio import timeout
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 
 OPERATION_CLOSE_WAIT_SECONDS = 30.0
 OPERATION_ADMISSION_WAIT_SECONDS = 30.0
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -101,6 +103,7 @@ class ResourceOperations:
     def __init__(
         self, owner: WorkspaceResourceOwner, thread: ThreadRef,
         holder_id: str, operation_id: str, created_by_turn_id: str | None,
+        *, admission: AsyncExitStack,
     ) -> None:
         if not holder_id or not operation_id:
             raise ValueError("外部资源 operation 缺少真实 holder 或 operation identity")
@@ -112,6 +115,11 @@ class ResourceOperations:
         self._lease_refs: dict[str, str] = {}
         self._pending_resources: set[str] = set()
         self._closed = False
+        self._admission = admission.pop_all()
+        self._exited = False
+        self._close_task: asyncio.Task[list[BaseException | None]] | None = None
+        self._close_tasks: dict[str, asyncio.Task[None]] = {}
+        self._close_started: set[str] = set()
 
     async def __aenter__(self) -> Self:
         self._assert_open()
@@ -121,14 +129,19 @@ class ResourceOperations:
         self, _error_type: type[BaseException] | None,
         error: BaseException | None, _traceback: TracebackType | None,
     ) -> None:
-        if error is None:
-            # 正常退出仍可首次取消；close负责排空原写入并传播取消。
-            await self.close()
-        else:
-            try:
-                await run_cleanup_shielded(self.close)
-            except BaseException as failure:
-                raise error from failure
+        try:
+            if error is None:
+                await self.close()
+            else:
+                try:
+                    await run_cleanup_shielded(self.close)
+                except BaseException as failure:
+                    raise error from failure
+        finally:
+            self._exited = True
+            # 观察已结束仍不能让 Session 删除越过原写盘；原 batch 接管同一 holder。
+            if self._close_task is None or self._close_task.done():
+                await self._admission.aclose()
 
     @asynccontextmanager
     async def _resource(self, resource_id: str) -> AsyncIterator[OwnedResourceRecord]:
@@ -192,9 +205,10 @@ class ResourceOperations:
             if not already_pending:
                 self._pending_resources.remove(record.resource_id)
 
-    async def _release(self, resource_id: str, lock: asyncio.Lock) -> None:
+    async def _release(self, resource_id: str, lock: asyncio.Lock, started: set[str]) -> None:
         # 首条intent尚未发布时也等待创建者登记的原锁，不要求已有业务记录。
         async with lock:
+            started.add(resource_id)
             lease_id = self._lease_refs.get(resource_id)
             if lease_id is not None:
                 def release() -> None:
@@ -204,36 +218,69 @@ class ResourceOperations:
 
                 await run_sync_shielded(release)
 
+    async def _settle_close(self, tasks: dict[str, asyncio.Task[None]]) -> list[BaseException | None]:
+        try:
+            return await asyncio.gather(*tasks.values(), return_exceptions=True)
+        finally:
+            if self._exited:
+                await self._admission.aclose()
+
+    def _observe_close(self, batch: asyncio.Task[list[BaseException | None]]) -> None:
+        # 观察者可能已因到期或取消离开，迟到失败仍须保留原异常诊断。
+        if batch.cancelled():
+            return
+        error = batch.exception()
+        errors = [error] if error is not None else batch.result()
+        for failure in errors:
+            if failure is not None and not isinstance(failure, asyncio.CancelledError):
+                logger.error("外部资源 operation 原关闭批次失败: operation_id=%s holder_id=%s",
+                             self._operation_id, self._holder_id,
+                             exc_info=(type(failure), failure, failure.__traceback__))
+
     async def close(self) -> None:
         self._closed = True
-        # 全批只取一次预算；取消只排空本次锁等待，原引用保留供同operation重试。
-        # TODO(5.4)：worker 排队及写盘须结算，预算不能抢占原生 I/O；外部终态仍须 owner 核实。
+        # 重叠观察复用唯一原 batch，实际结算后才可显式重试未释放项。
+        # TODO(5.4)：本预算只限制观察，不能抢占原生 I/O 或核实整个 operation/shutdown 终止。
         budget = asyncio.timeout(OPERATION_CLOSE_WAIT_SECONDS)
-        resources = dict.fromkeys((*self._lease_refs, *sorted(self._pending_resources)))
-        # 在让出事件循环前冻结原锁；未发布intent失败后会删除其锁登记。
-        tasks = [asyncio.create_task(self._release(resource_id, self._owner._resource_locks[resource_id]))
-                 for resource_id in resources]
-        batch = asyncio.gather(*tasks, return_exceptions=True)
-
-        async def settle() -> None:
-            await batch
+        if self._close_task is None or self._close_task.done():
+            resources = dict.fromkeys((*self._lease_refs, *sorted(self._pending_resources)))
+            # 在让出事件循环前冻结原锁；未发布intent失败后会删除其锁登记。
+            self._close_started = set()
+            self._close_tasks = {
+                resource_id: asyncio.create_task(self._release(
+                    resource_id, self._owner._resource_locks[resource_id], self._close_started,
+                )) for resource_id in resources
+            }
+            self._close_task = asyncio.create_task(self._settle_close(self._close_tasks))
+            self._close_task.add_done_callback(self._observe_close)
+        batch, tasks, started = self._close_task, self._close_tasks, self._close_started
 
         try:
             async with budget:
-                try:
-                    results = await asyncio.shield(batch)
-                except asyncio.CancelledError:
-                    # 先取得原取消，再排空本批；迟到写盘失败不能让 gather 丢失原取消消息。
-                    for task in tasks:
-                        task.cancel()
-                    await run_cleanup_shielded(settle)
-                    raise
-            errors = [result for result in results if isinstance(result, BaseException)]
+                results = await asyncio.shield(batch)
+            errors = [result for result in results
+                      if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)]
+            if any(task.cancelled() and resource_id not in started for resource_id, task in tasks.items()):
+                errors.append(TimeoutError(
+                    "外部资源 operation 原关闭批次锁等待已中断；保留未释放占用: "
+                    f"operation_id={self._operation_id}, holder_id={self._holder_id}, "
+                    f"resource_ids={','.join(self._lease_refs)}"
+                ))
         except (TimeoutError, asyncio.CancelledError) as failure:
             if isinstance(failure, TimeoutError) and not budget.expired():
                 raise
-            # gather已排空取消；到期或调用方取消都保留此前返回的原错误。
-            errors = [error for task in tasks if not task.cancelled() and (error := task.exception()) is not None]
+            waiting = [task for resource_id, task in tasks.items()
+                       if resource_id not in started and not task.done()]
+            for task in waiting:
+                task.cancel()
+
+            async def settle_waiters() -> None:
+                await asyncio.gather(*waiting, return_exceptions=True)
+
+            # 这里只排空 asyncio 锁等待，绝不取消或等待已取得锁的原 worker。
+            await run_cleanup_shielded(settle_waiters)
+            errors = [error for task in tasks.values()
+                      if task.done() and not task.cancelled() and (error := task.exception()) is not None]
             if isinstance(failure, asyncio.CancelledError):
                 if errors:
                     raise failure from BaseExceptionGroup("外部资源 operation 关闭失败", errors)

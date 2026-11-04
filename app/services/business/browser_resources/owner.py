@@ -61,11 +61,12 @@ class BrowserResourceOwner(WorkspaceResourceOwner):
         operation_id: str, created_by_turn_id: str | None = None,
     ) -> AsyncIterator[BrowserOperations]:
         await self.recover(())
-        async with (
-            self.admit_thread(session_id, thread_id) as ref,
-            BrowserOperations(self, ref, holder_id, operation_id, created_by_turn_id) as operations,
-        ):
-            yield operations
+        async with AsyncExitStack() as admission:
+            ref = await admission.enter_async_context(self.admit_thread(session_id, thread_id))
+            async with BrowserOperations(
+                self, ref, holder_id, operation_id, created_by_turn_id, admission=admission,
+            ) as operations:
+                yield operations
 
     async def perform(
         self, resource_id: str, *, action: BrowserAction, payload: ResourceSnapshot,

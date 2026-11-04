@@ -1013,3 +1013,9 @@ Web 定向 `BOXTEAM_E2E_SECTION8_FOCUS=copy_missing_attachment` 通过真实 Gat
 
 - 原资源登记和committed fork占用结算各在一个受保护worker内顺序遍历，移除逐资源重复排队；原准备锁、账本writer、部分提交、取消结算及迟到失败链不变，不合并网络同步或新增账本。44项冷恢复／取消单测及真实PTY／Chromium／HTTP重试矩阵4项通过，Ruff、compileall、生产Pyright零诊断与规范严格校验通过。
 - 同负载每领域36个资源、每版3次：冷准备worker调度74→4，完整恢复110→40；准备中位数Terminal约30→14ms、Browser约31→13ms，写盘次数及字节不变。完整恢复中位数约186→186ms、193→195ms，未证明全链路加速；该测量使用真实领域owner和替身transport。准确命令、源码指纹、原始结果及作者结构核对见`out/tests/temp/resource_recovery_batch_20261102/artifacts/verification.json`。全部测试有进程外期限／4GiB，产品集成使用原独占闸门；不代Gateway／Web、Windows或进程硬重启。5.2／5.4及21/23保持未完成，quick-access继续暂停。
+
+### 2026-11-04：5.4 原关闭批次的有界观察与 Thread 占用保留
+
+- Terminal／Browser 共享 operation 的关闭观察复用唯一原 batch，截止或取消只撤销尚未取得资源锁的等待；已经取得锁的原写盘继续结算，保留精确 lease、原锁及原 Thread holder。两个正式 `owner.operation` 一次迁齐准入栈移交，重叠关闭不重发释放，迟到成功／失败后同一 operation 可精确重试；未核实终态不签停止回执、不新增占用账本。
+- 定向 50 passed／6.88s，含真实原生写盘屏障、线程池排队、迟到失败和正式 owner 的独占 holder 阻断；Ruff 与编译退出 0。Pyright 退出 1，仅余修改前同样存在的 Terminal `create_terminal` 属性诊断，基线及结果原件保留。扩大回归在 90 秒保护下退出 124，观察到 1078 个通过和 1 个未归因 F；该 F 的最小运行通过，未完成的后 116 项补验通过，不能据此声称整组全绿。准确命令、指纹及原始结果位于 `out/tests/temp/attachment_close_sol_20261104/artifacts/verification.json`。
+- 使用真实 50ms 缩短观察预算验证，不冒充实际 30 秒、原生 I/O 可抢占或完整 shutdown 有硬期限。未验证完整 Session 删除、真实 HTTP／PTY／Chromium、Backend 退出、硬重启或 Windows；5.2／5.4 及团队产品功能继续 TODO。

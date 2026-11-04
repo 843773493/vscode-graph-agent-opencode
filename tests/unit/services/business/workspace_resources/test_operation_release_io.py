@@ -3,24 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event, get_ident
+from time import monotonic
 
 import pytest
 
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.services.business.browser_resources.operations import BrowserOperations
 from app.services.business.terminal_resources.operations import TerminalOperations
+from app.services.business.workspace_resources import operations as resource_operations
 from app.services.infrastructure.external_resource_leases import ResourceLease
 from tests.support.resource_owners.browser import BrowserOwnerFixture
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
-from tests.unit.services.business.test_resource_operation_close_deadline import (
-    advance_clock as advance_clock,  # noqa: PLC0414
-)
 from tests.unit.services.business.test_resource_operation_close_deadline import (
     bundle as bundle,  # noqa: PLC0414
 )
@@ -172,10 +171,11 @@ async def test_operation_release_keeps_loop_responsive_until_native_commit(
 
 @pytest.mark.parametrize("interruption", ["cancel", "deadline"])
 @pytest.mark.parametrize("write_fails", [False, True])
-async def test_interrupted_release_settles_original_writer_before_unlocking(
+async def test_interrupted_close_observes_boundedly_and_reuses_original_writer(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture,
     leased_operation: LeasedOperation,
-    release_write: ReleaseWrite, advance_clock: Callable[[float], None],
+    release_write: ReleaseWrite, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     interruption: str, write_fails: bool,
 ) -> None:
     operation, rid, lease = leased_operation
@@ -184,37 +184,44 @@ async def test_interrupted_release_settles_original_writer_before_unlocking(
     before = path.read_bytes()
     native = OSError(28, "取消期间原 lease 写盘失败", str(path))
     release_write.failure = native if write_fails else None
+    monkeypatch.setattr(resource_operations, "OPERATION_CLOSE_WAIT_SECONDS", 0.05)
+    began = monotonic()
     closing = asyncio.create_task(operation.close())
+    observing: asyncio.Task[None] | None = None
     try:
         await asyncio.wait_for(release_write.entered.wait(), 2)
         assert not closing.done(), "原生写盘不能阻塞取消与期限观察"
         if interruption == "cancel":
             closing.cancel("原 operation 取消")
-        else:
-            advance_clock(31)
-        for _ in range(5):
             await asyncio.sleep(0)
-        if interruption == "cancel":
             closing.cancel("再次取消不能遗弃原 writer")
-            await asyncio.sleep(0)
-        assert not closing.done() and owner._resource_lock(rid).locked()
+        expected = asyncio.CancelledError if interruption == "cancel" else TimeoutError
+        done, _ = await asyncio.wait((closing,), timeout=1)
+        assert closing in done, "原生写盘未结束时，本次观察不能继续等待原 batch"
+        with pytest.raises(expected) as interrupted:
+            await closing
+        assert monotonic() - began < 1, "原生写盘尚未放行，本次关闭观察必须有界返回"
+        assert (interrupted.value.args == ("原 operation 取消",) if interruption == "cancel"
+                else "总截止时间" in str(interrupted.value))
+        assert interrupted.value.__cause__ is None
+        batch, tasks = operation._close_task, operation._close_tasks
+        assert batch is not None and not batch.done() and not batch.cancelled()
+        assert owner._resource_lock(rid).locked()
         assert path.read_bytes() == before and operation._lease_refs == {rid: lease.lease_id}
         assert bundle.leases.get_lease(lease.lease_id) == lease
+        assert type(bundle.leases)(state_path=path).get_lease(lease.lease_id) == lease
+        observing = asyncio.create_task(operation.close())
+        await asyncio.sleep(0)
+        assert operation._close_task is batch and operation._close_tasks is tasks
+        assert len(release_write.threads) == 1
         release_write.release.set()
-        if interruption == "cancel":
-            with pytest.raises(asyncio.CancelledError, match="原 operation 取消") as cancelled:
-                await closing
-            errors = cancelled.value.__cause__.exceptions if isinstance(cancelled.value.__cause__, BaseExceptionGroup) else ()
-            assert bool(errors) is write_fails
-        else:
-            with pytest.raises(ExceptionGroup if write_fails else TimeoutError) as expired:
-                await closing
-            errors = expired.value.exceptions[:-1] if isinstance(expired.value, ExceptionGroup) else ()
-            timeout = expired.value.exceptions[-1] if isinstance(expired.value, ExceptionGroup) else expired.value
-            assert isinstance(timeout, TimeoutError) and "总截止时间" in str(timeout)
         if write_fails:
-            assert len(errors) == 1 and isinstance(errors[0], OSError)
-            assert errors[0].__cause__ is native
+            with pytest.raises(OSError) as failed:
+                await observing
+            assert failed.value.__cause__ is native
+            assert any(record.exc_info and record.exc_info[1] is failed.value for record in caplog.records)
+        else:
+            await observing
         assert operation._lease_refs == ({rid: lease.lease_id} if write_fails else {})
         assert not owner._resource_lock(rid).locked()
         saved = type(bundle.leases)(state_path=path).get_lease(lease.lease_id)
@@ -228,7 +235,7 @@ async def test_interrupted_release_settles_original_writer_before_unlocking(
         assert bundle.transport.creates == 1 and bundle.transport.deleted == []
     finally:
         release_write.release.set()
-        await asyncio.gather(closing, return_exceptions=True)
+        await asyncio.gather(closing, *(() if observing is None else (observing,)), return_exceptions=True)
 
 
 async def test_release_queue_cancellation_keeps_original_lock_and_lease(
@@ -259,16 +266,20 @@ async def test_release_queue_cancellation_keeps_original_lock_and_lease(
             closing.cancel("原线程池排队取消")
             await asyncio.sleep(0)
             closing.cancel("排队再次取消")
-            await asyncio.sleep(0)
-            assert not closing.done() and owner._resource_lock(rid).locked()
+            done, _ = await asyncio.wait((closing,), timeout=1)
+            assert closing in done
+            with pytest.raises(asyncio.CancelledError, match="原线程池排队取消"):
+                await closing
+            batch = operation._close_task
+            assert batch is not None and not batch.done() and not batch.cancelled()
+            assert owner._resource_lock(rid).locked()
             assert release_write.threads == [] and path.read_bytes() == before
             assert bundle.leases.get_lease(lease.lease_id) == lease
             free_worker.set()
             await asyncio.wait_for(release_write.entered.wait(), 2)
-            assert not closing.done() and owner._resource_lock(rid).locked()
+            assert not batch.done() and owner._resource_lock(rid).locked()
             release_write.release.set()
-            with pytest.raises(asyncio.CancelledError, match="原线程池排队取消"):
-                await closing
+            await operation.close()
             assert operation._lease_refs == {}
             assert not owner._resource_lock(rid).locked()
             await operation.close()
@@ -279,11 +290,104 @@ async def test_release_queue_cancellation_keeps_original_lock_and_lease(
             await asyncio.gather(closing, occupying_task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("ending", ["success", "close-cancel", "body-cancel", "body-error"])
+@pytest.mark.parametrize("interruption", ["cancel", "deadline"])
+async def test_shared_close_batch_keeps_prior_error_and_does_not_resume_cancelled_lock_waits(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture,
+    operation_exit_write: ReleaseWrite, monkeypatch: pytest.MonkeyPatch,
+    interruption: str,
+) -> None:
+    owner = bundle.owner
+    assert owner is not None
+    resources = [str((await bundle.create())["resource_id"]) for _ in range(3)]
+    failed, writing, locked = resources
+    async with owner.operation(
+        session_id=SESSION_A, thread_id=THREAD_A,
+        holder_id="request:mixed-close", operation_id="mixed-close",
+    ) as operation:
+        for rid in resources:
+            if isinstance(operation, TerminalOperations):
+                await operation.read_terminal(rid)
+            else:
+                await operation.perform(rid, "navigate", {"url": "https://mixed-close.test"})
+        leases = {rid: bundle.leases.leases_for_resource(rid)[0] for rid in resources}
+        ledger_ids = set(bundle.leases._leases)
+        original = TimeoutError("原账本自己的释放超时")
+        releasing = owner._release_operation_lease
+        calls: list[str] = []
+        should_fail = True
+
+        def release(lease_id: str) -> None:
+            calls.append(lease_id)
+            if lease_id == leases[failed].lease_id and should_fail:
+                raise original
+            releasing(lease_id)
+
+        monkeypatch.setattr(owner, "_release_operation_lease", release)
+        monkeypatch.setattr(resource_operations, "OPERATION_CLOSE_WAIT_SECONDS", 0.05)
+        operation_exit_write.enabled = True
+        lock = owner._resource_lock(locked)
+        await lock.acquire()
+        closing = asyncio.create_task(operation.close())
+        observing: asyncio.Task[None] | None = None
+        try:
+            await asyncio.wait_for(operation_exit_write.entered.wait(), 2)
+            async with asyncio.timeout(1):
+                while not operation._close_tasks[failed].done():
+                    await asyncio.sleep(0)
+            batch, tasks = operation._close_task, operation._close_tasks
+            monkeypatch.setattr(resource_operations, "OPERATION_CLOSE_WAIT_SECONDS", 1)
+            observing = asyncio.create_task(operation.close())
+            await asyncio.sleep(0)
+            assert operation._close_task is batch and operation._close_tasks is tasks
+            if interruption == "cancel":
+                closing.cancel("整批观察原取消")
+            done, _ = await asyncio.wait((closing,), timeout=1)
+            assert closing in done
+            if interruption == "cancel":
+                with pytest.raises(asyncio.CancelledError, match="整批观察原取消") as cancelled:
+                    await closing
+                assert isinstance(cancelled.value.__cause__, BaseExceptionGroup)
+                assert cancelled.value.__cause__.exceptions == (original,)
+            else:
+                with pytest.raises(ExceptionGroup) as expired:
+                    await closing
+                assert expired.value.exceptions[0] is original
+                assert len(expired.value.exceptions) == 2
+                assert isinstance(expired.value.exceptions[1], TimeoutError)
+                assert "总截止时间" in str(expired.value.exceptions[1])
+            assert batch is not None and not batch.done() and not batch.cancelled()
+            assert not lock._waiters and not observing.done()
+            lock.release()
+            await asyncio.sleep(0)
+            assert operation._lease_refs == {rid: lease.lease_id for rid, lease in leases.items()}
+            assert calls.count(leases[writing].lease_id) == 1 and leases[locked].lease_id not in calls
+            operation_exit_write.release.set()
+            with pytest.raises(ExceptionGroup) as shared:
+                await observing
+            assert shared.value.exceptions[0] is original
+            assert len(shared.value.exceptions) == 2
+            assert "锁等待已中断" in str(shared.value.exceptions[1])
+            assert operation._lease_refs == {rid: leases[rid].lease_id for rid in (failed, locked)}
+            should_fail = False
+            await operation.close()
+            assert operation._lease_refs == {} and set(bundle.leases._leases) == ledger_ids
+            assert [calls.count(leases[rid].lease_id) for rid in resources] == [2, 1, 1]
+            for lease in leases.values():
+                released = bundle.leases.get_lease(lease.lease_id)
+                assert released is not None and released.status == "released"
+        finally:
+            operation_exit_write.release.set()
+            if lock.locked():
+                lock.release()
+            await asyncio.gather(closing, *(() if observing is None else (observing,)), return_exceptions=True)
+
+
+@pytest.mark.parametrize("ending", ["success", "close-cancel", "deadline", "body-cancel", "body-error"])
 @pytest.mark.parametrize("write_fails", [False, True])
 async def test_owner_operation_exit_preserves_original_outcome_and_holder_until_release(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture,
     operation_exit_write: ReleaseWrite, ending: str, write_fails: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, path = bundle.owner, bundle.leases._state_path
     assert owner is not None and path is not None
@@ -296,6 +400,8 @@ async def test_owner_operation_exit_preserves_original_outcome_and_holder_until_
     native = OSError(28, "operation退出原账本写失败", str(path))
     operation_exit_write.failure = native if write_fails else None
     holder = OperationHolderGate(bundle.root / ".boxteam" / "sessions", namespace="workspace_resources")
+    if ending == "deadline":
+        monkeypatch.setattr(resource_operations, "OPERATION_CLOSE_WAIT_SECONDS", 0.05)
 
     async def invoke() -> None:
         async with owner.operation(
@@ -313,6 +419,8 @@ async def test_owner_operation_exit_preserves_original_outcome_and_holder_until_
         continued.append(True)
 
     pending = asyncio.create_task(invoke())
+    deleting: asyncio.Task[None] | None = None
+    deleting_entered = asyncio.Event()
     try:
         await asyncio.wait_for(operation_exit_write.entered.wait(), 2)
         operation, = instances
@@ -325,32 +433,48 @@ async def test_owner_operation_exit_preserves_original_outcome_and_holder_until_
             assert not proof.acquired, "原Thread holder须覆盖operation退出写盘"
         if ending == "close-cancel":
             pending.cancel("operation正常退出首次取消")
-        if ending != "success":
+        returned_early = ending in {"close-cancel", "deadline"}
+        if returned_early:
+            expected = asyncio.CancelledError if ending == "close-cancel" else TimeoutError
+            done, _ = await asyncio.wait((pending,), timeout=1)
+            assert pending in done, "正式 owner 入口必须在原生写盘结算前结束本次关闭观察"
+            with pytest.raises(expected) as interrupted:
+                await pending
+            assert (interrupted.value.args == ("operation正常退出首次取消",) if ending == "close-cancel"
+                    else "总截止时间" in str(interrupted.value))
+            assert interrupted.value.__cause__ is None
+        elif ending != "success":
             for _ in range(5):
                 await asyncio.sleep(0)
             pending.cancel("收尾重复取消不得替换原结果")
             await asyncio.sleep(0)
-        assert not pending.done() and owner._resource_lock(rid).locked()
+        assert pending.done() is returned_early
+        assert owner._resource_lock(rid).locked()
         assert path.read_bytes() == before and continued == []
         async with holder.lock_for(SESSION_A, wait=False) as proof:
             assert not proof.acquired
+        if returned_early:
+            async def deletion_holder() -> None:
+                # Session 删除取得同一 namespace 的 exclusive；原调用已返回也不得越过写盘。
+                async with holder.lock_for(SESSION_A):
+                    deleting_entered.set()
+
+            deleting = asyncio.create_task(deletion_holder())
+            await asyncio.sleep(0)
+            assert not deleting.done() and not deleting_entered.is_set()
         operation_exit_write.release.set()
-        if original is not None:
+        if returned_early:
+            assert operation._close_task is not None
+            results = await operation._close_task
+            failure, = results
+            assert deleting is not None
+            await asyncio.wait_for(deleting, 1)
+            assert deleting_entered.is_set()
+        elif original is not None:
             with pytest.raises(type(original)) as caught:
                 await pending
             assert caught.value is original
             failure = caught.value.__cause__
-        elif ending == "close-cancel":
-            with pytest.raises(asyncio.CancelledError) as cancelled:
-                await pending
-            assert cancelled.value.args == ("operation正常退出首次取消",)
-            errors = cancelled.value.__cause__
-            if write_fails:
-                assert isinstance(errors, BaseExceptionGroup) and len(errors.exceptions) == 1
-                failure = errors.exceptions[0]
-            else:
-                assert errors is None
-                failure = None
         elif write_fails:
             with pytest.raises(OSError) as failed:
                 await pending
@@ -375,4 +499,4 @@ async def test_owner_operation_exit_preserves_original_outcome_and_holder_until_
         assert bundle.transport.creates == 1 and bundle.transport.deleted == []
     finally:
         operation_exit_write.release.set()
-        await asyncio.gather(pending, return_exceptions=True)
+        await asyncio.gather(pending, *(() if deleting is None else (deleting,)), return_exceptions=True)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -174,11 +174,10 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         created_by_turn_id: str | None = None,
     ) -> AsyncIterator[TerminalOperations]:
         await self.recover(())
-        async with (
-            self.admit_thread(session_id, thread_id) as ref,
-            TerminalOperations(
-                self, ref, holder_id, operation_id, created_by_turn_id
-            ) as operations,
-        ):
-            yield operations
+        async with AsyncExitStack() as admission:
+            ref = await admission.enter_async_context(self.admit_thread(session_id, thread_id))
+            async with TerminalOperations(
+                self, ref, holder_id, operation_id, created_by_turn_id, admission=admission,
+            ) as operations:
+                yield operations
 
