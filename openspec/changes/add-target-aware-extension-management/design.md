@@ -181,6 +181,8 @@ capability discovery 只读取版本与实际已支持服务，不启动 Agent�
 
 Gateway 来源编辑的预检和保存要求连接具有稳定身份。缺少 `connection_id` 的既有条目只从原 connection ID owner 只读复用可明确匹配的身份；真正新增或不能明确匹配的条目返回 409，指出位置并要求显式提供 ID，不按数组位置借用其它连接的身份。该输入边界仅适用于新增 source writer；原文件 loader 对已支持旧配置的 ID 分配和迁移行为保持。writer 不兼作版本迁移入口：若 v1 缺 ID 会使原 loader 另行改写来源文件，预检和保存先明确要求沿原迁移入口处理或补齐 ID。预检不创建迁移记录、备份、ID 或来源导入事实，也不另建预览 token／身份账本。
 
+原生 Gateway 来源 JSON 的 Relay 沿现有目标 Gateway 请求头选择稳定归属，连接仅提供当前路由。唯一连接可从原 registry 解析；多个连接须明确选择，显式 `gateway_connection_id` 必须与目标 Gateway 一致。Relay 复用原管理发送链及原生来源 API，不新增远端配置副本或 `federation/config` 别名；认证后的联邦入站不得借本机凭据再次转发。首次网络等待前固定目标、连接、URL 和凭据，短请求占用归原 registry，释放只结清本次引用，不删除合法的无工作区连接；旧隧道仍有请求时继续受原 retired 跟踪保护。目标状态、错误、CAS、幂等键和同一请求的 request_id 原样贯通，断流不自动重放保存。尚未接通的配置状态／pending／事件及开发重启入口面对显式远端目标时明确拒绝，不落回本机；该阶段拒绝不计作相应远端管理能力完成。
+
 设置搜索与 `@modified`、`@ext`、`@lang` 等原过滤器基于当前编辑器冻结的域、目标、来源层及实际注册 schema／扩展集合计算；切焦点不换搜索上下文。业务配置仅展示真实支持的过滤维度，不造虚假的扩展或语言归属；查询旧代际失效，不能把 A 的命中或修改标志显示为 B 的值。
 
 保持实际合并顺序：Gateway inline → user → user_local；Workspace inline → user → user_local → workspace，以及原系统已定义的 runtime override。对象递归合并、数组整体替换；不存在前端发明的第三套优先级。新增配置仍按 `config-file-conventions` 使用同族 JSONC／schema；仅当发生不兼容变更才递增版本并提供官方预览、备份和可恢复迁移，不为 UI 新增假版本。

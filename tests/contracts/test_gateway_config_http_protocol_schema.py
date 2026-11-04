@@ -46,6 +46,22 @@ ROOTS = (
 )
 
 
+@pytest.mark.parametrize(("path", "method"), [
+    ("sources", "get"), ("sources/{source_key}", "get"),
+    ("sources/{source_key}/preflight", "post"), ("sources/{source_key}", "put"),
+    ("reload-status", "get"), ("retry-restart", "post"), ("resolve-restart", "post"),
+    ("discard-restart", "post"), ("events", "get"), ("events/stream", "get"),
+])
+def test_configuration_target_parameters_follow_actual_routes(
+    gateway_openapi: JsonSchemaValue, path: str, method: str,
+) -> None:
+    parameters = gateway_openapi["paths"]["/api/gateway/config/" + path][method]["parameters"]
+    target = next(item for item in parameters if item["name"] == "X-BoxTeam-Target-Gateway-Id")
+    connection = next(item for item in parameters if item["name"] == "gateway_connection_id")
+    assert target["in"] == "header" and target["required"] is False
+    assert connection["in"] == "query" and connection["required"] is False
+
+
 @pytest.mark.parametrize(("path", "method", "response", "request_model"), [
     ("sources", "get", "GatewayConfigSourcesDTO", None),
     ("reload-status", "get", "GatewayConfigReloadStatusDTO", None),

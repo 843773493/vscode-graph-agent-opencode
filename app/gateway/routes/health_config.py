@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 from datetime import (
     UTC,
     datetime,
 )
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
+import httpx
 from fastapi import (
     APIRouter,
     Depends,
@@ -19,10 +22,12 @@ from fastapi import (
     Query,
     Request,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
+from app.core.failures import failure_detail
 from app.core.logging_contract import get_runtime_log_root
+from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -33,9 +38,15 @@ from app.gateway.config import (
     load_gateway_config,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.federation import send_remote_gateway_management
 from app.gateway.federation.policy import (
     federation_capability_allowed,
     require_federation_capability,
+)
+from app.gateway.proxy_upstream import (
+    TARGET_GATEWAY_ID_HEADER,
+    parse_target_gateway_id,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import (
@@ -75,6 +86,120 @@ from app.services.infrastructure.config_service import (
 )
 
 router = APIRouter()
+
+
+@dataclass(frozen=True, slots=True)
+class _GatewayConfigTarget:
+    gateway_id: str
+    connection_id: str | None
+
+
+def _gateway_config_target(
+    request: Request,
+    target_gateway_id: Annotated[str | None, Header(alias=TARGET_GATEWAY_ID_HEADER)] = None,
+    gateway_connection_id: str | None = Query(default=None, min_length=1),
+) -> _GatewayConfigTarget | None:
+    target = parse_target_gateway_id(target_gateway_id)
+    if gateway_connection_id is not None and target is None:
+        raise HTTPException(status_code=400, detail="gateway_connection_id 必须同时指定稳定目标 Gateway")
+    if target is None:
+        return None
+    if target == request.app.state.gateway_id:
+        if gateway_connection_id is not None:
+            raise HTTPException(status_code=409, detail="本机 Gateway 目标不能指定远端连接")
+        return None
+    return _GatewayConfigTarget(gateway_id=target, connection_id=gateway_connection_id)
+
+
+def _require_native_gateway_config_target(
+    target: Annotated[_GatewayConfigTarget | None, Depends(_gateway_config_target)],
+) -> None:
+    if target is not None:
+        raise HTTPException(status_code=409, detail="此配置操作只支持当前原生 Gateway，尚未提供远端 Relay")
+
+
+async def _relay_gateway_config_source(
+    request: Request,
+    *,
+    auth: GatewayAuthContext,
+    target: _GatewayConfigTarget | None,
+    method: Literal["GET", "POST", "PUT"],
+    request_id: str,
+    source_key: str | None = None,
+) -> Response | None:
+    if target is None:
+        return None
+    if auth.kind != "local":
+        raise HTTPException(status_code=403, detail="联邦入站请求不能借本机凭据再次 Relay 到其它 Gateway")
+    registry = get_registry(request)
+    connection_id = target.connection_id
+    if connection_id is None:
+        matches = [connection for connection in registry.remote_gateway_connections()
+                   if connection.remote_gateway_id == target.gateway_id]
+        if not matches:
+            raise HTTPException(status_code=404, detail="目标 Gateway 未登记远端连接")
+        if len(matches) != 1:
+            raise HTTPException(status_code=409, detail="目标 Gateway 存在多条连接，请明确指定 gateway_connection_id")
+        connection_id = matches[0].connection_id
+    try:
+        connection = registry.remote_gateway_connection(connection_id)
+        if connection.remote_gateway_id != target.gateway_id:
+            raise HTTPException(status_code=409, detail="远端连接与稳定目标 Gateway 归属不匹配")
+        credential = FederationCredentialStore(
+            storage_path=get_gateway_root() / "credentials" / "federation.json"
+        ).get(connection_id)
+        gateway_url = registry.acquire_remote_gateway_reference(connection_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (PermissionError, RuntimeError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    # 在首次 await 前冻结连接、凭据和 URL；换代、拒绝或超时均不重选连接、重放请求。
+    try:
+        path = "/api/gateway/config/sources"
+        if source_key is not None:
+            path += "/" + quote(source_key, safe="")
+        if method == "POST":
+            path += "/preflight"
+        query = urlencode([(key, value) for key, value in request.query_params.multi_items()
+                           if key != "gateway_connection_id"])
+        if query:
+            path += "?" + query
+        try:
+            response = await send_remote_gateway_management(
+                gateway_url=gateway_url,
+                credential=credential,
+                method=method,
+                path=path,
+                request_id=request_id,
+                content=await request.body(),
+                content_type=request.headers.get("content-type"),
+                target_gateway_id=target.gateway_id,
+                sender_gateway_id=registry.gateway_id,
+            )
+        except httpx.RequestError as error:
+            raise HTTPException(status_code=502, detail=failure_detail(
+                error, stage="gateway-config-source-relay", label="远端来源请求传输失败，请用原幂等键查询结果",
+            )) from error
+        if response.is_success:
+            try:
+                envelope = response.json()
+                if not isinstance(envelope, dict) or envelope.get("request_id") != request_id:
+                    raise ValueError("远端来源响应 request_id 不匹配")
+                data = envelope.get("data")
+                if source_key is None:
+                    GatewayConfigSourcesDTO.model_validate(data)
+                else:
+                    document = (GatewayConfigSourcePreflightDTO.model_validate(data).document
+                                if method == "POST" else GatewayConfigSourceDocumentDTO.model_validate(data))
+                    if (document.gateway_id, document.source_key) != (target.gateway_id, source_key):
+                        raise ValueError("远端来源响应归属不匹配")
+            except (TypeError, ValueError) as error:
+                raise HTTPException(status_code=502, detail="远端来源成功响应的归属或协议不匹配") from error
+        headers = {name: response.headers[name] for name in ("content-type", "x-request-id")
+                   if name in response.headers}
+        return Response(content=response.content, status_code=response.status_code, headers=headers)
+    finally:
+        registry.release_remote_gateway_reference(connection_id)
 
 
 def _gateway_config_event_dto(event) -> GatewayConfigEventDTO:
@@ -123,6 +248,7 @@ async def health(
 @router.post(
     "/api/gateway/runtime/restart-development",
     response_model=APIResponse[DevelopmentRuntimeRestartDTO],
+    dependencies=[Depends(_require_native_gateway_config_target)],
 )
 async def restart_development_runtime(
     request: Request,
@@ -182,8 +308,12 @@ async def restart_development_runtime(
 async def gateway_config_sources(
     request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    target: Annotated[_GatewayConfigTarget | None, Depends(_gateway_config_target)],
     request_id: str = Depends(get_request_id),
 ):
+    relayed = await _relay_gateway_config_source(request, auth=auth, target=target, method="GET", request_id=request_id)
+    if relayed is not None:
+        return relayed
     require_federation_capability(request, auth, "configuration_read")
     try:
         gateway_state = getattr(request.app.state, "gateway_state", None)
@@ -236,9 +366,15 @@ async def gateway_config_source_document(
     source_key: str,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     service: Annotated[GatewayConfigReloadService, Depends(get_gateway_config_reload_service)],
+    target: Annotated[_GatewayConfigTarget | None, Depends(_gateway_config_target)],
     idempotency_key: str | None = Query(default=None),
     request_id: str = Depends(get_request_id),
 ):
+    relayed = await _relay_gateway_config_source(
+        request, auth=auth, target=target, method="GET", request_id=request_id, source_key=source_key,
+    )
+    if relayed is not None:
+        return relayed
     require_federation_capability(request, auth, "configuration_read")
     try:
         result = service.get_source_document(source_key=source_key, idempotency_key=idempotency_key)
@@ -260,8 +396,14 @@ async def preflight_gateway_config_source(
     payload: GatewayConfigSourceEditRequest,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     service: Annotated[GatewayConfigReloadService, Depends(get_gateway_config_reload_service)],
+    target: Annotated[_GatewayConfigTarget | None, Depends(_gateway_config_target)],
     request_id: str = Depends(get_request_id),
 ):
+    relayed = await _relay_gateway_config_source(
+        request, auth=auth, target=target, method="POST", request_id=request_id, source_key=source_key,
+    )
+    if relayed is not None:
+        return relayed
     require_federation_capability(request, auth, "configuration_read")
     require_federation_capability(request, auth, "configuration_write")
     try:
@@ -284,8 +426,14 @@ async def save_gateway_config_source(
     payload: GatewayConfigSourceEditRequest,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
     service: Annotated[GatewayConfigReloadService, Depends(get_gateway_config_reload_service)],
+    target: Annotated[_GatewayConfigTarget | None, Depends(_gateway_config_target)],
     request_id: str = Depends(get_request_id),
 ):
+    relayed = await _relay_gateway_config_source(
+        request, auth=auth, target=target, method="PUT", request_id=request_id, source_key=source_key,
+    )
+    if relayed is not None:
+        return relayed
     def require_write() -> None:
         require_federation_capability(request, auth, "configuration_read")
         require_federation_capability(request, auth, "configuration_write")
@@ -304,6 +452,7 @@ async def save_gateway_config_source(
 @router.get(
     "/api/gateway/config/reload-status",
     response_model=APIResponse[GatewayConfigReloadStatusDTO],
+    dependencies=[Depends(_require_native_gateway_config_target)],
 )
 async def gateway_config_reload_status(
     request: Request,
@@ -322,6 +471,7 @@ async def gateway_config_reload_status(
 @router.post(
     "/api/gateway/config/retry-restart",
     response_model=APIResponse[GatewayConfigReloadStatusDTO],
+    dependencies=[Depends(_require_native_gateway_config_target)],
 )
 async def retry_gateway_config_restart(
     request: Request,
@@ -366,6 +516,7 @@ async def retry_gateway_config_restart(
 @router.post(
     "/api/gateway/config/resolve-restart",
     response_model=APIResponse[GatewayConfigReloadStatusDTO],
+    dependencies=[Depends(_require_native_gateway_config_target)],
 )
 async def resolve_gateway_config_restart(
     request: Request,
@@ -411,6 +562,7 @@ async def resolve_gateway_config_restart(
 @router.post(
     "/api/gateway/config/discard-restart",
     response_model=APIResponse[GatewayConfigReloadStatusDTO],
+    dependencies=[Depends(_require_native_gateway_config_target)],
 )
 async def discard_gateway_config_restart(
     request: Request,
@@ -457,6 +609,7 @@ async def discard_gateway_config_restart(
 @router.get(
     "/api/gateway/config/events",
     response_model=APIResponse[GatewayConfigEventsDTO],
+    dependencies=[Depends(_require_native_gateway_config_target)],
 )
 async def gateway_config_events(
     request: Request,
@@ -492,6 +645,7 @@ async def gateway_config_events(
 @router.get(
     "/api/gateway/config/events/stream",
     response_class=StreamingResponse,
+    dependencies=[Depends(_require_native_gateway_config_target)],
     responses=sse_responses(
         "SSE Gateway 配置事件流",
         {"config": GatewayConfigEventDTO, "error": SseErrorDTO},

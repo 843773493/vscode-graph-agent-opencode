@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from app.core.failures import failure_detail
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore
@@ -7,6 +9,9 @@ from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
 from .core import WorkspaceTarget
+
+if TYPE_CHECKING:
+    from . import GatewayWorkspaceRegistry
 
 
 class RegistryRemoteMixin:
@@ -122,11 +127,12 @@ class RegistryRemoteMixin:
             retired_runtimes.append(retired_runtime)
 
     def _has_route_references_for_connection(self, connection_id: str) -> bool:
-        return any(
+        registry = cast("GatewayWorkspaceRegistry", self)
+        return bool(registry._remote_gateway_reference_counts.get(connection_id, 0)) or any(
             connection_id in referenced_connection_ids
-            and any(self._route_reference_counts.get(workspace_id, (0, 0)))
+            and any(registry._route_reference_counts.get(workspace_id, (0, 0)))
             for workspace_id, referenced_connection_ids in (
-                self._route_reference_connections.items()
+                registry._route_reference_connections.items()
             )
         )
     def _close_retired_remote_gateway_runtimes(self, connection_id: str) -> None:
@@ -138,6 +144,8 @@ class RegistryRemoteMixin:
         successfully_closed_runtimes: list[WorkspaceRuntime] = []
         try:
             for retired_runtime in retired_runtimes:
+                if self._remote_runtime_retirement_deferred(retired_runtime):
+                    continue
                 retired_runtime.close()
                 successfully_closed_runtimes.append(retired_runtime)
         finally:
@@ -148,6 +156,15 @@ class RegistryRemoteMixin:
                         for retired_runtime in successfully_closed_runtimes
                     )
                 )
+
+    def _remote_runtime_retirement_deferred(self, runtime: WorkspaceRuntime) -> bool:
+        """待决 batch 仍需旧代完成回滚，普通请求释放不能先关闭它。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        return any(
+            retired_runtime is runtime
+            for batch in registry._deferred_registry_batches.values()
+            for _, retired_runtime in batch.retired_runtimes
+        )
 
     def _remove_retired_runtime_instances(
         self,
@@ -182,6 +199,8 @@ class RegistryRemoteMixin:
         connection = self.remote_gateway_connection(connection_id)
         if connection.source_owner != "manual":
             raise PermissionError("配置管理的远端连接必须通过配置 owner 删除")
+        if cast("GatewayWorkspaceRegistry", self)._remote_gateway_reference_counts.get(connection_id, 0):
+            raise RuntimeError(f"Gateway 不能删除仍有管理请求引用的远端连接: {connection_id}")
         affected = tuple(target for target in self._targets.values() if connection_id in target.remote_gateway_connection_ids)
         for target in affected:
             self._assert_route_references_drained(target.key)

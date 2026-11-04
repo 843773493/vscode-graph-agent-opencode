@@ -567,6 +567,7 @@ async def test_remote_management_request_forwards_federation_and_request_ids(
             *,
             headers: dict[str, str],
             json: dict[str, object] | None,
+            content: bytes | None,
         ) -> httpx.Response:
             assert method == "POST"
             assert url == (
@@ -578,6 +579,7 @@ async def test_remote_management_request_forwards_federation_and_request_ids(
                 "X-Request-ID": "request-test",
             }
             assert json == {"root_path": "/srv/project"}
+            assert content is None
             return httpx.Response(
                 200,
                 json={"data": {"items": []}},

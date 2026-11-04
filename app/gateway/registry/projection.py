@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from app.gateway.federation import RemoteGatewayConnection
@@ -8,6 +9,9 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.services.infrastructure.config.state import ConfigConflictError
 
 from .core import GatewayRegistryBatchHandle, WorkspaceKey, WorkspaceTarget
+
+if TYPE_CHECKING:
+    from . import GatewayWorkspaceRegistry
 
 
 class RegistryProjectionMixin:
@@ -338,6 +342,8 @@ class RegistryProjectionMixin:
             committed_revision=self._registry_revision,
             deferred_retirement=defer_retiring_runtimes,
         )
+        if defer_retiring_runtimes:
+            cast("GatewayWorkspaceRegistry", self)._deferred_registry_batches[id(handle)] = handle
         if post_commit_error is not None:
             try:
                 handle.promote()
@@ -355,22 +361,38 @@ class RegistryProjectionMixin:
     def _rollback_registry_batch(self, handle: GatewayRegistryBatchHandle) -> None:
         """补偿已提交 batch；CAS 失败时保留 recovery_required 所需证据。"""
 
-        for connection_id, runtime in handle.staged_runtimes.items():
-            if self._remote_gateway_runtimes.get(connection_id) is runtime:
-                runtime.close()
-        self._restore_registry_state(handle.previous_snapshot)
+        registry = cast("GatewayWorkspaceRegistry", self)
+        current_runtimes = list(registry._remote_gateway_runtimes.items()) + [
+            (connection_id, runtime)
+            for connection_id, runtimes in registry._retired_remote_gateway_runtimes.items()
+            for runtime in runtimes
+        ]
+        registry._restore_registry_state(handle.previous_snapshot)
         self._remote_gateway_runtimes = dict(handle.previous_remote_runtimes)
+        restored_ids = {id(runtime) for runtime in handle.previous_remote_runtimes.values()}
         self._retired_remote_gateway_runtimes = {
-            connection_id: list(runtimes)
+            connection_id: [runtime for runtime in runtimes if id(runtime) not in restored_ids]
             for connection_id, runtimes in (
                 handle.previous_retired_remote_runtimes.items()
             )
         }
+        tracked_ids = restored_ids | {
+            id(runtime) for runtimes in registry._retired_remote_gateway_runtimes.values() for runtime in runtimes
+        }
+        # 回滚先恢复旧 active；本批新增且仍在途的代留在原 retired owner，最后一次释放再关闭。
+        cleanup_connections: set[str] = set()
+        for connection_id, runtime in current_runtimes:
+            if id(runtime) not in tracked_ids:
+                registry._register_retired_remote_gateway_runtime(connection_id, runtime)
+                tracked_ids.add(id(runtime))
+                cleanup_connections.add(connection_id)
+        for connection_id in cleanup_connections:
+            registry._close_retired_remote_gateway_runtimes(connection_id)
         self._route_signatures = dict(handle.previous_signatures)
         # registry revision 已在 batch 提交后递增；补偿写入必须以当前 revision
         # 为 CAS 基线，不能把持久 revision 伪造回旧值。
         self._registry_revision = handle.committed_revision
-        self._save(owner="config_batch")
+        registry._save(owner="config_batch")
     def _select_batch_active_workspace(
         self,
         *,

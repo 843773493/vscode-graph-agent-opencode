@@ -106,20 +106,27 @@ class GatewayRegistryBatchHandle:
         if self.finished:
             return
         if self.deferred_retirement:
+            self.registry._deferred_registry_batches.pop(id(self), None)
             errors: list[str] = []
+            closed_runtimes: list[tuple[str, WorkspaceRuntime]] = []
             for connection_id, runtime in self.retired_runtimes:
                 if self.registry._has_route_references_for_connection(connection_id):
                     continue
+                if self.registry._remote_runtime_retirement_deferred(runtime):
+                    continue
+                if not any(item is runtime for item in self.registry._retired_remote_gateway_runtimes.get(connection_id, [])):
+                    continue
                 try:
                     runtime.close()
+                    closed_runtimes.append((connection_id, runtime))
                 except Exception as error:  # noqa: BLE001 — 关闭全部远端运行时并汇总初始化失败的清理错误。
                     errors.append(f"{connection_id}: {error}")
+            self.registry._remove_retired_runtime_instances(tuple(closed_runtimes))
             if errors:
                 raise RuntimeError(
                     "Gateway registry batch promotion 关闭旧 remote runtime 失败: "
                     + "; ".join(errors)
                 )
-            self.registry._remove_retired_runtime_instances(self.retired_runtimes)
         self.finished = True
 
     def rollback(self) -> None:
@@ -127,6 +134,7 @@ class GatewayRegistryBatchHandle:
 
         if self.finished:
             return
+        self.registry._deferred_registry_batches.pop(id(self), None)
         self.registry._rollback_registry_batch(self)
         self.finished = True
 
@@ -154,11 +162,13 @@ class RegistryCoreMixin:
         self._remote_gateway_connections: dict[str, RemoteGatewayConnection] = {}
         self._remote_gateway_runtimes: dict[str, WorkspaceRuntime] = {}
         self._retired_remote_gateway_runtimes: dict[str, list[WorkspaceRuntime]] = {}
+        self._deferred_registry_batches: dict[int, GatewayRegistryBatchHandle] = {}
         self._runtime_generation: str | None = None
         self._route_revisions: dict[WorkspaceKey, int] = {}
         self._route_change_events: dict[WorkspaceKey, asyncio.Event] = {}
         self._route_reference_counts: dict[WorkspaceKey, tuple[int, int]] = {}
         self._route_reference_connections: dict[WorkspaceKey, set[str]] = {}
+        self._remote_gateway_reference_counts: dict[str, int] = {}
         self._route_signatures: dict[WorkspaceKey, tuple[object, ...]] = {}
         self._commit_observers: list[Callable[[], None]] = []
         self._load()

@@ -32,6 +32,7 @@ from app.gateway.runtime_proof import (
     _gateway_runtime_consumer_stages,
     _should_preserve_gateway_generation_for_handoff,
 )
+from app.schemas.internal_v2.common import APIResponse
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.state import ConfigConflictError
 
@@ -522,9 +523,11 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
         # 走 load_gateway_config() 分支（已被 monkeypatch）。
         request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
         auth=GatewayAuthContext(kind="local"),
+        target=None,
         request_id="req-gateway-config-sources",
     )
 
+    assert isinstance(response, APIResponse)
     assert response.request_id == "req-gateway-config-sources"
     assert response.data is not None
     assert response.data.schema_uri.startswith("boxteam://inline/")
@@ -588,9 +591,11 @@ async def test_gateway_config_sources_schema_uri_only_for_release_inline_schema(
         response = await gateway_config_sources(
             request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
             auth=GatewayAuthContext(kind="local"),
+            target=None,
             request_id="req-gateway-custom-schema",
         )
 
+        assert isinstance(response, APIResponse)
         assert response.data is not None
         assert response.data.schema_uri is None
         assert str(tmp_path) not in response.model_dump_json()

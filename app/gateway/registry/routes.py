@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, cast
 
 from app.core.path_utils import get_gateway_root
 from app.core.workspace_identity import validate_workspace_id
@@ -11,8 +12,36 @@ from app.gateway.service_types import GatewayServiceName
 
 from .core import WorkspaceRouteLease, WorkspaceSelector, WorkspaceTarget
 
+if TYPE_CHECKING:
+    from . import GatewayWorkspaceRegistry
+
 
 class RegistryRoutesMixin:
+    def acquire_remote_gateway_reference(self, connection_id: str) -> str:
+        """冻结管理请求的当前隧道，换代后仍持有原运行时直到请求结束。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        connection = registry.remote_gateway_connection(connection_id)
+        if connection.connection_error is not None:
+            raise LookupError(f"远程 Gateway 连接不可用: {connection_id}")
+        gateway_url = registry.remote_gateway_url(connection_id)
+        registry._remote_gateway_runtimes[connection_id].assert_healthy()
+        registry._remote_gateway_reference_counts[connection_id] = (
+            registry._remote_gateway_reference_counts.get(connection_id, 0) + 1
+        )
+        return gateway_url
+
+    def release_remote_gateway_reference(self, connection_id: str) -> None:
+        """只收尾本请求引用及 retired 隧道，保留无工作区的合法连接。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        count = registry._remote_gateway_reference_counts.get(connection_id, 0)
+        if count == 0:
+            raise RuntimeError(f"Gateway 远程管理引用重复释放: {connection_id}")
+        if count > 1:
+            registry._remote_gateway_reference_counts[connection_id] = count - 1
+        else:
+            registry._remote_gateway_reference_counts.pop(connection_id)
+            registry._close_retired_remote_gateway_runtimes(connection_id)
+
     @staticmethod
     def _route_signature(target: WorkspaceTarget) -> tuple[object, ...]:
         return (

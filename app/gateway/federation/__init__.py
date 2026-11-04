@@ -321,27 +321,62 @@ async def discover_remote_gateway(
     return manifest, direct_items
 
 
+async def send_remote_gateway_management(
+    *,
+    gateway_url: str,
+    credential: FederationCredential,
+    method: Literal["GET", "POST", "PUT", "DELETE"],
+    path: str,
+    request_id: str,
+    payload: dict[str, object] | None = None,
+    content: bytes | None = None,
+    content_type: str | None = None,
+    target_gateway_id: str | None = None,
+    sender_gateway_id: str | None = None,
+    timeout_seconds: float = 45,
+) -> httpx.Response:
+    """管理调用共用唯一发送入口；来源 Relay 保留原始 JSON 请求字节。"""
+    if content is not None and payload is not None:
+        raise ValueError("Gateway 管理请求不能同时提供 JSON 对象与原始正文")
+    headers = {
+        "X-BoxTeam-Federation-Token": credential.token,
+        "X-Request-ID": request_id,
+    }
+    if target_gateway_id is not None:
+        headers["X-BoxTeam-Target-Gateway-Id"] = target_gateway_id
+    if sender_gateway_id is not None:
+        headers["X-BoxTeam-Gateway-Id"] = sender_gateway_id
+    if content_type is not None:
+        headers["Content-Type"] = content_type
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        return await client.request(
+            method,
+            f"{gateway_url.rstrip('/')}{path}",
+            headers=headers,
+            json=payload,
+            content=content,
+        )
+
+
 async def request_remote_gateway_management(
     *,
     gateway_url: str,
     credential: FederationCredential,
-    method: Literal["GET", "POST", "DELETE"],
+    method: Literal["GET", "POST", "PUT", "DELETE"],
     path: str,
     request_id: str,
     payload: dict[str, object] | None = None,
     timeout_seconds: float = 45,
 ) -> dict[str, object]:
-    headers = {
-        "X-BoxTeam-Federation-Token": credential.token,
-        "X-Request-ID": request_id,
-    }
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        response = await client.request(
-            method,
-            f"{gateway_url.rstrip('/')}{path}",
-            headers=headers,
-            json=payload,
-        )
+    response = await send_remote_gateway_management(
+        gateway_url=gateway_url,
+        credential=credential,
+        method=method,
+        path=path,
+        request_id=request_id,
+        payload=payload,
+        timeout_seconds=timeout_seconds,
+    )
     response.raise_for_status()
     return _response_data(response)
 
