@@ -73,7 +73,8 @@ async def test_duplicate_native_uuid_registration_keeps_original_binding(
             original, = listed["data"]["items"]
             identity = primary / ".boxteam/workspace-identity.json"
             original_identity = identity.read_bytes()
-            assert json.loads(original_identity)["workspace_id"] == original["backend_workspace_id"]
+            assert json.loads(original_identity)["workspace_id"] == original["workspace_id"]
+            assert "backend_workspace_id" not in original
             duplicate = primary / f"copied-identity-{'external' if external else 'managed'}"
             (duplicate / ".boxteam").mkdir(parents=True, exist_ok=True)
             duplicate_identity = duplicate / ".boxteam/workspace-identity.json"
@@ -81,7 +82,7 @@ async def test_duplicate_native_uuid_registration_keeps_original_binding(
             shutil.copyfile(identity, duplicate_identity)
             state = context.boxteam_home / "state/gateway/gateway.sqlite"
             with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
-                before = tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry"))
+                before = tuple(connection.execute("SELECT gateway_id,workspace_id,payload_json FROM gateway_workspace_registry"))
                 metadata = connection.execute(
                     "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
                 ).fetchone()
@@ -97,16 +98,18 @@ async def test_duplicate_native_uuid_registration_keeps_original_binding(
             assert response.json()["request_id"] == response.headers["X-Request-ID"] == "duplicate-native-uuid"
             assert duplicate_identity.read_bytes() == identity.read_bytes() == original_identity
             with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
-                assert tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry")) == before
+                assert tuple(connection.execute("SELECT gateway_id,workspace_id,payload_json FROM gateway_workspace_registry")) == before
                 assert connection.execute(
                     "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
                 ).fetchone() == metadata
             current = (await client.get("/api/gateway/workspaces", params={"check_health": True})).raise_for_status().json()
             restored, = current["data"]["items"]
             assert restored["workspace_id"] == original["workspace_id"]
-            assert restored["backend_workspace_id"] == original["backend_workspace_id"]
+            assert restored["gateway_id"] == original["gateway_id"]
             assert restored["status"] == "ready"
-            assert current["data"]["active_workspace_id"] == listed["data"]["active_workspace_id"]
+            assert current["data"]["active_workspace"] == listed["data"]["active_workspace"] == {
+                "gateway_id": original["gateway_id"], "workspace_id": original["workspace_id"],
+            }
             (context.artifacts_dir / "duplicate-native-uuid.json").write_text(json.dumps({
                 "external": external, "rejection": response.json(), "retained": current,
             }, ensure_ascii=False, indent=2) + "\n")
@@ -139,7 +142,7 @@ async def test_known_root_reregistration_preserves_missing_or_changed_identity(
             original_identity = identity.read_bytes()
             state = context.boxteam_home / "state/gateway/gateway.sqlite"
             with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
-                rows = tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry"))
+                rows = tuple(connection.execute("SELECT gateway_id,workspace_id,payload_json FROM gateway_workspace_registry"))
                 metadata = connection.execute(
                     "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
                 ).fetchone()
@@ -163,7 +166,7 @@ async def test_known_root_reregistration_preserves_missing_or_changed_identity(
                         assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
                         assert (identity.read_bytes() if identity.exists() else None) == damaged
                         with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
-                            assert tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry")) == rows
+                            assert tuple(connection.execute("SELECT gateway_id,workspace_id,payload_json FROM gateway_workspace_registry")) == rows
                             assert connection.execute(
                                 "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
                             ).fetchone() == metadata
@@ -174,9 +177,11 @@ async def test_known_root_reregistration_preserves_missing_or_changed_identity(
             current = (await client.get("/api/gateway/workspaces", params={"check_health": True})).raise_for_status().json()
             retained, = current["data"]["items"]
             assert retained["workspace_id"] == original["workspace_id"]
-            assert retained["backend_workspace_id"] == original["backend_workspace_id"]
+            assert retained["gateway_id"] == original["gateway_id"]
             assert retained["status"] == "ready"
-            assert current["data"]["active_workspace_id"] == initial["data"]["active_workspace_id"]
+            assert current["data"]["active_workspace"] == initial["data"]["active_workspace"] == {
+                "gateway_id": original["gateway_id"], "workspace_id": original["workspace_id"],
+            }
             (context.artifacts_dir / "known-root-reregistration.json").write_text(
                 json.dumps({"attempts": results, "retained": current}, ensure_ascii=False, indent=2) + "\n",
             )
@@ -214,10 +219,10 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
             assert registered.status_code == 200, registered.text
             item = next(item for item in registered.json()["data"]["items"] if item["name"] == "identity-test")
             workspace_id = item["workspace_id"]
-            backend_id = item["backend_workspace_id"]
+            gateway_id = item["gateway_id"]
             identity = target / ".boxteam/workspace-identity.json"
             original = identity.read_bytes()
-            assert json.loads(original)["workspace_id"] == backend_id
+            assert json.loads(original)["workspace_id"] == workspace_id
             stopped = await client.post(f"/api/gateway/workspaces/{workspace_id}/runtime/stop")
             assert stopped.status_code == 200, stopped.text
             assert stopped.json()["data"]["status"] == "stopped"
@@ -261,7 +266,7 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
                 body = response.json()
                 assert body["request_id"] == response.headers["X-Request-ID"]
                 item = next(item for item in body["data"]["items"] if item["workspace_id"] == workspace_id)
-                assert item["backend_workspace_id"] == backend_id
+                assert item["gateway_id"] == gateway_id
                 assert item["status"] == "offline"
                 assert item["connection_error"] == expected_error
                 assert item["backend_generation"] == owner_contract["generation"]
@@ -272,14 +277,16 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
 
             with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
                 row, = connection.execute(
-                    "SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (workspace_id,),
+                    "SELECT payload_json FROM gateway_workspace_registry WHERE gateway_id=? AND workspace_id=?",
+                    (gateway_id, workspace_id),
                 ).fetchone()
                 metadata_row, = connection.execute(
                     "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
                 ).fetchone()
                 record = json.loads(row)
                 assert record["root_path"] == str(target)
-                assert record["backend_workspace_id"] == backend_id
+                assert (record["gateway_id"], record["workspace_id"]) == (gateway_id, workspace_id)
+                assert "backend_workspace_id" not in record
                 assert record["desired_running"] is False
                 assert record["connection_error"] == expected_error, "启动失败由唯一Backend owner记录"
                 assert json.loads(metadata_row)["managed_backends"] == original_contracts
@@ -295,7 +302,7 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
             response = await client.get("/api/gateway/workspaces", params={"check_health": True})
             assert response.status_code == 200, response.text
             item = next(item for item in response.json()["data"]["items"] if item["workspace_id"] == workspace_id)
-            assert item["backend_workspace_id"] == backend_id
+            assert item["gateway_id"] == gateway_id
             assert item["status"] == "ready"
             assert item["connection_error"] is None
             evidence["recovered"] = item

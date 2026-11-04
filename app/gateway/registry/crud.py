@@ -104,6 +104,14 @@ class RegistryCrudMixin:
         self._save(owner=mutation_owner or target.owner)
         return target
 
+    def _validate_local_root_binding(self, key: WorkspaceKey, root: Path) -> None:
+        registered = self._targets.get(key)
+        if registered is not None and Path(cast(str, registered.root_path)).resolve() != root.resolve():
+            raise WorkspaceIdentityConflictError(
+                f"工作区 UUID 已绑定另一物理根: workspace_id={key[1]}, "
+                f"registered={registered.root_path}, requested={root}"
+            )
+
     def _validate_target_identity(self, target: WorkspaceTarget) -> None:
         if target.connection_kind == "local":
             if not isinstance(target.root_path, str) or not target.root_path or not Path(target.root_path).is_absolute():
@@ -123,12 +131,7 @@ class RegistryCrudMixin:
         if target.connection_kind == "local":
             if target.gateway_id != self.gateway_id or target.remote_gateway_connection_ids:
                 raise ValueError("本机工作区必须属于当前原生 Gateway，不能带远端连接")
-            registered = self._targets.get(target.key)
-            if registered is not None and Path(cast(str, registered.root_path)).resolve() != Path(cast(str, target.root_path)).resolve():
-                raise WorkspaceIdentityConflictError(
-                    f"工作区 UUID 已绑定另一物理根: workspace_id={target.workspace_id}, "
-                    f"registered={registered.root_path}, requested={target.root_path}"
-                )
+            self._validate_local_root_binding(target.key, Path(cast(str, target.root_path)))
         elif target.connection_kind == "remote_gateway":
             if target.gateway_id == self.gateway_id or target.owner != "remote_projection" or not target.remote_gateway_connection_ids:
                 raise ValueError("远端工作区必须具有独立 Gateway 归属和连接关联")

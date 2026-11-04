@@ -56,6 +56,7 @@ class RegistryRuntimeMixin:
                     f"工作区原生根的 UUID 与原登记不匹配: registered={target.workspace_id}, "
                     f"expected={target.workspace_id}, actual={workspace_id}, root={root}"
                 )
+        registry._validate_local_root_binding((registry.gateway_id, workspace_id), root)
         return workspace_id
 
     def local_workspace_root(self, workspace_id: str) -> Path:

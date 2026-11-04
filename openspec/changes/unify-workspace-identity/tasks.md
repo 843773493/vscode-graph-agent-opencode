@@ -2,7 +2,7 @@
 
 - [x] 1.1 全仓检索工作区别名生成、`backend_workspace_id`／`remote_workspace_id` 及其直接和间接消费者，标出真实工作区引用与独立连接／导航身份。包括 camelCase、旧身份头、projection 生成器和不含旧字段名的持久引用；范围见 design 的迁移输入表。
 - [x] 1.2 明确支持的 registry、配置及客户端旧版本，确认需迁移的实际表、字段和恢复格式；与多工作区、quick-access、扩展管理规划对齐，避免新增旧映射调用方。输入基线与正确 owner 不改写边界见 design；迁移实现及恢复验收仍在第 5／6 组。
-- [ ] 1.3 在现有受控身份入口完成注册前 UUID 获取、已有 UUID 保留及同原生 Gateway 根冲突拒绝，不增加第二身份源或占位 workspace_id。
+- [x] 1.3 在现有受控身份入口完成注册前 UUID 获取、已有 UUID 保留及同原生 Gateway 根冲突拒绝，不增加第二身份源或占位 workspace_id。
 - [x] 1.3a 身份文件完整写入后原子不覆盖发布，消除并发读取空文件；覆盖创建／绑定竞争、候选失败清理与真实 Gateway 损坏恢复。此子项不代表 1.3 的登记与根冲突验收完成。Windows 实机验证尚未完成：`hyf-win` 目标已有两项本地删除，快照激活拒绝，未覆盖目标改动。
 
 ## 2. 原生 Gateway 登记与本地请求链
@@ -132,3 +132,11 @@
 - 公开连接 DELETE 在清理前共用 registry 的 owner／活动引用校验，清理成功后沿原 remove 复查并解绑。原转发对账同时识别已消失 owner、已失效连接关联和待删连接，不改绑另一连接；同来源其它有效连接及另一 Gateway 的同 UUID 转发保留。
 - 关闭失败保留原进程与定义；原子保存失败恢复定义内存并保留已停止运行态，原 DELETE 可重试且不重复关闭。公开入口保留未知 404、配置 owner 403、活动请求／流 409，核对 request_id、原异常因果、定义文件和 SQLite 冷恢复。
 - 四模块批次 176 passed／2 failed，失败均在原固定端口 41236 可用性检查；保留失败原件，确认真实 bind 可用后只补跑两例，2 passed。64 个新增参数场景全部通过。验证为 ASGITransport 进程内公开路由、真实 registry／SQLite／定义文件及 socket listener，进程关闭使用受控替身，不代表真实 HTTP 服务或 SSH 验收。Ruff 剩余 7 条与实际改前相同；Pyright 50 条均逐项归因于改前源码，未跑旧类型基线，不称类型全绿。最终源码与检查指纹一致，主线程复核差异；准确命令、原始结果及归因在 `out/tests/temp/identity_connection_cleanup_20261104/artifacts/connection-cleanup-final-evidence-1793809342971461555.json`。4.2／4.4／6.4 的整体迁移验收仍未完成。
+
+
+### 2026-11-04：1.3 canonical 注册冲突链路收口
+
+- 注册身份读取和原 registry 发布共用同一个 UUID／物理根检查，始终按本机完整 owner 查询；managed 在通用重复判断前、external 在健康探测前拒绝异根冲突，不新增身份源或兼容链。原 upsert、冷恢复与 generation 的发布前校验保持；不同 Gateway 的同 UUID 不互相阻挡。
+- root-binding 最终 20 passed／11.48 秒；复制身份的新根读取反例修复前 4 failed，修复后全部通过，保留 JSON／SQLite、初始化开关、原身份与登记不变、冷恢复损坏精确拒绝。真实 Gateway 的 managed／external 两个重复 UUID 场景通过；原登记身份缺件／改写及失败恢复两个场景补跑通过（90.31 秒）。managed 原组 34 passed，唯一被并行导入中断的参数补跑 1 passed；不将重复执行相加。
+- 并行 itemized 改动曾暂时删除仍被引用的函数，导致身份 CLI 导入失败；原始失败保留，确认导入恢复后才补跑失败项。最后产品补跑中两份 assembly／request 源码仍发生变化，本批身份与注册源码未变，因此这是共享工作区观察结果，不声称全仓冻结快照验收。Ruff 通过；本批三文件 Pyright 与改前按文件／规则／完整消息及重数核对为 148／148 条存量诊断，新增零；root-binding 测试单独零诊断。
+- 准确命令、指纹与原始结果见 `out/tests/temp/identity_registration_current/artifacts/` 和 `out/tests/temp/identity_root_binding_current/artifacts/verification-precise-1793822445037641024.json`。本项不代表完整 2.4／3.3／6.4 验收；symlink 同物理根、授权释放后搬根、generation 冲突与 Windows 本轮没有专门新增验收，后续对应范围继续保留。
