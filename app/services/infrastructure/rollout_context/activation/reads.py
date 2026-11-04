@@ -234,13 +234,12 @@ class ResourceActivationReadMixin:
     ) -> ResourceActivationSnapshotRef:
         """按稳定 identity 读取并重算 hash；篡改 fail closed。"""
 
-        with self._storage.storage._connect(
-            self._storage.storage.fork_paths.thread_identity(session_id, thread_id),
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+        # catalog、父级与当前 lineage 共用一次快照，避免每份正文重开连接和解析节点。
+        # 复用只限本次读取；每份正文仍核摘要，下一次调用重新建立提交边界。
+        with self._storage.storage.open_read_snapshot(
+            session_id, thread_id, checkpoint_ns,
+        ) as snapshot:
+            connection = snapshot.connection
             self.require_schema(connection)
             raw = self._read_raw_snapshot(
                 connection,
@@ -248,11 +247,12 @@ class ResourceActivationReadMixin:
                 thread_id=thread_id,
                 activation_snapshot_id=activation_snapshot_id,
             )
-        return self._build_snapshot(
-            raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
-                detail_ref=ref, checkpoint_ns=checkpoint_ns, storage_owner=(session_id, thread_id),
-            ),
-        )
+            return self._build_snapshot(
+                raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
+                    detail_ref=ref, checkpoint_ns=checkpoint_ns,
+                    storage_owner=(session_id, thread_id), snapshot=snapshot,
+                ),
+            )
 
     def frozen_for_model_call(
         self,
@@ -264,11 +264,10 @@ class ResourceActivationReadMixin:
     ) -> ResourceActivationSnapshotRef | None:
         """按模型调用的唯一 owner 找回原 ID，不从命名规则重算历史身份。"""
 
-        with self._storage.storage._connect(
-            self._storage.storage.fork_paths.thread_identity(session_id, thread_id),
-            checkpoint_ns, session_id=session_id, read_only=True,
-        ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+        with self._storage.storage.open_read_snapshot(
+            session_id, thread_id, checkpoint_ns,
+        ) as snapshot:
+            connection = snapshot.connection
             self.require_schema(connection)
             row = connection.execute(
                 "SELECT activation_snapshot_id FROM resource_activation_snapshots "
@@ -282,22 +281,22 @@ class ResourceActivationReadMixin:
                 connection, session_id=session_id, thread_id=thread_id,
                 activation_snapshot_id=strict_text(row[0], field="activation_snapshot_id"),
             )
-        return self._build_snapshot(
-            raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
-                detail_ref=ref, checkpoint_ns=checkpoint_ns, storage_owner=(session_id, thread_id),
-            ),
-        )
+            return self._build_snapshot(
+                raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
+                    detail_ref=ref, checkpoint_ns=checkpoint_ns,
+                    storage_owner=(session_id, thread_id), snapshot=snapshot,
+                ),
+            )
 
     def frozen_for_admission(
         self, admission: ExecutionAdmission, *, checkpoint_ns: str = ""
     ) -> ResourceActivationSnapshotRef | None:
         """唯一冻结 owner 查询本 execution，或同真实用户 Turn 的首次冻结事实。"""
 
-        with self._storage.storage._connect(
-            admission.thread_id, checkpoint_ns, session_id=admission.session_id,
-            read_only=True,
-        ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+        with self._storage.storage.open_read_snapshot(
+            admission.session_id, admission.thread_id, checkpoint_ns,
+        ) as snapshot:
+            connection = snapshot.connection
             self.require_schema(connection)
             execution = connection.execute(
                 "SELECT turn_id, execution_origin, job_id, admission_idempotency_key, "
@@ -338,12 +337,12 @@ class ResourceActivationReadMixin:
                 session_id=admission.session_id, thread_id=admission.thread_id,
                 activation_snapshot_id=strict_text(row[0], field="activation_snapshot_id"),
             )
-        return self._build_snapshot(
-            raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
-                detail_ref=ref, checkpoint_ns=checkpoint_ns,
-                storage_owner=(admission.session_id, admission.thread_id),
-            ),
-        )
+            return self._build_snapshot(
+                raw, read_lineage_manifest=lambda ref: self._lineage_body.read_lineage_manifest(
+                    detail_ref=ref, checkpoint_ns=checkpoint_ns,
+                    storage_owner=(admission.session_id, admission.thread_id), snapshot=snapshot,
+                ),
+            )
 
     def read_assembly_binding(
         self,

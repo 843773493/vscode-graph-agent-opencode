@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationPolicySnapshot,
@@ -33,6 +36,8 @@ from app.services.infrastructure.rollout_context.activation.store import (
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
+from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
+from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_record_from_mapping,
 )
@@ -40,6 +45,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 POLICY = ResourceActivationPolicySnapshot.from_dict({"default_boundary": "turn", "overrides": {"mcp_tool_catalog": "model_call"}})
@@ -187,6 +193,109 @@ def test_model_call_lookup_recovers_original_identity_after_store_restart(
     ) is None
 
 
+@pytest.mark.parametrize("origin", ["user_turn", "internal"])
+@pytest.mark.parametrize("lookup", ["identity", "model_call", "admission"])
+def test_cold_activation_read_shares_snapshot_with_parent_lineage(
+    activation_store, storage, sessions_root, monkeypatch, request, origin, lookup,
+) -> None:
+    parent = _execution_snapshot(storage)
+    thread = parent.owner_thread_id
+    if origin == "internal":
+        admission = storage.executions.admit_internal_execution(
+            SESSION_ID, thread_id=thread, execution_id="execution-shared-internal",
+            job_id="job-shared-internal", admission_idempotency_key="shared-internal",
+            runtime_notice_item=None,
+            request_input={"kind": "seed_reference", "reference": {"seed_id": "shared-internal"}},
+        )
+        parent = replace(parent, activation_snapshot_id="activation-shared-internal",
+                         execution_id=admission.execution_id, turn_id=None)
+    else:
+        admission = storage.executions.execution_admission(
+            SESSION_ID, thread_id=thread, execution_id=parent.execution_id,
+        )
+    parent_ref = activation_store.save_snapshot(parent)
+    call = _model_call_snapshot(parent, storage)
+    activation_store.save_snapshot(call)
+    expected = parent if lookup == "admission" else call
+    with RolloutCheckpointSaver(sessions_root) as cold:
+        backend = cold._storage.storage
+        connections, snapshots, details, resolutions = [], [], [], []
+        connect = backend._connect
+        open_snapshot = backend.open_read_snapshot
+        resolve = SessionCatalogPathResolver.resolve_thread_node
+        read_detail = DetailFiles.read
+
+        def observe_connect(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        def observe_snapshot(*args, **kwargs):
+            snapshot = open_snapshot(*args, **kwargs)
+            snapshots.append(snapshot)
+            return snapshot
+
+        def observe_resolve(resolver, session_id, thread_id):
+            resolutions.append((session_id, thread_id))
+            return resolve(resolver, session_id, thread_id)
+
+        def observe_detail(files, *args, **kwargs):
+            details.append(kwargs.get("snapshot"))
+            return read_detail(files, *args, **kwargs)
+
+        def load():
+            if lookup == "admission":
+                return cold.frozen_resource_activation_for_admission(admission)
+            if lookup == "model_call":
+                return cold.frozen_resource_activation_for_model_call(
+                    SESSION_ID, thread_id=thread, model_call_id=call.model_call_id,
+                )
+            return cold.read_resource_activation_snapshot(
+                SESSION_ID, thread_id=thread, activation_snapshot_id=call.activation_snapshot_id,
+            )
+
+        with monkeypatch.context() as observe:
+            observe.setattr(backend, "_connect", observe_connect)
+            observe.setattr(backend, "open_read_snapshot", observe_snapshot)
+            observe.setattr(SessionCatalogPathResolver, "resolve_thread_node", observe_resolve)
+            observe.setattr(DetailFiles, "read", observe_detail)
+            for _ in range(2):
+                connections.clear()
+                snapshots.clear()
+                details.clear()
+                resolutions.clear()
+                assert load().to_dict() == expected.to_dict()
+                measurement = {"lookup": lookup, "origin": origin, "connections": len(connections),
+                               "snapshots": len(snapshots), "detail_reads": len(details),
+                               "thread_resolutions": len(resolutions)}
+                print(f"activation cold read work: {measurement}")
+                context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+                (context.artifacts_dir / "activation-read-work.json").write_text(
+                    json.dumps(measurement, indent=2), encoding="utf-8",
+                )
+                assert len(details) == (1 if lookup == "admission" else 2)
+                assert len(connections) == len(snapshots) == len(resolutions) == 1
+                assert all(snapshot is snapshots[0] for snapshot in details)
+                assert snapshots[0].closed
+                with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                    connections[0].execute("SELECT 1")
+
+            # 同一 Saver 的下一次读取必须重新验证父级正文，不能跨调用复用成功结果。
+            target = cold._detail_store._files.path(parent_ref)
+            raw = target.read_bytes()
+            damaged = raw.replace(b"derivation:v1", b"derivation:v2", 1)
+            assert damaged != raw
+            try:
+                target.write_bytes(damaged)
+                with pytest.raises(ResourceActivationStoreError) as error:
+                    load()
+                assert error.value.code == "resource-activation-lineage-unavailable"
+                assert target.read_bytes() == damaged
+                assert snapshots[-1].closed
+            finally:
+                target.write_bytes(raw)
+
+
 def test_save_and_read_round_trip_preserves_identity(
     activation_store: ResourceActivationStore, storage: RolloutContextStore
 ) -> None:
@@ -209,6 +318,52 @@ def test_save_and_read_round_trip_preserves_identity(
             "SELECT COUNT(*) FROM resource_activation_snapshots"
         ).fetchone()[0]
     assert count == 1
+
+
+def test_cold_activation_lookup_closes_snapshot_on_absence_conflict_and_retry(
+    activation_store, storage, sessions_root, monkeypatch,
+) -> None:
+    parent = _execution_snapshot(storage)
+    admission = storage.executions.execution_admission(
+        SESSION_ID, thread_id=parent.owner_thread_id, execution_id=parent.execution_id,
+    )
+    with RolloutCheckpointSaver(sessions_root) as cold:
+        snapshots = []
+        open_snapshot = cold._storage.storage.open_read_snapshot
+
+        def observe_snapshot(*args, **kwargs):
+            snapshot = open_snapshot(*args, **kwargs)
+            snapshots.append(snapshot)
+            return snapshot
+
+        monkeypatch.setattr(cold._storage.storage, "open_read_snapshot", observe_snapshot)
+        assert cold.frozen_resource_activation_for_admission(admission) is None
+        assert cold.frozen_resource_activation_for_model_call(
+            SESSION_ID, thread_id=parent.owner_thread_id, model_call_id="absent-call",
+        ) is None
+        with pytest.raises(KeyError, match="activation snapshot 不存在"):
+            cold.read_resource_activation_snapshot(
+                SESSION_ID, thread_id=parent.owner_thread_id, activation_snapshot_id="absent-snapshot",
+            )
+        with pytest.raises(ResourceActivationStoreError) as conflict:
+            cold.frozen_resource_activation_for_admission(replace(admission, job_id="another-job"))
+        assert conflict.value.code == "resource-activation-snapshot-conflict"
+        assert len(snapshots) == 4 and all(snapshot.closed for snapshot in snapshots)
+
+        activation_store.save_snapshot(parent)
+        storage.executions.mark_execution_lost(
+            SESSION_ID, thread_id=parent.owner_thread_id, turn_id=parent.turn_id,
+            execution_id=parent.execution_id, reason="验证冷读取重试",
+        )
+        resumed = storage.executions.resume_turn(
+            SESSION_ID, thread_id=parent.owner_thread_id, job_id="job-shared-retry", turn_id=parent.turn_id,
+        )
+        retry_admission = storage.executions.execution_admission(
+            SESSION_ID, thread_id=parent.owner_thread_id, execution_id=resumed["execution_id"],
+        )
+        # 新 execution 尚未冻结时，仍精确恢复同 Turn 原 activation，不重新生成身份。
+        assert cold.frozen_resource_activation_for_admission(retry_admission).to_dict() == parent.to_dict()
+        assert len(snapshots) == 5 and all(snapshot.closed for snapshot in snapshots)
 
 
 def test_model_call_snapshot_reuses_parent_bytes(
