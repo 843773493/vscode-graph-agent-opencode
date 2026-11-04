@@ -76,7 +76,8 @@ def test_snapshot_catalog_audit_does_not_sort_all_historical_locators(audit_roll
     monkeypatch.setattr(storage, "_connect", observe)
     with storage.open_read_snapshot(session_id, thread_id) as snapshot:
         assert snapshot.session_id == session_id
-    catalog_queries = [statement for statement in statements if "FROM item_catalog item " in statement]
+    # commit 数量校验应消费同一次 catalog 顺序流，不应再全表 GROUP BY 一遍。
+    catalog_queries = [statement for statement in statements if "FROM item_catalog" in statement]
     assert len(catalog_queries) == 1
     with storage._connect(thread_id, session_id=session_id, read_only=True) as connection:
         plan = connection.execute("EXPLAIN QUERY PLAN " + catalog_queries[0]).fetchall()
@@ -104,4 +105,97 @@ def test_audit_rejects_reordered_locators_without_reclaiming_tail(audit_rollout,
         else:
             with storage.open_read_snapshot(session_id, thread_id):
                 pytest.fail("不能接受正文位置与 item 顺序不一致的历史")
+    assert jsonl.read_bytes() == before
+
+
+@pytest.fixture
+def commit_history_factory(tmp_path: Path, session_bundle_factory):
+    sessions = tmp_path / ".boxteam/sessions"
+    storage = RolloutContextStore(sessions).storage
+
+    def create(commit_count: int):
+        session_id = f"ses_{create_uuid_hex()}"
+        session_bundle_factory(sessions, session_id)
+        thread_id = storage.main_thread_id(session_id)
+        storage.initialize(session_id, thread_id=thread_id)
+        item_sequence = 0
+        with storage._lock(thread_id, "", session_id=session_id):
+            with storage._connect(thread_id, session_id=session_id) as connection:
+                for index in range(commit_count):
+                    items = ()
+                    if index % (commit_count // 32) == 0:
+                        item_sequence += 1
+                        items = (CanonicalItemRecord.create(
+                            item_sequence=item_sequence, item_id=f"audit-{item_sequence}",
+                            semantic_kind="user_input", payload_kind="text", status="completed", payload="audit",
+                            producer_ref={"producer_kind": "user", "producer_id": "audit-input"},
+                        ),)
+                    storage._append_v2_records_transaction(
+                        connection, thread_id, "", items, session_id=session_id,
+                        commit_kind="item_convergence" if items else "assembly_sealed",
+                        commit_mode="item_bearing" if items else "metadata_only",
+                        idempotency_key=f"audit-commit-{index}", begin_transaction=index == 0,
+                    )
+                storage._commit_connection(connection)
+        assert item_sequence == 32
+        return storage, session_id, thread_id
+
+    return create
+
+
+def test_snapshot_audit_does_not_retain_all_commit_boundaries(commit_history_factory, request):
+    measurements = []
+    for commits in (64, 4096):
+        storage, session_id, thread_id = commit_history_factory(commits)
+        tracemalloc.start()
+        try:
+            started = perf_counter()
+            with storage.open_read_snapshot(session_id, thread_id):
+                pass
+            elapsed = perf_counter() - started
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        measurements.append({"commits": commits, "items": 32, "seconds": elapsed, "peak_traced_bytes": peak})
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "commit-audit-memory.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
+    print(f"commit audit memory: {measurements}")
+    assert measurements[1]["peak_traced_bytes"] < measurements[0]["peak_traced_bytes"] + 128 * 1024
+
+
+def test_valid_mixed_commits_validate_bodies_and_reclaim_only_uncommitted_tail(commit_history_factory):
+    storage, session_id, thread_id = commit_history_factory(64)
+    jsonl = storage.jsonl_path(session_id, thread_id=thread_id)
+    committed = jsonl.read_bytes()
+    with jsonl.open("ab") as stream:
+        stream.write(b"uncommitted-tail")
+    storage.initialize(session_id, thread_id=thread_id)
+    assert jsonl.read_bytes() == committed
+    with storage.open_read_snapshot(session_id, thread_id, validate_integrity=True) as snapshot:
+        assert snapshot.session_id == session_id
+
+
+@pytest.mark.parametrize("operation", ["initialize", "snapshot"])
+@pytest.mark.parametrize("corruption", [
+    "UPDATE storage_commits SET jsonl_record_count=2 WHERE commit_id=(SELECT MIN(commit_id) FROM storage_commits)",
+    "UPDATE item_catalog SET commit_id=commit_id+1 WHERE item_sequence=1",
+    "UPDATE item_catalog SET commit_id=999999 WHERE item_sequence=32",
+    "UPDATE item_catalog SET commit_id=NULL WHERE item_sequence=32",
+])
+def test_mixed_commit_audit_rejects_counts_and_wrong_owners_without_reclaiming_tail(
+    commit_history_factory, operation, corruption,
+):
+    storage, session_id, thread_id = commit_history_factory(64)
+    jsonl = storage.jsonl_path(session_id, thread_id=thread_id)
+    with jsonl.open("ab") as stream:
+        stream.write(b"uncommitted-tail")
+    before = jsonl.read_bytes()
+    with sqlite3.connect(storage.index_path(session_id, thread_id=thread_id)) as connection:
+        connection.execute(corruption)
+    with pytest.raises(RuntimeError):
+        if operation == "initialize":
+            storage.initialize(session_id, thread_id=thread_id)
+        else:
+            with storage.open_read_snapshot(session_id, thread_id):
+                pytest.fail("不能接受 commit 数量或 item 归属损坏的历史")
     assert jsonl.read_bytes() == before
