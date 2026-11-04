@@ -89,7 +89,7 @@ def startup_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StartupCase
     def identities(project: Path, roots: tuple[Path, ...], *, initialize: bool) -> tuple[str, ...]:
         case.validated_roots.append((roots, initialize))
         return tuple(identity(project, root) for root in roots)
-    monkeypatch.setattr(bootstrap, "resolve_backend_workspace_id", identity)
+    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", identity)
     monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_ids", identities)
     monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", case.start)
     return case

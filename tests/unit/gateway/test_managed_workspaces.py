@@ -8,11 +8,16 @@ import pytest
 from fastapi import FastAPI, HTTPException
 
 from app.core.trace_middleware import TraceMiddleware
+from app.core.workspace_identity import (
+    load_or_create_workspace_id,
+    workspace_identity_path,
+)
 from app.gateway.auth import (
     GatewayAuthContext,
     verify_gateway_access,
     verify_gateway_token,
 )
+from app.gateway.config import GatewayConfig
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import request_remote_gateway_management
@@ -27,6 +32,7 @@ from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.managed_backend import ManagedBackendOwner
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
+from app.gateway.workspace_ids import build_managed_local_workspace_id
 from tests.support.gateway_managed_backends import ProcessProbe
 
 
@@ -43,7 +49,7 @@ def creation_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """只替换工作区身份 CLI 和进程启动，保留原创建、发布及失败结算。"""
     boundary = CreationBoundary()
     backend_id = "00000000-0000-4000-8000-000000000001"
-    monkeypatch.setattr("app.gateway.managed_workspaces.resolve_backend_workspace_id", lambda *_, **__: backend_id)
+    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", lambda *_, **__: backend_id)
     monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda *_, **__: backend_id)
 
     async def validate(*_):
@@ -111,6 +117,68 @@ def creation_app(creation_registry: GatewayWorkspaceRegistry, tmp_path: Path, mo
         monkeypatch.setattr(module, "get_project_root", lambda: tmp_path)
         monkeypatch.setattr(module, "get_runtime_log_root", lambda: tmp_path / "logs")
     return application
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("external", [False, True], ids=["managed", "external"])
+@pytest.mark.parametrize("damage", ["missing", "mismatch", "root_missing"])
+async def test_reregister_known_root_never_reinitializes_or_rebinds_identity(
+    creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, external: bool, damage: str,
+) -> None:
+    root = tmp_path / "registered"
+    root.mkdir()
+    original_id = load_or_create_workspace_id(root)
+    target = creation_registry.upsert(WorkspaceTarget(
+        workspace_id=build_managed_local_workspace_id(str(root)), name="原登记",
+        root_path=str(root), backend_url="http://127.0.0.1:43001",
+        backend_workspace_id=original_id, connection_kind="local", managed=False,
+    ))
+    identity = workspace_identity_path(root)
+    if damage in {"missing", "root_missing"}:
+        identity.unlink()
+        if damage == "root_missing":
+            identity.parent.rmdir()
+            root.rmdir()
+    else:
+        identity.write_text('{"workspace_id":"00000000-0000-4000-8000-000000000099"}\n')
+    before = identity.read_bytes() if identity.exists() else None
+    state = creation_registry._state_store
+    assert state is not None
+    saved, revision = state.load_workspace_registry(), creation_registry.registry_revision
+    later_calls: list[str] = []
+
+    async def unexpected_health(*_args: object, **_kwargs: object) -> None:
+        later_calls.append("health")
+        raise AssertionError("身份核验失败后不能访问后端")
+
+    async def unexpected_start(*_args: object, **_kwargs: object) -> None:
+        later_calls.append("start")
+        raise AssertionError("身份核验失败后不能启动后端")
+
+    creation_app.state.gateway_config = GatewayConfig()
+    monkeypatch.setattr(workspaces_lifecycle, "get_project_root", Path.cwd)
+    monkeypatch.setattr(workspaces_lifecycle, "wait_for_workspace_health", unexpected_health)
+    monkeypatch.setattr(GatewayWorkspaceRuntimeController, "start_managed_backend", unexpected_start)
+    if external:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=creation_app, raise_app_exceptions=False), base_url="http://gateway",
+        ) as client:
+            response = await client.post("/api/gateway/workspaces/local", json={
+                "root_path": str(root), "backend_url": target.backend_url,
+            })
+        assert response.status_code == (500 if damage == "missing" else 400), response.text
+    else:
+        with pytest.raises((RuntimeError, ValueError, FileNotFoundError)):
+            await create_direct_managed_workspace(
+                registry=creation_registry, project_root=Path.cwd(), log_dir=tmp_path / "logs",
+                root_path=str(root), name=None, create_directory=True, request_id="known-root-reregister",
+            )
+    assert (identity.read_bytes() if identity.exists() else None) == before
+    assert state.load_workspace_registry() == saved and creation_registry.registry_revision == revision
+    assert creation_registry.resolve(target.workspace_id).backend_workspace_id == original_id
+    assert later_calls == []
+    assert root.exists() is (damage != "root_missing")
 
 
 @pytest.mark.asyncio
@@ -308,7 +376,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     workspace_root = tmp_path / "created" / "workspace"
     monkeypatch.setattr(
-        "app.gateway.managed_workspaces.resolve_backend_workspace_id",
+        "app.gateway.registry.runtime.resolve_backend_workspace_id",
         lambda *_, **__: "00000000-0000-4000-8000-000000000001",
     )
 

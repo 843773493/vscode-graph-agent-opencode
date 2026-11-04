@@ -113,6 +113,76 @@ async def test_duplicate_native_uuid_registration_keeps_original_binding(
 
 
 @pytest.mark.asyncio
+async def test_known_root_reregistration_preserves_missing_or_changed_identity(
+    request: pytest.FixtureRequest, integration_workspace_root_path: str,
+    identity_service_ports: tuple[int, int],
+) -> None:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    root = Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=root)
+    backend_port, gateway_port = identity_service_ports
+    with ExitStack() as processes:
+        backend = start_backend_process(workspace_root=str(root), port=backend_port, log_name="known-root-backend")
+        processes.callback(close_backend_process, backend)
+        gateway = start_gateway_process(
+            workspace_root=root, default_backend_url=f"http://127.0.0.1:{backend.port}",
+            port=gateway_port, artifacts_dir=context.artifacts_dir,
+        )
+        processes.callback(close_gateway_process, gateway)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=45,
+        ) as client:
+            await acquire_gateway_guest(client)
+            initial = (await client.get("/api/gateway/workspaces", params={"check_health": False})).raise_for_status().json()
+            original, = initial["data"]["items"]
+            identity = root / ".boxteam/workspace-identity.json"
+            original_identity = identity.read_bytes()
+            state = context.boxteam_home / "state/gateway/gateway.sqlite"
+            with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
+                rows = tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry"))
+                metadata = connection.execute(
+                    "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+                ).fetchone()
+            results = []
+            for damage in ("missing", "mismatch"):
+                if damage == "missing":
+                    identity.unlink()
+                    damaged = None
+                else:
+                    damaged = b'{"workspace_id":"00000000-0000-4000-8000-000000000099"}\n'
+                    identity.write_bytes(damaged)
+                try:
+                    for external in (False, True):
+                        payload: dict[str, object] = {"root_path": str(root)}
+                        if external:
+                            payload["backend_url"] = f"http://127.0.0.1:{backend.port}"
+                        request_id = f"known-root-{damage}-{'external' if external else 'managed'}"
+                        response = await client.post("/api/gateway/workspaces/local", json=payload,
+                                                     headers={"X-Request-ID": request_id})
+                        assert response.status_code == (500 if damage == "missing" else 400), response.text
+                        assert response.json()["request_id"] == response.headers["X-Request-ID"] == request_id
+                        assert (identity.read_bytes() if identity.exists() else None) == damaged
+                        with closing(sqlite3.connect(f"{state.as_uri()}?mode=ro", uri=True)) as connection:
+                            assert tuple(connection.execute("SELECT workspace_id,payload_json FROM gateway_workspace_registry")) == rows
+                            assert connection.execute(
+                                "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+                            ).fetchone() == metadata
+                        results.append({"damage": damage, "external": external, "error": response.json()})
+                finally:
+                    # 修复测试注入的外部缺件／篡改；不替产品补建任何登记。
+                    identity.write_bytes(original_identity)
+            current = (await client.get("/api/gateway/workspaces", params={"check_health": True})).raise_for_status().json()
+            retained, = current["data"]["items"]
+            assert retained["workspace_id"] == original["workspace_id"]
+            assert retained["backend_workspace_id"] == original["backend_workspace_id"]
+            assert retained["status"] == "ready"
+            assert current["data"]["active_workspace_id"] == initial["data"]["active_workspace_id"]
+            (context.artifacts_dir / "known-root-reregistration.json").write_text(
+                json.dumps({"attempts": results, "retained": current}, ensure_ascii=False, indent=2) + "\n",
+            )
+
+
+@pytest.mark.asyncio
 async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
     identity_service_ports: tuple[int, int],

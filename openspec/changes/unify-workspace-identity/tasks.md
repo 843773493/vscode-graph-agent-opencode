@@ -68,3 +68,9 @@
 - 显式 Generator 导入和身份预检共用唯一只读输入校验，按原 bytes、冻结映射／owner／来源、source_hash 和精确回执区分 pending／imported／invalid；未结算或失配阻塞身份切换，已退休历史不按当前登记重绑。预检不写文件、不导入、不发网络请求，完整迁移仍 `apply_available=false`，6.1 不勾选。
 - 独审指出 snapshot 发布前中断留下半备份时，输入变化可能先导入新 hash 再报告旧备份失败。4 个反例先复现；原链路现先只读准备整批 bundle，所有半备份必须命中同一 source_hash 且已有归档 bytes 一致，再执行缓存结果。新增 preview／apply × 原 bytes、映射、归档冲突、定义重建失败共 8 场景，核零 POST、无新备份／snapshot／receipt、原件及原库不变；原输入不变的中断、丢应答、退休中断重入继续成功。
 - 最终 66 passed／18.24s，Ruff、Python 3.12 Pyright 退出 0，独立只读复核确认上述缺口闭合。准确命令、原始输出及源码指纹见 `out/tests/temp/identity_generator_unsealed_sol_20261104/artifacts/p2_verification.json`；基础预检证据保留在 `out/tests/temp/identity_generator_preflight_sol_20261104/artifacts/verification.json`。HTTP 边界采用明确 MockTransport，未声称真实目标 HTTP 导入或完整可恢复迁移已完成。
+
+### 2026-11-04：1.3 已登记根的注册身份保护
+
+- 原 root-binding owner 统一负责本机注册身份：已有根只能只读核验 UUID 并与原登记精确匹配；真正新根才允许沿原入口建目录、初始化身份。managed、external 和默认工作区启动共用该入口，移除各自初始化调用；已登记根丢失时，即使要求创建目录也不能重建，更不能因重复注册生成新 UUID 后才报错。
+- 原行为的真实 CLI／入口反例为 3 failed／1 passed；修复后注册、冷恢复、默认工作区改名与新／已有身份共 114 passed／19.76s。真实 Gateway 文件 4 passed／130.19s，新增场景逐一核 managed／external 的身份缺件与 UUID 改写拒绝、原文件和 SQLite 登记／活动项／revision 不变，修复测试注入后原工作区保持健康；缺件保留原 Trace 500，UUID 冲突为 workspace_create 400。
+- 最终静态对照完整原基线：Pyright 91／91、Ruff 27／27，无新增诊断；独立只读复核确认写入与调用顺序，9 份 Python 内存编译通过。准确命令、指纹及原件见 `out/tests/temp/identity_known_root_20261104/artifacts/verification.json`。symlink alias、并发注册和 Windows 未作专门验收；现有路由别名与完整迁移仍属后续任务，1.3 不勾选。

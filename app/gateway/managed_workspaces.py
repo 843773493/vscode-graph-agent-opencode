@@ -5,7 +5,6 @@ from pathlib import Path
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.schemas.gateway.lifecycle import (
     GatewayRuntimeGroupRequest,
@@ -54,14 +53,13 @@ async def create_direct_managed_workspace(
     workspace_root = requested_root.resolve()
     if workspace_root.exists() and not workspace_root.is_dir():
         raise ValueError("所选工作区资源不是目录")
-    if not workspace_root.exists():
-        if not create_directory:
-            raise FileNotFoundError("所选工作区目录不存在")
-        workspace_root.mkdir(parents=True)
+    if not workspace_root.exists() and not create_directory:
+        raise FileNotFoundError("所选工作区目录不存在")
     backend_workspace_id = await asyncio.to_thread(
-        resolve_backend_workspace_id,
+        registry.resolve_local_workspace_identity,
         project_root,
         workspace_root,
+        create_directory=create_directory,
     )
 
     workspace_id = build_managed_local_workspace_id(str(workspace_root))

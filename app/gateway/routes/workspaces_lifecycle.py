@@ -48,7 +48,6 @@ from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.local_workspace import wait_for_workspace_health
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from app.gateway.server.port_forwarding import (
     get_port_forward_manager,
     port_forward_http_error,
@@ -202,7 +201,7 @@ async def add_local_workspace(
             backend_url = payload.backend_url.rstrip("/")
             gateway_config = request.app.state.gateway_config
             backend_workspace_id = await asyncio.to_thread(
-                resolve_backend_workspace_id,
+                registry.resolve_local_workspace_identity,
                 get_project_root(),
                 workspace_root,
             )

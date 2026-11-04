@@ -20,9 +20,8 @@ from tests.support.gateway_managed_backends import ProcessProbe
 @pytest.fixture(autouse=True)
 def _stub_workspace_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        bootstrap,
-        "resolve_backend_workspace_id",
-        lambda *_: "00000000-0000-4000-8000-000000000001",
+        "app.gateway.registry.runtime.resolve_backend_workspace_id",
+        lambda *_, **__: "00000000-0000-4000-8000-000000000001",
     )
 
 
@@ -209,7 +208,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
             root_path=str(optional_root),
             backend_url="http://127.0.0.1:18110",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             managed=True,
         ),
         activate=False,
@@ -222,10 +221,13 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
     monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
-    monkeypatch.setattr(bootstrap, "resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
+    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", lambda *_, **__: "00000000-0000-4000-8000-000000000001")
     monkeypatch.setattr(
         "app.gateway.registry.runtime.resolve_backend_workspace_ids",
-        lambda _project, roots, **__: tuple("00000000-0000-4000-8000-000000000001" for _ in roots),
+        lambda _project, roots, **__: tuple(
+            "00000000-0000-4000-8000-000000000001" if root == default_root else "00000000-0000-4000-8000-000000000002"
+            for root in roots
+        ),
     )
 
     async def start_default_runtime(*, owner, **_: object):
@@ -236,7 +238,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
                 "terminal_manager": "http://127.0.0.1:18012",
                 "browser_manager": "http://127.0.0.1:18015",
             },
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+            backend_workspace_id=owner.contract.members[0].backend_workspace_id,
             backend_owner=owner,
         )
         contract = replace(owner.contract, backend_url=backend_url)

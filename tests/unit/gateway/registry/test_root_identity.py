@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.workspace_identity import (
+    load_or_create_workspace_id,
+    workspace_identity_path,
+)
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import (
@@ -108,3 +111,22 @@ def test_persisted_conflicting_root_is_rejected_without_repair(
         GatewayWorkspaceRegistry(storage_path=path, state_store=state)
     assert (state.load_workspace_registry() if state is not None else path.read_bytes()) == original
     assert not (tmp_path / "copy").exists()
+
+
+@pytest.mark.parametrize("has_identity", [False, True])
+def test_new_root_registration_initializes_once_and_preserves_existing_identity(
+    tmp_path: Path, root_registry: GatewayWorkspaceRegistry, has_identity: bool,
+) -> None:
+    root = tmp_path / "new-root"
+    expected = load_or_create_workspace_id(root) if has_identity else None
+    actual = root_registry.resolve_local_workspace_identity(Path.cwd(), root, create_directory=True)
+    assert expected is None or actual == expected
+    identity = workspace_identity_path(root)
+    before = identity.read_bytes(), identity.stat().st_mtime_ns, identity.stat().st_ino
+    target = root_registry.upsert(WorkspaceTarget(
+        workspace_id="new-registration", name="新登记", root_path=str(root),
+        backend_workspace_id=actual, backend_url="", connection_kind="local",
+    ))
+    assert root_registry.resolve_local_workspace_identity(Path.cwd(), root, create_directory=True) == actual
+    assert (identity.read_bytes(), identity.stat().st_mtime_ns, identity.stat().st_ino) == before
+    assert root_registry.resolve(target.workspace_id).backend_workspace_id == actual

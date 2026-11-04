@@ -29,7 +29,6 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendMember,
     ManagedBackendOwner,
 )
-from app.gateway.runtime.workspace_process import resolve_backend_workspace_id
 from app.gateway.workspace_ids import (
     build_managed_local_workspace_id,
 )
@@ -79,7 +78,6 @@ def _default_workspace_root() -> Path:
         if configured_root
         else get_user_workspace_root()
     )
-    root_path.mkdir(parents=True, exist_ok=True)
     return root_path
 
 
@@ -203,7 +201,9 @@ async def _complete_registry_startup(
     preserve_existing_managed_runtimes: bool,
 ) -> GatewayWorkspaceRegistry:
     external_backend_url = _external_default_backend_url()
-    backend_workspace_id = await asyncio.to_thread(resolve_backend_workspace_id, get_project_root(), default_root_path)
+    backend_workspace_id = await asyncio.to_thread(
+        registry.resolve_local_workspace_identity, get_project_root(), default_root_path, create_directory=True,
+    )
     if persisted_default is not None and persisted_default.backend_workspace_id != backend_workspace_id:
         raise RuntimeError("默认工作区 Backend UUID 与 registry 不匹配")
     owner = registry.backend_owner(default_workspace_id) if registry.has_target(default_workspace_id) else None

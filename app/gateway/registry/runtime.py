@@ -16,7 +16,12 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendOwner,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.runtime.workspace_process import resolve_backend_workspace_ids
+from app.gateway.runtime.workspace_process import (
+    resolve_backend_workspace_id,
+    resolve_backend_workspace_ids,
+)
+
+from .core import WorkspaceIdentityConflictError
 
 if TYPE_CHECKING:
     from . import GatewayWorkspaceRegistry
@@ -29,6 +34,27 @@ class RegistryRuntimeMixin:
 
     def backend_owners(self) -> tuple[ManagedBackendOwner, ...]:
         return tuple(self._backend_owners.values())
+
+    def resolve_local_workspace_identity(
+        self, project_root: Path, workspace_root: Path, *, create_directory: bool = False,
+    ) -> str:
+        """登记过的原生根只读核验；只有新根允许原身份入口初始化。"""
+        registry = cast("GatewayWorkspaceRegistry", self)
+        root = workspace_root.resolve()
+        bindings = [
+            target for target in registry.targets()
+            if target.connection_kind == "local" and Path(cast(str, target.root_path)).resolve() == root
+        ]
+        if not bindings and create_directory:
+            root.mkdir(parents=True, exist_ok=True)
+        workspace_id = resolve_backend_workspace_id(project_root, root, initialize=not bindings)
+        for target in bindings:
+            if target.backend_workspace_id != workspace_id:
+                raise WorkspaceIdentityConflictError(
+                    f"工作区原生根的 UUID 与原登记不匹配: registered={target.workspace_id}, "
+                    f"expected={target.backend_workspace_id}, actual={workspace_id}, root={root}"
+                )
+        return workspace_id
 
     def local_workspace_root(self, workspace_id: str, backend_workspace_id: str) -> Path:
         """只按精确 target/Backend 身份取得唯一 registry root binding。"""
