@@ -182,9 +182,6 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
     def _parse_canonical_attachment_id(self, session_id: str, file_id: str, *, thread_id: str | None = None) -> str:
         return self._resource_id(file_id, session_id=session_id, thread_id=thread_id, canonical=True)[0]
 
-    def _parse_logical_file_id(self, session_id: str, file_id: str) -> str:
-        return self._resource_id(file_id, session_id=session_id)[0]
-
     async def persist_inline(self, session_id: str, attachments: Sequence[AttachmentRef], *, thread_id: str, message_id: str) -> list[AttachmentRef]:
         if not message_id or ":" in message_id:
             raise ValueError("附件上传必须绑定非空且不含冒号的 message_id")

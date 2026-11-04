@@ -399,7 +399,7 @@ async def test_fork_capture_accepts_historical_gateway_uri_with_no_ambient_conte
     token = set_current_gateway_id(None)
     try:
         with pytest.raises(ValueError, match="固定目标工作区"):
-            case.store._parse_logical_file_id(SESSION_A, historical_uri)
+            case.store.read(SESSION_A, historical_uri)
         (snapshot,) = case.store.capture_fork_attachments(record, references=((historical_uri, True),), same_storage_owner=True)
         assert (snapshot.source_session_id, snapshot.source_thread_id, snapshot.source_attachment_id, snapshot.source_file_id) == (
             SESSION_A, case.owner.thread_id, parsed.attachment_id, historical_uri,
@@ -735,7 +735,7 @@ async def test_fork_attachment_same_length_damage_never_reuses_stat_cache(fork_c
         "/etc/passwd",
     ],
 )
-def test_parse_logical_file_id_rejects_traversal_and_foreign(file_id: str) -> None:
+def test_parse_attachment_uri_rejects_traversal_and_foreign(file_id: str) -> None:
     with pytest.raises(ValueError):
         parse_attachment_uri(file_id, require_file=True)
 

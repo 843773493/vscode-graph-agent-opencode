@@ -22,8 +22,8 @@
 
 ## 4. 普通访问、历史与 fork 迁齐
 
-- [ ] 4.1 原件/预览接口、资源导航、目录浏览、文件读取/编辑、Shell 和 fork 统一通过原附件 owner 按需重建；并发重建只发布同一资源/目录，原件缺失或损坏明确失败。
-  普通读/列表/媒体/下载、文件修改、Shell、fork 及持久 outbox 回放已迁并有定向证据。watch 已使用原 locator 和工作区 watcher，单次 stat 优先核实际节点类型，仅实际缺失的固定布局使用虚拟目录语义，不持正文 holder、不妨碍最后 detach 结清，核 released 根、显式附件 URI 及私有事件过滤，不因初始化或回放重建；reveal 的同步解析/stat/原生派发已持原 access 并验证卸载竞争与重建。外部系统文件管理器持续使用期尚无可靠占用身份，按本轮限定保留精确 TODO，不扩展通用接管或常驻 lease，因此暂不勾选全量入口完成。
+- [x] 4.1 原件/预览接口、资源导航、目录浏览、文件读取/编辑、Shell 和 fork 统一通过原附件 owner 按需重建；并发重建只发布同一资源/目录，原件缺失或损坏明确失败。
+  普通读/列表/媒体/下载、文件修改、Shell、fork 及持久 outbox 回放已迁并有定向证据。watch 使用原 locator 和工作区 watcher，不因初始化或回放重建；reveal 的解析/stat/原生派发持原 access，已验证卸载竞争与重建。2026-11-04 最终源码核对未发现普通入口遗漏，复用下表已有产品证据；外部系统文件管理器持续使用期按下方无身份接管 TODO 延期，不声称已实现。
 - [x] 4.2 保留 canonical/assembly 的实际输入版本及原 request_hash；释放工作目录不删除其依赖，不读取当前配置/文件补历史，不复制第二套完整消息或目录历史。
 - [x] 4.3 同工作区 fork 先重建可释放原件并复用身份/关联，跨工作区保存目标端原件及选定冻结结果；导入派生结果在目标卸载后仍保留，required/optional 真实缺件和失败/删除结算合同不变。
 
@@ -46,6 +46,7 @@
 原 5.2“旧代操作接管/挂起操作取消终止核实”与 5.4“通用 operation/Session 删除/shutdown 的完整期限治理”移出本次实施清单。已实现部分继续保留，未完成部分按以下范围独立跟踪，不能勾选为已实现：
 
 - TODO(resource-takeover)：没有可靠原生身份的旧代进程/浏览器接管，以及不合作 SDK、脚本或原生 I/O 的强制终止；附件在对应结果未知时继续保留并显示原因，不为归档补做通用接管。
+- TODO(attachment-reveal)：系统文件管理器启动后持续使用期没有可靠占用身份；本轮仅保护原生派发期间，不新增常驻 lease、进程追踪或 GUI 关闭确认，也不将该延期项设为普通访问验收门槛。
 - TODO(resource-shutdown)：整个 Backend/shutdown 的硬期限与上层启动器协调；MCP、Node Debug、Terminal/Browser 自身未直接影响本次附件目录链路的关闭、锁及 I/O 治理。
 - TODO(resource-storage-performance)：共享账本写入、WAL、终态元数据和恢复长尾；原测量原件保留，后续以实际负载选择优化，不把遍历所有共享消费者设为附件收口条件。
 - TODO(agent-collaboration)：团队、成员、委派与协作专项保持用户既有延期裁定。
@@ -87,4 +88,6 @@
 
 两条真实后端重启原件位于 `out/tests/temp/identity_convergence_20261104/artifacts/`：`attachment-process-live-final-1793794482374124887` 为真实后台父子处理进程跨 Backend 硬重启，1 passed、2 deselected，121.18s；`attachment-runtime-restart-final-1793794652556874428` 为 queued 输入与 stale runtime 重启对账，1 passed，100.65s。
 
-runtime/entry/Shell/terminal、离线转换/安装/回退及原目录释放中断的并行验证由各 owner 保留独立原件，不与上表重复相加。4.1 保留外部 GUI 持续使用期边界；6.3 继续未勾：真实进程停止派发前/回执后的硬退出、startup unknown 以及上传 topology/ingest 的迁后故障专项尚未完成本轮全量复验。Linux 的 fork/历史及两条重启通过不能代替 Windows 新策略验证，6.4 与归档 6.6 保持未完成。
+runtime/entry/Shell/terminal、离线转换/安装/回退及原目录释放中断的并行验证由各 owner 保留独立原件，不与上表重复相加。外部 GUI 持续使用期按上述 TODO 延期。6.3 继续未勾：附件占用与释放/重建中断的证据尚待按本轮实际改动核齐；通用进程接管、强停和完整关闭期限不作为补验要求。Linux 的 fork/历史及两条重启通过不能代替 Windows 新策略验证，6.4 与归档 6.6 保持未完成。
+
+2026-11-04 旧代码收敛：物理删除无生产调用的 blob 身份/去重/locator 生成 API、解析包装及对应死测试，保留迁移和冻结历史的只读校验，4 个文件净减 197 行。两份定向单测 104 passed（16.78 秒），Ruff、compileall 均退出 0；命令、外部保护、源码指纹和原始输出位于 `out/tests/temp/attachment_new_spec_cleanup_20261104/artifacts/`。本批无前端或协议改动，不追加 Web、Windows 和长集成回归。
