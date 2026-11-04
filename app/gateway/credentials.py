@@ -243,12 +243,12 @@ def credential_file_error(
     projected.__cause__ = error
     return projected
 
-def load_or_create_gateway_id(storage_path: Path) -> str:
+def load_or_create_gateway_id(storage_path: Path, *, read_only: bool = False) -> str:
     descriptor: int | None = None
     primary_error: BaseException | None = None
     stage = "stat"
     try:
-        if storage_path.exists():
+        if read_only or storage_path.exists():
             stage = "read"
             with storage_path.open("r", encoding="utf-8") as file:
                 stage = "decode"

@@ -2,11 +2,14 @@
 
 `app/gateway/control/gateway_registry/` 承载 Gateway 控制面中 workspace registry 与 registry apply journal 一条垂直链路的唯一实现：`gateway_workspace_registry` 权威注册行的读取与批处理替换、`registry_meta` 中 `workspace` revision 的读取与 CAS、`registry_apply_journal` 批处理恢复账本，以及把受控启动自身产生的 registry 提交纳入配置 apply 基线的 `rebase_config_apply_registry_revision`。
 
+`snapshot.py` 是 registry metadata 与目标行的唯一只读投影。运行时与显式离线身份预检共享它；调用方在同一连接与读事务中取快照，不能以两个独立读取拼接不同 revision，也不能为预检初始化可写 store。
+
 # 可修改内容
 
 - 可以维护 `gateway_registry.py` 中 `GatewayRegistryMixin` 的方法族（`load_workspace_registry`、`get_registry_revision`、`rebase_config_apply_registry_revision`、`list_registry_apply_journal`、`recover_registry_apply_journal`、`replace_workspace_registry`、`_start_registry_apply_journal`、`_finish_registry_apply_journal`）。
 - 可以维护本族内 `replace_workspace_registry` 的 owner 作用域校验、target identity 去重与 stale 行删除逻辑。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/gateway/` 下。
+- 可以维护 `snapshot.py` 的只读投影与 `tests/unit/configs/` 下的显式离线维护入口验收；不在此复制离线迁移协调。
 
 # 不可修改内容
 

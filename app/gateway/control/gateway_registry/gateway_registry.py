@@ -20,11 +20,14 @@ CAS/并发冲突。
 
 from __future__ import annotations
 
+# ruff: noqa: TRY004 -- 格式拒绝沿用 ValueError，不能因类型风格改变既有异常合同。
 import hashlib
 import json
 import sqlite3
+from typing import cast
 
-from app.core.sqlite_state import utc_now_text
+from app.core.sqlite_state import SQLiteStateDatabase, utc_now_text
+from app.gateway.control.gateway_registry.snapshot import read_workspace_registry
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     dump_json,
@@ -56,6 +59,8 @@ def _registry_connection_index(value: object) -> dict[str, dict[str, object]]:
 
 
 class GatewayRegistryMixin:
+    _database: SQLiteStateDatabase
+
     @staticmethod
     def _registry_meta_record_exists(connection: sqlite3.Connection) -> bool:
         """判断是否已存在证明 revision 曾被写入的 ``workspace_registry_meta`` 记录。"""
@@ -102,37 +107,10 @@ class GatewayRegistryMixin:
             )
 
     def load_workspace_registry(self) -> dict[str, object] | None:
-        meta = self.get_config("workspace_registry_meta")
         connection = self._database.connection()
         try:
-            rows = connection.execute(
-                """
-                SELECT payload_json
-                FROM gateway_workspace_registry
-                ORDER BY position ASC, workspace_id ASC
-                """
-            ).fetchall()
-            if meta is None and not rows:
-                return None
-            targets: list[object] = []
-            for row in rows:
-                payload = json.loads(str(row[0]))
-                if not isinstance(payload, dict):
-                    raise ValueError("Gateway SQLite 工作区注册记录必须是对象")
-                targets.append(payload)
-            metadata = meta.payload if meta is not None else {}
-            return {
-                "schema_version": int(metadata.get("schema_version", 10)),
-                "registry_revision": int(metadata.get("registry_revision", 0)),
-                "active_workspace_id": metadata.get("active_workspace_id"),
-                "order_customized": bool(metadata.get("order_customized", False)),
-                "runtime_generation": metadata.get("runtime_generation"),
-                "remote_gateway_connections": metadata.get(
-                    "remote_gateway_connections", []
-                ),
-                "managed_backends": metadata.get("managed_backends", []),
-                "targets": targets,
-            }
+            connection.execute("BEGIN")
+            return read_workspace_registry(connection)
         finally:
             connection.close()
 
@@ -343,8 +321,8 @@ class GatewayRegistryMixin:
         if not isinstance(targets, list) or not isinstance(remote_connections, list):
             raise ValueError("Gateway SQLite 注册表 payload 结构无效")
         metadata = {
-            "schema_version": int(payload.get("schema_version", 10)),
-            "registry_revision": int(payload.get("registry_revision", 0)),
+            "schema_version": int(cast(int, payload.get("schema_version", 10))),
+            "registry_revision": int(cast(int, payload.get("registry_revision", 0))),
             "active_workspace_id": payload.get("active_workspace_id"),
             "order_customized": bool(payload.get("order_customized", False)),
             "runtime_generation": payload.get("runtime_generation"),

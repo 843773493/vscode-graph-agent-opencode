@@ -4,7 +4,9 @@ import argparse
 import json
 import logging
 import os
+import sqlite3
 from pathlib import Path
+from typing import cast
 
 from dotenv import load_dotenv
 
@@ -183,6 +185,7 @@ def main() -> None:
             "install-source-development",
             "migrate",
             "migrate-runtime-config",
+            "preview-workspace-identity",
             "doctor",
             "diagnose",
         ),
@@ -226,6 +229,26 @@ def main() -> None:
         if args.project_root is not None
         else None
     )
+    if args.action == "preview-workspace-identity":
+        from configs.workspace_identity_migration import (
+            preview_workspace_identity_migration,
+        )
+
+        gateway_root = (Path(os.environ["BOXTEAM_GATEWAY_ROOT"]) if os.environ.get("BOXTEAM_GATEWAY_ROOT")
+                        else boxteam_home / "state/gateway")
+        try:
+            report = preview_workspace_identity_migration(
+                gateway_root=gateway_root, project_root=project_root or Path.cwd(),
+            ).report()
+        except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error) as error:
+            print(json.dumps({"action": args.action, "read_only": True,
+                              "error": str(error),
+                              "diagnostic": diagnostic_error(error, stage="registry_identity_preflight")}, ensure_ascii=False))
+            raise SystemExit(1) from None
+        print(json.dumps({"action": args.action, **report}, ensure_ascii=False))
+        if report["blockers"]:
+            raise SystemExit(1)
+        return
     if args.action == "migrate-runtime-config":
         from configs.runtime_logging_commit import commit_runtime_logging_migration
         from configs.runtime_logging_migration import preview_runtime_logging_migration
@@ -281,8 +304,9 @@ def main() -> None:
 
     if args.action == "install-source-development":
         local_only = _environment_flag(DEV_LOCAL_ONLY_ENV)
+        development_root = cast(Path, project_root)
         installation = install_source_development_configuration(
-            project_root=project_root,
+            project_root=development_root,
             config_root=config_root,
             local_only=local_only,
         )
@@ -291,7 +315,7 @@ def main() -> None:
         )
         if gateway_development_assets:
             install_gateway_development_assets(
-                project_root=project_root,
+                project_root=development_root,
                 home=home,
             )
         print(

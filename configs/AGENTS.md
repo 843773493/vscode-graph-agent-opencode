@@ -5,6 +5,7 @@
 # 可修改内容
 
 - 可以维护 `configs.boxteam` 配置安装入口、静态模板和配置 schema。
+- `workspace_identity_migration.py` 提供 `preview-workspace-identity` 只读登记身份预检；仅通过既有身份 owner 核验已登记根，不创建身份、启动目标或发布迁移。完整引用迁移与原子发布仍按对应 OpenSpec 推进，预览结果不能用于普通请求的旧别名换算。
 - 可以维护 `configs/tests/workspace/` 下由 E2E fixture 复制到隔离工作区的完整 Workspace 测试配置，以及 `configs/tests/model_stream/` 下的 model-stream transport 选择配置。
 - 可以维护完整的 `gateway_inline.jsonc`、`workspace_inline.jsonc` 内置默认配置，及 `gateway_dev.jsonc`、`workspace_dev.jsonc` 开发模板。
 
