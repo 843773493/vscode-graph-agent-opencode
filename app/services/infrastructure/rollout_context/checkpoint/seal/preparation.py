@@ -358,16 +358,31 @@ def prepare_registered_context(
                         frozen, binding, storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,
                     )
 
+                # 同批发现先按原调用验证归属，再按不可变 activation 解析一次目录；
+                # 不按工具反复读全目录，也不跨 prepare 复用正文或损坏校验结果。
+                discovery_catalogs: dict[str, dict[str, FrozenToolDefinition]] = {}
+
                 @cache
-                def resolve_discovery(ref: DiscoveredToolRef) -> FrozenToolDefinition:
+                def discovery_definitions(
+                    tool_call_id: str, model_call_id: str, activation_snapshot_id: str,
+                ) -> dict[str, FrozenToolDefinition]:
                     original, _original_call = owner.load_tool_call_resource_activation(
-                        session_id, thread_id=thread_id, tool_call_id=ref.tool_call_id,
-                        model_call_id=ref.model_call_id, checkpoint_ns=checkpoint_ns,
+                        session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+                        model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
                     )
-                    if original.activation_snapshot_id != ref.activation_snapshot_id:
+                    if original.activation_snapshot_id != activation_snapshot_id:
                         raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
-                    catalog = tool_catalog_from_activation(original, read_payload)
-                    definition = next((value for value in catalog.definitions if value.metadata.tool_id == ref.tool_id), None)
+                    if activation_snapshot_id not in discovery_catalogs:
+                        discovery_catalogs[activation_snapshot_id] = {
+                            value.metadata.tool_id: value
+                            for value in tool_catalog_from_activation(original, read_payload).definitions
+                        }
+                    return discovery_catalogs[activation_snapshot_id]
+
+                def resolve_discovery(ref: DiscoveredToolRef) -> FrozenToolDefinition:
+                    definition = discovery_definitions(
+                        ref.tool_call_id, ref.model_call_id, ref.activation_snapshot_id,
+                    ).get(ref.tool_id)
                     if (definition is None or definition.provenance.resource_id != ref.resource_id
                             or definition.provenance.revision != ref.revision):
                         raise ExtensionCatalogUnavailableError("发现结果引用的原冻结定义缺失或身份冲突")
