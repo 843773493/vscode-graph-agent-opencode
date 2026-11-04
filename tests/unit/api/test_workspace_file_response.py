@@ -145,6 +145,11 @@ async def test_preview_revalidation_checks_read_access_without_reading_body(prev
     status, headers, body = await transfer(WorkspaceFileResponse(preview, disposition="inline", preview_owner="owner-a"))
     assert status == 200 and body == b"archive-content"
     assert headers["cache-control"] == "private, no-cache"
+    vary = {
+        "x-boxteam-workspace-id", "x-boxteam-target-gateway-id", "x-boxteam-gateway-id",
+        "x-local-token", "x-boxteam-federation-token", "cookie",
+    }
+    assert {part.strip().lower() for part in headers["vary"].split(",")} == vary
     etag = headers["etag"]
     assert etag.startswith('W/"')
     conditions = {"weak": etag, "strong": etag[2:], "list": '"old", ' + etag, "star": "*"}
@@ -166,10 +171,7 @@ async def test_preview_revalidation_checks_read_access_without_reading_body(prev
     assert status == 304 and body == b""
     assert len(opened) == 1
     assert reused["etag"] == etag and reused["cache-control"] == headers["cache-control"]
-    assert {part.strip().lower() for part in reused["vary"].split(",")} == {
-        "accept-encoding", "x-boxteam-workspace-id", "x-boxteam-backend-workspace-id", "x-boxteam-gateway-id",
-        "x-local-token", "x-boxteam-federation-token", "cookie",
-    }
+    assert {part.strip().lower() for part in reused["vary"].split(",")} == vary | {"accept-encoding"}
     assert "content-length" not in reused
 
 

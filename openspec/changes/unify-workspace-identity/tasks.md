@@ -236,3 +236,5 @@
 
 - 真实双 Gateway 在第二次连接更新时已从新目标端口成功读取 manifest／workspaces，但恢复事务用临时操作代次校验已绑定 registry 而启动失败。连接快照现复用 registry 的实际运行代次，不更换绑定、不跳过 proof、不另建事实源；原 CAS、手动投影保留、cursor 与凭据边界维持。
 - 直接对账的初始／已绑定代次参数反例修复前 1 passed／1 failed，同一原始错误；修复后联邦、消费者事务与投影身份共 43 passed／8.53 秒。Ruff 1／1、Pyright 16／16 与实际 HEAD 源码对照无新增；原件在 `identity_registry_recovery_root/artifacts/configured-remote-generation-*` 和 `configured-remote-generation-static-comparison.json`。双 Gateway 原失败及稳定指纹见 `identity_remote_recovery_current/artifacts/verification-third-run-1793830715947422744.json`；后续真实更新／离线恢复未通过，4.4 保持未完成。
+
+- 6.4 文件缓存合同收尾：普通预览的 Vary 删除退役 Backend 身份头，改按现行 Target-Gateway 分区；200／304 均核对完整 Vary，保留 Accept-Encoding 合并、读权限、Range、原弱 ETag 与缓存行为。原单文件 21 passed，Ruff／diff 退出 0；项目解释器下 Pyright 1／1 为原测试 disposition 类型诊断，生产零诊断。Root 复核两文件差异，准确命令／原始输出／指纹见 `identity_file_vary_current/artifacts/verification-1793830797593.json`。未把该响应头单测扩展为真实浏览器缓存验收。

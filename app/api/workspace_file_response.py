@@ -66,7 +66,7 @@ class WorkspaceFileResponse(FileResponse):
                         self.headers["ETag"] = etag
                         self.headers["Cache-Control"] = "private, no-cache"
                         self.headers.add_vary_header(
-                            "X-BoxTeam-Workspace-Id, X-BoxTeam-Backend-Workspace-Id, X-BoxTeam-Gateway-Id, "
+                            "X-BoxTeam-Workspace-Id, X-BoxTeam-Target-Gateway-Id, X-BoxTeam-Gateway-Id, "
                             "X-Local-Token, X-BoxTeam-Federation-Token, Cookie"
                         )
                         candidates = {value.strip().removeprefix("W/") for value in headers.get("if-none-match", "").split(",")}
