@@ -315,12 +315,13 @@ def compile_prefix_context(
         retained_frames = retained_source_assembly.seal_binding.prefix.state.frames
         # 旧 root 只物化自身版本，晚于该版本的历史 delta 仍构成有效状态；
         # owner 本次提供的完整版本才覆盖此前全部更新，不能按 source ID 一刀切。
-        root_cutoffs = {
-            identity: max((frame.ordinal for frame in retained_frames
-                           for ref in frame.item_refs
-                           if (ref.source_identity, ref.source_revision) == (identity, revision)), default=0)
-            for identity, revision in root_revisions.items() if identity not in materialized
-        }
+        # 单次遍历冻结前缀定位各 root 的精确版本，不为每个来源重复扫描全部历史帧。
+        root_cutoffs = {identity: 0 for identity in root_revisions if identity not in materialized}
+        for frame in retained_frames if root_cutoffs else ():
+            for ref in frame.item_refs:
+                identity = ref.source_identity
+                if identity in root_cutoffs and ref.source_revision == root_revisions[identity]:
+                    root_cutoffs[identity] = max(root_cutoffs[identity], frame.ordinal)
         # 新 epoch 只携带每个 Skill 最后一次完整选择及其后续 diff；
         # A→B→A 的旧 A 帧仍留在历史 assembly，不在新上下文中形成重影。
         skill_cutoffs = {
