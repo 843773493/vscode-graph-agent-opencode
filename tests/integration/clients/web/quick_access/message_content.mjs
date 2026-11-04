@@ -5,12 +5,14 @@ import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { expectLastSearchStatus } from './default_interactions.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
+import { searchReceipt } from '../../../../support/workbench/search-observation.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 if (!base || !output) throw new Error('消息正文验收缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_message_content.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], nameSearches: [], around: [], queries: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], nameSearches: [], around: [], queries: [], apiReceipts: [], workspaceRequests: [],
   boundary: '真实 Gateway／正式 Workbench；消息和 fork 经产品 API 创建；model_stream 精确回放，不预写历史或缓存' };
+const responseReads = [], responseErrors = [];
 let page, failure;
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true,
@@ -20,9 +22,11 @@ try {
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
-  const queries = new Map();
+  const queries = new Map(), observations = new Map();
+  const requestOwner = request => ({ gateway_id: request.headers()['x-boxteam-target-gateway-id'], workspace_id: request.headers()['x-boxteam-workspace-id'] });
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (path.startsWith('/api/v1/')) result.workspaceRequests.push({ path, targetOwner: requestOwner(request) });
     if (/\/api\/(gateway\/(health|workspaces)|v1\/(session-catalog\/search|session-threads\/search|workspace\/files\/roots))$/.test(path)) {
       const observation = { url: request.url(), phase: result.phase, state: 'pending' };
       queries.set(request, observation);
@@ -30,44 +34,70 @@ try {
     }
     if (['/api/gateway/search', '/api/v1/sessions/history/search', '/api/v1/search'].includes(path)) {
       const body = request.postDataJSON();
-      const observed = { path, body, route: request.headers()['x-boxteam-workspace-id'], deadline: request.headers()['x-boxteam-content-search-deadline'] };
+      const observed = { path, body, targetOwner: path === '/api/gateway/search' ? undefined : requestOwner(request), deadline: request.headers()['x-boxteam-content-search-deadline'] };
       // 默认入口现在也使用联邦请求；按领域操作分别观察，继续捕获旧正文直连接口。
       const destination = path === '/api/gateway/search' && body.queries.every(query => query.operation === 'name') ? result.nameSearches : result.searches;
       destination.push(observed);
+      observations.set(request, observed);
     }
     if (/\/threads\/[^/]+\/history$/.test(path) && request.postDataJSON()?.direction === 'around') {
-      result.around.push({ path, body: request.postDataJSON(), route: request.headers()['x-boxteam-workspace-id'] });
+      const observed = { path, body: request.postDataJSON(), targetOwner: requestOwner(request) };
+      result.around.push(observed);
+      observations.set(request, observed);
     }
   });
-  page.on('requestfinished', request => { const query = queries.get(request); if (query) query.state = 'finished'; });
+  page.on('requestfinished', request => {
+    const query = queries.get(request); if (query) query.state = 'finished';
+    const observed = observations.get(request);
+    if (!observed) return;
+    responseReads.push((async () => {
+      if (observed.path === '/api/gateway/search') observed.receipt = await searchReceipt(request);
+      else {
+        const response = await request.response(), body = await response.json(), header = response.headers()['x-request-id'];
+        expect(body.request_id).toBeTruthy(); expect(body.request_id).toBe(header);
+        observed.receipt = { status: response.status(), requestId: body.request_id, header };
+      }
+    })().catch(error => responseErrors.push(String(error))));
+  });
   page.on('requestfailed', request => { const query = queries.get(request); if (query) { query.state = 'failed'; query.error = request.failure(); } });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  const api = async (path, data) => page.evaluate(async ({ path, data }) => {
-    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
-    const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST',
-      headers: { 'X-Local-Token': credential.data.token, 'Content-Type': 'application/json' },
-      body: data === undefined ? undefined : JSON.stringify(data) });
-    const body = await response.json();
-    if (!response.ok || body.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify({ path, status: response.status, body }));
-    return body.data;
-  }, { path, data });
+  const api = async (path, owner, data) => {
+    const response = await page.evaluate(async ({ path, owner, data }) => {
+      const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
+      const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST',
+        headers: { 'X-Local-Token': credential.data.token, 'Content-Type': 'application/json', ...(owner ? {
+          'X-BoxTeam-Workspace-Id': owner.workspace_id, 'X-BoxTeam-Target-Gateway-Id': owner.gateway_id,
+        } : {}) }, body: data === undefined ? undefined : JSON.stringify(data) });
+      const body = await response.json(), header = response.headers.get('X-Request-ID');
+      if (!response.ok || !body.request_id || body.request_id !== header) throw new Error(JSON.stringify({ path, status: response.status, body }));
+      return { data: body.data, receipt: { path, targetOwner: owner, status: response.status, requestId: body.request_id, header } };
+    }, { path, owner, data });
+    result.apiReceipts.push(response.receipt);
+    return response.data;
+  };
   // 通过真实页面 fetch 设置 Cookie，避免 Bun 的 Node HTTP 兼容层影响 Playwright APIRequestContext。
-  await api('/api/gateway/users/guest', { tracking: { source: 'message-content-search' } });
+  await api('/api/gateway/users/guest', undefined, { tracking: { source: 'message-content-search' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');
-  const target = targets.items.find(item => item.workspace_id === targets.active_workspace_id);
-  const session = await api('/api/v1/sessions', { title: '消息原文定位验收' });
-  const sessionId = session.session_id, main = (await api(`/api/v1/sessions/${sessionId}/main-thread`)).thread_id;
+  const owner = targets.active_workspace;
+  expect(owner).toEqual({ gateway_id: health.gateway_id, workspace_id: expect.any(String) });
+  expect(targets.items).toContainEqual(expect.objectContaining(owner));
+  expect((await api('/api/v1/workspace', owner)).workspace_id).toBe(owner.workspace_id);
+  result.owner = owner;
+  const session = await api('/api/v1/sessions', owner, { title: '消息原文定位验收' });
+  const sessionId = session.session_id, main = (await api(`/api/v1/sessions/${sessionId}/main-thread`, owner)).thread_id;
+  const threadUri = thread => `boxteam-thread://${owner.gateway_id}/${owner.workspace_id}/${sessionId}/${thread}`;
+  const threadSelector = thread => `section.boxteam-thread[data-workspace-id="${owner.workspace_id}"][data-session-id="${sessionId}"][data-thread-id="${thread}"]`;
   const messagePath = thread => `/api/v1/sessions/${sessionId}/threads/${thread}/messages`;
   const interactions = JSON.parse(process.env.BOXTEAM_MESSAGE_SEARCH_INTERACTIONS);
   const send = async (thread, content) => {
     await testControl({ action: 'plan_model', session_id: sessionId, thread_id: thread,
       interactions: interactions.splice(0, interactions.length === 8 ? 2 : 1) });
-    const accepted = await api(messagePath(thread), { message: { content }, run: {} });
+    const accepted = await api(messagePath(thread), owner, { message: { content }, run: {} });
     await expect.poll(async () => {
-      const job = await api(`/api/v1/jobs/${accepted.job_id}`);
+      const job = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
       if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));
       return job.status;
     }, { timeout: 30_000 }).toBe('completed');
@@ -76,8 +106,8 @@ try {
   const query = '定位😀词', original = '起始😀\n' + 'a'.repeat(66_000) + query + '\n第二处' + query + '\n尾';
   const first = await send(main, original);
   for (let index = 0; index < 6; index += 1) await send(main, `后续轮次 ${index}`);
-  const source = await api(`/api/v1/sessions/${sessionId}/fork-source-point`);
-  const fork = await api(`/api/v1/sessions/${sessionId}/fork-context`, {
+  const source = await api(`/api/v1/sessions/${sessionId}/fork-source-point`, owner);
+  const fork = await api(`/api/v1/sessions/${sessionId}/fork-context`, owner, {
     idempotency_key: 'message-content-child', source_uri: source.source_uri, source_view_id: source.source_view_id,
     source_view_revision: source.source_view_revision, anchor_item_id: source.anchor_item_id,
     target_container_uri: source.child_container_uri, mode: 'view_prefix_fork', creation_kind: 'new_child_thread',
@@ -88,7 +118,7 @@ try {
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   // 刷新按钮先于工作区镜像出现；等产品导航实际读到刚创建的 Session 后再发起搜索。
   await expect(page.getByRole('treeitem', { name: /^消息原文定位验收/ })).toBeVisible();
-  expect(await page.locator(`section.boxteam-thread[data-thread-id="${child}"]`).count()).toBe(0);
+  expect(await page.locator(threadSelector(child)).count()).toBe(0);
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   await command('workbench.action.quickOpen', query);
   await expectLastSearchStatus({ page, quick, label: '文件 · 没有匹配的资源' });
@@ -97,7 +127,6 @@ try {
   await expect(quick).toContainText('会话消息');
   // 名称立即提交，文件等待根元数据；两次请求必须保持同一冻结 owner。
   expect(result.nameSearches).toHaveLength(2);
-  const owner = { gateway_id: health.gateway_id, workspace_id: target.backend_workspace_id };
   expect(result.nameSearches[0].body.scope).toEqual({ mode: 'selected', owners: [owner] });
   expect(result.nameSearches[0].body.queries.map(({ category, operation, match_mode }) => ({ category, operation, match_mode }))).toEqual([
     { category: 'catalog', operation: 'name', match_mode: 'fuzzy' }, { category: 'thread', operation: 'name', match_mode: 'fuzzy' },
@@ -124,10 +153,10 @@ try {
   await expect(quick).toContainText('会话消息 · 本次查询完成');
   expect(result.searches).toHaveLength(1);
   expect(result.searches[0].path).toBe('/api/gateway/search');
-  expect(result.searches[0].body.scope).toEqual({ mode: 'selected', owners: [{ gateway_id: health.gateway_id, workspace_id: target.backend_workspace_id }] });
+  expect(result.searches[0].body.scope).toEqual({ mode: 'selected', owners: [owner] });
   expect(result.searches[0].body.queries.map(query => query.category)).toEqual(['message']);
   expect(result.searches[0].body.deadline_at).toBeGreaterThan(Date.now() / 1000 - 15);
-  const picks = quick.locator(`[data-quick-input-id^="boxteam-thread://"][data-quick-input-id*="/${child}#"]`);
+  const picks = quick.locator(`[data-quick-input-id^="${threadUri(child)}#"]`);
   await expect(picks).toHaveCount(2);
   const firstId = await picks.first().getAttribute('data-quick-input-id');
   result.phase = 'open-unloaded-child';
@@ -135,7 +164,7 @@ try {
   await picks.first().getByRole('button', { name: '在侧边打开', exact: true }).click();
   const groups = page.locator('.editor-group-container');
   await expect(groups).toHaveCount(2);
-  const thread = groups.nth(1).locator(`section.boxteam-thread[data-workspace-id="${target.backend_workspace_id}"][data-session-id="${sessionId}"][data-thread-id="${child}"]`);
+  const thread = groups.nth(1).locator(threadSelector(child));
   await expect(thread).toBeVisible();
   const mark = thread.locator('.chat-message-location mark');
   await expect(mark).toHaveText(query);
@@ -155,7 +184,7 @@ try {
   await command('workbench.action.quickOpen', 'content ' + query);
   await quick.locator('[data-quick-input-id="content-category-message"]').click();
   await expect(quick).toContainText('会话消息 · 本次查询完成');
-  await quick.locator(`[data-quick-input-id^="boxteam-thread://"][data-quick-input-id*="/${child}#"]`).last().click();
+  await quick.locator(`[data-quick-input-id^="${threadUri(child)}#"]`).last().click();
   await expect.poll(() => result.around.length).toBe(2);
   await expect(thread).toContainText('已定位消息原文');
   expect(result.around[1].body.anchor_message.start_codepoint).toBeGreaterThan(result.around[0].body.anchor_message.start_codepoint);
@@ -177,7 +206,7 @@ try {
   await page.route(stalePattern, stale);
   try {
     const response = page.waitForResponse(item => item.url().endsWith(`/threads/${child}/history`) && item.status() === 409);
-    await quick.locator(`[data-quick-input-id^="boxteam-thread://"][data-quick-input-id*="/${child}#"]`).first().click();
+    await quick.locator(`[data-quick-input-id^="${threadUri(child)}#"]`).first().click();
     expect((await (await response).json()).detail.code).toBe('stale_turn_reference');
     await expect(thread).toContainText('消息命中已过期，请重新搜索');
     await expect(mark).toHaveCount(0);
@@ -193,12 +222,12 @@ try {
 
   result.phase = 'tool-result-content';
   const toolQuery = process.env.BOXTEAM_TOOL_SEARCH_QUERY;
-  const toolFork = await api(`/api/v1/sessions/${sessionId}/fork-context`, {
+  const toolFork = await api(`/api/v1/sessions/${sessionId}/fork-context`, owner, {
     idempotency_key: 'tool-content-child', source_uri: source.source_uri, source_view_id: source.source_view_id,
     source_view_revision: source.source_view_revision, anchor_item_id: source.anchor_item_id,
     target_container_uri: source.child_container_uri, mode: 'view_prefix_fork', creation_kind: 'new_child_thread',
   });
-  expect(await page.locator(`section.boxteam-thread[data-thread-id="${toolFork.thread_id}"]`).count()).toBe(0);
+  expect(await page.locator(threadSelector(toolFork.thread_id)).count()).toBe(0);
   await command('workbench.action.quickOpen', 'content ' + toolQuery);
   await quick.locator('[data-quick-input-id="content-category-message"]').click();
   await expect(quick).toContainText('会话消息 · 没有匹配的资源');
@@ -207,13 +236,13 @@ try {
   await command('workbench.action.quickOpen', 'content ' + toolQuery);
   await quick.locator('[data-quick-input-id="content-category-tool"]').click();
   await expect(quick).toContainText('工具结果 · 本次查询完成');
-  const toolPick = quick.locator(`[data-quick-input-id^="boxteam-thread://"][data-quick-input-id*="/${toolFork.thread_id}#"]`);
+  const toolPick = quick.locator(`[data-quick-input-id^="${threadUri(toolFork.thread_id)}#"]`);
   await expect(toolPick).toHaveCount(1);
   // 原版详情悬停会覆盖下方行；从行左边缘进入，再点击右侧的真实动作。
   await input.hover();
   await toolPick.hover({ position: { x: 5, y: 5 } });
   await toolPick.getByRole('button', { name: '在侧边打开', exact: true }).click();
-  const toolThread = page.locator(`section.boxteam-thread[data-workspace-id="${target.backend_workspace_id}"][data-session-id="${sessionId}"][data-thread-id="${toolFork.thread_id}"]`);
+  const toolThread = page.locator(threadSelector(toolFork.thread_id));
   await expect(toolThread).toBeVisible();
   const toolOriginal = toolThread.locator('.chat-tool-details .chat-message-location');
   await expect(toolOriginal.locator('mark')).toHaveText(toolQuery);
@@ -228,9 +257,18 @@ try {
   expect(result.around.at(-1).body.anchor_message.start_codepoint).toBeGreaterThan(65536);
   expect(result.searches.at(-1).body.queries.map(query => query.category)).toEqual(['tool_result']);
   expect(result.searches.every(request => request.path === '/api/gateway/search')).toBe(true);
+  await expect.poll(() => responseReads.length).toBe(observations.size);
+  await Promise.all(responseReads);
+  expect(responseErrors).toEqual([]);
+  for (const search of [...result.nameSearches, ...result.searches]) {
+    expect(search.receipt.scope.owners).toEqual([owner]);
+    for (const page of search.receipt.pages) expect(page.branch.branch.owner).toEqual(owner);
+  }
+  for (const read of result.workspaceRequests) expect(read.targetOwner).toEqual(owner);
+  for (const read of result.around) expect(read.targetOwner).toEqual(owner);
   result.unopenedToolChildLocated = result.fullToolOutputVisible = result.toolCategoryIsolated = true;
   result.firstPick = firstId;
-  result.owner = { gateway: health.gateway_id, workspace: target.backend_workspace_id, sessionId, main, child };
+  result.threads = { sessionId, main, child, toolChild: toolFork.thread_id };
   result.phase = 'complete';
 } catch (error) {
   failure = error;

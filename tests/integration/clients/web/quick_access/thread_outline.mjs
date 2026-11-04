@@ -8,8 +8,9 @@ const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 if (!base || !output || !screenshot) throw new Error('Thread 大纲缺少隔离目标或产物目录');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_thread_outline.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], history: [], searches: [], viewWrites: [], executions: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], history: [], searches: [], viewWrites: [], executions: [], apiReceipts: [], workspaceRequests: [],
   boundary: '真实 Gateway、正式 Workbench、canonical 产品执行及 fork；模型使用现有 model_stream，未手写历史或浏览器状态' };
+const responseReads = [], responseErrors = [];
 let page, failure;
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
@@ -17,49 +18,75 @@ try {
   run.addCleanup('Chromium', () => browser.close());
   page = await browser.newPage({ viewport: { width: 1500, height: 1000 }, reducedMotion: 'reduce' });
   page.on('pageerror', error => result.pageErrors.push(String(error)));
+  const historyReads = new Map();
+  const requestOwner = request => ({ gateway_id: request.headers()['x-boxteam-target-gateway-id'], workspace_id: request.headers()['x-boxteam-workspace-id'] });
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
-    if (path.endsWith('/history')) result.history.push({ path, body: request.postDataJSON() });
+    if (path.startsWith('/api/v1/')) result.workspaceRequests.push({ path, targetOwner: requestOwner(request) });
+    if (path.endsWith('/history')) {
+      const read = { path, body: request.postDataJSON(), targetOwner: requestOwner(request) };
+      result.history.push(read);
+      historyReads.set(request, read);
+    }
     if (path.endsWith('/search')) result.searches.push(path);
     if (request.method() !== 'GET' && path.includes('/view-state')) result.viewWrites.push({ path, body: request.postDataJSON() });
   });
-  const api = (path, body) => page.evaluate(async ({ path, body }) => {
-    const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
-    const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST',
-      headers: { 'X-Local-Token': token, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-    const payload = await response.json();
-    if (!response.ok || payload.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify({ path, status: response.status, payload }));
-    return payload.data;
-  }, { path, body });
+  page.on('requestfinished', request => {
+    const read = historyReads.get(request);
+    if (!read) return;
+    responseReads.push((async () => {
+      const response = await request.response(), body = await response.json(), header = response.headers()['x-request-id'];
+      expect(body.request_id).toBeTruthy(); expect(body.request_id).toBe(header);
+      read.receipt = { status: response.status(), requestId: body.request_id, header };
+    })().catch(error => responseErrors.push(String(error))));
+  });
+  const api = async (path, owner, body) => {
+    const response = await page.evaluate(async ({ path, owner, body }) => {
+      const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
+      const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST',
+        headers: { 'X-Local-Token': token, 'Content-Type': 'application/json', ...(owner ? {
+          'X-BoxTeam-Workspace-Id': owner.workspace_id, 'X-BoxTeam-Target-Gateway-Id': owner.gateway_id,
+        } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const payload = await response.json(), header = response.headers.get('X-Request-ID');
+      if (!response.ok || !payload.request_id || payload.request_id !== header) throw new Error(JSON.stringify({ path, status: response.status, payload }));
+      return { data: payload.data, receipt: { path, targetOwner: owner, status: response.status, requestId: payload.request_id, header } };
+    }, { path, owner, body });
+    result.apiReceipts.push(response.receipt);
+    return response.data;
+  };
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await api('/api/gateway/users/guest', { tracking: { source: 'thread-outline' } });
+  await api('/api/gateway/users/guest', undefined, { tracking: { source: 'thread-outline' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces');
-  const target = targets.items.find(item => item.workspace_id === targets.active_workspace_id);
-  if (!target) throw new Error('大纲验收缺少已激活工作区');
-  const workspace = await api('/api/v1/workspace');
+  const owner = targets.active_workspace;
+  expect(owner).toEqual({ gateway_id: health.gateway_id, workspace_id: expect.any(String) });
+  expect(targets.items).toContainEqual(expect.objectContaining(owner));
+  expect((await api('/api/v1/workspace', owner)).workspace_id).toBe(owner.workspace_id);
+  result.owner = owner;
+  const resourceUri = (session, thread) => `boxteam://${owner.gateway_id}/workspace/${owner.workspace_id}/resources/session/${session}/threads/${thread}`;
+  const threadSelector = (session, thread) => `section.boxteam-thread[data-workspace-id="${owner.workspace_id}"][data-session-id="${session}"][data-thread-id="${thread}"]`;
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   result.phase = 'empty-thread';
-  const empty = await api('/api/v1/sessions', { title: '没有记录的大纲' });
-  const emptyThread = (await api(`/api/v1/sessions/${empty.session_id}/main-thread`)).thread_id;
+  const empty = await api('/api/v1/sessions', owner, { title: '没有记录的大纲' });
+  const emptyThread = (await api(`/api/v1/sessions/${empty.session_id}/main-thread`, owner)).thread_id;
   // 不传编辑器选项，让原命令沿 IOpenerService 解析规范资源 URI。
-  await command('_workbench.open', `boxteam://workspace/${workspace.workspace_id}/resources/session/${empty.session_id}/threads/${emptyThread}`);
-  await expect(page.locator(`section.boxteam-thread[data-thread-id="${emptyThread}"] textarea`)).toBeEnabled({ timeout: 30_000 });
+  await command('_workbench.open', resourceUri(empty.session_id, emptyThread));
+  await expect(page.locator(threadSelector(empty.session_id, emptyThread)).locator('textarea')).toBeEnabled({ timeout: 30_000 });
   await command('workbench.action.quickOpen', '@');
   await expect(quick).toContainText('No matching entries');
   await page.keyboard.press('Escape');
   result.emptyThreadOutline = true;
-  const session = await api('/api/v1/sessions', { title: '大纲分页验收' });
-  const main = (await api(`/api/v1/sessions/${session.session_id}/main-thread`)).thread_id;
+  const session = await api('/api/v1/sessions', owner, { title: '大纲分页验收' });
+  const main = (await api(`/api/v1/sessions/${session.session_id}/main-thread`, owner)).thread_id;
   const interactions = JSON.parse(process.env.BOXTEAM_OUTLINE_INTERACTIONS);
   const send = async (thread, content) => {
     const started = performance.now();
     await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: thread, interactions: [interactions.shift()] });
-    const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${thread}/messages`, { message: { content }, run: {} });
+    const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${thread}/messages`, owner, { message: { content }, run: {} });
     await expect.poll(async () => {
-      const job = await api(`/api/v1/jobs/${accepted.job_id}`);
+      const job = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
       if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));
       return job.status;
     // TODO：独立量化长历史执行准备的增长成本；这不是大纲交互的等待期限。
@@ -68,8 +95,8 @@ try {
     return accepted;
   };
   await send(main, '共同起点😀 $(warning)');
-  const source = await api(`/api/v1/sessions/${session.session_id}/fork-source-point`);
-  const fork = await api(`/api/v1/sessions/${session.session_id}/fork-context`, {
+  const source = await api(`/api/v1/sessions/${session.session_id}/fork-source-point`, owner);
+  const fork = await api(`/api/v1/sessions/${session.session_id}/fork-context`, owner, {
     idempotency_key: 'thread-outline-child', source_uri: source.source_uri, source_view_id: source.source_view_id,
     source_view_revision: source.source_view_revision, anchor_item_id: source.anchor_item_id,
     target_container_uri: source.child_container_uri, mode: 'view_prefix_fork', creation_kind: 'new_child_thread',
@@ -78,15 +105,15 @@ try {
   result.phase = 'generate-product-history';
   for (let index = 1; index <= 22; index++) await send(child, `child 大纲消息 ${String(index).padStart(2, '0')}`);
   await send(main, '仅 main 可见的后续消息');
-  const uri = `boxteam://workspace/${workspace.workspace_id}/resources/session/${session.session_id}/threads/${child}`;
+  const uri = resourceUri(session.session_id, child);
   await command('_workbench.open', uri);
   const groups = page.locator('.editor-group-container');
-  const firstPane = groups.first().locator(`section.boxteam-thread[data-thread-id="${child}"]`);
+  const firstPane = groups.first().locator(threadSelector(session.session_id, child));
   await expect(firstPane.locator('textarea')).toBeEnabled({ timeout: 30_000 });
   await expect(firstPane).toContainText('child 大纲消息 22');
   await command('workbench.action.splitEditorRight');
   await expect(groups).toHaveCount(2);
-  const secondPane = groups.nth(1).locator(`section.boxteam-thread[data-thread-id="${child}"]`);
+  const secondPane = groups.nth(1).locator(threadSelector(session.session_id, child));
   await expect(secondPane.locator('textarea')).toBeEnabled({ timeout: 30_000 });
   await expect(secondPane).toContainText('child 大纲消息 22');
   const viewport = pane => pane.locator('[data-virtuoso-scroller]');
@@ -108,7 +135,7 @@ try {
         transaction.onabort = () => { database.close(); reject(transaction.error); };
       };
     });
-  }, JSON.stringify([health.gateway_id, 'session', target.workspace_id, session.session_id, child]));
+  }, JSON.stringify([owner.gateway_id, 'session', JSON.stringify([owner.gateway_id, owner.workspace_id]), session.session_id, child]));
   await expect.poll(async () => (await position(secondPane)).top).toBeGreaterThan(100);
   const originalFirst = await position(firstPane), secondBottom = await position(secondPane);
   await viewport(secondPane).hover(); await page.mouse.wheel(0, -420);
@@ -180,7 +207,15 @@ try {
   expect((await position(firstPane)).anchor).toBe(originalFirst.anchor);
   result.unloadedTurnAccepted = true;
   result.noBusinessSearch = result.searches.length === 0;
-  result.preciseChildHistory = result.history.slice(before).every(read => read.path.includes(`/threads/${child}/history`));
+  await expect.poll(() => responseReads.length).toBe(historyReads.size);
+  await Promise.all(responseReads);
+  expect(responseErrors).toEqual([]);
+  for (const read of result.workspaceRequests) expect(read.targetOwner).toEqual(owner);
+  result.preciseChildHistory = result.history.slice(before).every(read => read.path.includes(`/threads/${child}/history`)
+    && read.targetOwner.gateway_id === owner.gateway_id && read.targetOwner.workspace_id === owner.workspace_id
+    && read.receipt.requestId === read.receipt.header);
+  result.threads = { sessionId: session.session_id, main, child };
+  result.resourceUri = uri;
 
   result.phase = 'complete';
 } catch (error) {
