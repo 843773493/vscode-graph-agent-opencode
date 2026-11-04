@@ -221,3 +221,8 @@
 
 - 只读复核及 Root 核对确认：manifest、投影、代理及连接关系使用来源 Gateway／UUID；多连接合并和解绑复用唯一 registry CAS，连接歧义不隐式选路。目标头与发送方身份分开，生命周期、目录和当前 Generator 沿原授权与 owner 执行；旧 Generator 的升级前退休边界保持。
 - 客户端选择、HTTP、搜索 scope、历史／文件缓存、Thread serializer、活动选择和目录 outbox 均消费完整 owner；旧字段限于显式迁移输入，原生 UUID 读取入口不是别名换算。相关定向回归、协议生成一致性、真实 sourceTransform 类型检查及完整 Workbench 构建沿上方各切片证据复用。本次勾选实现项，不将只读审查当作双 Gateway、全部浏览器恢复或 Windows 验收；4.4／5.4／6.3／6.4 保持未完成。
+
+### 2026-11-04：3.3／4.4 已晋升候选的后续交接
+
+- 运行时保留依据当前 active／draining 与另一个 serving generation 判断，删除“曾以候选启动就不能保留”的条件；未改变 Launcher 先启动新候选、晋升后再停旧进程的顺序，未扩展为非产品的冷交换流程。真实 SQLite 代次与正式配置 owner 的定向反例修复前普通来源通过、候选来源失败，修复后相关配置／lifespan 两文件 64 passed／62.14 秒。
+- 准确命令、原始反例、源码首尾指纹及类型／lint 对照在 `identity_registry_recovery_root/artifacts/promoted-handoff-*`；Ruff 7／7、Pyright 49／49 均为存量，新增零，生产 Pyright 2／2。不把该单测称为真实 managed 资源保留验收；双 Gateway 的真实 HTTP 测试也已改为产品的候选交接顺序，正在独立验证，3.3／4.4 仍未完成。

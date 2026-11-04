@@ -348,6 +348,36 @@ def test_gateway_shutdown_preserves_old_generation_for_pending_handoff(
         state.close()
 
 
+@pytest.mark.parametrize("startup_candidate_ref", [None, "previous-candidate-ref"])
+def test_gateway_shutdown_preserves_runtime_after_promoted_generation_handoff(
+    tmp_path: Path, startup_candidate_ref: str | None,
+) -> None:
+    # 已晋升的候选在下一次切换时也是旧 active；启动来源不改变进程归属。
+    config_path, schema_path = _write_gateway_config(tmp_path, [])
+    with closing(GatewayStateStore(path=tmp_path / "gateway.sqlite")) as state:
+        config = load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
+        reload_service = GatewayConfigReloadService(
+            state_store=state, config=config, config_path=config_path,
+            local_config_path=tmp_path / "gateway_local.jsonc", schema_path=schema_path,
+        )
+        for generation, listener in (("previous-generation", "draining"), ("current-generation", "serving")):
+            state.record_gateway_runtime_generation(
+                generation_id=generation, process_id=123,
+                loaded_source="pending" if startup_candidate_ref else "active",
+                candidate_id=startup_candidate_ref, active_revision=1, pending_revision=None,
+                candidate_digest=None, effective_digest="runtime-config", secret_binding_digest=None,
+                fencing_token=None, listener_state=listener, state="active",
+            )
+        assert _should_preserve_gateway_generation_for_handoff(
+            gateway_state=state, gateway_config_reload=reload_service,
+            startup_candidate_ref=startup_candidate_ref, generation_id="previous-generation",
+        )
+        assert not _should_preserve_gateway_generation_for_handoff(
+            gateway_state=state, gateway_config_reload=reload_service,
+            startup_candidate_ref=startup_candidate_ref, generation_id="current-generation",
+        )
+
+
 @pytest.mark.parametrize(
     ("workspace", "rule", "path"),
     [

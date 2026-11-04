@@ -619,13 +619,11 @@ def _should_preserve_gateway_generation_for_handoff(
         # 进程句柄；这些句柄必须脱离而不能终止旧 active 的真实进程。
         return True
     if generation is not None and (
-        startup_candidate_ref is None
-        and generation.state == "active"
+        generation.state == "active"
         and generation.listener_state == "draining"
     ):
-        # Promotion 先把旧 generation 标记为 draining，旧进程随后才收到
-        # supervisor 的停止信号。此时不能让旧 Gateway 关闭新 generation
-        # 已接管的 Workspace 进程。
+        # Promotion 后旧进程才收到停止信号；即使它最初来自候选，
+        # 也不能关闭新 generation 已接管的 Workspace 进程。
         active_generation = gateway_state.active_gateway_runtime_generation()
         return bool(
             active_generation is not None
