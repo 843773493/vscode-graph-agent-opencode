@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import json
 import os
 import shutil
@@ -24,7 +23,7 @@ from tests.harness.python.web_workbench import (
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.paths import chromium_temporary_environment
-from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -39,33 +38,6 @@ from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
 )
-
-
-def _select_free_port(
-    port_block: TestFilePortBlock,
-    reservations: ExitStack,
-    lease_path: Path,
-) -> tuple[int, list[tuple[int, bool]]]:
-    probes: list[tuple[int, bool]] = []
-    for port in range(port_block.start, port_block.end + 1):
-        lease = E2EProcessLease(lease_path, (port,))
-        try:
-            lease.acquire()
-        except RuntimeError as error:
-            cause = error.__cause__
-            if not isinstance(cause, OSError) or (
-                cause.errno != errno.EADDRINUSE and getattr(cause, "winerror", None) != 10048
-            ):
-                raise
-            probes.append((port, False))
-            continue
-        reservations.callback(lease.release)
-        probes.append((port, True))
-        return port, probes
-    raise RuntimeError(
-        f"测试文件端口块没有空闲端口: file={port_block.test_file}, "
-        f"start={port_block.start}, end={port_block.end}"
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -85,9 +57,11 @@ async def metadata_case(
 ) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay]]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
-    gateway_port, gateway_probes = _select_free_port(
-        ports, metadata_port_reservations, context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json",
+    lease, gateway_probes = E2EProcessLease.acquire_available(
+        context.runtime_root_for_node(request.node.nodeid) / "gateway-port.json", range(ports.start, ports.end + 1),
     )
+    metadata_port_reservations.callback(lease.release)
+    gateway_port = lease.ports[0]
     provider_port = ports.port(10)
     (context.artifacts_dir / "port-allocation.json").write_text(
         json.dumps(
@@ -167,9 +141,10 @@ async def metadata_frontend(
         yield str(client.base_url).rstrip("/")
         return
     runtime = context.runtime_root_for_node(request.node.nodeid)
-    port, port_probes = _select_free_port(
-        integration_port_block_for_file(Path(request.node.path)), metadata_port_reservations, runtime / "vite-port.json",
-    )
+    ports = integration_port_block_for_file(Path(request.node.path))
+    lease, port_probes = E2EProcessLease.acquire_available(runtime / "vite-port.json", range(ports.start, ports.end + 1))
+    metadata_port_reservations.callback(lease.release)
+    port = lease.ports[0]
     allocation_path = context.artifacts_dir / "port-allocation.json"
     allocation = json.loads(allocation_path.read_text())
     allocation["frontend"] = {"port": port, "transport": "vite", "bind_probes": [

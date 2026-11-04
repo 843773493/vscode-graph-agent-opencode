@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -14,7 +15,7 @@ import sqlite3
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -53,6 +54,28 @@ class E2EProcessLease:
     # release 用本次凭据和进程创建时间校验 owner，再删除本次记录。
     token: str = field(default_factory=lambda: secrets.token_hex(16))
     _reservations: ExitStack = field(default_factory=ExitStack, init=False, repr=False)
+
+    @classmethod
+    def acquire_available(
+        cls, path: Path, candidates: Iterable[int],
+    ) -> tuple[E2EProcessLease, list[tuple[int, bool]]]:
+        """只跳过被占用端口；成功后持续持有原租约，其他获取错误立即传播。"""
+        probes: list[tuple[int, bool]] = []
+        for port in candidates:
+            lease = cls(path, (port,))
+            try:
+                lease.acquire()
+            except RuntimeError as error:
+                cause = error.__cause__
+                if not isinstance(cause, OSError) or (
+                    cause.errno != errno.EADDRINUSE and getattr(cause, "winerror", None) != 10048
+                ):
+                    raise
+                probes.append((port, False))
+                continue
+            probes.append((port, True))
+            return lease, probes
+        raise RuntimeError(f"测试候选端口均不可用: path={path}, probes={probes}")
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

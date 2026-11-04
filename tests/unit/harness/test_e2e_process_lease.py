@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 from unittest.mock import Mock
@@ -65,3 +66,34 @@ def test_e2e_process_lease_rejects_live_owner_and_reclaims_reused_pid(
     assert not lease_path.exists()
     assert [port for port, _ in checked_ports] == [33001, 33001, 33001, 33001]
     assert all("E2E process lease" in service for _, service in checked_ports)
+
+
+@pytest.mark.parametrize("code", [errno.EACCES, None])
+def test_available_lease_propagates_non_conflict_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int | None,
+) -> None:
+    calls: list[int] = []
+    failure = RuntimeError("租约失败原件")
+
+    def acquire(lease: E2EProcessLease) -> None:
+        calls.append(lease.ports[0])
+        if code is None:
+            raise failure
+        raise failure from OSError(code, "真实原因")
+
+    monkeypatch.setattr(E2EProcessLease, "acquire", acquire)
+    with pytest.raises(RuntimeError) as caught:
+        E2EProcessLease.acquire_available(tmp_path / "lease.json", [33001, 33002])
+    assert caught.value is failure
+    assert calls == [33001]
+
+
+def test_available_lease_reports_exhaustion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def acquire(_lease: E2EProcessLease) -> None:
+        raise RuntimeError("占用") from OSError(errno.EADDRINUSE, "地址占用")
+
+    monkeypatch.setattr(E2EProcessLease, "acquire", acquire)
+    with pytest.raises(RuntimeError, match=r"probes=\[\(33001, False\), \(33002, False\)\]"):
+        E2EProcessLease.acquire_available(tmp_path / "lease.json", [33001, 33002])

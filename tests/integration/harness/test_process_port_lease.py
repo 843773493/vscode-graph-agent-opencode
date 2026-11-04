@@ -113,3 +113,30 @@ def test_existing_listener_is_preserved_and_lease_is_not_created(
     resources.enter_context(accepted)
     accepted.sendall(b"existing-listener-alive")
     assert client.recv(100) == b"existing-listener-alive"
+
+
+def test_available_lease_skips_listener_and_retains_selected_port(
+    port_case: tuple[ExitStack, Path],
+) -> None:
+    resources, artifacts = port_case
+    occupied = resources.enter_context(socket.socket())
+    occupied.bind(("127.0.0.1", 0))
+    occupied.listen()
+    with socket.socket() as candidate:
+        candidate.bind(("127.0.0.1", 0))
+        selected = candidate.getsockname()[1]
+    busy = occupied.getsockname()[1]
+    lease, probes = E2EProcessLease.acquire_available(artifacts / "available-port.json", [busy, selected])
+    resources.callback(lease.release)
+    assert probes == [(busy, False), (selected, True)]
+    assert lease.ports == (selected,)
+    with pytest.raises(OSError) as retained:
+        automatic_client(resources, selected).connect(occupied.getsockname())
+    assert retained.value.errno == errno.EADDRNOTAVAIL
+    with socket.socket() as client:
+        client.settimeout(1)
+        client.connect(occupied.getsockname())
+        accepted, _ = occupied.accept()
+        with accepted:
+            accepted.sendall(b"occupied-listener-preserved")
+            assert client.recv(100) == b"occupied-listener-preserved"
