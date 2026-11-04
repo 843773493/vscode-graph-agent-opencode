@@ -173,16 +173,40 @@ class WorkspaceFilePaths:
             raise RuntimeError("目标文件 owner 尚未装配原生 Gateway 目录根绑定")
         return self.bindings
 
-    def is_private(self, target: Path, *, root_uri: str | None = None) -> bool:
-        """普通文件树不公布保留存储目录；原生根和 symlink 别名遵守同一边界。"""
-        # 分类保留循环/断链的 symlink 节点；真正访问仍经 resolve/safe_join 明确失败。
-        resolved = Path(os.path.realpath(target))
+    def _private_path_filter(self, *, root_uri: str | None = None) -> tuple[Path, Callable[[Path], bool]]:
         if root_uri is not None and parse_resource_uri(root_uri).kind == "attachments":
             root, _ = self.resolve(resource_uri.file_uri_root(root_uri), materialize=False)
-            return (not target.is_relative_to(root) or not resolved.is_relative_to(root)
-                    or any(os.path.normcase(part) == ".boxteam" for part in target.relative_to(root).parts))
-        return (any(os.path.normcase(part) == ".boxteam" for part in (*target.parts, *resolved.parts))
-                or resolved.is_relative_to(Path(os.path.realpath(self.workspace / ".boxteam"))))
+            attachment_scope = True
+        else:
+            root = Path(os.path.realpath(self.workspace / ".boxteam"))
+            attachment_scope = False
+
+        def is_private(target: Path) -> bool:
+            # 分类保留循环/断链的 symlink 节点；真正访问仍经 resolve/safe_join 明确失败。
+            resolved = Path(os.path.realpath(target))
+            if attachment_scope:
+                return (not target.is_relative_to(root) or not resolved.is_relative_to(root)
+                        or any(os.path.normcase(part) == ".boxteam" for part in target.relative_to(root).parts))
+            return (any(os.path.normcase(part) == ".boxteam" for part in (*target.parts, *resolved.parts))
+                    or resolved.is_relative_to(root))
+
+        return root, is_private
+
+    def is_private(self, target: Path, *, root_uri: str | None = None) -> bool:
+        """单路径及长期事件流即时取根，使用与目录扫描相同的私有边界规则。"""
+        _root, is_private = self._private_path_filter(root_uri=root_uri)
+        return is_private(target)
+
+    @contextmanager
+    def private_path_filter(self, *, root_uri: str) -> Iterator[Callable[[Path], bool]]:
+        """只在一次同步目录扫描内复用根，结束前重核，不跨请求缓存。"""
+        # URI、附件 catalog locator 和私有根不应为每个 child 重复解析。
+        # child 的 realpath 仍逐项核验；收尾重核根，拒绝扫描期间发生边界改写的结果。
+        root, is_private = self._private_path_filter(root_uri=root_uri)
+        yield is_private
+        current_root, _is_private = self._private_path_filter(root_uri=root_uri)
+        if current_root != root:
+            raise ForbiddenError("目录扫描期间私有存储边界发生改变，请重新读取")
 
     def require_public_path(self, target: Path) -> None:
         if self.is_private(target):

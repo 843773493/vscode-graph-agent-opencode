@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from app.core.exceptions import ForbiddenError
@@ -29,11 +30,14 @@ class ToolTestFilePaths(WorkspaceFilePaths):
             bindings=None,
         )
 
-    def is_private(self, target: Path) -> bool:
-        resolved = Path(os.path.realpath(target))
-        if not target.is_relative_to(self.workspace) or not resolved.is_relative_to(self.workspace):
-            return True
-        return any(
-            os.path.normcase(part) == ".boxteam"
-            for part in (*target.relative_to(self.workspace).parts, *resolved.relative_to(self.workspace).parts)
-        )
+    def _private_path_filter(self, *, root_uri: str | None = None) -> tuple[Path, Callable[[Path], bool]]:
+        def is_private(target: Path) -> bool:
+            resolved = Path(os.path.realpath(target))
+            if not target.is_relative_to(self.workspace) or not resolved.is_relative_to(self.workspace):
+                return True
+            return any(
+                os.path.normcase(part) == ".boxteam"
+                for part in (*target.relative_to(self.workspace).parts, *resolved.relative_to(self.workspace).parts)
+            )
+
+        return self.workspace, is_private

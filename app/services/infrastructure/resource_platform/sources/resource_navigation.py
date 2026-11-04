@@ -13,7 +13,8 @@ import os
 import re
 import stat
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -293,46 +294,57 @@ class ResourceNavigation:
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
         ))
-        for child_node, hit, position in self._search_items(root, children, parsed, node, request, deadline, pattern, excluded, subtrees, resume):
-            match = hit.match if hit is not None else None
-            relative = parse_resource_uri(child_node.uri).tail_segments[len(parsed.tail_segments):]
-            name = "/".join(relative) or parsed.tail_segments[-1]
-            if request.operation == "list":
-                included = True
-            elif request.search_mode == "content":
-                included = match is not None
-            elif request.search_mode == "glob":
-                included = child_node.resource_shape == "file" and self._glob_matches(name, request.query)
-            elif request.search_mode == "fuzzy":
-                included = child_node.resource_shape == "file" and is_subsequence(fuzzy_query, name.casefold())
-            else:
-                included = request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
-            if included and request.operation == "search" and request.search_mode != "content":
-                included = self._file_included(name, request)
-            if included:
-                additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts} if hit is not None else {}
-                entry_bytes = 0 if child_node.uri in seen else len(child_node.model_dump_json().encode()) + 1
-                if match is not None:
-                    entry_bytes += len(match.model_dump_json().encode()) + 1
-                entry_bytes += sum(len(line.model_dump_json().encode()) + 1 for line in additions.values())
-                reason = "entry_limit" if (len(matches) if request.search_mode == "content" else len(entries)) == request.limit else (
-                    "response_byte_limit" if response_bytes + entry_bytes > request.max_response_bytes else None
-                )
-                if reason is not None:
-                    if not entries:
-                        raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
-                    # 续点指向首条未交付项；页预算不能推进越过该命中。
-                    cursor = self._encode_cursor(binding, position)
-                    return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()),
-                        truncated=True, next_cursor=cursor, truncation_reason=reason), request, deadline)
-                if child_node.uri not in seen:
-                    entries.append(child_node)
-                    seen.add(child_node.uri)
-                if match is not None:
-                    matches.append(match)
-                contexts.update(additions)
-                response_bytes += entry_bytes
-        return self._response(ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values())), request, deadline)
+        private_paths = (self._file_paths.private_path_filter(root_uri=parsed.display_uri)
+                         if parsed.kind in {"files", "attachments"} else nullcontext(None))
+        try:
+            # 作用域由当前同步请求持有；即使小页提前返回，也在返回前重核根。
+            # _walk 仍按需分类，不能为一页少量结果预先 realpath 整个目录。
+            with private_paths as is_private:
+                for child_node, hit, position in self._search_items(root, children, parsed, node, request, deadline, pattern, excluded, subtrees, resume, is_private):
+                    match = hit.match if hit is not None else None
+                    relative = parse_resource_uri(child_node.uri).tail_segments[len(parsed.tail_segments):]
+                    name = "/".join(relative) or parsed.tail_segments[-1]
+                    if request.operation == "list":
+                        included = True
+                    elif request.search_mode == "content":
+                        included = match is not None
+                    elif request.search_mode == "glob":
+                        included = child_node.resource_shape == "file" and self._glob_matches(name, request.query)
+                    elif request.search_mode == "fuzzy":
+                        included = child_node.resource_shape == "file" and is_subsequence(fuzzy_query, name.casefold())
+                    else:
+                        included = request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
+                    if included and request.operation == "search" and request.search_mode != "content":
+                        included = self._file_included(name, request)
+                    if included:
+                        additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts} if hit is not None else {}
+                        entry_bytes = 0 if child_node.uri in seen else len(child_node.model_dump_json().encode()) + 1
+                        if match is not None:
+                            entry_bytes += len(match.model_dump_json().encode()) + 1
+                        entry_bytes += sum(len(line.model_dump_json().encode()) + 1 for line in additions.values())
+                        reason = "entry_limit" if (len(matches) if request.search_mode == "content" else len(entries)) == request.limit else (
+                            "response_byte_limit" if response_bytes + entry_bytes > request.max_response_bytes else None
+                        )
+                        if reason is not None:
+                            if not entries:
+                                raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
+                            # 续点指向首条未交付项；页预算不能推进越过该命中。
+                            cursor = self._encode_cursor(binding, position)
+                            result = ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()),
+                                truncated=True, next_cursor=cursor, truncation_reason=reason)
+                            break
+                        if child_node.uri not in seen:
+                            entries.append(child_node)
+                            seen.add(child_node.uri)
+                        if match is not None:
+                            matches.append(match)
+                        contexts.update(additions)
+                        response_bytes += entry_bytes
+                else:
+                    result = ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()))
+        except ForbiddenError as error:
+            raise ResourceUriResolveError("capability_denied", "私有存储只允许由业务 owner 访问") from error
+        return self._response(result, request, deadline)
 
     def _navigate_owned_file(
         self, parsed: ParsedResourceUri, request: ResourceNavigationRequest, gateway_id: str,
@@ -459,9 +471,10 @@ class ResourceNavigation:
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
         excluded: frozenset[str], subtrees: frozenset[str], resume: SearchPosition,
+        is_private: Callable[[Path], bool] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, ContentMatch | None, SearchPosition]]:
         path = self._contained(root, children, parsed)
-        candidates = self._walk(root, children, parsed, request, deadline, subtrees) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
+        candidates = self._walk(root, children, parsed, request, deadline, subtrees, is_private) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path))),))
         root_stat = path.stat()
         prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
         prefix_checked = not resume.prefix
@@ -620,6 +633,7 @@ class ResourceNavigation:
     def _walk(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         request: ResourceNavigationRequest, deadline: float, subtrees: frozenset[str],
+        is_private: Callable[[Path], bool] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation]]:
         pending: list[tuple[tuple[str, ...], IgnoreScope | None]] = [(children, None)]
         visited: set[Path] = set()
@@ -679,8 +693,8 @@ class ResourceNavigation:
                 # 子根由自己的分支应用相对过滤及 ignore，不进入父根的扫描／输出配额。
                 if uri in subtrees:
                     continue
-                # 私有存储不作为文件树 child 发布；直接请求和别名仍在 _contained 拒绝。
-                if parsed.kind in {"files", "attachments"} and self._file_paths.is_private(child, root_uri=parsed.display_uri):
+                # 私有筛选复用本次根；真正输出节点仍由 _contained 重核访问。
+                if is_private is not None and is_private(child):
                     continue
                 if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"} and (
                     request.search_options is None or request.search_options.ignore_mode == "default"

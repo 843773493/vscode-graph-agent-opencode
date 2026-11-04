@@ -30,6 +30,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     ResourceUriResolveError,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
+from app.services.infrastructure.workspace_files import paths as paths_module
 
 WORKSPACE_ID = "019d1b4a-1111-7000-8000-000000000001"
 GATEWAY_ID = "gateway_navigation_test"
@@ -109,6 +110,69 @@ async def test_files_private_boundary_is_shared_with_native_aliases_but_not_skil
     skill_uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="skills", tail_segments=("example", "SKILL.md"))
     read = await owner.navigate(ResourceNavigationRequest(uri=skill_uri, operation="read"), local_gateway_id=GATEWAY_ID)
     assert read.content == "skill original"
+
+
+@pytest.mark.parametrize("limit", [1, 200], ids=["small-page", "whole-directory"])
+async def test_navigation_listing_reuses_private_root_without_skipping_child_access(navigation_case, monkeypatch, limit):
+    owner, workspace, uri = navigation_case
+    for index in range(128):
+        (workspace / f"file-{index:03}.txt").write_text("scan", encoding="utf-8")
+    (workspace / ".boxteam").mkdir()
+    (workspace / "private-alias").symlink_to(workspace / ".boxteam", target_is_directory=True)
+    original_realpath = paths_module.os.path.realpath
+    roots = 0
+    checked_children: set[Path] = set()
+
+    def observed_realpath(path, *args, **kwargs):
+        nonlocal roots
+        if Path(path) == workspace / ".boxteam":
+            roots += 1
+        candidate = Path(path)
+        if candidate.parent == workspace and candidate.name.startswith("file-"):
+            checked_children.add(candidate)
+        return original_realpath(path, *args, **kwargs)
+
+    monkeypatch.setattr(paths_module.os.path, "realpath", observed_realpath)
+    result = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="list", limit=limit),
+                                  local_gateway_id=GATEWAY_ID)
+    assert len(result.entries) == min(limit, 128)
+    assert result.truncated == (limit < 128)
+    assert {item.uri for item in result.entries} == {uri + f"/file-{index:03}.txt" for index in range(min(limit, 128))}
+    # 每个真正输出的节点仍经 _contained 重新核访问；筛选阶段不应再逐 child 取根。
+    assert roots <= (16 if limit == 1 else 140), f"目录筛选不应逐 child 重复解析根: {roots}"
+    assert len(checked_children) <= min(limit + 1, 128), "小页不应为整目录提前解析所有文件的 realpath"
+    print(f"navigation private-root resolutions: limit={limit}, roots={roots}, children={len(checked_children)}")
+
+
+@pytest.mark.parametrize("limit", [1, 500], ids=["small-page", "whole-directory"])
+async def test_navigation_rejects_private_root_retargeted_while_filtering(navigation_case, monkeypatch, limit):
+    owner, workspace, uri = navigation_case
+    # 私有根位于被枚举目录外，避免先由 _contained 拒绝某个新私有节点，掩盖收尾重核。
+    old_store, new_store = workspace.parent / "store-a", workspace.parent / "store-b"
+    old_store.mkdir()
+    new_store.mkdir()
+    private = workspace / ".boxteam"
+    private.symlink_to(old_store, target_is_directory=True)
+    public = workspace / "a.txt"
+    public.write_text("scan", encoding="utf-8")
+    (workspace / "b.txt").write_text("lookahead", encoding="utf-8")
+    original_realpath = paths_module.os.path.realpath
+    changed = False
+
+    def retarget(path, *args, **kwargs):
+        nonlocal changed
+        if Path(path) == public and not changed:
+            changed = True
+            private.unlink()
+            private.symlink_to(new_store, target_is_directory=True)
+        return original_realpath(path, *args, **kwargs)
+
+    monkeypatch.setattr(paths_module.os.path, "realpath", retarget)
+    with pytest.raises(ResourceUriResolveError) as failure:
+        await owner.navigate(ResourceNavigationRequest(uri=uri, operation="list", limit=limit), local_gateway_id=GATEWAY_ID)
+    assert changed
+    assert failure.value.reason_code == "capability_denied"
+    assert "私有存储边界发生改变" in str(failure.value.__cause__)
 
 
 @pytest.fixture

@@ -267,7 +267,7 @@ class WorkspaceService:
             nonlocal fingerprint, count
             for entry in directory_entries:
                 child = target_path / entry.name
-                if child in staging or self.file_paths.is_private(child, root_uri=display_path):
+                if child in staging or is_private(child):
                     continue
                 node = self._entry_to_file_node(entry, display_path, scope=scope)
                 fingerprint ^= int(digest({"name": node.name, "kind": node.kind, "size": node.size,
@@ -275,7 +275,10 @@ class WorkspaceService:
                 count += 1
                 if cursor_key is None or entry_key(node) > cursor_key:
                     yield node
-        with file_access(display_path, "目录扫描"), os.scandir(native_io_path(target_path)) as directory_entries:
+        with (file_access(display_path, "目录扫描"),
+              self.file_paths.private_path_filter(root_uri=display_path) as is_private,
+              os.scandir(native_io_path(target_path)) as directory_entries):
+            # 分页 revision 取决于全部公开成员，仍需消费整目录；这里只消除逐节点重复取根。
             entries = heapq.nsmallest(
                 limit + 1,
                 observed_entries(directory_entries),

@@ -18,6 +18,24 @@ def attempt_root(tmp_path: Path) -> Path:
     return tmp_path / ".boxteam" / "tool_tests" / "apply_patch" / "provider" / "case" / "workspace"
 
 
+def test_attempt_directory_filter_keeps_relative_private_and_symlink_boundaries(tmp_path, attempt_root):
+    paths = ToolTestFilePaths(workspace_root=tmp_path, attempt_root=attempt_root)
+    public = attempt_root / "public.txt"
+    public.write_text("scan", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    alias = attempt_root / "alias.txt"
+    alias.symlink_to(public)
+    with paths.private_path_filter(root_uri=paths.workspace_uri) as is_private:
+        assert not is_private(public) and not is_private(alias)
+        assert is_private(attempt_root / ".boxteam") and is_private(outside)
+        alias.unlink()
+        alias.symlink_to(outside)
+        # 根可复用，但每次分类必须观察节点当前的实际路径。
+        assert is_private(alias)
+    assert paths.is_private(alias, root_uri=paths.workspace_uri)
+
+
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("input_kind", ["relative", "absolute", "uri"])
 async def test_real_patch_in_private_attempt_uses_same_file_owner(
