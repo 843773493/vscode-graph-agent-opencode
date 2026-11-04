@@ -127,20 +127,33 @@ class _AssemblyContentStore:
             self.nodes[key] = node
         return {"node": key}
 
-    def encode(self, value: object) -> dict[str, object]:
+    def encode(self, value: object) -> tuple[dict[str, object], int]:
+        # 自底向上合计 JCS 长度，不为每层容器反复编码整棵子树。
+        # 长度只用于 128 字节内联边界，超过后统一返回 129；节点格式与 hash 不变。
         if isinstance(value, str) and value in self.sources:
-            return self._put({"kind": "canonical", **self.sources[value]})
-        raw = canonical_json_bytes(value)
-        if len(raw) <= 128:
-            return {"literal": value}
+            # 捕获的字符串本身至少 128 个 UTF-8 字节，加 JSON 引号后必超内联边界。
+            return self._put({"kind": "canonical", **self.sources[value]}), 129
         if isinstance(value, dict):
-            return self._put({"kind": "object", "entries": {key: self.encode(child) for key, child in value.items()}})
-        if isinstance(value, list):
-            prefix = None
-            for child in value:
-                prefix = self._put({"kind": "prefix", "parent": prefix, "value": self.encode(child)})
-            return prefix if prefix is not None else {"literal": []}
-        return self._put({"kind": "value", "value": value})
+            entries = {key: self.encode(child) for key, child in value.items()}
+            size = 2 + max(0, len(entries) - 1) + sum(
+                len(canonical_json_bytes(key)) + 1 + length for key, (_, length) in entries.items()
+            )
+            reference = {"literal": value} if size <= 128 else self._put({
+                "kind": "object", "entries": {key: child for key, (child, _) in entries.items()},
+            })
+        elif isinstance(value, list):
+            children = [self.encode(child) for child in value]
+            size = 2 + max(0, len(children) - 1) + sum(length for _, length in children)
+            reference = {"literal": value}
+            if size > 128:
+                prefix = None
+                for child, _ in children:
+                    reference = self._put({"kind": "prefix", "parent": prefix, "value": child})
+                    prefix = reference
+        else:
+            size = len(canonical_json_bytes(value))
+            reference = {"literal": value} if size <= 128 else self._put({"kind": "value", "value": value})
+        return reference, min(size, 129)
 
     def _node(self, key: str) -> dict[str, object]:
         if key not in self.nodes:
@@ -208,7 +221,7 @@ def store_snapshot(connection: sqlite3.Connection, snapshot: dict[str, object]) 
     store.capture_sources(snapshot)
     manifest = {**snapshot, "_storage_format": _FORMAT}
     for field in _FIELDS:
-        manifest[field] = store.encode(snapshot[field])
+        manifest[field], _ = store.encode(snapshot[field])
     return canonical_json_bytes(manifest).decode("utf-8")
 
 

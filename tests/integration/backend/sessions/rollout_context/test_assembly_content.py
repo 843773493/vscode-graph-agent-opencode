@@ -260,6 +260,50 @@ def _container_count(value: object) -> int:
     return 0
 
 
+@pytest.mark.parametrize("kind", ["string", "array", "object", "escaped_key"])
+@pytest.mark.parametrize("size", [128, 129])
+def test_content_inline_boundary_keeps_exact_manifest_and_node_bytes(production_context, kind, size):
+    _saver, session, thread, connection, _manager, _prepare = production_context
+    factories = {
+        "string": lambda body: body,
+        "array": lambda body: [body],
+        "object": lambda body: {"k": body},
+        "escaped_key": lambda body: {"😀\n\"\\": body},
+    }
+    factory = factories[kind]
+    body = "x" * (size - len(canonical_json_bytes(factory(""))))
+    value = factory(body)
+    assert len(canonical_json_bytes(value)) == size
+    snapshot = {
+        "session_id": session, "thread_id": thread, "selection": [],
+        "request_hash_preimage": {}, "tool_snapshot": value, "tool_set_refs": [], "seal_binding": None,
+    }
+    nodes = set(connection.execute("SELECT node_id,body_json FROM assembly_content_nodes"))
+    connection.execute("BEGIN IMMEDIATE")
+    encoded = store_snapshot(connection, snapshot)
+    if size == 128:
+        reference = {"literal": value}
+    else:
+        if kind == "string":
+            node = {"kind": "value", "value": value}
+        elif kind == "array":
+            node = {"kind": "prefix", "parent": None, "value": {"literal": body}}
+        else:
+            node = {"kind": "object", "entries": {key: {"literal": body} for key in value}}
+        key = sha256_jcs(node)
+        nodes.add((key, canonical_json_bytes(node).decode("utf-8")))
+        reference = {"node": key}
+    expected = {
+        **snapshot, "_storage_format": "assembly_content_v1", "tool_snapshot": reference,
+        "request_hash_preimage": {"literal": {}}, "tool_set_refs": {"literal": []},
+        "seal_binding": {"literal": None},
+    }
+    assert encoded == canonical_json_bytes(expected).decode("utf-8")
+    assert set(connection.execute("SELECT node_id,body_json FROM assembly_content_nodes")) == nodes
+    assert canonical_json_bytes(load_snapshot(connection, encoded)) == canonical_json_bytes(snapshot)
+    connection.rollback()
+
+
 @pytest.mark.parametrize("depth", [4, 20])
 def test_nested_tools_cold_read_copies_only_linear_content(
     production_context, monkeypatch, request, depth,
@@ -276,7 +320,17 @@ def test_nested_tools_cold_read_copies_only_linear_content(
         {"type": "function", "function": {"name": name, "parameters": schema}}
         for name in ("read_nested", "write_nested")
     ))
-    snapshot = prepare(f"nested-tools:{depth}", supplier=lambda: tools)["snapshot"]
+    encoded_containers = 0
+    original_encode = content_store.canonical_json_bytes
+
+    def count_encode(value):
+        nonlocal encoded_containers
+        encoded_containers += _container_count(value)
+        return original_encode(value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(content_store, "canonical_json_bytes", count_encode)
+        snapshot = prepare(f"nested-tools:{depth}", supplier=lambda: tools)["snapshot"]
     expected = snapshot.to_dict()
     copy_containers = 0
     original_copy = content_store.deepcopy
@@ -292,7 +346,8 @@ def test_nested_tools_cold_read_copies_only_linear_content(
         restored = cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id)
         assert restored.to_dict() == expected
     containers = _container_count(expected)
-    measurement = {"depth": depth, "output_containers": containers, "copied_containers": copy_containers}
+    measurement = {"depth": depth, "output_containers": containers, "copied_containers": copy_containers,
+                   "encoded_containers": encoded_containers}
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     (context.artifacts_dir / f"nested-tools-copy-{depth}.json").write_text(
         json.dumps(measurement, indent=2), encoding="utf-8",
@@ -316,6 +371,8 @@ def test_nested_tools_cold_read_copies_only_linear_content(
     assert canonical_json_bytes(load_snapshot(connection, raw)) == canonical_json_bytes(expected)
     # 复制量应随返回 JSON 大小线性增长，不能随嵌套层数反复复制已构建子树。
     assert copy_containers <= containers * 2
+    # 统计 content_store 的内联判定与 manifest 编码，不包含节点 hash 的独立编码。
+    assert encoded_containers <= containers * 2
 
 
 def test_seal_failure_rolls_back_content_nodes_and_assembly(production_context, monkeypatch):
