@@ -44,6 +44,10 @@ class ForkPathScope:
     @contextmanager
     def thread_resolution_scope(self) -> Iterator[None]:
         """单次同步存储操作复用已验证节点；退出后不保留定位结果。"""
+        # owner 检查和内层快照属于同次同步操作，共用定位结果；不延长到下一次操作。
+        if self._resolved_thread_nodes.get() is not None:
+            yield
+            return
         token = self._resolved_thread_nodes.set({})
         try:
             yield

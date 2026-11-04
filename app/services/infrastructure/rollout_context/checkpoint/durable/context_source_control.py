@@ -233,24 +233,26 @@ class ContextSourceControlStorageMixin:
         thread_id: str,
     ) -> tuple[ContextSourceControlState, ...]:
         """读取该 SessionThread 的全部控制状态，不建库、不执行恢复副作用。"""
-        resolved_thread_id = self._context_source_rollout_owner_or_none(
-            session_id, thread_id
-        )
-        if resolved_thread_id is None:
-            # 合成 SessionThread 没有 ContextStore，也就没有可恢复的持久化
-            # 控制状态；这是短路而不是吞错，索引损坏仍会抛 RuntimeError。
-            return ()
-        try:
-            with self._storage.read_connection(session_id, resolved_thread_id) as connection:
-                self._require_context_source_control_runtime(connection)
-                rows = connection.execute(
-                    f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
-                    "WHERE session_id = ? AND thread_id = ? "
-                    "ORDER BY created_at, source_id",
-                    (session_id, resolved_thread_id),
-                ).fetchall()
-        except RolloutNotMaterializedError:
-            return ()
+        # 本次读取的 owner 检查与快照打开复用路径；退出后下次读取仍重新校验 catalog。
+        with self._storage.fork_paths.thread_resolution_scope():
+            resolved_thread_id = self._context_source_rollout_owner_or_none(
+                session_id, thread_id
+            )
+            if resolved_thread_id is None:
+                # 合成 SessionThread 没有 ContextStore，也就没有可恢复的持久化
+                # 控制状态；这是短路而不是吞错，索引损坏仍会抛 RuntimeError。
+                return ()
+            try:
+                with self._storage.read_connection(session_id, resolved_thread_id) as connection:
+                    self._require_context_source_control_runtime(connection)
+                    rows = connection.execute(
+                        f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                        "WHERE session_id = ? AND thread_id = ? "
+                        "ORDER BY created_at, source_id",
+                        (session_id, resolved_thread_id),
+                    ).fetchall()
+            except RolloutNotMaterializedError:
+                return ()
         return tuple(_state_from_row(tuple(row)) for row in rows)
 
     def apply_context_source_control_mutation(
