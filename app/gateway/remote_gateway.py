@@ -336,7 +336,8 @@ async def reconcile_configured_remote_gateways(
     registry_batch_handle: GatewayRegistryBatchHandle | None = None
     registry_batch_commit_before: object | None = None
     registry_batch_revision_before: int | None = None
-    generation = f"gateway-remote-projection:{uuid4().hex}"
+    # 连接快照更新原 registry，不替换已经绑定的 Gateway 运行代次。
+    generation = registry.runtime_generation or f"gateway-remote-projection:{uuid4().hex}"
 
     async def prepare_remote_projection() -> None:
         try:

@@ -319,9 +319,11 @@ def test_registry_persists_remote_gateway_without_federation_token(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_generation", [None, "gateway_generation_previous"])
 async def test_configured_remote_reconcile_stages_all_and_preserves_manual_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    runtime_generation: str | None,
 ) -> None:
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     registry = GatewayWorkspaceRegistry(
@@ -355,6 +357,8 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
             remote_gateway_connection_ids=("rgw_manual",),
         ),),
     )
+    if runtime_generation is not None:
+        registry.apply_runtime_generation(runtime_generation)
     initial_revision = registry.registry_revision
 
     async def prepare(
@@ -412,6 +416,7 @@ async def test_configured_remote_reconcile_stages_all_and_preserves_manual_proje
     )
 
     assert registry.registry_revision == initial_revision + 1
+    assert registry.runtime_generation == runtime_generation
     assert registry.has_target((_OTHER_GATEWAY_ID, _WORKSPACE_ID))
     assert registry.has_target(
         (_REMOTE_GATEWAY_ID, _WORKSPACE_ID)

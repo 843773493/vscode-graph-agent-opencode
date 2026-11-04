@@ -231,3 +231,8 @@
 
 - 原真实双挂载历史恢复场景增加 Gateway 辅助服务健康入口观察，核两成员 UUID 和各自 Terminal／Browser 的四个真实 PID；Backend 组重启后四个 PID 保持不变。原 Session／Thread、消息顺序、规范化请求前缀、双工作区续跑及跨工作区 404 断言全部保留，1 passed／139.18 秒。原件 `identity_registry_recovery_root/artifacts/product-shared-history-auxiliary-owner-1793830635211828970.*`，生产与本场景源码稳定，只有并行独立联邦单测变化。
 - 结合上方真实工作台的完整组排空阻塞／force／CAS、候选失败恢复、此前启动／接管及真实身份 CLI 的非法 binding 零写入／零进程反例，3.3 完成 Linux 范围验收。Ruff 退出 0；本文件 Pyright 仍为与 HEAD 相同的四条存量诊断，新增观察逻辑零诊断。本项不扩展为 Windows 或真实 SSH 验收。
+
+### 2026-11-04：4.4 配置连接恢复的代次修复
+
+- 真实双 Gateway 在第二次连接更新时已从新目标端口成功读取 manifest／workspaces，但恢复事务用临时操作代次校验已绑定 registry 而启动失败。连接快照现复用 registry 的实际运行代次，不更换绑定、不跳过 proof、不另建事实源；原 CAS、手动投影保留、cursor 与凭据边界维持。
+- 直接对账的初始／已绑定代次参数反例修复前 1 passed／1 failed，同一原始错误；修复后联邦、消费者事务与投影身份共 43 passed／8.53 秒。Ruff 1／1、Pyright 16／16 与实际 HEAD 源码对照无新增；原件在 `identity_registry_recovery_root/artifacts/configured-remote-generation-*` 和 `configured-remote-generation-static-comparison.json`。双 Gateway 原失败及稳定指纹见 `identity_remote_recovery_current/artifacts/verification-third-run-1793830715947422744.json`；后续真实更新／离线恢复未通过，4.4 保持未完成。
