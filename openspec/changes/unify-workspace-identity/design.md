@@ -85,6 +85,25 @@ registry 的工作区键为 `(gateway_id, workspace_id)`；本地工作区可由
 
 ## Migration Plan
 
+### 已核对的输入与引用范围
+
+迁移输入基线为当前 registry 合同 13、Gateway SQLite schema 18、Gateway 配置格式 4 及 `gateway_connection_ids` 记录格式 4。低于 registry 13 的输入已被现有生产入口拒绝，不在此次新增兼容范围；其它旧配置先走其既有显式升级。SQLite 结构版本、registry payload 合同和配置 revision 各有原 owner，不能混为一个版本号。`workspaces.json` 合同 13 仅在没有权威 SQLite 登记时作为一次性迁移输入；两处并存且冲突时不得静默择一。
+
+| 链路／持久输入 | 已确认的旧引用与处理边界 |
+| --- | --- |
+| 本地登记 | `workspace_ids.py` 的路径／URL 哈希由 `managed_workspaces.py`、`server/bootstrap.py`、`routes/workspaces_lifecycle.py` 消费；替换取得 UUID 的入口，保留管理授权、root binding 与 CAS，不仅重命名生成器。 |
+| 共享 Backend | `ManagedBackendMember`、`WorkspaceRuntime`、registry runtime、controller／group_actions、health proof 和 startup recovery 同时携带别名与 UUID；完整成员迁齐，`owner_id`、generation、lease、fencing 不参与身份替换。 |
+| 联邦与连接 | `build_projected_workspace_id` 在 `federation/__init__.py`，由 `remote_gateway.py` 发布；projection／config batch、remote lifecycle、辅助代理及 skill source 消费。保留连接身份与每条连接的 cursor／租约，工作区按原生 Gateway＋UUID 合并。 |
+| 请求与公开协议 | `server/workspace_proxy.py`、resource navigation／text mutation、auxiliary proxy、catalog/resource catalog、workspace port，以及 proto 的 manifest／remote summary／workspace DTO 都有换算；清除旧 Backend 身份头与两套 ID 字段，同步生成产物和 SDK，不保留别名协议分支。 |
+| Gateway SQLite | `gateway_workspace_registry` 的主键／payload／active 标记、`workspace_registry_meta` 的活动项／managed_backends，以及 `user_view_state` 主键中的旧工作区引用必须带准确归属迁移；保留 registry revision 和 apply journal，不重放已结算的历史 journal。未结算 config／restart／generation 状态先阻塞并排空，不能按新格式假称已完成。 |
+| Gateway 文件 | `navigation/workspace-tree.json` 格式 1 按字段迁移，保留导航 `node_id`／父链。旧 `generators/*.json` 和 `migration-backups/session-generators/` 的冻结导入快照绑定原来源 bytes、映射与 `source_hash`：先由既有显式导入入口完成并退休运行源；未结算导入阻塞身份切换，已完成备份与回执保留，不修改原文再伪称原 hash。catalog 格式 3 已按真实 `(gateway_id, workspace_id)` 保存的快照不改写。 |
+| Web 持久引用 | `boxteam-browser-views` IndexedDB v1 的 selection、session view、settings 中折叠项及草稿键可能含别名；`boxteam-workspace-file-intents` v1 同时有 `gatewayWorkspaceId`／`backendWorkspaceId`；`boxteam-session-catalog-outbox` v2 的分区已有 Backend UUID，但 Gateway 分量需核确切来源。保留命令 ID、顺序、高水位及未知结果，不清空队列；旧分区不足以唯一确定来源时保留并阻塞派发。 |
+| Workbench 恢复 | Thread serializer v2 已保存真实 Gateway／workspace／Session／Thread，readonly serializer v1、搜索范围 v1 和合法资源 URI 同样保留既有正确 owner；临时 `routeId` 只在重连时重新解析。旧未版本化 Thread owner 缺少来源时继续保留不可用记录，不能借当前活动项补齐。 |
+
+纯内存的 HTTP target、hook dependency、目录镜像错误键、请求 barrier、文件操作、资源浏览和 MCP／持久任务消费者也须一并切换结构化 owner。`gatewayWorkspaceId`／`backendWorkspaceId` 的 camelCase 调用链和 `X-BoxTeam-Backend-Workspace-Id` 属于检索范围；不能只搜索 DTO 的 snake_case 字段。Agent／Session 服务中只是把实际 UUID 参数命名为 backend 的位置，按字段职责统一命名，不把其 canonical 历史正文作为别名记录重写。
+
+`add-workbench-quick-access` 与 `add-target-aware-extension-management` 后续消费同一结构化 owner；不会为了新查询或扩展宿主保留另一套工作区路由身份。升级前必须保留上述各客户端格式的完整迁移测试输入；正确的 URI／serializer 不因其它格式升级而无意义换版本。
+
 1. 明确支持的 registry／配置／客户端旧版本，冻结受影响管理写入并排空使用者，按现有方式停止相关 Gateway／Backend；不新建长期迁移服务。
 2. 只读预览并校验身份、完整引用、owner 与 generation；远端离线、重复 UUID 或未结算配置候选等阻塞必须先解决。保留旧控制面备份及客户端恢复材料，不备份或公开凭据到迁移结果。
 3. 在现有 SQLite 事务边界内迁移所有控制面引用和必要 schema，提交前完成引用完整性验证。跨文件步骤通过现有迁移协调保证可重入，未完成不得公布成功或开始正常服务。

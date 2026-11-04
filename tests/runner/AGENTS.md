@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-workspace-process-exclusivity` 使用三个真实 Backend 子进程和独立 home，验证物理工作区锁拒绝重复挂载、占用者继续服务及退出后的接管，保留产品入口创建的 Session／main Thread 与 UUID；固定180秒／4GiB及原集成闸门，不代表执行检查点历史、Gateway 身份迁移或 Windows 验收。
+
 `integration-search-scope-changes` 通过真实 Gateway／双后端与正式搜索 SDK，验 origin／A+B／all、控制面发现、独有正文、空／未知范围、移除 owner 和旧 route 被新离线 owner 复用后的冻结续查；核后端逐 request_id 的实际分发。固定180秒／4GiB及原集成闸门，不代替离线目标管理 UI、Web／Electron 或 Windows canonical 验收。
 
 `integration-web-search-coverage` 共用一次正式 Workbench 构建，先验出站故障装具的查询生命周期，再运行无替身文件覆盖 E2E；按较低证据层登记组合套件，原场景分别保留 Integration／E2E 分类与镜像产物。固定600秒／4GiB，沿集成独占闸门；不代表 Windows canonical 或完整 Quick Access 验收。

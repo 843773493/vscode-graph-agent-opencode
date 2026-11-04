@@ -1,7 +1,7 @@
 ## 1. 身份合同与迁移范围
 
-- [ ] 1.1 全仓检索工作区别名生成、`backend_workspace_id`／`remote_workspace_id` 及其直接和间接消费者，标出真实工作区引用与独立连接／导航身份。
-- [ ] 1.2 明确支持的 registry、配置及客户端旧版本，确认需迁移的实际表、字段和恢复格式；与多工作区、quick-access、扩展管理规划对齐，避免新增旧映射调用方。
+- [x] 1.1 全仓检索工作区别名生成、`backend_workspace_id`／`remote_workspace_id` 及其直接和间接消费者，标出真实工作区引用与独立连接／导航身份。包括 camelCase、旧身份头、projection 生成器和不含旧字段名的持久引用；范围见 design 的迁移输入表。
+- [x] 1.2 明确支持的 registry、配置及客户端旧版本，确认需迁移的实际表、字段和恢复格式；与多工作区、quick-access、扩展管理规划对齐，避免新增旧映射调用方。输入基线与正确 owner 不改写边界见 design；迁移实现及恢复验收仍在第 5／6 组。
 - [ ] 1.3 在现有受控身份入口完成注册前 UUID 获取、已有 UUID 保留及同原生 Gateway 根冲突拒绝，不增加第二身份源或占位 workspace_id。
 - [x] 1.3a 身份文件完整写入后原子不覆盖发布，消除并发读取空文件；覆盖创建／绑定竞争、候选失败清理与真实 Gateway 损坏恢复。此子项不代表 1.3 的登记与根冲突验收完成。Windows 实机验证尚未完成：`hyf-win` 目标已有两项本地删除，快照激活拒绝，未覆盖目标改动。
 
@@ -18,6 +18,7 @@
 - [ ] 3.2 迁齐 blockers、完整影响集合、force、配置 fan-out、移除、shutdown、preserve/adopt 与恢复，删除组生命周期中的工作区 ID 换算。
 - [ ] 3.3 经产品入口验证 sibling blocker、排空超时、显式 force、完整组恢复及辅助服务保留；缺失或错误 binding 必须拒绝部分 adopt。
 - [ ] 3.4 用受进程外保护的独立 Backend 子进程验证不同 home 争用同一隔离工作区仍失败、释放锁后可接管且 UUID 与业务历史保持不变。
+- [x] 3.4a Linux 真实 Backend A／B／C 使用三个独立 home，B 被物理工作区锁拒绝，A 继续可服务，A 退出后 C 接管且产品入口创建的 Session／main Thread 与身份文件保持不变。测试 `test_workspace_process_exclusivity.py`：1 passed／41.16s；执行历史、检查点与跨 Gateway 迁移仍由后续完整验收覆盖。
 
 ## 4. 联邦与连接身份分离
 
