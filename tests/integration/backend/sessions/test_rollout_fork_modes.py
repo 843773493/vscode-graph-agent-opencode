@@ -1679,7 +1679,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
                 idempotency_key="resource-source-delete", root_node_id=source.session_id,
             )
             assert not source_node.exists()
-        assert store._catalog.gc_candidates(now=datetime.now(UTC)) == ()
+        assert store._catalog.pending_directories() == ()
         cold_store = AttachmentBlobStore(context.workspace, path_resolver=context.sessions.path_resolver)
         cold = RolloutCheckpointSaver(context.sessions.path_resolver.sessions_root, attachment_store=cold_store)
         try:

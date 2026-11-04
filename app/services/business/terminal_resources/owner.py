@@ -162,6 +162,8 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
             lease = self._leases.get_lease(self._directory_lease_id(record.resource_id, record.working_directory_uri))
             if lease is not None and lease.status in {"active", "reconcile_required"}:
                 await self._leases.settle(lease.lease_id)
+            if self._working_directories is not None:
+                await self._working_directories.settle_working_directory(record.working_directory_uri)
 
     @asynccontextmanager
     async def operation(

@@ -25,6 +25,7 @@ from app.services.infrastructure.attachment_blob_catalog.legacy_references impor
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_attachment_directory,
+    resolve_file_version,
 )
 from app.services.infrastructure.attachment_blob_catalog.migration import (
     backup,
@@ -65,7 +66,7 @@ async def test_cli_prepares_independent_resources_and_complete_legacy_bindings(s
     response = json.loads(result.stdout)
     assert response == {"state": "catalog_prepared", "backup_id": json.loads((case.output / "manifest.json").read_bytes())["backup_id"],
                         "workspace_id": json.loads((case.output / "manifest.json").read_bytes())["workspace_id"],
-                        "source_attachment_schema": 3, "target_attachment_schema": 4, "resources": 2, "legacy_fork_payloads": 0}
+                        "source_attachment_schema": 3, "target_attachment_schema": 5, "resources": 2, "legacy_fork_payloads": 0}
     assert str(case.workspace) not in result.stdout and str(case.output) not in result.stdout
     verified = cli("verify-catalog", "--backup", str(case.output))
     assert verified.returncode == 0, verified.stderr
@@ -73,16 +74,17 @@ async def test_cli_prepares_independent_resources_and_complete_legacy_bindings(s
     with closing(sqlite3.connect(path)) as connection:
         connection.row_factory = sqlite3.Row
         require_directory_schema(connection)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
         for owner in owners:
             resource = connection.execute("SELECT * FROM attachment_directories WHERE attachment_id=?", (owner["attachment_id"],)).fetchone()
-            assert resource["availability"] == "available" and resource["unattached_since"] is None and resource["gc_after"] is None
+            assert resource["availability"] == "available" and resource["release_pending"] == 0 and resource["release_reason"] is None
             original = case.output / "converted/attachments" / resource["relative_locator"] / "original/content"
             assert original.read_bytes() == BODY
             version = connection.execute("SELECT * FROM attachment_directory_files WHERE attachment_id=?", (owner["attachment_id"],)).fetchone()
             assert (version["relative_path"], version["digest"], version["length"], version["file_name"]) == (
                 "original/content", blobs[0]["digest"], len(BODY), owner["file_name"],
             )
+            assert resolve_file_version(case.output / "converted/attachments", version["digest"]).read_bytes() == BODY
             association = connection.execute("SELECT * FROM attachment_directory_associations WHERE attachment_id=?", (owner["attachment_id"],)).fetchone()
             assert (association["session_id"], association["thread_id"], association["state"]) == (
                 owner["owner_session_id"], owner["owner_thread_id"], "active",
@@ -166,11 +168,12 @@ async def test_versions_and_retention_survive_catalog_conversion(
             ).fetchone()
             assert preview is not None and (digest, length) == ("sha256:" + hashlib.sha256(preview).hexdigest(), len(preview))
             assert (case.output / "converted/attachments" / locator / "preview/512.webp").read_bytes() == preview
+            assert resolve_file_version(case.output / "converted/attachments", digest).read_bytes() == preview
         else:
-            availability, start, deadline, retention, locator = connection.execute(
-                "SELECT availability,unattached_since,gc_after,retention_until,relative_locator FROM attachment_directories",
+            availability, pending, reason, retention, locator = connection.execute(
+                "SELECT availability,release_pending,release_reason,retention_until,relative_locator FROM attachment_directories",
             ).fetchone()
-            assert (start, deadline, retention) == (released.isoformat(), until.isoformat(), until.isoformat())
+            assert (pending, reason, retention) == (int(state != "tombstoned"), None, until.isoformat())
             assert availability == ("tombstoned" if state == "tombstoned" else "available")
             assert tuple(connection.execute("SELECT state FROM attachment_directory_associations").fetchone()) == ("released",)
             assert tuple(connection.execute("SELECT length FROM attachment_directory_files WHERE role='original'").fetchone()) == (len(BODY),)
@@ -212,16 +215,18 @@ async def test_interrupted_preparation_resumes_without_rewriting_published_catal
     assert frozen_files(case.output / "data") == source
 
 
-@pytest.mark.parametrize("damage", ["source", "directory", "catalog", "schema", "rows", "journal"])
+@pytest.mark.parametrize("damage", ["source", "directory", "version", "catalog", "schema", "rows", "journal"])
 async def test_mismatched_inputs_or_catalog_are_rejected_without_repair(backup_case: BackupCase, damage: str) -> None:
     case = backup_case
     path = prepare_directories(case)
     catalog.prepare_converted_catalog(case.output)
     if damage == "source":
         (case.output / "data" / case.original.relative_to(case.workspace / ".boxteam")).write_bytes(b"damaged source")
-    elif damage == "directory":
+    elif damage in {"directory", "version"}:
         original, = (path.parent / "attachments").rglob("content")
-        original.write_bytes(b"damaged converted original")
+        target = original if damage == "directory" else resolve_file_version(path.parent / "attachments", "sha256:" + file_digest(original))
+        target.chmod(0o600)
+        target.write_bytes(b"damaged converted content")
     elif damage == "journal":
         journal = path.parent / "catalog-journal.json"
         payload = json.loads(journal.read_bytes())
@@ -232,7 +237,7 @@ async def test_mismatched_inputs_or_catalog_are_rejected_without_repair(backup_c
             path.write_bytes(b"invalid sqlite file")
         else:
             with closing(sqlite3.connect(path)) as connection:
-                connection.execute("DROP INDEX attachment_directories_gc" if damage == "schema" else
+                connection.execute("DROP INDEX attachment_directories_pending" if damage == "schema" else
                                    "UPDATE attachment_directory_associations SET binding_token='different-binding'")
                 connection.commit()
             # 即使攻击者同时更新字节指纹，结构和来源逐行校验仍须拒绝。

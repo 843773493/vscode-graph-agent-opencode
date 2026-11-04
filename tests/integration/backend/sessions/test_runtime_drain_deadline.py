@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack
+from typing import cast
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 
 import app.core.session_subtree_delete as deletion
 from app.core.checkpoint_config import build_checkpoint_config
@@ -15,6 +17,7 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.session import SessionCreateRequest
 from tests.integration.backend.sessions.test_attachment_runtime_lifecycle import (
+    attachment_directory,
     execute_upload,
     isolate_unused_external_managers,
 )
@@ -151,10 +154,11 @@ async def test_delete_uses_remaining_budget_after_key_wait_and_preserves_blocked
             assert history.read_bytes() == original_bytes and node.is_dir()
             assert not (container.workspace_root / ".boxteam/sessions/.deleting" / key / sid).exists()
             assert case.tracker.snapshot(sid, tid).generation == generation and releases == []
-            directory = container.attachment_blob_store._catalog.get_directory(
-                parse_attachment_uri(ref.file_id, require_file=True).attachment_id,
-            )
-            assert directory.unattached_since is None and directory.gc_after is None
+            aid = parse_attachment_uri(ref.file_id, require_file=True).attachment_id
+            assert aid is not None
+            directory = container.attachment_blob_store._catalog.require_available_directory(aid)
+            assert not directory.release_pending
+            assert attachment_directory(container.attachment_blob_store, aid).is_dir()
             async with service._session_gate.shared(sid):
                 # 超时调用已归还自身等待，仍由原读者保护完整恢复依据。
                 control = SessionControlStore(node / "session-control.sqlite")
@@ -228,10 +232,11 @@ async def test_service_shutdown_drains_peer_runtime_while_original_cleanup_is_pe
         original_unload = state.runtime_unload
         assert original_unload is not None and not original_unload.done()
         assert state.generation == generation
-        peer_directory = container.attachment_blob_store._catalog.get_directory(
-            parse_attachment_uri(peer_ref.file_id, require_file=True).attachment_id,
-        )
-        assert peer_directory.unattached_since is not None and peer_directory.gc_after is not None
+        peer_aid = parse_attachment_uri(peer_ref.file_id, require_file=True).attachment_id
+        assert peer_aid is not None
+        peer_directory = container.attachment_blob_store._catalog.get_directory(peer_aid)
+        assert peer_directory is not None and peer_directory.availability == "released"
+        assert not attachment_directory(container.attachment_blob_store, peer_aid).exists()
         assert not any(
             (session, thread) == (peer_session, peer_thread)
             for session, thread, _token in container.attachment_blob_store._catalog.runtime_bindings()
@@ -243,13 +248,16 @@ async def test_service_shutdown_drains_peer_runtime_while_original_cleanup_is_pe
             with session_thread_owner_scope(
                 MutationIntentOwner(session_id=owner[0], thread_id=owner[1]), langgraph_thread_id=owner[1],
             ):
-                assert await case.runner.saver.aget_tuple(build_checkpoint_config(owner[1])) is not None
+                assert await case.runner.saver.aget_tuple(cast(RunnableConfig, build_checkpoint_config(owner[1]))) is not None
         finish.set()
         if fails_later:
             with pytest.raises(ExceptionGroup) as failure:
                 await closing
-            thread_error = failure.value.exceptions[0].exceptions[0]
+            session_error = failure.value.exceptions[0]
+            assert isinstance(session_error, BaseExceptionGroup)
+            thread_error = session_error.exceptions[0]
             if phase == "scope":
+                assert isinstance(thread_error, BaseExceptionGroup)
                 assert thread_error.exceptions[0].__cause__ is original_failure
             else:
                 assert thread_error is original_failure

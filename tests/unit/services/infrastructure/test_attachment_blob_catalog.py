@@ -134,7 +134,7 @@ def _original_path(store: AttachmentBlobStore, file_id: str) -> Path:
 def _store(tmp_path: Path, session_bundle_factory, *session_ids: str) -> AttachmentBlobStore:
     for session_id in session_ids:
         session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
-    return AttachmentBlobStore(tmp_path)
+    return AttachmentBlobStore(tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.json"))
 
 
 async def test_upload_restricts_original_before_publication(
@@ -614,18 +614,23 @@ async def test_fork_projects_generated_attachment_blocks_without_mutating_user_t
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("required", [False, True])
-async def test_fork_reclaimed_directory_respects_required_without_recreating_bytes(fork_capture, required: bool) -> None:
+async def test_fork_missing_saved_original_respects_required_without_recreating_bytes(fork_capture, required: bool) -> None:
     store, record = fork_capture
     (ref,) = await store.persist_inline(SESSION_A, [_attach("capture.txt", "text/plain", b"fork-body")],
         thread_id=record.source_thread_id, message_id="msg_reclaimed")
     attachment_id = parse_resource_uri(ref.file_id).attachment_id
     store.release_session_references(SESSION_A)
-    current = datetime.now(UTC)
-    store._clock = lambda: current + timedelta(days=31)
-    assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (attachment_id,)
+    assert await store.process_pending_directories() == (attachment_id,)
+    from app.services.infrastructure.attachment_blob_catalog.locator import (
+        resolve_file_version,
+    )
+    version = store._catalog.file_version(attachment_id, "original/content")
+    asset = resolve_file_version(store._attachments_root, version.digest)
+    asset.chmod(0o600)
+    asset.unlink()
     before = store._catalog.get_directory(attachment_id)
     if required:
-        with pytest.raises(FileNotFoundError, match="context_required_resource_unavailable"):
+        with pytest.raises(FileNotFoundError):
             store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
     else:
         (snapshot,) = store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, False),))
@@ -633,7 +638,12 @@ async def test_fork_reclaimed_directory_respects_required_without_recreating_byt
         assert snapshot.target_action == "omit" and snapshot.unavailable_reason
         assert store.project_attachment(SESSION_B, record.target_thread_id, ref.file_id) == {"file_id": ref.file_id, "availability": "unavailable"}
     assert store._catalog.fork_attachment_claim_ids(record.copy_operation_id) == ()
-    assert store._catalog.get_directory(attachment_id) == before
+    after = store._catalog.get_directory(attachment_id)
+    assert (after.attachment_id, after.relative_locator, after.created_at, after.availability) == (
+        before.attachment_id, before.relative_locator, before.created_at, before.availability,
+    )
+    assert after.release_pending == 1 and after.release_reason.startswith("重建未完成：FileNotFoundError:")
+    assert not asset.exists()
     assert _original_files(store._workspace_root) == []
 
 
@@ -1076,7 +1086,7 @@ def test_ingest_record_rejects_frozen_input_conflict(tmp_path: Path, field: str,
 
 
 @pytest.mark.parametrize("future", [False, True])
-def test_released_directory_retention_and_thirty_days_both_protect_deletion(tmp_path: Path, future: bool) -> None:
+def test_released_directory_preserves_only_explicit_retention_commitment(tmp_path: Path, future: bool) -> None:
     now = datetime.now(UTC)
     with closing(_catalog(tmp_path)) as catalog:
         ingest = _create_ingest(catalog, "attkey_retained", now - timedelta(days=100))
@@ -1084,21 +1094,19 @@ def test_released_directory_retention_and_thirty_days_both_protect_deletion(tmp_
         catalog.publish_ingest(ingest.ingest_idempotency_key, now=now)
         catalog.release_associations(session_id=SESSION_A, now=now - timedelta(days=31))
         before = catalog.get_directory(ingest.attachment_id)
-        assert before.gc_after == (now - timedelta(days=1)).isoformat()
+        assert before.release_pending == 1
         catalog.release_associations(session_id=SESSION_A, now=now)
         assert catalog.get_directory(ingest.attachment_id) == before
         deadline = now + timedelta(days=1 if future else -1)
         with catalog.write_transaction() as connection:
             connection.execute("UPDATE attachment_directories SET retention_until=? WHERE attachment_id=?", (deadline.isoformat(), ingest.attachment_id))
-        assert bool(catalog.gc_candidates(now=now)) is not future
+        assert catalog.pending_directories() == (catalog.get_directory(ingest.attachment_id),)
         if future:
-            with pytest.raises(AttachmentDirectoryRetainedError, match="尚未到期"):
-                catalog.begin_delete(ingest.attachment_id, now=now)
+            with pytest.raises(AttachmentDirectoryRetainedError, match="明确保留承诺"):
+                catalog.require_releasable_directory(ingest.attachment_id, now=now)
             assert catalog.get_directory(ingest.attachment_id).availability == "available"
         else:
-            assert catalog.begin_delete(ingest.attachment_id, now=now).availability == "deleting"
-            catalog.finish_delete(ingest.attachment_id, now=now)
-            assert catalog.get_directory(ingest.attachment_id).availability == "tombstoned"
+            assert catalog.require_releasable_directory(ingest.attachment_id, now=now).availability == "available"
 
 
 # ----------------------------------------------------------------------
@@ -1200,7 +1208,7 @@ async def test_persist_rejected_when_session_already_deleting(
 
 
 @pytest.mark.asyncio
-async def test_release_session_starts_own_deadline_and_keeps_other_session_directory(tmp_path, session_bundle_factory) -> None:
+async def test_release_session_releases_only_its_unmodified_working_directory(tmp_path, session_bundle_factory) -> None:
     with closing(_store(tmp_path, session_bundle_factory, SESSION_A, SESSION_B)) as store:
         payload = b"shared"
         refs = []
@@ -1211,34 +1219,30 @@ async def test_release_session_starts_own_deadline_and_keeps_other_session_direc
         first_id = parse_resource_uri(refs[0].file_id).attachment_id
         assert first_id in store.release_session_references(SESSION_A)
         assert store.read(SESSION_A, refs[0].file_id).data == payload
-        assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == ()
-        current = datetime.now(UTC)
-        store._clock = lambda: current + timedelta(days=31)
-        assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (first_id,)
+        assert store._catalog.get_directory(first_id).availability == "released"
+        assert await store.process_pending_directories() == ()
         assert store.read(SESSION_B, refs[1].file_id).data == payload
         assert len(_original_files(tmp_path)) == 1
 
 
 @pytest.mark.asyncio
-async def test_collect_garbage_marks_deleting_before_physical_removal_then_tombstones(tmp_path, session_bundle_factory, monkeypatch) -> None:
+async def test_release_records_intent_before_removal_and_rebuilds_same_identity(tmp_path, session_bundle_factory, monkeypatch) -> None:
     with closing(_store(tmp_path, session_bundle_factory, SESSION_A)) as store:
         (ref,) = await store.persist_inline(SESSION_A, [_attach("input.txt", "text/plain", b"garbage")],
             thread_id=store._path_resolver.main_thread_id(SESSION_A), message_id="msg_gc")
         attachment_id = parse_resource_uri(ref.file_id).attachment_id
         store.release_session_references(SESSION_A)
-        current = datetime.now(UTC)
-        store._clock = lambda: current + timedelta(days=31)
         remove = attachment_blob_store_module.remove_directory
         seen = []
         def observe(path):
             seen.append(store._catalog.get_directory(attachment_id).availability)
             remove(path)
         monkeypatch.setattr(attachment_blob_store_module, "remove_directory", observe)
-        assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (attachment_id,)
-        assert seen == ["deleting"] and store._catalog.get_directory(attachment_id).availability == "tombstoned"
+        assert await store.process_pending_directories() == (attachment_id,)
+        assert seen == ["releasing"] and store._catalog.get_directory(attachment_id).availability == "released"
         assert _original_files(tmp_path) == []
-        with pytest.raises(FileNotFoundError):
-            store.read(SESSION_A, ref.file_id)
+        assert store.read(SESSION_A, ref.file_id).data == b"garbage"
+        assert store.reference(attachment_id) == ref.file_id
 
 
 @pytest.mark.asyncio
@@ -1284,14 +1288,13 @@ async def test_pending_fork_claim_retains_only_source_directory_until_original_o
         assert control.list_non_terminal_leases() == ()
     with closing(store._open_control_store(SESSION_B)) as control:
         assert control.list_non_terminal_leases() == ()
-    current = datetime.now(UTC)
-    store._clock = lambda: current + timedelta(days=31)
-    assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (parse_resource_uri(target.file_id).attachment_id,)
+    assert store._catalog.get_directory(parse_resource_uri(target.file_id).attachment_id).availability == "released"
+    assert await store.process_pending_directories() == ()
     assert store.read(SESSION_A, source.file_id).data == body
     store._catalog.settle_fork_attachment_claims(copy_operation_id=record.copy_operation_id, claim_ids=(snapshot.claim_id,), state=terminal, now=store._clock())
-    assert await store.collect_garbage(leases=ExternalResourceLeaseLedger()) == (snapshot.source_attachment_id,)
-    with pytest.raises(FileNotFoundError):
-        store.read(SESSION_A, source.file_id)
+    assert await store.process_pending_directories() == (snapshot.source_attachment_id,)
+    assert store._catalog.get_directory(snapshot.source_attachment_id).availability == "released"
+    assert store.read(SESSION_A, source.file_id).data == body
 
 
 @pytest.mark.asyncio
@@ -1467,9 +1470,9 @@ async def test_terminal_fork_staging_removal_failure_retries_without_scanning(fo
     with monkeypatch.context() as patch:
         patch.setattr(fork_import_module, "remove_directory", interrupted)
         with pytest.raises(OSError, match="deletion interrupted"):
-            await target.collect_garbage(leases=ExternalResourceLeaseLedger())
+            await target.collect_fork_import_staging()
     assert path.exists()
-    await target.collect_garbage(leases=ExternalResourceLeaseLedger())
+    await target.collect_fork_import_staging()
     assert not path.exists()
     assert json.dumps([asdict(snapshot) for snapshot in target._catalog.terminal_fork_attachment_snapshots(record.copy_operation_id)], sort_keys=True) == json.dumps([asdict(snapshot) for snapshot in case.snapshots], sort_keys=True)
 

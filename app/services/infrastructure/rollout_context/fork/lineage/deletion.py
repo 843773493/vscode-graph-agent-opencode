@@ -109,3 +109,5 @@ class RolloutForkDeletionMixin:
                 with self._storage._lock(thread_id, "", session_id=session_id):
                     if rollout.exists():
                         shutil.rmtree(rollout)
+        if attachment_store is not None:
+            await attachment_store.process_pending_directories()

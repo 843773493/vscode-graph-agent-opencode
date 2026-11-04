@@ -24,6 +24,7 @@ from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
     utc_bucket_date,
     validate_blob_id,
     validate_blob_relative_locator,
+    validate_digest,
 )
 
 __all__ = [
@@ -99,6 +100,12 @@ def resolve_attachment_file(directory: Path, parts: tuple[str, ...]) -> Path:
     """读取、派生写入和冻结复制共用同一 containment 边界。"""
     validate_path_budget(directory, "/".join(parts))
     return _checked_descendant(directory, parts)
+
+
+def resolve_file_version(attachments_root: Path, digest: str) -> Path:
+    """原文件版本 owner 的只读资产；digest 定位字节，不合并可变目录身份。"""
+    validate_digest(digest)
+    return resolve_attachment_file(attachments_root, (".versions", "sha256", digest.removeprefix("sha256:")))
 
 
 def resolve_captured_directory_file(captured_root: Path, attachment_id: str, relative_path: str) -> Path:

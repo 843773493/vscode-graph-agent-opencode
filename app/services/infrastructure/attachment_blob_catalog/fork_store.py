@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractContextManager
+from pathlib import Path
 
 from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
@@ -55,6 +57,10 @@ from app.services.infrastructure.workspace_files.mutation_lock import (
 
 
 class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
+    directory_access: Callable[..., AbstractContextManager[None]]
+    _ensure_directory_locked: Callable[[str], Path]
+    process_pending_directories: Callable[..., Awaitable[tuple[str, ...]]]
+
     def project_attachment(self, target_session_id: str, target_thread_id: str, file_id: str) -> dict[str, str]:
         self._catalog.acquire_access()
         if not self._catalog.database_path.is_file():
@@ -70,7 +76,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
             target_uri = file_uri_root(snapshot.target_file_id)
             projected_file = file_uri_child(target_uri, *parsed.tail_segments[1:]) if parsed.kind == "attachments" else file_uri_child(target_uri, "original", "content")
             return {"file_id": projected_file, "directory_uri": target_uri,
-                    "availability": "available" if claim is not None and claim[0] == "committed" and record is not None and record.availability == "available" else "unavailable"}
+                    "availability": "available" if claim is not None and claim[0] == "committed" and record is not None and record.availability != "tombstoned" else "unavailable"}
         parsed = parse_resource_uri(file_id)
         if parsed.kind == "attachments" and parsed.scope_id != self.workspace_id:
             return {"file_id": file_id, "availability": "unavailable"}
@@ -82,7 +88,7 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
         projected_file = self.reference(attachment_id) if parsed.session_artifact_kind == "attachments" else parsed.display_uri
         return {"file_id": projected_file,
                 "directory_uri": file_uri_root(projected_file),
-                "availability": "available" if record is not None and record.availability == "available" else "unavailable"}
+                "availability": "available" if record is not None and record.availability != "tombstoned" else "unavailable"}
 
     def _fork_candidates(self, *, source_session_id: str, source_thread_id: str, references: Sequence[tuple[str, bool]]):
         grouped = {}
@@ -113,12 +119,17 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
         return tuple(result)
 
     def capture_fork_attachments(self, record: ForkSourceCaptureRecord, *, references: Sequence[tuple[str, bool]], same_storage_owner: bool) -> tuple[ForkAttachmentDirectorySnapshot, ...]:
+        candidates = self._fork_candidates(source_session_id=record.source_session_id, source_thread_id=record.source_thread_id, references=references)
+        # 原 holder 贯穿基线重建、冻结 claim 与 capture；释放不能穿过二者的交接。
+        with self.directory_access(*candidates):
+            return self._capture_fork_attachments(record, candidates=candidates, same_storage_owner=same_storage_owner)
+
+    def _capture_fork_attachments(self, record: ForkSourceCaptureRecord, *, candidates, same_storage_owner: bool) -> tuple[ForkAttachmentDirectorySnapshot, ...]:
         request = json.loads(record.request_json)
         source_domain, target_domain = request["source_storage_domain_id"], request["target_storage_domain_id"]
         if source_domain != self.workspace_id or (source_domain == target_domain) != same_storage_owner:
             raise ValueError("fork_owner_overlap：目录资源域与实际 owner 不一致")
         choices = {choice["resource_uri"]: choice["action"] for choice in request["resources"]}
-        candidates = self._fork_candidates(source_session_id=record.source_session_id, source_thread_id=record.source_thread_id, references=references)
         previous = self._catalog.fork_attachment_snapshots(record.copy_operation_id, target_session_id=record.target_session_id, target_thread_id=record.target_thread_id)
         if previous:
             if {snapshot.source_attachment_id: ({snapshot.source_file_id, *snapshot.source_file_aliases}, snapshot.required) for snapshot in previous} != {key: (value[0], value[1]) for key, value in candidates.items()}:
@@ -187,9 +198,8 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
         return result
 
     def _fork_directory_manifest(self, attachment_id: str):
-        directory = self._catalog.require_available_directory(attachment_id)
-        root = resolve_attachment_directory(self._attachments_root, directory.relative_locator)
         with workspace_file_mutation_lock(self._workspace_root):
+            root = self._ensure_directory_locked(attachment_id)
             files, directories = directory_manifest(root)
             for file in files:
                 if file.relative_path.split("/")[0] in {"original", "preview"}:
@@ -200,8 +210,9 @@ class ForkAttachmentStoreMixin(ForkAttachmentImportMixin):
                 raise FileNotFoundError("附件目录缺少原件，不能发布 fork")
             return files, directories
 
-    def release_fork_export(self, capture: ForkSourceCaptureRecord) -> None:
+    async def release_fork_export(self, capture: ForkSourceCaptureRecord) -> None:
         self._catalog.release_fork_export_claims(capture.copy_operation_id)
+        await self.process_pending_directories()
     async def reserve_copy_attachments(
         self, capture: ForkSourceCaptureRecord, creation: SessionCreationRecord | ThreadCreationRecord | None,
         snapshots: tuple[ForkAttachmentDirectorySnapshot, ...],

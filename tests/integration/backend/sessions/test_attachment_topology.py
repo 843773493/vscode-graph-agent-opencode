@@ -8,7 +8,7 @@ import json
 import sqlite3
 from contextlib import closing
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -601,7 +601,7 @@ async def test_gateway_attachment_upload_recovers_after_process_loss(
         final = _upload_state(case, session)
         assert len(final["acceptances"]) == len(final["roots"]) == len(final["queue"]) == 1
         assert final["queue"] == [{"job_id": job_id, "phase": "terminal"}]
-        # 已发布但未接受的上传进入30天宽限期；重新上传拥有另一个独立目录。
+        # 已发布但未接受的上传释放工作副本；重新上传拥有另一个独立目录。
         assert len(final["directories"]) == len(final["files"]) == 1 + int(boundary == "published")
         assert len([ref for ref in final["refs"] if ref["state"] == "active"]) == 1
         assert all(row["state"] in {"failed", "completed"} for row in final["pins"])
@@ -628,9 +628,10 @@ async def test_gateway_attachment_upload_recovers_after_process_loss(
             if timestamp is None:
                 assert current == previous
             else:
-                assert previous["unattached_since"] is None and previous["gc_after"] is None
-                assert current == {**previous, "unattached_since": timestamp, "updated_at": timestamp,
-                                   "gc_after": (datetime.fromisoformat(timestamp) + timedelta(days=30)).isoformat()}
+                assert previous["release_pending"] == 0 and previous["availability"] == "available"
+                assert datetime.fromisoformat(current["updated_at"]) >= datetime.fromisoformat(timestamp)
+                assert current == {**previous, "availability": "released", "updated_at": current["updated_at"],
+                                   "release_pending": 0, "release_reason": None}
         if accepted:
             await case.hard_restart()
             assert _upload_state(case, session) == settled

@@ -119,7 +119,7 @@ class ForkAttachmentClaimsMixin:
     def settle_fork_attachment_claims(self, *, copy_operation_id: str, claim_ids: Sequence[str], state: str, now: datetime) -> None:
         if state not in {"committed", "aborted", "target_deleted"}:
             raise ValueError("目录 fork 结算状态非法")
-        # 结算与删除共享原 owner 时钟，最后零关联后的期限不得另取系统时间。
+        # 结算与工作副本处理共享原 owner 时钟及精确关联。
         with self.write_transaction() as connection:
             for claim_id in claim_ids:
                 row = connection.execute("SELECT * FROM attachment_directory_fork_claims WHERE claim_id=? AND copy_operation_id=?", (claim_id, copy_operation_id)).fetchone()
@@ -174,7 +174,7 @@ class ForkAttachmentClaimsMixin:
             if (previous.relative_locator, previous.created_at, previous.availability) != (locator, created.isoformat(), "available"):
                 raise RuntimeError("目录 fork 目标与原冻结 intent 不一致，不能覆盖")
         else:
-            connection.execute("INSERT INTO attachment_directories VALUES (?,?,'available','private',?,?,NULL,NULL,NULL)", (snapshot.target_attachment_id, locator, created.isoformat(), datetime.now(UTC).isoformat()))
+            connection.execute("INSERT INTO attachment_directories VALUES (?,?,'available','private',?,?,NULL,0,NULL)", (snapshot.target_attachment_id, locator, created.isoformat(), datetime.now(UTC).isoformat()))
         for file in snapshot.files:
             if file.relative_path.split("/")[0] not in {"original", "preview"}:
                 continue

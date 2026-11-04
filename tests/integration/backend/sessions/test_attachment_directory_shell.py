@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import shlex
@@ -10,7 +11,6 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from textwrap import dedent
 
@@ -76,9 +76,9 @@ def process_running(pid: int) -> bool:
 
 
 @pytest.mark.parametrize("terminal_runtime", ["missing"], indirect=True)
-@pytest.mark.parametrize("gc_ledger_failure", [False, True], ids=["gc-success", "gc-ledger-retry"])
+@pytest.mark.parametrize("ledger_failure", [False, True], ids=["release-success", "release-ledger-retry"])
 async def test_verified_startup_failure_releases_the_real_attachment_workdir(
-    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch, gc_ledger_failure: bool,
+    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch, ledger_failure: bool,
 ) -> None:
     container, session_id, context = terminal_runtime
     store, owner, leases = container.attachment_blob_store, container.terminal_resource_owner, container.external_resource_leases
@@ -103,20 +103,25 @@ async def test_verified_startup_failure_releases_the_real_attachment_workdir(
     assert leases.leases_for_resource(attachment_id) == []
     assert leases.leases_for_resource(terminal_id) == []
     assert (directory / "original/content").read_bytes() == b"original-for-startup-failure"
+    # 暂停独立轮询，让账本故障只由本次显式处理入口触发。
+    await container.terminal_steering_service.shutdown()
     store.release_thread_references(session_id, message.thread_id)
-    monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
-    if gc_ledger_failure:
+    if ledger_failure:
         ledger_path = leases._state_path
         assert ledger_path is not None
         temporary = ledger_path.with_suffix(".tmp")
         temporary.mkdir()
         original = store._catalog.require_available_directory(attachment_id)
         try:
-            with pytest.raises((IsADirectoryError, PermissionError)):
-                await store.collect_garbage(leases=leases)
+            failure_type = PermissionError if os.name == "nt" else IsADirectoryError
+            with pytest.raises(failure_type, match="artifact=external_resource_leases: stage=write") as failure:
+                await store.process_pending_directories()
+            assert failure.value.errno == (errno.EACCES if os.name == "nt" else errno.EISDIR)
+            cause = failure.value.__cause__
+            assert isinstance(cause, OSError) and cause.filename == str(temporary)
             pending = store._catalog.get_directory(attachment_id)
-            assert pending is not None and pending.availability == "deleting"
-            assert (pending.relative_locator, pending.gc_after) == (original.relative_locator, original.gc_after)
+            assert pending is not None and pending.availability == "releasing"
+            assert pending.relative_locator == original.relative_locator
             assert not directory.exists()
             cold = ExternalResourceLeaseLedger(state_path=ledger_path)
             registered = cold.get(attachment_id)
@@ -124,12 +129,12 @@ async def test_verified_startup_failure_releases_the_real_attachment_workdir(
             assert cold.leases_for_resource(attachment_id) == []
         finally:
             temporary.rmdir()
-    assert await store.collect_garbage(leases=leases) == (attachment_id,)
+    assert await store.process_pending_directories() == (attachment_id,)
     assert not directory.exists()
     registered = leases.get(attachment_id)
     assert registered is not None and registered.status == "stopped"
     final = store._catalog.get_directory(attachment_id)
-    assert final is not None and final.availability == "tombstoned"
+    assert final is not None and final.availability == "released"
 
 
 @pytest.mark.parametrize("input_form", ["uri", "absolute", "relative"])
@@ -178,10 +183,9 @@ async def test_shell_process_holds_directory_after_tool_returns_until_verified_s
         assert (active.holder_session_id, active.holder_thread_id) == (session_id, message.thread_id)
         assert not leases.leases_for_resource(terminal_id)
         assert owner._store.get(terminal_id).working_directory_uri == local_directory_uri
-        # 直接调用真实 detach owner 边界，外置时钟只改变回收时刻，不伪造进程或 lease。
+        # 直接调用真实 detach owner 边界，不伪造进程或 lease。
         store.release_thread_references(session_id, message.thread_id)
-        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
-        assert await store.collect_garbage(leases=leases) == ()
+        assert await store.process_pending_directories() == ()
         assert directory.is_dir() and process_running(child_pid)
         snapshot = await owner.get_resource(terminal_id)
         stopped = await owner.command(terminal_id, action="stop", expected_revision=snapshot["owner_revision"],
@@ -190,8 +194,10 @@ async def test_shell_process_holds_directory_after_tool_returns_until_verified_s
         assert not process_running(child_pid)
         assert not leases.leases_for_resource(attachment_id)
         assert leases.get_lease(active.lease_id).status == "settled"
-        assert await store.collect_garbage(leases=leases) == (attachment_id,)
-        assert not directory.exists()
+        assert await store.process_pending_directories() == ()
+        assert (workdir / "output.txt").read_text() == "derived"
+        assert int((workdir / "child.pid").read_text()) == child_pid
+        assert probe.is_file() and directory.is_dir()
     finally:
         snapshot = await owner.get_resource(terminal_id)
         if snapshot["status"] not in {"terminated", "completed", "exited", "deleted"}:
@@ -199,7 +205,7 @@ async def test_shell_process_holds_directory_after_tool_returns_until_verified_s
                 holder_id="request:attachment-shell-cleanup", operation_id="attachment-shell-cleanup")
 
 
-async def test_shell_directory_admission_and_process_lease_exclude_due_gc(
+async def test_shell_directory_admission_and_process_lease_exclude_working_copy_release(
     terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     container, session_id, _context = terminal_runtime
@@ -211,7 +217,6 @@ async def test_shell_directory_admission_and_process_lease_exclude_due_gc(
     attachment_id = parse_resource_uri(ref.directory_uri).tail_segments[0]
     directory = store.resolve_directory_uri(parse_resource_uri(ref.directory_uri))
     store.release_thread_references(session_id, message.thread_id)
-    monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
     admitted, resume = asyncio.Event(), asyncio.Event()
     original = store.admit_working_directory
 
@@ -231,7 +236,7 @@ async def test_shell_directory_admission_and_process_lease_exclude_due_gc(
     try:
         await asyncio.wait_for(admitted.wait(), 5)
         # 真实目录 gate 仍被准入持有；回收不能等待它，也不能在 lease 发布前删除。
-        assert await asyncio.wait_for(store.collect_garbage(leases=leases), 5) == ()
+        assert await asyncio.wait_for(store.process_pending_directories(), 5) == ()
         assert not creation.done() and directory.is_dir()
     finally:
         resume.set()
@@ -240,13 +245,13 @@ async def test_shell_directory_admission_and_process_lease_exclude_due_gc(
     try:
         active, = leases.leases_for_resource(attachment_id)
         assert active.turn_stream_id == terminal_id
-        assert await store.collect_garbage(leases=leases) == ()
+        assert await store.process_pending_directories() == ()
         assert directory.is_dir()
     finally:
         stopped = await owner.command(terminal_id, action="stop", expected_revision=resource["owner_revision"],
             holder_id="request:directory-admission-stop", operation_id="directory-admission-stop")
         assert stopped["status"] == "terminated"
-    assert await store.collect_garbage(leases=leases) == (attachment_id,)
+    assert await store.process_pending_directories() == ()
     assert not directory.exists()
 
 
@@ -313,8 +318,7 @@ async def test_pending_stop_receipt_keeps_its_directory_but_does_not_block_anoth
         await asyncio.wait_for(entered.wait(), 5)
         assert not process_running(pids[0]) and process_running(pids[1])
         store.release_thread_references(session_id, message.thread_id)
-        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
-        assert await store.collect_garbage(leases=leases) == ()
+        assert await store.process_pending_directories() == ()
         second = await asyncio.wait_for(owner.get_resource(terminals[1]), 5)
         stopped = await asyncio.wait_for(owner.command(
             terminals[1], action="stop", expected_revision=second["owner_revision"],
@@ -325,15 +329,16 @@ async def test_pending_stop_receipt_keeps_its_directory_but_does_not_block_anoth
         assert (directories[1] / "derived/output.txt").read_text() == "independent"
         assert not stopping.done() and leases.leases_for_resource(attachments[0])
         assert not leases.leases_for_resource(attachments[1])
-        assert await store.collect_garbage(leases=leases) == (attachments[1],)
-        assert directories[0].is_dir() and not directories[1].exists()
+        assert await store.process_pending_directories() == ()
+        assert all(directory.is_dir() for directory in directories)
         assert calls == terminals
         release.set()
         first_stopped = await stopping
         assert first_stopped["status"] == "terminated" and first_stopped["reconciliation_status"] == "verified"
         assert not leases.leases_for_resource(attachments[0])
-        assert await store.collect_garbage(leases=leases) == (attachments[0],)
-        assert not directories[0].exists() and calls == terminals
+        assert await store.process_pending_directories() == ()
+        assert (directories[0] / "derived/output.txt").read_text() == "independent"
+        assert all(directory.is_dir() for directory in directories) and calls == terminals
     finally:
         release.set()
         if stopping is not None:
@@ -345,7 +350,7 @@ async def test_pending_stop_receipt_keeps_its_directory_but_does_not_block_anoth
                     holder_id="request:independent-cleanup", operation_id="independent-cleanup")
 
 
-async def test_failed_directory_lease_settlement_blocks_gc_until_original_stop_is_reconciled(
+async def test_failed_directory_lease_settlement_blocks_release_until_original_stop_is_reconciled(
     terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     container, session_id, context = terminal_runtime
@@ -371,7 +376,6 @@ async def test_failed_directory_lease_settlement_blocks_gc_until_original_stop_i
         assert process_running(pid)
         original, = leases.leases_for_resource(attachment_id)
         store.release_thread_references(session_id, message.thread_id)
-        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
         path = container.workspace_root / ".boxteam/resources.json"
         failure = OSError(5, "目录占用结清写盘失败")
         replace, stop = Path.replace, owner._transport.stop_resource
@@ -401,7 +405,7 @@ async def test_failed_directory_lease_settlement_blocks_gc_until_original_stop_i
         assert calls == [terminal_id] and not process_running(pid)
         assert leases.get_lease(original.lease_id) == original
         assert ExternalResourceLeaseLedger(state_path=path).get_lease(original.lease_id) == original
-        assert await store.collect_garbage(leases=leases) == ()
+        assert await store.process_pending_directories() == ()
         assert (directory / "original/content").read_bytes() == b"keep-until-durable-settlement"
         # 普通查询不自动重放未知停止；用户以新管理操作核实同一原资源。
         unknown = await owner.get_resource(terminal_id)
@@ -414,8 +418,8 @@ async def test_failed_directory_lease_settlement_blocks_gc_until_original_stop_i
         assert calls == [terminal_id] and not process_running(pid)
         assert leases.get_lease(original.lease_id).status == "settled"
         assert ExternalResourceLeaseLedger(state_path=path).get_lease(original.lease_id).status == "settled"
-        assert await store.collect_garbage(leases=leases) == (attachment_id,)
-        assert not directory.exists()
+        assert await store.process_pending_directories() == ()
+        assert probe.is_file() and int((directory / "derived/shell.pid").read_text()) == pid
     finally:
         snapshot = await owner.get_resource(terminal_id)
         if snapshot["status"] not in {"terminated", "completed", "exited", "deleted"}:
@@ -423,7 +427,7 @@ async def test_failed_directory_lease_settlement_blocks_gc_until_original_stop_i
                                 holder_id="request:settlement-cleanup", operation_id="settlement-cleanup")
 
 
-async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and_gc(
+async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and_results(
     terminal_workspace_root_path: str, request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -504,8 +508,7 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
                 # 模型增量游标由第一次Shell读取消费；完整运行快照仍保留原输出。
                 assert read["output"] == "" and "started" in read["terminal"]["buffer"]
                 assert read["terminal"]["resource_id"] == terminals[1]
-                monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
-                assert await store.collect_garbage(leases=leases) == ()
+                assert await store.process_pending_directories() == ()
                 healthy = await owner.get_resource(terminals[1])
                 stopped = await asyncio.wait_for(owner.command(
                     terminals[1], action="stop", expected_revision=healthy["owner_revision"],
@@ -514,9 +517,9 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
                 assert stopped["reconciliation_status"] == "verified" and not process_running(pids[1])
                 assert process_running(pids[0]) and not recovering.done()
                 assert leases.leases_for_resource(attachments[0]) and not leases.leases_for_resource(attachments[1])
-                assert await store.collect_garbage(leases=leases) == (attachments[1],)
+                assert await store.process_pending_directories() == ()
                 assert (directories[0] / "original/content").read_bytes() == b"cold-original-0"
-                assert not directories[1].exists()
+                assert int((directories[1] / "derived/shell.pid").read_text()) == pids[1]
                 assert calls.count((terminals[0], frozen_revision)) == 1
             finally:
                 release.set()
@@ -529,8 +532,10 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
                             holder_id="request:cold-cleanup", operation_id="cold-cleanup",
                         )
             assert not any(process_running(pid) for pid in pids)
-            assert await store.collect_garbage(leases=leases) == (attachments[0],)
-            assert not any(directory.exists() for directory in directories)
+            assert await store.process_pending_directories() == ()
+            for directory, pid in zip(directories, pids, strict=True):
+                assert (directory / "derived/cold.py").is_file()
+                assert int((directory / "derived/shell.pid").read_text()) == pid
     finally:
         terminate_process(process)
 
@@ -576,7 +581,6 @@ async def test_owner_terminal_commit_failure_keeps_real_workdir_until_durable_re
         assert process_running(pid) and workdir.is_dir()
         directory_lease, = leases.leases_for_resource(attachment_id)
         store.release_thread_references(session_id, message.thread_id)
-        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
         revision = (await owner.get_resource(rid))["owner_revision"]
         with monkeypatch.context() as patch:
             patch.setattr(Path, "replace", fail_terminal_commit)
@@ -593,15 +597,15 @@ async def test_owner_terminal_commit_failure_keeps_real_workdir_until_durable_re
         assert leases.get_lease(directory_lease.lease_id).status == "active"
         original_operation, = leases.leases_for_resource(rid)
         assert original_operation.status == "reconcile_required"
-        assert await store.collect_garbage(leases=leases) == ()
+        assert await store.process_pending_directories() == ()
         assert (directory / "original/content").read_bytes() == b"preserve-until-owner-commit"
         stopped = await owner.command(rid, action="stop", expected_revision=record.owner_revision,
                                       holder_id="request:owner-commit-reconcile", operation_id="owner-commit-reconcile")
         assert stopped["status"] == "terminated" and stopped["reconciliation_status"] == "verified"
         assert leases.get_lease(original_operation.lease_id).status == "settled"
         assert leases.get_lease(directory_lease.lease_id).status == "settled"
-        assert await store.collect_garbage(leases=leases) == (attachment_id,)
-        assert not directory.exists()
+        assert await store.process_pending_directories() == ()
+        assert int((workdir / "owner-commit.pid").read_text(encoding="ascii")) == pid
     finally:
         snapshot = await owner.get_resource(rid)
         if snapshot["status"] not in {"terminated", "completed", "exited", "deleted"} or snapshot["reconciliation_status"] != "verified":

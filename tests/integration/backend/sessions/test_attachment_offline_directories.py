@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    resolve_file_version,
+)
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
     AttachmentMaintenanceLock,
@@ -71,8 +74,10 @@ async def test_cli_materializes_shared_blob_as_independent_directories_without_t
         assert row["relative_locator"] == f"{stamp:%Y/%m/%d}/{owner['attachment_id']}"
         root = case.output / "converted/attachments" / row["relative_locator"]
         assert (root / "original/content").read_bytes() == BODY
+        saved = resolve_file_version(case.output / "converted/attachments", row["source_blob"]["digest"])
+        assert saved.read_bytes() == BODY
+        assert saved.stat().st_ino != (root / "original/content").stat().st_ino
         assert (root / "preview").is_dir() and (root / "derived").is_dir()
-        assert row["unattached_since"] is None and row["gc_after"] is None
         paths.append(root / "original/content")
     assert paths[0].stat().st_ino != paths[1].stat().st_ino
     assert all(file_digest(case.output / "data" / name) == digest for name, digest in before.items())
@@ -101,6 +106,9 @@ async def test_product_image_preview_is_copied_without_regeneration(legacy_case_
     root = case.output / "converted/attachments" / resource["relative_locator"]
     assert (root / "original/content").read_bytes() == content
     assert (root / "preview/512.webp").read_bytes() == preview
+    for name, body in (("original/content", content), ("preview/512.webp", preview)):
+        saved = resolve_file_version(case.output / "converted/attachments", "sha256:" + file_digest(root / name))
+        assert saved.read_bytes() == body
     with Image.open(root / "preview/512.webp") as image:
         assert max(image.size) == 512
 
@@ -118,8 +126,8 @@ async def test_released_owner_uses_recorded_release_time_and_preserves_explicit_
     backup.prepare_backup(case.workspace, case.output)
     directories.convert_backup(case.output)
     resource, = manifest(case)["resources"]
-    assert resource["unattached_since"] == released.isoformat()
-    assert resource["gc_after"] == (released + timedelta(days=max(30, retention_days or 0))).isoformat()
+    assert resource["source_owner"]["state"] == "released"
+    assert resource["source_owner"]["updated_at"] == released.isoformat()
     assert resource["source_owner"]["retention_until"] == (None if until is None else until.isoformat())
 
 
@@ -260,15 +268,21 @@ directories.convert_backup(directory)
     assert case.original.read_bytes() == BODY
 
 
-@pytest.mark.parametrize("damage", ["body", "extra_directory", "manifest", "source", "symlink"])
+@pytest.mark.parametrize("damage", ["body", "version_missing", "version_corrupt", "extra_directory", "manifest", "source", "symlink"])
 async def test_prepared_conversion_damage_is_not_overwritten_or_accepted(backup_case: BackupCase, damage: str) -> None:
     case = backup_case
     backup.prepare_backup(case.workspace, case.output)
     directories.convert_backup(case.output)
     root = case.output / "converted"
     content, = (root / "attachments").rglob("content")
+    saved = resolve_file_version(root / "attachments", "sha256:" + file_digest(content))
     if damage == "body":
         content.write_bytes(b"corrupt")
+    elif damage == "version_missing":
+        saved.unlink()
+    elif damage == "version_corrupt":
+        saved.chmod(0o600)
+        saved.write_bytes(b"corrupt reliable version")
     elif damage == "extra_directory":
         (root / "attachments/unregistered").mkdir()
     elif damage == "manifest":
@@ -282,6 +296,10 @@ async def test_prepared_conversion_damage_is_not_overwritten_or_accepted(backup_
         directories.convert_backup(case.output)
     with pytest.raises(RuntimeError):
         directories.verify_directories(case.output)
+    if damage == "version_missing":
+        assert not saved.exists()
+    elif damage == "version_corrupt":
+        assert saved.read_bytes() == b"corrupt reliable version"
     assert case.original.read_bytes() == BODY
 
 

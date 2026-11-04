@@ -85,20 +85,6 @@ async def _sweep_browser_orphans_periodically(container: AppContainer) -> None:
         await asyncio.sleep(1)
 
 
-async def _collect_attachment_directories_periodically(container: AppContainer) -> None:
-    """目录按持久到期索引低频回收；失败保留原状态，下一周期继续核实。"""
-    while True:
-        await asyncio.sleep(6 * 3600)
-        try:
-            await container.attachment_blob_store.reconcile_runtime_bindings(
-                messages=container.checkpointer,
-                is_current=container.thread_residency_tracker.is_current_runtime_binding,
-            )
-            await container.attachment_blob_store.collect_garbage(leases=container.external_resource_leases)
-        except Exception:
-            logger.exception("附件目录回收未收敛，保留关联与目录供下一周期重试")
-
-
 async def _retry_pending_fork_exports_periodically(container: AppContainer) -> None:
     while True:
         try:
@@ -384,10 +370,10 @@ class WorkspaceLifespan:
                     messages=container.checkpointer,
                     is_current=container.thread_residency_tracker.is_current_runtime_binding,
                 )
-            with _workspace_startup_stage(container, "attachment_blob_store.collect_garbage"):
-                collected = await container.attachment_blob_store.collect_garbage(leases=container.external_resource_leases)
-            if collected:
-                logger.info("已按附件 catalog 回收 %s 个到期目录", len(collected))
+            with _workspace_startup_stage(container, "attachment_blob_store.process_pending_directories"):
+                released = await container.attachment_blob_store.process_pending_directories()
+            if released:
+                logger.info("已按目录基线释放 %s 个无修改附件工作副本", len(released))
             with _workspace_startup_stage(container, "agent_execution_service.start"):
                 await container.agent_execution_service.start()
             with _workspace_startup_stage(container, "team_fanout_service.start"):
@@ -429,11 +415,6 @@ class WorkspaceLifespan:
                 name=f"browser-orphan-reclaim:{container.workspace_id}",
             )
             self._periodic_tasks.append(browser_sweep)
-            attachment_gc = asyncio.create_task(
-                _collect_attachment_directories_periodically(container),
-                name=f"attachment-directory-reclaim:{container.workspace_id}",
-            )
-            self._periodic_tasks.append(attachment_gc)
             fork_export_cleanup = asyncio.create_task(
                 _retry_pending_fork_exports_periodically(container),
                 name=f"fork-export-cleanup:{container.workspace_id}",

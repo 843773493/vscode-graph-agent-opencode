@@ -6,7 +6,6 @@ import asyncio
 import json
 import shlex
 import sys
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -98,8 +97,7 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
         assert native["status"] == "created" and native["reconciliation_status"] == "unknown"
         assert native["os_pid"] == observed["root"]["pid"]
         store.release_thread_references(session_id, message.thread_id)
-        monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
-        assert await store.collect_garbage(leases=leases) == ()
+        assert await store.process_pending_directories() == ()
         assert (directory / "original/content").read_bytes() == b"original-before-unverified-startup"
 
         if cold:
@@ -122,7 +120,7 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
         for field in ("os_pid", "process_group_id", "process_session_id", "process_start_time", "created_at"):
             assert runtime[field] == native[field]
         assert runtime["status"] == "created" and runtime["reconciliation_status"] == "unknown"
-        assert await store.collect_garbage(leases=leases) == ()
+        assert await store.process_pending_directories() == ()
 
         revision = unknown["owner_revision"]
         assert type(revision) is int
@@ -144,7 +142,7 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
             assert (settled.resource_id, settled.turn_stream_id, settled.operation_id) == (
                 lease.resource_id, lease.turn_stream_id, lease.operation_id,
             )
-        assert await store.collect_garbage(leases=leases) == (attachment_id,)
+        assert await store.process_pending_directories() == ()
         assert not directory.exists()
         assert (service.control / "workload.json").read_bytes() == original_workload
         receipt, = (service.control / "stop-receipts.jsonl").read_text().splitlines()

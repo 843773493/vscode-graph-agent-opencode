@@ -6,7 +6,7 @@ import hashlib
 import os
 import shutil
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -40,6 +40,7 @@ class PreparedFileDownload:
     media_type: str
     metadata: os.stat_result
     temporary: bool = False
+    admission: Callable[[], AbstractAsyncContextManager[None]] | None = None
 
 
 @contextmanager

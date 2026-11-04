@@ -78,7 +78,7 @@ def test_all_online_catalogs_must_close_before_maintenance(
 ) -> None:
     second = AttachmentBlobCatalog(catalog.database_path, workspace_id=catalog.workspace_id)
     try:
-        assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert second.connection.execute("SELECT count(*) FROM attachment_directories").fetchone()[0] == 0
         assert probe(False) == 0
         assert probe(True) == 73
@@ -97,7 +97,7 @@ def test_maintenance_blocks_catalog_before_database_creation_then_allows_retry(
             _ = catalog.connection
         assert not attachments_root.exists()
         assert catalog._connections == {}
-    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_access_only_guards_without_creating_database_or_originals(
@@ -131,7 +131,7 @@ def test_failed_open_releases_access_and_preserves_original_error(
             _ = catalog.connection
         assert caught.value is failure
         assert probe(True) == 0
-    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 @pytest.mark.parametrize("version", [1, 2, 3, 99])
@@ -141,7 +141,7 @@ def test_unknown_schema_rejection_does_not_leak_online_lock(
     catalog.database_path.parent.mkdir(parents=True)
     with sqlite3.connect(catalog.database_path) as connection:
         connection.execute(f"PRAGMA user_version = {version}")
-    with pytest.raises(RuntimeError, match="只支持 schema 4"):
+    with pytest.raises(RuntimeError, match="只支持 schema 5"):
         _ = catalog.connection
     assert probe(True) == 0
 

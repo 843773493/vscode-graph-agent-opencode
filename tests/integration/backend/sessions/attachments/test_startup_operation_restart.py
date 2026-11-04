@@ -14,13 +14,12 @@ import pytest
 from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.attachments.process_lifecycle import (
+    directory_snapshot,
+)
 from tests.integration.backend.sessions.attachments.test_process_retention_restart import (
     directory_lease,
     resource_leases,
-)
-from tests.integration.backend.sessions.attachments.test_retention_restart import (
-    DAY_SECONDS,
-    directory_snapshot,
 )
 from tests.integration.backend.sessions.test_attachment_directory_entry import upload
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
@@ -121,8 +120,7 @@ async def test_startup_unknown_survives_backend_loss_until_management_proof(
     released = directory_snapshot(case)
     assert released["association_state"] == "released" and released["binding_token"] == initial["binding_token"]
 
-    # 到期和已退出的进程都不能代替正式停止证明；普通查询不能自动结清。
-    case.replay.control.advance_wait(30 * DAY_SECONDS)
+    # 已退出的进程不能代替正式停止证明；普通查询不能自动结清。
     await case.hard_restart()
     response = await case.client.get(f"/api/v1/resources/{rid}")
     assert response.status_code == 200, response.text
@@ -150,7 +148,7 @@ async def test_startup_unknown_survives_backend_loss_until_management_proof(
     assert final["status"] == "terminated" and final["reconciliation_status"] == "verified"
 
     await case.hard_restart()
-    assert directory_snapshot(case) == {**released, "availability": "tombstoned"}
+    assert directory_snapshot(case) == {**released, "availability": "released", "release_pending": 0, "release_reason": None}
     assert not directory.exists() and directory_lease(case, attachment_id) == settled_directory
     assert canonical.read_bytes() == history
     assert (control / "workload.json").read_bytes() == workload_bytes

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import datetime
+from pathlib import Path
 
 from app.core.atomic_fs import fsync_directory
 from app.core.phase_observer import observe_phase
@@ -17,6 +18,7 @@ from app.services.infrastructure.attachment_blob_catalog.directories import (
     directory_manifest,
     protect_original,
     remove_directory,
+    save_file_version,
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     attachment_directory_relative_locator,
@@ -32,6 +34,9 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 from app.services.infrastructure.rollout_context.fork.source_capture import (
     capture_directory,
 )
+from app.services.infrastructure.workspace_files.mutation_lock import (
+    workspace_file_mutation_lock,
+)
 
 
 def _import_id(operation_id: str, attachment_id: str) -> str:
@@ -39,6 +44,9 @@ def _import_id(operation_id: str, attachment_id: str) -> str:
 
 
 class ForkAttachmentImportMixin:
+    _workspace_root: Path
+    _attachments_root: Path
+
     async def accept_fork_import(self, capture: ForkSourceCaptureRecord, snapshots: tuple[ForkAttachmentSnapshot | ForkAttachmentDirectorySnapshot, ...]) -> None:
         try:
             async with self._fork_imports.lock_for(capture.copy_operation_id):
@@ -85,6 +93,13 @@ class ForkAttachmentImportMixin:
             source = resolve_captured_directory(capture_root, snapshot.source_attachment_id)
             copy_directory_files(source, staging, snapshot.files, snapshot.directories)
             destination.parent.mkdir(parents=True, exist_ok=True)
+        # 目标原件版本必须先可靠发布，不能依赖未来仍在线的来源 capture。
+        version_source = destination if destination.exists() else staging
+        with workspace_file_mutation_lock(self._workspace_root):
+            for file in snapshot.files:
+                if file.relative_path.split("/")[0] in {"original", "preview"}:
+                    save_file_version(self._attachments_root, version_source / file.relative_path,
+                        digest=file.digest, length=file.length, attachment_id=snapshot.target_attachment_id)
         # 复制不占写事务；最终 claim 复核、短 rename 和 catalog 发布与中止串行。
         with self._catalog.write_transaction() as connection:
             claim = connection.execute("SELECT state FROM attachment_directory_fork_claims WHERE claim_id=?", (snapshot.claim_id,)).fetchone()

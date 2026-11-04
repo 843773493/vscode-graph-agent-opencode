@@ -36,7 +36,7 @@ def main() -> None:
     convert.add_argument("--backup", type=Path, required=True)
     directories = commands.add_parser("verify-directories", help="核验已准备目录与来源备份，不切换线上存储")
     directories.add_argument("--backup", type=Path, required=True)
-    catalog = commands.add_parser("prepare-catalog", help="从已核验目录准备隔离的 schema 4 catalog")
+    catalog = commands.add_parser("prepare-catalog", help="从已核验目录准备隔离的 schema 5 catalog")
     catalog.add_argument("--backup", type=Path, required=True)
     verify_catalog = commands.add_parser("verify-catalog", help="核验目标 catalog 与冻结旧引用，不切换线上 owner")
     verify_catalog.add_argument("--backup", type=Path, required=True)

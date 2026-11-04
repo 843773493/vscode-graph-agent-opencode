@@ -1,663 +1,117 @@
 ## Context
 
-变更前附件正文位于工作区，blob 身份由 digest 推导，逻辑附件及访问绑定 Session/Thread；启动与 Session 删除按 blob 创建时间即时回收。当前线上仅支持 schema 4 独立目录；schema 3 通过下文离线迁移显式安装，新上传不再写 blob/owner-ref 表或生成旧 Session URI。原件、预览、派生区、运行时代次与最后一次零关联后的 30 天期限由同一目录 owner 管理。
+附件目录线上主链已采用 schema 4：独立上传、目录/文件 URI、原件保护、媒体预览、Shell 工作目录、Thread 关联、冻结历史和 fork 均已接入原 owner。当前实现仍在最后关联解除后记录 30 天期限，由启动与低频 GC 回收。
 
-Terminal/Browser 已共用资源关联和 operation lease 规则：正常 unload 立即删除 thread 临时资源，手动 detach 后才等待 30 分钟。孤儿扫描跳过仍有关联的记录；恢复只核外部资源状态，不能解决失效关联。Thread residency 只保存本进程真实 runtime；重启后的冷 Thread 不会凭空取得可卸载的 generation。
+2026-11-04 用户将生命周期改为“卸载后检查，有修改保留，无修改删除”。本设计据此替换旧自动到期策略，并将曾扩展到 MCP、调试器及整个 Backend 的通用治理移出附件收尾。旧测试原件和批次记录保留于 Git 历史及 `out/tests/`，不将原 21/23 进度沿用为新合同进度。
 
 ## Goals / Non-Goals
 
-**Goals:** 目录是关联、Shell 工作目录和回收单位；异常退出不依赖 Agent 主动 detach；复用原 owner、URI、文件操作和冻结输入链路。
+**Goals:**
 
-**Non-Goals:** 不新增云端存储、每文件引用计数、通用文件版本控制或附件专用工具。目录主链、原文件/Shell 注入及 Linux/Windows 本地和真实跨机器 URI 产品流已经完成；完整生命周期故障组合与挂起操作/关闭期限仍按后续纵向切片推进，不将局部通过视为整个变更完成。Agent 团队、成员、委派及会话协作通信按用户裁定保留 TODO，不在此变更追加实现或专项验证。
+- 通过唯一附件 owner 完成最后关联解除、占用复核、修改检查、目录保留或释放，以及后续原件重建。
+- 保留已产生的处理结果、稳定 URI、原件、历史请求与 fork 依赖；清理工作副本不等于删除附件资源。
+- 迁齐调用方后移除旧 30 天策略，完成附件相关的定向产品验收后允许归档。
+
+**Non-Goals:**
+
+- 不新增完整目录快照历史、通用 JSON/file diff、心跳服务、进程扫描器或第二套 lease/恢复账本。
+- 不以本次收尾为由扩展通用 MCP、Node Debug、Terminal/Browser 的关闭、接管或强制终止功能，不要求整个 Backend/shutdown 具备硬期限。
+- 不回滚已有共享修复，不删除其它资源仍使用的生命周期能力，不实现用户暂缓的团队/协作功能。
 
 ## Decisions
 
-### 1. 每次独立上传得到独立目录资源
+### 1. 原件版本与可释放工作目录分离
 
-附件 owner 分配稳定资源 ID，在 `.boxteam/attachments/YYYY/MM/DD/{attachment_id}/` 下保存目录，UTC 日期在创建 intent 冻结，唯一 catalog 保存受检 locator。原件位于 `original/`，预览位于 `preview/`，处理输出位于 `derived/`；相对文件路径继续使用统一 owner 的校验和编码规则，不按当前日期或用户显示名寻找目录。
+上传成功必须已有当前目标工作区可独立读取的可靠原件版本。复用既有不可变资产/版本 owner，附件 catalog 保存其引用和现有目录/文件身份；不新建附件专用正文库，不以仍存活的上游工作目录或来源进程作为恢复来源。
 
-相同内容的独立上传不合并可变目录。目录没有“整体不可变 digest”；原件、预览及已进入 canonical/assembly 的具体版本有自己的 digest/length。原件保持不变，Shell 处理使用新文件或子目录。尚未作为历史输入冻结的派生文件可按原文件 owner 能力修改，不为每次编辑建立另一套历史。
+工作目录是使用原件和处理文件的现有可编辑空间。无修改时可以释放该物理目录，附件身份、原件版本及必要元信息仍保留。原件本身继续只读；预览按现有规则可再生成。修改过的目录直接保留其原位置与内容，不为“持久化”再复制一份目录或创建一套完整快照历史。
 
-### 2. 统一寻址与 Shell 工作目录
+相比目录不可重建时强行删除，这个边界允许立即释放未修改的工作副本，同时保持用户之后打开附件的能力。原件来源尚未可靠保存时，保留现有目录并明确报告原因，不能先删后补。
 
-统一 URI owner 登记 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}` 为 directory 根，并登记其文件 child 规则；在该 owner 的 kind 闭集中增加 `attachments`，不新增 scheme、query 或真实路径字段。新上传消息使用该根下原件 URI，并提供目录 URI、文件名、MIME 和处理结果写入提示。既有 Session 产物 URI 只能作为原历史身份保留，按原 provenance/owner 授权解析，不能继续生成新旧两套附件地址。
+### 2. 修改以初始可重建内容为基线
 
-2026-10-24 目录寻址基础已接入唯一 grammar：附件根只接受 workspace scope 和稳定 `att_<32 hex>` 身份，保留旧 ID；child 复用 files/skills 的单次解码及规范编码。原 `file_uri_root`/`file_uri_child` 移入该 owner，迁齐全部生产和测试调用后移除原定义，不留转发。导航 shape 将根限定为 directory。Web 文件树父级与 Markdown 相对链接共用后端已校验 URI 的根拆分，不在客户端另建完整 grammar；附件相对链接停在其目录根，原生绝对路径仍交目标机器解释。协议的可选 directory_uri 已经由原生成脚本迁齐，线上上传、媒体读取与文件入口均注入同一个目录 owner；旧历史缺少目录字段时不补造或重写。证据见 `out/tests/temp/attachment_uri_contract_20261024/artifacts/`。扩大导航集成的旧删除诊断断言在原 HEAD 同样失败，原件保留；另一项因 fixture 重用目录失败，单独场景通过，未放宽任何断言。
+基线由上传原件及系统管理的可再生内容定义。用户/工具新增的文件或目录，以及对需要保留内容的修改、删除，都属于有修改；仅生成系统预览或读取文件不算修改。
 
-Shell 的结构化 workdir 接受目录 URI，在 URI 指定目标的文件 owner 内取得短期本地 cwd 和操作 lease，再复用原 PTY 执行。URI 目标与 Shell 目标不一致时明确拒绝；不把远端 URI 当本机路径，不改写任意 command 字符串，不把真实 cwd写进普通业务记录。整个执行期间保留目录使用 lease；后台进程仍访问目录时，其真实进程 owner 延续占用，不能在工具提前返回时解除保活。
+判断对象是当前目录与其可重建基线的差异，不是“自上次卸载后有没有新写入”。目录一旦包含尚需保留的处理结果，后续卸载和重启仍保留这些结果。若处理结果被明确删除，当前目录重新与基线一致，则可以按同一规则释放。
 
-2026-10-24 的先行切片只接入既有 `files` 目录 URI：Terminal owner 依赖 container 已装配的 `WorkspaceFilePaths`，在创建记录/PTY 前解析精确 `boxteam://` 前缀的 URI；POSIX 原生目录名中的其它 `://` 不改变含义，全部原生 cwd 也在同一 Terminal owner 锚定目标工作区。工具层不再自行解析 cwd、接受另一份 workspace root 或重算公开位置，回执直接消费真实 PTY 的 `cwd_relative`。Shell 原生工作区外/私有目录行为保持，命令正文不做 URI 替换。目录解析中的系统异常和符号链接环完整留在诊断/cause，普通错误只包含资源 URI 和错误类型。该先行切片之后，附件目录 workdir 与进程持久占用也已接入；Windows 实机和远端产品入口验收仍由任务 6.1 负责。
+修改检查必须覆盖文件工具与原生 Shell 的实际结果，不依赖 Agent 自报完成、仅靠目录时间戳或只观察某个 API。复用原文件布局和版本信息，选择能区分实际行为的最小检查；不在每次读取时重复遍历/全量 hash，也不因本次策略引入通用 diff 引擎。历史请求冻结及其必要完整性校验继续沿原合同。
 
-后续 Shell 公共边界已在原 Terminal owner 接入 `TerminalWorkingDirectories` 准入端口，持久记录只增加同工作区附件目录根 URI；目录使用继续写入唯一 `ExternalResourceLeaseLedger`，holder 使用持久终端身份而非本次工具/Turn。准入锁内发布占用后才启动 PTY；工具提前返回不结清，核实终态与冷恢复才结清，未知/缺失回执保留。线上 container 已注入 schema 4 目录 owner，不保留空准入或另一套文件/进程执行链。Linux 真实 PTY 已验证相对/绝对/目录 URI 三种 cwd、后台进程保活、准入与到期 GC 竞争及核实停止后的释放；未知停止结果继续由原 owner 保留，Windows 与远端产品验收仍 TODO。准确候选指纹、命令和原始结果在 `out/tests/temp/attachment_shell_directory_20261024/artifacts/`。
+### 3. 最后关联解除时由同一 owner 处理
 
-Terminal 创建中的 cwd 解析统一通过既有 `run_sync_shielded` 执行原 `_resolve_workdir`，原生文件访问和同机 Gateway 控制调用不占用事件循环；请求上下文随 worker 复制。原 Thread holder 覆盖线程池排队和实际解析，取消等待至该调用结算后传播，期间及取消后不创建资源 intent、lease 或 PTY。输入、原文件 owner 的目标/权限检查和错误因果保持；该步骤不提供原生 I/O 抢占或整个 operation/shutdown 的硬期限，5.4 继续按完整合同验收。
+上传、消息接受与 fork 仍建立精确 Thread 关联。Thread 卸载、Thread/Session 删除或失效代次对账只解除自己的关联；旧代迟到通知不能解除新代关联。Session 删除不连带删除已经作为工作区资源保留的处理结果。
 
-### 3. 目录关联与 30 天回收
+处理规则如下：
 
-用户上传经既有 ingest/消息接受边界自动关联发起 Thread；未发送或接受失败的上传继续由原 pin/ingest 恢复流程收敛。关联是一组幂等的精确 Thread 关系，不是每次读取递增的计数，不承担鉴权职责。工作区内按既有授权可读取的 Thread 不因缺少上传者身份而被拒绝；需要长期保活时显式 attach，短期文件/Shell 操作由 lease 保护。
+| 当前事实 | 附件 owner 的处理 |
+| --- | --- |
+| 仍有其它有效 Thread 关联 | 保留目录，等待最后关联解除 |
+| 没有关联，但上传、排队接受、fork 或实际处理仍有保留/占用 | 保留目录并登记待处理；相关占用解除后重新检查 |
+| 旧数据仍有明确指定、尚未满足的额外保留承诺 | 沿原承诺保留，不能与旧自动 30 天期限混同 |
+| 无关联、无占用，目录相对基线有修改 | 保留原目录，不生成新的自动到期时间 |
+| 无关联、无占用且既有明确保留约束已满足，目录相对基线无修改且原件可靠 | 释放工作目录，保留原身份与可重建来源 |
+| 占用结果待核实，或检查/保存失败 | 保留目录与原事实，明确错误/原因，沿原 owner 重试 |
 
-按前文讨论的“与 Shell/Browser 相同的 Thread 释放通知”，Runtime unload 和逻辑 Thread/Session 删除都通知附件 owner detach；附件只进入宽限期，不随临时进程立即销毁。最后一个关联解除时持久化 `unattached_since` 和默认 30 天 deadline，再次 attach 清空 deadline。排队输入、进行中的上传、fork capture/publication 和文件处理由其既有 durable operation/claim 保活；不能因暂时没有 resident graph 将尚待执行的输入判为孤儿。
+继续使用现有目录操作锁、关联和占用事实，在同一处理边界串行化新关联/操作准入、修改检查和物理释放。删除前重新取得当前事实，不能使用卸载开始时的旧快照。释放先行时，后来的合法操作等待该次处理完成后经原入口重建；新关联或占用先行时本次不删。
 
-启动及低频周期检查只查询 catalog 到期记录，不频繁扫描磁盘。到期删除前与 attach、fork reservation、lease 获取在同一 owner 临界区/事务内复核，先提交不可再访问的删除状态，再按 locator 删除目录；重启按删除记录重试。有效操作结束后重新核验，不在 lease 到期时假定外部进程已停止。明确的未知目录不被自动吸收或删除。
+目录变化与实际占用分开判断：只读进程、延迟写入的命令同样可能仍在使用目录。Shell 的持久占用继续绑定真实终端/进程身份，工具提前返回不释放。只复用现有 owner 已登记的占用，不为任意本机进程增加全局文件访问追踪。
 
-### 4. 历史与 fork
+卸载无需为了附件回收强行停止仍有效的后台处理。无 Thread 关联的待处理目录由同一附件 owner 在原占用结清、显式重试或启动恢复时重新检查；复用原 catalog 的最小持久状态，不另建任务队列或周期到期 GC。
 
-历史关联、来源 provenance 和运行期保活职责分开：canonical 中出现 URI 本身不形成永久保活。附件脱离全部活动关联超过 30 天可删除原件；用户以后打开原会话或从该点 fork 时，资源明确 unavailable，不能自动复活空目录。这是本 change 对历史原件可用期限的显式产品修订；已封存的模型输入、预览、assembly/hash 和恢复依赖继续由原历史存储 owner 保留，不重新读取当前目录猜测过去输入。
+### 4. 普通访问统一重建工作目录
 
-同工作区 fork 默认通过统一目标检查取得共享目录关联，不复制可变目录来冒充同一资源；仅当该附件属于 fork 选中的历史依赖才保留它。跨工作区按冻结目录 manifest/revision 复制到独立目标资源，不保留跨端可变目录挂载。两者都沿用原 fork journal、publication 和 claim settlement；来源历史 ID/URI 不改写，目标写入使用目标 owner 解析的当前资源引用。目录修改与跨端 capture 必须核对冻结版本，不能复制混合时刻的文件集合。对原件的不可变约束和对派生输出的显式路径可见性不因共享而改变。
+媒体读取/预览、资源导航、普通文件读取/编辑、目录浏览、Shell workdir 和 fork 获取目录时，都通过同一附件 owner 取得可用目录。工作副本已释放时，在原目录锁内从目标工作区保存的原件版本按原身份与位置重建，再交回原文件/PTY 链路；并发访问不各自恢复一份。
 
-### 5. 异常退出必须由 owner 收敛
+可重建的工作副本释放必须与真正的资源删除、原件缺失或损坏区分。原件真实不可用时沿既有错误合同明确失败；不能创建空文件、恢复成另一附件、从当前上游目录猜测过去内容，或复活没有可靠来源的旧 tombstone。
 
-Terminal在原生启动前先通过原Manager writer发布created/unknown意图，避免真实PTY已存在而恢复文件尚无资源身份。Session收到原就绪和创建身份后再沿原写盘链核实。若首条意图写入失败，仍在场的原创建调用可证明Session.start未派发：同一记录持久关闭为deleted/verified后签not_created；收尾写入再次失败保留unknown、原错误及收尾错误，不签回执。该证明不从冷记录或清单缺失推导；Node硬退出后的无PID意图保持可发现和未核实，无身份终止接管继续TODO。沿用原record/schema/原子发布语义，不新增另一份intent文件或账本，也不将进程崩溃验收扩大为断电持久性证明。
+系统预览继续按既有 512 像素边界生成。已有派生文件只从被保留的原目录或其既有明确冻结版本读取；不能用上传原件伪造丢失的派生结果。URI 输入、原生路径操作参数及目标 Gateway/工作区归属继续复用原合同，不新增解析链路。
 
-Terminal历史裁剪仅将deleted/verified纳入既有256条配额；deleted/unknown和deleted/reconcile_required继续保留原恢复身份及版本，不能因历史积累在启动或新建时自动消失，也不能据此重新接纳同一资源身份。该规则不改变已核实历史的排序、保留数量或原writer。
+### 5. 历史与 fork 的权威边界不变
 
-Terminal Manager关闭观察在原唯一执行上标明创建排空、逐资源关闭和最终写盘阶段，到期报告仍未完成的已登记终端。观察者到期后原执行的迟到失败仍经唯一产品日志记录工作区、阶段、资源集合与完整原异常，日志再次失败保留两份原错及cause；只有原任务实际失败才清除执行引用并允许显式重试。阶段与在途集合只是进程内诊断，不新增持久事实，不改变原PTY保留、停止核实或五秒观察预算；整个shutdown期限仍属5.4未完成边界。
+canonical item 继续保存原历史身份、资源引用和实际用过的版本；assembly 与请求 hash 从原 immutable asset/version 重建，不读取当前工作目录猜测历史输入。释放工作副本不回收这些历史/恢复所需资产，也不把每次目录修改复制为第二份消息历史。
 
-Browser创建也先经原Manager writer发布created/unknown，再调用原Session.start；首次导航完成后标verified并沿原最终保存链返回。意图保存失败由仍在场的原调用证明start未派发，复用原failStartup/close保存failed/verified后签not_created；收尾再次失败保留unknown及原错误链，不签回执。created记录的管理close/delete在设置关闭准入标记前返回409/browser_creation_unverified，不将空Session context当作未创建或已停止证明，也不阻止原创建完成后的正常交互；原创建仍继续，失败仍沿原收尾链。Node硬退出后原意图继续可发现；没有原context身份的旧代接管继续TODO，不建立第二账本或以池内代际充当跨重启身份。
+同工作区 fork 沿原 claim/publication 复用资源身份并为目标建立关联；若工作目录已释放，先由原 owner 重建。跨工作区继续复制选定冻结版本并在目标保存其独立原件来源，来源离线或目录释放不影响已发布目标。导入派生结果按同一初始基线规则保留，不能在目标首次卸载时将它们视作无修改原件而删除。
 
-Browser Manager关闭由唯一Promise持有创建排空、逐资源检查点与失败收尾、共享运行时关闭和最终状态写入。每次调用从入口取得默认30秒观察预算，重入只等待原执行；到期报告阶段与仍执行的Browser身份，保留原句柄、检查点及准入关闭。资源关闭并行推进，正文捕获仍复用原串行队列；整批收齐结果后才重试，错误按原资源顺序保留并记录迟到失败。已成功的共享运行时关闭不因末次写盘失败再次执行；原任务成功后重复调用直接返回。此为协作式观察期限，不能抢占同步阻塞、证明任意脚本终止或替代生产进程退出核实。
+真正缺少 required 版本时仍拒绝，optional 版本不可用时仍记录原因；不改变历史 provenance、已封存 JSON/hash、失败/删除结算或原 fork 幂等行为。
 
-Terminal完成监控关闭先禁止下一轮扫描，并仅对原任务发起一次取消；每次关闭调用通过原asyncio.wait最多观察30秒，到期保留任务句柄并明确失败。Workspace保留该关闭步骤及后续依赖，重入不再次取消原扫描、不重启监控；迟到结果沿原任务交回关闭入口，原非取消失败保持异常身份。正常轮询中的连接、超时或资源待核实错误仍按原周期重试；关闭期间没有下一轮，须直接交回原错误，不能记录稍后重试后返回成功。此预算只限制事件循环可调度时的观察，不证明扫描可强制终止或整个进程退出已有硬期限。
+### 6. 重启只恢复本条附件链路
 
-不为每个附件发送心跳；复用后端启动代次、Thread runtime generation、durable admission/operation 和真实任务终态识别持有者。进程仍存活时，由统一执行 finally、取消保护和卸载通知收敛；重启时对照权威 Thread/任务事实处理旧代关联，不能仅看数据库里还有 Thread ID 就无限保留，也不能把 cold Thread 或排队输入当作已失效。迟到的旧代 detach 不得移除新代 attach。
+待处理、释放中及重建中的最小状态继续由原 catalog owner 负责。进程中断后，先核对关联、现有占用和可靠原件，再沿同一处理入口收尾；已保留的修改不因重启丢失。未核实的原生操作保持可发现并阻止对应目录删除，不假定超时或旧进程代次等于停止。
 
-附件、Shell 和 Browser 分别由自己的 owner 核实清理；过期持有者仅说明可接管，不证明 PTY、浏览器或处理进程已经停止。挂起操作的超时触发原执行 owner 取消/终止并核实；未知结果继续可发现并阻断破坏性回收，显式展示待核实原因及管理入口，不按短 TTL 强删目录或把操作标成成功。
-
-已有资源的工具、管理、卸载和孤儿回收操作丢失回执时，由原 owner 将本次精确 lease 与资源未知状态一同写入原账本。普通收尾及 Turn 清理只释放仍 active 的操作，不能释放待核实占用或覆盖 owner 已结清的 settled。同资源其它已完成操作、明确失败回执及单纯的未知资源快照不因此变成未知操作。冷恢复保留原未知结果与错误原因；只有核实资源身份、当前版本和真实终态后才结清，不能由存活快照自动重发旧副作用。创建链现在同样将本次精确原 lease 持久转为待核实；存活快照不再消除未知创建结果。Terminal/Browser 在有效且唯一的创建 intent 尚未接纳时返回 `creation_receipt`，绑定 resource/workspace/revision 和 `not_created`；owner 核对后将本次未创建 intent 关闭为不可见 tombstone、解除其关联并结清原占用，包括 Terminal 受管 cwd。身份冲突、普通 HTTP 失败、回执丢失或错误版本不能被当作未创建。Browser 只有在原 failStartup 链释放运行态并落盘成功后返回 `failed` 及完整失败快照；失败后的 stop/detach/delete 继续走原管理入口，不将任意 failed 状态加入全局停止集合。未收到正式回执的创建跨 scope/Turn 收尾与冷恢复继续保留未知及原 lease，真实终态仍由原 owner 核实后结清。Terminal 就绪前的 PTY 退出现复用原 Worker 的唯一进程树终止链，将已取得的 PID 和清理结果结构化传回；Linux forkpty 根已消失时仍按原 SID 核实后代。宿主只有在正式停止结果、Worker 退出确认和终态落盘全部成功后签发 `failed` 与 `terminated/verified` 快照；Node 保留原记录供回执丢失后的冷恢复核实，同步结清受管 cwd 占用。没有证明的 native 异常、Worker 异常或清理失败保留原未知记录与已取得的句柄，迟到 ready/启动失败消息不改写已结束的启动身份。创建途中未取得外部身份的接管，以及旧代运行操作的接管/终止与 5.4 总期限继续 TODO；Worker 退出与 HTTP 状态均不能替代停止证明。
-
-创建、Terminal普通读写、workspace完成查询、Browser动作（工具和既有HTTP入口）、传输授权、版本管理、停止与整组关联释放在原资源锁内共用派发保护。原JSON账本的同一lease先持久进入`dispatching`，再进入外部回调；正式回执校验、原owner记录与账本投影提交后恢复`active`，普通operation仍持有同一身份直至收尾。失败转入原unknown/reconcile链，即使unknown首步账本写入也失败，原dispatching仍被operation/Turn清理保留；普通存活查询不能消除，冷恢复与显式管理停止继续沿原身份核实。准备写失败不得派发；线程池排队时取消或关闭不开始新写入，已开始的写入持原资源锁结算。只有仍在场的原调用证明尚未进入外部回调，才沿同一账本撤回准备；撤回写失败保留保护与原取消/关闭错误。完整旧代接管继续TODO，不为此新增另一份派发日志或数据库迁移。
-
-创建链独立放入共享`creation.py`，两领域迁齐后移除原owner的三个创建私有方法，不保留转接入口。原operation对象直接提供冻结Thread/holder/operation/Turn身份，首条intent写盘前登记原资源锁和既有operation在途集合；close在让出事件循环前冻结原锁，记录尚未发布或发布失败删锁也能等待同一次创建。登记与取得lease复用原shielded获取链，未进入回调的关闭/取消由原调用持锁提交deleted/verified、stopped投影，再结清已取得的精确lease；初始写盘失败而无记录时不补造资源。Terminal cwd解析返回后重核operation关闭，拒绝迟到创建；这不宣称close已等待整个cwd阶段或有整个operation/shutdown硬期限。创建结果首次核实仅在原创建回执入口显式发生，普通清单不能凭creating状态恢复verified。
-
-传输授权从运行快照读取前复用同一派发保护，删除原快照/签发/拒绝校验各自重复的unknown收尾；原owner锁覆盖准备、查询、签发和回执确认。准备排队/写入时取消不迟到签发；签发回执丢失后，短暂或持续存储失败均不能由管理finally释放或让次错替换原错误。已核实的预检冲突、正式未签发拒绝先保存原观察并确认同一lease，再抛原ResourceConflict及正式拒绝cause；无效拒绝快照和响应投影错误仍交同一unknown链。普通查询不能核实未知授权，管理停止后才结清；其它同步lease writer和整个operation/shutdown期限仍TODO。
-
-版本管理、stop/delete和Thread/Session释放统一使用原dispatching保护，删除逐层重复unknown收尾；停止的首条状态保存也在同一保护内。正式终态仅settle此前待核实占用，本次连续工具恢复同一active lease供后续调用，仍由原operation收尾。fork提交后的取消沿共享派发链读取原持久committed回执，复用原释放入口核完整资源/holder/operation/Thread身份，再在唯一账本一次提交直接释放；身份冲突或写盘失败不经过active中间状态，不回滚原关联，保留原取消与清理cause。同key冷恢复消费原回执，不重复关联。完整旧代接管与整个operation/shutdown期限继续TODO。
-
-管理lease的唯一入口已改为异步上下文，五组原调用方全部直接等待，不保留同步入口。原账本获取/释放由shielded worker结算，原资源锁及适用Thread holder覆盖线程池排队、写盘和取消收尾。排队取消不开始获取；已开始获取须结算，原调用再释放自己取得的精确lease且不进入业务回调。连续工具提供的lease只核身份，仍由原operation负责收尾。错误收尾期间后续取消不能覆盖原错误，正常释放期间取消保留首次消息及迟到写盘cause；释放写失败保留原active占用，不能重发业务动作来补做释放。账本仍串行发布，原生I/O不可抢占，其它同步writer/通知及完整operation/shutdown期限继续TODO。
-
-正式停止回执与冷恢复观察承担不同职责：本次 stop/delete 的回执必须具有当前资源/工作区身份及与本次发布版本相等的整数 `transport_owner_revision`，不能接受旧代或未来版本；未知版本继续保留本次原 lease。Terminal 的原停止链在进程树核实后仍持有同一 Worker 句柄，等待 Worker 退出确认和终态写盘后才清除句柄、发布完成事件并返回。任一阶段失败持久保留 unknown；终态已在内存变化但写盘失败时，允许原句柄沿同一停止链重试，不为未取得 PID 的 native 创建异常扩大释放许可。停止与 unknown 写盘都失败时以 AggregateError 保留两份原异常及 cause。相关反例和 Linux 回归见 tasks 5.2 的 `resource_stop_receipts_20261024`；完整旧代接管、unknown 的显式管理、挂起队列终止与 5.4 总期限继续 TODO。
-
-Browser 的关闭/删除继续复用原 resource transition。原 context 关闭后，检查点删除和最终终态写盘仍属于本次关闭；失败将内存和可持久化记录恢复为 unknown，原错误上抛，unknown 写盘也失败时保留两份异常及 cause。deleted 只有在 verified 时才可幂等短路，失败后的显式重试仍完成原检查点清理与写盘，不重开 context。`browser_stop_receipts_20261024` 的真实 HTTP/Chromium 验收在原生检查点文件边界制造目录冲突，核对原页面只关闭一次、unknown 与精确 lease 保留、故障移除后外部 owner 重试落盘，再由 Python 核终态结清；该验证不代表 unknown 的普通管理入口接管或 Browser 挂起 operation 总期限已完成。
-
-显式管理停止现在使用现有 stop/delete 入口的新请求身份：未知资源先核当前外部身份/版本及原 lease，有 active 操作、重复的未知 operation 或版本冲突时拒绝；新管理 lease 只表示正在处理未知资源，不把账本状态改成 running。新请求提升并同步传输版本，继续唯一停止链；只有精确当前版本的 verified 终态与 owner 落盘成功后，才以 settled 结清旧待核实占用。未知资源投影按当前可观察身份/版本提供 stop 和无关联时的 delete，不能恢复使用、关联或传输授权。自动恢复、周期清理和卸载仍仅核实已有终态，不自动派发新停止；新停止不证明旧工具/导航等操作成功。Browser 检查点故障移除后可直接从产品管理入口完成；冷恢复的存活 Terminal/Browser 也可由新操作停止。缺少外部身份的 native 创建、同进程仍持锁/active 的操作、Browser 挂起队列和总期限仍 TODO，不因候选动作可见便宣称这些边界完成。
-
-原生 Browser owner 仍持有原创建 Promise 时，新管理取消可沿同一执行收敛：匹配当前传输版本后关闭新操作准入，以原资源转换队列释放已取得的独立 context；原创建在取得迟到 context、完成页面初始化或首次导航后核对取消，统一进入原 failStartup／close 写盘链。取消同时等待原释放及原创建，重复请求复用同一取消 Promise；只有原失败收尾已持久核实才返回 present／failed／verified，已有 context 不签 not_created。释放或原收尾失败保留完整错误，后续原停止入口重试；不改变唯一 lease 账本。原生 owner 重启后没有原创建 Promise 的记录仍按原未知身份边界处理，原生调用不可抢占和完整 operation／shutdown 期限仍属5.4。
-
-共享快照消费将原生 created 解释为领域 creating；原记录仍在 creating 时，未 verified 的原生运行观察不能覆盖创建阶段。这样 Python 硬退出后，原生创建继续执行时仍能由同一管理 stop 先进入 cancel-creation，而不会误入拒绝 created 的直接 close。已完成启动的 verified 快照保留原状态投影和未知结果规则；核实、版本冻结、原 lease 及后续停止链不变，无 schema 或第二状态来源。
-
-### 6. 本轮实施的失败隔离
-
-Browser的工具和管理动作统一消费同一回执提交链：成功及正式失败先核对资源/工作区和本次整数版本，再观察、核实、持久化与构建投影。失败回执内部的校验、序列化、记录或账本提交异常也沿原unknown出口保护本次精确lease，保留原Browser错误cause；不再由同层异常分支绕过保护。正式失败中的未知页面转换保持原HTTP错误并保留待核实占用，完整已核实失败保持原异常和普通释放语义。查询和冷恢复不重放动作，显式管理停止核实后才结清；该切片不替代完整旧代接管、挂起任务终止或全operation/shutdown期限验收。
-
-Terminal的普通工具调用与workspace命令完成查询也共用原锁内的唯一回执主体，不再让完成查询直接拼接投影。严格核本次整数版本，再沿原资源/工作区检查、观察、verified、记录提交、账本同步和投影顺序处理；传输失败、错误版本或unknown继续沿原出口保护精确operation lease和受管cwd占用。真实外部owner已停止时，完成查询现在提交终态并结清目录占用，保留workspace记录与Thread关联，普通operation仍按原规则释放。只迁移原调用链，不新增lease账本、重放或schema；已持久未知的动作仍须原管理终态证明，不能用存活查询恢复成功。Linux和Windows均经正式Session/上传/创建及真实PTY/HTTP验证；独立终态场景暂停steering观察，避免后台轮询替完成查询提交。完整旧代接管、同步阻塞、不合作取消及总期限仍TODO，5.2/5.4/6.2保持未勾。
-
-Terminal/Browser 的冷恢复仍共用原资源owner：本次先持久化版本，再逐项同步外部授权；单项同步失败保留该资源unknown，继续完成其余资源与账本更新后，原单错直接上抛、多错按原顺序聚合。已完成本次恢复的owner后续访问不重启整批版本推进，健康资源可沿原查询、授权及工具入口继续使用；未知资源仍须原管理入口核实。取消或进程退出立即传播，不将未同步项算作恢复完成。首次恢复的共享等待、挂起同步隔离及总期限继续TODO，本切片只处理已返回失败后的批次收敛，不引入恢复任务、另一份状态或自动重放。
-
-Browser 的关闭排空统一复用 `BrowserOperationQueue.drain()` 的完整已接纳 Promise 集合，包含串行排队以及尚在 `prepareForOperation()` 等待唤醒的并发交互；移除串行尾部加在途计数轮询的旧等待链。Manager 不再按 `discarded` 跳过运行资源，所有资源先关闭操作准入；排空后仍为冷状态的资源保留原检查点。Session 的单次排空定时预算在任何连接清理、解锁和检查点转换前生效，超时不取消或遗忘原操作。真实 Chromium/HTTP 验收覆盖冷唤醒准备、热交互执行、准备超时后的原操作完成及再次关闭，核对磁盘检查点、原页面关闭与冷 Manager 重开的最终表单值。该切片不覆盖 Manager 失败收尾、挂起操作强制终止或整个 shutdown 的总期限；这些仍属 5.4，不能将 Session 的等待失败等同于外部终态核实。
-
-后续补齐 Manager 的排空超时分支：它不再沿检查点捕获损坏的收尾链将原资源改成 lost、释放 context 并删除检查点；仍检查其它资源并保留其原错误，随后在关闭共享运行时池之前汇总失败。原关闭准入和唯一操作集合继续持有未结束操作，原操作完成后同一入口可重试捕获最终状态。真实 Manager 默认 5 秒预算的 HTTP/Chromium 场景核对超时后原页面与运行时仍存活、磁盘状态和原检查点未改，放行原操作后重试关闭及冷重开保留最后的编辑。其它捕获/收尾故障的期限、强制终止与进程退出协调仍 TODO；本项不是整个 5.4 完成。
-
-Manager 关闭先同步关闭当前所有运行资源的操作准入，再逐项调用原检查点链；本批从入口冻结一次默认 5 秒的单调排空截止，每项只取得剩余预算。已排空的空闲资源即使预算耗尽仍能由原队列即时确认；多个挂起资源不再各自重置 5 秒。超时按原资源身份汇总，原操作、页面、检查点和共享运行时继续保留；放行原操作后同一入口重试保存两份最终状态。生产信号入口现接回同一 Manager 的关闭重试，具体边界见下述生产信号切片；直接调用 Manager 的旧验收不替代信号入口验收。该预算仍只约束队列等待，创建中的资源接纳、检查点持久化/转换、其它失败收尾与整个 shutdown 的截止及强制终止继续 TODO。
-
-Manager 对检查点失败后的收尾继续按原资源隔离：若 context 释放、检查点删除或状态保存再次失败，将本次采集首因与收尾错误按顺序聚合，继续其它 Browser；原资源未核实完成时不关闭共享运行时池。Session 只在这条原收尾链全部完成后发布 lost，失败保持原 status 与 unknown，原 context 仅在释放成功后清除，避免下一轮关闭提前跳过；unknown 持久化也失败时保留收尾与保存异常及因果关系。检查点损坏仍明确报告失败，重试不伪造丢失状态恢复成功。完整关闭期限仍 TODO，生产信号退出协调按下述切片处理。
-
-关闭与版本撤销现共用原队列的单次有界`drain(timeoutMs)`：默认5秒，true表示快照集合已settle，false只表示本次等待结束，原Promise继续由唯一集合持有。普通版本同步先关闭旧连接/删除旧grant，冻结原集合并持久化新版本；超时返回独立`browser_owner_revision_drain_timeout`/408，不使用工具的page_reset语义，不停止或遗忘原动作。原动作结束后旧结果仍被授权版本检查拒绝，同版本重试只排空原集合。真实Python客户端→Node→Chromium/HTTP屏障验证磁盘版本、未结束原动作、另一Browser可读、迟到结果拒绝及核实关闭。持久化阻塞、Python首次recover single-flight gate和整个operation总期限继续TODO，不能把Node单资源有界等待称为恢复全局隔离或真实终止完成。
-
-管理stop/delete的版本推进显式携带`for_stop=true`，普通恢复、关联和grant同步携带false；两类内部HTTP入口均要求boolean意图，不保留旧请求fallback。Browser停止准备只撤权、关闭新操作准入并持久新版本，不提前等待原执行，避免脚本等待context关闭时阻止真正关闭。后续原Session.close释放context后仍核实同一队列，准备成功不是停止证明；写盘失败关闭准入并传播原错，不重复实现停止或新增执行账本。Terminal沿用原同步撤权和停止链。任意不合作脚本强制终止、首次冷恢复gate、整个operation/shutdown期限继续TODO，生产信号失败后退出协调按下述切片处理。
-
-2026-10-25 补齐关闭时的创建等待：Manager同步关闭新创建准入，原创建调用从排队、配额读取、登记、首次导航至最终persist都由本次完成Promise覆盖；这些Promise只是进程内执行句柄，不成为新的业务状态或恢复账本。准入在排队执行和配额等待后重核，重复身份仍不签发not_created。关闭等待与交互排空共用原默认5秒预算；超时不取消、遗忘或重发创建，已登记Session（含尚在取得运行时的created状态）在关闭入口同步关闭交互准入，原启动仍继续，迟到完成后由同Manager检查点重试。原队列与创建等待复用browserRuntime的同一排空原语，原调用方仍处理真实执行错误。启动失败物理移除独立收尾代码，直接使用Session.close，保留failed/unknown及两次持久化失败的原异常；未核实创建收尾继续阻止共享池关闭，可由现有管理close/delete核实。真实Chromium/HTTP屏障覆盖初始导航等待、创建超时及创建/peer操作组合预算，关闭重试后按原ID冷恢复；该创建切片不覆盖生产信号入口；强制终止、同步持久化阻塞或整个shutdown总期限仍TODO。
-
-`ThreadResidencyTracker.sweep()` 对每个 Thread 独立尝试清理，失败保留原 scope、generation 和 owner 记录，其它 Thread 仍完成。整批结束后向调用方抛出原错误（单项）或汇总错误（多项），附精确 owner 信息；不改变已有单错误类型或把失败算成成功卸载。`AgentExecutionService` 的唯一周期 worker 记录完整异常后按原 60 秒周期重试，取消和关闭正常传播。这里不解决失效关联或外部未知结果，也不绕过原 owner 核实规则。
-
-闲置扫描通过 `asyncio.wait` 为单个真实卸载任务提供 30 秒等待预算，覆盖该任务中等待运行排空、领域通知和 scope close 的总等待。到期向本轮报告含精确 owner/generation 的 `TimeoutError`，继续扫描其它 Thread；不取消原任务，不解除关联或 lease，不标记 cold。原任务仍由 `runtime_unload` 持有，新 admission 等待同一任务，后续扫描不会为同一代再启动清理。迟到成功沿原关闭链落为 cold；迟到失败由现有后台任务回调完整记录，原状态保留给下一周期重试。这是事件循环能调度时的扫描等待预算，不是保证 30 秒内释放资源或整轮完成的期限。
-
-Terminal/Browser 的 HTTP 层现统一使用可取消的异步 HTTPX，默认 10/30 秒及 Browser run 的原预算余量保持；同次网络传输共用单调总期限，不再把完整请求交给默认线程池。传输取消会关闭客户端连接，仍不证明服务端已经停止；该期限不覆盖资源锁等待、多次请求的 operation 总耗时或 scope 回调。共享 owner 已迁为每条资源记录一把进程内锁；创建、管理、传输授权、工具调用、lease 关闭、fork attach、Thread/Session 清理和孤儿回收均复用该资源的同一把锁，不再跨单资源外部请求持有 owner 全局锁。恢复入口只保留首次对账的 single-flight gate；锁与原 owner 记录一一对应，不形成新的持久账本。列表先按原关联/来源元信息选目标并完成所选资源恢复；一次外部清单请求不占资源锁，每条观察仅在自己的资源锁内合并，等锁后重检过滤及已核实删除状态。清单请求前后完整持久记录不同则明确冲突，请求方刷新，不以迟到快照覆盖并发命令或同版本外部状态观察，也不自动重发查询。多资源清理按资源 ID 固定顺序取得整组锁，仍在任何 detach 前核对完整 lease 集合。包含挂起资源的聚合查询或整组清理仍会等待该资源，同步回调阻塞事件循环时异步计时也无法抢占。任务 5.4 后续继续统一 operation 总截止时间、终止核实和迟到回执，明确 Session 删除、换代 admission 与 shutdown 的有界等待、失败返回和保留事实；本次锁隔离不代表这些合同已完成。
-
-
-runtime 准入及单 Session 的 runtime 排空现各有一次调用共用的 30 秒单调总等待预算，覆盖等待旧代卸载、构建与多个 Thread 的顺序排空，后续阶段不重置预算。等待超时或调用方取消只结束本次等待，原 build/unload task 仍由原 state 持有，迟到回执沿原链记录；后续重试复用同一任务，不能先建下一代或关闭尚在构建的 scope。Session 删除沿原异常传播停留在 deleting，保留 locator、active 控制 fence 和物理历史，待原任务完成后按同一删除记录继续。该预算只覆盖 tracker 的 runtime 阶段，不覆盖此前领域资源排空、Session gate/retention 等待或整个删除 operation。TODO：真实外部操作的总截止时间与终止核实、同步阻塞、线程池排队及整个 Backend shutdown 总期限仍未完成；全局 runtime 预算与失败保留存储的顺序已由下述 Backend 关闭切片接入，不能让迟到任务访问已关闭存储。
-
-扩展资源 owner 回归发现，记录查询已更名为 `_require_owned_resource_record`，但共享 operation、Terminal/Browser operation 和 Browser 管理入口仍有旧 `_require` 调用，导致取得 lease 或读取记录时直接失败。本轮全量迁齐这些调用和对应测试，保留唯一查询方法，不加兼容入口，也不改变关联、lease 或删除策略。
-
-
-2026-10-24 传输取消切片已迁齐两个客户端及全部直接/间接测试调用，物理删除同步私有 HTTP 入口，不保留同步生产链。原资源 owner 的 unknown 与恢复拒绝重放规则不变；HTTP 状态错误保留原始诊断与 cause，网络失败继续映射为服务不可用，Browser 408 的 code/retryable/recovery/timeout 字段保持。共享单元 HTTP 装具只替换 HTTPX 的网络 transport，不替换编解码；真实辅助服务验收仍经真实 socket。四项原基线反例分别证明取消后 socket 未关、默认线程池被占满时请求不能推进。最终候选的六项真实 HTTP 测试核对取消断连、unknown 跨重启、拒绝重放、独立资源传输及慢速分段响应不能延长期限；原业务协议回归 259 passed，真实 Terminal HTTP/PTY 8 passed，Browser 故障/恢复 32 passed，正式新矩阵 6 passed。Ruff、编译、命令、候选源码指纹和原始结果在 `out/tests/temp/resource_http_cancellation_20261024/artifacts/`。本轮仅 Linux；未重跑 Windows，不将关闭 socket 等同服务端进程终止，也不声称整个 operation、同步阻塞回调、DNS 执行器等待、Session 删除或 shutdown 已有完整期限。上述接管/终止与关闭顺序继续 TODO，5.2/5.4 不勾选；Agent 团队与协作专项继续 TODO。
-
-资源 owner 的记录与原 operation 账本各自只在原持久链成功后发布内存；记录读取为隔离草稿，写入保留其它资源最新快照，等待资源锁后必须重新读取。创建、scope/关联、fork dispatch/commit、版本冻结与终态共用同一 save，不保留共享对象先改后写或外层回滚。终态记录落盘后才结清占用；unknown 记录写盘前先将本次精确 lease 保护为待核实，失败时普通存活观察仍核对原账本，不能清除未核实操作或重放副作用。仅改变发布顺序和访问合同，schema 1 与现有恢复格式不变；全量JSON写入成本继续按测量证据另行优化。
-
-记录的读取、写入和格式拒绝共用原 `report_failure` 诊断出口；移除记录模块直接写日志的分支。正常公开说明保持原格式，日志再次失败时仅附日志错误类别，原始位置和完整日志次错保存在原异常 notes，外层仍保留原类别、原生错误码与直接 cause。日志故障不影响未发布状态、原账本和显式重试规则，不增加另一套持久或诊断链。
-
-单次 Terminal/Browser operation 关闭时，各占用分别取得原资源锁并通过原账本释放；只有持久释放成功后才移除本次内存引用。单项写盘失败或锁等待不阻断其它资源的释放，全部结果保留原单错或按输入顺序聚合；取消等待时，未释放引用继续由原 operation 保留，后续关闭沿原 lease 重试，未知/已结清占用仍服从既有 owner 判定。这不构成外部终止证明，也不补足整个 operation/shutdown 的总期限。
-
-Browser工具超时后的原AsyncFunction和页面reset现在由原`BrowserOperationQueue`的同一执行集合持有，不只登记已经超时返回的外层请求。排空每批settle后在原单次预算内继续复核集合，覆盖等待开始后才启动的内部执行；集合大小是句柄数，不是业务操作数。stop/delete在释放原context后仍等待这份集合，默认5秒未排空返回`browser_close_operation_drain_timeout`/408，保持unknown和原身份，不发布verified终态。原执行结束后，同一显式关闭重试完成检查点删除与终态持久化，不重复关闭context。真实Python传输客户端→Node/Chromium/HTTP场景覆盖工具超时、页面reset后的短操作、stop/delete失败后的磁盘unknown、peer可读和迟到结束重试；证据见tasks 5.2。该切片不能强制终止不合作脚本，Python业务owner的版本同步可能先等待同一挂起脚本，整个operation/shutdown期限继续TODO，backend信号失败后的重试见生产信号切片；5.2/5.4/6.2均保持未完成，Agent团队与协作继续暂缓。
-
-2026-10-25 生产信号关闭继续调用唯一 Manager.shutdown：明确失败后记录完整原异常并保留原进程与 HTTP 管理入口，原 Manager/Session 的关闭准入不回退。信号监听在失败后仍有效，同次关闭尚未结束时的重复信号不重复调用；核实原操作后再次信号沿同一 Manager 重试，成功才关闭 HTTP/WebSocket 并按信号退出。不引入自动重试或另一条停止链；未捕获异常与未处理 rejection 仍沿原致命退出规则以 1 结束；关闭过程中到达的致命错误也先记录原错误并升级最终退出码，不被在途关闭去重忽略。HTTP 阶段期限见下述共享收尾；上层启动器强杀协调、整个 shutdown 的总期限与不合作脚本强制停止继续 TODO。
-
-管理命令的等待边界由原 `WorkspaceResourceOwner.command` 唯一协调：入口一次30秒覆盖冷恢复、Thread准入、资源锁、撤权与正式回执，阶段不重新计时。到期取消并排空本调用的协作式等待；尚未派发的管理动作不补造unknown或管理lease，已提交的冷恢复事实保留，派发未核实则沿原异常链保存unknown和本次精确占用。外部已经停止但回执丢失时，新管理请求只核实原终态，不重新停止；底层TimeoutError和调用方取消保持原归属。HTTP继续采用既有503及原始request_id合同，不增第二命令链或操作账本。该预算不包括整个模型工具operation，也不承诺同步阻塞可抢占或任意不合作执行可强制终止，后续5.2/5.4仍须验收。
-
-Browser 的 HTTP／Session 恢复动作沿 `BrowserResourceOwner.perform` 使用一次30秒准入预算，覆盖冷恢复、Thread准入、原资源锁、身份／版本／关联校验及原管理lease获取。成功准入后退出预算，原holder、锁和lease继续覆盖唯一`BrowserOperations.call_locked`动作及收尾；保留传输和`run.timeoutMs`的既有执行期限。到期只取消本次准入，不派发迟到动作、不补造unknown或第二份占用；已提交恢复事实保留，底层TimeoutError与原取消保持归属。原生写盘仍须原worker结算，此预算不证明整个动作或shutdown已有硬期限。
+附件收尾只要求“保留正在使用的目录，已无占用时可处理，失败可见且可重试”。通用无身份进程接管、不合作执行强制终止、共享账本所有调用方的同步 I/O 治理，以及整个 Backend/shutdown 的硬期限属于后续 TODO，不继续作为附件归档前置项。
 
 ## Conflict Review
 
-本 change 是附件目录修订的后继 owner。以下旧 change 的既有验收只证明对应基线；目录主链已在本变更迁齐，尚未完成的 Web/平台和关闭期限验收继续保留。合入/归档顺序为先落现有基础 change，再应用本 change；不得在最后归档旧 change 时覆盖本修订。
-
-| 冲突来源 | 处理决定 | 必须保留的约束 |
+| 既有合同 | 本次处理 | 保留的边界 |
 | --- | --- | --- |
-| itemized 的旧内容寻址附件布局及单 blob fork 验收 | proposal/design、rollout 存储 requirement 与 fork 验收已同步目录/文件资源身份，取消相同上传强制合并；原 blob/owner-ref writer 已下线 | canonical 不保存物理 locator，历史原始身份和 frozen digest/length 不改写，fork claim/publication 原子性不降低 |
-| virtual-resource-addressing 的 kind 闭集、单文件附件模板及共享 blob 场景 | 由同一 URI owner 登记上述 workspace attachments directory/child；旧 Session URI 只保历史解析，不生成新引用 | 不新增 URI 解析器、不以原生展示路径建立第二定位关系、普通 files/root 仍不能直接遍历 `.boxteam` |
-| unified-resource-file-tools 的旧 Session 单文件产物边界 | 附件目录/child、原件只读与 derived 导航/写入已同步其 design 和文件 requirement，工具结果仍为 Session 单文件；Shell workdir 继续由本 change 定义 | 512 像素预览、媒体投影、原件读取、文件工具权限及修订语义保持 |
-| persistent-resources 的 thread unload 即时 delete、零关联 30 分钟、workspace 永不自动过期 | 这些规则继续适用于既有 Shell/Browser；附件复用机制但采用明确的零关联 30 天策略 | 显式 detach 不等于停止、有效 operation 阻止回收、未知停止结果不伪报成功 |
-| deduplicate-execution-history-storage 的不可变内容复用及恢复/fork保护 | 可变目录不参与 digest 身份合并；已冻结历史输入仍按原 immutable asset/version 复用 | 历史 request_hash 可重建，GC 不删除 checkpoint/assembly 所需版本；不从当前目录补历史 |
-| 当前附件 GC 的 `created_at < now-retention` 与 `retention=0` 调用 | 改为最后一次零关联后的 deadline；不能简单把参数改成 30 天 | 在 detach 第 30 天前不删，重启不重置 deadline，删除与 reattach 互斥 |
-| 当前恢复只核运行状态、关联存活无对账，以及单项异常停止 sweep | 已接入 tracker 实例/generation token、权威 pin/queue 核对与旧代解绑；外部未知结果的取消/终止核实仍 TODO | 不把日志或任务勾选当作异常退出后的真实资源释放证据 |
-| persistent-resources 的 unload 必须核实终态，与扫描等待期限 | 30 秒只限制本轮等待；唯一卸载任务继续持有全部未结清事实，runtime admission/单 Session runtime 排空等待最多 30 秒，真实清理仍由同一任务核实；其它删除阶段和全局关闭仍待收口 | 不把超时当停止证明，不重复删除，不提前释放 lease；共享锁/同步阻塞和关闭期限尚待 5.4 |
-
-## Risks / Trade-offs
-
-- [历史原件在无关联 30 天后不可用] → 明确到期/已回收状态；冻结模型输入与运行恢复依赖单独保护，不静默延长或承诺无限期附件历史。
-- [共享目录的派生结果互相覆盖] → 原件不变，模型提示使用新的文件/子目录；文件 owner 保留修订冲突合同，处理结果被用于模型输入时冻结具体版本。
-- [Shell 可写目录绕过逐文件观察] → 执行全程占用目录，capture/读取在原 owner 核实文件版本和 manifest；不依赖模型报告写入完成。
-- [GC 与 attach/fork/重启竞争] → 复用 owner 事务、lease 和 journal，删除前复核，提交删除状态后拒绝新 attach；删除失败保留可重试事实。
-- [慢清理拖长周期或占住共享 owner 锁] → 单 Thread 扫描等待预算 30 秒，同代任务去重；多个慢任务仍会累计等待，涉及同一挂起资源的整组释放仍可能受锁阻断；无关单资源和其它 Thread 的资源集合已隔离。后续 5.4 处理终止核实、整组等待与关闭期限；同步阻塞无法靠 asyncio 超时抢占。不擅自改 30 分钟/30 天期限。
+| 本变更旧 30 天期限与每 6 小时到期 GC | 由最后关联解除后的修改检查和实际占用复核替代；迁齐后移除旧生产实现 | 失败不能伪报删除，后台使用不能因超时丢失保护 |
+| 持久资源中 Shell/Browser 的闲置和临时资源规则 | 保持原样，仅调整附件工作目录的保留策略 | detach 不等于停止，其它资源仍使用的共享代码保留 |
+| 统一 URI/文件操作 | 沿原 owner 增加工作副本重建；资源身份与原输入能力不变 | 普通文件链路唯一，远端路径始终在目标机器解释 |
+| structured-user-message-attachments | 原件可靠保存，工作目录释放后仍可按原 URI 打开 | 原件只读、预览尺寸、媒体投影、权限与错误归属保持 |
+| itemized、历史存储去重与 fork | 冻结版本继续由原历史 owner 提供，不从当前目录补历史 | canonical、request_hash、owner、claim/publication 与备份不改写 |
+| 旧 5.2/5.4 中通用生命周期治理 | 移出附件必做任务，登记后续 TODO | 已有实现和验证记录保留；未完成部分不标已实现 |
 
 ## Migration Plan
 
-### 调用方与切换范围（任务 2.1）
+1. 全仓检索附件目录访问、关联释放、GC、启动/删除回调、fork、协议/生成物及测试，固定直接与间接消费者；只迁附件链路，不顺带重构其它资源。
+2. 支持当前线上 schema 4。先核实/补齐原件的可靠持久来源，再允许释放工作副本；已存在的处理结果保留，来源不明或缺件的记录逐项报告，不猜测为无修改、不清空恢复。
+3. 旧自动 `unattached_since/gc_after` 只作旧策略迁移输入，不再驱动新策略；旧明确的额外保留承诺继续保护，不能与自动 30 天期限混同。迁齐后删除无调用方的旧字段/查询/定时 worker，不以占位值继续运行两套策略。
+4. 实际改变数据库结构才提升 schema，SQL 定义和协调仍归原 owner。现有 schema 3 显式离线 prepare/convert/install/rollback 迁齐新目标格式，继续保全备份、原件、不可变来源绑定和终态 fork 原文；生产入口不双读旧表或旧正文。
+5. 保持原离线维护互斥及持久迁移记录。发布前失败保留原数据并可重试；切换有新写入后不得直接以旧备份覆盖新数据。释放/重建的中断恢复继续使用原目录身份和 locator。
+6. 一次迁齐原件读取/预览、文件操作、Shell、fork、关联解除、删除和启动恢复后，物理移除旧到期 GC、重复调用和只验证旧期限的死测试。必要的历史 URI/v2 冻结载荷解析保留在原 owner，不重新生成旧引用或改写历史。
+7. 新合同的产品验证完成后同步主规范并归档；文档修订、旧回收验收或局部 helper 通过均不算已完成新实现。
 
-2026-10-24 在 `4aa3e5a0f` 及当前共享工作树盘点。首轮精确符号检索覆盖 102 个文件、612 处；补充大小写不敏感的附件、Session 产物和 Shell 工作目录入口检索，覆盖 275 个源码/协议/测试文件、3110 处。该数字包括生成文件和测试引用，不代表 275 个独立 owner。原始检索、逐文件 SHA256 和行号保留在 `out/tests/temp/attachment_directory_inventory_20261024/artifacts/full-source-manifest-001.json` 及同目录 `full-references-001.jsonl`；后续实现按最终候选重新核对，不能将共享工作树的盘点结果当成已提交源码验证。
+## Risks / Trade-offs
 
-| 链路 | 现有权威及直接/间接消费者 | 单次迁齐与旧实现移除边界 |
-| --- | --- | --- |
-| 身份、落盘、SQL | `attachment_blob_catalog/{catalog,schema,records,blob_identity,locator,ingest,blobs,queries,store}.py` 与 `sql/`；container/Depends 注入 | facade 实际位于 `catalog.py`；schema 3 的 digest claim、owner 派生身份及 blob GC 由目录 owner 替代。SQL 已抽离，勿重复整理；同时修订本目录 AGENTS 的旧 facade/身份限制，不新增第二个生产 store。 |
-| 上传、用户及内部接受 | `message_service.py` → `persist_inline`/`AttachmentContentService` → `UserContentBuilder` → saver acceptance；`recovery.py` 与 `session_control_operation_lease` | 原 pin/fence/holder/消息接受结算协议保留；新资源 ID 绑定 ingest 幂等键而非 digest。同一次重试复用一个目录，独立上传另分配目录。accept、内部 admission 和恢复都核对精确附件及消息，不用 resident runtime 判断是否仍需保活。 |
-| 排队与执行输入 | Job 的 pending controller/runtime state、`pending_request_store.py`、execution step runner、checkpoint runtime/async API | 控制队列只保引用，正文仍由 canonical owner 提供；已接受但尚未执行的附件必须由 durable acceptance/operation 保活，不能因 pin 已终态或 runtime 尚未建立被 detach/GC。 |
-| 媒体与协议 | `attachment_content_service.py`、`api/messages.py` content/thumbnail；`internal_v2/attachment.py`、message/pending/turn DTO、`message.proto`/`public.proto` 及 Python/TS/Buf 生成物 | 原件与 512 像素预览改在同一目录，视频抽帧、MIME、诊断和不可用状态保留；新增目录引用须迁齐序列化、校验和生成产物，不能只改 Python 类型。 |
-| Web 输入与查看 | Composer/tray、attachments state、发送/重发 hooks、session API、timeline/turn 投影、`MessageAttachments`、`WorkspaceAttachmentPreview`、`useMessageMediaSources` 与 media utilities | 输入、发送、展示及下载都消费后端目录/文件引用；不由前端拼本机位置。迁齐 OpenAPI/生成类型，完成真实类型检查及 Web build。 |
-| URI、文件与导航 | `core/resource_uri.py`、virtual resolver、resource navigation、bootstrap/container 的 artifact reader；`workspace_filesystem_tools.py` 和 `workspace_files/paths.py` | 唯一 grammar 增加 attachments directory/child，原文件操作链获得目录 owner 端口；普通 files/root 仍拒绝 `.boxteam`。新消息不生成 Session 附件 URI，旧 URI 只解析到新 owner 的历史绑定。 |
-| 模型读取与冻结 | `agent_factory.py::read_artifact`、`context_dispatch.py::read_tool_call_attachment`、item schema/runtime notice、canonical LangChain/content/provider 映射、`item_resource_references` | 区分工作区访问授权、Thread 保活和历史 provenance；不能照搬原 Session/Thread 私有引用拒绝。typed 附件和 generated blocks 迁齐，用户原文及已封存 canonical/assembly bytes/hash 不变；实际用于请求的文件版本由既有 immutable asset owner 冻结。 |
-| Shell 与资源关联 | `tools/terminal.py` → TerminalOperations/ResourceOwner → PTY；workspace resource records/operation leases 与 Thread residency 通知 | 结构化 cwd 经目标 owner 解析，命令原文不替换；前台、提前返回及后台子进程沿原进程 owner 保持目录占用，真实终态后才解除。原生路径输入保留，远端 URI 不在中继机器解释。 |
-| fork、转移与历史 | attachment `fork_store/fork_import/fork_claims`；checkpoint `fork_source/fork_copy/fork_owner`、`source_capture/source_snapshot`；Session fork service/transfer DTO、copy attachment settlement、attachment projection | 原 capture/preimage/snapshot hash 含完整旧附件快照，不能原地改写。新同工作区 fork 共享目录关联，跨工作区冻结 manifest/revision 复制；旧历史身份通过新 owner 的确定映射解析，claim/publication/失败及删除结算全迁齐，不能只换普通读取。 |
-| 删除、恢复与回收 | `main.py` 启动恢复与 retention=0 GC；container Session 删除；fork lineage Thread 删除；`recovery.py` 与 `queries.py` | 同批替换创建时间 GC 和即时调用；精确 detach 后从最后零关联时刻起算 30 天，操作/排队/fork 仍受保护。删除登记、物理移除及重启重试共用目录 owner，不扫描目录吸收未知资源。 |
-| 验收及发行资产 | attachment catalog/identity/recovery/content 单测、消息寿命/拓扑/预览故障集成、read/navigation 工具、fork modes/publication/transfer/unavailable、Web 附件组件、vision E2E、`test_sqlite_release_assets.py` | 随各纵向切片迁齐旧身份/URI/GC 断言；执行、fork、恢复关键状态经产品入口生成。仅查询/投影局部测试可手工构造历史，发行包仍必须携带实际加载的 SQL。 |
+- [修改目录会持续占用磁盘] → 本次明确保留处理结果，不设置隐式 30 天到期；后续手动管理沿已有能力，另加自动保留政策须明确登记。
+- [未修改目录释放后首次访问需要重建] → 复用目标端本地原件和统一目录入口；不另发上游请求、不每次读取都重建或全量扫描。
+- [缺少可靠原件或无法核实占用] → 保留该目录并说明原因，不以归档为由删除未知数据；通用接管能力留后续 TODO。
+- [实际处理与卸载并发] → 用现有占用与目录锁核对，不靠“暂时没变化”推断无人使用；不创建第二套资源账本。
+- [旧测试反映不同产品行为] → 保留旧原件与指纹；仅替换已被新合同废除的期限预期，身份、顺序、冲突、历史 hash 和真实进程占用断言不放宽。
 
-### 支持的旧库及原件保全
+## Validation and Archive Boundary
 
-1. 当前 `AttachmentBlobCatalog._initialize()` 只支持空库与 `user_version=3`，版本 1/2 无现有升级入口。目录结构落地时将附件 schema 提升为 4，仅提供当前完整 schema 3 的显式离线迁移；新空库直接创建 4。版本 1/2、未知版本、缺表、损坏或受检 locator/内容不一致均明确拒绝并保留原数据，不隐式扩大支持范围。任务 2.1 只定范围，不提升 schema。
-2. 迁移前停止目标工作区后端及相关写入/外部任务。Session/topology/operation 锁不是整个工作区的停机证明。原附件 owner 的 `maintenance.py` 已引入跨进程共享/独占维护锁：Backend 在任何业务初始化前取得所有 mount 的共享锁，至全部业务 writer 与 catalog 关闭后归还；独立服务图构造也遵守此入口，目录访问由 catalog 惰性持有同一共享锁，连接关闭失败保留连接与锁供重试。锁文件固定在附件根同级，不能随目录/catalog 切换替换或删除；冲突立即明确失败，不探测端口、检查 PID 文件或按锁文件存在推断停机。`migration prepare` 已在取得独占后核对 Session 创建/删除、operation lease、Thread 创建、ingest、正文 commit claim、fork capture/claim/export release 和外部资源账本；非终态先由原恢复入口收敛，仍未收敛或未知终态则拒绝，不伪造终态或丢弃占用。完整 queued 输入保留，claimed/started 或没有 queued 输入支撑的 unknown execution 拒绝；通用账本中的外部资源必须 stopped、占用 released/settled 且仍有对应资源记录；Terminal/Browser 的领域 owner 记录也独立按原格式核对，要求其原终态闭集与 verified 同时成立，fork attach 不得仍 dispatching。不能用通用账本缺少资源来忽略领域记录先落盘的创建窗口，也不在离线预检中调用 recover 或伪造终态。维护锁不能单独证明遗留外部进程已经停止，版本转换、恢复和切换仍 TODO。
-3. 已提供显式 `python -m app.services.infrastructure.attachment_blob_catalog.migration prepare --workspace <root> --output <new-dir>` 与 `verify --backup <dir>`。只接受完整附件 schema 3，表、约束、索引和触发器由线上初始化共用的 SQL 顺序生成内存参照；缺失/改写不自动修复。通过 SQLite backup API 保存附件 catalog 与登记 Session/control/rollout 的已提交 WAL 内容；备份快照采用 immutable 只读核验，不在其中生成 WAL/SHM。依权威 catalog 和 journal 枚举并保存原件、派生预览及历史 capture，同时逐字保全已通过准入的 Terminal/Browser owner 记录与关联；终态仍残留的冻结 capture 全部逐字复制，不再次 SQLite backup 改变其字节；materialized/aborted 后已由原 owner 清理的临时 capture 不重建。Linux 执行明细中的合法冒号文件名原样保留，受检 locator 继续拒绝盘符逃逸和符号链接；清单保存 source schema、稳定身份、相对 locator、digest/length。原件先核受检 locator、普通文件及字节 hash，不遍历日期桶吸收资源。源文件和非空 WAL 在复制前后与全批结束复核，只将“缺 WAL”和“空 WAL”统一为无已提交页；任一步变化或失败保留 preparing 产物和原数据，不能为迁移先触发旧 retention=0 GC 或删原件。内容、清单及目录全部 durable 后，唯一 journal 才发布 prepared；verify 拒绝未完成或 hash 不一致的备份。此阶段不转换目录、不提升 schema，不提供覆盖源数据的恢复操作，不能把 prepared 当成迁移成功。
-4. 一个既有 `attachment_id` 迁为一个目录资源并保留其稳定 ID；同一 Thread 同内容的多次上传已在旧库合并，不能凭空推断原先的上传次数。不同既有逻辑 ID 不根据 digest 再合并。共享 blob 的已登记原件分别复制入各目录 `original/content`，不使用可写硬链接；已有预览逐字迁入 `preview/512.webp`，处理区 `derived/` 留空。用户显示名只保存在元数据，不参与物理定位。available 的原件缺失/损坏必须拒绝；已 tombstoned 的资源只保留不可用事实，不能创建空目录冒充恢复成功。已提供 `convert --backup <dir>` 与 `verify-directories --backup <dir>`：仅在已核验备份的 `converted/` 准备上述目录，日期冻结为旧 owner 创建时间的 UTC 日期；完整旧 owner/blob 行及来源备份指纹进入确定转换清单。活动关联要求权威 Session 和精确 Thread 存在，cold 不判失效；复制中断保留 preparing，可核对并复用已完成文件后继续，不覆盖损坏成品。所有输入/成品核验并 durable 后才发布 directories_prepared。目录阶段不切换线上 locator。另提供 `prepare-catalog --backup <dir>` 与 `verify-catalog --backup <dir>`，在 `converted/catalog.sqlite` 准备 schema 4 基础 catalog：目录、原件/已有预览版本、精确关联、完整旧 owner/blob 来源绑定及终态 fork claim/mapping 的原始 snapshot_json。SQL 唯一定义在 `managed_directory_schema.sql`，旧来源绑定和 fork 原文由不可变触发器保护；journal 绑定源备份、目录清单和 DDL 指纹。写库或 rename 后中断沿同一 journal 续跑，已发布目标绝不覆盖，核验包含完整结构及来源逐行比对。此目标尚无线上 ingest/新 fork 写入，离线安装入口见第 7 条；线上 owner 仍只支持 schema 3，不能据此启动新存储或宣称任务 2.2 已完成。
-   转换初始化先在完整计划 SHA256 定位的 `.converted-{hash}.preparing` 内原子写入 manifest 与 preparing journal，二者及目录 durable 后才将整个目录 rename 为 `converted/` 并同步父目录，随后才开始正文复制。初始化期间进程退出可重建同计划的未发布元数据；其它计划的临时目录、源备份和已发布正文不被清理。已存在但缺失元数据的旧转换根仍明确拒绝，不靠扫盘补造归属。此调整不改变 schema 或已完成转换的格式。
+关键状态由产品上传/消息/文件/Shell/fork/卸载入口生成，复用现有 fixture 与 model_stream。定向覆盖未修改释放与原 URI 重建、修改结果跨多次卸载/重启保留、仅预览不误保留、处理结果删除后恢复为可释放、多个 Thread、排队输入、真实后台进程、清理与重新使用竞争，以及释放/重建中断恢复。验证历史 hash、同/跨工作区 fork 和目标机器归属不变，按受影响实现补 Linux/Windows 真实文件及 PTY 检查。
 
-5. 新 owner 保存旧 Session URI、精确旧 owner/blob/version 和历史别名的确定绑定。生产解析旧 URI 后直接使用新目录/冻结版本，不回读旧表或旧正文位置；旧数据仅作迁移输入及人工备份。canonical item、assembly、资源索引中的原始历史 URI 和已封存 capture/snapshot/preimage 保持逐字不变。终态 fork mapping/claim 保留冻结原文及来源身份，由新 owner 校验该原文并解析迁入版本；不能改写旧 `relative_locator` 来重算 hash，也不能从 digest 猜测跨 Thread 授权。旧 v2 附件载荷由 `ForkAttachmentSnapshot.to_payload()` 显式冻结字段，claim、captured marker 和 source hash 共用同一入口；不再由 dataclass 全字段反射决定历史合同。目录快照须登记新版本，不能为旧 dataclass 添加默认字段后重新计算 v2。跨域正文先进入原 capture 的冻结文件树，由 `source-copy-snapshot:v3` marker 核对完整文件集合、digest/length，再经现有 files/chunk 传输；删除 live `attachment_chunk` 和对应 blob_id 传输字段，公开 Proto 保留其编号与名称。目标导入只读已收到的本地快照，不再二次联网读取 live owner。旧 v2 封存载荷/hash 继续原样读取，缺少冻结文件时明确失败，不回源补造；升级前用旧版本完成或撤销未终结跨域 fork，与离线迁移的非终态拒绝边界一致。新 fork 按目录 manifest 合同写入，不继续产生旧 blob 快照。
-   旧引用解析现在由原附件 owner 的 `legacy_references.py` 消费新 catalog 中的不可变来源和终态 fork 载荷；离线 prepare/verify 在逐行对照后实际解析全部 owner/alias，并校验 committed claim、精确目标 owner 与原件版本。普通旧引用只认本地工作区和精确 Session/Thread，跨来源必须有该消费 Thread 的冻结 alias，拒绝歧义或按 digest 猜测。历史 snapshot 的 locator 属于来源机器，不与目标位置比较，也不拿来读目标。该切片不改变 schema、封存 JSON/hash 或线上入口，目录的当前可用性与关联是否 released 分开；线上上传/lease/fork 新版本和安装切换仍 TODO。验证证据位于 `out/tests/temp/attachment_legacy_resolution_20261024/artifacts/`：产品入口执行及两代 fork 后移离来源/备份正文，仍可从新目录解析并核字节；覆盖 8 类来源/版本/claim/URI/alias 损坏与歧义反例，以及来源 locator 与目标不同的正例。完整离线迁移 suite 75 passed，附件定向 120 passed；另 1 条预览诊断文字断言在原 HEAD 同样失败，保留原始结果，未修改断言或生产预览行为。Ruff、compileall 和 OpenSpec strict 通过；线上整体目录功能仍未完成。
+所有测试继续使用进程外超时、内存保护及既有隔离路径。影响协议/生成物则检查生成一致性，影响前端则完成真实类型检查、构建及定向 Gateway/浏览器验证；未触及的前端和全仓长回归不作为默认门。
 
-6. 旧 active 引用按其精确 Session/Thread 与权威任务状态建立关联/必要占用；不能把全部冷 Thread 当失效，也不能仅因 Thread ID 存在而永久保活。旧 released 引用保留原释放 `updated_at`，某目录已零关联时用其可核验释放时刻起算 30 天，不能改按创建日或每次重启重置；原显式 `retention_until` 更晚时继续保护至该时刻，不缩短既有保护。未知释放时刻明确拒绝该记录并保全。迁移期间只登记到期事实，不夹带物理 GC；删除终态及保留中的 fork/恢复依赖独立核对。
-7. 在隔离准备区完成新 catalog、目录及映射校验，通过原 owner 的持久迁移记录冻结源备份指纹、schema 和目标集合；全部 durable 后才提交唯一切换点。启动只接受已完成的 schema 4，未完成迁移明确失败并由原迁移入口继续/撤销；不从源/目标双读猜测成功。中断前后的恢复、重复执行和回退必须验证。切换成功也不自动删除 schema 3 备份；应用有新写入后的回退不得直接覆盖新数据。旧生产表/方法与全部调用方在切换批次移除，目录维护互斥及迁移记录不成为第二套业务状态。
-
-   已提供 `install --workspace <root> --backup <dir>` 和 `rollback --workspace <root> --backup <dir>`。唯一 `.boxteam/attachment-migration.json` 冻结备份、目标 catalog、原源集合和文件/WAL 指纹；SQLite 内容用完整 schema/行核对，避免将 backup API 的页头变化当作内容变化。ready 恢复且尚未首次移出原目录时，再跑完整 preflight 核对集合，不只复验旧清单中的文件。先将旧根保全为 `.attachments-{backup_id}.schema3`，再发布已 durable 的准备目录，最后提交 installed；中间状态均阻止业务准入。撤销保全新目录副本，原目录恢复并 durable 后才发布 aborted。重复 install 不覆盖安装后的新写入；存在新写入时 rollback 明确拒绝。离线安装与当前线上 schema 4 owner 已接通；实际启动后可读取旧历史并生成新目录，Shell 全程占用与目录 GC 共用原 lease 账本。Windows 与完整深历史验收继续保留。
-
-离线迁移验收的 schema 3 输入固定来自 `cb90835523b9ff6d91e3f8dfaf3491855d55191d`：测试用完整 Git archive 导出该版本，独立 Python 进程复用其产品 fixture 和 `model_stream`，经真实上传、接受、执行及两代 fork 生成状态。当前产品不再承担生成旧结构的职责，也不保留旧线上 owner 或手写执行/fork 状态。旧进程及 owner 关闭后才复制工作区供当前迁移入口使用；保留源 commit/tree、命令、退出码、原始输出及来源回执。旧源码与生成工作区分别隔离，测试工作区沿用正式镜像输出路径，避免嵌套归档将 fork 临时 SQLite 路径拉长；旧 fork watchdog 的产物仍留在其认可的源码输出根。缺少固定历史 Git 对象时明确失败，不回退到当前源码或伪造旧表。团队服务仅沿用该旧版本执行入口既有的初始化依赖，团队功能与专项验证继续 TODO。
-
-2026-10-24 此输入切片在精确公开 HEAD 候选（仍 schema 3）和完整 schema 4 候选各通过 86 项离线迁移/安装检查，覆盖共享旧 blob、已有预览、排队输入、两代真实 fork、冻结来源 hash、安装/撤销及进程退出窗口；Ruff 和 compileall 通过。准确源码指纹、失败归因及最终原始输出位于 `out/tests/temp/attachment_legacy_product_20261024/artifacts/`。这一批只证明旧产品输入解耦；随后线上 owner、原调用方及唯一切换已迁齐，证据与未完成验收按 tasks 最新记录。
-
-### 实施顺序与验证门
-
-Windows 恢复补验要求 activation 新 ID 同时满足原生文件名单段与有界长度：Coordinator 对 snapshot kind、精确 Session/Thread、execution 和可空 model-call 的结构化 JCS 元组生成固定摘要，不用冒号拼接运行身份。原 typed detail locator 不变，物理 owner 使用既有 `native_io_path` 访问 Windows 长路径。已存 snapshot 身份仍由原唯一 catalog 返回；model-call 恢复按其既有 owner 唯一索引查出原 ID，并验证 execution parent，不能用新命名规则重新冻结历史。这不改变数据库结构或重写历史正文/hash。TODO：旧 Linux 数据中的非法 Windows 文件名在跨平台物理迁入时仍需明确方案与产品验收；本切片不隐式清洗、改写或增加路径别名。
-
-完整附件流程进一步要求持久 detail locator 始终使用 POSIX 字符串；fork source 捕获和目标资源检查与原 manifest 一致，不得用 str(Path) 随宿主平台改变合同。冻结详情从捕获、lineage/前缀读取、artifact 传输、目标安装到发布屏障及失败/恢复清理的原生 I/O 都复用 native_io_path，逻辑 locator、来源身份和原 hash 保持不变。Linux/Windows 的真实 Gateway→上传→PTY处理→读取→公开fork→硬重启→目标冷读已通过；准确源码、原始失败/通过和未覆盖范围见 tasks 6.1，不能据此声称中继远端寻址或全部故障组合已验收。
-
-SQLite 文件连接现统一经过 `sqlite_file_uri` 编码原生 I/O 路径，保留各 owner 原有只读、immutable、WAL 与事务语义；预算按实际交给 VFS 的 UTF-8 路径及 journal/WAL/SHM 后缀核对。Windows 默认 VFS 的 1040 字节缓冲区不等于普通 Win32 路径可用长度，不再靠缩短工作区规避。冻结 SQLite 复制仍在隔离解释器保持原读事务，父进程仅编码 URI，经结构化 stdin 传递，不打开或关闭 live 数据库文件。快照捕获、marker 校验、安装/恢复和消息流去重文件在原生 I/O 边界共用已有扩展路径/原子写；逻辑 locator、来源身份、正文和 hash 不变，不升 schema、不改系统设置。258 字符主库（sidecar 跨 MAX_PATH）、600 字符 ASCII 与含中文路径实机 WAL/重开/只读复制通过，258 字符工作区完整附件产品流也已通过；精确范围见 tasks 6.1 的 `sqlite_windows_path_budget_20261024` 证据，真正中继跨机器 URI 及完整生命周期故障组合继续 TODO。
-
-目录创建、上传接受、原件/预览、统一文件读写、Shell 占用、运行时代次与低频 GC 已纵向切换，blobs.py/queries.py 旧生产实现物理移除；schema.py、旧 SQL 和旧快照仅用于显式迁移或封存历史读取。后续优先补齐冻结历史/完整 Web/平台验收，再处理挂起操作终止、共享锁与关闭期限；每个批次迁齐调用方并验证后提交，未满足全部合同的任务保持未勾选。
-
-迁移本身须覆盖从产品生成的 schema 3 历史、相同内容重复上传、共享旧 blob 的多个 owner、已释放/已回收资源、终态深历史 fork、排队输入、非终态明确拒绝，以及切换前/切换点后崩溃与重复执行。核对原件字节、URI 身份、owner/claim、历史请求 hash 和备份；目录回收不删除历史 immutable asset。Agent 团队/委派专项验收继续 TODO；附件链实际必需的用户/内部消息接受和通用 fork 仍验证。
-
-2026-10-24 真实 SSH 产品验收补齐任务 6.1：Windows 原用例经产品上传、PTY 处理、read_file、公开 fork、Backend 硬退出重启及目标冷读后，Linux Gateway 再经原配对/SSH 隧道和 canonical workspace HTTP 代理提交目标执行。附件 derived URI 仅由 Windows owner 解析，原生 Shell 读取原件并写新结果，read_file 与普通文件 API 读回相同内容；相对路径、Windows 盘符绝对路径及资源 URI 同指目标机器的普通文件，响应位置仍为 URI，Linux 同名 decoy 不变，来源 canonical 与原件保持。协调器不写执行、fork、恢复或关联事实，模型继续复用原 model_stream。准确双端源码、原始失败与通过、SSH/HTTP 和 Windows 终态收据见 tasks 6.1 的 `cross_machine_attachment_uri_20261024` 证据；Linux 为 `dee803f02`、Windows 为已验证的 `e5168fba`，不能表述为相同源码全平台通过。Windows 最近 Terminal 启动失败专项回归、UNC、旧 Linux 非法 Windows 文件名迁入及 5.2/5.4/6.2 完整故障组合继续保留，Agent 团队和协作不新增实现或专项验证。
-
-### 目录增长与回收测量（任务 6.4）
-
-`integration-attachment-retention-measurements` 通过产品消息和真实 Agent 执行生成 1/32 个独立同内容上传，每个原件 3968 字节，随后沿真实 unload 产生零关联期限；定点冷 owner 恢复、截止前/到期查询与 GC 均消费原记录，不手填 pin、关联、期限或执行。正式原件和测试源码指纹见 tasks 6.4 证据。该场景度量 owner 成本，模型使用现有 model_stream，不代表网络/SSH、Windows 或完整 Backend 启动耗时。
-
-本次 Linux 样本为：1/32 个目录的 live 原件分别 3968/126976 字节，SQLite 分配页合计 143360/196608 字节；冷 owner 恢复约 7.52/9.11 ms，到期查询约 0.087/1.396 ms，GC 约 7.07/131.14 ms。GC 后全部已登记 live 目录消失，canonical bytes 不变，catalog 保留原 tombstone、文件版本、关联与 ingest 行。WAL 在发布后为 98912/2640952 字节，GC 后为 111272/3036472 字节；这反映本次未主动 checkpoint 的日志占用，不能与数据库页重复相加后当成有效正文体积，也不能由两个小样本承诺全链路线性增长。
-
-TODO（性能）：32 个目录的 124 KiB 原件对应约 2.90 MiB GC 后 WAL，终态记录仍保留；后续按同工作负载扩大目录数/正文规模并测 checkpoint 后文件占用、恢复和尾延迟，再评估 WAL checkpoint 与无引用终态元数据整理。清理前仍须证明历史/fork/恢复依赖安全，不自动缩短保留期限、不删除仍有依赖的 tombstone/版本，也不为小样本提前引入后台任务或新索引。挂起 operation 接管、共享 owner 锁和关闭期限继续是 5.2/5.4 未完成的正确性边界，本测量不能替代它们。
-
-### 批量 runtime 关闭隔离（5.4 部分收口）
-
-`ThreadResidencyTracker.close()` 对本批已选中的 state 分别建立短命等待 task，复用该 state 唯一的构建与卸载任务；不再串行等待第一个 Thread 后才开始其它 Thread。单 Session 在建等待者前冻结一次原 30 秒单调截止，所有 Thread 共用；全局 runtime 关闭现同样共用一次原 30 秒预算，超时保留原 owner；Backend 按下述依赖步骤保留未完成关闭及存储。构建仍挂起时不并发关闭其正在登记资源的 scope。
-
-本次等待者只收集各 state 的原异常，按选择顺序汇总；取消时排空本次等待者，不取消原 build/unload，也不建立清理重试或第二 owner。listener/scope 迟到失败仍保留原 generation 和错误供同入口重试；独立 Thread 已完成的清理与附件 detach 不重复执行。真实服务 shutdown 集成从产品上传与执行生成两个 Session 的附件、历史和 checkpoint，暂停一个原清理边界时核验另一 runtime 已 cold、附件已按原 owner 解除运行时关联，两个 Session 的 canonical bytes、locator 和 checkpoint 保持可读。
-
-Backend的单次协作式关闭等待按下述总预算执行；同步阻塞回调、不合作的外部进程终止和生产退出协调仍属于5.2/5.4/6.2，不能将等待有界视为已核实整体停止。团队、成员、委派与协作继续暂缓实现及专项验证。
-
-
-### Backend 关闭失败保留依赖并沿原入口重试（5.4 部分收口）
-
-原两层 AsyncExitStack 被唯一的 `WorkspaceLifespan` / `BackendLifespan` 关闭链替代。Workspace 的具名依赖步骤只有成功才移除；业务 writer、runtime 或附件关闭失败时，保留原失败步骤和后续存储，不重复已经完成的副作用。每个 Workspace 的原专属 asyncio task 从启动一直持有到重试关闭，MCP 的 AnyIO scope 始终由创建它的任务关闭；并发关闭等待者复用同一次执行，取消等待不取消原 owner。
-
-Backend按挂载逆序发起全部Workspace的原关闭入口，各挂载独立推进，单项失败或挂起不阻止其它挂载关闭；同一挂载内部仍按原依赖顺序串行执行。任一 Workspace 未完成时保留全部 catalog 与附件维护锁，原生命周期保存在 application state，不能用新启动覆盖；全部排空后才关闭 catalog，再归还维护锁和关闭 model_stream。catalog 关闭失败保留原组件以供同入口重试；真实连接关闭成功后才标记物理关闭。事务回滚失败则立即禁止业务访问，保留原回滚原因与首错，即使物理关闭失败也不能继续使用污染连接，原 owner 仍能重试物理关闭。
-
-全局 runtime 关闭使用与 Session 排空相同的一次 30 秒单调预算；超时不取消原 build/unload，不提前关闭仍可被迟到回调访问的 scope、目录或 locator。原业务异常与关闭异常明确聚合保留。产品验收从真实双挂载、上传和消息执行生成 checkpoint 与 canonical，覆盖 runtime 原失败/超时、业务与关闭同时失败、附件及 catalog 关闭失败、peer 独立关闭、原入口重试及迟到回调读取原存储；另验证 Goal 终态、任务体前取消的终态 writer，以及远端 fork export 周期清理仍沿原生命周期工作。
-
-Backend的唯一关闭owner迁入`app/backend_lifecycle.py`，`main`直接使用新模块；原定义物理移除，不留转发。`workspaces → catalog → maintenance → model_stream`只记录未完成步骤，成功才移除；后续阶段失败后重试不重复已完成的全局关闭。每次`close()`在入口取得一次30秒观察预算，全部阶段共用；阶段切换不重置。并发调用复用唯一在途owner，到期或取消只结束本次等待，不取消原owner。到期明确报告当前阶段及未完成的工作区/步骤，保留原生命周期和仍有必要的存储、维护锁；已经成功的步骤不会回滚或重新取得已释放依赖。原owner真正失败后，下一显式调用才重试剩余步骤，迟到失败完整记录；原底层TimeoutError不冒充观察期限。原关闭成功已经提交时，即使截止同时投递也返回真实成功，不能因步骤队列已空误报或越界。
-
-Catalog关闭复用既有`run_sync_shielded`执行原`registry.close()`，原Backend关闭owner持有线程池排队及同步执行；不新增关闭实现或任务账本。排队前同步撤销registry装配准入，各装配入口在取原锁前拒绝已关闭状态，锁内仍复核，避免关闭线程持锁时新请求再次阻塞事件循环。全部Workspace仍先沿原任务排空，catalog未完成不进入维护锁/model_stream步骤；等待者到期或取消不取消原同步执行，同一owner迟到完成后继续原依赖链。
-
-Workspace文件worker排空后的`workspace_service.close`同样由原Workspace任务等待`run_sync_shielded`，只将原同步关闭交给线程；原文件存储事务锁等待不占事件循环。Backend观察到期继续保留该步骤、文件存储、catalog、locator和维护锁，其它挂载及进程级诊断可继续推进；原事务结束后同一关闭owner继续后续依赖，不重复关闭。此处只覆盖文件存储关闭，不将MCP/AnyIO scope移出原任务，也不宣称其它同步回调或整个进程退出已有硬期限。
-
-附件catalog关闭也由同一Workspace任务等待`run_sync_shielded`，物理关闭前同步撤销准入，线程池排队期间即生效。新访问在取连接锁之前拒绝已关闭状态，原锁内继续复核；物理关闭失败保留未关闭连接与维护锁供原入口重试。真实连接读取与关闭竞争、线程池排队均不阻断Backend观察及进程诊断；观察到期或取消不取消原同步执行，迟到完成才继续关闭依赖。该边界不改变目录关联、回收期限或冻结历史，也不证明任意线程可终止。
-
-TODO：30秒限制调用者对整批关闭的等待，不保证原生线程可抢占，也不证明不合作任务或外部进程已终止。其它同步关闭、生产进程退出协调与强制终止核实继续按5.2/5.4验收，两项保持未勾；完整Gateway/Web及Windows关闭组合不由本次进程内生命周期测试替代。团队、成员、委派与协作继续TODO。
-
-
-### 冷恢复单次总等待预算（5.4 部分收口）
-
-Terminal/Browser 继续共用原 ResourceRecovery；单次调用在入口冻结一次30秒截止，首次清单、共享准备锁、各资源锁及授权同步共同消耗，不逐阶段重置。到期只取消并排空本调用的协作式等待，不取消其它调用持有的同步；清单未返回或尚未取得资源锁时不补造unknown，已发送而未核实的同步仍由原链持久保留unknown、原lease和冻结版本。后续调用复用原版本，不推进已完成资源或重放创建、工具、停止；原transport的TimeoutError和外部取消保持原身份。
-
-批量等待中断后，沿原任务集合排空并按资源选择顺序收集已完成的原异常。已有失败不能被后续预算到期覆盖：到期将原失败与本次TimeoutError聚合；外部取消保留原CancelledError与消息，原失败作为聚合cause。没有此前失败时保持原单一预算错误/取消合同，底层TimeoutError仍保留身份。仅管理重试标记及冻结版本继续由原pending协调，原owner和lease账本不变；成功项不回滚，不为取消新建另一套恢复状态。
-
-真实产品资源由原创建入口生成，正式生命周期关闭后冷建服务图；在真实Node/Chromium/HTTP已返回的清单或版本回执边界暂停，推进原30秒截止后核对同一页面、持久版本、unknown和原版本重试。该验证不是独立Backend进程重启、真实网络永久挂起、Gateway或主Web验收。同步阻塞、线程池、不合作任务取消和整个operation/shutdown期限及终止核实继续TODO；5.2/5.4/6.2保持未勾，团队协作继续暂缓。
-
-
-### 聚合资源列表的网络等待隔离（5.4 部分收口）
-
-Terminal/Browser列表复用原记录与观察链：选定资源恢复完成后冻结本次记录，取得一次真实清单，再逐资源短暂加锁、重读并核对。过滤不再匹配或已核实删除的条目省略；其余记录发生任何持久变化时明确返回冲突，HTTP沿现有映射返回409。只比较owner_revision不足以保护同版本的外部关闭观察；完整记录比较不形成第二套持久状态。取消网络等待不发布未收到的观察。原单资源查询、管理和工具仍沿同一资源锁，整批关联释放仍保留全量preflight，无每资源额外HTTP或兼容链。
-
-TODO：列表选择了仍在恢复/操作的资源时，仍会等待该资源原锁；该等待不占其它资源锁。整组释放的等待、列表/operation总预算、同步写盘阻塞与外部终止核实继续按5.2/5.4/6.2处理，本切片不代表完整关闭、Gateway/主Web或Windows验收。团队与协作继续暂缓。
-
-
-### 孤儿回收独立推进与单次预算（5.4 部分收口）
-
-Terminal/Browser的原`sweep_orphans`入口在一次30秒预算内准备冷恢复，并按原资源顺序发起各资源的恢复、锁内期限/关联/lease复核和原删除链。单项授权同步、资源锁或删除回执等待不阻止同批其它资源完成；不跨资源持锁，不另设回收事实源或删除writer。结果与错误仍按原资源顺序返回或聚合，底层异常保持原对象。
-
-准备、各资源恢复、锁等待、撤权和删除共用同一次入口截止；阶段切换不重置。到期取消并排空本调用创建的协作式等待，未开始的删除不伪造unknown，已派发但未核实的操作由原停止链保留unknown与精确原lease；成功资源的终态和lease结算不回滚。后续周期不得重发未知删除，显式管理沿原身份核实已停止事实或以新的管理请求接管。外部取消仍传播CancelledError，传输自己的TimeoutError保留原归属，不冒充整批预算。
-
-中断排空后继续从原任务集合按资源选择顺序收集已返回的原错误，不以其它项的取消覆盖。到期保留原失败并追加带原cause的预算TimeoutError；外部取消保持原对象和消息，原失败作为聚合cause。没有此前失败时保持原单一预算错误/取消行为；未中断的普通失败仍沿原ExceptionGroup返回，不改变成功结果顺序、记录、lease或显式管理核实链。
-
-TODO：这项预算只在事件循环正常调度、等待可取消时生效；同步fsync/回调、不合作任务或外部进程的终止核实，以及整组关联释放/Session删除/生产退出仍须后续处理。30分钟临时孤儿期限与附件目录30天期限均不改变；5.2/5.4/6.2保持未完成，团队及协作不追加实现或专项验证。
-
-
-### 整组关联释放的冲突检查与独立收尾
-
-Thread卸载和Session资源drain继续复用原`_release_refs`。冷恢复和未知终态观察先沿各资源原锁核实；网络观察不持其它资源锁。随后按稳定顺序取得本批锁，重读全部记录并同步核对全部lease；检查与任务接管间不让出事件循环，原冲突仍保证没有部分detach。检查通过后每个任务接管自身原锁，独立撤权/删除或解除workspace关联，完成即释放，不等其它回执。单错保留原对象，多错按原资源顺序聚合；成功项不回滚。
-
-入口一次30秒覆盖准备、恢复、终态观察、集合锁等待、撤权和释放。到期或取消排空本次协作式任务并释放本批锁；未开始不补造unknown，已派发未核实保留原记录、unknown与精确原lease。同代重试只核实正式终态并结算原lease，不重发未知删除。传输自己的TimeoutError保留原错误归属。物理移除旧的整组锁contextmanager，不保留第二释放链。
-
-TODO：整组preflight仍须等齐所选锁，不能为了peer提前detach破坏冲突原子边界；同步写盘/回调、不合作取消及原owner外部终止、整个Session删除和shutdown预算继续按5.2/5.4/6.2验收，不把资源drain局部完成视为整个删除成功。团队与协作暂缓。
-
-
-### 附件保留期使用Backend注入的UTC时钟
-
-附件目录owner与runtime装配消费同一个`RuntimeClockPorts.wall`，默认仍为系统UTC；没有新增测试环境分支或第二时钟状态。原零关联、重关联、重启恢复及GC算法不变，持久起点和30天期限仍由原catalog事务发布。真实Gateway/Backend验收使用既有进程外控制时钟及model_stream，经过两次正式消息执行和SIGKILL恢复：第29天重用清除旧期限，新代释放重新取得30天；第58天重启保留原期限，第59天精确到期删除，历史canonical字节保持。该时钟注入不代表挂起外部操作已被终止，5.2/5.4继续独立验收。
-
-
-Windows child fork失败回滚已将原Thread创建owner的三处staging/final目录删除统一接入既有`native_io_path`，仅在原生I/O边界扩展路径；冻结locator、归属清单核验及fsync顺序保持不变。真实执行生成深层历史后，在附件预留故障点核对child/capture/claim均aborted、目录全部清除、原关联逐字保全；独立正式suite为`integration-attachment-child-fork-rollback`。原完整场景继续验证来源删除与GC，全部断言保留，定向场景不代替它。
-
-TODO：独立图中缓存的ThreadCreationService控制连接仍缺少显式生命周期关闭；Windows完整场景通过回滚断言后，来源Session隔离rename被占用连接阻断。该归属问题与完整6.2故障组合留待后续，不依赖GC时机关闭连接、不扩大目录清理范围，也不把局部通过冒称完整Windows验收。按用户要求，本次长路径修复验证和提交后停下；团队、成员、委派及协作继续暂缓。准确源码、原始失败/通过结果和退出码见`out/tests/temp/attachment_child_rollback_20261025/artifacts/`。
-
-
-### 2026-10-25 Thread 创建控制连接的操作作用域
-
-用户恢复原 goal 后继续处理 Windows 来源 Session 删除的连接占用。原 `OwnerThreadCreationFactory` 不再长期缓存 `ThreadCreationService` 与 SQLite 连接；每次查询或完整创建通过显式上下文持有连接，成功、异常、取消及 service 构造失败均关闭同一连接。factory 仍共享原 topology gate；当前作用域只参与已有 publication binding，不新增持久事实、连接缓存或强关未知句柄。协议及全部生产/测试调用已迁齐，测试内查询连接也在物理 Session 删除前释放；团队调用仅机械迁移连接用法，不追加功能或专项验收。
-
-Linux 工厂与绑定/故障恢复 44 passed（其中工厂 9 项），正式附件 fork 生命周期 11 passed，取消/冷恢复 8 passed；后者 6 项仍是构造 checkpoint 的局部恢复验证，2 项通过真实消息执行生成来源，不能合称完整执行验收。Windows 当前快照完整附件 fork suite 的前 9 项通过，已越过原来源删除 WinError 5；随后跨端附件 capture 的普通 mkdir 触发 WinError 206，下一项装具重建又因目标附件 catalog 句柄未关闭报 WinError 32。后两项仍未通过，需在原附件复制 I/O 和装具 owner 内继续收口，不改系统长路径配置或缩短权威 locator。
-
-扩大 Linux snapshot 竞争检查在原 HEAD 完整 archive 中同样复现旧手填来源缺少冻结队列输入；保持生产拒绝与全部断言，装具迁为产品入口仍 TODO，不将该失败归因本次连接协议。准确命令、源码前后指纹、原始输出、退出码与 AST/调用方/断言审计位于 `out/tests/temp/thread_control_lifetime_20261026/artifacts/`。本片不构成整个挂起操作/关闭期限或完整平台故障组合完成，5.2、5.4、6.2继续未勾。
-
-### 2026-10-25 Windows 附件 capture 与 child 创建长路径
-
-附件目录的冻结清单、复制、原件保护及删除在原物理 I/O 函数内统一使用 `native_io_path`。跨端 child 的 staging 创建、清单复验、rename、发布检查和失败清理也在原 Thread 创建 owner 内使用同一原语，保留普通路径输入、冻结 locator、清单/hash 和持久回执。远端测试装具按逆序显式关闭 transport、附件 store、工作区活动 store 和 registry，不能用 registry 的 catalog 关闭代替业务连接释放。
-
-Windows 快照 `e3f5e5ffa1718f6cb860c5b1a779110a25d6d76f` 的完整附件 fork 生命周期为 11 passed/170.83 秒，覆盖来源删除、30 天 GC 和跨端 import 失败回滚；Linux 相同产品源码为 11 passed/108.85 秒。新增长路径准备/rename 后冷恢复 2 项在 Windows 通过，Linux 通用 Thread 创建回归 77 passed（排除团队专项）；目录回归在 Linux/Windows 各 24 passed。Ruff、编译及作者 AST/目录自查通过，原测试断言数量保持，准确命令、源码指纹、raw 与退出码在 `out/tests/temp/attachment_capture_native_io_20261025/artifacts/`。
-
-首轮跨端 child 的 `WinError 206` 出现在 Thread staging 创建，尚未进入预期的 import 故障点，现已修复；原失败及随后 watchdog 的父进程核对失败保留。watchdog 故障路径由下述独立切片验证。完整 5.2/5.4/6.2 继续未勾；170.83 秒仅为本轮整套测量，不放宽单次 fork 60 秒或 suite 180 秒期限，也不扩展团队与协作。
-
-### Windows fork watchdog 的原生父链与失败退出
-
-watchdog 仅额外认可 Windows venv 的一层 launcher：它必须直接属于原受保护进程，解释器入口及除 argv0 外的完整参数均与原 watchdog 启动一致；matrix 祖先和进程启动标记仍须核对。控制 reader 改读原 FileIO，避免 daemon 线程在异常退出时持有 BufferedReader 锁而发生二次崩溃。没有扩大到任意祖先或增加终止链。
-
-正式 harness 集成套件经真实 matrix 覆盖到期终止、错误控制消息及正常结清三个场景，核实受保护树实际停止、无关进程保持存活及原错误；Linux/Windows 各三项通过。它证明测试保护设施，不代替产品 fork 验收。生产单次 fork 60 秒保持不变；探针仅为基础设施场景使用短期限。准确快照、原始反例、单测和最终实机证据见 tasks 的 `fork_watchdog_windows_20261025` 记录。5.2/5.4/6.2 仍未完成。
-
-### 子树删除 owner 的一次总等待预算（5.4 部分收口）
-
-原 `SessionSubtreeDeleteService.delete()` 在同key锁之前取得一次30秒协作式预算，包含mark/finish的拓扑gate、全部Session的retention/creation结算、holder、Session gate与原复合drain。到期取消并排空本调用的协作式等待，按原持久进度退出；不取消原runtime build/unload，不提前fence、隔离或删除恢复依据。已隔离并记进度的Session不回滚，重入跳过原成功步骤。错误携带稳定工作区、根节点、operation及阶段，原owner自身的TimeoutError和调用方取消不改写。
-
-总预算使用独立的TimeoutError子类型，仅由该owner签发；导航executor只对这个明确结果补齐原拒绝链：mark前写`delete_wait_timeout`的rejected终态，mark后沿既有settlement失败链保持committed/repair_required。没有把任意底层超时归为业务拒绝，也不增加删除实现或持久状态。真实导航入队、状态查询与worker重启覆盖两侧结果和后续operation继续执行；真实上传和模型执行覆盖原历史、控制库、附件关联、runtime generation及同key恢复。普通查询装配使用ASGI，不能称为真实网络或Gateway验收。
-
-Linux7项执行场景最终86.55秒，包含新总预算与原runtime超时的分别归属、两阶段真实锁竞争和peer删除；原90秒suite虽已输出7 passed仍被外层判定TIMEOUT，依据新增场景实测调整为120秒后退出0，产品30秒不变。Windows定向69项通过，未复跑全部执行/关闭场景。准确源码、旧HEAD的8项期限反例、原始失败与最终结果见tasks证据。
-
-下述切片已将预算前移至导航删除入口，补齐JobService准备窗口。同步写盘/回调、线程池排队、不合作取消及真实外部进程终止仍须单独处理；5.2/5.4/6.2保持未勾，团队、成员、委派与协作不追加实现或专项验证。
-
-### Job准备窗口与子树删除共用原截止（5.4 部分收口）
-
-导航删除入口只冻结一次绝对截止，显式传给JobService和原子树删除owner；准备阶段结束后才进入后者，不叠加两个同时到期的计时器。协议将deadline改为必填keyword，生产调用、装配fake及测试迁齐；直接使用子树owner仍沿唯一入口取得默认30秒。上游截止已过时在同步mark/journal前拒绝。
-
-准备计数继续在原dispatch lock内修改，以Event替换原Condition：同锁检查计数、清事件，锁外等待；到期与取消不再因Condition重新取锁而挂住。失败时同步归还本调用在当前事件循环持有的准入标记，不修改准备计数、队列或原任务。只有成功登记本调用准入后才可归还，重叠删除拒绝不能清除其它owner。准备与子树owner自身的TimeoutError和调用方取消保持归属。
-
-产品Session创建、API入队及真实准备任务覆盖两种回执：准备阶段到期保持active且不补造journal；准备消耗20秒后进入Session gate，剩余预算到期保持committed/repair_required，worker重启沿原journal结清。API装配为ASGI，不能称为真实网络或Gateway验收。准确命令、源码指纹、完整旧HEAD反例及各平台结果见tasks同批证据；同步阻塞、线程池、不合作取消和外部终止仍TODO。
-
-### 已接受Job与FIFO发布的状态边界（5.4部分收口）
-
-新准入和冷恢复沿同一持久队列装载，原Job先保持accepted；在原调度锁内完成FIFO恢复后才转queued。装载硬错误不再留下queued却无FIFO的中间态。用户取消与关闭均先提交原canonical终态，仅queued项删除已有FIFO；accepted项同样刷新快照，关闭仅发布一次取消事件。终态写入失败不发布终态，重试保留原Job和准入身份；正常重试仍复用原装载链，不增加镜像插入入口或宽松删除。该边界不证明准备尚未提交时的关闭竞争、同步阻塞可抢占或整个shutdown硬期限，5.4保持未完成。
-
-### 资源operation收尾的整批等待预算（5.4 部分收口）
-
-Terminal/Browser继续共用`ResourceOperations.close()`：入口关闭迟到调用准入，全批释放任务只取得一次30秒协作式预算，各资源仍只取自己的原锁。到期取消并排空本批锁等待，不留下解锁后补做的后台释放；持久成功项已移除引用，未完成或写盘失败项保留精确原lease供同operation显式重试。到期前完成的原错误不被预算错误覆盖，多错沿原顺序聚合；底层自己的TimeoutError与调用方取消保持原归属。调用方取消时仍抛出原CancelledError并保留消息，已经发生的释放错误按资源顺序聚合为其cause；没有先前错误时不增加cause。两领域owner统一消费原operations异步上下文，正常退出直接等待close，不无条件屏蔽首次取消；主体已有异常或取消时才受保护地排空，并把释放失败作为cause保留主体原异常对象。原资源锁与Thread holder持续覆盖写盘结算。没有改变原账本、普通released语义或外部停止链。
-
-单测推进20秒并先释放一个资源锁，再推进11秒，验证不是逐资源重置预算；同时覆盖先返回的账本错误和整批超时的身份与顺序。正式Session和真实PTY/Chromium/HTTP生成资源及占用后，原资源锁竞争与单调时钟推进验证健康占用先释放、超时原占用落盘保留、原进程/页面身份和版本不变、解锁不自动释放及原operation重试。同步写盘、不合作取消、整个业务operation执行期限和外部终止仍TODO，不据此关闭5.2/5.4/6.2。
-
-### 文件worker的原任务与存储关闭顺序（5.4 部分收口）
-
-`WorkspaceFileOperations.stop()`先关闭准入并唤醒原worker，再通过原受理锁等待已接纳的准备完成；尚在锁外排队的请求取得锁后重核停止状态并拒绝。停止等待通过shield观察同一原worker，不提前清空句柄或取消仍在线程中执行的发布。原worker和准备锁任一未排空时，`close()`拒绝关闭原SQLite；多个停止调用仍复用同一任务，原错误继续上抛与记录。已持久受理但未执行的意图保持原记录，下次启动由原恢复链继续，不为关闭补建writer或重试链。
-
-Backend的原关闭步骤自然等待这条停止链；整批观察预算到期保留原步骤和依赖，原文件写入完成后同入口继续关闭。取消单个停止等待不构成写入终止证明。TODO：原生线程的强制终止、请求本身取消时全部同步准备的收敛，以及同步代码阻塞事件循环的完整期限仍按5.4后续验收，不据本切片关闭5.2/5.4/6.2。
-
-### Windows 终止工具的异步调用（5.4 部分收口）
-
-原`terminalProcessLifecycle`移除同步`spawnSync`，复用模块已有的`execFileAsync`并在唯一Windows调用点等待回执。`taskkill /T /F /PID`、1500毫秒工具上限及后续1500毫秒单调退出核实保持；启动错误、退出码、信号、stderr和原始cause继续可查。非零退出但根已自行消失仍允许后续核实；工具被期限终止则保留失败，不能因根消失丢弃原超时。没有增加另一终止链、进程身份或停止证明。
-
-隔离Node边界替身在工具回执未释放时完成真实loopback HTTP请求，并验证退出核实不会越过回执；它不代替真实taskkill。Windows原生受控父子进程经正式终止入口分别核实退出，Linux原session/僵尸/过期身份回归保持。该切片不证明任意同步存储可抢占、所有后代已逐一核验或整个operation/shutdown有硬期限，5.2/5.4/6.2继续未勾。
-
-### 单次领域列表的总等待预算（5.4 部分收口）
-
-原`WorkspaceResourceOwner.list_resources`从入口取得一次30秒协作式预算，准备、所选资源恢复、唯一外部清单及逐资源锁共同消耗。过滤、完整记录冲突检查、观察、写盘和排序仍是原唯一链路；本次到期排空自己的等待，保留已经持久提交的恢复与观察，不为未开始的读取补造unknown、lease或外部动作。原传输TimeoutError与调用方取消保持归属，无后台重试或清单缓存。
-
-真实Session与ASGI资源创建/列表驱动Node/PTY或Chromium/HTTP，暂停已取得的真实清单回执并推进本次截止，验证HTTP503/request_id、peer继续可读、原持久记录/占用及外部身份不变，以及故障解除后的正式列表重试。阶段预算相加与已提交前项保留由共享owner单测验证；此处不声称真实等待30秒、独立Backend重启或Gateway/Web验收。公共HTTP入口的跨领域预算由下述切片接入；同步存储、不合作取消及完整operation/shutdown仍TODO，5.2/5.4/6.2保持未勾。
-
-公共Workspace资源列表在原串行领域调用外取得一次30秒预算，Terminal到Browser的切换以及kind单选均不重新计时；仍复用原owner、参数、DTO和错误映射。到期只排空当前调用的协作式等待，保留已提交的前项观察、原资源及共享lease；原传输TimeoutError与调用方取消保持归属，没有另一份聚合状态或后台补发。真实双辅助服务场景通过正式Session和ASGI资源创建生成PTY及Browser，先取得两个原清单，再推进同一次HTTP预算，核对503、request_id、前项记录/lease原字节、peer可读、外部身份/版本及显式重试顺序。该预算不覆盖SessionResourceRegistry的另一展示投影，也不保证同步存储、DTO序列化可抢占或不合作取消能终止。
-
-### 单次资源详情的总等待预算（5.4 部分收口）
-
-原`WorkspaceResourceOwner.get_resource`在入口取得一次30秒协作式预算，冷恢复、原资源锁和外部清单共同消耗；保留锁内重读、原快照校验、观察/持久化及DTO投影链。读取到期排空本次等待，沿原错误映射返回503与request_id，不发布旧缓存或补造unknown/lease；已提交的冷恢复版本及结果保留，恢复中未核实的授权继续由原恢复合同处理。底层TimeoutError与调用方取消保持归属，解锁或放行回执不后台补做，显式重试仍沿同一owner。查询本身不停止外部资源、不结清其它operation的精确占用；同步存储及不合作取消仍TODO。
-
-真实Session与ASGI资源创建/详情入口生成两类资源，由原operation取得真实工具占用；在实际恢复完成后持原锁，或暂停已取得的真实清单回执，推进本次截止。验收核503、request_id、peer可读、记录/lease原字节、冷读原active lease、PTY/页面身份及版本和原入口重试。共享预算跨真实冷恢复20秒与后续清单11秒由原owner单测验证；真实辅助服务场景不代表真实等待30秒、Gateway/Web、Windows原生资源或完整fork/关闭验收，5.2/5.4/6.2保持未勾。
-
-### Terminal 创建排空与关闭观察（5.4 部分收口）
-
-复用原容量队尾持有从创建准入、cwd准备、Session登记、真实Worker启动到最终发布的完整调用；不增加另一份创建集合。关闭先同步停止新准入，原队尾排空后再取最终Session集合。队列取锁及异步cwd准备结束均重核合法身份/版本与准入：关闭拒绝只给本次唯一intent签not_created，已有身份冲突不签回执；已登记Session继续完成原启动，迟到就绪不能越过关闭。唯一cwd解析移除statSync，生产和测试调用全部迁齐异步stat，保留原生路径、相对持久表达、诊断与cause，无同步兼容入口。
-
-Manager只持有一次原关闭Promise。每个调用默认最多观察5秒，超时只返回terminal_manager_shutdown_timeout，不取消原创建或关闭。所有资源用allSettled收齐，再尝试最终持久化；首错不能提前释放整批owner。原执行排空并失败后才允许显式重试，已清空的Worker句柄不重发关闭；多错按原资源顺序及最终写盘错误聚合并保留cause。未知启动拒绝关闭，仍由原管理入口核实；运行中PTY继续按既有退出合同脱开Worker并标记reconcile_required，不改为整批杀死。
-
-生产信号入口在关闭失败后保留原进程、任务和HTTP管理查询，重复信号只观察原执行，失败返回后可再次信号重试。致命异常在去重之前登记，即使发生在原关闭期间也保持退出1；HTTP阶段期限见下述共享收尾，整个进程退出的总期限、未知native启动的原生接管仍TODO。真实HTTP/PTY验收仅在原Worker就绪结果的交付处设显式屏障，状态由正式创建生成；核对超时前后原进程身份、精确拒绝回执、迟到创建的同链处理及冷Manager恢复。单线程池真实计算让stat排队，同时完成loopback HTTP，证明事件循环仍可服务请求，不据此声称文件操作可抢占或已取消。5.2/5.4/6.2保持未勾。
-
-
-### 辅助服务共用 HTTP 收尾期限（5.4 部分收口）
-
-Terminal／Browser 删除各自仅等待 `server.close()` 的重复函数，共用 `src/shared/serverHttpShutdown.mjs`。进入 HTTP 阶段后默认最多等待 5000 毫秒，到期关闭原连接并抛出 `http_server_drain_timeout`；两宿主记录 transport 失败并退出 1，正常 SIGTERM 仍退出 143。Browser 同样在 finally 中结束进程，避免关闭阶段的 rejection 被在途关闭去重后永久挂起。普通 Manager 未核实则继续保留原进程及 HTTP 管理重试，不进入该阶段；致命错误仍沿原退出 1 合同，不声称外部资源已停止。
-
-真实 Node／HTTP／POSIX 信号用例等待 `100 Continue` 后保留未完成正文，核对正常与超时退出码、期限、精确诊断及空持久资源集合；原两服务信号回归继续核实真实资源与 Manager 失败保留和重试。本片不证明 Windows、Gateway/Web、整个 shutdown 的总期限、同步阻塞可抢占或未知原生进程接管；5.2／5.4保持未完成。
-
-### 单次传输授权的总等待预算（5.4 部分收口）
-
-原`WorkspaceResourceOwner.transport_grant`在入口取得一次30秒协作式预算，覆盖原终态预检锁、冷恢复、可选Thread准入、签发锁、运行快照和正式授权回执。保持终态零网络拒绝、版本核对、关联检查及`_grant`唯一签发/占用链；派发前到期不补造unknown或lease，派发未核实仍由原异常出口保留unknown及本次精确占用，已提交恢复版本保留。取消排空本次等待，放行回执不后台补签；原传输TimeoutError和调用方取消保持归属。存活查询不结清未知授权，显式管理停止核实终态后才settle并拒绝新授权，不把本次等待结束当作外部token已撤销或进程/页面已停止。
-
-共享owner单测覆盖两处锁、恢复和Thread准入、运行快照及签发回执，并在真实冷恢复版本同步后消耗20秒、在签发等待再消耗11秒，核对唯一预算及原版本/lease。正式Session与ASGI创建/授权入口生成真实Node/PTY或Chromium/HTTP，持原资源锁或暂停真实已签发回执，只推进本次截止；核503/request_id、peer授权、原外部身份/版本、精确占用冷读、显式重试或管理停止结算。Linux/Windows均运行同一4场景，证据不代替真实等待30秒、Gateway/Web、独立Backend重启或整个operation的终止核实。同步写盘、不合作取消及旧代接管仍TODO，5.2/5.4/6.2保持未勾。
-
-### 2026-10-26 停止窗口硬退出与生命周期故障验收
-
-原停止链在完成撤权后、真实停止回执返回后各增加一次phase观察，沿原lease标识，不增加业务writer或恢复状态。真实Gateway/Backend与模型工具入口生成附件和PTY父子进程；派发前退出保留原待核实占用，显式管理停止核实后结清；回执后退出由新Backend核实外部终态，不自动重放停止。两种窗口均保全原目录身份、locator、期限和canonical字节。
-
-Linux/Windows的停止窗口各2项通过；当前源码另完成29天重关联、30天到期、运行时代次/旧代迟到释放、attach/GC、main/child fork竞争和删除中途独立进程硬退出，分别按1/8/11/2项验证。6.2据这些具体覆盖收口，不代表5.2的未知native操作接管或5.4的同步阻塞、不合作取消及整个shutdown期限已完成。证据见tasks同批记录。
-
-### 工具方法的资源准入总等待预算（5.4 部分收口）
-
-原`ResourceOperations._resource`在单次方法入口取得一次30秒协作式预算，冷恢复、原资源锁、校验及取得原lease共同消耗。复用原锁和账本；准入到期排空本次等待，保留已提交恢复版本与已有精确占用，不为未派发动作补造unknown或lease，不后台补做。底层TimeoutError和调用者取消保持归属。预算在正式执行前退出，退出栈继续持原锁覆盖真实工具回执及持久提交，不能把准入预算误当成整个工具执行期限。外层owner.operation的Thread准入、同步写盘、不合作取消、旧代接管及shutdown总期限仍TODO，5.2/5.4保持未完成。
-
-共享owner单测覆盖恢复/锁等待、已有或尚无占用的到期与取消、真实冷恢复20秒加后续锁11秒、原异常身份、锁后关闭/关联重核及准入后执行超过30秒。正式Session与ASGI创建、原工具operation驱动真实PTY或Chromium/HTTP，核peer继续、原记录及精确lease冷读、外部身份/版本、不派发及显式重试；此组合不代表真实等待30秒、Gateway/Web或独立Backend重启。
-
-### Thread短准入与资源长操作隔离（5.4 部分收口）
-
-旧`admit_thread`将Session独占锁跨过整个资源operation，导致同Session的独立资源在网络等待时也无法进入。原入口改为先取得共用namespace的Session shared OS holder，再以短Session写准入核定workspace、canonical main或显式Thread；原Session锁在yield前释放。两类owner共用`workspace_resources` namespace，容器删除链只登记一次，按既有holder→Session锁序等待原operation及受保护close结束，再由原资源owner清理和物理隔离。OS holder仅保护本进程的实际持有期，不是第二份持久事实；原资源/operation lease账本、未知结果核实和恢复规则保持。
-
-Thread准入的holder、Session锁和读取共用入口一次30秒协作式预算；到期/取消排空本次准入，未进入主体不造资源、lease或unknown，底层TimeoutError保持身份。预算在真实执行前退出，不把工具执行、此前冷恢复或收尾强行限制为30秒。删除mark之后新准入沿原active校验拒绝，已准入操作由holder保护到原close结束；崩溃后OS锁释放，原持久未知占用仍须owner核实，不能仅凭holder消失结清。同步阻塞、不合作取消、旧代接管及整个operation/shutdown总期限继续TODO，5.2/5.4保持未勾。
-
-### 原生PTY创建与就绪之间的失败收尾（5.2部分收口）
-
-隔离worker在原生创建返回后立即交付唯一PTY PID，原ready必须与该身份一致；重复、非法或不匹配的消息明确拒绝启动，结算后的晚到消息不能覆盖原身份。正式startupError停止结果也只属于同一PID，不再等到就绪或异常回执才取得原生身份。该内部IPC合同整体迁移，不保留旧ready单独交付PID的兼容路径。
-
-已取得PID但启动失败时，原Session先持久化unknown，再沿既有terminateForRelease核实整棵进程树、确认worker退出及持久化终态；只有实际停止成功才签本次failed创建回执，返回“未执行停止”不构成证明。失败保留原句柄和恢复记录，created/unknown可由原管理kill重试同一执行。Linux保留forkpty创建时PID即SID的事实，执行根已回收时仍核对同SID后代。
-
-Linux真实HTTP/PTY用例只在原就绪消息交付处注入失败，父子均忽略SIGTERM，独立核对强杀后的进程状态、worker退出、原记录及peer可用；首次停止故障后经同一管理入口重试。此切片不证明Gateway/Web、Windows、独立Backend重启或native尚未交付PID的阻塞接管；后者及同步阻塞、不合作取消和整个shutdown期限继续TODO，5.2/5.4仍未完成。
-
-### 冷恢复取消后显式管理停止（5.2部分收口）
-
-Terminal的Worker已经退出且记录非运行时，只要unknown记录仍有完整PID、系统会话和启动标记，显式kill/delete继续进入原`terminateForRelease`，而非依赖内存Worker句柄。无句柄仍由原核验检查当前PID、进程组、系统会话与启动标记，身份不匹配保留unknown且不发信号；同Manager与冷Manager均复用唯一停止、写盘和回执链，不重建执行。缺少完整原生身份的接管继续TODO。
-
-Linux 原根进程随后退出时，完整记录中的 PID、进程组与 SID 必须仍符合原 PTY 根的同一身份，才能将根缺失交给原进程树停止链继续核实。原 SID 下的后代仍可能执行，不能因根缺失提前拒绝管理或发布 verified；由既有 SID 枚举、信号、退出复查及原终态写盘决定结果。仍存在但身份不符的 PID 和不完整身份继续拒绝；不为冷恢复创建 Worker、第二停止算法或新的持有记录，其它平台及未知 native 创建接管继续 TODO。
-
-普通冷恢复取消时继续保留原pending与冻结版本；显式stop/delete只准备原清单，在原资源锁内核expected_revision、active lease和delete关联限制后，复用`ResourceRecovery`唯一锁内同步主体并携带停止意图。普通访问仍沿普通排空；管理停止不先等待只能由context关闭才能结束的旧执行。同步后重读原记录，再沿原接管、版本推进、停止回执、持久终态和lease结算链完成，不新增任务、账本、schema或另一个停止实现。过期版本及有关联的delete在派发前拒绝，不消耗pending或撤权。缺少外部身份、同步阻塞、不合作执行和整个shutdown期限继续TODO；不能把本片当作5.2/5.4全部完成。
-
-### 消息准备窗口与关闭依赖（5.4 部分收口）
-
-消息上传、canonical线程提交与Job登记都属于既有`run_session_preparation`窗口；窗口存在时，Job可能尚未进入内存，因此仅取Job取消快照会漏掉真实writer。Workspace关闭现在先撤销新准入，再排空原准备计数，然后取消已登记Job并等待终态；Backend的原观察预算和依赖保留规则继续覆盖这段等待。`drain_preparations`复用原计数、事件和调度锁，同时替代Session删除内的重复等待循环；不新增任务集合、持久状态或提交链。计数检查与清事件同锁，实际等待不持锁，取消等待不取消原调用。
-
-真实双挂载与消息HTTP入口分别暂停DTO/上传前、canonical线程提交前，以及已通过Job准入但尚未登记的线程窗口。观察到期和取消都保留原owner、catalog与附件存储，peer可独立关闭；放行后前两种沿既有合同返回503并保留已提交队列及附件，后一种由原关闭链提交取消终态。冷读核对原输入身份、目录原件和持久队列；这不是独立进程重启、Gateway/Web或Windows验收。同步阻塞、不合作取消和生产进程退出仍属5.2/5.4未完成范围；本切片不收紧或替换既有消息接受合同。
-
-准备窗口的计数归还在原调用finally内同步完成。登记、检查与清事件仍按原调度锁串行；归还只修改本事件循环的计数并唤醒事件，没有await，因此不会与无await的检查/清事件交错，也不会因第二次取消而遗留无人计数。原线程提交的受保护收尾仍先结束，不能提前归还其准备占用；不新增清理task、shield层或账本，也不改变Job/队列的锁规则。
-
-### 普通冷恢复同步失败后的管理重试（5.2 部分收口）
-
-普通同步异常原先会删除pending；请求未到外部owner时，本地冻结版本高于外部版本，后续管理停止因此持续拒绝。原`ResourceRecovery`现以一个进程内记录同时保存冻结版本及仅管理重试标记；异常返回后普通查询仍可发现unknown且不重复同步，显式stop/delete经原准入和同一资源锁重试冻结版本。重复失败继续保留pending和原占用，同步成功后才移除；不新建持久恢复事实、账本、schema或停止链。取消分支保持原同版本恢复规则，健康资源不重复推进，真实停止与结算仍由原owner负责。缺少原生身份、同步阻塞、不合作取消及整个shutdown期限继续TODO，5.2/5.4保持未完成。
-
-### 首次冷恢复清单等待隔离（5.4 部分收口）
-
-首次清单的网络等待不持共享初始化锁。并发调用可各自读取原外部清单，首个成功结果经身份检查后，在同一事件循环不含await的原提交段冻结资源版本、对账原lease并发布pending；其余清单返回时若pending已建立，只消费已冻结版本，不覆盖提交或重复推进。移除原准备锁，不引入共享恢复task、额外状态或第二提交入口；读取取消和失败保留本调用原异常，不影响其它调用已提交的恢复。逐资源同步和原30秒总预算保持，迟到结果也不重放创建、停止或删除。
-
-该切片消除的是初始化期间的共享网络等待。同步JSON/fsync仍可能阻塞事件循环，传输方自身串行阻塞、不合作取消及整个operation/shutdown终止核实继续TODO，不由并发读取成功推断已解决。
-
-### Fork运行资源关联的一次等待预算（5.4 部分收口）
-
-`WorkspaceResourceOwner.attach_for_fork` 在原入口取得一次30秒协作式预算，覆盖恢复、历史回执查询、两次资源锁、目标Thread准入及原attach提交，不新建writer、回执或lease账本。到期只排空本次协作式等待：派发前不创建本次关联回执和占用，已提交恢复保留；派发后未核实继续原dispatching/unknown及精确lease；已提交后的阶段观察被取消仍保留committed、目标关联及提交版本。调用方取消和底层异常不改写为总预算错误。
-
-公开fork继续原发布后逐资源结算，等待失败不回滚已发布目标。解锁后不后台补做，同key重试查询原回执；未派发时才能继续关联，unknown动作不重发，已提交关联不重复。20+11秒的注入时钟核对阶段不重置预算；产品消息执行生成来源后的ASGI场景核对真实资源锁竞争、published目标、同key恢复和模型请求次数。外设传输为替身，不证明原生终态；本切片不调整原fork watchdog，不替代全fork、同步存储、不合作取消或全shutdown的期限验收。
-
-### 文件监听关闭保留原任务（5.4 部分收口）
-
-原共享监听登记保留到原任务实际终结；shutdown、最后订阅释放及同 key 重新订阅共用同一排空入口。停止只取消原任务一次，观察者取消不再次打断原清理；失败任务和原错误继续可见，健康项独立移除。同 key 新订阅在共享锁外等待旧监听退出，其它 root 可独立订阅；shutdown 关闭准入。订阅初始化失败或取消沿原释放链归还本次登记，原错和清理次错同时保留，不新增关闭 owner 或资源账本。
-
-原监听迭代器在取消后的清理阶段抛出的异常也必须上抛给同一排空入口，保留失败任务；不能仅发送错误帧后正常返回，使 owner 将未核实的停止当成成功。普通运行时的观察失败继续通过既有错误帧报告，已成功退出的监听仍可释放。两类行为按原任务的取消状态区分，不新建异常或重试任务。
-
-真实双挂载 lifespan 验收在 watchfiles 已完成原生退出、原任务尚未最终完成处暂停收尾，核对 peer 关闭、取消观察者及原30秒关闭观察到期后仍保留原任务、scope、registry和附件维护锁，放行后由同一 owner 排空。该故障点不证明原生线程可强制终止，也不代替独立进程重启、Gateway/Web、Windows或完整 shutdown 期限验收；同步阻塞与未知外部操作接管仍按5.2/5.4继续TODO。
-
-### 删除恢复目录的同步回收（5.4 部分收口）
-
-删除 journal 到期后的单节点检查、保留窗口核对、物理删除及父目录同步由同一个 worker 执行，复用既有 `run_sync_shielded`，原 Session gate 覆盖线程池排队及 I/O 结算。取消等待者仍须等原 worker 完成再传播取消；同节点回收串行，无关节点及导航查询可独立推进。原 journal、冻结 locator、lease/creation 防护、观察/通信期限及删除顺序保持，不增加 writer、账本或 schema。
-
-单元验证覆盖线程池排队、原生删除/同步等待、取消、到期边界和原异常重试；ASGI 集成通过产品创建和导航删除生成真实隔离目录，核对暂停期间查询、原 gate 及放行后同入口不重复删除。catalog 清单读取仍同步；此切片不证明任意原生 I/O 可终止、独立进程重启、Windows、Gateway/Web 或完整 shutdown 期限，5.2/5.4 保持 TODO。
-
-### Session 删除的物理隔离等待（5.4 部分收口）
-
-物理隔离的 mkdir、rename 和三道目录屏障复用同一 worker，原错误映射与屏障顺序保持；fence 关闭与隔离完成的异步观察点仍在原位置。首次删除和已隔离目录的恢复均持原 Session gate 至 worker 结算，同 key 锁也不提前释放；取消或协作式截止到达不能中断原生 I/O、补记进度或把尚未结算的操作视为停止。失败或取消后的同 key 恢复核验原目标并重做屏障，不重复资源 drain 或 rename。
-
-实际导航删除、worker 停止及重新启动验证沿同一 journal 恢复；原目录扫描竞态与删除回执回归保持。catalog 事务仍同步；整个删除/关闭硬期限、任意线程终止、独立进程重启、Windows 与 Gateway/Web 继续 TODO，不以 worker 排队和结算成功勾选完整 5.4。
-
-隔离内的源目录预检、已有目标核验和控制库fence CAS现已合并到同一worker阶段，原CAS入口随唯一调用方迁移一并删除。返回“已隔离”后只重做原屏障；未隔离时在原gate内完成检查、打开/关闭控制库和CAS，之后才到达原异步fence观察点。真实SQLite写锁等待、原生检查及线程池排队期间取消或到期，仍待原worker结算，不提前释放锁或执行后续rename；原fence和journal保留供同key恢复，不能将源目录仍在误判成fence未推进。catalog事务仍同步，整个关闭及原生终止合同继续TODO。
-
-Thread创建收敛所用控制库的存在性检查、打开和关闭现由原worker原语结算；连接在worker返回前登记到本次ExitStack，打开取消且结果尚未交付时也由异步finally关闭。原收敛业务保持可取消，不将整个异步流程shield；同key锁持续至关闭结算，此阶段仍在资源holder与Session gate之前。打开、收敛或关闭失败保留原异常、原件与未提交进度，同key显式重试；不新增存储、账本或同步兜底关闭。
-
-收敛的待处理清单、逐记录读取和最后重读/比较/中止复用原worker原语；原holder与两段Session gate覆盖相应worker的排队及结算，最后复核和中止仍在同一worker依次完成。唯一的定点目录清理函数先在原事件循环执行异步fork资源中止，再以一个worker核验全部目录、删除原目录并同步父目录；五处既有调用共用此实现。取消若落在目录清理，结算后保留preparing供同record恢复；若落在中止写入，保留已提交的aborted，不补造进度或重删目录。原创建准备及catalog事务仍同步；完整shutdown、原生终止核实及5.2/5.4继续TODO。
-
-删除的前序隔离目标探测也复用原 `run_sync_shielded`，在同一次 worker 内保留 `exists() or is_symlink()` 的短路判定。此时仅持同 key 锁和外层删除预算，尚未取得资源 holder、Session gate或调用 retention/drain；后序锁内的目标核验仍为隔离权威。取消或到期须等原 worker（包括线程池排队）结算，再传播原取消或预算错误；不继续资源排空、fence、rename或进度发布。已隔离恢复仍由原 journal和冻结 locator校验，不重放已完成的管理动作；断链symlink继续拒绝，不覆盖原件。catalog事务和任意原生I/O终止的完整5.4合同仍TODO。
-
-删除流的 catalog 冻结／mark（含原拒绝中止）、进度写入、finish 与提交回执读取，以及到期回收的已完成 journal 清单，均复用原 `run_sync_shielded`。冻结和 mark 在同一 worker 内沿原事务顺序执行，mark／finish 的导航 hook 仍在各自原 SQLite 事务中；同 key 锁及对应 topology gate 持有至原调用实际结算，取消或到期不能遗弃在途提交。清单读取取消后不进入物理回收；已实际提交的删除状态按原 journal 重试，不重做已完成的资源 drain。此变更只迁移该删除／回收链，不将全仓 catalog 同步入口改为异步，也不承诺原生 I/O 或完整 shutdown 的硬期限。
-
-Child创建在冻结record之后的目录探测、staging准备及原子写/同步、rename及目录同步、原final恢复核验和发布后复验，均由同一创建链调用既有shielded worker。各步骤分别等待原调用结算；取消或外层期限到达后不继续下一步骤，也不提前释放同key锁和原`thread_creation` holder。准备/rename仍在Session及topology gate外，控制库发布按下文复用原worker，业务回调留在原事件循环和原gate内；已发布目标不会因复验取消而倒删。重入复用原record的child身份、locator和清单，恢复未发布final或返回已发布目标，不建立第二发布/清理实现。业务确认回调中的同步I/O以及完整shutdown硬期限继续TODO。
-
-Child准入的catalog读取、owner与控制库绑定/main指针核对、路径预算检查、creation record建立和artifact清单冻结，作为一个连续同步操作交给既有`run_sync_shielded`。原topology shared、Session exclusive、同key锁和`thread_creation` holder覆盖线程池排队及原调用结算；取消或外层到期后仍完成该次准入的原事务序列，再传播取消，不进入prepared观察、staging或发布。实际已冻结的record与清单留给同key恢复，不新建事务、writer或恢复链。发布事务按下文复用原worker，原业务回调仍在原事件循环内，完整shutdown硬期限及任意原生线程终止继续TODO，5.2/5.4保持未完成。
-
-
-Child发布与失败收尾的直接catalog/control访问统一调用既有`run_sync_shielded`：原发布gate内以同一次worker核对owner节点并提交原CAS，冲突后的记录重读、gate外失败复核和中止、初始execution intent读取及返回前published核验均结算各自原调用。fork物化前capture查询、物化后record重读与失败中止也沿同一原语；清理/物化回调仍走原异步owner，不把整条流程shield。
-
-CAS在取消前后实际提交的child不会倒删、回退或再分配。等待取消时原gate和创建holder维持至该worker结束；取消后不继续本阶段后续动作，原业务确认回调留给同key恢复。重试跳过已提交CAS并补齐原附件发布结算；回调和异步阶段观察保持原事件循环、原gate及先后顺序，回调故障仍保留已发布事实。未发布失败按原状态、原因和定点目录清理中止，取消发生在中止写入时保留实际aborted而非伪造preparing。回调中的同步I/O、任意原生线程终止与完整shutdown硬期限继续TODO，5.2/5.4不因本切片勾选。
-
-### Fork 发布确认的异步合同（5.4 部分收口）
-
-Session main 与 child 的 `on_published` 统一为可等待回调，首次发布与同 key 恢复均在原目标 gate 内等待；不再保留同步回调入口。确认入口仍在事件循环中执行，fork owner 的冻结证明核验、catalog 查询与附件 settlement 写入共用一次既有 `run_sync_shielded`，保持原核对、事务与异常顺序。原 gate 和同 key 锁覆盖线程池排队及真实 I/O 结算；调用方取消须等 worker 完成后传播，不继续后续阶段，也不回退已 published 事实或重发物化/CAS。
-
-附件确认失败继续保留原 claim、preparing 或 published_pending_attachment_commit 结算与原异常，同 key 显式重试沿原目标补齐 committed。新 Session 与 child 的产品消息/Agent/model_stream 验收覆盖确认写入前后及线程池排队取消，核冻结目标、来源及目标 canonical 原字节、回调线程、原 gate 和恢复；完整原生线程终止、Session 其余同步创建 I/O、独立 Backend 重启、Windows 与全 shutdown 硬期限仍 TODO，5.2/5.4 保持未完成。
-
-### Session 创建原同步阶段的结算（5.4 部分收口）
-
-Session 创建 owner 的记录冻结、目录探测/准备/复验、发布前 capability/proof 核验及 rename、发布 CAS、已发布结果核验，以及隔离中止均复用既有 `run_sync_shielded`。每段保留原同步调用顺序和事务，不另建 writer 或恢复链；原 key 锁和相应 topology/Session gate 覆盖线程池排队及真实 I/O 结算。取消或外层期限到达后先等本段结束，再传播原错误，不继续下一阶段；已经提交的 preparing/published/aborted、冻结身份及 locator 供同 key 恢复，不倒删目标或重发发布。
-
-异步发布确认仍在原事件循环与原 gate 内执行，其持久结算沿上一切片的同一 worker 合同。产品消息/Agent/model_stream 生成带附件来源，经 ASGI fork API 验证原记录、取消期间独立工作区请求、来源与目标 canonical 原字节、唯一恢复目标及 aborted 隔离。同步辅助查询的其它异步消费者、Session/fork 编排中的其它存储访问及共享连接锁竞争继续 TODO；本片不将整个创建流程 shield，也不承诺原生线程可终止、独立 Backend 重启、Windows、Gateway/Web 或全 shutdown 硬期限，5.2/5.4 保持未完成。
-
-### Session及资源Thread准入的同步读取（5.4 部分收口）
-
-Session读写准入的active catalog查询、`SessionService.get`的单节点/目录读取，以及Terminal/Browser共用Thread准入的main和locator核验统一复用既有`run_sync_shielded`。DTO投影仍在原事件循环；原同步查询、工作区与目录判断、异常及锁序保持，不新增同步兼容入口、事务或租约。topology/Session gate和已取得的资源holder覆盖线程池排队与真实I/O结算，取消/外层期限不遗弃worker，也不继续创建资源。成功后短Session锁仍先于真实工具执行释放，原holder覆盖operation收尾。
-
-真实PTY/Chromium及ASGI资源入口验证active、Session目录、main/显式Thread、共享catalog连接锁和线程池排队共16个阶段，核其它HTTP可响应、原gate/holder持有、记录与lease原字节及显式重试。共享连接锁仍可阻塞依赖同一存储的读取；worker不是原生终止机制，取消仍须等已提交I/O完成。其它同步业务存储、不合作任务、旧代接管、独立Backend重启、Windows、Gateway/Web和完整shutdown硬期限继续TODO，5.2/5.4保持未完成。
-
-### 活动记录库关闭沿原Workspace任务等待worker
-
-`WorkspaceLifespan`的`activity.close`与已有文件/附件存储关闭共用`run_sync_shielded`，仅将原同步关闭交给worker；MCP/AnyIO scope仍在原生命周期任务执行。线程池排队及原生句柄释放均受Backend同一次观察预算约束，观察到期或取消不取消原关闭任务，不提前移除当前步骤或归还后续catalog与维护锁。原关闭错误保持归属，重试仍从未完成步骤继续；不改SQLite关闭语义或增加关闭writer。配置source owner不持有连接，其空关闭入口保持原行为。其它同步I/O、不合作操作终止及整个shutdown硬期限仍属5.4未完成范围。
-
-启动与每小时活动裁剪也由原生命周期／周期任务等待同一个受保护worker，复用原同步`prune`及SQLite DELETE。真实写锁或线程池排队不再占住事件循环；启动须取得原裁剪结果才继续，关闭取消周期任务后须等其worker结算再关闭活动库。Backend观察到期或取消只结束该次等待，原周期任务、数据库、locator与维护锁继续保留；重入不重复裁剪，迟到存储失败仍按原周期错误交回。其它同步活动读写、原生I/O强制终止与整个进程退出期限继续TODO。
-
-### Fork 冻结文件传输的原生 I/O 结算（5.4 部分收口）
-
-来源文件清单和分块读取、目标位置检查和文件打开/写入/同步/关闭、目录同步及完整快照核验、失败删除统一调用既有 `run_sync_shielded`。原导出/创建 key 锁覆盖线程池排队及实际 I/O 结算，分块网络请求保持可取消，正文块和文件并发上限、hash/长度、marker 最后接收及来源冻结坐标不变。打开句柄在 worker 内先登记到本次调用的 ExitStack，再交付返回值；取消发生在打开后但交付前也由同一栈关闭。原异常随退出信息交给原文件 contextmanager，正文失败与关闭次错保留原 cause/context。失败清理的 worker 显式恢复此前失败的异常上下文，保留原生清理次错的 cause；清理等待被取消时，将此前失败链接到原取消，不因跨线程和任务边界丢失错误。
-
-失败仍先取消并排空本次文件任务，再由 worker 删除接收中的临时快照，不留锁外后台补写，不回读 live 来源。取消保持原 preparing 与冻结创建身份，显式同 key 恢复沿原产品入口复制并核唯一目标、冷恢复字节与请求 hash；普通失败已中止的身份仍不得复活。其它 fork/catalog 同步访问、任意原生线程终止、完整 shutdown 硬期限及独立 Backend/Windows/Gateway/Web 验收继续 TODO；不据本切片勾选 5.2/5.4。
-
-
-### Terminal／Browser 资源记录写入的异步结算（5.4 部分收口）
-
-原 ResourceRecordStore 的全部 writer 统一等待异步 save，文件写锁内将候选合并、校验、JSON 序列化、fsync 和 replace 交给既有 run_sync_shielded。写入成功后才整体发布同一份记录；后续资源写入合并已发布状态，不共写临时文件。原资源锁和准入覆盖线程池排队及实际结算，取消不遗弃 worker 或提前释放占用。新建记录发布前先登记原锁；fork 取消以原持久回执判断是否 committed，已提交关联不转为 unknown，只沿精确原 lease 收尾。
-
-冷恢复的网络清单仍在共享锁外；首个成功清单取得唯一准备锁，由同一次受保护任务完成原记录观察、lease 对账、版本冻结和 pending 发布。资源登记和 committed fork 占用结算复用既有 shielded worker，继续取得唯一账本 writer 锁，并与原对账顺序执行。准备锁覆盖原生写盘结算；只有原等待收到取消才排空同一准备任务，保留首次取消及迟到写盘错误 cause，正常结果和原失败直接传播。迟到清单或并发恢复不会重冻版本。同步冷加载、其它同步访问、原生 I/O 抢占及完整 shutdown 硬期限继续 TODO，5.2／5.4 保持未完成。
-
-本地推进版本已落盘但外部同步未核实时，复用原恢复 pending 保存同一版本并仅允许显式 stop/delete 重试；普通读取不重发同步，取消不继续派发。未发布版本不登记 pending，冷 owner 仍沿原清单冻结流程恢复。
-
-首条创建 intent 写盘的取消由原调用单独核实：尚未进入外部创建回调、登记 operation lease 或派发创建，worker 已提交的 intent 在原锁与 Thread 准入内受保护地关闭为 deleted/verified，解除关联，随后才同步原账本的 stopped 投影。只登记原资源身份，不补造占用或外部回执；重复取消不能遗弃收尾。写盘或账本同步失败保留原取消与原存储错误，后续冷读取不凭清单缺失改写未核实 intent。原调用随 Backend 退出的接管仍是 5.2 TODO，不将本地未派发证明推广到旧代操作。
-
-### 同步 worker 完成后的取消传播（5.4 部分收口）
-
-`run_sync_shielded` 仅在原等待收到 `CancelledError` 时进入既有受保护结算，然后传播原取消。成功结果和原生失败已表明 worker 结束，直接返回或抛出，不再创建额外收尾任务；否则首次外部取消可能落入为既有取消设计的 cleanup shield，被吞掉后继续业务步骤或周期等待。原生执行期间的取消仍等待同一 worker，保持原锁、原异常身份及失败时的取消 context；不改 `run_cleanup_shielded` 的既有失败收尾合同，不新增 worker 或停止算法。此竞争的确定性复现不能单独证明此前 Browser 合并回归挂起的根因，完整 shutdown 与旧代接管继续按 5.2／5.4 验收。
-
-### Terminal steering 关闭的下一轮扫描准入（5.4 部分收口）
-
-关闭先登记原 service 的停止请求，再取消原监控一次并观察；重入关闭沿同一任务。即使依赖的受保护收尾消耗取消，原扫描返回后也先检查停止请求并退出，不再进入轮询 sleep。观察者取消只终止本次等待，不能向原监控再次转发取消；原句柄保留到后续关闭调用取得真实结果，原失败也不因观察取消而丢失。关闭取得结果后按原任务身份移除句柄，原非取消异常直接交回 Workspace／Backend，后续依赖与维护锁由现有关闭 owner 保留；同入口重试只继续未完成步骤，不重新执行失败监控。显式再次 start 在旧任务结果已结算后复位停止请求，沿原 service 创建一个新监控，不重放完成通知或改变 completion claim。单次 scan_once 和原失败日志保持；不合作扫描终止及完整 shutdown 硬期限仍保留 TODO，不据此关闭完整 5.4。
-
-### Agent 驻留扫描与 runtime 关闭的唯一任务（5.4 部分收口）
-
-关闭先停止 service 的新准入，由唯一关闭任务取消原驻留扫描一次，等待真实扫描结束后才清除其句柄和工具缓存，再沿原 tracker 排空 generation scope。调用者每次最多观察30秒；取消或到期不取消该关闭任务，也不清除尚在结算的扫描。即使扫描的受保护收尾消耗取消，停止请求也阻止下一轮扫描；关闭期间普通扫描错误不再当作周期重试消耗。迟到失败由原任务记录，并保留给后续观察者；原失败交付后，下一次显式关闭才重试剩余 tracker 排空，不复活扫描。成功重复关闭复用已完成结果，不新增资源账本。原生I/O抢占、外部操作终止及整个生产进程关闭硬期限继续TODO，5.4保持未完成。
-
-### Terminal 启动失败后的迟到原生身份与停止证明（5.2 部分收口）
-
-启动失败或超时只结束原就绪等待，不能丢弃同一仍在收尾的 Worker 首次交付的合法 PID；已有身份、成功就绪或已退出 Worker 的迟到创建消息不得替换原身份或重新启动就绪。Worker 继续使用原进程树停止算法，停止请求取得真实结果后经同一 IPC 返回绑定 PID 的 `stopped` 回执，发送结算后才退出；该回执不另建 operation 或资源账本，也不改变原启动错误。
-
-宿主只接受与原 PID 匹配且属于未就绪创建的停止结果；Session 等待原 Worker 退出后，重读迟到身份与清理结果，先将原终态落盘再签原创建失败回执。Worker 退出但没有正式停止证明时仍保留 created/unknown、原身份及无失败回执，不依据进程已退出的观察自行补齐证明。此边界处理原调用仍在场且收到原 IPC 的情况；native 始终未返回身份、原调用随 Backend 退出、缺少完整原生身份或涉及 Python 领域 lease 的丢回执接管、完整关闭硬期限继续 TODO，5.2／5.4 不据此关闭。
-
-2026-10-31 实机观测补充：Linux `/proc` 约 6381 项时，Worker 在收到 shutdown 后约 0.78 秒才完成首轮扫描并发出 TERM，等待 1.5 秒后约 2.92 秒才发出 KILL，最终全 session 核实尚未完成就触及宿主原有 3 秒强杀期限。此时保留 unknown／无失败回执符合现有规则，不能将 KILL 已发出当作正式停止证明。扫描成本、统一总截止时间及整条领域 lease 的缺证明接管仍是 TODO；不通过延长超时或改变原停止算法收口。迟到正式证明的正向集成使用配合 TERM 退出的真实父子进程；忽略 TERM 的真实强杀与首次停止失败重试继续由原场景验证。
-
-### Terminal 原创建身份贯穿启动、失败与管理恢复（5.2 部分收口）
-
-Worker 复用创建时原有的进程元数据读取，先交付 spawned PID，再经同一 IPC 交付绑定该 PID 的进程组、系统 session 和启动标记；原读取与最小启动观察均完成后才发送 ready。读取失败沿原错误通道拒绝启动，平台没有该元数据则明确交付 null，不从当前时间或 PID 合成启动标记。宿主只接受同一仍在场 Worker、原 PID 匹配的首次身份；后续消息和 Worker 退出不能替换它，也不能重新完成失败的就绪等待。
-
-Session 正常启动与失败收尾共用原身份捕获，将这些既有字段写入唯一恢复记录；删除正常启动后重新读取当前进程作为创建身份的旧路径。停止证明丢失后仍保持 created/unknown、完整原身份和无失败回执；Node 硬重启读取该记录也不自动结清。用户显式 kill/delete 才沿既有 verifyPersistedProcessIdentity 与 terminateTerminalProcessTree 核实当前实例及原系统 session，成功持久化终态后返回管理结果；不重新执行命令、补发创建失败回执或改写原 transport owner revision。缺少完整原生身份仍明确拒绝停止并保留 unknown。此切片限已有原生身份的 Node 管理恢复，Python operation/目录 lease、native 永不交付身份和整个 shutdown 接管仍须后续验收。
-
-原停止失败写入 unknown 前也捕获收尾期间到达的同一身份；若无PID分支的 Worker 关闭本身报错，只有身份字段确实发生变化时才追加原 writer 的持久化。身份保存再次失败时按发生顺序保留启动、关闭与存储的原错误，原 Worker 句柄和 unknown 不被释放或改成已停止；不重放清理，也不让后来的写盘错误替换原失败。
-
-### 附件工作目录准入的原生访问结算（5.4 部分收口）
-
-`AttachmentBlobStore.admit_working_directory` 的来源识别和目录 holder 内复核交给既有 `run_sync_shielded`，继续使用同一 catalog、稳定 locator、符号链接边界、可用性及目录判断。catalog 沿用各真实线程独立连接；请求的 Gateway／request ContextVar 随 worker 传递，URI 仍由原 owner 规范化。复核 helper 是原判断的唯一实现，未引入第二解析或写入链。
-
-原 Terminal Thread 准入覆盖整个调用；目录 holder 覆盖复核的线程池排队、执行及取消结算，重复取消不能提前交给 GC。此时已存在原 Terminal intent 和 operation lease，取消阻止后续 PTY 创建，本地准备由共享创建链的未派发收尾处理。成功后的记录保存、持久目录占用与外部创建顺序不变。普通路径仍返回原未受管结果，不吸收未知目录；原生 I/O 不能被该 worker 强行中断，不能将此切片等同整个操作或关闭的有界等待。目录lease写入的worker仍使用原账本writer锁，不新增并行writer；其它同步入口及完整期限继续TODO，5.2／5.4 保持未完成。
-
-### 启动停止证明丢失后的 Python 目录占用结算（5.2 部分验收）
-
-正式消息上传和 Python Terminal 创建生成原目录、创建 intent、operation lease 及持久目录 lease。原生创建失败后收到迟到身份，但正式停止证明丢失时，原 operation 保持待核实、目录占用保持有效；即使独立观察已没有执行中的进程，也不能凭此回收目录。原 Node 或硬重启读取原记录的 Node 继续公开同一 created/unknown 及完整创建身份。
-
-显式 Python 管理停止沿既有版本同步和原生身份核实链执行，外部终态与领域记录持久成功后，原 operation 与目录 lease 才结清；冷读原账本核对同一 lease 身份，最后零关联目录到期后才能 GC。不重放创建、不补写停止证明、不增加恢复入口或账本。本验收覆盖 Linux 的两种 Node 生命周期，Python Backend 进程硬重启、无原生身份接管、任意原生 I/O 终止和完整 shutdown 总期限继续 TODO，5.2／5.4 不据此勾选。
-
-### 原账本终态提交与通知线程（5.4 部分收口）
-
-`settle` 与 `reconcile` 统一为异步入口，Terminal／Browser 的停止、冷恢复、创建收尾和目录占用，以及 MCP 启动对账、Node 调试的进程结清全部直接等待。原 JSON writer 锁内由既有 worker 执行读改写，持久成功后在同一锁内按提交顺序将轻量通知排入调用者事件循环；事件循环完成原通知后调用才结算。事件通道及其 asyncio 队列不进入 worker，不增加通知账本、后台重试或另一套 writer。通知失败仍按原规则显式记录，不回滚持久事实。
-
-资源锁及调用方已有准入覆盖线程池排队、写盘和通知；首次取消保留原消息，重复取消不能提前解锁或丢失迟到写盘错误。结清只消费原 owner 已核实的终态，不把取消、超时或文件提交当作外部进程已停止的证明。其它同步 writer、旧代完整接管、原生 I/O 抢占及整个 operation／shutdown 期限继续 TODO，5.2／5.4 不据此勾选。
-
-### Terminal本地准备与外部创建的派发边界（5.2／5.4部分收口）
-
-共享创建链先持久保存原intent并取得原operation lease，再执行领域本地准备。Terminal在此阶段完成受管cwd准入、目录URI保存和绑定原终端身份的目录lease获取；最后才将原operation标为dispatching并调用外部创建。目录登记与lease获取复用原shielded worker和账本writer锁，目录holder、资源锁及Thread准入一直覆盖排队、原生写盘与取消结算，不增加账本或第二创建链。
-
-准备失败或取消时，仍在场的原调用能够证明从未调用外部创建，沿原未派发收尾持久提交deleted/verified、解除关联、结清已发布的目录lease及原operation。关闭等待同一准备结算，准备返回后重新核准入，禁止迟到创建。准备成功后真正派发而回执丢失，仍保留unknown、待核实operation和目录占用；不把本地准备的证明推广到Backend硬退出、旧调用消失或原生创建已派发的情况。原生I/O抢占及整个operation/shutdown总期限继续TODO，5.2／5.4保持未完成。
-
-### 附件启动与定点恢复的同步存储结算（5.4 部分收口）
-
-启动枚举的权威 catalog 快照，以及定点恢复的删除 journal／active 校验、canonical 引用读取、原件清理和 pin 接管结算，统一通过既有 `run_sync_shielded` 执行原同步恢复逻辑。定点恢复仍先取得原上传 holder 再取得 Session gate，两者覆盖线程池排队、真实 I/O 和取消结算；请求上下文随 worker 传递，存储使用原有线程安全连接，不建立另一恢复任务或消息事实。
-
-启动快照取消后不进入逐 Session 恢复；已进入定点恢复则等原 worker 结束后传播取消，存储失败保留原异常及取消因果。显式重试只处理原非终态 pin，成功结算不重复。当前 runtime generation 判断仍在事件循环中，未将 tracker 回调机械迁入线程；运行时关联存储对账由下一切片收口，GC 账本写入、锁文件打开、原生 I/O 抢占及整个 operation／shutdown 期限继续 TODO，5.2／5.4 保持未完成。
-
-### 运行时关联对账的事件循环与存储边界（5.4 部分收口）
-
-启动、周期维护和原 Thread 卸载全部等待唯一异步对账／解绑入口。catalog 关联快照、后台任务与上传 pin 核对、队列快照和精确 token 解绑由既有受保护 worker 执行；pin 先于队列读取，保留原跨库存储交接规则。周期对账复用删除 drain 的共享附件 holder，覆盖 worker 排队、执行和取消结算；它允许新代上传并行，物理删除须等待。打开 Session 控制库前复核精确关联，快照过期且原关联已释放时不再访问可能已隔离的节点。取消须等待同一 worker 实际完成，原错误及取消因果继续交回原调用，不另起后台释放或新增 lease 账本。
-
-tracker 的当前绑定判断留在事件循环。当前 runtime 只要仍登记，就包含正在 closing 或关闭失败后恢复准入的同一代；closing 仅撤销 admission，不作为失效关联依据。原卸载 listener 仍可精确释放这一代，失败由原 scope／关闭任务重试。runtime 真正移除后才成为旧代，迟到 worker 的 SQL 继续匹配旧 token；新一轮产品执行重建的关联不会被它解除。同步 acquire listener、原生 I/O 抢占、旧代无身份接管及整个 operation／shutdown 总期限继续 TODO，不据此勾选 5.2／5.4。
-
-### GC 查询、删除和原账本结算的 worker 边界（5.4 部分收口）
-
-到期目录候选与终态 fork 操作枚举通过既有受保护 worker 查询。每个目录先在原目录 holder 和工作区文件 mutation lock 内核对、提交 deleting 并幂等删除物理目录；随后归还工作区文件写锁，仍在原目录 holder 与同一 worker 内沿唯一外部 lease 账本提交 stopped，最后写 tombstone，账本等待不阻塞无关文件操作。账本或最后提交失败时保留原 deleting 与 locator，由下次原 GC 定点重试；不添加补偿表或扫描目录。实际仍被保留的目录在同步删除入口内返回未收集，原异步调用取消仍由 worker 原语传播，不因跳过保留目录而吞掉取消。
-
-终态 fork 暂存沿原 operation import holder，在同一 worker 内完成快照查询、原生路径探测及删除；显式 operation 与周期全量入口复用同一实现。holder 覆盖排队和全部结算，取消或迟到失败不让原 writer／GC 在锁外继续。未知目录与原终态 claim 不变。此切片不证明原生 I/O 可抢占、旧代无身份接管或整个 operation／shutdown 有硬期限，5.2／5.4 保持未完成。
-
-### 创建回执前 Python owner 硬退出的核实边界
-
-真实创建入口先生成 intent 和 dispatching lease；独立 Python 进程在原 transport 派发前，或真实 Node 创建返回而 Python 尚未接收回执时被强杀。新进程仅从原 owner 记录与唯一 lease 账本恢复，不补写历史或复用旧创建调用。外部实例存在时，普通读取保持 reconcile_required，来源、关联和原 lease 身份不变；必须取得新的管理 operation，沿原停止链核实真实 PTY／页面终态，持久结清精确原占用后才能完成原 Session 清理。外部实例不存在时仍保留 creating／unknown 和原待核实 lease，404 与空清单均不构成未创建证明。该验收覆盖 Python owner 进程强杀与新进程恢复、真实 Node HTTP／PTY／Chromium；不替代完整 Backend／Gateway／Web 重启、Windows、无外部身份接管或整个 operation／shutdown 期限。
-
-### 尚无原生登记的创建取消证明（5.2 部分收口）
-
-原 stop 管理入口对 creating／unknown 意图取得新的管理 operation 后，调用受既有工作区／owner 授权保护的 `POST /api/{terminals|browsers}/{resource_id}/cancel-creation`，传入原冻结 `owner_revision`。尚无原生登记时，在现有 TerminalSession／BrowserSession 恢复记录保存 deleted／verified 与 `release_reason=creation_cancelled`，不启动 PTY／context。先将同一 ID 登记到原 Manager 集合以阻断异步准入与迟到创建，再等待原 writer；等待或写入失败期间只在运行态标记该候选尚未发布，普通 snapshot 返回 unknown。原 writer 成功后才清除此标记并签 not_created；重启从已发布记录恢复，终端历史配额不回收该取消事实。字段沿用现有记录，未新增数据库结构、文件或 lease 账本。
-
-回执绑定 resource_id／workspace_id／owner_revision；Python 严格核整数版本和 not_created，再通过原 owner writer 提交 deleted／verified、解除关联、同步账本及结清原待核实 lease。已有原生记录（包括 created／unknown）只返回 present 和当前快照，新管理操作随后走原版本推进／停止链；不能从空 PID／context 推导停止。取消请求失败、损坏回执、日志或后续本地落盘失败继续沿原 dispatching／unknown 保护和显式管理核实，不通过 finally 释放。此片不解决 Node 硬退出后已登记但缺少真实进程／context 身份的意图，也不代表整个 operation／shutdown 的期限完成。
-
-### Node Debug 握手占用的异步发布（5.4 部分收口）
-
-握手后的 typed 资源登记与 process-instance lease 获取一起进入既有受保护 worker，继续使用唯一账本、原 writer 锁与发布顺序；原 owner 准入及锁覆盖排队、写入和取消结算。运行时现有 state_lock 同时串行化登记与终态 claim 迁移，进程 monitor 不能先结清尚未发布的占用。取消保留原取消及迟到写盘失败，不代表进程已经停止；原管理 stop 仍须核实原 PID 身份并结清同一实例。移除仅供该链使用的同步登记及身份辅助入口，启动回调与测试全部迁为 await。
-
-claim 同步读写、不可抢占的原生 I/O、无身份旧代接管，以及整个 operation／shutdown 总期限继续 TODO；5.2／5.4 保持未完成。本切片没有新增存储、账本、后台释放或副作用重放。
-
-### MCP 连接的原 task 登记与关闭（5.4 部分收口）
-
-启动、配置替换和显式重连不再分别登记资源；唯一 runtime 在 SDK 初始化后等待原 owner 的异步登记回调，提交成功后才通知就绪。登记与关闭投影沿既有 shielded worker 和原账本 writer，均由同一个 session task 串行等待，不跨 worker 持有目录 publication 锁，也不让其它 task 退出 SDK 上下文。启动取消排空该原 task 的关闭，重复取消保留首次取消及迟到错误；未发布候选的清理也保留原控制流异常。关闭状态写盘失败继续由 start／close 交付；运行中断线后的存储次错立即走原 owner 失效报告，不能只留到 shutdown。已关闭的候选不得返回启动成功。
-
-canonical sink 的追加和工具终态提交与提交后确认共用一次既有受保护 worker：先经原 Saver 提交，再沿原 observer 顺序确认 MCP 资格与后台消息消费。原准入上下文随线程传递，取消等待同一次提交及确认结算；提交失败不确认，确认失败保留已提交 item 身份、原异常和取消因果。进程硬退出窗口仍由原恢复对账收敛，不把不同账本的确认称为单一事务。
-
-模型封存资格、调用占用、定时到期、MCP 确认中的共享 publication 锁及整个 operation／shutdown 期限继续 TODO；不据此宣称共享账本所有入口均不阻塞或原生 I/O 可抢占。5.2／5.4 保持未完成。
-
-### Node Debug claim 的异步提交与卸载准入（5.4 部分收口）
-
-启动意图、spawn 身份、running、停止及冷恢复的 claim 写入统一等待既有受保护 worker，原会话存储仍是唯一 writer。活跃阶段在让出事件循环前通过原 tracker 登记本次提交的 blocker；持久提交后才更新真实 claim 的 blocker，原执行结束后移除提交 blocker。失败保留原持久事实与投影，不把尚未提交的候选当作已发布状态。重复取消等待同一写入及投影结算，保留首次取消与迟到存储错误。
-
-原 per-owner 锁和 Session 准入覆盖提交等待；冷恢复也在该 owner 锁内核实，活跃 runtime 的只读观察仍能在进程终止等待期间推进。spawn 身份和终态迁移共用原 state_lock，monitor 可观察真实退出，但不能先结清再被迟到的 spawned/running 覆盖。既有进程、lease 和 claim 身份不变，不新增恢复链或持久账本。同步读取、原生 I/O 抢占、无身份旧代接管及整个 operation／shutdown 总期限继续 TODO，5.2／5.4 保持未完成。
-
-### Node Debug 删除准备的 catalog 读取（5.4 部分收口）
-
-删除入口通过原 `NodeDebugSessionStore` 一次读取 main／已发布 child 并核对全部 owner，原 SQLite 连接的只读打开、查询、关闭和 catalog 路径校验在同一受保护 worker 中完成。空库或不支持的 schema 明确拒绝，不在删除准备中初始化或改写原件。读取等待不阻塞事件循环；取消仍等原读取及连接关闭结算，再由原删除 owner 释放 gate。准备成功之前不停止任何 runtime，不推进 fence、物理隔离或 drained 进度；取消后沿原 operation ID 恢复，原 locator 和 Session 原件保持。缺库、非文件、符号链接、重复 owner 及不可解析的 Thread 沿原合同明确拒绝，不扫描补建目录或增加另一套 catalog。后续 claim／manifest 的停止与删除访问沿下节结算；驻留 source 的同步回调、其它读写、原生 I/O 抢占及整个清理总期限仍 TODO。
-
-### Node Debug 停止与删除排空的原生状态访问（5.4 部分收口）
-
-活体实例的running／停止阶段沿原claim读取器进入受保护worker，原state_lock覆盖排队及结算，后续原lease与claim writer的发布顺序保持。删除前停止进程及监控任务后，原SessionState的同步投影／manifest写入和最终active claim核验同样由worker结算；原Session删除gate与owner锁覆盖整条链，取消或存储失败不提前推进fence、物理隔离及drained进度。全部核实完成才在原runtime集合删除该owner，避免Session隔离后服务关闭再次解析已删除catalog；失败或取消仍保留原runtime用于核实重试。不增加缓存、writer、lease或新的恢复链；驻留source同步回调仍会读盘并已登记TODO，其它同步调试入口、原生I/O抢占及整个shutdown期限继续单独验收。
-
-### Node Debug 冷恢复的原生核实与审计（5.4 部分收口）
-
-冷 owner 的原 claim 读取、恢复决策所需的操作系统身份访问、停止后的身份轮询及恢复审计沿既有受保护 worker 结算；原 owner 临界区覆盖排队、执行和取消等待。审计仍由原 SessionState 与 SessionStore 写入，不增加第二份状态或 writer。每次普通／强制信号在同一 worker 内先重新核对 PID 与原起始身份，再连续派发；等待期间 PID 已复用、消失或身份不可比时，不把上一次观察作为停止新实例的依据。活跃 runtime 最终 OS 核实也沿同一 worker。已有轮询期限与异常分类保持，原生 I/O 抢占、其它入口的同步读取／写入及整个关闭总期限仍 TODO。
-
-### Turn 收尾的原注册身份与账本写入（5.4 部分收口）
-
-Turn 注册表在原 LifetimeScope 与控制状态文件都清理成功后才移除同一 scope／inbox；失败或等待者取消保留登记和同 ID 准入冲突。重入关闭复用原 LifetimeScope 的唯一在途任务，失败后仅重试未释放资源。并发等待者完成时核对原对象身份，不重复删除已由后继 Turn 使用的控制文件，不新增关闭任务表、锁或持久恢复记录。
-
-StepRunner 将原 Turn 的 release_turn_leases 绑定为返回 None 的异步清理回调，等待既有受保护 worker 执行唯一账本 writer。锁等待和持久提交不阻塞事件循环，原 active 占用提交成功后才完成该回调；失败仍按原执行出口报告，同入口重试保留原 Turn 身份。原 runtime 使用权释放顺序和外部终态判定保持。控制文件同步 I/O、其它共享账本入口、无身份接管与整个 operation／shutdown 期限仍 TODO，5.2／5.4保持未完成。
-
-### 冷恢复复用已登记资源身份（5.4 性能部分）
-
-原外部资源账本的身份登记幂等：同 ID、同 kind 返回原持久记录的隔离副本，不刷新 `updated_at` 或重写整账本；登记不是续期或运行状态观察。已有保留范围、创建来源、核实状态和精确 operation lease 不因重复登记改变，仍由原 owner 的状态发布、对账和核实后结清推进；新身份持久成功后才发布，非法输入和类型冲突继续拒绝。冷恢复不增加缓存或批量登记入口，原准备锁、worker、整批对账、版本冻结和未知占用规则保持。参考 Copilot 的 `CopilotCLITerminalLinkProvider.registerTerminal` 以原集合幂等登记；它没有本项目的持久 lease 合同，不能据此省略状态核实。同步 writer 隔离、无身份旧代接管、原生 I/O 抢占和整个 operation／shutdown 期限继续 TODO，5.2／5.4 保持未完成。
-
-### MCP 冷资格回收的原账本与目录锁（5.4 部分收口）
-
-启动等待原 `reconcile_lost_handles` 异步入口，先在调用者循环清理原内存引用和定时器，再以一个既有受保护 worker 扫描 MCP 记录的未结算占用、释放失去 handle 的 prepared／execution 资格。沿原账本的批量查询避免逐连接重复扫描；该冷账本阶段不持目录 publication 锁，不新增缓存、恢复表、writer 或 SDK 执行入口。成功后才进入原状态对账与 SDK session 创建，原连接仍可为 orphaned，资格释放不表示远端操作停止。取消等原 worker 结算，首次消息和迟到错误保留；写入失败保留此前成功，显式重试沿原占用状态跳过已释放项。相同实例的残留 handle close 仍沿原循环和原锁，不能将本片解释为该同步写入、运行中其它资格入口或整个 shutdown 的期限已经解决；5.2／5.4 继续未完成。
-
-### Node 调试关闭的准入与 owner 排空（5.4 部分收口）
-
-服务关闭首先撤销新操作准入；已在等待 Session gate 的调用在返回后再次检查，不能迟到启动。已经进入的操作按精确 owner 登记至原 gate 完整退出，关闭为各 owner 独立等待该批操作，再在原 owner 锁内读取最终 runtime 并调用唯一进程停止链，覆盖尚未物化 runtime 的启动窗口。单个 owner 等待不阻断其它 owner 的停止；待核实终态显式失败，不将 `reconcile_required` 视为已关闭。
-
-各 owner 共用本次默认 30 秒观察窗口；到期保留原关闭任务、runtime、claim 和 lease，并按 owner 报告未完成项。取消只结束本次观察，重叠等待复用原任务；原任务失败结算后显式重试，已成功项不重复执行。每个等待者冻结自己的任务集合，后来的重试不能替换先前应收到的原错误；同批已失败项和超时项同时保留。不新增持久账本或进程终止实现。同步驻留 source、原生 I/O 抢占、无身份旧代接管及整个 Backend／operation 的硬期限仍 TODO，5.2／5.4保持未完成。
+完成上述附件链路、旧实现删除和对应验证即可收口；以下 TODO 不阻止本次归档：通用旧代无原生身份接管、不合作 SDK/脚本强停、整个 Backend/shutdown 硬期限，以及其它模块未与本次目录链路直接相关的锁/I/O/性能治理。已有测量与失败原件继续保留，未完成项不勾选为已实现。

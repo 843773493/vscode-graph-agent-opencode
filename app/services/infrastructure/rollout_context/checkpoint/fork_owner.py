@@ -597,7 +597,7 @@ class CheckpointForkOwner:
             except Exception:
                 catalog.finish_fork_source_capture(capture.copy_operation_id, state="aborted", reason="source export capture failed")
                 if self.source.attachment_store is not None:
-                    self.source.attachment_store.release_fork_export(capture)
+                    await self.source.attachment_store.release_fork_export(capture)
                 remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
                 raise
         snapshot, marker_hash = read_captured_snapshot(self._storage.storage.sessions_dir, capture)
@@ -614,7 +614,7 @@ class CheckpointForkOwner:
             raise RuntimeError("fork source export 未完整 captured，不能接受 committed 回执")
         catalog.finish_fork_source_capture(capture.copy_operation_id, state="materialized" if committed else "aborted")
         if self.source.attachment_store is not None:
-            self.source.attachment_store.release_fork_export(capture)
+            await self.source.attachment_store.release_fork_export(capture)
         remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
         return catalog.get_fork_source_capture(copy_operation_id=capture.copy_operation_id)
 
@@ -751,3 +751,5 @@ class CheckpointForkOwner:
             # 未发布 target 即使已完成 rollout 物化，也允许创建 operation 失败终结。
             catalog.abort_unpublished_fork_capture(capture, creation=record, reason=reason)
         remove_captured_snapshot(self._storage.storage.sessions_dir, capture)
+        if self.source.attachment_store is not None:
+            await self.source.attachment_store.process_pending_directories()

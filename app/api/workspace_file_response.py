@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+from contextlib import AsyncExitStack
 from typing import Literal
 
 import anyio
@@ -51,29 +52,32 @@ class WorkspaceFileResponse(FileResponse):
         extensions = {key: value for key, value in scope.get("extensions", {}).items()
                       if key != "http.response.pathsend"}
         try:
-            with file_access(self.download.uri, "文件传输"):
-                headers = Headers(scope=scope)
-                if self.preview_owner is not None and scope["method"] == "GET" and "range" not in headers:
-                    metadata = self.download.metadata
-                    # 只散列身份与 stat 观察值；这是弱校验器，不是正文 hash 或保存 CAS。
-                    observation = (self.preview_owner, self.download.uri, metadata.st_dev, metadata.st_ino,
-                                   metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
-                    etag = 'W/"' + hashlib.sha256(repr(observation).encode()).hexdigest() + '"'
-                    self.headers["ETag"] = etag
-                    self.headers["Cache-Control"] = "private, no-cache"
-                    self.headers.add_vary_header(
-                        "X-BoxTeam-Workspace-Id, X-BoxTeam-Backend-Workspace-Id, X-BoxTeam-Gateway-Id, "
-                        "X-Local-Token, X-BoxTeam-Federation-Token, Cookie"
-                    )
-                    candidates = {value.strip().removeprefix("W/") for value in headers.get("if-none-match", "").split(",")}
-                    if "*" in candidates or etag.removeprefix("W/") in candidates:
-                        # stat 可见不表示仍可读取；空读打开检查当前权限，不读取正文。
-                        async with await anyio.open_file(self.path, "rb"):
-                            pass
-                        await Response(status_code=304, headers={key: self.headers[key]
-                            for key in ("ETag", "Cache-Control", "Vary")})(scope, receive, send)
-                        return
-                await super().__call__({**scope, "extensions": extensions}, receive, send_file)
+            async with AsyncExitStack() as access:
+                if self.download.admission is not None:
+                    await access.enter_async_context(self.download.admission())
+                with file_access(self.download.uri, "文件传输"):
+                    headers = Headers(scope=scope)
+                    if self.preview_owner is not None and scope["method"] == "GET" and "range" not in headers:
+                        metadata = self.download.metadata
+                        # 只散列身份与 stat 观察值；这是弱校验器，不是正文 hash 或保存 CAS。
+                        observation = (self.preview_owner, self.download.uri, metadata.st_dev, metadata.st_ino,
+                                       metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+                        etag = 'W/"' + hashlib.sha256(repr(observation).encode()).hexdigest() + '"'
+                        self.headers["ETag"] = etag
+                        self.headers["Cache-Control"] = "private, no-cache"
+                        self.headers.add_vary_header(
+                            "X-BoxTeam-Workspace-Id, X-BoxTeam-Backend-Workspace-Id, X-BoxTeam-Gateway-Id, "
+                            "X-Local-Token, X-BoxTeam-Federation-Token, Cookie"
+                        )
+                        candidates = {value.strip().removeprefix("W/") for value in headers.get("if-none-match", "").split(",")}
+                        if "*" in candidates or etag.removeprefix("W/") in candidates:
+                            # stat 可见不表示仍可读取；空读打开检查当前权限，不读取正文。
+                            async with await anyio.open_file(self.path, "rb"):
+                                pass
+                            await Response(status_code=304, headers={key: self.headers[key]
+                                for key in ("ETag", "Cache-Control", "Vary")})(scope, receive, send)
+                            return
+                    await super().__call__({**scope, "extensions": extensions}, receive, send_file)
         finally:
             if self.download.temporary:
                 primary_error = sys.exception()

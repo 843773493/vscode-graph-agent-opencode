@@ -159,9 +159,9 @@ class AttachmentDirectoryRecord:
     protection: str
     created_at: str
     updated_at: str
-    unattached_since: str | None
-    gc_after: str | None
     retention_until: str | None
+    release_pending: int
+    release_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)

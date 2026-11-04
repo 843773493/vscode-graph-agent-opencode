@@ -23,6 +23,7 @@ from app.core.path_utils import (
     get_workspace_root,
 )
 from app.core.resource_uri import file_uri_child, file_uri_root
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.workspace import (
     WorkspaceContextDTO,
@@ -197,32 +198,28 @@ class WorkspaceService:
             if limit is None
             else limit
         )
-        target_path, display_path = await asyncio.to_thread(
-            self.file_paths.resolve,
-            path,
-            scope=scope,
-            allow_empty=True,
-        )
-        physical = native_io_path(target_path)
-        if not physical.exists():
-            error = FileNotFoundError(f"文件树路径不存在: {display_path or '.'}")
-            raise mark_public_failure(error, str(error))
-        if not physical.is_dir():
-            error = NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
-            raise mark_public_failure(error, str(error))
-
         owner = self.file_operations
-        key, _ = await asyncio.to_thread(owner.directory_key, display_path, scope)
         cursor_value = decode_directory_cursor(cursor) if cursor else None
         cursor_key = None if cursor_value is None else cursor_value["after"]
+
         def snapshot():
-            with owner.observation_lock:
-                items, next_key, signature = self._scan_directory(
-                    target_path, display_path, scope, resolved_limit, cursor_key,
-                )
-                revision = owner.store.observe([(key, key.path, signature, True)])[0].directory_revision
-                return items, next_key, revision
-        items, next_key, revision = await asyncio.to_thread(snapshot)
+            with self.file_paths.access(path):
+                target_path, display_path = self.file_paths.resolve(path, scope=scope, allow_empty=True)
+                physical = native_io_path(target_path)
+                if not physical.exists():
+                    error = FileNotFoundError(f"文件树路径不存在: {display_path or '.'}")
+                    raise mark_public_failure(error, str(error))
+                if not physical.is_dir():
+                    error = NotADirectoryError(f"文件树路径不是目录: {display_path or '.'}")
+                    raise mark_public_failure(error, str(error))
+                key, _ = owner.directory_key(display_path, scope)
+                with owner.observation_lock:
+                    items, next_key, signature = self._scan_directory(
+                        target_path, display_path, scope, resolved_limit, cursor_key,
+                    )
+                    revision = owner.store.observe([(key, key.path, signature, True)])[0].directory_revision
+                return items, next_key, revision, key, display_path
+        items, next_key, revision, key, display_path = await run_sync_shielded(snapshot)
         if cursor_value is not None and (cursor_value["directory_key"] != key.model_dump() or cursor_value["revision"] != revision):
             raise WorkspaceFileOperationConflictError("目录分页游标的原 revision 已失效，请重新读取目录")
         next_cursor = None if next_key is None else encode_directory_cursor(key, revision, next_key)
@@ -245,7 +242,7 @@ class WorkspaceService:
 
     async def file_references(self, paths: list[str]) -> WorkspaceFileReferencesDTO:
         def resolve():
-            return [self.file_paths.resolve(path, allow_empty=False)[1] for path in paths]
+            return [self.file_paths.resolve(path, allow_empty=False, materialize=False)[1] for path in paths]
         return WorkspaceFileReferencesDTO(uris=await asyncio.to_thread(resolve))
 
     def _scan_directory(
@@ -353,15 +350,13 @@ class WorkspaceService:
         path: str,
         scope: WorkspaceFileScope = "workspace",
     ) -> WorkspaceFileContentDTO:
-        target_path, relative_path = await asyncio.to_thread(
-            self.file_paths.resolve,
-            path,
-            scope=scope,
-            allow_empty=False,
-        )
-        observed = await asyncio.to_thread(read_file_preimage, target_path, reference=relative_path,
-                                           max_bytes=self._config_service.get_workspace_preview_max_bytes())
-        return self._file_content_dto(target_path, relative_path, observed)
+        def read():
+            with self.file_paths.access(path):
+                target_path, relative_path = self.file_paths.resolve(path, scope=scope, allow_empty=False)
+                observed = read_file_preimage(target_path, reference=relative_path,
+                    max_bytes=self._config_service.get_workspace_preview_max_bytes())
+                return self._file_content_dto(target_path, relative_path, observed)
+        return await run_sync_shielded(read)
 
     def _file_content_dto(self, target_path: Path, reference: str, observed: FilePreimage) -> WorkspaceFileContentDTO:
         raw_content, metadata = observed.content, observed.metadata
@@ -389,11 +384,11 @@ class WorkspaceService:
         expected_revision: str,
         scope: WorkspaceFileScope = "workspace",
     ) -> WorkspaceFileContentDTO:
-        return await asyncio.to_thread(self._update_file_content, path, content, expected_revision, scope)
+        return await run_sync_shielded(self._update_file_content, path, content, expected_revision, scope)
 
     def _update_file_content(self, path: str, content: str, expected_revision: str,
                              scope: WorkspaceFileScope) -> WorkspaceFileContentDTO:
-        with workspace_file_mutation_lock(self._workspace_root):
+        with self.file_paths.access(path, for_write=True), workspace_file_mutation_lock(self._workspace_root):
             target_path, reference = self.file_paths.resolve(path, scope=scope, allow_empty=False, reject_symlink=True, for_write=True)
             observed = read_file_preimage(target_path, reference=reference,
                                           max_bytes=self._config_service.get_workspace_preview_max_bytes())
@@ -442,6 +437,11 @@ class WorkspaceService:
         scope: WorkspaceFileScope = "workspace",
         archive_directory: bool = True,
     ) -> PreparedFileDownload:
+        with self.file_paths.access(path):
+            return self._prepare_file_download(path=path, scope=scope, archive_directory=archive_directory)
+
+    def _prepare_file_download(self, *, path: str, scope: WorkspaceFileScope,
+                               archive_directory: bool) -> PreparedFileDownload:
         with file_access(None, "目标解析"):
             target, display_path = self.file_paths.resolve(
                 path,
@@ -456,7 +456,8 @@ class WorkspaceService:
         if stat.S_ISREG(metadata.st_mode):
             media_type, _ = mimetypes.guess_type(target.name)
             return PreparedFileDownload(target, display_path, target.name,
-                                        media_type or "application/octet-stream", metadata)
+                                        media_type or "application/octet-stream", metadata,
+                                        admission=lambda: self.file_paths.admit(display_path))
         if not archive_directory:
             error = IsADirectoryError(f"工作区路径不是文件: {display_path}")
             raise mark_public_failure(error, str(error))
@@ -509,6 +510,7 @@ class WorkspaceService:
         path: str,
         scope: WorkspaceFileScope,
     ) -> str:
+        # TODO(attachment-reveal): 用原 access 覆盖 resolve/stat/dispatch，并明确系统文件管理器异步使用期；短 ensure 不能保护释放竞争。
         target, display_path = self.file_paths.resolve(
             path,
             scope=scope,

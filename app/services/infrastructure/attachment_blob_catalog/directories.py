@@ -13,6 +13,7 @@ from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.file_permissions import restrict_private_path_access
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_attachment_file,
+    resolve_file_version,
 )
 from app.services.infrastructure.attachment_blob_catalog.records import (
     DirectorySnapshotFile,
@@ -47,6 +48,39 @@ def verify_content(content: bytes | Path, digest: str, length: int, attachment_i
         actual_digest, actual_length = "sha256:" + hashlib.sha256(content).hexdigest(), len(content)
     if (actual_digest, actual_length) != (digest, length):
         raise RuntimeError(f"附件正文与冻结版本不一致：attachment_id={attachment_id}, expected={digest}/{length}, actual={actual_digest}/{actual_length}")
+
+
+def save_file_version(attachments_root: Path, content: bytes | Path, *, digest: str, length: int, attachment_id: str) -> Path:
+    """原 owner 在目录锁/写锁内发布不可变版本；已有损坏资产明确失败，绝不覆盖。"""
+    target = native_io_path(resolve_file_version(attachments_root, digest))
+    if target.exists():
+        verify_content(target, digest, length, attachment_id)
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    restrict_private_path_access(target.parent, is_directory=True)
+    staging = target.with_suffix(".partial")
+    if staging.exists():
+        # 仅此版本的未发布临时文件可重建；已发布资产永不改写。
+        staging.chmod(0o600)
+        staging.unlink()
+    with staging.open("xb") as writer:
+        restrict_private_path_access(staging, descriptor=writer.fileno())
+        if isinstance(content, Path):
+            actual = _read_file_version(content, "original/content", copy_to=writer)
+            if (actual.digest, actual.length) != (digest, length):
+                raise RuntimeError(f"附件原件来源与登记版本不一致：attachment_id={attachment_id}")
+        else:
+            verify_content(content, digest, length, attachment_id)
+            writer.write(content)
+        writer.flush()
+        staging.chmod(0o400)
+        os.fsync(writer.fileno())
+    verify_content(staging, digest, length, attachment_id)
+    os.rename(staging, target)
+    fsync_directory(target.parent)
+    fsync_directory(target.parent.parent)
+    fsync_directory(attachments_root)
+    return target
 
 
 def directory_manifest(root: Path) -> tuple[tuple[DirectorySnapshotFile, ...], tuple[str, ...]]:

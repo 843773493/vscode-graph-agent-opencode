@@ -1,4 +1,4 @@
-"""真实 Shell 进程跨 Backend 硬退出保活，核实终态后才回收到期目录。"""
+"""真实 Shell 进程跨 Backend 硬退出保活，核实终态后保留处理结果。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import os
 import shlex
 import subprocess
 import sys
-from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 
 import psutil
@@ -16,8 +15,7 @@ import pytest
 
 from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import file_uri_child, parse_resource_uri
-from tests.integration.backend.sessions.attachments.test_retention_restart import (
-    DAY_SECONDS,
+from tests.integration.backend.sessions.attachments.process_lifecycle import (
     directory_snapshot,
 )
 from tests.integration.backend.sessions.test_attachment_directory_entry import upload
@@ -106,7 +104,7 @@ async def test_process_retention_across_hard_restarts(
     await case.hard_restart()
     released = directory_snapshot(case)
     assert released["association_state"] == "released" and released["binding_token"] == initial["binding_token"]
-    assert datetime.fromisoformat(str(released["gc_after"])) == datetime.fromisoformat(str(released["unattached_since"])) + timedelta(days=30)
+    assert released["release_pending"] == 1 and released["availability"] == "available"
     assert directory_lease(case, attachment_id) == lease
     assert all(process.is_running() for process in processes)
     response = await case.client.get(f"/api/v1/resources/{rid}")
@@ -116,7 +114,6 @@ async def test_process_retention_across_hard_restarts(
     assert resource["reconciliation_status"] == "verified"
     assert resource["source_thread"]["session_id"] == session
 
-    case.replay.control.advance_wait(30 * DAY_SECONDS)
     await case.hard_restart()
     assert directory_snapshot(case) == released
     assert directory_lease(case, attachment_id) == lease
@@ -193,17 +190,19 @@ async def test_process_retention_across_hard_restarts(
     settled = directory_lease(case, attachment_id)
     assert settled == {**lease, "status": "settled", "updated_at": settled["updated_at"]}
     await case.hard_restart()
-    expired = directory_snapshot(case)
-    assert expired == {**released, "availability": "tombstoned"}
-    assert not directory.exists() and directory_lease(case, attachment_id) == settled
+    retained = directory_snapshot(case)
+    assert retained == {**released, "release_pending": 0, "release_reason": "目录相对上传初始基线有修改，保留原位置与处理结果"}
+    assert directory.is_dir() and directory_lease(case, attachment_id) == settled
+    assert json.loads((directory / "derived/processes.json").read_bytes()) == [process.pid for process in processes]
     assert canonical.read_bytes() == frozen_history
-    unavailable = await case.client.get("/api/v1/workspace/files/content", params={"path": original["file_id"]})
-    assert unavailable.status_code == 404, unavailable.text
+    available = await case.client.get("/api/v1/workspace/files/content", params={"path": original["file_id"]})
+    assert available.status_code == 200 and available.json()["data"]["content"] == "process-retention-original", available.text
     await case.hard_restart()
-    assert directory_snapshot(case) == expired and not directory.exists()
+    assert directory_snapshot(case) == retained and directory.is_dir()
+    assert json.loads((directory / "derived/processes.json").read_bytes()) == [process.pid for process in processes]
     assert directory_lease(case, attachment_id) == settled and canonical.read_bytes() == frozen_history
     case.record("process-retention-restart", {
         "resource_id": rid, "processes": identities, "initial": initial, "released": released,
-        "expired": expired, "lease": lease, "settled": settled, "stopped": stopped, "recovery": recovery,
-        "scope": "真实Gateway/Backend/model_stream/Shell/PTY和硬退出，精确到期保活，停止派发前或真实回执返回后硬退出，由新Backend核实原终态或新管理操作终止后回收；不证明不合作执行可强制终止",
+        "retained": retained, "lease": lease, "settled": settled, "stopped": stopped, "recovery": recovery,
+        "scope": "真实Gateway/Backend/model_stream/Shell/PTY和硬退出，原占用持续保活，停止派发前或真实回执返回后硬退出，由新Backend核实原终态或新管理操作终止后保留处理结果；不证明不合作执行可强制终止",
     })

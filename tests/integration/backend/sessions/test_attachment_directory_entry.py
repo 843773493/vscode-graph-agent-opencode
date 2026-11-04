@@ -1,4 +1,4 @@
-"""真实消息入口验证独立目录、canonical 接受和冷读，不调用模型。"""
+"""真实消息与图执行入口验证独立目录、预览释放、canonical 接受和冷读。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import base64
 import os
 from contextlib import closing
 from io import BytesIO
+from unittest.mock import AsyncMock
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -35,10 +36,17 @@ from app.protocol.generated.boxteam.workspace.v2.message_pb2 import (
 from app.protocol.generated.boxteam.workspace.v2.public_pb2 import (
     TurnAttachmentDTO as ProtocolTurnAttachment,
 )
-from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
+from app.schemas.internal_v2.job import JobStatus
+from app.schemas.internal_v2.message import (
+    AttachmentRef,
+    MessageCreateRequest,
+    MessageRunRequest,
+    RunOptions,
+)
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
+    SessionForkCreationKind,
     SessionForkResourceChoice,
 )
 from app.schemas.internal_v2.text_mutation import (
@@ -50,6 +58,11 @@ from app.schemas.internal_v2.text_mutation import (
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
+)
+from app.services.business.job.service import JobService
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    resolve_attachment_directory,
+    resolve_file_version,
 )
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
@@ -74,6 +87,13 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
 from tests.integration.backend.sessions.test_rollout_fork_modes import (
     remote_fork_target as remote_fork_target,  # noqa: PLC0414
 )
+from tests.integration.backend.sessions.test_thread_runtime_runner import RuntimeCase
+from tests.integration.backend.sessions.test_thread_runtime_runner import (
+    runner_case as runner_case,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.test_thread_runtime_runner import (
+    runtime_case as runtime_case,  # noqa: PLC0414
+)
 from tests.support.message_service import accept_queued_message
 
 
@@ -93,6 +113,7 @@ async def test_message_uploads_are_independent_and_canonical_acceptance_protects
     for ref in refs:
         parsed = parse_attachment_uri(ref.file_id, require_file=True)
         assert parsed.kind == "attachments" and parsed.scope_id == container.workspace_id
+        assert ref.directory_uri is not None
         assert ref.file_id == file_uri_child(ref.directory_uri, "original", "content")
         assert container.attachment_blob_store.read(session.session_id, ref.file_id).data == body
     accept_queued_message(container.message_service, first)
@@ -108,7 +129,7 @@ async def test_message_uploads_are_independent_and_canonical_acceptance_protects
         assert [(ref.file_id, ref.directory_uri) for ref in restored] == [(ref.file_id, ref.directory_uri) for ref in message.attachments]
         for ref in restored:
             assert ParseDict(ref.model_dump(mode="json", exclude_none=True), ProtocolTurnAttachment()).directory_uri == ref.directory_uri
-    assert container.attachment_blob_store.recover_session(session.session_id, messages=container.message_service._checkpointer) == ()
+    assert container.attachment_blob_store.recover_session(session.session_id, messages=container.checkpointer) == ()
     with closing(AttachmentBlobStore(container.workspace_root, path_resolver=container.session_service.path_resolver)) as cold:
         for ref in refs:
             assert cold.read(session.session_id, ref.file_id).data == body
@@ -119,8 +140,6 @@ async def test_regular_file_and_managed_attachments_share_history_and_fork_witho
     startup_container: AppContainer, fork_gateway_request_context: None,
     monkeypatch: pytest.MonkeyPatch, input_kind: str,
 ) -> None:
-    from unittest.mock import AsyncMock
-
     container = startup_container
     for owner in (container.terminal_resource_owner, container.browser_resource_owner):
         monkeypatch.setattr(owner._transport, "list_resources", AsyncMock(return_value=[]))
@@ -163,28 +182,88 @@ async def test_regular_file_and_managed_attachments_share_history_and_fork_witho
 
 
 @pytest.mark.parametrize("size", [(900, 600), (120, 80)])
-async def test_preview_generation_uses_same_directory_and_preserves_original(startup_container: AppContainer, size: tuple[int, int]) -> None:
-    container = startup_container
+async def test_preview_generation_releases_and_rebuilds_same_directory_after_runtime_unload(
+    runtime_case: RuntimeCase, monkeypatch: pytest.MonkeyPatch, size: tuple[int, int],
+) -> None:
+    container = runtime_case.runner.container
+    for owner in (container.terminal_resource_owner, container.browser_resource_owner):
+        monkeypatch.setattr(owner._transport, "list_resources", AsyncMock(return_value=[]))
     session = await container.session_service.create(SessionCreateRequest(title="目录图片预览"))
     source = BytesIO()
     Image.new("RGB", size, (12, 24, 36)).save(source, format="PNG")
     original = source.getvalue()
-    message = await container.message_service.create(session.session_id, MessageCreateRequest(content="图片", attachments=[upload(original, mime="image/png")]))
-    ref, = message.attachments
-    preview = container.attachment_blob_store.read_thumbnail(session.session_id, ref.file_id)
+    accepted = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+        message=MessageCreateRequest(content="图片", attachments=[upload(original, mime="image/png")]), run=RunOptions(),
+    ))
+    assert isinstance(container.job_service, JobService)
+    job = container.job_service._jobs[accepted.job_id]
+    assert job.task is not None
+    await asyncio.wait_for(asyncio.shield(job.task), timeout=15)
+    assert job.status == JobStatus.completed, job.error_message
+    ref, = job.attachments
+    assert ref.directory_uri is not None
+    store = container.attachment_blob_store
+    aid = parse_attachment_uri(ref.file_id, require_file=True).attachment_id
+    assert aid is not None
+    record = store._catalog.require_available_directory(aid)
+    directory = resolve_attachment_directory(store._attachments_root, record.relative_locator)
+    canonical = container.session_service.path_resolver.resolve_thread_node(session.session_id, accepted.thread_id) / "rollout/rollout.jsonl"
+    history = canonical.read_bytes()
+    preview = store.read_thumbnail(session.session_id, ref.file_id)
     assert preview.content_type == "image/webp"
     with Image.open(BytesIO(preview.data)) as image:
         assert max(image.size) == min(512, max(size))
-    assert container.attachment_blob_store.read_thumbnail(session.session_id, ref.file_id).data == preview.data
-    assert container.attachment_blob_store.read(session.session_id, ref.file_id).data == original
-    assert container.attachment_blob_store.read(session.session_id, file_uri_child(ref.directory_uri, "preview", "512.webp")).data == preview.data
+    assert store.read_thumbnail(session.session_id, ref.file_id).data == preview.data
+    assert store.read(session.session_id, ref.file_id).data == original
+    assert store.read(session.session_id, file_uri_child(ref.directory_uri, "preview", "512.webp")).data == preview.data
     preview_uri = file_uri_child(ref.directory_uri, "preview", "512.webp")
+    await runtime_case.tracker.close(session_id=session.session_id)
+    assert not directory.exists(), "系统生成的预览不属于用户处理结果"
     for uri, expected_mime, expected_data in ((ref.file_id, "image/png", original), (preview_uri, "image/webp", preview.data)):
         result = await container.resource_navigation.navigate(ResourceNavigationRequest(uri=uri, operation="read", read_format="auto"),
             local_gateway_id="gateway_6c8b2f9317a5a2c6c4569958b1e23d84")
         assert result.media_type == "image" and result.mime_type == expected_mime
+        assert result.content is not None
         assert base64.b64decode(result.content) == expected_data
-    accept_queued_message(container.message_service, message)
+    assert store.read_thumbnail(session.session_id, ref.file_id).data == preview.data
+    assert store.describe_reference(ref, session_id=session.session_id) == ref
+    assert directory.exists() and not store._catalog.runtime_bindings()
+    assert canonical.read_bytes() == history
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+async def test_released_attachment_requires_reliable_original_when_opened_through_file_owner(
+    startup_container: AppContainer, damage: str,
+) -> None:
+    container = startup_container
+    session = await container.session_service.create(SessionCreateRequest(title="原件版本不可用"))
+    message = await container.message_service.create(session.session_id, MessageCreateRequest(
+        content="上传后尚未接受", attachments=[upload(b"rebuild requires original version")],
+    ))
+    ref, = message.attachments
+    store = container.attachment_blob_store
+    aid = parse_attachment_uri(ref.file_id, require_file=True).attachment_id
+    assert aid is not None
+    await store.recover_idle_session(session.session_id, messages=container.checkpointer)
+    record = store._catalog.get_directory(aid)
+    assert record is not None and record.availability == "released"
+    directory = resolve_attachment_directory(store._attachments_root, record.relative_locator)
+    assert not directory.exists()
+    version = store._catalog.file_version(aid, "original/content")
+    assert version is not None
+    original = resolve_file_version(store._attachments_root, version.digest)
+    original.chmod(0o600)
+    if damage == "missing":
+        original.unlink()
+        with pytest.raises(FileNotFoundError):
+            await container.workspace_service.get_file_content(path=ref.file_id)
+    else:
+        original.write_bytes(b"corrupt original")
+        with pytest.raises(RuntimeError, match="正文与冻结版本不一致"):
+            await container.workspace_service.get_file_content(path=ref.file_id)
+    failed = store._catalog.get_directory(aid)
+    assert failed is not None and failed.relative_locator == record.relative_locator
+    assert failed.release_reason is not None and not directory.exists()
 
 
 async def test_upload_retry_keeps_identity_and_conflict_does_not_change_original(startup_container: AppContainer) -> None:
@@ -213,27 +292,31 @@ async def test_recovery_distinguishes_unused_upload_and_durable_queued_input(sta
     if accepted:
         accept_queued_message(container.message_service, message)
     store = container.attachment_blob_store
-    await store.recover_idle_session(session.session_id, messages=container.message_service._checkpointer)
+    await store.recover_idle_session(session.session_id, messages=container.checkpointer)
     ref, = message.attachments
     identity = parse_attachment_uri(ref.file_id, require_file=True).attachment_id
+    assert identity is not None
     association = store._catalog.connection.execute("SELECT state FROM attachment_directory_associations WHERE attachment_id=?", (identity,)).fetchone()
     assert association[0] == ("active" if accepted else "released")
     record = store._catalog.get_directory(identity)
-    assert record.availability == "available"
-    assert (record.unattached_since is None) == accepted
-    assert (record.gc_after is None) == accepted
-    assert await store.collect_garbage(leases=container.external_resource_leases) == ()
+    assert record is not None and record.availability == ("available" if accepted else "released")
+    directory = resolve_attachment_directory(store._attachments_root, record.relative_locator)
+    assert directory.exists() is accepted
+    assert await store.process_pending_directories() == ()
     assert store.read(session.session_id, ref.file_id).data == b"queued input"
-    assert await store.recover_idle_session(session.session_id, messages=container.message_service._checkpointer) == ()
+    assert await store.recover_idle_session(session.session_id, messages=container.checkpointer) == ()
+    reopened = store._catalog.get_directory(identity)
+    assert reopened is not None and reopened.availability == "available" and not reopened.release_pending
+    assert reopened.relative_locator == record.relative_locator and directory.is_dir()
+    association = store._catalog.connection.execute("SELECT state FROM attachment_directory_associations WHERE attachment_id=?", (identity,)).fetchone()
+    assert association[0] == ("active" if accepted else "released")
 
 
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 async def test_local_fork_retains_directory_without_rewriting_canonical_history(
     startup_container: AppContainer, fork_gateway_request_context: None,
-    monkeypatch: pytest.MonkeyPatch, creation_kind: str,
+    monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind,
 ) -> None:
-    from unittest.mock import AsyncMock
-
     container = startup_container
     # 只替换未使用的外部 PTY/Browser 清单传输；fork 与附件 owner 均使用真实实现。
     for owner in (container.terminal_resource_owner, container.browser_resource_owner):
@@ -266,13 +349,8 @@ async def test_local_fork_retains_directory_without_rewriting_canonical_history(
 async def test_remote_fork_copies_frozen_directory_after_live_source_is_removed(
     production_fork_container: AppContainer,
     remote_fork_target: tuple[AppContainer, SourceForkOwnerTransport],
-    monkeypatch: pytest.MonkeyPatch, creation_kind: str,
+    monkeypatch: pytest.MonkeyPatch, creation_kind: SessionForkCreationKind,
 ) -> None:
-    from unittest.mock import AsyncMock
-
-    from app.services.infrastructure.attachment_blob_catalog.locator import (
-        resolve_attachment_directory,
-    )
     from app.services.infrastructure.rollout_context.fork.source_capture import (
         capture_directory,
     )
@@ -295,8 +373,10 @@ async def test_remote_fork_copies_frozen_directory_after_live_source_is_removed(
         reset_current_gateway_id(source_token)
     ref, = message.attachments
     identity = parse_attachment_uri(ref.file_id, require_file=True).attachment_id
+    assert identity is not None
     store = source.attachment_blob_store
     directory = store._catalog.get_directory(identity)
+    assert directory is not None
     live = resolve_attachment_directory(store._attachments_root, directory.relative_locator)
     offline = live.with_name(live.name + ".offline-after-capture")
     before = source.checkpointer._storage.storage.read_items(session.session_id, message.thread_id)
@@ -326,9 +406,11 @@ async def test_remote_fork_copies_frozen_directory_after_live_source_is_removed(
         })
         result = await target.session_context_fork_service.fork(request)
         assert offline.exists() and not live.exists()
+        assert result.export_release is not None
         assert result.export_release.state == "confirmed"
         resource, = result.resources
         assert (resource.resource_uri, resource.action, resource.availability) == (ref.file_id, "copy_snapshot", "available")
+        assert resource.target_uri is not None
         parsed = parse_attachment_uri(resource.target_uri, require_file=True)
         assert parsed.scope_id == target.workspace_id and parsed.attachment_id != identity
         assert target.attachment_blob_store.read(result.session.session_id, resource.target_uri, owner_thread_id=result.thread_id).data == b"captured directory original"
@@ -348,7 +430,7 @@ async def test_remote_fork_copies_frozen_directory_after_live_source_is_removed(
         operation = target.session_context_fork_service._creation_key(request.idempotency_key)
         for container in (source, target):
             capture = container.session_service.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=operation)
-            assert capture.state == "materialized"
+            assert capture is not None and capture.state == "materialized"
             assert not capture_directory(container.attachment_blob_store._sessions_root, capture).exists()
         assert [call.action for call in transport.calls].count("capture") == 1
         assert [call.action for call in transport.calls].count("release") == 1

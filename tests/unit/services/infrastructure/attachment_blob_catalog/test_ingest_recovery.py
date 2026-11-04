@@ -27,6 +27,9 @@ from app.services.infrastructure.attachment_blob_catalog import (
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -47,7 +50,7 @@ class RecoveryCase:
 async def recovery_case(tmp_path: Path, session_bundle_factory) -> AsyncIterator[RecoveryCase]:
     for identity in (SESSION_ID, PEER_ID):
         session_bundle_factory(tmp_path / ".boxteam/sessions", identity)
-    with closing(AttachmentBlobStore(tmp_path)) as store:
+    with closing(AttachmentBlobStore(tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.json"))) as store:
         ref, = await store.persist_inline(SESSION_ID, [AttachmentRef(
             file_id="inline:recovery.txt", name="recovery.txt", content_type="text/plain",
             data_url="data:text/plain;base64,Y3dk",
@@ -133,11 +136,11 @@ async def test_recovery_retains_guards_context_and_original_failure(
                 # 失败留下的原 pin 可在同一入口重试；成功或已取消的结算不重复。
                 retried = await store.recover_idle_session(SESSION_ID, messages=case.messages)
                 assert retried == (("released-unused-reference", "settled-pin") if pins else ())
-                assert store.read(SESSION_ID, case.ref.file_id).data == b"cwd"
                 attachment_id = parse_resource_uri(case.ref.file_id).attachment_id
                 assert attachment_id is not None
                 record = store._catalog.get_directory(attachment_id)
-                assert record is not None and record.gc_after is not None and record.availability == "available"
+                assert record is not None and record.release_pending == 0 and record.availability == "released"
+                assert store.read(SESSION_ID, case.ref.file_id).data == b"cwd"
             finally:
                 release.set()
                 await asyncio.gather(pending, return_exceptions=True)

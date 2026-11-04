@@ -5,7 +5,7 @@
 # 可修改内容
 
 - 维护迁移准入、SQLite backup API 协调、原件与冻结历史保全、备份清单及持久切换记录。
-- 迁移实现落地后在本目录接续 schema 3 → 4 的转换与中断恢复。
+- 维护 schema 3 → 5 的转换、可靠版本发布与中断恢复。
 
 # 不可修改内容
 
@@ -17,8 +17,8 @@
 
 - 使用原附件 owner 的维护锁。SQL 结构仍由现有 SQL 文件负责，此处只保留读取和执行协调。
 - 外部占用同时核对通用 lease 账本和 Terminal/Browser 领域记录；复用原 owner 的格式与终态闭集，不调用恢复或修改关联。已核实终态的领域记录必须逐字进入备份，创建中、待核实及 dispatching fork attach 明确拒绝。
-- prepare 仅准备 schema 3 备份；convert/verify-directories 只处理备份内独立目录。prepare-catalog/verify-catalog 在 `converted/catalog.sqlite` 准备 schema 4 的目录、文件版本、关联及不可变来源绑定，DDL 唯一定义在 `../sql/managed_directory_schema.sql`。线上 owner 只支持 schema 4，schema 3 须经此入口显式离线迁移；install/rollback 负责离线目录根发布，catalog_prepared 不能代替真实启动、上传与历史恢复验收。
-- 每个旧 attachment_id 单独复制原件到 `original/content`，已有预览逐字复制到 `preview/512.webp`，`derived/` 留空；不使用硬链接，不重新生成预览。完整旧 owner/blob 行保留在转换清单，UTC 日期来自 owner 创建时间。released 的释放时间与显式 retention 保护保留，tombstoned 不造目录。
+- prepare 仅准备 schema 3 备份；convert/verify-directories 只处理备份内独立目录。prepare-catalog/verify-catalog 在 `converted/catalog.sqlite` 准备 schema 5 的目录、文件版本、关联及不可变来源绑定，DDL 唯一定义在 `../sql/managed_directory_schema.sql`。线上 owner 只读写 schema 5，schema 4 由原 owner 原子升级，schema 3 须经此入口显式离线迁移；install/rollback 负责离线目录根发布，catalog_prepared 不能代替真实启动、上传与历史恢复验收。
+- 每个旧 attachment_id 单独复制原件到 `original/content`，已有预览逐字复制到 `preview/512.webp`，`derived/` 留空；转换与安装共用物化入口，同时将已核验字节保存到目标根的 `.versions/sha256/`。不使用硬链接，不重新生成预览，不覆盖损坏成品。完整旧 owner/blob 行保留在转换清单，UTC 日期来自 owner 创建时间。只保留显式 retention 保护，released 目录标记待处理，不继承旧自动期限，tombstoned 不造目录或可靠字节。
 - 转换和核验复用原维护锁互斥；复制中断只回收本计划的 `.partial` 副本，已完成文件核 hash/length 后复用，损坏成品不覆盖。全量来源与目标校验、durability 完成后才发布目录准备完成。
 - convert 的初始化元数据先写入由完整计划 hash 定位的 `.converted-{hash}.preparing`，manifest/journal 全部 durable 后才原子发布 `converted/`，再复制正文。重试只回收同一计划的未发布初始化目录，不清理其它计划或原备份；已存在但缺失身份元数据的旧 `converted/` 仍明确拒绝，不猜测归属。
 - 命令只输出稳定身份、状态与计数，清单只保存相对 locator，不输出普通业务原生路径。
@@ -27,4 +27,4 @@
 - 完成物化或中止的临时 capture 可已由原 owner 清理；残留 capture 仍按原 snapshot/marker hash 核验并逐字保存。离线准入不得要求重建已清理的终态临时目录。Linux 的既有执行明细文件名可含冒号，locator 按目标原生语义保留，同时拒绝各段盘符、逃逸与符号链接；Windows 继续拒绝冒号文件名。
 
 - install/rollback 在 workspace 独占维护锁和 converted 共享锁内执行；唯一 `attachment-migration.json` 绑定原备份、目标 catalog 和源集合。首次移动旧根前重新做完整 preflight，SQLite 以逻辑 schema/行核对备份、源文件及 WAL 另冻结指纹。preparing/ready/rolling_back 阻止线上准入；目录和 catalog 缺失不初始化空库。
-- 原目录保全为 `.attachments-{backup_id}.schema3`，未发布目标及撤销副本保存在 `.attachment-install-{backup_id}`；中断只沿同一记录继续，不自动删备份。已 installed 的 install 重试只核归属/结构，不重放旧内容；rollback 必须证明未有后续写入，不覆盖新数据。
+- 原目录保全为 `.attachments-{backup_id}.schema3`，未发布目标及撤销副本保存在 `.attachment-install-{backup_id}`；中断只沿同一记录继续，不自动删备份。发布前核对工作副本、可靠版本、catalog 和私有权限；已 installed 的 install 重试按唯一 schema 常量核归属/结构，不重放旧内容；rollback 必须证明未有后续写入，原根与包含可靠版本的撤销副本一并保全，不覆盖新数据。

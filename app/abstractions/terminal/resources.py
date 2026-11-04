@@ -16,6 +16,10 @@ class TerminalWorkingDirectories(Protocol):
         """保护目录准入，直到调用方发布持久进程占用；返回受管目录 URI。"""
         ...
 
+    async def settle_working_directory(self, reference: str) -> None:
+        """原进程占用已核实结清，重试该目录的待处理工作副本。"""
+        ...
+
 
 class TerminalRequestError(ResourceRequestError):
     """PTY 服务的 HTTP 失败；响应正文只供诊断，不能投影为业务错误。"""

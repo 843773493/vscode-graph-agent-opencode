@@ -1,26 +1,24 @@
 CREATE TABLE attachment_directory_metadata (
     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
     workspace_id TEXT NOT NULL,
-    schema_version INTEGER NOT NULL CHECK (schema_version = 4)
+    schema_version INTEGER NOT NULL CHECK (schema_version = 5)
 );
 
 CREATE TABLE attachment_directories (
     attachment_id TEXT PRIMARY KEY,
     relative_locator TEXT NOT NULL UNIQUE,
-    availability TEXT NOT NULL CHECK (availability IN ('available', 'deleting', 'tombstoned')),
+    availability TEXT NOT NULL CHECK (availability IN ('available', 'releasing', 'released', 'rebuilding', 'tombstoned')),
     protection TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    unattached_since TEXT,
-    gc_after TEXT,
     retention_until TEXT,
-    CHECK (length(attachment_id) = 36 AND substr(attachment_id, 1, 4) = 'att_'),
-    CHECK ((unattached_since IS NULL AND gc_after IS NULL) OR
-           (unattached_since IS NOT NULL AND gc_after IS NOT NULL AND gc_after >= unattached_since))
+    release_pending INTEGER NOT NULL DEFAULT 0 CHECK (release_pending IN (0, 1)),
+    release_reason TEXT,
+    CHECK (length(attachment_id) = 36 AND substr(attachment_id, 1, 4) = 'att_')
 );
 
-CREATE INDEX attachment_directories_gc ON attachment_directories(gc_after)
-    WHERE availability = 'available' AND gc_after IS NOT NULL;
+CREATE INDEX attachment_directories_pending ON attachment_directories(attachment_id)
+    WHERE release_pending = 1 OR availability IN ('releasing', 'rebuilding');
 
 CREATE TABLE attachment_directory_files (
     attachment_id TEXT NOT NULL REFERENCES attachment_directories(attachment_id),
@@ -148,4 +146,4 @@ BEGIN SELECT RAISE(ABORT, 'attachment fork aliases are immutable'); END;
 CREATE TRIGGER attachment_directory_fork_aliases_no_delete BEFORE DELETE ON attachment_directory_fork_aliases
 BEGIN SELECT RAISE(ABORT, 'attachment fork aliases are immutable'); END;
 
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;

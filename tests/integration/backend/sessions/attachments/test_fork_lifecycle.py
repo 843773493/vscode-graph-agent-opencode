@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import AsyncMock
@@ -14,6 +14,7 @@ import pytest
 
 from app.container import AppContainer
 from app.core.resource_uri import (
+    file_uri_child,
     parse_attachment_uri,
     resource_display_uri,
     thread_resource_uri,
@@ -28,6 +29,7 @@ from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionForkResourceChoice,
 )
+from app.schemas.internal_v2.text_mutation import CreateText, PatchText
 from app.services.infrastructure.attachment_blob_catalog import fork_import, fork_store
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_attachment_directory,
@@ -57,10 +59,10 @@ from tests.integration.backend.sessions.test_rollout_fork_modes import (
 
 @pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
-@pytest.mark.parametrize("gc_first", [True, False], ids=["gc-first", "fork-first"])
-async def test_directory_claim_and_gc_choose_one_order_before_target_publication(
+@pytest.mark.parametrize("release_first", [True, False], ids=["release-first", "fork-first"])
+async def test_directory_claim_and_release_share_holder_before_target_publication(
     production_fork_container: AppContainer, fork_execution_source: SessionDTO,
-    creation_kind: str, gc_first: bool, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+    creation_kind: str, release_first: bool, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
 ) -> None:
     container = production_fork_container
     context = _production_fork_context(container)
@@ -71,104 +73,90 @@ async def test_directory_claim_and_gc_choose_one_order_before_target_publication
         source.session_id, source_thread,
     ) / "rollout/rollout.jsonl"
     original_history = canonical.read_bytes()
-    original, = store._catalog.gc_candidates(now=datetime.now(UTC) + timedelta(days=31))
-    assert original.gc_after is not None
+    identity, = store._catalog.connection.execute("SELECT attachment_id FROM attachment_directories").fetchone()
+    original = store._catalog.get_directory(identity)
+    assert original is not None and original.availability == "released"
     directory = resolve_attachment_directory(store._attachments_root, original.relative_locator)
-    monkeypatch.setattr(store, "_clock", lambda: datetime.fromisoformat(original.gc_after))
-    parent = await context.sessions.create(SessionCreateRequest(title="回收竞争的副本容器"))
+    assert not directory.exists()
+    assert store.read(source.session_id, store.reference(identity)).data == "冷恢复附件正文".encode()
+    assert store._catalog.get_directory(identity).release_pending == 0
+    parent = await context.sessions.create(SessionCreateRequest(title="释放竞争的副本容器"))
     fork_request = await _fork_request(
         context, source.session_id, mode="full_rollout_copy", creation_kind=creation_kind,
         target_container_uri=parent.uri if creation_kind == "new_child_thread" else None,
     )
     key = context.forks._creation_key(fork_request.idempotency_key)
+    # 真实条件修改再显式删除回到基线；原 holder 保护交接，竞争从持久待处理事实开始。
+    with store.directory_access(identity):
+        temporary = file_uri_child(store.directory_uri(identity), "derived", "handoff.txt")
+        created = container.text_mutations.execute(CreateText(target=temporary, content="temporary", expected_version="absent"))
+        assert created["status"] == "success"
+        deleted = container.text_mutations.execute(PatchText(
+            target=store.directory_uri(identity), input="*** Begin Patch\n*** Delete File: derived/handoff.txt\n*** End Patch",
+            expected_versions={"derived/handoff.txt": "sha256:" + hashlib.sha256(b"temporary").hexdigest()},
+            explanation="显式恢复初始基线，验证 fork 与工作副本释放的原 holder 交接",
+        ))
+        assert deleted["status"] == "success"
+    assert store._catalog.get_directory(identity).release_pending == 1
     program = dedent("""\
         import asyncio
         import json
         import sys
-        from datetime import datetime
         from pathlib import Path
         from app.core.path_utils import build_session_catalog_components
         from app.core.workspace_identity import read_workspace_id
         from app.services.infrastructure.attachment_blob_catalog.store import AttachmentBlobStore
         from app.services.infrastructure.external_resource_leases import ExternalResourceLeaseLedger
         root = Path(sys.argv[1])
-        clock = datetime.fromisoformat(sys.argv[2])
         catalog = build_session_catalog_components(root / ".boxteam/sessions", read_workspace_id(root))
-        store = AttachmentBlobStore(root, path_resolver=catalog.resolver, clock=lambda: clock)
+        store = AttachmentBlobStore(root, path_resolver=catalog.resolver,
+            leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json"))
         try:
-            result = asyncio.run(store.collect_garbage(leases=ExternalResourceLeaseLedger(
-                state_path=root / ".boxteam/resources.json",
-            )))
-            print(json.dumps({"collected": result}), flush=True)
+            result = asyncio.run(store.process_pending_directories())
+            print(json.dumps({"released": result}), flush=True)
         finally:
             store.close()
             catalog.close()
     """)
     artifacts = TestRunContext.from_test_file(Path(request.node.path)).prepare().artifacts_dir
-    prepare = store._catalog.prepare_fork_attachment_claims
-    collections: list[list[str]] = []
+    releases: list[list[str]] = []
 
-    def collect_at_claim(**kwargs: object) -> None:
-        # 只固定真实 claim 提交前/后的时序，另一进程沿原 GC 入口执行，不手填业务状态。
-        if not gc_first:
-            prepare(**kwargs)
-        command = [sys.executable, "-c", program, str(container.workspace_root), original.gc_after]
-        outcome = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
-        prefix = f"{creation_kind}-{'gc-first' if gc_first else 'fork-first'}"
+    def release_in_process() -> None:
+        command = ["timeout", "30", "bash", "-c", 'ulimit -d 4194304; exec "$@"', "bash",
+                   sys.executable, "-c", program, str(container.workspace_root)]
+        outcome = subprocess.run(command, capture_output=True, text=True, timeout=35, check=False)
+        prefix = f"{creation_kind}-{'release-first' if release_first else 'fork-first'}"
         (artifacts / f"{prefix}.stdout.raw").write_text(outcome.stdout, encoding="utf-8")
         (artifacts / f"{prefix}.stderr.raw").write_text(outcome.stderr, encoding="utf-8")
         (artifacts / f"{prefix}.json").write_text(json.dumps({
             "command": command, "exit_code": outcome.returncode,
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         assert outcome.returncode == 0, (outcome.stdout, outcome.stderr)
-        collections.append(json.loads(outcome.stdout)["collected"])
-        assert collections == ([[original.attachment_id]] if gc_first else [[]])
-        assert directory.exists() is not gc_first
-        if gc_first:
+        releases.append(json.loads(outcome.stdout)["released"])
+        assert releases == ([[identity]] if release_first else [[]])
+        assert directory.exists() is not release_first
+
+    if release_first:
+        release_in_process()
+    else:
+        prepare = store._catalog.prepare_fork_attachment_claims
+
+        def release_at_claim(**kwargs: object) -> None:
+            # 原 holder 覆盖 manifest 到 claim 的窗口，另一进程不得提前释放目录。
+            release_in_process()
             prepare(**kwargs)
 
-    monkeypatch.setattr(store._catalog, "prepare_fork_attachment_claims", collect_at_claim)
-    if gc_first:
-        with pytest.raises(FileNotFoundError):
-            await context.forks.fork(fork_request)
-        capture = context.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
-        assert capture.state == "aborted"
-        assert [row[0] for row in store._catalog.connection.execute(
-            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
-        )] == ["aborted"]
-        snapshot, = store._catalog.fork_attachment_snapshots(
-            key, target_session_id=capture.target_session_id, target_thread_id=capture.target_thread_id,
-        )
-        assert (snapshot.source_attachment_id, snapshot.target_attachment_id) == (
-            original.attachment_id, original.attachment_id,
-        )
-        if creation_kind == "new_session_main":
-            assert context.sessions.path_resolver.catalog_store.get_creation_record(key).state == "aborted"
-            with pytest.raises(KeyError):
-                context.sessions.path_resolver.catalog_store.get_node(capture.target_session_id)
-        else:
-            with context.forks._threads.for_owner_session(parent.session_id) as threads:
-                record = threads.control_store.get_thread_creation_record(key)
-                assert record.state == "aborted"
-                root = context.sessions.path_resolver.resolve_session_node(parent.session_id)
-                assert not (root / record.final_relative_locator).exists()
-                assert not (root / record.staging_locator).exists()
-        final = store._catalog.get_directory(original.attachment_id)
-        assert final.availability == "tombstoned"
-        assert (final.gc_after, final.relative_locator) == (original.gc_after, original.relative_locator)
-        with pytest.raises(RuntimeError, match="已中止"):
-            await context.forks.fork(fork_request)
-    else:
-        result = await context.forks.fork(fork_request)
-        resource, = result.resources
-        assert store.read(result.session.session_id, resource.target_uri, owner_thread_id=result.thread_id).data == "冷恢复附件正文".encode()
-        assert store._catalog.get_directory(original.attachment_id).gc_after is None
-        assert await store.collect_garbage(leases=container.external_resource_leases) == ()
-        assert [row[0] for row in store._catalog.connection.execute(
-            "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
-        )] == ["committed"]
-    assert len(collections) == 1
-    assert canonical.read_bytes() == original_history
+        monkeypatch.setattr(store._catalog, "prepare_fork_attachment_claims", release_at_claim)
+    result = await context.forks.fork(fork_request)
+    resource, = result.resources
+    assert store.read(result.session.session_id, resource.target_uri, owner_thread_id=result.thread_id).data == "冷恢复附件正文".encode()
+    final = store._catalog.get_directory(identity)
+    assert final.relative_locator == original.relative_locator and final.release_pending == 0
+    assert final.availability == "available" and await store.process_pending_directories() == ()
+    assert [row[0] for row in store._catalog.connection.execute(
+        "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
+    )] == ["committed"]
+    assert len(releases) == 1 and canonical.read_bytes() == original_history
 
 
 @pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
@@ -207,10 +195,8 @@ async def test_published_fork_keeps_directory_after_source_delete_until_target_r
         (identity,),
     )]
     assert active == [(result.session.session_id, result.thread_id)]
-    assert store._catalog.get_directory(identity).gc_after is None
-    future = datetime.now(UTC) + timedelta(days=31)
-    monkeypatch.setattr(store, "_clock", lambda: future)
-    assert await store.collect_garbage(leases=container.external_resource_leases) == ()
+    assert store._catalog.get_directory(identity).release_pending == 0
+    assert await store.process_pending_directories() == ()
     assert store.read(result.session.session_id, resource.resource_uri, owner_thread_id=result.thread_id).data == "冷恢复附件正文".encode()
     assert [item.to_dict() for item in container.checkpointer._storage.storage.read_items(
         result.session.session_id, result.thread_id,
@@ -222,15 +208,12 @@ async def test_published_fork_keeps_directory_after_source_delete_until_target_r
         "SELECT state FROM attachment_directory_fork_claims WHERE copy_operation_id=?", (key,),
     )] == ["target_deleted"]
     record = store._catalog.get_directory(identity)
-    assert datetime.fromisoformat(record.unattached_since) == future
-    assert datetime.fromisoformat(record.gc_after) == future + timedelta(days=30)
+    assert record.release_pending == 0 and record.availability == "released"
     directory = resolve_attachment_directory(store._attachments_root, record.relative_locator)
-    assert directory.is_dir()
-    assert await store.collect_garbage(leases=container.external_resource_leases) == ()
-    monkeypatch.setattr(store, "_clock", lambda: future + timedelta(days=31))
-    assert await store.collect_garbage(leases=container.external_resource_leases) == (identity,)
     assert not directory.exists()
-    assert store._catalog.get_directory(identity).availability == "tombstoned"
+    assert await store.process_pending_directories() == ()
+    reopened = await container.workspace_service.get_file_content(path=store.reference(identity))
+    assert reopened.content == "冷恢复附件正文"
 
 
 async def _assert_unpublished_fork_rollback(
@@ -307,13 +290,10 @@ async def test_unpublished_fork_failure_releases_only_its_original_directory_cla
     container = production_fork_container
     store = container.attachment_blob_store
     resolver = _production_fork_context(container).sessions.path_resolver
-    # 不修写业务记录；原删除 owner 释放最后关联后，原 GC 不得被失败 claim 无限阻塞。
-    now = datetime.now(UTC)
-    monkeypatch.setattr(store, "_clock", lambda: now)
+    # 原删除 owner 释放最后关联后，失败 claim 不得无限阻塞工作副本释放。
     await resolver.delete_subtree(idempotency_key="delete-failed-fork-source", root_node_id=fork_execution_source.session_id)
-    monkeypatch.setattr(store, "_clock", lambda: now + timedelta(days=31))
-    assert await store.collect_garbage(leases=container.external_resource_leases) == (identity,)
-    assert store._catalog.get_directory(identity).availability == "tombstoned"
+    assert await store.process_pending_directories() == ()
+    assert store._catalog.get_directory(identity).availability == "released"
 
 
 @pytest.mark.parametrize("fork_execution_source", [True], indirect=True)
@@ -389,14 +369,12 @@ async def test_remote_import_failure_settles_both_owners_without_publishing_targ
                 assert not (root / record.staging_locator).exists()
         store = target.attachment_blob_store
         directory = store._catalog.get_directory(identity)
-        assert directory.unattached_since is not None and directory.gc_after is not None
+        assert directory.release_pending == 0 and directory.availability == "released"
         assert store._catalog.connection.execute(
             "SELECT count(*) FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", (identity,),
         ).fetchone()[0] == 0
-        assert await store.collect_garbage(leases=target.external_resource_leases) == ()
-        monkeypatch.setattr(store, "_clock", lambda: datetime.fromisoformat(directory.gc_after) + timedelta(seconds=1))
-        assert await store.collect_garbage(leases=target.external_resource_leases) == (identity,)
-        assert store._catalog.get_directory(identity).availability == "tombstoned"
+        assert await store.process_pending_directories() == ()
+        assert store._catalog.get_directory(identity).availability == "released"
         calls = len(transport.calls)
         with pytest.raises(RuntimeError, match="已中止"):
             await target.session_context_fork_service.fork(request)

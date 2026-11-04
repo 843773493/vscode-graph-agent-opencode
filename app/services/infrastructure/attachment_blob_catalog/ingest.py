@@ -85,7 +85,7 @@ class IngestMixin:
                 raise RuntimeError("附件目录尚未 durable，拒绝发布")
             timestamp = now.astimezone(UTC).isoformat()
             connection.execute(
-                "INSERT INTO attachment_directories VALUES (?,?, 'available','private',?,?,NULL,NULL,NULL)",
+                "INSERT INTO attachment_directories VALUES (?,?, 'available','private',?,?,NULL,0,NULL)",
                 (record.attachment_id, record.relative_locator, record.created_at, timestamp),
             )
             self._insert_file_version(connection, AttachmentFileVersion(

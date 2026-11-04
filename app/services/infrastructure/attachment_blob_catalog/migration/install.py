@@ -14,6 +14,7 @@ from app.services.infrastructure.attachment_blob_catalog.directories import (
     protect_original,
 )
 from app.services.infrastructure.attachment_blob_catalog.directory_schema import (
+    DIRECTORY_SCHEMA_VERSION,
     require_directory_schema,
 )
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
@@ -135,7 +136,7 @@ def install_converted_catalog(workspace: Path, backup: Path) -> dict[str, object
                 with read_database(checked_path(live, "catalog.sqlite")) as catalog:
                     require_directory_schema(catalog)
                     owner = catalog.execute("SELECT workspace_id, schema_version FROM attachment_directory_metadata WHERE singleton_id=1").fetchone()
-                    if owner is None or tuple(owner) != (plan.workspace_id, 4):
+                    if owner is None or tuple(owner) != (plan.workspace_id, DIRECTORY_SCHEMA_VERSION):
                         raise RuntimeError("已发布附件 catalog 的归属/版本不一致")
                 return {**binding, "state": "installed"}
             if journal["state"] not in {"preparing", "ready"}:
@@ -158,7 +159,7 @@ def install_converted_catalog(workspace: Path, backup: Path) -> dict[str, object
                 for name in ("original", "preview", "derived"):
                     checked_path(destination, resource.relative_locator + "/" + name).mkdir(parents=True, exist_ok=True, mode=0o700)
                 for file in resource.files:
-                    _materialize(backup, destination, file)
+                    _materialize(backup, destination, file, attachment_id=resource.attachment_id)
                 protect_original(checked_path(destination, resource.relative_locator))
             target = checked_path(destination, "catalog.sqlite")
             if not target.exists():

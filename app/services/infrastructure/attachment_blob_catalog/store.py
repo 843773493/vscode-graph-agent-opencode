@@ -6,13 +6,16 @@ import base64
 import hashlib
 import mimetypes
 import os
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import asynccontextmanager
+import sys
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import unquote_to_bytes
 
+import portalocker
 from PIL import Image, ImageOps
 
 from app.abstractions.resource_file_content import ResourceFileContent
@@ -35,7 +38,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
-from app.core.shielded_cleanup import run_sync_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
 from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.hashing import canonical_json_bytes
@@ -48,6 +51,7 @@ from app.services.infrastructure.attachment_blob_catalog.catalog import (
 from app.services.infrastructure.attachment_blob_catalog.directories import (
     protect_original,
     remove_directory,
+    save_file_version,
     verify_content,
 )
 from app.services.infrastructure.attachment_blob_catalog.fork_store import (
@@ -68,6 +72,10 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 from app.services.infrastructure.attachment_blob_catalog.recovery import (
     AttachmentIngestRecoveryMixin,
 )
+from app.services.infrastructure.attachment_blob_catalog.working_copies import (
+    AttachmentDirectoryHolderGate,
+    WorkingCopiesMixin,
+)
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
@@ -78,15 +86,23 @@ from app.services.infrastructure.workspace_files.mutation_lock import (
 ATTACHMENT_ROOT_DIRECTORY_NAME = "attachments"
 MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
 
+if TYPE_CHECKING:
+    from app.services.infrastructure.workspace_files.operations import (
+        WorkspaceFileOperations,
+    )
 
-class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixin):
+
+class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixin):
     """原附件服务的目录实现；不再写入或读取旧 blob 表。"""
 
     def __init__(self, workspace_root: Path, *, path_resolver: SessionCatalogPathResolver | None = None,
+                 leases: ExternalResourceLeaseLedger | None = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._workspace_root = workspace_root.expanduser().resolve()
         self.workspace_id = read_workspace_id(self._workspace_root)
         self._clock = clock
+        self._leases = leases
+        self._file_operations: WorkspaceFileOperations | None = None
         self._sessions_root = self._workspace_root / ".boxteam/sessions"
         self._attachments_root = self._workspace_root / ".boxteam/attachments"
         self._catalog = AttachmentBlobCatalog(self._attachments_root / CATALOG_DATABASE_NAME, workspace_id=self.workspace_id)
@@ -95,10 +111,13 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         self._topology_gate = NavigationTopologyGate(self._sessions_root)
         self.deletion_holder = OperationHolderGate(self._sessions_root, namespace="attachment_ingest")
         self._fork_imports = OperationHolderGate(self._sessions_root, namespace="attachment_fork_import")
-        self._directory_operations = OperationHolderGate(self._sessions_root, namespace="attachment_directory")
+        self._directory_operations = AttachmentDirectoryHolderGate(self._sessions_root)
 
     def close_admission(self) -> None:
         self._catalog.close_admission()
+
+    def bind_file_operations(self, operations: WorkspaceFileOperations) -> None:
+        self._file_operations = operations
 
     def close(self) -> None:
         self._catalog.close()
@@ -197,17 +216,18 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         preimage = hashlib.sha256(canonical_json_bytes([session_id, thread_id, message_id, operation_id, attachment_id, attachment.file_id])).hexdigest()
         control = self._open_control_store(session_id)
         try:
-            async with self._directory_operations.lock_for(attachment_id), self._topology_gate.shared(), self._gate.exclusive(session_id):
-                generation = self._assert_session_active(session_id, thread_id)
-                self._catalog.require_available_directory(attachment_id)
-                pin = control.create_or_get_lease(operation_kind="attachment", operation_identity=operation_id,
-                    preimage_hash=preimage, expected_generation=generation,
-                    recovery_ref=f"attachment-ref:{session_id}:{thread_id}:{message_id}:{attachment_id}")
-                if pin.state == "active":
-                    self._catalog.attach_directory(attachment_id, session_id=session_id, thread_id=thread_id,
-                        binding_token=f"reference:{operation_id}", now=self._clock())
-                elif pin.state != "completed":
-                    raise RuntimeError("附件引用 pin 已终止，不能重开原操作")
+            async with self._directory_operations.lock_for(attachment_id):
+                await run_sync_shielded(self._ensure_held_directory, attachment_id)
+                async with self._topology_gate.shared(), self._gate.exclusive(session_id):
+                    generation = self._assert_session_active(session_id, thread_id)
+                    pin = control.create_or_get_lease(operation_kind="attachment", operation_identity=operation_id,
+                        preimage_hash=preimage, expected_generation=generation,
+                        recovery_ref=f"attachment-ref:{session_id}:{thread_id}:{message_id}:{attachment_id}")
+                    if pin.state == "active":
+                        self._catalog.attach_directory(attachment_id, session_id=session_id, thread_id=thread_id,
+                            binding_token=f"reference:{operation_id}", now=self._clock())
+                    elif pin.state != "completed":
+                        raise RuntimeError("附件引用 pin 已终止，不能重开原操作")
         finally:
             control.close()
 
@@ -232,8 +252,8 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             if pin.state != "active":
                 if pin.state != "completed" or record.state != "published":
                     raise RuntimeError("附件上传 pin 已终止，不能重开原操作")
-                self._catalog.require_available_directory(record.attachment_id)
-                verify_content(resolve_attachment_file(resolve_attachment_directory(self._attachments_root, record.relative_locator), ("original", "content")), record.digest, record.length, record.attachment_id)
+                root = await run_sync_shielded(self.ensure_directory, record.attachment_id)
+                verify_content(resolve_attachment_file(root, ("original", "content")), record.digest, record.length, record.attachment_id)
                 return AttachmentRef(file_id=self.reference(record.attachment_id), directory_uri=self.directory_uri(record.attachment_id), name=record.file_name, content_type=record.mime_type)
             details["attachment_id"] = record.attachment_id
             await observe_phase(operation_id, "attachment.ingest.preparing", details=details)
@@ -262,6 +282,8 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             control.close()
 
     def _write_directory(self, record: DirectoryIngestRecord, data: bytes) -> None:
+        with workspace_file_mutation_lock(self._workspace_root):
+            save_file_version(self._attachments_root, data, digest=record.digest, length=record.length, attachment_id=record.attachment_id)
         destination = resolve_attachment_directory(self._attachments_root, record.relative_locator)
         if destination.exists():
             verify_content(resolve_attachment_file(destination, ("original", "content")), record.digest, record.length, record.attachment_id)
@@ -295,25 +317,27 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
         observe_phase_sync(record.ingest_idempotency_key, "attachment.ingest.directory_renamed", details=details)
         verify_content(resolve_attachment_file(destination, ("original", "content")), record.digest, record.length, record.attachment_id)
 
-    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False) -> Path:
+    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False, materialize: bool = True) -> Path:
         if parsed.kind != "attachments" or parsed.scope != "workspace" or parsed.scope_id != self.workspace_id or parsed.gateway_authority is not None:
             raise ValueError("附件目录 URI 不属于本机固定工作区")
-        record = self._catalog.require_available_directory(parsed.tail_segments[0])
+        attachment_id = parsed.tail_segments[0]
         children = parsed.tail_segments[1:]
         if for_write and (not children or children[0] != "derived"):
             error = PermissionError("附件原件和预览只读，处理结果必须写入 derived 目录")
             raise mark_public_failure(error, str(error))
-        root = resolve_attachment_directory(self._attachments_root, record.relative_locator)
-        if not root.is_dir():
-            error = FileNotFoundError("附件目录的物理正文缺失")
-            raise mark_public_failure(error, str(error))
+        if materialize:
+            root = self.ensure_directory(attachment_id)
+        else:
+            record = self._catalog.get_directory(attachment_id)
+            if record is None or record.availability == "tombstoned":
+                raise FileNotFoundError(f"附件资源不存在：attachment_id={attachment_id}")
+            root = resolve_attachment_directory(self._attachments_root, record.relative_locator)
         return resolve_attachment_file(root, children)
 
     def read(self, session_id: str | None, file_id: str, *, owner_thread_id: str | None = None) -> ResourceFileContent:
-        with workspace_file_mutation_lock(self._workspace_root):
-            attachment_id, children = self._resource_id(file_id, session_id=session_id, thread_id=owner_thread_id)
-            record = self._catalog.require_available_directory(attachment_id)
-            path = resolve_attachment_file(resolve_attachment_directory(self._attachments_root, record.relative_locator), children)
+        attachment_id, children = self._resource_id(file_id, session_id=session_id, thread_id=owner_thread_id)
+        with self.access_files(attachment_id), workspace_file_mutation_lock(self._workspace_root):
+            path = resolve_attachment_file(self._ensure_directory_locked(attachment_id), children)
             if not path.is_file():
                 raise FileNotFoundError(f"附件文件不存在：{file_id}")
             try:
@@ -326,29 +350,39 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
                     raise RuntimeError("附件原件或预览缺少已登记版本")
                 verify_content(data, version.digest, version.length, attachment_id)
             mime_type = version.mime_type if version is not None else mimetypes.guess_type(path.name)[0]
-            return ResourceFileContent(data, mime_type or "application/octet-stream")
+            result = ResourceFileContent(data, mime_type or "application/octet-stream")
+        return result
 
     def describe_reference(self, attachment: AttachmentRef, *, session_id: str | None) -> AttachmentRef:
         attachment_id, children = self._resource_id(attachment.file_id, session_id=session_id)
-        self._catalog.require_available_directory(attachment_id)
-        if not children:
-            raise IsADirectoryError("附件输入必须明确指向目录内的文件")
-        directory_uri = self.directory_uri(attachment_id)
-        if attachment.directory_uri is not None and parse_resource_uri(attachment.directory_uri, local_gateway_id=get_current_gateway_id()).display_uri != parse_resource_uri(directory_uri, local_gateway_id=get_current_gateway_id()).display_uri:
-            raise ValueError("附件 directory_uri 与原件身份不一致")
-        version = self._catalog.file_version(attachment_id, "/".join(children))
-        return attachment.model_copy(update={
-            "directory_uri": directory_uri,
-            "name": attachment.name or (version.file_name if version is not None else children[-1]),
-            "content_type": attachment.content_type or self.read(session_id, attachment.file_id).content_type,
-        })
+        with self.access_files(attachment_id):
+            self._ensure_held_directory(attachment_id)
+            if not children:
+                raise IsADirectoryError("附件输入必须明确指向目录内的文件")
+            directory_uri = self.directory_uri(attachment_id)
+            if attachment.directory_uri is not None and parse_resource_uri(attachment.directory_uri, local_gateway_id=get_current_gateway_id()).display_uri != parse_resource_uri(directory_uri, local_gateway_id=get_current_gateway_id()).display_uri:
+                raise ValueError("附件 directory_uri 与原件身份不一致")
+            version = self._catalog.file_version(attachment_id, "/".join(children))
+            result = attachment.model_copy(update={
+                "directory_uri": directory_uri,
+                "name": attachment.name or (version.file_name if version is not None else children[-1]),
+                "content_type": attachment.content_type or self.read(session_id, attachment.file_id).content_type,
+            })
+        return result
 
     def read_thumbnail(self, session_id: str | None, file_id: str, *, max_edge: int = 512) -> ResourceFileContent:
         if not 64 <= max_edge <= 1024:
             raise ValueError("图片缩略图 max_edge 必须在 64 到 1024 之间")
         attachment_id, _ = self._resource_id(file_id, session_id=session_id)
+        with self.access_files(attachment_id):
+            result = self._read_thumbnail_held(session_id, file_id, attachment_id=attachment_id, max_edge=max_edge)
+        return result
+
+    def _read_thumbnail_held(self, session_id: str | None, file_id: str, *, attachment_id: str, max_edge: int) -> ResourceFileContent:
         uri = file_uri_child(self.directory_uri(attachment_id), "preview", "512.webp")
-        if max_edge == 512 and self._catalog.file_version(attachment_id, "preview/512.webp") is not None:
+        version = self._catalog.file_version(attachment_id, "preview/512.webp")
+        root = self.ensure_directory(attachment_id)
+        if max_edge == 512 and version is not None and (root / "preview/512.webp").is_file():
             return self.read(session_id, uri)
         source = self.read(session_id, file_id)
         if not source.content_type.startswith("image/"):
@@ -365,8 +399,9 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             raise ValueError(f"附件图片已损坏或不是有效图片：{file_id}") from error
         content = output.getvalue()
         if max_edge == 512:
-            with workspace_file_mutation_lock(self._workspace_root):
-                path = self.resolve_directory_uri(parse_resource_uri(uri, local_gateway_id=get_current_gateway_id()))
+            with self.directory_access(attachment_id), workspace_file_mutation_lock(self._workspace_root):
+                root = self._ensure_directory_locked(attachment_id)
+                path = resolve_attachment_file(root, ("preview", "512.webp"))
                 if path.exists():
                     # 未登记的成品只能与本次确定生成结果一致，不能吸收半写或损坏字节。
                     verify_content(path, "sha256:" + hashlib.sha256(content).hexdigest(), len(content), attachment_id)
@@ -377,8 +412,28 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
                         stream.flush()
                         os.fsync(stream.fileno())
                     fsync_directory(path.parent)
-                self._catalog.publish_file_version(AttachmentFileVersion(attachment_id, "preview/512.webp", "preview", "sha256:" + hashlib.sha256(content).hexdigest(), len(content), None, "image/webp"))
+                digest = "sha256:" + hashlib.sha256(content).hexdigest()
+                save_file_version(self._attachments_root, content, digest=digest, length=len(content), attachment_id=attachment_id)
+                self._catalog.publish_file_version(AttachmentFileVersion(attachment_id, "preview/512.webp", "preview", digest, len(content), None, "image/webp"))
         return ResourceFileContent(content, "image/webp")
+
+    @asynccontextmanager
+    async def admit_directory(self, attachment_id: str) -> AsyncIterator[None]:
+        async def settle() -> None:
+            await run_sync_shielded(self._settle_directory_access, attachment_id)
+
+        try:
+            async with self._directory_operations.lock_for(attachment_id):
+                await run_sync_shielded(self._ensure_held_directory, attachment_id)
+                yield
+        finally:
+            primary_error = sys.exception()
+            try:
+                await run_cleanup_shielded(settle)
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    raise BaseExceptionGroup("附件访问失败且工作副本结清失败", [primary_error, cleanup_error]) from None
+                raise
 
     @asynccontextmanager
     async def admit_working_directory(self, target: Path) -> AsyncIterator[str | None]:
@@ -389,44 +444,129 @@ class AttachmentBlobStore(ForkAttachmentStoreMixin, AttachmentIngestRecoveryMixi
             return
         attachment_id = parse_resource_uri(reference).tail_segments[0]
         async with self._directory_operations.lock_for(attachment_id):
-            # holder 覆盖排队和原生访问结算；取消不能提前允许 GC。
+            # holder 覆盖排队和原生访问结算；取消不能提前释放工作副本。
             yield await run_sync_shielded(self._require_working_directory, target, reference, attachment_id)
 
     def _require_working_directory(self, target: Path, reference: str, attachment_id: str) -> str:
+        self._ensure_held_directory(attachment_id)
         self._catalog.require_available_directory(attachment_id)
         if self.reference_for_path(target) != reference or not target.is_dir():
             raise FileNotFoundError("Shell 工作目录的附件版本不可用")
+        self._catalog.request_working_copy_check(attachment_id, now=self._clock())
+        if self._leases is not None:
+            resource = self._leases.get(attachment_id)
+            if resource is not None and resource.status != "running":
+                self._leases.update_external_state(attachment_id, lifetime_scope="workspace", status="running")
         # 公开引用带当前 Gateway 身份，持久终端 intent 保存同一目标的本机规范 URI。
         return parse_resource_uri(self.directory_uri(attachment_id), local_gateway_id=get_current_gateway_id()).display_uri
 
-    async def collect_garbage(self, *, leases: ExternalResourceLeaseLedger) -> tuple[str, ...]:
-        await self.collect_fork_import_staging()
-        collected = []
-        candidates = await run_sync_shielded(self._catalog.gc_candidates, now=self._clock())
+    async def process_pending_directories(self, *, leases: ExternalResourceLeaseLedger | None = None,
+                                          attachment_ids: Sequence[str] | None = None) -> tuple[str, ...]:
+        """最后关联解除、占用结清、显式重试和启动恢复共用唯一处理入口。"""
+        ledger = leases if leases is not None else self._leases
+        if ledger is None:
+            raise RuntimeError("附件工作副本处理尚未注入原资源占用账本")
+        released = []
+        failures = []
+        candidates = await run_sync_shielded(self._catalog.pending_directories, attachment_ids=attachment_ids)
         for candidate in candidates:
-            async with self._directory_operations.lock_for(candidate.attachment_id, wait=False) as holder:
-                if not holder.acquired:
-                    continue
-                if leases.get(candidate.attachment_id) is not None and leases.leases_for_resource(candidate.attachment_id):
-                    continue
-                # 原 holder 覆盖删除、账本及 tombstone；取消不得在三者之间遗弃收尾。
-                if await run_sync_shielded(self._delete_directory, candidate.attachment_id, leases):
-                    collected.append(candidate.attachment_id)
-        return tuple(collected)
+            try:
+                if await run_sync_shielded(self._try_process_directory, candidate.attachment_id, ledger):
+                    released.append(candidate.attachment_id)
+            except (OSError, RuntimeError, ValueError) as error:
+                failures.append(error)
+        if failures:
+            if len(failures) == 1:
+                raise failures[0]
+            raise ExceptionGroup("附件工作副本处理失败，原目录与待处理事实已保留", failures)
+        return tuple(released)
 
-    def _delete_directory(self, attachment_id: str, leases: ExternalResourceLeaseLedger) -> bool:
+    @contextmanager
+    def access_files(self, *attachment_ids: str, for_write: bool = False) -> Iterator[None]:
+        """真实正文 I/O 结束后结清待处理；重开和普通读不制造解绑事件。"""
+        try:
+            with self.directory_access(*attachment_ids):
+                try:
+                    yield
+                finally:
+                    primary_error = sys.exception()
+                    try:
+                        if for_write:
+                            for attachment_id in attachment_ids:
+                                self._catalog.request_working_copy_check(attachment_id, now=self._clock())
+                    except BaseException as cleanup_error:
+                        if primary_error is not None:
+                            raise BaseExceptionGroup("附件修改失败且待处理登记失败", [primary_error, cleanup_error]) from None
+                        raise
+        finally:
+            primary_error = sys.exception()
+            try:
+                for attachment_id in attachment_ids:
+                    self._settle_directory_access(attachment_id)
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    raise BaseExceptionGroup("附件访问失败且工作副本结清失败", [primary_error, cleanup_error]) from None
+                raise
+
+    def _settle_directory_access(self, attachment_id: str) -> None:
+        if self._leases is None or self._directory_access_held(attachment_id):
+            return
+        pending = self._catalog.pending_directories(attachment_ids=(attachment_id,))
+        if pending:
+            self._try_process_directory(attachment_id, self._leases)
+
+    def _try_process_directory(self, attachment_id: str, ledger: ExternalResourceLeaseLedger) -> bool:
+        try:
+            with self.directory_access(attachment_id, wait=False):
+                if ledger.get(attachment_id) is not None and ledger.leases_for_resource(attachment_id):
+                    self._catalog.retain_working_copy(attachment_id,
+                        reason="真实操作仍占用附件目录，等待原 owner 核实结清", now=self._clock())
+                    return False
+                try:
+                    return self._release_directory(attachment_id, ledger)
+                except (OSError, RuntimeError, ValueError) as error:
+                    self._catalog.retain_working_copy(attachment_id,
+                        reason=f"工作副本处理未完成：{type(error).__name__}: {error}", now=self._clock())
+                    raise
+        except portalocker.AlreadyLocked:
+            return False
+
+    def _release_directory(self, attachment_id: str, leases: ExternalResourceLeaseLedger) -> bool:
         with workspace_file_mutation_lock(self._workspace_root):
             try:
-                record = self._catalog.begin_delete(attachment_id, now=self._clock())
-            except AttachmentDirectoryRetainedError:
+                record = self._catalog.require_releasable_directory(attachment_id, now=self._clock())
+            except AttachmentDirectoryRetainedError as error:
+                self._catalog.retain_working_copy(attachment_id, reason=str(error), now=self._clock())
                 return False
-            remove_directory(resolve_attachment_directory(self._attachments_root, record.relative_locator))
-        # deleting 与目录 holder 已关闭该目录准入；账本不占无关文件的工作区写锁。
+            if self._file_operations is not None and self._file_operations.attachment_directory_in_use(attachment_id):
+                self._catalog.retain_working_copy(attachment_id, reason="原文件操作尚未结清，保留附件工作副本", now=self._clock())
+                return False
+            if record.availability == "released":
+                return False
+            if record.availability == "rebuilding":
+                self._ensure_directory_locked(attachment_id)
+                record = self._catalog.require_available_directory(attachment_id)
+            root = resolve_attachment_directory(self._attachments_root, record.relative_locator)
+            if record.availability == "available":
+                self._save_directory_versions(attachment_id, root)
+                if not self._matches_initial_baseline(attachment_id, root):
+                    self._catalog.retain_working_copy(attachment_id, reason="目录相对上传初始基线有修改，保留原位置与处理结果", now=self._clock(), pending=False)
+                    return False
+                self._catalog.set_working_copy_state(attachment_id, expected="available", state="releasing", now=self._clock())
+            else:
+                self._require_saved_original(attachment_id)
+                if root.exists() and not self._matches_initial_baseline(attachment_id, root, partial=True):
+                    raise RuntimeError("释放中断后出现非基线内容，保留附件目录")
+            remove_directory(root)
+        # 状态及原 holder 继续关闭准入，账本不占无关文件的工作区写锁。
         if leases.get(attachment_id) is not None:
             leases.update_external_state(attachment_id, lifetime_scope="workspace", status="stopped")
-        # 账本失败仍保留 deleting，原到期查询可沿同一 locator 幂等重试。
-        self._catalog.finish_delete(attachment_id, now=self._clock())
+        self._catalog.set_working_copy_state(attachment_id, expected="releasing", state="released", now=self._clock())
         return True
+
+    async def settle_working_directory(self, reference: str) -> None:
+        attachment_id = parse_resource_uri(reference).tail_segments[0]
+        await self.process_pending_directories(attachment_ids=(attachment_id,))
 
     def _assert_session_active(self, session_id: str, thread_id: str) -> int:
         """gate 内 fresh 校验 catalog 节点 active、fence active 且 thread 未失效。"""

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
@@ -20,6 +20,7 @@ from app.services.infrastructure.attachment_blob_catalog.directory_schema import
     DIRECTORY_SCHEMA_VERSION,
     initialize_directory_schema,
     require_directory_schema,
+    upgrade_directory_schema_4,
 )
 from app.services.infrastructure.attachment_blob_catalog.fork_claims import (
     ForkAttachmentClaimsMixin,
@@ -37,7 +38,6 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 )
 
 CATALOG_DATABASE_NAME = "catalog.sqlite"
-ATTACHMENT_RETENTION = timedelta(days=30)
 
 
 class AttachmentDirectoryRetainedError(RuntimeError):
@@ -54,7 +54,7 @@ def _directory_record(row: sqlite3.Row) -> AttachmentDirectoryRecord:
 
 
 class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
-    """沿用原附件 owner 的注入面，线上只读写 schema 4，不回读旧表。"""
+    """沿用原附件 owner 的注入面，线上只读写当前目录结构，不回读旧表。"""
 
     SCHEMA_VERSION = DIRECTORY_SCHEMA_VERSION
 
@@ -121,6 +121,9 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
             if version == 0:
                 initialize_directory_schema(connection, workspace_id=self.workspace_id)
             else:
+                if version == 4:
+                    upgrade_directory_schema_4(connection, workspace_id=self.workspace_id)
+                    version = self.SCHEMA_VERSION
                 if version != self.SCHEMA_VERSION:
                     raise RuntimeError(
                         f"附件目录只支持 schema {self.SCHEMA_VERSION}，当前 version={version}；"
@@ -214,7 +217,7 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
             (attachment_id, session_id, thread_id, binding_token, timestamp, timestamp),
         )
         connection.execute(
-            "UPDATE attachment_directories SET unattached_since=NULL,gc_after=NULL,updated_at=? WHERE attachment_id=?",
+            "UPDATE attachment_directories SET release_pending=0,release_reason=NULL,updated_at=? WHERE attachment_id=?",
             (timestamp, attachment_id),
         )
 
@@ -262,29 +265,32 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
     @staticmethod
     def _mark_zero_associations(connection: sqlite3.Connection, attachment_id: str, now: datetime) -> None:
         timestamp = now.astimezone(UTC).isoformat()
-        deadline = (now.astimezone(UTC) + ATTACHMENT_RETENTION).isoformat()
         connection.execute(
-            "UPDATE attachment_directories SET unattached_since=COALESCE(unattached_since,?),gc_after=COALESCE(gc_after,?),updated_at=? "
-            "WHERE attachment_id=? AND NOT EXISTS (SELECT 1 FROM attachment_directory_associations a WHERE a.attachment_id=? AND a.state='active')",
-            (timestamp, deadline, timestamp, attachment_id, attachment_id),
+            "UPDATE attachment_directories SET release_pending=1,release_reason=NULL,updated_at=? "
+            "WHERE attachment_id=? AND availability NOT IN ('released','tombstoned') "
+            "AND NOT EXISTS (SELECT 1 FROM attachment_directory_associations a WHERE a.attachment_id=? AND a.state='active')",
+            (timestamp, attachment_id, attachment_id),
         )
 
-    def gc_candidates(self, *, now: datetime) -> tuple[AttachmentDirectoryRecord, ...]:
+    def pending_directories(self, *, attachment_ids: Sequence[str] | None = None) -> tuple[AttachmentDirectoryRecord, ...]:
+        if attachment_ids is not None and not attachment_ids:
+            return ()
+        selected = "" if attachment_ids is None else f" AND attachment_id IN ({','.join('?' for _ in attachment_ids)})"
         rows = self._connected().execute(
-            "SELECT * FROM attachment_directories WHERE availability='deleting' OR "
-            "(availability='available' AND gc_after<=? AND (retention_until IS NULL OR retention_until<=?)) ORDER BY attachment_id",
-            (now.astimezone(UTC).isoformat(), now.astimezone(UTC).isoformat()),
+            "SELECT * FROM attachment_directories WHERE (release_pending=1 OR availability IN ('releasing','rebuilding'))"
+            + selected + " ORDER BY attachment_id", () if attachment_ids is None else tuple(attachment_ids),
         ).fetchall()
         return tuple(_directory_record(row) for row in rows)
 
-    def begin_delete(self, attachment_id: str, *, now: datetime) -> AttachmentDirectoryRecord:
+    def require_releasable_directory(self, attachment_id: str, *, now: datetime) -> AttachmentDirectoryRecord:
+        """调用方已持原目录 holder；事务内复核全部持久依赖，不按时间猜占用终态。"""
         with self.write_transaction() as connection:
             record = self.get_directory(attachment_id)
             if record is None or record.availability == "tombstoned":
                 raise FileNotFoundError(f"附件目录不存在：attachment_id={attachment_id}")
             timestamp = now.astimezone(UTC).isoformat()
-            if record.availability != "deleting" and (record.gc_after is None or record.gc_after > timestamp or (record.retention_until is not None and record.retention_until > timestamp)):
-                raise AttachmentDirectoryRetainedError("附件目录尚未到期")
+            if record.retention_until is not None and record.retention_until > timestamp:
+                raise AttachmentDirectoryRetainedError("附件目录仍有明确保留承诺")
             association = connection.execute("SELECT 1 FROM attachment_directory_associations WHERE attachment_id=? AND state='active' LIMIT 1", (attachment_id,)).fetchone()
             ingest = connection.execute("SELECT 1 FROM attachment_directory_ingests WHERE attachment_id=? AND state IN ('preparing','durable') LIMIT 1", (attachment_id,)).fetchone()
             fork = connection.execute(
@@ -296,17 +302,30 @@ class AttachmentBlobCatalog(IngestMixin, ForkAttachmentClaimsMixin):
             ).fetchone()
             if association is not None or ingest is not None or fork is not None:
                 raise AttachmentDirectoryRetainedError("附件目录仍有关联或未结清操作")
-            connection.execute("UPDATE attachment_directories SET availability='deleting',updated_at=? WHERE attachment_id=?", (timestamp, attachment_id))
-            # 同一写事务已核实该行存在；返回实际写入后的完整记录。
-            return _directory_record(connection.execute("SELECT * FROM attachment_directories WHERE attachment_id=?", (attachment_id,)).fetchone())
+            return record
 
-    def finish_delete(self, attachment_id: str, *, now: datetime) -> None:
+    def set_working_copy_state(self, attachment_id: str, *, expected: str, state: str, now: datetime) -> None:
+        """释放与重建只改变工作副本事实，资源身份和不可变版本永不变成新资源。"""
+        allowed = {("available", "releasing"), ("releasing", "released"), ("released", "rebuilding"), ("rebuilding", "available")}
+        if (expected, state) not in allowed:
+            raise ValueError("附件工作副本状态转换非法")
         with self.write_transaction() as connection:
             changed = connection.execute(
-                "UPDATE attachment_directories SET availability='tombstoned',updated_at=? WHERE attachment_id=? AND availability='deleting'",
-                (now.astimezone(UTC).isoformat(), attachment_id),
+                "UPDATE attachment_directories SET availability=?,release_pending=0,release_reason=NULL,updated_at=? WHERE attachment_id=? AND availability=?",
+                (state, now.astimezone(UTC).isoformat(), attachment_id, expected),
             ).rowcount
             if not changed:
                 record = self.get_directory(attachment_id)
-                if record is None or record.availability != "tombstoned":
-                    raise RuntimeError("附件目录没有登记 deleting，不能伪报已回收")
+                if record is None or record.availability != state:
+                    raise RuntimeError("附件工作副本状态前像冲突")
+
+    def request_working_copy_check(self, attachment_id: str, *, now: datetime) -> None:
+        with self.write_transaction() as connection:
+            self._mark_zero_associations(connection, attachment_id, now)
+
+    def retain_working_copy(self, attachment_id: str, *, reason: str, now: datetime, pending: bool = True) -> None:
+        with self.write_transaction() as connection:
+            connection.execute(
+                "UPDATE attachment_directories SET release_pending=?,release_reason=?,updated_at=? WHERE attachment_id=? AND availability<>'tombstoned'",
+                (int(pending), reason, now.astimezone(UTC).isoformat(), attachment_id),
+            )

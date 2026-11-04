@@ -656,7 +656,7 @@ def _build_app_container(
         instruction_file_resolver=resolve_instruction_file,
     )
     attachment_blob_store = AttachmentBlobStore(
-        resolved_workspace_root, path_resolver=session_path_resolver, clock=clock_ports.wall,
+        resolved_workspace_root, path_resolver=session_path_resolver, leases=external_resource_leases, clock=clock_ports.wall,
     )
     construction.callback(attachment_blob_store.close)
     workspace_service = WorkspaceService(
@@ -665,6 +665,8 @@ def _build_app_container(
         attachments=attachment_blob_store,
         native_directories=native_directories(),
     )
+    attachment_blob_store.bind_file_operations(workspace_service.file_operations)
+    construction.callback(workspace_service.close)
     terminal_manager_client = TerminalManagerClient(
         config_service=config_service,
         workspace_id=workspace_id,
@@ -1087,9 +1089,9 @@ def _build_app_container(
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
             attachment_blob_store.release_session_references(session_id)
-            collected = await attachment_blob_store.collect_garbage(leases=external_resource_leases)
-            await observe_phase(session_id, "attachments.gc.completed", details={
-                "collected_attachment_ids": list(collected),
+            released = await attachment_blob_store.process_pending_directories()
+            await observe_phase(session_id, "attachments.working_copies.processed", details={
+                "released_attachment_ids": list(released),
             })
 
         session_path_resolver.bind_fork_retention_release_callback(checkpointer.release_fork_retentions)

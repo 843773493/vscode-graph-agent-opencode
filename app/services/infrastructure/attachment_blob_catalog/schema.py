@@ -1,4 +1,4 @@
-"""仅供显式离线迁移核对 schema 3；线上只使用 directory_schema 的 schema 4。"""
+"""仅供显式离线迁移核对 schema 3；线上只使用 directory_schema 的 schema 5。"""
 
 from __future__ import annotations
 

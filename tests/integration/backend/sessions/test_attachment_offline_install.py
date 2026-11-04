@@ -22,6 +22,9 @@ from app.services.infrastructure.attachment_blob_catalog.directory_schema import
 from app.services.infrastructure.attachment_blob_catalog.legacy_references import (
     verify_legacy_references,
 )
+from app.services.infrastructure.attachment_blob_catalog.locator import (
+    resolve_file_version,
+)
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
 )
@@ -65,14 +68,21 @@ def assert_installed(case: BackupCase) -> tuple[dict[str, object], Path]:
         connection.row_factory = sqlite3.Row
         require_directory_schema(connection)
         verify_legacy_references(connection)
-        rows = connection.execute("SELECT relative_locator FROM attachment_directories WHERE availability='available'").fetchall()
+        rows = connection.execute(
+            "SELECT d.relative_locator,f.digest,f.length FROM attachment_directories d "
+            "JOIN attachment_directory_files f USING(attachment_id) WHERE d.availability='available' AND f.role='original'",
+        ).fetchall()
         assert rows
     for row in rows:
         original = live / row[0] / "original/content"
         assert original.read_bytes() == BODY
+        saved = resolve_file_version(live, row["digest"])
+        assert saved.read_bytes() == BODY and saved.stat().st_size == row["length"] == len(BODY)
+        assert saved.stat().st_ino != original.stat().st_ino
         if os.name != "nt":
             assert not original.stat().st_mode & 0o222
             assert not original.parent.stat().st_mode & 0o222
+            assert not saved.stat().st_mode & 0o222
     with closing(sqlite3.connect(case.index_path)) as connection:
         assert tuple(connection.execute("SELECT item_id, content_hash FROM item_catalog ORDER BY item_sequence")) == case.canonical_items
         assert connection.execute("SELECT COUNT(*) FROM execution_queue WHERE phase='queued'").fetchone()[0] == 1
@@ -99,12 +109,47 @@ async def test_cli_install_retry_and_rollback_keep_history_and_both_directory_ve
     assert file_digest(case.original) == before and case.original.read_bytes() == BODY
     with closing(sqlite3.connect(live / "catalog.sqlite")) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
-    preserved = case.workspace / ".boxteam" / (".attachment-install-" + journal["backup_id"]) / "discarded/catalog.sqlite"
-    assert preserved.is_file()
+    preserved = case.workspace / ".boxteam" / (".attachment-install-" + journal["backup_id"]) / "discarded"
+    assert (preserved / "catalog.sqlite").is_file()
+    assert tuple(path.read_bytes() for path in (preserved / ".versions/sha256").iterdir()) == (BODY,)
     assert frozen_files(case.output) == frozen
     assert cli("rollback", "--workspace", str(case.workspace), "--backup", str(case.output)).returncode == 0
     with AttachmentMaintenanceLock(live, exclusive=False):
         pass
+
+
+async def test_image_install_keeps_original_preview_and_local_reliable_versions(legacy_case_factory) -> None:
+    case = legacy_case_factory("preview")
+    backup.prepare_backup(case.workspace, case.output)
+    directories.convert_backup(case.output)
+    catalog.prepare_converted_catalog(case.output)
+    frozen = frozen_files(case.output)
+    response = install.install_converted_catalog(case.workspace, case.output)
+    live = case.workspace / ".boxteam/attachments"
+    with closing(sqlite3.connect(live / "catalog.sqlite")) as connection:
+        connection.row_factory = sqlite3.Row
+        require_directory_schema(connection)
+        verify_legacy_references(connection)
+        files = tuple(connection.execute(
+            "SELECT d.relative_locator,f.relative_path,f.digest,f.length,f.mime_type "
+            "FROM attachment_directory_files f JOIN attachment_directories d USING(attachment_id)",
+        ))
+    assert len(files) == 3
+    preview = base64.b64decode(case.evidence["preview_base64"])
+    image = base64.b64decode(case.evidence["image_base64"])
+    for locator, relative, digest, length, mime in files:
+        expected = preview if relative == "preview/512.webp" else image if mime == "image/png" else BODY
+        assert expected and (live / locator / relative).read_bytes() == expected
+        saved = resolve_file_version(live, digest)
+        assert saved.read_bytes() == expected and saved.stat().st_size == length == len(expected)
+    installed = frozen_files(live)
+    assert install.install_converted_catalog(case.workspace, case.output) == response
+    assert frozen_files(live) == installed
+    assert install.rollback_install(case.workspace, case.output)["state"] == "aborted"
+    assert case.original.read_bytes() == BODY
+    with closing(sqlite3.connect(live / "catalog.sqlite")) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert frozen_files(case.output) == frozen
 
 
 async def test_installed_catalog_starts_product_owner_preserves_history_and_accepts_new_upload(
@@ -133,7 +178,7 @@ async def test_installed_catalog_starts_product_owner_preserves_history_and_acce
     try:
         container = _build_owned_container(case.workspace, monkeypatch, request)
         store = container.attachment_blob_store
-        assert store._catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert store._catalog.connection.execute("PRAGMA user_version").fetchone()[0] == 5
         history = container.checkpointer.load_history(case.session_id, case.thread_id, TurnHistoryLoadRequest(direction="tail"))
         original = next(message for turn in history.items for message in turn.user_messages if message.message_id == case.message_id)
         (reference,) = original.attachments
@@ -217,19 +262,30 @@ async def test_process_exit_between_root_renames_blocks_startup_and_resumes_orig
     assert frozen_files(case.output) == frozen
 
 
-async def test_copy_interruption_resumes_without_overwriting_source_or_partial_target(prepared_install: BackupCase, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("stage", ["version", "catalog"])
+async def test_copy_interruption_resumes_without_overwriting_source_or_partial_target(
+    prepared_install: BackupCase, monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
     case = prepared_install
-    original = install._copy
-    def interrupt(source, target):
-        original(source, target)
-        raise OSError("catalog 副本 durable 后中断")
+    owner, method = (directories, "save_file_version") if stage == "version" else (install, "_copy")
+    original = getattr(owner, method)
+    def interrupt(*args, **kwargs):
+        original(*args, **kwargs)
+        raise OSError("副本 durable 后中断")
     with monkeypatch.context() as patch:
-        patch.setattr(install, "_copy", interrupt)
+        patch.setattr(owner, method, interrupt)
         with pytest.raises(OSError, match="durable"):
             install.install_converted_catalog(case.workspace, case.output)
     assert case.original.read_bytes() == BODY
+    journal = json.loads((case.workspace / ".boxteam/attachment-migration.json").read_bytes())
+    staged = case.workspace / ".boxteam" / (".attachment-install-" + journal["backup_id"]) / "attachments"
+    saved, = (staged / ".versions/sha256").iterdir()
+    before = saved.stat()
+    assert saved.read_bytes() == BODY
     assert install.install_converted_catalog(case.workspace, case.output)["state"] == "installed"
-    assert_installed(case)
+    _, live = assert_installed(case)
+    published = live / saved.relative_to(staged)
+    assert (published.stat().st_ino, published.stat().st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
 
 
 async def test_source_sqlite_row_change_since_backup_refuses_install_before_journal(prepared_install: BackupCase) -> None:

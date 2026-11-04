@@ -9,7 +9,6 @@ import subprocess
 import sys
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -149,7 +148,7 @@ def ingest_case(request: pytest.FixtureRequest, session_bundle_factory):
     root = prepare_test_workspace(workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces", template_items=())
     session_bundle_factory(root / ".boxteam/sessions", SESSION)
-    with closing(AttachmentBlobStore(root)) as store, RolloutCheckpointSaver(root / ".boxteam/sessions", attachment_store=store) as saver:
+    with closing(AttachmentBlobStore(root, leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json"))) as store, RolloutCheckpointSaver(root / ".boxteam/sessions", attachment_store=store) as saver:
         messages = MessageService(main_thread_resolver=store._path_resolver.main_thread_id,
                                   checkpointer=saver, attachment_store=store, workspace_root=root)
         yield IngestCase(root, store, saver, messages)
@@ -180,9 +179,9 @@ async def test_restart_recovers_upload_pin_at_real_durable_boundary(ingest_case,
         assert not resolve_staging_path(case.store._attachments_root, record["staging_relative_locator"]).exists()
         directory = case.store._catalog.get_directory(record["attachment_id"])
         if published:
-            assert directory.availability == "available"
+            assert directory.availability == ("available" if accepted else "released")
+            assert directory.release_pending == 0
             assert case.store.read(SESSION, case.store.reference(directory.attachment_id)).data == BODY
-            assert bool(directory.gc_after) is not accepted
         else:
             assert directory is None
             assert not resolve_attachment_directory(case.store._attachments_root, record["relative_locator"]).exists()
@@ -352,12 +351,11 @@ async def test_recovery_releases_only_unaccepted_message_reference(
         )).fetchone()
         assert failed[0] == "failed"
     assert abandoned.attachments[0].file_id != message.attachments[0].file_id
-    current = datetime.now(UTC)
-    case.store._clock = lambda: current + timedelta(days=31)
-    await case.store.collect_garbage(leases=ExternalResourceLeaseLedger(state_path=case.root / ".boxteam/resources.json"))
+    await case.store.process_pending_directories()
     assert case.store.read(SESSION, message.attachments[0].file_id).data == BODY
-    with pytest.raises(FileNotFoundError):
-        case.store.read(SESSION, abandoned.attachments[0].file_id)
+    abandoned_id = parse_resource_uri(abandoned.attachments[0].file_id).attachment_id
+    assert case.store._catalog.get_directory(abandoned_id).availability == "released"
+    assert case.store.read(SESSION, abandoned.attachments[0].file_id).data == (BODY if same_body else b"unaccepted-only")
 
 
 @pytest.mark.asyncio

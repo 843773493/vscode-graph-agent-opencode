@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import aclosing, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,7 +65,7 @@ async def _observe_batch_once(
 
 async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatchService,
                       roots: tuple[Path, ...], after_event_id: int | None,
-                      references: dict[Path, str]) -> AsyncIterator[WorkspaceFileChangeBatch]:
+                      references: dict[Path, str]) -> AsyncGenerator[WorkspaceFileChangeBatch, None]:
     def reference(path: Path) -> str:
         matches = [root for root in references if path == root or path.is_relative_to(root)]
         if not matches:
@@ -111,7 +111,7 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                     for value in event["directories"]:
                         revision = WorkspaceDirectoryRevisionDTO.model_validate(value)
                         key = revision.directory_key
-                        path = await asyncio.to_thread(owner.paths.native, key.path)
+                        path = await asyncio.to_thread(owner.paths.native, key.path, materialize=False)
                         if any(path == root or path.is_relative_to(root) for root in roots):
                             directories.append(revision)
                     if directories:

@@ -1,29 +1,30 @@
 ## Why
 
-用户上传的附件需要可由文件工具和 Shell 继续处理的独立工作目录，而现有按 digest 共享的单文件 blob、Session/Thread 私有引用及即时 GC 无法表达这个生命周期。现有资源回收也存在漏 detach 后无法成为孤儿、重启遗留占用阻断释放，以及单个 Thread 清理失败或一直不返回而阻断整个闲置扫描的问题。
+用户上传的附件需要可由现有文件工具和 Shell 处理的独立工作目录。目录主链已实现，本次按 2026-11-04 用户裁定简化剩余生命周期：最后关联解除后检查目录，修改过的保留，未修改的释放工作副本；重新使用时从已保存原件重建。附件收尾不再承担全部外部资源的关闭治理。
 
 ## What Changes
 
-- 以工作区附件目录为资源单位，每次独立上传创建独立资源；目录包含原件、预览及处理结果，关联和回收只计算整个目录，不逐文件维护 Thread 引用。
-- 复用现有领域 owner、Thread attach/detach、operation lease 和恢复对账机制。上传成功自动关联发起 Thread，Thread 释放由后端解除关联；最后一次 detach 后默认保留 30 天，以低频检查和删除前事务复核回收目录。
-- **BREAKING** 附件目录替代按内容摘要合并上传资源的身份和保留机制；digest 仅校验明确的文件版本，不能作为可变目录身份。迁齐上传、媒体读取、文件工具、Shell、历史、fork 和删除消费者后移除旧附件存储链路。
-- 在统一 URI owner 中登记工作区附件目录及文件 child 模板；Shell 的结构化工作目录在目标端解析 URI，命令正文继续使用原生 Shell 语义，不做命令字符串替换。
-- 保留上传原件；处理结果使用新文件/子目录。已封存的 canonical 输入和 assembly 不从当前目录重建，回收后历史展示明确不可用，不能改写历史或伪造成功。
-- 补齐运行时 owner 失效、崩溃恢复和挂起操作的可核验释放规则；闲置扫描对单个 Thread 的卸载最多等待 30 秒，超时后保留唯一在途清理任务并继续扫描，原任务失败后才允许后续周期重试，不能重复发起外部释放。
-- 已完成 Thread 闲置扫描失败隔离/周期重试与有界等待，以及 Shell、Browser 资源记录查询的遗留改名调用迁齐；接续实施附件目录的单链路迁移。全仓调用方与 schema 3 离线切换范围见 design，线上目录链已迁齐，挂起任务终止核实、共享 owner 锁隔离和关闭期限仍按未完成任务推进，不把规划或扫描等待超时当作资源已经释放。
+- 每次独立上传仍创建独立的工作区目录资源；原件、预览和处理结果使用同一目录身份与统一资源 URI，普通文件操作和 Shell 继续复用原链路。
+- **BREAKING** 取消最后一次 detach 后统一保留 30 天的附件目录策略。Thread 卸载、Thread/Session 删除或恢复对账实际解除最后关联后，附件 owner 在无有效占用时检查目录：有修改保留现有目录；无修改释放可重建的工作目录。仍有关联或有效占用时延后，相关事实解除后重新处理。
+- “修改”相对于上传原件与系统可再生文件的初始基线判断；新增、修改或删除需要保留的处理结果均属于修改，系统自动预览与单纯读取不算。已经保留的派生结果不会因下一次卸载没有新写入而被删除；修改目录不再按旧 30 天期限自动回收。
+- 上传原件须有可靠的持久版本，复用既有不可变资产/版本 owner。释放工作目录不删除附件身份、原件来源或历史依赖；读取、查看、文件操作及 Shell 经同一附件 owner 按原 URI 重建，不要求重新上传。
+- 已封存的 canonical 输入、assembly、历史来源及 request_hash 合同保持；fork 沿用原 capture/claim/publication，并处理工作目录已释放后的原件重建。
+- 全量迁齐附件调用方后物理删除被替代的 30 天到期查询、周期 GC 及其生产分支和死测试，保持唯一生命周期链路。必要的重启待处理恢复复用原 catalog 与占用事实，不增加另一套任务或 lease 账本。
+- 通用 MCP、Node Debug、Terminal/Browser 全生命周期接管、不合作执行强制终止及整个 Backend/shutdown 硬期限保留为独立后续 TODO，不作为本次附件归档门槛；已有共享修复及其它模块仍使用的能力保留。
 
 ## Capabilities
 
 ### New Capabilities
 
-- `managed-attachment-directories`: 工作区附件目录、URI 与 Shell 访问、Thread 关联、30 天回收、历史/fork 保留及失效 owner 对账。
+- `managed-attachment-directories`: 独立附件目录、目标端 URI/Shell 访问、按修改和实际占用处理工作副本、原件重建及历史/fork 保护。
 
 ### Modified Capabilities
 
-- `structured-user-message-attachments`: 上传原件和预览改由工作区目录资源保存，消息使用其文件与目录 URI。
+- `structured-user-message-attachments`: 原件保存与目录工作副本分离；工作目录释放后，原件/预览及模型附件引用仍经同一 owner 使用。
 
 ## Impact
 
-- 影响 attachment store/catalog、UserContentBuilder、统一 URI owner、文件操作 owner、Terminal workdir、Thread residency、Session/Thread 删除和 fork 资源处理；不新增服务、第二套文件操作链路或另一套 lease 账本。
-- 与 `add-itemized-rollout-context` 的附件 blob/owner refs、`add-unified-virtual-resource-addressing` 的附件单文件模板、`add-unified-resource-file-tools` 的只读附件产物边界及 `add-workspace-persistent-resource-management` 的即时释放规则做显式衔接，冲突与替代顺序记录在 design。
-- 保持 SQLite、canonical item、冻结请求、现有媒体预览和权限边界。只有实际调整数据库结构才提升对应 schema；支持的旧数据范围沿用项目政策，迁移不得静默丢弃原件或双读旧实现。
+- 修改附件 catalog/store、上传/接受、普通读取/媒体/文件/Shell、Thread 关联通知、Session/Thread 删除、启动恢复和 fork 消费者；不新增服务、通用文件工具或第二份可变附件正文。
+- 与 itemized、统一 URI、文件操作、持久资源及历史存储去重的既有规范衔接；资源定位继续使用 URI，目标机器的原生操作参数、展示、正文、诊断及必要原生配置遵循字段职责合同。
+- 支持当前 schema 4 数据及现有 schema 3 显式离线迁移入口；实际改变结构才提升对应 schema 并迁齐转换工具。旧自动期限不再驱动新策略，旧明确保留承诺与历史版本继续保护。
+- 本次仅修订规划；当前代码及此前通过的 30 天回收测试不代表新合同已经实现或验收，任务清单保留新的实现与验收门。

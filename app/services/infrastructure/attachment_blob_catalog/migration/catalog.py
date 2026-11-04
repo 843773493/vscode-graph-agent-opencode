@@ -1,4 +1,4 @@
-"""将已准备目录和旧历史绑定转换为隔离的 schema 4 catalog，不切换线上 owner。"""
+"""将已准备目录和旧历史绑定转换为隔离的新 catalog，不切换线上 owner。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ from app.services.infrastructure.attachment_blob_catalog.records import (
 # 列顺序只负责参数绑定与逐行核验；结构、约束和版本唯一定义在 SQL 资产。
 _COLUMNS = {
     "attachment_directory_metadata": ("singleton_id", "workspace_id", "schema_version"),
-    "attachment_directories": ("attachment_id", "relative_locator", "availability", "protection", "created_at", "updated_at", "unattached_since", "gc_after", "retention_until"),
+    "attachment_directories": ("attachment_id", "relative_locator", "availability", "protection", "created_at", "updated_at", "retention_until", "release_pending", "release_reason"),
     "attachment_directory_files": ("attachment_id", "relative_path", "role", "digest", "length", "file_name", "mime_type"),
     "attachment_directory_associations": ("attachment_id", "session_id", "thread_id", "binding_token", "state", "created_at", "updated_at"),
     "attachment_legacy_bindings": ("attachment_id", "owner_ref_id", "source_session_id", "source_thread_id", "source_blob_id", "source_owner_json", "source_blob_json"),
@@ -67,7 +67,7 @@ def _source_rows(directory: Path, plan: DirectoryPlan) -> dict[str, list[tuple[o
         retention = None if owner.retention_until is None else _timestamp(owner.retention_until).isoformat()
         rows["attachment_directories"].append((
             resource.attachment_id, locator, blob.availability, blob.protection,
-            created.isoformat(), updated.isoformat(), resource.unattached_since, resource.gc_after, retention,
+            created.isoformat(), updated.isoformat(), retention, int(blob.availability == "available" and owner.state == "released"), None,
         ))
         # 已回收目录也保留原件的版本事实，但不会建立物理目录或伪造可读字节。
         rows["attachment_directory_files"].append((
@@ -168,7 +168,7 @@ def verify_converted_catalog(directory: Path) -> dict[str, object]:
 
 
 def prepare_converted_catalog(directory: Path) -> dict[str, object]:
-    """原件目录核验后准备 schema 4，失败只重建本 journal 名下的未发布临时库。"""
+    """原件目录核验后准备新 catalog，失败只重建本 journal 名下的未发布临时库。"""
     directory = directory.expanduser().resolve(strict=True)
     root = checked_path(directory, "converted")
     with AttachmentMaintenanceLock(root, exclusive=True):

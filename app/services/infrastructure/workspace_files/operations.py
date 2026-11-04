@@ -136,14 +136,18 @@ class WorkspaceFileOperations:
                 await asyncio.to_thread(self._cleanup, self.store.get(operation_id, actor))
             await asyncio.to_thread(self._prune_unaccepted_uploads)
             for operation_id, actor in self.store.pending():
-                await asyncio.to_thread(self._execute, self.store.get(operation_id, actor))
+                record = self.store.get(operation_id, actor)
+                await asyncio.to_thread(self._execute, record)
+                await self.paths.settle_accesses(*self._attachment_references(record))
             self.worker_state = "running"
             self._ready.set()
             while not self._stopping:
                 self._changed.clear()
                 pending = self.store.pending()
                 for operation_id, actor in pending:
-                    await asyncio.to_thread(self._execute, self.store.get(operation_id, actor))
+                    record = self.store.get(operation_id, actor)
+                    await asyncio.to_thread(self._execute, record)
+                    await self.paths.settle_accesses(*self._attachment_references(record))
                     if self._stopping:
                         break
                 remaining = [self.store.get(operation_id, actor) for operation_id, actor in self.store.pending()]
@@ -171,9 +175,14 @@ class WorkspaceFileOperations:
         return key, target
 
     def _restore_directory_paths(self) -> None:
+        bindings = [(key, self.paths.native(uri, materialize=False)) for key, uri in self.store.observed_directories()]
+        for operation_id, actor in self.store.staging_records():
+            record = self.store.get(operation_id, actor)
+            key = WorkspaceDirectoryKeyDTO.model_validate(record.payload["directory_key"])
+            bindings.append((key, self.paths.native(record.payload["target"])))
         with self.observation_lock:
-            for key, uri in self.store.observed_directories():
-                self._directory_paths.setdefault(self.paths.native(uri), set()).add(key)
+            for key, target in bindings:
+                self._directory_paths.setdefault(target, set()).add(key)
 
     def observed_directories(self, paths: set[Path], *, removed: set[Path] | None = None):
         with self.observation_lock:
@@ -207,7 +216,12 @@ class WorkspaceFileOperations:
             self._validate_destination(target / name, child, root_uri=root_uri)
 
     def _stage_root(self, record: FileOperationRecord, index: int) -> Path:
-        target = self.paths.native(record.steps[index]["target"], for_write=True)
+        key = WorkspaceDirectoryKeyDTO.model_validate(record.payload["directory_key"])
+        with self.observation_lock:
+            roots = [path for path, keys in self._directory_paths.items() if key in keys]
+        if len(roots) != 1:
+            raise RuntimeError("原文件 operation 缺少唯一目标目录绑定")
+        target = roots[0] / record.steps[index]["relative_path"]
         return target.parent / f".boxteam-file-{record.operation_id}-{index}"
 
     def observe_directories(self, directories: list[tuple[WorkspaceDirectoryKeyDTO, Path]]):
@@ -296,8 +310,7 @@ class WorkspaceFileOperations:
                 replay = self.store.replay(intent.client_operation_id, actor, request_hash)
                 if replay is not None:
                     return replay
-                payload = await asyncio.to_thread(self._prepare, kind, key, target, intent, actor, data, incoming, request_hash)
-                receipt = self.store.accept(actor=actor, kind=kind, intent=intent, request_hash=request_hash, payload=payload)
+                receipt = await asyncio.to_thread(self._accept, kind, key, target, intent, actor, data, incoming, request_hash)
                 accepted = True
                 self._changed.set()
                 return receipt
@@ -312,6 +325,19 @@ class WorkspaceFileOperations:
                             raise BaseExceptionGroup("文件受理及本次上传暂存回收均失败",
                                                      [original_error, cleanup_error]) from None
                         raise
+
+    def _accept(self, kind: str, key: WorkspaceDirectoryKeyDTO, target: Path,
+                intent: WorkspaceFileMutationIntentDTO, actor: str, data: dict,
+                incoming: Path | None, request_hash: str) -> WorkspaceFileOperationReceiptDTO:
+        values = [key.path, *data.get("source_paths", [])]
+        if "source_path" in data:
+            values.append(data["source_path"])
+        # holder 保护正文准备至原 pending operation 持久受理的交接。
+        with self.paths.access(*values):
+            with self.observation_lock:
+                self._directory_paths.setdefault(target, set()).add(key)
+            payload = self._prepare(kind, key, target, intent, actor, data, incoming, request_hash)
+            return self.store.accept(actor=actor, kind=kind, intent=intent, request_hash=request_hash, payload=payload)
 
     def _prepare(self, kind: str, key: WorkspaceDirectoryKeyDTO, target: Path,
                  intent: WorkspaceFileMutationIntentDTO, actor: str, data: dict,
@@ -463,7 +489,28 @@ class WorkspaceFileOperations:
                 observations.append(self._observe(directory_key, real))
         return observations
 
+    @staticmethod
+    def _attachment_references(record: FileOperationRecord) -> tuple[str, ...]:
+        values = [record.payload["target"]]
+        values.extend(entry["source"]["uri"] for entry in record.payload["entries"]
+                      if entry["source"] is not None and "uri" in entry["source"])
+        return tuple(values)
+
+    def attachment_directory_in_use(self, attachment_id: str) -> bool:
+        """原待处理 operation 是唯一排队事实，不为附件复制队列或 lease。"""
+        for operation_id, actor in self.store.pending():
+            record = self.store.get(operation_id, actor)
+            for uri in self._attachment_references(record):
+                parsed = parse_resource_uri(uri)
+                if parsed.kind == "attachments" and parsed.scope_id == self.workspace_id and parsed.tail_segments[0] == attachment_id:
+                    return True
+        return False
+
     def _execute(self, original: FileOperationRecord) -> None:
+        with self.paths.access(*self._attachment_references(original), for_write=True):
+            self._execute_with_access(original)
+
+    def _execute_with_access(self, original: FileOperationRecord) -> None:
         intent = WorkspaceFileMutationIntentDTO.model_validate(original.payload["intent"])
         dependencies = [self.store.get(value, original.actor) for value in intent.depends_on]
         if any(value.state not in NAVIGATION_MUTATION_TERMINAL_STATES for value in dependencies):

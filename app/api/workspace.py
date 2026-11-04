@@ -161,6 +161,7 @@ def open_workspace_file_sse(
     try:
         references = {workspace_service.file_paths.workspace: workspace_service.file_paths.workspace_uri}
         for value in payload.paths:
+            # TODO(attachment-watch): 观察应只解析 locator；须同时迁齐 released 目录根校验，避免短 holder 后的释放竞争和误报 404。
             native, uri = workspace_service.file_paths.resolve(value)
             references[native] = uri
         roots = watch_service.resolve_watch_roots(str(path) for path in references)

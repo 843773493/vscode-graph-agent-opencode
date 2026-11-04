@@ -86,12 +86,12 @@ def execute_text_mutation(*, paths: WorkspaceFilePaths, target: str, declared: l
                           explanation: str = "", max_journal_bytes: int | None = None) -> dict[str, object]:
     workspace = paths.workspace
     root, root_uri = resolve_text_target(paths, target)
-    if not root.is_dir():
-        error = NotADirectoryError("文本修改目标必须是已存在的目录根")
-        raise mark_public_failure(error, str(error))
     result: dict[str, object] | None = None
     try:
-        with workspace_file_mutation_lock(workspace):
+        with paths.access(target, for_write=True), workspace_file_mutation_lock(workspace):
+            if not root.is_dir():
+                error = NotADirectoryError("文本修改目标必须是已存在的目录根")
+                raise mark_public_failure(error, str(error))
             validate_text_paths(declared, root)
             if set(expected_versions) != set(declared):
                 raise ValueError("expected_versions 必须精确覆盖全部文件路径，包含移动的源与目的")

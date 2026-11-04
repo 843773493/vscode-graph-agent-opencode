@@ -10,7 +10,6 @@ import shlex
 import subprocess
 import sys
 from dataclasses import asdict, replace
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -100,12 +99,12 @@ async def test_real_operation_fault_keeps_exact_leases_until_verified_management
 
     probe = directory / "derived/receipt_probe.py"
     marker = directory / "derived/written.txt"
-    probe.write_text("from pathlib import Path\nPath('written.txt').write_text('side-effect', encoding='utf-8')\n", encoding="utf-8")
+    if entry == "write":
+        probe.write_text("from pathlib import Path\nPath('written.txt').write_text('side-effect', encoding='utf-8')\n", encoding="utf-8")
     args = [sys.executable, probe.name]
     # 原生PTY用回车提交，Windows控制台中的换行本身不会执行命令。
     command = (subprocess.list2cmdline(args) if os.name == "nt" else shlex.join(args)) + "\r"
     store.release_thread_references(sid, tid)
-    monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
     async with owner.operation(session_id=sid, thread_id=tid, holder_id="request:real-receipt", operation_id="real-receipt") as operation:
         await operation.read_terminal(rid)
         active, = leases.leases_for_resource(rid)
@@ -143,7 +142,7 @@ async def test_real_operation_fault_keeps_exact_leases_until_verified_management
     assert current["owner_revision"] == 2
     actual = await owner._transport.get_resource(rid)
     assert actual["os_pid"] == pid and actual["transport_owner_revision"] == 2
-    assert process_running(pid) and await store.collect_garbage(leases=leases) == ()
+    assert process_running(pid) and await store.process_pending_directories() == ()
     assert (directory / "original/content").read_bytes() == b"keep-original-receipt"
     stopped = await owner.command(rid, action="stop", expected_revision=2,
                                   holder_id="request:receipt-proof", operation_id="receipt-proof")
@@ -155,8 +154,13 @@ async def test_real_operation_fault_keeps_exact_leases_until_verified_management
     cold = ExternalResourceLeaseLedger(state_path=leases._state_path)
     assert cold.get_lease(active.lease_id) == settled
     assert cold.get_lease(directory_lease.lease_id) == leases.get_lease(directory_lease.lease_id)
-    assert await store.collect_garbage(leases=leases) == (attachment_id,)
-    assert not directory.exists() and len(received) == 1
+    assert await store.process_pending_directories() == ()
+    assert len(received) == 1
+    if entry == "write":
+        assert probe.is_file() and marker.read_text(encoding="utf-8") == "side-effect"
+        assert store.read(sid, file_uri_child(store.directory_uri(attachment_id), "derived", marker.name)).data == b"side-effect"
+    else:
+        assert not directory.exists(), "原占用结清后自动释放未修改的工作副本"
     run = TestRunContext.from_test_file(Path(request.path)).prepare()
     (run.artifacts_dir / f"receipt-{entry}-{fault}.json").write_text(json.dumps({
         "entry": entry, "fault": fault, "os_pid": pid, "original_operation_lease": active.lease_id,
@@ -178,13 +182,12 @@ async def _assert_workspace_completion(
     # 暂停独立轮询，确保本次完成查询是唯一提交终态的观察者。
     await container.terminal_steering_service.shutdown()
     store.release_thread_references(sid, tid)
-    monkeypatch.setattr(store, "_clock", lambda: datetime.now(UTC) + timedelta(days=31))
     # 真实外部owner已停止；Python业务记录只能由本次完成查询核实并提交。
     stopped = await owner._transport.stop_resource(rid)
     assert stopped["terminal"]["status"] == "terminated" and not process_running(pid)
     assert owner._store.get(rid).status == "running"
     assert leases.get_lease(directory_lease.lease_id).status == "active"
-    assert await store.collect_garbage(leases=leases) == ()
+    assert await store.process_pending_directories() == ()
     failure = RuntimeError(f"事件发布失败 {directory / 'lease-event-secret'}；" + "完整诊断" * 80)
     sink_error = OSError("日志输出失败 /private/ledger-log-secret")
     channel = container.job_event_bus.event_channel_service.channel("resource.state/external_resource_leases")
@@ -236,7 +239,7 @@ async def _assert_workspace_completion(
             assert "diagnostic_sink_error" not in detail
     for text in (*leases.notification_errors, json.dumps(result), leases._state_path.read_text()):
         assert "lease-event-secret" not in text and "ledger-log-secret" not in text
-    assert await store.collect_garbage(leases=leases) == (attachment_id,)
+    assert await store.process_pending_directories() == ()
     assert not directory.exists()
     run = TestRunContext.from_test_file(Path(request.path)).prepare()
     (run.artifacts_dir / f"completion-{notification_failure}.json").write_text(json.dumps({
@@ -246,7 +249,7 @@ async def _assert_workspace_completion(
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-async def test_workspace_completion_commits_real_stopped_pty_and_releases_due_directory(
+async def test_workspace_completion_commits_real_stopped_pty_and_releases_unmodified_directory(
     managed_terminal, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture, request: pytest.FixtureRequest,
 ) -> None:

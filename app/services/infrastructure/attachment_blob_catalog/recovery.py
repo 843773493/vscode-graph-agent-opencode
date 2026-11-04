@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol
 
 from app.core.phase_observer import observe_phase_sync
@@ -45,6 +45,7 @@ class AttachmentIngestRecoveryMixin:
 
     _catalog: AttachmentBlobCatalog
     deletion_holder: OperationHolderGate
+    process_pending_directories: Callable[..., Awaitable[tuple[str, ...]]]
 
     def bind_thread_runtime(self, session_id: str, thread_id: str, binding_token: str) -> None:
         self._catalog.bind_thread_runtime(session_id, thread_id, binding_token, now=self._clock())
@@ -73,7 +74,10 @@ class AttachmentIngestRecoveryMixin:
             return self._catalog.release_associations(session_id=session_id, thread_id=thread_id,
                                                        binding_token=binding_token, now=self._clock())
 
-        return await run_sync_shielded(release)
+        released = await run_sync_shielded(release)
+        if released:
+            await self.process_pending_directories(attachment_ids=released)
+        return released
 
     async def reconcile_runtime_bindings(self, *, messages: AttachmentMessageReader,
                                          is_current: Callable[[str, str, str], bool]) -> tuple[str, ...]:
@@ -230,7 +234,9 @@ class AttachmentIngestRecoveryMixin:
                 return ()
             async with self._gate.exclusive(session_id):
                 # holder 和 gate 覆盖排队、原生 I/O 及取消后的同一 worker 结算。
-                return await run_sync_shielded(recover)
+                actions = await run_sync_shielded(recover)
+            await self.process_pending_directories()
+            return actions
 
     async def recover_pending_ingests(self, *, messages: AttachmentMessageReader) -> int:
         """启动时以权威 Session catalog 枚举，复用同一定点恢复入口。"""

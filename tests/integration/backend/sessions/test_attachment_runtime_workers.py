@@ -25,6 +25,7 @@ from app.schemas.internal_v2.message import (
 from app.services.business.job.service import JobService
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.integration.backend.sessions.test_attachment_runtime_lifecycle import (
+    attachment_directory,
     execute_upload,
     isolate_unused_external_managers,
 )
@@ -132,11 +133,17 @@ async def test_reconcile_storage_keeps_loop_context_and_original_outcome(
                 else:
                     assert await pending == (case.attachment_id,)
                 retained = "failure" in outcome or (stage == "bindings" and outcome == "cancel")
-                record = store._catalog.require_available_directory(case.attachment_id)
-                assert (record.gc_after is None) == retained
+                record = store._catalog.get_directory(case.attachment_id)
+                assert record is not None
+                pending_release = not retained and outcome == "cancel"
+                assert record.availability == ("available" if retained or pending_release else "released")
+                assert bool(record.release_pending) is pending_release
+                assert attachment_directory(store, case.attachment_id).exists() is (retained or pending_release)
                 assert store._catalog.runtime_bindings() == (((case.session_id, case.thread_id, case.token),) if retained else ())
                 assert await reconcile() == ((case.attachment_id,) if retained else ())
                 assert await reconcile() == ()
+                assert await store.process_pending_directories() == ((case.attachment_id,) if pending_release else ())
+                assert not attachment_directory(store, case.attachment_id).exists()
                 assert store.read(case.session_id, case.ref.file_id).data == b"runtime original"
             finally:
                 release.set()
@@ -176,7 +183,7 @@ async def test_current_generation_is_checked_on_event_loop_before_any_release(
             assert await store.reconcile_runtime_bindings(messages=container.checkpointer, is_current=is_current) == ()
         assert seen == [(case.session_id, case.thread_id, case.token)]
         assert store._catalog.runtime_bindings() == tuple(seen)
-        assert store._catalog.require_available_directory(case.attachment_id).gc_after is None
+        assert not store._catalog.require_available_directory(case.attachment_id).release_pending
 
 
 async def test_old_worker_cannot_release_generation_created_during_storage_wait(
@@ -236,7 +243,7 @@ async def test_old_worker_cannot_release_generation_created_during_storage_wait(
             await asyncio.wait_for(asyncio.shield(job.task), 15)
             assert job.status == JobStatus.completed, job.error_message
             assert store._catalog.runtime_bindings() == ((case.session_id, case.thread_id, new_token),)
-            assert store._catalog.require_available_directory(case.attachment_id).gc_after is None
+            assert not store._catalog.require_available_directory(case.attachment_id).release_pending
             assert store.read(case.session_id, case.ref.file_id).data == b"runtime original"
         finally:
             release.set()
@@ -273,7 +280,7 @@ async def test_unload_failure_keeps_same_generation_binding_until_owner_retries(
         assert failure in caught.value.exceptions
         assert tracker.is_current_runtime_binding(case.session_id, case.thread_id, case.token)
         assert store._catalog.runtime_bindings() == ((case.session_id, case.thread_id, case.token),)
-        assert store._catalog.require_available_directory(case.attachment_id).gc_after is None
+        assert not store._catalog.require_available_directory(case.attachment_id).release_pending
     finally:
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
@@ -281,7 +288,9 @@ async def test_unload_failure_keeps_same_generation_binding_until_owner_retries(
     await tracker.close(session_id=case.session_id)
     assert not tracker.is_current_runtime_binding(case.session_id, case.thread_id, case.token)
     assert store._catalog.runtime_bindings() == ()
-    assert store._catalog.require_available_directory(case.attachment_id).gc_after is not None
+    released = store._catalog.get_directory(case.attachment_id)
+    assert released is not None and released.availability == "released"
+    assert not attachment_directory(store, case.attachment_id).exists()
 
 
 async def test_stale_snapshot_does_not_reopen_control_after_owner_released_binding(
@@ -323,7 +332,9 @@ async def test_stale_snapshot_does_not_reopen_control_after_owner_released_bindi
                 no_control.setattr(store, "_open_control_store", unexpected_control)
                 release.set()
                 assert await pending == ()
-            assert store._catalog.require_available_directory(case.attachment_id).gc_after is not None
+            released = store._catalog.get_directory(case.attachment_id)
+            assert released is not None and released.availability == "released"
+            assert not attachment_directory(store, case.attachment_id).exists()
         finally:
             release.set()
             await asyncio.gather(pending, return_exceptions=True)

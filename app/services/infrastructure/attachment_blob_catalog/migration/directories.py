@@ -7,10 +7,13 @@ import json
 import os
 import shutil
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.atomic_fs import atomic_write_bytes, fsync_directory
+from app.services.infrastructure.attachment_blob_catalog.directories import (
+    save_file_version,
+)
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     attachment_directory_relative_locator,
     resolve_attachment_directory,
@@ -46,8 +49,6 @@ class DirectoryResource:
     source_owner: dict[str, object]
     source_blob: dict[str, object]
     files: tuple[DirectoryFile, ...]
-    unattached_since: str | None
-    gc_after: str | None
 
 
 @dataclass(frozen=True)
@@ -95,19 +96,14 @@ def _plan(directory: Path) -> DirectoryPlan:
                 raise RuntimeError(f"附件迁移缺少一致正文版本: attachment_id={attachment_id}")
             blob = dict(blob_row)
             created = _timestamp(owner["created_at"])
+            _timestamp(owner["updated_at"])
+            if owner["retention_until"] is not None:
+                _timestamp(owner["retention_until"])
             # 不从备份时间、原 blob 日期或用户文件名派生目录。
             locator = attachment_directory_relative_locator(attachment_id, created)
             resolve_attachment_directory(directory / "converted/attachments", locator)
             if owner["state"] == "active":
                 _require_owner(data, owner["owner_session_id"], owner["owner_thread_id"])
-                unattached_since = gc_after = None
-            else:
-                released = _timestamp(owner["updated_at"])
-                unattached_since = released.isoformat()
-                deadline = released + timedelta(days=30)
-                if owner["retention_until"] is not None:
-                    deadline = max(deadline, _timestamp(owner["retention_until"]))
-                gc_after = deadline.isoformat()
             files = []
             if blob["availability"] == "available":
                 for source_locator, child in (
@@ -125,7 +121,7 @@ def _plan(directory: Path) -> DirectoryPlan:
                         raise RuntimeError(f"附件迁移原件版本不一致: attachment_id={attachment_id}")
                     files.append(DirectoryFile(source_locator, locator + "/" + child, source["sha256"], source["length"]))
             resources.append(DirectoryResource(
-                attachment_id, locator if files else None, owner, blob, tuple(files), unattached_since, gc_after,
+                attachment_id, locator if files else None, owner, blob, tuple(files),
             ))
     return DirectoryPlan(identity["backup_id"], identity["workspace_id"], file_digest(directory / "manifest.json"), tuple(resources))
 
@@ -135,20 +131,22 @@ def _check_file(path: Path, row: DirectoryFile) -> None:
         raise RuntimeError(f"附件转换文件 hash/length 不一致，保留现场: locator={row.relative_locator}")
 
 
-def _materialize(directory: Path, root: Path, row: DirectoryFile) -> None:
+def _materialize(directory: Path, root: Path, row: DirectoryFile, *, attachment_id: str) -> None:
+    """从已核验备份发布工作副本及可靠版本，重试只复验既有成品。"""
     target = checked_path(root, row.relative_locator)
     if target.exists():
         _check_file(target, row)
-        return
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    partial = checked_path(root, row.relative_locator + ".partial")
-    # 仅回收本转换 journal 名下未发布的临时副本；绝不覆盖已发布文件。
-    partial.unlink(missing_ok=True)
-    source = BackupSource(checked_path(directory / "data", row.source_locator), row.source_locator, "file", row.sha256)
-    _copy(source, partial)
-    _check_file(partial, row)
-    os.replace(partial, target)
-    fsync_directory(target.parent)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        partial = checked_path(root, row.relative_locator + ".partial")
+        # 仅回收本转换 journal 名下未发布的临时副本；绝不覆盖已发布文件。
+        partial.unlink(missing_ok=True)
+        source = BackupSource(checked_path(directory / "data", row.source_locator), row.source_locator, "file", row.sha256)
+        _copy(source, partial)
+        _check_file(partial, row)
+        os.replace(partial, target)
+        fsync_directory(target.parent)
+    save_file_version(root, target, digest="sha256:" + row.sha256, length=row.length, attachment_id=attachment_id)
 
 
 def _verify_contents(root: Path, plan: DirectoryPlan, *, catalog: bool = False) -> int:
@@ -169,6 +167,10 @@ def _verify_contents(root: Path, plan: DirectoryPlan, *, catalog: bool = False) 
         for row in resource.files:
             _check_file(checked_path(root / "attachments", row.relative_locator), row)
             expected.add(row.relative_locator)
+            version_locator = ".versions/sha256/" + row.sha256
+            _check_file(checked_path(root / "attachments", version_locator), row)
+            expected.add(version_locator)
+            expected_directories.update({".versions", ".versions/sha256"})
             count += 1
     actual = set()
     actual_directories = set()
@@ -239,7 +241,7 @@ def convert_backup(directory: Path) -> dict[str, object]:
             for name in ("original", "preview", "derived"):
                 checked_path(attachments, resource.relative_locator + "/" + name).mkdir(parents=True, exist_ok=True, mode=0o700)
             for row in resource.files:
-                _materialize(directory, attachments, row)
+                _materialize(directory, attachments, row, attachment_id=resource.attachment_id)
         # 复制结束再次核验完整备份，不能混合转换期间变化的来源。
         if _json(asdict(_plan(directory))) != payload:
             raise RuntimeError("附件转换期间来源备份发生变化")

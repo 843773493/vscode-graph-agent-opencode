@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping
 from contextlib import closing
-from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -118,7 +118,7 @@ def assert_frozen_requests(
 
 
 @pytest.mark.asyncio
-async def test_attachment_request_rebuild_survives_derived_edit_gc_and_restart(
+async def test_attachment_request_rebuild_survives_derived_edit_release_and_restart(
     history_target: HistoryTarget, fork_deadlines: ForkDeadlineRegistry,
 ) -> None:
     target = history_target
@@ -248,29 +248,26 @@ async def test_attachment_request_rebuild_survives_derived_edit_gc_and_restart(
             aid = parse_attachment_uri(ref["file_id"], require_file=True).attachment_id
             assert aid is not None
             directory = store._catalog.get_directory(aid)
-            assert directory is not None and directory.gc_after is not None
+            assert directory is not None and directory.release_pending == 0
             root = resolve_attachment_directory(store._attachments_root, directory.relative_locator)
             assert (root / "original/content").read_bytes() == original
             assert (root / "preview/512.webp").is_file()
             with Image.open(root / "preview/512.webp") as preview:
                 assert preview.size == (512, 256)
             assert (root / "derived/result.txt").read_text() == changed_text
-            # 使用原 owner 的持久期限和外置时钟；不手填关联、canonical 或执行状态。
-            expires = datetime.fromisoformat(directory.gc_after) + timedelta(seconds=1)
-        with closing(AttachmentBlobStore(target.workspace, clock=lambda: expires)) as store:
-            collected = await store.collect_garbage(leases=ExternalResourceLeaseLedger(
+        with closing(AttachmentBlobStore(target.workspace, leases=ExternalResourceLeaseLedger(
                 state_path=target.workspace / ".boxteam/resources.json",
-            ))
-            assert collected == (aid,)
-            assert not root.exists()
+            ))) as store:
+            assert await store.process_pending_directories() == ()
+            assert (root / "derived/result.txt").read_text() == changed_text
 
         await asyncio.to_thread(target.restart)
-        unavailable = await client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": ref["file_id"]})
-        assert unavailable.status_code == 404, unavailable.text
+        available = await client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": ref["file_id"]})
+        assert available.status_code == 200 and available.content == original, available.text
         loaded = await client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})
         assert loaded.status_code == 200, loaded.text
         historical_ref, = loaded.json()["data"]["items"][0]["user_messages"][0]["attachments"]
-        assert historical_ref["file_id"] == ref["file_id"] and historical_ref["availability"] == "unavailable"
+        assert historical_ref["file_id"] == ref["file_id"] and historical_ref["availability"] == "available"
         changes = await client.get(f"/api/v1/sessions/{session}/changesets/all")
         assert changes.status_code == 200, changes.text
         change, = changes.json()["data"]["files"]
@@ -284,7 +281,7 @@ async def test_attachment_request_rebuild_survives_derived_edit_gc_and_restart(
             client, "delete_session", target_node_id=session, wait_for_settlement=True,
         )
         assert (deleted["state"], deleted["settlement"]) == ("committed", "settled"), deleted
-        assert not index.exists() and not root.exists()
+        assert not index.exists() and (root / "derived/result.txt").read_text() == changed_text
         await asyncio.to_thread(target.restart)
         loaded_fork = await client.post(f"/api/v1/sessions/{fork_session}/history", json={"direction": "head", "turns": 10})
         assert loaded_fork.status_code == 200, loaded_fork.text
@@ -292,15 +289,23 @@ async def test_attachment_request_rebuild_survives_derived_edit_gc_and_restart(
         assert [item["turn_id"] for item in fork_items[:-1]] == [item["turn_id"] for item in loaded.json()["data"]["items"]]
         assert fork_items[-1]["final_response"] == "副本已消费共享目录。"
         fork_ref, = fork_items[0]["user_messages"][0]["attachments"]
-        assert fork_ref["file_id"] == ref["file_id"] and fork_ref["availability"] == "unavailable"
+        assert fork_ref["file_id"] == ref["file_id"] and fork_ref["availability"] == "available"
         assert fork_index.with_name("rollout.jsonl").read_bytes() == fork_canonical
         with closing(AttachmentBlobStore(target.workspace)) as store:
             saver = RolloutCheckpointSaver(target.workspace / ".boxteam/sessions", attachment_store=store)
             assert_frozen_requests(saver, fork_session, fork_thread, assemblies=fork_assemblies, frozen=fork_frozen,
                                    captures=fork_captures, profile=profile)
-        continuation, = plan(target, fork_session, fork_thread, [{"content": "副本在来源与目录删除后继续。"}])
+        removal, continuation = plan(target, fork_session, fork_thread, [
+            tool("apply_patch", {
+                "target": ref["directory_uri"],
+                "input": "*** Begin Patch\n*** Delete File: derived/result.txt\n*** End Patch",
+                "expected_versions": {"derived/result.txt": "sha256:" + hashlib.sha256(changed_text.encode()).hexdigest()},
+                "explanation": "显式删除处理结果，恢复附件初始基线",
+            }, "remove-derived"),
+            {"content": "副本在来源删除后继续，并显式清理处理结果。"},
+        ])
         accepted = await client.post(f"/api/v1/sessions/{fork_session}/messages", json={
-            "message": {"content": "继续使用副本历史，不重新读取已删除的目录。"},
+            "message": {"content": "继续使用副本历史，显式删除已完成的处理结果。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
         })
         assert accepted.status_code == 200, accepted.text
@@ -317,13 +322,26 @@ async def test_attachment_request_rebuild_survives_derived_edit_gc_and_restart(
             ).fetchall() == imported_calls
             assert {row[0] for row in connection.execute(
                 "SELECT model_call_id FROM model_calls WHERE session_id=? AND thread_id=?", (fork_session, fork_thread),
-            )} == {warm_call, continuation}
+            )} == {warm_call, removal, continuation}
+        removed = json.loads((target.replay.artifacts / (removal + ".json")).read_text())
         fork_evidence = audit_sealed_requests(
             fork_index, (resolver.resolve_session_node(fork_session) / "logs/llm_requests").glob("*.json"),
-            {warm_call: warm_capture, continuation: continued},
+            {warm_call: warm_capture, removal: removed, continuation: continued},
         )
-        (target.replay.artifacts / "attachment-gc-rebuild.json").write_text(json.dumps({
+        await asyncio.to_thread(target.restart)
+        assert not root.exists()
+        with closing(AttachmentBlobStore(target.workspace)) as store:
+            assert store._catalog.get_directory(aid).availability == "released"
+            saver = RolloutCheckpointSaver(target.workspace / ".boxteam/sessions", attachment_store=store)
+            assert_frozen_requests(saver, fork_session, fork_thread, assemblies=fork_assemblies, frozen=fork_frozen,
+                                   captures=fork_captures, profile=profile)
+        rebuilt = await client.get("/api/v1/workspace/files/download", params={"path": ref["file_id"]})
+        assert rebuilt.status_code == 200 and rebuilt.content == original, rebuilt.text
+        assert (root / "original/content").read_bytes() == original
+        assert not (root / "derived/result.txt").exists()
+        assert fork_index.with_name("rollout.jsonl").read_bytes().startswith(fork_canonical)
+        (target.replay.artifacts / "attachment-working-copy-rebuild.json").write_text(json.dumps({
             "source": evidence, "fork": fork_evidence,
             "historical_owner": [session, thread], "imported_calls": imported_calls,
-            "scope": "真实 Gateway、产品上传/工具/fork/删除、目录 GC 与进程重启；模型为 model_stream，不代 Web、Windows或全部8.3",
+            "scope": "真实 Gateway、产品上传/工具/fork/删除、修改结果保留、回到基线释放/重建与进程重启；模型为 model_stream，不代 Web、Windows或全部8.3",
         }, ensure_ascii=False, indent=2) + "\n")
