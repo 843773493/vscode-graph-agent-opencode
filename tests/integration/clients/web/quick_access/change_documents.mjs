@@ -3,7 +3,6 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
-import { selectThread } from '../persistent_tasks/workbench.mjs';
 import { verifyEditorNavigation, verifyViewNavigation } from './editor_navigation.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -23,30 +22,40 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
-    if (/\/changesets\/.+$/.test(path)) result.reads.push({ phase: result.phase, path, route: request.headers()['x-boxteam-workspace-id'] });
+    if (/\/changesets\/.+$/.test(path)) result.reads.push({ phase: result.phase, path,
+      gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
     if (path === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'read') {
-      result.sources.push({ phase: result.phase, body: request.postDataJSON() });
+      result.sources.push({ phase: result.phase, body: request.postDataJSON(),
+        gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
     }
   });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  const api = (path, data) => page.evaluate(async ({ path, data }) => {
+  const api = (path, data, owner) => page.evaluate(async ({ path, data, owner }) => {
     const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
     const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST',
-      headers: { 'X-Local-Token': token, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
+      headers: { 'X-Local-Token': token, 'Content-Type': 'application/json', ...(owner ? {
+        'X-BoxTeam-Target-Gateway-Id': owner.gatewayId, 'X-BoxTeam-Workspace-Id': owner.workspaceId,
+      } : {}) }, body: data === undefined ? undefined : JSON.stringify(data) });
     const payload = await response.json();
     if (!response.ok || payload.code !== 0 || payload.request_id !== response.headers.get('X-Request-ID')) {
       throw new Error(JSON.stringify({ path, status: response.status, payload }));
     }
     return payload.data;
-  }, { path, data });
+  }, { path, data, owner });
   await api('/api/gateway/users/guest', { tracking: { source: 'change-documents' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');
-  const workspace = await api('/api/v1/workspace');
-  const session = await api('/api/v1/sessions', { title: '更改模型验收' });
-  const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`);
-  const owner = { gatewayId: health.gateway_id, workspaceId: workspace.workspace_id, routeId: targets.active_workspace_id,
+  const target = targets.active_workspace;
+  expect(target.gateway_id).toBe(health.gateway_id);
+  const workspaceOwner = { gatewayId: target.gateway_id, workspaceId: target.workspace_id };
+  const workspace = await api('/api/v1/workspace', undefined, workspaceOwner);
+  expect(workspace.workspace_id).toBe(target.workspace_id);
+  const session = await api('/api/v1/sessions', { title: '更改模型验收' }, workspaceOwner);
+  expect(session.workspace_id).toBe(target.workspace_id);
+  const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`, undefined, workspaceOwner);
+  expect(main.session_id).toBe(session.session_id);
+  const owner = { ...workspaceOwner,
     sessionId: session.session_id, threadId: main.thread_id, title: session.title };
   result.owner = owner;
   const interactions = JSON.parse(process.env.BOXTEAM_CHANGE_INTERACTIONS), turns = [];
@@ -54,9 +63,9 @@ try {
     result.phase = 'execute-' + index;
     await testControl({ action: 'plan_model', session_id: owner.sessionId, thread_id: owner.threadId, interactions: interactions.splice(0, 2) });
     const accepted = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`,
-      { message: { content: index ? '更新至第二版' : '生成首版' }, run: {} });
+      { message: { content: index ? '更新至第二版' : '生成首版' }, run: {} }, owner);
     await expect.poll(async () => {
-      const job = await api(`/api/v1/jobs/${accepted.job_id}`);
+      const job = await api(`/api/v1/jobs/${accepted.job_id}`, undefined, owner);
       if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));
       return job.status;
     }, { timeout: 30_000 }).toBe('completed');
@@ -64,14 +73,17 @@ try {
   }
   result.turns = turns;
   const changesetId = 'turn:' + turns[1];
-  const data = await api(`/api/v1/sessions/${owner.sessionId}/changesets/${encodeURIComponent(changesetId)}`);
+  const data = await api(`/api/v1/sessions/${owner.sessionId}/changesets/${encodeURIComponent(changesetId)}`, undefined, owner);
   const file = data.files.find(file => file.file_path.endsWith('/diff-history.txt'));
   expect(file.before_preview).toContain('history v1 line 01'); expect(file.after_preview).toContain('history v2 line 01');
   await page.reload({ waitUntil: 'domcontentloaded' });
   const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
     await globalThis.workbench.commands.executeCommand(id, ...args);
   }, { id, args });
-  const thread = await selectThread(page, owner, 0);
+  const workspaceKey = JSON.stringify([owner.gatewayId, owner.workspaceId]);
+  await page.getByTestId(`catalog-node-${workspaceKey}-${owner.sessionId}`).locator(`button[data-session-id="${owner.sessionId}"]`).dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`);
+  await expect(thread).toBeVisible();
   await thread.getByRole('button', { name: '切换会话资源', exact: true }).click();
   await thread.getByRole('tab', { name: '更改', exact: true }).click();
   await thread.locator(`.session-changeset-row[title="显示任务 ${turns[1]} 中产生的文件变更"]`).click();
@@ -144,7 +156,7 @@ try {
   await expect(groups.nth(0).locator('.editor-instance .view-lines')).toContainText('history v2 line 01');
   expect(result.reads.filter(read => read.phase === result.phase)).toHaveLength(1);
   result.lastCloseRereads = true;
-  expect(result.reads.every(read => read.route === owner.routeId || read.phase.startsWith('execute-'))).toBe(true);
+  expect([...result.reads, ...result.sources].every(read => read.gatewayId === owner.gatewayId && read.workspaceId === owner.workspaceId)).toBe(true);
   expect(result.pageErrors).toEqual([]);
   result.phase = 'passed';
 } catch (error) {

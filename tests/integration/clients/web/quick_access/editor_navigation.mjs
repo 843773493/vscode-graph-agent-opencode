@@ -71,9 +71,9 @@ export async function verifyEditorNavigation({ page, command, owner, fileUri, re
     result.editorDirtyClose = true;
 
     result.phase = 'native-editor-close-one-copy';
-    await command('workbench.action.quickOpen', 'edt ');
+    await command('workbench.action.quickOpen', 'edt diff-history.txt');
     await expect(diffs()).toHaveCount(2);
-    await firstDiff.hover();
+    await expect(firstDiff).toHaveClass(/focused/);
     await firstDiff.getByRole('button', { name: 'Close Editor', exact: true }).click();
     await expect(diffs()).toHaveCount(1);
     await expect(diffs().first()).toHaveAttribute('aria-label', /Group 2/);
@@ -120,7 +120,7 @@ export async function verifyViewNavigation({ page, command, owner, result }) {
     await command('workbench.action.quickOpen', `view ${label}`);
     // 单视图容器与同名视图都由原 Provider 提供，二者均聚焦相同产品视图。
     await view(label).click();
-    const panel = page.locator('.part.panel').locator(`.native-workspace-panel[data-panel-kind="${kind}"][data-workspace-id="${owner.routeId}"]`);
+    const panel = page.locator('.part.panel').locator(`.native-workspace-panel[data-panel-kind="${kind}"][data-workspace-id="${owner.workspaceId}"]`);
     await expect(panel).toBeVisible();
     const content = panel.locator('.native-workspace-panel-content:not([hidden])');
     await expect(content).toBeVisible();
