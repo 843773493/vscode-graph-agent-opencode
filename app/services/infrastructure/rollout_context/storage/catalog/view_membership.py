@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text
+from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import insert_view_jumps
 from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
     append_members,
     clone_members,
@@ -309,24 +310,7 @@ class RolloutViewMembershipMixin:
                 "FROM context_view_ranges WHERE view_id = ?",
                 (view_id, parent_view_id),
             )
-            parent_by_view = dict(connection.execute(
-                "SELECT view_id, parent_view_id FROM context_views"
-            ).fetchall())
-            level = 0
-            while True:
-                ancestor = view_id
-                for _ in range(2**level):
-                    ancestor = parent_by_view.get(ancestor)
-                    if ancestor is None:
-                        break
-                if ancestor is None:
-                    break
-                connection.execute(
-                    "INSERT INTO context_view_jumps(view_id, jump_level, ancestor_view_id, ancestor_depth) "
-                    "VALUES (?, ?, ?, ?)",
-                    (view_id, level, ancestor, 2**level),
-                )
-                level += 1
+            insert_view_jumps(connection, view_id)
             return view_id
         materialized_sequences = sequence_values
         if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
@@ -517,43 +501,7 @@ class RolloutViewMembershipMixin:
                 raise RuntimeError(f"context view message range 插入失败: {view_id}")
             range_index += 1
         if parent_view_id:
-            jump_cursor = connection.execute(
-                "INSERT INTO context_view_jumps(view_id, jump_level, ancestor_view_id, ancestor_depth) VALUES (?, 0, ?, 1)",
-                (view_id, parent_view_id),
-            )
-            if jump_cursor.rowcount != 1:
-                raise RuntimeError(f"context view ancestor jump 插入失败: {view_id}")
-            parent_by_view = {
-                strict_text(row[0], field="context_views.view_id"): strict_optional_text(
-                    row[1], field="context_views.parent_view_id"
-                )
-                for row in connection.execute(
-                    "SELECT view_id, parent_view_id FROM context_views"
-                ).fetchall()
-            }
-            level = 1
-            while True:
-                ancestor = view_id
-                for _ in range(2**level):
-                    ancestor = parent_by_view.get(ancestor)
-                    if ancestor is None:
-                        break
-                if ancestor is None:
-                    break
-                jump_cursor = connection.execute(
-                    "INSERT INTO context_view_jumps(view_id, jump_level, ancestor_view_id, ancestor_depth) VALUES (?, ?, ?, ?)",
-                    (
-                        view_id,
-                        level,
-                        ancestor,
-                        2**level,
-                    ),
-                )
-                if jump_cursor.rowcount != 1:
-                    raise RuntimeError(
-                        f"context view ancestor jump 插入失败: {view_id}/{level}"
-                    )
-                level += 1
+            insert_view_jumps(connection, view_id)
         for turn_id, ordinal, user_sequence, final_sequence, root_item_id in rows:
             turn_cursor = connection.execute(
                 "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, user_message_sequence, final_message_sequence, root_input_item_id, fork_lineage_json) VALUES (?, ?, ?, ?, ?, ?, ?)",

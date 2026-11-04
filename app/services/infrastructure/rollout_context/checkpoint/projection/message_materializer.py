@@ -14,6 +14,7 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import read_view_ancestry
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
@@ -305,30 +306,8 @@ class RolloutMessageMaterializerMixin:
         connection: sqlite3.Connection,
         view_id: str,
     ) -> None:
-        rows = connection.execute(
-            "SELECT view_id, parent_view_id FROM context_views"
-        ).fetchall()
-        parents = {
-            strict_text(row[0], field="context_views.view_id"): strict_optional_text(
-                row[1], field="context_views.parent_view_id"
-            )
-            for row in rows
-        }
-        if view_id not in parents:
-            raise RuntimeError(f"context view 不存在: {view_id}")
-        current = view_id
-        visited: set[str] = set()
-        while current is not None:
-            if current in visited:
-                raise RuntimeError(f"context view 父链成环: {view_id}")
-            visited.add(current)
-            parent = parents[current]
-            if parent is not None and parent not in parents:
-                raise RuntimeError(
-                    f"context view 引用不存在的 parent: {current} -> {parent}"
-                )
-            current = parent
-
+        # 校验全部相关祖先，避免为一个 view 扫描其他分支；不缓存跨调用的校验结果。
+        ancestors = read_view_ancestry(connection, view_id)
         jumps = connection.execute(
             "SELECT jump_level, ancestor_view_id, ancestor_depth FROM context_view_jumps WHERE view_id = ? ORDER BY jump_level",
             (view_id,),
@@ -345,18 +324,11 @@ class RolloutMessageMaterializerMixin:
                 ancestor_depth,
                 field="context_view_jumps.ancestor_depth",
             )
-            expected = view_id
-            for _ in range(2**level):
-                parent = parents.get(expected)
-                if parent is None:
-                    raise RuntimeError(
-                        f"context view jump 越界: view={view_id}, level={level}"
-                    )
-                expected = parent
-            if expected != ancestor_view_id or ancestor_depth != 2**level:
-                raise RuntimeError(
-                    f"context view jump 非法: view={view_id}, level={level}"
-                )
+            if level >= (len(ancestors) - 1).bit_length():
+                raise RuntimeError(f"context view jump 越界: view={view_id}, level={level}")
+            depth = 1 << level
+            if ancestors[depth] != ancestor_view_id or ancestor_depth != depth:
+                raise RuntimeError(f"context view jump 非法: view={view_id}, level={level}")
 
         ranges = connection.execute(
             "SELECT source_kind, start_message_sequence, end_message_sequence FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
