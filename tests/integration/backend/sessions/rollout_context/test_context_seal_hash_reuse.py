@@ -1,7 +1,9 @@
 """真实 prepare 的同次摘要复用与 seal 输入首次错误合同。"""
 
 import hashlib
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import rfc8785
@@ -30,6 +32,11 @@ from app.services.infrastructure.rollout_context.checkpoint.seal import lifecycl
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceDescriptor,
+)
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import DetailUnavailableError
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 按当前文件隔离正式工作区
 )
@@ -38,6 +45,105 @@ from tests.integration.backend.sessions.rollout_context.test_context_production_
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+
+
+@pytest.mark.parametrize("source_count", [1, 8])
+def test_prepare_restores_source_details_in_one_snapshot(
+    production_context, monkeypatch, request, source_count,
+):
+    saver, session, thread, connection, manager, prepare = production_context
+    for index in range(1, source_count):
+        source_id = f"instruction:snapshot-{index}"
+        manager.register(ContextSourceDescriptor(
+            source_id=source_id, source_kind="agent_instructions", name=source_id,
+            description="快照复用装具", internal_locator=f"instruction-producer://snapshot-{index}",
+            root_placement="root_eligible",
+        ), tracking_status="tracked")
+        manager.observe(source_id, f"冻结来源正文 {index}", revision=f"snapshot-{index}:1")
+    storage = saver._storage.storage
+    request_content = saver._request_content_for_plan
+    open_snapshot = storage.open_read_snapshot
+    read_manifest = saver._storage.assemblies.get_context_plan_detail
+    read_body = saver._detail_store.read
+    read_prepared = saver._detail_store.read_prepared
+    calls, active = [], []
+
+    def observe_content(*args, **kwargs):
+        call = {"owned": [], "borrowed": kwargs.get("snapshot"), "manifests": [], "bodies": [], "prepared": 0}
+        calls.append(call)
+        active.append(call)
+        try:
+            return request_content(*args, **kwargs)
+        finally:
+            active.pop()
+
+    def observe_open(*args, **kwargs):
+        snapshot = open_snapshot(*args, **kwargs)
+        if active:
+            active[-1]["owned"].append(snapshot)
+        return snapshot
+
+    def observe_manifest(*args, **kwargs):
+        if active:
+            active[-1]["manifests"].append(kwargs.get("snapshot"))
+        return read_manifest(*args, **kwargs)
+
+    def observe_body(*args, **kwargs):
+        if active:
+            active[-1]["bodies"].append(kwargs.get("snapshot"))
+        return read_body(*args, **kwargs)
+
+    def observe_prepared(*args, **kwargs):
+        if active:
+            active[-1]["prepared"] += 1
+        return read_prepared(*args, **kwargs)
+
+    monkeypatch.setattr(saver, "_request_content_for_plan", observe_content)
+    monkeypatch.setattr(storage, "open_read_snapshot", observe_open)
+    monkeypatch.setattr(saver._storage.assemblies, "get_context_plan_detail", observe_manifest)
+    monkeypatch.setattr(saver._detail_store, "read", observe_body)
+    monkeypatch.setattr(saver._detail_store, "read_prepared", observe_prepared)
+    prepare("source-snapshot-first")
+    second = prepare("source-snapshot-second")["snapshot"]
+    second.validate_hashes()
+    selected = [entry for entry in second.selection if entry.included and entry.ref.ref_type == "request_only"]
+    assert len(selected) == source_count
+    second_bytes = canonical_json_bytes(second.to_dict())
+    before = connection.execute("SELECT assembly_id,request_hash FROM context_assemblies ORDER BY rowid").fetchall()
+    target = saver._detail_store._files.path(selected[-1].detail_ref)
+    assert target is not None
+    original = target.read_bytes()
+    try:
+        target.write_bytes(b"{}")
+        with pytest.raises(DetailUnavailableError, match="typed v3"):
+            prepare("source-snapshot-failed")
+        assert connection.execute("SELECT assembly_id,request_hash FROM context_assemblies ORDER BY rowid").fetchall() == before
+    finally:
+        target.write_bytes(original)
+    recovered = prepare("source-snapshot-recovered")["snapshot"]
+    recovered.validate_hashes()
+    assert canonical_json_bytes(saver.get_context_assembly(session, thread, assembly_id=second.assembly_id).to_dict()) == second_bytes
+    measurements = [
+        {"opened": len(call["owned"]), "manifests": len(call["manifests"]), "bodies": len(call["bodies"]), "prepared": call["prepared"]}
+        for call in calls
+    ]
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"source-detail-snapshots-{source_count}.json").write_text(
+        json.dumps(measurements, indent=2), encoding="utf-8",
+    )
+    print(f"source detail snapshot calls ({source_count} sources): {measurements}")
+    disk_reads = [call for call in calls if call["manifests"]]
+    assert len(disk_reads) == 3
+    for call in disk_reads:
+        assert call["borrowed"] is None
+        assert len(call["owned"]) == 1
+        snapshot, = call["owned"]
+        assert snapshot.closed
+        assert call["manifests"] == [snapshot] * source_count
+        assert call["bodies"] == [snapshot] * source_count
+    prepared_reads = [call for call in calls if call["prepared"]]
+    assert prepared_reads
+    assert all(call["prepared"] == source_count and call["owned"] == [] for call in prepared_reads)
 
 
 @pytest.fixture

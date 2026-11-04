@@ -306,81 +306,88 @@ class ContextProjectionOwnerMixin:
             for ref in plan.refs
             if ref.ref_type == "request_only" and ref.ref_id in selected_request_entries
         }
-        for ref_id, ref in refs.items():
-            selection_entry = selected_request_entries[ref_id]
-            body_key = selection_entry.contribution_id or ref_id
-            if ref.availability != "available":
-                raise DetailUnavailableError(
-                    f"detail-unavailable: request-only source unavailable: {ref_id}"
+        with ExitStack() as reads:
+            for ref_id, ref in refs.items():
+                selection_entry = selected_request_entries[ref_id]
+                body_key = selection_entry.contribution_id or ref_id
+                if ref.availability != "available":
+                    raise DetailUnavailableError(
+                        f"detail-unavailable: request-only source unavailable: {ref_id}"
+                    )
+                detail_ref = selection_entry.detail_ref
+                if not isinstance(detail_ref, DetailRef):
+                    raise DetailUnavailableError(
+                        f"detail-unavailable: sealed request-only 缺少 typed detail: {ref_id}"
+                    )
+                detail_ref.require_owner(plan.session_id, plan.thread_id, plan.assembly_id)
+                prepared = prepared_by_ref.get(detail_ref)
+                # 同一次正文恢复只打开一个只读事务；全部为 prepared 值时不访问磁盘。
+                # caller 提供的 snapshot 仅借用，自己的连接在成功或异常退出时统一释放。
+                if prepared is None and snapshot is None:
+                    snapshot = reads.enter_context(self._storage.storage.open_read_snapshot(
+                        session_id, thread_id, checkpoint_ns,
+                    ))
+                detail_record = self._request_source_record(
+                    session_id, thread_id, checkpoint_ns, detail_ref, ref,
+                    prepared=prepared, snapshot=snapshot,
                 )
-            detail_ref = selection_entry.detail_ref
-            if not isinstance(detail_ref, DetailRef):
-                raise DetailUnavailableError(
-                    f"detail-unavailable: sealed request-only 缺少 typed detail: {ref_id}"
+                detail_envelope = (
+                    self._detail_store.read_prepared(
+                        prepared, include_sensitive=ref.protection != "public",
+                    ) if prepared is not None else self._detail_store.read(
+                        session_id=session_id, thread_id=thread_id, record=detail_record,
+                        include_sensitive=ref.protection != "public",
+                        snapshot=snapshot,
+                    )
                 )
-            detail_ref.require_owner(plan.session_id, plan.thread_id, plan.assembly_id)
-            prepared = prepared_by_ref.get(detail_ref)
-            detail_record = self._request_source_record(
-                session_id, thread_id, checkpoint_ns, detail_ref, ref,
-                prepared=prepared, snapshot=snapshot,
-            )
-            detail_envelope = (
-                self._detail_store.read_prepared(
-                    prepared, include_sensitive=ref.protection != "public",
-                ) if prepared is not None else self._detail_store.read(
-                    session_id=session_id, thread_id=thread_id, record=detail_record,
-                    include_sensitive=ref.protection != "public",
-                    snapshot=snapshot,
+                detail_body = detail_envelope.get("detail")
+                if (
+                    detail_body is None
+                    or detail_envelope.get("protection") != ref.protection
+                ):
+                    raise DetailUnavailableError(
+                        f"detail-unavailable: detail has no permitted body: {ref_id}"
+                    )
+                # 最终正文只从 sealed selection 的 detail 读取；source_ref 可以
+                # 指向旧 assembly，但绝不能覆盖本 assembly 的最终 binding。
+                if any(
+                    key in result and result[key] != detail_body
+                    for key in {ref_id, body_key}
+                ):
+                    raise ValueError(f"source-mismatch: request-only detail body: {ref_id}")
+                result[ref_id] = detail_body
+                result[body_key] = detail_body
+                if ref.content_hash is None:
+                    raise ValueError(f"source-mismatch: local request source 缺少 content_hash: {ref_id}")
+                body = result[ref_id]
+                body_length = payload_content_length(
+                    ref.payload_kind or "structured_content",
+                    body,
                 )
-            )
-            detail_body = detail_envelope.get("detail")
-            if (
-                detail_body is None
-                or detail_envelope.get("protection") != ref.protection
-            ):
-                raise DetailUnavailableError(
-                    f"detail-unavailable: detail has no permitted body: {ref_id}"
+                contribution = next(
+                    (
+                        contribution
+                        for contribution in plan.contributions
+                        if contribution.contribution_id == selection_entry.contribution_id
+                    ),
+                    None,
                 )
-            # 最终正文只从 sealed selection 的 detail 读取；source_ref 可以
-            # 指向旧 assembly，但绝不能覆盖本 assembly 的最终 binding。
-            if any(
-                key in result and result[key] != detail_body
-                for key in {ref_id, body_key}
-            ):
-                raise ValueError(f"source-mismatch: request-only detail body: {ref_id}")
-            result[ref_id] = detail_body
-            result[body_key] = detail_body
-            if ref.content_hash is None:
-                raise ValueError(f"source-mismatch: local request source 缺少 content_hash: {ref_id}")
-            body = result[ref_id]
-            body_length = payload_content_length(
-                ref.payload_kind or "structured_content",
-                body,
-            )
-            contribution = next(
-                (
-                    contribution
-                    for contribution in plan.contributions
-                    if contribution.contribution_id == selection_entry.contribution_id
-                ),
-                None,
-            )
-            if (
-                contribution is not None
-                and contribution.source_revision != ref.source_revision
-            ):
-                raise ValueError(
-                    f"source-mismatch: request-only contribution source_revision: {ref_id}"
+                if (
+                    contribution is not None
+                    and contribution.source_revision != ref.source_revision
+                ):
+                    raise ValueError(
+                        f"source-mismatch: request-only contribution source_revision: {ref_id}"
+                    )
+                body_hash = (
+                    contribution_content_hash(contribution.contribution_kind, body)
+                    if contribution is not None
+                    else sha256_jcs(body)
                 )
-            body_hash = (
-                contribution_content_hash(contribution.contribution_kind, body)
-                if contribution is not None
-                else sha256_jcs(body)
-            )
-            expected_token = ref.content_hash
-            actual_token = body_hash
-            if body_length != ref.content_length or actual_token != expected_token:
-                raise ValueError(f"source-mismatch: request-only ref: {ref_id}")
+                expected_token = ref.content_hash
+                actual_token = body_hash
+                if body_length != ref.content_length or actual_token != expected_token:
+                    raise ValueError(f"source-mismatch: request-only ref: {ref_id}")
         for contribution in plan.contributions:
             if not contribution.request_only:
                 continue
