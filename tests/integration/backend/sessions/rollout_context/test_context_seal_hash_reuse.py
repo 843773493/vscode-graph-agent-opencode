@@ -16,7 +16,7 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.plans import contributions as contribution_domain
 from app.domain.itemized.plans.request import ContextRequestPlan
@@ -51,6 +51,125 @@ from tests.integration.backend.sessions.rollout_context.test_context_production_
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+
+
+@pytest.mark.parametrize("body", [{"规则": ["中文\n", "引号\"", 1e-7]}, "中文\n引号\"\\"])
+def test_standalone_request_ref_uses_verified_detail_digest(registry_db, monkeypatch, body):
+    saver, session, _connection, accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    ref = ContextRef.request_only_ref(
+        "standalone-source", session_id=session, thread_id=thread, plan_id="standalone-plan",
+        source_ref="standalone-origin", content=body, source_revision="standalone:1",
+    )
+    draft = ContextRequestPlan(
+        session, thread, "standalone-plan", refs=(ref,),
+        plan_creation_idempotency_key="standalone-create",
+    )
+    registered = saver.create_context_plan(session, draft)
+    frozen = saver.seal_context_plan(
+        session, thread, registered.draft, turn_id=accepted["turn_id"],
+        execution_id=accepted["initial_execution_id"], provider_version="standalone-provider",
+        wire_profile=None, wire_params=None, seal_idempotency_key="standalone-seal",
+        request_only_content={ref.ref_id: body},
+    )
+    assert not frozen.contributions
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.get_context_assembly(session, thread, assembly_id=frozen.assembly_id)
+        assert restored == frozen
+        encode = rfc8785.dumps
+        encodings = []
+
+        def observe_encode(value):
+            if value == body:
+                encodings.append(value)
+            return encode(value)
+
+        with monkeypatch.context() as observe:
+            observe.setattr(rfc8785, "dumps", observe_encode)
+            assert cold._request_content_for_plan(
+                session, thread, "", restored.as_sealed_plan(), None,
+            ) == {ref.ref_id: body}
+        assert len(encodings) == 1
+        detail = next(entry.detail_ref for entry in restored.selection if entry.included)
+        target = cold._detail_store._files.path(detail)
+        original = target.read_bytes()
+        try:
+            target.write_bytes(b"{}")
+            with pytest.raises(DetailUnavailableError, match="typed v3"):
+                cold._request_content_for_plan(session, thread, "", restored.as_sealed_plan(), None)
+            assert target.read_bytes() == b"{}"
+        finally:
+            target.write_bytes(original)
+
+
+@pytest.mark.parametrize("source_count", [1, 4])
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_request_content_reuses_verified_length_and_single_contribution_digest(
+    production_context, monkeypatch, request, source_count, target_format,
+):
+    saver, session, thread, _connection, manager, prepare = production_context
+    for index in range(1, source_count):
+        source_id = f"instruction:content-digest:{index}"
+        manager.register(ContextSourceDescriptor(
+            source_id=source_id, source_kind="agent_instructions", name=source_id,
+            description="正文摘要复用验证", internal_locator=f"instruction-producer://content-digest/{index}",
+            root_placement="root_eligible",
+        ), tracking_status="tracked")
+        manager.observe(source_id, f"冻结规则 {index}：中文、引号\"和换行\n", revision=f"content-digest:{index}")
+    encode = rfc8785.dumps
+    active, measurements = [], []
+
+    def observe_encode(value):
+        if active:
+            active[-1].append(value)
+        return encode(value)
+
+    def observe_reader(reader, stage):
+        read_content = reader._request_content_for_plan
+
+        def observe_content(*args, **kwargs):
+            encodings = []
+            active.append(encodings)
+            try:
+                content = read_content(*args, **kwargs)
+            finally:
+                active.pop()
+            plan = args[3]
+            selected = {entry.contribution_id for entry in plan.selection if entry.included}
+            for contribution in plan.contributions:
+                if contribution.contribution_id not in selected:
+                    continue
+                body = content[contribution.contribution_id]
+                preimage = {"contribution_kind": contribution.contribution_kind, "body": body}
+                measurements.append({"stage": stage, "body_encodings": encodings.count(body),
+                                     "contribution_encodings": encodings.count(preimage)})
+            return content
+
+        monkeypatch.setattr(reader, "_request_content_for_plan", observe_content)
+
+    monkeypatch.setattr(rfc8785, "dumps", observe_encode)
+    observe_reader(saver, "prepare")
+    prepared = prepare("content-digest-first", target_format=target_format)
+    plan = prepared["snapshot"].as_sealed_plan()
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        observe_reader(cold, "cold")
+        for _ in range(2):
+            projection = cold.project_context_plan_for_dispatch(
+                session, thread, plan, target_format=target_format,
+            )
+            assert projection.assembly == prepared["snapshot"]
+            assert projection.messages == prepared["messages"]
+            assert projection.tools == prepared["tools"]
+            assert projection.losses == prepared["losses"]
+            assert projection.native == prepared.get("native_projection")
+            assert projection.resource_refs == prepared["resource_refs"]
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "request-content-encodings.json").write_text(
+        json.dumps(measurements, indent=2), encoding="utf-8",
+    )
+    print(f"request content encodings ({source_count}, {target_format}): {measurements}")
+    assert {item["stage"] for item in measurements} == {"prepare", "cold"}
+    assert all(item["body_encodings"] == item["contribution_encodings"] == 1 for item in measurements)
 
 
 @pytest.mark.parametrize("source_count", [1, 8])

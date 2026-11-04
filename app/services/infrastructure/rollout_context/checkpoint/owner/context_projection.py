@@ -364,9 +364,11 @@ class ContextProjectionOwnerMixin:
                 if ref.content_hash is None:
                     raise ValueError(f"source-mismatch: local request source 缺少 content_hash: {ref_id}")
                 body = result[ref_id]
-                body_length = payload_content_length(
-                    ref.payload_kind or "structured_content",
-                    body,
+                # parser 已逐字节核验结构化长度和正文摘要；只比对同次读取的结果。
+                # text 仍按原始 UTF-8 计长，不能拿 detail 的 JCS 长度替代。
+                body_length = (
+                    payload_content_length("text", body)
+                    if ref.payload_kind == "text" else detail_record.length
                 )
                 contribution = (
                     contributions_by_id.get(selection_entry.contribution_id)
@@ -382,7 +384,7 @@ class ContextProjectionOwnerMixin:
                 body_hash = (
                     contribution_content_hash(contribution.contribution_kind, body)
                     if contribution is not None
-                    else sha256_jcs(body)
+                    else detail_envelope["detail_content_hash"]
                 )
                 expected_token = ref.content_hash
                 actual_token = body_hash
@@ -398,21 +400,8 @@ class ContextProjectionOwnerMixin:
                 raise DetailUnavailableError(
                     f"detail-unavailable: contribution source missing: {contribution_id}"
                 )
-            body = result[contribution_id]
-            expected_token = (
-                contribution.content_hash
-            )
-            if (
-                contribution.content_length
-                != payload_content_length("structured_content", body)
-                or (
-                    contribution_content_hash(contribution.contribution_kind, body)
-                )
-                != expected_token
-            ):
-                raise ValueError(
-                    f"source-mismatch: context contribution: {contribution_id}"
-                )
+            # typed plan 已保证 contribution/ref 的长度与 hash 相同；上方逐 ref
+            # 已用 contribution_kind 计算并核对摘要，此处不再重复编码同一正文。
         return result
 
     def _request_source_record(
