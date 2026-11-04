@@ -209,6 +209,7 @@ def tool_definition_batch(
         value.tool_id: revision for value, revision in definition_source_values(previous)
     }
     sources, deltas = list(batch.sources), list(batch.deltas)
+    batch_source_ids: set[str] | None = None
     for name, discovered in sorted(discoveries.items()):
         policy = policies[name]
         if policy.model_visibility_locked:
@@ -250,7 +251,11 @@ def tool_definition_batch(
         revision = sha256_jcs({"content": content})
         previous_revision = previous_revisions.get(name)
         source_id = discovered.resource_id
-        if any(source.descriptor.source_id == source_id for source in batch.sources):
+        # 同次 prepare 的原 batch 不变；实际恢复定义时只索引一次 owner 身份。
+        # 全部定义被跳过时不扫描，也不跨 prepare 缓存这次的冲突校验。
+        if batch_source_ids is None:
+            batch_source_ids = {source.descriptor.source_id for source in batch.sources}
+        if source_id in batch_source_ids:
             raise ExtensionCatalogUnavailableError("活动定义不得登记第二个 CSM owner")
         sources.append(ContextSourceSnapshot(
             descriptor=ContextSourceDescriptor(

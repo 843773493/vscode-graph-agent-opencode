@@ -378,11 +378,14 @@ def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, f
         key, *, context_owner=None, boundary: ResourceActivationBoundary = "model_call",
         checkpoint_ns: str = "", request_messages=(),
         policies_for=extension_catalog_policy_resolver,
+        context_source_manager=None,
     ):
         target = saver if context_owner is None else context_owner
-        source_manager = manager if target is saver else ContextSourceManager(
-            owner=ContextSourceOwnerKey(session, thread), control_state_port=target,
-        )
+        source_manager = context_source_manager
+        if source_manager is None:
+            source_manager = manager if target is saver else ContextSourceManager(
+                owner=ContextSourceOwnerKey(session, thread), control_state_port=target,
+            )
         with (
             session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
             execution_admission_scope(admission, langgraph_thread_id=thread),

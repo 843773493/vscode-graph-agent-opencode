@@ -25,6 +25,9 @@ from app.services.infrastructure.rollout_context.checkpoint.seal import preparat
 from app.services.infrastructure.rollout_context.checkpoint.durable import source_activation
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import definition_source_values
 from app.services.infrastructure.rollout_context.runtime.context_sources import tool_definitions
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import ContextSourceManager
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import ContextSourceOwnerKey
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import ContextSourceDescriptor, ContextSourceSnapshot
 from tests.harness.python.run_context import TestRunContext
 from tests.unit.services.infrastructure.mcp import test_tool_search as search
 
@@ -95,6 +98,90 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
         return originals, activation.activation_snapshot_id
 
     return create
+
+
+@pytest.mark.parametrize("ordinary_count", [0, 8])
+@pytest.mark.parametrize("compact", [False, True])
+async def test_prepare_checks_definition_owner_collisions_with_one_batch_pass(
+    discovered_batch, guidance_prepare, registry_db, monkeypatch, request, ordinary_count, compact,
+):
+    originals, _activation_id = await discovered_batch(4, 1, compact=compact)
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+
+    def make_manager(owner):
+        manager = ContextSourceManager(owner=ContextSourceOwnerKey(session, thread), control_state_port=owner)
+        for index in range(ordinary_count):
+            source_id = f"instruction:definition-batch-{index}"
+            manager.register(ContextSourceDescriptor(
+                source_id=source_id, source_kind="agent_instructions", name=source_id,
+                description="定义恢复并存的普通来源", internal_locator=f"runtime:definition-batch-{index}",
+            ), tracking_status="tracked")
+            manager.observe(source_id, f"普通来源正文 {index}", revision="instruction:1")
+        return manager
+
+    manager = make_manager(saver)
+    prepare = preparation.tool_definition_batch
+    original_attribute = ContextSourceSnapshot.__getattribute__
+    phases, active = [], []
+
+    def observe_attribute(source, name):
+        caller = sys._getframe(1).f_code
+        if (active and name == "descriptor" and caller.co_filename == tool_definitions.__file__
+                and caller.co_qualname.startswith("tool_definition_batch")):
+            active[-1]["descriptor_reads"] += 1
+        return original_attribute(source, name)
+
+    def observe_prepare(batch, **kwargs):
+        phase = {"source_count": len(batch.sources), "descriptor_reads": 0}
+        phases.append(phase)
+        active.append(phase)
+        try:
+            return prepare(batch, **kwargs)
+        finally:
+            active.pop()
+
+    monkeypatch.setattr(ContextSourceSnapshot, "__getattribute__", observe_attribute)
+    monkeypatch.setattr(preparation, "tool_definition_batch", observe_prepare)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        for key, owner in (("first", saver), ("successor", saver), ("cold", cold)):
+            source_manager = manager if owner is saver else make_manager(owner)
+            wire, _ = guidance_prepare("definition-owner-" + key, context_owner=owner, context_source_manager=source_manager)
+            snapshot = wire["snapshot"]
+            values = [value for value, _revision in definition_source_values(snapshot)]
+            assert [value.tool_id for value in values] == (sorted(originals) if compact else [])
+            assert {ref.source_identity for frame in snapshot.seal_binding.prefix.state.frames for ref in frame.item_refs} >= {
+                f"instruction:definition-batch-{index}" for index in range(ordinary_count)
+            }
+            assert cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id).to_dict() == snapshot.to_dict()
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / f"definition-owner-{ordinary_count}-{compact}.json").write_text(
+        json.dumps(phases, indent=2), encoding="utf-8",
+    )
+    print(f"definition owner work ({ordinary_count=}, {compact=}): {phases}")
+    assert len(phases) == 3
+    assert all(phase["descriptor_reads"] == (phase["source_count"] if compact else 0) for phase in phases)
+
+
+async def test_prepare_rejects_definition_registered_with_a_second_owner(
+    discovered_batch, guidance_prepare, registry_db,
+):
+    originals, _activation_id = await discovered_batch(4, 1)
+    saver, session, connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    manager = ContextSourceManager(owner=ContextSourceOwnerKey(session, thread), control_state_port=saver)
+    source_id = originals["notes"]["provenance"]["resource_id"]
+    manager.register(ContextSourceDescriptor(
+        source_id=source_id, source_kind="agent_instructions", name="冲突来源",
+        description="不得覆盖原冻结定义", internal_locator="runtime:conflicting-definition",
+    ), tracking_status="tracked")
+    manager.observe(source_id, "第二 owner 的正文", revision="conflicting:1")
+    before = connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall()
+    pending = manager.prepare_pending()
+    with pytest.raises(ExtensionCatalogUnavailableError, match="活动定义不得登记第二个 CSM owner"):
+        guidance_prepare("definition-owner-rejected", context_source_manager=manager)
+    assert connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall() == before
+    assert manager.prepare_pending() == pending
 
 
 @pytest.mark.parametrize("call_count", [1, 2])
