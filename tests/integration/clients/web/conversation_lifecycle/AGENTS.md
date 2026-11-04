@@ -26,6 +26,7 @@ Section 8 完整会话生命周期的唯一 Python owner、浏览器驱动和独
 - focus 仍由 MJS 唯一 registry 定义；pytest collection 在启动 fixture 前校验，不保留旧 E2E 别名。
 - `copy_capture_recovery` 只复用完整 forks 中的 capture／marker 恢复场景，创建独立保留会话后执行同一业务函数与错误审计；用于定向重验，不代替完整 forks 验收。
 - `copy_attachment_deletion` 只复用完整 forks 的附件 finalizer／目标删除竞争函数；reservation 只创建 claim，未提交目标关联时须精确核不存在，提交先行则删除后核 released。两种顺序都保留原 claim／冻结来源、结算、lease、重启不复活及来源内容断言；定向结果不替代完整 forks。
+- 附件 copy 生命周期不再等待旧 GC 事件或断言 30 天期限。原 claim 保护工作目录，最后真实关联解除后核 `released`／无待处理及物理目录缺失，再经原文件 API 的同一 URI 重建；保留原身份、locator、字节和 claim 结算断言。
 - copy 请求页在重启后须恢复存活观察目标，按 Session、Thread 和过滤范围匹配真实 connected；仅当重启前已接受的 source DELETE 在同页完成原 journal、目录／聊天宿主和原版 Tab 释放证明后，才验证该精确 source Trace 释放。关页与最终错误审计共用同一归属检查，不能用删除证明豁免其它存活订阅。
 - 重启期间工具审批轮询的 502 须精确绑定 source Session／Thread、原页面和实际 Gateway 回执；目录对账通知按真实响应头的 request_id 消费已通过网络审计的同页 snapshot／events／navigation-events 或精确 Session GET 响应，不能重复消费或按文案、时间猜配并发请求。
 - copy 请求页面先等待原版 `code/didRestoreEditors`；重启前绑定实际 Thread EditorPane 的工作区、Session 和 Thread owner，并将原版 Tab 的 Thread basename 唯一关联到真实成功的 bootstrap 回执，冻结尚未挂载的恢复标签身份。回执须核同 Gateway origin、路由、业务工作区、Session／Thread 与 request_id；歧义、缺失回执或身份错配必须失败，不得仅凭失败 URL 放行未知 Session。成功 bootstrap 原件随失败诊断保留。

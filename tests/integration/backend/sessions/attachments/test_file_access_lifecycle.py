@@ -3,27 +3,37 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import subprocess
 import threading
 import zlib
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 
-from app.api.workspace import get_workspace_file_content
+from app.api import workspace as workspace_api
+from app.api.workspace import (
+    get_workspace_file_content,
+    reveal_workspace_file_entry,
+    stream_workspace_file_events,
+)
 from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.key_lock_pool import KEY_LOCK_SHARDS
 from app.core.resource_uri import file_uri_child, parse_attachment_uri
 from app.schemas.internal_v2.text_mutation import PatchText
+from app.schemas.internal_v2.workspace import WorkspaceFileWatchRequest
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceFileMutationIntentDTO,
 )
 from app.services.infrastructure import workspace_service as service_module
 from app.services.infrastructure.attachment_blob_catalog import ingest as ingest_module
 from app.services.infrastructure.workspace_files import operations as operations_module
-from app.services.infrastructure.workspace_files.events import file_events
 from tests.integration.backend.sessions.test_attachment_runtime_lifecycle import (
     attachment_directory,
     execute_upload,
@@ -222,7 +232,169 @@ async def test_restoring_observed_directories_does_not_reopen_released_working_c
         await service.stop()
 
 
-async def test_replaying_original_file_operation_event_does_not_reopen_released_directory(access_case) -> None:
+async def test_last_detach_during_watch_initialization_finishes_without_body_holder(access_case, monkeypatch) -> None:
+    case, session, ref, aid, directory = access_case
+    container = case.runner.container
+    store, service = container.attachment_blob_store, container.workspace_service
+    entered, release = threading.Event(), threading.Event()
+    watch_thread_id: int | None = None
+    lookup, resolve = store._catalog.get_directory, store.resolve_directory_uri
+
+    def watch_reference(*args, **kwargs):
+        nonlocal watch_thread_id
+        if kwargs.get("require_directory"):
+            watch_thread_id = threading.get_ident()
+        return resolve(*args, **kwargs)
+
+    def pause_lookup(identity: str):
+        record = lookup(identity)
+        if identity == aid and threading.get_ident() == watch_thread_id and not entered.is_set():
+            assert not store._directory_access_held(aid)
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError("附件观察 locator 屏障未释放")
+        return record
+
+    monkeypatch.setattr(store, "resolve_directory_uri", watch_reference)
+    monkeypatch.setattr(store._catalog, "get_directory", pause_lookup)
+    assert ref.directory_uri is not None
+    pending = asyncio.create_task(stream_workspace_file_events(WorkspaceFileWatchRequest(paths=[ref.directory_uri]),
+        _="local", watch_service=container.workspace_file_watch_service, workspace_service=service))
+    response = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        await asyncio.wait_for(case.tracker.close(session_id=session), 5)
+        record = lookup(aid)
+        assert record.availability == "released" and record.release_pending == 0 and not directory.exists()
+        release.set()
+        response = await asyncio.wait_for(pending, 5)
+        assert lookup(aid).availability == "released" and not directory.exists()
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        if response is not None:
+            await cast(AsyncGenerator[str, None], response.body_iterator).aclose()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="验证 POSIX 原生 Shell 的目录替换")
+async def test_watch_rejects_fixed_layout_path_replaced_by_native_shell_file(access_case) -> None:
+    case, _session, ref, aid, directory = access_case
+    container = case.runner.container
+    assert ref.directory_uri is not None
+    await asyncio.to_thread(subprocess.run, "rmdir derived && printf result > derived", shell=True,
+        cwd=directory, check=True, capture_output=True, timeout=5)
+    derived_uri = file_uri_child(ref.directory_uri, "derived")
+    with pytest.raises(HTTPException) as rejected:
+        await stream_workspace_file_events(WorkspaceFileWatchRequest(paths=[derived_uri]),
+            _="local", watch_service=container.workspace_file_watch_service, workspace_service=container.workspace_service)
+    assert rejected.value.status_code == 400
+    assert isinstance(rejected.value.__cause__, NotADirectoryError)
+    assert rejected.value.detail == f"文件监听路径不是目录: {derived_uri}"
+    assert (directory / "derived").read_bytes() == b"result"
+    assert (directory / "original/content").read_bytes() == b"runtime original"
+    record = container.attachment_blob_store._catalog.get_directory(aid)
+    assert record.availability == "available" and record.release_pending == 0
+
+
+async def test_watch_released_attachment_uses_locator_and_only_publishes_selected_resources(access_case, monkeypatch) -> None:
+    case, session, ref, aid, directory = access_case
+    container = case.runner.container
+    store, service, watcher = container.attachment_blob_store, container.workspace_service, container.workspace_file_watch_service
+    _other_session, _other_thread, other_ref = await execute_upload(case)
+    other_id = parse_attachment_uri(other_ref.file_id, require_file=True).attachment_id
+    assert other_id is not None and other_id != aid and ref.directory_uri is not None
+    other_directory = attachment_directory(store, other_id)
+    await service.start()
+    stream = None
+    monkeypatch.setattr(workspace_api, "SSE_HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    try:
+        await service.list_files(path=ref.directory_uri)
+        await case.tracker.close(session_id=session)
+        assert store._catalog.get_directory(aid).availability == "released" and not directory.exists()
+        for path, status in [(ref.file_id, 400), (file_uri_child(ref.directory_uri, "derived", "missing"), 404)]:
+            with pytest.raises(HTTPException) as invalid:
+                await stream_workspace_file_events(WorkspaceFileWatchRequest(paths=[path]),
+                    _="local", watch_service=watcher, workspace_service=service)
+            assert invalid.value.status_code == status
+        assert store._catalog.get_directory(aid).availability == "released" and not directory.exists()
+        response = await stream_workspace_file_events(
+            WorkspaceFileWatchRequest(paths=[ref.directory_uri, file_uri_child(ref.directory_uri, "derived")]),
+            _="local", watch_service=watcher, workspace_service=service,
+        )
+        stream = cast(AsyncGenerator[str, None], response.body_iterator)
+        assert await asyncio.wait_for(anext(stream), 5) == ": heartbeat\n\n"
+        await asyncio.wait_for(watcher.wait_until_ready((service._workspace_root,)), 5)
+        assert store._catalog.get_directory(aid).availability == "released" and not directory.exists()
+        (other_directory / "derived/secret.txt").write_text("未订阅的附件结果", encoding="utf-8")
+        (service._workspace_root / ".boxteam/private-watch-secret").write_text("私有状态", encoding="utf-8")
+        for _ in range(8):
+            assert await asyncio.wait_for(anext(stream), 5) == ": heartbeat\n\n"
+        assert store._catalog.get_directory(aid).availability == "released" and not directory.exists()
+
+        assert (await service.get_file_content(path=ref.file_id)).content == "runtime original"
+        changes = []
+        for _ in range(100):
+            frame = await asyncio.wait_for(anext(stream), 5)
+            if frame.startswith(":"):
+                continue
+            assert frame.startswith("event: changes\ndata: "), frame
+            batch = json.loads(frame.removeprefix("event: changes\ndata: "))
+            changes.extend(batch["changes"])
+            if changes:
+                break
+        assert changes and all(change["path"] == ref.directory_uri or change["path"].startswith(ref.directory_uri + "/") for change in changes)
+        assert store._catalog.get_directory(aid).availability == "available" and directory.is_dir()
+        assert (directory / "original/content").read_bytes() == b"runtime original"
+    finally:
+        if stream is not None:
+            await stream.aclose()
+        await service.stop()
+
+
+@pytest.mark.parametrize("released_before", [False, True], ids=["detach-during-dispatch", "rebuild-before-dispatch"])
+async def test_reveal_holds_original_owner_through_native_dispatch(access_case, monkeypatch, released_before: bool) -> None:
+    case, session, ref, aid, directory = access_case
+    store, service = case.runner.container.attachment_blob_store, case.runner.container.workspace_service
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def dispatch(command, **options):
+        assert store._directory_access_held(aid)
+        assert (directory / "original/content").read_bytes() == b"runtime original"
+        calls.append((command, options))
+        entered.set()
+        if not release.wait(10):
+            raise TimeoutError("系统定位派发屏障未释放")
+
+    monkeypatch.setattr(service_module, "shutil", SimpleNamespace(which=lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None))
+    monkeypatch.setattr(service_module, "subprocess", SimpleNamespace(Popen=dispatch, DEVNULL=-3, CREATE_NEW_PROCESS_GROUP=0x200))
+    if released_before:
+        await case.tracker.close(session_id=session)
+        assert store._catalog.get_directory(aid).availability == "released" and not directory.exists()
+    pending = asyncio.create_task(reveal_workspace_file_entry(path=ref.file_id, scope="workspace", _="local",
+        request_id="attachment-reveal", workspace_service=service))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        if not released_before:
+            await case.tracker.close(session_id=session)
+            assert store._catalog.get_directory(aid).release_pending == 1
+        assert directory.is_dir() and not pending.done()
+        release.set()
+        result = await asyncio.wait_for(pending, 5)
+        assert result.data is not None
+        assert result.data.path == ref.file_id and result.request_id == "attachment-reveal"
+        assert len(calls) == 1 and any(str(directory) in argument for argument in calls[0][0])
+        record = store._catalog.get_directory(aid)
+        assert record.release_pending == 0
+        assert record.availability == ("available" if released_before else "released")
+        assert directory.exists() is released_before
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize("subscribed", [True, False], ids=["selected", "private"])
+async def test_replaying_original_file_operation_event_does_not_reopen_released_directory(access_case, subscribed: bool) -> None:
     case, session, ref, aid, directory = access_case
     container = case.runner.container
     store, service = container.attachment_blob_store, container.workspace_service
@@ -255,13 +427,29 @@ async def test_replaying_original_file_operation_event_does_not_reopen_released_
         assert deleted["status"] == "success"
         await case.tracker.close(session_id=session)
         assert store._catalog.get_directory(aid).availability == "released" and not directory.exists()
-        stream = file_events(owner, container.workspace_file_watch_service, (service._workspace_root,),
-            after_event_id=expected["event_id"] - 1,
-            references={service._workspace_root: service.file_paths.workspace_uri, directory / "derived": derived})
-        event = await asyncio.wait_for(anext(stream), 5)
-        assert event.event_id == expected["event_id"]
-        assert [value.model_dump(mode="json") for value in event.directories] == expected["directories"]
-        assert [value.model_dump(mode="json") for value in event.snapshots] == expected["snapshots"]
+        response = await stream_workspace_file_events(
+            WorkspaceFileWatchRequest(paths=[derived] if subscribed else [], after_event_id=expected["event_id"] - 1),
+            _="local", watch_service=container.workspace_file_watch_service, workspace_service=service,
+        )
+        stream = cast(AsyncGenerator[str, None], response.body_iterator)
+        pending = asyncio.create_task(anext(stream))
+        try:
+            if not subscribed:
+                await asyncio.wait_for(container.workspace_file_watch_service.wait_until_ready((service._workspace_root,)), 5)
+                (service._workspace_root / "public.txt").write_text("公开目录变化", encoding="utf-8")
+            frame = await asyncio.wait_for(pending, 5)
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        assert frame.startswith("event: changes\ndata: "), frame
+        event = json.loads(frame.removeprefix("event: changes\ndata: "))
+        if subscribed:
+            assert event["event_id"] == expected["event_id"]
+            assert event["directories"] == expected["directories"]
+            assert event["snapshots"] == expected["snapshots"]
+        else:
+            assert event["changes"] == [{"kind": "create", "path": file_uri_child(service.file_paths.workspace_uri, "public.txt")}]
+            assert event["directories"] == event["snapshots"] == []
         record = store._catalog.get_directory(aid)
         assert record.availability == "released" and record.release_pending == 0 and not directory.exists()
     finally:

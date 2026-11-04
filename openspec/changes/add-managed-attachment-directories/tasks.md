@@ -23,7 +23,7 @@
 ## 4. 普通访问、历史与 fork 迁齐
 
 - [ ] 4.1 原件/预览接口、资源导航、目录浏览、文件读取/编辑、Shell 和 fork 统一通过原附件 owner 按需重建；并发重建只发布同一资源/目录，原件缺失或损坏明确失败。
-  本轮普通读/列表/媒体/下载、文件修改、Shell、fork 及持久 outbox 回放已迁并有定向证据；watch 初始 locator 与 released 目录根校验、reveal 的同步访问及系统文件管理器异步使用期仍未完整纳入生命周期，已在原入口保留具体 TODO，不能视为全量消费者迁齐。
+  普通读/列表/媒体/下载、文件修改、Shell、fork 及持久 outbox 回放已迁并有定向证据。watch 已使用原 locator 和工作区 watcher，单次 stat 优先核实际节点类型，仅实际缺失的固定布局使用虚拟目录语义，不持正文 holder、不妨碍最后 detach 结清，核 released 根、显式附件 URI 及私有事件过滤，不因初始化或回放重建；reveal 的同步解析/stat/原生派发已持原 access 并验证卸载竞争与重建。外部系统文件管理器持续使用期尚无可靠占用身份，按本轮限定保留精确 TODO，不扩展通用接管或常驻 lease，因此暂不勾选全量入口完成。
 - [x] 4.2 保留 canonical/assembly 的实际输入版本及原 request_hash；释放工作目录不删除其依赖，不读取当前配置/文件补历史，不复制第二套完整消息或目录历史。
 - [x] 4.3 同工作区 fork 先重建可释放原件并复用身份/关联，跨工作区保存目标端原件及选定冻结结果；导入派生结果在目标卸载后仍保留，required/optional 真实缺件和失败/删除结算合同不变。
 
@@ -78,8 +78,13 @@
 | 工具结果、full copy、副本执行、多次 Backend 重启、Session 删除、显式删除结果回基线、历史及下载重建 | `frozen-history-final-1793794147960306137`：1 passed，178.47s；核原身份、URI、bytes、assembly 与 request_hash |
 | 生产类型检查与完整旧 HEAD 对照 | `pyright-final-comparison-1793794928758961420.json`：当前 27 文件 235 条既有诊断，完整 `bf0f2e1` 基线 26 文件 244 条；按文件/rule/完整 message 多重集无新增。此结果不是全库类型全绿 |
 | events 与新 file-access/schema 4 测试类型 | `outbox-types-complete-1793794976518058543`：3 文件、0 errors；生成器声明准确提供原 aclose 能力，无运行逻辑变化 |
+| watch/reveal 导航入口与真实 API outbox 回放 | `navigation-integration-1793797654578122025`：6 passed、9 deselected，59.98s；真实上传/卸载生成 released，再核原 URI 重建和受限事件、目录错误分类、reveal 派发期间 holder、selected/private 持久回放；不包含外部 GUI 持续使用期 |
+| 导航首批单测与静态对照 | `navigation-unit-1793797623599908796`：123 passed、8 fixture setup errors，7.23s；8 项停在未迁的 Gateway `backend_workspace_id` 构造参数，归独立身份切片处理。`navigation-static-1793797654529996885`、`navigation-js-syntax-1793797654676207477` 退出0；`navigation-static-comparison-1793798027656736883.json` 按原语义 AST 节点及重数核 Pyright 15/15、API Ruff B008 27/27，新增0，不能称类型或 API Ruff 全绿 |
+| watch 最后解绑竞争与首轮定向检查 | `navigation-watch-final-1793798601260916326`：5 passed、11 deselected，48.59s，新增初始化阻塞期间最后 detach 已完整释放/pending0 的场景；复核 released 根、私有事件及真实 API 回放。`navigation-unit-final-1793798643363493289`：22 passed，2.04s。该轮 watch 5 项与首批未变的 reveal 2 项共 7 个导航场景，后续新增类型拒绝场景见下，不将重复运行相加 |
+| watch 真实节点类型回归与最终收口 | `navigation-watch-node-type-1793799269988377918`：6 passed、11 deselected，60.47s；真实上传后由原生 Shell 子进程在附件根执行 `rmdir derived && printf result > derived`，公开 watch 入口按真实文件返回 400/NotADirectoryError，原件与生成结果保留，同时复核最后 detach 竞争、released 根及真实 API 回放。单次 stat 优先核实际节点，仅缺失的固定布局保留虚拟目录语义，不持正文 holder 或物化；本项未复验 PTY、Windows 或 Web。`navigation-node-type-static-final-1793799401657212994` Ruff 退出 0；`navigation-node-type-types-final-1793799401652778323` 与完整旧 HEAD 核生产诊断 15/15，新增 0，测试诊断 0；本批导航测试引入的 7 条流类型诊断已按实际 AsyncGenerator 合同修正。`navigation-node-type-comparison-1793799532512692685.json` 核精确语义 AST/重数、归档与 Git 源码一致，以及最终测试仅增加类型导入/cast，复用上述行为结果；原 API Ruff 源码未变，仍为 27 条既有 B008，不称全绿 |
+| 导航最终静态及旧 Web 测试合同 | `navigation-static-final-1793798643345766954` 退出0；`navigation-static-final-comparison-1793798727991487815.json` 核最终生产源码 Pyright 15/15，API 源码未变复用 Ruff 27/27，新增0。旧 GC 事件和两组 30 天字段断言已物理移除，迁为 claim 保护、无修改释放及原 URI 重建；JS 语法通过。两项 copy focus 的 `navigation-browser-reuse-entry-1793798146521753755` 停在原 Python bootstrap 读取已删除 `active_workspace_id`，1 failed/94.40s，Chromium/MJS 未启动；不算附件浏览器验收。`navigation-workbench-reuse-1793798148110056744.json` 明确记录与正式构建一致的 890 个客户端源码及原 build/type 收据，未重复构建 |
 | Ruff、compileall、矩阵和规范 | `final-static-complete-1793794459419517970`、`final-compile-complete-1793794459670264094`、`outbox-ruff-complete-1793794977716849676` 退出 0；`api-comment-ruff-comparison-1793794928758961420.json` 核 API 文件 27 条既有 B008 与旧 HEAD 完全一致且 AST 不变；`matrix-references-final-1793793815825635312` 核 27 个附件 suite、36 个精确引用；最终 strict 原件见本目录最新 `tasks-strict-complete-*` |
 
 两条真实后端重启原件位于 `out/tests/temp/identity_convergence_20261104/artifacts/`：`attachment-process-live-final-1793794482374124887` 为真实后台父子处理进程跨 Backend 硬重启，1 passed、2 deselected，121.18s；`attachment-runtime-restart-final-1793794652556874428` 为 queued 输入与 stale runtime 重启对账，1 passed，100.65s。
 
-runtime/entry/Shell/terminal、离线转换/安装/回退及原目录释放中断的并行验证由各 owner 保留独立原件，不与上表重复相加。4.1 保留 watch/reveal 剩余工作；6.3 继续未勾：真实进程停止派发前/回执后的硬退出、startup unknown 以及上传 topology/ingest 的迁后故障专项尚未完成本轮全量复验。Linux 的 fork/历史及两条重启通过不能代替 Windows 新策略验证，6.4 与归档 6.6 保持未完成。
+runtime/entry/Shell/terminal、离线转换/安装/回退及原目录释放中断的并行验证由各 owner 保留独立原件，不与上表重复相加。4.1 保留外部 GUI 持续使用期边界；6.3 继续未勾：真实进程停止派发前/回执后的硬退出、startup unknown 以及上传 topology/ingest 的迁后故障专项尚未完成本轮全量复验。Linux 的 fork/历史及两条重启通过不能代替 Windows 新策略验证，6.4 与归档 6.6 保持未完成。

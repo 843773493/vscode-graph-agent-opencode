@@ -6,6 +6,7 @@ import base64
 import hashlib
 import mimetypes
 import os
+import stat
 import sys
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
@@ -317,7 +318,8 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
         observe_phase_sync(record.ingest_idempotency_key, "attachment.ingest.directory_renamed", details=details)
         verify_content(resolve_attachment_file(destination, ("original", "content")), record.digest, record.length, record.attachment_id)
 
-    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False, materialize: bool = True) -> Path:
+    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False, materialize: bool = True,
+                              require_directory: bool = False) -> Path:
         if parsed.kind != "attachments" or parsed.scope != "workspace" or parsed.scope_id != self.workspace_id or parsed.gateway_authority is not None:
             raise ValueError("附件目录 URI 不属于本机固定工作区")
         attachment_id = parsed.tail_segments[0]
@@ -332,7 +334,23 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
             if record is None or record.availability == "tombstoned":
                 raise FileNotFoundError(f"附件资源不存在：attachment_id={attachment_id}")
             root = resolve_attachment_directory(self._attachments_root, record.relative_locator)
-        return resolve_attachment_file(root, children)
+        target = resolve_attachment_file(root, children)
+        if require_directory:
+            try:
+                mode = target.stat().st_mode
+            except FileNotFoundError:
+                # 缺失的固定布局保留虚拟目录语义；观察不占用正文或触发重建。
+                if children in {(), ("original",), ("preview",), ("derived",)}:
+                    return target
+                if self._catalog.file_version(attachment_id, "/".join(children)) is None:
+                    error = FileNotFoundError(f"文件监听路径不存在: {parsed.display_uri}")
+                    raise mark_public_failure(error, str(error))
+            else:
+                if stat.S_ISDIR(mode):
+                    return target
+            error = NotADirectoryError(f"文件监听路径不是目录: {parsed.display_uri}")
+            raise mark_public_failure(error, str(error))
+        return target
 
     def read(self, session_id: str | None, file_id: str, *, owner_thread_id: str | None = None) -> ResourceFileContent:
         attachment_id, children = self._resource_id(file_id, session_id=session_id, thread_id=owner_thread_id)

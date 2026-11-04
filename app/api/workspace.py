@@ -25,6 +25,7 @@ from app.api.sse_heartbeat import (
 from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.exceptions import ForbiddenError
 from app.core.failures import failure_detail, report_failure
+from app.core.resource_uri import parse_resource_uri
 from app.protocol.codecs.workspace_events import (
     file_change_batch_to_json,
     file_change_batch_to_proto,
@@ -160,11 +161,14 @@ def open_workspace_file_sse(
 ) -> AsyncIterator[str]:
     try:
         references = {workspace_service.file_paths.workspace: workspace_service.file_paths.workspace_uri}
+        watch_paths = []
         for value in payload.paths:
-            # TODO(attachment-watch): 观察应只解析 locator；须同时迁齐 released 目录根校验，避免短 holder 后的释放竞争和误报 404。
-            native, uri = workspace_service.file_paths.resolve(value)
+            native, uri = workspace_service.file_paths.resolve(value, materialize=False, require_directory=True)
             references[native] = uri
-        roots = watch_service.resolve_watch_roots(str(path) for path in references)
+            # 附件 locator 位于原工作区 watcher 内；工作副本释放不使订阅失效。
+            if parse_resource_uri(uri).kind != "attachments":
+                watch_paths.append(str(native))
+        roots = watch_service.resolve_watch_roots(watch_paths)
     except ValidationError:
         raise
     except FileNotFoundError as error:

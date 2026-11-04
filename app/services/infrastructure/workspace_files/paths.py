@@ -43,7 +43,8 @@ _NativeReply = TypeVar("_NativeReply", NativeDirectoryBindingDTO, NativeDirector
 
 
 class AttachmentDirectoryPaths(Protocol):
-    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False, materialize: bool = True) -> Path: ...
+    def resolve_directory_uri(self, parsed: ParsedResourceUri, *, for_write: bool = False, materialize: bool = True,
+                              require_directory: bool = False) -> Path: ...
 
     def access_files(self, *attachment_ids: str, for_write: bool = False) -> AbstractContextManager[None]: ...
 
@@ -177,7 +178,7 @@ class WorkspaceFilePaths:
         # 分类保留循环/断链的 symlink 节点；真正访问仍经 resolve/safe_join 明确失败。
         resolved = Path(os.path.realpath(target))
         if root_uri is not None and parse_resource_uri(root_uri).kind == "attachments":
-            root, _ = self.resolve(resource_uri.file_uri_root(root_uri))
+            root, _ = self.resolve(resource_uri.file_uri_root(root_uri), materialize=False)
             return (not target.is_relative_to(root) or not resolved.is_relative_to(root)
                     or any(os.path.normcase(part) == ".boxteam" for part in target.relative_to(root).parts))
         return (any(os.path.normcase(part) == ".boxteam" for part in (*target.parts, *resolved.parts))
@@ -202,7 +203,7 @@ class WorkspaceFilePaths:
 
     def resolve(self, value: str, *, scope: str = "workspace", allow_empty: bool = True,
                 reject_symlink: bool = False, allow_external: bool = True, for_write: bool = False,
-                materialize: bool = True) -> tuple[Path, str]:
+                materialize: bool = True, require_directory: bool = False) -> tuple[Path, str]:
         if is_resource_uri_input(value):
             parsed = parse_resource_uri(value, local_gateway_id=get_current_gateway_id())
             if parsed.kind == "attachments":
@@ -210,7 +211,8 @@ class WorkspaceFilePaths:
                     raise RuntimeError("文件 owner 尚未装配附件目录解析")
                 if any(os.path.normcase(part) == ".boxteam" for part in parsed.tail_segments[1:]):
                     raise ForbiddenError("附件目录不公开嵌套的私有存储")
-                return self.attachments.resolve_directory_uri(parsed, for_write=for_write, materialize=materialize), parsed.display_uri
+                return self.attachments.resolve_directory_uri(parsed, for_write=for_write, materialize=materialize,
+                                                              require_directory=require_directory), parsed.display_uri
             if parsed.kind != "files" or parsed.scope not in {"workspace", "gateway"}:
                 raise ValueError("文件入口必须指向 Workspace 或 Gateway files 资源")
             if parsed.gateway_authority is not None:

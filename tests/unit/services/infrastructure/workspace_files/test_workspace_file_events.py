@@ -78,7 +78,8 @@ async def test_operation_staging_watch_events_are_hidden_after_cleanup(
         )
 
         class OneBatchWatcher:
-            async def subscribe_roots(self, _roots):
+            async def subscribe_roots(self, _roots, *, include_internal_paths=False):
+                assert include_internal_paths is False
                 for batch in watcher_batches:
                     yield batch
 

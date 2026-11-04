@@ -510,45 +510,46 @@ class WorkspaceService:
         path: str,
         scope: WorkspaceFileScope,
     ) -> str:
-        # TODO(attachment-reveal): 用原 access 覆盖 resolve/stat/dispatch，并明确系统文件管理器异步使用期；短 ensure 不能保护释放竞争。
-        target, display_path = self.file_paths.resolve(
-            path,
-            scope=scope,
-            allow_empty=True,
-        )
-        if not target.exists():
-            error = FileNotFoundError(f"系统定位路径不存在: {display_path or '.'}")
-            raise mark_public_failure(error, str(error))
+        with self.file_paths.access(path):
+            target, display_path = self.file_paths.resolve(
+                path,
+                scope=scope,
+                allow_empty=True,
+            )
+            if not target.exists():
+                error = FileNotFoundError(f"系统定位路径不存在: {display_path or '.'}")
+                raise mark_public_failure(error, str(error))
 
-        if sys.platform == "darwin":
-            command = ["open", "-R", str(target)] if target.is_file() else ["open", str(target)]
-        elif os.name == "nt":
-            command = (
-                ["explorer.exe", f"/select,{target}"]
-                if target.is_file()
-                else ["explorer.exe", str(target)]
+            if sys.platform == "darwin":
+                command = ["open", "-R", str(target)] if target.is_file() else ["open", str(target)]
+            elif os.name == "nt":
+                command = (
+                    ["explorer.exe", f"/select,{target}"]
+                    if target.is_file()
+                    else ["explorer.exe", str(target)]
+                )
+            else:
+                opener = shutil.which("gio") or shutil.which("xdg-open")
+                if opener is None:
+                    raise RuntimeError("当前系统未安装 gio 或 xdg-open，无法在系统文件管理器中显示")
+                command = (
+                    [opener, "open", str(target if target.is_dir() else target.parent)]
+                    if Path(opener).name == "gio"
+                    else [opener, str(target if target.is_dir() else target.parent)]
+                )
+            process_group_options = (
+                {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if os.name == "nt"
+                else {"start_new_session": True}
             )
-        else:
-            opener = shutil.which("gio") or shutil.which("xdg-open")
-            if opener is None:
-                raise RuntimeError("当前系统未安装 gio 或 xdg-open，无法在系统文件管理器中显示")
-            command = (
-                [opener, "open", str(target if target.is_dir() else target.parent)]
-                if Path(opener).name == "gio"
-                else [opener, str(target if target.is_dir() else target.parent)]
+            # TODO(attachment-reveal): 启动器退出不能证明外部文件管理器关闭；持续使用期尚无可靠占用身份。
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **process_group_options,
             )
-        process_group_options = (
-            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-            if os.name == "nt"
-            else {"start_new_session": True}
-        )
-        subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **process_group_options,
-        )
         return display_path
 
     @staticmethod

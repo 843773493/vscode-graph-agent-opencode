@@ -7540,9 +7540,8 @@ async function runCopyAttachmentLifecycle(surface, owners) {
       sourceDelete = await deleteOwner(source);
       await navigationTerminal({ ...source, page: requestSurface.page },
         { operationId: sourceDelete.operation_id, intent: { kind: "delete_session" } });
-      const gc = (await testControl({ action: "events" })).findLast((event) => event.operation_id === source.sessionId && event.phase === "attachments.gc.completed");
-      assert.ok(gc);
-      assert.ok(!gc.details.collected_attachment_ids.includes(directory.attachment_id), "已提交 claim 必须阻止 source 删除后的正文 GC");
+      const retained = await readAttachmentSql(surface, "SELECT availability,release_pending FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]);
+      assert.deepEqual(retained, [{ availability: "available", release_pending: 1 }], "原 claim 必须保护 source 删除后的工作目录，等待发布结清");
       assert.deepEqual(await readFile(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}/original/content`), buffer);
     }
     if (phase === "copy.attachments.before_finalize") {
@@ -7620,13 +7619,19 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     assert.equal(finalClaims[0].state, phase.endsWith(".preparing") ? "aborted" : "target_deleted");
     const directories = await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]);
     assert.equal(directories.length, 1, "同工作区 fork 不复制共享目录");
-    assert.equal(directories[0].availability, "available");
-    assert.ok(directories[0].unattached_since);
-    assert.equal(Date.parse(directories[0].gc_after) - Date.parse(directories[0].unattached_since), 30 * 24 * 3600 * 1000);
+    assert.equal(directories[0].availability, "released");
+    assert.equal(directories[0].release_pending, 0);
     assert.deepEqual(await readAttachmentSql(surface, "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", [directory.attachment_id]), []);
+    await assert.rejects(stat(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}`), { code: "ENOENT" });
+    const reopened = (await ownerApi(surface, `/api/v1/workspace/files/content?${new URLSearchParams({ path: attachment.file_id })}`)).data;
+    assert.equal(reopened.path, attachment.file_id);
+    assert.deepEqual(Buffer.from(reopened.content, "utf8"), buffer, "最后关联解除后仍可经原 URI 重建原件");
+    const rebuilt = (await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]))[0];
+    assert.deepEqual([rebuilt.attachment_id, rebuilt.relative_locator, rebuilt.availability, rebuilt.release_pending],
+      [directory.attachment_id, directory.relative_locator, "available", 0]);
     assert.deepEqual(await readFile(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}/original/content`), buffer);
     facts.push({ phase, source: source.sessionId, captured, claims, sourceDelete, killed, restarted, settledClaims, settlement,
-      published: published ? { sessionId: published.owner.sessionId, history: published.targetHistory, displayed: published.displayed } : null, tool, capabilityBoundary, finalClaims, directories });
+      published: published ? { sessionId: published.owner.sessionId, history: published.targetHistory, displayed: published.displayed } : null, tool, capabilityBoundary, finalClaims, directories, reopened, rebuilt });
   }
   return facts;
 }
@@ -7764,10 +7769,16 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     const sourceDelete = await deleteOwner(source);
     const directories = await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]);
     assert.equal(directories.length, 1);
-    assert.equal(directories[0].availability, "available");
-    assert.ok(directories[0].unattached_since);
-    assert.equal(Date.parse(directories[0].gc_after) - Date.parse(directories[0].unattached_since), 30 * 24 * 3600 * 1000);
+    assert.equal(directories[0].availability, "released");
+    assert.equal(directories[0].release_pending, 0);
     assert.equal((await readAttachmentSql(surface, "SELECT COUNT(*) AS count FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", [directory.attachment_id]))[0].count, 0);
+    await assert.rejects(stat(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}`), { code: "ENOENT" });
+    const reopened = (await ownerApi(surface, `/api/v1/workspace/files/content?${new URLSearchParams({ path: attachment.file_id })}`)).data;
+    assert.equal(reopened.path, attachment.file_id);
+    assert.deepEqual(Buffer.from(reopened.content, "utf8"), buffer);
+    const rebuilt = (await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]))[0];
+    assert.deepEqual([rebuilt.attachment_id, rebuilt.relative_locator, rebuilt.availability, rebuilt.release_pending],
+      [directory.attachment_id, directory.relative_locator, "available", 0]);
     facts.push({ finalizerFirst, sourceSessionId: source.sessionId, sourceThreadId: source.threadId,
       targetSessionId: target.sessionId, targetThreadId: target.threadId, workspaceId: requestSurface.gatewayWorkspaceId,
       operationId, request: structuredClone(request), requestPageId, requestDocumentId, requestStartedAt,
@@ -7775,7 +7786,7 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
       deletionCatalogBarrier: finalizerFirst ? null : catalogDeleting, deletionCatalogAt,
       initialReleasedAt, deletionDrainBarrier: finalizerFirst ? null : drainWaiting, deletionDrainReleasedAt,
       capture, claims, publishedSettlement, deletion, claimsBeforeRelease, settlementBeforeRelease, deletedClaims,
-      deletedSettlement, lease, killed, restarted, terminal, sourceDelete, directories });
+      deletedSettlement, lease, killed, restarted, terminal, sourceDelete, directories, reopened, rebuilt });
   }
   return facts;
 }

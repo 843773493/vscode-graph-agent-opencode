@@ -28,6 +28,7 @@
 - `.versions/sha256/` 归原 immutable file version owner，保存重建所需原件与可再生预览；不新增正文服务、第二套可变附件或消息历史。发布前可靠保存原件，缺失、损坏及未知目录内容必须明确失败并保留处理结果。
 - 同目录 fork 的 preparing/reserved claim 保护发布，committed 后由目标关联保活；最后关联解除后按同一基线检查，不等待跨端导出回执。物理独立目录的来源导出仍须等待原 export release。
 - 待处理目录及终态 fork 操作查询走原受保护 worker；目录 holder 按受检稳定 ID 精确隔离，普通同步 I/O、异步下载准入、fork 和释放共用同一 OS 锁。正文退出按精确 ID 重试已有待处理，实际文件修改和 Shell 准入请求检查；有修改是已完成的保留决定，不反复挂起重查。真实文件操作须在 holder 内物化目录；观察索引与引用规范化只解析 catalog locator，不据此读取正文或触发重建。
+- 文件 watch 初始化只解析 locator，用单次 stat 优先核实际节点类型，仅实际缺失的固定布局使用虚拟目录语义；不取得正文 holder、不物化或阻碍最后解绑结清，真实文件和不存在的派生子目录继续拒绝。原工作区 watcher 仅向显式附件 URI 根公布内部变更及持久事件，分类和回放不得重建工作副本或暴露其它私有状态。reveal 的解析、stat 与原生派发持同一 access；外部文件管理器持续使用期没有可核实身份时保留具体 TODO，不制造常驻占用或假报关闭。
 - 工作区文件写锁只覆盖基线核对与物理发布/释放，账本等待不阻塞无关文件。账本失败保留 releasing；终态 fork 暂存的快照、原生探测与删除由同一 worker 在原 import holder 内完成，取消须等它结算，不扫描未知目录。候选一次查询取得完整行，定点访问只查询相应 ID。
 - Shell 工作目录的来源识别与 holder 内复核复用既有受保护 worker，保留请求上下文及原 catalog/locator 校验；holder 覆盖线程池排队与原生访问结算，取消后不进入占用发布或 PTY 创建。worker 不抢占原生 I/O，持久 lease 写入和整个 operation/shutdown 期限仍单独验收。
 - fork 同工作区保留目录关联，跨工作区只复制冻结 manifest。网络统一使用原 files/chunk；新目录快照显式版本，旧 v2 blob 载荷只解码。alias 按精确消费 Session/Thread 与已提交 claim 解析，未映射 URI 不猜测归属。

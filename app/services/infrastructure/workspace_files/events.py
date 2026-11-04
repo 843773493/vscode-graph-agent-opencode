@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from weakref import WeakKeyDictionary
 
-from app.core.resource_uri import file_uri_child
+from app.core.resource_uri import file_uri_child, parse_resource_uri
 from app.schemas.internal_v2.workspace_file_operations import (
     WorkspaceDirectoryKeyDTO,
     WorkspaceDirectoryRevisionDTO,
@@ -66,11 +66,17 @@ async def _observe_batch_once(
 async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatchService,
                       roots: tuple[Path, ...], after_event_id: int | None,
                       references: dict[Path, str]) -> AsyncGenerator[WorkspaceFileChangeBatch, None]:
-    def reference(path: Path) -> str:
+    def subscription_root(path: Path) -> Path | None:
         matches = [root for root in references if path == root or path.is_relative_to(root)]
         if not matches:
-            raise ValueError("文件观察事件不属于固定订阅根")
+            return None
         root = max(matches, key=lambda value: len(value.parts))
+        return None if owner.paths.is_private(path, root_uri=references[root]) else root
+
+    def reference(path: Path) -> str:
+        root = subscription_root(path)
+        if root is None:
+            raise ValueError("文件观察事件不属于公开订阅根")
         return file_uri_child(references[root], *path.relative_to(root).parts)
     latest = owner.store.latest_event_id()
     cursor = latest if after_event_id is None else after_event_id
@@ -97,7 +103,9 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
     def is_private_staging_change(path: Path, roots: set[Path]) -> bool:
         return path in roots or any(parent in roots for parent in path.parents)
 
-    async with aclosing(watcher.subscribe_roots(roots)) as source:
+    include_attachments = any(parse_resource_uri(uri).kind == "attachments" for uri in references.values())
+    # 底层仍复用原工作区 watcher；只开放显式附件根，不能公布其它私有存储。
+    async with aclosing(watcher.subscribe_roots(roots, include_internal_paths=include_attachments)) as source:
         next_batch = asyncio.create_task(anext(source))
         pending_batch: WorkspaceFileChangeBatch | None = None
         try:
@@ -112,7 +120,7 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                         revision = WorkspaceDirectoryRevisionDTO.model_validate(value)
                         key = revision.directory_key
                         path = await asyncio.to_thread(owner.paths.native, key.path, materialize=False)
-                        if any(path == root or path.is_relative_to(root) for root in roots):
+                        if subscription_root(path) is not None:
                             directories.append(revision)
                     if directories:
                         keys = {value.directory_key for value in directories}
@@ -138,7 +146,8 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                     private_roots = private_staging_roots()
                     changes = tuple(
                         change for change in changes
-                        if not is_private_staging_change(Path(change.path), private_roots)
+                        if (not is_private_staging_change(Path(change.path), private_roots)
+                            and subscription_root(Path(change.path)) is not None)
                     )
                     if not changes:
                         continue
@@ -154,7 +163,7 @@ async def file_events(owner: WorkspaceFileOperations, watcher: WorkspaceFileWatc
                 changes = tuple(WorkspaceFileChange(kind=change.kind, path=reference(Path(change.path))) for change in changes)
                 yield WorkspaceFileChangeBatch(changes=changes, overflow=batch.overflow,
                                                 directories=tuple(directories), event_id=cursor,
-                                                invalidated_roots=tuple(references[root] for root in roots) if batch.overflow else ())
+                                                invalidated_roots=tuple(dict.fromkeys(references.values())) if batch.overflow else ())
         finally:
             next_batch.cancel()
             with suppress(asyncio.CancelledError, StopAsyncIteration):
