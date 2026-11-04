@@ -374,24 +374,22 @@ class RolloutMaintenanceOwner(
                             "SELECT name FROM sqlite_master WHERE type='table'"
                         )
                     }
+                    meta_columns = {
+                        str(row[1])
+                        for row in existing_connection.execute("PRAGMA table_info(database_meta)")
+                    }
                     if "database_meta" in database_tables and existing_connection.execute(
                         "SELECT 1 FROM database_meta LIMIT 1"
                     ).fetchone() is not None:
                         self._validate_schema_state(existing_connection)
                     if "database_meta" in database_tables:
-                        owner_columns = {
-                            str(row[1])
-                            for row in existing_connection.execute(
-                                "PRAGMA table_info(database_meta)"
-                            )
-                        }
                         execution_columns = {
                             str(row[1])
                             for row in existing_connection.execute(
                                 "PRAGMA table_info(executions)"
                             )
                         }
-                        if not {"session_id", "thread_id"}.issubset(owner_columns) or not {
+                        if not {"session_id", "thread_id"}.issubset(meta_columns) or not {
                             "session_id", "thread_id"
                         }.issubset(execution_columns):
                             raise RuntimeError(
@@ -425,12 +423,6 @@ class RolloutMaintenanceOwner(
                                     "schema-incompatible: rollout 表缺少 thread_id: "
                                     f"{table}。该开发期 SQLite 不自动迁移，请备份后删除对应 rollout/ 并重建。"
                                 )
-                    meta_columns = {
-                        str(row[1])
-                        for row in existing_connection.execute(
-                            "PRAGMA table_info(database_meta)"
-                        )
-                    }
                     if "rollout_format_version" not in meta_columns:
                         raise FormatDispatchError(
                             "unsupported_legacy_rollout: 缺少 v2 format dispatch"
@@ -468,10 +460,6 @@ class RolloutMaintenanceOwner(
                                 "v2 rollout database_meta 缺失但已有业务数据，"
                                 "拒绝猜测半成品恢复: v2_migration_repair_required"
                             )
-                        if "rollout_format_version" not in meta_columns:
-                            raise FormatDispatchError(
-                                "unsupported_legacy_rollout: rollout database_meta 缺少 format row"
-                            )
                         # 空的、已创建 v2 schema 继续走下面的 meta 初始化。
                     else:
                         needs_schema = False
@@ -493,8 +481,8 @@ class RolloutMaintenanceOwner(
             with self._host._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
-                # 同次初始化复用 writer；既有 authority 仍先经过只读预检。
-                # 结构、发布状态和提交链每次检查，正文只复用精确字节的校验回执。
+                # 既有结构已经在持锁的只读预检中校验；本次仅新建 schema 时再校验。
+                # 发布状态和提交链仍每次检查，正文只复用精确字节的校验回执。
                 if needs_schema:
                     initialize_rollout_schema(connection, initialize_activation=self._host._initialize_activation)
                 self._host._validate_reasoning_projection_connection(connection)
@@ -598,7 +586,8 @@ class RolloutMaintenanceOwner(
                         raise RuntimeError(
                             f"rollout active branch head view 更新失败: {active_branch_id}"
                         )
-                self._validate_schema_state(connection)
+                if needs_schema:
+                    self._validate_schema_state(connection)
                 if (
                     session_id,
                     thread_id,
