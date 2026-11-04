@@ -15,20 +15,25 @@ from collections.abc import Iterable
 from urllib.parse import unquote
 
 import httpx
+from fastapi import HTTPException
 
+from app.core.identifier import validate_gateway_id
 from app.core.shielded_cleanup import run_cleanup_shielded
 
 __all__ = [
     "GATEWAY_PROXY_DROPPED_HEADERS",
+    "TARGET_GATEWAY_ID_HEADER",
     "UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
     "build_upstream_url",
     "filter_hop_by_hop_headers",
     "load_proxy_gateway_id",
+    "parse_target_gateway_id",
     "run_cleanup_shielded",
     "send_upstream_request",
 ]
 
 UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS = 60.0
+TARGET_GATEWAY_ID_HEADER = "X-BoxTeam-Target-Gateway-Id"
 
 # httpx 按 RFC 3986 解析 path 组件：`#` 之后算 fragment、`?` 之后算 query，两者都
 # 不能出现在 path 里，ASCII 控制字符同样非法。uvicorn 只对请求行解码一层，因此
@@ -80,9 +85,20 @@ GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",
         "x-boxteam-gateway-id",
+        "x-boxteam-target-gateway-id",
         "x-boxteam-navigation-actor",
     }
 )
+
+
+def parse_target_gateway_id(value: str | None) -> str | None:
+    """目标归属与本跳发送方身份分离，非法显式值不能退回活动工作区。"""
+    if value is None:
+        return None
+    try:
+        return validate_gateway_id(value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 def load_proxy_gateway_id() -> str:

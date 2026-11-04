@@ -171,7 +171,8 @@ async def test_shared_backend_workspace_authority_routes_only_to_remote_owner(
 async def test_gateway_scope_does_not_choose_between_duplicate_local_routes(navigation_proxy, navigation_relay):
     client, registry, forwarded = navigation_proxy
     registry.upsert(WorkspaceTarget(workspace_id="duplicate-local", backend_workspace_id=WORKSPACE_ID,
-        name="duplicate", root_path="/unused", backend_url="http://duplicate.test", connection_kind="local"), activate=False)
+        name="duplicate", root_path=registry.resolve("original-target").root_path,
+        backend_url="http://duplicate.test", connection_kind="local"), activate=False)
     response = await client.post(f"/api/v1/workspaces/{WORKSPACE_ID}/resources/navigation", json={
         "uri": f"boxteam://gateway/{GATEWAY_ID}/resources/skills/test/SKILL.md", "operation": "read"})
     assert response.status_code == 409, response.text
@@ -359,7 +360,7 @@ async def test_navigation_missing_or_ambiguous_target_never_uses_active(navigati
         requested_id = WORKSPACE_ID
         registry.upsert(WorkspaceTarget(
             workspace_id="duplicate-target", backend_workspace_id=WORKSPACE_ID,
-            name="duplicate", root_path="/unused-duplicate", backend_url="http://duplicate.test",
+            name="duplicate", root_path=registry.resolve("original-target").root_path, backend_url="http://duplicate.test",
             connection_kind="local",
         ), activate=False)
     elif mapping == "local_remote_duplicate":

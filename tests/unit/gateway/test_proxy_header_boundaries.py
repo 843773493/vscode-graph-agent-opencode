@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -32,6 +34,7 @@ _EXPECTED_GATEWAY_DROPPED_HEADERS = frozenset(
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",
         "x-boxteam-gateway-id",
+        "x-boxteam-target-gateway-id",
         "x-boxteam-navigation-actor",
         "x-boxteam-resource-owner",
     }
@@ -156,7 +159,7 @@ def test_gateway_proxy_headers_drop_hop_and_credential_headers() -> None:
     )
     request.state.request_id = "req_headers"
 
-    headers = _proxy_headers(request)
+    headers = _proxy_headers(request, gateway_id="gateway_" + "a" * 32)
 
     assert headers["x-end-to-end"] == "kept"
     assert "connection" not in {key.lower() for key in headers}
@@ -207,7 +210,7 @@ def test_both_proxies_never_forward_the_client_supplied_credential_header(
         request.state.request_id = "req_drop"
         return builder(request)
 
-    for builder in (_proxy_headers, _proxy_request_headers):
+    for builder in (partial(_proxy_headers, gateway_id="gateway_" + "a" * 32), _proxy_request_headers):
         headers = build(builder)
         assert headers["x-kept"] == "ok"
         # 客户端值一旦没被剥离，代理再写权威值时就会留下两个同名键

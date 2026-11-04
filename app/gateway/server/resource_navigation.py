@@ -32,6 +32,7 @@ from app.gateway.federation.errors import (
 )
 from app.gateway.federation.grants import ResourceNavigationGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
+from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
 from app.gateway.registry.owners import workspace_owner
 from app.gateway.server.workspace_proxy import (
     _proxy_workspace_request,
@@ -85,6 +86,7 @@ async def _navigate_target(
     user_access: UserAccessContext | None, backend_workspace_id: str | None, deadline: float,
 ) -> Response:
     gateway_id = request.app.state.gateway_id
+    requested_gateway_id = parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER))
     try:
         if auth is not None and auth.kind == "federation":
             raise HTTPException(400, detail="联邦资源导航必须通过原 read grant relay")
@@ -95,7 +97,7 @@ async def _navigate_target(
             targets = [target for target in registry.targets() if target.backend_workspace_id == backend_workspace_id]
             if not targets:
                 raise HTTPException(404, detail="workspace 未注册或不存在")
-            owner_gateway_id = resource.gateway_authority
+            owner_gateway_id = resource.gateway_authority or requested_gateway_id
             if resource.scope == "gateway":
                 owner_gateway_id = owner_gateway_id or gateway_id
                 if resource.scope_id != owner_gateway_id:
@@ -124,6 +126,8 @@ async def _navigate_target(
                                        tail_segments=resource.tail_segments, gateway_authority=owner_gateway_id)
             resource = parse_resource_uri(uri, local_gateway_id=gateway_id)
             payload = payload.model_copy(update={"uri": uri})
+        if requested_gateway_id is not None and requested_gateway_id != (resource.gateway_authority or gateway_id):
+            raise HTTPException(400, detail="目标 Gateway 与导航 URI 归属不一致")
         if resource.gateway_authority is None and resource.scope == "workspace":
             targets = [target for target in _registry(request).targets() if target.connection_kind == "local" and target.backend_workspace_id == resource.scope_id]
             if not targets:

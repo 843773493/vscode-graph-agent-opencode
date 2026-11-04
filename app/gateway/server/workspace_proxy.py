@@ -29,10 +29,12 @@ from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,
+    TARGET_GATEWAY_ID_HEADER,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
     filter_hop_by_hop_headers,
     load_proxy_gateway_id,
+    parse_target_gateway_id,
     run_cleanup_shielded,
     send_upstream_request,
 )
@@ -41,6 +43,7 @@ from app.gateway.registry import (
     WorkspaceRouteLease,
     WorkspaceTarget,
 )
+from app.gateway.registry.owners import workspace_owner
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (
@@ -166,8 +169,10 @@ def _proxy_headers(
     request: Request,
     target: WorkspaceTarget | None = None,
     *,
+    gateway_id: str,
     include_credentials: bool = True,
     navigation_actor: str | None = None,
+    target_gateway_id: str | None = None,
 ) -> dict[str, str]:
     headers = filter_hop_by_hop_headers(
         (key, value)
@@ -177,7 +182,7 @@ def _proxy_headers(
     headers["X-Request-ID"] = get_request_id(request)
     # 按请求注入 Gateway 自身稳定身份；客户端同名头部已在上面的剥离集合里剔除，
     # 故这里写入的永远是本机 Gateway 的权威 gateway_id。
-    headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
+    headers["X-BoxTeam-Gateway-Id"] = gateway_id
     if navigation_actor is not None:
         headers[NAVIGATION_ACTOR_HEADER] = navigation_actor
     application = request.scope.get("app")
@@ -191,6 +196,9 @@ def _proxy_headers(
         remote_workspace_id = target.remote_workspace_id
         if connection_id is None or remote_workspace_id is None:
             raise RuntimeError("远程投影工作区缺少 Gateway 连接信息")
+        if target_gateway_id is None:
+            raise RuntimeError("远程投影请求缺少明确目标 Gateway 归属")
+        headers[TARGET_GATEWAY_ID_HEADER] = target_gateway_id
         headers["X-BoxTeam-Workspace-Id"] = remote_workspace_id
         if include_credentials:
             credential = FederationCredentialStore(
@@ -374,6 +382,7 @@ async def _proxy_workspace_request(
     request_body: bytes | None = None,
     navigation_deadline_at: float | None = None,
 ) -> Response:
+    requested_gateway_id = parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER))
     requested_backend_workspace_id = request.headers.get(BACKEND_WORKSPACE_ID_HEADER)
     if requested_backend_workspace_id is not None:
         try:
@@ -381,12 +390,14 @@ async def _proxy_workspace_request(
         except RuntimeError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
     registry = _registry(request)
+    local_gateway_id = load_proxy_gateway_id()
     if path.startswith("workspaces/"):
         backend_workspace_id = path.split("/", 2)[1]
         targets = [
             target for target in registry.targets()
             if target.backend_workspace_id == backend_workspace_id
             and (target_workspace_id is None or target.workspace_id == target_workspace_id)
+            and (requested_gateway_id is None or workspace_owner(target, registry, local_gateway_id).gateway_id == requested_gateway_id)
         ]
         if not targets:
             raise HTTPException(status_code=404, detail="workspace 未注册或不存在")
@@ -399,6 +410,8 @@ async def _proxy_workspace_request(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    if requested_gateway_id is not None and requested_gateway_id != workspace_owner(target, registry, local_gateway_id).gateway_id:
+        raise HTTPException(status_code=400, detail="目标 Gateway 与选定工作区归属不一致")
     if requested_backend_workspace_id is not None and (
         target.connection_kind != "local"
         or requested_backend_workspace_id != target.backend_workspace_id
@@ -539,11 +552,16 @@ async def _proxy_workspace_request(
                         detail=str(error),
                     ) from error
             # 联邦凭据缺失/过期在这里响亮失败；此处抛错也必须归还上面持有的引用。
+            target_gateway_id = workspace_owner(target, registry, local_gateway_id).gateway_id
+            if requested_gateway_id is not None and requested_gateway_id != target_gateway_id:
+                raise HTTPException(status_code=400, detail="目标 Gateway 与选定工作区归属不一致")
             headers = _proxy_headers(
                 request,
                 target,
+                gateway_id=local_gateway_id,
                 include_credentials=include_credentials,
                 navigation_actor=navigation_actor,
+                target_gateway_id=target_gateway_id,
             )
             if request_body is not None:
                 # typed 请求已由路由 owner 重写，长度必须属于重写后的 UTF-8 字节。
@@ -696,6 +714,9 @@ async def _proxy_context_request(
             resource_identity=query.resource_identity, uri=query.uri, scope=query.scope,
             local_gateway_id=request.app.state.gateway_id,
         )
+        requested_gateway_id = parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER))
+        if requested_gateway_id is not None and requested_gateway_id != (resource.gateway_authority or request.app.state.gateway_id):
+            raise HTTPException(status_code=400, detail="目标 Gateway 与上下文 URI 归属不一致")
         query = query.model_copy(update={"uri":resource.uri})
         if resource.gateway_authority is None and resource.scope == "workspace":
             targets = [

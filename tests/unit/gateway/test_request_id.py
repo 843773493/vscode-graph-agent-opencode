@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from functools import partial
 from unittest.mock import MagicMock
 
 import httpx
@@ -81,7 +82,7 @@ def test_gateway_proxy_forwards_authoritative_request_id() -> None:
     )
     request.state.request_id = "req_gateway_proxy"
 
-    headers = _proxy_headers(request)
+    headers = _proxy_headers(request, gateway_id="gateway_" + "a" * 32)
 
     assert headers["X-Request-ID"] == "req_gateway_proxy"
     assert headers["X-Local-Token"] == "local-dev-token"
@@ -105,7 +106,7 @@ def _upstream_request_id_values(headers: dict[str, str]) -> list[str]:
 @pytest.mark.parametrize(
     "build_headers",
     [
-        pytest.param(_proxy_headers, id="workspace-api"),
+        pytest.param(partial(_proxy_headers, gateway_id="gateway_" + "a" * 32), id="workspace-api"),
         pytest.param(_auxiliary_proxy_headers, id="auxiliary-service"),
     ],
 )
@@ -160,7 +161,7 @@ def test_gateway_proxy_overwrites_inbound_history_policy() -> None:
         )
     )
 
-    headers = _proxy_headers(request)
+    headers = _proxy_headers(request, gateway_id="gateway_" + "a" * 32)
 
     assert "999" not in headers["X-BoxTeam-History-Loading"]
     assert '"anchor_before_turns":4' in headers["X-BoxTeam-History-Loading"]

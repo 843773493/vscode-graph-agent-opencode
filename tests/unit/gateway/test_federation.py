@@ -1357,11 +1357,14 @@ def test_remote_proxy_headers_preserve_request_id_and_hide_local_token(
         remote_workspace_id="remote_ws",
     )
 
-    headers = _proxy_headers(request, target)
+    headers = _proxy_headers(request, target, gateway_id="gateway_" + "b" * 32,
+                             target_gateway_id="gateway_" + "a" * 32)
 
     assert headers["X-Request-ID"] == "req_authoritative"
+    assert headers["X-BoxTeam-Gateway-Id"] == "gateway_" + "b" * 32
     assert headers["X-BoxTeam-Federation-Token"] == credential.token
     assert headers["X-BoxTeam-Workspace-Id"] == "remote_ws"
+    assert headers["X-BoxTeam-Target-Gateway-Id"] == "gateway_" + "a" * 32
     assert "X-Local-Token" not in headers
 
 

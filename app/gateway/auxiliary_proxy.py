@@ -28,14 +28,17 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,
+    TARGET_GATEWAY_ID_HEADER,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
     build_upstream_url,
     filter_hop_by_hop_headers,
     load_proxy_gateway_id,
+    parse_target_gateway_id,
     run_cleanup_shielded,
     send_upstream_request,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry.owners import workspace_owner
 from app.gateway.service_types import GatewayServiceName
 
 router = APIRouter()
@@ -98,6 +101,9 @@ def _proxy_request_headers(
         credential = FederationCredentialStore(
             storage_path=get_gateway_root() / "credentials" / "federation.json"
         ).get(connection_id)
+        headers[TARGET_GATEWAY_ID_HEADER] = workspace_owner(
+            target, _registry(request.app), headers["X-BoxTeam-Gateway-Id"],
+        ).gateway_id
         headers["X-BoxTeam-Federation-Token"] = credential.token
         headers["X-BoxTeam-Workspace-Id"] = remote_workspace_id
     elif target is not None and service in {"terminal_manager", "browser_manager"}:
@@ -122,6 +128,16 @@ def _validate_auxiliary_target_header(
         or backend_workspace_id != _auxiliary_workspace_id(target)
     ):
         raise HTTPException(status_code=400, detail="终端 Gateway target 与 backend UUID 冲突")
+
+
+def _validate_auxiliary_gateway_header(
+    target: WorkspaceTarget, registry: GatewayWorkspaceRegistry, value: str | None,
+) -> None:
+    target_gateway_id = parse_target_gateway_id(value)
+    if target_gateway_id is not None and target_gateway_id != workspace_owner(
+        target, registry, load_proxy_gateway_id(),
+    ).gateway_id:
+        raise HTTPException(status_code=400, detail="目标 Gateway 与工作区归属冲突")
 
 
 def _proxy_response_headers(response: httpx.Response) -> dict[str, str]:
@@ -181,6 +197,9 @@ async def proxy_auxiliary_http(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    _validate_auxiliary_gateway_header(
+        target, registry, request.headers.get(TARGET_GATEWAY_ID_HEADER),
+    )
     if service in {"terminal_manager", "browser_manager"}:
         _validate_auxiliary_target_header(
             target, request.headers.get("X-BoxTeam-Backend-Workspace-Id")
@@ -326,6 +345,9 @@ async def _proxy_auxiliary_websocket(
     registry = _registry(websocket.app)
     try:
         target = registry.resolve(workspace_id)
+        _validate_auxiliary_gateway_header(
+            target, registry, websocket.headers.get(TARGET_GATEWAY_ID_HEADER),
+        )
         if service in {"terminal_manager", "browser_manager"}:
             _validate_auxiliary_target_header(
                 target, websocket.headers.get("X-BoxTeam-Backend-Workspace-Id")
@@ -383,6 +405,9 @@ async def _proxy_auxiliary_websocket(
             credential = FederationCredentialStore(
                 storage_path=get_gateway_root() / "credentials" / "federation.json"
             ).get(connection_id)
+            upstream_headers[TARGET_GATEWAY_ID_HEADER] = workspace_owner(
+                target, registry, upstream_headers["X-BoxTeam-Gateway-Id"],
+            ).gateway_id
             upstream_headers["X-BoxTeam-Federation-Token"] = credential.token
         browser_stream = service == "browser_manager"
         async with connect(

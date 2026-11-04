@@ -83,3 +83,10 @@
 - 独审两处 P2 已闭合：Gateway 根统一展开规范化；发现／隧道健康检查被取消且关闭再次失败时保留原取消对象、以原因链保留清理错误，不继续下一连接。公共同步 worker 的原生失败优先合同保持，原 11 项用例通过。
 - 相关登记／联邦／预检回归 138 passed，最终远端及原生 proof 26 passed，公开合同 62 passed（场景重叠不相加）。原生 HTTP 使用 ASGI、真实认证／DTO／registry／只读 CLI；远端 SSH 和 HTTP 使用明确替身，不代表真实双 Gateway／SSH 或 Windows 验收。协议格式／lint／build／breaking／生成一致性、实际 sourceTransform 类型检查及完整 Workbench 构建均退出 0；静态与完整 HEAD archive 对照无新增诊断，Pyright 60／60、Ruff 12／12 为存量。
 - 准确命令、实际退出码、源码指纹及原始日志：`out/tests/temp/identity_remote_preflight_20261104/artifacts/verification.json`。完整 registry／持久引用／客户端迁移与可恢复发布仍未完成，`apply_available=false`，4.4／6.1 保持未勾选。
+
+### 2026-11-04：2.2／4.3 独立目标 Gateway 载体切片
+
+- 普通工作区 HTTP、辅助 HTTP／WebSocket、资源导航及上下文 read／search 共用 `X-BoxTeam-Target-Gateway-Id` 的严格身份解析。canonical 工作区路由可按该归属区分相同 UUID 的不同 Gateway；明确 URI 或已选工作区与目标头冲突时，在初次租约和上游调用前拒绝。远端出站按原登记重建目标头，本跳发送方仍用 `X-BoxTeam-Gateway-Id`；本机 Backend／辅助服务不接收目标头，不改变认证或有界联邦规则。
+- 私有 HTTP 头部构造器接收本请求已读取的本跳身份，移除新增链路中的重复身份文件读取，迁齐直接及参数化消费者。旧导航歧义 fixture 改为同 UUID、同物理根的重复路由，保留原 409 和不回退 active 的断言，不放宽先前根冲突约束。
+- 最新主线定向 61 passed；较广代理／导航批次的其余通过结果按未变源码复用，辅助批次 205 passed、最终新增场景 35 passed，重叠场景不相加。扩大检查曾出现一次未改流取消用例超时；完整 HEAD archive 单例及组合均通过，当前组合也通过，保留原始失败，不据此改公共清理逻辑。Ruff／Python 3.12 Pyright 与完整 HEAD archive 对照分别为 7／7、25／25 项存量诊断，新增为零；独立只读复核未发现本切片问题。准确命令、退出码、指纹及全部原始结果见 `out/tests/temp/target_gateway_carrier_20261104/artifacts/verification.json` 和 `out/tests/temp/auxiliary_target_gateway_20261104/artifacts/verification.json`。
+- 本轮仍保留待整体迁移的 alias／Backend UUID 合同，未实现复合 registry 键、远程生命周期／目录／Generator 与客户端迁移；无真实双 Gateway／SSH 或 Windows 新验收，2.2／4.3／4.4 保持未勾选。
