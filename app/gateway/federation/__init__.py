@@ -18,6 +18,7 @@ from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
     FederationError,
 )
+from app.gateway.proxy_upstream import run_cleanup_shielded, send_upstream_request
 from app.gateway.runtime.process_ports import allocate_ssh_tunnel_port
 from app.gateway.runtime.ssh_process import start_ssh_tunnel_process
 from app.gateway.runtime.workspace import WorkspaceRuntime
@@ -321,6 +322,34 @@ async def discover_remote_gateway(
     return manifest, direct_items
 
 
+class _ManagementResponse(httpx.Response):
+    """EOF 自动关闭与代理关闭共同等待原响应、客户端的唯一清理任务。"""
+
+    def __init__(self, response: httpx.Response, client: httpx.AsyncClient) -> None:
+        super().__init__(
+            response.status_code, headers=response.headers, stream=response.stream,
+            request=response.request, extensions=response.extensions,
+        )
+        self._client = client
+        self._close_task: asyncio.Task[None] | None = None
+
+    async def _close(self) -> None:
+        try:
+            await super().aclose()
+        finally:
+            await self._client.aclose()
+
+    async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close())
+        close_task = self._close_task
+        try:
+            await asyncio.shield(close_task)
+        except asyncio.CancelledError:
+            await run_cleanup_shielded(lambda: close_task)
+            raise
+
+
 async def send_remote_gateway_management(
     *,
     gateway_url: str,
@@ -333,9 +362,11 @@ async def send_remote_gateway_management(
     content_type: str | None = None,
     target_gateway_id: str | None = None,
     sender_gateway_id: str | None = None,
+    last_event_id: str | None = None,
+    stream: bool = False,
     timeout_seconds: float = 45,
 ) -> httpx.Response:
-    """管理调用共用唯一发送入口；来源 Relay 保留原始 JSON 请求字节。"""
+    """管理调用共用唯一发送入口；流响应把原客户端交给响应关闭链。"""
     if content is not None and payload is not None:
         raise ValueError("Gateway 管理请求不能同时提供 JSON 对象与原始正文")
     headers = {
@@ -348,14 +379,42 @@ async def send_remote_gateway_management(
         headers["X-BoxTeam-Gateway-Id"] = sender_gateway_id
     if content_type is not None:
         headers["Content-Type"] = content_type
-    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-        return await client.request(
+    if last_event_id is not None:
+        headers["Last-Event-ID"] = last_event_id
+    client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, read=None if stream else timeout_seconds))
+    response: httpx.Response | None = None
+    handed_off = False
+
+    async def close() -> None:
+        try:
+            if response is not None:
+                await response.aclose()
+        finally:
+            await client.aclose()
+
+    try:
+        forwarded = client.build_request(
             method,
             f"{gateway_url.rstrip('/')}{path}",
             headers=headers,
             json=payload,
             content=content,
         )
+        try:
+            response = await send_upstream_request(
+                client, forwarded, response_headers_timeout_seconds=timeout_seconds,
+            )
+        except TimeoutError as error:
+            raise httpx.ReadTimeout("远端 Gateway 在管理请求期限内未返回响应头", request=forwarded) from error
+        if not stream:
+            await response.aread()
+            return response
+        owned_response = _ManagementResponse(response, client)
+        handed_off = True
+        return owned_response
+    finally:
+        if not handed_off:
+            await run_cleanup_shielded(close)
 
 
 async def request_remote_gateway_management(

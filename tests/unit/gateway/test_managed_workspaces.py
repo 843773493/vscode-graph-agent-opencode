@@ -1,7 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Self
 
 import httpx
 import pytest
@@ -550,43 +549,16 @@ async def test_remote_management_request_forwards_federation_and_request_ids(
         peer_gateway_id="gateway_remote",
     )
 
-    class ManagementClient:
-        def __init__(self, *, timeout: int) -> None:
-            assert timeout == 45
+    requests: list[httpx.Request] = []
 
-        async def __aenter__(self) -> Self:
-            return self
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": {"items": []}})
 
-        async def __aexit__(self, *_: object) -> None:
-            return None
-
-        async def request(
-            self,
-            method: str,
-            url: str,
-            *,
-            headers: dict[str, str],
-            json: dict[str, object] | None,
-            content: bytes | None,
-        ) -> httpx.Response:
-            assert method == "POST"
-            assert url == (
-                "http://127.0.0.1:41000/api/gateway/"
-                "federation/managed-workspaces"
-            )
-            assert headers == {
-                "X-BoxTeam-Federation-Token": credential.token,
-                "X-Request-ID": "request-test",
-            }
-            assert json == {"root_path": "/srv/project"}
-            assert content is None
-            return httpx.Response(
-                200,
-                json={"data": {"items": []}},
-                request=httpx.Request(method, url),
-            )
-
-    monkeypatch.setattr("app.gateway.federation.httpx.AsyncClient", ManagementClient)
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **options: client_class(
+        **options, transport=httpx.MockTransport(respond), trust_env=False,
+    ))
 
     result = await request_remote_gateway_management(
         gateway_url="http://127.0.0.1:41000/",
@@ -598,3 +570,11 @@ async def test_remote_management_request_forwards_federation_and_request_ids(
     )
 
     assert result == {"items": []}
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "http://127.0.0.1:41000/api/gateway/federation/managed-workspaces"
+    assert request.headers["X-BoxTeam-Federation-Token"] == credential.token
+    assert request.headers["X-Request-ID"] == "request-test"
+    assert request.content == b'{"root_path":"/srv/project"}'
+    assert request.extensions["timeout"] == {"connect": 45, "read": 45, "write": 45, "pool": 45}

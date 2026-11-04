@@ -13,17 +13,20 @@ from starlette.responses import Response, StreamingResponse
 
 from app.gateway.auth import GatewayAuthContext
 from app.gateway.control.user_access import UserAccessContext
+from app.gateway.proxy_upstream import UpstreamResponseBody
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import (
     _http_client,
     _is_streaming_workspace_path,
     _proxy_workspace_request,
-    _stream_proxy_body,
     _stream_proxy_response,
     _wait_for_workspace_runtime,
 )
 from tests.support.gateway_managed_backends import ProcessProbe
+
+GATEWAY_ID = "gateway_" + "a" * 32
+WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 
 
 @pytest.fixture(autouse=True)
@@ -80,15 +83,15 @@ class _FailingByteStream(httpx.AsyncByteStream):
 
 @pytest.fixture
 def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
-    result = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    result = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json")
     result.upsert(
         WorkspaceTarget(
-            workspace_id="gw_stream",
+            gateway_id=GATEWAY_ID,
+            workspace_id=WORKSPACE_ID,
             name="stream",
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
     )
     return result
@@ -97,22 +100,22 @@ def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
 def test_backend_route_change_invalidates_existing_lease(
     registry: GatewayWorkspaceRegistry,
 ) -> None:
-    lease = registry.route_lease("gw_stream")
+    lease = registry.route_lease(WORKSPACE_ID)
 
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gw_stream",
+            gateway_id=GATEWAY_ID,
+            workspace_id=WORKSPACE_ID,
             name="stream",
-            root_path="/tmp/workspace",
+            root_path=registry.resolve(WORKSPACE_ID).root_path,
             backend_url="http://127.0.0.1:41002",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         activate=False,
     )
 
     assert lease.invalidated.is_set()
-    assert registry.route_lease("gw_stream").revision > lease.revision
+    assert registry.route_lease(WORKSPACE_ID).revision > lease.revision
 
 
 @pytest.mark.asyncio
@@ -151,7 +154,7 @@ async def test_navigation_actor_only_reaches_operation_routes(
                 "path": f"/api/v1/{path}",
                 "query_string": b"",
                 "headers": [
-                    (b"x-boxteam-workspace-id", b"gw_stream"),
+                    (b"x-boxteam-workspace-id", WORKSPACE_ID.encode()),
                     (b"x-boxteam-navigation-actor", b"user:forged"),
                 ],
                 "app": application,
@@ -179,7 +182,7 @@ async def test_navigation_actor_only_reaches_operation_routes(
     assert len(forwarded_headers) == 1
     assert forwarded_headers[0].get("X-BoxTeam-Navigation-Actor") == expected_actor
     assert forwarded_headers[0]["X-Request-ID"] == "req_navigation_scope"
-    assert registry.route_reference_counts("gw_stream") == (0, 0)
+    assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -215,7 +218,7 @@ async def test_rewritten_body_uses_actual_content_length(
                 "path": "/api/v1/context/read",
                 "query_string": b"",
                 "headers": [
-                    (b"x-boxteam-workspace-id", b"gw_stream"),
+                    (b"x-boxteam-workspace-id", WORKSPACE_ID.encode()),
                     (b"content-length", b"2"),
                 ],
                 "app": application,
@@ -237,7 +240,7 @@ async def test_rewritten_body_uses_actual_content_length(
     assert response.status_code == 200
     assert bodies == [rewritten_body]
     assert content_lengths == [str(len(rewritten_body))]
-    assert registry.route_reference_counts("gw_stream") == (0, 0)
+    assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -245,7 +248,7 @@ async def test_sse_proxy_ends_immediately_when_route_is_invalidated(
     registry: GatewayWorkspaceRegistry,
 ) -> None:
     response = _StreamingResponse()
-    lease = registry.route_lease("gw_stream")
+    lease = registry.route_lease(WORKSPACE_ID)
     stream = _stream_proxy_response(
         cast(httpx.Response, response),
         lease,
@@ -255,7 +258,7 @@ async def test_sse_proxy_ends_immediately_when_route_is_invalidated(
     await response.chunks.put(b": heartbeat\n\n")
     assert await asyncio.wait_for(anext(stream), timeout=0.2) == b": heartbeat\n\n"
 
-    registry.invalidate_route("gw_stream")
+    registry.invalidate_route(WORKSPACE_ID)
     assert await asyncio.wait_for(anext(stream), timeout=0.2) == (
         b": gateway-route-invalidated\n\n"
     )
@@ -267,7 +270,7 @@ async def test_sse_proxy_ends_immediately_when_route_is_invalidated(
 @pytest.mark.asyncio
 async def test_binary_proxy_forwards_chunks_and_closes_upstream() -> None:
     response = _StreamingResponse()
-    stream = _stream_proxy_body(cast(httpx.Response, response))
+    stream = UpstreamResponseBody(cast(httpx.Response, response))
 
     await response.chunks.put(b"binary-")
     await response.chunks.put(b"download")
@@ -328,12 +331,12 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
     calls: list[str] = []
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gw_stream",
+            gateway_id=GATEWAY_ID,
+            workspace_id=WORKSPACE_ID,
             name="stream",
-            root_path="/tmp/workspace",
+            root_path=registry.resolve(WORKSPACE_ID).root_path,
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         activate=False,
     )
@@ -343,12 +346,12 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
         if len(calls) == 1:
             registry.upsert(
                 WorkspaceTarget(
-                    workspace_id="gw_stream",
+                    gateway_id=GATEWAY_ID,
+                    workspace_id=WORKSPACE_ID,
                     name="stream",
-                    root_path="/tmp/workspace",
+                    root_path=registry.resolve(WORKSPACE_ID).root_path,
                     backend_url="http://127.0.0.1:41002",
                     connection_kind="local",
-                    backend_workspace_id="00000000-0000-4000-8000-000000000001",
                 ),
                 activate=False,
             )
@@ -373,7 +376,7 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
             "method": "GET",
             "path": "/api/v1/sessions/ses_1/message-streams/availability",
             "query_string": b"turn_ids=job_1&turn_ids=job_2",
-            "headers": [(b"x-boxteam-workspace-id", b"gw_stream")],
+            "headers": [(b"x-boxteam-workspace-id", WORKSPACE_ID.encode())],
             "app": application,
         }
     )
@@ -409,12 +412,12 @@ async def test_message_stream_hides_initial_upstream_404_until_stream_is_created
     calls: list[str] = []
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gw_stream",
+            gateway_id=GATEWAY_ID,
+            workspace_id=WORKSPACE_ID,
             name="stream",
-            root_path="/tmp/workspace",
+            root_path=registry.resolve(WORKSPACE_ID).root_path,
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": "http://127.0.0.1:41001"}
@@ -442,7 +445,7 @@ async def test_message_stream_hides_initial_upstream_404_until_stream_is_created
             "method": "GET",
             "path": "/api/v1/sessions/ses_1/turns/job_1/message-stream",
             "query_string": b"after_seq=0",
-            "headers": [(b"x-boxteam-workspace-id", b"gw_stream")],
+            "headers": [(b"x-boxteam-workspace-id", WORKSPACE_ID.encode())],
             "app": application,
         }
     )
@@ -474,11 +477,11 @@ async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
     registry: GatewayWorkspaceRegistry, managed_backend_factory,
 ) -> None:
     application = FastAPI()
-    workspace_root = Path("/tmp/workspace")
+    workspace_root = registry.resolve(WORKSPACE_ID).root_path
     target = WorkspaceTarget(
-        workspace_id="gw_stream", name="stream", root_path=str(workspace_root),
+        gateway_id=GATEWAY_ID,
+        workspace_id=WORKSPACE_ID, name="stream", root_path=workspace_root,
         backend_url="http://127.0.0.1:41003", connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True, desired_running=True,
     )
     graph = managed_backend_factory((target,), backend_url=target.backend_url, process=ProcessProbe())
@@ -489,7 +492,7 @@ async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
         graph.publish(registry)
 
     application.state.managed_runtime_restore_tasks = {
-        "gw_stream": asyncio.create_task(restore())
+        WORKSPACE_ID: asyncio.create_task(restore())
     }
     request = Request(
         {
@@ -502,14 +505,14 @@ async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
     )
 
     try:
-        await _wait_for_workspace_runtime(request, registry.resolve("gw_stream"))
+        await _wait_for_workspace_runtime(request, registry.resolve(WORKSPACE_ID))
     finally:
         await asyncio.gather(
             *application.state.managed_runtime_restore_tasks.values(),
             return_exceptions=True,
         )
 
-    assert registry.has_runtime("gw_stream") is True
+    assert registry.has_runtime(WORKSPACE_ID) is True
 
 
 @pytest.mark.asyncio
@@ -526,12 +529,12 @@ async def test_proxy_bounds_hung_upstream_response_headers_and_releases_connecti
     application = FastAPI()
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gw_stream",
+            gateway_id=GATEWAY_ID,
+            workspace_id=WORKSPACE_ID,
             name="stream",
-            root_path="/tmp/workspace",
+            root_path=registry.resolve(WORKSPACE_ID).root_path,
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": "http://127.0.0.1:41001"}
@@ -561,7 +564,7 @@ async def test_proxy_bounds_hung_upstream_response_headers_and_releases_connecti
             "method": "GET",
             "path": "/api/v1/workspace",
             "query_string": b"",
-            "headers": [(b"x-boxteam-workspace-id", b"gw_stream")],
+            "headers": [(b"x-boxteam-workspace-id", WORKSPACE_ID.encode())],
             "app": application,
         }
     )
@@ -607,12 +610,12 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
     application = FastAPI()
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gw_stream",
+            gateway_id=GATEWAY_ID,
+            workspace_id=WORKSPACE_ID,
             name="stream",
-            root_path="/tmp/workspace",
+            root_path=registry.resolve(WORKSPACE_ID).root_path,
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={
@@ -639,7 +642,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
         {
             "type": "http",
             "method": "GET",
-            "path": "/api/gateway/workspaces/gw_stream/terminal-manager/health",
+            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/terminal-manager/health",
             "query_string": b"",
             "headers": [],
             "app": application,
@@ -657,7 +660,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
         with pytest.raises(HTTPException) as captured:
             await asyncio.wait_for(
                 proxy_auxiliary_http(
-                    workspace_id="gw_stream",
+                    workspace_id=WORKSPACE_ID,
                     service_path="terminal-manager",
                     path="health",
                     request=request,
@@ -701,7 +704,7 @@ async def test_proxy_rejects_path_that_folds_out_of_v1_namespace(
             "type": "http",
             "method": "GET",
             "path": "/api/v1/%2e%2e/%2e%2e/api/gateway/health",
-            "headers": [(b"x-boxteam-workspace-id", b"gw_stream")],
+            "headers": [(b"x-boxteam-workspace-id", WORKSPACE_ID.encode())],
             "app": application,
         }
     )
@@ -726,12 +729,13 @@ async def test_proxy_rejects_path_that_folds_out_of_v1_namespace(
     assert "越出上游命名空间" in detail or "点段" in detail
     # 关键：没有任何请求被转发到上游。
     assert calls == []
-    assert registry.route_reference_counts("gw_stream") == (0, 0)
+    assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
 async def test_stream_proxy_releases_route_reference_under_anyio_cancellation(
-    registry: GatewayWorkspaceRegistry,
+    registry: GatewayWorkspaceRegistry, streaming: bool,
 ) -> None:
     """客户端断开触发 anyio task group 取消时，上游响应与路由引用仍必须被释放。
 
@@ -757,19 +761,16 @@ async def test_stream_proxy_releases_route_reference_under_anyio_cancellation(
         async def aclose(self) -> None:
             closed.set()
 
-    lease = registry.acquire_route_reference("gw_stream", streaming=True)
+    lease = registry.acquire_route_reference(WORKSPACE_ID, streaming=streaming)
     released: list[str] = []
 
     def on_close() -> None:
         released.append("on_close")
-        registry.release_route_reference("gw_stream", streaming=True)
+        registry.release_route_reference(WORKSPACE_ID, streaming=streaming)
 
-    stream = _stream_proxy_response(
-        cast(httpx.Response, _Upstream()),
-        lease,
-        None,
-        on_close,
-    )
+    upstream = cast(httpx.Response, _Upstream())
+    stream = (_stream_proxy_response(upstream, lease, None, on_close)
+              if streaming else UpstreamResponseBody(upstream, on_close))
     disconnected = asyncio.Event()
 
     async def stream_response() -> None:
@@ -792,4 +793,92 @@ async def test_stream_proxy_releases_route_reference_under_anyio_cancellation(
 
     assert await asyncio.wait_for(closed.wait(), timeout=1)
     assert released == ["on_close"]
-    assert registry.route_reference_counts("gw_stream") == (0, 0)
+    assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_body_close_waits_for_same_cleanup_before_releasing_reference(
+    registry: GatewayWorkspaceRegistry,
+) -> None:
+    """HTTPX 提前置 closed 也不能跳过仍在结算的关闭任务。"""
+    read_entered = asyncio.Event()
+    close_entered = asyncio.Event()
+    close_release = asyncio.Event()
+    cancellations: list[asyncio.CancelledError] = []
+    close_calls: list[str] = []
+
+    class SlowClose(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            read_entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as error:
+                cancellations.append(error)
+                raise
+            yield b"unreachable"
+
+        async def aclose(self) -> None:
+            close_calls.append("close")
+            close_entered.set()
+            await close_release.wait()
+
+    registry.acquire_route_reference(WORKSPACE_ID, streaming=False)
+    response = httpx.Response(200, stream=SlowClose())
+    body = UpstreamResponseBody(response, lambda: registry.release_route_reference(WORKSPACE_ID, streaming=False))
+    reader = asyncio.ensure_future(anext(aiter(body)))
+    closer: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(read_entered.wait(), timeout=1)
+        reader.cancel("原始取消")
+        await asyncio.wait_for(close_entered.wait(), timeout=1)
+        assert response.is_closed and registry.route_reference_counts(WORKSPACE_ID) == (1, 0)
+        closer = asyncio.create_task(body.aclose())
+        reader.cancel("重复取消")
+        await asyncio.sleep(0)
+        assert not reader.done() and not closer.done()
+        close_release.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await asyncio.wait_for(reader, timeout=1)
+        assert caught.value is cancellations[0]
+        await asyncio.wait_for(closer, timeout=1)
+        await body.aclose()
+        assert close_calls == ["close"]
+        assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
+    finally:
+        close_release.set()
+        reader.cancel()
+        await asyncio.gather(reader, *([closer] if closer is not None else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_shared_cleanup_preserves_original_error_and_route_count(
+    registry: GatewayWorkspaceRegistry, streaming: bool, close_fails: bool,
+) -> None:
+    primary = httpx.ReadError("原始读取错误")
+    cleanup = OSError("原始关闭错误")
+    close_calls: list[str] = []
+
+    class FailingUpstream:
+        async def aiter_bytes(self) -> AsyncIterator[bytes]:
+            raise primary
+            yield b"unreachable"
+
+        async def aclose(self) -> None:
+            close_calls.append("close")
+            if close_fails:
+                raise cleanup
+
+    lease = registry.acquire_route_reference(WORKSPACE_ID, streaming=streaming)
+    upstream = cast(httpx.Response, FailingUpstream())
+    def release() -> None:
+        registry.release_route_reference(WORKSPACE_ID, streaming=streaming)
+
+    stream = (_stream_proxy_response(upstream, lease, None, release)
+              if streaming else UpstreamResponseBody(upstream, release))
+    with pytest.raises(OSError if close_fails else httpx.ReadError) as caught:
+        _ = [chunk async for chunk in stream]
+    assert caught.value is (cleanup if close_fails else primary)
+    assert close_calls == ["close"]
+    assert registry.route_reference_counts(WORKSPACE_ID) == (0, 0)

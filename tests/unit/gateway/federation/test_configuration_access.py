@@ -24,10 +24,12 @@ from app.gateway.federation.policy import Capability, FederationPolicyStore
 from app.gateway.federation.ports import principal_ref_for_gateway
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes import health_config
 from app.gateway.routes.health_config import router as config_router
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import router as proxy_router
-from app.services.infrastructure.config.state import ConfigEventInput
+from app.schemas.gateway.config import GatewayConfigEventDTO
+from app.services.infrastructure.config.state import ConfigEventInput, ConfigEventRecord
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 PEER = "gateway_" + "a" * 32
@@ -314,3 +316,27 @@ async def test_production_configuration_sse_revocation_emits_public_error_and_st
         assert stream.closed and case.registry.route_reference_counts(WORKSPACE_ID) == (0, 0)
     denied = await case.client.get(path)
     assert denied.status_code == 403
+
+
+async def test_native_gateway_sse_rechecks_read_after_frame_serialization(
+    configuration_access: ConfigurationAccess, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """授权在本帧构造期间撤销时，实际披露点不能沿用构造前的结果。"""
+    case = configuration_access
+    case.allow("configuration_read")
+    case.state.append_config_event(ConfigEventInput(
+        event_id="serialization-revocation", config_domain="gateway", candidate_id=None, attempt_id=None,
+        apply_id=None, idempotency_key=None, commit_revision=None, active_revision=1, pending_revision=None,
+        source="never-disclose-after-revocation", result="applied",
+    ))
+    original = health_config._gateway_config_event_dto
+
+    def revoke_during_serialization(event: ConfigEventRecord) -> GatewayConfigEventDTO:
+        dto = original(event)
+        case.allow()
+        return dto
+
+    monkeypatch.setattr(health_config, "_gateway_config_event_dto", revoke_during_serialization)
+    body = await _consume_sse_with_revocation(case, "/api/gateway/config/events/stream")
+    assert b"event: config\n" not in body and b"never-disclose-after-revocation" not in body
+    assert b"event: error\n" in body and b"configuration_read" in body

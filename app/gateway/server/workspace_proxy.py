@@ -33,7 +33,9 @@ from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,
     TARGET_GATEWAY_ID_HEADER,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    UpstreamResponseBody,
     build_upstream_url,
+    close_upstream_response,
     filter_hop_by_hop_headers,
     load_proxy_gateway_id,
     parse_target_gateway_id,
@@ -289,35 +291,7 @@ async def _stream_proxy_response(
         if user_session_changed is not None:
             pending_tasks.append(user_session_changed)
         await run_cleanup_shielded(
-            partial(_close_proxy_response, response, pending_tasks, on_close)
-        )
-
-
-async def _close_proxy_response(
-    response: httpx.Response,
-    pending_tasks: list[asyncio.Task[object]],
-    on_close: Callable[[], None] | None,
-) -> None:
-    """回收上游响应与本路由的代理引用；在取消下也必须完整跑完。"""
-
-    await asyncio.gather(*pending_tasks, return_exceptions=True)
-    try:
-        await response.aclose()
-    finally:
-        if on_close is not None:
-            on_close()
-
-
-async def _stream_proxy_body(
-    response: httpx.Response,
-    on_close: Callable[[], None] | None = None,
-) -> AsyncIterator[bytes]:
-    try:
-        async for chunk in response.aiter_bytes():
-            yield chunk
-    finally:
-        await run_cleanup_shielded(
-            partial(_close_proxy_response, response, [], on_close)
+            partial(close_upstream_response, response, pending_tasks, on_close)
         )
 
 
@@ -696,7 +670,7 @@ async def _proxy_workspace_request(
         # 非 SSE 的流式响应体仍持有这份引用，直到 body 真正结束才由 on_close 归还。
         route_reference_handed_off = True
         return StreamingResponse(
-            _stream_proxy_body(response, release_route_reference),
+            UpstreamResponseBody(response, release_route_reference),
             status_code=response.status_code,
             headers=headers,
             media_type=media_type,

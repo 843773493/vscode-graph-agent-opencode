@@ -11,7 +11,7 @@ Gateway 的两个 httpx 客户端都不设读取超时：SSE 必须能长期占�
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from urllib.parse import unquote
 
 import httpx
@@ -24,7 +24,9 @@ __all__ = [
     "GATEWAY_PROXY_DROPPED_HEADERS",
     "TARGET_GATEWAY_ID_HEADER",
     "UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
+    "UpstreamResponseBody",
     "build_upstream_url",
+    "close_upstream_response",
     "filter_hop_by_hop_headers",
     "load_proxy_gateway_id",
     "parse_target_gateway_id",
@@ -142,6 +144,8 @@ def filter_hop_by_hop_headers(
 async def send_upstream_request(
     client: httpx.AsyncClient,
     request: httpx.Request,
+    *,
+    response_headers_timeout_seconds: float | None = None,
 ) -> httpx.Response:
     """发送上游请求，只约束响应头等待，不约束响应体的流式读取。
 
@@ -151,8 +155,51 @@ async def send_upstream_request(
 
     return await asyncio.wait_for(
         client.send(request, stream=True),
-        timeout=UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+        timeout=(UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS
+                 if response_headers_timeout_seconds is None else response_headers_timeout_seconds),
     )
+
+
+async def close_upstream_response(
+    response: httpx.Response,
+    pending_tasks: list[asyncio.Task[object]],
+    on_close: Callable[[], None] | None,
+) -> None:
+    """结算读取任务后关闭上游，再释放原代理引用。"""
+    await asyncio.gather(*pending_tasks, return_exceptions=True)
+    try:
+        await response.aclose()
+    finally:
+        if on_close is not None:
+            on_close()
+
+
+class UpstreamResponseBody:
+    """响应体与外层 ASGI 共同等待唯一清理任务，覆盖首次迭代前的取消。"""
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
+        self._response = response
+        self._on_close = on_close
+        self._close_task: asyncio.Task[None] | None = None
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._response.aiter_bytes():
+                yield chunk
+        finally:
+            await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                close_upstream_response(self._response, [], self._on_close)
+            )
+        close_task = self._close_task
+        await run_cleanup_shielded(lambda: close_task)
 
 
 def build_upstream_url(

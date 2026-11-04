@@ -62,6 +62,19 @@ def test_configuration_target_parameters_follow_actual_routes(
     assert connection["in"] == "query" and connection["required"] is False
 
 
+def test_configuration_event_stream_keeps_native_cursor_and_event_contract(gateway_openapi: JsonSchemaValue) -> None:
+    operation = gateway_openapi["paths"]["/api/gateway/config/events/stream"]["get"]
+    parameters = {item["name"]: item for item in operation["parameters"]}
+    assert parameters["after"]["in"] == "query" and parameters["after"]["schema"]["minimum"] == 0
+    assert parameters["Last-Event-ID"]["in"] == "header"
+    assert parameters["Last-Event-ID"]["required"] is False
+    assert {"type": "string"} in parameters["Last-Event-ID"]["schema"]["anyOf"]
+    response = operation["responses"]["200"]
+    assert response["content"] == {"text/event-stream": {"schema": {"type": "string"}}}
+    assert response["x-sse-events"]["config"]["$ref"] == "#/components/schemas/GatewayConfigEventDTO"
+    assert response["x-sse-events"]["error"]["$ref"] == "#/components/schemas/SseErrorDTO"
+
+
 @pytest.mark.parametrize(("path", "method", "response", "request_model"), [
     ("sources", "get", "GatewayConfigSourcesDTO", None),
     ("reload-status", "get", "GatewayConfigReloadStatusDTO", None),
