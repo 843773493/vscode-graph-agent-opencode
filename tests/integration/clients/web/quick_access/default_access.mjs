@@ -89,6 +89,25 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     expect(second.length).toBeGreaterThanOrEqual(2);
     expect(second.every(request => belongs(request, ownerB))).toBe(true);
     await page.keyboard.press('Escape');
+
+    // 真实原版历史命令走 quickNavigate；MRU 与范围固定，不发送领域查询。
+    const recentFile = await fileUri(ownerB), previousFile = await fileUri(ownerB, 'quickdiscover-file.txt');
+    await command('_workbench.open', previousFile, [undefined, { pinned: true }]);
+    await command('_workbench.open', recentFile, [undefined, { pinned: true }]);
+    const beforeHistory = requests.length;
+    await command('workbench.action.openPreviousEditorFromHistory');
+    await expect(quick).toBeVisible();
+    const historyRows = quick.locator('[data-quick-input-id]');
+    await expect(historyRows).toHaveCount(2);
+    const historyIds = await historyRows.evaluateAll(rows => rows.map(row => row.dataset.quickInputId));
+    expect(historyIds).toEqual([recentFile, previousFile]);
+    await expect(quick.getByRole('option').filter({ has: page.locator(`[data-quick-input-id="${previousFile}"]`) })).toHaveClass(/focused/);
+    await page.keyboard.press('Enter');
+    await expect(quick).not.toBeVisible();
+    await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('discover B line one');
+    expect(requests.length).toBe(beforeHistory);
+    result.quickNavigateHistory = { ids: historyIds, owner: ownerB.workspaceId, zeroSearchRequests: true, keyboardAccepted: true };
+
     const beforeMissing = requests.length;
     await command('workbench.action.quickOpen', 'quick-no-match-unique');
     await expect(quick).toContainText('会话 · 没有匹配的资源');

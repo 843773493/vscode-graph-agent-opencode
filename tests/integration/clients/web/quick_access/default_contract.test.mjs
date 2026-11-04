@@ -115,6 +115,18 @@ test('URI 原样交原 Opener 并冻结发起组，校验前不创建侧边组�
   expect(calls.every(call => call.group === 1 && call.side && call.pinned && call.preserveFocus)).toBe(true);
 });
 
+test('quickNavigate 只按所选 owner 的历史顺序导航，不混入补充项或帮助且不发查询', async () => {
+  const result = await exercise('quickNavigateContract');
+  expect(result.empty.map(item => item.id)).toEqual(result.resources);
+  expect(result.filtered.map(item => item.id).sort()).toEqual([...result.resources].sort());
+  expect(result.empty.map(item => item.label)).toEqual(['needle recent', 'needle Thread']);
+  expect(result.calls).toEqual([]);
+  expect(result.buttons).toBe(0);
+  expect(result.opened).toHaveLength(1);
+  expect(result.opened[0]).toMatchObject({ resource: result.resources[0], group: 1,
+    options: { pinned: false, preserveFocus: false } });
+});
+
 test('普通 delegate 保留行列定位且修改位置不重查，filesOnly 沿上游保留字面查询', async () => {
   const positioned = await exercise('fileRangeContract', false);
   expect(positioned.patterns).toEqual(['', 'target.txt']);

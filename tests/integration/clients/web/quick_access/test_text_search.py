@@ -113,6 +113,8 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         assert receipt["defaultQuickAccess"]["emptyHasNoQueries"] is True
         assert receipt["defaultQuickAccess"]["helpHasNoQueries"] is True
         assert receipt["defaultQuickAccess"]["helpKeepsInvocation"] is True
+        assert receipt["quickNavigateHistory"]["zeroSearchRequests"] is True
+        assert receipt["quickNavigateHistory"]["keyboardAccepted"] is True
         assert len(receipt["defaultListPresentation"]) == 3
         assert receipt["workspaceSymbolsUnavailable"] is True
         assert receipt["defaultScope"]["cancelKeepsQueryAndSelection"] is True

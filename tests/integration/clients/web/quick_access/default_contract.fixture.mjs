@@ -19,19 +19,48 @@ const uri = name => workspaceFileUri(owner, root + '/' + name, root);
 
 /** 仅替原 Picker 事件和宿主服务；实际 Provider、取消及接受逻辑均来自生产源码。 */
 function defaultAccess(options, history = [], opener = { open() { throw new Error('delegate 不应被 URI opener 抢占'); } },
-  editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }) {
+  editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }, quickNavigate = false) {
   const changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
   const picker = { value: '', items: [], activeItems: [], selectedItems: [], keyMods: { alt: false, ctrlCmd: false },
-    buttons: [], onDidTriggerButton: Event.None,
+    buttons: [], quickNavigate: quickNavigate ? { keybindings: [] } : undefined, onDidTriggerButton: Event.None,
     onDidHide: Event.None, onDidChangeActive: Event.None, onDidChangeValue: changes.event, onDidAccept: accepts.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
   const group = { id: 1 }, groups = { groups: [], activeGroup: group, getGroup: id => id === group.id ? group : undefined };
   const provider = new WorkspaceQuickAccess({ createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
-    { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {},
+    { getHistory: () => history }, { getValue: () => undefined }, {}, {}, { lookupKeybinding: () => undefined },
     opener, { error(error) { throw error; } }, { enabled: false }, {});
   const lifetime = provider.provide(picker, cancellation.token, options);
   return { picker, accepts, change(value) { picker.value = value; changes.fire(); },
     dispose() { cancellation.dispose(true); lifetime.dispose(); provider.dispose(); changes.dispose(); accepts.dispose(); } };
+}
+
+export async function quickNavigateContract() {
+  const calls = [], opened = [], fetch = globalThis.fetch;
+  const registry = Registry.as(Extensions.Quickaccess);
+  const registration = registry.registerQuickAccessProvider({ prefix: '_navigation-contract ', ctor: class {},
+    helpEntries: [{ description: '不能混入历史的帮助', commandCenterOrder: 1 }] });
+  globalThis.fetch = async input => { calls.push(String(input)); throw new Error('历史导航不得发起网络查询'); };
+  const thread = new ThreadInput({ ...owner, routeId: '', sessionId: 'session-a', threadId: 'thread-a', title: 'needle Thread' });
+  const first = { resource: uri('needle-recent.txt'), label: 'needle recent' };
+  const history = [first, { resource: workspaceFileUri({ ...owner, workspaceId: 'workspace-b' },
+    'boxteam://workspace/workspace-b/resources/files/root/needle-foreign.txt',
+    'boxteam://workspace/workspace-b/resources/files/root'), label: 'needle foreign' }, thread,
+    { ...first }, { resource: uri('needle-hidden.txt'), label: 'needle hidden' }];
+  let f;
+  try {
+    f = defaultAccess({ searchOwner: owner, includeHelp: true, additionPicks: [{ label: 'needle extra' }],
+      filter: item => item.label !== 'needle hidden' }, history, undefined,
+      { openEditor(input, group) { opened.push({ resource: input.resource.toString(), group, options: input.options }); return Promise.resolve(); } }, true);
+    const empty = f.picker.items.map(item => ({ id: item.id, label: item.label }));
+    f.change('needle');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const filtered = f.picker.items.map(item => ({ id: item.id, label: item.label }));
+    f.picker.activeItems = f.picker.selectedItems = [f.picker.items.find(item => item.id === first.resource.toString())];
+    f.accepts.fire({ inBackground: false });
+    await Promise.resolve();
+    return { empty, filtered, buttons: f.picker.buttons.length, opened, calls,
+      resources: [first.resource.toString(), thread.resource.toString()] };
+  } finally { f?.dispose(); registration.dispose(); globalThis.fetch = fetch; }
 }
 
 export function uriContract() {

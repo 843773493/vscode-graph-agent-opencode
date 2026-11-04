@@ -831,3 +831,11 @@
 - 正式 Gateway／Workbench／Chromium 通过真实消息、fork 和 child 执行生成事件；未选类别零正文查询、未打开 child 两处长正文命中、同 Pane 新位置、实际 mark 可见、追加后旧行读取、旧引用拒绝及零全量 Trace 请求均通过。正式 Python 搜索 SDK 核原 owner 的旧 cursor 409、原原因、零页和保留输入续点。联合消息／工具正文回归 2 passed／263.18 秒，pageErrors=[]；驱动清理收尾后的 Trace 定向再次通过（122.47 秒）。请求日志场景在本轮首批通过。名称与文件原有独立请求的测试现分别核冻结 owner、类别、文件根和续查描述，不再错误要求单请求。
 - 真实 Workbench 类型检查（23 份转换源码）、正式 Web 构建、协议生成一致性／Buf breaking、Ruff、ESM 语法和 OpenSpec strict 通过。Pyright 在原 sessions／container 保留 7 条既存诊断，基线同文，没有新增；不称全仓类型零诊断。正式构建44.99秒、退出0，main SHA256=b38a18307ac32a1af79d831abe6d01260553c12c16ba0b1fe60faa9b6827f013。
 - 初轮预算推进／空 owner 查询失败已修复，原件保留；浏览器初轮旧名称计数断言与新驱动误用 cleanup 的失败保留，新驱动使用原 close 并分别保存执行、诊断和清理错误。准确命令、指纹、退出码及正式产物见 out/tests/temp/trace_search_20261104/artifacts/verification.json。仅删除两份已记录指纹的临时基线源文件，正式产物与原始日志保留。本切片没有验证 Electron 或 Windows；工作区／Gateway 运行日志仍未实现，9.6 及相关整项不勾选。
+
+
+### 2026-11-04：quickNavigate 只导航原历史（7.4 部分）
+
+- 对照固定上游 AnythingQuickAccessProvider.doGetPicks 的 quickNavigate 分支，将项目 Provider 的历史返回提前到补充项、模式帮助及文件符号之前。保留已选 owner 过滤、同目标去重、历史顺序、原 fuzzy／filter 及原接受逻辑，不建另一套历史或查询器。
+- 新浏览器合同装具先复现旧实现混入 addition／help／separator，再验证仅所选工作区的文件和 Thread、排除外部 owner／重复／隐藏项、零网络查询和原组接受。20 项检查／171 条断言通过（16.97 秒），原 URI／行列、delegate、身份取消、名称／正文续页、原调用接收者及帮助转接断言保持。前两次失败分别为装具漏传文件根和缺少 keybinding 服务方法，原始输出保留，不算产品缺陷。
+- 正式 Gateway／双托管 Backend／Workbench／Chromium 的原搜索组合验收通过（231.37 秒）：通过真实打开入口建立 B 的两个最近文件，再调用原 workbench.action.openPreviousEditorFromHistory，核 MRU 顺序、仅 B、原版第二项激活及真实 Enter 后 B 正文可见，全程零搜索请求。原跨范围、dirty 模型、SearchView／Search Editor、watcher、保存／恢复和停止目标断言均保持，pageErrors=[]。出站延迟故障点仍是原显式 Integration 装具，不将其称为原生服务故障。
+- 23 份转换源码的真实 Workbench 类型、正式 Web 构建、Python 定向类型、Ruff、ESM 语法及差异检查通过；共享构建44.93秒、退出0，main SHA256=0d89bf1181724e717a10196f9203065036e7bbdb988ef76ea88cc2fefa3e4ab7。命令、源码指纹、失败与通过输出、实际退出码及正式产物见 out/tests/temp/quick_navigate_20261104/artifacts/verification.json。本批未改变公开协议或后端产品，不重复生成／后端全套测试；未验证 Electron／Windows。文件符号等其余范围仍未闭环，7.4 保持未勾选。

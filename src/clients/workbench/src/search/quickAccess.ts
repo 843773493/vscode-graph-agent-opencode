@@ -192,6 +192,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     disposables.add(token.onCancellationRequested(() => controller.abort()));
     const alive = () => !token.isCancellationRequested && !controller.signal.aborted && this.run === run;
     const accepted = (items: Pick<ResourcePick>[]) => run.options.filter ? items.filter(run.options.filter) : items;
+    if (run.picker.quickNavigate) return accepted(this.recent(run, filter));
     const active = run.globalPick;
     const symbolSegments = original.split('@');
     if (!this.contentMode && !this.category && !resourceLink && previousFilter && !run.options.filesOnly && active?.resource?.scheme === 'boxteam-file' && symbolSegments.length > 1
@@ -204,7 +205,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const recent = this.contentMode ? [] : this.recent(run, filter);
     const fast = accepted([...extras, ...(!filter && run.options.includeHelp ? this.help(run) : []),
       ...(recent.length ? [{ type: 'separator' as const, label: '最近打开' }, ...recent] : [])]);
-    if (run.picker.quickNavigate || !filter && !run.options.filesOnly && !run.options.fileSearchDelegate && !this.contentMode) return fast;
+    if (!filter && !run.options.filesOnly && !run.options.fileSearchDelegate && !this.contentMode) return fast;
     if (openLink) {
       return accepted([{ id: 'link:' + filter, label: '打开链接', description: filter,
         accept: (mods, event) => {
