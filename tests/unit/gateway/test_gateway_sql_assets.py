@@ -9,7 +9,11 @@ import pytest
 
 from app.core.sqlite_state import SQLiteStateDatabase
 from app.gateway.control.gateway_state import _GATEWAY_MIGRATIONS, GatewayStateStore
-from app.services.infrastructure.config.state import ConfigConflictError
+from app.services.infrastructure.config.state import (
+    ConfigConflictError,
+    build_secret_binding_summary,
+    dump_json,
+)
 
 
 def _snapshot(connection):
@@ -42,7 +46,7 @@ def test_gateway_upgrade_from_each_existing_version_and_reopen(tmp_path, version
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     assert snapshot["config"] == [("control-marker", 9, "{}", "frozen")]
     assert snapshot["versions"][:version] == [tuple(row) for row in original_versions]
-    assert [row[0] for row in snapshot["versions"]] == list(range(1, 19))
+    assert [row[0] for row in snapshot["versions"]] == list(range(1, 21))
     with GatewayStateStore(path=path) as reopened, closing(reopened.connection()) as connection:
         assert _snapshot(connection) == snapshot
     with closing(sqlite3.connect(path)) as connection:
@@ -50,7 +54,7 @@ def test_gateway_upgrade_from_each_existing_version_and_reopen(tmp_path, version
 
 
 def test_gateway_pending_location_migration_preserves_candidate_and_replay(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     path = tmp_path / "gateway.sqlite"
 
@@ -64,17 +68,28 @@ def test_gateway_pending_location_migration_preserves_candidate_and_replay(
             state="candidate_validated", base_active_revision=5, source_generation=11,
         )
 
-    # facade 持有同一迁移元组；旧库必须由原有构造入口创建。
-    with monkeypatch.context() as legacy:
-        legacy.setattr("app.gateway.control.gateway_state._GATEWAY_MIGRATIONS", _GATEWAY_MIGRATIONS[:17])
-        with GatewayStateStore(path=path) as old:
-            candidate = create(old)
-            with closing(old.connection()) as connection:
-                connection.execute("UPDATE config_pending_candidate SET persistence_location = ?", (str(path),))
-                original = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
-                del original["persistence_location"]
-                versions = list(connection.execute("SELECT * FROM schema_migrations ORDER BY version"))
+    # 旧版本原件按旧 DDL 写入；新 API 不在缺少新列的伪旧 schema 上执行。
+    with (
+        SQLiteStateDatabase(path=path, schema_version=17, migrations=_GATEWAY_MIGRATIONS[:17]) as old,
+        closing(old.connection()) as connection,
+    ):
+        connection.execute("INSERT INTO config_revision_meta VALUES ('gateway', 2)")
+        connection.execute(
+            "INSERT INTO config_pending_candidate("
+            "config_domain,candidate_id,idempotency_key,pending_revision,payload_json,source_baseline_json,"
+            "candidate_digest,effective_digest,target_generation,fencing_token,state,created_at,"
+            "base_active_revision,source_generation,secret_bindings_json,persistence_location) "
+            "VALUES ('gateway','location-candidate','location-replay',1,?,?,'candidate-digest','effective-digest',"
+            "'generation-new','fence-original','candidate_validated','2026-01-01T00:00:00+00:00',5,11,?,?)",
+            (dump_json({"token": "env:TEST_KEY"}), dump_json({"user": {"revision": 7, "digest": "source-digest"}}),
+             dump_json(build_secret_binding_summary({"token": "env:TEST_KEY"})), str(path)),
+        )
+        original = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
+        del original["persistence_location"]
+        original["source_edit_json"] = None
+        versions = list(connection.execute("SELECT * FROM schema_migrations ORDER BY version"))
 
+    candidate = None
     for _ in range(2):
         with GatewayStateStore(path=path) as store:
             with closing(store.connection()) as connection:
@@ -85,6 +100,9 @@ def test_gateway_pending_location_migration_preserves_candidate_and_replay(
                 assert list(connection.execute("SELECT * FROM schema_migrations ORDER BY version"))[:17] == versions
             latest = store.get_pending_config_candidate(config_domain="gateway")
             assert latest is not None
+            if candidate is None:
+                candidate = latest
+            assert latest == candidate and latest.source_edit is None
             assert "persistence_location" not in asdict(latest)
             assert store.get_pending_config_candidate(config_domain="gateway", candidate_id=candidate.candidate_id) == candidate
             assert store.get_pending_config_candidate(config_domain="gateway", idempotency_key=candidate.idempotency_key) == candidate

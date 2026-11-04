@@ -11,12 +11,14 @@ app/gateway/config/
 ├── sources.py                  来源层读取、迁移、来源明细及启动失败记录
 ├── connection_ids.py           connection_id 规范化、迁移和回滚
 ├── reload_lifecycle.py         ReloadLifecycleMixin：watcher、事件游标与 reload
+├── source_edit.py              GatewaySourceEditMixin：来源正文、纯预检与原 pending 保存
 └── reload_pending_restart.py   ReloadPendingRestartMixin：pending restart 与 health proof
 ```
 
 配置读取链：`sources.py` 提供持久来源，`connection_ids.py` 规范化旧配置，`loader.py`
 完成合并与校验，`values.py` 定义返回的配置值。热重载链：`__init__.py` 组装公开服务，
-`reload_lifecycle.py` 管理 watcher 和 reload 状态，`reload_pending_restart.py` 管理重启提交与健康证明。
+`reload_lifecycle.py` 在唯一 reload 锁内管理 watcher 和 reload 状态，`source_edit.py` 将文件 CAS
+与来源提交绑定到同一 pending/claim 链，`reload_pending_restart.py` 管理重启提交与健康证明。
 新增职责先归入对应的垂直模块；只有出现独立 owner 和调用边界时才继续下沉目录。
 
 # 可修改内容

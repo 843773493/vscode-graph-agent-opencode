@@ -22,6 +22,7 @@
 - Gateway 运行组请求的 `desired_workspace_ids` 仅在结构检查时由 HTTP 可空数组投影到 proto 的具名 presence 包装消息，根及包装成员仍由同一 descriptor 检查；HTTP 未指定、清空和非空集合的原语义、完整组前置条件及去重约束仍归 Pydantic 与生命周期 owner。
 - Gateway配置来源、重载状态、事件及pending证明／丢弃请求共用该检查，来源与事件成员递归推导；policy manifest保留原Struct边界，缺失来源摘要用Value保留显式null。URI、摘要值域、修订及证明约束仍由Pydantic和配置owner负责，不从descriptor替代业务校验。
 - Workspace 来源文档、JSONC 预检／保存请求及配置事件共用该检查；来源、完整状态和 CAS 嵌套字段由 descriptor 核对，JSONC 格式、秘密占位、文件／层／active 及原 pending 幂等恢复仍由配置 owner 负责。
+- Gateway 来源文档与 JSONC 预检／保存请求同样递归核对 Gateway descriptor；原生 Gateway 身份、来源权限与原 pending/claim 恢复继续由 Gateway 配置 owner 负责。
 - 联邦manifest、完整工作区列表及启停／重启回执共用该检查，远端连接摘要与配置游标递归核对；原服务快照Struct边界、联邦深度、配置状态及生命周期前置条件继续归Pydantic和原owner。
 - Gateway 工作区注册、更新、排序、激活及导航树与面包屑共用该检查，嵌套导航节点由 descriptor 递归核对；原生路径输入、显式空值、节点类型配对与放置约束仍归 Pydantic，导航和生命周期仍归原 owner。
 - 文件 HTTP 的请求、目录、内容、操作回执和快捷目录共用该检查；正文修改的命令、版本字典、回执及前后件快照也从 proto 递归核对，不另列字段映射。原生路径输入、传输封套的固定 URI、版本和命令互斥校验继续由对应业务模型负责。

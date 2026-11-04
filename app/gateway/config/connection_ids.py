@@ -323,6 +323,8 @@ def _normalize_connection_ids(
     config_path: Path,
     state_store: GatewayStateStore | None,
     previous_entries: list[dict[str, object]] | None = None,
+    persist_migrations: bool = True,
+    allow_new_ids: bool = True,
 ) -> list[dict[str, object]]:
     raw_workspaces = raw_config.get("workspaces")
     if not isinstance(raw_workspaces, list):
@@ -365,12 +367,17 @@ def _normalize_connection_ids(
             if matching:
                 connection_id = cast(str, matching[0]["connection_id"])
                 unmatched_previous.remove(matching[0])
-            elif position < len(previous_entries):
+            elif allow_new_ids and position < len(previous_entries):
                 position_entry = previous_entries[position]
                 connection_id = cast(str, position_entry["connection_id"])
                 if position_entry in unmatched_previous:
                     unmatched_previous.remove(position_entry)
             else:
+                if not allow_new_ids:
+                    raise ConfigConflictError(
+                        f"Gateway 来源 workspaces[{position}].connection_id 缺失；"
+                        "新增连接必须显式填写稳定 connection_id"
+                    )
                 connection_id = _new_connection_id(config_path, position)
         if connection_id in used:
             raise ValueError(f"Gateway connection_id 重复: {connection_id}")
@@ -383,7 +390,7 @@ def _normalize_connection_ids(
             }
         )
 
-    if state_store is not None:
+    if state_store is not None and persist_migrations:
         _migrate_gateway_connection_ids_in_source(
             raw_config=raw_config,
             config_path=config_path,

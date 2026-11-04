@@ -778,6 +778,304 @@ export declare type GatewayConfigPendingDiscardRequest = Message<"boxteam.gatewa
 export declare const GatewayConfigPendingDiscardRequestSchema: GenMessage<GatewayConfigPendingDiscardRequest>;
 
 /**
+ * 文件、SQLite layer 与 active 为独立 CAS 基线，目标绑定原生 Gateway 与逻辑来源。
+ *
+ * @generated from message boxteam.gateway.v2.GatewayConfigSourceEditRequest
+ */
+export declare type GatewayConfigSourceEditRequest = Message<"boxteam.gateway.v2.GatewayConfigSourceEditRequest"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string source_key = 2;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: string jsonc = 3;
+   */
+  jsonc: string;
+
+  /**
+   * @generated from field: google.protobuf.Value base_file_digest = 4;
+   */
+  baseFileDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value base_layer_revision = 5;
+   */
+  baseLayerRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value base_layer_digest = 6;
+   */
+  baseLayerDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value expected_active_revision = 7;
+   */
+  expectedActiveRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value expected_active_digest = 8;
+   */
+  expectedActiveDigest?: Value | undefined;
+
+  /**
+   * @generated from field: string idempotency_key = 9;
+   */
+  idempotencyKey: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayConfigSourceEditRequest.
+ * Use `create(GatewayConfigSourceEditRequestSchema)` to create a new message.
+ */
+export declare const GatewayConfigSourceEditRequestSchema: GenMessage<GatewayConfigSourceEditRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayConfigSourceLayerViewDTO
+ */
+export declare type GatewayConfigSourceLayerViewDTO = Message<"boxteam.gateway.v2.GatewayConfigSourceLayerViewDTO"> & {
+  /**
+   * @generated from field: string source_key = 1;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: string layer = 2;
+   */
+  layer: string;
+
+  /**
+   * @generated from field: int64 precedence = 3;
+   */
+  precedence: bigint;
+
+  /**
+   * @generated from field: bool writable = 4;
+   */
+  writable: boolean;
+
+  /**
+   * @generated from field: google.protobuf.Struct payload = 5;
+   */
+  payload?: JsonObject | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayConfigSourceLayerViewDTO.
+ * Use `create(GatewayConfigSourceLayerViewDTOSchema)` to create a new message.
+ */
+export declare const GatewayConfigSourceLayerViewDTOSchema: GenMessage<GatewayConfigSourceLayerViewDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayConfigSourceOriginDTO
+ */
+export declare type GatewayConfigSourceOriginDTO = Message<"boxteam.gateway.v2.GatewayConfigSourceOriginDTO"> & {
+  /**
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: string source_key = 2;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: repeated string shadowed_sources = 3;
+   */
+  shadowedSources: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayConfigSourceOriginDTO.
+ * Use `create(GatewayConfigSourceOriginDTOSchema)` to create a new message.
+ */
+export declare const GatewayConfigSourceOriginDTOSchema: GenMessage<GatewayConfigSourceOriginDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayConfigSourceEditDTO
+ */
+export declare type GatewayConfigSourceEditDTO = Message<"boxteam.gateway.v2.GatewayConfigSourceEditDTO"> & {
+  /**
+   * @generated from field: string idempotency_key = 1;
+   */
+  idempotencyKey: string;
+
+  /**
+   * @generated from field: string candidate_id = 2;
+   */
+  candidateId: string;
+
+  /**
+   * @generated from field: string state = 3;
+   */
+  state: string;
+
+  /**
+   * @generated from field: string file_digest = 4;
+   */
+  fileDigest: string;
+
+  /**
+   * @generated from field: bool source_saved = 5;
+   */
+  sourceSaved: boolean;
+
+  /**
+   * @generated from field: bool layer_imported = 6;
+   */
+  layerImported: boolean;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayConfigSourceEditDTO.
+ * Use `create(GatewayConfigSourceEditDTOSchema)` to create a new message.
+ */
+export declare const GatewayConfigSourceEditDTOSchema: GenMessage<GatewayConfigSourceEditDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayConfigSourceDocumentDTO
+ */
+export declare type GatewayConfigSourceDocumentDTO = Message<"boxteam.gateway.v2.GatewayConfigSourceDocumentDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string source_key = 2;
+   */
+  sourceKey: string;
+
+  /**
+   * @generated from field: string layer = 3;
+   */
+  layer: string;
+
+  /**
+   * @generated from field: bool writable = 4;
+   */
+  writable: boolean;
+
+  /**
+   * @generated from field: string jsonc = 5;
+   */
+  jsonc: string;
+
+  /**
+   * @generated from field: string file_presence = 6;
+   */
+  filePresence: string;
+
+  /**
+   * @generated from field: google.protobuf.Value file_digest = 7;
+   */
+  fileDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_revision = 8;
+   */
+  layerRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_digest = 9;
+   */
+  layerDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value source_generation = 10;
+   */
+  sourceGeneration?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value active_revision = 11;
+   */
+  activeRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value active_digest = 12;
+   */
+  activeDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct json_schema = 13;
+   */
+  jsonSchema?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct effective = 14;
+   */
+  effective?: JsonObject | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct source_effective = 15;
+   */
+  sourceEffective?: JsonObject | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.GatewayConfigSourceLayerViewDTO layers = 16;
+   */
+  layers: GatewayConfigSourceLayerViewDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.GatewayConfigSourceOriginDTO origins = 17;
+   */
+  origins: GatewayConfigSourceOriginDTO[];
+
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayConfigReloadStatusDTO status = 18;
+   */
+  status?: GatewayConfigReloadStatusDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.GatewayConfigSourceEditDTO edit = 19;
+   */
+  edit?: GatewayConfigSourceEditDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayConfigSourceDocumentDTO.
+ * Use `create(GatewayConfigSourceDocumentDTOSchema)` to create a new message.
+ */
+export declare const GatewayConfigSourceDocumentDTOSchema: GenMessage<GatewayConfigSourceDocumentDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayConfigSourcePreflightDTO
+ */
+export declare type GatewayConfigSourcePreflightDTO = Message<"boxteam.gateway.v2.GatewayConfigSourcePreflightDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayConfigSourceDocumentDTO document = 1;
+   */
+  document?: GatewayConfigSourceDocumentDTO | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct candidate = 2;
+   */
+  candidate?: JsonObject | undefined;
+
+  /**
+   * @generated from field: string candidate_digest = 3;
+   */
+  candidateDigest: string;
+
+  /**
+   * @generated from field: repeated string changed_paths = 4;
+   */
+  changedPaths: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayConfigSourcePreflightDTO.
+ * Use `create(GatewayConfigSourcePreflightDTOSchema)` to create a new message.
+ */
+export declare const GatewayConfigSourcePreflightDTOSchema: GenMessage<GatewayConfigSourcePreflightDTO>;
+
+/**
  * @generated from message boxteam.gateway.v2.GatewayConfigEventDTO
  */
 export declare type GatewayConfigEventDTO = Message<"boxteam.gateway.v2.GatewayConfigEventDTO"> & {

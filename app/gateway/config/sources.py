@@ -164,6 +164,11 @@ def _load_or_migrate_gateway_override(
     path: Path,
     persist_migrations: bool,
 ) -> dict[str, object] | None:
+    if not persist_migrations:
+        file_snapshot = read_stable_config_file(path)
+        payload = parse_stable_config_file(file_snapshot)
+        verify_stable_config_file(file_snapshot)
+        return payload
     if persist_migrations:
         blocked = state_store.migrate_legacy_config_secrets(config_key)
         if blocked:
@@ -225,11 +230,6 @@ def _load_or_migrate_gateway_override(
             journal_origin="loader",
         )
         _record_gateway_source_journal(state_store, source_record, origin="loader")
-        return payload
-    if not persist_migrations:
-        payload = parse_stable_config_file(file_snapshot)
-        if payload is None:
-            raise RuntimeError(f"Gateway 配置来源解析为空: source_key={config_key}")
         return payload
     payload = parse_stable_config_file(file_snapshot)
     if payload is None:

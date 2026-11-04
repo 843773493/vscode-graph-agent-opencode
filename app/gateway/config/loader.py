@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Literal, cast
 
@@ -57,6 +58,9 @@ def load_gateway_config(
     persist_migrations: bool = True,
     startup: bool = False,
     gateway_id: str | None = None,
+    source_overrides: dict[str, dict[str, object]] | None = None,
+    source_payloads: dict[str, dict[str, object]] | None = None,
+    allow_new_connection_ids: bool = True,
 ) -> GatewayConfig:
     """加载 Gateway 内置默认、用户配置和本地覆盖。"""
     resolved_config_path = config_path or get_user_gateway_config_path()
@@ -70,6 +74,8 @@ def load_gateway_config(
         else resolved_config_path.parent / "gateway_local.jsonc"
     )
     raw_gateway_config = read_jsonc_object(resolved_inline_config_path)
+    if source_payloads is not None:
+        source_payloads["inline:0"] = deepcopy(raw_gateway_config)
     source_paths: list[Path] = [resolved_inline_config_path]
     user_override: dict[str, object] | None = None
     local_override: dict[str, object] | None = None
@@ -166,18 +172,16 @@ def load_gateway_config(
             )
             source_paths.append(resolved_local_config_path)
     elif not loaded_persisted_snapshot:
-        user_override = _load_or_migrate_gateway_override(
-            state_store=state_store,
-            config_key="gateway_mutable_override",
-            path=resolved_config_path,
-            persist_migrations=persist_migrations,
-        )
-        local_override = _load_or_migrate_gateway_override(
-            state_store=state_store,
-            config_key="gateway_local_mutable_override",
-            path=resolved_local_config_path,
-            persist_migrations=persist_migrations,
-        )
+        overrides = {}
+        for key, path in (("gateway_mutable_override", resolved_config_path), ("gateway_local_mutable_override", resolved_local_config_path)):
+            overrides[key] = (
+                source_overrides[key] if source_overrides is not None and key in source_overrides
+                else _load_or_migrate_gateway_override(
+                    state_store=state_store, config_key=key, path=path, persist_migrations=persist_migrations,
+                )
+            )
+        user_override = overrides["gateway_mutable_override"]
+        local_override = overrides["gateway_local_mutable_override"]
         source_details.extend(
             [
                 _gateway_source_detail(
@@ -192,6 +196,9 @@ def load_gateway_config(
                 ),
             ]
         )
+    if source_payloads is not None:
+        source_payloads["gateway_mutable_override"] = deepcopy(user_override or {})
+        source_payloads["gateway_local_mutable_override"] = deepcopy(local_override or {})
     if user_override is not None:
         raw_gateway_config = merge_json_objects(raw_gateway_config, user_override)
         if state_store.path not in source_paths:
@@ -207,11 +214,9 @@ def load_gateway_config(
     _normalize_connection_ids(
         raw_gateway_config,
         config_path=resolved_config_path,
-        state_store=(
-            state_store
-            if persist_migrations and not loaded_persisted_snapshot
-            else None
-        ),
+        state_store=state_store if not loaded_persisted_snapshot else None,
+        persist_migrations=persist_migrations and not loaded_persisted_snapshot,
+        allow_new_ids=allow_new_connection_ids,
     )
     # 旧版先按 v1 结构校验，再校验补入 connection_id 的规范化候选。
     validate_config(

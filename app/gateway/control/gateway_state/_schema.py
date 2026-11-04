@@ -137,4 +137,5 @@ _GATEWAY_MIGRATIONS = (
     load_sql(__package__, "sql/017.sql"),
     load_sql(__package__, "sql/018.sql"),
     _migrate_workspace_owner_schema,
+    load_sql(__package__, "sql/020.sql"),
 )

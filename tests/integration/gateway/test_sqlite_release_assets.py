@@ -52,7 +52,7 @@ for _ in range(2):
     with GatewayStateStore(path=Path("state/gateway.sqlite")) as store:
         store.set_config(config_key="release-marker", config_version=3, payload={"value": "中文"})
         assert store.get_config("release-marker").payload == {"value": "中文"}
-        assert store.diagnostics().schema_version == 18
+        assert store.diagnostics().schema_version == 20
     with federation_control_database(gateway_root=Path("state")) as database:
         connection = database.connection()
         assert connection.execute("SELECT COUNT(*) FROM federation_replay_registry").fetchone()[0] == 0
@@ -84,7 +84,7 @@ for _ in range(2):
         require_resource_activation_schema(rollout)
         assert rollout.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert rollout.execute("SELECT count(*) FROM context_assemblies").fetchone()[0] == 0
-print(json.dumps({"loaded": core.__file__, "schema": 18}))
+print(json.dumps({"loaded": core.__file__, "schema": 20}))
 '''
     environment = {**os.environ, "PYTHONPATH": str(staged_application)}
 
@@ -99,7 +99,7 @@ print(json.dumps({"loaded": core.__file__, "schema": 18}))
 
     passed = run("staged-initialize-reopen")
     assert passed.returncode == 0, passed.stderr
-    assert json.loads(passed.stdout)["schema"] == 18
+    assert json.loads(passed.stdout)["schema"] == 20
     asset = staged_application / "app/gateway/control/gateway_state/sql/001.sql"
     asset.unlink()
     missing = run("staged-missing-asset")

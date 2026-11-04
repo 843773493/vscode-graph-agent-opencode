@@ -53,7 +53,10 @@ from app.schemas.gateway.config import (
     GatewayConfigPendingDiscardRequest,
     GatewayConfigPendingHealthProofRequest,
     GatewayConfigReloadStatusDTO,
+    GatewayConfigSourceDocumentDTO,
     GatewayConfigSourceDTO,
+    GatewayConfigSourceEditRequest,
+    GatewayConfigSourcePreflightDTO,
     GatewayConfigSourcesDTO,
 )
 from app.schemas.gateway.diagnostics import (
@@ -225,6 +228,80 @@ async def gateway_config_sources(
 
 
 @router.get(
+    "/api/gateway/config/sources/{source_key}",
+    response_model=APIResponse[GatewayConfigSourceDocumentDTO],
+)
+async def gateway_config_source_document(
+    request: Request,
+    source_key: str,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    service: Annotated[GatewayConfigReloadService, Depends(get_gateway_config_reload_service)],
+    idempotency_key: str | None = Query(default=None),
+    request_id: str = Depends(get_request_id),
+):
+    require_federation_capability(request, auth, "configuration_read")
+    try:
+        result = service.get_source_document(source_key=source_key, idempotency_key=idempotency_key)
+    except ConfigConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    require_federation_capability(request, auth, "configuration_read")
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post(
+    "/api/gateway/config/sources/{source_key}/preflight",
+    response_model=APIResponse[GatewayConfigSourcePreflightDTO],
+)
+async def preflight_gateway_config_source(
+    request: Request,
+    source_key: str,
+    payload: GatewayConfigSourceEditRequest,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    service: Annotated[GatewayConfigReloadService, Depends(get_gateway_config_reload_service)],
+    request_id: str = Depends(get_request_id),
+):
+    require_federation_capability(request, auth, "configuration_read")
+    require_federation_capability(request, auth, "configuration_write")
+    try:
+        result = service.preflight_source_edit(source_key=source_key, request=payload)
+    except ConfigConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    require_federation_capability(request, auth, "configuration_read")
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.put(
+    "/api/gateway/config/sources/{source_key}",
+    response_model=APIResponse[GatewayConfigSourceDocumentDTO],
+)
+async def save_gateway_config_source(
+    request: Request,
+    source_key: str,
+    payload: GatewayConfigSourceEditRequest,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    service: Annotated[GatewayConfigReloadService, Depends(get_gateway_config_reload_service)],
+    request_id: str = Depends(get_request_id),
+):
+    def require_write() -> None:
+        require_federation_capability(request, auth, "configuration_read")
+        require_federation_capability(request, auth, "configuration_write")
+
+    require_write()
+    try:
+        result = await service.save_source_edit(source_key=source_key, request=payload, before_write=require_write)
+    except ConfigConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    require_federation_capability(request, auth, "configuration_read")
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
     "/api/gateway/config/reload-status",
     response_model=APIResponse[GatewayConfigReloadStatusDTO],
 )
@@ -234,28 +311,10 @@ async def gateway_config_reload_status(
     request_id: str = Depends(get_request_id),
 ):
     require_federation_capability(request, auth, "configuration_read")
-    status = get_gateway_config_reload_service(request).status()
+    status = get_gateway_config_reload_service(request).get_reload_status_dto()
     require_federation_capability(request, auth, "configuration_read")
     return APIResponse(
-        data=GatewayConfigReloadStatusDTO(
-            available=True,
-            healthy=status.healthy,
-            revision=status.revision,
-            restart_required=status.restart_required,
-            reason=status.reason,
-            changed_sections=list(status.changed_sections),
-            last_error=status.last_error,
-            state=status.state,
-            active_revision=status.active_revision,
-            pending_revision=status.pending_revision,
-            candidate_id=status.candidate_id,
-            candidate_ref=status.candidate_ref,
-            attempt_id=status.attempt_id,
-            apply_id=status.apply_id,
-            layer_digests=status.layer_digests or {},
-            applied_paths=list(status.applied_paths),
-            deferred_paths=list(status.deferred_paths),
-        ),
+        data=status,
         request_id=request_id,
     )
 

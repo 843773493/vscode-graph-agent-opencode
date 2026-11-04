@@ -122,6 +122,7 @@ from .loader import (
 from .loader import load_gateway_config as load_gateway_config
 from .reload_lifecycle import ReloadLifecycleMixin
 from .reload_pending_restart import ReloadPendingRestartMixin
+from .source_edit import GatewaySourceEditMixin
 from .sources import _gateway_source_detail as _gateway_source_detail
 from .sources import (
     _load_or_migrate_gateway_override as _load_or_migrate_gateway_override,
@@ -152,5 +153,6 @@ from .values import resolve_gateway_path as resolve_gateway_path
 class GatewayConfigReloadService(
     ReloadLifecycleMixin,
     ReloadPendingRestartMixin,
+    GatewaySourceEditMixin,
 ):
     """Gateway 配置的候选、pending 和 active 管理器。"""

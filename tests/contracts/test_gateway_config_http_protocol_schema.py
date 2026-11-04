@@ -42,6 +42,7 @@ from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 ROOTS = (
     "GatewayConfigSourcesDTO", "GatewayConfigReloadStatusDTO", "GatewayConfigEventsDTO",
     "GatewayConfigPendingHealthProofRequest", "GatewayConfigPendingDiscardRequest",
+    "GatewayConfigSourceEditRequest", "GatewayConfigSourceDocumentDTO", "GatewayConfigSourcePreflightDTO",
 )
 
 
@@ -52,6 +53,9 @@ ROOTS = (
     ("retry-restart", "post", "GatewayConfigReloadStatusDTO", None),
     ("resolve-restart", "post", "GatewayConfigReloadStatusDTO", "GatewayConfigPendingHealthProofRequest"),
     ("discard-restart", "post", "GatewayConfigReloadStatusDTO", "GatewayConfigPendingDiscardRequest"),
+    ("sources/{source_key}", "get", "GatewayConfigSourceDocumentDTO", None),
+    ("sources/{source_key}/preflight", "post", "GatewayConfigSourcePreflightDTO", "GatewayConfigSourceEditRequest"),
+    ("sources/{source_key}", "put", "GatewayConfigSourceDocumentDTO", "GatewayConfigSourceEditRequest"),
 ])
 def test_configuration_schema_follows_actual_routes(
     gateway_openapi: JsonSchemaValue, path: str, method: str, response: str, request_model: str | None,
@@ -86,6 +90,13 @@ def test_configuration_schema_requires_exported_roots(gateway_openapi: JsonSchem
     ("GatewayConfigEventDTO", "pending_revision", {"type": "string"}),
     ("GatewayConfigPendingHealthProofRequest", "consumer_health_digests", {"type": "object", "additionalProperties": {"type": "integer"}}),
     ("GatewayConfigPendingDiscardRequest", "expected_active_revision", {"type": "string"}),
+    ("GatewayConfigSourceDocumentDTO", "source_key", {"type": "integer"}),
+    ("GatewayConfigSourceDocumentDTO", "source_effective", {"type": "string"}),
+    ("GatewayConfigSourceLayerViewDTO", "writable", {"type": "string"}),
+    ("GatewayConfigSourceOriginDTO", "shadowed_sources", {"type": "object"}),
+    ("GatewayConfigSourceEditDTO", "source_saved", {"type": "integer"}),
+    ("GatewayConfigSourceEditRequest", "idempotency_key", {"type": "integer"}),
+    ("GatewayConfigSourcePreflightDTO", "changed_paths", {"type": "object"}),
 ])
 def test_configuration_schema_rejects_nested_shape_drift(
     gateway_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -95,7 +106,8 @@ def test_configuration_schema_rejects_nested_shape_drift(
         openapi.assert_gateway_http_schemas(gateway_openapi)
 
 
-@pytest.mark.parametrize("model", (*ROOTS, "GatewayConfigSourceDTO", "GatewayConfigEventDTO"))
+@pytest.mark.parametrize("model", (*ROOTS, "GatewayConfigSourceDTO", "GatewayConfigEventDTO",
+                                    "GatewayConfigSourceLayerViewDTO", "GatewayConfigSourceOriginDTO", "GatewayConfigSourceEditDTO"))
 def test_configuration_schema_uses_candidate_descriptor(
     gateway_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet, model: str,
 ) -> None:
@@ -107,7 +119,7 @@ def test_configuration_schema_uses_candidate_descriptor(
     assert model in str(caught.value) and "new_configuration_field" in str(caught.value)
 
 
-@pytest.mark.parametrize("model", ["GatewayConfigReloadStatusDTO", "GatewayConfigEventDTO"])
+@pytest.mark.parametrize("model", ["GatewayConfigReloadStatusDTO", "GatewayConfigEventDTO", "GatewayConfigSourceEditDTO"])
 def test_configuration_export_rejects_drift_before_publishing(
     tmp_path: Path, http_descriptor_bundle: FileDescriptorSet, model: str,
     openapi_output: Path, openapi_export: Callable[[Path, Path], None],
@@ -132,6 +144,7 @@ def configuration_owner(tmp_path: Path) -> Iterator[tuple[FastAPI, GatewayConfig
             state_store=store, config=config, config_path=get_user_gateway_config_path(),
             local_config_path=get_user_gateway_local_config_path(),
             schema_path=get_user_gateway_schema_path(),
+            gateway_id="gateway_" + "c" * 32,
         )
         owner.initialize_active_snapshot()
         application = FastAPI()
@@ -168,6 +181,29 @@ async def test_real_configuration_http_serialization_survives_all_generated_cons
             samples[name] = body["data"]
             message = ParseDict(body["data"], getattr(public_pb2, name)())
             assert type(message).FromString(message.SerializeToString()) == message
+        endpoint = "/api/gateway/config/sources/gateway_local_mutable_override"
+        document = (await client.get(endpoint)).raise_for_status().json()["data"]
+        request = {
+            "gateway_id": document["gateway_id"], "source_key": document["source_key"],
+            "jsonc": "{ // 原生 Gateway local 来源\n}\n",
+            "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
+            "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
+            "expected_active_digest": document["active_digest"], "idempotency_key": "contract-source",
+        }
+        preview = await client.post(endpoint + "/preflight", json=request, headers={"X-Request-ID": "source-preview"})
+        saved = await client.put(endpoint, json=request, headers={"X-Request-ID": "source-saved"})
+        for response, expected_id in ((preview, "source-preview"), (saved, "source-saved")):
+            assert response.status_code == 200, response.text
+            assert response.headers["X-Request-ID"] == response.json()["request_id"] == expected_id
+        samples["GatewayConfigSourceEditRequest"] = request
+        samples["GatewayConfigSourceDocumentDTO"] = saved.json()["data"]
+        samples["GatewayConfigSourcePreflightDTO"] = preview.json()["data"]
+        for name in ("GatewayConfigSourceEditRequest", "GatewayConfigSourceDocumentDTO", "GatewayConfigSourcePreflightDTO"):
+            message = ParseDict(samples[name], getattr(public_pb2, name)())
+            assert type(message).FromString(message.SerializeToString()) == message
+        request_proto = ParseDict(request, public_pb2.GatewayConfigSourceEditRequest())
+        assert request_proto.base_file_digest.WhichOneof("kind") == "null_value"
+        assert samples["GatewayConfigSourceDocumentDTO"]["edit"]["state"] == "active"
     assert samples["GatewayConfigSourcesDTO"]["policy_manifest"]
     assert samples["GatewayConfigSourcesDTO"]["sources"]
     status = samples["GatewayConfigReloadStatusDTO"]

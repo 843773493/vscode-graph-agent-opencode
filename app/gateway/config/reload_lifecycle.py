@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from app.core.failures import failure_detail
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -28,6 +30,9 @@ from .values import (
     GatewayConfig,
     GatewayConfigRuntimeApplier,
 )
+
+if TYPE_CHECKING:
+    from . import GatewayConfigReloadService
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,7 @@ class ReloadLifecycleMixin:
         self._on_runtime_config = on_runtime_config
         self._gateway_id = gateway_id
         self._watcher: ConfigFileWatcher | None = None
+        self._reload_lock = asyncio.Lock()
         now = datetime.now(UTC)
         self._state_store.recover_expired_config_applies(
             config_domain=self._CONFIG_DOMAIN
@@ -287,7 +293,19 @@ class ReloadLifecycleMixin:
         except Exception:
             # reload 已保留旧 active 和真实失败状态；本次失败不能终止后续文件修复的监听。
             logger.exception("Gateway 配置 watcher reload 失败，继续监听后续修改")
-    async def reload(self) -> None:
+    async def reload(
+        self, *, before_build: Callable[[], bool] | None = None,
+        idempotency_key: str | None = None, source_edit: dict[str, object] | None = None,
+    ) -> None:
+        async with self._reload_lock:
+            if before_build is not None and not before_build():
+                return
+            await self._reload_candidate(idempotency_key=idempotency_key, source_edit=source_edit)
+
+    async def _reload_candidate(
+        self, *, idempotency_key: str | None, source_edit: dict[str, object] | None,
+    ) -> None:
+        service = cast("GatewayConfigReloadService", self)
         now = datetime.now(UTC)
         reported_error: Exception | None = None
         error_detail: str | None = None
@@ -295,10 +313,23 @@ class ReloadLifecycleMixin:
             candidate = load_gateway_config(
                 config_path=self._config_path,
                 local_config_path=self._local_config_path,
+                inline_config_path=self._config.source_paths[0],
                 schema_path=self._schema_path,
                 state_store=self._state_store,
             )
+            if source_edit is None:
+                saved = service._saved_source_edit_candidate(candidate)
+                if saved is not None:
+                    # 已执行或需要恢复的原候选只查询，不重复进入 applier。
+                    if saved.state != "candidate_validated":
+                        return
+                    idempotency_key, source_edit = saved.idempotency_key, saved.source_edit
             if candidate.revision == self._config.revision:
+                if source_edit is not None:
+                    pending = service._prepare_candidate(candidate, idempotency_key=idempotency_key, source_edit=source_edit)
+                    self._state_store.complete_unchanged_config_candidate(
+                        config_domain=self._CONFIG_DOMAIN, candidate_id=pending.candidate_id,
+                    )
                 self._status = replace(
                     self._status,
                     healthy=True,
@@ -319,7 +350,7 @@ class ReloadLifecycleMixin:
             payload = prepare_config_for_persistence(candidate.payload)
             if not isinstance(payload, dict):
                 raise TypeError("Gateway 脱敏 candidate payload 必须是对象")
-            candidate_id = f"candidate_{source_generation}_{candidate.revision}"
+            candidate_id, _ = service._candidate_identity(candidate, idempotency_key, source_edit)
             # 已发布的重启意图由 retry/discard/proof 处理，文件重复观察不能重新接纳、
             # 覆写失败正文或续发 token。来源真正变化后会得到新的 candidate_id。
             if self._state_store.get_gateway_restart_intent(
@@ -327,21 +358,8 @@ class ReloadLifecycleMixin:
             ) is not None:
                 return
             active = self._state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
-            pending = self._state_store.create_pending_config_candidate(
-                config_domain=self._CONFIG_DOMAIN,
-                candidate_id=candidate_id,
-                idempotency_key=f"reload:{source_generation}:{candidate.revision}",
-                payload=payload,
-                source_baseline=baseline,
-                candidate_digest=candidate.revision,
-                effective_digest=candidate.revision,
-                target_generation="gateway-runtime",
-                fencing_token=None,
-                state="candidate_validated",
-                base_active_revision=(
-                    active.active_revision if active is not None else None
-                ),
-                source_generation=source_generation,
+            pending = service._prepare_candidate(
+                candidate, idempotency_key=idempotency_key, source_edit=source_edit,
             )
             attempt_id = new_config_id("attempt")
             apply_id = new_config_id("apply")

@@ -179,6 +179,8 @@ capability discovery 只读取版本与实际已支持服务，不启动 Agent�
 
 原单 workspace API 对来源层的 SQLite 物化语义保持不变；“编辑来源文件”是明确选中 source 的操作，由新增原 owner writer 做文件 CAS／原子写入后再沿原导入链处理，用户级来源沿既有 fan-out。不能让一次 runtime／SQLite 更新顺带回写 JSONC，也不能把来源文件编辑伪装成已经同时激活全部工作区。入口与结果明确是来源正文写入、层物化还是 active 生效，避免引入双写事实源。
 
+Gateway 来源编辑的预检和保存要求连接具有稳定身份。缺少 `connection_id` 的既有条目只从原 connection ID owner 只读复用可明确匹配的身份；真正新增或不能明确匹配的条目返回 409，指出位置并要求显式提供 ID，不按数组位置借用其它连接的身份。该输入边界仅适用于新增 source writer；原文件 loader 对已支持旧配置的 ID 分配和迁移行为保持。writer 不兼作版本迁移入口：若 v1 缺 ID 会使原 loader 另行改写来源文件，预检和保存先明确要求沿原迁移入口处理或补齐 ID。预检不创建迁移记录、备份、ID 或来源导入事实，也不另建预览 token／身份账本。
+
 设置搜索与 `@modified`、`@ext`、`@lang` 等原过滤器基于当前编辑器冻结的域、目标、来源层及实际注册 schema／扩展集合计算；切焦点不换搜索上下文。业务配置仅展示真实支持的过滤维度，不造虚假的扩展或语言归属；查询旧代际失效，不能把 A 的命中或修改标志显示为 B 的值。
 
 保持实际合并顺序：Gateway inline → user → user_local；Workspace inline → user → user_local → workspace，以及原系统已定义的 runtime override。对象递归合并、数组整体替换；不存在前端发明的第三套优先级。新增配置仍按 `config-file-conventions` 使用同族 JSONC／schema；仅当发生不兼容变更才递增版本并提供官方预览、备份和可恢复迁移，不为 UI 新增假版本。

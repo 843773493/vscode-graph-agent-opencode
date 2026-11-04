@@ -194,6 +194,71 @@ export interface GatewayConfigPendingDiscardRequest {
   expected_active_digest: string;
 }
 
+/** 文件、SQLite layer 与 active 为独立 CAS 基线，目标绑定原生 Gateway 与逻辑来源。 */
+export interface GatewayConfigSourceEditRequest {
+  gateway_id: string;
+  source_key: string;
+  jsonc: string;
+  base_file_digest: any | undefined;
+  base_layer_revision: any | undefined;
+  base_layer_digest: any | undefined;
+  expected_active_revision: any | undefined;
+  expected_active_digest: any | undefined;
+  idempotency_key: string;
+}
+
+export interface GatewayConfigSourceLayerViewDTO {
+  source_key: string;
+  layer: string;
+  precedence: number;
+  writable: boolean;
+  payload: { [key: string]: any } | undefined;
+}
+
+export interface GatewayConfigSourceOriginDTO {
+  path: string;
+  source_key: string;
+  shadowed_sources: string[];
+}
+
+export interface GatewayConfigSourceEditDTO {
+  idempotency_key: string;
+  candidate_id: string;
+  state: string;
+  file_digest: string;
+  source_saved: boolean;
+  layer_imported: boolean;
+}
+
+export interface GatewayConfigSourceDocumentDTO {
+  gateway_id: string;
+  source_key: string;
+  layer: string;
+  writable: boolean;
+  jsonc: string;
+  file_presence: string;
+  file_digest: any | undefined;
+  layer_revision: any | undefined;
+  layer_digest: any | undefined;
+  source_generation: any | undefined;
+  active_revision: any | undefined;
+  active_digest: any | undefined;
+  json_schema: { [key: string]: any } | undefined;
+  effective: { [key: string]: any } | undefined;
+  source_effective: { [key: string]: any } | undefined;
+  layers: GatewayConfigSourceLayerViewDTO[];
+  origins: GatewayConfigSourceOriginDTO[];
+  status: GatewayConfigReloadStatusDTO | undefined;
+  edit?: GatewayConfigSourceEditDTO | undefined;
+}
+
+export interface GatewayConfigSourcePreflightDTO {
+  document: GatewayConfigSourceDocumentDTO | undefined;
+  candidate: { [key: string]: any } | undefined;
+  candidate_digest: string;
+  changed_paths: string[];
+}
+
 export interface GatewayConfigEventDTO {
   event_seq: number;
   event_id: string;
@@ -2144,6 +2209,439 @@ export const GatewayConfigPendingDiscardRequest: MessageFns<GatewayConfigPending
     const message = createBaseGatewayConfigPendingDiscardRequest();
     message.expected_active_revision = object.expected_active_revision ?? 0;
     message.expected_active_digest = object.expected_active_digest ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayConfigSourceEditRequest(): GatewayConfigSourceEditRequest {
+  return {
+    gateway_id: "",
+    source_key: "",
+    jsonc: "",
+    base_file_digest: undefined,
+    base_layer_revision: undefined,
+    base_layer_digest: undefined,
+    expected_active_revision: undefined,
+    expected_active_digest: undefined,
+    idempotency_key: "",
+  };
+}
+
+export const GatewayConfigSourceEditRequest: MessageFns<GatewayConfigSourceEditRequest> = {
+  fromJSON(object: any): GatewayConfigSourceEditRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      jsonc: isSet(object.jsonc) ? globalThis.String(object.jsonc) : "",
+      base_file_digest: isSet(object?.base_file_digest) ? object.base_file_digest : undefined,
+      base_layer_revision: isSet(object?.base_layer_revision) ? object.base_layer_revision : undefined,
+      base_layer_digest: isSet(object?.base_layer_digest) ? object.base_layer_digest : undefined,
+      expected_active_revision: isSet(object?.expected_active_revision) ? object.expected_active_revision : undefined,
+      expected_active_digest: isSet(object?.expected_active_digest) ? object.expected_active_digest : undefined,
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+    };
+  },
+
+  toJSON(message: GatewayConfigSourceEditRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.jsonc !== "") {
+      obj.jsonc = message.jsonc;
+    }
+    if (message.base_file_digest !== undefined) {
+      obj.base_file_digest = message.base_file_digest;
+    }
+    if (message.base_layer_revision !== undefined) {
+      obj.base_layer_revision = message.base_layer_revision;
+    }
+    if (message.base_layer_digest !== undefined) {
+      obj.base_layer_digest = message.base_layer_digest;
+    }
+    if (message.expected_active_revision !== undefined) {
+      obj.expected_active_revision = message.expected_active_revision;
+    }
+    if (message.expected_active_digest !== undefined) {
+      obj.expected_active_digest = message.expected_active_digest;
+    }
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigSourceEditRequest>, I>>(base?: I): GatewayConfigSourceEditRequest {
+    return GatewayConfigSourceEditRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigSourceEditRequest>, I>>(
+    object: I,
+  ): GatewayConfigSourceEditRequest {
+    const message = createBaseGatewayConfigSourceEditRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.source_key = object.source_key ?? "";
+    message.jsonc = object.jsonc ?? "";
+    message.base_file_digest = object.base_file_digest ?? undefined;
+    message.base_layer_revision = object.base_layer_revision ?? undefined;
+    message.base_layer_digest = object.base_layer_digest ?? undefined;
+    message.expected_active_revision = object.expected_active_revision ?? undefined;
+    message.expected_active_digest = object.expected_active_digest ?? undefined;
+    message.idempotency_key = object.idempotency_key ?? "";
+    return message;
+  },
+};
+
+function createBaseGatewayConfigSourceLayerViewDTO(): GatewayConfigSourceLayerViewDTO {
+  return { source_key: "", layer: "", precedence: 0, writable: false, payload: undefined };
+}
+
+export const GatewayConfigSourceLayerViewDTO: MessageFns<GatewayConfigSourceLayerViewDTO> = {
+  fromJSON(object: any): GatewayConfigSourceLayerViewDTO {
+    return {
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
+      precedence: isSet(object.precedence) ? globalThis.Number(object.precedence) : 0,
+      writable: isSet(object.writable) ? globalThis.Boolean(object.writable) : false,
+      payload: isObject(object.payload) ? object.payload : undefined,
+    };
+  },
+
+  toJSON(message: GatewayConfigSourceLayerViewDTO): unknown {
+    const obj: any = {};
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.layer !== "") {
+      obj.layer = message.layer;
+    }
+    if (message.precedence !== 0) {
+      obj.precedence = Math.round(message.precedence);
+    }
+    if (message.writable !== false) {
+      obj.writable = message.writable;
+    }
+    if (message.payload !== undefined) {
+      obj.payload = message.payload;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigSourceLayerViewDTO>, I>>(base?: I): GatewayConfigSourceLayerViewDTO {
+    return GatewayConfigSourceLayerViewDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigSourceLayerViewDTO>, I>>(
+    object: I,
+  ): GatewayConfigSourceLayerViewDTO {
+    const message = createBaseGatewayConfigSourceLayerViewDTO();
+    message.source_key = object.source_key ?? "";
+    message.layer = object.layer ?? "";
+    message.precedence = object.precedence ?? 0;
+    message.writable = object.writable ?? false;
+    message.payload = object.payload ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayConfigSourceOriginDTO(): GatewayConfigSourceOriginDTO {
+  return { path: "", source_key: "", shadowed_sources: [] };
+}
+
+export const GatewayConfigSourceOriginDTO: MessageFns<GatewayConfigSourceOriginDTO> = {
+  fromJSON(object: any): GatewayConfigSourceOriginDTO {
+    return {
+      path: isSet(object.path) ? globalThis.String(object.path) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      shadowed_sources: globalThis.Array.isArray(object?.shadowed_sources)
+        ? object.shadowed_sources.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewayConfigSourceOriginDTO): unknown {
+    const obj: any = {};
+    if (message.path !== "") {
+      obj.path = message.path;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.shadowed_sources?.length) {
+      obj.shadowed_sources = message.shadowed_sources;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigSourceOriginDTO>, I>>(base?: I): GatewayConfigSourceOriginDTO {
+    return GatewayConfigSourceOriginDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigSourceOriginDTO>, I>>(object: I): GatewayConfigSourceOriginDTO {
+    const message = createBaseGatewayConfigSourceOriginDTO();
+    message.path = object.path ?? "";
+    message.source_key = object.source_key ?? "";
+    message.shadowed_sources = object.shadowed_sources?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseGatewayConfigSourceEditDTO(): GatewayConfigSourceEditDTO {
+  return {
+    idempotency_key: "",
+    candidate_id: "",
+    state: "",
+    file_digest: "",
+    source_saved: false,
+    layer_imported: false,
+  };
+}
+
+export const GatewayConfigSourceEditDTO: MessageFns<GatewayConfigSourceEditDTO> = {
+  fromJSON(object: any): GatewayConfigSourceEditDTO {
+    return {
+      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : "",
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      file_digest: isSet(object.file_digest) ? globalThis.String(object.file_digest) : "",
+      source_saved: isSet(object.source_saved) ? globalThis.Boolean(object.source_saved) : false,
+      layer_imported: isSet(object.layer_imported) ? globalThis.Boolean(object.layer_imported) : false,
+    };
+  },
+
+  toJSON(message: GatewayConfigSourceEditDTO): unknown {
+    const obj: any = {};
+    if (message.idempotency_key !== "") {
+      obj.idempotency_key = message.idempotency_key;
+    }
+    if (message.candidate_id !== "") {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.file_digest !== "") {
+      obj.file_digest = message.file_digest;
+    }
+    if (message.source_saved !== false) {
+      obj.source_saved = message.source_saved;
+    }
+    if (message.layer_imported !== false) {
+      obj.layer_imported = message.layer_imported;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigSourceEditDTO>, I>>(base?: I): GatewayConfigSourceEditDTO {
+    return GatewayConfigSourceEditDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigSourceEditDTO>, I>>(object: I): GatewayConfigSourceEditDTO {
+    const message = createBaseGatewayConfigSourceEditDTO();
+    message.idempotency_key = object.idempotency_key ?? "";
+    message.candidate_id = object.candidate_id ?? "";
+    message.state = object.state ?? "";
+    message.file_digest = object.file_digest ?? "";
+    message.source_saved = object.source_saved ?? false;
+    message.layer_imported = object.layer_imported ?? false;
+    return message;
+  },
+};
+
+function createBaseGatewayConfigSourceDocumentDTO(): GatewayConfigSourceDocumentDTO {
+  return {
+    gateway_id: "",
+    source_key: "",
+    layer: "",
+    writable: false,
+    jsonc: "",
+    file_presence: "",
+    file_digest: undefined,
+    layer_revision: undefined,
+    layer_digest: undefined,
+    source_generation: undefined,
+    active_revision: undefined,
+    active_digest: undefined,
+    json_schema: undefined,
+    effective: undefined,
+    source_effective: undefined,
+    layers: [],
+    origins: [],
+    status: undefined,
+    edit: undefined,
+  };
+}
+
+export const GatewayConfigSourceDocumentDTO: MessageFns<GatewayConfigSourceDocumentDTO> = {
+  fromJSON(object: any): GatewayConfigSourceDocumentDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      layer: isSet(object.layer) ? globalThis.String(object.layer) : "",
+      writable: isSet(object.writable) ? globalThis.Boolean(object.writable) : false,
+      jsonc: isSet(object.jsonc) ? globalThis.String(object.jsonc) : "",
+      file_presence: isSet(object.file_presence) ? globalThis.String(object.file_presence) : "",
+      file_digest: isSet(object?.file_digest) ? object.file_digest : undefined,
+      layer_revision: isSet(object?.layer_revision) ? object.layer_revision : undefined,
+      layer_digest: isSet(object?.layer_digest) ? object.layer_digest : undefined,
+      source_generation: isSet(object?.source_generation) ? object.source_generation : undefined,
+      active_revision: isSet(object?.active_revision) ? object.active_revision : undefined,
+      active_digest: isSet(object?.active_digest) ? object.active_digest : undefined,
+      json_schema: isObject(object.json_schema) ? object.json_schema : undefined,
+      effective: isObject(object.effective) ? object.effective : undefined,
+      source_effective: isObject(object.source_effective) ? object.source_effective : undefined,
+      layers: globalThis.Array.isArray(object?.layers)
+        ? object.layers.map((e: any) => GatewayConfigSourceLayerViewDTO.fromJSON(e))
+        : [],
+      origins: globalThis.Array.isArray(object?.origins)
+        ? object.origins.map((e: any) => GatewayConfigSourceOriginDTO.fromJSON(e))
+        : [],
+      status: isSet(object.status) ? GatewayConfigReloadStatusDTO.fromJSON(object.status) : undefined,
+      edit: isSet(object.edit) ? GatewayConfigSourceEditDTO.fromJSON(object.edit) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayConfigSourceDocumentDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.layer !== "") {
+      obj.layer = message.layer;
+    }
+    if (message.writable !== false) {
+      obj.writable = message.writable;
+    }
+    if (message.jsonc !== "") {
+      obj.jsonc = message.jsonc;
+    }
+    if (message.file_presence !== "") {
+      obj.file_presence = message.file_presence;
+    }
+    if (message.file_digest !== undefined) {
+      obj.file_digest = message.file_digest;
+    }
+    if (message.layer_revision !== undefined) {
+      obj.layer_revision = message.layer_revision;
+    }
+    if (message.layer_digest !== undefined) {
+      obj.layer_digest = message.layer_digest;
+    }
+    if (message.source_generation !== undefined) {
+      obj.source_generation = message.source_generation;
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = message.active_revision;
+    }
+    if (message.active_digest !== undefined) {
+      obj.active_digest = message.active_digest;
+    }
+    if (message.json_schema !== undefined) {
+      obj.json_schema = message.json_schema;
+    }
+    if (message.effective !== undefined) {
+      obj.effective = message.effective;
+    }
+    if (message.source_effective !== undefined) {
+      obj.source_effective = message.source_effective;
+    }
+    if (message.layers?.length) {
+      obj.layers = message.layers.map((e) => GatewayConfigSourceLayerViewDTO.toJSON(e));
+    }
+    if (message.origins?.length) {
+      obj.origins = message.origins.map((e) => GatewayConfigSourceOriginDTO.toJSON(e));
+    }
+    if (message.status !== undefined) {
+      obj.status = GatewayConfigReloadStatusDTO.toJSON(message.status);
+    }
+    if (message.edit !== undefined) {
+      obj.edit = GatewayConfigSourceEditDTO.toJSON(message.edit);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigSourceDocumentDTO>, I>>(base?: I): GatewayConfigSourceDocumentDTO {
+    return GatewayConfigSourceDocumentDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigSourceDocumentDTO>, I>>(
+    object: I,
+  ): GatewayConfigSourceDocumentDTO {
+    const message = createBaseGatewayConfigSourceDocumentDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.source_key = object.source_key ?? "";
+    message.layer = object.layer ?? "";
+    message.writable = object.writable ?? false;
+    message.jsonc = object.jsonc ?? "";
+    message.file_presence = object.file_presence ?? "";
+    message.file_digest = object.file_digest ?? undefined;
+    message.layer_revision = object.layer_revision ?? undefined;
+    message.layer_digest = object.layer_digest ?? undefined;
+    message.source_generation = object.source_generation ?? undefined;
+    message.active_revision = object.active_revision ?? undefined;
+    message.active_digest = object.active_digest ?? undefined;
+    message.json_schema = object.json_schema ?? undefined;
+    message.effective = object.effective ?? undefined;
+    message.source_effective = object.source_effective ?? undefined;
+    message.layers = object.layers?.map((e) => GatewayConfigSourceLayerViewDTO.fromPartial(e)) || [];
+    message.origins = object.origins?.map((e) => GatewayConfigSourceOriginDTO.fromPartial(e)) || [];
+    message.status = (object.status !== undefined && object.status !== null)
+      ? GatewayConfigReloadStatusDTO.fromPartial(object.status)
+      : undefined;
+    message.edit = (object.edit !== undefined && object.edit !== null)
+      ? GatewayConfigSourceEditDTO.fromPartial(object.edit)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayConfigSourcePreflightDTO(): GatewayConfigSourcePreflightDTO {
+  return { document: undefined, candidate: undefined, candidate_digest: "", changed_paths: [] };
+}
+
+export const GatewayConfigSourcePreflightDTO: MessageFns<GatewayConfigSourcePreflightDTO> = {
+  fromJSON(object: any): GatewayConfigSourcePreflightDTO {
+    return {
+      document: isSet(object.document) ? GatewayConfigSourceDocumentDTO.fromJSON(object.document) : undefined,
+      candidate: isObject(object.candidate) ? object.candidate : undefined,
+      candidate_digest: isSet(object.candidate_digest) ? globalThis.String(object.candidate_digest) : "",
+      changed_paths: globalThis.Array.isArray(object?.changed_paths)
+        ? object.changed_paths.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewayConfigSourcePreflightDTO): unknown {
+    const obj: any = {};
+    if (message.document !== undefined) {
+      obj.document = GatewayConfigSourceDocumentDTO.toJSON(message.document);
+    }
+    if (message.candidate !== undefined) {
+      obj.candidate = message.candidate;
+    }
+    if (message.candidate_digest !== "") {
+      obj.candidate_digest = message.candidate_digest;
+    }
+    if (message.changed_paths?.length) {
+      obj.changed_paths = message.changed_paths;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayConfigSourcePreflightDTO>, I>>(base?: I): GatewayConfigSourcePreflightDTO {
+    return GatewayConfigSourcePreflightDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayConfigSourcePreflightDTO>, I>>(
+    object: I,
+  ): GatewayConfigSourcePreflightDTO {
+    const message = createBaseGatewayConfigSourcePreflightDTO();
+    message.document = (object.document !== undefined && object.document !== null)
+      ? GatewayConfigSourceDocumentDTO.fromPartial(object.document)
+      : undefined;
+    message.candidate = object.candidate ?? undefined;
+    message.candidate_digest = object.candidate_digest ?? "";
+    message.changed_paths = object.changed_paths?.map((e) => e) || [];
     return message;
   },
 };

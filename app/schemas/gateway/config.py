@@ -134,3 +134,69 @@ class GatewayConfigSourcesDTO(BaseModel):
     schema_uri: ConfigSourceURI
     sources: list[GatewayConfigSourceDTO] = Field(default_factory=list)
     policy_manifest: list[dict[str, object]] = Field(default_factory=list)
+
+
+class GatewayConfigSourceEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    gateway_id: str = Field(min_length=1)
+    source_key: str = Field(min_length=1)
+    jsonc: str
+    base_file_digest: str | None = Field(...)
+    base_layer_revision: int | None = Field(..., ge=0)
+    base_layer_digest: str | None = Field(...)
+    expected_active_revision: int | None = Field(..., ge=0)
+    expected_active_digest: str | None = Field(...)
+    idempotency_key: str = Field(min_length=1)
+
+
+class GatewayConfigSourceLayerViewDTO(BaseModel):
+    source_key: str
+    layer: ConfigSourceLayer
+    precedence: int
+    writable: bool
+    payload: dict[str, object]
+
+
+class GatewayConfigSourceOriginDTO(BaseModel):
+    path: str
+    source_key: str
+    shadowed_sources: list[str] = Field(default_factory=list)
+
+
+class GatewayConfigSourceEditDTO(BaseModel):
+    idempotency_key: str
+    candidate_id: str
+    state: str
+    file_digest: str
+    source_saved: bool
+    layer_imported: bool
+
+
+class GatewayConfigSourceDocumentDTO(BaseModel):
+    gateway_id: str
+    source_key: str
+    layer: ConfigSourceLayer
+    writable: bool
+    jsonc: str
+    file_presence: Literal["present", "absent"]
+    file_digest: str | None = None
+    layer_revision: int | None = None
+    layer_digest: str | None = None
+    source_generation: int | None = None
+    active_revision: int | None = None
+    active_digest: str | None = None
+    json_schema: dict[str, object]
+    effective: dict[str, object]
+    source_effective: dict[str, object]
+    layers: list[GatewayConfigSourceLayerViewDTO]
+    origins: list[GatewayConfigSourceOriginDTO]
+    status: GatewayConfigReloadStatusDTO
+    edit: GatewayConfigSourceEditDTO | None = None
+
+
+class GatewayConfigSourcePreflightDTO(BaseModel):
+    document: GatewayConfigSourceDocumentDTO
+    candidate: dict[str, object]
+    candidate_digest: str
+    changed_paths: list[str]

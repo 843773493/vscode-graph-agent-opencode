@@ -318,6 +318,122 @@ class GatewayConfigPendingDiscardRequest(_message.Message):
     expected_active_digest: str
     def __init__(self, expected_active_revision: _Optional[int] = ..., expected_active_digest: _Optional[str] = ...) -> None: ...
 
+class GatewayConfigSourceEditRequest(_message.Message):
+    __slots__ = ("gateway_id", "source_key", "jsonc", "base_file_digest", "base_layer_revision", "base_layer_digest", "expected_active_revision", "expected_active_digest", "idempotency_key")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    JSONC_FIELD_NUMBER: _ClassVar[int]
+    BASE_FILE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    BASE_LAYER_REVISION_FIELD_NUMBER: _ClassVar[int]
+    BASE_LAYER_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_ACTIVE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    source_key: str
+    jsonc: str
+    base_file_digest: _struct_pb2.Value
+    base_layer_revision: _struct_pb2.Value
+    base_layer_digest: _struct_pb2.Value
+    expected_active_revision: _struct_pb2.Value
+    expected_active_digest: _struct_pb2.Value
+    idempotency_key: str
+    def __init__(self, gateway_id: _Optional[str] = ..., source_key: _Optional[str] = ..., jsonc: _Optional[str] = ..., base_file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., base_layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., base_layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., expected_active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., expected_active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., idempotency_key: _Optional[str] = ...) -> None: ...
+
+class GatewayConfigSourceLayerViewDTO(_message.Message):
+    __slots__ = ("source_key", "layer", "precedence", "writable", "payload")
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    LAYER_FIELD_NUMBER: _ClassVar[int]
+    PRECEDENCE_FIELD_NUMBER: _ClassVar[int]
+    WRITABLE_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    source_key: str
+    layer: str
+    precedence: int
+    writable: bool
+    payload: _struct_pb2.Struct
+    def __init__(self, source_key: _Optional[str] = ..., layer: _Optional[str] = ..., precedence: _Optional[int] = ..., writable: _Optional[bool] = ..., payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class GatewayConfigSourceOriginDTO(_message.Message):
+    __slots__ = ("path", "source_key", "shadowed_sources")
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    SHADOWED_SOURCES_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    source_key: str
+    shadowed_sources: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, path: _Optional[str] = ..., source_key: _Optional[str] = ..., shadowed_sources: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class GatewayConfigSourceEditDTO(_message.Message):
+    __slots__ = ("idempotency_key", "candidate_id", "state", "file_digest", "source_saved", "layer_imported")
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    FILE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_SAVED_FIELD_NUMBER: _ClassVar[int]
+    LAYER_IMPORTED_FIELD_NUMBER: _ClassVar[int]
+    idempotency_key: str
+    candidate_id: str
+    state: str
+    file_digest: str
+    source_saved: bool
+    layer_imported: bool
+    def __init__(self, idempotency_key: _Optional[str] = ..., candidate_id: _Optional[str] = ..., state: _Optional[str] = ..., file_digest: _Optional[str] = ..., source_saved: _Optional[bool] = ..., layer_imported: _Optional[bool] = ...) -> None: ...
+
+class GatewayConfigSourceDocumentDTO(_message.Message):
+    __slots__ = ("gateway_id", "source_key", "layer", "writable", "jsonc", "file_presence", "file_digest", "layer_revision", "layer_digest", "source_generation", "active_revision", "active_digest", "json_schema", "effective", "source_effective", "layers", "origins", "status", "edit")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    LAYER_FIELD_NUMBER: _ClassVar[int]
+    WRITABLE_FIELD_NUMBER: _ClassVar[int]
+    JSONC_FIELD_NUMBER: _ClassVar[int]
+    FILE_PRESENCE_FIELD_NUMBER: _ClassVar[int]
+    FILE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    LAYER_REVISION_FIELD_NUMBER: _ClassVar[int]
+    LAYER_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    JSON_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    EFFECTIVE_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_EFFECTIVE_FIELD_NUMBER: _ClassVar[int]
+    LAYERS_FIELD_NUMBER: _ClassVar[int]
+    ORIGINS_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    EDIT_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    source_key: str
+    layer: str
+    writable: bool
+    jsonc: str
+    file_presence: str
+    file_digest: _struct_pb2.Value
+    layer_revision: _struct_pb2.Value
+    layer_digest: _struct_pb2.Value
+    source_generation: _struct_pb2.Value
+    active_revision: _struct_pb2.Value
+    active_digest: _struct_pb2.Value
+    json_schema: _struct_pb2.Struct
+    effective: _struct_pb2.Struct
+    source_effective: _struct_pb2.Struct
+    layers: _containers.RepeatedCompositeFieldContainer[GatewayConfigSourceLayerViewDTO]
+    origins: _containers.RepeatedCompositeFieldContainer[GatewayConfigSourceOriginDTO]
+    status: GatewayConfigReloadStatusDTO
+    edit: GatewayConfigSourceEditDTO
+    def __init__(self, gateway_id: _Optional[str] = ..., source_key: _Optional[str] = ..., layer: _Optional[str] = ..., writable: _Optional[bool] = ..., jsonc: _Optional[str] = ..., file_presence: _Optional[str] = ..., file_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., layer_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., source_generation: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_revision: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., active_digest: _Optional[_Union[_struct_pb2.Value, _Mapping]] = ..., json_schema: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., source_effective: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., layers: _Optional[_Iterable[_Union[GatewayConfigSourceLayerViewDTO, _Mapping]]] = ..., origins: _Optional[_Iterable[_Union[GatewayConfigSourceOriginDTO, _Mapping]]] = ..., status: _Optional[_Union[GatewayConfigReloadStatusDTO, _Mapping]] = ..., edit: _Optional[_Union[GatewayConfigSourceEditDTO, _Mapping]] = ...) -> None: ...
+
+class GatewayConfigSourcePreflightDTO(_message.Message):
+    __slots__ = ("document", "candidate", "candidate_digest", "changed_paths")
+    DOCUMENT_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    CHANGED_PATHS_FIELD_NUMBER: _ClassVar[int]
+    document: GatewayConfigSourceDocumentDTO
+    candidate: _struct_pb2.Struct
+    candidate_digest: str
+    changed_paths: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, document: _Optional[_Union[GatewayConfigSourceDocumentDTO, _Mapping]] = ..., candidate: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., candidate_digest: _Optional[str] = ..., changed_paths: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class GatewayConfigEventDTO(_message.Message):
     __slots__ = ("event_seq", "event_id", "config_domain", "candidate_id", "attempt_id", "apply_id", "idempotency_key", "commit_revision", "active_revision", "pending_revision", "source", "result", "activation_scope", "changed_paths", "applied_paths", "deferred_paths", "error", "occurred_at")
     EVENT_SEQ_FIELD_NUMBER: _ClassVar[int]

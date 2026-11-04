@@ -186,6 +186,71 @@ message GatewayConfigPendingDiscardRequest {
   string expected_active_digest = 2;
 }
 
+// 文件、SQLite layer 与 active 为独立 CAS 基线，目标绑定原生 Gateway 与逻辑来源。
+message GatewayConfigSourceEditRequest {
+  string gateway_id = 1;
+  string source_key = 2;
+  string jsonc = 3;
+  google.protobuf.Value base_file_digest = 4;
+  google.protobuf.Value base_layer_revision = 5;
+  google.protobuf.Value base_layer_digest = 6;
+  google.protobuf.Value expected_active_revision = 7;
+  google.protobuf.Value expected_active_digest = 8;
+  string idempotency_key = 9;
+}
+
+message GatewayConfigSourceLayerViewDTO {
+  string source_key = 1;
+  string layer = 2;
+  int64 precedence = 3;
+  bool writable = 4;
+  google.protobuf.Struct payload = 5;
+}
+
+message GatewayConfigSourceOriginDTO {
+  string path = 1;
+  string source_key = 2;
+  repeated string shadowed_sources = 3;
+}
+
+message GatewayConfigSourceEditDTO {
+  string idempotency_key = 1;
+  string candidate_id = 2;
+  string state = 3;
+  string file_digest = 4;
+  bool source_saved = 5;
+  bool layer_imported = 6;
+}
+
+message GatewayConfigSourceDocumentDTO {
+  string gateway_id = 1;
+  string source_key = 2;
+  string layer = 3;
+  bool writable = 4;
+  string jsonc = 5;
+  string file_presence = 6;
+  google.protobuf.Value file_digest = 7;
+  google.protobuf.Value layer_revision = 8;
+  google.protobuf.Value layer_digest = 9;
+  google.protobuf.Value source_generation = 10;
+  google.protobuf.Value active_revision = 11;
+  google.protobuf.Value active_digest = 12;
+  google.protobuf.Struct json_schema = 13;
+  google.protobuf.Struct effective = 14;
+  google.protobuf.Struct source_effective = 15;
+  repeated GatewayConfigSourceLayerViewDTO layers = 16;
+  repeated GatewayConfigSourceOriginDTO origins = 17;
+  GatewayConfigReloadStatusDTO status = 18;
+  optional GatewayConfigSourceEditDTO edit = 19;
+}
+
+message GatewayConfigSourcePreflightDTO {
+  GatewayConfigSourceDocumentDTO document = 1;
+  google.protobuf.Struct candidate = 2;
+  string candidate_digest = 3;
+  repeated string changed_paths = 4;
+}
+
 message GatewayConfigEventDTO {
   int64 event_seq = 1;
   string event_id = 2;
