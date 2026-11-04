@@ -478,7 +478,7 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_activation
     sealed_before = saver.list_context_assemblies(SESSION_ID, thread)
     assert len(sealed_before) == 1
     assembly_before = sealed_before[0]
-    detail_ref_before = storage.assemblies.get_context_assembly_detail_ref(
+    _, detail_ref_before = storage.assemblies.read_context_assembly(
         SESSION_ID, thread, assembly_id=assembly_before.assembly_id
     )
 
@@ -498,8 +498,8 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_activation
         == assembly_before
     )
     assert (
-        storage.assemblies.get_context_assembly_detail_ref(
+        storage.assemblies.read_context_assembly(
             SESSION_ID, thread, assembly_id=assembly_before.assembly_id
-        )
+        )[1]
         == detail_ref_before
     )

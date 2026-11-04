@@ -94,35 +94,26 @@ class ContextAssemblyReaderMixin:
         checkpoint_ns: str = "",
     ) -> ContextAssemblySnapshot:
         """读取已 sealed 的不可变 assembly snapshot。"""
-        return self._read_committed_assembly(
+        return self.read_context_assembly(
             session_id, thread_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
         )[0]
 
-    def get_context_assembly_detail_ref(
+    def read_context_assembly(
         self,
         session_id: str,
         thread_id: str,
         *,
         assembly_id: str,
         checkpoint_ns: str = "",
-    ) -> DetailRef | None:
-        """只返回同一只读快照中已验证的审计详情引用，不重新分配 locator。"""
-        return self._read_committed_assembly(
-            session_id, thread_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
-        )[1]
-
-    def _read_committed_assembly(
-        self,
-        session_id: str,
-        thread_id: str,
-        *,
-        assembly_id: str,
-        checkpoint_ns: str,
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> tuple[ContextAssemblySnapshot, DetailRef | None]:
+        """同次读取返回 assembly 与审计详情引用，可借用调用方的冻结快照。"""
         required_text(assembly_id, field="assembly_id")
-        with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+        with self._storage.read_connection(
+            session_id, thread_id, checkpoint_ns, snapshot=snapshot,
+        ) as connection:
             return self._read_context_assembly_connection(
-                snapshot.connection, session_id, thread_id,
+                connection, session_id, thread_id,
                 assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
             )
 

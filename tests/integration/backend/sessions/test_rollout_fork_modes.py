@@ -2487,12 +2487,12 @@ async def test_fork_first_provider_recompiles_typed_root_without_rewriting_impor
         ) == saver._storage.assemblies.get_context_plan_registration(
             source.session_id, thread_id=source_thread, plan_id=historical.plan_id,
         )
-        audit_ref = cold._storage.assemblies.get_context_assembly_detail_ref(
+        _, audit_ref = cold._storage.assemblies.read_context_assembly(
             target.session_id, target_thread, assembly_id=assembly_id,
         )
-        assert audit_ref == saver._storage.assemblies.get_context_assembly_detail_ref(
+        assert audit_ref == saver._storage.assemblies.read_context_assembly(
             source.session_id, source_thread, assembly_id=assembly_id,
-        )
+        )[1]
         sealed_details = tuple(
             entry.detail_ref for entry in historical.selection
             if entry.included and entry.detail_ref is not None

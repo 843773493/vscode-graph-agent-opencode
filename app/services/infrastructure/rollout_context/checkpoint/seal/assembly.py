@@ -233,59 +233,53 @@ def seal_snapshot(
             raise ValueError(
                 "assembly-idempotency-conflict: snapshot seal key/input 不一致"
             )
-        committed = owner._storage.assemblies.get_context_assembly(
-            session_id,
-            thread_id,
-            assembly_id=registered.assembly_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-        if canonical_json_bytes(committed.to_dict()) != canonical_json_bytes(
-            snapshot.to_dict()
-        ):
-            raise ValueError(
-                "assembly-idempotency-conflict: snapshot 与已提交 assembly 不一致"
+        # assembly、审计引用与 detail manifest 共用本次 fresh 快照，避免为同一
+        # 重试逐层重开快照、反复全扫历史；正文仍实际读取并检查权限及 manifest。
+        with owner._storage.storage.open_read_snapshot(
+            session_id, thread_id, checkpoint_ns,
+        ) as read_snapshot:
+            committed, detail_ref = owner._storage.assemblies.read_context_assembly(
+                session_id, thread_id, assembly_id=registered.assembly_id,
+                checkpoint_ns=checkpoint_ns, snapshot=read_snapshot,
             )
-        detail_ref = owner._storage.assemblies.get_context_assembly_detail_ref(
-            session_id,
-            thread_id,
-            assembly_id=committed.assembly_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-        if (detail is None) != (detail_ref is None):
-            raise ValueError(
-                "assembly-idempotency-conflict: 重试 header detail 存在性不一致"
-            )
-        if detail_ref is not None:
-            record = detail_record_from_mapping(
-                owner._storage.assemblies.get_context_plan_detail(
-                    session_id,
-                    thread_id,
-                    detail_ref=detail_ref,
-                    checkpoint_ns=checkpoint_ns,
-                )
-            )
-            if record.required != required_detail or record.sensitive != sensitive_detail:
-                raise ValueError(
-                    "assembly-idempotency-conflict: 重试 header detail manifest 不一致"
-                )
-            canonical_detail_bytes, detail_hash = canonical_json_bytes_and_hash(detail)
-            if (
-                record.source_revision != detail_hash
-                or record.length != len(canonical_detail_bytes)
+            if canonical_json_bytes(committed.to_dict()) != canonical_json_bytes(
+                snapshot.to_dict()
             ):
                 raise ValueError(
-                    "assembly-idempotency-conflict: 重试 header detail manifest 不一致"
+                    "assembly-idempotency-conflict: snapshot 与已提交 assembly 不一致"
                 )
-            owner.read_context_plan_detail(
-                session_id,
-                thread_id,
-                detail_ref=detail_ref,
-                checkpoint_ns=checkpoint_ns,
-            )
-        elif required_detail or sensitive_detail:
-            raise ValueError(
-                "assembly-idempotency-conflict: 无正文的 header detail flags 不一致"
-            )
+            if (detail is None) != (detail_ref is None):
+                raise ValueError(
+                    "assembly-idempotency-conflict: 重试 header detail 存在性不一致"
+                )
+            if detail_ref is not None:
+                record = detail_record_from_mapping(
+                    owner._storage.assemblies.get_context_plan_detail(
+                        session_id, thread_id, detail_ref=detail_ref,
+                        checkpoint_ns=checkpoint_ns, snapshot=read_snapshot,
+                    )
+                )
+                if record.required != required_detail or record.sensitive != sensitive_detail:
+                    raise ValueError(
+                        "assembly-idempotency-conflict: 重试 header detail manifest 不一致"
+                    )
+                canonical_detail_bytes, detail_hash = canonical_json_bytes_and_hash(detail)
+                if (
+                    record.source_revision != detail_hash
+                    or record.length != len(canonical_detail_bytes)
+                ):
+                    raise ValueError(
+                        "assembly-idempotency-conflict: 重试 header detail manifest 不一致"
+                    )
+                owner._detail_store.read(
+                    session_id=session_id, thread_id=thread_id, record=record,
+                    snapshot=read_snapshot,
+                )
+            elif required_detail or sensitive_detail:
+                raise ValueError(
+                    "assembly-idempotency-conflict: 无正文的 header detail flags 不一致"
+                )
+        # 释放读锁后再进入既有 seal 写事务；写入方仍独立核验当前提交事实。
         return owner._storage.assemblies.seal_context_assembly(
             session_id,
             thread_id,

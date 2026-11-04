@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import replace
 
 import pytest
@@ -16,6 +17,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
+)
+from app.services.infrastructure.rollout_context.runtime.detail_store import (
+    DetailUnavailableError,
 )
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     _project,
@@ -34,6 +38,105 @@ from tests.integration.backend.sessions.rollout_context.test_schema4_checkpoint_
 )
 
 EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+
+
+@pytest.fixture
+def sealed_snapshot_retry(registry_db):
+    saver, session, _connection, accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+
+    def create(*, with_detail=True, sensitive=False):
+        plan = saver.create_context_plan(session, ContextRequestPlan(
+            session_id=session, thread_id=thread, plan_id="snapshot-read-once",
+            refs=(), plan_creation_idempotency_key="snapshot-read-once:create",
+        )).draft
+        snapshot = ContextPlanComposer().assembly(
+            plan=plan, session_id=session, thread_id=thread,
+            assembly_id="snapshot-read-once:assembly", turn_id=accepted["turn_id"],
+            execution_id=accepted["initial_execution_id"], provider_version="header-provider",
+        )
+        options = {
+            "seal_idempotency_key": "snapshot-read-once:seal",
+            "seal_input_hash": sha256_jcs("snapshot-read-once:input"),
+            "detail": {"audit": "original"} if with_detail else None,
+            "required_detail": with_detail,
+            "sensitive_detail": sensitive,
+        }
+        commit = saver.seal_context_assembly(session, thread, snapshot, **options)
+        return snapshot, options, commit
+
+    return create
+
+
+@pytest.mark.parametrize("with_detail", [False, True])
+@pytest.mark.parametrize("restart", [False, True])
+def test_snapshot_retry_reads_assembly_and_detail_in_one_fresh_authority_snapshot(
+    registry_db, sealed_snapshot_retry, monkeypatch, with_detail, restart,
+):
+    saver, session, connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    snapshot, options, commit = sealed_snapshot_retry(with_detail=with_detail)
+    before = _state(saver, session, connection)
+    with (RolloutCheckpointSaver(saver._detail_store.sessions_dir) if restart else nullcontext(saver)) as reader:
+        audits = []
+        maintenance = reader._storage.storage._maintenance_owner
+        validate = maintenance._validate_v2_commit_offsets
+
+        def observe(*args, **kwargs):
+            audits.append(kwargs.get("validate_jsonl_items", True))
+            return validate(*args, **kwargs)
+
+        monkeypatch.setattr(maintenance, "_validate_v2_commit_offsets", observe)
+        monkeypatch.setattr(reader._detail_store, "prepare", _no_allocation)
+        for attempt in range(2):
+            assert reader.seal_context_assembly(session, thread, snapshot, **options) == commit
+            # 注册读取、assembly/detail 的同次读取、写前恢复各一次，后续重试仍 fresh。
+            print(f"snapshot retry audits: detail={with_detail}, restart={restart}, attempt={attempt}, audits={audits}")
+            assert audits == [False, False, True] * (attempt + 1)
+    assert _state(saver, session, connection) == before
+
+
+@pytest.mark.parametrize("damage", ["body", "manifest", "flags", "sensitive"])
+def test_snapshot_retry_still_revalidates_detail_and_permissions_after_success(
+    registry_db, sealed_snapshot_retry, damage,
+):
+    saver, session, connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    snapshot, options, commit = sealed_snapshot_retry(sensitive=damage == "sensitive")
+    if damage == "sensitive":
+        before = _state(saver, session, connection)
+        with pytest.raises(PermissionError, match="未授权读取"):
+            saver.seal_context_assembly(session, thread, snapshot, **options)
+    else:
+        assert saver.seal_context_assembly(session, thread, snapshot, **options) == commit
+        _, detail_ref = saver._storage.assemblies.read_context_assembly(
+            session, thread, assembly_id=snapshot.assembly_id,
+        )
+        if damage == "body":
+            path = saver._detail_store._files.path(detail_ref)
+            assert path is not None
+            raw = path.read_bytes()
+            changed = raw.replace(b'"audit":"original"', b'"audit":"modified"')
+            assert changed != raw and len(changed) == len(raw)
+            path.write_bytes(changed)
+        elif damage == "manifest":
+            connection.execute("UPDATE context_plan_details SET sensitive=1")
+            connection.commit()
+        else:
+            connection.execute("UPDATE context_plan_details SET required=0")
+            connection.commit()
+        before = _state(saver, session, connection)
+        error_type = ValueError if damage == "flags" else DetailUnavailableError
+        message = {
+            "body": "content manifest hash/length 不一致",
+            "manifest": "sensitive 与 protection 不一致",
+            "flags": "重试 header detail manifest 不一致",
+        }[damage]
+        with pytest.raises(error_type, match=message):
+            saver.seal_context_assembly(session, thread, snapshot, **options)
+        if damage == "body":
+            assert path.read_bytes() == changed
+    assert _state(saver, session, connection) == before
 
 
 def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(registry_db):
@@ -214,7 +317,7 @@ def test_header_detail_survives_committed_response_loss_and_restart(
         saver.seal_context_assembly(
             session, saver._storage.storage.main_thread_id(session), snapshot, **options
         )
-    detail = saver._storage.assemblies.get_context_assembly_detail_ref(
+    _, detail = saver._storage.assemblies.read_context_assembly(
         session,
         saver._storage.storage.main_thread_id(session),
         assembly_id=snapshot.assembly_id,
