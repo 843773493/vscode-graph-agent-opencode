@@ -75,21 +75,17 @@ class DetailFiles:
         self, ref: DetailRef, *, create: bool = False,
         creation_record: SessionCreationRecord | None = None,
         storage_owner: tuple[str, str] | None = None,
+        snapshot: RolloutReadSnapshot | None = None,
     ) -> Path | None:
-        relative = detail_relative_path(ref)
         owner_session, owner_thread = storage_owner or (ref.session_id, ref.thread_id)
+        if snapshot is not None:
+            if snapshot.closed:
+                raise RuntimeError("rollout read snapshot 已关闭")
+            if (snapshot.session_id, snapshot.thread_id) != (owner_session, owner_thread):
+                raise ValueError("read snapshot 与 detail 目标 owner 不一致")
+        relative = detail_relative_path(ref)
         if create or creation_record is not None:
             ref.require_owner(owner_session, owner_thread)
-        elif (ref.session_id, ref.thread_id) != (owner_session, owner_thread):
-            index_path = (
-                self._resolver.resolve_thread_node(owner_session, owner_thread)
-                / "rollout" / "index.sqlite"
-            )
-            with closing(sqlite3.connect(sqlite_file_uri(index_path) + "?mode=ro", uri=True)) as connection:
-                require_historical_scope(
-                    connection, ref.session_id, ref.thread_id,
-                    current_owner=(owner_session, owner_thread),
-                )
         if creation_record is not None and creation_record.session_id != ref.session_id:
             raise ValueError("source-mismatch: detail 与 prepared Session creation owner 不一致")
         root = (
@@ -98,6 +94,18 @@ class DetailFiles:
                 creation_record, ref.thread_id,
             )
         )
+        if (ref.session_id, ref.thread_id) != (owner_session, owner_thread):
+            # 历史授权与物理路径共用一次 locator 解析；有快照时借用同一读取事务。
+            # 归属仍逐份核验，不再由 read 和 path 各开连接重复检查。
+            with (
+                nullcontext(snapshot.connection) if snapshot is not None else closing(
+                    sqlite3.connect(sqlite_file_uri(root / "rollout" / "index.sqlite") + "?mode=ro", uri=True)
+                )
+            ) as connection:
+                require_historical_scope(
+                    connection, ref.session_id, ref.thread_id,
+                    current_owner=(owner_session, owner_thread),
+                )
         # locator 与 typed identity 保持原文，只在物理 I/O owner 扩展 Windows 路径。
         root = native_io_path(root)
         root_info = self._info(ref, root)
@@ -134,25 +142,7 @@ class DetailFiles:
         snapshot: RolloutReadSnapshot | None = None,
     ) -> bytes:
         """历史 ref 保留原值；只从已授权的当前物理节点读取冻结正文。"""
-        owner = (session_id, thread_id)
-        if snapshot is not None:
-            if snapshot.closed:
-                raise RuntimeError("rollout read snapshot 已关闭")
-            if (snapshot.session_id, snapshot.thread_id) != owner:
-                raise ValueError("read snapshot 与 detail 目标 owner 不一致")
-        if (ref.session_id, ref.thread_id) != owner:
-            with (
-                nullcontext(snapshot.connection) if snapshot is not None else closing(
-                    sqlite3.connect(
-                        sqlite_file_uri(self._resolver.resolve_thread_node(*owner) / "rollout" / "index.sqlite") + "?mode=ro",
-                        uri=True,
-                    )
-                )
-            ) as connection:
-                require_historical_scope(
-                    connection, ref.session_id, ref.thread_id, current_owner=owner,
-                )
-        target = self.path(ref, storage_owner=owner)
+        target = self.path(ref, storage_owner=(session_id, thread_id), snapshot=snapshot)
         if target is None:
             raise DetailUnavailableError(f"assembly detail 正文缺失: {ref.detail_id}")
         with self._path_access(ref, target, stage="read"):

@@ -19,6 +19,7 @@ from app.domain.itemized.plans.contributions import ContextContribution, SourceB
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime import detail_files
 from app.services.infrastructure.rollout_context.runtime.context_sources.source_observation import (
     SourceObservation,
     build_source_lifecycle_decision,
@@ -31,7 +32,7 @@ from tests.unit.services.infrastructure.rollout_context.conftest import SourceSe
 
 @pytest.mark.asyncio
 async def test_extensions_preserve_typed_controls_through_seal_fork_and_cold_read(
-    source_seal_case: SourceSealCase, session_bundle_factory, fork_deadlines,
+    source_seal_case: SourceSealCase, session_bundle_factory, fork_deadlines, monkeypatch,
 ):
     case = source_seal_case
     saver, owner = case.saver, case.owner
@@ -138,6 +139,71 @@ async def test_extensions_preserve_typed_controls_through_seal_fork_and_cold_rea
         assert restored.session_id == session and restored.thread_id == thread
         (registry_row,) = restarted._storage.assemblies.list_context_contributions(target, target_thread)
         assert registry_row["source_ordinal"] == 0
+        files = restarted._detail_store._files
+        original_read = files.read
+        original_resolve = files._resolver.resolve_thread_node
+        original_connect = detail_files.sqlite3.connect
+        original_scope = detail_files.require_historical_scope
+        calls, active = [], []
+
+        def observe_read(*args, **kwargs):
+            call = {"snapshot": kwargs.get("snapshot"), "resolves": 0, "connections": 0, "scopes": []}
+            calls.append(call)
+            active.append(call)
+            try:
+                call["raw"] = original_read(*args, **kwargs)
+                return call["raw"]
+            finally:
+                active.pop()
+
+        def observe_resolve(*args, **kwargs):
+            if active:
+                active[-1]["resolves"] += 1
+            return original_resolve(*args, **kwargs)
+
+        def observe_connect(*args, **kwargs):
+            # locator 本身还会核验 catalog/control；只计本次重复的 rollout 索引连接。
+            if active and "/rollout/index.sqlite" in str(args[0]).replace("\\", "/"):
+                active[-1]["connections"] += 1
+            return original_connect(*args, **kwargs)
+
+        def observe_scope(connection, *args, **kwargs):
+            if active:
+                active[-1]["scopes"].append(connection)
+            return original_scope(connection, *args, **kwargs)
+
+        monkeypatch.setattr(files, "read", observe_read)
+        monkeypatch.setattr(files._resolver, "resolve_thread_node", observe_resolve)
+        monkeypatch.setattr(detail_files.sqlite3, "connect", observe_connect)
+        monkeypatch.setattr(detail_files, "require_historical_scope", observe_scope)
         bodies = restarted._request_content_for_plan(target, target_thread, "", restored.as_sealed_plan(), None)
         assert bodies[contribution.contribution_id] == contribution.body
+        raw = files.read(selected.detail_ref, session_id=target, thread_id=target_thread)
+        assert raw == calls[0]["raw"]
+        borrowed = calls[0]["snapshot"]
+        assert borrowed is not None and borrowed.closed
+        with pytest.raises(RuntimeError, match="snapshot 已关闭"):
+            files.read(selected.detail_ref, session_id=target, thread_id=target_thread, snapshot=borrowed)
+        with restarted._storage.storage.open_read_snapshot(target, target_thread) as read_snapshot:
+            with pytest.raises(ValueError, match="snapshot 与 detail 目标 owner 不一致"):
+                files.read(selected.detail_ref, session_id=session, thread_id=thread, snapshot=read_snapshot)
+            with pytest.raises(ValueError, match="历史 SessionThread 不属于目标本地冻结 snapshot"):
+                files.read(
+                    replace(selected.detail_ref, session_id=create_prefixed_id("ses")),
+                    session_id=target, thread_id=target_thread, snapshot=read_snapshot,
+                )
+        measurements = [
+            {"snapshot": call["snapshot"] is not None, "resolves": call["resolves"],
+             "connections": call["connections"], "scopes": len(call["scopes"])}
+            for call in calls
+        ]
+        print(f"inherited detail read work: {measurements}")
+        assert measurements == [
+            {"snapshot": True, "resolves": 1, "connections": 0, "scopes": 1},
+            {"snapshot": False, "resolves": 1, "connections": 1, "scopes": 1},
+            {"snapshot": True, "resolves": 0, "connections": 0, "scopes": 0},
+            {"snapshot": True, "resolves": 0, "connections": 0, "scopes": 0},
+            {"snapshot": True, "resolves": 1, "connections": 0, "scopes": 1},
+        ]
+        assert calls[0]["scopes"] == [borrowed.connection]
     assert jsonl.read_bytes() == before
