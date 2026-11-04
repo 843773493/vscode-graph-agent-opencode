@@ -7,7 +7,7 @@
 
 ## 2. 原生 Gateway 登记与本地请求链
 
-- [ ] 2.1 将本地工作区登记、唯一 root binding、活动选择和路由键迁为工作区 UUID 与 Gateway 归属，保持 owner／租约／registry revision CAS。
+- [x] 2.1 将本地工作区登记、唯一 root binding、活动选择和路由键迁为工作区 UUID 与 Gateway 归属，保持 owner／租约／registry revision CAS。
 - [x] 2.2 迁齐本地管理和业务代理的工作区定位，统一路径与头部 UUID，拒绝冲突及错误归属，保留原 request ID 和管理授权。
 - [ ] 2.3 同步协议 descriptor／proto、公开 DTO、生成映射与校验、OpenAPI 和 SDK；更新破坏性协议版本，执行生成产物一致性检查和受影响类型检查。
 - [x] 2.4 通过真实注册和 HTTP／URI 文件入口验证各层 UUID 相同、两工作区隔离、相同 UUID 不同根冲突及未授权根管理拒绝。
@@ -159,3 +159,9 @@
 
 - 导航最终短检查 51 passed／2.76 秒；URI 业务归属复用既有 Gateway ID 校验，非法归属在 owner／RPC／租约前明确 400，合法未登记归属仍 404，已登记远端共享 UUID 继续成功。首次真实导航的非法 authority 500 原件保留；修复后完整主集成 1 passed／74.77 秒，覆盖真实双工作区注册激活、工具结果 URI、Session 删除隔离与失败修复，源码首尾一致。原件 `out/tests/temp/identity_resource_navigation_current/artifacts/navigation-owner-fixed-integration-1793824974306682510.*`；本场景不包含真实模型执行。
 - 最后路由消费者补验及独立十文件差异复核完成；导航生产 Pyright 零诊断，两测试保留 11 条与改前比较无新增的存量诊断。身份 OpenSpec strict 退出 0。最终源码指纹与准确命令索引在 `identity_file_proxy_current/artifacts/final-evidence-index.json`，独立复核原件在 `identity_proxy_admission_current/artifacts/identity-ten-owned-review-index-1793825005852749713.json`。
+
+### 2026-11-04：2.1 登记身份与冷恢复收口
+
+- 冷恢复在构造新建对象前要求持久 owner、namespace、generation 和连接集合真实存在；generation 非字符串在原准入入口拒绝，缺件不再被新建默认值替代。新建、owner 授权、root binding、revision CAS 和租约仍沿唯一登记链路。
+- 身份恢复 53 项、健康／查找 100 项通过；本地登记／根／owner 与恢复集中检查 129 passed，另一个配置迁移重入用例失败单独处理，不算本项成功。真实 Gateway 经产品注册、激活后重启恢复 1 passed／107.80 秒，源码首尾一致；复合活动归属、原错误 cause、JSON／SQLite 原件和租约断言保留，独立六文件只读复核未发现问题。
+- 准确命令与原始结果在 `out/tests/temp/identity_registry_recovery_root/artifacts/`、`identity_registry_recovery_current/artifacts/`、`identity_registry_read_consumers_current/artifacts/`。Root 四文件 Pyright 完整 HEAD 基线／当前 108／108、Ruff 1／1，均无新增诊断；代理三测试静态零诊断。未将该证据扩展为 Windows、真实远端、客户端或完整 6.3／6.4 验收。

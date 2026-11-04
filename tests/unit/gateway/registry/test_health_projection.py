@@ -1,9 +1,9 @@
 """Backend 列表健康投影、并发快照与原生错误边界。"""
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import httpx
@@ -17,7 +17,9 @@ from app.gateway.auth import verify_gateway_token
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes import workspaces
-from tests.support.gateway_managed_backends import ProcessProbe
+from tests.support.gateway_managed_backends import ManagedBackendGraph, ProcessProbe
+
+LOCAL_GATEWAY_ID = "gateway_" + "1" * 32
 
 
 @pytest.fixture
@@ -27,13 +29,16 @@ def health_registry_state(tmp_path: Path) -> Iterator[GatewayStateStore]:
 
 
 @pytest.fixture
-def backend_dto_case(tmp_path: Path, managed_backend_factory, health_registry_state: GatewayStateStore):
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "dto-gateway.json", state_store=health_registry_state)
+def backend_dto_case(
+    tmp_path: Path, managed_backend_factory: Callable[..., ManagedBackendGraph],
+    health_registry_state: GatewayStateStore,
+) -> Iterator[tuple[GatewayWorkspaceRegistry, ManagedBackendGraph]]:
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "dto-gateway.json", state_store=health_registry_state, gateway_id=LOCAL_GATEWAY_ID)
     targets = tuple(WorkspaceTarget(
-        workspace_id=f"dto-member-{index}", name=f"DTO {index}",
+        gateway_id=registry.gateway_id,
+        workspace_id=f"00000000-0000-4000-8000-{index + 1:012d}", name=f"DTO {index}",
         root_path=str(tmp_path / str(index)), backend_url="http://127.0.0.1:41000",
         connection_kind="local", managed=True,
-        backend_workspace_id=f"00000000-0000-4000-8000-{index + 1:012d}",
     ) for index in range(2))
     for target in targets:
         registry.upsert(target, activate=False)
@@ -49,44 +54,60 @@ def backend_dto_case(tmp_path: Path, managed_backend_factory, health_registry_st
 async def test_external_registered_route_is_discoverable_without_health_requests(
     tmp_path: Path, health_registry_state: GatewayStateStore, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "external-gateway.json", state_store=health_registry_state)
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "external-gateway.json", state_store=health_registry_state, gateway_id=LOCAL_GATEWAY_ID)
     client_type = httpx.AsyncClient
+    requests: list[httpx.Request] = []
 
     def unexpected_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         raise AssertionError(f"不检查健康的列表不应发请求: {request.url}")
 
     monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
         **options, transport=httpx.MockTransport(unexpected_request),
     ))
     try:
-        for workspace, backend, workspace_uuid in (
-            ("external", "http://127.0.0.1:41000", "00000000-0000-4000-8000-000000000001"),
-            ("unconnected", "", "00000000-0000-4000-8000-000000000002"),
+        external_id = "00000000-0000-4000-8000-000000000001"
+        unconnected_id = "00000000-0000-4000-8000-000000000002"
+        for workspace_id, name, backend in (
+            (external_id, "external", "http://127.0.0.1:41000"),
+            (unconnected_id, "unconnected", ""),
         ):
             registry.upsert(WorkspaceTarget(
-                workspace_id=workspace, name=workspace, root_path=str(tmp_path / workspace),
+                gateway_id=registry.gateway_id, workspace_id=workspace_id,
+                name=name, root_path=str(tmp_path / name),
                 connection_kind="local", managed=False, backend_url=backend,
-                backend_workspace_id=workspace_uuid,
             ), activate=False)
-        items = {item.workspace_id: item for item in await registry.list_dtos(check_health=False)}
-        assert items["external"].status == items["external"].services["workspace_api"].status == "ready"
-        assert registry.resolve_service_url("external", "workspace_api") == "http://127.0.0.1:41000"
-        assert items["unconnected"].status == "offline"
+        before = health_registry_state.load_workspace_registry()
+        targets = [asdict(target) for target in registry.targets()]
+        revision, active = registry.registry_revision, registry.active_workspace
+        leases = [registry.route_lease(target.key) for target in registry.targets()]
+        items = {(item.gateway_id, item.workspace_id): item for item in await registry.list_dtos(check_health=False)}
+        external = items[(registry.gateway_id, external_id)]
+        assert external.status == external.services["workspace_api"].status == "ready"
+        assert registry.resolve_service_url(external_id, "workspace_api") == "http://127.0.0.1:41000"
+        assert items[(registry.gateway_id, unconnected_id)].status == "offline"
+        assert not requests
+        assert health_registry_state.load_workspace_registry() == before
+        assert [asdict(target) for target in registry.targets()] == targets
+        assert (registry.registry_revision, registry.active_workspace) == (revision, active)
+        for lease in leases:
+            assert not lease.invalidated.is_set()
+            assert registry.route_lease((lease.gateway_id, lease.workspace_id)) == lease
     finally:
         registry.close()
 
 
 @pytest.mark.asyncio
 async def test_backend_dtos_probe_published_contract_inside_lifecycle_lock(
-    backend_dto_case, monkeypatch: pytest.MonkeyPatch,
+    backend_dto_case: tuple[GatewayWorkspaceRegistry, ManagedBackendGraph], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry, graph = backend_dto_case
     client_type = httpx.AsyncClient
-    requests = []
+    requests: list[httpx.Request] = []
 
     def response(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        payload = {"data": {"healthy": True}}
+        payload: dict[str, object] = {"data": {"healthy": True}}
         if request.url.path == "/api/v1/health":
             payload = {
                 "status": "ok",
@@ -101,13 +122,13 @@ async def test_backend_dtos_probe_published_contract_inside_lifecycle_lock(
     ))
     async with graph.owner.lock:
         with pytest.raises(LookupError, match="正在切换路由"):
-            registry.resolve_service_url("dto-member-0", "workspace_api")
+            registry.resolve_service_url(graph.targets[0].key, "workspace_api")
         items = await registry.list_dtos()
         assert all(item.status == "ready" and item.connection_error is None for item in items)
         assert all(item.backend_generation == graph.owner.contract.generation for item in items)
         assert all(item.affected_workspace_ids == list(graph.owner.contract.workspace_ids) for item in items)
         assert graph.owner.error is None
-    assert registry.resolve_service_url("dto-member-0", "workspace_api") == graph.owner.contract.backend_url
+    assert registry.resolve_service_url(graph.targets[0].key, "workspace_api") == graph.owner.contract.backend_url
     assert len([request for request in requests if request.url.path == "/api/v1/health"]) == 2
     assert all(registry.resolve(member_id).connection_error is None for member_id in graph.owner.contract.workspace_ids)
 
@@ -115,14 +136,14 @@ async def test_backend_dtos_probe_published_contract_inside_lifecycle_lock(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("during_transition", [True, False])
 async def test_backend_dto_probe_failure_is_visible_and_only_stable_owner_persists_it(
-    backend_dto_case, monkeypatch: pytest.MonkeyPatch, during_transition: bool,
+    backend_dto_case: tuple[GatewayWorkspaceRegistry, ManagedBackendGraph], monkeypatch: pytest.MonkeyPatch, during_transition: bool,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     registry, graph = backend_dto_case
     client_type = httpx.AsyncClient
 
     def response(request: httpx.Request) -> httpx.Response:
-        payload = {"data": {"healthy": True}}
+        payload: dict[str, object] = {"data": {"healthy": True}}
         if request.url.path == "/api/v1/health":
             payload = {
                 "status": "ok", "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
@@ -138,7 +159,7 @@ async def test_backend_dto_probe_failure_is_visible_and_only_stable_owner_persis
         await graph.owner.lock.acquire()
     try:
         items = await registry.list_dtos()
-        assert all(item.status == "offline" and "stage=workspace_health, error=RuntimeError" in item.connection_error for item in items)
+        assert all(item.status == "offline" and item.connection_error is not None and "stage=workspace_health, error=RuntimeError" in item.connection_error for item in items)
         assert "managed Backend 完整组健康证明不匹配" in caplog.text
         if during_transition:
             assert graph.owner.error is None
@@ -155,7 +176,7 @@ async def test_backend_dto_probe_failure_is_visible_and_only_stable_owner_persis
 
 @pytest.mark.asyncio
 async def test_old_dto_probe_cannot_mark_newly_published_owner_failed(
-    backend_dto_case, monkeypatch: pytest.MonkeyPatch,
+    backend_dto_case: tuple[GatewayWorkspaceRegistry, ManagedBackendGraph], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry, graph = backend_dto_case
     old_contract = graph.owner.contract
@@ -190,14 +211,14 @@ async def test_old_dto_probe_cannot_mark_newly_published_owner_failed(
 
 @pytest.mark.asyncio
 async def test_dto_active_state_uses_snapshot_from_list_entry_during_health_probe(
-    backend_dto_case, monkeypatch: pytest.MonkeyPatch,
+    backend_dto_case: tuple[GatewayWorkspaceRegistry, ManagedBackendGraph], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry, graph = backend_dto_case
-    entry_active_workspace_id = registry.active_workspace_id
-    activated_workspace_id = next(
-        workspace_id
-        for workspace_id in graph.owner.contract.workspace_ids
-        if workspace_id != entry_active_workspace_id
+    entry_active_workspace = registry.active_workspace
+    assert entry_active_workspace is not None
+    activated_workspace = next(
+        target.key for target in graph.targets
+        if target.key != entry_active_workspace
     )
     entered, release = asyncio.Event(), asyncio.Event()
     client_type = httpx.AsyncClient
@@ -219,18 +240,18 @@ async def test_dto_active_state_uses_snapshot_from_list_entry_during_health_prob
     ))
     pending = asyncio.create_task(registry.list_dtos())
     await asyncio.wait_for(entered.wait(), 2)
-    registry.activate(activated_workspace_id)
+    registry.activate(activated_workspace)
     release.set()
 
     items = await asyncio.wait_for(pending, 2)
     assert {
-        item.workspace_id for item in items if item.active
-    } == {entry_active_workspace_id}
+        (item.gateway_id, item.workspace_id) for item in items if item.active
+    } == {entry_active_workspace}
 
     later_items = await asyncio.wait_for(registry.list_dtos(), 2)
     assert {
-        item.workspace_id for item in later_items if item.active
-    } == {activated_workspace_id}
+        (item.gateway_id, item.workspace_id) for item in later_items if item.active
+    } == {activated_workspace}
 
 
 @pytest.fixture(params=["/private/health-source", r"C:\private\health-source", r"\\server\private\health-source"])
@@ -252,7 +273,7 @@ def health_sink_error(request: pytest.FixtureRequest, health_error: RuntimeError
 
 
 @pytest.fixture
-def health_list_http():
+def health_list_http() -> Callable[..., Awaitable[httpx.Response]]:
     original_client = httpx.AsyncClient
 
     async def listed(registry: GatewayWorkspaceRegistry, *, check_health: bool = True) -> httpx.Response:
@@ -277,9 +298,9 @@ def health_list_http():
     ("browser_manager", "service_health"),
 ])
 async def test_health_failure_facts_cross_http_persistence_and_cold_read(
-    backend_dto_case, health_registry_state: GatewayStateStore,
+    backend_dto_case: tuple[GatewayWorkspaceRegistry, ManagedBackendGraph], health_registry_state: GatewayStateStore,
     health_error: RuntimeError, health_sink_error: OSError | None,
-    health_list_http, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    health_list_http: Callable[..., Awaitable[httpx.Response]], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     fault: str, stage: str,
 ) -> None:
     registry, graph = backend_dto_case
@@ -287,7 +308,7 @@ async def test_health_failure_facts_cross_http_persistence_and_cold_read(
     original_assert_healthy = graph.owner.assert_healthy
     fault_enabled = True
     before = health_registry_state.load_workspace_registry()
-    bad_urls = {runtime.service_urls[fault] + "/health" for runtime in graph.runtimes.values()} if fault in {"terminal_manager", "browser_manager"} else set()
+    bad_urls = {runtime.service_urls[fault] + "/health" for runtime in graph.runtimes.values()} if fault == "terminal_manager" or fault == "browser_manager" else set()
 
     def assert_healthy() -> None:
         if fault == "backend" and fault_enabled:
@@ -351,7 +372,7 @@ async def test_health_failure_facts_cross_http_persistence_and_cold_read(
     health_registry_state.close()
     with (
         GatewayStateStore(path=health_registry_state.path) as cold_state,
-        closing(GatewayWorkspaceRegistry(storage_path=path, state_store=cold_state)) as cold,
+        closing(GatewayWorkspaceRegistry(storage_path=path, state_store=cold_state, gateway_id=registry.gateway_id)) as cold,
     ):
         assert cold_state.load_workspace_registry() == persisted_failure
         cold_response = await health_list_http(cold, check_health=False)

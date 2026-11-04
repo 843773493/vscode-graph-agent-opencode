@@ -929,9 +929,13 @@ def test_registry_rejects_removed_ssh_direct_backend_in_current_schema(tmp_path:
     path.write_text(json.dumps({"schema_version": 14, "gateway_id": LOCAL_GATEWAY, "managed_backends": [], "targets": [{
         "gateway_id": LOCAL_GATEWAY, "workspace_id": WORKSPACE_ID, "name": "Old SSH", "root_path": None,
         "backend_url": "http://127.0.0.1:41000", "connection_kind": "ssh", "managed": True,
+        "owner": "manual", "target_namespace": "gateway", "target_generation": "removed-ssh-generation",
+        "remote_gateway_connection_ids": [],
     }]}))
+    original = path.read_bytes()
     with pytest.raises(ValueError, match="未知工作区连接类型: ssh"):
         GatewayWorkspaceRegistry(gateway_id=LOCAL_GATEWAY, storage_path=path)
+    assert path.read_bytes() == original
 
 
 def test_registry_persists_auxiliary_manager_urls_for_gateway_restart(

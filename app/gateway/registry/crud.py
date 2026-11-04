@@ -122,6 +122,8 @@ class RegistryCrudMixin:
             raise ValueError(f"Gateway registry target owner 非法: {target.owner}")
         if not isinstance(target.target_namespace, str) or not target.target_namespace.strip():
             raise ValueError("Gateway registry target_namespace 必须是非空字符串")
+        if not isinstance(target.target_generation, str):
+            raise ValueError("Gateway registry target_generation 必须是字符串")  # noqa: TRY004 — 身份字段沿用 ValueError 拒绝合同。
         if target.connection_id is not None and (
             not isinstance(target.connection_id, str) or not target.connection_id.strip()
         ):

@@ -83,6 +83,10 @@ class RegistryPersistenceMixin:
             if not isinstance(item, dict):
                 raise TypeError("Gateway registry target 必须是对象")
             record = dict(item)
+            # 新建对象的默认值不能替代已发布的所有权和代次事实。
+            for field in ("owner", "target_namespace", "target_generation", "remote_gateway_connection_ids"):
+                if field not in record:
+                    raise ValueError(f"Gateway registry 缺少持久身份字段: {field}")
             record["parent_workspace"] = workspace_owner_key(record.get("parent_workspace"))
             for field in ("remote_gateway_connection_ids", "remote_service_names", "remote_affected_workspace_ids"):
                 value = record.get(field, [])
