@@ -105,8 +105,8 @@
 
 - [x] 10.1 为 Thread 注册原 Outline creator，使用 quickPickDataSource、preview／reveal／captureViewState；披露历史覆盖并补取缺页，取消只恢复对应组展示态。
 - [x] 10.2 保留文本 `:`／`::`／`@`／`@:` 语义；`#` 及 includeSymbols 仅接实际可限定根的符号服务，未具备时明确未启用，不伪造符号或查全局后过滤。
-- [ ] 10.3 核对 `edt active `／`edt `／`edt mru ` 中 Thread／文件／Diff 的名称、类型、组、dirty 与关闭语义；同目标多组副本仍可准确选择。
-- [ ] 10.4 让 `view ` 发现并聚焦已有会话导航与工作区面板，保留原视图位置和归属；验证文本与 Thread 切换、大纲预览取消和未挂载历史。
+- [x] 10.3 核对 `edt active `／`edt `／`edt mru ` 中 Thread／文件／Diff 的名称、类型、组、dirty 与关闭语义；同目标多组副本仍可准确选择。
+- [x] 10.4 让 `view ` 发现并聚焦已有会话导航与工作区面板，保留原视图位置和归属；验证文本与 Thread 切换、大纲预览取消和未挂载历史。
 
 ## 11. 领域动作与资源模式
 
@@ -857,3 +857,11 @@
 - 正式 Workbench、真实 Gateway／后端与 Chromium 已通过产品执行及 fork 创建 23 轮 child 历史：空 Thread、main／child 隔离、20→23 轮明确分页、非法真实 cursor 后重读、未挂载轮次接受、两组隔离、真实滚轮位置恢复及预览零持久写入均通过，pageErrors=[]。仅错误续点场景改写请求的 cursor，由真实后端拒绝；没有替换响应、预写历史或浏览器状态。联合运行的大纲项通过，新增编辑器导航项另有测试驱动失败，未把联合退出 1 表述为全绿。
 - 60 项定向检查／466 条断言、25 份实际转换源码的真实 Workbench 类型检查、Ruff、显式项目解释器的 Pyright、ESM 与 OpenSpec strict 通过。正式构建退出 0／45.59 秒，main SHA256=93cf51d53051731437a1753e58ee9eb8d3edfc44b70dc5da85f0c2c9702dc32f；只改测试后核源码早于构建及全文指纹，复用同一构建。准确命令、指纹、原始失败与退出码：out/tests/temp/thread_outline_20261104/artifacts/verification.json；页面原件：out/tests/integration/clients/web/quick_access/test_thread_outline/runs/run-c114735ae099/nodes/node-8268691f3631/artifacts/thread-outline.json。
 - TODO：长历史产品执行准备仍有增长成本，24 次执行实测 8.29～18.83 秒；保留测量与代码 TODO，后续独立量化，不以手工历史替产品生成关键状态。Electron／Windows 的大纲尚未验收，其余正文和管理任务保持原状态。
+
+
+### 2026-11-04：原编辑器与视图快速导航验收（10.3、10.4）
+
+- 复用真实执行生成的文件／更改和原 Thread，两组 Diff 经 `edt active `、`edt `、`edt mru ` 核对标签、组与活动顺序；真实输入产生 dirty，经原关闭按钮及不保存确认返回，关闭一个副本保留另一组，零搜索请求。文本 `@`／`@:` 在 Thread 后仍沿 JSON 符号服务定位，Esc 恢复原位置。
+- `view ` 通过原 Provider 聚焦已有会话导航及工作区终端、输出、自动化、端口、MCP 连接和 Browser，核对原底部面板位置及精确工作区归属。来源／Diff 刷新恢复、最后引用关闭后重读及磁盘正文不变断言保留；正式 Gateway／后端／Workbench／Chromium 1 passed／95.53 秒，pageErrors=[]。只改验收，不新增产品导航链路。
+- 复用相同产品指纹的25份实际转换源码类型检查及正式构建；测试驱动的命令返回序列化、自动保存、关闭结算／Esc焦点、hover及视图标签定位问题和瞬时端口占用均保留原件，未扩大产品交互期限或放宽原业务断言。进程外240秒／4GiB保护，外层360秒；最终Ruff、项目解释器Pyright、ESM、OpenSpec strict与差异检查见证据收据。
+- 完整命令、指纹、失败归因、原始输出与退出码：`out/tests/temp/thread_outline_20261104/artifacts/verification.json`；页面原件：`out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-37c04fd66a4e/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Electron／Windows导航尚未验收，不以本批勾选整体运行面验收。

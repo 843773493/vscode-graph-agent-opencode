@@ -4,6 +4,7 @@ import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 import { selectThread } from '../persistent_tasks/workbench.mjs';
+import { verifyEditorNavigation, verifyViewNavigation } from './editor_navigation.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
@@ -67,7 +68,9 @@ try {
   const file = data.files.find(file => file.file_path.endsWith('/diff-history.txt'));
   expect(file.before_preview).toContain('history v1 line 01'); expect(file.after_preview).toContain('history v2 line 01');
   await page.reload({ waitUntil: 'domcontentloaded' });
-  const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+  const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
+    await globalThis.workbench.commands.executeCommand(id, ...args);
+  }, { id, args });
   const thread = await selectThread(page, owner, 0);
   await thread.getByRole('button', { name: '切换会话资源', exact: true }).click();
   await thread.getByRole('tab', { name: '更改', exact: true }).click();
@@ -133,6 +136,8 @@ try {
   await assertDiff(0); await expect(text().locator('.view-lines')).toContainText('只读来源模型验收');
   expect(result.sources.filter(read => read.phase === result.phase)).toHaveLength(1);
   result.sourceRestored = true;
+  await verifyEditorNavigation({ page, command, owner, fileUri: file.file_path, result });
+  await verifyViewNavigation({ page, command, owner, result });
   await command('workbench.action.closeAllEditors');
   result.phase = 'last-close-reopen';
   await command('_workbench.open', legacy, [0, { pinned: true }]);

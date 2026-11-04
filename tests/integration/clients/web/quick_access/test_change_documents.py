@@ -6,7 +6,9 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -44,30 +46,36 @@ async def test_diff_and_source_models_share_references_and_restore(
                 "replace_all": True, "expected_version": "sha256:" + hashlib.sha256(before.encode()).hexdigest()}),
         }}]}, {"content": "第二版已生成"},
     ]
-    interactions = [build_cassette(asset_id="change-documents", model="browser-chat-tool-loop-stub",
+    interactions = [cast(list[object], build_cassette(asset_id="change-documents", model="browser-chat-tool-loop-stub",
         url=f"http://127.0.0.1:{ports.port(10)}/v1/chat/completions",
         frames=chat_completion_frames(response_id=f"change-documents-{index}", model="browser-chat-tool-loop-stub",
             deltas=[{"role": "assistant", **reply}], finish_reason="tool_calls" if "tool_calls" in reply else "stop"),
-    ).raw["interactions"][0] for index, reply in enumerate(replies)]
+    ).raw["interactions"])[0] for index, reply in enumerate(replies)]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace, default_backend_url=backend,
         port=ports.port(20), artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     command = ["bun", "tests/integration/clients/web/quick_access/change_documents.mjs"]
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
+                          "--timeout-seconds", "240", "--", *command]
     result_path = context.artifacts_dir / "change-documents.json"
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
-            completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
+            completed = await asyncio.to_thread(subprocess.run, supervised_command, cwd=context.project_root,
                 env={**os.environ, **temporary, **replay.environment, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
                     "BOXTEAM_CHANGE_INTERACTIONS": json.dumps(interactions), "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                     "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "failure.png")},
-                capture_output=True, text=True, timeout=150, check=False)
+                capture_output=True, text=True, timeout=270, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_text(completed.stdout)
         (context.artifacts_dir / "browser.stderr.raw").write_text(completed.stderr)
-        (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": completed.returncode}) + "\n")
+        (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command,
+            "supervised_command": supervised_command, "exit_code": completed.returncode}) + "\n")
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         result = json.loads(result_path.read_text())
-        for key in ("singleDiffRead", "splitShared", "readonly", "patch", "legacyMigrated", "diffRestored", "sourceRestored", "lastCloseRereads"):
+        for key in ("singleDiffRead", "splitShared", "readonly", "patch", "legacyMigrated", "diffRestored", "sourceRestored", "lastCloseRereads",
+                    "editorGroupAndMru", "editorDirtyClose", "editorCloseIsolated", "textSymbolsAfterThread"):
             assert result[key], key
         assert result["pageErrors"] == []
+        assert result["existingWorkspaceViews"] == ["terminal", "output", "automation", "ports", "mcp", "browser"]
         assert (workspace / "diff-history.txt").read_text(encoding="utf-8") == after
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)
