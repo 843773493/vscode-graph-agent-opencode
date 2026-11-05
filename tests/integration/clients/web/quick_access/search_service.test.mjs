@@ -27,7 +27,7 @@ const page = (path, hits = [], extra = {}) => ({ node: { uri: path, resource_sha
 const files = (target, names, extra = {}) => page(target.uri, [], { entries: names.map(name => ({ uri: target.uri + '/' + name, resource_shape: 'file', operations: ['read'] })), ...extra });
 
 /** 仅提供显式领域页资产；生产 Provider、共享 SSE 消费及其校验均实际运行。 */
-async function withTransport(callback, asset = async target => page(target.uri)) {
+async function withTransport(callback, asset = async target => page(target.uri), diagnostic = {}) {
   const calls = [], paths = [];
   const routes = spyOn(gateway, 'resolveWorkspace');
   const direct = spyOn(gateway, 'request');
@@ -55,7 +55,7 @@ async function withTransport(callback, asset = async target => page(target.uri))
       }
       const count = q.operation === 'content' ? result.matches.length : result.entries.length;
       const state = { branch, state: result.truncated ? 'limited' : 'complete', retryable: false, allocated_results: q.limit,
-        returned_results: count, ...(result.truncated ? { code: result.truncation_reason ?? 'result_limit', cursor: result.next_cursor } : {}) };
+        returned_results: count, ...(result.truncated ? { code: result.truncation_reason ?? 'result_limit', cursor: result.next_cursor } : {}), ...diagnostic };
       states.push(state);
       emit('page', { branch: state, page: { provider_id: 'workspace-files-' + q.operation, workspace_id: item.owner.workspace_id,
         category: 'file', operation: q.operation, contract_version: 1, state: state.state,
@@ -358,6 +358,48 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         const result = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'file' });
         expect(result.limitHit).toBe(true); expect(result.messages[0].text).toContain('response_byte_limit');
       }, async target => page(target.uri, [], { truncated: true, truncation_reason: 'response_byte_limit' }));
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('原文件分支失败和取消保留完整诊断，结构化原因不依赖错误文字', async () => {
+    const f = fixture([]);
+    try {
+      for (const diagnostic of [
+        { state: 'failed', code: 'execution_failed', error_owner: 'workspace_files', reason: 'read_failed', http_status: 403,
+          message: '无法读取 /target/project/secret.txt：权限不足', retryable: false },
+        { state: 'cancelled', code: 'cancelled', error_owner: 'workspace_files', reason: 'request_cancelled',
+          message: '原目标文件查询已停止', retryable: true },
+      ]) await withTransport(async calls => {
+        const error = await f.search.textSearch(query()).then(() => undefined, failure => failure);
+        expect(error).toBeInstanceOf(Error);
+        expect(error.cause).toMatchObject({ type: 'branch', request_id: 'file-request-0', branch: diagnostic });
+        expect(error.message).toContain(diagnostic.state === 'cancelled' ? '文件搜索已取消：' : '文件搜索失败：');
+        expect(error.message).toContain(diagnostic.message);
+        for (const field of ['code', 'error_owner', 'reason', 'http_status']) {
+          if (diagnostic[field] === undefined) expect(error.message).not.toContain(`${field}:`);
+          else expect(error.message).toContain(`${field}: ${diagnostic[field]}`);
+        }
+        expect(error.message).toContain('request_id: file-request-0');
+        expect(calls).toHaveLength(1);
+      }, async () => ({ failure: diagnostic }));
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('不可继续的文件受限警告保留原说明、归属和请求身份且不信任命令链接', async () => {
+    const f = fixture([]), diagnostic = { message: '原响应预算不足 [执行](command:workbench.action.closeWindow) <b>诊断</b>',
+      error_owner: 'workspace_files', reason: 'response_bytes' };
+    try {
+      await withTransport(async calls => {
+        const result = await f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'file' });
+        expect(result.limitHit).toBe(true); expect(result.results).toEqual([]);
+        expect(result.messages).toHaveLength(1);
+        const warning = result.messages[0];
+        expect(warning.type).toBe(2); expect(warning.trusted).not.toBe(true);
+        for (const value of ['code: response_byte_limit', diagnostic.message, 'error_owner: workspace_files', 'reason: response_bytes', 'request_id: file-request-0']) {
+          expect(warning.text).toContain(value);
+        }
+        expect(warning.text).not.toContain('http_status:'); expect(calls).toHaveLength(1);
+      }, async target => page(target.uri, [], { truncated: true, truncation_reason: 'response_byte_limit' }), diagnostic);
     } finally { f.instantiation.dispose(); }
   });
 

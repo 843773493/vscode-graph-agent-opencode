@@ -114,7 +114,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
         query: query.type === QueryType.Text ? query.contentPattern.pattern : query.onlyOpenEditors ? '**/*' : query.filePattern || '**/*',
         match_mode: query.type === QueryType.Text ? query.contentPattern.isRegExp ? 'regex' : 'literal'
           : query.onlyOpenEditors || query.shouldGlobMatchFilePattern || !query.filePattern ? 'glob' : 'fuzzy',
-        limit: pageLimit, file_targets: planned.map(item => item.wire) };
+        limit: pageLimit, file_targets: planned.map(item => item.wire), diagnostic_targets: [] };
       do {
         if (source.token.isCancellationRequested) throw new CancellationError();
         let scope = continuation?.scope;
@@ -131,13 +131,16 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           if (!plan) throw new Error('文件搜索返回了其它目录根');
           const { owner, folder, target } = plan;
           if (event.type === 'branch') {
+            const diagnostic = [event.branch.code && `code: ${event.branch.code}`, event.branch.message,
+              event.branch.error_owner && `error_owner: ${event.branch.error_owner}`, event.branch.reason && `reason: ${event.branch.reason}`,
+              event.branch.http_status !== undefined && `http_status: ${event.branch.http_status}`, `request_id: ${event.request_id}`].filter(Boolean).join(' · ');
             if (event.branch.state === 'failed' || event.branch.state === 'cancelled') throw new Error(
-              `文件搜索失败：${event.branch.code} · ${event.branch.message ?? ''} · request_id: ${event.request_id}`);
+              `文件搜索${event.branch.state === 'cancelled' ? '已取消' : '失败'}：${diagnostic}`, { cause: event });
             if (event.branch.state === 'limited') {
               if (event.branch.cursor || event.branch.code === 'output_limit') branches.push({ branch: event.branch.branch, cursor: event.branch.cursor });
               else {
                 limitHit = true;
-                messages.push({ type: TextSearchCompleteMessageType.Warning, text: `文件搜索受限：${event.branch.code}（${owner.path}）` });
+                messages.push({ type: TextSearchCompleteMessageType.Warning, text: `文件搜索受限：${diagnostic}（${owner.path}）` });
               }
             }
             return;
