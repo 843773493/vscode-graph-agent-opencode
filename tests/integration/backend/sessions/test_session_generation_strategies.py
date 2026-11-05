@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -89,9 +90,21 @@ async def generation_client(
         await acquire_gateway_guest(client)
         workspaces = await client.get("/api/gateway/workspaces")
         assert workspaces.status_code == 200, workspaces.text
-        workspace_id = workspaces.json()["data"]["active_workspace_id"]
-        assert isinstance(workspace_id, str) and workspace_id
-        client.headers["X-BoxTeam-Workspace-Id"] = workspace_id
+        health = await client.get("/api/gateway/health")
+        assert health.status_code == 200, health.text
+        owner = {
+            "gateway_id": health.json()["data"]["gateway_id"],
+            "workspace_id": read_workspace_id(generation_backend[1]),
+        }
+        data = workspaces.json()["data"]
+        assert data["active_workspace"] == owner
+        target, = (item for item in data["items"]
+                   if (item["gateway_id"], item["workspace_id"]) == (owner["gateway_id"], owner["workspace_id"]))
+        assert target["connection_kind"] == "local"
+        client.headers.update({
+            "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+            "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+        })
         yield client
 
 

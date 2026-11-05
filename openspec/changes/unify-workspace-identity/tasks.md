@@ -296,3 +296,9 @@
 - source-child fork 两次在 setup 失败，尚未进入业务：首次辅助服务39224，补验Backend39200；保留原始失败，不记fork通过。补验后实际 `ss -tanp` 观察39200作为出站源连接处于TIME-WAIT，宿主自动源端口范围32768–60999与固定测试块重叠；这不证明首次39224占用的来源。
 - 联邦装具复用既有 `E2EProcessLease`，在启动前持有固定Backend、Gateway、辅助服务、sshd与隧道端口，全部句柄退出后才释放；并行Backend／下游Gateway先完成移交再统一失败回收，上游仍等待下游就绪。不加盲重试、不终止未知监听或修改宿主配置。
 - 端口租约、真实Backend并行启动失败清理及HTTP就绪定向11 passed／22.62秒，Ruff和项目解释器Pyright退出0。最终仅格式化一个测试导入，完整AST相同。命令、首尾源码指纹与原始结果在 `out/tests/temp/identity_remaining_web_20261105/artifacts/federation-port-lease-behavior-1793858923834718097.json`、`federation-port-lease-type-1793858915450571697.json`、`federation-port-lease-final-static-1793859023481622292.json` 和 `federation-import-format-attribution.json`。本次不代替完整fork／Web／Windows业务验收，6.4仍未完成。
+
+### 2026-11-05：6.4 会话生成与共享 HTTP Skill 消费者
+
+- 两组真实Gateway装具均从原生Gateway健康响应与工作区身份文件核验完整owner，普通请求固定双目标头，不从活动项补齐归属。HTTP Skill双工作区入口保留共享原件只获取一次、每个工作区冻结与更新后的原强断言，正式矩阵1 passed／93.32秒、退出0。
+- 会话生成策略正式矩阵6 passed／1 failed／129.08秒；失败项已创建并执行分支，在原40次等待内仍reporting，未放宽期限或宣称整组通过。原trace随后显示汇报Job完成，创建至完成8.90秒，agent_start至模型请求4.87秒；TODO保持：进一步定位请求前准备耗时。另一个原长窗口终态用例通过，不能替代短窗口性能验收。
+- 原始命令、首尾源码SHA及退出码：`out/tests/temp/identity_remaining_web_20261105/artifacts/gateway-http-skill-owner-product-1793858643861942969.json`、`task-generation-owner-product-1793858388101593363.json`、`generation-report-timing-attribution.json`。两文件与既有静态交付及真实执行首尾完全相同，Ruff通过；五文件Pyright72／72既存诊断，新增0，原件在 `identity_remaining_backend_20261105/artifacts/evidence-index.json` 和 `pyright-attribution-01.json`，匹配收据为 `generation-skill-source-attribution.json`。6.4尚未完成。

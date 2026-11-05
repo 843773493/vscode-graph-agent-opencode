@@ -14,6 +14,7 @@ import commentjson
 import httpx
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from tests.integration.backend.agents.test_gateway_skill_source_flow import (
     ENDPOINT,
     FRONTMATTER,
@@ -112,9 +113,17 @@ async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspac
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
             await acquire_gateway_guest(client)
             assert (await client.get("/api/v1/workspace")).status_code == 200
-            gateway_id = (await client.get("/api/gateway/health")).json()["data"]["gateway_id"]
-            initial_targets = (await client.get("/api/gateway/workspaces")).json()["data"]
-            first_target = initial_targets["active_workspace_id"]
+            health = await client.get("/api/gateway/health")
+            assert health.status_code == 200, health.text
+            gateway_id = health.json()["data"]["gateway_id"]
+            inventory = await client.get("/api/gateway/workspaces")
+            assert inventory.status_code == 200, inventory.text
+            initial_targets = inventory.json()["data"]
+            first_owner = {"gateway_id": gateway_id, "workspace_id": read_workspace_id(workspace)}
+            assert initial_targets["active_workspace"] == first_owner
+            first_target, = (item for item in initial_targets["items"]
+                             if (item["gateway_id"], item["workspace_id"]) == (gateway_id, first_owner["workspace_id"]))
+            assert first_target["connection_kind"] == "local"
             before = (await client.get("/api/gateway/config/reload-status")).json()["data"]
             path = home / "config/gateway.jsonc"
             payload = commentjson.loads(path.read_text())
@@ -135,27 +144,33 @@ async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspac
             assert len(source.requests) == 1
             added = await client.post("/api/gateway/workspaces/local", json={"root_path": str(secondary), "name": "HTTP Skill Secondary"})
             assert added.status_code == 200, added.text
-            second_target = next(item["workspace_id"] for item in added.json()["data"]["items"] if item["workspace_id"] != first_target)
-            sessions: list[tuple[str, str, str]] = []
-            for target in (first_target, second_target):
+            second_owner = {"gateway_id": gateway_id, "workspace_id": read_workspace_id(secondary)}
+            assert second_owner != first_owner
+            second_target, = (item for item in added.json()["data"]["items"]
+                              if (item["gateway_id"], item["workspace_id"]) == (gateway_id, second_owner["workspace_id"]))
+            assert second_target["connection_kind"] == "local"
+            sessions: list[tuple[dict[str, str], str, str]] = []
+            for owner in (first_owner, second_owner):
                 prefix = "/api/v1"
-                headers = {"X-BoxTeam-Workspace-Id": target}
+                headers = {"X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                           "X-BoxTeam-Workspace-Id": owner["workspace_id"]}
                 info = await client.get(prefix + "/workspace", headers=headers)
                 assert info.status_code == 200, info.text
+                assert info.json()["data"]["workspace_id"] == owner["workspace_id"]
                 created = await client.post(prefix + "/sessions", headers=headers, json={"title": "Shared HTTP Skill"})
                 assert created.status_code == 200, created.text
                 session_id = created.json()["data"]["session_id"]
                 thread_id = (await client.get(prefix + f"/sessions/{session_id}/main-thread", headers=headers)).json()["data"]["thread_id"]
-                state.plan(session_id, thread_id, _skill_reply("http_skill_" + target, tracked=True), _text_reply("SHARED_HTTP_SKILL_OK"))
+                state.plan(session_id, thread_id, _skill_reply("http_skill_" + owner["workspace_id"], tracked=True), _text_reply("SHARED_HTTP_SKILL_OK"))
                 async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers={**LOCAL_TOKEN_HEADERS, **headers},
                                              cookies=client.cookies, timeout=60, trust_env=False) as routed:
                     job = await _job(routed, session_id)
                 assert job["status"] in {"completed", "succeeded"}, job
                 wire = json.dumps(state.requests[-1], ensure_ascii=False)
                 assert "共享网络初始正文 Ω" in wire and source.url not in wire
-                sessions.append((target, session_id, thread_id))
+                sessions.append((owner, session_id, thread_id))
             assert len(source.requests) == 1, "Workspace 目录和 skill_load 不得访问上游"
-            workspace_id = json.loads((workspace / ".boxteam/workspace-identity.json").read_text())["workspace_id"]
+            workspace_id = first_owner["workspace_id"]
             raw_path = f"/api/gateway/skill-sources/{gateway_id}/workspaces/{workspace_id}"
             original = (await client.get(raw_path)).json()["data"]
             entry = original["entries"][0]
@@ -181,9 +196,11 @@ async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspac
             assert updated["revision"] != original["revision"]
             assert updated["entries"][0]["entry_identity"] == entry["entry_identity"]
             await asyncio.sleep(1.2)
-            for target, session_id, thread_id in sessions:
+            for owner, session_id, thread_id in sessions:
                 state.plan(session_id, thread_id, _text_reply("TRACKED_HTTP_UPDATE_OK"))
-                async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers={**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Workspace-Id": target},
+                async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers={**LOCAL_TOKEN_HEADERS,
+                                             "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                                             "X-BoxTeam-Workspace-Id": owner["workspace_id"]},
                                              cookies=client.cookies, timeout=60, trust_env=False) as routed:
                     job = await _job(routed, session_id)
                 assert job["status"] in {"completed", "succeeded"}, job
