@@ -10,7 +10,8 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
   const observe = request => {
     const path = new URL(request.url()).pathname;
     const body = request.method() === 'POST' && path === '/api/v1/resources/navigation' ? request.postDataJSON() : undefined;
-    if (body?.operation === 'read') reads.push({ ...body, route: request.headers()['x-boxteam-workspace-id'] });
+    if (body?.operation === 'read') reads.push({ ...body, gatewayId: request.headers()['x-boxteam-target-gateway-id'],
+      workspaceId: request.headers()['x-boxteam-workspace-id'] });
     const observed = searchRequest(request);
     if (observed?.path === '/api/gateway/search' || body?.operation === 'search'
       || ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(path)) queries.push(observed);
@@ -29,7 +30,8 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
   };
   try {
     result.phase = 'canonical-readonly-source-documents';
-    const other = await api('/api/v1/workspace', owner.routeB);
+    const other = await api('/api/v1/workspace', owner.secondaryOwner);
+    expect(other.workspace_id).toBe(owner.secondaryOwner.workspaceId);
     const prefix = workspaceId => `boxteam://${owner.gatewayId}/workspace/${workspaceId}/resources/`;
     const agentsA = prefix(owner.workspaceId) + 'agent-spec/root/AGENTS.md';
     const agentsB = prefix(other.workspace_id) + 'agent-spec/root/AGENTS.md';
@@ -54,8 +56,11 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
     const quick = page.locator('.quick-input-widget');
     const completed = page.waitForRequest(request => {
       const observed = searchRequest(request);
+      if (observed?.path !== '/api/gateway/search') return false;
+      const owners = observed.body.scope.mode === 'resume' ? observed.body.scope.scope.owners : observed.body.scope.owners;
       return observed?.path === '/api/gateway/search' && observed.query === 'AGENTS' && observed.categories.includes('catalog')
-        && observed.owners.length === 1 && observed.owners[0] === other.workspace_id;
+        && owners.length === 1 && owners[0].gateway_id === owner.secondaryOwner.gatewayId
+        && owners[0].workspace_id === owner.secondaryOwner.workspaceId;
     });
     await command('workbench.action.quickOpen', 'AGENTS');
     const receipt = await searchReceipt(await completed);
@@ -67,7 +72,12 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
     await expect(quick).not.toBeVisible();
     await expectSource('source AGENTS B');
     expect(queries.length).toBeGreaterThan(0);
-    expect(queries.every(query => query.path === '/api/gateway/search' && query.owners.length === 1 && query.owners[0] === other.workspace_id)).toBe(true);
+    expect(queries.every(query => {
+      if (query.path !== '/api/gateway/search') return false;
+      const owners = query.body.scope.mode === 'resume' ? query.body.scope.scope.owners : query.body.scope.owners;
+      return owners.length === 1 && owners[0].gateway_id === owner.secondaryOwner.gatewayId
+        && owners[0].workspace_id === owner.secondaryOwner.workspaceId;
+    })).toBe(true);
 
     result.phase = 'skill-readonly-and-source-reopen';
     const skill = await open(skillB);
@@ -75,9 +85,9 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
     await command('workbench.action.closeActiveEditor');
     await open(skillB);
     await expectSource('source Skill B');
-    expect(reads.filter(read => read.uri === addressA.uri && read.route === owner.routeA)).toHaveLength(1);
-    expect(reads.filter(read => read.uri === addressB.uri && read.route === owner.routeB)).toHaveLength(1);
-    expect(reads.filter(read => read.uri === skill.uri && read.route === owner.routeB)).toHaveLength(2);
+    expect(reads.filter(read => read.uri === addressA.uri && read.gatewayId === owner.gatewayId && read.workspaceId === owner.workspaceId)).toHaveLength(1);
+    expect(reads.filter(read => read.uri === addressB.uri && read.gatewayId === owner.secondaryOwner.gatewayId && read.workspaceId === owner.secondaryOwner.workspaceId)).toHaveLength(1);
+    expect(reads.filter(read => read.uri === skill.uri && read.gatewayId === owner.secondaryOwner.gatewayId && read.workspaceId === owner.secondaryOwner.workspaceId)).toHaveLength(2);
     expect(reads.every(read => read.read_format === 'auto')).toBe(true);
     expect(writes).toEqual([]);
     expect(await readFile(join(process.env.BOXTEAM_CATALOG_WORKSPACE, 'other/AGENTS.md'), 'utf8')).toContain('source AGENTS B');

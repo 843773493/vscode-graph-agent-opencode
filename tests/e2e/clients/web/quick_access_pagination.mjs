@@ -16,11 +16,12 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
     const observed = searchRequest(request);
     if (observed?.path !== '/api/gateway/search') return [];
     const { body } = observed;
+    const owners = body.scope.mode === 'resume' ? body.scope.scope.owners : body.scope.owners;
     return body.queries.flatMap(query => {
       const selected = body.continuations.length ? body.continuations.filter(item => item.branch.category === query.category)
-        : observed.owners.map(workspace_id => ({ branch: { category: query.category, owner: { workspace_id } } }));
+        : owners.map(owner => ({ branch: { category: query.category, owner } }));
       return selected.map(item => ({ category: query.category, query: query.query, limit: query.limit,
-        workspaceId: item.branch.owner.workspace_id, cursor: item.cursor }));
+        gatewayId: item.branch.owner.gateway_id, workspaceId: item.branch.owner.workspace_id, cursor: item.cursor }));
     });
   };
   const observe = request => {
@@ -34,9 +35,11 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
       const pending = searchReceipt(request).then(receipt => {
         for (const branch of receipt.summary.branches) {
           const page = receipt.pages.find(event => event.branch.branch.category === branch.branch.category
+            && event.branch.branch.owner.gateway_id === branch.branch.owner.gateway_id
             && event.branch.branch.owner.workspace_id === branch.branch.owner.workspace_id)?.page;
           const domain = page?.catalog ?? page?.threads ?? page?.files;
-          responses.push({ query: receipt.query, category: branch.branch.category, workspaceId: branch.branch.owner.workspace_id,
+          responses.push({ query: receipt.query, category: branch.branch.category, gatewayId: branch.branch.owner.gateway_id,
+            workspaceId: branch.branch.owner.workspace_id,
             count: branch.returned_results, identities: domain?.items?.map(item => item.node?.node_id ?? item.thread_id),
             cursor: branch.cursor, state: branch.state, code: branch.code, reason: branch.reason, errorOwner: branch.error_owner,
             httpStatus: branch.http_status, gatewayStatus: receipt.status, requestId: receipt.requestId,
@@ -83,7 +86,7 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
     await expect(first).toHaveAttribute('data-quick-input-id', active);
     expect(fileRequests()[0].cursor).toBeUndefined();
     expect(fileRequests()[1].cursor).toBeTruthy();
-    expect(fileRequests().every(item => item.limit === 50 && item.workspaceId === owner.workspaceId)).toBe(true);
+    expect(fileRequests().every(item => item.limit === 50 && item.gatewayId === owner.gatewayId && item.workspaceId === owner.workspaceId)).toBe(true);
     // 初始名称与文件各一次 HTTP，随后仅继续文件分支；分支计量不冒充请求数。
     expect(wire.filter(item => item.query === 'pagingfiles')).toHaveLength(3);
     result.pagination.selectionPreserved = true;
@@ -126,7 +129,7 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
     // 关键目录及 Thread 状态由真实创建入口产生，不预写 catalog／控制库。
     const sessions = [];
     for (let index = 0; index < 55; index++) sessions.push(
-      await api('/api/v1/sessions', owner.routeA, { title: `pagingcatalog 会话 ${String(index).padStart(3, '0')}` }));
+      await api('/api/v1/sessions', owner, { title: `pagingcatalog 会话 ${String(index).padStart(3, '0')}` }));
     await command('workbench.action.quickOpen', 'pagingcatalog');
     await expect(quick).toContainText('pagingcatalog 会话');
     await expect.poll(() => requests.filter(item => item.query === 'pagingcatalog').length).toBe(3);
@@ -157,8 +160,11 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
       const counts = responses.filter(item => item.query === 'pagingcatalog' && item.category === domain).map(item => item.count);
       expect(counts).toEqual([50, 5]);
     }
-    expect(requests.every(item => item.workspaceId === owner.workspaceId)).toBe(true);
-    expect(wire.every(item => item.owners.length === 1 && item.owners[0] === owner.workspaceId)).toBe(true);
+    expect(requests.every(item => item.gatewayId === owner.gatewayId && item.workspaceId === owner.workspaceId)).toBe(true);
+    expect(wire.every(item => {
+      const owners = item.body.scope.mode === 'resume' ? item.body.scope.scope.owners : item.body.scope.owners;
+      return owners.length === 1 && owners[0].gateway_id === owner.gatewayId && owners[0].workspace_id === owner.workspaceId;
+    })).toBe(true);
     await Promise.all(reads);
     expect(errors).toEqual([]);
     result.pagination.explicitIndependentPages = true;
@@ -173,7 +179,8 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
     const target = sessions[outside], query = `pgcg${String(outside).padStart(3, '0')}`;
     const waitSearch = async (category, filter, cursor) => {
       const request = await page.waitForRequest(request => branches(request).some(branch => branch.category === category
-        && branch.query === filter && Boolean(branch.cursor) === cursor && branch.workspaceId === owner.workspaceId));
+        && branch.query === filter && Boolean(branch.cursor) === cursor
+        && branch.gatewayId === owner.gatewayId && branch.workspaceId === owner.workspaceId));
       const receipt = await read(request);
       return { receipt, branch: receipt.summary.branches.find(item => item.branch.category === category),
         page: receipt.pages.find(item => item.page.category === category)?.page };
@@ -185,7 +192,7 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
       return { category: page.category, requestId: receipt.requestId };
     });
     await expect(quick.locator(`[data-quick-input-id="session:${key}/${target.session_id}"]`)).toHaveCount(1);
-    const main = await api(`/api/v1/sessions/${target.session_id}/main-thread`, owner.routeA);
+    const main = await api(`/api/v1/sessions/${target.session_id}/main-thread`, owner);
     await expect(quick.locator(`[data-quick-input-id$="/${main.thread_id}"]`)).toHaveCount(1);
     await page.keyboard.press('Escape');
 
@@ -195,7 +202,7 @@ export async function verifyQuickAccessPagination({ page, command, api, result, 
     expect(firstPage.page.catalog.total).toBe(55);
     expect(firstPage.branch.cursor).toBeTruthy();
     // 产品创建入口推进 catalog revision，原 cursor 必须拒绝，不能拼入新的目录快照。
-    await api('/api/v1/sessions', owner.routeA, { title: 'catalog cursor revision trigger' });
+    await api('/api/v1/sessions', owner, { title: 'catalog cursor revision trigger' });
     await revealStatus('会话');
     await status('会话').hover();
     const [stale] = await Promise.all([waitSearch('catalog', 'pagingcatalog', true),

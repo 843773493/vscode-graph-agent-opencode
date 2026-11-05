@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
@@ -99,6 +100,11 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": result.returncode}) + "\n")
         assert result.returncode == 0, f"{result.stdout}\n{result.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
+        owner = receipt["owner"]
+        assert owner["gatewayId"] == owner["secondaryOwner"]["gatewayId"] and owner["gatewayId"]
+        assert owner["workspaceId"] == read_workspace_id(workspace)
+        assert owner["secondaryOwner"]["workspaceId"] == read_workspace_id(other)
+        assert owner["workspaceId"] != owner["secondaryOwner"]["workspaceId"]
         assert receipt["sessionOpensMain"] is True
         assert receipt["unopenedChildKeepsIdentity"] is True
         assert receipt["folderUsesFreshNavigation"] is True

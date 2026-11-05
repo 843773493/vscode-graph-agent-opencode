@@ -64,7 +64,7 @@ export async function verifyTextModelSharing({ page, command, api, result, targe
   await expect(lines(0)).toContainText('A unsaved shared');
   expect(await readFile(join(workspace, name), 'utf8')).toBe(external);
   const current = await api(`/api/v1/workspace/files/content?${new URLSearchParams({ path: path(targets[0]) })}`,
-    { headers: { 'X-BoxTeam-Workspace-Id': targets[0].route } });
+    { headers: { 'X-BoxTeam-Target-Gateway-Id': targets[0].gatewayId, 'X-BoxTeam-Workspace-Id': targets[0].workspaceId } });
   expect(current.status).toBe(200); expect(current.body.data.content).toBe(external);
   // 用户明确放弃本次编辑后，才允许原服务重读和释放最后一个引用。
   await command('workbench.action.files.revert');

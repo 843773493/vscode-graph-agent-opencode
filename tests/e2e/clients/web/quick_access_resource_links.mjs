@@ -15,7 +15,8 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
   const observeBytes = response => {
     const request = response.request(), url = new URL(request.url());
     if (url.pathname !== '/api/v1/workspace/files/raw') return;
-    links.byteReads.push({ uri: url.searchParams.get('path'), route: request.headers()['x-boxteam-workspace-id'],
+    links.byteReads.push({ uri: url.searchParams.get('path'), gatewayId: request.headers()['x-boxteam-target-gateway-id'],
+      workspaceId: request.headers()['x-boxteam-workspace-id'],
       range: request.headers().range ?? null, status: response.status(), requestId: response.headers()['x-request-id'] });
   };
   page.on('response', observeBytes);
@@ -37,7 +38,7 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
   const thread = id => page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${id}"]`);
   try {
     result.phase = 'canonical-child-uri';
-    const pageOfThreads = await api(`/api/v1/session-threads/search?query=${owner.childId}`, owner.routeA);
+    const pageOfThreads = await api(`/api/v1/session-threads/search?query=${owner.childId}`, owner);
     const childUri = pageOfThreads.items.find(item => item.thread_id === owner.childId)?.thread_uri;
     expect(childUri).toBeTruthy();
     await command('workbench.action.closeAllEditors');
@@ -60,7 +61,7 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
     links.sessionUsesMainAndSideGroup = true;
 
     result.phase = 'canonical-file-uri';
-    const roots = await api('/api/v1/workspace/files/roots', owner.routeA);
+    const roots = await api('/api/v1/workspace/files/roots', owner);
     const fileUri = roots.workspace_uri + '/uri%40target.txt';
     await open(fileUri);
     const editor = page.locator('.editor-instance .monaco-editor').filter({ visible: true });
@@ -77,15 +78,16 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
     links.imageDecoded = true;
 
     result.phase = 'canonical-real-http-range';
-    const ranged = await page.evaluate(async ({ uri, route }) => {
+    const ranged = await page.evaluate(async ({ uri, owner }) => {
       const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
       const query = new URLSearchParams({ path: uri, scope: 'workspace' });
       const response = await fetch(`/api/v1/workspace/files/raw?${query}`, {
-        headers: { 'X-Local-Token': credential.data.token, 'X-BoxTeam-Workspace-Id': route, Range: 'bytes=1-3' },
+        headers: { 'X-Local-Token': credential.data.token, 'X-BoxTeam-Target-Gateway-Id': owner.gatewayId,
+          'X-BoxTeam-Workspace-Id': owner.workspaceId, Range: 'bytes=1-3' },
       });
       return { status: response.status, bytes: [...new Uint8Array(await response.arrayBuffer())],
         range: response.headers.get('content-range'), requestId: response.headers.get('x-request-id') };
-    }, { uri: roots.workspace_uri + '/uri-image.png', route: owner.routeA });
+    }, { uri: roots.workspace_uri + '/uri-image.png', owner });
     expect(ranged.status).toBe(206);
     expect(ranged.bytes).toEqual([80, 78, 71]);
     expect(ranged.range).toMatch(/^bytes 1-3\/\d+$/);
@@ -109,7 +111,7 @@ export async function verifyResourceLinks({ page, command, api, result, owner })
     expect(Array.from(savedBytes.subarray(0, 3))).toEqual([239, 187, 191]);
     expect(savedBytes.subarray(3).toString()).toBe('BOM saved');
     links.textSavePreservesBom = true;
-    expect(links.byteReads.every(read => read.route === owner.routeA && read.requestId)).toBe(true);
+    expect(links.byteReads.every(read => read.gatewayId === owner.gatewayId && read.workspaceId === owner.workspaceId && read.requestId)).toBe(true);
 
     await verifySourceDocuments({ page, command, api, result, owner, open });
     // 恢复 A 的文件编辑器，后续专用模式继续验证原发起工作区。
