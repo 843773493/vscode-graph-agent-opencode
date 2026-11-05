@@ -351,11 +351,9 @@ class RolloutViewMembershipMixin:
         }
         turn_ids: list[str] = []
         sequence_set = set(materialized_sequences)
-        for sequence in materialized_sequences:
-            value = turn_by_sequence.get(sequence)
+        # 完整性只取决于本次选集；每个 Turn 核一次，不能对未完整选入的 Turn 逐消息重扫。
+        for value in dict.fromkeys(turn_by_sequence.get(sequence) for sequence in materialized_sequences):
             if value is None:
-                continue
-            if value in turn_ids:
                 continue
             row = connection.execute(
                 "SELECT turn_kind, first_message_sequence, last_message_sequence, user_message_sequence, final_message_sequence FROM turns WHERE turn_id = ?",
