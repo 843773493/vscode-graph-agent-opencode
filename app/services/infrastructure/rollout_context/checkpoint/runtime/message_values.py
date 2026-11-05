@@ -20,17 +20,12 @@ MessagesState = Literal["view", "delta", "snapshot"]
 def prepare_message_values(
     saver: BaseCheckpointSaver, *, values: Mapping[str, object],
     versions: Mapping[str, object], new_versions: Mapping[str, object],
-    metadata: Mapping[str, object], parent: CheckpointTuple | None,
+    metadata: Mapping[str, object], parent: CheckpointTuple | None, parent_delta: bool,
 ) -> tuple[list[BaseMessage], MessagesState]:
     candidate = values.get("messages")
     counters = metadata.get("counters_since_delta_snapshot", {})
     if not isinstance(counters, Mapping):
         raise TypeError("checkpoint Delta counters 必须是 mapping")
-    parent_values = parent.checkpoint["channel_values"] if parent is not None else {}
-    parent_delta = parent is not None and (
-        isinstance(parent_values.get("messages"), _DeltaSnapshot)
-        or ("messages" not in parent_values and "messages" in parent.checkpoint["channel_versions"])
-    )
     delta = isinstance(candidate, _DeltaSnapshot) or "messages" in counters or parent_delta
     state: MessagesState = "view"
     if "messages" in values:

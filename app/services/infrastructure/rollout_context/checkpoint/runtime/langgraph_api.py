@@ -16,7 +16,7 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
     get_checkpoint_metadata,
 )
-from langgraph.checkpoint.serde.types import ERROR
+from langgraph.checkpoint.serde.types import ERROR, _DeltaSnapshot
 
 from app.core.failures import failure_detail
 from app.core.phase_observer import observe_phase_sync
@@ -233,17 +233,52 @@ class RolloutLangGraphCheckpointMixin:
             raise TypeError("checkpoint.channel_values 必须是 dict")
         checkpoint = dict(checkpoint)
         parent_checkpoint = None
+        parent_channel_versions = {}
+        parent_delta = False
+        parent_exists = False
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
         if isinstance(parent_checkpoint_id, str) and parent_checkpoint_id:
-            parent_checkpoint = self.get_tuple(config)
-        if parent_checkpoint is None and isinstance(parent_checkpoint_id, str) and "messages" in channel_values:
+            if "messages" in channel_values:
+                # 本次完整输入仍由 durable owner 核正文和归属；父 checkpoint
+                # 只提供版本与 Delta 状态，不读取其旧正文和未消费的 pending writes。
+                owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+                try:
+                    snapshot = self._context_reader.open_snapshot(owner.session_id, thread_id, checkpoint_ns)
+                except RolloutNotMaterializedError:
+                    snapshot = None
+                if snapshot is not None:
+                    with snapshot:
+                        index = self._context_reader.latest_checkpoint(snapshot, parent_checkpoint_id)
+                        if index is not None:
+                            self._storage.checkpoints.checkpoint_values(
+                                owner.session_id, thread_id, checkpoint_ns, index,
+                                snapshot=snapshot, requested_channels=frozenset(),
+                            )
+                            parent_channel_versions, _, parent_state = self._storage.checkpoints.checkpoint_versions(
+                                snapshot, index.checkpoint_id,
+                            )
+                            parent_exists = True
+                            parent_delta = parent_state == "snapshot" or (
+                                parent_state == "delta" and "messages" in parent_channel_versions
+                            )
+            else:
+                parent_checkpoint = self.get_tuple(config)
+                if parent_checkpoint is not None:
+                    parent_exists = True
+                    parent_channel_versions = parent_checkpoint.checkpoint["channel_versions"]
+                    parent_values = parent_checkpoint.checkpoint["channel_values"]
+                    parent_delta = isinstance(parent_values.get("messages"), _DeltaSnapshot) or (
+                        "messages" not in parent_values and "messages" in parent_channel_versions
+                    )
+        if not parent_exists and isinstance(parent_checkpoint_id, str) and "messages" in channel_values:
             # 首个完整基准可独立建立根；省略值不能掩盖已引用父链的丢失。
             parent_checkpoint_id = None
-        elif parent_checkpoint is None and parent_checkpoint_id:
+        elif not parent_exists and parent_checkpoint_id:
             raise RuntimeError(f"父 checkpoint 不可读取: {parent_checkpoint_id}")
         current_messages, messages_state = prepare_message_values(
             self, values=channel_values, versions=checkpoint.get("channel_versions", {}),
             new_versions=new_versions, metadata=metadata, parent=parent_checkpoint,
+            parent_delta=parent_delta,
         )
         if messages_state == "view" and "messages" not in channel_values:
             channel_values = {**channel_values, "messages": current_messages}
@@ -256,11 +291,6 @@ class RolloutLangGraphCheckpointMixin:
             if channel_name in channel_versions and channel_versions[channel_name] != version:
                 raise ValueError(f"checkpoint new_versions 与 channel_versions 不一致: {channel_name}")
             merged_channel_versions.setdefault(channel_name, version)
-        parent_channel_versions = (
-            parent_checkpoint.checkpoint.get("channel_versions", {})
-            if parent_checkpoint is not None
-            else {}
-        )
         for channel_name in channel_values:
             if merged_channel_versions.get(channel_name) is None:
                 version = new_versions.get(channel_name)

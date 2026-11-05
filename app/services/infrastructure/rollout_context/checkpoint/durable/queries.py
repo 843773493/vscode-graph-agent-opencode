@@ -686,24 +686,37 @@ class RolloutCheckpointQueriesMixin:
             include_execution_context=include_execution_context,
             message_protocol=True,
         )
-        checkpoint["channel_versions"] = {}
-        checkpoint["updated_channels"] = []
+        versions, updated, message_state = self.checkpoint_versions(snapshot, index.checkpoint_id)
+        checkpoint["channel_versions"] = versions
+        checkpoint["updated_channels"] = updated
         connection = self._storage._snapshot_connection(snapshot)
-        message_state = connection.execute(
-            "SELECT value_state FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
-            (index.checkpoint_id,),
-        ).fetchone()
-        if message_state == ("delta",):
+        if message_state == "delta":
             # latest overlay 虽返回完整 selection，也不能掩盖其已登记增量依赖损坏。
             delta_history_path(connection, index.checkpoint_id, checkpoint_ns=checkpoint_ns, channels=("messages",))
+        checkpoint["versions_seen"] = self._storage.decode_value(
+            (index.versions_seen_type, index.versions_seen_blob)
+        )
+        checkpoint["pending_sends"] = self._storage.decode_value(
+            (index.pending_sends_type, index.pending_sends_blob)
+        )
+        return checkpoint
+
+    def checkpoint_versions(
+        self, snapshot: RolloutReadSnapshot, checkpoint_id: str,
+    ) -> tuple[dict[str, str], list[str], str]:
+        """读写共用通道版本；完整输入写入不应为此恢复父消息正文。"""
+        connection = self._storage._snapshot_connection(snapshot)
         rows = connection.execute(
-            "SELECT channel_name, channel_version, updated_index FROM checkpoint_channels WHERE checkpoint_id = ? ORDER BY updated_index",
-            (index.checkpoint_id,),
+            "SELECT channel_name, channel_version, updated_index, value_state FROM checkpoint_channels WHERE checkpoint_id = ? ORDER BY updated_index",
+            (checkpoint_id,),
         ).fetchall()
+        versions: dict[str, str] = {}
+        updated: list[str] = []
+        message_state = None
         for raw_row in rows:
-            if len(raw_row) != 3:
+            if len(raw_row) != 4:
                 raise RuntimeError("checkpoint_channels version 行字段数非法")
-            name, version, updated_index = raw_row
+            name, version, updated_index, state = raw_row
             name = strict_text(name, field="checkpoint_channels.channel_name")
             version = strict_optional_text(
                 version, field="checkpoint_channels.channel_version"
@@ -712,16 +725,14 @@ class RolloutCheckpointQueriesMixin:
                 updated_index, field="checkpoint_channels.updated_index"
             )
             if version is not None:
-                checkpoint["channel_versions"][name] = version
+                versions[name] = version
             if updated_index is not None:
-                checkpoint["updated_channels"].append(name)
-        checkpoint["versions_seen"] = self._storage.decode_value(
-            (index.versions_seen_type, index.versions_seen_blob)
-        )
-        checkpoint["pending_sends"] = self._storage.decode_value(
-            (index.pending_sends_type, index.pending_sends_blob)
-        )
-        return checkpoint
+                updated.append(name)
+            if name == "messages":
+                message_state = state
+        if message_state not in {"view", "delta", "snapshot"}:
+            raise RuntimeError(f"checkpoint messages value_state 非法: {checkpoint_id}/{message_state!r}")
+        return versions, updated, message_state
 
     def metadata(self, index: RolloutCheckpointIndex) -> CheckpointMetadata:
         value = json.loads(index.metadata_json)
