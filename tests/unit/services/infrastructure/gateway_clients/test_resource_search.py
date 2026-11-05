@@ -30,6 +30,9 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
+from app.services.infrastructure.gateway_search.client import (
+    IncompleteSearchStreamError,
+)
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
@@ -39,9 +42,10 @@ OWNER = {"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "workspace_id
 
 
 class Stream(httpx.AsyncByteStream):
-    def __init__(self, body: bytes, *, wait: bool = False) -> None:
+    def __init__(self, body: bytes, *, wait: bool = False, failure: Exception | None = None) -> None:
         self.body = body
         self.wait = wait
+        self.failure = failure
         self.closed = False
         self.blocked = asyncio.Event()
 
@@ -49,6 +53,8 @@ class Stream(httpx.AsyncByteStream):
         # 故意在 Unicode 和 JSON／SSE 字段内部切块；不编写第二份解码器。
         for offset in range(0, len(self.body), 17):
             yield self.body[offset:offset + 17]
+        if self.failure is not None:
+            raise self.failure
         if self.wait:
             self.blocked.set()
             await asyncio.Event().wait()
@@ -92,12 +98,12 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[GatewaySessio
     await transport.aclose()
 
 
-def install_response(monkeypatch, client, events, *, wait=False, status=200, headers=None):
+def install_response(monkeypatch, client, events, *, wait=False, status=200, headers=None, failure=None):
     body = b": heartbeat\n\n" + b"".join(
         _encode_search_sse(FederatedSearchEventDTO.model_validate(event)) + b": heartbeat\n\n"
         for event in events
     )
-    stream = Stream(body, wait=wait)
+    stream = Stream(body, wait=wait, failure=failure)
     requests = []
 
     async def send(request: httpx.Request) -> httpx.Response:
@@ -122,6 +128,33 @@ async def test_stream_preserves_domain_cursor_and_uses_only_one_gateway_request(
     assert body["scope"] == request_body.scope.model_dump(mode="json")
     assert time.time() < body["deadline_at"] <= time.time() + 15
     assert request_body.deadline_at is None
+
+
+@pytest.mark.parametrize("event_count", [0, 1, 3])
+async def test_normal_eof_preserves_machine_error_and_original_request_identity(client, monkeypatch, events, request_body, event_count):
+    stream, requests = install_response(monkeypatch, client, events[:event_count])
+    received = []
+    with pytest.raises(IncompleteSearchStreamError) as caught:
+        async for event in client.resource_search.search(request_body, request_id=REQUEST_ID):
+            received.append(event)
+    assert caught.value.code == "incomplete_stream"
+    assert caught.value.request_id == REQUEST_ID
+    assert str(caught.value) == "Gateway 搜索流在最终汇总前断开；已交付分支须按原范围独立续查"
+    assert not hasattr(caught.value, "http_status")
+    assert received == [FederatedSearchEventDTO.model_validate(event) for event in events[:event_count]]
+    assert stream.closed and len(requests) == 1
+    assert requests[0].headers["X-Request-ID"] == REQUEST_ID
+
+
+@pytest.mark.parametrize("failure_type", [httpx.ReadError, httpx.ReadTimeout])
+async def test_reader_failures_keep_their_original_type_and_message(client, monkeypatch, events, request_body, failure_type):
+    failure = failure_type("原搜索连接读取失败")
+    stream, requests = install_response(monkeypatch, client, events[:1], failure=failure)
+    with pytest.raises(failure_type) as caught:
+        _ = [event async for event in client.resource_search.search(request_body, request_id=REQUEST_ID)]
+    assert caught.value is failure
+    assert str(caught.value) == "原搜索连接读取失败"
+    assert stream.closed and len(requests) == 1
 
 
 @pytest.fixture
@@ -260,8 +293,8 @@ async def test_gateway_rejection_preserves_registered_reason(client, monkeypatch
         _ = [event async for event in client.resource_search.search(request_body, request_id=REQUEST_ID)]
 
 
-@pytest.mark.parametrize("wrong_target", [False, True])
-async def test_context_json_relay_shares_event_validation_and_preserves_grant(client, monkeypatch, events, wrong_target):
+@pytest.mark.parametrize("wrong_target,event_count", [(False, 4), (True, 4), (False, 0), (False, 1), (False, 3)])
+async def test_context_json_relay_shares_event_validation_and_preserves_grant(client, monkeypatch, events, wrong_target, event_count):
     payload = json.loads(json.dumps(events))
     for event in payload:
         branches = [event["branch"]] if "branch" in event else event.get("summary", {}).get("branches", [])
@@ -277,6 +310,7 @@ async def test_context_json_relay_shares_event_validation_and_preserves_grant(cl
                 "scope": "workspace", "query": "needle", "match_mode": "literal", "revision": "original-owner-revision",
                 "has_more": True, "next_cursor": "opaque-owner-cursor",
             })
+    payload = payload[:event_count]
     target_gateway = "gateway_" + "b" * 32 if wrong_target else OWNER["gateway_id"]
     query = GatewayContextSearchRequest.model_validate({
         "source_gateway_id": OWNER["gateway_id"],
@@ -289,13 +323,21 @@ async def test_context_json_relay_shares_event_validation_and_preserves_grant(cl
     received = []
 
     async def send(request):
+        assert request.headers["X-Request-ID"] == REQUEST_ID
         received.append(json.loads(request.content))
         return httpx.Response(200, json={"request_id": REQUEST_ID, "data": {"events": payload}}, headers={"X-Request-ID": REQUEST_ID})
 
     monkeypatch.setattr(client._http_client, "_transport", httpx.MockTransport(send))
     gateway_token, request_token = set_current_gateway_id(OWNER["gateway_id"]), set_current_request_id(REQUEST_ID)
     try:
-        if wrong_target:
+        if event_count < len(events):
+            with pytest.raises(IncompleteSearchStreamError) as caught:
+                await client.search_gateway_context(query)
+            assert caught.value.code == "incomplete_stream"
+            assert caught.value.request_id == REQUEST_ID
+            assert str(caught.value) == "Gateway 搜索流在最终汇总前断开；已交付分支须按原范围独立续查"
+            assert not hasattr(caught.value, "http_status")
+        elif wrong_target:
             with pytest.raises(RuntimeError, match="回执归属错误"):
                 await client.search_gateway_context(query)
         else:

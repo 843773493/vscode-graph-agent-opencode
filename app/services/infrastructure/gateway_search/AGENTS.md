@@ -16,4 +16,5 @@
 
 - SSE 使用第三方解码器；只在 Gateway 调度，保留原范围、owner、cursor 和错误。
 - 每次调用由发起者提供 request_id；断流和协议错误明确失败，不伪报完整无匹配。
+- 正常结束但缺最终汇总时，SSE 与 JSON relay 共用验证器抛出 `IncompleteSearchStreamError`，携带 `code=incomplete_stream` 和原 `request_id`，保留既有详细原因；不改标取消、超时、HTTP 拒绝或底层读取异常，不虚构 HTTP 状态。
 - 连接由原 GatewaySessionContextClient 持有并关闭，不建立另一套连接生命周期。

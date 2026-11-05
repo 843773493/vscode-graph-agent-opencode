@@ -25,6 +25,16 @@ from app.services.business.session_navigation.name_search_budget import (
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 
 
+class IncompleteSearchStreamError(RuntimeError):
+    """正常读取结束但缺少最终汇总；保留原请求身份及续查提示。"""
+
+    code = "incomplete_stream"
+
+    def __init__(self, request_id: str) -> None:
+        super().__init__("Gateway 搜索流在最终汇总前断开；已交付分支须按原范围独立续查")
+        self.request_id = request_id
+
+
 class GatewaySearchEventValidator:
     """SSE 与 JSON relay 共用事件顺序、目标归属和唯一终态合同。"""
 
@@ -102,7 +112,7 @@ class GatewaySearchEventValidator:
 
     def finish(self) -> None:
         if not self.ended:
-            raise RuntimeError("Gateway 搜索流在最终汇总前断开；已交付分支须按原范围独立续查")
+            raise IncompleteSearchStreamError(self.request_id)
 
 
 class GatewayResourceSearchClient:
