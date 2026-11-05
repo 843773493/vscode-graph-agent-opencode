@@ -369,7 +369,7 @@ class ContextDispatchOwnerMixin:
         eligible = []
         for index, message in enumerate(messages):
             role = codec.message_role(message)
-            if role == "tool" or codec.tool_calls(message):
+            if role == "tool" or codec.tool_call_ids(message):
                 eligible.append((index, message, codec.message_id(message, index), role))
         with self._storage.storage._lock(thread_id, checkpoint_ns, session_id=session_id):
             with self._storage.storage._connect(

@@ -4,7 +4,12 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, message_to_dict
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    ToolMessage,
+    message_to_dict,
+)
 
 from app.domain.itemized.hashing import content_hash
 from app.domain.itemized.identity.item_projection import (
@@ -77,33 +82,29 @@ def projection_codec() -> LangChainMessageCodec:
     AIMessage(content="回答", additional_kwargs={"tool_calls": [{"id": "vendor-only"}]}),
     HumanMessage(content="问题"),
     ToolMessage(content="结果", tool_call_id="call-1", artifact={"rows": [1, 2]}),
-    {"data": {"tool_calls": [{"id": "call-1", "args": {}}, None, "invalid"]}},
-    {"data": {"tool_calls": ({"id": "tuple-call"},)}},
-    {"data": None},
 ])
 def test_tool_call_inspection_preserves_serialized_contract(projection_codec, message) -> None:
-    value = message if isinstance(message, dict) else message_to_dict(message)
+    value = message_to_dict(message)
     data = value.get("data")
     calls = data.get("tool_calls") if isinstance(data, dict) else None
-    expected = [call for call in calls if isinstance(call, dict)] if isinstance(calls, list) else []
-    assert projection_codec.tool_calls(message) == expected
+    expected = tuple(call.get("id") or call.get("tool_call_id") for call in calls if isinstance(call, dict)) if isinstance(calls, list) else ()
+    assert projection_codec.tool_call_ids(message) == expected
 
 
-def test_tool_call_inspection_keeps_message_containers_isolated(projection_codec) -> None:
+def test_tool_call_identity_snapshot_keeps_message_changes_isolated(projection_codec) -> None:
     message = AIMessage(content="正文", tool_calls=[
         {"id": "call-1", "name": "shell", "args": {"paths": ["README.md"]}},
     ])
-    inspected = projection_codec.tool_calls(message)
-    inspected[0]["args"]["paths"].append("changed")
-    inspected[0]["id"] = "changed"
-    assert projection_codec.tool_calls(message) == [
-        {"id": "call-1", "name": "shell", "args": {"paths": ["README.md"]}, "type": "tool_call"},
-    ]
+    inspected = projection_codec.tool_call_ids(message)
+    message.tool_calls[0]["args"]["paths"].append("changed")
+    message.tool_calls[0]["id"] = "changed"
+    assert inspected == ("call-1",)
+    assert projection_codec.tool_call_ids(message) == ("changed",)
 
 
 def test_tool_call_inspection_rejects_non_message(projection_codec) -> None:
     with pytest.raises(TypeError, match="消息 codec 只接受 LangChain BaseMessage"):
-        projection_codec.tool_calls(object())
+        projection_codec.tool_call_ids(object())
 
 
 @pytest.fixture

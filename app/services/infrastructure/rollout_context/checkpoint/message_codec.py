@@ -219,19 +219,18 @@ class LangChainMessageCodec:
             or f"internal-{hashlib.sha256(message_id.encode()).hexdigest()[:24]}"
         )
 
-    def tool_calls(
-        self, message: object | Mapping[str, object]
-    ) -> list[Mapping[str, object]]:
-        if isinstance(message, Mapping):
-            data = message.get("data")
-        elif isinstance(message, BaseMessage):
-            # 工具识别与归属匹配会反复遍历历史，只序列化需要的字段。
-            # 保留 model_dump 的嵌套容器隔离，不能直接返回消息里的可变 tools。
-            data = message.model_dump(include={"tool_calls"})
-        else:
+    def tool_call_ids(self, message: object) -> tuple[str | None, ...]:
+        """只取声明身份；缺失 ID 的声明仍占位，交实际正文解析报告错误。"""
+        if not isinstance(message, BaseMessage):
             raise TypeError("消息 codec 只接受 LangChain BaseMessage")
-        calls = data.get("tool_calls") if isinstance(data, Mapping) else None
-        return [call for call in calls if isinstance(call, Mapping)] if isinstance(calls, list) else []
+        # 筛选与归属只消费 ID，不能为此反复复制可能很大的 args；
+        # 完整参数由 items_for_message 在生成 canonical 正文时统一解析。
+        data = message.model_dump(include={"tool_calls": {"__all__": {"id", "tool_call_id"}}})
+        calls = data.get("tool_calls")
+        return tuple(
+            call_id if isinstance(call_id := call.get("id") or call.get("tool_call_id"), str) else None
+            for call in calls if isinstance(call, Mapping)
+        ) if isinstance(calls, list) else ()
 
     def model_call_id(self, message: object) -> str | None:
         """从消息自身的持久 identity 读取所属模型调用。"""
@@ -280,8 +279,7 @@ class LangChainMessageCodec:
                     identity = ItemProjectionIdentity(model_call_id=model_call_id)
                     call_ids = frozenset(
                         provider_tool_call_id(identity, call_id)
-                        for call in self.tool_calls(messages[index])
-                        if isinstance(call_id := call.get("id") or call.get("tool_call_id"), str)
+                        for call_id in self.tool_call_ids(messages[index]) if call_id is not None
                     )
                     if call_ids:
                         declarations[index] = (index, identity, call_ids)
@@ -370,7 +368,8 @@ class LangChainMessageCodec:
         # 这里只适配正文；typed 身份和 annotations 已从 metadata 单独读取，
         # 不再序列化整份 metadata、artifact 和其它未消费字段。
         data_mapping = message.model_dump(include={"content", "tool_calls", "invalid_tool_calls", "tool_call_id", "name"})
-        tool_calls = self.tool_calls({"data": data_mapping})
+        raw_tool_calls = data_mapping.get("tool_calls")
+        tool_calls = [call for call in raw_tool_calls if isinstance(call, Mapping)] if isinstance(raw_tool_calls, list) else []
         if canonical_items and canonical_items[-1].semantic_kind == SemanticKind.COMPACTION_SUMMARY:
             stored = canonical_items[-1]
             if (len(canonical_items) != 1 or not isinstance(message, HumanMessage)
