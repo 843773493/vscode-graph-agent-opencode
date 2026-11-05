@@ -78,9 +78,9 @@ class ArtifactIndex:
     url: str
     requests: list[str]
 
-    def source(self) -> dict[str, str]:
-        return {"kind": "gallery", "name": "org.example/artifact", "version": "release-1", "endpoint": self.url,
-            "entry_url": self.url + "/v0.1/servers/org.example%2Fartifact/versions/release-1"}
+    def source(self, version: str = "release-1") -> dict[str, str]:
+        return {"kind": "gallery", "name": "org.example/artifact", "version": version, "endpoint": self.url,
+            "entry_url": self.url + "/v0.1/servers/org.example%2Fartifact/versions/" + version}
 
 
 @pytest.fixture
@@ -152,6 +152,9 @@ def installation_case(request: pytest.FixtureRequest, web_workbench_assets: Path
     provider.update({"model": "e2e-stub-model", "api_key": "artifact-fixture-key"})
     config["llm"]["providers"] = [provider]
     config["agents"]["default"]["model"] = {"primary_provider": "primary", "fallback_providers": []}
+    # MCP 回放场景不使用网页 embedding；关闭其对已移除 Provider 的独立依赖。
+    fetch = next(tool for tool in config["agents"]["default"]["tools"]["custom"] if tool["tool_id"] == "fetch_webpage")
+    fetch["options"]["embedding"] = None
     config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
     runtime = context.runtime_root_for_node(request.node.nodeid)
     home = context.boxteam_home_for_node(request.node.nodeid)
@@ -371,6 +374,172 @@ def test_original_api_retains_shared_generation_until_both_workspaces_release_it
     assert exchange("GET", second_base + "/mcp/installations", "retention-removed-in-A2")["data"] == []
     (case.context.artifacts_dir / "retention-evidence.json").write_text(json.dumps({"http": evidence,
         "connections": [first_ref, second_ref], "artifact": artifact}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_same_source_update_is_separate_until_original_candidate_cas_explicitly_switches_idle_thread(
+    installation_case: InstallationCase, artifact_index: ArtifactIndex,
+) -> None:
+    case = installation_case
+    evidence: list[dict[str, object]] = []
+
+    def exchange(method: str, path: str, key: str, body: dict[str, object] | None = None) -> dict:
+        response = case.client.request(method, path, json=body, headers={"X-Request-ID": key})
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert response.headers["X-Request-ID"] == result["request_id"] == key
+        evidence.append({"method": method, "path": path, "request_id": key, "response": result})
+        return result["data"]
+
+    workspace_id = exchange("GET", "/api/gateway/workspaces", "update-workspaces")["items"][0]["workspace_id"]
+    base = f"/api/v1/workspaces/{workspace_id}"
+    capabilities = case.client.get(base + "/mcp/installation-capabilities")
+    capabilities.raise_for_status()
+    target = capabilities.json()["target"]
+    source_path = base + "/config/sources/workspace_root_mutable_override"
+
+    def candidate_plan(version: str) -> dict:
+        source = artifact_index.source(version)
+        inspected = exchange("POST", base + "/mcp/candidate-manifests", "update-inspect-" + version, {"target": target, "source": source})
+        candidate = {"target": target, "source": source, "manifest_digest": inspected["manifest_digest"],
+            "variant": inspected["variants"][0]["ref"], "server_id": "updatable"}
+        plan = exchange("POST", base + "/mcp/candidate-plans", "update-plan-" + version, candidate)
+        return {"candidate": candidate, "plan_digest": plan["plan_digest"]}
+
+    def install(plan: dict, key: str) -> dict:
+        operation = exchange("POST", base + "/mcp/installations", key, {**plan, "operation_id": key, "entrypoint": "artifact-server"})
+        deadline = time.monotonic() + 40
+        while operation["status"] == "running":
+            assert time.monotonic() < deadline, operation
+            time.sleep(.1)
+            operation = exchange("GET", base + "/mcp/installation-operations/" + key, key + "-observe")
+        return operation
+
+    def configure(plan: dict, artifact: dict, key: str) -> dict:
+        document = exchange("GET", source_path, key + "-source")
+        configuration = commentjson.loads(document["jsonc"])
+        configuration["mcp"] = {"servers": {"updatable": {"enabled": True, "transport": "stdio", "managed_launch": artifact["binding"]}}}
+        edit = {"gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"], "source_key": document["source_key"], "jsonc": json.dumps(configuration),
+            "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+            "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"], "idempotency_key": key}
+        saved = exchange("PUT", base + "/mcp/candidate-configurations", key, {
+            "target": {"kind": "workspace", "gateway_id": target["gateway_id"], "workspace_id": workspace_id},
+            "server_id": "updatable", "plan": plan, "managed_launch": artifact["binding"], "source_edit": edit})
+        assert saved["edit"]["state"] == "active" and saved["edit"]["source_saved"] and saved["edit"]["layer_imported"]
+        assert saved["active_revision"] > document["active_revision"]
+        assert saved["effective"]["mcp"]["servers"]["updatable"]["managed_launch"] == artifact["binding"]
+        return saved
+
+    first_plan = candidate_plan("release-1")
+    first_operation = install(first_plan, "update-install-one")
+    assert first_operation["status"] == "succeeded", first_operation
+    first = first_operation["artifact"]
+    first_document = configure(first_plan, first, "update-configure-one")
+    first_server, = exchange("GET", base + "/mcp/servers", "update-ready-one")
+    assert first_server["server_id"] == "updatable" and first_server["status"] == "ready"
+    first_ref = first_server["connection_ref"]
+    original_config = (case.workspace / ".boxteam/workspace.jsonc").read_bytes()
+    session = exchange("POST", base + "/sessions", "update-session", {"title": "同来源制品显式升级"})
+    probes: dict[str, dict] = {}
+
+    def invoke(phase: str, artifact: dict, dependency: str) -> dict:
+        call_id = "update-probe-" + phase
+        replies = [{"tool_calls": [{"index": 0, "id": call_id, "type": "function", "function": {
+            "name": "invoke_extension_tool", "arguments": json.dumps({"tool_name": "mcp__updatable__installation_probe", "arguments": {}})}}]},
+            {"content": "已读取实际安装环境。"}]
+        calls = case.replay.control.plan_model_calls(session["session_id"], session["thread_id"], [cast(list[dict[str, object]], build_cassette(
+            asset_id=f"update-{phase}-{index}", model="e2e-stub-model", url="https://opencode.ai/zen/v1/chat/completions",
+            frames=chat_completion_frames(response_id=f"update-{phase}-{index}", model="e2e-stub-model", deltas=({"role": "assistant", **reply},),
+                finish_reason="tool_calls" if "tool_calls" in reply else "stop")).raw["interactions"])[0] for index, reply in enumerate(replies)])
+        accepted = exchange("POST", base + f"/sessions/{session['session_id']}/messages", "update-message-" + phase, {
+            "message": {"content": "调用安装探针，读取当前精确制品的路径与依赖。"}, "run": {"mode": "single_agent", "agent_id": "default"}})
+        deadline = time.monotonic() + 40
+        while True:
+            job = exchange("GET", base + f"/jobs/{accepted['job_id']}", "update-job-" + phase)
+            if job["status"] in {"succeeded", "completed"}:
+                break
+            assert job["status"] not in {"failed", "cancelled", "timed_out"} and time.monotonic() < deadline, job
+            time.sleep(.1)
+        wire = json.loads((case.replay.artifacts / f"{calls[1]}.json").read_text(encoding="utf-8"))["request"]
+        results = {message["tool_call_id"]: message for message in wire["messages"] if message["role"] == "tool"}
+        tool_message = results[call_id]
+        assert tool_message["name"] == "invoke_extension_tool"
+        part, = tool_message["content"]
+        environment = Path(artifact["command"]).parent.parent
+        assert part["type"] == "text" and json.loads(part["text"]) == {"prefix": str(environment),
+            "executable": str(environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")), "dependency": dependency}
+        probes[phase] = tool_message
+        evidence.append({"phase": phase, "session_id": session["session_id"], "thread_id": session["thread_id"],
+            "model_call_ids": calls, "tool_results": results})
+        return results
+
+    invoke("original", first, "locked-one")
+    ledger_path = case.workspace / ".boxteam/resources.json"
+    first_record = ExternalResourceLeaseLedger(state_path=ledger_path).get(first_ref)
+    assert first_record is not None and first_record.process is not None and not first_record.process.exit_verified
+
+    def require_original(key: str) -> None:
+        assert (case.workspace / ".boxteam/workspace.jsonc").read_bytes() == original_config
+        current = exchange("GET", source_path, key + "-source")
+        for field in ("file_digest", "layer_revision", "layer_digest", "source_generation", "active_revision", "active_digest", "effective"):
+            assert current[field] == first_document[field], field
+        assert exchange("GET", base + "/mcp/servers", key + "-connection") == [first_server]
+        record = ExternalResourceLeaseLedger(state_path=ledger_path).get(first_ref)
+        assert record is not None and record.status == "running" and not record.cleanup_failed
+        assert record.process == first_record.process and record.managed_launch is not None
+        assert record.managed_launch.model_dump() == first["binding"] and Path(first["command"]).is_file()
+
+    manifest_path = artifact_index.root / "v0.1/servers/org.example/artifact/versions/release-2"
+    manifest = json.loads(manifest_path.with_name("release-1").read_text(encoding="utf-8"))
+    manifest["server"]["version"] = "release-2"
+    manifest["server"]["packages"][0]["version"] = "2.0.0"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    second_plan = candidate_plan("release-2")
+    failed = install(second_plan, "update-install-missing-two")
+    assert failed["status"] == "failed" and failed["stage"] == "lock" and failed["artifact"] is None, failed
+    assert failed["error"] and "artifact-server==2.0.0" in failed["log"]
+    assert exchange("GET", base + "/mcp/installations", "update-failed-unpublished") == [first]
+    require_original("update-after-failure")
+    invoke("after-failure", first, "locked-one")
+
+    _wheel(artifact_index.root, "locked-leaf", "2.0.0", b"VALUE = 'changed-index-two'\n")
+    _wheel(artifact_index.root, "artifact-server", "2.0.0", (Path.cwd() / "tests/integration/workspace_services/mcp/artifact_server.py").read_bytes(),
+        requires="Requires-Dist: locked-leaf>=2\n", entrypoint="artifact-server")
+    second_operation = install(second_plan, "update-install-two")
+    assert second_operation["status"] == "succeeded", second_operation
+    second = second_operation["artifact"]
+    assert second["installed_distributions"] == {"artifact-server": "2.0.0", "locked-leaf": "2.0.0"}
+    assert second["source"]["name"] == first["source"]["name"] and second["source"]["endpoint"] == first["source"]["endpoint"]
+    assert second["source"]["version"] == "release-2" and first["source"]["version"] == "release-1"
+    assert second["binding"]["installation_id"] != first["binding"]["installation_id"]
+    assert second["binding"]["generation"] != first["binding"]["generation"]
+    assert Path(second["command"]).is_file()
+    require_original("update-published-unconfigured")
+    invoke("published-unconfigured", first, "locked-one")
+
+    # TODO(2.5)：未结调用切换策略待独立裁定；本场景只验证空闲连接的显式切换。
+    ledger = ExternalResourceLeaseLedger(state_path=ledger_path)
+    assert ledger.leases_for_resource(first_ref) == []
+    second_document = configure(second_plan, second, "update-configure-two")
+    assert second_document["active_revision"] > first_document["active_revision"]
+    second_server, = exchange("GET", base + "/mcp/servers", "update-ready-two")
+    assert second_server["status"] == "ready" and second_server["connection_ref"] != first_ref
+    results = invoke("configured-two", second, "changed-index-two")
+    assert all(results["update-probe-" + phase] == result for phase, result in probes.items())
+    ledger = ExternalResourceLeaseLedger(state_path=ledger_path)
+    previous = ledger.get(first_ref)
+    assert previous is not None and previous.status == "stopped" and previous.process is not None and previous.process.exit_verified
+    assert previous.managed_launch is not None and previous.managed_launch.model_dump() == first["binding"]
+    assert not previous.cleanup_failed and ledger.leases_for_resource(first_ref) == []
+    current = ledger.get(second_server["connection_ref"])
+    assert current is not None and current.status == "running" and current.managed_launch is not None
+    assert current.managed_launch.model_dump() == second["binding"]
+    assert ledger.leases_for_resource(second_server["connection_ref"]) == []
+    artifacts = exchange("GET", base + "/mcp/installations", "update-both-published")
+    assert {artifact["binding"]["generation"] for artifact in artifacts} == {first["binding"]["generation"], second["binding"]["generation"]}
+    assert Path(first["command"]).is_file() and all(artifact["state"] == "published" for artifact in artifacts)
+    (case.context.artifacts_dir / "update-evidence.json").write_text(json.dumps({"http": evidence,
+        "first": first, "second": second, "old_connection": first_ref, "new_connection": second_server["connection_ref"]},
+        ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def test_original_workbench_install_action_publishes_without_configuring(installation_case: InstallationCase, artifact_index: ArtifactIndex) -> None:
