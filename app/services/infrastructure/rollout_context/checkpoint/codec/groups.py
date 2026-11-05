@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
-from app.domain.itemized.hashing import content_hash
+from app.domain.itemized.hashing import canonical_json_bytes, content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ProjectionGroup,
@@ -319,7 +319,15 @@ def restore_group_manifests(
                 )
             values["payload_kind"], values["payload"] = "text", item.payload["content"]
             values["content_hash"] = content_hash("text", values["payload"])
-        candidate = CanonicalItemRecord.from_dict(values)
+        # typed 字段已由 domain 严格解析；镜像与正文未变时复用本次已校验的候选，
+        # 避免再次摘要完整正文。自由扩展仍按 JCS 比较，不能把布尔值当作数字。
+        candidate = (
+            item
+            if values["payload"] is item.payload
+            and manifest == item.projection_manifest()
+            and canonical_json_bytes(manifest["extensions"]) == canonical_json_bytes(item.extensions)
+            else CanonicalItemRecord.from_dict(values)
+        )
         if candidate.projection_group != item.projection_group:
             raise ValueError("checkpoint canonical group manifest 有序坐标不一致")
         if candidate.projection_identity is not None:
