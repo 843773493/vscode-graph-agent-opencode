@@ -39,7 +39,7 @@ from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 from app.services.infrastructure.mcp.execution_handles import CallRetention
@@ -168,6 +168,8 @@ def _bind_response_model_call(
     codec = LangChainMessageCodec()
     identity = ItemProjectionIdentity(model_call_id=model_call_id)
     messages = []
+    pending_assistants: list[AIMessage] = []
+    call_counts: dict[str, int] = {}
     for message in model_response.result:
         if isinstance(message, (AIMessage, ToolMessage)):
             existing = codec.model_call_id(message)
@@ -176,15 +178,18 @@ def _bind_response_model_call(
                     "source-mismatch: dispatch response 的 model_call_id 冲突: "
                     f"message_id={message.id!r}, expected={model_call_id!r}, actual={existing!r}"
                 )
-            if isinstance(message, ToolMessage):
-                matches = [
-                    call
-                    for assistant in messages if isinstance(assistant, AIMessage)
-                    for call in assistant.tool_calls
-                    if isinstance(call["id"], str)
-                    and matches_tool_call_id(identity, call["id"], message.tool_call_id)
-                ]
-                if len(matches) != 1:
+            if isinstance(message, AIMessage):
+                pending_assistants.append(message)
+            else:
+                # 每份声明只登记一次，避免逐结果重扫全部声明；计数保留重复冲突。
+                # 只在结果到达时消费之前的声明，尾部未消费字段沿用原错误边界。
+                for assistant in pending_assistants:
+                    for call in assistant.tool_calls:
+                        if isinstance(call["id"], str):
+                            key = provider_tool_call_id(identity, call["id"])
+                            call_counts[key] = call_counts.get(key, 0) + 1
+                pending_assistants.clear()
+                if call_counts.get(provider_tool_call_id(identity, message.tool_call_id), 0) != 1:
                     raise ValueError(
                         "source-mismatch: dispatch ToolMessage 缺少唯一 emitting assistant: "
                         f"tool_call_id={message.tool_call_id!r}"

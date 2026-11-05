@@ -110,6 +110,100 @@ async def test_vendor_carrier_binds_emitting_call_and_its_structured_tool_result
     assert result.response_metadata == {}
 
 
+@pytest.fixture
+def tracked_tool_declarations():
+    class ToolDeclarations(list[dict[str, object]]):
+        visits = 0
+
+        def __iter__(self):
+            for call in super().__iter__():
+                self.visits += 1
+                yield call
+
+    return ToolDeclarations
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("tool_count", [4, 64])
+@pytest.mark.parametrize("retain", [False, True])
+async def test_response_pairing_visits_tool_declarations_linearly(
+    bridge, response_dispatch, tracked_tool_declarations, mode, tool_count, retain,
+):
+    model_call_id, dispatch = response_dispatch
+    calls = tracked_tool_declarations({
+        "id": f"{model_call_id}:tool-call:call-{index}" if index % 2 else f"call-{index}",
+        "name": "answer", "args": {}, "type": "tool_call",
+    } for index in range(tool_count))
+    assistant = AIMessage(content="工具回答", id="batch-assistant").model_copy(update={"tool_calls": calls})
+    results = [ToolMessage(content=f"结果-{index}", tool_call_id=(
+        f"call-{index}" if index % 2 else f"{model_call_id}:tool-call:call-{index}"
+    )) for index in range(tool_count)]
+    retained = []
+    if retain:
+        bridge._prepare_projection.return_value[0]["extension_call_scope"] = nullcontext(retained.extend)
+    response = await dispatch(ModelResponse(result=[assistant, *results]), mode)
+    visits = calls.visits
+    assert [message.tool_call_id for message in response.result if isinstance(message, ToolMessage)] == [
+        message.tool_call_id for message in results
+    ]
+    assert all(message.response_metadata["model_call_id"] == model_call_id for message in response.result)
+    assert retained == calls if retain else retained == []
+    assert assistant.response_metadata == {}
+    assert all(message.response_metadata == {} for message in results)
+    print(f"tools={tool_count}, mode={mode}, retain={retain}, declaration_visits={visits}")
+    # execute 默认的无操作 retention 也会消费一次完整声明列表。
+    assert visits <= tool_count * 2
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("declared", ["raw", "scoped", "foreign"])
+@pytest.mark.parametrize("selected", ["raw", "scoped", "foreign"])
+async def test_response_pairing_preserves_exact_call_scope(response_dispatch, mode, declared, selected):
+    model_call_id, dispatch = response_dispatch
+    ids = {"raw": "call", "scoped": f"{model_call_id}:tool-call:call", "foreign": "foreign:tool-call:call"}
+    assistant = AIMessage(content="", tool_calls=[{"id": ids[declared], "name": "answer", "args": {}}])
+    result = ToolMessage(content="结果", tool_call_id=ids[selected])
+    response = ModelResponse(result=[assistant, result])
+    if (declared == "foreign") != (selected == "foreign"):
+        with pytest.raises(ValueError, match="缺少唯一 emitting assistant"):
+            await dispatch(response, mode)
+    else:
+        bound = await dispatch(response, mode)
+        assert bound.result[1].tool_call_id == ids[selected]
+        assert bound.result[1].response_metadata["model_call_id"] == model_call_id
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("layout", ["same_assistant", "separate_assistants", "after_result", "future"])
+async def test_response_pairing_rejects_ambiguous_or_future_declarations(response_dispatch, mode, layout):
+    model_call_id, dispatch = response_dispatch
+    call = {"id": "call", "name": "answer", "args": {}}
+    assistant = AIMessage(content="", tool_calls=[call])
+    duplicate = AIMessage(content="", tool_calls=[{**call, "id": f"{model_call_id}:tool-call:call"}])
+    result = ToolMessage(content="结果", tool_call_id="call")
+    if layout == "same_assistant":
+        messages = [AIMessage(content="", tool_calls=[call, duplicate.tool_calls[0]]), result]
+    elif layout == "separate_assistants":
+        messages = [assistant, duplicate, result]
+    elif layout == "after_result":
+        messages = [assistant, result, duplicate, result]
+    else:
+        messages = [result, assistant]
+    with pytest.raises(ValueError, match="缺少唯一 emitting assistant"):
+        await dispatch(ModelResponse(result=messages), mode)
+    assert result.response_metadata == {}
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_response_pairing_keeps_repeated_results_and_unconsumed_calls(response_dispatch, mode):
+    _model_call_id, dispatch = response_dispatch
+    assistant = AIMessage(content="", tool_calls=[{"id": "call", "name": "answer", "args": {}}])
+    result = ToolMessage(content="结果", tool_call_id="call")
+    unconsumed = AIMessage(content="尾部声明").model_copy(update={"tool_calls": [{"name": "unconsumed"}]})
+    bound = await dispatch(ModelResponse(result=[assistant, result, result, unconsumed]), mode)
+    assert [message.content for message in bound.result] == ["", "结果", "结果", "尾部声明"]
+
+
 @pytest.mark.parametrize("mode", ["sync", "async"])
 async def test_model_dispatch_reserves_before_sending_and_retains_only_actual_calls(bridge, response_dispatch, mode):
     _model_call_id, dispatch = response_dispatch
