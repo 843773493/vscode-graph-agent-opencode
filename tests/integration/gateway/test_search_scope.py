@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
@@ -37,6 +38,7 @@ from tests.support.workspaces import prepare_default_test_workspace
 class ScopeNetwork:
     workspace: Path
     gateway_home: Path
+    gateway_id: str
     artifacts: Path
     gateway_port: int
     backend_port: int
@@ -46,22 +48,23 @@ class ScopeNetwork:
         """仅在 Gateway 停止时准备登记输入；不为测试生成任何查询结果或领域历史。"""
         gateway_root = self.gateway_home / "state/gateway"
         state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
-        registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json", state_store=state)
+        registry = GatewayWorkspaceRegistry(gateway_id=self.gateway_id, storage_path=gateway_root / "workspaces.json", state_store=state)
         try:
             if replace:
-                owner = registry.backend_owner("route_stopped")
+                previous_id = workspace_backend_id_for_root(self.stopped_roots[0])
+                owner = registry.backend_owner((self.gateway_id, previous_id))
                 assert owner is not None
                 registry.discard_stopped_backend_owner(owner)
-                registry.remove("route_stopped")
-            backend_id = workspace_backend_id_for_root(root)
+                registry.remove((self.gateway_id, previous_id))
+            workspace_id = workspace_backend_id_for_root(root)
             registry.upsert(WorkspaceTarget(
-                workspace_id="route_stopped", name=root.name, root_path=str(root), backend_url="",
-                connection_kind="local", backend_workspace_id=backend_id,
+                gateway_id=self.gateway_id, workspace_id=workspace_id, name="Stopped workspace", root_path=str(root), backend_url="",
+                connection_kind="local",
                 managed=True, desired_running=False,
             ), activate=False)
             registry.register_backend_owner(ManagedBackendOwner(ManagedBackendContract(
-                owner_id=f"scope_backend_{backend_id}", generation=f"scope_generation_{backend_id}",
-                members=(ManagedBackendMember("route_stopped", backend_id),), backend_url="",
+                gateway_id=self.gateway_id, owner_id=f"scope_backend_{workspace_id}", generation=f"scope_generation_{workspace_id}",
+                members=(ManagedBackendMember(workspace_id),), backend_url="",
             )))
         finally:
             registry.close()
@@ -90,7 +93,9 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
                 workspace_root=root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
                 fresh_identity=True,
             )
-        fixture = ScopeNetwork(workspace, runtime / "boxteam-home", artifacts, ports.port(20), ports.port(0), stopped_roots)
+        gateway_home = runtime / "boxteam-home"
+        gateway_id = load_or_create_gateway_id(gateway_home / "state/gateway/identity.json")
+        fixture = ScopeNetwork(workspace, gateway_home, gateway_id, artifacts, ports.port(20), ports.port(0), stopped_roots)
         fixture.register_stopped_target(stopped_roots[0])
         backend = start_backend_process(
             workspace_root=str(workspace), port=fixture.backend_port, log_name="scope-backend",
@@ -105,7 +110,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
 
 
 @pytest.mark.asyncio
-async def test_frozen_all_survives_gateway_restart_and_route_reuse(network: ScopeNetwork) -> None:
+async def test_frozen_all_survives_gateway_restart_and_same_name_workspace_replacement(network: ScopeNetwork) -> None:
     gateway = await asyncio.to_thread(network.start_gateway)
     observations = []
     try:
@@ -122,7 +127,8 @@ async def test_frozen_all_survives_gateway_restart_and_route_reuse(network: Scop
             first = await resolve({"mode": "all"}, "req_scope_first")
             assert len(first["scope"]["owners"]) == 2
             assert all(branch["state"] == "registered" for branch in first["branches"])
-            stopped_owner = next(branch["owner"] for branch in first["branches"] if branch["target_id"] == "route_stopped")
+            stopped_owner = {"gateway_id": network.gateway_id, "workspace_id": workspace_backend_id_for_root(network.stopped_roots[0])}
+            assert next(branch for branch in first["branches"] if branch["owner"] == stopped_owner)["state"] == "registered"
             before = {path.relative_to(network.stopped_roots[0]).as_posix(): path.read_bytes() for path in network.stopped_roots[0].rglob("*") if path.is_file()}
             selected = await resolve({"mode": "origin", "origin": stopped_owner}, "req_scope_selected")
             assert selected["scope"]["owners"] == [stopped_owner]
@@ -136,10 +142,10 @@ async def test_frozen_all_survives_gateway_restart_and_route_reuse(network: Scop
             assert resumed["scope"] == first["scope"]
             old_branch = next(branch for branch in resumed["branches"] if branch["owner"] == stopped_owner)
             assert old_branch["state"] == "unavailable" and old_branch["code"] == "owner_unavailable"
-            assert old_branch["target_id"] is None
             fresh = await resolve({"mode": "all"}, "req_scope_fresh")
             assert len(fresh["scope"]["owners"]) == 2 and stopped_owner not in fresh["scope"]["owners"]
-            current_owner = next(branch["owner"] for branch in fresh["branches"] if branch["target_id"] == "route_stopped")
+            current_owner = {"gateway_id": network.gateway_id, "workspace_id": workspace_backend_id_for_root(network.stopped_roots[1])}
+            assert next(branch for branch in fresh["branches"] if branch["owner"] == current_owner)["state"] == "registered"
             assert current_owner != stopped_owner
             assert not (network.stopped_roots[0] / ".boxteam/sessions").exists()
             assert not (network.stopped_roots[1] / ".boxteam/sessions").exists()

@@ -39,6 +39,7 @@
 - [x] 6.2 原子迁移 registry／metadata、root binding、managed_backends、活动选择、目录／Generator 和 user_view_state；保留有效 URI、canonical 正文、历史 hash 及 Session／Thread 身份。
 - [x] 6.3 用受支持旧版本完整输入验证成功、重入、冲突、远端离线、写入中断恢复和维护窗口回退，检查迁移后真实重启与客户端恢复，不手工补齐产品应生成的关联。
 - [ ] 6.4 迁齐后物理删除旧别名生成器、重复字段、换算接口、死代码和旧协议分支；完成全仓消费者核对、相关静态分析及定向回归，保留准确命令、源码版本与原始结果。所有测试使用既有矩阵或进程外超时／内存保护。
+  - 2026-11-05 搜索元数据消费者：发现与冻结范围测试改用完整 Gateway／workspace owner，远端准备沿正式 projection 发布入口；保留相同 UUID 不同 Gateway、发现零启动、分页不改活动项／导航、重启后旧 owner 不重定向到同名新工作区的断言。发现补验 13 passed，冻结范围真实 Gateway 重启单项沿首批通过记录复用，源码指纹未变；两文件 Ruff／Pyright 零诊断。准确命令、失败归因与补验原件见 `out/tests/temp/identity_metadata_consumers_20261105/artifacts/final-index.json`；全仓其余消费者仍待核齐，本项不勾选。
 
 ### 2026-11-04：6.1 只读登记身份预检切片
 

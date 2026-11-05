@@ -9,12 +9,13 @@ import pytest
 
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
 from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 
-GATEWAY = "gateway_discovery"
-BACKEND_IDS = [f"00000000-0000-4000-8000-{index:012d}" for index in range(1, 4)]
+GATEWAY = "gateway_00000000000040008000000000000001"
+REMOTE_GATEWAY = "gateway_00000000000040008000000000000002"
+WORKSPACE_IDS = [f"00000000-0000-4000-8000-{index:012d}" for index in range(1, 4)]
 HEADERS = {"X-Local-Token": "discovery-token", "X-Request-ID": "req_discovery"}
 
 
@@ -29,12 +30,12 @@ class DiscoveryFixture:
 @pytest.fixture
 async def discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[DiscoveryFixture]:
     registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "registry.json", state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
+        gateway_id=GATEWAY, storage_path=tmp_path / "registry.json", state_store=GatewayStateStore(path=tmp_path / "gateway.sqlite"),
     )
     for index, name in enumerate(("Alpha project", "Unrelated name", "Stopped workspace")):
         registry.upsert(WorkspaceTarget(
-            workspace_id=f"route_{index}", name=name, root_path=str(tmp_path / f"absent-workspace-{index}"),
-            backend_url="", connection_kind="local", backend_workspace_id=BACKEND_IDS[index],
+            gateway_id=GATEWAY, workspace_id=WORKSPACE_IDS[index], name=name, root_path=str(tmp_path / f"absent-workspace-{index}"),
+            backend_url="", connection_kind="local",
             managed=True, desired_running=False,
         ), activate=False)
     navigation_path = tmp_path / "navigation.json"
@@ -67,7 +68,7 @@ async def _query(discovery: DiscoveryFixture, **params: str | int) -> dict:
 @pytest.mark.asyncio
 async def test_discovery_pages_preserve_navigation_and_include_stopped_targets(discovery: DiscoveryFixture) -> None:
     before = discovery.navigation_path.read_bytes()
-    revision, active = discovery.registry.registry_revision, discovery.registry.active_workspace_id
+    revision, active = discovery.registry.registry_revision, discovery.registry.active_workspace
     collected, cursor = [], None
     for _index in range(3):
         page = await _query(discovery, limit=1, **({"cursor": cursor} if cursor else {}))
@@ -75,14 +76,14 @@ async def test_discovery_pages_preserve_navigation_and_include_stopped_targets(d
         cursor = page["cursor"]
         assert page["complete"] is (cursor is None)
     assert cursor is None
-    assert [item["target_id"] for item in collected] == ["route_0", "route_1", "route_2"]
     assert [item["owner"] for item in collected] == [
-        {"gateway_id": GATEWAY, "workspace_id": workspace_id} for workspace_id in BACKEND_IDS
+        {"gateway_id": GATEWAY, "workspace_id": workspace_id} for workspace_id in WORKSPACE_IDS
     ]
     assert discovery.navigation_path.read_bytes() == before
-    assert (discovery.registry.registry_revision, discovery.registry.active_workspace_id) == (revision, active)
+    assert (discovery.registry.registry_revision, discovery.registry.active_workspace) == (revision, active)
     for target in discovery.registry.targets():
         assert not target.desired_running
+        assert target.root_path is not None
         assert not Path(target.root_path).exists()
     assert discovery.registry._runtimes == {}
 
@@ -92,7 +93,7 @@ async def test_discovery_matches_name_id_and_navigation_with_exact_owners(discov
     created = await discovery.client.post("/api/gateway/workspace-navigation/folders", json={"name": "报告集合"})
     assert created.status_code == 200, created.text
     folder = next(node for node in created.json()["data"]["nodes"] if node["kind"] == "workspace_folder")
-    reference = next(node for node in created.json()["data"]["nodes"] if node["workspace_id"] == "route_1")
+    reference = next(node for node in created.json()["data"]["nodes"] if node["workspace"] == {"gateway_id": GATEWAY, "workspace_id": WORKSPACE_IDS[1]})
     moved = await discovery.client.patch(f"/api/gateway/workspace-navigation/nodes/{reference['node_id']}", json={"parent_node_id": folder["node_id"]})
     assert moved.status_code == 200, moved.text
     # 把较早节点移到较晚创建的父节点下，不能把按 parent_id 分组的 wire 顺序误认为前序遍历。
@@ -102,9 +103,9 @@ async def test_discovery_matches_name_id_and_navigation_with_exact_owners(discov
     moved = await discovery.client.patch(f"/api/gateway/workspace-navigation/nodes/{folder['node_id']}", json={"parent_node_id": outer["node_id"]})
     assert moved.status_code == 200, moved.text
     before = discovery.navigation_path.read_bytes()
-    for query, expected in (("lphpj", "route_0"), (BACKEND_IDS[1], "route_1"), ("报告", "route_1")):
+    for query, expected in (("lphpj", WORKSPACE_IDS[0]), (WORKSPACE_IDS[1], WORKSPACE_IDS[1]), ("报告", WORKSPACE_IDS[1])):
         page = await _query(discovery, query=query)
-        assert [item["target_id"] for item in page["items"]] == [expected]
+        assert [item["owner"] for item in page["items"]] == [{"gateway_id": GATEWAY, "workspace_id": expected}]
         assert page["complete"] and page["cursor"] is None
     item = (await _query(discovery, query="报告"))["items"][0]
     assert item["breadcrumb_node_ids"] == [outer["node_id"], folder["node_id"], reference["node_id"]]
@@ -122,9 +123,9 @@ async def test_discovery_rejects_cursor_after_its_metadata_changes(discovery: Di
     if change == "query":
         params["query"] = "Alpha"
     elif change == "gateway":
-        monkeypatch.setattr(app.state, "gateway_id", "gateway_replaced")
+        monkeypatch.setattr(app.state, "gateway_id", "gateway_00000000000040008000000000000003")
     elif change == "registry":
-        discovery.registry.update("route_0", name="Renamed")
+        discovery.registry.update((GATEWAY, WORKSPACE_IDS[0]), name="Renamed")
     else:
         response = await discovery.client.post("/api/gateway/workspace-navigation/folders", json={"name": "new folder"})
         assert response.status_code == 200, response.text
@@ -136,19 +137,22 @@ async def test_discovery_rejects_cursor_after_its_metadata_changes(discovery: Di
 
 @pytest.mark.asyncio
 async def test_discovery_reports_remote_owner_without_resolving_or_connecting_route(discovery: DiscoveryFixture) -> None:
-    discovery.registry.upsert_remote_gateway(RemoteGatewayConnection(
+    connection = RemoteGatewayConnection(
         connection_id="remote-disconnected", name="Remote", host="unused.invalid", port=22, username="unused",
-        private_key_path=None, ssh_config_host=None, remote_gateway_port=8014, remote_gateway_id="gateway_remote",
-        protocol_version=1, source_owner="manual",
-    ))
-    discovery.registry.upsert(WorkspaceTarget(
-        workspace_id="remote-projection", name="Remote workspace", root_path=None, backend_url="",
-        connection_kind="remote_gateway", backend_workspace_id=BACKEND_IDS[0], owner="remote_projection",
-        connection_id="remote-disconnected",
-        remote_gateway_connection_id="remote-disconnected", remote_workspace_id="remote-route-alias",
-    ), activate=False)
+        private_key_path=None, ssh_config_host=None, remote_gateway_port=8014, remote_gateway_id=REMOTE_GATEWAY,
+        protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
+    )
+    discovery.registry.apply_remote_projection_snapshot(connection=connection, projections=(WorkspaceTarget(
+        gateway_id=REMOTE_GATEWAY, workspace_id=WORKSPACE_IDS[0], name="Remote workspace", root_path=None, backend_url="",
+        connection_kind="remote_gateway", owner="remote_projection",
+        remote_gateway_connection_ids=(connection.connection_id,),
+    ),))
     page = await _query(discovery, query="Remote workspace")
-    assert [item["owner"] for item in page["items"]] == [{"gateway_id": "gateway_remote", "workspace_id": BACKEND_IDS[0]}]
+    assert [item["owner"] for item in page["items"]] == [{"gateway_id": REMOTE_GATEWAY, "workspace_id": WORKSPACE_IDS[0]}]
+    all_owners = [item["owner"] for item in (await _query(discovery))["items"]]
+    assert len(all_owners) == 4
+    assert {"gateway_id": GATEWAY, "workspace_id": WORKSPACE_IDS[0]} in all_owners
+    assert {"gateway_id": REMOTE_GATEWAY, "workspace_id": WORKSPACE_IDS[0]} in all_owners
     assert discovery.registry._remote_gateway_runtimes == {}
     assert discovery.registry._runtimes == {}
 
