@@ -918,3 +918,9 @@
 - 原文件 owner 的两处 cursor binding 区分查询身份与本页 `limit/max_response_bytes`；双根配额2/1后继续单根，可重新分配而不误拒原cursor。查询、scope、匹配／覆盖、扫描／读取／期限及文件观察／区间校验保留，未增加兼容链或扫描器。升级前旧binding的cursor需重新查询，保留明确invalid_cursor。
 - 当前共享树248项定向、4项HTTP准入／状态字节／零配额边界通过；隔离真实Gateway的11次请求验证name/content双根→单根、零配额不推进及最终无漏无重，当前客户端21项验证重复根／有界0哨兵／exists。完整计量、公平准入及精确上限／多一条按源码指纹逐项复核，16.17闭环。Ruff与strict通过，生产9条Pyright诊断与完整HEAD基线相同，无新增；未改前端／DTO，不重复构建。
 - 原始命令、源码指纹、首轮错误检查路径退出4及修正后通过、独立类型基线、真实HTTP结果与适用边界见 `out/tests/temp/2026/11/05/search_budget_completion/artifacts/verification-005.json` 及 `root-integration-006.json`；不以本项替代未完成的共享SQL整理、其它第16组或Electron验收。
+
+### 2026-11-05：请求日志与 Trace 失效游标重新查询（16.18 部分）
+
+- 原 Gateway 错误出口将四个既有 invalid／stale 请求日志和 Trace 游标代码标为可重新查询；保留原 owner、code、reason、HTTP状态、输入cursor及零交付计数。原客户端继续查询携原cursor，失败重新查询只选原分支并省略已拒绝cursor，不新增解析器、DTO或分类链。
+- 43项传输、40项原owner／API、55项调度／输出／Service及26项真实Chromium组件合同通过；共享树43项补验、Ruff和ESM检查通过。组件核scope／类别／查询保持与命令URI／HTML只作文字；SSE和宿主边界为显式装具。真实Trace经执行／fork／Gateway页面定位及SDK失效cursor检查1项通过。正式构建通过；49宿主类型检查保留完整归档基线两错，Python测试旧32条诊断与基线相同，未宣称全绿。
+- 真实请求日志停在原Quick Input整体隐藏后的焦点断言，新retryable断言尚未到达；未放宽焦点或业务断言，正独立取证。16.18整项保持未勾。完整原件 `out/tests/temp/2026/11/05/search_error_contract/artifacts/verification-008.json`；根集成与精确归属 `root-integration-009.json`（SHA256 `9e1dc2350daf53c070a0bd379df882391459c7d730e7fd0eef986d33de823288`）。

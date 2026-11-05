@@ -86,6 +86,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
                         "cursor": diagnostic["cursor"]}]}), request_id="trace-stale-cursor")]
             failure, = events[-1]["summary"]["branches"]
             assert failure["state"] == "failed" and failure["code"] == "stale_trace_search_cursor"
+            assert failure["retryable"] is True
             assert failure["error_owner"] == "trace_event_store" and failure["reason"] == "file_changed"
             assert failure["http_status"] == 409 and failure["cursor"] == diagnostic["cursor"]
             assert failure["returned_results"] == 0 and not any(event["type"] == "page" for event in events)

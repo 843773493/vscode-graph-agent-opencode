@@ -82,6 +82,30 @@ test('正文同 UUID 跨 Gateway 只请求中继，快分支续页不被初始�
   expect(result.status.every(detail => detail.includes('request_id: request-'))).toBe(true);
 });
 
+for (const rejection of [
+  { category: 'LLM 请求记录', code: 'invalid_request_log_cursor', owner: 'llm_request_log', reason: 'malformed', status: 400 },
+  { category: 'LLM 请求记录', code: 'stale_request_log_cursor', owner: 'llm_request_log', reason: 'record_changed', status: 409 },
+  { category: 'Trace', code: 'invalid_trace_search_cursor', owner: 'trace_event_store', reason: 'malformed', status: 400 },
+  { category: 'Trace', code: 'stale_trace_search_cursor', owner: 'trace_event_store', reason: 'file_changed', status: 409 },
+]) test(`${rejection.code} 重新查询保持原分支并清除被拒绝的 cursor`, async () => {
+  const result = await exercise('cursorRejectionContract', rejection);
+  const category = rejection.category === 'Trace' ? 'trace' : 'llm_request';
+  expect(result.requests).toHaveLength(3);
+  expect(result.requests[0].scope.owners).toEqual(federatedOwners);
+  expect(result.requests[0].queries[0]).toMatchObject({ category, operation: 'content' });
+  const continuation = result.requests[1], retry = result.requests[2];
+  expect(continuation.continuations).toEqual([{ branch: { owner: federatedOwners[1], category, operation: 'content' }, cursor: 'B-rejected-cursor' }]);
+  expect(retry.scope).toEqual(continuation.scope);
+  expect(retry.queries).toEqual(continuation.queries);
+  expect(retry.continuations).toEqual([{ branch: { owner: federatedOwners[1], category, operation: 'content' } }]);
+  expect(result.failureLabel).toContain('原 owner 拒绝此续点');
+  expect(result.diagnosticText).toContain('[执行](command:workbench.action.closeWindow) <b>诊断</b>');
+  expect(result.diagnosticLinks).toBe(0); expect(result.diagnosticMarkup).toBe(0);
+  expect(result.retryTooltip).toBe('重新查询此类别');
+  expect(result.pending).toEqual([false, false]); expect(result.busy).toBe(false);
+  expect(result.status[1]).toContain('request_id: request-2');
+});
+
 test('文件使用原 QueryBuilder 选项，一次联邦 A+B，快分支续原 cursor 且独立重试', async () => {
   const result = await exercise('fileBranchContract', 'retry');
   expect(result.requests).toHaveLength(3);
@@ -210,7 +234,7 @@ for (const category of ['会话', 'Thread']) {
     expect(result.paths.every(path => ['/api/gateway/auth/local-credential', '/api/gateway/search'].includes(path))).toBe(true);
     expect(result.requests[0].scope.owners).toEqual(federatedOwners);
     expect(result.requests[0].queries).toEqual([{ category: category === '会话' ? 'catalog' : 'thread', operation: 'name',
-      contract_version: 1, query: 'needle', match_mode: 'fuzzy', limit: 50, file_targets: [] }]);
+      contract_version: 1, query: 'needle', match_mode: 'fuzzy', limit: 50, file_targets: [], diagnostic_targets: [] }]);
     for (const request of result.requests.slice(1)) {
       expect(request.scope.mode).toBe('resume');
       expect(request.scope.scope.owners).toEqual(result.requests[0].scope.owners);

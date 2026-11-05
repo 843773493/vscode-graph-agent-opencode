@@ -36,6 +36,8 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultsDTO,
 )
 from app.schemas.search_federation import FederatedSearchEventDTO
+from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
+from app.services.infrastructure.turn_history.trace_search import TraceSearchError
 
 GATEWAY = "gateway_" + "a" * 32
 OWNERS = [{"gateway_id": GATEWAY, "workspace_id": f"00000000-0000-4000-8000-{index:012d}"} for index in range(1, 4)]
@@ -65,6 +67,7 @@ class SearchHTTP:
     paused: PausedBody = field(default_factory=PausedBody)
     mirror: GatewaySessionCatalogSearchService | None = None
     network_error: type[httpx.RequestError] | None = None
+    cursor_rejection: tuple[LLMRequestLogError | TraceSearchError, int] | None = None
 
     async def receive(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -73,6 +76,9 @@ class SearchHTTP:
         payload = json.loads(request.content)
         request_id = request.headers["X-Request-ID"]
         headers = {"X-Request-ID": request_id, "Content-Type": "application/json"}
+        if self.cursor_rejection is not None:
+            error, status = self.cursor_rejection
+            return httpx.Response(status, headers=headers, json={"detail": error.detail()})
         if self.mode == "paused":
             return httpx.Response(200, headers=headers, stream=self.paused)
         if self.mode in {"error", "wrong-error-id"}:
@@ -279,6 +285,40 @@ async def test_original_domain_reason_distinguishes_same_failure_code(search_htt
     assert failure.retryable is (reason in {"invalid_cursor", "stale_cursor"})
     terminal, = [event.branch for event in result if event.type == "branch"]
     assert terminal == failure
+
+
+@pytest.mark.parametrize("category,error,status", [
+    ("llm_request", LLMRequestLogError("invalid_request_log_cursor", "malformed", "请求日志续点格式无效"), 400),
+    ("llm_request", LLMRequestLogError("stale_request_log_cursor", "record_changed", "请求日志正文已变化"), 409),
+    ("trace", TraceSearchError("invalid_trace_search_cursor", "malformed", "Trace 续点格式无效"), 400),
+    ("trace", TraceSearchError("stale_trace_search_cursor", "file_changed", "Trace 已追加或改写"), 409),
+])
+async def test_request_and_trace_cursor_failure_can_restart_original_branch(
+    search_http: SearchHTTP, category: str, error: LLMRequestLogError | TraceSearchError, status: int,
+) -> None:
+    resolved = await search_http.client.post("/api/gateway/search/resolve", json={"mode": "selected", "owners": OWNERS[:1]})
+    assert resolved.status_code == 200
+    scope = resolved.json()["data"]["scope"]
+    branch = {"owner": OWNERS[0], "category": category, "operation": "content"}
+    search_http.cursor_rejection = error, status
+    result = events(await search_http.search(scope={"mode": "resume", "scope": scope},
+        queries=[{"category": category, "operation": "content", "query": "needle", "match_mode": "literal", "limit": 1}],
+        continuations=[{"branch": branch, "cursor": "original-log-position"}]))
+    summary = result[-1].summary
+    assert summary is not None
+    failure, = summary.branches
+    assert failure.state == "failed" and failure.retryable
+    assert failure.branch.model_dump(mode="json", exclude_none=True) == branch
+    assert (failure.error_owner, failure.code, failure.reason, failure.message) == (
+        error.detail()["owner"], error.code, error.reason, str(error))
+    assert failure.http_status == status and failure.provider_id is None
+    assert failure.cursor == "original-log-position" and failure.returned_results == summary.returned_results == 0
+    assert not any(event.type == "page" for event in result)
+    terminal, = [event.branch for event in result if event.type == "branch"]
+    assert terminal == failure
+    sent, = search_http.requests
+    assert json.loads(sent.content)["cursor"] == "original-log-position"
+    assert sent.headers["X-Request-ID"] == "req_search"
 
 
 @pytest.mark.parametrize("mode,status", [("authentication-error", 401), ("permission-error", 403)])

@@ -3,17 +3,19 @@ import { queryFederatedSearchBranches } from '../../../../../src/clients/workben
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 import { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 import { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { IconLabel } from '../../../../../src/clients/workbench/upstream/src/vs/base/browser/ui/iconLabel/iconLabel.js';
 
 /** 真实名称／正文分支与共享 SSE 消费器，只有 Gateway 网络响应为显式装具。 */
 export function fileBranchContract(mode) { return federatedBranchContract(mode, '文件'); }
 export function contentBranchContract(mode) { return federatedBranchContract(mode, '会话消息'); }
 export function nameBranchContract({ mode, category }) { return federatedBranchContract(mode, category); }
+export function cursorRejectionContract(rejection) { return federatedBranchContract('cursor-rejection', rejection.category, rejection); }
 
-async function federatedBranchContract(mode, category) {
+async function federatedBranchContract(mode, category, rejection) {
   const originalFetch = globalThis.fetch, before = workspaceContext.getSnapshot();
-  const names = { '会话消息': 'message', '会话': 'catalog', 'Thread': 'thread', '文件': 'file' };
+  const names = { '会话消息': 'message', '会话': 'catalog', 'Thread': 'thread', '文件': 'file', 'LLM 请求记录': 'llm_request', 'Trace': 'trace' };
   const file = category === '文件';
-  const content = category === '会话消息', operation = content ? 'content' : 'name';
+  const content = category === '会话消息' || category === 'LLM 请求记录' || category === 'Trace', operation = content ? 'content' : 'name';
   const owners = ['gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']
     .map(gatewayId => ({ gatewayId, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
   const roots = owners.map(owner => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`);
@@ -104,6 +106,28 @@ async function federatedBranchContract(mode, category) {
       (item, owner) => ({ id: `${owner.gatewayId}/${owner.workspaceId}/${content ? item.message.reference.start_codepoint : `${item.kind}/${item.title}`}`, label: item.title, accept() {} }),
       () => updates++, value => { busy = value; }, value => { label = value; }, instantiation ?? {});
     await until(() => connections.length === 1); const first = connections[0]; scope(first);
+    if (mode === 'cursor-rejection') {
+      const completed = index => ({ ...state(index), returned_results: 0 });
+      const limited = { ...state(1, 'limited'), cursor: 'B-rejected-cursor', returned_results: 0 };
+      send(first, 'branch', { branch: completed(0) }); send(first, 'branch', { branch: limited });
+      end(first, [completed(0), limited]); await until(() => !busy);
+      const continuation = branches[1].status.trigger();
+      await until(() => connections.length === 2); const next = connections[1]; scope(next);
+      const failure = { ...state(1, 'failed'), code: rejection.code, error_owner: rejection.owner, reason: rejection.reason,
+        http_status: rejection.status, cursor: limited.cursor, message: '原 owner 拒绝此续点 [执行](command:workbench.action.closeWindow) <b>诊断</b>' };
+      send(next, 'branch', { branch: failure }); end(next, [failure]); await continuation;
+      const failureLabel = branches[1].status.label, retryTooltip = branches[1].status.buttons[0].tooltip;
+      // 使用 Quick Input 原标签渲染器核对文本，不在测试内复制 Markdown 或命令解析。
+      const rendering = lifetime.add(new IconLabel(document.createElement('div'), { supportHighlights: true, supportIcons: true }));
+      rendering.setLabel(failureLabel);
+      const diagnosticText = rendering.element.textContent, diagnosticLinks = rendering.element.querySelectorAll('a[href]').length,
+        diagnosticMarkup = rendering.element.querySelectorAll('b').length;
+      const retry = branches[1].status.trigger();
+      await until(() => connections.length === 3); const last = connections[2]; scope(last);
+      send(last, 'branch', { branch: completed(1) }); end(last, [completed(1)]); await retry;
+      return { requests: connections.map(connection => connection.request), paths, failureLabel, retryTooltip, busy, diagnosticText, diagnosticLinks, diagnosticMarkup,
+        pending: branches.map(branch => branch.pending), status: branches.map(branch => branch.status.detail) };
+    }
     if (mode === 'cancel' || mode === 'late') {
       const count = updates; lifetime.dispose();
       if (mode === 'late') { page(first, 0, 2); page(first, 1, 2); end(first, [state(0), state(1)]); first.release(); }

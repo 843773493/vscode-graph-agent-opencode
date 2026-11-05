@@ -84,6 +84,7 @@ async def test_request_content_search_opens_only_the_exact_record(
                         "cursor": diagnostic["cursor"]}]}), request_id="req_log_stale_cursor")]
             failure, = events[-1]["summary"]["branches"]
             assert failure["state"] == "failed" and failure["code"] == "stale_request_log_cursor"
+            assert failure["retryable"] is True
             assert failure["error_owner"] == "llm_request_log" and failure["reason"] == "catalog_changed"
             assert failure["http_status"] == 409 and failure["cursor"] == diagnostic["cursor"]
             assert failure["returned_results"] == 0 and not any(event["type"] == "page" for event in events)
