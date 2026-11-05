@@ -81,7 +81,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
             raise ValueError("source-mismatch: captured activation catalog 不属于 source 存储 owner")
         require_resource_activation_schema(connection)
 
-        def read_lineage(ref: DetailRef) -> Mapping[str, object]:
+        def read_lineage(ref: DetailRef) -> tuple[Mapping[str, object], str]:
             return read_captured_lineage_manifest(connection, ref, captured_node=captured_node)
 
         for session_id, thread_id, snapshot_id in connection.execute(

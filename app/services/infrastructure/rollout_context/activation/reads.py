@@ -13,7 +13,6 @@ from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 
 from app.domain.itemized.execution_admission import ExecutionAdmission
-from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationContractError,
@@ -142,7 +141,7 @@ def binding_assembly_id(
     binding: ResourceProvenanceRef,
     *,
     storage_owner: tuple[str, str],
-    read_lineage_manifest: Callable[[DetailRef], Mapping[str, object]],
+    read_lineage_manifest: Callable[[DetailRef], tuple[Mapping[str, object], str]],
 ) -> str:
     """当前 catalog 验证历史正文归属；继承和重试不改写原 DetailRef。"""
     if not isinstance(snapshot, ResourceActivationSnapshotRef) or not isinstance(
@@ -201,8 +200,8 @@ def binding_assembly_id(
         )
     lineage_ref = _detail_ref_from_key(row[-2], field="lineage_detail_ref")
     lineage_ref.require_owner(root.owner_session_id, root.owner_thread_id, ref.assembly_id)
-    manifest = read_lineage_manifest(lineage_ref)
-    if sha256_jcs(manifest) != row[-1]:
+    manifest, manifest_digest = read_lineage_manifest(lineage_ref)
+    if manifest_digest != row[-1]:
         raise ResourceActivationStoreError(
             HASH_MISMATCH_CODE, "retry 原冻结 lineage manifest digest 不一致",
         )
@@ -503,7 +502,7 @@ class ResourceActivationReadMixin:
 
     def _build_snapshot(
         self, raw: Mapping[str, object], *,
-        read_lineage_manifest: Callable[[DetailRef], Mapping[str, object]],
+        read_lineage_manifest: Callable[[DetailRef], tuple[Mapping[str, object], str]],
     ) -> ResourceActivationSnapshotRef:
         record = raw["record"]
         assert isinstance(record, dict)
@@ -525,7 +524,7 @@ class ResourceActivationReadMixin:
         thread_id = strict_text(record["thread_id"], field="thread_id")
         body_ref.require_owner(session_id, thread_id, activation_snapshot_id)
         try:
-            manifest = read_lineage_manifest(body_ref)
+            manifest, manifest_digest = read_lineage_manifest(body_ref)
         except (KeyError, DetailUnavailableError) as error:
             # retention/权限/篡改导致正文不可用时必须显式 loss，绝不按同名新资源
             # 或空 manifest 重建 lineage。
@@ -533,7 +532,7 @@ class ResourceActivationReadMixin:
                 LINEAGE_BODY_UNAVAILABLE_CODE,
                 f"受保护 activation lineage 正文不可用: {activation_snapshot_id}",
             ) from error
-        if record["lineage_manifest_digest"] != sha256_jcs(manifest):
+        if record["lineage_manifest_digest"] != manifest_digest:
             raise ResourceActivationStoreError(
                 HASH_MISMATCH_CODE,
                 "受保护 lineage manifest digest 与 catalog 不一致: "

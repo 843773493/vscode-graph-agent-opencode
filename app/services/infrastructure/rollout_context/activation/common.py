@@ -127,7 +127,7 @@ class ResourceActivationLineageBodyStore(Protocol):
         checkpoint_ns: str,
         storage_owner: tuple[str, str],
         snapshot: RolloutReadSnapshot | None = None,
-    ) -> Mapping[str, object]: ...
+    ) -> tuple[Mapping[str, object], str]: ...
 
 
 def _optional_detail_ref_from_key(value: object, *, field: str) -> DetailRef | None:

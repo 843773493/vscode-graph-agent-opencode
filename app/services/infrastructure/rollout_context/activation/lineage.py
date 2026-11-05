@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 from app.core.atomic_fs import native_io_path
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -43,18 +44,19 @@ LINEAGE_DETAIL_KIND = "resource_activation_lineage"
 LINEAGE_RETENTION_CLASS = "resource_activation_provenance"
 
 
-def _lineage_payload(value: Mapping[str, object], detail_kind: str) -> Mapping[str, object]:
+def _lineage_payload(value: Mapping[str, object], detail_kind: str) -> tuple[Mapping[str, object], str]:
     if detail_kind != LINEAGE_DETAIL_KIND:
         raise RuntimeError("source-mismatch: lineage detail kind 不属于 activation provenance")
     body = value.get("detail")
     if not isinstance(body, Mapping):
         raise TypeError("source-mismatch: lineage detail 正文不是 object")
-    return body
+    # detail parser 已核验实际正文摘要；随正文交给 catalog 比对，不再重复编码、哈希。
+    return body, cast(str, value["detail_content_hash"])
 
 
 def read_captured_lineage_manifest(
     connection: sqlite3.Connection, detail_ref: DetailRef, *, captured_node: Path,
-) -> Mapping[str, object]:
+) -> tuple[Mapping[str, object], str]:
     """只读 caller 捕获的 catalog 和正文，不经运行时路径解析器回读 live。"""
     require_historical_scope(connection, detail_ref.session_id, detail_ref.thread_id)
     row = connection.execute(
@@ -113,7 +115,7 @@ class ActivationLineageBodyStore:
         checkpoint_ns: str,
         storage_owner: tuple[str, str],
         snapshot: RolloutReadSnapshot | None = None,
-    ) -> Mapping[str, object]:
+    ) -> tuple[Mapping[str, object], str]:
         raw = self._storage.assemblies.get_context_plan_detail(
             storage_owner[0],
             storage_owner[1],
