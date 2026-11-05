@@ -134,7 +134,6 @@ class McpExecutionHandles:
         """turn-bound 目录在原执行内保留；后继模型调用只继承，不延长期限。"""
         key = ("execution", session_id, thread_id, execution_id)
         reservation = self._reservations.get(key)
-        targets = {target.target_id: target for target in binding.targets.values() if target.origin == "mcp"}
         if reservation is not None:
             if (reservation.owner_scope is not scope or scope.state != "open"
                     or reservation.binding_ref != binding):
@@ -142,6 +141,8 @@ class McpExecutionHandles:
             return reservation
         if scope.state != "open":
             raise ExtensionTargetResolutionError("MCP 原执行 scope 已关闭")
+        # 继承资格直接复用原 handle；只有首次发放才展开冻结目录。
+        targets = {target.target_id: target for target in binding.targets.values() if target.origin == "mcp"}
         reservation = _Reservation(
             {name: self._resolve_active(target) for name, target in targets.items()}, (),
             datetime.now(UTC) + timedelta(seconds=self._timeout_seconds), owner_scope=scope, binding_ref=binding,
@@ -196,6 +197,7 @@ class McpExecutionHandles:
                     return
                 identity = ItemProjectionIdentity(model_call_id=model_call_id)
                 operations: set[str] = set()
+                target_names: set[str] | None = None
                 for call in calls:
                     if call["name"] != "invoke_extension_tool":
                         continue
@@ -203,7 +205,12 @@ class McpExecutionHandles:
                     if not isinstance(call_id, str) or not call_id:
                         raise ValueError("MCP 模型输出缺少稳定 tool_call_id")
                     target_name = call["args"].get("tool_name")
-                    if not isinstance(target_name, str) or target_name.strip() not in binding.targets:
+                    if not isinstance(target_name, str):
+                        continue
+                    # 同一响应只展开一次目录，普通输出无需展开。
+                    if target_names is None:
+                        target_names = set(binding.targets)
+                    if target_name.strip() not in target_names:
                         continue
                     operations.add(software_tool_operation_id(
                         "mcp_call", session_id, thread_id, model_call_id,
