@@ -267,9 +267,17 @@ class TraceEventStore:
 
     def event_threads(self, session_id: str, events: list[Event]) -> dict[str, str]:
         """Session 文件内按已提交 Job 事实投影 Thread 身份，Goal 明确归 main。"""
-        job_ids = {event.job_id for event in events if event.type not in {"goal_updated", "goal_cleared"}}
         with self._file_lock(session_id):
-            owners = TraceTurnIndex(self._trace_file(session_id).parent).job_threads(session_id, job_ids)
+            return self._event_threads(session_id, events, {})
+
+    def _event_threads(
+        self, session_id: str, events: list[Event], owners: dict[str, str],
+    ) -> dict[str, str]:
+        job_ids = {event.job_id for event in events if event.type not in {"goal_updated", "goal_cleared"}}
+        trace_dir = self._trace_file(session_id).parent
+        missing = job_ids - owners.keys()
+        if missing:
+            owners.update(TraceTurnIndex(trace_dir).job_threads(session_id, missing))
         result = {}
         for event in events:
             if event.type == "goal_updated" or event.type == "goal_cleared":
@@ -286,9 +294,12 @@ class TraceEventStore:
         position: TraceSearchPosition | None, budget: TraceSearchBudget,
     ) -> TraceSearchPage:
         with self._file_lock(session_id):
+            # 仅在本次持锁搜索内复用已完整校验的 Job 归属；条目数受扫描预算约束，
+            # 新请求重新查询，不能把后续追加的归属冲突隐藏在跨请求缓存中。
+            owners: dict[str, str] = {}
             return search_trace_events(session_id, self._trace_file(session_id), query,
                 limit=limit, position=position, budget=budget,
-                event_threads=lambda events: self.event_threads(session_id, events))
+                event_threads=lambda events: self._event_threads(session_id, events, owners))
 
     def locate(self, reference: TraceReferenceDTO) -> TraceLocationDTO:
         with self._file_lock(reference.session_id):

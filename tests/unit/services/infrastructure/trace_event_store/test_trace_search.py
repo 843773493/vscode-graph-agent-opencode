@@ -14,6 +14,7 @@ from app.schemas.event import (
     JobCreatedPayload,
 )
 from app.services.infrastructure.turn_history import trace_search
+from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
 from app.services.infrastructure.turn_history.trace_page import TRACE_PAGE_MAX_BYTES
 from app.services.infrastructure.turn_history.trace_search import (
     TraceSearchBudget,
@@ -63,6 +64,38 @@ def test_reverse_pages_continue_within_record_and_keep_real_thread(records):
         assert located.text[reference.start_codepoint:reference.end_codepoint] == "needle😀"
         preview_offset = reference.start_codepoint - hit.preview_start_codepoint
         assert hit.preview[preview_offset:preview_offset + len("needle😀")] == "needle😀"
+
+
+@pytest.mark.parametrize("mixed_jobs", [False, True])
+async def test_search_reuses_job_ownership_only_within_locked_request(records, monkeypatch, mixed_jobs):
+    store, session, _file, main, child = records
+    jobs = ["job-1", "job-0" if mixed_jobs else "job-1", "job-1"]
+    for ordinal, job in enumerate(jobs):
+        await store.append(session, AgentStartEvent(
+            event_id=f"window-{ordinal}", job_id=job, timestamp=datetime.now(UTC),
+            payload=AgentStartPayload(message="x" * 300000 + "window-needle", agent_id="default"),
+        ))
+    lookup = TraceTurnIndex.job_threads
+    queries = []
+
+    def observe(index, session_id, job_ids):
+        if job_ids:
+            queries.append(set(job_ids))
+        return lookup(index, session_id, job_ids)
+
+    monkeypatch.setattr(TraceTurnIndex, "job_threads", observe)
+    page = search(store, session, "window-needle", limit=100)
+    assert page.complete
+    assert [hit.reference.event_id for hit in page.items] == ["window-2", "window-1", "window-0"]
+    assert [hit.reference.thread_id for hit in page.items] == [child, main if mixed_jobs else child, child]
+    assert queries == ([{"job-1"}, {"job-0"}] if mixed_jobs else [{"job-1"}])
+
+    await store.append(session, JobCreatedEvent(
+        event_id="new-owner-conflict", job_id="job-1", timestamp=datetime.now(UTC),
+        payload=JobCreatedPayload(session_id=session, thread_id=main, message="conflict", agent_id="default"),
+    ))
+    with pytest.raises(RuntimeError, match="Thread 归属漂移"):
+        search(store, session, "window-needle", limit=100)
 
 
 async def test_append_invalidates_cursor_but_not_unchanged_target(records):
@@ -120,7 +153,7 @@ def test_no_match_does_not_hash_or_resolve_threads(records, monkeypatch):
     def unexpected(*_args, **_kwargs):
         raise AssertionError("非命中不需要正文摘要或 Thread 查询")
     monkeypatch.setattr(trace_search.hashlib, "sha256", unexpected)
-    monkeypatch.setattr(store, "event_threads", unexpected)
+    monkeypatch.setattr(store, "_event_threads", unexpected)
     page = search(store, session, "不存在的独有词")
     assert page.complete and page.items == [] and page.position is None
 
