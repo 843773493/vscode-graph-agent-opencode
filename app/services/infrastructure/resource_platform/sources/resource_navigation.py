@@ -280,8 +280,9 @@ class ResourceNavigation:
                 # 工作区附件按工作区权限访问；Session 私有产物才消费调用者的精确 capability。
                 return self._navigate_owned_file(parsed, request, gateway_id, deadline, self._artifact_reader, owner_id=self._workspace_id)
             return self._read(path, node, request, deadline)
+        # 输出页预算不改变查询身份；扫描、读取、匹配选项及原文件观察仍绑定续点。
         binding = hashlib.sha256(json.dumps(
-            {**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri, "gateway_id": gateway_id},
+            {**request.model_dump(exclude={"uri", "cursor", "limit", "max_response_bytes"}), "uri": parsed.display_uri, "gateway_id": gateway_id},
             sort_keys=True, separators=(",", ":"),
         ).encode()).hexdigest()
         resume = self._decode_cursor(request.cursor, binding)
@@ -376,7 +377,7 @@ class ResourceNavigation:
             return self._read_content(owned.data, node, request, deadline, media_type=media, mime_type=mime_type)
         if request.search_mode != "content":
             raise ResourceUriResolveError("capability_denied", "工具结果仅支持单文件正文搜索，不提供产物目录匹配")
-        binding = hashlib.sha256(json.dumps({**request.model_dump(exclude={"uri", "cursor"}), "uri": parsed.display_uri,
+        binding = hashlib.sha256(json.dumps({**request.model_dump(exclude={"uri", "cursor", "limit", "max_response_bytes"}), "uri": parsed.display_uri,
                                             "gateway_id": gateway_id}, sort_keys=True).encode()).hexdigest()
         version = hashlib.sha256(owned.data).hexdigest()
         resume = self._decode_cursor(request.cursor, binding)

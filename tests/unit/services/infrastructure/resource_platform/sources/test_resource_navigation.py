@@ -29,8 +29,8 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
-from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.services.infrastructure.workspace_files import paths as paths_module
+from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 WORKSPACE_ID = "019d1b4a-1111-7000-8000-000000000001"
 GATEWAY_ID = "gateway_navigation_test"
@@ -234,10 +234,10 @@ async def test_execution_deadline_does_not_change_cursor_binding(navigation_case
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changes", [
     {"uri_suffix": "/sub"}, {"operation": "search", "query": "a"},
-    {"limit": 3}, {"scan_limit": 30}, {"max_bytes": 8},
-    {"max_response_bytes": 2048}, {"timeout_ms": 500}, {"gateway_id": "gateway_other"},
+    {"scan_limit": 30}, {"max_bytes": 8},
+    {"timeout_ms": 500}, {"gateway_id": "gateway_other"},
 ])
-async def test_cursor_rejects_another_target_query_or_limits(navigation_case, changes) -> None:
+async def test_cursor_rejects_another_target_query_or_bound_limits(navigation_case, changes) -> None:
     owner, workspace, uri = navigation_case
     (workspace / "sub").mkdir()
     for name in ("a.txt", "b.txt", "c.txt"):
