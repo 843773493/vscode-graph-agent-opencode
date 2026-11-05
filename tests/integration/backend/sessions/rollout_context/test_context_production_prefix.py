@@ -19,6 +19,7 @@ from app.agents.graph_binding import (
 )
 from app.agents.providers.wire_finalize import finalize_provider_wire
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_prefixed_id
 from app.core.model_request_context import SummaryCandidateScope
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCatalogStore
@@ -66,18 +67,18 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
 )
-from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
 from app.services.mapping.itemized.canonical_langchain import (
     project_summary_source,
     summary_source_groups,
 )
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - fixture 根据当前测试文件隔离产物
 )
-from tests.harness.python.run_context import TestRunContext
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 
@@ -833,6 +834,39 @@ def test_seal_projection_is_reused_and_independent_cold_projection_maps_after_cl
             ) == native
 
 
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_cold_wire_read_uses_frozen_request_without_current_attachment_projection(
+    production_context, monkeypatch, session_bundle_factory, target_format,
+):
+    saver, session, thread, _connection, _manager, prepare = production_context
+    result = prepare("cold-frozen-wire", target_format=target_format)
+    snapshot = result["snapshot"]
+    foreign = create_prefixed_id("ses")
+    session_bundle_factory(saver._storage.storage.sessions_dir, foreign)
+    foreign_thread = saver._storage.storage.main_thread_id(foreign)
+    saver.accept_turn(
+        foreign, thread_id=foreign_thread, accepted_ingress_id="foreign-wire-ingress",
+        acceptance_idempotency_key="foreign-wire-root", job_id="foreign-wire-job",
+        admission_idempotency_key="foreign-wire-admission", payload="未授权历史的独立owner", payload_kind="text",
+    )
+
+    def reject_live_projection(*args, **kwargs):
+        raise AssertionError("读取历史 wire 不得查询当前附件 alias")
+
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        for name in ("project_message_attachments", "project_attachment_payload"):
+            monkeypatch.setattr(cold._storage.attachment_projection, name, reject_live_projection)
+        wire = cold.read_sealed_context_wire(session, thread, snapshot.as_sealed_plan())
+        assert wire == snapshot.request_hash_preimage
+        message_field = "messages" if target_format == "chat_completions" else "input"
+        messages = wire[message_field]
+        assert isinstance(messages, list) and messages
+        messages.clear()
+        assert cold.read_sealed_context_wire(session, thread, snapshot.as_sealed_plan()) == snapshot.request_hash_preimage
+        with pytest.raises(ValueError, match="历史 SessionThread 不属于目标本地冻结 snapshot"):
+            cold.read_sealed_context_wire(foreign, foreign_thread, snapshot.as_sealed_plan())
+
+
 @pytest.mark.parametrize("damage", ["assembly-manifest", "activation-binding"])
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
 def test_independent_cold_projection_and_retry_reject_persisted_damage_after_ack(
@@ -870,6 +904,11 @@ def test_independent_cold_projection_and_retry_reject_persisted_damage_after_ack
         cold.project_context_plan_for_dispatch(
             session, thread, result["plan"], target_format=target_format,
         )
+    with (
+        RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold,
+        pytest.raises((ValueError, RuntimeError), match=expected_error),
+    ):
+        cold.read_sealed_context_wire(session, thread, result["plan"])
     with pytest.raises((ValueError, RuntimeError), match=expected_error):
         prepare("damaged-after-ack", target_format=target_format)
     assert len(acknowledged) == 1

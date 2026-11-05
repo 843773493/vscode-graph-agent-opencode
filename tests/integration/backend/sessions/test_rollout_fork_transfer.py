@@ -8,6 +8,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import AsyncIterator
+from contextlib import closing
 from pathlib import Path
 
 import commentjson
@@ -15,7 +16,9 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.agents.providers.wire_finalize import ChatWireProfile
 from app.core.identifier import create_prefixed_id
+from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import (
     parse_resource_uri,
     parse_session_thread_uri,
@@ -32,8 +35,17 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_attachment_directory,
     resolve_captured_directory,
 )
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.attachments.test_frozen_history import (
+    assert_frozen_requests,
+)
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     _completed,
     _prepare_workspace,
@@ -58,7 +70,8 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
     run_partition = context.runtime_root_for_node(request.node.nodeid).parent.name
     artifacts = context.artifacts_dir / run_partition / request.node.name
     artifacts.mkdir(parents=True, exist_ok=True)
-    same_backend_routes = bool(getattr(request, "param", {}).get("same_backend_routes"))
+    options = getattr(request, "param", {})
+    same_backend_routes = bool(options.get("same_backend_routes"))
     fork_deadlines = ForkDeadlineRegistry(artifacts)
     try:
         with model_stream_replay(
@@ -70,7 +83,7 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
                 context, _prepare_workspace, backend_environment=model.environment,
                 backend_asgi_app="tests.support.e2e_control.backend_app:app",
                 # 共享 Backend 时真实 owner 是 A，辅助服务必须跟随该 owner 启动。
-                resource_service_nodes=("a" if same_backend_routes else "b",),
+                resource_service_nodes=options.get("resource_service_nodes", ("a" if same_backend_routes else "b",)),
                 on_sshd_started=fork_deadlines.watchdog.register_c3_sshd,
                 same_backend_routes=same_backend_routes,
             ) as nodes:
@@ -894,6 +907,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_triad", [{"resource_service_nodes": ("b", "c")}], indirect=True)
 @pytest.mark.parametrize("creation_kind", ["new_session_main", "new_child_thread"])
 async def test_real_source_child_fork_cold_history_attachment_and_successor(
     transfer_triad, creation_kind: str,
@@ -1175,6 +1189,94 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     (artifacts / "source-child-successor-wire.json").write_text(successor_wire)
     assert inherited in successor_wire and child_only in successor_wire and successor in successor_wire
     assert main_only not in successor_wire
+    assert target_file_id in successor_wire
+    assert attachment_source["resource_uri"] not in successor_wire
+
+    # 真实执行取得目录关联后硬重启，由产品对账释放；来源保持离线，不手填待处理或恢复事实。
+    resolver = get_session_path_resolver(target.workspace / ".boxteam/sessions")
+    index = resolver.resolve_thread_node(target_session_id, target_thread_id) / "rollout/index.sqlite"
+    with closing(sqlite3.connect(index.as_uri() + "?mode=ro", uri=True)) as connection:
+        assemblies = dict(connection.execute("SELECT model_call_id,assembly_id FROM model_calls"))
+    captures = {call: json.loads((model.artifacts / f"{call}.json").read_text()) for call in assemblies}
+    target_attachment_id = target_file.tail_segments[0]
+    assert claims[0]["target_attachment_id"] == target_attachment_id
+    with closing(AttachmentBlobStore(target.workspace)) as store:
+        saver = RolloutCheckpointSaver(target.workspace / ".boxteam/sessions", attachment_store=store)
+        frozen_requests = {call: saver.get_context_assembly(
+            target_session_id, target_thread_id, assembly_id=assembly,
+        ).to_dict() for call, assembly in assemblies.items()}
+        directory = store._catalog.get_directory(target_attachment_id)
+        assert directory is not None and directory.availability == "available"
+        working_copy = resolve_attachment_directory(store._attachments_root, directory.relative_locator)
+        assert (working_copy / "original/content").read_bytes() == attachment_body
+    rebuild_restart = target.restart_backend()
+    assert source.backend.process.poll() is not None
+    assert not working_copy.exists()
+    with closing(AttachmentBlobStore(target.workspace)) as store:
+        directory = store._catalog.get_directory(target_attachment_id)
+        assert directory is not None and directory.availability == "released" and directory.release_pending == 0
+        saver = RolloutCheckpointSaver(target.workspace / ".boxteam/sessions", attachment_store=store)
+        assert_frozen_requests(saver, target_session_id, target_thread_id,
+            assemblies=assemblies, frozen=frozen_requests, captures=captures,
+            profile=ChatWireProfile(provider_id="primary", custom_llm_provider="openai", model="e2e-stub-model",
+                                    reasoning_content_replay=True))
+    assert not working_copy.exists(), "重建冻结请求不能物化当前附件目录"
+    rebuilt = await target.client.get("/api/v1/workspace/files/download", params={"path": target_file_id})
+    assert rebuilt.status_code == 200 and rebuilt.content == attachment_body, rebuilt.text
+    assert (working_copy / "original/content").read_bytes() == attachment_body
+    assert _provider_call_count(model) == provider_requests_before_fork + 1
+    (artifacts / "source-offline-target-working-copy-rebuild.json").write_text(json.dumps({
+        "source_owner": source_owner, "target_uri": target_file_id, "restart": rebuild_restart,
+        "request_hashes": {call: snapshot["request_hash"] for call, snapshot in frozen_requests.items()},
+        "original_sha256": hashlib.sha256(attachment_body).hexdigest(),
+    }, ensure_ascii=False, indent=2) + "\n")
+
+    if creation_kind == "new_session_main":
+        # 第二次跨端 fork 继承 C 已实际发送过本地 alias 的 assembly，不能只跳过第一代映射。
+        next_point_response = await target.client.get(
+            f"/api/v1/sessions/{target_session_id}/fork-source-point",
+            params={"mode": "full_rollout_copy", "thread_id": target_thread_id},
+        )
+        assert next_point_response.status_code == 200, next_point_response.text
+        next_point = next_point_response.json()["data"]
+        hub.client.headers.update(hub_headers)
+        next_request = {
+            "idempotency_key": "second-cross-workspace-frozen-attachment",
+            "source_uri": published["thread_uri"],
+            "target_container_uri": workspace_session_inventory_uri(hub.workspace_id, gateway_authority=hub.gateway_id),
+            "creation_kind": "new_session_main", "mode": "full_rollout_copy",
+            "source_view_id": next_point["source_view_id"], "source_view_revision": next_point["source_view_revision"],
+            "resources": [{"resource_uri": item["resource_uri"], "action": "copy_snapshot"} for item in next_point["resources"]],
+        }
+        next_response = await _post_fork(
+            hub, target_session_id, next_request, _fork_deadline(hub, next_request, fork_deadlines),
+            stage="second_cross_workspace_fork",
+        )
+        assert next_response.status_code == 200, next_response.text
+        next_result = next_response.json()["data"]
+        next_session, next_thread = next_result["session"]["session_id"], next_result["thread_id"]
+        next_file_id = next_result["resources"][0]["target_uri"]
+        assert next_file_id not in {target_file_id, attachment_source["resource_uri"]}
+        target.restart_backend("kill")
+        hub.restart_backend()
+        assert source.backend.process.poll() is not None and target.backend.process.poll() is not None
+        with RolloutCheckpointSaver(hub.workspace / ".boxteam/sessions") as saver:
+            assert_frozen_requests(saver, next_session, next_thread,
+                assemblies=assemblies, frozen=frozen_requests, captures=captures,
+                profile=ChatWireProfile(provider_id="primary", custom_llm_provider="openai", model="e2e-stub-model",
+                                        reasoning_content_replay=True))
+        before_next = _provider_call_count(model)
+        await _send(hub, next_session, "第二代目标继续使用本机附件。", thread_id=next_thread, model=model, reply=reply_text)
+        assert _provider_call_count(model) == before_next + 1
+        next_wire = json.dumps(_provider_requests(model)[before_next:], ensure_ascii=False)
+        assert next_file_id in next_wire and target_file_id not in next_wire
+        assert attachment_source["resource_uri"] not in next_wire
+        next_original = await hub.client.get("/api/v1/workspace/files/download", params={"path": next_file_id})
+        assert next_original.status_code == 200 and next_original.content == attachment_body
+        (artifacts / "second-cross-workspace-frozen-attachment.json").write_text(json.dumps({
+            "fork": next_result, "request_hashes": {call: value["request_hash"] for call, value in frozen_requests.items()},
+            "successor_wire": json.loads(next_wire), "source_backends_offline": True,
+        }, ensure_ascii=False, indent=2) + "\n")
 
 
 def _creation_record(node: CommunicationNode, key: str, child_session_node: Path | None) -> dict[str, object]:

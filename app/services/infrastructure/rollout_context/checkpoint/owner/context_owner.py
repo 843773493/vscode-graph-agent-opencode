@@ -146,7 +146,7 @@ class ContextOwnerMixin(
         include_summaries: bool = False,
         request_only_content: Mapping[str, object] | None = None,
     ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...]]:
-        """以同一 sealed selection 同时生成消息与独立 provider tools。"""
+        """按 sealed selection 投影当前目标的消息与 tools；历史 wire 由专用读取入口返回。"""
         projection = self._project_committed_context_plan(
             session_id,
             thread_id,
@@ -159,6 +159,39 @@ class ContextOwnerMixin(
             collect_capability_losses=True,
         )
         return projection.messages, projection.tools, projection.losses
+
+    def read_sealed_context_wire(
+        self,
+        session_id: str,
+        thread_id: str,
+        plan: ContextRequestPlan,
+        *,
+        checkpoint_ns: str = "",
+    ) -> dict[str, object]:
+        """读取该次实际封存的请求，不以当前附件 alias 或 Provider 配置重新编码。
+
+        fork 保留来源 assembly；即使来源已是另一次 fork，历史请求仍使用当时
+        的目标 URI。scope、canonical、detail、prefix 与 activation 沿原冷读链
+        校验，正文复用 assembly 已保存的规范化 wire，不建立另一套消息历史。
+        """
+        committed, items, content = self._read_committed_context_projection(
+            session_id, thread_id, plan,
+            checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+        )
+        snapshot = committed.assembly
+        # 纯映射核对封存 selection/prefix 与正文，不查询当前可变附件目录。
+        project_context_plan(
+            snapshot.as_sealed_plan(), items,
+            include_runtime_notices=True, include_summaries=True,
+            request_only_content=content, seal_binding=snapshot.seal_binding,
+        )
+        wire = snapshot.request_hash_preimage
+        if (snapshot.projector_id != WIRE_PROJECTOR_ID
+                or snapshot.target_format not in {"chat_completions", "responses"}
+                or not isinstance(wire, dict)):
+            raise ValueError("detail-unavailable: assembly 未封存完整 Provider wire")
+        # snapshot 的公开 getter 已隔离可变 JSON；调用方不能改写封存正文。
+        return wire
 
     def project_context_plan_for_dispatch(
         self,

@@ -17,7 +17,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from app.agents.providers.wire_finalize import ChatWireProfile, finalize_provider_wire
+from app.agents.providers.wire_finalize import ChatWireProfile
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import (
     file_uri_child,
@@ -102,17 +102,7 @@ def assert_frozen_requests(
         snapshot = saver.get_context_assembly(session, thread, assembly_id=assembly)
         assert snapshot.to_dict() == frozen[call]
         assert snapshot.provider_version == profile.identity()
-        messages, tools, losses = saver.project_context_plan_to_provider(
-            session, thread, snapshot.as_sealed_plan(), target_format="chat_completions",
-            include_runtime_notices=True, include_summaries=True,
-        )
-        assert not losses
-        preimage = snapshot.request_hash_preimage
-        assert isinstance(preimage, dict)
-        params = {key: value for key, value in preimage.items() if key not in {"messages", "tools"}}
-        rebuilt = normalize_wire_request(finalize_provider_wire(
-            messages=messages, tools=tools, native_request=None, profile=profile, params=params,
-        ))
+        rebuilt = saver.read_sealed_context_wire(session, thread, snapshot.as_sealed_plan())
         assert rebuilt == normalize_wire_request(captures[call]["request"]) == snapshot.request_hash_preimage
         snapshot.validate_hashes()
 

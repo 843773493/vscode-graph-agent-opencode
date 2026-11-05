@@ -18,7 +18,10 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
-from app.domain.itemized.plans.contributions import ContextContribution, ContributionResolver
+from app.domain.itemized.plans.contributions import (
+    ContextContribution,
+    ContributionResolver,
+)
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
@@ -143,7 +146,7 @@ class ContextProjectionOwnerMixin:
         *,
         checkpoint_ns: str = "",
     ) -> dict[str, object]:
-        """从同一已提交 selection 直接编码 Responses input，不经过 LangChain。"""
+        """按已提交 selection 编码当前目标 Responses input；历史 wire 使用专用读取入口。"""
         snapshot, items, request_content = self._read_committed_context_projection(
             session_id, thread_id, plan,
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
