@@ -45,12 +45,20 @@ try {
   const gateway = createServer((incoming, response) => {
     const upstream = { path: incoming.url, owner: incoming.headers['x-boxteam-workspace-id'],
       cookie: incoming.headers.cookie, body: '', closed: false, response };
+    if (input.scenario === 'file-cache') upstream.headers = incoming.headers;
     upstreams.push(upstream);
     response.once('close', () => { upstream.closed = true; });
     incoming.on('data', chunk => { upstream.body += chunk; });
     incoming.on('end', () => {
       if (input.scenario === 'pending') return;
-      if (input.scenario === 'json') {
+      if (input.scenario === 'file-cache') {
+        const unchanged = incoming.headers['if-none-match'] === 'W/"resource-v1"';
+        response.writeHead(unchanged ? 304 : 200, { 'Content-Type': 'image/png',
+          'ETag': 'W/"resource-v1"', 'Cache-Control': 'private, no-cache',
+          'Vary': 'X-BoxTeam-Workspace-Id, X-BoxTeam-Target-Gateway-Id, Authorization, Cookie',
+          'X-Request-ID': unchanged ? 'fixture-validation' : 'fixture-original' });
+        response.end(unchanged ? undefined : 'fixture-image-bytes');
+      } else if (input.scenario === 'json') {
         response.writeHead(201, { 'Content-Type': 'application/json', 'X-Request-ID': 'fixture-request',
           'Set-Cookie': 'fixture-session=returned; HttpOnly' });
         response.end(JSON.stringify({ path: upstream.path, owner: upstream.owner,
@@ -63,7 +71,25 @@ try {
   });
   const target = await listen(gateway);
   const origin = await listen(createWorkbenchServer({ root: input.root, gateway: target }));
-  if (input.scenario === 'streams') {
+  if (input.scenario === 'file-cache') {
+    const path = '/api/v1/workspace/files/raw?path=boxteam%3A%2F%2Fworkspace%2Ffixture%2Fimage.png';
+    const headers = { 'X-BoxTeam-Workspace-Id': 'workspace-a', 'X-BoxTeam-Target-Gateway-Id': 'gateway-a',
+      Authorization: 'Bearer test-only', Cookie: 'fixture-session=local' };
+    const read = extra => new Promise((resolve, reject) => {
+      const client = request(origin + path, { headers: { ...headers, ...extra } }, response => {
+        const chunks = [];
+        response.on('data', chunk => chunks.push(chunk));
+        response.on('end', () => resolve({ status: response.statusCode, headers: response.headers,
+          body: Buffer.concat(chunks).toString() }));
+        response.on('error', reject);
+      });
+      clients.push(client);
+      client.on('error', reject);
+      client.end();
+    });
+    observed.cold = await read({});
+    observed.warm = await read({ 'If-None-Match': observed.cold.headers.etag });
+  } else if (input.scenario === 'streams') {
     const responses = [];
     for (const path of ['/api/stream/first', '/api/stream/second']) {
       const client = open(origin, path);
@@ -130,7 +156,7 @@ try {
 const scope = await TestRunContext.fromTestFile('tests/integration/clients/web/workbench_server.test.mjs').prepare();
 await writeFile(join(scope.artifactsDir, 'observer.mjs'), observer);
 
-for (const scenario of ['streams', 'pending', 'json', 'static']) {
+for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache']) {
   test(`Workbench HTTP 代理：${scenario}`, async () => {
     const directory = join(scope.artifactsDir, scenario);
     await mkdir(directory);
@@ -163,7 +189,30 @@ for (const scenario of ['streams', 'pending', 'json', 'static']) {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
     const observed = JSON.parse(result.stdout);
-    if (scenario === 'streams') {
+    if (scenario === 'file-cache') {
+      expect(observed.cold.status).toBe(200);
+      expect(observed.cold.body).toBe('fixture-image-bytes');
+      expect(observed.warm.status).toBe(304);
+      expect(observed.warm.body).toBe('');
+      for (const response of [observed.cold, observed.warm]) {
+        expect(response.headers.etag).toBe('W/"resource-v1"');
+        expect(response.headers['cache-control']).toBe('private, no-cache');
+        expect(response.headers.vary).toBe('X-BoxTeam-Workspace-Id, X-BoxTeam-Target-Gateway-Id, Authorization, Cookie');
+      }
+      expect(observed.cold.headers['x-request-id']).toBe('fixture-original');
+      expect(observed.warm.headers['x-request-id']).toBe('fixture-validation');
+      expect(observed.requests).toHaveLength(2);
+      const [cold, warm] = observed.requests;
+      expect(warm.path).toBe(cold.path);
+      expect(cold.headers['if-none-match']).toBeUndefined();
+      expect(warm.headers['if-none-match']).toBe('W/"resource-v1"');
+      for (const request of [cold, warm]) {
+        expect(request.headers['x-boxteam-workspace-id']).toBe('workspace-a');
+        expect(request.headers['x-boxteam-target-gateway-id']).toBe('gateway-a');
+        expect(request.headers.authorization).toBe('Bearer test-only');
+        expect(request.headers.cookie).toBe('fixture-session=local');
+      }
+    } else if (scenario === 'streams') {
       expect(observed.firstReleased).toBe(true);
       expect(observed.secondStillOpen).toBe(true);
       expect(observed.secondMessage).toBe('data: second-only\n\n');

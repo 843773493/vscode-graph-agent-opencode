@@ -22,6 +22,11 @@ export const transformedSourcePaths = [
   'src/vs/workbench/services/textfile/common/textEditorService.ts',
   'src/vs/workbench/services/configuration/common/configurationCache.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
+  'src/vs/workbench/contrib/webview/common/webview.ts',
+  'src/vs/workbench/api/common/extHostWebview.ts',
+  'src/vs/workbench/contrib/webview/browser/resourceLoading.ts',
+  'src/vs/platform/webview/common/mimeTypes.ts',
+  'extensions/markdown-language-features/src/preview/preview.ts',
   ...searchEditorSourcePaths,
   ...outlineSourcePaths,
   ...mcpSourcePaths,
@@ -48,6 +53,35 @@ export function sourceTransform(root, productConfiguration, extensions) {
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
+    if (path === join(upstream, 'src/vs/workbench/contrib/webview/common/webview.ts')) {
+      // 允许根中的 HTTP 扩展文件也走原隔离 Worker；第三方 URL 保留直接加载语义。
+      contents = replaceOnce(contents, 'export function asWebviewUri(resource: URI, remoteInfo?: WebviewRemoteInfo): URI {',
+        'export function asWebviewUri(resource: URI, remoteInfo?: WebviewRemoteInfo, localResourceRoots: readonly URI[] = []): URI {');
+      contents = replaceOnce(contents, 'if (resource.scheme === Schemas.http || resource.scheme === Schemas.https) {',
+        "if ((resource.scheme === Schemas.http || resource.scheme === Schemas.https) && !localResourceRoots.some(root => isEqualOrParent(resource.with({ query: '' }), root, true))) {");
+      contents = "import { isEqualOrParent } from '../../../../base/common/resources.js';\n" + contents;
+    }
+    if (path === join(upstream, 'src/vs/workbench/api/common/extHostWebview.ts')) {
+      contents = replaceOnce(contents, 'return asWebviewUri(resource, this.#remoteInfo);',
+        'return asWebviewUri(resource, this.#remoteInfo, this.#options.localResourceRoots ?? getDefaultLocalResourceRoots(this.#extension, this.#workspace));');
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/webview/browser/resourceLoading.ts')) {
+      // 原 Fetch Provider 的 stat 是零值占位，不能据此让 Worker 永久命中；HTTP 文件沿 fetch 自身再验证。
+      contents = replaceOnce(contents, 'const readOptions: { etag?: string; position?: number; length?: number } = { etag: options.ifNoneMatch };',
+        'const isHttpResource = resourceToLoad.scheme === Schemas.http || resourceToLoad.scheme === Schemas.https;\nconst readOptions: { etag?: string; position?: number; length?: number } = { etag: isHttpResource ? undefined : options.ifNoneMatch };');
+      contents = replaceOnce(contents, 'new WebviewResourceResponse.StreamSuccess(result.value, result.etag, result.mtime, mime, result.size)',
+        'new WebviewResourceResponse.StreamSuccess(result.value, isHttpResource ? undefined : result.etag, isHttpResource ? undefined : result.mtime, mime, result.size)');
+    }
+    if (path === join(upstream, 'src/vs/platform/webview/common/mimeTypes.ts')) {
+      contents = replaceOnce(contents, "['.oft', 'font/otf'],",
+        "['.otf', 'font/otf'],\n['.ttf', 'font/ttf'],\n['.woff', 'font/woff'],\n['.woff2', 'font/woff2'],");
+    }
+    if (path === join(upstream, 'extensions/markdown-language-features/src/preview/preview.ts')) {
+      // 首次生成贡献资源 URL 前发布同一允许根，避免首帧继续直连本机 HTTP。
+      const options = 'this.#webviewPanel.webview.options = this.#getWebviewOptions();';
+      contents = replaceOnce(contents, options, '');
+      contents = replaceOnce(contents, 'const content = await (shouldReloadPage', `${options}\nconst content = await (shouldReloadPage`);
+    }
     if (path === join(upstream, 'src/vs/workbench/browser/web.main.ts')) {
       const marker = 'await this.registerIndexedDBFileSystemProviders(environmentService, fileService, logService, loggerService, logsPath);';
       const cacheSchemes = '[Schemas.file, Schemas.vscodeUserData, Schemas.tmp] /* Cache all non native resources */';
