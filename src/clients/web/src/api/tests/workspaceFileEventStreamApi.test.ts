@@ -2,8 +2,25 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { streamWorkspaceFileEvents } from "../../api";
 import type { WorkspaceFileChangeBatchDTO } from "../../protocol/jsonTypes";
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
+import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../session/sessionApiFetchMock";
 
-const originalFetch = globalThis.fetch;
+const OWNER = { gatewayId: "gateway-file-events", workspaceId: "00000000-0000-4000-8000-000000000062" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const ROOT = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
+
+function installStreamBackend(respond: (init: RequestInit | undefined) => Response): string[] {
+  const requests: string[] = [];
+  installSessionApiFetchMock(({ path, method, init }) => {
+    expect(path).toBe("/api/v1/workspace/observations/stream");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    requests.push(`${method} ${path}`);
+    return respond(init);
+  });
+  return requests;
+}
 
 function streamResponse(chunks: string[], init: RequestInit | undefined): Response {
   const encoder = new TextEncoder();
@@ -25,30 +42,26 @@ function streamResponse(chunks: string[], init: RequestInit | undefined): Respon
 }
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  unwrapSessionApiFetch();
 });
 
 describe("工作区文件监听 SSE 客户端", () => {
   test("发送快捷路径并解析批量文件变化", async () => {
     const port = 48_101;
-    let requestCount = 0;
     let streamRequest: RequestInit | undefined;
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      requestCount += 1;
-      if (requestCount === 1) {
-        return Response.json({ data: { token: "watch-token" } });
-      }
-      streamRequest = args[1];
+    const requests = installStreamBackend((init) => {
+      streamRequest = init;
       return streamResponse([
         ": heartbeat\n\n",
-        "event: changes\ndata: {\"overflow\":false,\"directories\":[],\"event_id\":7,\"invalidated_roots\":[],\"snapshots\":[],\"changes\":[{\"kind\":\"edit\",\"path\":\"/workspace/a.ts\"}]}\n\n",
-      ], args[1]);
-    }, { preconnect: originalFetch.preconnect });
+        `event: changes\ndata: ${JSON.stringify({ overflow: false, directories: [], event_id: 7,
+          invalidated_roots: [], snapshots: [], changes: [{ kind: "edit", path: `${ROOT}/a.ts` }] })}\n\n`,
+      ], init);
+    });
     const batches: WorkspaceFileChangeBatchDTO[] = [];
     let connected = false;
 
-    await streamWorkspaceFileEvents(port, ["/workspace/shortcut"], {
-      workspaceId: "gw_watch",
+    await streamWorkspaceFileEvents(port, [`${ROOT}/shortcut`], {
+      workspaceId: WORKSPACE_KEY,
       onBatch: (batch) => batches.push(batch),
       onConnected: () => {
         connected = true;
@@ -56,54 +69,47 @@ describe("工作区文件监听 SSE 客户端", () => {
     });
 
     expect(JSON.parse(String(streamRequest?.body)).subscriptions).toEqual([{
-      subscription_id: expect.any(String), kind: "workspace_files", paths: ["/workspace/shortcut"],
+      subscription_id: expect.any(String), kind: "workspace_files", paths: [`${ROOT}/shortcut`],
     }]);
-    expect(new Headers(streamRequest?.headers).get("X-BoxTeam-Workspace-Id"))
-      .toBe("gw_watch");
+    expect(requests).toEqual(["POST /api/v1/workspace/observations/stream"]);
     expect(connected).toBe(true);
     expect(batches).toEqual([{
       overflow: false, directories: [], event_id: 7, invalidated_roots: [], snapshots: [],
-      changes: [{ kind: "edit", path: "/workspace/a.ts" }],
+      changes: [{ kind: "edit", path: `${ROOT}/a.ts` }],
     }]);
   });
 
   test("服务端监听错误会直接暴露", async () => {
     const port = 48_102;
-    let requestCount = 0;
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      requestCount += 1;
-      if (requestCount === 1) {
-        return Response.json({ data: { token: "watch-token" } });
-      }
+    const requests = installStreamBackend((init) => {
       return streamResponse([
         "event: error\ndata: {\"message\":\"watch failed\"}\n\n",
-      ], args[1]);
-    }, { preconnect: originalFetch.preconnect });
+      ], init);
+    });
 
-    await expect(streamWorkspaceFileEvents(port, [])).rejects.toThrow("watch failed");
+    await expect(streamWorkspaceFileEvents(port, [], { workspaceId: WORKSPACE_KEY })).rejects.toThrow("watch failed");
+    expect(requests).toEqual(["POST /api/v1/workspace/observations/stream"]);
   });
 
   test("发送durable cursor且保留非空配对目录快照", async () => {
-    let requests = 0;
     let init: RequestInit | undefined;
-    const key = { workspace_id: "workspace-sse", scope: "workspace", root: "/workspace", path: "src" };
+    const key = { workspace_id: OWNER.workspaceId, scope: "workspace", root: ROOT, path: `${ROOT}/src` };
     const batch = { changes: [], overflow: false, event_id: 31, invalidated_roots: [],
       directories: [{ directory_key: key, directory_revision: 9, exists: true }],
-      snapshots: [{ root_path: "/workspace", path: "src", directory_key: key, directory_revision: 9,
-        items: [{ name: "a.ts", path: "src/a.ts", kind: "file" }], truncated: false, limit: 500, next_cursor: null }] };
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      requests += 1;
-      if (requests === 1) return Response.json({ data: { token: "paired-watch-token" } });
-      init = args[1];
-      return streamResponse([`event: changes\ndata: ${JSON.stringify(batch)}\n\n`], args[1]);
-    }, { preconnect: originalFetch.preconnect });
+      snapshots: [{ root_path: ROOT, path: `${ROOT}/src`, directory_key: key, directory_revision: 9,
+        items: [{ name: "a.ts", path: `${ROOT}/src/a.ts`, kind: "file" }], truncated: false, limit: 500, next_cursor: null }] };
+    const requests = installStreamBackend((requestInit) => {
+      init = requestInit;
+      return streamResponse([`event: changes\ndata: ${JSON.stringify(batch)}\n\n`], requestInit);
+    });
     const batches: WorkspaceFileChangeBatchDTO[] = [];
-    await streamWorkspaceFileEvents(48_103, ["/workspace/src"], {
-      workspaceId: "gw-paired", afterEventId: 30, onBatch: (value) => batches.push(value),
+    await streamWorkspaceFileEvents(48_103, [`${ROOT}/src`], {
+      workspaceId: WORKSPACE_KEY, afterEventId: 30, onBatch: (value) => batches.push(value),
     });
     expect(JSON.parse(String(init?.body)).subscriptions).toEqual([{
-      subscription_id: expect.any(String), kind: "workspace_files", paths: ["/workspace/src"], files_after: 30,
+      subscription_id: expect.any(String), kind: "workspace_files", paths: [`${ROOT}/src`], files_after: 30,
     }]);
+    expect(requests).toEqual(["POST /api/v1/workspace/observations/stream"]);
     expect(batches).toEqual([batch]);
   });
 });

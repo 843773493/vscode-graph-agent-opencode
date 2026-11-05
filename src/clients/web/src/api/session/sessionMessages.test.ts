@@ -7,13 +7,27 @@ import {
   replayMessageTurn,
   sendUserMessage,
 } from "./sessionMessages";
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import {
-  installSessionApiFetchMock,
+  installSessionApiFetchMock as installSessionApiFetch,
   unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
 
-const originalFetch = globalThis.fetch;
+const OWNER = { gatewayId: "gateway-messages", workspaceId: "00000000-0000-4000-8000-000000000065" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const businessRequests: string[] = [];
+
+function installSessionApiFetchMock(...[handler, options]: Parameters<typeof installSessionApiFetch>): void {
+  installSessionApiFetch((request) => {
+    expect(request.path.startsWith("/api/v1/sessions/")).toBe(true);
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    businessRequests.push(request.path);
+    return handler(request);
+  }, options);
+}
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 function installWindow(port: number): void {
@@ -34,6 +48,9 @@ function installFetchMock(respond: () => Response): void {
 afterEach(() => {
   jest.useRealTimers();
   unwrapSessionApiFetch();
+  const count = businessRequests.length;
+  businessRequests.length = 0;
+  expect(count).toBeGreaterThan(0);
   restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
@@ -44,7 +61,7 @@ describe("会话消息列表 API 的 CursorPage 契约", () => {
       request_id: "req-messages-empty",
     }));
 
-    await expect(listMessages(48_308, "ses_x", "workspace-1")).resolves.toEqual({
+    await expect(listMessages(48_308, "ses_x", WORKSPACE_KEY)).resolves.toEqual({
       items: [],
       next_cursor: null,
       has_more: false,
@@ -57,7 +74,7 @@ describe("会话消息列表 API 的 CursorPage 契约", () => {
       request_id: "req-messages-broken-items",
     }));
 
-    await expect(listMessages(48_309, "ses_x", "workspace-1")).rejects
+    await expect(listMessages(48_309, "ses_x", WORKSPACE_KEY)).rejects
       .toThrow("会话消息列表响应 items 必须是数组，实际为 number");
   });
 });
@@ -95,7 +112,7 @@ describe("会话附件文本预览按需读取", () => {
       48_315,
       "ses_preview",
       "file_preview",
-      "workspace-preview",
+      WORKSPACE_KEY,
       { maxCodeUnits: 3 },
     )).resolves.toEqual({ text: "abc", truncated: true });
     expect(pullCount).toBe(3);
@@ -109,7 +126,7 @@ describe("会话附件文本预览按需读取", () => {
       48_316,
       "ses_preview",
       "file_preview",
-      "workspace-preview",
+      WORKSPACE_KEY,
       { maxCodeUnits: 2 },
     )).resolves.toEqual({ text: "你好", truncated: false });
   });
@@ -125,7 +142,7 @@ describe("中断请求只作用于明确的 Thread", () => {
       requests.push(url);
       return Response.json({ data: result, request_id: "req-interrupt" });
     });
-    expect(await interruptSession(48_311, result.session_id, result.thread_id, "workspace-1")).toEqual(result);
+    expect(await interruptSession(48_311, result.session_id, result.thread_id, WORKSPACE_KEY)).toEqual(result);
     expect(requests).toHaveLength(1);
     expect(new URL(requests[0], "http://localhost").searchParams.get("thread_id")).toBe(result.thread_id);
   });
@@ -136,7 +153,7 @@ describe("中断请求只作用于明确的 Thread", () => {
     { ...result, thread_id: undefined },
   ])("拒绝错位或缺失的回执身份 %j", async (response) => {
     installFetchMock(() => Response.json({ data: response, request_id: "req-interrupt-bad-owner" }));
-    await expect(interruptSession(48_311, result.session_id, result.thread_id, "workspace-1")).rejects.toThrow("中断响应归属不匹配");
+    await expect(interruptSession(48_311, result.session_id, result.thread_id, WORKSPACE_KEY)).rejects.toThrow("中断响应归属不匹配");
   });
 });
 
@@ -150,31 +167,24 @@ describe("请求日志读取必须带上限，不能无限等待", () => {
     const requestStarted = new Promise<void>((resolve) => {
       markRequestStarted = resolve;
     });
-    globalThis.fetch = Object.assign(
-      async (...args: Parameters<typeof fetch>) => {
-        const [input, init] = args;
-        const path = new URL(String(input), `http://127.0.0.1:${port}`).pathname;
-        if (path === "/api/gateway/auth/local-credential") {
-          return Response.json({ data: { token: "llm-log-token" } });
+    installSessionApiFetchMock(async ({ path, init }) => {
+      expect(path).toBe("/api/v1/sessions/ses_timeout/llm-request-logs");
+      requestSignal = init?.signal ?? null;
+      markRequestStarted!();
+      // 模拟后端卡死：只有在被 abort 时才结束，绝不自己返回。
+      return await new Promise<Response>((_, reject) => {
+        const abort = () => reject(
+          requestSignal?.reason ?? new DOMException("aborted", "AbortError"),
+        );
+        if (requestSignal?.aborted) {
+          abort();
+          return;
         }
-        requestSignal = init?.signal ?? null;
-        markRequestStarted!();
-        // 模拟后端卡死：只有在被 abort 时才结束，绝不自己返回。
-        return await new Promise<Response>((_, reject) => {
-          const abort = () => reject(
-            requestSignal?.reason ?? new DOMException("aborted", "AbortError"),
-          );
-          if (requestSignal?.aborted) {
-            abort();
-            return;
-          }
-          requestSignal?.addEventListener("abort", abort, { once: true });
-        });
-      },
-      { preconnect: originalFetch.preconnect },
-    );
+        requestSignal?.addEventListener("abort", abort, { once: true });
+      });
+    }, { credentialToken: "llm-log-token" });
 
-    const pending = getLLMRequestLogs(port, "ses_timeout", "workspace-1");
+    const pending = getLLMRequestLogs(port, "ses_timeout", WORKSPACE_KEY);
     // 让凭据与业务请求走到 fetch，然后推进时间越过超时上限。
     await requestStarted;
     jest.advanceTimersByTime(15_000);
@@ -208,8 +218,8 @@ describe("发送与重放统一消费真实准入身份", () => {
     notice: "已准入重放",
   } as const;
   const actions = [
-    { name: "发送消息", run: () => sendUserMessage(48_311, "session-accepted", "实际用户输入") },
-    { name: "重放消息", run: () => replayMessageTurn(48_311, "session-accepted", "message-original", { action: "regenerate" }) },
+    { name: "发送消息", run: () => sendUserMessage(48_311, "session-accepted", "实际用户输入", undefined, [], WORKSPACE_KEY) },
+    { name: "重放消息", run: () => replayMessageTurn(48_311, "session-accepted", "message-original", { action: "regenerate" }, WORKSPACE_KEY) },
   ];
   for (const action of actions) {
     test(`${action.name}保留后端独立的 message/Job/Turn/thread`, async () => {

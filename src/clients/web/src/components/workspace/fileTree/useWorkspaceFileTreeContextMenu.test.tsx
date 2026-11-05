@@ -9,11 +9,24 @@ import {
   type WorkspaceFileTreeContextMenuApi,
   type FileTreeContextMenuTarget,
 } from "./useWorkspaceFileTreeContextMenu";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
+import { installWorkspaceFileIntentStoreMock } from "../../../tests/workspaceFileIntentStoreMock";
+import { flushReactEffects } from "../../../tests/fixtures/session/asyncControl";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalFetch = globalThis.fetch;
-const workspaceRootUri = "boxteam://workspace/ws-1/resources/files/root";
+const OWNER = { gatewayId: "gateway-tree-menu", workspaceId: "00000000-0000-4000-8000-000000000068" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const workspaceRootUri = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
+const renderers: ReactTestRenderer[] = [];
+const intentMocks: ReturnType<typeof installWorkspaceFileIntentStoreMock>[] = [];
+
+function assertOwner(init?: RequestInit): void {
+  const headers = new Headers(init?.headers);
+  expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+  expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+}
 const treePath = (path: string): string => path ? `${workspaceRootUri}/${path}` : workspaceRootUri;
 
 function installWindow(overrides: Record<string, unknown> = {}): void {
@@ -44,6 +57,7 @@ function menuTarget(overrides: Partial<FileTreeContextMenuTarget> = {}): FileTre
 }
 
 interface HarnessOptions {
+  workspaceId?: string;
   sessionId?: string;
   referenceForTreePath?: (treePath: string) => string;
   reconcileDirectories?: () => Promise<void>;
@@ -66,7 +80,7 @@ function mountMenu(options: HarnessOptions = {}): {
     void uploadTargetRef;
     apiRef.current = useWorkspaceFileTreeContextMenu({
       port: 8060,
-      workspaceId: "gw_test",
+      workspaceId: options.workspaceId ?? "gw_test",
       sessionId: options.sessionId ?? "ses_1",
       referenceForTreePath: options.referenceForTreePath
         ?? ((treePath: string) => treePath),
@@ -85,6 +99,7 @@ function mountMenu(options: HarnessOptions = {}): {
   act(() => {
     renderer = create(<Harness />);
   });
+  renderers.push(renderer);
   return {
     api: () => {
       if (!apiRef.current) {
@@ -103,6 +118,8 @@ function clickEvent(): { preventDefault: () => void; clientX: number; clientY: n
 }
 
 afterEach(() => {
+  act(() => { for (const renderer of renderers.splice(0)) renderer.unmount(); });
+  for (const mock of intentMocks.splice(0)) mock.restore();
   globalThis.fetch = originalFetch;
   restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
@@ -193,7 +210,7 @@ describe("文件树右键菜单", () => {
   test("默认快捷路径开关按当前状态选择添加或删除", async () => {
     installWindow();
     const calls: string[] = [];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return Response.json({
@@ -207,6 +224,8 @@ describe("文件树右键菜单", () => {
           data: { kind: "guest", user_id: null },
         });
       }
+      expect(url.pathname.startsWith("/api/v1/sessions/ses_1/")).toBe(true);
+      assertOwner(init);
       calls.push(url.pathname);
       const settings: SessionFileTreeSettings = {
         session_id: "ses_1",
@@ -220,7 +239,7 @@ describe("文件树右键菜单", () => {
       });
     }, { preconnect: globalThis.fetch.preconnect });
 
-    const harness = mountMenu({ acceptFileTreeSettings: () => {} });
+    const harness = mountMenu({ workspaceId: WORKSPACE_KEY, acceptFileTreeSettings: () => {} });
     await act(async () => {
       await harness.api().toggleDefaultShortcut(
         { path: "/ws/src", label: "src", source: "session" },
@@ -258,8 +277,10 @@ describe("文件树右键菜单", () => {
 
   test("上传失败后强制重载目标目录并只上报状态栏", async () => {
     installWindow();
+    intentMocks.push(installWorkspaceFileIntentStoreMock());
+    const businessPaths: string[] = [];
     const requested: Array<{ path: string; force: boolean | undefined }> = [];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return Response.json({ code: 0, message: "ok", request_id: "req-up", data: { token: "t" } });
@@ -267,12 +288,22 @@ describe("文件树右键菜单", () => {
       if (url.pathname === "/api/gateway/users/current") {
         return Response.json({ code: 0, message: "ok", request_id: "req-up", data: { kind: "guest", user_id: null } });
       }
+      assertOwner(init);
+      businessPaths.push(url.pathname);
+      if (url.pathname === "/api/v1/workspace") {
+        return Response.json({ request_id: "req-upload-workspace", data: { workspace_id: OWNER.workspaceId } });
+      }
+      if (url.pathname === "/api/v1/workspace/files/roots") {
+        return Response.json({ request_id: "req-upload-roots", data: { workspace_uri: workspaceRootUri } });
+      }
+      expect(url.pathname).toBe("/api/v1/workspace/files");
       return new Response(JSON.stringify({ detail: "磁盘已满" }), {
         status: 507, statusText: "Insufficient Storage",
         headers: { "Content-Type": "application/json" },
       });
     }, { preconnect: globalThis.fetch.preconnect });
     const harness = mountMenu({
+      workspaceId: WORKSPACE_KEY,
       loadDirectory: async (path: string, force?: boolean) => {
         requested.push({ path, force });
         return true;
@@ -283,10 +314,12 @@ describe("文件树右键菜单", () => {
       harness.api().handleUploadInput([new File(["x"], "a.txt")]);
     });
     await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushReactEffects();
     });
+    expect(businessPaths).toEqual([
+      "/api/v1/workspace", "/api/v1/workspace/files/roots", "/api/v1/workspace/files",
+    ]);
     expect(requested).toEqual([{ path: treePath("src"), force: true }]);
-    expect(harness.statuses.some((text) => text.startsWith("上传本地文件失败: "))).toBe(true);
+    expect(harness.statuses.some((text) => text.startsWith("上传本地文件失败: ") && text.includes("磁盘已满"))).toBe(true);
   });
 });

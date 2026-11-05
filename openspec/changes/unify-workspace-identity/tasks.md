@@ -326,3 +326,8 @@
 ### 2026-11-05：6.4 文件缓存与会话信息产品消费者
 
 - 正式Workbench的文件缓存与会话信息两项通过，工作区身份从真实文件／Gateway登记核对并以完整owner保存，所有业务调用双目标头；保留图片私有缓存重验、跨工作区隔离与会话信息实际展示断言。它们所属组合仍有catalog失败，未表述全绿。源码首尾和静态一致，复核记录 `out/tests/temp/identity_remaining_web_20261105/artifacts/cache-session-info-source-attribution.json`；6.4仍未勾。
+
+### 2026-11-05：6.4 最后批 API 与 hook 身份消费者
+
+- 12份测试迁齐完整owner key、URI、directory_key及sessionScopeKey；真实API均核业务端点确实被请求和双目标头，不让用户屏障或别名解析失败产生空转通过。目录、资源、Goal、Trace和RunActions保留切换、迟到、错误归属及失败重读断言；纯标签与零请求负例保持原边界。
+- 首轮130 passed／1006断言（46+19+30+35），均有60秒／4GiB外部保护。真实Web tsc仍28条既存诊断，输出与05逐字节相同，本批零诊断；复用相同实际产品输入的成功Web构建。源码、准确命令、原始输出和输入覆盖见 `out/tests/temp/identity_remaining_backend_20261105/artifacts/src-evidence-index-06.json` 与 `src-web-build-reuse-06.json`。根复核12文件SHA和独立patch；菜单507只证明目录快照失败后的重读，不冒充multipart失败，6.4仍未勾。

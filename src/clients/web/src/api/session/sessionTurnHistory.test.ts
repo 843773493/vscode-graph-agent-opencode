@@ -6,10 +6,26 @@ import {
   StaleTurnCursorHttpError,
 } from "./sessionTurnHistory";
 import { HttpRequestError } from "../http";
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import {
-  installSessionApiFetchMock,
+  installSessionApiFetchMock as installSessionApiFetch,
   unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
+
+const OWNER = { gatewayId: "gateway-turn-history", workspaceId: "00000000-0000-4000-8000-000000000063" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const businessRequests: string[] = [];
+
+function installSessionApiFetchMock(...[handler, options]: Parameters<typeof installSessionApiFetch>): void {
+  installSessionApiFetch((request) => {
+    expect(request.path.startsWith("/api/v1/sessions/")).toBe(true);
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    businessRequests.push(request.path);
+    return handler(request);
+  }, options);
+}
 
 function apiResponse(data: unknown, status = 200): Response {
   return Response.json(
@@ -20,6 +36,9 @@ function apiResponse(data: unknown, status = 200): Response {
 
 afterEach(() => {
   unwrapSessionApiFetch();
+  const count = businessRequests.length;
+  businessRequests.length = 0;
+  expect(count).toBeGreaterThan(0);
 });
 
 describe("Turn 历史 API client", () => {
@@ -33,12 +52,12 @@ describe("Turn 历史 API client", () => {
           limited_reason: null, scanned_items: 0, scanned_bytes: 0 }
         : { thread_id: "thread_child", items: [], projection_epoch: 1 });
     });
-    await searchThreadHistoryMessages(49_219, "ses_api", "thread_child", { query: "😀词", limit: 3 }, "workspace-owner");
+    await searchThreadHistoryMessages(49_219, "ses_api", "thread_child", { query: "😀词", limit: 3 }, WORKSPACE_KEY);
     await loadSessionHistory(49_219, "ses_api", { direction: "around", anchor_turn_id: "turn-1", anchor_message: reference },
-      "workspace-owner", undefined, "thread_child");
+      WORKSPACE_KEY, undefined, "thread_child");
     expect(requests).toEqual([
-      { path: "/api/v1/sessions/ses_api/threads/thread_child/history/search", body: { query: "😀词", limit: 3 }, workspace: "workspace-owner" },
-      { path: "/api/v1/sessions/ses_api/threads/thread_child/history", body: { direction: "around", anchor_turn_id: "turn-1", anchor_message: reference }, workspace: "workspace-owner" },
+      { path: "/api/v1/sessions/ses_api/threads/thread_child/history/search", body: { query: "😀词", limit: 3 }, workspace: OWNER.workspaceId },
+      { path: "/api/v1/sessions/ses_api/threads/thread_child/history", body: { direction: "around", anchor_turn_id: "turn-1", anchor_message: reference }, workspace: OWNER.workspaceId },
     ]);
   });
 
@@ -54,7 +73,7 @@ describe("Turn 历史 API client", () => {
         return apiResponse({
           session: {
             session_id: "ses_api",
-            workspace_id: "workspace",
+            workspace_id: OWNER.workspaceId,
             title: "API 测试",
             current_agent_id: "default",
             created_at: "2026-07-28T00:00:00Z",
@@ -70,12 +89,12 @@ describe("Turn 历史 API client", () => {
       return apiResponse({ items: [], projection_epoch: 1 });
     }, { credentialToken: "turn-api-token" });
 
-    await getSessionTurnBootstrap(49_211, "ses_api", "workspace");
+    await getSessionTurnBootstrap(49_211, "ses_api", WORKSPACE_KEY);
     await loadSessionHistory(
       49_211,
       "ses_api",
       { direction: "before", cursor: "opaque cursor", turns: 4 },
-      "workspace",
+      WORKSPACE_KEY,
     );
     await loadSessionHistory(
       49_211,
@@ -85,7 +104,7 @@ describe("Turn 历史 API client", () => {
         turn_ids: ["job_1", "job_2"],
         turns: 2,
       },
-      "workspace",
+      WORKSPACE_KEY,
     );
 
     expect(requests).toEqual([
@@ -130,7 +149,7 @@ describe("Turn 历史 API client", () => {
         49_212,
         "ses_stale",
         { direction: "before", cursor: "old" },
-        "workspace",
+        WORKSPACE_KEY,
       );
     await expect(failed).rejects.toBeInstanceOf(StaleTurnCursorHttpError);
     await expect(failed).rejects.toHaveProperty("requestId", "request-stale");
@@ -152,7 +171,7 @@ describe("Turn 历史 API client", () => {
     }, { credentialToken: "broken-token" });
 
     try {
-      await getSessionTurnBootstrap(49_213, "ses_broken", "workspace");
+      await getSessionTurnBootstrap(49_213, "ses_broken", WORKSPACE_KEY);
       throw new Error("预期 bootstrap 请求失败");
     } catch (error) {
       expect(error).toBeInstanceOf(HttpRequestError);

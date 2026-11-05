@@ -4,9 +4,28 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { useSessionTraceHistory } from "./useSessionTraceHistory";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../../api/session/sessionApiFetchMock";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
+const OWNER = { gatewayId: "gateway-trace-history", workspaceId: "00000000-0000-4000-8000-000000000072" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
 const originalFetch = globalThis.fetch;
+const businessRequests: string[] = [];
+let expectsBusinessRequest = false;
+
+function installTraceBackend(handler: Parameters<typeof installSessionApiFetchMock>[0]): void {
+  expectsBusinessRequest = true;
+  installSessionApiFetchMock((request) => {
+    expect(/^\/api\/v1\/sessions\/[^/]+\/traces$/.test(request.path)).toBe(true);
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    businessRequests.push(request.path);
+    return handler(request);
+  });
+}
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 function installWindow(port: number): void {
@@ -23,9 +42,9 @@ function installWindow(port: number): void {
 function session(sessionId: string): Session {
   return {
     session_id: sessionId,
-    workspace_id: "workspace-local",
+    workspace_id: OWNER.workspaceId,
     resource_identity: `fixture-${sessionId}`,
-    uri: `boxteam://workspace/workspace-local/resources/session/${sessionId}`,
+    uri: `boxteam://workspace/${OWNER.workspaceId}/resources/session/${sessionId}`,
     scope: "workspace",
     title: sessionId,
     current_agent_id: "default",
@@ -67,8 +86,13 @@ function tracePage(sessionId: string, eventId: string) {
 }
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  unwrapSessionApiFetch();
   restoreGlobalDescriptor("window", originalWindowDescriptor);
+  const count = businessRequests.length;
+  const expected = expectsBusinessRequest;
+  businessRequests.length = 0;
+  expectsBusinessRequest = false;
+  if (expected) expect(count).toBeGreaterThan(0);
 });
 
 describe("useSessionTraceHistory", () => {
@@ -109,26 +133,23 @@ describe("useSessionTraceHistory", () => {
     installWindow(port);
     let resolveOld: (response: Response) => void = () => undefined;
     const oldResponse = new Promise<Response>((resolve) => { resolveOld = resolve; });
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    installTraceBackend(async ({ url: rawUrl }) => {
       // window 桩只提供 location.port，getApiBaseUrl() 因此返回同源相对路径；
       // 必须显式给出 base，否则 new URL(相对路径) 会抛错并让被测 hook 看不到响应。
-      const path = new URL(String(args[0]), `http://127.0.0.1:${port}`).pathname;
-      if (path === "/api/gateway/auth/local-credential") {
-        return Response.json({ request_id: "req_token", data: { token: "trace-token" } });
-      }
+      const path = new URL(rawUrl, `http://127.0.0.1:${port}`).pathname;
       if (path.includes("session-a")) return oldResponse;
       return tracePage("session-b", "event-b");
-    }, { preconnect: originalFetch.preconnect });
+    });
     let latestState = state();
 
     function Harness({ sessionId }: { sessionId: string }): React.ReactNode {
       const [current, setCurrent] = React.useState(state);
       latestState = current;
-      const scopeKey = `workspace-a::${sessionId}`;
+      const scopeKey = sessionScopeKey(WORKSPACE_KEY, sessionId);
       useSessionTraceHistory({
         apiPort: port,
         currentSession: session(sessionId),
-        workspaceId: "workspace-a",
+        workspaceId: WORKSPACE_KEY,
         scopeKey,
         active: true,
         history: current.sessionTraceHistoryBySession.get(scopeKey) ?? null,
@@ -155,11 +176,11 @@ describe("useSessionTraceHistory", () => {
 
     expect(
       latestState.sessionTraceHistoryBySession
-        .get("workspace-a::session-b")?.items.map((event) => event.event_id),
+        .get(sessionScopeKey(WORKSPACE_KEY, "session-b"))?.items.map((event) => event.event_id),
     ).toEqual(["event-b"]);
     expect(
       latestState.sessionTraceHistoryBySession
-        .get("workspace-a::session-a")?.items,
+        .get(sessionScopeKey(WORKSPACE_KEY, "session-a"))?.items,
     ).toEqual([]);
     renderer!.unmount();
   });
@@ -168,22 +189,19 @@ describe("useSessionTraceHistory", () => {
     const port = 49_304;
     installWindow(port);
     let traceFetchCount = 0;
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const path = new URL(String(args[0]), `http://127.0.0.1:${port}`).pathname;
-      if (path === "/api/gateway/auth/local-credential") {
-        return Response.json({ request_id: "req_token", data: { token: "trace-token" } });
-      }
+    installTraceBackend(async ({ url: rawUrl }) => {
+      const path = new URL(rawUrl, `http://127.0.0.1:${port}`).pathname;
       if (path.endsWith("/traces")) traceFetchCount += 1;
       return tracePage("session-cached", `event-${traceFetchCount}`);
-    }, { preconnect: originalFetch.preconnect });
+    });
 
     function Harness({ active }: { active: boolean }): React.ReactNode {
       const [current, setCurrent] = React.useState(state);
-      const scopeKey = "workspace-a::session-cached";
+      const scopeKey = sessionScopeKey(WORKSPACE_KEY, "session-cached");
       useSessionTraceHistory({
         apiPort: port,
         currentSession: session("session-cached"),
-        workspaceId: "workspace-a",
+        workspaceId: WORKSPACE_KEY,
         scopeKey,
         active,
         history: current.sessionTraceHistoryBySession.get(scopeKey) ?? null,
@@ -217,11 +235,8 @@ describe("useSessionTraceHistory", () => {
   test("使用服务端 next_cursor 前插更旧页且不写入 live event queue", async () => {
     const port = 49_303;
     installWindow(port);
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const url = new URL(String(args[0]), `http://127.0.0.1:${port}`);
-      if (url.pathname === "/api/gateway/auth/local-credential") {
-        return Response.json({ request_id: "req_token", data: { token: "page-token" } });
-      }
+    installTraceBackend(async ({ url: rawUrl }) => {
+      const url = new URL(rawUrl, `http://127.0.0.1:${port}`);
       const older = url.searchParams.get("cursor") === "older-1";
       return Response.json({
         request_id: older ? "req_older" : "req_tail",
@@ -243,18 +258,18 @@ describe("useSessionTraceHistory", () => {
           has_more: !older,
         },
       });
-    }, { preconnect: originalFetch.preconnect });
+    });
     let latestState = state();
     let loader: (() => Promise<number>) | null = null;
 
     function Harness(): React.ReactNode {
       const [current, setCurrent] = React.useState(state);
       latestState = current;
-      const scopeKey = "workspace-a::session-page";
+      const scopeKey = sessionScopeKey(WORKSPACE_KEY, "session-page");
       const controller = useSessionTraceHistory({
         apiPort: port,
         currentSession: session("session-page"),
-        workspaceId: "workspace-a",
+        workspaceId: WORKSPACE_KEY,
         scopeKey,
         active: true,
         history: current.sessionTraceHistoryBySession.get(scopeKey) ?? null,
@@ -279,7 +294,7 @@ describe("useSessionTraceHistory", () => {
     expect(added).toBe(1);
     expect(
       latestState.sessionTraceHistoryBySession
-        .get("workspace-a::session-page")?.items.map((event) => event.event_id),
+        .get(sessionScopeKey(WORKSPACE_KEY, "session-page"))?.items.map((event) => event.event_id),
     ).toEqual(["event-old", "event-new"]);
     expect(latestState.eventQueuesBySession).toBeUndefined();
     renderer!.unmount();
@@ -292,14 +307,8 @@ describe("useSessionTraceHistory", () => {
     const requests: { thread: string | null; cursor: string | null }[] = [];
     let resolveA!: (response: Response) => void;
     const pendingA = new Promise<Response>(resolve => { resolveA = resolve; });
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const url = new URL(String(args[0]), `http://127.0.0.1:${port}`);
-      if (url.pathname === "/api/gateway/auth/local-credential") {
-        return Response.json({ request_id: "req_token", data: { token: "thread-trace-token" } });
-      }
-      if (url.pathname.startsWith("/api/gateway/users/")) {
-        return Response.json({ request_id: "req_guest", data: { kind: "guest" } });
-      }
+    installTraceBackend(async ({ url: rawUrl }) => {
+      const url = new URL(rawUrl, `http://127.0.0.1:${port}`);
       const thread = url.searchParams.get("thread_id");
       const cursor = url.searchParams.get("cursor");
       requests.push({ thread, cursor });
@@ -309,15 +318,15 @@ describe("useSessionTraceHistory", () => {
       page.data.next_cursor = cursor ? null : "older-b";
       page.data.has_more = !cursor;
       return Response.json(page);
-    }, { preconnect: originalFetch.preconnect });
+    });
     let latestState = state();
     let loadOlder!: () => Promise<number>;
     function Harness({ threadId }: { threadId: string }): React.ReactNode {
       const [current, setCurrent] = React.useState(state);
       latestState = current;
-      const scopeKey = `workspace-a::session-shared::${threadId}`;
+      const scopeKey = `${sessionScopeKey(WORKSPACE_KEY, "session-shared")}::${threadId}`;
       const controller = useSessionTraceHistory({ apiPort: port, currentSession: session("session-shared"),
-        workspaceId: "workspace-a", threadId, scopeKey, active: true,
+        workspaceId: WORKSPACE_KEY, threadId, scopeKey, active: true,
         history: current.sessionTraceHistoryBySession.get(scopeKey) ?? null, setState: setCurrent });
       loadOlder = controller.loadOlder;
       return null;
@@ -328,8 +337,8 @@ describe("useSessionTraceHistory", () => {
     await act(async () => { resolveA(tracePage("session-shared", "event-a-late")); });
     await act(async () => { expect(await loadOlder()).toBe(1); });
     expect(requests).toEqual([{ thread: threadA, cursor: null }, { thread: threadB, cursor: null }, { thread: threadB, cursor: "older-b" }]);
-    expect(latestState.sessionTraceHistoryBySession.get(`workspace-a::session-shared::${threadA}`)?.items).toEqual([]);
-    expect(latestState.sessionTraceHistoryBySession.get(`workspace-a::session-shared::${threadB}`)?.items.map(item => item.event_id))
+    expect(latestState.sessionTraceHistoryBySession.get(`${sessionScopeKey(WORKSPACE_KEY, "session-shared")}::${threadA}`)?.items).toEqual([]);
+    expect(latestState.sessionTraceHistoryBySession.get(`${sessionScopeKey(WORKSPACE_KEY, "session-shared")}::${threadB}`)?.items.map(item => item.event_id))
       .toEqual(["event-b-old", "event-b-new"]);
     renderer.unmount();
   });

@@ -2,19 +2,39 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { HttpRequestError } from "../../api";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import type { Session, SessionResource } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { useSessionResourceLoader } from "./useSessionResourceLoader";
 import {
   apiSuccessResponse,
   apiErrorResponse,
-  installGatewayFetch,
+  installGatewayFetch as installGatewayFetchMock,
   restoreGatewayTestEnvironment,
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import {
   flushReactEffects,
   createDeferredResult,
 } from "../../tests/fixtures/session/asyncControl";
+
+const OWNER_A = { gatewayId: "gateway-resources-a", workspaceId: "00000000-0000-4000-8000-000000000069" };
+const OWNER_B = { ...OWNER_A, gatewayId: "gateway-resources-b" };
+const WORKSPACE_A = gatewayWorkspaceKey(OWNER_A);
+const WORKSPACE_B = gatewayWorkspaceKey(OWNER_B);
+let expectsBusinessRequest = false;
+const businessRequests: string[] = [];
+
+function installGatewayFetch(...[handler, options]: Parameters<typeof installGatewayFetchMock>): void {
+  expectsBusinessRequest = true;
+  installGatewayFetchMock((request) => {
+    expect(/^\/api\/v1\/sessions\/[^/]+\/resources(?:\/.*)?$/.test(request.path)).toBe(true);
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER_A.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER_A.workspaceId);
+    businessRequests.push(request.path);
+    return handler(request);
+  }, options);
+}
 
 const SESSION_ID = "ses_resource_owner";
 const renderers: ReactTestRenderer[] = [];
@@ -24,6 +44,11 @@ afterEach(async () => {
     for (const renderer of renderers.splice(0)) renderer.unmount();
   });
   restoreGatewayTestEnvironment();
+  const count = businessRequests.length;
+  const expected = expectsBusinessRequest;
+  businessRequests.length = 0;
+  expectsBusinessRequest = false;
+  if (expected) expect(count).toBeGreaterThan(0);
 });
 
 function resource(name: string, revision: number): SessionResource {
@@ -42,8 +67,8 @@ function resource(name: string, revision: number): SessionResource {
 
 async function mountResourceLoader() {
   // 夹具只提供该 hook 消费的 Session 身份；协议 URI 字段由其独立合同测试覆盖。
-  let currentSession = { session_id: SESSION_ID, workspace_id: "backend-workspace" } as Session;
-  let workspaceId = "gateway-workspace-A";
+  let currentSession = { session_id: SESSION_ID, workspace_id: OWNER_A.workspaceId } as Session;
+  let workspaceId = WORKSPACE_A;
   let currentState = {
     currentSession,
     currentSessionWorkspaceId: workspaceId,
@@ -77,7 +102,7 @@ async function mountResourceLoader() {
       if (change === "session") {
         currentSession = { ...currentSession, session_id: "ses_resource_other" };
       } else if (change === "workspace") {
-        workspaceId = "gateway-workspace-B";
+        workspaceId = WORKSPACE_B;
       } else {
         loader.invalidateSessionResources();
       }
@@ -221,7 +246,7 @@ describe("Session 资源失败后的权威重读", () => {
 
   test("旧工作区保存的刷新与控制入口不能向新 owner 写入", async () => {
     let requests = 0;
-    installGatewayFetch(() => { requests += 1; return apiSuccessResponse({ session_id: SESSION_ID, items: [] }); });
+    installGatewayFetchMock(() => { requests += 1; return apiSuccessResponse({ session_id: SESSION_ID, items: [] }); });
     const mounted = await mountResourceLoader();
     const staleLoader = mounted.loader();
     await mounted.switchTo("workspace");

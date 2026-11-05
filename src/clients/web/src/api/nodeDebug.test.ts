@@ -12,12 +12,16 @@ import {
   startNodeDebug,
   updateNodeDebugConfiguration,
 } from "./nodeDebug";
+import { gatewayWorkspaceKey } from "./workspaceIdentity";
 import type {
   NodeDebugActionRequest,
   NodeDebugCapabilities,
   NodeDebugConfiguration,
   NodeDebugState,
 } from "../types/backend";
+
+const OWNER = { gatewayId: "gateway-node-debug", workspaceId: "00000000-0000-4000-8000-000000000064" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
 
 const originalFetch = globalThis.fetch;
 const nodeDebugTestPort = 59_731;
@@ -77,7 +81,7 @@ describe("Node Debug API client", () => {
     const sessionId = "session / 需要编码";
     const threadId = "thread/? &需要编码";
     const configurationId = "configuration/id";
-    const workspaceId = "workspace-node-debug";
+    const workspaceId = WORKSPACE_KEY;
     const requests: CapturedRequest[] = [];
 
     globalThis.fetch = Object.assign(
@@ -88,7 +92,7 @@ describe("Node Debug API client", () => {
           return Response.json({ data: { token: "node-debug-token" } });
         }
         if (url.pathname === "/api/gateway/users/current") {
-          return Response.json({ data: {}, request_id: "req-user" });
+          return Response.json({ data: { kind: "guest", user_id: null }, request_id: "req-user" });
         }
 
         requests.push({
@@ -253,8 +257,11 @@ describe("Node Debug API client", () => {
       target_thread_id: "target thread / 需要编码",
     });
 
+    expect(requests).toHaveLength(11);
+    expect(requests.every((captured) => captured.url.pathname.startsWith("/api/v1/debug/node"))).toBe(true);
     for (const captured of requests) {
-      expect(captured.headers.get("X-BoxTeam-Workspace-Id")).toBe(workspaceId);
+      expect(captured.headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+      expect(captured.headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
     }
   });
 });

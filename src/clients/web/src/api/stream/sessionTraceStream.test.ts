@@ -7,14 +7,23 @@ import {
   TraceCursorGoneError,
 } from "./sessionTraceStream";
 import type { SessionStreamEvent } from "../../types/backend";
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
+import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../session/sessionApiFetchMock";
 
-const originalFetch = globalThis.fetch;
+const OWNER = { gatewayId: "gateway-trace", workspaceId: "00000000-0000-4000-8000-000000000066" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const businessRequests: string[] = [];
 
-function localCredentialResponse(port: number) {
-  return Response.json({
-    data: { token: `test-local-token-${port}` },
-    request_id: "req_test",
-  });
+function installTraceBackend(...[handler, options]: Parameters<typeof installSessionApiFetchMock>): void {
+  installSessionApiFetchMock((request) => {
+    expect(request.path === "/api/v1/workspace/observations/stream"
+      || /^\/api\/v1\/sessions\/[^/]+\/traces$/.test(request.path)).toBe(true);
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    businessRequests.push(request.path);
+    return handler(request);
+  }, options);
 }
 
 function streamResponse(
@@ -42,15 +51,9 @@ function installStreamBackend(
   port: number,
   responseFactory: () => Response,
 ): Headers[] {
-  let requestCount = 0;
   const streamRequestHeaders: Headers[] = [];
-  globalThis.fetch = Object.assign(
-    async (...args: Parameters<typeof fetch>) => {
-      const [, init] = args;
-      requestCount += 1;
-      if (requestCount === 1) {
-        return localCredentialResponse(port);
-      }
+  installTraceBackend(({ path, init }) => {
+      expect(path).toBe("/api/v1/workspace/observations/stream");
       streamRequestHeaders.push(new Headers(init?.headers));
       const response = responseFactory();
       const subscriptionId = (JSON.parse(String(init?.body)) as { subscriptions: [{ subscription_id: string }] }).subscriptions[0].subscription_id;
@@ -63,9 +66,7 @@ function installStreamBackend(
         transform(chunk, controller) { controller.enqueue(envelope("frame", new TextDecoder().decode(chunk))); },
       }));
       return new Response(body, { headers: response.headers });
-    },
-    { preconnect: originalFetch.preconnect },
-  );
+    }, { credentialToken: `test-local-token-${port}` });
   return streamRequestHeaders;
 }
 
@@ -94,7 +95,10 @@ function traceBlock(
 }
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  unwrapSessionApiFetch();
+  const count = businessRequests.length;
+  businessRequests.length = 0;
+  expect(count).toBeGreaterThan(0);
 });
 
 describe("会话 SSE 客户端", () => {
@@ -105,7 +109,7 @@ describe("会话 SSE 客户端", () => {
     const received: SessionStreamEvent[] = [];
 
     await streamSessionEvents(port, "ses_heartbeat_test", {
-      idleTimeoutMs: 50,
+      workspaceId: WORKSPACE_KEY, idleTimeoutMs: 50,
       onActivity: () => {
         activityCount += 1;
       },
@@ -138,7 +142,7 @@ describe("会话 SSE 客户端", () => {
     );
 
     await expect(
-      streamSessionEvents(port, "ses_idle_test", { idleTimeoutMs: 10 }),
+      streamSessionEvents(port, "ses_idle_test", { workspaceId: WORKSPACE_KEY, idleTimeoutMs: 10 }),
     ).rejects.toBeInstanceOf(SessionStreamIdleTimeoutError);
     expect(streamCancelled).toBe(true);
   });
@@ -155,7 +159,7 @@ describe("会话 SSE 客户端", () => {
 
     await streamSessionEvents(port, "ses_stream_test", {
       afterCursor: "evt_previous",
-      idleTimeoutMs: 50,
+      workspaceId: WORKSPACE_KEY, idleTimeoutMs: 50,
       onEvent: (event, cursor) => {
         received.push(event);
         receivedCursors.push(cursor);
@@ -180,7 +184,7 @@ describe("会话 SSE 客户端", () => {
     );
 
     await expect(
-      streamSessionEvents(port, "ses_stream_test", { idleTimeoutMs: 50 }),
+      streamSessionEvents(port, "ses_stream_test", { workspaceId: WORKSPACE_KEY, idleTimeoutMs: 50 }),
     ).rejects.toThrow("SSE trace 重复 cursor: tc1.duplicate");
   });
 
@@ -191,7 +195,7 @@ describe("会话 SSE 客户端", () => {
     })]));
     const received: SessionStreamEvent[] = [];
     await expect(streamSessionEvents(port, "ses_stream_test", {
-      idleTimeoutMs: 50, onEvent: (event) => { received.push(event); },
+      workspaceId: WORKSPACE_KEY, idleTimeoutMs: 50, onEvent: (event) => { received.push(event); },
     })).rejects.toThrow("Trace owner 不匹配: 请求 ses_stream_test/*，收到 ses_foreign/");
     expect(received).toEqual([]);
   });
@@ -202,7 +206,7 @@ describe("会话 SSE 客户端", () => {
     const received: SessionStreamEvent[] = [];
     await expect(streamSessionEvents(port, "ses_stream_test", {
       threadId: "thr_00000000700070008000000000000002",
-      idleTimeoutMs: 50, onEvent: (event) => { received.push(event); },
+      workspaceId: WORKSPACE_KEY, idleTimeoutMs: 50, onEvent: (event) => { received.push(event); },
     })).rejects.toThrow("Trace owner 不匹配");
     expect(received).toEqual([]);
   });
@@ -213,7 +217,7 @@ describe("会话 SSE 客户端", () => {
     delete event.thread_id;
     installStreamBackend(port, () => streamResponse([`id: scope\nevent: trace\ndata: ${JSON.stringify(event)}\n\n`]));
     await expect(streamSessionEvents(port, "ses_stream_test", {
-      idleTimeoutMs: 50,
+      workspaceId: WORKSPACE_KEY, idleTimeoutMs: 50,
     })).rejects.toThrow("thread_id");
   });
 
@@ -229,7 +233,7 @@ describe("会话 SSE 客户端", () => {
     let routeRevision = "";
 
     await streamSessionEvents(port, "ses_stream_test", {
-      idleTimeoutMs: 50,
+      workspaceId: WORKSPACE_KEY, idleTimeoutMs: 50,
       onConnected: (value) => {
         routeRevision = value ?? "";
       },
@@ -241,28 +245,20 @@ describe("会话 SSE 客户端", () => {
   test("事件历史按 opaque cursor 向旧页分页", async () => {
     const port = 49_005;
     const requestedUrls: string[] = [];
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const url = new URL(String(args[0]));
-      if (url.pathname === "/api/gateway/auth/local-credential") {
-        return localCredentialResponse(port);
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return Response.json({
-          data: { user_id: "test-user" },
-          request_id: "req_test_user",
-        });
-      }
-      requestedUrls.push(`${url.pathname}${url.search}`);
+    installTraceBackend(({ url, path }) => {
+      const parsed = new URL(url);
+      expect(path).toBe("/api/v1/sessions/ses_stream_test/traces");
+      requestedUrls.push(`${path}${parsed.search}`);
       return Response.json({
         request_id: "req_trace_page",
         data: { items: [], next_cursor: "older-2", has_more: true },
       });
-    }, { preconnect: originalFetch.preconnect });
+    });
 
     const page = await listSessionTraceHistory(
       port,
       "ses_stream_test",
-      "gw_stream_test",
+      WORKSPACE_KEY,
       { cursor: "opaque cursor", limit: 100, threadId: "thr_00000000700070008000000000000001" },
     );
 
@@ -275,47 +271,38 @@ describe("会话 SSE 客户端", () => {
 
   test("历史 Trace 游标失效时抛出可恢复的专用错误", async () => {
     const port = 49_006;
-    let requestCount = 0;
-    globalThis.fetch = Object.assign(
-      async () => {
-        requestCount += 1;
-        if (requestCount === 1) {
-          return localCredentialResponse(port);
-        }
-        return Response.json(
-          { detail: { code: "trace_cursor_gone" } },
-          { status: 410, statusText: "Gone" },
-        );
-      },
-      { preconnect: originalFetch.preconnect },
-    );
+    const requestedPaths: string[] = [];
+    installTraceBackend(({ path }) => {
+      requestedPaths.push(path);
+      return Response.json(
+        { detail: { code: "trace_cursor_gone" } },
+        { status: 410, statusText: "Gone" },
+      );
+    });
 
     await expect(
       listSessionTraceHistory(
         port,
         "ses_stream_test",
-        "gw_stream_test",
+        WORKSPACE_KEY,
         { cursor: "evt_expired" },
       ),
     ).rejects.toBeInstanceOf(TraceCursorGoneError);
+    expect(requestedPaths).toEqual(["/api/v1/sessions/ses_stream_test/traces"]);
   });
 
   test("精确 Thread 历史拒绝错归属响应，聚合历史仍接受实际 Thread", async () => {
     const port = 49_013;
     const event = { ...traceEvent("evt_history_owner"), content: "" };
-    globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
-      const url = new URL(String(args[0]));
-      if (url.pathname === "/api/gateway/auth/local-credential") return localCredentialResponse(port);
-      return Response.json({ request_id: "req_owner", data: {
-        items: [event], next_cursor: null, has_more: false,
-      } });
-    }, { preconnect: originalFetch.preconnect });
-    const page = await listSessionTraceHistory(port, event.session_id);
+    installTraceBackend(() => Response.json({ request_id: "req_owner", data: {
+      items: [event], next_cursor: null, has_more: false,
+    } }));
+    const page = await listSessionTraceHistory(port, event.session_id, WORKSPACE_KEY);
     expect(page.items).toEqual([event]);
-    await expect(listSessionTraceHistory(port, event.session_id, undefined, {
+    await expect(listSessionTraceHistory(port, event.session_id, WORKSPACE_KEY, {
       threadId: "thr_sibling",
     })).rejects.toThrow("Trace owner 不匹配");
-    await expect(listSessionTraceHistory(port, "ses_other"))
+    await expect(listSessionTraceHistory(port, "ses_other", WORKSPACE_KEY))
       .rejects.toThrow("Trace owner 不匹配");
   });
 });

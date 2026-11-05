@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act } from "react-test-renderer";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import type { AppState } from "../../types/frontend";
 import type { Session } from "../../types/backend";
 import {
   apiSuccessResponse,
-  installGatewayFetch,
+  installGatewayFetch as installGatewayFetchMock,
   restoreGatewayTestEnvironment,
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import {
@@ -18,7 +19,33 @@ import {
   createSessionGoalControllerHarness,
 } from "../../tests/fixtures/session/sessionGoalController";
 
-afterEach(restoreGatewayTestEnvironment);
+const OWNER_A = { gatewayId: "gateway-goal-a", workspaceId: "00000000-0000-4000-8000-000000000070" };
+const OWNER_B = { ...OWNER_A, gatewayId: "gateway-goal-b" };
+const WORKSPACE_A = gatewayWorkspaceKey(OWNER_A);
+const WORKSPACE_B = gatewayWorkspaceKey(OWNER_B);
+let expectsBusinessRequest = false;
+const businessRequests: string[] = [];
+
+function installGatewayFetch(...[handler, options]: Parameters<typeof installGatewayFetchMock>): void {
+  expectsBusinessRequest = true;
+  installGatewayFetchMock((request) => {
+    expect(/^\/api\/v1\/sessions\/[^/]+\/goal$/.test(request.path)).toBe(true);
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER_A.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER_A.workspaceId);
+    businessRequests.push(request.path);
+    return handler(request);
+  }, options);
+}
+
+afterEach(() => {
+  restoreGatewayTestEnvironment();
+  const count = businessRequests.length;
+  const expected = expectsBusinessRequest;
+  businessRequests.length = 0;
+  expectsBusinessRequest = false;
+  if (expected) expect(count).toBeGreaterThan(0);
+});
 
 const GOAL_PORT = 49_406;
 
@@ -27,13 +54,13 @@ function state(): AppState {
     currentSession: {
       session_id: "session-test",
       thread_id: "thr_goal_main",
-      workspace_id: "workspace-test",
+      workspace_id: OWNER_A.workspaceId,
       title: "测试会话",
       current_agent_id: "default",
       created_at: "2026-09-02T00:00:00Z",
       updated_at: "2026-09-02T00:00:00Z",
     },
-    currentSessionWorkspaceId: "workspace-test",
+    currentSessionWorkspaceId: WORKSPACE_A,
     currentGoal: null,
     currentGoalSessionId: null,
     goalLoading: false,
@@ -92,7 +119,7 @@ describe("useSessionGoalController 请求合并", () => {
     });
     await act(async () => {
       mounted.setState((previous) => ({
-        ...previous, currentSessionWorkspaceId: "workspace-other", goalError: null,
+        ...previous, currentSessionWorkspaceId: WORKSPACE_B, goalError: null,
       }));
       await Promise.resolve();
     });
@@ -100,7 +127,7 @@ describe("useSessionGoalController 请求合并", () => {
       rejectGoal(new Error("旧工作区读取失败"));
       expect(await pending).toBeInstanceOf(Error);
     });
-    expect(mounted.state().currentSessionWorkspaceId).toBe("workspace-other");
+    expect(mounted.state().currentSessionWorkspaceId).toBe(WORKSPACE_B);
     expect(mounted.state().goalError).toBeNull();
     mounted.unmount();
   });
@@ -286,7 +313,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
   const sessionA = {
     session_id: "ses_a",
     thread_id: "thr_goal_main",
-    workspace_id: "workspace-test",
+    workspace_id: OWNER_A.workspaceId,
     title: "会话 A",
     current_agent_id: "default",
     created_at: "2026-09-02T00:00:00Z",
@@ -309,7 +336,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
     const mounted = await mountGoalHarness({
       initial: {
         currentSession: sessionA,
-        currentSessionWorkspaceId: "workspace-test",
+        currentSessionWorkspaceId: WORKSPACE_A,
         currentGoal: null,
         currentGoalSessionId: "ses_a",
         goalLoading: false,
@@ -322,7 +349,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
       pending = mounted.controller().refreshGoal({
         sessionId: "ses_a",
         threadId: "thr_goal_main",
-        workspaceId: "workspace-test",
+        workspaceId: WORKSPACE_A,
       });
       await Promise.resolve();
     });
@@ -394,7 +421,7 @@ describe("useSessionGoalController 跨会话守卫", () => {
 describe("useSessionGoalController 会话身份守卫", () => {
   test("目标会话为空时 refreshGoal 清空残留 Goal 状态并短路，绝不发请求", async () => {
     let goalRequests = 0;
-    installGatewayFetch(({ path }) => {
+    installGatewayFetchMock(({ path }) => {
       if (path.includes("/api/v1/sessions/")) {
         goalRequests += 1;
         return apiSuccessResponse({});

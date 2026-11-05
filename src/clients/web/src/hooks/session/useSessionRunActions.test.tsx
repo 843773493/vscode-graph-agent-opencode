@@ -6,30 +6,57 @@ import type { AppState } from "../../types/frontend";
 import {
   apiSuccessResponse,
   apiErrorResponse,
-  installGatewayFetch,
+  installGatewayFetch as installGatewayFetchMock,
   restoreGatewayTestEnvironment,
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import { createAppStateMirror } from "../../tests/fixtures/session/appState";
 import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
 import { mountSessionRunActions } from "../../tests/fixtures/session/sessionRunActions";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
 import { INITIAL_APP_STATE } from "../app/appStateSeed";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { useSessionRunActions } from "./useSessionRunActions";
 
-const CACHE_KEY = "gw_send_regression::ses_send_regression";
+const OWNER_A = { gatewayId: "gateway-run-a", workspaceId: "00000000-0000-4000-8000-000000000071" };
+const OWNER_B = { ...OWNER_A, gatewayId: "gateway-run-b" };
+const WORKSPACE_A = gatewayWorkspaceKey(OWNER_A);
+const WORKSPACE_B = gatewayWorkspaceKey(OWNER_B);
 const SESSION_ID = "ses_send_regression";
+const CACHE_KEY = sessionScopeKey(WORKSPACE_A, SESSION_ID);
+let expectsBusinessRequest = false;
+const businessRequests: string[] = [];
 
-afterEach(restoreGatewayTestEnvironment);
+function installGatewayFetch(...[handler, options]: Parameters<typeof installGatewayFetchMock>): void {
+  expectsBusinessRequest = true;
+  installGatewayFetchMock((request) => {
+    expect(request.path.startsWith("/api/v1/")).toBe(true);
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER_A.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER_A.workspaceId);
+    businessRequests.push(request.path);
+    return handler(request);
+  }, options);
+}
+
+
+afterEach(() => {
+  restoreGatewayTestEnvironment();
+  const count = businessRequests.length;
+  const expected = expectsBusinessRequest;
+  businessRequests.length = 0;
+  expectsBusinessRequest = false;
+  if (expected) expect(count).toBeGreaterThan(0);
+});
 
 /** 回归用的固定会话：网关工作区、当前 agent 与时间戳都取稳定值。 */
 function session(): Session {
   return {
     session_id: SESSION_ID,
     thread_id: "thr_run_actions",
-    workspace_id: "workspace_send_regression",
+    workspace_id: OWNER_A.workspaceId,
     resource_identity: `fixture-${SESSION_ID}`,
-    uri: `boxteam://workspace/workspace_send_regression/resources/session/${SESSION_ID}`,
+    uri: `boxteam://workspace/${OWNER_A.workspaceId}/resources/session/${SESSION_ID}`,
     scope: "workspace",
     title: "发送回归",
     title_source: "user",
@@ -52,8 +79,8 @@ function state(currentSession: Session | null): AppState {
     sessionsByWorkspace: new Map(),
     sessionGatewayWorkspaceById: new Map(),
     currentSession,
-    currentSessionWorkspaceId: "gw_send_regression",
-    activeGatewayWorkspaceId: "gw_send_regression",
+    currentSessionWorkspaceId: WORKSPACE_A,
+    activeGatewayWorkspaceId: WORKSPACE_A,
     sessionHistoryReloadNonce: 0,
     status: "",
     contentView: "default",
@@ -150,7 +177,7 @@ describe("发送消息状态更新", () => {
     const sent = new Promise<Response>((resolve) => { resolveSend = resolve; });
     const attachment: AttachmentRef = { file_id: "attachment_same_id", name: "当前附件.txt" };
     const initial = state(session());
-    const otherScope = "gw_other::ses_send_regression";
+    const otherScope = sessionScopeKey(WORKSPACE_B, SESSION_ID);
     initial.sessionAttachmentSummaries.set(otherScope, { count: 1, names: ["其它工作区.txt"], latestAt: null });
     installGatewayFetch(({ path, method }) => path === MESSAGES_PATH && method === "POST" ? sent : undefined);
     const mounted = runActions(session(), initial);
@@ -172,7 +199,7 @@ describe("发送消息状态更新", () => {
     const currentSession = session();
     delete currentSession.thread_id;
     let requests = 0;
-    installGatewayFetch(() => { requests += 1; throw new Error("不应发送请求"); });
+    installGatewayFetchMock(() => { requests += 1; throw new Error("不应发送请求"); });
     const mounted = runActions(currentSession);
     await expect(mounted.actions.sendMessage("不能猜主线程")).rejects.toThrow("缺少 catalog 主线程身份");
     expect(requests).toBe(0);
@@ -186,7 +213,7 @@ describe("发送消息状态更新", () => {
     const selected = { ...session(), session_id: "ses_selected_later" };
     const initial = state(null);
     initial.sessions = [selected];
-    initial.sessionsByWorkspace.set("gw_send_regression", [selected]);
+    initial.sessionsByWorkspace.set(WORKSPACE_A, [selected]);
     const sentSessions: string[] = [];
     installGatewayFetch(({ path, method }) => {
       if (path === "/api/v1/sessions" && method === "POST") return creating;
@@ -207,7 +234,7 @@ describe("发送消息状态更新", () => {
     expect(mounted.state().currentSession?.session_id).toBe(selected.session_id);
     expect(mounted.state().status).toBe(selectedStatus);
     expect(sentSessions).toEqual(["ses_created_late"]);
-    expect(mounted.state().pendingConversations.get("gw_send_regression::ses_created_late")?.[0]?.threadId).toBe("thr_created_late");
+    expect(mounted.state().pendingConversations.get(sessionScopeKey(WORKSPACE_A, "ses_created_late"))?.[0]?.threadId).toBe("thr_created_late");
     expect(mounted.state().pendingConversations.has(CACHE_KEY)).toBe(false);
   });
 
@@ -330,7 +357,7 @@ describe("发送消息状态更新", () => {
 
   test("缺少 main Thread 身份时不发送中断请求", async () => {
     let requests = 0;
-    installGatewayFetch(() => { requests += 1; throw new Error("不应发送请求"); });
+    installGatewayFetchMock(() => { requests += 1; throw new Error("不应发送请求"); });
     const mounted = runActions({ ...session(), thread_id: undefined });
     await expect(mounted.actions.interruptSession()).rejects.toThrow("缺少权威 main Thread 身份");
     expect(requests).toBe(0);
@@ -627,7 +654,7 @@ describe("发送消息状态更新", () => {
         return apiSuccessResponse({
           session_id: "ses_created_on_send",
           thread_id: "thr_run_actions",
-          workspace_id: "workspace_send_regression",
+          workspace_id: OWNER_A.workspaceId,
           title: "新会话",
           current_agent_id: "default",
           created_at: "2026-07-20T00:00:00Z",
@@ -662,7 +689,7 @@ describe("发送消息状态更新", () => {
   });
 
   test("未选中会话时中断必须显式失败，不能静默成功", async () => {
-    installGatewayFetch(() => undefined, { token: "test-no-session-interrupt-token" });
+    installGatewayFetchMock(() => undefined, { token: "test-no-session-interrupt-token" });
     const mounted = runActions(null);
 
     await expect(mounted.actions.interruptSession())
@@ -679,7 +706,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
   }
 
   function sameSessionInOtherWorkspace(current: Session): Session {
-    const workspaceId = "workspace_send_other";
+    const workspaceId = OWNER_B.workspaceId;
     return {
       ...current,
       workspace_id: workspaceId,
@@ -691,7 +718,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     return mountWithSessionSwitch({
       startedSession,
       switchedSession: sameSessionInOtherWorkspace(startedSession),
-      switchedWorkspaceId: "gw_send_other_workspace",
+      switchedWorkspaceId: WORKSPACE_B,
     });
   }
 
@@ -709,7 +736,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     actions: ReturnType<typeof useSessionRunActions>;
     switchAway: () => void;
   } {
-    const startedWorkspaceId = "gw_send_regression";
+    const startedWorkspaceId = WORKSPACE_A;
     const switchedWorkspaceId = options.switchedWorkspaceId ?? startedWorkspaceId;
     const mirror = createAppStateMirror({
       ...(options.initialState ?? state(options.startedSession)),
@@ -799,7 +826,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     const sending = actions.sendMessage("跨工作区在途发送").catch(() => undefined);
     switchAway();
     expect(mirror.current().currentSession?.session_id).toBe(started.session_id);
-    expect(mirror.current().currentSessionWorkspaceId).toBe("gw_send_other_workspace");
+    expect(mirror.current().currentSessionWorkspaceId).toBe(WORKSPACE_B);
 
     releaseSend(apiErrorResponse(502, "来源工作区的模型网关拒绝"));
     await sending;
@@ -809,7 +836,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       "job_send_source_owner",
     );
     expect(mirror.current().activeJobIdsBySession.has(
-      sessionScopeKey("gw_send_other_workspace", started.session_id),
+      sessionScopeKey(WORKSPACE_B, started.session_id),
     )).toBe(false);
   });
 
@@ -826,7 +853,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     const sending = actions.sendMessage("跨工作区在途发送");
     switchAway();
     expect(mirror.current().currentSession?.session_id).toBe(started.session_id);
-    expect(mirror.current().currentSessionWorkspaceId).toBe("gw_send_other_workspace");
+    expect(mirror.current().currentSessionWorkspaceId).toBe(WORKSPACE_B);
 
     releaseSend(apiSuccessResponse({
       message_id: "msg_send_source_owner",
@@ -850,7 +877,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       "job_send_source_owner",
     );
     expect(mirror.current().activeJobIdsBySession.has(
-      sessionScopeKey("gw_send_other_workspace", started.session_id),
+      sessionScopeKey(WORKSPACE_B, started.session_id),
     )).toBe(false);
   });
 
@@ -965,7 +992,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     const interrupting = actions.interruptSession();
     switchAway();
     expect(mirror.current().currentSession?.session_id).toBe(started.session_id);
-    expect(mirror.current().currentSessionWorkspaceId).toBe("gw_send_other_workspace");
+    expect(mirror.current().currentSessionWorkspaceId).toBe(WORKSPACE_B);
 
     releaseInterrupt(apiSuccessResponse({
       session_id: started.session_id,
@@ -1001,7 +1028,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     expect(mirror.current().status).toBe("新 owner 状态");
     expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe("job_backend_running");
     expect(mirror.current().activeJobIdsBySession.has(
-      sessionScopeKey("gw_send_other_workspace", started.session_id),
+      sessionScopeKey(WORKSPACE_B, started.session_id),
     )).toBe(false);
   });
 
@@ -1051,7 +1078,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     const { mirror, actions, switchAway } = mountWithSessionSwitch({
       startedSession: started,
       switchedSession: sameSessionInOtherWorkspace(started),
-      switchedWorkspaceId: "gw_send_other_workspace",
+      switchedWorkspaceId: WORKSPACE_B,
       initialState,
     });
     const interrupting = actions.interruptSession();
@@ -1133,7 +1160,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       .toBe("msg_replay_new");
     expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe("job_replay_new");
     expect(mirror.current().activeJobIdsBySession.has(
-      sessionScopeKey("gw_send_other_workspace", started.session_id),
+      sessionScopeKey(WORKSPACE_B, started.session_id),
     )).toBe(false);
   });
 
@@ -1160,14 +1187,14 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
 
 test("显式子 Thread 发送与停止失败重读始终冻结目标，不改写主线程 metadata", async () => {
   const child = "thr_explicit_child";
-  const cacheKey = JSON.stringify(["gw_send_regression", SESSION_ID, child]);
+  const cacheKey = JSON.stringify([WORKSPACE_A, SESSION_ID, child]);
   const mirror = createAppStateMirror(state(session()));
   let actions!: ReturnType<typeof useSessionRunActions>;
   function Harness() {
     actions = useSessionRunActions({
       apiPort: 0, currentSession: session(), currentThreadId: child,
-      activeGatewayWorkspaceId: "gw_send_regression", currentSessionGatewayWorkspaceId: "gw_send_regression",
-      currentSessionCacheKey: cacheKey, defaultGatewayWorkspaceId: "gw_send_regression",
+      activeGatewayWorkspaceId: WORKSPACE_A, currentSessionGatewayWorkspaceId: WORKSPACE_A,
+      currentSessionCacheKey: cacheKey, defaultGatewayWorkspaceId: WORKSPACE_A,
       contentView: "default", setState: mirror.setState, refreshAgentStateSnapshot: async () => undefined,
       createSession: async () => { throw new Error("固定 Thread 不应创建替代会话"); },
     });

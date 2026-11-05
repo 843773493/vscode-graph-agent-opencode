@@ -4,11 +4,17 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { useRef } from "react";
 import { useWorkspaceFileTreeDirectories } from "./useWorkspaceFileTreeDirectories";
 import { fileTreeNodeFixture as fileNode } from "./workspaceFileTreeTestFixtures";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
-const workspaceRootUri = "boxteam://workspace/ws-1/resources/files/root";
+const OWNER = { gatewayId: "gateway-tree-directories", workspaceId: "00000000-0000-4000-8000-000000000067" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const workspaceRootUri = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
+const renderers: ReactTestRenderer[] = [];
+let businessRequests = 0;
+let expectsBusinessRequest = false;
 const treePath = (path: string): string => path ? `${workspaceRootUri}/${path}` : workspaceRootUri;
 
 function installWindow(port: number): void {
@@ -24,7 +30,7 @@ function installWindow(port: number): void {
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "ws-1", scope: "workspace", root: workspaceRootUri, path: data.path },
+    data = { directory_key: { workspace_id: OWNER.workspaceId, scope: "workspace", root: workspaceRootUri, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({
@@ -37,8 +43,16 @@ function apiResponse(data: unknown): Response {
 
 // 安装了 window 时 API 基础地址为空串，fetch 收到的是同源相对路径，
 // 这里统一补一个基准再解析，避免把相对路径当成非法 URL。
-function requestUrl(input: RequestInfo | URL): URL {
-  return new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
+function requestUrl(input: RequestInfo | URL, init?: RequestInit): URL {
+  const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
+  if (url.pathname.startsWith("/api/v1/")) {
+    expect(url.pathname).toBe("/api/v1/workspace/files");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    businessRequests += 1;
+  }
+  return url;
 }
 
 interface HarnessHandle {
@@ -50,11 +64,12 @@ interface HarnessHandle {
   commitExpanded: (paths: string[]) => void;
 }
 
-function mountHarness(port: number): {
+function mountHarness(port: number, expectsRequest = true): {
   renderer: ReactTestRenderer;
   handle: HarnessHandle;
   statuses: string[];
 } {
+  expectsBusinessRequest = expectsRequest;
   const statuses: string[] = [];
   const handle: Partial<HarnessHandle> = {};
 
@@ -67,7 +82,7 @@ function mountHarness(port: number): {
     };
     const api = useWorkspaceFileTreeDirectories({
       port,
-      workspaceId: "ws-1",
+      workspaceId: WORKSPACE_KEY,
       expandedPathsRef,
       shortcutTreePathsRef,
       activeFilePathRef,
@@ -85,12 +100,19 @@ function mountHarness(port: number): {
   act(() => {
     renderer = create(<Harness />);
   });
+  renderers.push(renderer);
   return { renderer, handle: handle as HarnessHandle, statuses };
 }
 
 afterEach(() => {
+  act(() => { for (const renderer of renderers.splice(0)) renderer.unmount(); });
   globalThis.fetch = originalFetch;
   restoreGlobalDescriptor("window", originalWindowDescriptor);
+  const requestCount = businessRequests;
+  const expected = expectsBusinessRequest;
+  businessRequests = 0;
+  expectsBusinessRequest = false;
+  if (expected) expect(requestCount).toBeGreaterThan(0);
 });
 
 describe("workspace 文件树目录缓存", () => {
@@ -98,8 +120,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_601;
     installWindow(port);
     let requests = 0;
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -140,8 +162,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_602;
     installWindow(port);
     let page = 0;
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -183,8 +205,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_603;
     installWindow(port);
     let requests = 0;
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -195,7 +217,7 @@ describe("workspace 文件树目录缓存", () => {
       return apiResponse({ root_path: workspaceRootUri, path: workspaceRootUri, items: [], truncated: false, next_cursor: null });
     }, { preconnect: originalFetch.preconnect });
 
-    const { handle } = mountHarness(port);
+    const { handle } = mountHarness(port, false);
     let result = false;
     await act(async () => {
       result = await handle.loadDirectory(treePath("src"), false, true);
@@ -207,8 +229,8 @@ describe("workspace 文件树目录缓存", () => {
   test("加载失败写入错误并把消息上报状态栏", async () => {
     const port = 49_604;
     installWindow(port);
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -239,8 +261,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_605;
     installWindow(port);
     const requestedPaths: string[] = [];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -278,8 +300,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_606;
     installWindow(port);
     const releaseList: { current: (() => void) | null } = { current: null };
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -322,8 +344,8 @@ describe("workspace 文件树目录缓存", () => {
   test("403 权限失败时目录错误与状态栏都带可执行提示且保留原始文本", async () => {
     const port = 49_612;
     installWindow(port);
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -353,8 +375,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_613;
     installWindow(port);
     const releaseList: { current: (() => void) | null } = { current: null };
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -392,8 +414,8 @@ describe("workspace 文件树目录缓存", () => {
   test("子树失效只丢弃该路径及其后代，兄弟与父级缓存保留", async () => {
     const port = 49_614;
     installWindow(port);
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -428,8 +450,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_615;
     installWindow(port);
     let items = [fileNode(treePath("src/old.ts"))];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
@@ -463,8 +485,8 @@ describe("workspace 文件树目录缓存", () => {
     const port = 49_616;
     installWindow(port);
     const releases: Array<() => void> = [];
-    globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
