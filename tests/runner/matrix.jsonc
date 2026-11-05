@@ -132,6 +132,8 @@
     {"id":"integration-web-child-thread","layer":"integration","client":"web","enabled":true,"timeoutMs":420000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_child_thread_panel.py"]},
     {"id":"integration-web-browser-views","layer":"integration","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/test_browser_view_sessions.py"]},
     {"id":"e2e-web-session-information","layer":"e2e","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/e2e/clients/web/test_session_information.py"]},
+    // 300秒保护整个构建/进程树；普通API与UI操作另断言毫秒总预算，不允许借此超时放宽交互性能。
+    {"id":"e2e-web-interactive-latency","layer":"e2e","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/e2e/clients/web/test_interactive_latency.py"]},
     {"id":"e2e-web-goal-tasks","layer":"e2e","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/e2e/clients/web/test_goal_sidebar.py"]},
     {"id":"e2e-web-session-navigation","layer":"e2e","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/e2e/clients/web/test_session_physical_tree.py"]},
     {"id":"integration-task-generations","layer":"integration","client":null,"enabled":true,"timeoutMs":360000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/backend/sessions/test_persistent_task_generations.py"]},
