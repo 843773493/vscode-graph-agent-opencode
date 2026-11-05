@@ -45,6 +45,7 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     MESSAGES_VERSION_MIGRATION_SQL,
     MODEL_CALLS_ASSEMBLY_INDEX_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    TOOL_CALLS_MESSAGE_INDEX_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
     initialize_rollout_schema,
@@ -602,6 +603,10 @@ class RolloutMaintenanceOwner(
                 # 性能索引不改变事实格式；既有库通过初始化校验后补建，普通只读不写库。
                 # 非唯一索引只加速定位，重复坐标继续由原读取校验明确报告。
                 if not needs_schema:
+                    # 索引替换与其他补建共用事务，失败不能只删掉旧索引。
+                    if not connection.in_transaction:
+                        connection.execute("BEGIN IMMEDIATE")
+                    execute_atomic_schema_sql(connection, TOOL_CALLS_MESSAGE_INDEX_SQL)
                     connection.execute(ITEM_CATALOG_LOCATOR_INDEX_SQL)
                     connection.execute(COMMIT_IDEMPOTENCY_INDEX_SQL)
                     connection.execute(ITEM_CATALOG_MODEL_TOOL_INDEX_SQL)

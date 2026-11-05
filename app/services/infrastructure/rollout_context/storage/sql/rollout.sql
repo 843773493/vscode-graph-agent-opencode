@@ -515,7 +515,6 @@
         CREATE INDEX IF NOT EXISTS turns_ordinal_index ON turns(turn_ordinal);
         CREATE INDEX IF NOT EXISTS context_view_turns_ordinal_index ON context_view_turns(view_id, logical_turn_ordinal);
         CREATE INDEX IF NOT EXISTS context_view_turns_turn_index ON context_view_turns(turn_id, view_id);
-        CREATE INDEX IF NOT EXISTS tool_calls_id_index ON tool_calls(tool_call_id, assistant_message_sequence);
         CREATE INDEX IF NOT EXISTS tool_calls_result_sequence_index ON tool_calls(result_message_sequence);
         CREATE INDEX IF NOT EXISTS checkpoint_commit_index ON checkpoints(commit_id DESC);
         CREATE INDEX IF NOT EXISTS checkpoint_channels_view_index ON checkpoint_channels(context_view_id);
