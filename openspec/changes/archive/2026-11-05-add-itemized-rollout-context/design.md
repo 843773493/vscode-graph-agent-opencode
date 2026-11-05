@@ -2,7 +2,7 @@
 
 ## Context
 
-实施与测试提示：普通bootstrap／历史小页读取同时受[交互总延迟预算](../enforce-interactive-latency-budgets/design.md)约束，既有100–200ms reader合同不放宽。全量integrity/hash检查须归初始化／迁移／恢复／明确变化的原owner边界；回执复用计数或局部microbenchmark不能代替经Gateway的完整延迟，不为每次暖读叠加防御性全量扫描。
+实施与测试提示：普通bootstrap／历史小页读取同时受[交互总延迟预算](../../enforce-interactive-latency-budgets/design.md)约束，既有100–200ms reader合同不放宽。全量integrity/hash检查须归初始化／迁移／恢复／明确变化的原owner边界；回执复用计数或局部microbenchmark不能代替经Gateway的完整延迟，不为每次暖读叠加防御性全量扫描。
 
 当前 `app/core/rollout_storage.py` 以完整 LangChain message 作为 `rollout.jsonl` 的不可变记录，并在 SQLite 中维护 `messages`、tool call 和 reasoning 的投影。当前消息流协议已经有 block 生命周期和增量事件，但它是实时展示/恢复通道，不等同于 rollout 的 canonical history。现有 middleware 还会直接对 `ModelRequest` 的 messages、system message 和 tools 做请求级修改，缺少统一的来源、版本和 assembly provenance。
 

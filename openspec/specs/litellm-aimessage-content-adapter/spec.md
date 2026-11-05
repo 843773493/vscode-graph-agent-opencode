@@ -1,13 +1,17 @@
 # litellm-aimessage-content-adapter Specification
 
+2026-11-05 发布边界：本轮只发布已验收的通用上下文／存储、精确 Thread、来源激活、fork 和恢复合同。团队／成员／委派及跨 Session 协作的新设计和专项场景仅作延期参考，不构成本轮已实现能力；已有协作行为不在本次同步中删除或改变。
+
 ## Purpose
-将 LiteLLM 返回的 assistant 内容以单一、不可变且有序的 `AIMessage.content` block 序列保存，并在恢复模型上下文时按照来源 provider、目标 provider 和能力配置生成临时请求投影。工具调用继续遵守 LangGraph 的标准消息契约。
+将 Provider assistant 输出归一为有序、可校验的 canonical item/content parts，并按冻结来源及目标能力生成临时 LangChain/Provider 投影；LiteLLM 适配器遵守同一归一合同，不能把 AIMessage 或某一种发送方式变成 v2 事实来源。
+
 ## Requirements
+
 ### Requirement: assistant 内容必须使用有序、可校验的 content blocks
 
-LiteLLM 适配器 SHALL 将文本、reasoning、thinking 和 redacted thinking 保存在经过共享 Schema 校验的有序 `AIMessage.content` block 序列中，不得生成项目自定义的 `litellm_payload` 包装块。
+LiteLLM 适配器 SHALL 将文本、reasoning、thinking 和 redacted thinking 先转换为经过共享 Schema 校验的 normalized content parts/item drafts。v2 canonical 路径必须由 `assistant_output`/`reasoning` semantic item 和稳定 content-part identity 表达，`AIMessage` 只是 LangChain 执行或 checkpoint projection，不是 v2 rollout 的事实来源。旧 v1 message 的 `AIMessage.content` carrier 只允许由一次性 `legacy_import_v1_to_v2` migration staging 读取，不能作为正常 provider/history/checkpoint/runtime 的兼容路径。
 
-`AIMessage.content` SHALL 保留跨 provider 字段的原始顺序。LiteLLM 的独立字段必须使用以下 carrier block 保存，不能继续作为 `AIMessage` 顶层独立字段，也不能合并成统一的 `type: "reasoning"`：
+`AIMessage.content` 在兼容投影中 SHALL 保留跨 provider 字段的原始顺序。LiteLLM 的独立字段必须使用以下 carrier block 保存，不能继续作为 `AIMessage` 顶层独立字段，也不能合并成统一的 `type: "reasoning"`：
 
 ```json
 {
@@ -31,79 +35,66 @@ LiteLLM 适配器 SHALL 将文本、reasoning、thinking 和 redacted thinking �
 }
 ```
 
-Responses reasoning item SHALL 作为 `reasoning_items` carrier 的数组元素保存，并整体保留 LiteLLM 返回的 item。适配器不得按 `id`、`status`、`content`、`summary`、`encrypted_content` 或项目当前已知字段建立白名单；provider 后续增加的字段也必须随 item 一起保存：
-
-```json
-{
-  "type": "reasoning",
-  "id": "rs_item_002",
-  "status": "completed",
-  "content": [{"type": "reasoning_text", "text": "已确定检查范围。"}],
-  "summary": [{"type": "summary_text", "text": "检查范围已确定。"}],
-  "encrypted_content": "..."
-}
-```
+Responses reasoning item SHALL 作为 `reasoning_items` carrier 的数组元素保存，并整体保留 LiteLLM 返回的 item。适配器不得按 `id`、`status`、`content`、`summary`、`encrypted_content` 或项目当前已知字段建立白名单；provider 后续增加的字段也必须随 item 一起保存。v2 item finalizer 可以从同一 carrier 生成 canonical reasoning item/content part，但不得丢失 source provider/type/version 或未知字段。
 
 Chat Completions 的纯字符串 `reasoning_content` SHALL 转换为一个 `reasoning_content` carrier；LiteLLM 已返回的 `thinking_blocks` SHALL 整体追加其 `thinking` 或 `redacted_thinking` block，不得抽取 `thinking`/`text` 字段后重建；可见模型文本 SHALL 使用 `text` block。缺失、`null` 或空值不生成空 content block。
 
-适配器 SHALL NOT 将 reasoning、thinking 或 encrypted 数据的副本写入最终 `AIMessage.additional_kwargs` 或项目自定义 `extras`。流式阶段可以暂时使用 `additional_kwargs` 和 `part_id/index` 组装，但 finalizer 必须清理这些运行时字段。`invalid_tool_calls` SHALL 按 LangChain `AIMessage` 字段原样保留，空数组也必须随 canonical 消息持久化，以保证消息序列化和反序列化结构稳定。
+适配器 SHALL NOT 将 reasoning、thinking 或 encrypted 数据的副本写入最终 `AIMessage.additional_kwargs` 或项目自定义 `extras`。流式阶段可以暂时使用 `additional_kwargs` 和 `part_id/index` 组装，但 finalizer 必须清理这些运行时字段。`invalid_tool_calls` SHALL 按 LangChain `AIMessage` 字段原样保留，空数组也必须随兼容 projection 持久化；v2 canonical item 通过明确的 payload/extension 字段表达同一事实。
 
 #### Scenario: 纯文本 assistant 响应
 
 - **WHEN** LiteLLM 返回 `content="完成"`，且没有 reasoning 或 thinking 字段
-- **THEN** `AIMessage.content` 为 `[{'type': 'text', 'text': '完成'}]` 或等价可恢复文本，additional kwargs 不包含 reasoning 备份
+- **THEN** normalized output 生成一个带稳定 identity 的 text content part；一次性 migration staging 如需保留 v1 projection 才生成 `[{'type': 'text', 'text': '完成'}]`，v2 canonical semantic kind 为 `assistant_output`，additional kwargs 不包含 reasoning 备份
 
 #### Scenario: reasoning 与最终文本同时返回
 
 - **WHEN** LiteLLM 返回 `content="最终回答"` 和 `reasoning_content="先检查文件"`
-- **THEN** `AIMessage.content` 包含有序的 `reasoning_content` carrier 和 text block，不存在 `litellm_payload` 或顶层 reasoning 备份字段
+- **THEN** normalized parts 按来源顺序保留 reasoning carrier 和 text part；一次性 migration staging 可以生成 v1 AIMessage 投影，v2 形成 assistant output/reasoning item 或其 content parts，不存在 `litellm_payload` 或顶层 reasoning 备份字段
 
 #### Scenario: Responses reasoning item 与最终文本同时返回
 
 - **WHEN** Responses 返回带 summary/encrypted_content 的 reasoning item 和最终文本
-- **THEN** LiteLLM 返回的完整 item 深复制到 `reasoning_items` carrier，provider 字段不嵌套在 `extras.response_item`，未被项目识别的 provider 字段也不得丢失，carrier 与最终文本 block 的相对顺序保持
+- **THEN** LiteLLM 返回的完整 item 深复制到 reasoning carrier，provider 字段不嵌套在 `extras.response_item`，未被项目识别的 provider 字段也不得丢失，carrier 与最终文本 part 的相对顺序保持
 
 #### Scenario: reasoning 字段与正文交错
 
 - **WHEN** 流式响应依次返回 `reasoning_content`、Responses reasoning item 和正文 delta
-- **THEN** 最终 `AIMessage.content` 按返回顺序包含 `reasoning_content` carrier、`reasoning_items` carrier 和 text block，不能按字段类型重新排序
+- **THEN** finalizer 按返回顺序生成 carrier/content part 与 canonical item draft，不能按字段类型重新排序
 
 #### Scenario: LiteLLM block 含有项目未知字段
 
 - **WHEN** LiteLLM 的 reasoning、thinking 或 redacted_thinking block 含有当前项目没有定义的 provider 扩展字段
-- **THEN** 适配器整体复制该 block；只有流式合并所生成的临时 `part_*`、`index` 和 `extras` 在 canonical finalizer 中清理，Schema 不得丢弃未知 provider 字段
+- **THEN** 适配器整体复制该 block；只有流式合并所生成的临时 `part_*`、`index` 和 `extras` 在 finalizer 中清理，Schema 不得丢弃未知 provider 字段
 
 #### Scenario: 空的 output item added
 
 - **WHEN** Responses 先发送没有正文的 `response.output_item.added`
-- **THEN** 流式适配器不提交空 reasoning/message block；后续有正文的 delta 或 done item 才形成 carrier/provider content block
+- **THEN** 流式适配器不提交空 reasoning/message block；后续有正文的 delta 或 done item 才形成 carrier、content part 或 canonical item
 
 ### Requirement: 工具调用必须遵守 LangGraph 消息契约
 
-适配器 SHALL 将可执行工具调用保存到 `AIMessage.tool_calls`，将工具结果保存为带有对应 `tool_call_id` 的 `ToolMessage`。工具调用和结果不得仅存在于普通 content block 中。
+适配器 SHALL 将可执行工具调用归一化为独立的 canonical `tool_call` item，将工具结果归一化为带对应 `tool_call_id` 的 `tool_result` item。v2 LangChain projection（以及一次性 migration staging 的必要输出）可以分别生成 `AIMessage.tool_calls` 和 `ToolMessage`；工具调用和结果不得仅存在于普通 text content block 中。
 
 #### Scenario: assistant 同时返回文本和工具调用
 
 - **WHEN** LiteLLM 返回文本、reasoning 和一个可执行工具调用
-- **THEN** 文本/reasoning 进入 `AIMessage.content`，工具名称、参数和调用 id 进入 `AIMessage.tool_calls`，LangGraph 可以正常路由工具
+- **THEN** canonical item 层分别保留 assistant output/reasoning 与 tool call identity，LangChain projection 将文本/reasoning 放入 `AIMessage.content`、工具名称/参数/id 放入 `AIMessage.tool_calls`
 
 #### Scenario: 工具返回大型结果
 
 - **WHEN** 工具返回大型 JSON 结果
-- **THEN** 结果作为 `ToolMessage` 按 rollout 消息规则保存，`tool_call_id` 与 assistant 调用 id 一致，assistant content 不复制结果正文
+- **THEN** 结果作为独立 `tool_result` canonical item 保存并通过 `tool_call_id` 关联，LangChain projection 生成 `ToolMessage`，assistant output 不复制结果正文
 
 ### Requirement: 历史恢复必须执行目标 provider 投影
 
-系统 SHALL 将持久化的 `AIMessage` 和由 `UserContentBuilder` 生成的结构化 `HumanMessage` 视为不可变来源，在模型请求边界根据来源 provider、目标 provider 和能力配置生成临时投影。投影至少支持独立控制用户文本、附件路径说明、用户 rich content、可见 assistant content、`reasoning_content`、`thinking_blocks`、reasoning item、summary 和 encrypted reasoning。
+系统 SHALL 将 v2 canonical `assistant_output`、reasoning、tool_call 和 tool_result item 视为不可变来源，在模型请求边界根据来源 provider、目标 provider 和能力配置生成临时 LangChain/provider 投影。若一次性 `legacy_import_v1_to_v2` migration staging 读取 v1 `AIMessage`，它只能作为迁移输入；正常 provider/history/checkpoint/runtime 不读取 v1。投影至少支持独立控制可见 content、`reasoning_content`、`thinking_blocks`、reasoning item、summary 和 encrypted reasoning。
 
-投影 SHALL 保留用户消息、附件身份和相对路径元信息、可见 assistant 文本、标准工具调用和工具结果；目标 provider 不支持的用户 rich block 或 reasoning 必须仅在请求投影中过滤，并不得改写 checkpoint、rollout JSONL 或源消息。所有 Provider 的最终模型请求 SHALL 经过 LiteLLM 的公开异步发送入口：Chat Completions 和 Anthropic Messages 使用 `litellm.acompletion`，Responses 使用 `litellm.aresponses`。provider-specific mapper 只能生成 LiteLLM 入口所需的请求输入并归一化结果，不得调用 provider SDK、原生 HTTP API 或以直连 SDK 作为回退。
-
-对于 Chat Completions 和 Anthropic Messages，应用传给 LiteLLM 的图片 block SHALL 使用 `{"type":"image_url","image_url":{"url":"data:image/...;base64,..."}}` 形状；对于 Responses，应用传给 LiteLLM 的图片 block SHALL 使用 `{"type":"input_image","image_url":"data:image/...;base64,..."}` 形状。Anthropic 原生 `{"type":"image","source":...}` wire block 只能由 LiteLLM 在其 provider 边界内部生成，应用层不得直接构造或发送该形状。
+投影 SHALL 保留用户消息、可见 assistant 文本、标准工具调用和工具结果；目标 provider 不支持的 reasoning 必须过滤，不得改写 checkpoint、rollout JSONL 或源 canonical item。`assistant_text` 只属于 projection，不得作为 v2 canonical item kind。
 
 #### Scenario: 从 reasoning provider 切换到普通模型
 
 - **WHEN** 当前目标模型不接受 reasoning_content、thinking_blocks 和 reasoning item
-- **THEN** 请求历史只携带可见文本、用户附件路径和工具契约，原始思考仍保留在源 `AIMessage.content`
+- **THEN** 请求历史只携带可见 assistant text、用户输入和工具契约，原始 reasoning item/content part 仍保留在 canonical source
 
 #### Scenario: 同一 provider 回放 encrypted reasoning
 
@@ -113,79 +104,78 @@ Chat Completions 的纯字符串 `reasoning_content` SHALL 转换为一个 `reas
 #### Scenario: 跨 provider 只保留安全摘要
 
 - **WHEN** 目标 provider 接受 summary 但不接受来源 encrypted payload
-- **THEN** 投影只保留可安全转换的 summary，删除 encrypted 内容和来源专属字段，同时不删除用户附件路径说明
-
-#### Scenario: Chat Completions 图片请求统一经过 LiteLLM
-
-- **WHEN** 目标协议为 Chat Completions，且用户消息包含有效的图片预览
-- **THEN** 应用通过 `litellm.acompletion` 发送 `messages`，图片输入保持 `image_url` block，应用不直接调用目标 provider SDK，源消息保持不变
-
-#### Scenario: Responses 图片请求使用 LiteLLM Responses 入口
-
-- **WHEN** 目标协议为 Responses，且用户消息包含有效的图片预览
-- **THEN** 应用通过 `litellm.aresponses` 发送 `input`，图片输入使用 `input_image` block 及字符串形式的 `image_url`，不得把该请求降级为 provider SDK 直连
-
-#### Scenario: Anthropic 图片转换由 LiteLLM 完成
-
-- **WHEN** 目标 provider 为 Anthropic Messages，且用户消息包含有效的图片预览
-- **THEN** 应用通过 `litellm.acompletion` 发送 LiteLLM 可接受的 `image_url` block，不构造 Anthropic 原生 `image/source` block；最终 Anthropic wire 转换由 LiteLLM 完成
-
-#### Scenario: LiteLLM 不支持 rich block 时禁止直连回退
-
-- **WHEN** LiteLLM 无法为目标 provider 发送某个可选 rich block
-- **THEN** 请求投影保留 manifest 和相对路径，记录 `not_sent`/`projection_failed` 诊断，并且系统不得改用 `ChatAnthropic`、其它 provider SDK 或原生 HTTP 客户端发送
-
-#### Scenario: 图片预览 rich block 不被目标 provider 支持
-
-- **WHEN** 源 `HumanMessage` 包含预览 `image_url` block，而目标 provider 不支持图像输入
-- **THEN** 请求投影保留用户文本和相对附件路径，跳过该 rich block 并记录明确的未发送原因，源 `HumanMessage` 和 checkpoint 保持不变
+- **THEN** 投影只保留可安全转换的 summary，删除 encrypted 内容和来源专属字段
 
 #### Scenario: 空 reasoning item 不参与请求历史
 
 - **WHEN** 源 content 只有没有正文、summary 或 encrypted 内容的 reasoning item
 - **THEN** 投影过滤该 item，不把 provider server id 当成可执行历史
 
+#### Scenario: Chat Completions 图片投影保留冻结输入
+
+- **WHEN** 目标协议为 Chat Completions，且冻结用户输入包含目标支持的有效图片预览
+- **THEN** 系统经所选 Provider 的统一投影与发送入口生成合法图片输入，保留用户文本、附件身份和相对路径元信息；源 canonical item、附件冻结输入和 checkpoint 不变
+
+#### Scenario: Responses 图片投影使用目标协议形状
+
+- **WHEN** 目标协议为 Responses，且冻结用户输入包含目标支持的有效图片预览
+- **THEN** Provider projector 生成该协议接受的图片输入并通过已选择的发送方式发送，不把 Chat 或 Anthropic 的 wire block 原样套入；源 canonical item 和 checkpoint 不变
+
+#### Scenario: Anthropic 图片投影遵守所选发送方式
+
+- **WHEN** 目标协议为 Anthropic Messages，且冻结用户输入包含目标支持的有效图片预览
+- **THEN** Provider projector 按当前选择的原生或 LiteLLM 入口生成其要求的合法图片形状，不要求所有 Provider 请求必须先经过 LiteLLM，也不改写冻结来源
+
+#### Scenario: rich block 发送能力失败必须明确
+
+- **WHEN** 所选 Provider 投影或发送方式不能处理某个可选 rich block
+- **THEN** 系统保留 manifest、用户文本和相对附件路径，记录明确的 `not_sent`/`projection_failed` 诊断，不静默改投另一发送方式或伪造发送成功
+
+#### Scenario: 图片预览 rich block 不被目标 provider 支持
+
+- **WHEN** 冻结用户输入包含图片预览，而目标 provider 不支持图像输入
+- **THEN** 请求投影保留用户文本和相对附件路径，跳过该可选 rich block 并记录明确的未发送原因，源 canonical item、冻结附件输入和 checkpoint 保持不变
+
 ### Requirement: 投影不能修改 checkpoint 来源消息
 
-历史投影 SHALL 返回新的临时消息或请求 payload，不得就地修改 `AIMessage.content`、`HumanMessage.content`、`AIMessage.tool_calls`、`AIMessage.response_metadata`、用户附件元数据、SQLite 行或 rollout JSONL。相同 checkpoint 在不同目标 provider 下重复读取，必须得到相同的源消息和确定性的目标投影。
+历史投影 SHALL 返回新的临时 LangChain message 或 Provider request payload，不得就地修改 canonical item/content parts、工具调用与结果 identity、来源元数据、用户附件冻结输入、SQLite 行或 rollout JSONL；生成的 AIMessage/HumanMessage 投影同样不得被后续 projector 就地改写。相同 checkpoint 在不同目标 provider 下重复读取，必须得到相同的冻结来源和确定性的目标投影。
 
 #### Scenario: 同一历史切换两个模型
 
 - **WHEN** 先用不支持 encrypted 或图片 rich block 的模型读取，再用支持回放的来源模型读取同一 checkpoint
-- **THEN** 第一次读取不会清除第二次所需的 source content 或预览 base64，第二次仍可按能力生成回放请求
+- **THEN** 第一次读取不会清除第二次所需的 canonical content 或冻结附件输入，第二次仍可按目标能力生成回放请求
 
 ### Requirement: 流式响应只在最终提交时形成 canonical AIMessage
 
-流式 chunk 可以暂时携带 provider 原始片段、运行时 `part_id/index` 或额外字段，但 assistant 稳定完成时 SHALL 合并为一条经过 Schema 校验的有序 content block `AIMessage`。最终持久化消息不得因每个 chunk 重复保存 reasoning 或工具参数。
+流式 chunk 可以暂时携带 provider 原始片段、运行时 `part_id/index` 或额外字段，但 v2 assistant output 稳定完成时 SHALL 形成一个或多个经过 Schema 校验的 canonical item/content-part；仅在 LangChain compatibility projection 边界才合并为有序 `AIMessage.content`。最终持久化 item/message 不得因每个 chunk 重复保存 reasoning 或工具参数。
 
 #### Scenario: 多个流式 reasoning/text/tool chunk
 
 - **WHEN** 模型连续返回 reasoning、文本和工具参数 chunk
-- **THEN** 内存合并结果只生成一条最终 `AIMessage`，content 中是有序 carrier/provider blocks，tool_calls 只保存一次规范化结果
+- **THEN** 内存合并结果按 normalized identity 形成最终 assistant output/reasoning/tool call item，LangChain projection 至多生成目标所需的 AIMessage，不为每个 chunk 追加完整正文
 
 #### Scenario: assistant 流式过程中崩溃
 
-- **WHEN** 进程在最终 AIMessage 提交前崩溃
-- **THEN** 未完成 chunk 可以丢失，但此前已提交消息保持可读，不产生多条互相矛盾的 assistant revision
+- **WHEN** 进程在最终 item finalization 或 AIMessage compatibility projection 前崩溃
+- **THEN** 未完成 draft 可以丢失，但此前已提交 item 保持可读，不产生多条互相矛盾的 assistant revision；未提交 output 不得被标为 final
 
 ### Requirement: checkpoint、rollout 和 Web 投影必须识别有序 content 布局
 
-checkpoint saver、上下文恢复器、rollout message projection 和 Web 历史读取 SHALL 从经过 Schema 校验的有序 content blocks 提取可见文本、reasoning summary、reasoning 文本、encrypted 存在标记和工具阶段，不得依赖 `additional_kwargs` 的 reasoning 备份或额外 payload 文件。
+checkpoint saver、上下文恢复器、rollout item projection 和 Web 历史读取 SHALL 从经过 Schema 校验的有序 canonical content parts/items 提取可见文本、reasoning summary、reasoning 文本、encrypted 存在标记和工具阶段。只有一次性 `legacy_import_v1_to_v2` migration staging 可以读取有序 v1 `AIMessage.content` 并生成迁移报告；正常 history/provider/checkpoint/runtime 不读取 v1 carrier。不得依赖 `additional_kwargs` 的 reasoning 备份或额外 payload 文件。
 
-Web projection SHALL 不返回 encrypted 正文；full checkpoint 恢复 SHALL 保留完整有序 `AIMessage.content`，模型请求投影才按 provider 能力过滤。
+Web projection SHALL 不返回 encrypted 正文；full checkpoint 恢复 SHALL 根据 active view 和 ContextRequestPlan 生成完整可执行的 LangChain message projection，模型请求投影才按 provider 能力过滤。该 plan 的 selection 必须消费 Saver 冻结的 `ContextSelectionEntry.ref` tagged union：canonical/request-only source 使用 `ContextRef`，`selection_kind=tool_set` 使用独立 `ToolSetRef`；ToolSetRef 只能进入 Provider tools/tool-config，不能生成 LangChain message 或 canonical history。Provider adapter 必须使用与 ToolSetRef 绑定的 manifest（`tool_set_snapshot_id`、source revision、content length、hash token、schema/policy version 和 policy）生成 request_hash；不能用当前 registry 或笼统 logical tool contract hash 替换它。不同 provider 的 wire tool 编码可以造成不同 request_hash，但相同 manifest 必须保留相同 plan_hash，manifest/hash mismatch 必须拒绝 exact replay。
 
 #### Scenario: checkpoint roundtrip
 
-- **WHEN** saver 将含 reasoning、summary、encrypted 和 tool_calls 的 AIMessage 写入后再读取
-- **THEN** 恢复的 AIMessage content 顺序、carrier 原始字段、工具调用和来源元数据可重建，不需要额外 kwargs 备份
+- **WHEN** saver 将含 reasoning、summary、encrypted 和 tool_calls 的 v2 item set 写入后再读取
+- **THEN** canonical item/content part 顺序、carrier 原始字段、工具调用和来源元数据可重建，LangChain projection 不需要额外 kwargs 备份
 
 #### Scenario: 默认 Web 历史
 
 - **WHEN** Web 请求 user、tool_summary、final_response 历史
-- **THEN** SQLite/reader 从 reasoning carrier 和 provider block 得到安全摘要和存在标记，不解析或返回 encrypted 正文
+- **THEN** SQLite/item projection 从 canonical reasoning/content parts 得到安全摘要和存在标记，不解析或返回 encrypted 正文
 
 #### Scenario: 工具详情和模型 full history 分别读取
 
 - **WHEN** 用户请求 bounded tool_call/tool_result，或 LangGraph 请求完整可执行历史
-- **THEN** 前者只读取所需消息内容，后者读取完整源消息并在目标 provider adapter 中投影；两者都不回退到 payload 文件
-
+- **THEN** 前者只读取所需 item 内容，后者通过 ContextRequestPlan 的同一 selection 读取完整 source item/ToolSetSnapshot，并在目标 provider adapter 中投影；ToolSetRef 只编码到 tools/tool-config，两者都不回退到 detail store 伪造消息
