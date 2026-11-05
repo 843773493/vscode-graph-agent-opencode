@@ -361,7 +361,7 @@ class RolloutViewMembershipMixin:
                     "FROM context_view_ranges WHERE view_id = ?",
                     (view_id, parent_view_id),
                 )
-            insert_view_jumps(connection, view_id)
+            insert_view_jumps(connection, view_id, parent_view_id)
             return view_id
         materialized_sequences = tuple(dict.fromkeys((*parent_sequences, *sequence_values)))
         message_rows = (
@@ -496,7 +496,7 @@ class RolloutViewMembershipMixin:
             raise RuntimeError(f"context view 插入失败: {view_id}")
         _insert_view_ranges(connection, view_id, parent_view_id, sequence_values, view_kind)
         if parent_view_id:
-            insert_view_jumps(connection, view_id)
+            insert_view_jumps(connection, view_id, parent_view_id)
         for turn_id, ordinal, user_sequence, final_sequence, root_item_id in rows:
             turn_cursor = connection.execute(
                 "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, user_message_sequence, final_message_sequence, root_input_item_id, fork_lineage_json) VALUES (?, ?, ?, ?, ?, ?, ?)",

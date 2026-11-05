@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from app.services.infrastructure.rollout_context.storage.transaction import (
+    strict_non_negative_int,
     strict_optional_text,
     strict_text,
 )
@@ -44,14 +45,35 @@ def read_view_ancestry(connection: sqlite3.Connection, view_id: str) -> list[str
     return chain
 
 
-def insert_view_jumps(connection: sqlite3.Connection, view_id: str) -> None:
-    """共享一次已校验的父链，按深度取祖先；不为每个 level 重走父指针。"""
-    chain = read_view_ancestry(connection, view_id)
-    for level in range((len(chain) - 1).bit_length()):
+def insert_view_jumps(connection: sqlite3.Connection, view_id: str, parent_view_id: str | None) -> None:
+    """复用已发布的二倍祖先索引，生成新 view 的 O(log 深度) 跳转。"""
+    ancestor = parent_view_id
+    visited = {view_id}
+    level = 0
+    # 已走 2^level 步后，再从该祖先走同样步数；只校验本次消费的跳转，
+    # 完整父链的环、缺失和历史跳转校验仍留给显式审计。
+    while ancestor is not None:
+        if ancestor in visited:
+            raise RuntimeError(f"context view 父链成环: {view_id}")
+        visited.add(ancestor)
+        row = connection.execute(
+            "SELECT source.parent_view_id,jump.ancestor_view_id,jump.ancestor_depth "
+            "FROM context_views source LEFT JOIN context_view_jumps jump "
+            "ON jump.view_id=source.view_id AND jump.jump_level=? WHERE source.view_id=?",
+            (level, ancestor),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"context view 引用不存在的 parent: {view_id} -> {ancestor}")
         depth = 1 << level
+        following = strict_optional_text(row[1], field="context_view_jumps.ancestor_view_id")
+        if (following is not None and strict_non_negative_int(row[2], field="context_view_jumps.ancestor_depth") != depth
+                or level == 0 and following != strict_optional_text(row[0], field="context_views.parent_view_id")):
+            raise RuntimeError(f"context view jump 非法: view={ancestor}, level={level}")
         inserted = connection.execute(
             "INSERT INTO context_view_jumps(view_id,jump_level,ancestor_view_id,ancestor_depth) VALUES (?,?,?,?)",
-            (view_id, level, chain[depth], depth),
+            (view_id, level, ancestor, depth),
         )
         if inserted.rowcount != 1:
             raise RuntimeError(f"context view ancestor jump 插入失败: {view_id}/{level}")
+        ancestor = following
+        level += 1
