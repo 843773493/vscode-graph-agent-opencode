@@ -43,6 +43,7 @@
   - 2026-11-05 名称／文件联邦搜索验收迁齐：外部后端登记和请求统一使用原生 Gateway／workspace UUID，移除测试中的路由别名及退役 DTO 字段；真实 Gateway 与双 Backend 1 passed／118.02 秒，覆盖重启续页、目录及 child 版本冲突、文件正文／UTF-16 列、实际读失败、停止目标和连接拒绝。原身份、顺序、游标、错误归属及输出字节预算断言保留，Session／child 状态仍由产品入口生成；Ruff／Pyright 零诊断。命令、原始输出和收据见 `out/tests/temp/identity_federated_search_20261105/artifacts/final-index.json`；本场景不代表跨 Gateway 实网或客户端验收。
 
   - 2026-11-05 辅助代理验收消费者迁齐：三份 HTTP／WebSocket／路由认证单测使用原生 Gateway／workspace UUID，远端准备沿正式 projection 发布；保留目标冲突拒绝、发送方头剥离、联邦授权、request_id 及引用结清，原 RuntimeError 边界在合法 owner 前提下验证原 cause、503 和零转发。三文件 75 passed，Ruff／Pyright 零诊断，源码与生产依赖指纹一致；原件见 `out/tests/temp/identity_auxiliary_proxy_20261105/artifacts/evidence-index.json` 及其 `static-analysis-2026-11-05T00-56-21-805Z/evidence-index.json`。本批只迁单元验收，不代表真实网络或客户端通过，6.4 仍未勾选。
+  - 2026-11-05 Gateway 最终消费者切片：真实 Terminal 管理、原生目录绑定、导航、三类搜索、旧格式 Generator 导入及健康／诊断选择器使用唯一 UUID 与明确 Gateway owner；导航 HTTP 替身删除第二个 UUID 入参，两处调用方全部迁齐，生命周期单测 36 passed。目录／导航各 1 passed，搜索 4 passed，Generator 1 passed；健康／代理环境隔离先通过 2 项，按现行 UUID 校验合同修正最后一个选择器后仅补该项 1 passed。各切片最终 Ruff／Pyright 零诊断，保留 registry 原件、request_id、冻结范围、重启／重试及错误归属断言。Terminal 两个真实场景分别通过；第二项失败由本正式工作区九天前遗留 Backend 持续覆盖资源账本导致，只核实并终止该测试持有的两个孤儿进程后补验，原现场与清理回执保留。准确命令、源码指纹、失败与补验原件见 `out/tests/temp/identity_final_consumers_20261105/artifacts/`；Web／Electron 其余消费者尚在迁齐，6.4 继续未勾选。
 
 ### 2026-11-04：6.1 只读登记身份预检切片
 
