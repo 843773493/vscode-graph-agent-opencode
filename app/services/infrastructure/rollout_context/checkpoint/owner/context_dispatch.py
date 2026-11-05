@@ -386,7 +386,7 @@ class ContextDispatchOwnerMixin:
             pending = []
             for (index, message, message_id, role), stored in zip(eligible, existing_groups, strict=True):
                 model_call_id = (
-                    codec.tool_message_model_call_id(message, messages[:index]) if role == "tool"
+                    codec.tool_message_model_call_id(messages, index) if role == "tool"
                     else codec.model_call_id(message) if role == "assistant" else None
                 )
                 group = tuple(codec.items_for_message(

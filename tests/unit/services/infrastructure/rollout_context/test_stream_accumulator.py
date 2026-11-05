@@ -328,7 +328,7 @@ def test_tool_checkpoint_uses_the_preceding_assistant_model_scope(
         content="文件正文",
     )
     assert codec.model_call_id(tool) is None
-    binding = codec.tool_message_model_call_id(tool, (assistant,))
+    binding = codec.tool_message_model_call_id((assistant, tool), 1)
     item = codec.items_for_message(
         tool,
         item_sequence=1,
@@ -342,3 +342,37 @@ def test_tool_checkpoint_uses_the_preceding_assistant_model_scope(
     assert binding == item.projection_identity.model_call_id == "model-tool-call"
     assert item.semantic_kind == SemanticKind.TOOL_RESULT
     assert item.payload["tool_call_id"] == "call-1"
+
+
+def test_tool_lookup_keeps_nearest_and_scoped_matches_within_its_prefix(codec) -> None:
+    def assistant(scope, call_id):
+        return AIMessage(content="", id=f"lc_run--{scope}", tool_calls=[
+            {"id": call_id, "name": "read_file", "args": {}},
+        ])
+
+    messages = (
+        assistant("old", "reused"),
+        ToolMessage(content="旧结果", tool_call_id="reused"),
+        assistant("new", "reused"),
+        ToolMessage(content="新结果", tool_call_id="reused"),
+        ToolMessage(content="精确旧结果", tool_call_id="old:tool-call:reused"),
+        ToolMessage(content="尚无声明", tool_call_id="future-call"),
+        assistant("future", "future-call"),
+    )
+    assert [codec.tool_message_model_call_id(messages, index) for index in (1, 3, 4, 5)] == [
+        "old", "new", "old", None,
+    ]
+
+
+def test_tool_lookup_keeps_direct_identity_and_lazy_error_boundary(codec) -> None:
+    malformed = AIMessage(content="", response_metadata={"model_call_id": 42})
+    assistant = AIMessage(content="", id="lc_run--nearest", tool_calls=[
+        {"id": "call", "name": "read_file", "args": {}},
+    ])
+    result = ToolMessage(content="结果", tool_call_id="call")
+    assert codec.tool_message_model_call_id((malformed, assistant, result), 2) == "nearest"
+    direct = result.model_copy(update={"response_metadata": {"model_call_id": "direct"}})
+    assert codec.tool_message_model_call_id((malformed, direct), 1) == "direct"
+    unresolved = result.model_copy(update={"tool_call_id": "missing"})
+    with pytest.raises(ValueError, match="model_call_id 必须是非空字符串"):
+        codec.tool_message_model_call_id((malformed, assistant, unresolved), 2)

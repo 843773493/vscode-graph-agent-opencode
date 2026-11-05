@@ -265,16 +265,20 @@ class LangChainMessageCodec:
         return None
 
     def tool_message_model_call_id(
-        self, message: object, preceding_messages: Sequence[object]
+        self, messages: Sequence[object], index: int,
     ) -> str | None:
         """按消息顺序把 ToolMessage 绑定到它前面的 assistant carrier。"""
+        message = messages[index]
         direct = self.model_call_id(message)
         if direct is not None:
             return direct
         tool_call_id = getattr(message, "tool_call_id", None)
         if not isinstance(tool_call_id, str) or not tool_call_id:
             return None
-        for preceding in reversed(preceding_messages):
+        # 借用原序列按坐标逆查；逐个 ToolMessage 复制前缀会累积平方级复制量。
+        # 仍只消费当前位置之前、实际匹配经过的消息，保留最近匹配和错误边界。
+        for preceding_index in range(index - 1, -1, -1):
+            preceding = messages[preceding_index]
             model_call_id = self.model_call_id(preceding)
             if model_call_id is None:
                 continue
@@ -295,7 +299,7 @@ class LangChainMessageCodec:
         for index, message in enumerate(messages):
             if not isinstance(message, ToolMessage):
                 continue
-            model_call_id = self.tool_message_model_call_id(message, messages[:index])
+            model_call_id = self.tool_message_model_call_id(messages, index)
             identity = ItemProjectionIdentity(model_call_id=model_call_id)
             raw_call_id = provider_tool_call_id(identity, message.tool_call_id)
             call_ids.append(

@@ -673,7 +673,7 @@ class ModelCallExecution:
             for index, message in enumerate(canonical_messages):
                 if not isinstance(message, ToolMessage):
                     continue
-                emitting_model_call_id = codec.tool_message_model_call_id(message, canonical_messages[:index])
+                emitting_model_call_id = codec.tool_message_model_call_id(canonical_messages, index)
                 if emitting_model_call_id is None:
                     raise RuntimeError("source-mismatch: ToolMessage reconciliation 缺少 emitting model-call identity")
                 tool_results.append((message, emitting_model_call_id))

@@ -69,7 +69,7 @@ class MessageCodec(Protocol):
     def model_call_id(self, message: object) -> str | None: ...
 
     def tool_message_model_call_id(
-        self, message: object, preceding_messages: Sequence[object]
+        self, messages: Sequence[object], index: int,
     ) -> str | None: ...
 
     def items_for_message(

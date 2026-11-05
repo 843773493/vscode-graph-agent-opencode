@@ -180,7 +180,7 @@ def prepare_messages(
                         f"{admission.execution_origin!r}"
                     )
             model_call_id = (
-                codec.tool_message_model_call_id(message, messages[:index])
+                codec.tool_message_model_call_id(messages, index)
                 if message_role == "tool"
                 else codec.model_call_id(message)
                 if message_role == "assistant"

@@ -10,7 +10,7 @@ from uuid import UUID
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from app.agents import model_call_execution
@@ -237,6 +237,64 @@ async def test_request_reconciliation_requires_explicit_emitting_model_call(
     reconcile.assert_not_awaited()
     bridge._aprepare.assert_not_awaited()
     handler.assert_not_awaited()
+
+
+@pytest.fixture
+def tracked_message_history():
+    class MessageHistory(list[BaseMessage]):
+        copied_entries = 0
+
+        def __getitem__(self, key):
+            value = super().__getitem__(key)
+            if isinstance(key, slice):
+                self.copied_entries += len(value)
+            return value
+
+    return MessageHistory
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("history_size", [4, 64])
+@pytest.mark.parametrize("scoped", [False, True])
+async def test_request_tool_attribution_does_not_copy_history_prefixes(
+    bridge, response_dispatch, tracked_message_history, monkeypatch, mode, history_size, scoped,
+):
+    messages = tracked_message_history()
+    expected = []
+    for index in range(history_size):
+        model_call_id = f"model-history-{index}"
+        messages.extend([
+            AIMessage(content="", id=f"lc_run--{model_call_id}", tool_calls=[
+                {"id": "reused-call", "name": "read_file", "args": {}},
+            ]),
+            ToolMessage(content="结果", tool_call_id=(
+                f"{model_call_id}:tool-call:reused-call" if scoped else "reused-call"
+            )),
+        ])
+        expected.append((f"{model_call_id}:tool-call:reused-call", "canonical.tool_result.before_commit"))
+    observed = []
+
+    async def observe_async(operation_id, phase):
+        observed.append((operation_id, phase))
+
+    monkeypatch.setattr(model_call_execution, "observe_phase_sync", lambda *args: observed.append(args))
+    monkeypatch.setattr(model_call_execution, "observe_phase", observe_async)
+    reconcile = AsyncMock()
+    monkeypatch.setattr(model_call_execution, "get_current_model_delta_sink",
+                        lambda: SimpleNamespace(complete_tool_from_message=reconcile))
+    request = ModelRequest(model=MagicMock(), messages=messages)
+    assert request.messages is messages
+    if mode == "sync":
+        bridge.execute(request)
+        reconcile.assert_not_awaited()
+    else:
+        await bridge.aexecute(request)
+        assert [(call.args[0], call.kwargs["model_call_id"]) for call in reconcile.await_args_list] == [
+            (messages[2 * index + 1], f"model-history-{index}") for index in range(history_size)
+        ]
+    assert observed == expected
+    print(f"history={history_size}, mode={mode}, scoped={scoped}, copied_entries={messages.copied_entries}")
+    assert messages.copied_entries == 0
 
 
 @pytest.mark.asyncio
