@@ -222,19 +222,9 @@
 - Ruff 排除原 API 的 B008 后通过；Pyright 新服务及 API 无新增诊断，容器／生命周期的 6 条既存诊断与 `9332b9be7` 原件逐条对比一致。协议生成一致性、Buf format／lint／breaking、真实 Workbench 类型检查（18 份转换源码）及正式 Web 构建通过。
 - 准确命令、源码指纹、原始输出和退出码：`out/tests/temp/quick_access_provider_20261103/artifacts/provider-*`；产品运行原件：`out/tests/integration/gateway/test_thread_name_search/`。本批未改 UI 行为，未重复浏览器与 Electron 验收。树浏览、其余领域 Provider、规范 URI 的全部命中投影及 Gateway 联邦仍未完成，16.2／16.3／16.20 保持未勾选。
 
-## 17. 资源字节持久缓存（2026-11-03 补充设计）
+## 17／18. 已迁出的缓存完善范围
 
-覆盖规范：原文件预览复用私有条件缓存；Webview 资源缓存沿原版加载与隔离规则；资源缓存跨 Web 与 Electron 持久且可丢弃。
-
-本组按实际实现和验收证据逐项勾选；此前图片解码、Range、文字保存及 Electron 历史缓存证据不能替代资源字节缓存证明。复用第 2／4 组的唯一文件打开与读取链，按完整纵向链迁齐原消费者和验收，不设定全局实施顺序。
-
-- [ ] 17.1 清点普通图片 FileService／Blob、Webview loadLocalResource／Worker、raw 读取、附件预览、Gateway 与 Electron 回环代理的实际调用方和相关测试；确认同一原文件入口与 URI 投影，明确第三方 URL、下载／临时数据／Range 边界，不复制图片编辑器、Worker 或资源解析器。
-- [x] 17.2 在原文件 owner 为普通预览完整 raw GET 实现 private/no-cache、有效 ETag 及认证／原目标校验之后的空正文 304；Vary 合并实际工作区／后端身份与认证头／Cookie，validator 绑定稳定资源及版本观察值。保留下载／临时／Range／失败的 no-store，304 不完整读正文、不沿旧 request_id，mtime／size 不代替内容 hash 或保存基线；同步相关 API 描述及真实类型消费者，移除该预览场景旧的统一 no-store 分支。
-- [ ] 17.3 沿标准 fetch HTTP 缓存接通原图片编辑器，保持原 FileService、Blob／object URL 生命周期；贯通 Gateway／回环代理条件头、缓存头、Vary、304。原 Webview 复用固定版本 Worker 和宿主 ETag／NotModified 链，不自建字节缓存服务或文件落盘 IPC，不通过替换原 Pane 绕过宿主条件。
-- [ ] 17.4 对齐稳定 owner／URI、HTTP Vary、Webview 根限制和认证切换；验证 watcher 更新／删除／重连／overflow、强制刷新、route 改变／重用及取消后迟到响应。覆盖缓存存在时的权限拒绝／断连，不能使用旧字节伪报当前成功，媒体内部 version 不成为业务版本。
-- [ ] 17.5 复用 Web origin 与 Electron 原固定 profile／partition／renderer origin 的持久存储，正常重启不清缓存；处理引擎淘汰、配额及写入诊断，资源清理不删设置／聊天／草稿／业务文件，无全量预热、home 镜像、另一份前端或新增原生能力。
-- [ ] 17.6 以隔离 A/B 同路径真实图片、UTF-8 文本及原 Webview 允许根中的 CSS／字体／脚本，经 Gateway 分别验首次／二次／更新／删除／断连／认证切换／route 重用、Range 和淘汰；按原读取 owner 保留 MIME、条件请求、服务端真实 200／304／206、正文传输量及缓存失效证据。不得只断言 fetch 状态码或可见图片；定向回归文本保存 CAS、未保存模型、备份和原媒体操作，不默认全套重跑。
-- [ ] 17.7 对同一源码及正式构建完成相关静态分析、真实类型检查和 Web build，并用可迁移打包 Electron 产物真实验普通图片／Webview 的正常退出重启及零正文重传；无开发服务器或源码目录依赖。所有执行性检查带进程外超时／内存保护，正式产物按测试路径保存；上游 Worker／宿主或原生条件缺失明确未通过，不用 Web 证明替代 Electron。
+原第 17／18 组任务整体迁入 [refine-workbench-layered-caches](../refine-workbench-layered-caches/tasks.md)，保留编号和已完成 17.2／18.3 的证据归属。下方历史收据继续保留，不能据部分收据勾选后续任务。这里不再重复维护 checklist，也不以配置、语言／扩展、Webview 缓存及统一清理的完成阻塞快速访问归档；第 1–16 组实际依赖的身份、查询缓存、原恢复数据与当前文件读取仍按原断言验收。
 
 ## 既有切片的实现与验收记录
 
