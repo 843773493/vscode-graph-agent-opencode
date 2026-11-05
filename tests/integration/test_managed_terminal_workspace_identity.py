@@ -33,7 +33,7 @@ from tests.support.processes.gateway import (
 
 
 @pytest.mark.asyncio
-async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
+async def test_managed_terminal_uses_workspace_uuid_and_python_client_controls_it(
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -47,30 +47,31 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
     workspace_root = Path(integration_workspace_root_path).resolve()
     artifacts = workspace_root.parent / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
-    backend_workspace_id = load_or_create_workspace_id(workspace_root)
-    owner = ManagedBackendOwner(ManagedBackendContract(
-        "backend_owner_terminal", "backend_generation_terminal",
-        (ManagedBackendMember("terminal-target", backend_workspace_id),), "",
-    ))
+    workspace_id = load_or_create_workspace_id(workspace_root)
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "managed-runtime-gateway.json")
-    registry.upsert(WorkspaceTarget(
-        workspace_id="terminal-target", name="Terminal", root_path=str(workspace_root),
-        backend_url="", connection_kind="local", backend_workspace_id=backend_workspace_id, managed=True,
-    ))
-    registry.register_backend_owner(owner)
-    contract, runtimes = await start_managed_backend_runtime(
-        owner=owner, registry=registry, project_root=Path.cwd().resolve(), log_dir=artifacts / "managed-runtime-logs",
-    )
-    registry.publish_backend_runtime(owner, contract, runtimes)
-    runtime = runtimes["terminal-target"]
     try:
-        assert runtime.backend_workspace_id == backend_workspace_id
+        owner = ManagedBackendOwner(ManagedBackendContract(
+            gateway_id=registry.gateway_id, owner_id="backend_owner_terminal",
+            generation="backend_generation_terminal", members=(ManagedBackendMember(workspace_id),), backend_url="",
+        ))
+        registry.upsert(WorkspaceTarget(
+            gateway_id=registry.gateway_id, workspace_id=workspace_id, name="Terminal", root_path=str(workspace_root),
+            backend_url="", connection_kind="local", managed=True,
+        ))
+        registry.register_backend_owner(owner)
+        contract, runtimes = await start_managed_backend_runtime(
+            owner=owner, registry=registry, project_root=Path.cwd().resolve(), log_dir=artifacts / "managed-runtime-logs",
+        )
+        registry.publish_backend_runtime(owner, contract, runtimes)
+        runtime = runtimes[workspace_id]
+        assert owner.contract.workspace_ids == (workspace_id,)
+        assert registry.resolve(workspace_id).workspace_id == runtime.workspace_id == workspace_id
         terminal_url = runtime.service_urls["terminal_manager"]
         async with httpx.AsyncClient(timeout=3) as client:
             health_response = await client.get(f"{terminal_url}/health")
         health_response.raise_for_status()
         terminal_health = health_response.json()
-        assert terminal_health["workspace_id"] == backend_workspace_id
+        assert terminal_health["workspace_id"] == workspace_id
         assert "workspace_root" not in terminal_health
         assert isinstance(terminal_health["process_id"], int)
 
@@ -78,14 +79,14 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
             await _adopt_local_node_service(
                 service_name="terminal_manager",
                 service_url=terminal_url,
-                backend_workspace_id="00000000-0000-4000-8000-000000000002",
+                workspace_id="00000000-0000-4000-8000-000000000002",
                 log_dir=artifacts / "managed-runtime-logs",
             )
 
         adopted = await _adopt_local_node_service(
-                service_name="terminal_manager",
+            service_name="terminal_manager",
             service_url=terminal_url,
-            backend_workspace_id=backend_workspace_id,
+            workspace_id=workspace_id,
             log_dir=artifacts / "managed-runtime-logs",
         )
         assert adopted is not None
@@ -99,9 +100,9 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
 
         terminal_client = TerminalManagerClient(
             backend_url=terminal_url,
-            workspace_id=backend_workspace_id,
+            workspace_id=workspace_id,
         )
-        workspace_api_path = f"/api/v1/workspaces/{backend_workspace_id}"
+        workspace_api_path = f"/api/v1/workspaces/{workspace_id}"
         async with httpx.AsyncClient(
             base_url=runtime.service_urls["workspace_api"],
             headers=LOCAL_TOKEN_HEADERS,
@@ -131,7 +132,7 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
             created_response.raise_for_status()
             created = created_response.json()["data"]
             terminal_id = created["resource_id"]
-            assert created["workspace_id"] == backend_workspace_id
+            assert created["workspace_id"] == workspace_id
             assert created["source_thread"] == {
                 "session_id": session_id,
                 "thread_id": thread_id,
@@ -144,7 +145,7 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
             # 第二种寻址载体也必须命中同一个 owner 资源，不能产生另一份事实。
             explicit = await client.get(
                 f"/api/v1/resources/{terminal_id}",
-                headers={"X-BoxTeam-Workspace-Id": backend_workspace_id},
+                headers={"X-BoxTeam-Workspace-Id": workspace_id},
             )
             explicit.raise_for_status()
             assert explicit.json()["data"]["resource_id"] == terminal_id
@@ -160,7 +161,7 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
             assert stopped.json()["data"]["status"] == "terminated"
             assert stopped.headers["X-Request-ID"] == stopped.json()["request_id"]
             (artifacts / "managed-terminal-owner-result.json").write_text(json.dumps({
-                "workspace_id": backend_workspace_id, "terminal_id": terminal_id,
+                "workspace_id": workspace_id, "terminal_id": terminal_id,
                 "terminal_manager_pid": terminal_health["process_id"],
                 "stop_elapsed_seconds": stop_elapsed,
                 "stopped": stopped.json()["data"],
@@ -195,6 +196,7 @@ async def test_gateway_owner_create_grant_ws_and_management_bypass_rejection(
             timeout=30,
         ) as client:
             await acquire_gateway_guest(client)
+            initialized = {}
             for path in (
                 "/api/gateway/health",
                 "/api/gateway/workspaces",
@@ -202,10 +204,17 @@ async def test_gateway_owner_create_grant_ws_and_management_bypass_rejection(
             ):
                 response = await client.get(path)
                 response.raise_for_status()
-                assert response.headers["X-Request-ID"] == response.json()["request_id"]
-            workspaces = (await client.get("/api/gateway/workspaces")).json()["data"]
-            workspace_id = workspaces["active_workspace_id"]
-            client.headers["X-BoxTeam-Workspace-Id"] = workspace_id
+                payload = response.json()
+                assert response.headers["X-Request-ID"] == payload["request_id"]
+                initialized[path] = payload["data"]
+            active = initialized["/api/gateway/workspaces"]["active_workspace"]
+            workspace_id = active["workspace_id"]
+            assert active["gateway_id"] == initialized["/api/gateway/health"]["gateway_id"]
+            assert workspace_id == initialized["/api/v1/workspace"]["workspace_id"]
+            client.headers.update({
+                "X-BoxTeam-Workspace-Id": workspace_id,
+                "X-BoxTeam-Target-Gateway-Id": active["gateway_id"],
+            })
             session_response = await client.post(
                 "/api/v1/sessions", json={"title": "Gateway Terminal"}
             )
@@ -245,7 +254,9 @@ async def test_gateway_owner_create_grant_ws_and_management_bypass_rejection(
             )
             grant_response.raise_for_status()
             async with websockets.connect(
-                f"ws://127.0.0.1:{port}/api/gateway/workspaces/{workspace_id}/terminal-manager/terminal?token=local-dev-token",
+                f"ws://127.0.0.1:{port}/api/gateway/workspaces/{workspace_id}/terminal-manager/terminal"
+                f"?token={LOCAL_TOKEN_HEADERS['X-Local-Token']}",
+                additional_headers={"X-BoxTeam-Target-Gateway-Id": active["gateway_id"]},
             ) as socket:
                 await socket.send(
                     json.dumps(
