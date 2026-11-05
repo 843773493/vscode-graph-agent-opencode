@@ -126,7 +126,6 @@ from app.services.infrastructure.mcp.invocation import (
 from app.services.infrastructure.mcp.tool_definitions import (
     FrozenToolCatalog,
     FrozenToolDefinition,
-    tool_catalog_from_activation,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
@@ -817,15 +816,10 @@ def create_my_deep_agent(
         skill_snapshot_resolver = resolve_skill_snapshot
 
         def discovery_catalog_resolver() -> FrozenToolCatalog:
-            snapshot, _model_call_id = checkpointer.load_tool_call_resource_activation(
+            return checkpointer.load_tool_call_extension_catalog(
                 session_id, thread_id=thread_id,
                 tool_call_id=tool_invocation_context.require_tool_call_id(),
                 model_call_id=tool_invocation_context.require_model_call_id(),
-            )
-            return tool_catalog_from_activation(
-                snapshot, lambda frozen, binding: checkpointer.read_resource_activation_payload(
-                    frozen, binding, storage_owner=(session_id, thread_id),
-                ),
             )
 
         def resolve_catalog():

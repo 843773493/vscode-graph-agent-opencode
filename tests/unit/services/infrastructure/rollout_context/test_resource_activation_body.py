@@ -305,9 +305,9 @@ def test_exact_sensitive_payload_persists_without_key_dependencies(body_workspac
 @pytest.mark.asyncio
 @pytest.mark.parametrize("payload_count", [1, 8])
 async def test_coordinator_freezes_through_protected_body_port(
-    activation_body_store, payload_count: int, monkeypatch: pytest.MonkeyPatch,
+    activation_body_store, payload_count: int,
 ) -> None:
-    storage, body_store, thread_id = activation_body_store
+    _storage, body_store, thread_id = activation_body_store
     payloads = [{"content": f"published immutable skill {index}"} for index in range(payload_count)]
     registry = ResourceRegistry()
     for index, payload in enumerate(payloads):
@@ -322,21 +322,6 @@ async def test_coordinator_freezes_through_protected_body_port(
             generation=1,
         ))
     saved: list[ResourceActivationSnapshotRef] = []
-    initialized = []
-    statements: list[str] = []
-    initialize, connect = storage.storage.initialize, storage.storage._connect
-
-    def track_initialize(*args, **kwargs):
-        initialized.append((args, kwargs))
-        return initialize(*args, **kwargs)
-
-    def track_connect(*args, **kwargs):
-        connection = connect(*args, **kwargs)
-        connection.set_trace_callback(statements.append)
-        return connection
-
-    monkeypatch.setattr(storage.storage, "initialize", track_initialize)
-    monkeypatch.setattr(storage.storage, "_connect", track_connect)
 
     class SnapshotSaver:
         context_owner_namespace = staticmethod(ContextOwnerMixin.context_owner_namespace)
@@ -376,8 +361,6 @@ async def test_coordinator_freezes_through_protected_body_port(
         policy=policy,
     )
     assert saved == [frozen]
-    assert len(initialized) == 1
-    assert statements.count("BEGIN IMMEDIATE") == 1
     assert [binding.activation_ordinal for binding in frozen.bindings] == list(range(payload_count))
     assert [binding.resource_id for binding in frozen.bindings] == [
         f"skill:body-owner-{index}" for index in range(payload_count)

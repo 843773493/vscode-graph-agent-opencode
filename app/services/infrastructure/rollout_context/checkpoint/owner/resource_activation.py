@@ -28,6 +28,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
     ExtensionDispatchBindingRef,
 )
+from app.services.infrastructure.mcp.tool_definitions import (
+    FrozenToolCatalog,
+    tool_catalog_from_activation,
+)
 from app.services.infrastructure.rollout_context.activation.body import (
     ResourceActivationBodyStore,
 )
@@ -122,6 +126,26 @@ class ResourceActivationOwnerMixin:
         )
         assert assembly.model_call_id is not None
         return snapshot, assembly.model_call_id
+
+    def load_tool_call_extension_catalog(
+        self, session_id: str, *, thread_id: str, tool_call_id: str,
+        model_call_id: str | None = None, checkpoint_ns: str = "",
+    ) -> FrozenToolCatalog:
+        """恢复原调用的完整目录，所有定义正文共用一次 rollout 读取快照。"""
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
+        activation, _ = self.load_tool_call_resource_activation(
+            session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
+        )
+        body_store = ResourceActivationBodyStore(self._storage, self._detail_store)
+        # 复用仅限本次同步目录读取；每份正文仍检查归属、manifest 和摘要。
+        with self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as current:
+            return tool_catalog_from_activation(
+                activation, lambda frozen, binding: body_store.read_payload(
+                    snapshot=frozen, binding=binding, storage_owner=(session_id, thread_id),
+                    checkpoint_ns=checkpoint_ns, read_snapshot=current,
+                ),
+            )
 
     def resolve_extension_dispatch_for_tool_call(
         self, session_id: str, *, thread_id: str, tool_call_id: str,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -31,6 +31,9 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
 )
 
 if TYPE_CHECKING:
@@ -93,20 +96,24 @@ class ResourceActivationBodyStore:
         binding: ResourceProvenanceRef,
         storage_owner: tuple[str, str],
         checkpoint_ns: str = "",
+        read_snapshot: RolloutReadSnapshot | None = None,
     ) -> object:
         """按 catalog 恢复出的 snapshot binding 校验并读取 payload。"""
 
         lineage_body = ActivationLineageBodyStore(self._storage, self._detail_store)
         # binding、重试 lineage、manifest 与正文共用当前读取快照，避免各层重开连接。
-        with self._storage.storage.open_read_snapshot(
-            storage_owner[0], storage_owner[1], checkpoint_ns,
-        ) as read_snapshot:
-            require_resource_activation_schema(read_snapshot.connection)
+        with (
+            self._storage.storage.open_read_snapshot(*storage_owner, checkpoint_ns)
+            if read_snapshot is None else nullcontext(read_snapshot)
+        ) as current, self._storage.storage.read_connection(
+            *storage_owner, checkpoint_ns, snapshot=current,
+        ) as connection:
+            require_resource_activation_schema(connection)
             expected_assembly_id = binding_assembly_id(
-                read_snapshot.connection, snapshot, binding, storage_owner=storage_owner,
+                connection, snapshot, binding, storage_owner=storage_owner,
                 read_lineage_manifest=lambda ref: lineage_body.read_lineage_manifest(
                     detail_ref=ref, checkpoint_ns=checkpoint_ns, storage_owner=storage_owner,
-                    snapshot=read_snapshot,
+                    snapshot=current,
                 ),
             )
             detail_ref = binding.detail_ref
@@ -131,7 +138,7 @@ class ResourceActivationBodyStore:
                     storage_owner[1],
                     detail_ref=detail_ref,
                     checkpoint_ns=checkpoint_ns,
-                    snapshot=read_snapshot,
+                    snapshot=current,
                 )
                 record = detail_record_from_mapping(raw)
                 self._validate_record(
@@ -150,7 +157,7 @@ class ResourceActivationBodyStore:
                     thread_id=storage_owner[1],
                     record=record,
                     include_sensitive=True,
-                    snapshot=read_snapshot,
+                    snapshot=current,
                 )
             except (KeyError, DetailUnavailableError) as error:
                 raise ResourceActivationStoreError(
