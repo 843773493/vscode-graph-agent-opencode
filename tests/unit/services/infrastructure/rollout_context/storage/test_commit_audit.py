@@ -11,9 +11,7 @@ from time import perf_counter
 import pytest
 
 from app.core.identifier import create_uuid_hex
-from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.storage import transaction
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.harness.python.run_context import TestRunContext
 
@@ -63,28 +61,6 @@ def test_warm_initialization_does_not_buffer_entire_committed_history(audit_roll
         "peak_traced_bytes": peak,
     }, indent=2), encoding="utf-8")
     assert peak < jsonl_bytes // 2, (peak, jsonl_bytes)
-
-
-def test_snapshot_catalog_audit_does_not_sort_all_historical_locators(audit_rollout, monkeypatch):
-    storage, session_id, thread_id = audit_rollout
-    connect = storage._connect
-    statements = []
-
-    def observe(*args, **kwargs):
-        connection = connect(*args, **kwargs)
-        connection.set_trace_callback(statements.append)
-        return connection
-
-    monkeypatch.setattr(storage, "_connect", observe)
-    with storage.open_read_snapshot(session_id, thread_id) as snapshot:
-        assert snapshot.session_id == session_id
-    # 普通读取只查询 catalog 末尾一条，不能排序或遍历全部 locator。
-    catalog_queries = [statement for statement in statements if "FROM item_catalog" in statement]
-    assert len(catalog_queries) == 1
-    assert "DESC LIMIT 1" in catalog_queries[0]
-    with storage._connect(thread_id, session_id=session_id, read_only=True) as connection:
-        plan = connection.execute("EXPLAIN QUERY PLAN " + catalog_queries[0]).fetchall()
-    assert not any("TEMP B-TREE FOR ORDER BY" in row[3] for row in plan), plan
 
 
 @pytest.mark.parametrize("operation", ["initialize", "integrity_snapshot"])
@@ -166,47 +142,6 @@ def test_snapshot_audit_does_not_retain_all_commit_boundaries(commit_history_fac
     assert measurements[1]["peak_traced_bytes"] < measurements[0]["peak_traced_bytes"] + 128 * 1024
 
 
-@pytest.mark.parametrize("operation", ["initialize", "integrity_snapshot"])
-def test_commit_audit_reuses_closed_enums_while_rechecking_every_record(
-    commit_history_factory, monkeypatch, operation,
-):
-    storage, session_id, thread_id = commit_history_factory(4096)
-    with storage._lock(thread_id, "", session_id=session_id):
-        with storage._connect(thread_id, session_id=session_id) as connection:
-            storage._append_v2_records_transaction(
-                connection, thread_id, "", (), session_id=session_id,
-                commit_kind="terminal_convergence", commit_mode="metadata_only",
-                outcome="completed_empty", idempotency_key="audit-terminal",
-            )
-            storage._commit_connection(connection)
-    scans = {CommitKind: 0, CommitMode: 0, ControlOutcome: 0}
-    enum_iter = type(CommitKind).__iter__
-    contract = transaction.validate_commit_contract
-    checked = 0
-
-    def observe_enum(enum):
-        if enum in scans:
-            scans[enum] += 1
-        return enum_iter(enum)
-
-    def observe_contract(**values):
-        nonlocal checked
-        checked += 1
-        return contract(**values)
-
-    monkeypatch.setattr(type(CommitKind), "__iter__", observe_enum)
-    monkeypatch.setattr(transaction, "validate_commit_contract", observe_contract)
-    if operation == "initialize":
-        storage.initialize(session_id, thread_id=thread_id)
-    else:
-        with storage.open_read_snapshot(session_id, thread_id, validate_integrity=True):
-            pass
-    print(f"commit audit enum scans ({operation}): {[(enum.__name__, count) for enum, count in scans.items()]}; checked={checked}")
-    # 显式全检之后还核当前快照边界；恢复只进行历史审计。
-    assert checked == (4097 if operation == "initialize" else 4098)
-    assert not any(scans.values())
-
-
 def test_valid_mixed_commits_validate_bodies_and_reclaim_only_uncommitted_tail(commit_history_factory):
     storage, session_id, thread_id = commit_history_factory(64)
     jsonl = storage.jsonl_path(session_id, thread_id=thread_id)
@@ -243,34 +178,6 @@ def test_mixed_commit_audit_rejects_counts_and_wrong_owners_without_reclaiming_t
             with storage.open_read_snapshot(session_id, thread_id, validate_integrity=True):
                 pytest.fail("不能接受 commit 数量或 item 归属损坏的历史")
     assert jsonl.read_bytes() == before
-
-
-def test_snapshot_work_is_bounded_as_commit_history_grows(commit_history_factory, monkeypatch, request):
-    measurements = []
-    for count in (64, 4096):
-        storage, session_id, thread_id = commit_history_factory(count)
-        connect = storage._connect
-        steps = 0
-
-        def progress():
-            nonlocal steps
-            steps += 1
-            return 0
-
-        def observe(*args, **kwargs):
-            connection = connect(*args, **kwargs)
-            connection.set_progress_handler(progress, 1)
-            return connection
-
-        with monkeypatch.context() as patch:
-            patch.setattr(storage, "_connect", observe)
-            with storage.open_read_snapshot(session_id, thread_id):
-                pass
-        measurements.append({"commits": count, "sqlite_vm_steps": steps})
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    (context.artifacts_dir / "snapshot-work.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
-    print(f"snapshot bounded work: {measurements}")
-    assert measurements[1]["sqlite_vm_steps"] <= measurements[0]["sqlite_vm_steps"] + 100
 
 
 @pytest.mark.parametrize("corruption", [

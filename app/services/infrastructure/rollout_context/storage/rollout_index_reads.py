@@ -123,7 +123,9 @@ class RolloutIndexMixin:
                     )
                 if validate_integrity:
                     self._validate_v2_commit_offsets(connection, jsonl_path)
-                validate_commit_boundary(connection, jsonl_path.stat().st_size)
+                else:
+                    # 完整审计已核对同一末尾边界，只有普通读取需要单独检查。
+                    validate_commit_boundary(connection, jsonl_path.stat().st_size)
                 integrity = (
                     connection.execute("PRAGMA integrity_check").fetchone()[0]
                     if validate_integrity

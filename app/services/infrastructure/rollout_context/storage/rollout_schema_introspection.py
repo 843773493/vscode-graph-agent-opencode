@@ -357,7 +357,7 @@ class RolloutSchemaIntrospectionMixin:
         if "rollout_format_version" not in columns:
             return
         row = connection.execute(
-            "SELECT rollout_format_version, committed_jsonl_offset, last_commit_id, schema_version "
+            "SELECT rollout_format_version, committed_jsonl_offset, last_commit_id, schema_version, last_item_sequence "
             "FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
         if row is None or strict_non_negative_int(
@@ -541,6 +541,15 @@ class RolloutSchemaIntrospectionMixin:
                 "database_meta.committed_jsonl_offset 与 storage_commits 不一致: "
                 f"meta={database_offset}, commits={previous}, "
                 f"catalog_end={expected_item_offset}, file={jsonl_size}"
+            )
+        # 复用本次审计的末尾序号；恢复前必须核对 meta，不能再按损坏边界截尾。
+        database_last_item_sequence = strict_non_negative_int(
+            row[4], field="database_meta.last_item_sequence"
+        )
+        if database_last_item_sequence != expected_item_sequence - 1:
+            raise RuntimeError(
+                "database_meta.last_item_sequence 与 item_catalog 不一致: "
+                f"meta={database_last_item_sequence}, catalog={expected_item_sequence - 1}"
             )
         validate_projection_membership(connection)
         # TODO：旧库显式升级链路移除后，取消 schema 23 的分界；旧表尚未使用成员块。
