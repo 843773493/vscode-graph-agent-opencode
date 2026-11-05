@@ -23,6 +23,7 @@
 ## 3. MCP 与现有 Agent 唯一链路
 
 - [ ] 3.1 在原 MCP 管理服务 seam 消费目标配置、安装及原 MCP owner 的完整对象，迁齐旧 React 连接入口；移除该运行面重复 client、enabled/status 与目录，不复制原列表／详情。
+  - 2026-11-05 原入口迁移切片：原 `IMcpService`／`IMcpWorkbenchService` 消费项目 MCP owner 的精确目标 DTO，底部原列表、原详情 Webview、Server Options 和授权管理 Workbench 共用同一组对象；旧 React 列表／授权页／hook 及此运行面的原发现与工具 client 已物理下线。原可见性观察、完整替换、失败重读、目录成员通知、迟到请求隔离与面板恢复均迁齐；未接入的安装／配置／凭据写入明确拒绝。受保护定向单测 59 passed，31 份实际转换源码类型检查通过，Web 构建通过，Web tsc 保留与完整基线相同的 28 条既存诊断；本地完整浏览器场景通过，远端 turn／model_call 与真实 300 秒期限错误场景另 3 passed／712.02 秒，保留目标归属、真实工具执行、canonical／assembly request_hash 与秘密保护强断言。正式 Workbench Webview 使用与固定源码 v6 协议核对一致的官方 1.145.0 资产，仍保留 UUID 子域隔离。MCP 专项先经真实目标 `/agents` 等待 SDK 配置检查，不构成冷启动 Thread 性能验收；冷初始化及一次未进入业务的端口占用失败原件均保留。最终源码指纹、准确命令、原始输出和各场景边界见 `out/tests/temp/workbench_mcp_owner_20261105/artifacts/mcp-owner-final-evidence.json`；安装、完整配置与跨目标闭包未完成，整项保持未勾选。
 - [ ] 3.2 配置计划通过原 workspace source／candidate／CAS 提交，补受管 launch binding／私有输入引用 schema 与解析消费者；在原 MCP 凭据 owner 扩展按 workspace／server／输入键版本及来源绑定的私有写入与引用，不能把 OAuth store 当完整 input secret 实现。核 A1/A2 secret 实际调用、重启、换地址不借用、正文／DTO／事件／日志脱敏，保留既存配置与 OAuth。
 - [ ] 3.3 接入连接操作、OAuth、目录通知和工具调用原生命周期；验证目录 revision／generation、热替换、封存资格、排空及结果未知合同，无第二套资源租约或逻辑 session 固定功能。
 - [ ] 3.4 支持受验证 VSIX 动态 definition Provider，保留来源实例／host generation／collection／原定义、provide／启动前 resolve／change／dispose／取消语义，仍明确选择 workspace 并交项目 owner 启用；验跨目标同 ID、离线、迟到 resolve、配置 unavailable，拒绝 A 本机动态定义到 B 执行，静态可迁移模板须重新校验且不搬秘密，不在 Extension Host 另启项目 Agent MCP client。

@@ -6,6 +6,7 @@ import { SessionNavigation } from './sessionNavigation.js';
 import { ViewPaneContainer } from '../upstream/src/vs/workbench/browser/parts/views/viewPaneContainer.js';
 import { Codicon } from '../upstream/src/vs/base/common/codicons.js';
 import { WorkspacePanel } from './workspacePanel.js';
+import { McpServersListView } from '../upstream/src/vs/workbench/contrib/mcp/browser/mcpServersView.js';
 import './workspacePanelState.js';
 import './workspaceIdentityRecovery.js';
 import './search/searchService.js';
@@ -65,7 +66,8 @@ for (const [kind, title, icon, order] of [
   }, ViewContainerLocation.Panel);
   views.registerViews([{
     id: `${id}.view`, name: { value: title, original: title },
-    canToggleVisibility: true, canMoveView: true, ctorDescriptor: new SyncDescriptor(WorkspacePanel),
+    canToggleVisibility: true, canMoveView: true,
+    ctorDescriptor: kind === 'mcp' ? new SyncDescriptor(McpServersListView, [{}]) : new SyncDescriptor(WorkspacePanel),
     openCommandActionDescriptor: { id: `${id}.focus`, title: { value: `打开${title}`, original: `Open ${kind}` } },
   }], container);
 }

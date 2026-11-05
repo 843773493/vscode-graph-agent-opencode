@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
-  listMcpOperations, listMcpServers, submitMcpOperation,
+  listMcpOperations, getMcpCatalog, submitMcpOperation,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
@@ -36,7 +36,7 @@ function installFetch(respond: (url: URL, init: RequestInit | undefined) => unkn
 
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-test("所有 MCP 消费者传递完整 owner 并返回原业务数组或对象", async () => {
+test("所有 MCP 消费者传递完整 owner，保留完整目录封套及原操作对象", async () => {
   const requests: { url: URL; init: RequestInit | undefined }[] = [];
   const servers: McpServerDTO[] = [{ server_id: "server", transport: "stdio", enabled: true, status: "ready", tools: [], connection_ref: "mcp-connection:v1:" + "a".repeat(32) + ":1" }];
   const authorization = { authorization_url: "http://localhost/authorize" };
@@ -47,7 +47,8 @@ test("所有 MCP 消费者传递完整 owner 并返回原业务数组或对象",
     return envelope(init?.method ? operation : [operation]);
   });
   const signal = new AbortController().signal;
-  expect(await listMcpServers(port, target)).toEqual(servers);
+  const catalog = { ...envelope(servers), data: servers, target: { kind: "workspace" as const, ...target }, protocol_version: 1 as const, catalog_revision: revision, catalog_generation: 1 };
+  expect(await getMcpCatalog(port, target)).toEqual(catalog);
   expect(await listMcpOperations(port, target)).toEqual([operation]);
   expect(await submitMcpOperation(port, target, "server", "connect", signal)).toEqual(operation);
   expect(await cancelMcpOperation(port, target, "operation/id", signal)).toEqual(operation);
@@ -86,7 +87,7 @@ test.each([
   { catalog_revision: revision, catalog_generation: Number.MAX_SAFE_INTEGER + 1 },
 ])("目录消费前拒绝无效 revision 或 generation %j", async invalid => {
   const port = installFetch(() => envelope([], invalid));
-  await expect(listMcpServers(port, target)).rejects.toThrow("目录 revision／generation");
+  await expect(getMcpCatalog(port, target)).rejects.toThrow("目录 revision／generation");
 });
 
 test("请求发出后选择对象改变不改变原 owner 核对基线", async () => {

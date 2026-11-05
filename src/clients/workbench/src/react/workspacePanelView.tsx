@@ -9,7 +9,6 @@ import { TerminalContent } from '../../../web/src/components/panels/bottomPanel/
 import { BrowserContent } from '../../../web/src/components/panels/bottomPanel/BrowserContent.js';
 import { GatewayLogContent } from '../../../web/src/components/panels/bottomPanel/GatewayLogContent.js';
 import WorkspacePortForwardPanel from '../../../web/src/components/workspace/portForward/WorkspacePortForwardPanel.js';
-import McpConnections from '../../../web/src/components/workspace/mcp/McpConnections.js';
 import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmProvider.js';
 import { useWorkspaceResources } from '../../../web/src/hooks/workspace/useWorkspaceResources.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -21,11 +20,11 @@ import style from './workspacePanelView.css?text';
 import panelStyle from '../../../web/src/styles/foundation/workbenchPanel.css?text';
 import portStyle from '../../../web/src/styles/workspace/portForwardPanel.css?text';
 
-type PanelKind = 'terminal' | 'browser' | 'output' | 'ports' | 'automation' | 'mcp';
+type PanelKind = 'terminal' | 'browser' | 'output' | 'ports' | 'automation';
 const panelKinds: Record<string, PanelKind> = {
   'boxteam.workspace.terminal': 'terminal', 'boxteam.workspace.output': 'output',
   'boxteam.browser.view': 'browser',
-  'boxteam.ports.view': 'ports', 'boxteam.automation.tasks': 'automation', 'boxteam.mcp.view': 'mcp',
+  'boxteam.ports.view': 'ports', 'boxteam.automation.tasks': 'automation',
 };
 const toolbar = (tools: ReactNode) => <div className="native-workspace-panel-toolbar">{tools}</div>;
 
@@ -68,7 +67,6 @@ function WorkspaceProduct({ kind, workspace, editors, active, input }: {
       <GatewayLogContent apiPort={0} workspaceId={gatewayWorkspaceKey(workspace)} active={active} renderToolbar={toolbar} />
     </section>;
     case 'ports': return <WarmConfirmProvider><WorkspacePortForwardPanel apiPort={0} workspace={workspace} active={active} /></WarmConfirmProvider>;
-    case 'mcp': return <McpConnections apiPort={0} target={workspace} active={active} />;
   }
 }
 

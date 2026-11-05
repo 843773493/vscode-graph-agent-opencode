@@ -23,12 +23,13 @@ async function request<T extends McpResponse>(port: number, target: GatewayWorks
   return response;
 }
 
-export async function listMcpServers(port: number, target: GatewayWorkspaceRequestTarget, signal?: AbortSignal) {
+export async function getMcpCatalog(port: number, target: GatewayWorkspaceRequestTarget, signal?: AbortSignal) {
   const response = await request<McpServerListResponseDTO>(port, target, "servers", { signal });
   if (!/^sha256:[0-9a-f]{64}$/.test(response.catalog_revision) || !Number.isSafeInteger(response.catalog_generation) || response.catalog_generation < 1) {
     throw new Error("MCP 管理响应缺少有效目录 revision／generation");
   }
-  return unwrapApiData(response);
+  unwrapApiData(response);
+  return response;
 }
 
 export async function listMcpOperations(port: number, target: GatewayWorkspaceRequestTarget, signal?: AbortSignal) {

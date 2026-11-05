@@ -3,6 +3,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../upstream/src/vs
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
 import { IPaneCompositePartService } from '../upstream/src/vs/workbench/services/panecomposite/browser/panecomposite.js';
 import { IWorkbenchLayoutService, Parts } from '../upstream/src/vs/workbench/services/layout/browser/layoutService.js';
+import { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { ViewContainerLocation } from '../upstream/src/vs/workbench/common/views.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
 import { workspaceContext } from './workspaceContext.js';
@@ -17,12 +18,14 @@ class WorkspacePanelState extends Disposable {
   private revision = 0;
   private disposed = false;
   private size: PanelState['size'];
+  private openMcpAfterRestore = Boolean(new URLSearchParams(location.search).get('mcp_workspace'));
 
   constructor(
     @IPaneCompositePartService private readonly panes: IPaneCompositePartService,
     @IWorkbenchLayoutService private readonly layout: IWorkbenchLayoutService,
     @IStorageService private readonly storage: IStorageService,
     @INotificationService private readonly notifications: INotificationService,
+    @IViewsService private readonly views: IViewsService,
   ) {
     super();
     const unsubscribe = workspaceContext.subscribe(() => this.selectWorkspace());
@@ -57,27 +60,42 @@ class WorkspacePanelState extends Disposable {
 
   private selectWorkspace(): void {
     const snapshot = workspaceContext.getSnapshot();
-    if (snapshot.loading || snapshot.error || !snapshot.activeId || snapshot.activeId === this.route) return;
+    const selectedRoute = !snapshot.loading && !snapshot.error ? snapshot.activeId : null;
+    if (this.openMcpAfterRestore && !selectedRoute) {
+      ++this.revision;
+      this.route = this.appliedRoute;
+    }
+    if (snapshot.loading && !snapshot.error) return;
+    const route = selectedRoute !== this.route ? selectedRoute : null;
+    if (!route && !this.openMcpAfterRestore) return;
     const first = this.route === null;
-    this.save();
-    this.route = snapshot.activeId;
-    const route = this.route;
-    const next = this.storage.getObject<PanelState>(this.key(route), StorageScope.WORKSPACE);
-    this.size = next?.size;
-    const revision = ++this.revision;
+    const next = route ? this.storage.getObject<PanelState>(this.key(route), StorageScope.WORKSPACE) : undefined;
+    if (route) {
+      this.save();
+      this.route = route;
+      ++this.revision;
+    }
+    const revision = this.revision;
     this.restoring = this.restoring.then(async () => {
       if (this.disposed || revision !== this.revision) return;
-      if (!next) {
-        if (!first) this.layout.setPartHidden(true, Parts.PANEL_PART);
+      if (route) {
+        if (next) {
+          // 关闭时也恢复选中标签，用户下次展开仍回到此工作区原来的面板。
+          if (next.id) await this.panes.openPaneComposite(next.id, ViewContainerLocation.Panel, false);
+          if (this.disposed || revision !== this.revision) return;
+          if (next.size) this.layout.setSize(Parts.PANEL_PART, next.size);
+          this.layout.setPartHidden(!next.visible, Parts.PANEL_PART);
+        } else if (!first) {
+          this.layout.setPartHidden(true, Parts.PANEL_PART);
+        }
+        this.size = next?.size;
         this.appliedRoute = route;
-        return;
       }
-      // 关闭时也恢复选中标签，用户下次展开仍回到此工作区原来的面板。
-      if (next.id) await this.panes.openPaneComposite(next.id, ViewContainerLocation.Panel, false);
-      if (this.disposed || revision !== this.revision) return;
-      if (next.size) this.layout.setSize(Parts.PANEL_PART, next.size);
-      this.layout.setPartHidden(!next.visible, Parts.PANEL_PART);
-      this.appliedRoute = route;
+      // 显式入口在同一 owner 恢复完成后打开；无活动工作区或初始化失败也交给原 MCP 视图显示真实错误。
+      if (this.openMcpAfterRestore) {
+        if (selectedRoute && this.appliedRoute === selectedRoute) this.openMcpAfterRestore = false;
+        await this.views.openView('boxteam.mcp.view', true);
+      }
     }).catch((cause: unknown) => this.notifications.error(`恢复工作区底部面板失败：${String(cause)}`));
   }
 

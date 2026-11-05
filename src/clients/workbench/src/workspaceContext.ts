@@ -18,6 +18,7 @@ interface WorkspaceSnapshot {
 /** 只镜像 Gateway 已返回的工作区选择，供不同原生视图共享；不持有业务 writer。 */
 let snapshot: WorkspaceSnapshot = { gatewayId: null, workspaces: [], activeId: null, settings: null, loading: true, error: null };
 let generation = 0;
+let refreshing: Promise<void> | undefined;
 const listeners = new Set<() => void>();
 export const workspaceContext = {
   getSnapshot: () => snapshot,
@@ -34,13 +35,20 @@ export const workspaceContext = {
     snapshot = next;
     for (const listener of listeners) listener();
   },
-  async refresh(): Promise<void> {
-    const request = ++generation;
-    try {
-      const [workspaces, settings, gatewayId] = await Promise.all([listGatewayWorkspaces(0), getBrowserUiSettings(0), browserGatewayId(0)]);
-      if (request === generation) this.publish({ gatewayId, workspaces: workspaces.items, activeId: nullableGatewayWorkspaceKey(workspaces.active_workspace), settings, loading: false, error: null });
-    } catch (cause) {
-      if (request === generation) this.publish({ ...snapshot, loading: false, error: errorMessage(cause) });
-    }
+  refresh(): Promise<void> {
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      do {
+        const request = generation;
+        try {
+          const [workspaces, settings, gatewayId] = await Promise.all([listGatewayWorkspaces(0), getBrowserUiSettings(0), browserGatewayId(0)]);
+          if (request === generation) this.publish({ gatewayId, workspaces: workspaces.items, activeId: nullableGatewayWorkspaceKey(workspaces.active_workspace), settings, loading: false, error: null });
+        } catch (cause) {
+          if (request === generation) this.publish({ ...snapshot, loading: false, error: errorMessage(cause) });
+        }
+        // 导航的未完成发布淘汰读取时，重取当前后端事实；已完成发布则直接沿用该结果。
+      } while (snapshot.loading && !snapshot.error);
+    })().finally(() => { refreshing = undefined; });
+    return refreshing;
   },
 };

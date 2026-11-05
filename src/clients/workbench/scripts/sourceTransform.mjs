@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTransform.mjs';
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
+import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [
@@ -23,6 +24,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   ...searchEditorSourcePaths,
   ...outlineSourcePaths,
+  ...mcpSourcePaths,
 ];
 
 function replaceOnce(source, marker, replacement) {
@@ -34,10 +36,15 @@ function replaceOnce(source, marker, replacement) {
 export function sourceTransform(root, productConfiguration, extensions) {
   if (productConfiguration.commit !== pinnedUpstreamCommit) throw new Error(`上游版本不匹配：要求 ${pinnedUpstreamCommit}`);
   const upstream = join(root, 'upstream');
+  const product = {
+    ...productConfiguration,
+    // 官方 1.145.0 资源匹配当前 Webview v6 协议；保留原 UUID 子域隔离，替换上游陈旧的 v4 地址。
+    webviewContentExternalBaseUrlTemplate: 'https://{{uuid}}.vscode-cdn.net/stable/a717861c07586a53d83b80d742cd3f59b20a6273/out/vs/workbench/contrib/webview/browser/pre/',
+  };
   return async function transformSource(path, source) {
     let contents = source;
     const replacements = {
-      '/*BUILD->INSERT_PRODUCT_CONFIGURATION*/': JSON.stringify(productConfiguration).slice(1, -1),
+      '/*BUILD->INSERT_PRODUCT_CONFIGURATION*/': JSON.stringify(product).slice(1, -1),
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
@@ -222,6 +229,7 @@ try {
       contents = `import { transferSearchContext } from ${JSON.stringify(join(root, 'src/search/scope.js'))};\n` + contents;
     }
     contents = transformOutline(root, path, contents, replaceOnce);
+    contents = transformMcp(root, path, contents, replaceOnce);
     return transformSearchEditor(root, path, contents, replaceOnce);
   };
 }

@@ -5,7 +5,7 @@
 .native-workspace-panel-product { flex: 1; height: 100%; min-height: 0; border: 0; box-shadow: none; }
 .native-workspace-panel-toolbar { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 4px; padding: 3px 8px; border-bottom: var(--bt-surface-border); }
 .native-workspace-panel-content > .port-forward-panel { flex: 1; min-height: 0; }
-.native-workspace-panel-content > :is(.persistent-tasks, [aria-label="工作区 MCP 连接"]) { flex: 1; min-width: 0; }
+.native-workspace-panel-content > .persistent-tasks { flex: 1; min-width: 0; }
 .workspace-browser-panel { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .workspace-browser-content { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .workspace-browser-list { flex: 0 1 320px; min-width: 180px; overflow: auto; }

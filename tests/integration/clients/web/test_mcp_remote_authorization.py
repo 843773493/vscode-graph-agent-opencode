@@ -90,23 +90,30 @@ def product_case(request: pytest.FixtureRequest):
                 hub, target = nodes["a"], nodes["b"]
                 listing = await hub.client.get("/api/gateway/workspaces")
                 assert listing.status_code == 200, listing.text
-                routes = {item["backend_workspace_id"]: item for item in listing.json()["data"]["items"]}
-                remote = routes[target.workspace_id]
-                assert remote["remote"]["gateway_id"] == target.gateway_id
-                assert remote["workspace_id"] != target.workspace_id
-                activated = await hub.client.post(f"/api/gateway/workspaces/{remote['workspace_id']}/activate")
+                owners = {(item["gateway_id"], item["workspace_id"]): item for item in listing.json()["data"]["items"]}
+                remote = owners[target.gateway_id, target.workspace_id]
+                assert remote["connection_kind"] == "remote_gateway"
+                owner = {"gateway_id": target.gateway_id, "workspace_id": target.workspace_id}
+                selected_headers = {"X-BoxTeam-Target-Gateway-Id": target.gateway_id,
+                                    "X-BoxTeam-Workspace-Id": target.workspace_id}
+                activated = await hub.client.post(
+                    f"/api/gateway/workspaces/{target.workspace_id}/activate", headers=selected_headers,
+                )
                 assert activated.status_code == 200, activated.text
-                hub.client.headers["X-BoxTeam-Workspace-Id"] = remote["workspace_id"]
+                assert activated.json()["data"]["active_workspace"] == owner
+                hub.client.headers.update(selected_headers)
                 case = SimpleNamespace(context=context, mount=MountedWorkspace(target.workspace_id, target.workspace))
                 yield hub.client, replay, case
 
                 operations = await target.client.get("/api/v1/mcp/connection-operations")
                 assert operations.status_code == 200, operations.text
+                assert operations.json()["target"] == {"kind": "workspace", **owner}
                 operation, = operations.json()["data"]
                 assert operation["status"] == "succeeded"
                 for name in ("a", "c"):
-                    local_headers = {"X-BoxTeam-Workspace-Id": routes[hub.workspace_id]["workspace_id"],
-                                     "X-BoxTeam-Backend-Workspace-Id": hub.workspace_id} if name == "a" else {}
+                    node = nodes[name]
+                    local_headers = {"X-BoxTeam-Target-Gateway-Id": node.gateway_id,
+                                     "X-BoxTeam-Workspace-Id": node.workspace_id}
                     absent = await nodes[name].client.get(
                         f"/api/v1/mcp/connection-operations/{operation['operation_id']}", headers=local_headers,
                     )
@@ -120,8 +127,7 @@ def product_case(request: pytest.FixtureRequest):
                             content = path.read_text(errors="replace")
                             assert all(secret not in content for secret in secrets), path.name
                 (context.artifacts_dir / "remote-owner.json").write_text(json.dumps({
-                    "boundary": boundary, "hub_gateway_id": hub.gateway_id, "owner_gateway_id": target.gateway_id,
-                    "route_workspace_id": remote["workspace_id"], "backend_workspace_id": target.workspace_id,
+                    "boundary": boundary, "hub_gateway_id": hub.gateway_id, "owner": owner,
                     "operation_id": operation["operation_id"], "credential_owner_only": True,
                 }, indent=2))
     return start

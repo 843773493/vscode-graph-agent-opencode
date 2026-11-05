@@ -82,6 +82,9 @@ async def test_web_authorization_reaches_original_owner_then_discovers_and_execu
         authorized = await browser_runner(case, base_url=str(client.base_url), session_title=title, session_id=session, thread_id=thread, mode="authorize")
         await wait_for_job_done(client, authorized["jobId"], max_attempts=60)
         assert authorized["backendReady"] and authorized["bottomTabPersisted"] and authorized["privateReferrerAbsent"]
+        assert authorized["originalWorkbenchManagement"] and authorized["originalListCommand"]
+        assert authorized["initialCatalogFailures"] >= 1
+        assert authorized["owner"]["workspace_id"] == case.mount.workspace_id
         assert secure.registrations == secure.exchanges == len(secure.authorizations) == 1
         second = discovery_plan(replay, session, thread, [
             ("search_tools", {"tool_ids": ["mcp__secure__probe"]}),

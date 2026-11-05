@@ -1,5 +1,5 @@
-import { completeMcpAuthorization, getMcpAuthorization, type McpConnectionOperationDTO } from "../../api/mcpConnections";
-import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
+import { completeMcpAuthorization, getMcpAuthorization, type McpConnectionOperationDTO } from "../../../web/src/api/mcpConnections.js";
+import type { GatewayWorkspaceRequestTarget } from "../../../web/src/api/workspaceIdentity.js";
 
 export const MCP_OAUTH_CALLBACK_PATH = "/mcp-oauth-callback.html";
 export const MCP_OAUTH_MESSAGE = "boxteam-mcp-oauth-callback:v1";

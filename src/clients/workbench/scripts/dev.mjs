@@ -114,7 +114,7 @@ const server = await createServer({
 await server.listen();
 // 原版工作台的静态依赖图很大，先完成 Vite 转换，再向统一开发栈报告可用。
 const startedAt = performance.now();
-await Promise.all(['/src/main.ts', '/src/agent.contribution.ts', '/src/react/mcpAuthorization.tsx']
+await Promise.all(['/src/main.ts', '/src/agent.contribution.ts']
   .map(entry => server.environments.client.transformRequest(entry)));
 await server.environments.client.waitForRequestsIdle();
 const optimizer = server.environments.client.depsOptimizer;

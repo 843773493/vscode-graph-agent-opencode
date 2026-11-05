@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import * as api from "../../api/mcpConnections";
-import { authorizeMcpInWindow, MCP_OAUTH_CALLBACK_PATH, MCP_OAUTH_MESSAGE } from "./authorizationWindow";
+import * as api from "../../web/src/api/mcpConnections";
+import { authorizeMcpInWindow, MCP_OAUTH_CALLBACK_PATH, MCP_OAUTH_MESSAGE } from "../src/mcp/authorizationWindow";
 
 const target = { gateway_id: "gateway-test", workspace_id: "remote-owner" };
 const operation: api.McpConnectionOperationDTO = { operation_id: "original-operation", connection_id: "connection", server_id: "secure", action: "connect", status: "waiting_user", stage: "authorize", created_at: 1, updated_at: 1, deadline: Date.now() / 1000 + 60 };
