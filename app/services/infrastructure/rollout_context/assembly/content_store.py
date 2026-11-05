@@ -39,17 +39,19 @@ class _AssemblyContentStore(ExitStack):
         self.dependencies: set[str] = set()
         self._canonical_stream: BinaryIO | None = None
         # 与本次文件句柄同寿命；内容节点写入不修改 canonical item/commit。
-        # 复用同批提交和 scope 校验，下一次 store/load 仍从空集合重新检查。
+        # 构造时已核验 assembly owner；仅在本次 store/load 内复用，下次操作重新检查。
         self._validated_commits: set[int] = set()
-        self._validated_scopes: set[tuple[str, str]] = set()
+        self._validated_scopes: set[tuple[str, str]] = {self.assembly_owner}
 
     def _canonical_item_payload(
         self, canonical_item_id: str, historical_owner: tuple[str, str],
     ) -> object:
-        require_historical_scope(self.connection, *historical_owner)
         canonical_identity = (*historical_owner, canonical_item_id)
         if canonical_identity in self.canonical_payloads:
             return self.canonical_payloads[canonical_identity]
+        if historical_owner not in self._validated_scopes:
+            require_historical_scope(self.connection, *historical_owner)
+            self._validated_scopes.add(historical_owner)
         locator = self.connection.execute(
             "SELECT i.item_sequence,i.jsonl_offset,i.jsonl_length,e.session_id,e.thread_id,"
             "i.execution_id,i.turn_scope,i.turn_id "
@@ -106,7 +108,6 @@ class _AssemblyContentStore(ExitStack):
             # 其它Thread的选择由既有manifest owner核验；这里只复用目标本地已捕获的正文。
             if (ref["session_id"], ref["thread_id"]) not in local_scopes or ref["content_length"] < 128:
                 continue
-            require_historical_scope(self.connection, ref["session_id"], ref["thread_id"])
             source = self.connection.execute(
                 "SELECT i.content_hash,i.payload_length,i.source_revision,i.item_sequence,e.session_id,e.thread_id "
                 "FROM item_catalog i LEFT JOIN executions e ON e.execution_id=i.execution_id WHERE i.item_id=?",

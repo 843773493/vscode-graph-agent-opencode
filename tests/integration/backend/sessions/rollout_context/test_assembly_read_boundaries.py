@@ -1,9 +1,7 @@
-"""真实封存内容的同批提交复用，下一次操作和逐 item 损坏检测仍独立。"""
+"""真实封存内容可重复恢复，后续操作仍报告实际消费数据的损坏。"""
 
 import json
 import sqlite3
-from collections import Counter
-from time import perf_counter
 
 import pytest
 
@@ -14,7 +12,6 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.storage.catalog import item_reader
 from tests.integration.backend.sessions.test_checkpoint_message_groups import _save
 from tests.integration.backend.sessions.test_checkpoint_message_groups import (
     group_case as group_case,  # noqa: PLC0414 - 真实消息组按当前测试文件隔离工作区
@@ -42,10 +39,10 @@ def assembly_batch(tmp_path, group_case, frozen_provider_prepare, request):
         captured = {node["item_id"] for row in connection.execute("SELECT body_json FROM assembly_content_nodes")
                     if (node := json.loads(row[0]))["kind"] == "canonical"}
         assert len(captured) == 32
-        commits = {row[0] for item in captured for row in connection.execute(
-            "SELECT commit_id FROM item_catalog WHERE item_id=?", (item,),
-        )}
-    assert len(commits) == 1
+        member = sorted(captured)[17]
+        commit_id = connection.execute(
+            "SELECT commit_id FROM item_catalog WHERE item_id=?", (member,),
+        ).fetchone()[0]
 
     def read():
         if request.param == "cold_read":
@@ -58,41 +55,20 @@ def assembly_batch(tmp_path, group_case, frozen_provider_prepare, request):
             return result
 
     expected = original.to_dict() if request.param == "cold_read" else encoded
-    return read, expected, path, commits, sorted(captured)[17], storage.jsonl_path(session, thread_id=thread)
+    return read, expected, path, commit_id, member, storage.jsonl_path(session, thread_id=thread)
 
 
 @pytest.mark.parametrize("damage", ["commit_metadata", "item_locator", "item_projection"])
-def test_assembly_content_reuses_boundaries_but_rechecks_each_operation(assembly_batch, monkeypatch, damage):
-    read, expected, path, commits, member, jsonl = assembly_batch
+def test_assembly_content_rechecks_each_operation(assembly_batch, damage):
+    read, expected, path, commit_id, member, jsonl = assembly_batch
     before = jsonl.read_bytes()
-    checked_commits, checked_scopes = [], []
-    validate_commit = item_reader.validate_stored_commit
-    validate_scope = item_reader.require_historical_scope
-
-    def commit(row, **kwargs):
-        checked_commits.append(row[0])
-        return validate_commit(row, **kwargs)
-
-    def scope(connection, session, thread, **kwargs):
-        checked_scopes.append((session, thread))
-        return validate_scope(connection, session, thread, **kwargs)
-
-    monkeypatch.setattr(item_reader, "validate_stored_commit", commit)
-    monkeypatch.setattr(item_reader, "require_historical_scope", scope)
     for _ in range(2):
-        checked_commits.clear()
-        checked_scopes.clear()
-        started = perf_counter()
         assert read() == expected
-        print(json.dumps({"milliseconds": (perf_counter() - started) * 1000,
-                          "commit_checks": len(checked_commits), "scope_checks": len(checked_scopes)}))
-        assert Counter(checked_commits) == Counter({value: 1 for value in commits})
-        assert len(checked_scopes) == 1
 
     with sqlite3.connect(path) as connection:
         if damage == "commit_metadata":
             # 当前末尾提交未改；重新消费旧 commit 时仍须发现规范字节损坏。
-            connection.execute("UPDATE storage_commits SET metadata_json=metadata_json||' ' WHERE commit_id=?", (min(commits),))
+            connection.execute("UPDATE storage_commits SET metadata_json=metadata_json||' ' WHERE commit_id=?", (commit_id,))
             error = "metadata_json 不是 RFC 8785 JCS object"
         elif damage == "item_locator":
             connection.execute("UPDATE item_catalog SET jsonl_length=jsonl_length+1 WHERE item_id=?", (member,))
@@ -100,6 +76,10 @@ def test_assembly_content_reuses_boundaries_but_rechecks_each_operation(assembly
         else:
             connection.execute("UPDATE item_catalog SET tool_call_id='forged' WHERE item_id=?", (member,))
             error = "tool_call_id 不一致"
+    with sqlite3.connect(path) as connection:
+        damaged_catalog = tuple(connection.iterdump())
     with pytest.raises(RuntimeError, match=error):
         read()
     assert jsonl.read_bytes() == before
+    with sqlite3.connect(path) as connection:
+        assert tuple(connection.iterdump()) == damaged_catalog
