@@ -39,7 +39,7 @@ async def test_content_cursor_skips_completed_file_bodies(navigation_case, monke
     body = "unchanged filler\n" * 4095 + "needle\n"
     names = [f"{index:03}.txt" for index in range(count)]
     for name in names:
-        (workspace / name).write_text(body, encoding="utf-8")
+        (workspace / name).write_bytes(body.encode("utf-8"))
     reads = Counter()
     read_bytes = 0
     read = owner._read_bytes
@@ -270,6 +270,86 @@ async def test_subtree_cannot_exclude_the_query_root(navigation_case):
             search_options=ResourceNavigationSearchOptions(excluded_subtree_uris=(uri,))), local_gateway_id=GATEWAY_ID)
 
 
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("subtree", [False, True], ids=["model-file", "independent-subtree"])
+async def test_coverage_uses_the_target_filesystem_casing(navigation_case, monkeypatch, synchronous, subtree):
+    owner, workspace, uri = navigation_case
+    excluded = workspace / "Mixed"
+    if subtree:
+        excluded.mkdir()
+        (excluded / "hidden.txt").write_text("needle", encoding="utf-8")
+    else:
+        excluded.write_text("needle", encoding="utf-8")
+    for name in ("next.txt", "tail.txt"):
+        (workspace / name).write_text("needle", encoding="utf-8")
+    alias = workspace / "mIXED"
+    aliases_same_file = alias.exists()
+    field = "excluded_subtree_uris" if subtree else "excluded_resource_uris"
+    payload = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", limit=1,
+        search_options=ResourceNavigationSearchOptions.model_validate({field: [uri + "/mIXED"], "files_only": True}))
+    reads = []
+    original = owner._read_bytes
+
+    def observed(path, *args, **kwargs):
+        reads.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "_read_bytes", observed)
+    seen, cursor = [], None
+    for _ in range(4):
+        request = payload.model_copy(update={"cursor": cursor})
+        page = owner.navigate_sync(request, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+        assert len(page.entries) == len(page.matches) == 1
+        seen.extend(hit.uri for hit in page.matches)
+        cursor = page.next_cursor
+        if not page.truncated:
+            assert cursor is None
+            break
+        assert cursor and page.truncation_reason == "entry_limit"
+    else:
+        pytest.fail("大小写排除后的正文分页未收敛")
+    covered_uri = uri + ("/Mixed/hidden.txt" if subtree else "/Mixed")
+    assert set(seen) == {uri + "/next.txt", uri + "/tail.txt"} | (set() if aliases_same_file else {covered_uri})
+    assert len(seen) == len(set(seen))
+    if aliases_same_file:
+        assert not any(path == excluded or path.is_relative_to(excluded) for path in reads)
+    print(f"native coverage: subtree={subtree}, alias_exists={aliases_same_file}, pages={len(seen)}")
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_coverage_root_uses_the_target_filesystem_casing(navigation_case, synchronous):
+    owner, workspace, uri = navigation_case
+    directory = workspace / "Mixed"
+    directory.mkdir()
+    (directory / "covered.txt").write_text("needle", encoding="utf-8")
+    (directory / "remaining.txt").write_text("needle", encoding="utf-8")
+    payload = ResourceNavigationRequest(uri=uri + "/Mixed", operation="search", search_mode="content", query="needle", limit=1,
+        search_options=ResourceNavigationSearchOptions(excluded_resource_uris=(uri + "/mIXED/covered.txt",)))
+
+    async def search():
+        return owner.navigate_sync(payload, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(payload, local_gateway_id=GATEWAY_ID)
+
+    if (workspace / "mIXED").exists():
+        page = await search()
+        assert [hit.uri for hit in page.matches] == [uri + "/Mixed/remaining.txt"]
+        assert not page.truncated and page.next_cursor is None
+    else:
+        with pytest.raises(ResourceUriResolveError) as failure:
+            await search()
+        assert failure.value.reason_code == "scope_mismatch"
+
+
+async def test_coverage_keeps_distinct_hardlink_paths(navigation_case):
+    owner, workspace, uri = navigation_case
+    covered = workspace / "covered.txt"
+    covered.write_text("needle", encoding="utf-8")
+    os.link(covered, workspace / "separate.txt")
+    page = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", limit=1,
+        search_options=ResourceNavigationSearchOptions(excluded_resource_uris=(uri + "/covered.txt",))), local_gateway_id=GATEWAY_ID)
+    assert [hit.uri for hit in page.matches] == [uri + "/separate.txt"]
+    assert not page.truncated and page.next_cursor is None
+
+
 def test_coverage_is_a_canonical_uri_set_only_for_content_queries():
     uri = "boxteam://workspace/ws/resources/files/root/a.txt"
     request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle",
@@ -305,7 +385,7 @@ async def test_text_options_keep_literal_defaults_and_smart_regex_case(navigatio
 @pytest.mark.parametrize("separators,columns", [(None, [1, 25, 33]), ("._", [1, 17, 25]), (".", [1, 25])])
 async def test_whole_word_uses_explicit_editor_separators(navigation_case, separators, columns):
     owner, workspace, uri = navigation_case
-    (workspace / "text.txt").write_text("foo foobar xxxx foo_bar foo.bar foo🧪bar")
+    (workspace / "text.txt").write_text("foo foobar xxxx foo_bar foo.bar foo🧪bar", encoding="utf-8")
     page = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="foo",
         search_options={"whole_word": True, "word_separators": separators, "all_matches": True}), local_gateway_id=GATEWAY_ID)
     assert [match.column for match in page.matches] == columns
@@ -329,7 +409,7 @@ async def test_multiline_crlf_emoji_positions_are_codepoints_not_snippet_offsets
 
 async def test_clipped_snippet_keeps_utf16_coordinates_of_hidden_emoji_prefix(navigation_case):
     owner, workspace, uri = navigation_case
-    (workspace / "text.txt").write_text("😀" * 100 + "needle")
+    (workspace / "text.txt").write_text("😀" * 100 + "needle", encoding="utf-8")
     page = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode="content",
         query="needle", max_snippet_bytes=16), local_gateway_id=GATEWAY_ID)
     match, = page.matches
@@ -353,7 +433,7 @@ async def test_artifact_capability_uses_same_multiline_options_and_ranges(artifa
 
 async def test_all_matches_page_within_one_line_and_bind_options(navigation_case):
     owner, workspace, uri = navigation_case
-    (workspace / "text.txt").write_text("🧪 hit hit hit\n")
+    (workspace / "text.txt").write_text("🧪 hit hit hit\n", encoding="utf-8")
     query = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="hit", limit=1,
         search_options={"all_matches": True})
     columns, cursor = [], None
