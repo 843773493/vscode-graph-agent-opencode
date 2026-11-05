@@ -331,9 +331,14 @@ class RolloutViewMembershipMixin:
             )
         message_rows = (
             connection.execute(
-                "SELECT message_sequence, turn_id FROM messages WHERE message_sequence IN ("
+                # 一次取回 Turn 与 canonical locator，避免再遍历消息并逐条查 catalog。
+                # 按消息聚合仍区分 locator 缺失和重复，不能用任意一条匹配掩盖损坏。
+                "SELECT m.message_sequence,m.turn_id,m.message_id,MIN(item.item_id),COUNT(item.item_id) "
+                "FROM messages m LEFT JOIN item_catalog item "
+                "ON item.jsonl_offset=m.jsonl_offset AND item.jsonl_length=m.jsonl_length "
+                "WHERE m.message_sequence IN ("
                 + ",".join("?" for _ in materialized_sequences)
-                + ")",
+                + ") GROUP BY m.message_sequence ORDER BY m.message_sequence",
                 materialized_sequences,
             ).fetchall()
             if materialized_sequences
@@ -347,7 +352,7 @@ class RolloutViewMembershipMixin:
             strict_non_negative_int(sequence, field="messages.message_sequence"): strict_optional_text(
                 turn_id, field="messages.turn_id"
             )
-            for sequence, turn_id in message_rows
+            for sequence, turn_id, _message_id, _item_id, _item_count in message_rows
         }
         turn_ids: list[str] = []
         sequence_set = set(materialized_sequences)
@@ -521,41 +526,23 @@ class RolloutViewMembershipMixin:
                 raise RuntimeError(
                     f"context view turn 插入失败: {view_id}/{turn_id}"
                 )
-        item_rows = (
-            connection.execute(
-                "SELECT m.message_sequence, m.message_id, m.jsonl_offset, m.jsonl_length FROM messages AS m WHERE m.message_sequence IN ("
-                + ",".join("?" for _ in materialized_sequences)
-                + ") ORDER BY m.message_sequence",
-                materialized_sequences,
-            ).fetchall()
-            if materialized_sequences
-            else []
-        )
         candidate_item_ids: set[str] = set()
         if ordered_context_item_ids is not None:
             candidate_item_ids.update(ordered_context_item_ids)
-        for message_sequence, message_id, jsonl_offset, jsonl_length in item_rows:
-            strict_non_negative_int(
-                message_sequence, field="messages.message_sequence"
-            )
+        for _sequence, _turn_id, message_id, item_id, item_count in message_rows:
             message_id = strict_text(message_id, field="messages.message_id")
-            item_rows_for_message = connection.execute(
-                "SELECT item_id FROM item_catalog WHERE jsonl_offset = ? AND jsonl_length = ? "
-                "ORDER BY item_sequence",
-                (jsonl_offset, jsonl_length),
-            ).fetchall()
-            if not item_rows_for_message:
+            if item_count == 0:
                 raise RuntimeError(
                     f"message projection 缺少 canonical item: {message_id}"
                 )
-            if len(item_rows_for_message) != 1:
+            if item_count != 1:
                 raise RuntimeError(
                     "message projection 对应多个 canonical item: "
-                    f"message_id={message_id}, count={len(item_rows_for_message)}"
+                    f"message_id={message_id}, count={item_count}"
                 )
             candidate_item_ids.add(
                 strict_text(
-                    item_rows_for_message[0][0], field="item_catalog.item_id"
+                    item_id, field="item_catalog.item_id"
                 )
             )
         # provider block item 没有独立的 message_sequence；它们仍属于同一
