@@ -275,7 +275,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       }, value => {
         query.busy = value;
         if (queryAlive() && !run.symbolMode) run.picker.busy = value;
-      }, label => { if (queryAlive() && !run.symbolMode) run.picker.placeholder = `${this.contentMode ? '搜索正文 · ' + run.options.contentCategory : '查找' + (this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation);
+      }, label => { if (queryAlive() && !run.symbolMode) run.picker.placeholder = run.options.placeholder
+        ?? `${this.contentMode ? '搜索正文 · ' + run.options.contentCategory : '查找' + (run.options.filesOnly ? '文件' : this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation);
     return [...fast, ...branches.map(branch => branch.status)];
   }
 
@@ -355,7 +356,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     editor?: EditorInput | IResourceEditorInput, message?: TurnMessageMatchDTO, trace?: TraceMatchDTO): ResourcePick {
     const side = run.options.includeOpenToSideButton !== false;
     const dirty = editor && isEditorInput(editor) && editor.isDirty() && !editor.isSaving();
-    const copyReference = supportsResourceReference(resource);
+    const copyReference = !run.options.fileSearchDelegate && !run.options.handleAccept && supportsResourceReference(resource);
     const input = editor ?? { resource, label: title, options: message ? { boxteamMessage: message } as ThreadEditorOptions : trace ? { boxteamTrace: trace } as ThreadEditorOptions : undefined };
     return { id: message ? `${resource.toString()}#${message.reference!.item_id}/${message.reference!.start_codepoint}`
       : trace ? `${resource.toString()}#trace/${trace.reference!.event_id}/${trace.reference!.start_codepoint}` : resource.toString(), resource, editor, label: title, description, detail,

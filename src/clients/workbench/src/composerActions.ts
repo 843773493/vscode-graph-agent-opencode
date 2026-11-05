@@ -6,15 +6,18 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import type { IAnythingQuickAccessProviderRunOptions } from '../upstream/src/vs/workbench/contrib/search/common/search.js';
 import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
 import { ATTACH_RESOURCE_URI, PASTE_SELECTED_CONTENT, resourceReference, supportsResourceReference } from './resourceActions.js';
 import { ThreadPane } from './threadPane.js';
+import { ThreadInput } from './threadInput.js';
+import type { SearchInvocationOptions } from './search/target.js';
 import { workspaceContext } from './workspaceContext.js';
 
 const resourceContext = ContextKeyExpr.or(ContextKeyExpr.equals('resourceScheme', 'boxteam-file'), ContextKeyExpr.equals('resourceScheme', 'boxteam-source'));
 
 /** 接收者来自发起编辑器，或明确选择的可见 Thread；后续焦点不参与归属。 */
-async function appendToThread(accessor: ServicesAccessor, content: () => Promise<string>): Promise<void> {
+async function appendToThread(accessor: ServicesAccessor, content: () => Promise<string | undefined>): Promise<void> {
   const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService);
   const active = editors.activeEditorPane;
   const targets = editors.visibleEditorPanes.filter(pane => pane instanceof ThreadPane)
@@ -36,6 +39,7 @@ async function appendToThread(accessor: ServicesAccessor, content: () => Promise
     if (selected.pane.threadTarget?.conversation !== target.conversation) throw new Error('接收 Thread 已关闭或改变，请重新选择');
     const draft = target.conversation.captureDraft();
     const text = await content();
+    if (text === undefined) return;
     if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或用户身份已改变，请重新选择来源与接收者');
     if (selected.pane.threadTarget?.conversation !== target.conversation) throw new Error('接收 Thread 已关闭或改变，请重新选择');
     await draft.append(text);
@@ -45,15 +49,29 @@ async function appendToThread(accessor: ServicesAccessor, content: () => Promise
 registerAction2(class AttachResourceReference extends Action2 {
   constructor() {
     super({ id: ATTACH_RESOURCE_URI, title: { value: '将资源 URI 加入聊天草稿…', original: 'Attach Resource URI to Chat…' },
-      f1: true, precondition: resourceContext,
+      f1: true, precondition: ContextKeyExpr.or(resourceContext, ContextKeyExpr.equals('activeEditor', ThreadPane.ID)),
       menu: [{ id: MenuId.EditorTitleContext, group: '2_copy', when: resourceContext },
         { id: MenuId.EditorContext, group: '9_cutcopypaste', when: resourceContext }] });
   }
   async run(accessor: ServicesAccessor, supplied?: URI): Promise<void> {
     if (supplied !== undefined && !URI.isUri(supplied)) throw new Error('引用需要明确的资源 URI');
-    const resource = supplied ?? EditorResourceAccessor.getCanonicalUri(accessor.get(IEditorService).activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
-    if (!resource || !supportsResourceReference(resource)) throw new Error('此资源尚未提供规范引用能力');
-    await appendToThread(accessor, () => resourceReference(resource));
+    const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService);
+    const active = editors.activeEditor;
+    const resource = supplied ?? EditorResourceAccessor.getCanonicalUri(active, { supportSideBySide: SideBySideEditor.PRIMARY });
+    if (resource && supportsResourceReference(resource)) {
+      await appendToThread(accessor, () => resourceReference(resource));
+      return;
+    }
+    if (supplied || !(active instanceof ThreadInput)) throw new Error('此资源尚未提供规范引用能力');
+    const providerOptions: SearchInvocationOptions & IAnythingQuickAccessProviderRunOptions = { searchOwner: { gatewayId: active.owner.gatewayId, workspaceId: active.owner.workspaceId },
+      filesOnly: true, includeOpenToSideButton: false, placeholder: '选择要加入发起 Thread 草稿的文件 · 不打开文件' };
+    await appendToThread(accessor, async () => {
+      const selected = await quick.quickAccess.pick('', { preserveValue: true, enabledProviderPrefixes: [''], providerOptions });
+      if (!selected?.length) return;
+      const pick = selected[0], source = 'resource' in pick && URI.isUri(pick.resource) ? pick.resource : undefined;
+      if (!source || !supportsResourceReference(source)) throw new Error('所选文件没有可用的规范资源引用');
+      return resourceReference(source);
+    });
   }
 });
 

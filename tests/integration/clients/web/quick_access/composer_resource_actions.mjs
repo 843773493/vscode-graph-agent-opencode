@@ -51,6 +51,9 @@ try {
   expect(sourceOwner.workspace_id).not.toBe(receiverOwner.workspace_id);
   expect((await api('/api/v1/workspace', { headers: headers(sourceOwner) })).workspace_id).toBe(sourceOwner.workspace_id);
   const roots = await api('/api/v1/workspace/files/roots', { headers: headers(sourceOwner) });
+  const receiverRoots = await api('/api/v1/workspace/files/roots', { headers: headers(receiverOwner) });
+  const unopenedSource = receiverRoots.workspace_uri + '/thread-source-only.txt';
+  const unopenedAddress = await api('/api/gateway/resource-addresses/parse', { method: 'POST', body: JSON.stringify({ uri: unopenedSource, local_gateway_id: health.gateway_id }) });
   const source = roots.workspace_uri + '/selection.txt';
   const address = await api('/api/gateway/resource-addresses/parse', { method: 'POST', body: JSON.stringify({ uri: source, local_gateway_id: health.gateway_id }) });
   const file = await api(`/api/v1/workspace/files/content?path=${encodeURIComponent(source)}`, { headers: headers(sourceOwner) });
@@ -100,6 +103,39 @@ try {
   expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([{ phase: result.phase,
     body: { uri: source, local_gateway_id: health.gateway_id, resource_gateway_id: sourceOwner.gateway_id } }]);
   result.referenceRecipient = true;
+
+  result.phase = 'cancel-source-picker';
+  await command('workbench.action.focusFirstEditorGroup');
+  const tabsBeforeSourcePicker = await page.locator('.tabs-container .tab').count();
+  await command('workbench.action.showCommands');
+  await quick.locator('input').fill('>将资源 URI 加入聊天草稿');
+  await quick.getByRole('option').filter({ hasText: '将资源 URI 加入聊天草稿' }).click();
+  await expect(quick).toBeVisible();
+  await expect(quick.locator('input')).toHaveAttribute('placeholder', '选择要加入发起 Thread 草稿的文件 · 不打开文件');
+  await quick.locator('input').fill('thread-source-only');
+  await expect(quick.getByRole('option').filter({ hasText: 'thread-source-only.txt' })).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(quick).not.toBeVisible();
+  await expect(composer(0)).toHaveValue(expectedA1);
+  await expect(composer(1)).toHaveValue('A2 原草稿');
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([]);
+  result.sourcePickerCancelUnchanged = true;
+
+  result.phase = 'attach-unopened-source';
+  pending = command('boxteam.resource.attachToChat');
+  await expect(quick).toBeVisible();
+  await quick.locator('input').fill('thread-source-only');
+  await quick.getByRole('option').filter({ hasText: 'thread-source-only.txt' }).click();
+  await pending;
+  expectedA1 += `\n${unopenedAddress.reference_uri}`;
+  await expect(composer(0)).toHaveValue(expectedA1);
+  await expect(composer(1)).toHaveValue('A2 原草稿');
+  expect(await page.locator('.tabs-container .tab').count()).toBe(tabsBeforeSourcePicker);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([{ phase: result.phase,
+    body: { uri: unopenedSource, local_gateway_id: health.gateway_id, resource_gateway_id: receiverOwner.gateway_id } }]);
+  result.unopenedSourceReference = true;
 
   result.phase = 'originating-thread-keeps-recipient';
   await command('workbench.action.focusFirstEditorGroup');

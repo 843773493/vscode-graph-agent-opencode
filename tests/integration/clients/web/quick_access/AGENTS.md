@@ -18,6 +18,8 @@
 
 发起 Thread 优先场景仅在浏览器 HTTP 边界暂缓真实地址解析回执，期间通过原命令切换活动编辑器组；放行原响应后仍只追加原草稿。该具名延迟不模拟真实 TCP 故障，也不替换来源身份或正文。关闭／切换后的旧句柄和存储失败另由原草稿 hook 的定向测试验证。
 
+同一 Composer 页面从 Thread 的真实命令面板进入原 Quick Access 文件选择，验证取消不改草稿、未打开来源只附加 URI，且无正文读取、无新 Tab、无执行。测试仅预备普通文件正文，不预写历史或持久草稿；固定版本、多选和二级返回仍按各自任务验证。
+
 `test_thread_restore_health` 经产品 API 创建 A 的 Session，正式页面打开精确 Thread；B 仅在外部健康 HTTP 边界提供可释放的无响应屏障。核真实 bootstrap 归属／request_id、Composer 可操作总时间及显式健康刷新离线诊断，不预写历史、不替换 A 或 Gateway 响应，不代替真实远端断网验收。
 
 服务装具经生产 esbuild 与 legacy decorators 编译真实源码。明确记录 Gateway 传输替身和模型装具边界；真实页面通过 Gateway。产物按测试文件镜像，保留外部超时和内存保护。

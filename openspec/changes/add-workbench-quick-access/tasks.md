@@ -127,6 +127,7 @@
 
 - [ ] 12.1 将复制 URI、引用、粘贴和明确固定版本作为独立动作，使用原只选择／多步 Quick Input，不抢占打开的侧边／固定／后台修饰键。
   - 复制 URI 已接入同一原 Action／Command：编辑器菜单、文件菜单及 Quick Access 文件／来源候选复用，后端唯一 grammar 返回带明确 Gateway 的 `reference_uri`，保留原地址字段语义。真实 Gateway／Chromium 验证来源文档、执行生成的工具结果和文件候选复制；没有正文读取、打开资源、激活来源或新增执行，候选按钮保留搜索框焦点。130项Python检查、Workbench真实类型检查、正式构建、协议生成一致性及breaking检查通过；准确命令、指纹和失败原件见 `out/tests/temp/2026/11/05/resource_reference_copy/artifacts/verification-001.json`。首次页面运行在辅助服务端口租约阶段失败，确认端口恢复可绑定后的一次重试通过。引用／粘贴／固定版本及Thread／Diff复制尚未齐，本项继续未勾选。
+  - Thread命令面板现可用原QuickAccess只选择未打开文件，先固定原草稿与工作区，取消不改草稿，接受只附加规范URI。真实Gateway／正式Workbench页面1 passed，核零新Tab／正文读取／执行及刷新保留；异步提示覆盖和外部delegate被插复制按钮的回归已修复，原断言保留，11项delegate／原Chat合同、最终真实类型与规定Web构建通过。证据`out/tests/temp/2026/11/05/composer_source_selection/artifacts/verification-001.json`；初次页面、合同及两项临时命令配置失败原件均保留。固定版本、多选／返回及完整能力矩阵仍未完成，本项不勾选。
 - [x] 12.2 在发起时固定来源及接收 Thread，全局入口无接收者才选择，切换焦点／范围不改投；接收者失效明确失败，不猜最近 Thread。
 - [x] 12.3 将支持的原资源引用交给精确 Composer 草稿，附件仍经原上传 owner，来源预览不激活，加入草稿不发消息、不启动 turn。
   - 文件／来源文档的 URI 引用与实际选定正文分别由原 Action／Command 加入原 Composer writer；文件菜单复用同一命令，恢复后才发布写入句柄，接受时追加最新输入，作用域切换／卸载使旧句柄永久失效。引用只保存规范 URI，正文保留当时的选择，不伪装上传附件或新建存储链路。远端后端简称另携明确来源 Gateway 交同一 grammar 解析，与显式 URI 冲突拒绝。
