@@ -8,15 +8,16 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.messages import last_assistant_message
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.messages import last_assistant_message
-from tests.support.ports import e2e_port_block_for_file
 from tests.support.text import normalize_text
 
 
@@ -38,9 +39,22 @@ async def information_client(
             headers=LOCAL_TOKEN_HEADERS, timeout=30,
         ) as client:
             await acquire_gateway_guest(client)
+            health = await client.get("/api/gateway/health")
+            assert health.status_code == 200, health.text
+            owner = {
+                "gateway_id": health.json()["data"]["gateway_id"],
+                "workspace_id": read_workspace_id(Path(e2e_workspace_root_path)),
+            }
             response = await client.get("/api/gateway/workspaces")
             assert response.status_code == 200, response.text
-            client.headers["X-BoxTeam-Workspace-Id"] = response.json()["data"]["active_workspace_id"]
+            workspaces = response.json()["data"]
+            assert workspaces["active_workspace"] == owner
+            targets = [item for item in workspaces["items"] if all(item[key] == value for key, value in owner.items())]
+            assert len(targets) == 1 and targets[0]["connection_kind"] == "local"
+            client.headers.update({
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+            })
             yield client
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

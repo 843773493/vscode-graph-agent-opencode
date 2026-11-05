@@ -130,6 +130,7 @@ if (process.argv.includes(SECTION8_SELECTION_CONTRACT_ARG)) {
 }
 const baseUrl = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
 const expectedWorkspaceId = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
+const expectedGatewayId = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");
 const resultPath = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
 const screenshotPath = standaloneSelfTest ? "" : requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
@@ -220,9 +221,20 @@ async function api(page, pathname, init = {}, expectedStatus, timing = null) {
   return value;
 }
 
+function workspaceHeaders(owner) {
+  assert.ok(owner.gatewayId && owner.workspaceId, "请求必须持有完整 Gateway／工作区 owner");
+  return { "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId };
+}
+
+function workspaceSelectionKey(owner) {
+  // 只消费产品展示索引的复合键；HTTP 和业务记录仍分别传原生 Gateway 与 UUID。
+  workspaceHeaders(owner);
+  return JSON.stringify([owner.gatewayId, owner.workspaceId]);
+}
+
 async function ownerApi(owner, pathname, init = {}, expectedStatus, timing = null) {
   return api(owner.page, pathname, {
-    ...init, headers: { ...init.headers, "X-BoxTeam-Workspace-Id": owner.gatewayWorkspaceId },
+    ...init, headers: { ...init.headers, ...workspaceHeaders(owner) },
   }, expectedStatus, timing);
 }
 
@@ -231,7 +243,7 @@ async function ownerApiResponse(owner, pathname, init = {}) {
   const { body, ...requestOptions } = init;
   const response = await owner.page.request.fetch(new URL(pathname, owner.page.url()).toString(), {
     ...requestOptions,
-    headers: { ...init.headers, "X-Local-Token": token, "X-BoxTeam-Workspace-Id": owner.gatewayWorkspaceId },
+    headers: { ...init.headers, "X-Local-Token": token, ...workspaceHeaders(owner) },
     ...(body === undefined ? {} : { data: body }),
   });
   try {
@@ -353,9 +365,11 @@ function runningAdmissionThreadId(admission, refusal, target) {
     && Number.isInteger(refusal.pageId)
     && Number.isInteger(refusal.documentId)
     && admission.sessionId === target.sessionId
-    && admission.workspaceHeader === refusal.workspaceHeader
+    && (admission.workspaceHeader === refusal.workspaceHeader && admission.targetGatewayHeader === refusal.targetGatewayHeader)
     && typeof admission.workspaceHeader === "string"
     && admission.workspaceHeader.length > 0
+    && typeof admission.targetGatewayHeader === "string"
+    && admission.targetGatewayHeader.length > 0
     && Number.isFinite(admission.requestedAt)
     && Number.isFinite(admission.receivedAt)
     && admission.requestedAt <= admission.receivedAt
@@ -440,7 +454,7 @@ function classifyMessageStreamErrors(consoleErrorFacts, consoleErrors, messageSt
             && (responseTarget.threadId === null || responseTarget.threadId === ownerThreadId)
             && response.threadId === responseTarget.threadId;
         })()
-        && response.workspaceHeader === refusal.workspaceHeader
+        && (response.workspaceHeader === refusal.workspaceHeader && response.targetGatewayHeader === refusal.targetGatewayHeader)
         && typeof response.workspaceHeader === "string"
         && response.workspaceHeader.length > 0
         && typeof response.requestId === "string"
@@ -504,10 +518,11 @@ function classifyIncompleteMessageStreamErrors(consoleErrorFacts, failedRequests
       && typeof fact.requestId === "string" && fact.requestId.length > 0
       && typeof fact.messageStreamId === "string" && fact.messageStreamId.length > 0
       && typeof fact.workspaceHeader === "string" && fact.workspaceHeader.length > 0
+      && typeof fact.targetGatewayHeader === "string" && fact.targetGatewayHeader.length > 0
       && failure.status === fact.status && failure.sessionId === fact.sessionId
       && failure.turnId === fact.turnId && failure.threadId === fact.threadId
       && failure.turnStreamId === fact.turnStreamId && failure.afterSeq === fact.afterSeq
-      && failure.workspaceHeader === fact.workspaceHeader && failure.messageStreamId === fact.messageStreamId);
+      && (failure.workspaceHeader === fact.workspaceHeader && failure.targetGatewayHeader === fact.targetGatewayHeader) && failure.messageStreamId === fact.messageStreamId);
     if (responseCandidates.length !== 1) continue;
     const [response] = responseCandidates;
     if (consumedResponses.has(response)) continue;
@@ -530,7 +545,7 @@ function classifyIncompleteMessageStreamErrors(consoleErrorFacts, failedRequests
       && fact.pageId === response.pageId && fact.documentId === response.documentId
       && fact.sessionId === target.sessionId && fact.turnId === target.turnId
       && (fact.threadId === null || fact.threadId === ownerThreads[0])
-      && fact.workspaceHeader === response.workspaceHeader
+      && (fact.workspaceHeader === response.workspaceHeader && fact.targetGatewayHeader === response.targetGatewayHeader)
       && fact.requestId && fact.requestId !== response.requestId
       && fact.messageStreamId === response.messageStreamId
       && isEventStreamResponse(fact)
@@ -655,6 +670,7 @@ function validControlledRestartWindow(window) {
     && typeof window.targetSessionId === "string" && window.targetSessionId.length > 0
     && typeof window.activeSessionId === "string" && window.activeSessionId.length > 0
     && typeof window.workspaceId === "string" && window.workspaceId.length > 0
+    && typeof window.gatewayId === "string" && window.gatewayId.length > 0
     && typeof window.origin === "string" && gatewayOrigin.origin === window.origin
     && typeof window.targetName === "string" && window.targetName.length > 0
     && Number.isInteger(window.gatewayPort) && window.gatewayPort > 0
@@ -699,7 +715,7 @@ function hasRecoveredRestartObservations(response, request, window) {
   const deleted = proof?.operationId === window.sourceDeletionOperationId
     && typeof window.sourceDeletionOperationId === "string"
     && proof.pageId === request.pageId && proof.documentId === request.documentId
-    && proof.origin === window.origin && proof.workspaceHeader === window.workspaceId
+    && proof.origin === window.origin && (proof.workspaceHeader === window.workspaceId && proof.targetGatewayHeader === window.gatewayId)
     && proof.terminalRequestId && proof.receipt?.state === "committed"
     && (proof.receipt.settlement === null || proof.receipt.settlement === "settled")
     && proof.journal?.subtree_delete_idempotency_key === window.sourceDeletionOperationId
@@ -768,7 +784,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
         && response.body && typeof response.body === "object" && response.body.request_id === response.requestId
         && response.bodyRequestId === response.requestId && response.bodyError === undefined
         && isControlledRestartUpstreamFailure(response.body.detail, window.workspaceId)
-        && response.workspaceHeader === window.workspaceId
+        && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
         && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
         && response.requestedAt <= response.receivedAt && response.receivedAt >= window.backendRestart.stopRequestedAt
         && response.receivedAt <= window.backendRestart.startedAt
@@ -780,7 +796,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
         && request.restartWindowId === window.operationId && request.url === response.url
         && request.method === "POST" && request.pageId === response.pageId
         && request.documentId === response.documentId && request.pageRole === response.pageRole
-        && request.requestedAt === response.requestedAt && request.workspaceHeader === response.workspaceHeader
+        && request.requestedAt === response.requestedAt && (request.workspaceHeader === response.workspaceHeader && request.targetGatewayHeader === response.targetGatewayHeader)
         && request.bodyError === undefined && request.body && typeof request.body === "object"
         && !Array.isArray(request.body) && Array.isArray(request.body.subscriptions)
         && request.body.subscriptions.length > 0);
@@ -811,7 +827,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
         && response.body && typeof response.body === "object" && response.body.request_id === response.requestId
         && response.bodyRequestId === response.requestId && response.bodyError === undefined
         && isControlledRestartUpstreamFailure(response.body.detail, window.workspaceId)
-        && response.workspaceHeader === window.workspaceId
+        && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
         && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
         && response.requestedAt <= response.receivedAt && response.receivedAt >= window.backendRestart.stopRequestedAt
         && response.receivedAt <= window.backendRestart.startedAt
@@ -824,7 +840,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
         && request.restartWindowId === window.operationId && request.url === response.url
         && request.method === response.method && request.pageId === response.pageId
         && request.documentId === response.documentId && request.pageRole === response.pageRole
-        && request.requestedAt === response.requestedAt && request.workspaceHeader === response.workspaceHeader
+        && request.requestedAt === response.requestedAt && (request.workspaceHeader === response.workspaceHeader && request.targetGatewayHeader === response.targetGatewayHeader)
         && request.bodyError === undefined);
       if (requests.length !== 1
           || requestFacts.filter((candidate) => candidate.requestFactId === response.requestFactId).length !== 1) continue;
@@ -857,7 +873,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
       && request.method === "POST" && request.url === error.url && request.pageId === error.pageId
       && request.documentId === error.documentId
       && (request.restartWindowId === null || request.restartWindowId === window.operationId)
-      && request.workspaceHeader === window.workspaceId && request.requestedAt <= window.startedAt
+      && (request.workspaceHeader === window.workspaceId && request.targetGatewayHeader === window.gatewayId) && request.requestedAt <= window.startedAt
       && request.body && typeof request.body === "object" && Array.isArray(request.body.subscriptions)
       && request.body.subscriptions.length > 0
       && request.body.subscriptions.every((subscription) => typeof subscription.subscription_id === "string"
@@ -868,7 +884,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
     const recoveries = responseFacts.filter((response) => response.method === "POST" && response.status === 200
       && response.url === error.url && response.pageId === error.pageId && response.documentId === error.documentId
       && response.restartWindowId === window.operationId && response.pageRole === pageBinding.role
-      && response.workspaceHeader === window.workspaceId
+      && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
       && Number.isFinite(response.requestedAt) && response.requestedAt >= window.backendRestart.startedAt
       && Number.isFinite(response.receivedAt) && response.receivedAt >= response.requestedAt
       && response.receivedAt <= window.endedAt
@@ -945,6 +961,7 @@ function classifyForkAttachmentDeletionConflicts(consoleErrorFacts, conflictResp
       && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
       && response.receivedAt >= response.requestedAt
       && typeof response.workspaceHeader === "string" && response.workspaceHeader.length > 0
+      && typeof response.targetGatewayHeader === "string" && response.targetGatewayHeader.length > 0
       && response.forkRequest && typeof response.forkRequest.idempotency_key === "string"
       && response.forkRequestBodyError === undefined);
     if (responses.length !== 1) continue;
@@ -970,6 +987,7 @@ function classifyForkAttachmentDeletionConflicts(consoleErrorFacts, conflictResp
         && match[1] === race.sourceSessionId
         && response.sessionId === race.sourceSessionId
         && response.workspaceHeader === race.workspaceId
+        && response.targetGatewayHeader === race.gatewayId
         && response.pageId === error.pageId && response.documentId === error.documentId
         && response.pageId === race.requestPageId && response.documentId === race.requestDocumentId
         && race.deletion?.intent?.kind === "delete_session"
@@ -1006,30 +1024,50 @@ function classifyForkAttachmentDeletionConflicts(consoleErrorFacts, conflictResp
 }
 
 function runMessageStreamDiagnosticsSelfTest() {
+  const attachmentOwner = { gatewayId: "gateway-source", workspaceId: "1ebe98fa-75fd-442f-976b-2e2ca4b1884d" };
+  const attachmentId = "att_01a1a6ed52017cb3be28d05ae92ced2d";
+  const attachmentUri = "boxteam://gateway-source/workspace/1ebe98fa-75fd-442f-976b-2e2ca4b1884d/resources/attachments/att_01a1a6ed52017cb3be28d05ae92ced2d/original/content";
+  const localAttachmentUri = "boxteam://workspace/1ebe98fa-75fd-442f-976b-2e2ca4b1884d/resources/attachments/att_01a1a6ed52017cb3be28d05ae92ced2d/original/content";
+  assertAttachmentRebuildPath(attachmentOwner, attachmentId, attachmentUri, localAttachmentUri);
+  for (const [owner, requestedUri, returnedUri] of [
+    [attachmentOwner, attachmentUri.replace("gateway-source", "gateway-other"), localAttachmentUri],
+    [attachmentOwner, attachmentUri.replace(attachmentOwner.workspaceId, "other-workspace"), localAttachmentUri],
+    [attachmentOwner, attachmentUri.replace(attachmentId, "att_other"), localAttachmentUri],
+    [attachmentOwner, attachmentUri.replace("original/content", "variants/content"), localAttachmentUri],
+    [attachmentOwner, attachmentUri, attachmentUri],
+    [attachmentOwner, attachmentUri, localAttachmentUri.replace(attachmentOwner.workspaceId, "other-workspace")],
+    [attachmentOwner, attachmentUri, localAttachmentUri.replace(attachmentId, "att_other")],
+    [attachmentOwner, attachmentUri, localAttachmentUri.replace("original/content", "variants/content")],
+    [{ ...attachmentOwner, gatewayId: null }, attachmentUri, localAttachmentUri],
+    [{ ...attachmentOwner, workspaceId: null }, attachmentUri, localAttachmentUri],
+  ]) {
+    assert.throws(() => assertAttachmentRebuildPath(owner, attachmentId, requestedUri, returnedUri),
+      "附件重建必须拒绝其它 Gateway／工作区／附件／原件路径以及非本地规范返回 URI");
+  }
   const url = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?thread_id=thr_owner&after_seq=0";
   const owner = {
     url: "http://127.0.0.1:19000/api/v1/sessions/ses_owner/messages",
     method: "POST", status: 200, pageId: 1, documentId: 2, kind: "admission",
-    sessionId: "ses_owner", threadId: null, workspaceHeader: "workspace-owner",
+    sessionId: "ses_owner", threadId: null, workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner",
     requestId: "request-admission", requestedAt: 10, receivedAt: 20,
     body: { request_id: "request-admission", data: { job_id: "job_appended", turn_id: "turn_appended", thread_id: "thr_owner", status: "running",
       dispatch: { session_id: "ses_owner", thread_id: "thr_owner", job_id: "job_appended", job_status: "running" } } },
   };
   const refusal = {
     url, method: "GET", status: 404, pageId: 1, documentId: 2, sessionId: "ses_owner", turnId: "turn_appended",
-    threadId: "thr_owner", afterSeq: "0", workspaceHeader: "workspace-owner", requestId: "request-refusal",
+    threadId: "thr_owner", afterSeq: "0", workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner", requestId: "request-refusal",
     requestedAt: 30, receivedAt: 40,
     body: { detail: "消息流不存在: session_id=ses_owner turn_id=turn_appended", request_id: "request-refusal" },
   };
   const recovery = {
     url, method: "GET", status: 200, pageId: 1, documentId: 2, sessionId: "ses_owner", turnId: "turn_appended",
-    threadId: "thr_owner", afterSeq: "0", workspaceHeader: "workspace-owner", requestId: "request-recovery", messageStreamId: "stream-appended",
+    threadId: "thr_owner", afterSeq: "0", workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner", requestId: "request-recovery", messageStreamId: "stream-appended",
     headers: { contentType: "text/event-stream; charset=utf-8" },
     requestedAt: 50, receivedAt: 60,
   };
   const basicOwner = { page: { diagnosticId: 1 }, sessionId: "ses_owner", threadId: "thr_owner",
-    gatewayWorkspaceId: "workspace-owner" };
-  const trace = { pageId: 1, documentId: 2, status: 200, workspaceHeader: "workspace-owner",
+    gatewayId: "gateway-owner", workspaceId: "workspace-owner" };
+  const trace = { pageId: 1, documentId: 2, status: 200, workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner",
     contentType: "text/event-stream; charset=utf-8", requestId: "trace-request", cdpRequestId: "cdp-trace",
     subscriptions: [{ kind: "session_trace", session_id: "ses_owner", subscription_id: "trace-1" }],
     connectedSubscriptions: ["trace-1"] };
@@ -1042,6 +1080,7 @@ function runMessageStreamDiagnosticsSelfTest() {
   }
   assert.equal(basicStreamConnections(basicOwner, [trace], [recovery]).message.length, 1);
   assert.equal(basicStreamConnections(basicOwner, [trace], [{ ...recovery, threadId: "other" }]).message.length, 0);
+  assert.equal(basicStreamConnections(basicOwner, [trace], [{ ...recovery, targetGatewayHeader: "other-gateway" }]).message.length, 0);
   const consoleError = { index: 0, text: "Failed to load resource: the server responded with a status of 404 (Not Found)",
     url, pageId: 1, documentId: 2 };
   const classify = (responses = [refusal, recovery], admissions = [owner], errors = [consoleError], texts = [consoleError.text]) =>
@@ -1049,6 +1088,15 @@ function runMessageStreamDiagnosticsSelfTest() {
 
   assert.equal(classify().handledMessageStreamErrors.length, 1, "精确匹配 admission、404 与后续 SSE 应分类为瞬态");
   assert.equal(classify().unhandledConsoleErrors.length, 0);
+  assert.equal(classify([refusal, recovery], [{ ...owner, targetGatewayHeader: "other-gateway" }]).unhandledConsoleErrors.length, 1,
+    "相同 UUID 在其它 Gateway 的 admission 不能证明当前消息流 owner");
+  assert.equal(classify([refusal, { ...recovery, targetGatewayHeader: "other-gateway" }]).unhandledConsoleErrors.length, 1,
+    "相同 UUID 在其它 Gateway 的恢复不能释放当前消息流错误");
+  for (const targetGatewayHeader of [undefined, null, ""]) {
+    assert.equal(classify([refusal, recovery].map(fact => ({ ...fact, targetGatewayHeader })),
+      [{ ...owner, targetGatewayHeader }]).unhandledConsoleErrors.length, 1,
+    "所有载体都缺 Gateway 时，相等空值不能证明完整 owner");
+  }
   const threadlessUrl = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?after_seq=0";
   const threadlessRefusal = { ...refusal, url: threadlessUrl, threadId: null };
   const threadlessRecovery = { ...recovery, url: threadlessUrl, threadId: null };
@@ -1165,14 +1213,14 @@ function runMessageStreamDiagnosticsSelfTest() {
   const chunkedUrl = "http://127.0.0.1:19000/api/v1/sessions/ses_owner/turns/turn_appended/message-stream?thread_id=thr_owner&turn_stream_id=stream-appended&after_seq=20";
   const interruptedResponse = { url: chunkedUrl, method: "GET", status: 200, pageId: 1, documentId: 2,
     sessionId: "ses_owner", turnId: "turn_appended", threadId: "thr_owner", turnStreamId: "stream-appended",
-    afterSeq: "20", workspaceHeader: "workspace-owner", requestId: "request-stream-interrupted",
+    afterSeq: "20", workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner", requestId: "request-stream-interrupted",
     messageStreamId: "stream-appended", requestedAt: 70, receivedAt: 80,
     headers: { contentType: "text/event-stream; charset=utf-8" } };
   const reconnect = { ...interruptedResponse, requestId: "request-stream-reconnect", requestedAt: 100, receivedAt: 110 };
   const failedRequest = { url: chunkedUrl, error: "net::ERR_INCOMPLETE_CHUNKED_ENCODING", pageId: 1, documentId: 2,
     requestedAt: 70, failedAt: 90, responseRequestId: "request-stream-interrupted", status: 200,
     sessionId: "ses_owner", turnId: "turn_appended", threadId: "thr_owner", turnStreamId: "stream-appended",
-    afterSeq: "20", workspaceHeader: "workspace-owner", messageStreamId: "stream-appended" };
+    afterSeq: "20", workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner", messageStreamId: "stream-appended" };
   const chunkedConsoleError = { index: 0, text: "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING",
     url: chunkedUrl, pageId: 1, documentId: 2, receivedAt: 90 };
   const classifyChunked = (responses = [interruptedResponse, reconnect], admissions = [owner], failures = [failedRequest], errors = [chunkedConsoleError]) =>
@@ -1194,6 +1242,11 @@ function runMessageStreamDiagnosticsSelfTest() {
   }], [owner], [failedRequest], [chunkedConsoleError], "重连必须保持原 stream 身份");
   assertChunkedIsUnhandled([interruptedResponse, { ...reconnect, workspaceHeader: "workspace-other" }],
     [owner], [failedRequest], [chunkedConsoleError], "跨 workspace 重连不能处理原 stream 中断");
+  assertChunkedIsUnhandled([interruptedResponse, { ...reconnect, targetGatewayHeader: "gateway-other" }],
+    [owner], [failedRequest], [chunkedConsoleError], "相同 UUID 跨 Gateway 重连不能处理原 stream 中断");
+  assertChunkedIsUnhandled([interruptedResponse, reconnect].map(fact => ({ ...fact, targetGatewayHeader: null })),
+    [{ ...owner, targetGatewayHeader: null }], [{ ...failedRequest, targetGatewayHeader: null }], [chunkedConsoleError],
+    "缺少 Gateway 的全部载体不能证明原 stream 归属");
   assertChunkedIsUnhandled([interruptedResponse, { ...reconnect, documentId: 3 }],
     [owner], [failedRequest], [chunkedConsoleError], "跨 document 重连不能处理原 stream 中断");
   assertChunkedIsUnhandled([interruptedResponse, reconnect], [], [failedRequest], [chunkedConsoleError],
@@ -1243,13 +1296,13 @@ function runMessageStreamDiagnosticsSelfTest() {
   const forkRequestId = "request-fork-delete-race";
   const forkResponse = {
     url: forkUrl, method: "POST", status: 409, kind: "fork_context", pageId: 7, documentId: 8,
-    sessionId: "ses_source", workspaceHeader: "workspace-source", requestId: forkRequestId,
+    sessionId: "ses_source", workspaceHeader: "workspace-source", targetGatewayHeader: "gateway-source", requestId: forkRequestId,
     requestedAt: 120, receivedAt: 170, body: { request_id: forkRequestId, detail: forkDetail },
     forkRequest: structuredClone(forkRequest),
   };
   const race = {
     finalizerFirst: false, operationId: forkOperation, sourceSessionId: "ses_source", sourceThreadId: "thr_source",
-    targetSessionId: "ses_target", targetThreadId: "thr_target", workspaceId: "workspace-source",
+    targetSessionId: "ses_target", targetThreadId: "thr_target", workspaceId: "workspace-source", gatewayId: "gateway-source",
     request: structuredClone(forkRequest), requestPageId: 7, requestDocumentId: 8, requestStartedAt: 100,
     response: { status: 409, requestId: forkRequestId, body: structuredClone(forkResponse.body) }, responseReceivedAt: 180,
     initialBarrier: { operation_id: forkOperation, phase: "copy.attachments.before_finalize" },
@@ -1293,6 +1346,11 @@ function runMessageStreamDiagnosticsSelfTest() {
   const crossOwnerRace = { ...race, sourceSessionId: "ses_foreign" };
   assert.equal(classifyPipeline({ races: [crossOwnerRace] }).handledForkAttachmentDeletionConflicts.length, 0,
     "fork request、capture 与 race source owner 不一致时不得分类");
+  assert.equal(classifyPipeline({ races: [{ ...race, gatewayId: "gateway-other" }] }).handledForkAttachmentDeletionConflicts.length, 0,
+    "相同 UUID 在其它 Gateway 的删除竞争不能释放当前 fork 错误");
+  assert.equal(classifyPipeline({ races: [{ ...race, gatewayId: null }],
+    responses: [{ ...forkResponse, targetGatewayHeader: null }] }).handledForkAttachmentDeletionConflicts.length, 0,
+  "缺少 Gateway 的删除竞争与响应不能证明完整 owner");
   const crossOriginFailure = { ...failedRequest, pageId: 7, documentId: 8 };
   const crossOriginResponses = [
     { ...interruptedResponse, pageId: 7, documentId: 8 },
@@ -1314,7 +1372,7 @@ function runMessageStreamDiagnosticsSelfTest() {
   const pageRouteSessionId = "ses_page_route";
   const testRestartWindow = ({ operationId, phase, sourceSessionId, sourceThreadId, targetSessionId, pageIds, index }) => ({
     operationId, captureOperationId: operationId, phase, sourceSessionId, sourceThreadId, targetSessionId,
-    activeSessionId: "ses_active", workspaceId: "workspace-a", origin: "http://127.0.0.1:19001",
+    activeSessionId: "ses_active", workspaceId: "workspace-a", gatewayId: "gateway-a", origin: "http://127.0.0.1:19001",
     targetName: "a", gatewayPort: 19001,
     backendRestart: { targetName: "a", port: 19000, beforePid: 1000 + index, afterPid: 2000 + index,
       stopRequestedAt: 130, stoppedAt: 135, startRequestedAt: 170, startedAt: 180 },
@@ -1367,13 +1425,13 @@ function runMessageStreamDiagnosticsSelfTest() {
       restartConsoleErrors.push(status502Text);
       restartRequests.push({ requestFactId, restartWindowId: window.operationId, url: targetUrl, method,
         pageId: pageBinding.pageId, documentId: 1, pageRole: pageBinding.role,
-        requestedAt: 140, workspaceHeader: window.workspaceId, body: requestBody,
+        requestedAt: 140, workspaceHeader: window.workspaceId, targetGatewayHeader: window.gatewayId, body: requestBody,
         bodyText: requestBody === null ? null : JSON.stringify(requestBody) });
       restartResponses.push({ restartWindowId: window.operationId, url: targetUrl, method, status: 502, cdpRequestId: `cdp-${errorIndex}`,
         requestFactId, pageId: pageBinding.pageId, documentId: 1, pageRole: pageBinding.role,
         requestedAt: 140, receivedAt: 150, requestId, bodyRequestId: requestId,
         body: { detail: `无法连接工作区后端: workspace_id=${window.workspaceId}, error_type=ConnectError；请查看 Gateway 服务日志`, request_id: requestId },
-        workspaceHeader: window.workspaceId });
+        workspaceHeader: window.workspaceId, targetGatewayHeader: window.gatewayId });
     }
   }
   const observationsUrl = "http://127.0.0.1:19001/api/v1/workspace/observations/stream";
@@ -1392,13 +1450,13 @@ function runMessageStreamDiagnosticsSelfTest() {
     restartWindowId: restartWindows[0].operationId });
   restartRequests.push({ requestFactId: observationRequestFactId, restartWindowId: null, url: observationsUrl,
     method: "POST", pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role,
-    requestedAt: 90, workspaceHeader: restartWindows[0].workspaceId,
+    requestedAt: 90, workspaceHeader: restartWindows[0].workspaceId, targetGatewayHeader: restartWindows[0].gatewayId,
     body: { subscriptions: [{ subscription_id: observationSubscriptionId, kind: "workspace_files" }] } });
   const recoveryRequestId = "request-observation-stream-recovered";
   restartResponses.push({ requestFactId: "browser-request-observation-stream-recovery",
     restartWindowId: restartWindows[0].operationId, url: observationsUrl, method: "POST", status: 200,
     pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role,
-    requestedAt: 181, receivedAt: 183, workspaceHeader: restartWindows[0].workspaceId,
+    requestedAt: 181, receivedAt: 183, workspaceHeader: restartWindows[0].workspaceId, targetGatewayHeader: restartWindows[0].gatewayId,
     requestId: recoveryRequestId, contentType: "text/event-stream", subscriptions: [
       { subscription_id: observationSubscriptionId, kind: "workspace_files" },
     ], connectedSubscriptions: [observationSubscriptionId] });
@@ -1727,7 +1785,7 @@ function runMessageStreamDiagnosticsSelfTest() {
   ] } };
   const sourceDeletionProof = { operationId: "source-delete", terminalRequestId: "source-delete-terminal",
     pageId: deleteRequest.pageId, documentId: deleteRequest.documentId,
-    origin: deletionWindow.origin, workspaceHeader: deletionWindow.workspaceId,
+    origin: deletionWindow.origin, workspaceHeader: deletionWindow.workspaceId, targetGatewayHeader: deletionWindow.gatewayId,
     receipt: { state: "committed", settlement: "settled" },
     journal: { subtree_delete_idempotency_key: "source-delete", root_node_id: deletionWindow.sourceSessionId, state: "completed" },
     remaining: [], sessionIds: [deletionWindow.sourceSessionId],
@@ -1745,6 +1803,8 @@ function runMessageStreamDiagnosticsSelfTest() {
     { ...sourceDeletionProof, documentId: deleteRequest.documentId + 1 },
     { ...sourceDeletionProof, origin: "http://127.0.0.1:19002" },
     { ...sourceDeletionProof, workspaceHeader: "another-workspace" },
+    { ...sourceDeletionProof, targetGatewayHeader: "another-gateway" },
+    { ...sourceDeletionProof, targetGatewayHeader: null },
     { ...sourceDeletionProof, receipt: { state: "running", settlement: null } },
     { ...sourceDeletionProof, receipt: { state: "committed", settlement: "repair_required" } },
     { ...sourceDeletionProof, journal: { ...sourceDeletionProof.journal, subtree_delete_idempotency_key: "another-deletion" } },
@@ -1828,7 +1888,7 @@ function basicStreamConnections(owner, observations = controlledRestartResponses
   const traceByDocument = new Map();
   for (const response of observations) {
     if (response.pageId !== owner.page.diagnosticId || response.status !== 200
-        || response.workspaceHeader !== owner.gatewayWorkspaceId
+        || response.workspaceHeader !== owner.workspaceId || response.targetGatewayHeader !== owner.gatewayId
         || response.contentType?.split(";", 1)[0] !== "text/event-stream"
         || !response.requestId || !response.cdpRequestId) continue;
     const subscriptions = response.subscriptions?.filter((subscription) => subscription.kind === "session_trace"
@@ -1843,7 +1903,7 @@ function basicStreamConnections(owner, observations = controlledRestartResponses
     trace: [...traceByDocument.values()],
     message: messages.filter((response) => response.pageId === owner.page.diagnosticId
       && response.sessionId === owner.sessionId && response.threadId === owner.threadId
-      && response.workspaceHeader === owner.gatewayWorkspaceId
+      && response.workspaceHeader === owner.workspaceId && response.targetGatewayHeader === owner.gatewayId
       && response.status === 200 && isEventStreamResponse(response)),
   };
 }
@@ -1879,22 +1939,20 @@ async function waitForJobStatus(owner, jobId, expectedJobStatus = "completed") {
   return latestJob;
 }
 
-async function createSessionThroughGateway(page, workspaceId) {
-  const payload = await api(page, "/api/v1/sessions", {
+async function createSessionThroughGateway(surface) {
+  const { page } = surface;
+  const payload = await ownerApi(surface, "/api/v1/sessions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-BoxTeam-Workspace-Id": workspaceId,
     },
     body: JSON.stringify({ title: "Web 工具循环完整流程", agent_id: "default" }),
   });
   const sessionId = payload?.data?.session_id;
   assert.equal(typeof sessionId, "string", "Gateway 新建会话响应缺少 session_id");
-  const main = await api(page, `/api/v1/sessions/${sessionId}/main-thread`, {
-    headers: { "X-BoxTeam-Workspace-ID": workspaceId },
-  });
-  const owner = { name: "a", page, sessionId, threadId: main.data.thread_id,
-    gatewayWorkspaceId: workspaceId, workspaceIdentity: payload.data.workspace_id, child: false };
+  assert.equal(payload.data.workspace_id, surface.workspaceId);
+  const main = await ownerApi(surface, `/api/v1/sessions/${sessionId}/main-thread`);
+  const owner = { ...surface, sessionId, threadId: main.data.thread_id, child: false };
   const catalog = await sessionCatalogNode(owner);
   await threadRolloutLocator(owner, catalog);
   await planGoldenLoop(sessionId, main.data.thread_id);
@@ -1902,8 +1960,8 @@ async function createSessionThroughGateway(page, workspaceId) {
 }
 
 function threadSurface(owner) {
-  assert.ok(owner.workspaceIdentity && owner.sessionId && owner.threadId, "Thread locator 必须持有完整后端身份");
-  return owner.page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceIdentity}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`);
+  assert.ok(owner.workspaceId && owner.sessionId && owner.threadId, "Thread locator 必须持有完整后端身份");
+  return owner.page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`);
 }
 
 function threadTab(owner) {
@@ -1942,7 +2000,8 @@ async function sendPrompt(owner, prompt) {
   const pathname = `/api/v1/sessions/${sessionId}/threads/${threadId}/messages`;
   const isTargetRequest = request => request.method() === "POST"
     && new URL(request.url()).pathname === pathname
-    && request.headers()["x-boxteam-workspace-id"] === owner.gatewayWorkspaceId;
+    && request.headers()["x-boxteam-workspace-id"] === owner.workspaceId
+    && request.headers()["x-boxteam-target-gateway-id"] === owner.gatewayId;
   const thread = threadSurface(owner);
   await thread.getByTestId("composer-input").fill(prompt);
   const [responseResult, clickResult] = await Promise.allSettled([
@@ -1955,7 +2014,8 @@ async function sendPrompt(owner, prompt) {
   const request = response.request();
   const payload = request.postDataJSON();
   assert.equal(payload?.message?.content, prompt, "Composer 发送内容不一致");
-  assert.equal(request.headers()["x-boxteam-workspace-id"], owner.gatewayWorkspaceId);
+  assert.equal(request.headers()["x-boxteam-workspace-id"], owner.workspaceId);
+  assert.equal(request.headers()["x-boxteam-target-gateway-id"], owner.gatewayId);
   assert.equal(response.status(), 200, await response.text());
   const responseBody = await response.json();
   assert.equal(responseBody.request_id, response.headers()["x-request-id"]);
@@ -2148,7 +2208,7 @@ async function runGoalOwner(surface) {
 
 async function runBasicChat(surface) {
   const { page } = surface;
-  const rootOwner = await createSessionThroughGateway(page, surface.gatewayWorkspaceId);
+  const rootOwner = await createSessionThroughGateway(surface);
   result.threadId = rootOwner.threadId;
   result.sessionId = rootOwner.sessionId;
   await drainPageResponseBodies(page);
@@ -2181,7 +2241,7 @@ async function runBasicChat(surface) {
       ["复用历史上下文", "工具已经返回，我先确认历史上下文"]),
     waitForJobStatus(rootOwner, secondSend.jobId),
   ]);
-  result.persisted = await loadPersistedEvidence(page, result.sessionId, surface.gatewayWorkspaceId, rootOwner.threadId);
+  result.persisted = await loadPersistedEvidence(rootOwner);
   result.basicStreamConnections = basicStreamConnections(rootOwner);
   result.streams = Object.fromEntries(Object.entries(result.basicStreamConnections)
     .map(([kind, connections]) => [kind, connections.length]));
@@ -2235,8 +2295,9 @@ async function runBasicChat(surface) {
   return { sessionId: rootOwner.sessionId, threadId: rootOwner.threadId, streams: result.streams };
 }
 
-async function loadPersistedEvidence(page, sessionId, workspaceId, threadId) {
-  const headers = { "X-BoxTeam-Workspace-Id": workspaceId };
+async function loadPersistedEvidence(owner) {
+  const { page, sessionId, threadId } = owner;
+  const headers = workspaceHeaders(owner);
   const messages = await api(page, `/api/v1/sessions/${sessionId}/messages`, { headers });
   const logs = await api(page, `/api/v1/sessions/${sessionId}/llm-request-logs`, { headers });
   const agentState = await api(page, `/api/v1/sessions/${sessionId}/agent-state/messages`, { headers });
@@ -2423,7 +2484,7 @@ async function loadThreadHistory(owner, options = {}, timing = null) {
   let requestOutcome = "completed";
   try {
     const value = await ownerApi(owner, `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": owner.gatewayWorkspaceId },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ direction: "tail", turns: 256, include: HISTORY_INCLUDE, ...options }),
     }, undefined, requestTiming);
     return await validateThreadHistoryPage(owner, value, timing);
@@ -2531,7 +2592,7 @@ async function openOwner(owner) {
     await selectSession(owner);
   } catch (error) {
     result.navigationFailure = {
-      expected: { workspaceId: owner.gatewayWorkspaceId, sessionId: owner.sessionId },
+      expected: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId, sessionId: owner.sessionId },
       url: owner.page.url(),
       breadcrumb, expansionSteps, rows: await catalogRows(owner.page),
     };
@@ -2550,11 +2611,11 @@ async function openOwner(owner) {
 
 async function createProductSession(surface, title) {
   const response = await ownerApi(surface, "/api/v1/sessions", {
-    method: "POST", headers: { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": surface.gatewayWorkspaceId },
+    method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, agent_id: "default" }),
   });
   const dto = response.data;
-  assert.equal(dto.workspace_id, surface.workspaceIdentity, "业务 Session 身份必须来自后端 workspace identity");
+  assert.equal(dto.workspace_id, surface.workspaceId, "业务 Session 身份必须来自后端 workspace identity");
   canonicalUuid7(dto.session_id, "ses");
   const main = await ownerApi(surface, `/api/v1/sessions/${dto.session_id}/main-thread`);
   assert.equal(main.data.session_id, dto.session_id);
@@ -2727,7 +2788,8 @@ function runTranscriptViewportSelfTest() {
 function runHistoryRecoveryClassifierSelfTest() {
   const text = "Failed to load resource: the server responded with a status of 409 (Conflict)";
   const url = "http://127.0.0.1:19000/api/v1/sessions/session-a/threads/thread-a/history";
-  const owner = { pageId: 1, documentId: 2, sessionId: "session-a", threadId: "thread-a", workspaceHeader: "route-a" };
+  const owner = { pageId: 1, documentId: 2, sessionId: "session-a", threadId: "thread-a",
+    workspaceHeader: "workspace-a", targetGatewayHeader: "gateway-a" };
   const conflict = { ...owner, url, kind: "history", method: "POST", status: 409,
     requestId: "conflict", requestedAt: 100, receivedAt: 120,
     parameters: { direction: "after", cursor: "frozen-window", turns: 3 },
@@ -2739,7 +2801,7 @@ function runHistoryRecoveryClassifierSelfTest() {
   const tail = { ...owner, kind: "history", method: "POST", requestedAt: 131, receivedAt: 140,
     requestId: "tail", parameters: { direction: "tail", turns: 5 },
     body: { request_id: "tail", threadId: owner.threadId, projectionEpoch: 2 } };
-  const proof = { ...owner, workspaceId: owner.workspaceHeader, verifiedAt: 150 };
+  const proof = { ...owner, workspaceId: owner.workspaceHeader, gatewayId: owner.targetGatewayHeader, verifiedAt: 150 };
   const classify = (overrides = {}) => classifyConsoleErrors({ consoleErrors: [text],
     consoleErrorFacts: [{ ...owner, url, text, index: 0 }], failedRequests: [],
     conflictResponses: [conflict], historyRecoveryResponses: [bootstrap, tail], historyLiveProofs: [proof],
@@ -2754,6 +2816,11 @@ function runHistoryRecoveryClassifierSelfTest() {
     { historyRecoveryResponses: [{ ...bootstrap, receivedAt: 119 }, tail] },
     { historyLiveProofs: [{ ...proof, documentId: 3 }] },
     { historyLiveProofs: [{ ...proof, threadId: "other-thread" }] },
+    { historyLiveProofs: [{ ...proof, gatewayId: "other-gateway" }] },
+    { historyRecoveryResponses: [{ ...bootstrap, targetGatewayHeader: "other-gateway" }, tail] },
+    { conflictResponses: [{ ...conflict, targetGatewayHeader: null }],
+      historyRecoveryResponses: [bootstrap, tail].map(fact => ({ ...fact, targetGatewayHeader: null })),
+      historyLiveProofs: [{ ...proof, gatewayId: null }] },
     { historyLiveProofs: [{ ...proof, verifiedAt: 139 }] },
     { conflictResponses: [{ ...conflict, body: { ...conflict.body, request_id: "other" } }] },
   ]) assert.deepEqual(classify(overrides).unhandledConsoleErrors, [text],
@@ -2854,7 +2921,7 @@ async function assertTranscriptDom(owner, history, stage, { onTurn = null, navig
     const failure = {
       stage, error: String(error), inspectedIndex,
       target: { pageId: owner.page.diagnosticId, documentId: owner.page.diagnosticDocumentId,
-        workspaceId: owner.gatewayWorkspaceId, sessionId: owner.sessionId, threadId: owner.threadId,
+        workspaceId: owner.workspaceId, sessionId: owner.sessionId, threadId: owner.threadId,
         child: Boolean(owner.child), url: owner.page.url() },
       expectedCount: expected.length, expectedOffset,
       expected: expected.slice(expectedOffset, expectedOffset + 64).map((entry) => entry.kind === "turn"
@@ -3029,7 +3096,7 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
       target: {
         pageId: owner.page.diagnosticId,
         documentId: owner.page.diagnosticDocumentId,
-        workspaceId: owner.gatewayWorkspaceId,
+        workspaceId: owner.workspaceId,
         sessionId: owner.sessionId,
         threadId: owner.threadId,
         turnId: turn.turn_id,
@@ -3276,7 +3343,7 @@ async function verifyOwnerTurns(owner, { reload = true, historyTiming = null } =
   const internal = await assertInternalHistory(owner, page, "live");
   // 必须在测试驱动主动刷新之前证明当前页面已完成真实历史校准。
   historyLiveProofs.push({ pageId: owner.page.diagnosticId, documentId: owner.page.diagnosticDocumentId,
-    sessionId: owner.sessionId, threadId: owner.threadId, workspaceId: owner.gatewayWorkspaceId,
+    sessionId: owner.sessionId, threadId: owner.threadId, workspaceId: owner.workspaceId, gatewayId: owner.gatewayId,
     turnIds: page.items.map((turn) => turn.turn_id),
     internalExecutionIds: page.internal_executions.map((execution) => execution.execution_id), verifiedAt: Date.now() });
   const turnNavigationProof = {
@@ -3362,7 +3429,7 @@ async function sessionCatalogNode(owner) {
   const node = rows[0];
   assert.equal(node.kind, "session");
   assert.equal(node.state, "active");
-  assert.equal(node.workspace_id, owner.workspaceIdentity);
+  assert.equal(node.workspace_id, owner.workspaceId);
   canonicalUuid7(node.node_id, "ses");
   canonicalUuid7(node.main_thread_id, "thr");
   const createdDate = new Date(node.created_at).toISOString().slice(0, 10);
@@ -3399,7 +3466,7 @@ async function readControl(owner, query, parameters = []) {
 
 async function readFrozenControl(owner, node, query, parameters = []) {
   assert.equal(node.node_id, owner.sessionId);
-  assert.equal(node.workspace_id, owner.workspaceIdentity);
+  assert.equal(node.workspace_id, owner.workspaceId);
   return testControl({ action: "read_sql", name: owner.name, relative_path: `${sessionLocator(node)}/session-control.sqlite`, query, parameters });
 }
 
@@ -3545,7 +3612,7 @@ async function prepareNavigationIntent(surface, fields) {
 
 async function enqueueNavigationIntent(surface, operation) {
   const accepted = await ownerApi(surface, "/api/v1/session-catalog/operations:enqueue", {
-    method: "POST", headers: { "Content-Type": "application/json", "X-BoxTeam-Workspace-Id": surface.gatewayWorkspaceId }, body: JSON.stringify({ intents: [operation.intent] }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ intents: [operation.intent] }),
   });
   assert.equal(accepted.data.accepted_count, 1);
   return { ...operation, accepted: accepted.data };
@@ -3559,7 +3626,7 @@ async function closingDeletionDocument(surface, operation, affectedOwners) {
   await drainPageResponseBodies(surface.page);
   await surface.page.waitForFunction(() => performance.getEntriesByName("code/didRestoreEditors", "mark").length > 0);
   const identity = { pageId: surface.page.diagnosticId, documentId: surface.page.diagnosticDocumentId,
-    origin: new URL(surface.page.url()).origin, workspaceHeader: surface.gatewayWorkspaceId };
+    origin: new URL(surface.page.url()).origin, workspaceHeader: surface.workspaceId, targetGatewayHeader: surface.gatewayId };
   const tabIds = await surface.page.locator('.tabs-container .tab[data-resource-name^="thr_"]')
     .evaluateAll(tabs => tabs.map(tab => tab.getAttribute("data-resource-name")));
   const responses = historyRecoveryResponses.filter(response => response.pageId === identity.pageId
@@ -3568,11 +3635,11 @@ async function closingDeletionDocument(surface, operation, affectedOwners) {
   const loadedTabIds = tabIds.filter(threadId => responses.some(response => response.status === 200
     && response.body?.threadId === threadId));
   const owners = restoredThreadOwners(loadedTabIds, responses, { origin: identity.origin,
-    workspaceId: surface.gatewayWorkspaceId, backendWorkspaceId: surface.workspaceIdentity });
+    gatewayId: surface.gatewayId, workspaceId: surface.workspaceId });
   assert.ok(owners.length > 0, "关闭前必须先证明真实恢复的 Thread owner，不能以空工作台替代");
   const sessionIds = [...new Set(affectedOwners.map(owner => {
-    assert.equal(owner.workspaceIdentity, surface.workspaceIdentity);
-    assert.equal(owner.gatewayWorkspaceId, surface.gatewayWorkspaceId);
+    assert.equal(owner.gatewayId, surface.gatewayId);
+    assert.equal(owner.workspaceId, surface.workspaceId);
     return owner.sessionId;
   }))].sort();
   assert.ok(owners.some(owner => sessionIds.includes(owner.sessionId)), "原关闭文档必须实际持有本次删除的 Thread");
@@ -3613,7 +3680,8 @@ async function navigationTerminal(surface, operation, expected = "committed", ed
     await surface.page.waitForFunction(() => performance.getEntriesByName("code/didRestoreEditors", "mark").length > 0);
     const deletedThreadIds = [...new Set(editorOwners.filter(owner => sessionIds.includes(owner.sessionId))
       .map(owner => {
-        assert.equal(owner.workspaceIdentity, surface.workspaceIdentity, "删除标签证据不得借用其它工作区 owner");
+        assert.equal(owner.workspaceId, surface.workspaceId, "删除标签证据不得借用其它工作区 owner");
+        assert.equal(owner.gatewayId, surface.gatewayId, "删除标签证据不得借用其它 Gateway owner");
         assert.ok(owner.threadId, "删除标签证据必须包含真实 Thread 身份");
         return owner.threadId;
       }))];
@@ -3625,7 +3693,7 @@ async function navigationTerminal(surface, operation, expected = "committed", ed
       const chats = await Promise.all(sessionIds.map((sessionId) =>
         surface.page.locator(`.chat-stream-virtual-shell[data-owner-session-id="${sessionId}"]`).count()));
       const hosts = await Promise.all(sessionIds.map(sessionId => surface.page.locator(
-        `section.boxteam-thread[data-workspace-id="${surface.workspaceIdentity}"][data-session-id="${sessionId}"]`).count()));
+        `section.boxteam-thread[data-workspace-id="${surface.workspaceId}"][data-session-id="${sessionId}"]`).count()));
       const tabs = await Promise.all(deletedThreadIds.map(threadId => threadTab({ ...surface, threadId }).count()));
       const pending = [...surface.page.diagnosticSessionReads].some(request => sessionIds.includes(sessionTargetFromUrl(request.url())));
       if ([...counts, ...chats, ...hosts, ...tabs].some(count => count !== 0) || pending
@@ -3635,14 +3703,15 @@ async function navigationTerminal(surface, operation, expected = "committed", ed
     }, "原删除 journal、目录、Thread Tab 与在途读取同时收敛");
     lifecycleDeletionProofs.push({ operationId: operation.operationId, terminalRequestId, receipt,
       pageId: surface.page.diagnosticId, documentId: surface.page.diagnosticDocumentId,
-      origin: new URL(surface.page.url()).origin, workspaceHeader: surface.gatewayWorkspaceId,
+      origin: new URL(surface.page.url()).origin, workspaceHeader: surface.workspaceId, targetGatewayHeader: surface.gatewayId,
       journal, nodeIds, sessionIds, remaining,
       absentDomNodeIds: nodeIds, absentChatSessionIds: sessionIds, absentHostSessionIds: sessionIds,
       absentThreadIds: deletedThreadIds, verifiedAt });
     for (const document of closedDocuments) {
       assert.equal(document.operationId, operation.operationId);
       assert.equal(document.origin, new URL(surface.page.url()).origin);
-      assert.equal(document.workspaceHeader, surface.gatewayWorkspaceId);
+      assert.equal(document.workspaceHeader, surface.workspaceId);
+      assert.equal(document.targetGatewayHeader, surface.gatewayId);
       assert.deepEqual(document.sessionIds, [...sessionIds].sort(), "重启前后必须是同一个冻结删除 batch");
       const events = nativeLifecycleEvents.filter(event => event.pageId === document.pageId
         && event.documentId === document.documentId);
@@ -3652,7 +3721,8 @@ async function navigationTerminal(surface, operation, expected = "committed", ed
       assert.ok(hidden && closed, "旧文档必须有真实 pagehide→close，不能借用新文档的 DOM 收敛证明");
       lifecycleDeletionProofs.push({ operationId: operation.operationId, terminalRequestId, receipt,
         pageId: document.pageId, documentId: document.documentId, origin: document.origin,
-        workspaceHeader: document.workspaceHeader, journal, nodeIds, sessionIds, remaining, verifiedAt,
+        workspaceHeader: document.workspaceHeader, targetGatewayHeader: document.targetGatewayHeader,
+        journal, nodeIds, sessionIds, remaining, verifiedAt,
         closedDocument: document });
     }
   }
@@ -4352,7 +4422,7 @@ async function catalogMutation(surface, fields, expected = "committed") {
 }
 
 function catalogRow(surface, nodeId) {
-  return surface.page.getByTestId(`catalog-node-${surface.gatewayWorkspaceId}-${nodeId}`);
+  return surface.page.getByTestId(`catalog-node-${workspaceSelectionKey(surface)}-${nodeId}`);
 }
 
 function namedCatalogRow(surface, name) {
@@ -4375,17 +4445,20 @@ async function expandCatalogRow(row) {
 }
 
 async function openCatalogWorkspace(owner) {
-  const row = owner.page.getByTestId(`workspace-node-${owner.gatewayWorkspaceId}`);
+  const row = owner.page.getByTestId(`workspace-node-${workspaceSelectionKey(owner)}`);
   await row.waitFor({ state: "visible" });
   const current = (await api(owner.page, "/api/gateway/workspaces")).data;
-  if (current.active_workspace_id !== owner.gatewayWorkspaceId) {
+  const expected = { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId };
+  if (current.active_workspace?.gateway_id !== owner.gatewayId || current.active_workspace?.workspace_id !== owner.workspaceId) {
     const [response] = await Promise.all([
       owner.page.waitForResponse(entry => entry.request().method() === "POST"
-        && new URL(entry.url()).pathname === `/api/gateway/workspaces/${owner.gatewayWorkspaceId}/activate`),
+        && new URL(entry.url()).pathname === `/api/gateway/workspaces/${owner.workspaceId}/activate`
+        && entry.request().headers()["x-boxteam-target-gateway-id"] === owner.gatewayId
+        && entry.request().headers()["x-boxteam-workspace-id"] === owner.workspaceId),
       row.locator(".workspace-label").click(),
     ]);
     assert.equal(response.status(), 200, await response.text());
-    assert.equal((await response.json()).data.active_workspace_id, owner.gatewayWorkspaceId);
+    assert.deepEqual((await response.json()).data.active_workspace, expected);
   }
   await expandCatalogRow(row);
 }
@@ -4393,7 +4466,7 @@ async function openCatalogWorkspace(owner) {
 async function browserCatalogOutbox(surface) {
   let records;
   await waitUntil(async () => {
-    records = await surface.page.evaluate(async (workspaceId) => {
+    records = await surface.page.evaluate(async ({ gatewayId, workspaceId }) => {
       // 观察器不能抢先创建空库；schema 只能由产品的持久层初始化。
       const databases = await indexedDB.databases();
       if (!databases.some((database) => database.name === "boxteam-session-catalog-outbox")) return null;
@@ -4409,12 +4482,15 @@ async function browserCatalogOutbox(surface) {
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
-        return records.filter((record) => record.partition_key.split("\u0000")[1] === workspaceId)
+        return records.filter((record) => {
+          const [gateway, workspace] = record.partition_key.split("\u0000");
+          return gateway === gatewayId && workspace === workspaceId;
+        })
           .sort((left, right) => left.client_sequence - right.client_sequence);
       } finally {
         database.close();
       }
-    }, surface.workspaceIdentity);
+    }, { gatewayId: surface.gatewayId, workspaceId: surface.workspaceId });
     return records !== null;
   }, "产品创建原会话目录 outbox");
   return records;
@@ -4423,7 +4499,7 @@ async function browserCatalogOutbox(surface) {
 async function catalogFolderDialog(surface, { name, parentName = null, renameName = null, deleteName = null }) {
   const row = parentName || renameName || deleteName
     ? namedCatalogRow(surface, parentName || renameName || deleteName)
-    : surface.page.getByTestId(`workspace-node-${surface.gatewayWorkspaceId}`);
+    : surface.page.getByTestId(`workspace-node-${workspaceSelectionKey(surface)}`);
   await row.click({ button: "right" });
   const item = deleteName ? "删除文件夹及内容" : renameName ? "重命名" : parentName ? "新建子文件夹" : "新建会话文件夹";
   await surface.page.getByRole("menuitem", { name: item, exact: true }).click();
@@ -4493,7 +4569,7 @@ async function runNavigationOptimism(surfaces) {
     for (const owner of deletedOwners) {
       assert.ok(deleted.has(owner.sessionId));
       await expect(threadTab({ ...owner, page: surface.page })).toHaveCount(0);
-      await expect(surface.page.locator(`section.boxteam-thread[data-workspace-id="${surface.workspaceIdentity}"][data-session-id="${owner.sessionId}"] .chat-stream-shell`)).toHaveCount(0);
+      await expect(surface.page.locator(`section.boxteam-thread[data-workspace-id="${surface.workspaceId}"][data-session-id="${owner.sessionId}"] .chat-stream-shell`)).toHaveCount(0);
     }
     return { deletedIds: [...deleted], closedThreadIds: deletedOwners.map(owner => owner.threadId),
       currentSessionId: survivor.sessionId, title: canonical.name };
@@ -4501,7 +4577,8 @@ async function runNavigationOptimism(surfaces) {
   const attachWire = (page) => {
     const request = (entry) => {
       if (entry.method() !== "POST" || new URL(entry.url()).pathname !== "/api/v1/session-catalog/operations:enqueue") return;
-      facts.requests.push({ page: page.url(), at: Date.now(), workspaceId: entry.headers()["x-boxteam-workspace-id"], ...entry.postDataJSON() });
+      facts.requests.push({ page: page.url(), at: Date.now(), workspaceId: entry.headers()["x-boxteam-workspace-id"],
+        gatewayId: entry.headers()["x-boxteam-target-gateway-id"], ...entry.postDataJSON() });
     };
     const response = (entry) => {
       if (entry.request().method() !== "POST" || new URL(entry.url()).pathname !== "/api/v1/session-catalog/operations:enqueue") return;
@@ -4516,7 +4593,7 @@ async function runNavigationOptimism(surfaces) {
     wirePages.push({ page, request, response });
   };
   const match = async (phase, details, tag) => {
-    const barrier = { barrier_id: `${label}-${tag}`, phase, details: { workspace_id: surface.workspaceIdentity, ...details } };
+    const barrier = { barrier_id: `${label}-${tag}`, phase, details: { workspace_id: surface.workspaceId, ...details } };
     await testControl({ action: "arm_match", ...barrier });
     held.push(barrier);
     return barrier;
@@ -4566,7 +4643,7 @@ async function runNavigationOptimism(surfaces) {
   };
   const localOperation = async (owner, action, predicate, description) => {
     const diagnostic = { pageId: owner.page.diagnosticId, documentId: owner.page.diagnosticDocumentId,
-      origin: new URL(owner.page.url()).origin, workspaceHeader: owner.gatewayWorkspaceId, startedAt: Date.now() };
+      origin: new URL(owner.page.url()).origin, workspaceHeader: owner.workspaceId, targetGatewayHeader: owner.gatewayId, startedAt: Date.now() };
     const previous = new Set((await browserCatalogOutbox(owner)).map((record) => record.operation.client_operation_id));
     const dialog = await action();
     if (dialog) await dialog.waitFor({ state: "hidden", timeout: 5000 });
@@ -4793,7 +4870,7 @@ async function runNavigationOptimism(surfaces) {
 
     const failedLocalName = `${label} IndexedDB abort`;
     const abortDiagnostic = { pageId: surface.page.diagnosticId, documentId: surface.page.diagnosticDocumentId,
-      origin: new URL(surface.page.url()).origin, workspaceHeader: surface.gatewayWorkspaceId, startedAt: Date.now() };
+      origin: new URL(surface.page.url()).origin, workspaceHeader: surface.workspaceId, targetGatewayHeader: surface.gatewayId, startedAt: Date.now() };
     await surface.page.evaluate((operationName) => {
       const original = IDBObjectStore.prototype.add;
       IDBObjectStore.prototype.add = function (value, ...args) {
@@ -4844,8 +4921,9 @@ async function runNavigationOptimism(surfaces) {
       const pending = (async () => {
         const url = new URL(entry.request.url);
         const workspaceId = Object.entries(entry.request.headers).find(([name]) => name.toLowerCase() === "x-boxteam-workspace-id")?.[1];
+        const gatewayId = Object.entries(entry.request.headers).find(([name]) => name.toLowerCase() === "x-boxteam-target-gateway-id")?.[1];
         // 三工作区仍正常运行；传输实验只针对本场景原 A 目标。
-        if (workspaceId !== surface.gatewayWorkspaceId) {
+        if (workspaceId !== surface.workspaceId || gatewayId !== surface.gatewayId) {
           await eventTransport.send(entry.responseStatusCode === undefined ? "Fetch.continueRequest" : "Fetch.continueResponse", { requestId: entry.requestId });
           return;
         }
@@ -4857,7 +4935,7 @@ async function runNavigationOptimism(surfaces) {
             if (subscriptions.some((subscription) => subscription.kind === "session_activity")) {
               // 活动观察者已合并到唯一工作区传输；只取消包含它的真实目标请求。
               await eventTransport.send("Fetch.failRequest", { requestId: entry.requestId, errorReason: "Aborted" });
-              eventWire.activitySseDropped.push({ url: entry.request.url, workspaceId, subscriptions, at: Date.now() });
+              eventWire.activitySseDropped.push({ url: entry.request.url, workspaceId, gatewayId, subscriptions, at: Date.now() });
               return;
             }
           }
@@ -4880,7 +4958,7 @@ async function runNavigationOptimism(surfaces) {
           const payload = JSON.parse(bytes.toString("utf8"));
           const httpRequestId = entry.responseHeaders.find((header) => header.name.toLowerCase() === "x-request-id")?.value;
           assert.equal(payload.request_id, httpRequestId);
-          const captured = { url: entry.request.url, httpRequestId, bytes: bytes.length,
+          const captured = { url: entry.request.url, workspaceId, gatewayId, httpRequestId, bytes: bytes.length,
             sha256: createHash("sha256").update(bytes).digest("hex"), data: payload.data };
           if (url.pathname === "/api/v1/session-catalog/navigation-events") {
             eventWire.pages.push(captured);
@@ -4961,7 +5039,7 @@ async function runNavigationOptimism(surfaces) {
       return eventWire.cursorGone !== undefined && eventWire.recoverySnapshot !== undefined;
     }, "真实 cursor gone 后自动重读权威 snapshot");
     assert.equal(eventWire.cursorGone.data.cursor_gone, true);
-    assert.equal(eventWire.cursorGone.data.workspace_id, surface.workspaceIdentity);
+    assert.equal(eventWire.cursorGone.data.workspace_id, surface.workspaceId);
     assert.ok(eventWire.recoverySnapshot.data.catalog_revision >= newerSnapshot.catalog_revision);
     await namedCatalogRow(peer, newerName).waitFor({ state: "visible" });
     assert.equal(await catalogRow(peer, independent.nodeId).count(), 1);
@@ -5135,7 +5213,7 @@ async function runNavigationOptimism(surfaces) {
       assert.equal(receipt.requestId, receipt.body.request_id);
       assert.ok(receipt.body.data.receipts.every((entry) => receipt.operationIds.includes(entry.operation_id)));
     }
-    assert.ok(facts.requests.every((request) => request.workspaceId === surface.gatewayWorkspaceId));
+    assert.ok(facts.requests.every((request) => request.workspaceId === surface.workspaceId && request.gatewayId === surface.gatewayId));
     return facts;
   } catch (error) {
     scenarioError = error;
@@ -5376,7 +5454,7 @@ function assertForkSourceOwner(uri, source, localGatewayId = source.gatewayId) {
   assert.ok(match, "fork 来源必须是显式 Session/Thread URI");
   const { gateway, workspace, session, thread } = match.groups;
   assert.deepEqual([gateway ?? localGatewayId, workspace, session, thread],
-    [source.gatewayId, source.workspaceIdentity, source.sessionId, source.threadId],
+    [source.gatewayId, source.workspaceId, source.sessionId, source.threadId],
     "local URI 按请求 Gateway 解析后必须仍是冻结的真实 source owner");
 }
 
@@ -5492,12 +5570,12 @@ async function forkDeadline(request, source, targetSurface, stage = "fork_contex
   let deadline = forkOperationDeadlines.get(request.idempotency_key);
   if (!deadline) {
     deadline = await beginForkOperationDeadline({
-      target: `${targetSurface.gatewayId}/${targetSurface.workspaceIdentity}/${source.sessionId}`,
+      target: `${targetSurface.gatewayId}/${targetSurface.workspaceId}/${source.sessionId}`,
       operationKey: request.idempotency_key,
       timeoutMs: FORK_OPERATION_DEADLINE_MS,
     });
     deadline.sourceSessionId = source.sessionId;
-    deadline.targetWorkspace = targetSurface.workspaceIdentity;
+    deadline.targetWorkspace = targetSurface.workspaceId;
     forkOperationDeadlines.set(request.idempotency_key, deadline);
   }
   await deadline.setStage(stage);
@@ -5551,7 +5629,7 @@ async function readForkDurableHistory(targetSurface, payload, deadline) {
     `/api/v1/sessions/${sessionId}/threads/${threadId}/history`, targetSurface.page.url()).toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Local-Token": token,
-      "X-BoxTeam-Workspace-Id": targetSurface.gatewayWorkspaceId },
+      ...workspaceHeaders(targetSurface) },
     data: JSON.stringify({ direction: "tail", turns: 256 }),
     timeout: validationBudget ? validationBudget.remainingMs() : 0,
   }), "读取 fork Thread 持久历史");
@@ -5966,17 +6044,17 @@ async function beginForkUiSubmission(page, source, targetSurface, sessionId, sub
   const pathname = `/api/v1/sessions/${sessionId}/fork-context`;
   const matches = (request) => request.method() === "POST" && new URL(request.url()).pathname === pathname;
   const deadline = await beginForkSubmissionDeadline({
-    target: `${targetSurface.gatewayId}/${targetSurface.workspaceIdentity}/${source.sessionId}`,
+    target: `${targetSurface.gatewayId}/${targetSurface.workspaceId}/${source.sessionId}`,
     timeoutMs: FORK_OPERATION_DEADLINE_MS,
   });
   deadline.sourceSessionId = source.sessionId;
-  deadline.targetWorkspace = targetSurface.workspaceIdentity;
+  deadline.targetWorkspace = targetSurface.workspaceId;
   const responsePending = page.waitForResponse((response) => matches(response.request()), { timeout: 0 });
   const requestPending = page.waitForRequest(matches, { timeout: 0 }).then(async (request) => {
     const body = request.postDataJSON();
     const boundDeadline = await bindForkOperationDeadline(deadline, body.idempotency_key);
     boundDeadline.sourceSessionId = source.sessionId;
-    boundDeadline.targetWorkspace = targetSurface.workspaceIdentity;
+    boundDeadline.targetWorkspace = targetSurface.workspaceId;
     await boundDeadline.setStage("确认按钮提交后的 fork POST 已发出");
     forkOperationDeadlines.set(body.idempotency_key, boundDeadline);
     return { request, body, deadline: boundDeadline };
@@ -6042,7 +6120,7 @@ async function requestForkHttpResponse(source, request, targetSurface) {
       `/api/v1/sessions/${source.sessionId}/fork-context`, targetSurface.page.url()).toString(), {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Local-Token": token,
-        "X-BoxTeam-Workspace-Id": targetSurface.gatewayWorkspaceId },
+        ...workspaceHeaders(targetSurface) },
       data: JSON.stringify(request),
       timeout: 0,
     });
@@ -6348,7 +6426,7 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
   const anchorItemId = request.mode === "last_completed_turn_fork" ? sourceEvidence.completedAnchorItemId : request.anchor_item_id;
   if (request.mode === "last_completed_turn_fork" && request.anchor_item_id !== null) assert.equal(request.anchor_item_id, anchorItemId);
   assert.equal(fork.anchor_item_id, anchorItemId, "context 自动截止点必须来自源端最新完成且可见的事实");
-  assert.equal(dto.workspace_id, targetSurface.workspaceIdentity);
+  assert.equal(dto.workspace_id, targetSurface.workspaceId);
   assert.equal(dto.scope, "workspace");
   const main = (await ownerApi(targetSurface, `/api/v1/sessions/${dto.session_id}/main-thread`)).data;
   assert.equal(main.session_id, dto.session_id);
@@ -6993,16 +7071,17 @@ function restoredThreadOwners(threadIds, responses, window) {
     const owners = new Map(responses.filter(response => response.kind === "bootstrap" && response.status === 200
       && response.requestId && response.body?.request_id === response.requestId
       && response.body.sessionId === response.sessionId && response.body.threadId === threadId
-      && response.body.workspaceId && response.workspaceHeader && new URL(response.url).origin === window.origin)
+      && response.body.workspaceId && response.workspaceHeader && response.targetGatewayHeader
+      && new URL(response.url).origin === window.origin)
       .map(response => {
-        const owner = { routeId: response.workspaceHeader, workspaceId: response.body.workspaceId,
+        assert.equal(response.body.workspaceId, response.workspaceHeader, "bootstrap 正文与请求必须使用同一工作区 UUID");
+        const owner = { gatewayId: response.targetGatewayHeader, workspaceId: response.workspaceHeader,
           sessionId: response.sessionId, threadId };
         return [JSON.stringify(owner), owner];
       }));
     assert.equal(owners.size, 1, `恢复的 Thread Tab 必须能唯一关联真实 bootstrap owner: ${threadId}`);
     const owner = [...owners.values()][0];
-    if (owner.routeId !== window.workspaceId) return [];
-    assert.equal(owner.workspaceId, window.backendWorkspaceId, "恢复 Tab 的 Gateway 路由与业务工作区必须一致");
+    if (owner.gatewayId !== window.gatewayId || owner.workspaceId !== window.workspaceId) return [];
     return [owner];
   });
 }
@@ -7012,7 +7091,7 @@ async function bindControlledRestartPage(window, page, role) {
   const editorOwners = await page.locator("section.boxteam-thread[data-workspace-id][data-session-id][data-thread-id]")
     .evaluateAll((editors, workspaceId) => editors.filter(editor => editor.dataset.workspaceId === workspaceId)
       .map(editor => ({ workspaceId: editor.dataset.workspaceId, sessionId: editor.dataset.sessionId,
-        threadId: editor.dataset.threadId })), window.backendWorkspaceId);
+        threadId: editor.dataset.threadId })), window.workspaceId);
   assert.ok(editorOwners.every(owner => owner.sessionId && owner.threadId), "恢复编辑器必须具有真实 Session／Thread owner");
   const tabThreadIds = await page.locator('.tabs-container .tab[data-resource-name^="thr_"]')
     .evaluateAll(tabs => tabs.map(tab => tab.getAttribute("data-resource-name")));
@@ -7041,7 +7120,7 @@ async function beginControlledRestartWindow(surface, { operationId, phase, captu
     captureOperationId: captured.copy_operation_id,
     sourceThreadId: captured.source_thread_id, targetSessionId: captured.target_session_id,
     sourceDeletionOperationId: sourceDeletion?.operationId ?? null,
-    activeSessionId, workspaceId: surface.gatewayWorkspaceId, backendWorkspaceId: surface.workspaceIdentity, origin: gatewayUrl.origin,
+    activeSessionId, gatewayId: surface.gatewayId, workspaceId: surface.workspaceId, origin: gatewayUrl.origin,
     targetName: surface.name, gatewayPort: Number(gatewayUrl.port),
     backendRestart: { targetName: surface.name, port: null, beforePid: null, afterPid: null,
       stopRequestedAt: null, stoppedAt: null, startRequestedAt: null, startedAt: null },
@@ -7196,7 +7275,7 @@ async function runCopyCaptureLifecycle(surface, owners, activeSessionId) {
       assert.ok(firstHttpElapsedMs >= FORK_OPERATION_DEADLINE_MS - 1_000,
         "本地 deadline 错误必须发生在原始预算边界");
     } else if (firstHttp.response.status === 502) {
-      assert.ok(isControlledRestartUpstreamFailure(firstHttp.response.body.detail, surface.gatewayWorkspaceId),
+      assert.ok(isControlledRestartUpstreamFailure(firstHttp.response.body.detail, surface.workspaceId),
         `进程立即退出时原 HTTP 必须收到 Gateway 的明确上游连接失败: ${JSON.stringify(firstHttp.response)}`);
       assert.ok(firstHttpElapsedMs < FORK_OPERATION_DEADLINE_MS, "502 必须发生在单次 fork 总期限内");
     } else {
@@ -7325,7 +7404,7 @@ async function runCopyMarkerCrashRecovery(surface, owners, activeSessionId) {
   const firstHttp = await pending;
   assert.equal(firstHttp.error, undefined, firstHttp.error);
   assert.equal(firstHttp.response.status, 502, "marker durable 后立即崩溃必须使原 fork HTTP 收到真实上游失败");
-  assert.ok(isControlledRestartUpstreamFailure(firstHttp.response.body.detail, surface.gatewayWorkspaceId),
+  assert.ok(isControlledRestartUpstreamFailure(firstHttp.response.body.detail, surface.workspaceId),
     `marker 崩溃回执必须属于目标 Gateway 路由: ${JSON.stringify(firstHttp.response)}`);
   const firstHttpElapsedMs = performance.now() - requestStartedAt;
   assert.ok(firstHttpElapsedMs < 60_000, "原 HTTP 失败必须发生在 Gateway 60 秒期限前");
@@ -7359,10 +7438,11 @@ async function runCopyMarkerCrashRecovery(surface, owners, activeSessionId) {
 
 async function readAttachmentContent(owner, fileId, expectedStatus = 200) {
   const token = await localToken(owner.page);
-  const response = await owner.page.evaluate(async ({ path, token, workspaceId }) => {
-    const reply = await fetch(path, { headers: { "X-Local-Token": token, "X-BoxTeam-Workspace-Id": workspaceId }, credentials: "include" });
+  const response = await owner.page.evaluate(async ({ path, headers }) => {
+    const reply = await fetch(path, { headers, credentials: "include" });
     return { status: reply.status, requestId: reply.headers.get("X-Request-ID"), contentType: reply.headers.get("Content-Type"), bytes: [...new Uint8Array(await reply.arrayBuffer())] };
-  }, { path: `/api/v1/sessions/${owner.sessionId}/attachments/content?${new URLSearchParams({ file_id: fileId, variant: "original" })}`, token, workspaceId: owner.gatewayWorkspaceId });
+  }, { path: `/api/v1/sessions/${owner.sessionId}/attachments/content?${new URLSearchParams({ file_id: fileId, variant: "original" })}`,
+    headers: { "X-Local-Token": token, ...workspaceHeaders(owner) } });
   assert.equal(response.status, expectedStatus, Buffer.from(response.bytes).toString("utf8"));
   assert.equal(typeof response.requestId, "string");
   assert.ok(response.requestId.length > 0);
@@ -7393,7 +7473,7 @@ async function createAttachmentSource(surface, title, owners, { prefixTurns = 0,
   const refs = material.turn.user_messages.flatMap((message) => message.attachments);
   assert.equal(refs.length, 1);
   const attachment = refs[0];
-  assert.match(attachment.directory_uri, new RegExp(`^boxteam://(?:${source.gatewayId}/)?workspace/${source.workspaceIdentity}/resources/attachments/att_[0-9a-f]{32}$`));
+  assert.match(attachment.directory_uri, new RegExp(`^boxteam://(?:${source.gatewayId}/)?workspace/${source.workspaceId}/resources/attachments/att_[0-9a-f]{32}$`));
   assert.equal(attachment.file_id, `${attachment.directory_uri}/original/content`);
   const content = await readAttachmentContent(source, attachment.file_id);
   assert.deepEqual(Buffer.from(content.bytes), buffer);
@@ -7425,7 +7505,7 @@ async function runMessageStreamAfter20(surface) {
   const published = await publishedForkOwner(source, request, fork, before);
   const targetFile = published.targetHistory.items.flatMap((turn) => turn.user_messages)
     .flatMap((message) => message.attachments).find((item) => item.name === attachment.name)?.file_id;
-  assert.ok(targetFile?.startsWith(`boxteam://${published.owner.gatewayId}/workspace/${published.owner.workspaceIdentity}/resources/attachments/`));
+  assert.ok(targetFile?.startsWith(`boxteam://${published.owner.gatewayId}/workspace/${published.owner.workspaceId}/resources/attachments/`));
   const capabilityBoundary = await runAttachmentCapabilityBoundary(published.owner, source,
     targetFile, attachment.file_id, "message-stream-after20");
   const response = messageStreamResponses.findLast((fact) => fact.status === 200
@@ -7435,9 +7515,8 @@ async function runMessageStreamAfter20(surface) {
     turn_stream_id: response.messageStreamId, after_seq: "20" });
   const token = await localToken(published.owner.page);
   // 浏览器从同一 Gateway 续读真实持久流；不构造或替换任何产品事件。
-  const replay = await published.owner.page.evaluate(async ({ path, token, workspaceId }) => {
-    const response = await fetch(path, { headers: { "X-Local-Token": token,
-      "X-BoxTeam-Workspace-Id": workspaceId, Accept: "text/event-stream", "Last-Event-ID": "20" } });
+  const replay = await published.owner.page.evaluate(async ({ path, headers }) => {
+    const response = await fetch(path, { headers });
     const fact = { status: response.status, requestId: response.headers.get("X-Request-ID"),
       streamId: response.headers.get("X-Message-Stream-ID"), chunks: [], eof: false, error: null };
     const reader = response.body.getReader();
@@ -7456,7 +7535,7 @@ async function runMessageStreamAfter20(surface) {
     }
     return fact;
   }, { path: `/api/v1/sessions/${published.owner.sessionId}/turns/${capabilityBoundary.sent.turnId}/message-stream?${query}`,
-    token, workspaceId: published.owner.gatewayWorkspaceId });
+    headers: { "X-Local-Token": token, ...workspaceHeaders(published.owner), Accept: "text/event-stream", "Last-Event-ID": "20" } });
   const facts = { sourceSessionId: source.sessionId, sessionId: published.owner.sessionId,
     threadId: published.owner.threadId, turnId: capabilityBoundary.sent.turnId,
     capabilityBoundary, originalSubscription: response, replay };
@@ -7506,6 +7585,15 @@ async function runAttachmentCapabilityBoundary(owner, source, targetFile, source
   return completed;
 }
 
+function assertAttachmentRebuildPath(surface, attachmentId, requestedUri, returnedUri) {
+  workspaceHeaders(surface);
+  assert.ok(attachmentId, "附件重建必须持有原目录的 attachment_id");
+  const path = `workspace/${surface.workspaceId}/resources/attachments/${attachmentId}/original/content`;
+  // 本场景以完整 Gateway URI 请求，本机文件 API 返回本地规范 URI。
+  assert.equal(requestedUri, `boxteam://${surface.gatewayId}/${path}`, "附件重建请求必须属于原 Gateway／工作区／附件原件");
+  assert.equal(returnedUri, `boxteam://${path}`, "附件重建必须返回原工作区附件原件的本地规范 URI");
+}
+
 async function runCopyAttachmentLifecycle(surface, owners) {
   await enableAttachmentCapabilityTools(surface);
   const facts = [];
@@ -7518,8 +7606,11 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     const barrier = { operation_id: operationId, phase };
     await testControl({ action: "arm", ...barrier });
     const requestSurface = await copyRequestSurface(source);
-    const pending = requestFork(source, request, undefined, requestSurface).then((value) => ({ value }), (error) => ({ error: String(error) }));
-    await testControl({ action: "acknowledged", ...barrier });
+    const pending = requestFork(source, request, undefined, requestSurface);
+    await Promise.race([
+      testControl({ action: "acknowledged", ...barrier }),
+      pending.then(() => { throw new Error(`fork 请求在屏障到达前已成功: operation_id=${operationId}, phase=${phase}`); }),
+    ]);
     const captured = await readCopyCapture(surface, operationId);
     const claims = await copyAttachmentClaims(surface, operationId);
     assert.equal(claims.length, 1);
@@ -7570,7 +7661,7 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     await testControl({ action: "release", ...barrier });
     const restarted = await testControl({ action: "process", name: surface.name, operation: "start" });
     assert.notEqual(killed.before_pid, restarted.after_pid);
-    assert.ok((await pending).error);
+    await assert.rejects(pending);
     await reopen();
     const settledClaims = await copyAttachmentClaims(surface, operationId);
     assert.equal(settledClaims.length, 1, "恢复只按原 claim ID 收敛，不能借用其它 copy 或添加第二个 claim");
@@ -7624,7 +7715,7 @@ async function runCopyAttachmentLifecycle(surface, owners) {
     assert.deepEqual(await readAttachmentSql(surface, "SELECT session_id,thread_id FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", [directory.attachment_id]), []);
     await assert.rejects(stat(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}`), { code: "ENOENT" });
     const reopened = (await ownerApi(surface, `/api/v1/workspace/files/content?${new URLSearchParams({ path: attachment.file_id })}`)).data;
-    assert.equal(reopened.path, attachment.file_id);
+    assertAttachmentRebuildPath(surface, directory.attachment_id, attachment.file_id, reopened.path);
     assert.deepEqual(Buffer.from(reopened.content, "utf8"), buffer, "最后关联解除后仍可经原 URI 重建原件");
     const rebuilt = (await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]))[0];
     assert.deepEqual([rebuilt.attachment_id, rebuilt.relative_locator, rebuilt.availability, rebuilt.release_pending],
@@ -7734,7 +7825,7 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
           url: new URL(`/api/v1/sessions/${source.sessionId}/fork-context`, requestSurface.page.url()).toString(),
           method: "POST", status: rejection.status, pageId: requestPageId, documentId: requestDocumentId,
           requestedAt: requestStartedAt, receivedAt: responseReceivedAt, kind: "fork_context",
-          sessionId: source.sessionId, workspaceHeader: requestSurface.gatewayWorkspaceId,
+          sessionId: source.sessionId, workspaceHeader: requestSurface.workspaceId, targetGatewayHeader: requestSurface.gatewayId,
           requestId: rejection.requestId, body: rejection.body, forkRequest: structuredClone(request),
         });
       } else {
@@ -7774,13 +7865,13 @@ async function runCopyAttachmentDeletionRace(surface, owners) {
     assert.equal((await readAttachmentSql(surface, "SELECT COUNT(*) AS count FROM attachment_directory_associations WHERE attachment_id=? AND state='active'", [directory.attachment_id]))[0].count, 0);
     await assert.rejects(stat(`${source.workspace}/.boxteam/attachments/${directory.relative_locator}`), { code: "ENOENT" });
     const reopened = (await ownerApi(surface, `/api/v1/workspace/files/content?${new URLSearchParams({ path: attachment.file_id })}`)).data;
-    assert.equal(reopened.path, attachment.file_id);
+    assertAttachmentRebuildPath(surface, directory.attachment_id, attachment.file_id, reopened.path);
     assert.deepEqual(Buffer.from(reopened.content, "utf8"), buffer);
     const rebuilt = (await readAttachmentSql(surface, "SELECT * FROM attachment_directories WHERE attachment_id=?", [directory.attachment_id]))[0];
     assert.deepEqual([rebuilt.attachment_id, rebuilt.relative_locator, rebuilt.availability, rebuilt.release_pending],
       [directory.attachment_id, directory.relative_locator, "available", 0]);
     facts.push({ finalizerFirst, sourceSessionId: source.sessionId, sourceThreadId: source.threadId,
-      targetSessionId: target.sessionId, targetThreadId: target.threadId, workspaceId: requestSurface.gatewayWorkspaceId,
+      targetSessionId: target.sessionId, targetThreadId: target.threadId, workspaceId: requestSurface.workspaceId, gatewayId: requestSurface.gatewayId,
       operationId, request: structuredClone(request), requestPageId, requestDocumentId, requestStartedAt,
       response: rejection, successResponse, responseReceivedAt, initialBarrier: initial,
       deletionCatalogBarrier: finalizerFirst ? null : catalogDeleting, deletionCatalogAt,
@@ -7974,7 +8065,7 @@ async function runLiveResourceForks(surface, owners) {
         body: JSON.stringify({ ...sourceRef, retention_scope, title: `${kind} ${retention_scope} fork` }),
       })).data;
       assert.equal(resource.kind, kind);
-      assert.equal(resource.workspace_id, source.workspaceIdentity);
+      assert.equal(resource.workspace_id, source.workspaceId);
       assert.deepEqual(resource.source_thread, sourceRef);
       assert.deepEqual(resource.thread_associations, [sourceRef]);
       assert.equal(resource.reconciliation_status, "verified");
@@ -8453,7 +8544,7 @@ async function runOptionalSeedRevisit(surface) {
       assert.equal(seeds[1].turn.ordinal, 7, "第三个 seed 前必须已完成第七轮");
       historyTiming = { targetTurnId: target.turn_id, events: [] };
       measurement = {
-        owner: { sessionId: input.source.sessionId, threadId: input.source.threadId, workspaceId: input.source.gatewayWorkspaceId },
+        owner: { sessionId: input.source.sessionId, threadId: input.source.threadId, workspaceId: input.source.workspaceId },
         targetTurnId: target.turn_id,
         targetRootLogicalItemOrdinal: target.root_logical_item_ordinal,
         historyTiming,
@@ -9955,16 +10046,16 @@ async function createGeneratedReport(target, label, responses) {
         context: { type_id: "builtin.literal", version: "1", content: "" },
         action: { type_id: "builtin.session_generation", version: "1", generation: {
           generator_type: { type_id: "builtin.agent_prompt", version: "1" },
-          placement: { kind: "workspace", workspace_id: target.workspaceIdentity },
+          placement: { kind: "workspace", workspace_id: target.workspaceId },
           context_source: { kind: "fresh" }, title_template: "生成结果验收", path_template: [],
-          session_strategy: { mode: "fork_new_and_report_back", target: { workspace_id: target.workspaceIdentity, session_id: target.sessionId, thread_id: target.threadId }, concurrency: "queue", report_back: "continue_agent" },
+          session_strategy: { mode: "fork_new_and_report_back", target: { workspace_id: target.workspaceId, session_id: target.sessionId, thread_id: target.threadId }, concurrency: "queue", report_back: "continue_agent" },
           config: { prompt, session_title: "生成结果验收" }, gateway_id: target.gatewayId,
         } },
       },
     }),
   })).data;
   assert.equal(definition.lifecycle, "active");
-  assert.equal(definition.workspace_id, target.workspaceIdentity);
+  assert.equal(definition.workspace_id, target.workspaceId);
   const manualKey = `section8-generated-${target.sessionId}`;
   let run = (await ownerApi(target, `/api/v1/persistent-tasks/${definition.task_id}/checks`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idempotency_key: manualKey, expected_revision: definition.revision }),
@@ -10953,11 +11044,14 @@ async function runSection8Product(browser, primaryPage) {
       const health = await api(page, "/api/gateway/health");
       assert.equal(health.data.gateway_id, node.gateway_id);
       const workspaces = await api(page, "/api/gateway/workspaces");
-      const gatewayWorkspaceId = workspaces.data.active_workspace_id;
-      assert.equal(typeof gatewayWorkspaceId, "string");
-      const workspace = await api(page, "/api/v1/workspace");
-      assert.equal(workspace.data.workspace_id, node.workspace_identity);
-      surfaces[name] = { name, page, gatewayWorkspaceId, workspaceIdentity: node.workspace_identity, gatewayId: node.gateway_id,
+      const expected = { gateway_id: node.gateway_id, workspace_id: node.workspace_id };
+      assert.deepEqual(workspaces.data.active_workspace, expected);
+      assert.equal(workspaces.data.items.filter(item => item.gateway_id === expected.gateway_id
+        && item.workspace_id === expected.workspace_id).length, 1);
+      const surface = { name, page, workspaceId: node.workspace_id, gatewayId: node.gateway_id };
+      const workspace = await ownerApi(surface, "/api/v1/workspace");
+      assert.equal(workspace.data.workspace_id, node.workspace_id);
+      surfaces[name] = { ...surface,
         workspace: node.workspace, uriTemplate: node.uri_template, mcpCatalogs: node.mcp_catalogs,
         backendLog: node.backend_stderr };
     }
@@ -11083,11 +11177,12 @@ async function closeControlledRestartRequestPage(page, window) {
     assert.equal(original.pageId, page.diagnosticId);
     assert.ok(binding.documentIds.includes(original.documentId));
     assert.equal(original.workspaceHeader, window.workspaceId);
+    assert.equal(original.targetGatewayHeader, window.gatewayId);
     assert.ok(original.body?.subscriptions?.length, "重启前冻结的订阅不能为空");
     await waitUntil(() => controlledRestartResponses.some((response) => response.pageId === original.pageId
       && response.documentId === original.documentId && response.url === original.url
       && response.restartWindowId === window.operationId && response.pageRole === "copy-request"
-      && response.status === 200 && response.workspaceHeader === window.workspaceId
+      && response.status === 200 && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
       && response.requestId && response.cdpRequestId
       && response.contentType?.split(";", 1)[0].trim().toLowerCase() === "text/event-stream"
       && response.requestedAt >= window.backendRestart.startedAt
@@ -11101,9 +11196,9 @@ async function closeControlledRestartRequestPage(page, window) {
 
 async function runControlledRestartPageCloseSelfTest() {
   const request = { requestFactId: "close-proof-original", pageId: -1, documentId: 1,
-    url: "http://127.0.0.1:19001/api/v1/workspace/observations/stream", workspaceHeader: "workspace-close",
+    url: "http://127.0.0.1:19001/api/v1/workspace/observations/stream", workspaceHeader: "workspace-close", targetGatewayHeader: "gateway-close",
     body: { subscriptions: [{ subscription_id: "original", kind: "workspace_files" }] } };
-  const window = { operationId: "close-proof-operation", workspaceId: request.workspaceHeader,
+  const window = { operationId: "close-proof-operation", workspaceId: request.workspaceHeader, gatewayId: request.targetGatewayHeader,
     origin: "http://127.0.0.1:19001", backendRestart: { startedAt: 100 },
     pageBindings: [{ pageId: -1, role: "copy-request", documentIds: [1], observationRequests: [request] }] };
   let closed = false;
@@ -11331,6 +11426,8 @@ function classifyConsoleErrors(input = {}) {
       const expectedRead = ["bootstrap", "pending", "breadcrumb", "catalog_children", "main_thread", "session", "file_tree_settings", "goal", "resources", "attachment_content", "job"].includes(refusal.kind) && refusal.method === "GET"
         || refusal.kind === "history" && refusal.method === "POST";
       if (!expectedRead || refusal.status !== status || !refusal.requestId || refusal.body?.request_id !== refusal.requestId
+          || typeof refusal.workspaceHeader !== "string" || !refusal.workspaceHeader
+          || typeof refusal.targetGatewayHeader !== "string" || !refusal.targetGatewayHeader
           || typeof detail !== "string") return null;
       if (refusal.kind === "resources") {
         const url = new URL(refusal.url);
@@ -11354,7 +11451,7 @@ function classifyConsoleErrors(input = {}) {
         if (status !== 404 || detail !== `Job ${refusal.jobId} not found`) return null;
         const responses = jobOwnerResponses.filter((response) => response.pageId === refusal.pageId
           && new URL(response.url).origin === new URL(refusal.url).origin
-          && response.workspaceHeader === refusal.workspaceHeader
+          && (response.workspaceHeader === refusal.workspaceHeader && response.targetGatewayHeader === refusal.targetGatewayHeader)
           && response.receivedAt <= refusal.requestedAt && response.body?.data?.job_id === refusal.jobId);
         const owners = responses.map((response) => {
           const data = response.body?.data;
@@ -11376,7 +11473,7 @@ function classifyConsoleErrors(input = {}) {
       if (status === 409 && (catalogNodeRead || !detail.startsWith("session_deletion_pending:"))) return null;
       const lifecycleProofIndex = deletionProofs.findIndex((proof) => proof.pageId === refusal.pageId
         && proof.documentId === refusal.documentId && proof.origin === new URL(refusal.url).origin
-        && proof.workspaceHeader === refusal.workspaceHeader && proof.terminalRequestId
+        && (proof.workspaceHeader === refusal.workspaceHeader && proof.targetGatewayHeader === refusal.targetGatewayHeader) && proof.terminalRequestId
         && proof.journal.state === "completed" && proof.remaining.length === 0
         && proof.verifiedAt >= refusal.receivedAt
         && (catalogNodeRead ? proof.nodeIds : proof.sessionIds).includes(nodeId)
@@ -11386,9 +11483,10 @@ function classifyConsoleErrors(input = {}) {
               || document.operationId !== proof.operationId
               || proof.journal.subtree_delete_idempotency_key !== proof.operationId
               || document.pageId !== proof.pageId || document.documentId !== proof.documentId
-              || document.origin !== proof.origin || document.workspaceHeader !== proof.workspaceHeader
+              || document.origin !== proof.origin || (document.workspaceHeader !== proof.workspaceHeader || document.targetGatewayHeader !== proof.targetGatewayHeader)
               || !document.sessionIds.includes(nodeId) || !document.owners.some(owner =>
-                document.sessionIds.includes(owner.sessionId) && owner.threadId && owner.routeId === proof.workspaceHeader)
+                document.sessionIds.includes(owner.sessionId) && owner.threadId && owner.workspaceId === proof.workspaceHeader
+                && owner.gatewayId === proof.targetGatewayHeader)
               || !Number.isFinite(document.capturedAt) || !Number.isFinite(refusal.requestedAt)) return false;
           const hidden = lifecycleEvents.find(event => event.kind === "pagehide" && event.pageId === proof.pageId
             && event.documentId === proof.documentId && event.receivedAt >= document.capturedAt);
@@ -11415,6 +11513,8 @@ function classifyConsoleErrors(input = {}) {
     const recoveries = candidates.map((conflict) => {
       const detail = conflict.body?.detail;
       if (conflict.kind !== "history" || conflict.method !== "POST"
+          || typeof conflict.workspaceHeader !== "string" || !conflict.workspaceHeader
+          || typeof conflict.targetGatewayHeader !== "string" || !conflict.targetGatewayHeader
           || !["before", "after"].includes(conflict.parameters?.direction)
           || typeof conflict.parameters?.cursor !== "string" || !conflict.parameters.cursor
           || !Number.isInteger(conflict.parameters?.turns) || conflict.parameters.turns < 1 || conflict.parameters.turns > 256
@@ -11427,10 +11527,12 @@ function classifyConsoleErrors(input = {}) {
           || detail.current_history_view_revision <= detail.cursor_history_view_revision) return null;
       for (const [liveProofIndex, proof] of liveProofs.entries()) {
         if (proof.pageId !== conflict.pageId || proof.documentId !== conflict.documentId || proof.threadId !== conflict.threadId
-            || proof.sessionId !== conflict.sessionId || proof.workspaceId !== conflict.workspaceHeader) continue;
+            || proof.sessionId !== conflict.sessionId || proof.workspaceId !== conflict.workspaceHeader
+            || proof.gatewayId !== conflict.targetGatewayHeader) continue;
         const responses = recoveryFacts.filter((response) => response.pageId === proof.pageId
           && response.documentId === proof.documentId && response.sessionId === proof.sessionId
-          && response.workspaceHeader === proof.workspaceId && response.body?.request_id === response.requestId
+          && response.workspaceHeader === proof.workspaceId && response.targetGatewayHeader === proof.gatewayId
+          && response.body?.request_id === response.requestId
           && response.requestId && response.body.threadId === proof.threadId
           && response.body.projectionEpoch === detail.current_epoch && response.receivedAt <= proof.verifiedAt);
         for (const bootstrap of responses.filter((response) => response.kind === "bootstrap"
@@ -11497,7 +11599,7 @@ async function installPageDiagnostics(page) {
         const request = native.request;
         return request && native.status === 502 && native.serverRequestId === response.requestId
           && native.url === response.url && request.method === response.method
-          && request.documentId === response.documentId && request.workspaceHeader === response.workspaceHeader
+          && request.documentId === response.documentId && (request.workspaceHeader === response.workspaceHeader && request.targetGatewayHeader === response.targetGatewayHeader)
           && Math.abs(native.receivedAt - response.receivedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS;
       });
       if (candidates.length === 1) response.cdpRequestId = candidates[0][0];
@@ -11512,7 +11614,7 @@ async function installPageDiagnostics(page) {
       const candidates = pendingPlaywrightRequests.filter((item) => !item.bound
         && item.fact.pageId === page.diagnosticId && item.fact.documentId === cdpRequest.documentId
         && item.fact.url === cdpRequest.url && item.fact.method === "POST"
-        && item.fact.workspaceHeader === cdpRequest.workspaceHeader
+        && (item.fact.workspaceHeader === cdpRequest.workspaceHeader && item.fact.targetGatewayHeader === cdpRequest.targetGatewayHeader)
         && JSON.stringify(item.fact.body) === JSON.stringify(cdpRequest.body)
         && Math.abs(item.fact.requestedAt - cdpRequest.requestedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
       if (candidates.length !== 1) continue;
@@ -11520,7 +11622,7 @@ async function installPageDiagnostics(page) {
       const reverse = pendingCdpRequests.filter((candidate) => !candidate.bound
         && candidate.documentId === playwrightRequest.fact.documentId
         && candidate.url === playwrightRequest.fact.url
-        && candidate.workspaceHeader === playwrightRequest.fact.workspaceHeader
+        && (candidate.workspaceHeader === playwrightRequest.fact.workspaceHeader && candidate.targetGatewayHeader === playwrightRequest.fact.targetGatewayHeader)
         && JSON.stringify(candidate.body) === JSON.stringify(playwrightRequest.fact.body)
         && Math.abs(candidate.requestedAt - playwrightRequest.fact.requestedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
       if (reverse.length !== 1) continue;
@@ -11607,8 +11709,10 @@ async function installPageDiagnostics(page) {
     cdp.on("Network.requestWillBeSent", (event) => {
       const workspaceHeader = Object.entries(event.request.headers ?? {}).find(([name]) =>
         name.toLowerCase() === "x-boxteam-workspace-id")?.[1] ?? null;
+      const targetGatewayHeader = Object.entries(event.request.headers ?? {}).find(([name]) =>
+        name.toLowerCase() === "x-boxteam-target-gateway-id")?.[1] ?? null;
       cdpNetworkRequests.set(event.requestId, { method: event.request.method,
-        documentId: page.diagnosticDocumentId, workspaceHeader });
+        documentId: page.diagnosticDocumentId, workspaceHeader, targetGatewayHeader });
       if (event.request.method !== "POST" || new URL(event.request.url).pathname !== OBSERVATION_STREAM_PATH) return;
       let body;
       try {
@@ -11620,7 +11724,7 @@ async function installPageDiagnostics(page) {
       }
       pendingCdpRequests.push({ requestId: event.requestId, url: event.request.url, body,
         subscriptions: body.subscriptions,
-        workspaceHeader, documentId: page.diagnosticDocumentId, requestedAt: Date.now(), bound: false });
+        workspaceHeader, targetGatewayHeader, documentId: page.diagnosticDocumentId, requestedAt: Date.now(), bound: false });
       bindObservationRequest();
     });
     cdp.on("Network.responseReceived", (event) => {
@@ -11717,7 +11821,7 @@ page.on("request", (request) => {
   const pageBinding = restartWindow && controlledRestartPageBinding(restartWindow, page.diagnosticId);
   const requestDocument = { requestFactId: `browser-request-${++controlledRestartRequestOrdinal}`,
     pageId: page.diagnosticId, documentId: page.diagnosticDocumentId, requestedAt: Date.now(),
-    url: requestUrl, method: request.method(), workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
+    url: requestUrl, method: request.method(), workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
     restartWindowId: restartWindow?.operationId ?? null, pageRole: pageBinding?.role ?? null };
   requestDocuments.set(request, requestDocument);
   if (request.method() === "POST" && new URL(requestUrl).pathname === OBSERVATION_STREAM_PATH) {
@@ -11772,7 +11876,8 @@ page.on("requestfailed", (request) => {
     ...(streamResponse ? { responseRequestId: streamResponse.requestId, status: streamResponse.status,
       sessionId: streamResponse.sessionId, turnId: streamResponse.turnId, threadId: streamResponse.threadId,
       turnStreamId: streamResponse.turnStreamId, afterSeq: streamResponse.afterSeq,
-      workspaceHeader: streamResponse.workspaceHeader, messageStreamId: streamResponse.messageStreamId } : {}) });
+      workspaceHeader: streamResponse.workspaceHeader, targetGatewayHeader: streamResponse.targetGatewayHeader,
+      messageStreamId: streamResponse.messageStreamId } : {}) });
 });
 page.on("response", (response) => {
   const url = new URL(response.url());
@@ -11788,7 +11893,7 @@ page.on("response", (response) => {
       documentId: requestDocument?.documentId ?? null,
       pageRole: requestDocument?.pageRole ?? pageBinding?.role ?? null,
       requestedAt: requestDocument?.requestedAt ?? null, receivedAt: Date.now(),
-      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
+      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
       requestId: response.headers()["x-request-id"] ?? null,
       contentType: response.headers()["content-type"] ?? null,
       subscriptions: Array.isArray(subscriptions) ? subscriptions : null,
@@ -11826,14 +11931,15 @@ page.on("response", (response) => {
       const requestFact = { requestFactId: requestDocument.requestFactId,
         restartWindowId, url: response.url(), method: request.method(), pageId: page.diagnosticId,
         documentId: requestDocument.documentId, pageRole: pageBinding.role,
-        requestedAt: requestDocument.requestedAt, workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
+        requestedAt: requestDocument.requestedAt, workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
         body: requestBody, bodyText: requestBodyText, ...(requestBodyError ? { bodyError: requestBodyError } : {}) };
       const responseFact = controlledRestartResponses.find((candidate) => candidate.requestFactId === requestDocument.requestFactId)
         ?? { requestFactId: requestDocument.requestFactId,
         restartWindowId, url: response.url(), method: request.method(), status: response.status(), pageId: page.diagnosticId,
         documentId: requestDocument.documentId, pageRole: pageBinding.role, requestedAt: requestDocument.requestedAt,
         receivedAt: Date.now(), requestId: responseHeaders["x-request-id"] ?? null,
-        bodyRequestId: null, body: null, workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null };
+        bodyRequestId: null, body: null, workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
+        targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null };
       const existingRequest = controlledRestartRequests.find((candidate) => candidate.requestFactId === requestFact.requestFactId);
       if (existingRequest) {
         // 同一真实请求可能在窗口前发出；用已核对页面/文档的 502 响应补齐其中断归属。
@@ -11877,7 +11983,7 @@ page.on("response", (response) => {
       threadId: streamTarget.threadId,
       turnStreamId: streamTarget.turnStreamId,
       afterSeq: streamTarget.afterSeq,
-      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
+      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
       requestId: responseHeaders["x-request-id"] ?? null,
       messageStreamId: responseHeaders["x-message-stream-id"] ?? null,
       headers: {
@@ -11929,7 +12035,7 @@ page.on("response", (response) => {
       attachmentFileId: attachmentContent ? url.searchParams.get("file_id") : null,
       threadId: history?.[3] ?? admission?.[2] ?? null,
       parameters: historyKind === "history" && request.method() === "POST" ? request.postDataJSON() : null,
-      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null,
+      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
       requestId: response.headers()["x-request-id"] ?? null,
       receivedAt: Date.now() };
     if (fact.kind === "fork_context" && request.method() === "POST") {
@@ -11961,7 +12067,7 @@ page.on("response", (response) => {
       navigationResponses.push(existing);
     } else {
     const fact = { url: response.url(), method: response.request().method(), status: response.status(),
-      workspaceHeader: response.request().headers()["x-boxteam-workspace-id"] ?? null,
+      workspaceHeader: response.request().headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: response.request().headers()["x-boxteam-target-gateway-id"] ?? null,
       requestId: response.headers()["x-request-id"] ?? null, receivedAt: Date.now() };
     navigationResponses.push(fact);
     diagnosticResponseFacts.set(response.request(), fact);
@@ -12008,19 +12114,26 @@ const result = {
 };
 
 function runRestoredThreadOwnersSelfTest() {
-  const window = { origin: "http://127.0.0.1:19000", workspaceId: "route-a", backendWorkspaceId: "workspace-a" };
+  const window = { origin: "http://127.0.0.1:19000", gatewayId: "gateway-a", workspaceId: "workspace-a" };
+  assert.deepEqual(workspaceHeaders(window), {
+    "X-BoxTeam-Target-Gateway-Id": "gateway-a", "X-BoxTeam-Workspace-Id": "workspace-a",
+  });
+  assert.notEqual(workspaceSelectionKey(window), workspaceSelectionKey({ ...window, gatewayId: "gateway-b" }));
   const response = { kind: "bootstrap", status: 200, requestId: "bootstrap-request", sessionId: "session-a",
-    workspaceHeader: "route-a", url: window.origin + "/api/v1/sessions/session-a/bootstrap?thread_id=thread-a",
+    workspaceHeader: "workspace-a", targetGatewayHeader: "gateway-a",
+    url: window.origin + "/api/v1/sessions/session-a/bootstrap?thread_id=thread-a",
     body: { request_id: "bootstrap-request", sessionId: "session-a", threadId: "thread-a", workspaceId: "workspace-a" } };
-  const expected = [{ routeId: "route-a", workspaceId: "workspace-a", sessionId: "session-a", threadId: "thread-a" }];
+  const expected = [{ gatewayId: "gateway-a", workspaceId: "workspace-a", sessionId: "session-a", threadId: "thread-a" }];
   assert.deepEqual(restoredThreadOwners(["thread-a", "thread-a"], [response, response], window), expected);
   assert.deepEqual(restoredThreadOwners([], [response], window), [], "没有实际 Tab 的响应不能加入重启归属");
-  assert.deepEqual(restoredThreadOwners(["thread-a"], [{ ...response, workspaceHeader: "route-b" }], window), [],
-    "其它 Gateway 路由的真实 Tab 不能加入当前工作区");
+  assert.deepEqual(restoredThreadOwners(["thread-a"], [{ ...response, targetGatewayHeader: "gateway-b" }], window), [],
+    "相同 UUID 在其它 Gateway 的真实 Tab 不能加入当前 owner");
+  assert.deepEqual(restoredThreadOwners(["thread-a"], [{ ...response, workspaceHeader: "workspace-b",
+    body: { ...response.body, workspaceId: "workspace-b" } }], window), [], "同 Gateway 的其它工作区不能加入当前 owner");
   for (const invalid of [{ status: 502 }, { kind: "history" }, { requestId: null },
     { url: "http://127.0.0.1:19001/api/v1/sessions/session-a/bootstrap" },
     { body: { ...response.body, request_id: "other" } }, { body: { ...response.body, sessionId: "other" } },
-    { body: { ...response.body, workspaceId: "other" } },
+    { body: { ...response.body, workspaceId: "other" } }, { targetGatewayHeader: null },
   ]) assert.throws(() => restoredThreadOwners(["thread-a"], [{ ...response, ...invalid }], window));
   assert.throws(() => restoredThreadOwners(["thread-a"], [response,
     { ...response, sessionId: "session-b", body: { ...response.body, sessionId: "session-b" } }], window),
@@ -12032,9 +12145,10 @@ function runDeletionReadClassifierSelfTest() {
   const url = `http://127.0.0.1:19000/api/v1/sessions/${sessionId}`;
   const text = "Failed to load resource: the server responded with a status of 409 (Conflict)";
   const refusal = { url, pageId: 7, documentId: 8, kind: "session", method: "GET", status: 409,
-    sessionId, workspaceHeader: "workspace-a", requestId: "request-refused", receivedAt: 100,
+    sessionId, workspaceHeader: "workspace-a", targetGatewayHeader: "gateway-a", requestId: "request-refused", receivedAt: 100,
     body: { request_id: "request-refused", detail: `session_deletion_pending: session_id='${sessionId}', state='deleting'` } };
-  const proof = { pageId: 7, documentId: 8, origin: new URL(url).origin, workspaceHeader: "workspace-a", terminalRequestId: "request-terminal",
+  const proof = { pageId: 7, documentId: 8, origin: new URL(url).origin, workspaceHeader: "workspace-a",
+    targetGatewayHeader: "gateway-a", terminalRequestId: "request-terminal",
     journal: { state: "completed" }, remaining: [], verifiedAt: 200, sessionIds: [sessionId],
     nodeIds: [sessionId], absentDomNodeIds: [sessionId], absentChatSessionIds: [sessionId], operationId: "delete-op" };
   const classify = (response = refusal, proofs = [proof], errors = [{ index: 0, url, text, pageId: 7, documentId: 8 }], lifecycleEvents = []) => classifyConsoleErrors({
@@ -12049,6 +12163,10 @@ function runDeletionReadClassifierSelfTest() {
   assert.deepEqual(classify(refusal, []).unhandledConsoleErrors, [text], "缺少删除终态不得忽略409");
   assert.deepEqual(classify(refusal, [{ ...proof, remaining: [sessionId] }]).unhandledConsoleErrors, [text]);
   assert.deepEqual(classify(refusal, [{ ...proof, workspaceHeader: "workspace-other" }]).unhandledConsoleErrors, [text]);
+  assert.deepEqual(classify(refusal, [{ ...proof, targetGatewayHeader: "gateway-other" }]).unhandledConsoleErrors, [text],
+    "相同 UUID 在其它 Gateway 的删除证明不能释放当前读取");
+  assert.deepEqual(classify({ ...refusal, targetGatewayHeader: null }, [{ ...proof, targetGatewayHeader: null }])
+    .unhandledConsoleErrors, [text], "缺少 Gateway 的响应与删除证明不能证明完整 owner");
   for (const identity of [{ pageId: 9 }, { documentId: 9 }]) {
     assert.deepEqual(classify(refusal, [{ ...proof, ...identity }]).unhandledConsoleErrors, [text],
       "删除证明不能借用另一页面或文档的 DOM／标签收敛结果");
@@ -12062,8 +12180,8 @@ function runDeletionReadClassifierSelfTest() {
     receipt: { state: "committed", settlement: "settled" },
     journal: { ...proof.journal, subtree_delete_idempotency_key: proof.operationId },
     closedDocument: { pageId: 7, documentId: 8, operationId: proof.operationId,
-      origin: proof.origin, workspaceHeader: "workspace-a", capturedAt: 120, sessionIds: [sessionId],
-      owners: [{ routeId: "workspace-a", workspaceId: "backend-a", sessionId, threadId: "thread-a" }] } };
+      origin: proof.origin, workspaceHeader: "workspace-a", targetGatewayHeader: "gateway-a", capturedAt: 120, sessionIds: [sessionId],
+      owners: [{ gatewayId: "gateway-a", workspaceId: "workspace-a", sessionId, threadId: "thread-a" }] } };
   const closedEvents = [{ kind: "pagehide", pageId: 7, documentId: 8, receivedAt: 130, observationOrder: 1 },
     { kind: "closed", pageId: 7, documentId: 8, receivedAt: 140, observationOrder: 2 }];
   const closedRefusal = { ...refusal, requestedAt: 90 };
@@ -12075,7 +12193,7 @@ function runDeletionReadClassifierSelfTest() {
     { journal: { ...closedProof.journal, subtree_delete_idempotency_key: "another-op" } },
     { verifiedAt: 139 }, { remaining: [sessionId] },
     ...[{ pageId: 9 }, { documentId: 9 }, { operationId: "another-op" },
-      { origin: "http://127.0.0.1:19001" }, { workspaceHeader: "other-workspace" },
+      { origin: "http://127.0.0.1:19001" }, { workspaceHeader: "other-workspace" }, { targetGatewayHeader: "other-gateway" },
       { owners: [] }, { sessionIds: [] }, { capturedAt: 131 }]
       .map(change => ({ closedDocument: { ...closedProof.closedDocument, ...change } })),
   ]) assert.deepEqual(classifyClosed(changes), [text]);
@@ -12097,7 +12215,7 @@ function runDeletionReadClassifierSelfTest() {
     for (const invalid of [
       { ...response, method: "POST" }, { ...response, kind: null }, { ...response, status: 500 },
       { ...response, sessionId: "ses_other" }, { ...response, pageId: 9 }, { ...response, documentId: 9 },
-      { ...response, workspaceHeader: "workspace-other" }, { ...response, requestId: null },
+      { ...response, workspaceHeader: "workspace-other" }, { ...response, targetGatewayHeader: "gateway-other" }, { ...response, requestId: null },
       { ...response, body: undefined }, { ...response, body: { ...response.body, request_id: "other-request" } },
       { ...response, body: { ...response.body, detail: `会话物理目录缺失: ${sessionId}` } },
     ]) assert.deepEqual(classify(invalid, [proof], [error]).unhandledConsoleErrors, [error.text]);
@@ -12218,7 +12336,8 @@ try {
   result.startupGraphEvents = startupEvents.filter((event) => GRAPH_PHASES.has(event.phase));
   await ensureGuest(page);
   const workspaces = await api(page, "/api/gateway/workspaces");
-  assert.equal(workspaces?.data?.active_workspace_id, expectedWorkspaceId, "active workspace 不一致");
+  assert.deepEqual(workspaces?.data?.active_workspace,
+    { gateway_id: expectedGatewayId, workspace_id: expectedWorkspaceId }, "active workspace owner 不一致");
 
 
   result.section8Mode = section8Selection.mode;

@@ -85,15 +85,21 @@ async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine
         decoy.write_bytes(originals[decoy])
     registered = await source.client.get("/api/gateway/workspaces")
     assert registered.status_code == 200, registered.text
-    routes = {row["backend_workspace_id"]: row["workspace_id"] for row in registered.json()["data"]["items"]}
-    switched = await source.client.post(f"/api/gateway/workspaces/{routes[nodes['b'].workspace_id]}/activate")
+    owners = {(row["gateway_id"], row["workspace_id"]) for row in registered.json()["data"]["items"]}
+    assert {(node.gateway_id, node.workspace_id) for node in nodes.values()} <= owners
+    selected = nodes["b"]
+    switched = await source.client.post(f"/api/gateway/workspaces/{selected.workspace_id}/activate",
+        headers={"X-BoxTeam-Target-Gateway-Id": selected.gateway_id})
     assert switched.status_code == 200, switched.text
+    selected_owner = {"gateway_id": selected.gateway_id, "workspace_id": selected.workspace_id}
+    assert switched.json()["data"]["active_workspace"] == selected_owner
     endpoint = f"/api/v1/workspaces/{target.workspace_id}/workspace/files/content"
     evidence = []
 
     async def request(method, path, *, status=200, body=None):
         response = await source.client.request(method, endpoint, params={"path": path}, json=body,
-            headers={"X-BoxTeam-Workspace-Id": routes[nodes["b"].workspace_id]})
+            headers={"X-BoxTeam-Target-Gateway-Id": target.gateway_id,
+                     "X-BoxTeam-Workspace-Id": target.workspace_id})
         assert response.status_code == status, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
         for node in nodes.values():
@@ -102,6 +108,14 @@ async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine
         evidence.append({"method": method, "status": status, "response": response.json()})
         return response.json().get("data")
 
+    conflict = await source.client.get(endpoint, params={"path": relative}, headers={
+        "X-BoxTeam-Target-Gateway-Id": target.gateway_id, "X-BoxTeam-Workspace-Id": selected.workspace_id,
+    })
+    assert conflict.status_code == 400, conflict.text
+    assert conflict.json()["detail"] == "路径与请求头的工作区 UUID 不一致"
+    assert conflict.headers["X-Request-ID"] == conflict.json()["request_id"]
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    evidence.append({"method": "GET", "status": 400, "response": conflict.json()})
     values = (relative, str(native), uri)
     reads = [await request("GET", value) for value in values]
     assert all(read["path"] == uri and read["content"] == "c OWNER Ω\n" for read in reads)
@@ -138,6 +152,9 @@ async def test_remote_file_api_resolves_native_and_uri_targets_on_target_machine
     for path, content in originals.items():
         if path != native:
             assert path.read_bytes() == content
+    final_registry = await source.client.get("/api/gateway/workspaces", params={"check_health": False})
+    assert final_registry.status_code == 200, final_registry.text
+    assert final_registry.json()["data"]["active_workspace"] == selected_owner
     assert not case.requests()
     (artifacts / "native-file-target-routing.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -195,10 +212,11 @@ async def test_native_file_uri_events(
     external_uri = references[3]
     assert parse_resource_uri(external_uri).scope_id == case.gateway_id
     values = ("src/" + file.name, str(file), uri)
-    for value in values:
-        content = checked(await case.client.get("/api/v1/workspace/files/content", params={"path": value}))
-        assert (content["path"], content["content"]) == (uri, file.read_bytes().decode("utf-8"))
-    revision = content["revision"]
+    contents = [checked(await case.client.get("/api/v1/workspace/files/content", params={"path": value}))
+                for value in values]
+    assert all((content["path"], content["content"]) == (uri, file.read_bytes().decode("utf-8"))
+               for content in contents)
+    revision = contents[-1]["revision"]
     for index, value in enumerate(values):
         saved_text = f"三种输入实际保存 {index} Ω\n"
         saved = checked(await case.client.put("/api/v1/workspace/files/content", params={"path": value}, json={

@@ -43,7 +43,7 @@ async function withTransport(callback, asset = async target => page(target.uri))
       const event = { sequence: ++sequence, request_id: id, type, ...payload };
       frames.push(`id: ${sequence}\nevent: search\ndata: ${JSON.stringify(event)}\n\n`);
     };
-    emit('scope', { scope: { scope, branches: scope.owners.map(owner => ({ owner, state: 'registered', target_id: owner.workspace_id })) } });
+    emit('scope', { scope: { scope, branches: scope.owners.map(owner => ({ owner, state: 'registered' })) } });
     for (const q of request.queries) for (const item of q.file_targets) {
       const branch = { owner: item.owner, category: 'file', operation: q.operation, resource_uri: item.target.uri };
       const selected = request.continuations.find(c => JSON.stringify(c.branch) === JSON.stringify(branch));

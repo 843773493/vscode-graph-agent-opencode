@@ -86,10 +86,14 @@ async def test_navigation_keeps_target_across_activation_reconnect_and_read_fail
             "gateway_id": target.gateway_id, "workspace_id": target.workspace_id}
         registry = await source.client.get("/api/gateway/workspaces")
         assert registry.status_code == 200, registry.text
-        routes = {row["backend_workspace_id"]: row["workspace_id"] for row in registry.json()["data"]["items"]}
-        switched = await source.client.post(f"/api/gateway/workspaces/{routes[other.workspace_id]}/activate")
+        registered = {(row["gateway_id"], row["workspace_id"]) for row in registry.json()["data"]["items"]}
+        assert {(node.gateway_id, node.workspace_id) for node in nodes.values()} <= registered
+        switched = await source.client.post(f"/api/gateway/workspaces/{other.workspace_id}/activate",
+            headers={"X-BoxTeam-Target-Gateway-Id": other.gateway_id})
         assert switched.status_code == 200, switched.text
-        assert switched.json()["data"]["active_workspace_id"] == routes[other.workspace_id]
+        assert switched.json()["data"]["active_workspace"] == {
+            "gateway_id": other.gateway_id, "workspace_id": other.workspace_id,
+        }
         active = await source.client.get("/api/v1/workspace")
         assert active.status_code == 200 and active.json()["data"]["workspace_id"] == other.workspace_id
     finally:
@@ -100,7 +104,8 @@ async def test_navigation_keeps_target_across_activation_reconnect_and_read_fail
     # 新 channel 仍属于原 Gateway；旧 cursor 继续同一目录，而非当前激活的 B。
     channel_before = _channel(source, target.gateway_id)
     assert len(channel_before) == 1
-    reconnected = await source.client.post(f"/api/gateway/workspaces/{routes[target.workspace_id]}/reconnect")
+    reconnected = await source.client.post(f"/api/gateway/workspaces/{target.workspace_id}/reconnect",
+        headers={"X-BoxTeam-Target-Gateway-Id": target.gateway_id})
     assert reconnected.status_code == 200, reconnected.text
     await _wait(lambda: len(_channel(source, target.gateway_id)) == 1
         and _channel(source, target.gateway_id) != channel_before)

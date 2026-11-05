@@ -317,14 +317,21 @@ async def test_conversation_lifecycle_through_real_workbench(
             await acquire_gateway_guest(client)
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            workspace_id = workspaces.json()["data"]["active_workspace_id"]
-            assert isinstance(workspace_id, str) and workspace_id
+            active_workspace = workspaces.json()["data"]["active_workspace"]
+            assert active_workspace == {"gateway_id": node.gateway_id, "workspace_id": node.workspace_id}
+            assert len([
+                item for item in workspaces.json()["data"]["items"]
+                if (item["gateway_id"], item["workspace_id"]) == (node.gateway_id, node.workspace_id)
+            ]) == 1, "活动 owner 必须属于唯一真实登记的 Gateway／工作区"
+            workspace_id = active_workspace["workspace_id"]
+            gateway_id = active_workspace["gateway_id"]
 
         environment = os.environ.copy()
         environment.update(
             {
                 "BOXTEAM_BROWSER_BASE_URL": str(node.client.base_url).rstrip("/"),
                 "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
+                "BOXTEAM_BROWSER_GATEWAY_ID": gateway_id,
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
                 "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,
@@ -333,7 +340,7 @@ async def test_conversation_lifecycle_through_real_workbench(
                 "TMP": section8_browser_temporary_directory,
                 "TEMP": section8_browser_temporary_directory,
                 "BOXTEAM_BROWSER_NODES": json.dumps({
-                    name: {"base_url": str(peer.client.base_url).rstrip("/"), "workspace_identity": peer.workspace_id,
+                    name: {"base_url": str(peer.client.base_url).rstrip("/"), "workspace_id": peer.workspace_id,
                            "gateway_id": peer.gateway_id, "workspace": str(peer.workspace),
                            "backend_stderr": str(peer.backend.stderr_file.name),
                            "uri_template": session_resource_uri(peer.workspace_id, "__SESSION__", gateway_authority=peer.gateway_id),
@@ -814,6 +821,7 @@ async def test_conversation_lifecycle_through_real_workbench(
             assert connection["status"] == 200
             assert connection["requestId"] and connection["cdpRequestId"]
             assert connection["workspaceHeader"] == workspace_id
+            assert connection["targetGatewayHeader"] == gateway_id
             subscription, = (
                 item for item in connection["subscriptions"]
                 if item["subscription_id"] == connection["subscriptionId"]
@@ -825,6 +833,7 @@ async def test_conversation_lifecycle_through_real_workbench(
             assert connection["sessionId"] == result["sessionId"]
             assert connection["threadId"] == result["threadId"]
             assert connection["workspaceHeader"] == workspace_id
+            assert connection["targetGatewayHeader"] == gateway_id
         assert result["persisted"]["llmRequestCount"] == 4
     except subprocess.TimeoutExpired as error:
         error.add_note(f"浏览器实时输出: {browser_stdout_path}; {browser_stderr_path}; 阶段: {phase_path}")

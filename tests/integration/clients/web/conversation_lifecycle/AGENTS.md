@@ -15,7 +15,7 @@ Section 8 完整会话生命周期的唯一 Python owner、浏览器驱动和独
 
 - Python owner、focus CLI及诊断自检统一通过Node／`--expose-gc`执行唯一MJS驱动；矩阵和依赖仍使用Bun。Bun/JSC在同一4GiB数据段保护下预留大量可写映射，不能以扩大上限、缩小完整场景或自动运行时回退掩盖失败。导航operation及barrier身份统一使用既有受控identifier工厂的独立namespace，保留UUIDv7格式；只在诊断内存自检中显式GC。
 - `section8_ports` 仅在本文件获分配的端口块内平移服务布局，持续持有同一组租约并将选定布局传给三工作区装具；只跳过真实地址占用，保留探测记录，不终止已有监听者或扩展端口块边界。
-- Gateway 崩溃回执核对 `gatewayWorkspaceId` 路由身份，不读取已删除的 `workspaceId` 字段；失败诊断通过日志路径取大小，必须支持故意重启后已关闭的旧日志句柄，不能覆盖原浏览器失败。
+- 活动选择消费公开 `active_workspace` 的 `(gateway_id, workspace_id)`，业务请求同时携带原 UUID 与 `X-BoxTeam-Target-Gateway-Id`；目录节点和 outbox 按完整 owner 索引，不再保存路由／业务双 ID。恢复 Tab 的真实 bootstrap 正文须与 UUID 请求头相等，并核同目标 Gateway；相同 UUID 的其它 Gateway 不能混入。Gateway 崩溃回执仍核原 UUID；失败诊断通过日志路径取大小，支持故意重启后已关闭的旧日志句柄，不能覆盖原浏览器失败。
 - 正式工作区与产物镜像本测试路径；控制端、配置、临时目录和日志按 run／node 隔离。
 - 长流程诊断正文按原响应的 X-Request-ID、URL、方法及状态绑定 CDP request，等原请求完整结束后读取；不得用额外 HTTP 请求补造正文，也不得让 Playwright 长期缓存完整历史。读取失败仍记录在原 fact，保留 owner 与错误分类断言。
 - CDP 在途请求在收到响应或失败时释放；响应表只保留业务 API 和仍需原始正文归因的 502，不累计成功静态资源。页面错误、请求失败和 console 错误仍完整审计，不能按资源类型忽略未知错误。
