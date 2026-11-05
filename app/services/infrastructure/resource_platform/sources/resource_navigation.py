@@ -90,6 +90,15 @@ class SearchPosition(NamedTuple):
     prefix: str
 
 
+FileEntryIdentity = tuple[tuple[str, ...], tuple[str, ...]]
+
+
+def _entry_identity(path: Path, resolved: Path) -> FileEntryIdentity:
+    # 原生解析确认实际大小写；逻辑入口另行保留，防止链接与目标被自行合并。
+    # normcase 仅消除入口的拼写差异，不能越过第一项的原生文件系统判断。
+    return resolved.parts, tuple(os.path.normcase(part) for part in path.parts)
+
+
 def _resolve_path(path: Path) -> Path:
     try:
         return path.resolve()
@@ -271,7 +280,7 @@ class ResourceNavigation:
         path = self._contained(root, children, parsed)
         excluded = self._excluded_resources(parsed, options.excluded_resource_uris, gateway_id, root, path, deadline)
         subtrees = self._excluded_resources(parsed, options.excluded_subtree_uris, gateway_id, root, path, deadline)
-        if path.parts in subtrees:
+        if _entry_identity(root.joinpath(*children), path) in subtrees:
             raise ResourceUriResolveError("scope_mismatch", "独立查询子树必须严格位于当前查询根以内")
         node = self._node(parsed, path, include_stat=request.operation == "describe")
         if request.operation not in node.operations:
@@ -460,9 +469,9 @@ class ResourceNavigation:
 
     @staticmethod
     def _excluded_resources(parsed: ParsedResourceUri, uris: tuple[str, ...], gateway_id: str,
-                            root: Path, query_path: Path, deadline: float) -> frozenset[tuple[str, ...]]:
-        query_parts = query_path.parts
-        excluded: set[tuple[str, ...]] = set()
+                            root: Path, query_path: Path, deadline: float) -> frozenset[FileEntryIdentity]:
+        query_parts, query_entry = _entry_identity(root.joinpath(*parsed.tail_segments[1:]), query_path)
+        excluded: set[FileEntryIdentity] = set()
         for uri in uris:
             ResourceNavigation._check_deadline(deadline)
             target = parse_resource_uri(uri, local_gateway_id=gateway_id)
@@ -470,33 +479,33 @@ class ResourceNavigation:
                 parsed.scope, parsed.scope_id, parsed.kind, parsed.gateway_authority,
             ) or target.tail_segments[0] != parsed.tail_segments[0]:
                 raise ResourceUriResolveError("scope_mismatch", "排除资源不属于本次文件查询根")
-            # 复用目标文件 owner 的原生解析；字符串段保留解析后的真实大小写，
-            # 不使用 WindowsPath 的全局忽略大小写比较，也不按 inode 合并硬链接。
-            parts = _resolve_path(root.joinpath(*target.tail_segments[1:])).parts
-            if parts[:len(query_parts)] != query_parts:
+            path = root.joinpath(*target.tail_segments[1:])
+            identity = _entry_identity(path, _resolve_path(path))
+            parts, entry = identity
+            if parts[:len(query_parts)] != query_parts or entry[:len(query_entry)] != query_entry:
                 raise ResourceUriResolveError("scope_mismatch", "排除资源不属于本次文件查询根")
-            excluded.add(parts)
+            excluded.add(identity)
         return frozenset(excluded)
 
     def _search_items(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-        excluded: frozenset[tuple[str, ...]], subtrees: frozenset[tuple[str, ...]], resume: SearchPosition,
+        excluded: frozenset[FileEntryIdentity], subtrees: frozenset[FileEntryIdentity], resume: SearchPosition,
         is_private: Callable[[Path], bool] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, ContentMatch | None, SearchPosition]]:
         path = self._contained(root, children, parsed)
-        candidates = self._walk(root, children, parsed, request, deadline, subtrees, is_private) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path)), path),))
+        candidates = self._walk(root, children, parsed, request, deadline, subtrees, is_private) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path)), _entry_identity(root.joinpath(*children), path)),))
         root_stat = path.stat()
         prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
         prefix_checked = not resume.prefix
         index = 0
         # TODO：目录前缀仍逐页观察；64 文件小页实测见 test_content_cursor_skips_completed_file_bodies。
         # 后续复用须沿原 watcher/cacheKey 生命周期，不能缓存另一份权威目录或绕过重启续页校验。
-        for child, metadata, child_path in candidates:
+        for child, metadata, identity in candidates:
             self._check_deadline(deadline)
             if request.search_options is not None and request.search_options.files_only and child.resource_shape != "file":
                 continue
-            if child_path.parts in excluded:
+            if identity in excluded:
                 continue
             index += 1
             # 文件观察值和 ignore 版本足以识别可变前缀；不重复序列化每条命中正文。
@@ -643,9 +652,9 @@ class ResourceNavigation:
 
     def _walk(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
-        request: ResourceNavigationRequest, deadline: float, subtrees: frozenset[tuple[str, ...]],
+        request: ResourceNavigationRequest, deadline: float, subtrees: frozenset[FileEntryIdentity],
         is_private: Callable[[Path], bool] | None,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, Path]]:
+    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, FileEntryIdentity]]:
         pending: list[tuple[tuple[str, ...], IgnoreScope | None]] = [(children, None)]
         visited: set[Path] = set()
         scanned = 0
@@ -702,7 +711,8 @@ class ResourceNavigation:
                     tail_segments=(parsed.tail_segments[0], *child_parts),
                 )
                 # 子根由自己的分支应用相对过滤及 ignore，不进入父根的扫描／输出配额。
-                if subtrees and _resolve_path(child).parts in subtrees:
+                entry_path = root.joinpath(*child_parts)
+                if subtrees and _entry_identity(entry_path, _resolve_path(child)) in subtrees:
                     continue
                 # 私有筛选复用本次根；真正输出节点仍由 _contained 重核访问。
                 if is_private is not None and is_private(child):
@@ -722,7 +732,7 @@ class ResourceNavigation:
                 child_path = self._contained(root, child_parts, parsed)
                 child_node = self._node(parse_resource_uri(uri), child_path)
                 # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
-                yield child_node, FileObservation(self._stat(child_path), scope.version if scope is not None else ()), child_path
+                yield child_node, FileObservation(self._stat(child_path), scope.version if scope is not None else ()), _entry_identity(entry_path, child_path)
                 if request.operation == "search" and child_node.resource_shape == "directory":
                     pending.append((child_parts, scope))
             if request.operation == "list":

@@ -457,7 +457,7 @@ async def test_scan_budget_stops_enumeration_before_sorting_all_files(navigation
             finally:
                 closed.append(True)
 
-    monkeypatch.setattr(resource_navigation, "os", SimpleNamespace(scandir=counted))
+    monkeypatch.setattr(resource_navigation.os, "scandir", counted)
     with pytest.raises(ResourceFileOperationError) as failure:
         await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode=search_mode, query="missing", scan_limit=3), local_gateway_id=GATEWAY_ID)
     assert (failure.value.code, failure.value.reason) == ("output_limit_exceeded", "scan_limit")

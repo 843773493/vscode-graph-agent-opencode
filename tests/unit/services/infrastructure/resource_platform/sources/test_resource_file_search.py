@@ -350,6 +350,42 @@ async def test_coverage_keeps_distinct_hardlink_paths(navigation_case):
     assert not page.truncated and page.next_cursor is None
 
 
+@pytest.fixture
+def symbolic_link():
+    def create(target: Path, link: Path) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=target.is_dir())
+        except OSError as error:
+            if os.name == "nt" and error.winerror == 1314:
+                pytest.skip("Windows 目标未授予创建符号链接权限")
+            raise
+    return create
+
+
+@pytest.mark.parametrize("field", ["excluded_resource_uris", "excluded_subtree_uris"])
+async def test_coverage_keeps_symbolic_link_entry_separate_from_target(navigation_case, symbolic_link, field):
+    owner, workspace, uri = navigation_case
+    target = workspace / "target.txt"
+    target.write_text("needle", encoding="utf-8")
+    symbolic_link(target, workspace / "alias.txt")
+    page = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle", limit=1,
+        search_options=ResourceNavigationSearchOptions.model_validate({field: [uri + "/alias.txt"]})), local_gateway_id=GATEWAY_ID)
+    assert [hit.uri for hit in page.matches] == [uri + "/target.txt"]
+    assert not page.truncated and page.next_cursor is None
+
+
+async def test_coverage_cannot_reach_query_root_through_another_entry(navigation_case, symbolic_link):
+    owner, workspace, uri = navigation_case
+    target = workspace / "target"
+    target.mkdir()
+    (target / "covered.txt").write_text("needle", encoding="utf-8")
+    symbolic_link(target, workspace / "alias")
+    with pytest.raises(ResourceUriResolveError) as failure:
+        await owner.navigate(ResourceNavigationRequest(uri=uri + "/target", operation="search", search_mode="content", query="needle",
+            search_options=ResourceNavigationSearchOptions(excluded_resource_uris=(uri + "/alias/covered.txt",))), local_gateway_id=GATEWAY_ID)
+    assert failure.value.reason_code == "scope_mismatch"
+
+
 def test_coverage_is_a_canonical_uri_set_only_for_content_queries():
     uri = "boxteam://workspace/ws/resources/files/root/a.txt"
     request = ResourceNavigationRequest(uri=uri, operation="search", search_mode="content", query="needle",
