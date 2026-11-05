@@ -132,8 +132,9 @@ class SkillCatalogMixin:
 
         def register_skill_catalog(self, snapshot: SkillCatalogActivationSnapshot) -> None:
             """来源按原顺序登记一次；同名新 entry 保留原 tracked registration。"""
-            for binding in snapshot.sources.values():
-                self.register(_skill_descriptor(binding), binding_revision=snapshot.catalog_revision)
+            descriptors = tuple(_skill_descriptor(binding) for binding in snapshot.sources.values())
+            if descriptors:
+                self.register(*descriptors, binding_revision=snapshot.catalog_revision)
             # entries 已包含在 sources 中；仅重排名称索引，不重复读取 rebuild 或持久控制状态。
             for binding in snapshot.entries.values():
                 self._install_registration(self._sources[f"skill:{binding.entry_identity}"])
@@ -180,6 +181,7 @@ class SkillCatalogMixin:
                 binding = activation_snapshot.entries.get(normalized)
                 if binding is None:
                     raise KeyError(f"Skill 不存在: name={normalized}")
+                self.refresh_context_rebuild_state()
                 state = self._registration_candidate(_skill_descriptor(binding), activation_snapshot.catalog_revision)
                 source_id = state.source_id
             else:

@@ -96,7 +96,7 @@ class SourceRegistryMixin:
         def register(
             self,
             descriptor: ContextSourceDescriptor,
-            *,
+            *additional_descriptors: ContextSourceDescriptor,
             binding_revision: str | None = None,
             tracking_status: ContextSourceTrackingStatus = "untracked",
         ) -> None:
@@ -110,15 +110,6 @@ class SourceRegistryMixin:
             revision 提供 ``binding_revision``，表示目录/来源绑定版本；它不同于
             observation 产生的来源内容 ``latest_revision``，不得将两者互相冒充。
             """
-            state = self._registration_candidate(descriptor, binding_revision, tracking_status)
-            self._persist_control_state(state, operation="register")
-            self._install_registration(state)
-
-        def _registration_candidate(
-            self, descriptor: ContextSourceDescriptor, binding_revision: str | None,
-            tracking_status: ContextSourceTrackingStatus = "untracked",
-        ) -> SourceState:
-            """准备目录绑定；只有成功 mutation 才安装名称索引与 registration。"""
             if binding_revision is not None and (
                 not isinstance(binding_revision, str) or not binding_revision
             ):
@@ -128,7 +119,18 @@ class SourceRegistryMixin:
                     "register.tracking_status 只能是 tracked 或 untracked: "
                     f"{tracking_status!r}"
                 )
+            # 同批目录只在入口对齐 rebuild；各来源仍独立校验 descriptor 并持久化控制状态。
             self.refresh_context_rebuild_state()
+            for candidate_descriptor in (descriptor, *additional_descriptors):
+                state = self._registration_candidate(candidate_descriptor, binding_revision, tracking_status)
+                self._persist_control_state(state, operation="register")
+                self._install_registration(state)
+
+        def _registration_candidate(
+            self, descriptor: ContextSourceDescriptor, binding_revision: str | None,
+            tracking_status: ContextSourceTrackingStatus = "untracked",
+        ) -> SourceState:
+            """从已对齐的控制状态准备绑定；成功 mutation 后才安装 registration。"""
             state = self._sources.get(descriptor.source_id)
             if state is None:
                 state = SourceState(
