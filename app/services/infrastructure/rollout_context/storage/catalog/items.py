@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
+from functools import partial
 from typing import TYPE_CHECKING
 
 from app.core.hashing import sha256_hex as _hash_bytes
@@ -339,6 +340,8 @@ class RolloutItemsMixin:
                 raise RuntimeError("user_turn request item admission 缺少真实 Turn")
             if origin == "internal" and turn_id is not None:
                 raise RuntimeError("internal request item admission 必须 Turn-less")
+            # 同一批请求共用提交与历史授权的校验结果；每个成员仍读取实际正文并核对边界和投影。
+            read_item = partial(self._read_v2_item_at, validated_commits=set(), validated_scopes=set())
             with self.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id).open("rb") as stream:
                 for message_id, item_id in message_locators:
                     locator = find_message_locator(connection, message_id, item_id=item_id)
@@ -356,7 +359,7 @@ class RolloutItemsMixin:
                     if not isinstance(attribution[1], str) or not attribution[1]:
                         raise RuntimeError(f"request message 缺少 canonical execution attribution: {message_id}")
                     items = tuple(read_message_group(
-                        connection, stream, offset=catalog[2], length=catalog[3], read_item=self._read_v2_item_at,
+                        connection, stream, offset=catalog[2], length=catalog[3], read_item=read_item,
                     )) if catalog is not None else ()
                     groups.append(RequestMessageGroup(message_id, attribution[0], attribution[1], items))
         return tuple(groups)
