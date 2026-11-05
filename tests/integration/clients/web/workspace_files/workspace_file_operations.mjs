@@ -9,14 +9,16 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 import { configureChromiumTemporaryDirectory } from "./chromium-temporary-directory.mjs";
+import { TestRunContext } from "../../../../harness/js/run-context.mjs";
 
 const root = process.cwd();
 const mode = process.argv[2] ?? "full";
 if (!["backend", "proxy", "smoke", "cleanup", "full"].includes(mode)) throw new Error(`未知测试阶段: ${mode}`);
-const output = path.join(root, "out/tests/integration/clients/web/workspace_files/workspace_file_operations");
-const artifacts = path.join(output, "artifacts");
+const scope = await TestRunContext.fromTestFile("tests/integration/clients/web/workspace_files/workspace_file_operations.mjs").prepare();
+const output = scope.outputRoot;
+const artifacts = scope.artifactsDir;
 const bundle = path.join(artifacts, "bundle");
-const runtime = path.join(output, "runtime");
+const runtime = path.join(scope.runRoot, "runtime");
 const browserTemporary = path.join(runtime, "browser-temporary");
 const downloads = path.join(artifacts, "downloads");
 await mkdir(bundle, { recursive: true });
@@ -35,12 +37,18 @@ import { useWorkspaceFileOperations } from ${modulePath("components/workspace/fi
 import { useWorkspaceFileTreeDirectories } from ${modulePath("components/workspace/fileTree/useWorkspaceFileTreeDirectories.ts")};
 import * as storage from ${modulePath("state/workspaceFiles/intentStore.ts")};
 import * as api from ${modulePath("api.ts")};
+import { gatewayWorkspaceKey } from ${modulePath("api/workspaceIdentity.ts")};
+const fixtures = await (await fetch("/control/info")).json();
+window.owners = Object.fromEntries(Object.entries(fixtures).map(([label, fixture]) =>
+  [label, { gatewayId: fixture.gateway_id, workspaceId: fixture.workspace_id }]));
+window.workspaceSelection = (label) => gatewayWorkspaceKey(window.owners[label]);
 window.storage = storage;
 window.api = api;
 window.statuses = [];
 window.errors = [];
 window.committed = [];
-function Harness({ route }) {
+function Harness({ label }) {
+  const route = window.workspaceSelection(label);
   const expanded = useRef(new Set());
   const shortcuts = useRef(new Set());
   const active = useRef(null);
@@ -51,7 +59,7 @@ function Harness({ route }) {
     reconcileDirectories: directories.reconcileDirectories, acceptSnapshots: directories.acceptSnapshots,
     directoryVersion: directories.directoryVersion, onStatusChange: (message) => window.statuses.push(message),
     onError: (message) => window.errors.push(message),
-    onCommitted: (parent) => { expanded.current.add(parent); window.committed.push({ route, parent }); } });
+    onCommitted: (parent) => { expanded.current.add(parent); window.committed.push({ route: label, parent }); } });
   useEffect(() => {
     let cancelled = false;
     void api.getWorkspaceFiles(Number(location.port), "", route).then((result) => {
@@ -64,11 +72,11 @@ function Harness({ route }) {
     }).catch((error) => window.errors.push(String(error)));
     return () => { cancelled = true; };
   }, [route]);
-  window.driver = { ...operations, ...directories, route };
+  window.driver = { ...operations, ...directories, route: label };
   return <pre>{JSON.stringify({ route, directories: directories.directories, pending: operations.pendingCreations })}</pre>;
 }
 const renderer = createRoot(document.getElementById("root"));
-window.mount = (route) => renderer.render(<Harness key={route} route={route}/>);
+window.mount = (label) => renderer.render(<Harness key={label} label={label}/>);
 window.mount(new URL(location.href).searchParams.get("route") || "gw-files-a");
 `, "utf8");
 const built = await Bun.build({ entrypoints: [entry], target: "browser", outdir: bundle, naming: "harness.js",
@@ -204,7 +212,8 @@ try {
   evidence.backend = { ready_ms: performance.now() - backendStarted, owners };
   for (const route of Object.keys(owners)) {
     const response = await fetch(backendUrl + "/api/v1/workspace/files?path=target&scope=workspace", {
-      headers: { "X-BoxTeam-Workspace-Id": route },
+      headers: { "X-BoxTeam-Workspace-Id": owners[route].workspace_id,
+        "X-BoxTeam-Target-Gateway-Id": owners[route].gateway_id },
     });
     const body = await response.json();
     assert(response.ok && body.request_id === response.headers.get("X-Request-ID")
@@ -218,10 +227,11 @@ try {
     context = await openContext();
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
-    const status = await page.evaluate(async () => {
+    const status = await page.evaluate(async (owner) => {
       const controller = new AbortController();
       const response = await fetch("/api/v1/workspace/files/events", {
-        method: "POST", headers: { "X-BoxTeam-Workspace-Id": "gw-files-a", "Content-Type": "application/json" },
+        method: "POST", headers: { "X-BoxTeam-Workspace-Id": owner.workspace_id,
+          "X-BoxTeam-Target-Gateway-Id": owner.gateway_id, "Content-Type": "application/json" },
         body: JSON.stringify({ paths: [], after_event_id: 0 }), signal: controller.signal,
       });
       // 真正消费首个 keepalive，确保 Chromium 已持有流，再取消同一 response。
@@ -231,7 +241,7 @@ try {
       controller.abort();
       reader.releaseLock();
       return response.status;
-    });
+    }, owners["gw-files-a"]);
     assert(status === 200, "代理SSE必须真实发出200头");
     await page.close();
     const deadline = performance.now() + 5_000;
@@ -266,7 +276,7 @@ try {
     }, sample);
     if (hasSource) {
       const stored = await page.evaluate(async () =>
-        (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a"))[0]);
+        (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace(window.owners["gw-files-a"]))[0]);
       const sources = stored.command.kind === "copy" ? [stored.command.sourcePath] : stored.command.sourcePaths;
       assert(sources.every((value) => value.startsWith("boxteam://")), "复制来源必须在真实IndexedDB中持久化为URI");
       assert(!JSON.stringify(stored).includes(owners["gw-files-a"].root_path), "原生输入不得落入浏览器持久intent");
@@ -296,7 +306,7 @@ try {
     await window.driver.submit(window.filePath("target"), { kind: "upload", entries: [
       { file: new Blob([bytes]), name: "上传.bin", relativePath: "上传.bin" },
     ] });
-    const records = await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a");
+    const records = await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace(window.owners["gw-files-a"]);
     return { id: records[0].intent.client_operation_id, sequence: records[0].intent.client_sequence,
       size: records[0].command.entries[0].file.size, errors: window.errors };
   });
@@ -305,11 +315,12 @@ try {
   await page.unroute("**/api/v1/workspace/files/operations?*");
   await loadPage(page, base);
   const restored = await page.evaluate(async () => {
-    const record = (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a"))[0];
+    const record = (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace(window.owners["gw-files-a"]))[0];
     return { id: record.intent.client_operation_id, bytes: Array.from(new Uint8Array(await record.command.entries[0].file.arrayBuffer())),
-      backend: record.scope.backendWorkspaceId };
+      owner: { gatewayId: record.scope.gatewayId, workspaceId: record.scope.workspaceId } };
   });
-  assert(restored.id === originalUpload.id && restored.backend === owners["gw-files-a"].workspace_id, "刷新不得改原身份/目标");
+  assert(restored.id === originalUpload.id && restored.owner.workspaceId === owners["gw-files-a"].workspace_id
+    && restored.owner.gatewayId === owners["gw-files-a"].gateway_id, "刷新不得改原身份/目标");
   assert(restored.bytes.every((byte, index) => byte === index % 251) && restored.bytes.length === 65536, "真实IDB刷新后Blob正文必须完整");
   const beforeFinish = await control("/control/gw-files-a/inspect");
   await control("/control/gw-files-a/gate/release", "POST");
@@ -328,7 +339,7 @@ try {
   await page.route("**/api/v1/workspace/files/entries?*", (route) => route.abort("failed"));
   const unknown = await page.evaluate(async () => {
     await window.driver.submit(window.filePath("target"), { kind: "create", name: "未受理.txt", entryKind: "file" });
-    return (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a"))[0].intent;
+    return (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace(window.owners["gw-files-a"]))[0].intent;
   });
   await page.unroute("**/api/v1/workspace/files/entries?*");
   await loadPage(page, base);
@@ -340,7 +351,7 @@ try {
   await control("/control/gw-files-a/gate/pause", "POST");
   const switched = await page.evaluate(async () => {
     await window.driver.submit(window.filePath("target"), { kind: "create", name: "原目标.txt", entryKind: "file" });
-    return (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace("gw-files-a"))[0];
+    return (await (await window.storage.openWorkspaceFileIntentStore()).loadForWorkspace(window.owners["gw-files-a"]))[0];
   });
   await page.evaluate(() => window.mount("gw-files-b"));
   await page.waitForFunction(() => window.driver.route === "gw-files-b" && window.driver.directoryVersion(window.filePath("target")));
@@ -369,7 +380,7 @@ try {
     let result;
     try {
       await window.api.streamWorkspaceFileEvents(Number(location.port), [], {
-        workspaceId: "gw-files-a", afterEventId: 0, signal: controller.signal,
+        workspaceId: window.workspaceSelection("gw-files-a"), afterEventId: 0, signal: controller.signal,
         onBatch: (value) => { result = value; controller.abort(); },
       });
     } catch (error) { if (error.name !== "AbortError") throw error; }
@@ -382,9 +393,8 @@ try {
 
   const second = await context.newPage();
   await loadPage(second, base);
-  const scope = { gatewayId: "controlled-file-browser-gateway", gatewayWorkspaceId: "idb-only",
-    backendWorkspaceId: owners["gw-files-a"].workspace_id, workspaceRoot: owners["gw-files-a"].uri, actor: "local" };
-  const key = { workspace_id: scope.backendWorkspaceId, scope: "workspace", root: scope.workspaceRoot, path: scope.workspaceRoot + "/target" };
+  const scope = { gatewayId: "idb-only-gateway", workspaceId: owners["gw-files-a"].workspace_id, workspaceRoot: owners["gw-files-a"].uri, actor: "local" };
+  const key = { workspace_id: scope.workspaceId, scope: "workspace", root: scope.workspaceRoot, path: scope.workspaceRoot + "/target" };
   const insert = (targetPage, name) => targetPage.evaluate(async ({ scope, key, name }) =>
     (await window.storage.openWorkspaceFileIntentStore()).insert({ scope, directoryKey: key, directoryPath: key.path,
       directoryRevision: 1, command: { kind: "create", name, entryKind: "file" } }), { scope, key, name });
@@ -394,7 +404,7 @@ try {
   const alias = await page.evaluate(async ({ scope, key, nativeTarget }) => {
     const store = await window.storage.openWorkspaceFileIntentStore();
     const before = await store.load(scope);
-    const [targetUri] = await window.api.resolveWorkspaceFileReferences(Number(location.port), [nativeTarget], "gw-files-a");
+    const [targetUri] = await window.api.resolveWorkspaceFileReferences(Number(location.port), [nativeTarget], window.workspaceSelection("gw-files-a"));
     const aliasKey = { ...key, path: targetUri };
     const record = await store.insert({ scope, directoryKey: aliasKey, directoryPath: aliasKey.path,
       directoryRevision: 1, command: { kind: "create", name: "alias", entryKind: "file" } });
@@ -412,7 +422,8 @@ try {
   }
   if (mode === "cleanup") {
     const response = await fetch(backendUrl + "/api/v1/workspace/files/events", { method: "POST",
-      headers: { "X-BoxTeam-Workspace-Id": "gw-files-a", "Content-Type": "application/json" },
+      headers: { "X-BoxTeam-Workspace-Id": owners["gw-files-a"].workspace_id,
+        "X-BoxTeam-Target-Gateway-Id": owners["gw-files-a"].gateway_id, "Content-Type": "application/json" },
       body: JSON.stringify({ paths: [], after_event_id: 0 }) });
     assert(response.ok, "SSE回收样本必须进入生产文件watch入口");
     await response.body.cancel();

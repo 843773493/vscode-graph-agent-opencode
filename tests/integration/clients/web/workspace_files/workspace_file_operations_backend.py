@@ -21,7 +21,9 @@ from app.api.deps import (
     get_workspace_service,
     verify_local_token,
 )
+from app.core.resource_uri import ParsedResourceUri, resource_display_uri
 from app.core.trace_middleware import TraceMiddleware
+from app.gateway.control.gateway_state import GatewayStateStore
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
@@ -31,6 +33,18 @@ from tests.support.workspaces import prepare_test_workspace
 
 
 def make_app(output_root: Path) -> FastAPI:
+    gateway_id = "gateway_01900000000070008000000000000001"
+    state = GatewayStateStore(path=output_root / "runtime/gateway.sqlite")
+
+    class Bindings:
+        """受控 Gateway 传输边界内仍复用唯一原生根持久化 owner。"""
+        def bind(self, root: Path) -> str:
+            directory_id = state.bind_native_directory(gateway_id=gateway_id, native_root=str(root))
+            return resource_display_uri(scope="gateway", scope_id=gateway_id, kind="files", tail_segments=(directory_id,))
+
+        def resolve(self, parsed: ParsedResourceUri) -> Path:
+            return Path(state.resolve_native_directory(gateway_id=parsed.scope_id, directory_id=parsed.tail_segments[0]))
+
     services = {}
     watchers = {}
     gates = {}
@@ -51,7 +65,7 @@ def make_app(output_root: Path) -> FastAPI:
         config.get_workspace_file_default_limit.return_value = 500
         config.get_workspace_preview_max_bytes.return_value = 1024 * 1024
         config.get_workspace_preview_binary_sample_bytes.return_value = 8192
-        service = WorkspaceService(config_service=config, workspace_root=root)
+        service = WorkspaceService(config_service=config, workspace_root=root, native_directories=Bindings())
         gate = Event()
         gate.set()
         original = service.file_operations._execute
@@ -65,6 +79,8 @@ def make_app(output_root: Path) -> FastAPI:
         services[route] = service
         gates[route] = gate
         watchers[route] = WorkspaceFileWatchService(workspace_root=root)
+
+    routes_by_workspace = {service.workspace_id: route for route, service in services.items()}
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -80,6 +96,7 @@ def make_app(output_root: Path) -> FastAPI:
             for service in services.values():
                 await service.stop()
                 service.close()
+            state.close()
 
     app = FastAPI(lifespan=lifespan)
     app.add_middleware(TraceMiddleware)
@@ -87,10 +104,10 @@ def make_app(output_root: Path) -> FastAPI:
     app.include_router(workspace_observation.router, prefix="/api/v1")
 
     def route_for(request: Request) -> str:
-        route = request.headers.get("X-BoxTeam-Workspace-Id")
-        if route not in services:
-            raise HTTPException(409, "测试必须显式指定固定 Gateway workspace ID")
-        return route
+        workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+        if request.headers.get("X-BoxTeam-Target-Gateway-Id") != gateway_id or workspace_id not in routes_by_workspace:
+            raise HTTPException(409, "测试必须显式指定固定 Gateway 和工作区 UUID")
+        return routes_by_workspace[workspace_id]
 
     def workspace_service(request: Request):
         return services[route_for(request)]
@@ -109,7 +126,9 @@ def make_app(output_root: Path) -> FastAPI:
     async def record_request(request: Request, call_next):
         if request.url.path.startswith("/api/v1/"):
             requests.append({"path": request.url.path, "query": request.url.query,
-                             "route": request.headers.get("X-BoxTeam-Workspace-Id"),
+                             "route": routes_by_workspace.get(request.headers.get("X-BoxTeam-Workspace-Id")),
+                             "workspace_id": request.headers.get("X-BoxTeam-Workspace-Id"),
+                             "gateway_id": request.headers.get("X-BoxTeam-Target-Gateway-Id"),
                              "method": request.method})
         return await call_next(request)
 
@@ -126,11 +145,11 @@ def make_app(output_root: Path) -> FastAPI:
 
     @app.get("/api/gateway/health")
     async def health(request: Request):
-        return envelope(request, {"gateway_id": "controlled-file-browser-gateway"})
+        return envelope(request, {"gateway_id": gateway_id})
 
     @app.get("/control/info")
     async def info():
-        return {route: {"workspace_id": service.workspace_id, "root_path": service.root_path, "uri": service.file_paths.workspace_uri}
+        return {route: {"gateway_id": gateway_id, "workspace_id": service.workspace_id, "root_path": service.root_path, "uri": service.file_paths.workspace_uri}
                 for route, service in services.items()}
 
     @app.post("/control/{route}/gate/{state}")

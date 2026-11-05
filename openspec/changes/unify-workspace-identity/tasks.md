@@ -280,3 +280,8 @@
 
 - 驱动、HTTP观察与搜索收据统一核完整Gateway／UUID；真实IndexedDB观察使用原 `gatewayWorkspaceKey`／`browserViewKey`，不再用裸UUID拼已退役的存储键。首轮因此在滚动持久化观察超时，迁齐观察入口后正式矩阵1 passed／165.94秒、退出0，`run-707cfdfd3abf`；草稿／滚动重载、新页面恢复、历史缓存先显、独立上下文与未读标记的11项业务断言通过，页面错误为空。
 - 查询展示历史仍由原fixture准备，未读执行状态通过真实消息与model_stream产生；不将手工历史作为执行／恢复完整验收。测试两文件SHA与验收首尾一致，Python静态与完整Web类型沿同批相同源码收据复用，最终驱动纯语法退出0；原失败和补验见 `out/tests/temp/identity_remaining_web_20261105/artifacts/browser-views-product-1793857351147908025.json`、`browser-views-owner-key-product-1793857601642843175.json` 及 `browser-view-key-js-parse-1793857592107051056.json`。其余消费者仍未完成，6.4不勾。
+
+### 2026-11-05：6.4 文件操作与持久意图消费者
+
+- Chromium文件装具以真实UUID／Gateway装配生产hook、HTTP文件owner与IndexedDB，原 `gw-files-a/b` 仅作测试控制标签；刷新、目标切换与多Tab持久意图不再保存双工作区ID。文件根接口的首轮500定位为装具缺原生目录绑定，现复用真实 `GatewayStateStore` 根owner，未添加产品回退；日志／trace改用原 `TestRunContext` 分运行保存。
+- 受保护完整脚本28.77秒通过、退出0，正式产物 `run-8d52e06916b7`。新建文件／目录、复制／粘贴／上传、Blob刷新恢复、未知结果原ID续查、冻结目标、多Tab因果依赖及SSE原强断言保留；此边界的Gateway认证／传输仍为显式受控替身，不等同完整Workbench E2E。Ruff与JS纯语法退出0，Pyright剩1条原有私有worker替换签名诊断，新增0。首轮和最终原件在 `out/tests/temp/identity_remaining_web_20261105/artifacts/file-operations-product-1793857502355789163.json`、`file-operations-native-binding-product-1793857796702424509.json`、`file-owner-ruff-1793857712881955058.json`、`file-owner-pyright-1793857712861006124.json` 与 `file-owner-js-parse-1793857712881328628.json`；交付源码与最终验收首尾SHA一致，6.4仍未完成。
