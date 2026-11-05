@@ -115,8 +115,8 @@ class RolloutStorage(
         self._initialize_activation = initialize_activation
 
     def catalog_body_validation_scope(self) -> AbstractContextManager[None]:
-        """为单次 provider prepare 提供有界正文成功校验作用域。"""
-        return catalog_body_validation_scope()
+        """为单次读取或准入复用正文校验；嵌套步骤共用最外层的有界作用域。"""
+        return catalog_body_validation_scope(reuse_existing=True)
 
     def _codec(self) -> MessageCodec:
         """返回由 checkpoint 组装层注入的消息适配器。"""

@@ -425,9 +425,9 @@ class ContextDispatchOwnerMixin:
         ):
             raise RuntimeError("model-call boundary 与当前 execution admission 不一致")
         checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
-        # Provider prepare 已持有请求级校验作用域，不能在 boundary 内重置它。
-        # TODO：独立 boundary 准入的校验复用留待后续性能优化。
-        with self._lock:
+        # 独立准入只解析同一正文一次；Provider prepare 内借用外层作用域，
+        # 避免重置已验证正文。作用域结束即释放，后续读取仍核实际字节与索引。
+        with self._lock, self._storage.storage.catalog_body_validation_scope():
             if turn_id is not None:
                 self._storage.checkpoints.ensure_active_view_contains_turn_root(
                     session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,

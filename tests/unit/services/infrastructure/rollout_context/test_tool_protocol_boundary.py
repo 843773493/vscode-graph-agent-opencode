@@ -7,6 +7,7 @@ chokepoint；rewind（含 replay 使用的 arewind/arewind_to_turn）经由同�
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -42,6 +43,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.catalog import integrity
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
@@ -314,6 +316,102 @@ def _seed_closed_tool_group(saver: RolloutCheckpointSaver, thread: str) -> None:
         [user, call, result],
         2,
     )
+
+
+@pytest.mark.parametrize("group_count", [1, 16])
+@pytest.mark.parametrize("closed", [False, True])
+def test_model_boundary_validates_each_body_once_and_releases_after_return(
+    protocol_case, monkeypatch, group_count: int, closed: bool,
+) -> None:
+    saver, storage, thread, accepted = protocol_case
+    messages = []
+    for index in range(group_count):
+        messages.append(AIMessage(
+            id=f"boundary-call-{index}", content="",
+            tool_calls=[{"name": "read_file", "args": {}, "id": f"call-{index}"}],
+        ))
+        if closed or index < group_count - 1:
+            messages.append(ToolMessage(
+                id=f"boundary-result-{index}", content="工具正文",
+                tool_call_id=f"call-{index}", name="read_file",
+            ))
+    arguments = dict(
+        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
+        messages=messages,
+    )
+    saver.ensure_request_items(SESSION_ID, thread, **arguments)
+    original_line = integrity.canonical_json_line
+    validations = Counter()
+
+    def observe(value):
+        validations[value["item_id"]] += 1
+        return original_line(value)
+
+    monkeypatch.setattr(integrity, "canonical_json_line", observe)
+    for attempt in range(2):
+        validations.clear()
+        conflict, predecessor = saver.prepare_model_call_boundary(
+            SESSION_ID, thread, **arguments, validated_predecessors={},
+        )
+        assert (conflict is None) is closed
+        assert predecessor is None
+        expected_items = 1 + len(messages)
+        print({"boundary_groups": group_count, "closed": closed, "attempt": attempt,
+               "body_validations": sum(validations.values()), "items": expected_items})
+        assert len(validations) == expected_items
+        assert set(validations.values()) == {1}
+        validations.clear()
+        # 正常与预期冲突返回都必须释放正文；后续独立读取不能沿用本次缓存。
+        assert len(storage.storage.read_items(SESSION_ID, thread)) == expected_items
+        assert set(validations.values()) == {1}
+
+
+@pytest.mark.parametrize("damage", ["body", "projection"])
+def test_model_boundary_rechecks_changed_bytes_and_projection(
+    protocol_case, monkeypatch, damage: str,
+) -> None:
+    saver, storage, thread, accepted = protocol_case
+    arguments = dict(
+        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
+        messages=(), validated_predecessors={},
+    )
+    assert saver.prepare_model_call_boundary(SESSION_ID, thread, **arguments) == (None, None)
+    path = storage.storage.jsonl_path(SESSION_ID, thread_id=thread)
+    before = path.read_bytes()
+    if damage == "body":
+        damaged = before.replace("读取配置".encode(), "篡改配置".encode())
+        assert damaged != before and len(damaged) == len(before)
+        path.write_bytes(damaged)
+        match = "schema/content 非法"
+    else:
+        with storage.storage._connect(thread, "", session_id=SESSION_ID) as connection:
+            connection.execute("UPDATE item_catalog SET tool_call_id='forged' WHERE item_id='item-user-1'")
+            connection.commit()
+        match = "tool_call_id 不一致"
+    with pytest.raises(RuntimeError, match=match):
+        saver.prepare_model_call_boundary(SESSION_ID, thread, **arguments)
+    assert path.read_bytes() == (damaged if damage == "body" else before)
+    # 测试恢复注入的损坏后，独立读取仍须重新解析，异常作用域不能泄漏正文。
+    if damage == "body":
+        path.write_bytes(before)
+    else:
+        with storage.storage._connect(thread, "", session_id=SESSION_ID) as connection:
+            assert connection.execute(
+                "SELECT tool_call_id FROM item_catalog WHERE item_id='item-user-1'",
+            ).fetchone() == ("forged",)
+            connection.execute("UPDATE item_catalog SET tool_call_id=NULL WHERE item_id='item-user-1'")
+            connection.commit()
+    original_line = integrity.canonical_json_line
+    validations = []
+
+    def observe(value):
+        validations.append(value["item_id"])
+        return original_line(value)
+
+    monkeypatch.setattr(integrity, "canonical_json_line", observe)
+    for _ in range(2):
+        assert len(storage.storage.read_items(SESSION_ID, thread)) == 1
+    assert validations == ["item-user-1", "item-user-1"]
 
 
 def test_rewind_conflict_keeps_old_view_zero_side_effects(protocol_case) -> None:

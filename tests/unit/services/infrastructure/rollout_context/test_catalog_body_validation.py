@@ -80,6 +80,39 @@ def test_body_validation_resets_scope_after_exception_and_restores_nested_scope(
     assert len(validation_calls) == 3
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_borrowed_scope_keeps_outer_success_until_owner_exits(
+    body_input_factory: _BodyInputFactory, validation_calls: list[object], fail: bool,
+) -> None:
+    raw, parameters = body_input_factory()
+    with integrity.catalog_body_validation_scope():
+        integrity.validate_catalog_body(raw, **parameters)
+        try:
+            with integrity.catalog_body_validation_scope(reuse_existing=True):
+                integrity.validate_catalog_body(raw, **parameters)
+                if fail:
+                    raise RuntimeError("borrowed scope failure")
+        except RuntimeError as error:
+            assert fail and str(error) == "borrowed scope failure"
+        integrity.validate_catalog_body(raw, **parameters)
+        assert len(validation_calls) == 1
+    integrity.validate_catalog_body(raw, **parameters)
+    assert len(validation_calls) == 2
+
+
+def test_borrowed_scope_respects_outer_capacity(
+    body_input_factory: _BodyInputFactory, validation_calls: list[object],
+) -> None:
+    first, first_parameters = body_input_factory("first")
+    second, second_parameters = body_input_factory("other")
+    with integrity.catalog_body_validation_scope(max_entries=1):
+        integrity.validate_catalog_body(first, **first_parameters)
+        with integrity.catalog_body_validation_scope(reuse_existing=True):
+            integrity.validate_catalog_body(second, **second_parameters)
+            integrity.validate_catalog_body(first, **first_parameters)
+    assert len(validation_calls) == 3
+
+
 def test_body_validation_returns_isolated_nested_values_on_every_read(
     validation_calls: list[object],
 ) -> None:

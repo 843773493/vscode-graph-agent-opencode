@@ -70,8 +70,9 @@ class CatalogBodyValidationCache:
 @contextmanager
 def catalog_body_validation_scope(
     *, max_bytes: int = _BODY_VALIDATION_MAX_BYTES, max_entries: int = _BODY_VALIDATION_MAX_ENTRIES,
+    reuse_existing: bool = False,
 ) -> Iterator[None]:
-    """单次 prepare 只复用相同实际字节的成功校验，退出后释放全部正文。"""
+    """单次操作复用相同字节的成功校验；借用外层时沿用其容量与生命周期。"""
     if type(max_bytes) is not int or type(max_entries) is not int:
         raise TypeError(
             "正文校验作用域的字节和条目上限必须是严格整数: "
@@ -81,6 +82,9 @@ def catalog_body_validation_scope(
         raise ValueError("正文校验作用域的字节和条目上限必须大于 0")
     if max_bytes > _BODY_VALIDATION_MAX_BYTES or max_entries > _BODY_VALIDATION_MAX_ENTRIES:
         raise ValueError("正文校验作用域不能超过硬上限：8MiB / 4096 条")
+    if reuse_existing and _body_validation_scope.get() is not None:
+        yield
+        return
     successful: LRUCache[_BodyValidationKey, _BodyValidationValue] = LRUCache(
         maxsize=max_bytes, getsizeof=lambda value: len(value[0]),
     )

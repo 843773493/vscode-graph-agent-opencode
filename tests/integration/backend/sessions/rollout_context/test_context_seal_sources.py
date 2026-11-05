@@ -311,11 +311,12 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
     @contextmanager
     def observe_scope():
         nonlocal phase
+        previous_phase = phase
         scope_events.append("enter")
         with original_scope():
             phase = "inside"
             yield
-        phase = "after"
+        phase = "inside" if previous_phase == "inside" else "after"
         scope_events.append("exit")
 
     def observe_validation(operation, raw, *, sequence, item_id, catalog_hash, payload_length, source_revision, **options):
@@ -345,14 +346,14 @@ def test_provider_uses_storage_body_validation_scope_and_ends_after_success(prod
     monkeypatch.setattr(item_reader, "read_catalog_body", partial(observe_validation, original_read))
     monkeypatch.setattr(integrity, "canonical_json_line", observe)
     prepare("body-validation-success-scope")
-    assert scope_events == ["enter", "exit"]
+    assert scope_events == ["enter", "enter", "exit", "exit"]
     assert requests["inside"]
     assert all(count >= 2 for count in requests["inside"].values())
     expected_validations = Counter({key: 1 for key in requests["inside"]})
     assert requests["before"] == validations["before"] == expected_validations
     assert validations["inside"] == expected_validations
     storage.initialize(session, thread_id=thread)
-    assert scope_events == ["enter", "exit"]
+    assert scope_events == ["enter", "enter", "exit", "exit"]
     assert requests["after"] == expected_validations
     assert validations["after"] == Counter()
 
