@@ -274,8 +274,9 @@ def prepare_registered_context(
 
                 frozen_skills = skill_catalog_from_activation(activation_snapshot, read_skill_payload)
                 pending_catalog = None
-                if frozen_skills is not None and previous is not None:
+                if frozen_skills is not None and previous is not None and context_source_manager.pending_skill_selection_ids():
                     # 待封存的显式选择来自上一已封存调用，新目录不能覆盖原选择。
+                    # 没有待选择正文时不恢复旧目录，避免每次新请求重复读取全部旧来源。
                     original = owner.load_sealed_resource_activation(
                         session_id, thread_id=thread_id, assembly_id=previous.assembly_id,
                         plan_hash=previous.plan_hash, request_hash=previous.request_hash,

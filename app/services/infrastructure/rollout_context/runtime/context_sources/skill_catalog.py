@@ -405,10 +405,14 @@ class SkillCatalogMixin:
                 )
             return candidate
 
+        def pending_skill_selection_ids(self) -> tuple[str, ...]:
+            """从已对齐的控制状态取得待封存选择；目录读取与正文恢复共用此判定。"""
+            return tuple(state.source_id for state in self._sources.values() if state.source_kind == "skill"
+                         and state.selection_sequence > state.latest_visible_selection_sequence)
+
         def restore_frozen_skill_selections(self, snapshot: SkillCatalogActivationSnapshot | None) -> None:
             """只从发起工具调用的封存目录恢复待选择正文，不消费下一请求的新目录。"""
-            pending = tuple(state for state in self._sources.values() if state.source_kind == "skill"
-                            and state.selection_sequence > state.latest_visible_selection_sequence)
+            pending = tuple(self._sources[source_id] for source_id in self.pending_skill_selection_ids())
             if not pending:
                 return
             # 同名比较只扫一次，且包括已封存的更新选择，避免复活更早的 pending。
