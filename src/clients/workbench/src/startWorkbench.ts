@@ -7,6 +7,7 @@ import './composerActions.js';
 import './changeFiles.js';
 import { installReadonlyDocumentSerialization } from './readonlyDocuments.js';
 import './search/nameModes.js';
+import './search/workspaceQuickAccess.js';
 
 installReadonlyDocumentSerialization();
 

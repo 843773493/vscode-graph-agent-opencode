@@ -18,4 +18,6 @@ Quick Access 的 Session／Thread／文件名称及消息、工具结果、LLM �
 
 Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显示取消、保留已有候选及原 code／reason／request_id，原 `retryable` 控制单分支明确重试；`failed` 与 `deadline` 保持原失败和超时语义，不从消息文本推断状态。
 
+`workspace ` 只调用原 Gateway 登记发现 API，沿原导航 cursor 有界续查；浏览、范围选择和取消不启动、连接或激活目标。工作区切换、连接与启动分别注册一个具名 Action／Command，Gateway 菜单和 Quick Access 共用它们；执行前固定并重新核验完整 owner，最终交原导航 runtime 和 Backend 完整组确认，不新增业务状态机。
+
 运行日志与 Gateway 自有日志使用同一联邦客户端的 `runtime_log` 诊断分支；每个 Gateway 一条明确来源，工作区只筛选关联进程，共享文件不按工作区重复查询。原行引用仅作具名诊断定位动作，不新造资源 URI，接受后交给原 Gateway 诊断视图精确读取。

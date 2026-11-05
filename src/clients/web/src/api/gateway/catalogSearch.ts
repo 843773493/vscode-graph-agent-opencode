@@ -25,6 +25,16 @@ export interface CatalogSearchView {
   limited: boolean;
 }
 
+/** 只发现控制面登记及导航元数据；不查询或启动工作区。 */
+export async function discoverGatewayWorkspaces(port: number, query: string, {
+  signal, cursor, includeFolders = false, limit = 50,
+}: { signal?: AbortSignal; cursor?: string; includeFolders?: boolean; limit?: number } = {}): Promise<GatewayWorkspaceDiscoveryResultsDTO> {
+  const parameters = new URLSearchParams({ query, include_folders: String(includeFolders), limit: String(limit) });
+  if (cursor !== undefined) parameters.set("cursor", cursor);
+  return unwrapApiData(await requestJson<APIResponse<GatewayWorkspaceDiscoveryResultsDTO>>(port,
+    `/api/gateway/search/workspaces?${parameters}`, { signal }));
+}
+
 export async function resolveCatalogSearchTarget(port: number, owner: GatewaySearchWorkspaceOwnerDTO): Promise<string> {
   const scope = unwrapApiData(await requestJson<APIResponse<GatewaySearchScopeResolutionDTO>>(port, "/api/gateway/search/resolve", {
     method: "POST", body: JSON.stringify({ mode: "origin", origin: owner }),
@@ -50,10 +60,7 @@ export async function searchCatalogView(port: number, query: string, navigation:
   };
   // 控制面发现只读登记和导航；业务目录只发送一次明确 all 的联邦请求。
   const tasks = [
-    requestJson<APIResponse<GatewayWorkspaceDiscoveryResultsDTO>>(port,
-      `/api/gateway/search/workspaces?${new URLSearchParams({ query, include_folders: "true", limit: "200" })}`, { signal: querySignal },
-    ).then(response => {
-      const discovery = unwrapApiData(response);
+    discoverGatewayWorkspaces(port, query, { signal: querySignal, includeFolders: true, limit: 200 }).then(discovery => {
       controls = [
         ...discovery.items.map(item => ({ workspace_id: gatewayWorkspaceKey(item.owner!), workspace_name: item.name, owner: item.owner,
           node_id: item.navigation_node_id, node_kind: "workspace" as const, name: item.name,
