@@ -525,7 +525,7 @@ async def _proxy_workspace_request(
                         detail=str(error),
                     ) from error
             # 联邦凭据缺失/过期在这里响亮失败；此处抛错也必须归还上面持有的引用。
-            target_gateway_id = workspace_owner(target, registry, local_gateway_id).gateway_id
+            target_gateway_id = workspace_owner(target).gateway_id
             if requested_gateway_id is not None and requested_gateway_id != target_gateway_id:
                 raise HTTPException(status_code=400, detail="目标 Gateway 与选定工作区归属不一致")
             headers = _proxy_headers(

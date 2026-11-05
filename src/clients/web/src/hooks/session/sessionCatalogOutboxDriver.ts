@@ -97,8 +97,6 @@ export type CatalogOutboxFailureReconciler = (
 
 export interface CatalogOutboxDriverInput {
   port: number;
-  /** Gateway 注册表中的路由 ID；与 partition.workspaceId 的后端身份分离。 */
-  gatewayWorkspaceId: string;
   workspaceTarget: GatewayWorkspaceRequestTarget;
   partition: CatalogOutboxPartition;
   persistence: CatalogOutboxPersistencePort;

@@ -352,9 +352,7 @@ async def _proxy_auxiliary_websocket(
             credential = FederationCredentialStore(
                 storage_path=get_gateway_root() / "credentials" / "federation.json"
             ).get(connection_id)
-            upstream_headers[TARGET_GATEWAY_ID_HEADER] = workspace_owner(
-                target, registry, upstream_headers["X-BoxTeam-Gateway-Id"],
-            ).gateway_id
+            upstream_headers[TARGET_GATEWAY_ID_HEADER] = workspace_owner(target).gateway_id
             upstream_headers["X-BoxTeam-Federation-Token"] = credential.token
         browser_stream = service == "browser_manager"
         async with connect(

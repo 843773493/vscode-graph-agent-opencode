@@ -400,7 +400,7 @@ async def test_control_budget_rejected_before_http_dispatch(search_http: SearchH
 @pytest.fixture
 def mirrored_owner(search_http: SearchHTTP) -> _CatalogSnapshot:
     assert search_http.mirror is not None
-    owner = workspace_owner(search_http.registry.resolve((GATEWAY, OWNERS[0]["workspace_id"])), search_http.registry, GATEWAY)
+    owner = workspace_owner(search_http.registry.resolve((GATEWAY, OWNERS[0]["workspace_id"])))
     nodes = [SessionCatalogNodeDTO(node_id=f"folder-{index}", kind="folder", name=f"needle {index}", node_revision=1)
              for index in range(3)]
     snapshot = _CatalogSnapshot(owner=owner, revision="mirror-v1", catalog_revision=7,

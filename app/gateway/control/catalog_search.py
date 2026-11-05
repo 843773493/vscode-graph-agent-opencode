@@ -142,7 +142,7 @@ class GatewaySessionCatalogSearchService:
         if self._task is not None:
             raise RuntimeError("Gateway 会话目录索引同步器已经启动")
         for target in self._registry.targets():
-            owner = workspace_owner(target, self._registry, self._gateway_id)
+            owner = workspace_owner(target)
             snapshot = self._load_snapshot(owner)
             if snapshot is not None:
                 self._snapshots[owner] = snapshot
@@ -209,7 +209,7 @@ class GatewaySessionCatalogSearchService:
         # 若只增不减，长驻进程内存会随历史工作区无界增长（快照含全部会话节点）。
         # 每轮同步以权威 registry 存活集为界回收，用集合差而非再扫一遍 targets。
         live_workspace_ids = {target.key for target in targets}
-        live_owners = {workspace_owner(target, self._registry, self._gateway_id) for target in targets}
+        live_owners = {workspace_owner(target) for target in targets}
         for owner in self._snapshots.keys() - live_owners:
             self._snapshots.pop(owner)
         for workspace_id in set(self._workspace_errors) - live_workspace_ids:
@@ -248,7 +248,7 @@ class GatewaySessionCatalogSearchService:
     ) -> _CatalogSnapshot:
         lock = self._sync_lock_for(target.key)
         async with lock:
-            owner = workspace_owner(target, self._registry, self._gateway_id)
+            owner = workspace_owner(target)
             url, headers = self._target_request(target, request_id=request_id)
             response = await self._http_client.get(
                 url,
@@ -261,7 +261,7 @@ class GatewaySessionCatalogSearchService:
             if len(nodes_by_id) != len(exported.items):
                 raise RuntimeError(f"工作区目录导出包含重复 node_id: {target.workspace_id}")
             if (not self._registry.has_target(target.key)
-                or workspace_owner(self._registry.resolve(target.key), self._registry, self._gateway_id) != owner):
+                or workspace_owner(self._registry.resolve(target.key)) != owner):
                 raise RuntimeError(f"会话目录同步期间登记归属已改变: {target.workspace_id}")
             snapshot = _CatalogSnapshot(
                 owner=owner, catalog_revision=exported.catalog_revision, revision=exported.revision,

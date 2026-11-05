@@ -83,7 +83,7 @@ def discover_workspaces(
         if node.kind != "workspace_ref" and not include_folders:
             continue
         target = by_target[(node.workspace.gateway_id, node.workspace.workspace_id)] if node.workspace is not None else None
-        owner = workspace_owner(target, registry, gateway_id) if target is not None else None
+        owner = workspace_owner(target) if target is not None else None
         terms = (node.name, node.node_id, "/".join(names))
         if target is not None and owner is not None:
             terms += (target.workspace_id, owner.workspace_id)

@@ -427,7 +427,6 @@ export function createSessionCatalogOutboxRuntime(
       let runtimeDriver!: RuntimeDriver;
       const driver = createSessionCatalogOutboxDriver({
         port: options.apiPort,
-        gatewayWorkspaceId,
         workspaceTarget,
         partition,
         persistence,
