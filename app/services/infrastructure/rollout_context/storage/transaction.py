@@ -19,7 +19,6 @@ from uuid import uuid4
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.guards import (
     register_jsonl_guard,
@@ -562,7 +561,8 @@ class V2ItemCommitCoordinator:
             commit_metadata = dict(metadata)
         else:
             raise TypeError("storage commit metadata 必须是 object")
-        canonical_json_bytes(commit_metadata)
+        # 在 JSONL 追加前完成 metadata 校验，并复用编码结果写账本，避免重复编码正文。
+        metadata_json = _json(commit_metadata)
         if subject_id is not None and (
             not isinstance(subject_id, str) or not subject_id
         ):
@@ -691,7 +691,7 @@ class V2ItemCommitCoordinator:
                     subject_id,
                     idempotency_key,
                     outcome,
-                    _json(commit_metadata),
+                    metadata_json,
                 ),
             )
             commit_id = _non_negative_int(
