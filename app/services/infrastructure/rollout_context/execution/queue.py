@@ -45,22 +45,35 @@ class RolloutExecutionQueueMixin:
         try:
             with self._storage.read_connection(session_id, thread_id) as connection:
                 upper = connection.execute("SELECT COALESCE(MAX(commit_id),0) FROM storage_commits WHERE status='committed'").fetchone()[0]
-                if after_commit_id is None:
+                if after_commit_id is None or after_commit_id == upper:
                     return ExecutionCompletionPage((), upper)
                 if after_commit_id > upper:
                     raise RuntimeError("执行终态来源游标超过原owner历史，拒绝重置")
+                # 沿 commit 主键截取增量；两种归属分别用 execution/turn 索引定位，避免 OR 关联全部历史。
+                # 先限制首次结束页，再逐个定位最新修正；不展开页外执行，也不重复投递旧执行。
                 rows = connection.execute(
-                    "WITH terminals AS (SELECT e.execution_id,MIN(c.commit_id) AS first_commit_id,MAX(c.commit_id) AS commit_id FROM executions e "
-                    "JOIN storage_commits c ON (c.subject_id=e.execution_id AND e.execution_origin='internal') "
-                    "OR (c.subject_id=e.turn_id AND e.execution_origin='user_turn' AND c.idempotency_key IN "
-                    "('terminal:'||e.turn_id||':'||e.execution_id||':'||c.outcome,'execution-lost:'||e.turn_id||':'||e.execution_id)) "
-                    "WHERE c.status='committed' AND c.commit_kind='terminal_convergence' "
-                    "AND e.session_id=? AND e.thread_id=? GROUP BY e.execution_id HAVING MIN(c.commit_id)>?) "
-                    "SELECT c.commit_id,e.execution_id,e.job_id,c.outcome,json_extract(q.input_json,'$.request_id'),t.first_commit_id "
-                    "FROM terminals t JOIN storage_commits c ON c.commit_id=t.commit_id JOIN executions e ON e.execution_id=t.execution_id "
-                    "LEFT JOIN execution_queue q ON q.execution_id=e.execution_id AND q.checkpoint_ns='' "
-                    "WHERE c.commit_id<=? "
-                    "ORDER BY t.first_commit_id LIMIT ?", (session_id, thread_id, after_commit_id, upper, limit),
+                    "WITH page AS MATERIALIZED (SELECT c.commit_id AS first_commit_id,e.execution_id,e.job_id,e.execution_origin,e.turn_id "
+                    "FROM storage_commits c NOT INDEXED CROSS JOIN executions e ON e.execution_id IN ("
+                    "SELECT execution_id FROM executions WHERE execution_id=c.subject_id AND execution_origin='internal' "
+                    "UNION ALL SELECT execution_id FROM executions WHERE turn_id=c.subject_id AND execution_origin='user_turn' "
+                    "AND c.idempotency_key IN ('terminal:'||turn_id||':'||execution_id||':'||c.outcome,"
+                    "'execution-lost:'||turn_id||':'||execution_id)) "
+                    "WHERE c.commit_id>? AND c.status='committed' AND c.commit_kind='terminal_convergence' "
+                    "AND e.session_id=? AND e.thread_id=? AND NOT EXISTS (SELECT 1 FROM storage_commits previous "
+                    "WHERE previous.commit_kind='terminal_convergence' AND previous.status='committed' "
+                    "AND previous.subject_id=CASE e.execution_origin WHEN 'internal' THEN e.execution_id ELSE e.turn_id END "
+                    "AND previous.commit_id<c.commit_id AND (e.execution_origin='internal' OR previous.idempotency_key IN "
+                    "('terminal:'||e.turn_id||':'||e.execution_id||':'||previous.outcome,'execution-lost:'||e.turn_id||':'||e.execution_id))) "
+                    "ORDER BY c.commit_id LIMIT ?) "
+                    "SELECT c.commit_id,t.execution_id,t.job_id,c.outcome,json_extract(q.input_json,'$.request_id'),t.first_commit_id "
+                    "FROM page t JOIN storage_commits c ON c.commit_id=(SELECT MAX(latest.commit_id) FROM storage_commits latest "
+                    "WHERE latest.commit_kind='terminal_convergence' AND latest.status='committed' "
+                    "AND latest.subject_id=CASE t.execution_origin WHEN 'internal' THEN t.execution_id ELSE t.turn_id END "
+                    "AND (t.execution_origin='internal' OR latest.idempotency_key IN "
+                    "('terminal:'||t.turn_id||':'||t.execution_id||':'||latest.outcome,'execution-lost:'||t.turn_id||':'||t.execution_id))) "
+                    "LEFT JOIN execution_queue q ON q.execution_id=t.execution_id AND q.checkpoint_ns='' "
+                    "WHERE c.commit_id<=? ORDER BY t.first_commit_id",
+                    (after_commit_id, session_id, thread_id, limit, upper),
                 ).fetchall()
                 records = tuple(ExecutionCompletion(*row) for row in rows)
                 return ExecutionCompletionPage(records, records[-1].cursor_commit_id if len(rows) == limit else upper)
