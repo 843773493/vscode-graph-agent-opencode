@@ -86,7 +86,7 @@ def install_user_configuration(
 ) -> ConfigurationInstallation:
     """从静态资源安装双配置；普通模式只补缺失配置。"""
     resolved_root = config_root.expanduser().resolve()
-    sources: list[tuple[Path, Path, Path, Path]] = []
+    sources: list[tuple[Path, Path, Path, bytes | None]] = []
     for domain in CONFIG_DOMAINS:
         config_source = resolve_config_resource_source(
             _profile_config_resource(domain, profile),
@@ -96,26 +96,36 @@ def install_user_configuration(
             f"{domain}_schema.jsonc",
             project_root=project_root,
         )
-        validate_config_resource_pair(config_source, schema_source)
+        config_target = resolved_root / f"{domain}.jsonc"
+        schema_target = resolved_root / f"{domain}_schema.jsonc"
+        schema_content = schema_source.read_bytes()
+        schema_changed = (
+            force or not schema_target.exists()
+            or schema_target.read_bytes() != schema_content
+        )
+        # 只校验实际安装的资源；既有用户配置由对应运行时校验合并结果。
+        if force or not config_target.exists() or schema_changed:
+            validate_config_resource_pair(config_source, schema_source)
         sources.append(
             (
                 config_source,
-                schema_source,
-                resolved_root / f"{domain}.jsonc",
-                resolved_root / f"{domain}_schema.jsonc",
+                config_target,
+                schema_target,
+                schema_content if schema_changed else None,
             )
         )
 
     config_paths: list[Path] = []
     schema_paths: list[Path] = []
     created_config_paths: list[Path] = []
-    for config_source, schema_source, config_target, schema_target in sources:
+    for config_source, config_target, schema_target, schema_content in sources:
         config_paths.append(config_target)
         schema_paths.append(schema_target)
         if force or not config_target.exists():
             atomic_write(config_target, config_source.read_bytes(), 0o600)
             created_config_paths.append(config_target)
-        atomic_write(schema_target, schema_source.read_bytes(), 0o600)
+        if schema_content is not None:
+            atomic_write(schema_target, schema_content, 0o600)
 
     return ConfigurationInstallation(
         config_paths=tuple(config_paths),

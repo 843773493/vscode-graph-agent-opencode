@@ -6,11 +6,13 @@ import json
 import os
 import shutil
 from pathlib import Path
+from unittest.mock import Mock
 
 import commentjson
 import jsonschema
 import pytest
 
+from configs import installer
 from configs.boxteam import (
     SSH_BLOCK_BEGIN,
     SSH_BLOCK_END,
@@ -161,6 +163,49 @@ def test_force_rebuild_replaces_both_user_configs(tmp_path: Path) -> None:
     }
     assert "stale" not in _load_jsonc_object(config_root / "gateway.jsonc")
     assert "stale" not in _load_jsonc_object(config_root / "workspace.jsonc")
+
+
+def test_repeated_install_does_not_revalidate_or_rewrite_unchanged_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_root = tmp_path / "config"
+    first = install_user_configuration(
+        config_root=config_root, profile="default", project_root=Path.cwd(),
+    )
+    validate = Mock(wraps=installer.validate_config_resource_pair)
+    write = Mock(wraps=installer.atomic_write)
+    monkeypatch.setattr(installer, "validate_config_resource_pair", validate)
+    monkeypatch.setattr(installer, "atomic_write", write)
+
+    second = install_user_configuration(
+        config_root=config_root, profile="default", project_root=Path.cwd(),
+    )
+
+    assert second.config_paths == first.config_paths
+    assert second.schema_paths == first.schema_paths
+    assert second.created_config_paths == ()
+    validate.assert_not_called()
+    write.assert_not_called()
+
+
+def test_changed_schema_is_validated_before_replacing_installed_resources(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    sources = project / "configs"
+    sources.mkdir(parents=True)
+    for domain in ("gateway", "workspace"):
+        (sources / f"{domain}_inline.jsonc").write_text('{"enabled": true}')
+        (sources / f"{domain}_schema.jsonc").write_text('{"type": "object"}')
+    config_root = tmp_path / "config"
+    install_user_configuration(config_root=config_root, profile="default", project_root=project)
+    before = {path.name: path.read_bytes() for path in config_root.iterdir()}
+    (sources / "workspace_schema.jsonc").write_text('{"type": "array"}')
+
+    with pytest.raises(jsonschema.ValidationError):
+        install_user_configuration(config_root=config_root, profile="default", project_root=project)
+
+    assert {path.name: path.read_bytes() for path in config_root.iterdir()} == before
 
 
 def test_source_development_install_uses_dev_profiles_and_source_env(

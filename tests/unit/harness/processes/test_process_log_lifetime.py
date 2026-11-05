@@ -59,7 +59,7 @@ def startup(
         )
         close = workspace_processes.close_backend_process
     else:
-        monkeypatch.setattr(module, "_install_current_user_configuration", Mock())
+        monkeypatch.setattr(module, "install_user_configuration", Mock())
         monkeypatch.setattr(module.shutil, "which", lambda _name: "node")
         monkeypatch.setattr(module, "wait_for_gateway_ready", ready)
         start = partial(gateway_processes.start_gateway_process,

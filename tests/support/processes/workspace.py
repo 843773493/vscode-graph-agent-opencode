@@ -28,6 +28,7 @@ from tests.support.processes.scope import (
 )
 
 TEST_READY_TIMEOUT_SECONDS = 60
+TEST_LISTENER_POLL_SECONDS = 0.2
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +153,7 @@ def wait_for_backend_ready(
         except psutil.NoSuchProcess as error:
             raise RuntimeError(f"后端进程在监听前退出: pid={process.pid}, port={port}") from error
         if not listening:
-            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            time.sleep(min(TEST_LISTENER_POLL_SECONDS, max(0, deadline - time.monotonic())))
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -241,7 +242,7 @@ def wait_for_http_ok(
         except psutil.NoSuchProcess as error:
             raise RuntimeError(f"测试进程在监听前退出: pid={process.pid}, url={url}") from error
         if not listening:
-            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            time.sleep(min(TEST_LISTENER_POLL_SECONDS, max(0, deadline - time.monotonic())))
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:

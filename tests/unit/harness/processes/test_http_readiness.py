@@ -306,7 +306,7 @@ def test_workspace_does_not_connect_until_owned_listener_exists(
 
     monkeypatch.setattr(workspace_processes, "urlopen", connect)
     workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
-    assert observed == pytest.approx([0.15])
+    assert observed == pytest.approx([0.2])
 
 
 @pytest.mark.parametrize("address", [("127.0.0.1", 4313), ("127.0.0.2", 4312)])
@@ -554,3 +554,27 @@ def test_no_probe_until_owned_listener_is_ready(
     else:
         workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
     assert len(calls) == 1 and 0.15 <= clock.now <= 0.2
+
+
+@pytest.mark.parametrize("entry", ["gateway", "http", "workspace"])
+def test_unready_listener_does_not_rescan_connections_every_fifty_milliseconds(
+    entry: str, clock: ManualClock, process: Mock, backend_connections: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend_connections.net_connections.return_value = []
+    monkeypatch.setattr(workspace_processes, "TEST_READY_TIMEOUT_SECONDS", 1)
+    connect = Mock()
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+
+    with pytest.raises(TimeoutError):
+        if entry == "gateway":
+            gateway_processes.wait_for_gateway_ready(4312, process)
+        elif entry == "http":
+            workspace_processes.wait_for_http_ok("http://127.0.0.1:4312/health", process, timeout_seconds=1)
+        else:
+            workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
+
+    # Gateway 包装器保留默认 60 秒期限，其余入口在本测试中使用 1 秒。
+    assert backend_connections.net_connections.call_count == (300 if entry == "gateway" else 5)
+    assert clock.now == pytest.approx(60 if entry == "gateway" else 1)
+    connect.assert_not_called()
