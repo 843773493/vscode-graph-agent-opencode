@@ -341,21 +341,16 @@ def install_frozen_skill_catalog(
 ) -> None:
     """显式选择取原调用目录；新目录仅负责本次metadata与tracked观察。"""
     manager.install_skill_activation_snapshot(snapshot)
-    for binding in snapshot.sources.values():
-        manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
-    metadata = []
-    for binding in snapshot.entries.values():
-        manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
-        metadata.append({"name": binding.name, "description": binding.description})
+    manager.register_skill_catalog(snapshot)
     manager.restore_frozen_skill_selections(pending_catalog)
     manager.observe_frozen_tracked_skills()
-    if not include_instructions or (not metadata and not any(
+    if not include_instructions or (not snapshot.entries and not any(
         descriptor.source_id == "instruction:skill-catalog" for descriptor in manager.descriptors()
     )):
         return
     lines = "\n".join(
-        f'- **{entry["name"]}**: {entry["description"]}\n  -> 匹配后调用 `skill_load(name="...")` 激活正文'
-        for entry in metadata
+        f'- **{binding.name}**: {binding.description}\n  -> 匹配后调用 `skill_load(name="...")` 激活正文'
+        for binding in snapshot.entries.values()
     ) or "(No skills available yet.)"
     register_instruction_producer(manager, InstructionProducerSpec(
         producer_id="R05", source_id="instruction:skill-catalog", source_kind="skill_catalog_metadata",

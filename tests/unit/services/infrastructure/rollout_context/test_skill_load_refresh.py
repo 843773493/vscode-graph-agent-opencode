@@ -186,7 +186,7 @@ def test_last_explicit_selection_wins_before_seal_and_after_cold_restore(source_
     assert pending is not None and [delta.source_id for delta in pending.deltas] == ["skill:demo"]
     manager = case.manager()
     manager.install_skill_activation_snapshot(original)
-    manager.register_skill_binding(a, catalog_revision=original.catalog_revision)
+    manager.register_skill_catalog(original)
     manager.restore_frozen_skill_selections(original)
     tools = ToolSetSnapshot(selection_revision=sha256_jcs({"changed": True}), tools=(
         {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}},
@@ -215,7 +215,7 @@ def test_catalog_rebind_keeps_pending_tracked_update_sealable(source_seal_case):
     manager.load_skill("demo", "tracked", activation_snapshot=catalog)
     case.seal(manager)
     manager.observe("skill:demo", "v2\n").require_tracked()
-    manager.register_skill_binding(catalog.entries["demo"], catalog_revision="catalog:metadata-only")
+    manager.register_skill_catalog(replace(catalog, catalog_revision="catalog:metadata-only"))
     _, sealed = case.seal(manager)
     block = json.loads(sealed.prefix.state.frames[-1].content)["sources"][0]
     assert block["revision"] == _revision("v2\n")

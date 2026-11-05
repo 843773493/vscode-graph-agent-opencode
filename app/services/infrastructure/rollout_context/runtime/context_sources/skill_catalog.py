@@ -130,9 +130,13 @@ class SkillCatalogMixin:
                 raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 尚无冻结 Skill catalog")
             return self._skill_activation_snapshot
 
-        def register_skill_binding(self, binding: SkillCatalogBinding, *, catalog_revision: str) -> None:
-            """entry identity 决定 registration；同名新 entry 保留原 tracked registration。"""
-            self.register(_skill_descriptor(binding), binding_revision=catalog_revision)
+        def register_skill_catalog(self, snapshot: SkillCatalogActivationSnapshot) -> None:
+            """来源按原顺序登记一次；同名新 entry 保留原 tracked registration。"""
+            for binding in snapshot.sources.values():
+                self.register(_skill_descriptor(binding), binding_revision=snapshot.catalog_revision)
+            # entries 已包含在 sources 中；仅重排名称索引，不重复读取 rebuild 或持久控制状态。
+            for binding in snapshot.entries.values():
+                self._install_registration(self._sources[f"skill:{binding.entry_identity}"])
 
         def install_skill_activation_snapshot(
             self,
