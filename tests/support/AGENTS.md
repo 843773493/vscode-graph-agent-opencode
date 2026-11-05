@@ -16,7 +16,7 @@
 │   └── custom_tool_test_workspace.py      工具历史装具准备与阶段计时
 ├── 进程、连接与存储生命周期
 │   ├── processes/scope.py                    进程句柄登记及作用域释放
-│   ├── processes/workspace.py                Workspace后端、日志、端口预检与HTTP就绪
+│   ├── processes/workspace.py                Workspace后端、日志、端口预检与限频监听/HTTP就绪
 │   ├── processes/gateway.py                  Gateway进程、配置和就绪
 │   ├── gateway_managed_backends.py        Gateway托管后端的显式进程替身
 │   └── session_catalog_owner.py           测试catalog连接的登记与释放

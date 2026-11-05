@@ -24,6 +24,8 @@ communication/
 # 规范
 
 - 每个联邦节点的工作区、端口和进程都由调用方上下文显式拥有并释放。
+- 独立 Backend 与下游 Gateway 并行启动；上游 Gateway 等下游就绪后再配对。启动失败必须先等所有并行任务移交句柄，再统一释放，不取消尚持有启动线程的兄弟任务。
+- 启动前用既有 `E2EProcessLease` 持有 Backend、Gateway、辅助服务、sshd 与隧道的固定端口，所有服务退出后才释放，避免自动出站源端口抢占；不终止未知监听进程或修改宿主端口配置。
 - fault backend 必须保留原始异常和真实 owner 的调用顺序，不补造业务回执。
 - 新通信测试辅助按 probe、组合装配或进程注入职责放置，并同步更新 `tests/support/AGENTS.md`。
 

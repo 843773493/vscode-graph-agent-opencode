@@ -24,7 +24,6 @@ from app.core.workspace_identity import (
     workspace_identity_path,
 )
 from app.gateway.runtime.process_lifecycle import ManagedProcess
-from configs.installer import install_user_configuration
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 from tests.harness.python.browser_manager import (
     close_browser_manager_processes,
@@ -33,6 +32,7 @@ from tests.harness.python.browser_manager import (
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -142,8 +142,21 @@ async def open_communication_triad(
         "UsePAM no", "PasswordAuthentication no", "KbdInteractiveAuthentication no",
         "PubkeyAuthentication yes", "StrictModes no", "AllowTcpForwarding yes", "LogLevel VERBOSE", "",
     ]))
-    ensure_local_port_available(ports.port(60), service_name="C3 隔离 sshd")
+    layout = (("a", 0), ("b", 20)) if same_backend_routes else (("a", 0), ("b", 20), ("c", 40))
+    backend_layout = layout[:1] if same_backend_routes else layout
+    service_offsets = {60, *range(70, 80)}
+    service_offsets.update(offset for _, offset in backend_layout)
+    service_offsets.update(offset + 1 for _, offset in layout)
+    for name, offset in backend_layout:
+        if name in resource_service_nodes:
+            service_offsets.update(offset + step for step in (4, 5, 6))
     async with AsyncExitStack() as resources:
+        # 启动并行节点前持续占住服务端口，避免出站连接提前占用尚未监听的端口。
+        # 复用原租约；清理顺序保证所有服务退出后才归还端口。
+        lease = E2EProcessLease(context.artifacts_dir / "c3-process-lease.json",
+                                tuple(ports.port(offset) for offset in sorted(service_offsets)))
+        lease.acquire()
+        resources.callback(lease.release)
         log = resources.enter_context((ssh_root / "sshd.log").open("w"))
         process = await asyncio.to_thread(subprocess.Popen, [sshd, "-D", "-e", "-f", str(config)], stdout=log, stderr=log, text=True, start_new_session=True)
         ssh_owner = ManagedProcess(process=process, log_file=log)
@@ -158,16 +171,8 @@ async def open_communication_triad(
         backends = {}
         backend_starters = {}
         nodes = {}
-        layout = (("a", 0), ("b", 20)) if same_backend_routes else (("a", 0), ("b", 20), ("c", 40))
         gateway_homes = {name: (gateway_runtime_root or context.workspace_root) / name / "boxteam-home" for name, _ in layout}
-        for name, offset in layout:
-            if same_backend_routes and name == "b":
-                # 两条 Gateway 路由共享唯一 Popen；绝不启动第二个 backend 共写工作区。
-                workspaces[name], backends[name] = workspaces["a"], backends["a"]
-                backend_starters[name] = backend_starters["a"]
-                if gateway_homes[name].exists():
-                    shutil.rmtree(gateway_homes[name])
-                continue
+        async def start_backend_node(name: str, offset: int) -> None:
             node_context = replace(context, workspace_root=context.workspace_root / name / "workspace")
             workspace = prepare_workspace(node_context, ports.port(10), ports.port(offset + 1))
             # 模板身份不能被三个独立工作区共享；由正式启动 owner 创建各自 UUID。
@@ -227,10 +232,23 @@ async def open_communication_triad(
             def close_owned_backend(name=name):
                 close_backend_process(nodes[name].backend if name in nodes else backends[name])
             resources.push_async_callback(asyncio.to_thread, close_owned_backend)
-        for name, offset in (*layout[1:], layout[0]):
+
+        results = await asyncio.gather(
+            *(start_backend_node(name, offset) for name, offset in backend_layout),
+            return_exceptions=True,
+        )
+        # 所有启动线程归还句柄后才退出资源栈，避免部分失败时漏回收并行节点。
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            raise BaseExceptionGroup("联邦 Backend 启动失败", errors)
+        if same_backend_routes:
+            workspaces["b"], backends["b"] = workspaces["a"], backends["a"]
+            backend_starters["b"] = backend_starters["a"]
+            if gateway_homes["b"].exists():
+                shutil.rmtree(gateway_homes["b"])
+
+        async def start_gateway_node(name: str, offset: int) -> None:
             workspace = workspaces[name]
-            # B 在单 Backend 模式没有启动 backend，仍必须独立初始化自己的 Gateway HOME。
-            install_user_configuration(config_root=gateway_homes[name] / "config", profile="default", project_root=root, force=False)
             if name == "a":
                 config_path = gateway_homes[name] / "config/gateway.jsonc"
                 payload = commentjson.loads(config_path.read_text())
@@ -256,6 +274,16 @@ async def open_communication_triad(
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
             nodes[name] = CommunicationNode(workspace, client, health.json()["data"]["gateway_id"], backends[name].workspace_id, backends[name], backend_starters[name], gateway_homes[name], gateway)
+
+        results = await asyncio.gather(
+            *(start_gateway_node(name, offset) for name, offset in layout[1:]),
+            return_exceptions=True,
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            raise BaseExceptionGroup("联邦 Gateway 启动失败", errors)
+        # A 的联邦配对依赖 B/C 已经就绪，其余节点没有相互依赖。
+        await start_gateway_node(*layout[0])
         async with asyncio.timeout(20):
             while len(nodes["a"].channels()) != len(layout) - 1 or any(len(nodes[name].channels()) != 1 for name, _ in layout[1:]):
                 await asyncio.sleep(0.05)

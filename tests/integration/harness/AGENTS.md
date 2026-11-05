@@ -26,7 +26,7 @@ harness/
 ├── test_windows_target_activation.py           Windows 目标激活生命周期
 ├── test_windows_target_process_guard.py        Windows Job Object 进程树保护
 ├── test_windows_target_stop.py                 Windows 目标停止与进程回收
-├── test_workspace_readiness.py                工作区就绪探针的身份与 HTTP 状态
+├── test_workspace_readiness.py                工作区身份、HTTP 状态及并行启动失败回收
 ├── dev_gateway_readiness.test.mjs              外层 Gateway 等待的 HTTP 期限与 manager 身份
 ├── dev_service_readiness.test.mjs              开发服务 HTTP 与 detached 就绪记录观察预算
 └── e2e_control_client.test.mjs                 JS 控制端口的 TCP 分块、回执与并发隔离

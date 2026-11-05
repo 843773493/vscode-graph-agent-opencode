@@ -290,3 +290,9 @@
 
 - 资源关闭按原生Gateway／UUID唯一选目标并核本地连接，两种模型协议在组合中逐项通过；随后a06因测试客户端的来源目标头与远端URI冲突返回400而停止，未将组合记为通过。context/read现显式带URI目标双头，后续消息仍固定来源owner；a06独立补验1 passed／116.68秒、退出0，保留冷读零物化、切换／重连、send／wait冻结目标、真实工具顺序配对和持久通信事实断言。
 - 原组合与补验命令／源码指纹／原始结果分别为 `out/tests/temp/identity_remaining_web_20261105/artifacts/backend-owner-consumers-product-1793857872642301432.json` 和 `context-uri-target-product-1793858070035877626.json`。资源关闭静态沿已交付相同SHA的 `identity_remaining_backend_20261105/artifacts/evidence-index.json` 复用；a06最终Ruff退出0、Pyright8／8既存诊断无新增，对照 `context-uri-target-type-comparison.json`。其余Backend消费者尚未完成，6.4继续未勾；联邦沿原loopback传输装具，不代表真实SSH或Windows。
+
+### 2026-11-05：6.4 联邦验收装具的启动与端口归属
+
+- source-child fork 两次在 setup 失败，尚未进入业务：首次辅助服务39224，补验Backend39200；保留原始失败，不记fork通过。补验后实际 `ss -tanp` 观察39200作为出站源连接处于TIME-WAIT，宿主自动源端口范围32768–60999与固定测试块重叠；这不证明首次39224占用的来源。
+- 联邦装具复用既有 `E2EProcessLease`，在启动前持有固定Backend、Gateway、辅助服务、sshd与隧道端口，全部句柄退出后才释放；并行Backend／下游Gateway先完成移交再统一失败回收，上游仍等待下游就绪。不加盲重试、不终止未知监听或修改宿主配置。
+- 端口租约、真实Backend并行启动失败清理及HTTP就绪定向11 passed／22.62秒，Ruff和项目解释器Pyright退出0。最终仅格式化一个测试导入，完整AST相同。命令、首尾源码指纹与原始结果在 `out/tests/temp/identity_remaining_web_20261105/artifacts/federation-port-lease-behavior-1793858923834718097.json`、`federation-port-lease-type-1793858915450571697.json`、`federation-port-lease-final-static-1793859023481622292.json` 和 `federation-import-format-attribution.json`。本次不代替完整fork／Web／Windows业务验收，6.4仍未完成。

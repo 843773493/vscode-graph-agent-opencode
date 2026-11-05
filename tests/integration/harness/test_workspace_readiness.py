@@ -9,14 +9,59 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from threading import Thread
 from unittest.mock import Mock
 
 import pytest
 
+import tests.support.processes.workspace as workspace_processes
+from tests.harness.python.run_context import TestRunContext
+from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.workspace import wait_for_backend_ready
 
 EXPECTED_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+
+
+@pytest.fixture
+def parallel_backend_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestFilePortBlock, RuntimeError, list[subprocess.Popen[str]], list[int]]:
+    ports = integration_port_block_for_file(Path(__file__))
+    failure = RuntimeError("并行节点就绪失败")
+    processes: list[subprocess.Popen[str]] = []
+    ready_ports: list[int] = []
+    original = workspace_processes.wait_for_backend_ready
+
+    def wait(port: int, process: subprocess.Popen[str], workspace_id: str) -> None:
+        processes.append(process)
+        if port == ports.port(20):
+            raise failure
+        original(port, process, workspace_id)
+        ready_ports.append(port)
+
+    monkeypatch.setattr(workspace_processes, "wait_for_backend_ready", wait)
+    return ports, failure, processes, ready_ports
+
+
+async def test_parallel_federation_waits_for_other_starters_before_failure_cleanup(
+    parallel_backend_failure: tuple[TestFilePortBlock, RuntimeError, list[subprocess.Popen[str]], list[int]],
+) -> None:
+    from tests.integration.backend.sessions.test_session_communication_pipeline import (
+        _prepare_workspace,
+    )
+    from tests.support.communication.federation import open_communication_triad
+
+    ports, failure, processes, ready_ports = parallel_backend_failure
+    context = TestRunContext.from_test_file(Path(__file__)).prepare()
+    with pytest.raises(BaseExceptionGroup) as caught:
+        async with open_communication_triad(context, _prepare_workspace, ports=ports):
+            pytest.fail("一个节点启动失败时不得进入业务阶段")
+
+    assert caught.value.exceptions == (failure,)
+    assert set(ready_ports) == {ports.port(0), ports.port(40)}
+    assert len(processes) == 3
+    assert all(process.poll() is not None for process in processes)
 
 
 @dataclass(slots=True)
