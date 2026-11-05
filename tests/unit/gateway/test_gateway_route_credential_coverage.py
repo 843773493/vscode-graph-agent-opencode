@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.trace_middleware import TraceMiddleware
+from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes.workspaces import router as workspaces_router
 
@@ -28,16 +29,16 @@ from app.gateway.routes.workspaces import router as workspaces_router
 def _build_app(tmp_path: Path) -> FastAPI:
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", gateway_id=load_proxy_gateway_id())
     application.state.registry = registry
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gw_default",
+            gateway_id=registry.gateway_id,
+            workspace_id="00000000-0000-4000-8000-000000000001",
             name="默认工作区",
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:9",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             owner="system",
             managed=False,
             system_default=True,
@@ -49,7 +50,9 @@ def _build_app(tmp_path: Path) -> FastAPI:
 
 @pytest.fixture
 def gateway_app(tmp_path: Path) -> Iterator[FastAPI]:
-    yield _build_app(tmp_path)
+    application = _build_app(tmp_path)
+    yield application
+    application.state.registry.close()
 
 
 def test_list_workspaces_requires_local_token(gateway_app: FastAPI) -> None:

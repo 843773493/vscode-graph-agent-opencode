@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from typing import cast
 
 import anyio
@@ -19,22 +20,25 @@ from app.gateway.auxiliary_proxy import (
     proxy_attach_frontend,
     proxy_auxiliary_http,
 )
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.proxy_upstream import load_proxy_gateway_id
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceKey, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.service_types import GatewayServiceName
 
+WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+
 
 @pytest.fixture
-def registry(tmp_path) -> GatewayWorkspaceRegistry:
-    result = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+def registry(tmp_path: Path) -> Iterator[GatewayWorkspaceRegistry]:
+    result = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", gateway_id=load_proxy_gateway_id())
     result.upsert(
         WorkspaceTarget(
-            workspace_id="gw_aux",
+            gateway_id=result.gateway_id,
+            workspace_id=WORKSPACE_ID,
             name="aux",
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41100",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={
@@ -45,7 +49,8 @@ def registry(tmp_path) -> GatewayWorkspaceRegistry:
         ),
         activate=False,
     )
-    return result
+    yield result
+    result.close()
 
 
 @pytest.mark.asyncio
@@ -75,7 +80,7 @@ async def test_http_proxies_preserve_repeated_query_parameters(
                 "method": "GET",
                 "path": "/health",
                 "query_string": b"item=first&item=second&empty=&label=%E4%B8%AD%E6%96%87",
-                "headers": [],
+                "headers": [(b"x-boxteam-target-gateway-id", registry.gateway_id.encode())],
                 "app": application,
             }
         )
@@ -83,7 +88,7 @@ async def test_http_proxies_preserve_repeated_query_parameters(
         request.state.request_id = "req_aux_query"
         if proxy_kind == "auxiliary":
             response = await proxy_auxiliary_http(
-                workspace_id="gw_aux",
+                workspace_id=WORKSPACE_ID,
                 service_path="terminal-manager",
                 path="health",
                 request=request,
@@ -98,7 +103,7 @@ async def test_http_proxies_preserve_repeated_query_parameters(
     assert response.body == b"upstream"
     assert queries == [[("item", "first"), ("item", "second"), ("empty", ""), ("label", "中文")]]
     assert request_ids == ["req_aux_query"]
-    assert registry.route_reference_counts("gw_aux") == (0, 0)
+    assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -121,9 +126,9 @@ async def test_auxiliary_proxy_rejects_direct_resource_management_before_forward
         {
             "type": "http",
             "method": "GET",
-            "path": "/api/gateway/workspaces/gw_aux/terminal-manager/evil",
+            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/terminal-manager/evil",
             "query_string": b"",
-            "headers": [],
+            "headers": [(b"x-boxteam-target-gateway-id", registry.gateway_id.encode())],
             "app": application,
         }
     )
@@ -133,7 +138,7 @@ async def test_auxiliary_proxy_rejects_direct_resource_management_before_forward
     try:
         with pytest.raises(HTTPException) as captured:
             await proxy_auxiliary_http(
-                workspace_id="gw_aux",
+                workspace_id=WORKSPACE_ID,
                 service_path="terminal-manager",
                 # uvicorn 已把请求行里的 %2e%2e 解码为 ..，路由拿到的就是解码后的路径。
                 path="../../evil",
@@ -147,7 +152,7 @@ async def test_auxiliary_proxy_rejects_direct_resource_management_before_forward
     detail = str(captured.value.detail)
     assert "/api/v1/resources" in detail
     assert calls == []
-    assert registry.route_reference_counts("gw_aux") == (0, 0)
+    assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -203,54 +208,58 @@ async def test_auxiliary_stream_releases_upstream_under_anyio_cancellation() -> 
 @pytest.mark.asyncio
 async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
     registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """registry 权威拒绝（RuntimeError）必须归还引用并显式失败，不得泄漏。"""
 
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id="gw_bad",
-            name="bad",
-            root_path=None,
-            backend_url="",
-            connection_kind="remote_gateway",
-            backend_workspace_id="00000000-0000-4000-8000-000000000002",
-            owner="manual",
-            remote_gateway_connection_id=None,
-            remote_workspace_id=None,
-        ),
-        activate=False,
-    )
+    workspace_key = (registry.gateway_id, WORKSPACE_ID)
+    original = RuntimeError("辅助服务运行时尚未就绪")
+    resolutions: list[tuple[WorkspaceKey, GatewayServiceName]] = []
+    forwarded: list[httpx.Request] = []
+
+    def reject(workspace: WorkspaceKey, service: GatewayServiceName) -> str:
+        assert workspace == workspace_key
+        assert registry.route_reference_counts(workspace_key) == (1, 0)
+        resolutions.append((workspace, service))
+        raise original
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        forwarded.append(request)
+        return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(registry, "resolve_service_url", reject)
     application = FastAPI()
     application.state.registry = registry
-    application.state.http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, content=b"ok")
-        )
-    )
     request = Request(
         {
             "type": "http",
             "method": "GET",
-            "path": "/api/gateway/workspaces/gw_bad/terminal-manager/health",
+            "path": f"/api/gateway/workspaces/{WORKSPACE_ID}/terminal-manager/health",
             "query_string": b"",
-            "headers": [],
+            "headers": [(b"x-boxteam-target-gateway-id", registry.gateway_id.encode())],
             "app": application,
         }
     )
     request._body = b""
     request.state.request_id = "req_aux_runtime_error"
 
-    with pytest.raises(HTTPException) as captured:
-        await proxy_auxiliary_http(
-            workspace_id="gw_bad",
-            service_path="terminal-manager",
-            path="health",
-            request=request,
-            auth=GatewayAuthContext(kind="local"),
-        )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        application.state.http_client = client
+        with pytest.raises(HTTPException) as captured:
+            await proxy_auxiliary_http(
+                workspace_id=WORKSPACE_ID,
+                service_path="terminal-manager",
+                path="health",
+                request=request,
+                auth=GatewayAuthContext(kind="local"),
+            )
 
     assert captured.value.status_code == 503
-    assert registry.route_reference_counts("gw_bad") == (0, 0)
+    assert captured.value.detail == str(original)
+    assert captured.value.__cause__ is original
+    assert resolutions == [(workspace_key, "terminal_manager")]
+    assert forwarded == []
+    assert registry.route_reference_counts(workspace_key) == (0, 0)
 
 
 @pytest.fixture
@@ -271,7 +280,9 @@ def auxiliary_websocket(registry: GatewayWorkspaceRegistry) -> tuple[WebSocket, 
         messages.append(message)
 
     return WebSocket({
-        "type": "websocket", "path": "/terminal", "headers": [], "app": application,
+        "type": "websocket", "path": "/terminal", "app": application,
+        "headers": [(b"x-boxteam-target-gateway-id", registry.gateway_id.encode()),
+                    (b"x-boxteam-workspace-id", WORKSPACE_ID.encode())],
         "query_string": f"token={get_gateway_local_token()}".encode(),
     }, receive, send), messages
 
@@ -327,7 +338,7 @@ async def test_auxiliary_websocket_failures_keep_native_diagnostics_private(
 
         class Connect:
             async def __aenter__(self) -> Upstream:
-                assert registry.route_reference_counts("gw_aux") == (0, 1)
+                assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 1)
                 if phase == "upstream":
                     raise original
                 return Upstream()
@@ -338,7 +349,7 @@ async def test_auxiliary_websocket_failures_keep_native_diagnostics_private(
         monkeypatch.setattr("app.gateway.auxiliary_proxy.connect", lambda *_args, **_kwargs: Connect())
 
     await _proxy_auxiliary_websocket(
-        websocket=websocket, workspace_id="gw_aux", service=service, socket_path="terminal",
+        websocket=websocket, workspace_id=WORKSPACE_ID, service=service, socket_path="terminal",
     )
     if phase in {"access", "runtime"}:
         monkeypatch.setattr(registry, "resolve", resolve)
@@ -350,7 +361,7 @@ async def test_auxiliary_websocket_failures_keep_native_diagnostics_private(
     assert frame["reason"] == f"auxiliary_websocket_{reported_phase}_failed"
     assert len(frame["reason"].encode()) <= 123
     assert native not in str(messages)
-    assert registry.route_reference_counts("gw_aux") == (0, 0)
+    assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
     assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
     assert str(original) in caplog.text
     if phase == "relay":
@@ -376,10 +387,10 @@ async def test_auxiliary_websocket_rejection_never_opens_upstream(
 
     monkeypatch.setattr("app.gateway.auxiliary_proxy.connect", unexpected_connect)
     await _proxy_auxiliary_websocket(
-        websocket=websocket, workspace_id="gw_aux", service="terminal_manager", socket_path="terminal",
+        websocket=websocket, workspace_id=WORKSPACE_ID, service="terminal_manager", socket_path="terminal",
     )
     assert messages == [{"type": "websocket.close", "code": 1008, "reason": "auxiliary_websocket_access_failed"}]
-    assert registry.route_reference_counts("gw_aux") == (0, 0)
+    assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -393,7 +404,7 @@ async def test_auxiliary_websocket_cancellation_preserves_identity_and_reference
 
     class Connect:
         async def __aenter__(self) -> None:
-            assert registry.route_reference_counts("gw_aux") == (0, 1)
+            assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 1)
             raise original
 
         async def __aexit__(self, *_args: object) -> None:
@@ -402,8 +413,8 @@ async def test_auxiliary_websocket_cancellation_preserves_identity_and_reference
     monkeypatch.setattr("app.gateway.auxiliary_proxy.connect", lambda *_args, **_kwargs: Connect())
     with pytest.raises(asyncio.CancelledError) as captured:
         await _proxy_auxiliary_websocket(
-            websocket=websocket, workspace_id="gw_aux", service="terminal_manager", socket_path="terminal",
+            websocket=websocket, workspace_id=WORKSPACE_ID, service="terminal_manager", socket_path="terminal",
         )
     assert captured.value is original
     assert messages == [{"type": "websocket.accept", "subprotocol": None, "headers": []}]
-    assert registry.route_reference_counts("gw_aux") == (0, 0)
+    assert registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)

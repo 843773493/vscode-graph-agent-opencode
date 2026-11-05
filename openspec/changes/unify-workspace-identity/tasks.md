@@ -42,6 +42,8 @@
   - 2026-11-05 搜索元数据消费者：发现与冻结范围测试改用完整 Gateway／workspace owner，远端准备沿正式 projection 发布入口；保留相同 UUID 不同 Gateway、发现零启动、分页不改活动项／导航、重启后旧 owner 不重定向到同名新工作区的断言。发现补验 13 passed，冻结范围真实 Gateway 重启单项沿首批通过记录复用，源码指纹未变；两文件 Ruff／Pyright 零诊断。准确命令、失败归因与补验原件见 `out/tests/temp/identity_metadata_consumers_20261105/artifacts/final-index.json`；全仓其余消费者仍待核齐，本项不勾选。
   - 2026-11-05 名称／文件联邦搜索验收迁齐：外部后端登记和请求统一使用原生 Gateway／workspace UUID，移除测试中的路由别名及退役 DTO 字段；真实 Gateway 与双 Backend 1 passed／118.02 秒，覆盖重启续页、目录及 child 版本冲突、文件正文／UTF-16 列、实际读失败、停止目标和连接拒绝。原身份、顺序、游标、错误归属及输出字节预算断言保留，Session／child 状态仍由产品入口生成；Ruff／Pyright 零诊断。命令、原始输出和收据见 `out/tests/temp/identity_federated_search_20261105/artifacts/final-index.json`；本场景不代表跨 Gateway 实网或客户端验收。
 
+  - 2026-11-05 辅助代理验收消费者迁齐：三份 HTTP／WebSocket／路由认证单测使用原生 Gateway／workspace UUID，远端准备沿正式 projection 发布；保留目标冲突拒绝、发送方头剥离、联邦授权、request_id 及引用结清，原 RuntimeError 边界在合法 owner 前提下验证原 cause、503 和零转发。三文件 75 passed，Ruff／Pyright 零诊断，源码与生产依赖指纹一致；原件见 `out/tests/temp/identity_auxiliary_proxy_20261105/artifacts/evidence-index.json` 及其 `static-analysis-2026-11-05T00-56-21-805Z/evidence-index.json`。本批只迁单元验收，不代表真实网络或客户端通过，6.4 仍未勾选。
+
 ### 2026-11-04：6.1 只读登记身份预检切片
 
 - 新增显式 `python -m configs.boxteam preview-workspace-identity`，只读 registry 13／Gateway SQLite 18／connection record 4；不安装配置、不创建缺失身份、不启动目标。运行时与维护入口复用唯一 registry 快照投影，metadata 与行使用同一读事务，避免并发发布时混合 revision。
