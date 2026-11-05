@@ -100,13 +100,16 @@ class _AssemblyContentStore(ExitStack):
                     visit(child, path, reference)
                     path.pop()
 
-        local_scopes = read_local_scopes(self.connection)
         for selection in snapshot["selection"]:
             ref = selection["ref"]
-            if not selection["included"] or ref["ref_type"] != "canonical_item":
+            if not selection["included"] or ref["ref_type"] != "canonical_item" or ref["content_length"] < 128:
                 continue
-            # 其它Thread的选择由既有manifest owner核验；这里只复用目标本地已捕获的正文。
-            if (ref["session_id"], ref["thread_id"]) not in local_scopes or ref["content_length"] < 128:
+            # 只核本次捕获的长正文来源；复用同次操作的授权，不扫描无关历史 binding。
+            scope = (ref["session_id"], ref["thread_id"])
+            if scope not in self._validated_scopes:
+                self._validated_scopes.update(read_local_scopes(self.connection, historical_scope_key=scope))
+            # 其它 Thread 的选择由 manifest 核验；这里只复用目标本地已捕获的正文。
+            if scope not in self._validated_scopes:
                 continue
             source = self.connection.execute(
                 "SELECT i.content_hash,i.payload_length,i.source_revision,i.item_sequence,e.session_id,e.thread_id "
