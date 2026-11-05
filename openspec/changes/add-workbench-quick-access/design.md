@@ -160,6 +160,22 @@ Provider 由现有工作区服务装配／依赖注入持有，注册返回可�
 
 已接入的能力通过 `match_modes` 明确声明匹配语义：catalog／Thread 名称仅接受 `fuzzy`，canonical 消息／工具结果的 `content` 操作仅接受区分大小写的 `literal`，后者允许查询空格等正文。消息与工具结果共享原 `WorkspaceMessageSearchResultsDTO`，保留码点位置、精确 Thread、原游标及所有原预算原因；每页最多100个命中，不建立缓存或第二正文索引。原 `/sessions/history/search` 与统一分派共用同一 Provider，原响应形状及400／409历史错误保持不变。精确 Thread 的查询与 around 继续沿原历史 owner，不变成工作区发现查询。
 
+#### 领域查询预算与覆盖
+
+预算复用各 owner 的既有请求字段和常量，不增加 Quick Access 专属配置。下表记录当前接入值；领域上限与联邦剩余配额取较小值，续页重新取得单页预算但仍核原查询、归属和数据版本，不能因此宣称已覆盖全部历史。
+
+| 领域及预算 owner | 单页预算 | 覆盖与达到上限的语义 |
+|---|---|---|
+| 文件／目录：`ResourceNavigationRequest`、`ResourceNavigation` | 原导航默认100项、最多1000；文件Provider最多500。默认扫描10000项、最多100000；默认10秒、最多30秒；单文件默认64KiB、最多32MiB；响应默认1MiB、最多48MiB；片段默认2KiB、最多8KiB | 只查明确根，保留根局部过滤／ignore／文件能力。条数／响应字节受限返回原因与合法续点；扫描／期限失败保留原具名错误，不能解释为空结果。文件名按资源数、正文按匹配区间计量，上下文只占字节。 |
+| 会话目录：`NameSearchBudget`、原catalog查询 | Provider最多500项；准入、冷快照、匹配和投影共用最多15秒 | 查询权威catalog名称／ID／逻辑路径，结果cursor绑定查询及catalog revision；达到结果上限保留续点，期限失败不发布半份快照。离线镜像另披露来源、更新时间和stale。 |
+| Thread名称：`thread_search` | 最多100项；每页最多检查64个目录节点、512个Thread、1秒调度；总准入期限最多15秒 | 不限于已打开Thread；页内扫描／调度受限保留原原因及续点，目录／Thread版本变化明确拒绝旧cursor。1秒调度预算与15秒总期限分别生效。 |
+| 消息／工具结果：`MessageSearchBudget`、`workspace_search` | 原请求默认50、最多100个匹配；工作区页最多检查64个目录节点、16个Thread；所有Thread共用256条正文、8MiB、1秒调度和最多15秒总准入期限 | 只查询可见canonical历史；完整工具输出与JSONL共计正文预算。返回原扫描／Thread／字节／期限原因；无法推进的超大单项不造cursor，不把前端缓存或已加载历史当全集。 |
+| LLM请求：`LogSearchBudget`、原日志owner | Provider最多100个匹配；64个目录节点、128条记录、8MiB、1秒正文调度；单条1MiB、单目录最多512个JSON文件；总准入最多15秒 | 查询原Session日志，不猜Thread；记录／目录超限明确受限，只有可推进时才提供续点。查询版本与精确读取均由原日志owner核验。 |
+| Trace：`TraceSearchBudget`、原Trace owner | Provider最多100个匹配；64个目录节点、128条事件、8MiB、1秒正文调度；原单窗口512KiB；总准入最多15秒 | 只查原已提交事件及其真实归属，区分扫描、窗口／单项和期限受限；不能以Trace覆盖代替运行日志。 |
+| 运行日志：`LogQueryBudget`、Gateway diagnostics | 原请求默认50、最多100个匹配；每页64个来源、512行、8MiB、1秒正文调度；单行256KiB；继承更短的请求剩余期限 | 仅明确选择的当前日志文件，不包含轮转归档；共享Backend来源披露实际工作区关联。保留未读续点和来源不可用状态，不把部分来源无匹配报告为完整无匹配。 |
+
+联邦层仍按原8类查询、64个冻结工作区、128个分支、3页并发、最多15秒总期限，以及分别8MiB的领域页接收和业务事件输出预算准入；默认总结果配额200、合法范围0～1000。零配额不分发，未查询分支明确受限；它不证明领域能力、选项或覆盖已经校验。领域内部索引和缓存继续由原 owner 决定，不新增统一索引或第二套预算执行链。
+
 #### 请求、搜索会话与缓存的独立生命周期
 
 参考原 `FileSearchManager` 的 session／`clearCache` 和 Quick Access 的文件查询缓存，但不把它们等同于持久索引或分页快照：
@@ -404,6 +420,10 @@ Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，�
 LLM 请求日志保持 Session 级原归属，以 `llm_request/content` 注册到同一工作区 SearchService；不猜测历史 Thread。原日志 owner 对 request、response、upstream 按固定字段顺序、两空格缩进、Unicode JSON 形成搜索文本，采用相同字面量／码点合同。每页最多检查 64 个 catalog 节点、128 条记录、8 MiB 正文及一秒正文调度预算，服从请求总期限；单条硬上限 1 MiB，每个目录最多枚举 512 个 JSON 文件。cursor 绑定 Gateway／工作区／原查询／catalog revision、当前日志目录元数据版本与页内正文版本。原 Session URI 和独立记录引用分别承担资源寻址和位置；接受后只读一个文件，核验正文版本再复用原 RequestLogCard，临时展示命中附近原文，不触发整批日志 loader，不写入聊天或缓存。当前正文已知不再匹配时，续点直接移到下一条记录，最后一条已穷尽即完成，不为已知空尾页重复请求。单项／目录超限不提供无法推进的 cursor，删除或留存裁剪明确失效。
 
 Trace 以独立 `trace/content` Provider 复用原 TraceEventStore、JSONL 页和已提交 Job／Thread 索引，Goal 沿原合同归 main；它不查询 Gateway／工作区运行日志。每页至多检查 64 个 catalog 节点、128 条事件、读取 8 MiB 窗口，并消费一秒正文调度及原总期限；单窗口／事件上限沿原 512 KiB。各 Session 从新到旧，单事件内按 Unicode 码点正序匹配原 schema 的两空格 Unicode JSON。只有命中或正在继续的事件计算一次完整行版本，没有匹配不查 Thread；同窗口候选批量解析归属。cursor 绑定归属、查询、catalog revision、当前文件观察版本和字节／正文位置；stat 观察不冒充任意修改的内容校验。命中使用原 Session URI及独立精确 Thread／事件／行区间／正文位置，接受时在同一 Session 读准入和文件锁内只读原行并核版本，不读取全量 Trace。追加使旧搜索 cursor 失效，但未变化原行仍可定位。原事件面板临时显示命中附近各最多 1000 字符和原详情，实际挂载后滚动；关闭释放，不写历史缓存或持久 contentView。运行日志来源仍须分别接入与验收，不能用 Trace 完成代替 9.6 整项。
+
+运行日志以独立 `runtime_log/content` 类别接入同一联邦 SearchJob、总期限、配额、输出计量和终态。原工作区冻结 scope 不变；查询显式携带 `diagnostic_targets[{gateway_id, scope:{source, workspace_ids}}]`，每个 Gateway 的每种明确来源各派一条诊断分支，同 Gateway 同来源不得重复声明。Gateway 必须来自冻结范围的 Gateway 集合，工作区筛选必须是该 Gateway 已选工作区的非空子集；Gateway 自有来源须单独选择且不携带工作区集合。分支身份中的 `owner` 与 `diagnostics` 二选一，仅运行日志使用后者；原 Workspace Provider 的归属和领域页不变，事件独立携带原 Gateway typed `diagnostic_logs` 页，不伪造 workspace owner。Quick Access 继续只消费 `streamFederatedSearch` 的增量有界命中，接受时用具名 diagnostics 定位动作交给原诊断视图，不降为“打开视图再搜索”。
+
+日志正文归原 Gateway diagnostics，工作区只筛选关联的真实受管来源。共享 Backend 文件只读取一次并披露实际 `workspace_ids`，不声称单条正文只属于所选工作区。查询复用原来源枚举和管理认证，不读取 `.boxteam/`，不复制日志或建索引账本；每页最多 64 个来源、512 行、8 MiB、一秒正文调度，单行最多 256 KiB，仅查当前文件，不查轮转归档。完整物理行按区分大小写的字面量正序匹配，位置为去除行尾后的 Unicode 码点；cursor 绑定来源集合及当前文件观察版本，精确引用只校验文件身份、原行字节区间与完整行版本。追加拒绝旧 cursor，但未改完整行仍可定位；轮转、删除、改写明确失效。原始日志仅是受认证诊断视图的临时具名导航目标，沿统一寻址的原始诊断管理例外，不新增 URI 或普通上下文引用能力。
 
 工具定位复用 `anchor_message`／`located_message`，around 在同一 snapshot 定点补取相应 ModelCall 限定调用的原工具详情。React 按 canonical item_id 找到原 ToolRow，展开其活动区与结果行后临时展示完整原文；mark 实际挂载通知原定位调度，原生 `scrollIntoView` 先揭示限高工具详情内的命中，再对齐外层虚拟列表。不得按同名工具或裸 call ID 猜测行。完整输出删除或改写明确转为 `stale_turn_reference`；权限与其它存储错误保留原错误归属。查询及打开均不触发模型或工具重放，关闭定位释放原文。
 
@@ -679,6 +699,12 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 | 既有恢复及查询缓存 | 本轮仍验草稿／编辑器／历史恢复、查询受限预热和独立生命周期；完整分层冷热态、升级／分类清理及配置／Worker 专项转 refine-workbench-layered-caches |
 
 按闭包安排定向协议／owner测试、前端真实类型检查和web构建、真实浏览器及桌面验证；网络记录证明请求范围，不能仅靠UI看不到B断言未查询B。定向套件按资源／fixture隔离并行，同一有副作用fixture独占，昂贵全套只按影响扩展，不默认串行全跑，失败先归因不盲重跑。证据保留固定源码指纹、命令、进程外保护、原始输出、退出码和每项实际运行面；未具备条件的原生模式列缺失服务、宿主和原因，不用条件能力掩盖核心项目能力未完成。
+
+## 扩展、MCP 安装与设置管理的关联边界
+
+性能验收同时遵守[交互总延迟预算](../enforce-interactive-latency-budgets/design.md)：普通导航、查询和打开必须统计真实入口到完整结果／可用UI的总耗时，不以Provider局部耗时、loading出现或进程timeout替代。权限、归属和版本检查保留；不在暖查询无条件重复全历史／全库审计，不增加另一套性能监控。
+
+目标感知的 MCP 安装、Web／多目标 Node 扩展宿主及配置编辑归属由独立变更 [add-target-aware-extension-management](../add-target-aware-extension-management/design.md) 定义。快速访问继续沿本稿 Registry／Command／Opener 和查询合同消费能力；完整安装、宿主与设置验收归该变更，当前入口的条件复用不作为其完成证据。两个变更均保持 Electron 仅承担窗口、生命周期与固定 profile 的边界。
 
 ## 后续细化边界（不表示实施顺序）
 

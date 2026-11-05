@@ -7,7 +7,8 @@
 - [x] 1.1 按 design 的具名 owner 对照现行 schema、查询入口与所有直接／间接消费者，确认目录使用 SQLite catalog、Thread 使用精确 SessionThread，不沿用物理目录重建条文。
   - 已核当前Provider注册、原API、Gateway／工具／React／Workbench消费者：目录沿SQLite locator与逻辑导航，folder不映射物理树；Thread经原Session读准入及控制库事务核不可变main_thread_id，消息／工具继续canonical owner。六组Provider相关生产源码与已接受收据逐文件SHA一致，复用原名称／正文／生命周期验收，并以16.6当前83项及真实双Backend调度检查承接调用链。准确归属及证据索引见 `out/tests/temp/2026/11/05/search_owner_inventory/artifacts/verification.json`；本项仅关闭盘点，不代替后续公开合同、跨平台文件身份或完整资源打开验收。
 - [ ] 1.2 为领域搜索新增的请求、命中、独立位置和分支状态补齐原 owner 的 typed 合同；涉及公开 API 时同步其 delta、OpenAPI 与生成客户端。Provider／联邦共享信封按第 16 组统一生命周期，领域 payload 不被通用对象 DTO 取代，不创建第二客户端。
-- [ ] 1.3 为文件、目录、消息、工具、请求和日志分别确定必要的查询预算、上限和覆盖说明，复用原 owner 配置／常量；索引技术各自决定，不强建全局索引。
+- [x] 1.3 为文件、目录、消息、工具、请求和日志分别确定必要的查询预算、上限和覆盖说明，复用原 owner 配置／常量；索引技术各自决定，不强建全局索引。
+  - design「领域查询预算与覆盖」逐项登记原声明：文件／目录、catalog、Thread、canonical消息／工具、请求、Trace、运行日志及联邦外层；明确1秒领域调度与15秒总准入分别生效、原导航参数与Provider上限区别，以及受限／错误／合法续点的覆盖语义。24份原owner／schema／调度源码只读清点及SHA见 `out/tests/temp/2026/11/05/search_budget_inventory/artifacts/verification.json`；无新生产参数、配置或查询链，不重复未变化的产品测试。本项只完成预算确定，不代替第15／16组剩余验收。
 - [ ] 1.4 完成共享签名和生成类型的真实检查，核真实序列化结果、Unicode 位置单位和错误归属，阻止只改 TS 声明但后端不提供数据的接入。
 
 ## 2. 稳定目标与统一打开
