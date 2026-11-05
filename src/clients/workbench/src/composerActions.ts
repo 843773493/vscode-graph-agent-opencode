@@ -66,11 +66,16 @@ registerAction2(class AttachResourceReference extends Action2 {
     const providerOptions: SearchInvocationOptions & IAnythingQuickAccessProviderRunOptions = { searchOwner: { gatewayId: active.owner.gatewayId, workspaceId: active.owner.workspaceId },
       filesOnly: true, includeOpenToSideButton: false, placeholder: '选择要加入发起 Thread 草稿的文件 · 不打开文件' };
     await appendToThread(accessor, async () => {
-      const selected = await quick.quickAccess.pick('', { preserveValue: true, enabledProviderPrefixes: [''], providerOptions });
+      const selected = await quick.quickAccess.pick('', { preserveValue: true, canPickMany: true, enabledProviderPrefixes: [''], providerOptions });
       if (!selected?.length) return;
-      const pick = selected[0], source = 'resource' in pick && URI.isUri(pick.resource) ? pick.resource : undefined;
-      if (!source || !supportsResourceReference(source)) throw new Error('所选文件没有可用的规范资源引用');
-      return resourceReference(source);
+      const sources = selected.map(pick => {
+        const source = 'resource' in pick && URI.isUri(pick.resource) ? pick.resource : undefined;
+        if (!source || !supportsResourceReference(source)) throw new Error('所选文件没有可用的规范资源引用');
+        return source;
+      });
+      const references: string[] = [];
+      for (const source of sources) references.push(await resourceReference(source));
+      return references.join('\n');
     });
   }
 });

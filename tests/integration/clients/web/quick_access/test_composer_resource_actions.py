@@ -44,6 +44,7 @@ async def test_resource_actions_only_change_selected_thread_draft(
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "Composer资源动作验收需要Chromium"
     (workspace / "thread-source-only.txt").write_text("未打开的文件正文不应被读取", encoding="utf-8")
+    (workspace / "thread-source-other.txt").write_text("第二个未打开文件也不应读取正文", encoding="utf-8")
     other = prepare_default_test_workspace(
         workspace_root=workspace.with_name("composer-source-B"),
         template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace",
@@ -72,7 +73,8 @@ async def test_resource_actions_only_change_selected_thread_draft(
     result = json.loads(result_path.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
     for key in ("cancelUnchanged", "referenceRecipient", "sourcePickerCancelUnchanged", "unopenedSourceReference",
-                "originatingThreadKeptRecipient", "pasteRecipient", "restoredDrafts", "sourceChangePreservesPaste"):
+                "multiSourceFailureNoAppend", "multiSourceKeptRecipient", "originatingThreadKeptRecipient",
+                "pasteRecipient", "restoredDrafts", "sourceChangePreservesPaste"):
         assert result[key], key
     assert result["executions"] == []
     with provider.control._condition:

@@ -189,7 +189,10 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const filter = parsed?.filter ?? original;
     if (run.normalized === filter && original !== filter && (!run.options.fileSearchDelegate || !run.picker.busy)) return null;
     run.normalized = filter;
-    const accepted = (items: Pick<ResourcePick>[]) => run.options.filter ? items.filter(run.options.filter) : items;
+    const accepted = (items: Pick<ResourcePick>[]) => {
+      const picks = run.options.filter ? items.filter(run.options.filter) : items;
+      return run.picker.canSelectMany ? picks.map(item => item.type === 'separator' ? item : { ...item, pickable: !!item.resource }) : picks;
+    };
     if (run.picker.quickNavigate) return accepted(this.recent(run, filter));
     const active = run.picker.activeItems[0];
     if (!run.symbolMode && active?.resource) run.globalPicks = { items: [...run.picker.items], active };
@@ -275,7 +278,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         if (queryAlive() && !run.symbolMode) run.picker.busy = value;
       }, label => { if (queryAlive() && !run.symbolMode) run.picker.placeholder = run.options.placeholder
         ?? `${this.contentMode ? '搜索正文 · ' + run.options.contentCategories!.join('、') : '查找' + (run.options.filesOnly ? '文件' : this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation);
-    return [...fast, ...branches.map(branch => branch.status)];
+    return run.picker.canSelectMany ? accepted([...fast, ...branches.map(branch => branch.status)]) : [...fast, ...branches.map(branch => branch.status)];
   }
 
   private contentCategories(run: AccessRun, filter: string): ResourcePick[] {
@@ -343,11 +346,13 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   private publish(run: AccessRun, items: Pick<ResourcePick>[]): void {
     const active = run.picker.activeItems[0], keep = run.picker.keepScrollPosition;
+    const selectedIds = run.picker.canSelectMany ? new Set(run.picker.selectedItems.map(item => item.id)) : undefined;
     const targets = items.filter((item): item is ResourcePick => item.type !== 'separator' && !!item.accept);
     run.publishing = true;
     try {
       run.picker.keepScrollPosition = true;
       run.picker.items = items;
+      if (selectedIds) run.picker.selectedItems = targets.filter(item => selectedIds.has(item.id));
       // 恢复按身份等待原目标；目标消失时清空确认，不能改投新占行对象。
       const activeId = run.restoreId ?? (active?.accept ? active.id : undefined);
       run.picker.activeItems = activeId ? targets.filter(item => item.id === activeId) : targets.slice(0, 1);

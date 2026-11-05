@@ -10,16 +10,17 @@ const sharedWorkspaceId = '019a0000-0000-7000-8000-000000000001';
 const federatedOwners = ['gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']
   .map(gateway_id => ({ gateway_id, workspace_id: sharedWorkspaceId }));
 const [ownerAKey, ownerBKey] = federatedOwners.map(owner => `${owner.gateway_id}/${owner.workspace_id}`);
-const workbench = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'default-contract.mjs');
-await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/default_contract.fixture.mjs')],
-  outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
+const workbench = resolve('src/clients/workbench');
+const bundles = new Map([['/default-contract.mjs', 'default_contract.fixture.mjs'], ['/composer-selection.mjs', 'composer_selection.fixture.mjs']]);
+for (const [path, entry] of bundles) await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access', entry)],
+  outfile: join(run.artifactsDir, path.slice(1)), bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
   tsconfig: join(workbench, 'tsconfig.jsonc'),
   plugins: [buildSourcePlugin(workbench, sourceTransform(workbench, { commit: pinnedUpstreamCommit }, []))], logLevel: 'silent' });
 // 本地静态装具避免每次经浏览器控制通道传输数 MB 的 base64 源码。
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   const path = new URL(request.url).pathname;
   if (path === '/') return new Response('<!doctype html><title>Quick Access 合同装具</title>', { headers: { 'content-type': 'text/html' } });
-  if (path === '/default-contract.mjs') return new Response(Bun.file(bundle), { headers: { 'content-type': 'text/javascript' } });
+  if (bundles.has(path)) return new Response(Bun.file(join(run.artifactsDir, path.slice(1))), { headers: { 'content-type': 'text/javascript' } });
   return new Response('Not Found', { status: 404 });
 } });
 run.addCleanup('合同静态服务', () => server.stop(true));
@@ -38,11 +39,48 @@ async function exercise(name, argument) {
     page.on('pageerror', error => errors.push(String(error)));
     await page.goto(server.url.href);
     // 显式组件装具：浏览器运行真实 Provider，宿主及 Picker 事件替身不证明产品页面接线。
-    const result = await page.evaluate(async ({ name, argument }) => (await import('/default-contract.mjs'))[name](argument), { name, argument });
+    const path = name === 'composerResourceSelectionContract' ? '/composer-selection.mjs' : '/default-contract.mjs';
+    const result = await page.evaluate(async ({ name, argument, path }) => (await import(path))[name](argument), { name, argument, path });
     expect(errors).toEqual([]);
     return result;
   } finally { await context.close(); }
 }
+
+for (const entry of [
+  { title: '多选确认返回全部目标且阻止原打开动作', action: 'accept', canPickMany: true, labels: ['alpha.txt', 'beta.txt'], cancelled: 0, executions: 0 },
+  { title: '多选勾选后 Esc 返回空集合并取消读取', action: 'cancel', canPickMany: true, labels: [], cancelled: 1, executions: 0 },
+  { title: '单选确认保持原返回及只选择行为', action: 'accept', canPickMany: false, labels: ['alpha.txt'], cancelled: 0, executions: 0 },
+  { title: '单选 Esc 保持原取消读取行为', action: 'cancel', canPickMany: false, labels: [], cancelled: 1, executions: 0 },
+  { title: 'show 忽略多选选项并保持原打开动作', action: 'show', canPickMany: true, labels: undefined, cancelled: 0, executions: 1 },
+]) test(`原 Controller ${entry.title}`, async () => {
+  const result = await exercise('quickAccessControllerContract', entry);
+  expect(result.labels).toEqual(entry.labels);
+  expect(result.canSelectMany).toBe(entry.canPickMany && entry.action !== 'show');
+  expect(result.readerCancelled).toBe(entry.cancelled);
+  expect(result.executions).toBe(entry.executions);
+  expect(result.providerDisposed).toBe(1);
+});
+
+for (const mode of ['success', 'failure', 'cancel', 'unsupported']) test(`Composer 多选 ${mode} 经原命令只写捕获 writer，失败或取消零追加`, async () => {
+  const result = await exercise('composerResourceSelectionContract', mode);
+  expect(result.canPickMany).toBe(true);
+  expect(result.events.slice(0, 2)).toEqual(['capture:0', 'pick']);
+  expect(result.writes[1]).toEqual([]);
+  if (mode === 'success' || mode === 'failure') {
+    expect(result.requests).toHaveLength(2);
+    expect(result.beforeSecondWrites).toEqual([[], []]);
+    expect(result.requests.map(item => item.uri.split('/').at(-1))).toEqual(['alpha.txt', 'beta.txt']);
+  } else expect(result.requests).toEqual([]);
+  if (mode === 'success') {
+    expect(result.writes[0]).toEqual([['alpha', 'beta'].map(name => `boxteam://gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/workspace/019a0000-0000-7000-8000-000000000001/resources/files/root/${name}.txt`).join('\n')]);
+    expect(result.events.filter(event => event.startsWith('append:'))).toEqual(['append:0']);
+    expect(result.outcome).toEqual({});
+  } else {
+    expect(result.writes[0]).toEqual([]);
+    expect(result.events.filter(event => event.startsWith('append:'))).toEqual([]);
+    if (mode !== 'cancel') expect(result.outcome.failure).toBeTruthy();
+  }
+});
 
 test('正文类别集合确认后同时查询消息和工具，未选类别及工作区零请求', async () => {
   const result = await exercise('contentSelectionContract', 'confirm');
@@ -185,6 +223,21 @@ test('文件使用原 QueryBuilder 选项，一次联邦 A+B，快分支续原 c
   expect(result.paths.filter(path => path === '/api/v1/workspace/files/roots')).toHaveLength(2);
   expect(result.rootRequests).toEqual(federatedOwners);
   expect(result.busy).toBe(false);
+});
+
+test('文件多选 Provider 同查询续页按身份保留勾选，新项未勾选且身份失效清空选择', async () => {
+  const result = await exercise('fileBranchContract', 'multi-selection');
+  expect(result.initiallyPickable).toBe(true);
+  expect(result.statusPickable).toEqual([false, false]);
+  expect(result.currentStatusPickable).toEqual([false, false]);
+  expect(result.resourceIds).toHaveLength(2); expect(result.resourcePickable).toEqual([true, true]);
+  expect(result.selectedIds).toEqual([result.firstId]);
+  expect(result.currentSelectedObject).toBe(true); expect(result.replacedFirstObject).toBe(true);
+  expect(result.query).toBe('needle');
+  expect(result.requests).toHaveLength(2);
+  expect(result.requests.map(request => request.queries[0].query)).toEqual(['needle', 'needle']);
+  expect(result.requests[1].continuations[0].cursor).toBe('A-original-cursor');
+  expect(result.invalidatedSelectedIds).toEqual([]); expect(result.invalidatedActiveIds).toEqual([]);
 });
 
 for (const mode of ['cancel', 'late']) test(`文件 ${mode} 取消同一联邦流且不发布迟到页`, async () => {

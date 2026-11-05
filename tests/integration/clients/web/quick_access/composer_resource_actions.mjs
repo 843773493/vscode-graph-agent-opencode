@@ -12,6 +12,7 @@ const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_composer_resource_actions.py');
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], executions: [], reads: [], addresses: [], receipts: [],
   boundary: '真实Gateway、双工作区、正式Workbench与原Composer/IndexedDB；产品入口创建Session，未预写草稿、历史或替换响应；model_stream仅用于后端启动' };
+const phase = value => { result.phase = value; console.info(`Composer 资源动作阶段：${value}`); };
 let page, failure;
 try {
   const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'),
@@ -54,6 +55,10 @@ try {
   const receiverRoots = await api('/api/v1/workspace/files/roots', { headers: headers(receiverOwner) });
   const unopenedSource = receiverRoots.workspace_uri + '/thread-source-only.txt';
   const unopenedAddress = await api('/api/gateway/resource-addresses/parse', { method: 'POST', body: JSON.stringify({ uri: unopenedSource, local_gateway_id: health.gateway_id }) });
+  const otherUnopenedSource = receiverRoots.workspace_uri + '/thread-source-other.txt';
+  const otherUnopenedAddress = await api('/api/gateway/resource-addresses/parse', { method: 'POST', body: JSON.stringify({ uri: otherUnopenedSource, local_gateway_id: health.gateway_id }) });
+  const unopenedChoices = [{ name: 'thread-source-only.txt', source: unopenedSource, address: unopenedAddress },
+    { name: 'thread-source-other.txt', source: otherUnopenedSource, address: otherUnopenedAddress }];
   const source = roots.workspace_uri + '/selection.txt';
   const address = await api('/api/gateway/resource-addresses/parse', { method: 'POST', body: JSON.stringify({ uri: source, local_gateway_id: health.gateway_id }) });
   const file = await api(`/api/v1/workspace/files/content?path=${encodeURIComponent(source)}`, { headers: headers(sourceOwner) });
@@ -80,7 +85,16 @@ try {
   const text = page.locator('.editor-instance .monaco-editor').filter({ visible: true });
   await expect(text.locator('.view-lines')).toContainText('原选定正文');
   const quick = page.locator('.quick-input-widget');
-  result.phase = 'cancel-reference';
+  const checkUnopenedSources = async () => {
+    await quick.locator('input').fill('thread-source-');
+    for (const choice of unopenedChoices) {
+      await quick.locator('.monaco-list-row').filter({ hasText: choice.name }).getByRole('checkbox').check();
+    }
+    const rows = await quick.locator('.monaco-list-row').filter({ hasText: /thread-source-(only|other)\.txt/ }).allTextContents();
+    expect(rows).toHaveLength(2);
+    return rows.map(text => unopenedChoices.find(choice => text.includes(choice.name)));
+  };
+  phase('cancel-reference');
   let pending = command('boxteam.resource.attachToChat');
   await expect(quick).toContainText('选择接收草稿的 Thread');
   await expect(quick.getByRole('option')).toHaveCount(2);
@@ -91,7 +105,7 @@ try {
   expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
   result.cancelUnchanged = true;
 
-  result.phase = 'attach-reference';
+  phase('attach-reference');
   pending = command('boxteam.resource.attachToChat');
   await expect(quick).toContainText('选择接收草稿的 Thread');
   await quick.getByRole('option').filter({ hasText: sessions[0].threadId }).click();
@@ -104,7 +118,7 @@ try {
     body: { uri: source, local_gateway_id: health.gateway_id, resource_gateway_id: sourceOwner.gateway_id } }]);
   result.referenceRecipient = true;
 
-  result.phase = 'cancel-source-picker';
+  phase('cancel-source-picker');
   await command('workbench.action.focusFirstEditorGroup');
   const tabsBeforeSourcePicker = await page.locator('.tabs-container .tab').count();
   await command('workbench.action.showCommands');
@@ -112,8 +126,7 @@ try {
   await quick.getByRole('option').filter({ hasText: '将资源 URI 加入聊天草稿' }).click();
   await expect(quick).toBeVisible();
   await expect(quick.locator('input')).toHaveAttribute('placeholder', '选择要加入发起 Thread 草稿的文件 · 不打开文件');
-  await quick.locator('input').fill('thread-source-only');
-  await expect(quick.getByRole('option').filter({ hasText: 'thread-source-only.txt' })).toHaveCount(1);
+  await checkUnopenedSources();
   await page.keyboard.press('Escape');
   await expect(quick).not.toBeVisible();
   await expect(composer(0)).toHaveValue(expectedA1);
@@ -122,11 +135,14 @@ try {
   expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([]);
   result.sourcePickerCancelUnchanged = true;
 
-  result.phase = 'attach-unopened-source';
+  phase('attach-unopened-source');
   pending = command('boxteam.resource.attachToChat');
   await expect(quick).toBeVisible();
   await quick.locator('input').fill('thread-source-only');
-  await quick.getByRole('option').filter({ hasText: 'thread-source-only.txt' }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: 'thread-source-only.txt' }).getByRole('checkbox').check();
+  // 原复选框的 Enter 只切换勾选；从输入框确认整个选择。
+  await quick.locator('input').press('Enter');
+  await expect(quick).not.toBeVisible();
   await pending;
   expectedA1 += `\n${unopenedAddress.reference_uri}`;
   await expect(composer(0)).toHaveValue(expectedA1);
@@ -137,7 +153,72 @@ try {
     body: { uri: unopenedSource, local_gateway_id: health.gateway_id, resource_gateway_id: receiverOwner.gateway_id } }]);
   result.unopenedSourceReference = true;
 
-  result.phase = 'originating-thread-keeps-recipient';
+  phase('multi-source-grammar-failure');
+  await command('workbench.action.focusFirstEditorGroup');
+  let parseAttempts = 0;
+  const rejectSecond = async route => {
+    if (++parseAttempts !== 2) { await route.continue(); return; }
+    // 具名 HTTP 故障边界：第二项交给真实 grammar 拒绝 query，不替换后端错误。
+    const body = route.request().postDataJSON();
+    const response = await route.fetch({ postData: JSON.stringify({ ...body, uri: body.uri + '?invalid=1' }) });
+    result.multiSourceFailure = { status: response.status(), body: await response.json() };
+    await route.fulfill({ response });
+  };
+  await page.route('**/api/gateway/resource-addresses/parse', rejectSecond);
+  try {
+    pending = command('boxteam.resource.attachToChat').then(() => ({}), error => ({ failure: String(error) }));
+    await expect(quick).toBeVisible();
+    await checkUnopenedSources();
+    await quick.locator('input').press('Enter');
+    await expect(quick).not.toBeVisible();
+    expect((await pending).failure).toBeTruthy();
+  } finally { await page.unroute('**/api/gateway/resource-addresses/parse', rejectSecond); }
+  expect(parseAttempts).toBe(2);
+  expect(result.multiSourceFailure.status).toBe(400);
+  expect(JSON.stringify(result.multiSourceFailure.body)).toContain('resource_uri_grammar');
+  await expect(composer(0)).toHaveValue(expectedA1);
+  await expect(composer(1)).toHaveValue('A2 原草稿');
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(await page.locator('.tabs-container .tab').count()).toBe(tabsBeforeSourcePicker);
+  result.multiSourceFailureNoAppend = true;
+
+  phase('multi-source-keeps-recipient');
+  let releaseMultiResponse, multiHeld = false;
+  const multiBarrier = new Promise(resolve => { releaseMultiResponse = resolve; });
+  let multiResponses = 0, selectedChoices;
+  const delaySecond = async route => {
+    const response = await route.fetch();
+    if (++multiResponses === 2) { multiHeld = true; await multiBarrier; }
+    await route.fulfill({ response });
+  };
+  await page.route('**/api/gateway/resource-addresses/parse', delaySecond);
+  try {
+    pending = command('boxteam.resource.attachToChat');
+    await expect(quick).toBeVisible();
+    selectedChoices = await checkUnopenedSources();
+    await quick.locator('input').press('Enter');
+    await expect(quick).not.toBeVisible();
+    await expect.poll(() => multiHeld).toBe(true);
+    // 第一项已成功仍不能先写草稿；后来焦点只影响展示，不改接收者。
+    await expect(composer(0)).toHaveValue(expectedA1);
+    await expect(composer(1)).toHaveValue('A2 原草稿');
+    await command('workbench.action.focusSecondEditorGroup');
+    releaseMultiResponse();
+    await pending;
+  } finally {
+    releaseMultiResponse();
+    await page.unroute('**/api/gateway/resource-addresses/parse', delaySecond);
+  }
+  expectedA1 += '\n' + selectedChoices.map(choice => choice.address.reference_uri).join('\n');
+  await expect(composer(0)).toHaveValue(expectedA1);
+  await expect(composer(1)).toHaveValue('A2 原草稿');
+  expect(result.addresses.filter(read => read.phase === result.phase)).toEqual(selectedChoices.map(choice => ({ phase: result.phase,
+    body: { uri: choice.source, local_gateway_id: health.gateway_id, resource_gateway_id: receiverOwner.gateway_id } })));
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(await page.locator('.tabs-container .tab').count()).toBe(tabsBeforeSourcePicker);
+  result.multiSourceKeptRecipient = true;
+
+  phase('originating-thread-keeps-recipient');
   await command('workbench.action.focusFirstEditorGroup');
   const internalSource = await page.evaluate(({ owner, root }) => globalThis.workbench.URI.from({
     scheme: 'boxteam-file', authority: owner.gateway_id,
@@ -170,7 +251,7 @@ try {
   expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
   result.originatingThreadKeptRecipient = true;
 
-  result.phase = 'paste-selection';
+  phase('paste-selection');
   await text.getByRole('textbox').focus();
   await page.keyboard.press('ControlOrMeta+A');
   pending = command('boxteam.resource.pasteSelectionToChat');
@@ -183,19 +264,19 @@ try {
   expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
   result.pasteRecipient = true;
 
-  result.phase = 'change-source';
+  phase('change-source');
   await api(`/api/v1/workspace/files/content?path=${encodeURIComponent(source)}`, { method: 'PUT', headers: headers(sourceOwner),
     body: JSON.stringify({ content: '来源后续正文', expected_revision: file.revision }) });
   await expect(composer(1)).toHaveValue(expectedA2);
   result.sourceChangePreservesPaste = true;
-  result.phase = 'restore';
+  phase('restore');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(composer(0)).toHaveValue(expectedA1, { timeout: 30_000 });
   await expect(composer(1)).toHaveValue(expectedA2, { timeout: 30_000 });
   expect(result.executions).toEqual([]);
   expect(result.pageErrors).toEqual([]);
   result.restoredDrafts = true;
-  result.phase = 'complete';
+  phase('complete');
 } catch (error) {
   failure = error; result.failure = String(error);
   if (page) await page.screenshot({ path: required('BOXTEAM_BROWSER_SCREENSHOT_PATH'), fullPage: true }).catch(cause => { result.screenshotFailure = String(cause); });

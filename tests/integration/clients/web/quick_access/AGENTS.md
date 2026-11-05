@@ -18,13 +18,17 @@
 
 发起 Thread 优先场景仅在浏览器 HTTP 边界暂缓真实地址解析回执，期间通过原命令切换活动编辑器组；放行原响应后仍只追加原草稿。该具名延迟不模拟真实 TCP 故障，也不替换来源身份或正文。关闭／切换后的旧句柄和存储失败另由原草稿 hook 的定向测试验证。
 
-同一 Composer 页面从 Thread 的真实命令面板进入原 Quick Access 文件选择，验证取消不改草稿、未打开来源只附加 URI，且无正文读取、无新 Tab、无执行。测试仅预备普通文件正文，不预写历史或持久草稿；固定版本、多选和二级返回仍按各自任务验证。
+同一 Composer 页面从 Thread 的真实命令面板进入原 Quick Access 文件多选，验证勾选后 Esc 不解析引用或改草稿、未打开来源只附加 URI，且无正文读取、无新 Tab、无执行。第二项失败仅在具名 HTTP 边界把该项加入非法 query，交真实 grammar 返回原错误；全部成功场景只延迟第二项真实回执，确认此前草稿未变并切换焦点，最后仍只追加发起草稿。测试仅预备普通文件正文，不预写历史或持久草稿；固定版本和二级返回仍按各自任务验证。
 
 `test_thread_restore_health` 经产品 API 创建 A 的 Session，正式页面打开精确 Thread；B 仅在外部健康 HTTP 边界提供可释放的无响应屏障。核真实 bootstrap 归属／request_id、Composer 可操作总时间及显式健康刷新离线诊断，不预写历史、不替换 A 或 Gateway 响应，不代替真实远端断网验收。
 
 服务装具经生产 esbuild 与 legacy decorators 编译真实源码。明确记录 Gateway 传输替身和模型装具边界；真实页面通过 Gateway。产物按测试文件镜像，保留外部超时和内存保护。
 
 `default_contract` 在浏览器中运行真实 Provider，只有 Picker 事件及宿主服务替身，用于调用参数、取消与接受的合同检查；不能将它称为原 Chat／空文件编辑器或完整页面验收。`default_access` 经真实 Gateway 创建关键状态，和原搜索／恢复场景一起使用正式 Workbench 构建。
+
+`quick_access_controller.fixture` 经同一 sourceTransform 运行真实 QuickAccessController，仅替换 Picker 事件和读取服务边界；覆盖多选确认、勾选后 Esc 取消 reader，以及原单选和 show 的行为，不替代原 QuickPick 的真实 DOM 或 Composer 页面验证。
+
+`composer_selection.fixture` 运行实际资源引用命令与 URI HTTP 客户端，Pane 使用原 ThreadPane 子类，HTTP 回执和 writer 仅作明确服务边界计数；验证逐项解析全部完成后一次追加、第二项失败或取消／不支持时 writer 零调用，以及解析期间切换焦点不改接收者。不把这些服务回执装具当真实 grammar 或产品页面证据。
 
 `test_query_lifecycle` 用隔离 A/B/C、产品 API 创建的 Session 和正式 Workbench 验证搜索分支。名称统一观察 Gateway SSE；`query_gateway_fixture.py` 仅替换本测试进程的出站网络边界，延迟指定真实领域响应或注入具名读取失败，记录 Gateway 实际分发、期限、取消和 request_id。名称及文件读取失败均在同一 Gateway 出站边界注入；身份 401 在明确浏览器 HTTP 边界注入。核对三并发占满时第四分支不分发、超时保留其他结果、单分支重试、停止目标零业务读取及身份失效；不替换匹配、调度、SSE 编码或业务状态，不以这些替身证明真实服务故障。正常名称／文件和正文验收仍使用真实 Gateway／后端。
 

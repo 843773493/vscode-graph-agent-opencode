@@ -10,6 +10,7 @@ export const transformedSourcePaths = [
   'src/vs/workbench/browser/layout.ts',
   'src/vs/workbench/browser/quickaccess.ts',
   'src/vs/platform/quickinput/browser/quickAccess.ts',
+  'src/vs/platform/quickinput/common/quickAccess.ts',
   'src/vs/platform/quickinput/browser/helpQuickAccess.ts',
   'src/vs/workbench/services/search/common/queryBuilder.ts',
   'src/vs/workbench/contrib/search/browser/search.contribution.ts',
@@ -191,11 +192,24 @@ const model = reference.object;`);
         '\t\t\tawait editorViewState.group.openEditor(editorViewState.editor, {\n\t\t\t\tviewState: editorViewState.state,');
       contents = replaceOnce(contents, '\n\t\t\tthis.reset();\n\t\t}\n\t}\n\n\treset()', '\n\t\t}\n\t}\n\n\treset()');
     }
+    if (path === join(upstream, 'src/vs/platform/quickinput/common/quickAccess.ts')) {
+      contents = replaceOnce(contents, 'export interface IQuickAccessOptions {',
+        'export interface IQuickAccessOptions {\n/** 仅 pick 显式启用原 QuickPick 多选，show 保持原打开行为。 */\nreadonly canPickMany?: boolean;');
+    }
     if (path === join(upstream, 'src/vs/platform/quickinput/browser/quickAccess.ts')) {
       contents = replaceOnce(contents, '@IContextKeyService private readonly contextKeyService: IContextKeyService',
         '@IContextKeyService private readonly contextKeyService: IContextKeyService,\n@IEditorService private readonly editors: IEditorService');
       const entry = 'private doShowOrPick(value: string, pick: boolean, options?: IQuickAccessOptions): Promise<IQuickPickItem[] | undefined> | void {';
       contents = replaceOnce(contents, entry, `${entry}\noptions = prepareSearchInvocation(options, this.editors);`);
+      const picker = 'const picker = disposables.add(this.quickInputService.createQuickPick({ useSeparators: true }));';
+      contents = replaceOnce(contents, picker, `${picker}\nconst canPickMany = pick && options?.canPickMany === true;\npicker.canSelectMany = canPickMany;`);
+      contents = replaceOnce(contents, 'let pickPromise: DeferredPromise<IQuickPickItem[]> | undefined = undefined;',
+        'let pickPromise: DeferredPromise<IQuickPickItem[]> | undefined = undefined;\nlet didAccept = false;');
+      contents = replaceOnce(contents, 'e.veto();\n\t\t\t\tpicker.hide();', 'e.veto();\n\t\t\t\tdidAccept = true;\n\t\t\t\tpicker.hide();');
+      // 勾选会提前写 selectedItems，只有明确接受才能将多选结果交给调用方。
+      contents = replaceOnce(contents, 'if (picker.selectedItems.length === 0) {',
+        'const selectedItems = canPickMany && !didAccept ? [] : picker.selectedItems.slice(0);\nif (selectedItems.length === 0) {');
+      contents = replaceOnce(contents, 'pickPromise?.complete(picker.selectedItems.slice(0));', 'pickPromise?.complete(selectedItems);');
       contents = `import { prepareSearchInvocation } from ${JSON.stringify(join(root, 'src/search/target.js'))};\nimport { IEditorService } from ${JSON.stringify(join(root, 'upstream/src/vs/workbench/services/editor/common/editorService.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/platform/quickinput/browser/helpQuickAccess.ts')) {

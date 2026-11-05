@@ -4,6 +4,10 @@ import { workspaceContext } from '../../../../../src/clients/workbench/src/works
 import { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 import { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { IconLabel } from '../../../../../src/clients/workbench/upstream/src/vs/base/browser/ui/iconLabel/iconLabel.js';
+import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
+import { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
+import { WorkspaceQuickAccess } from '../../../../../src/clients/workbench/src/search/quickAccess.js';
+import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
 
 /** 真实名称／正文分支与共享 SSE 消费器，只有 Gateway 网络响应为显式装具。 */
 export function fileBranchContract(mode) { return federatedBranchContract(mode, '文件'); }
@@ -103,6 +107,48 @@ async function federatedBranchContract(mode, category, diagnostic) {
   };
   let busy = false, updates = 0, label;
   try {
+    if (mode === 'multi-selection') {
+      const changes = lifetime.add(new Emitter()), accepts = lifetime.add(new Emitter());
+      let items = [];
+      const picker = { value: 'needle', canSelectMany: true, selectedItems: [], activeItems: [], buttons: [],
+        keyMods: { alt: false, ctrlCmd: false }, onDidChangeValue: changes.event, onDidAccept: accepts.event,
+        onDidHide: Event.None, onDidChangeActive: Event.None, onDidTriggerButton: Event.None,
+        onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None,
+        get items() { return items; },
+        // 原 QuickPick 重建列表会清除旧勾选；不能用不清选择的普通数组掩盖 publish 缺口。
+        set items(value) { items = value; this.selectedItems = []; },
+      };
+      const group = { id: 1 }, groups = { groups: [], activeGroup: group, getGroup: () => group };
+      const editors = { openEditor() { throw new Error('多选 Provider 合同不得打开编辑器'); } };
+      const provider = lifetime.add(new WorkspaceQuickAccess({
+        createInstance: (ctor, ...args) => ctor === PickerEditorState ? new PickerEditorState(editors, groups) : instantiation.createInstance(ctor, ...args),
+        createChild: (...args) => instantiation.createChild(...args),
+      }, editors, groups, { getHistory: () => [] }, { getValue: () => undefined }, {}, {},
+      { lookupKeybinding: () => undefined }, {}, { error(error) { throw error; } }, { enabled: false }, {}));
+      lifetime.add(provider.provide(picker, token.token, { filesOnly: true, includeOpenToSideButton: false, searchOwners: owners }));
+      await until(() => connections.length === 1); const first = connections[0]; scope(first);
+      page(first, 0, 2, 'limited');
+      const emptyB = { ...state(1), returned_results: 0 };
+      send(first, 'branch', { branch: emptyB }); end(first, [state(0, 'limited'), emptyB]);
+      await until(() => !picker.busy && picker.items.some(item => item.resource));
+      const original = picker.items.find(item => item.resource), firstId = original.id;
+      const initiallyPickable = original.pickable;
+      const statusPickable = picker.items.filter(item => item.type !== 'separator' && !item.resource).map(item => item.pickable);
+      picker.selectedItems = [original];
+      const continuing = picker.items.find(item => item.buttons?.some(button => button.tooltip === '继续查询此类别')).trigger();
+      await until(() => connections.length === 2); const next = connections[1]; scope(next);
+      page(next, 0, 4); end(next, [state(0)]); await continuing;
+      const resources = picker.items.filter(item => item.resource), currentFirst = resources.find(item => item.id === firstId);
+      const selectedIds = picker.selectedItems.map(item => item.id), currentSelectedObject = picker.selectedItems[0] === currentFirst;
+      const currentStatusPickable = picker.items.filter(item => item.type !== 'separator' && !item.resource).map(item => item.pickable);
+      const query = picker.value;
+      invalidateGatewayUserSession(0);
+      await until(() => picker.items.some(item => item.id === 'identity-invalidated'));
+      return { initiallyPickable, statusPickable, currentStatusPickable, firstId, selectedIds, currentSelectedObject,
+        replacedFirstObject: original !== currentFirst, resourceIds: resources.map(item => item.id), resourcePickable: resources.map(item => item.pickable),
+        query, requests: connections.map(connection => connection.request), invalidatedSelectedIds: picker.selectedItems.map(item => item.id),
+        invalidatedActiveIds: picker.activeItems.map(item => item.id) };
+    }
     const branches = queryFederatedSearchBranches(owners, [category], content ? '😀命中' : 'needle', lifetime, token.token, {},
       (item, owner) => ({ id: `${owner.gatewayId}/${owner.workspaceId}/${content ? item.message.reference.start_codepoint : `${item.kind}/${item.title}`}`, label: item.title, accept() {} }),
       () => updates++, value => { busy = value; }, value => { label = value; }, instantiation ?? {});
