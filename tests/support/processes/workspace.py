@@ -41,31 +41,45 @@ class BackendProcess:
     workspace_id: str
 
 
-def terminate_process(process: subprocess.Popen[str]) -> None:
+def terminate_process(process: subprocess.Popen[str], *, force: bool = False) -> None:
     if process.poll() is not None:
         return
 
-    try:
-        process.terminate()
-        process.wait(timeout=10)
-        return
-    except ProcessLookupError:
-        return
-    except subprocess.TimeoutExpired:
+    children: list[psutil.Process] = []
+    if sys.platform == "win32":
         try:
-            process.kill()
+            # venv 启动器可能先于实际服务器退出；停止前冻结归属，不能等父进程消失后再查。
+            children = psutil.Process(process.pid).children(recursive=True)
+        except psutil.NoSuchProcess:
             process.wait(timeout=10)
             return
-        except ProcessLookupError:
-            return
-        except Exception as error:
-            raise RuntimeError(
-                f"无法强制终止进程: pid={process.pid}, returncode={process.poll()}"
-            ) from error
+        if force:
+            # 崩溃恢复测试必须同时硬退出实际服务器，不能只杀启动器。
+            for child in reversed(children):
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    continue
+    try:
+        (process.kill if force else process.terminate)()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+    except ProcessLookupError:
+        pass
     except Exception as error:
         raise RuntimeError(
             f"无法终止进程: pid={process.pid}, returncode={process.poll()}"
         ) from error
+    if children:
+        _, alive = psutil.wait_procs(children, timeout=10)
+        if alive:
+            raise RuntimeError(
+                f"测试服务器子进程尚未退出: launcher_pid={process.pid}, "
+                f"child_pids={[child.pid for child in alive]}"
+            )
 
 
 def ensure_local_port_available(

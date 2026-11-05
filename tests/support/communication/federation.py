@@ -65,15 +65,14 @@ class CommunicationNode:
     gateway: GatewayProcess | None = None
 
     def restart_backend(self, operation: str = "restart") -> dict[str, object]:
-        """pytest 只终止本 node 持有的 Popen；重启复用原 mount/composition 与端口。"""
+        """pytest 只终止本 node 持有的进程树；重启复用原 mount/composition 与端口。"""
         if operation not in {"restart", "kill", "start"}:
             raise ValueError(f"未知 owned backend 操作: {operation}")
         previous = self.backend
         if operation in {"restart", "kill"}:
             if previous.process.poll() is not None:
                 raise RuntimeError("owned backend 已停止，拒绝重复 kill")
-            previous.process.kill()
-            previous.process.wait(timeout=10)
+            terminate_process(previous.process, force=True)
             close_backend_process(previous)
         if operation in {"restart", "start"}:
             if previous.process.poll() is None:

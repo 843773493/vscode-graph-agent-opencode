@@ -7,6 +7,7 @@ processes/
 ├── test_workspace_python_executable.py   宿主平台对应的虚拟环境解释器路径
 ├── test_port_availability.py             三平台端口绑定语义与探针socket释放
 ├── test_process_log_lifetime.py          Workspace/Gateway进程与日志移交
+├── test_process_termination.py           Windows启动器与服务器退出顺序、POSIX原信号语义
 ├── test_auxiliary_process_lifetime.py    Browser/Terminal辅助进程的准备与清理
 ├── test_http_readiness.py                HTTP探针预算与失败归属
 └── test_*_lifetime.py                    按被管理资源划分的生命周期故障注入

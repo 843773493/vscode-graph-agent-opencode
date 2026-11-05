@@ -239,8 +239,7 @@ async def test_authorization_continues_without_new_user_turn(
                     internal = database.execute("SELECT job_id FROM executions WHERE execution_origin='internal'").fetchone()
                 assert internal is not None
                 await wait_for_job_done(client, internal[0], max_attempts=100)
-            backends[0].process.kill()
-            await asyncio.to_thread(backends[0].process.wait, 10)
+            await asyncio.to_thread(terminate_process, backends[0].process, force=True)
             replay.control.release(task_id, fault)
             replacement = await asyncio.to_thread(
                 start_backend_process, workspace_root=str(case.mount.workspace_root), port=backends[0].port,

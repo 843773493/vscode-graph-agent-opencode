@@ -31,7 +31,7 @@ from tests.integration.backend.agents.test_mcp_tool_approval import (
 )
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
-from tests.support.processes.workspace import start_backend_process
+from tests.support.processes.workspace import start_backend_process, terminate_process
 
 
 async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_execution(
@@ -60,8 +60,7 @@ async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_
         assert {lease["lease_id"].split(":", 1)[0] for lease in qualified} == {"mcp-prepared", "mcp-execution"}
         old_connection, = {lease["resource_id"] for lease in qualified}
         assert not original.receipts.exists()
-        backends[0].process.kill()
-        await asyncio.to_thread(backends[0].process.wait, 10)
+        await asyncio.to_thread(terminate_process, backends[0].process, force=True)
         restarted = await asyncio.to_thread(
             start_backend_process, workspace_root=str(case.mount.workspace_root), port=backends[0].port,
             log_name="mcp-approval-restarted", asgi_app="tests.support.e2e_control.backend_app:app",

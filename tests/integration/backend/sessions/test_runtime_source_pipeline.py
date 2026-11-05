@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -1801,9 +1802,8 @@ class RestartRuntimeSourceCase(ModelReplayCase):
     async def restart(self, *, hard: bool, while_stopped: Callable[[], None] | None = None) -> None:
         previous = self.backends[-1]
         if hard:
-            previous.process.kill()
-            return_code = await asyncio.to_thread(previous.process.wait, timeout=10)
-            assert return_code < 0
+            await asyncio.to_thread(terminate_process, previous.process, force=True)
+            assert previous.process.returncode == (1 if os.name == "nt" else -signal.SIGKILL)
         await asyncio.to_thread(close_backend_process, previous)
         if while_stopped is not None:
             assert previous.process.poll() is not None

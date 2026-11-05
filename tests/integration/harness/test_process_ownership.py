@@ -15,6 +15,7 @@ from typing import Literal, TextIO
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
+import psutil
 import pytest
 
 from tests.harness.python import browser_manager, terminal_backend, terminal_frontend
@@ -48,10 +49,48 @@ from tests.support.processes.scope import capture_test_processes, register_test_
 from tests.support.processes.workspace import (
     BackendProcess,
     close_backend_process,
+    ensure_local_port_available,
+    resolve_workspace_python_executable,
     start_backend_process,
     terminate_process,
     wait_for_http_ok,
 )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="验证原生 Windows venv 启动器与服务器子进程")
+@pytest.mark.parametrize("force", [False, True])
+def test_windows_python_service_stop_releases_actual_server_before_port_reuse(
+    force: bool, tmp_path: Path,
+) -> None:
+    python = resolve_workspace_python_executable(Path.cwd())
+    port = integration_port_block_for_file(Path(__file__)).port(90)
+    script = tmp_path / "server.py"
+    script.write_text(
+        "import sys, uvicorn\n"
+        "async def app(scope, receive, send):\n"
+        "    await send({'type': 'http.response.start', 'status': 200, 'headers': []})\n"
+        "    await send({'type': 'http.response.body', 'body': b'ready'})\n"
+        "uvicorn.run(app, host='127.0.0.1', port=int(sys.argv[1]), lifespan='off', log_level='warning')\n",
+        encoding="utf-8",
+    )
+    with (tmp_path / "server.log").open("w", encoding="utf-8") as log:
+        process = subprocess.Popen([str(python), str(script), str(port)], stdout=log, stderr=log, text=True)
+        children: list[psutil.Process] = []
+        try:
+            wait_for_http_ok(f"http://127.0.0.1:{port}", process, timeout_seconds=10)
+            children = psutil.Process(process.pid).children(recursive=True)
+            assert children, "本场景必须经 Windows venv 启动器启动实际服务器"
+            terminate_process(process, force=force)
+            # 先检查被测关闭的结果，再运行本用例的兜底回收。
+            assert process.poll() is not None
+            assert not [child.pid for child in children if child.is_running()]
+            ensure_local_port_available(port, service_name="重启服务器")
+        finally:
+            for child in children:
+                if child.is_running():
+                    child.kill()
+                    child.wait(timeout=10)
+            terminate_process(process, force=True)
 
 
 @pytest.fixture
