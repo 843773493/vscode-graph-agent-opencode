@@ -38,6 +38,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
+    ITEM_CATALOG_LOCATOR_INDEX_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
@@ -630,7 +631,9 @@ class RolloutMaintenanceOwner(
                 )
                 if file_size > committed_offset:
                     reconcile_jsonl_tail(path, committed_offset)
-                return self._manifest_from_connection(
-                    connection,
-                    checkpoint_ns,
-                )
+                manifest = self._manifest_from_connection(connection, checkpoint_ns)
+                # 性能索引不改变事实格式；既有库通过初始化校验后补建，普通只读不写库。
+                # 非唯一索引只加速定位，重复坐标继续由原读取校验明确报告。
+                if not needs_schema:
+                    connection.execute(ITEM_CATALOG_LOCATOR_INDEX_SQL)
+                return manifest
