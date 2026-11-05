@@ -368,7 +368,8 @@ def restore_group_manifests(
 
 
 def group_content(items: Sequence[CanonicalItemRecord]) -> str | list[object]:
-    primary = validate_group(items)
+    """唯一调用方 project_message 已校验完整消息组，正文组装不重复扫描身份和顺序。"""
+    primary = items[-1]
     result: list[object] = []
     for item in items:
         if item.semantic_kind == "tool_call":
