@@ -105,7 +105,18 @@ async function federatedBranchContract(mode, category, rejection) {
     const branches = queryFederatedSearchBranches(owners, [category], content ? '😀命中' : 'needle', lifetime, token.token, {},
       (item, owner) => ({ id: `${owner.gatewayId}/${owner.workspaceId}/${content ? item.message.reference.start_codepoint : `${item.kind}/${item.title}`}`, label: item.title, accept() {} }),
       () => updates++, value => { busy = value; }, value => { label = value; }, instantiation ?? {});
-    await until(() => connections.length === 1); const first = connections[0]; scope(first);
+    await until(() => connections.length === 1); const first = connections[0];
+    if (mode === 'disconnect-before-scope') {
+      first.controller.close();
+      await until(() => !busy);
+      const details = branches.map(branch => branch.status.detail), labels = branches.map(branch => branch.status.label);
+      const retry = branches[1].status.trigger();
+      await until(() => connections.length === 2); const next = connections[1]; scope(next);
+      page(next, 0, 2); page(next, 1, 2); end(next, [state(0), state(1)]); await retry;
+      return { details, labels, requests: connections.map(connection => connection.request), paths,
+        pending: branches.map(branch => branch.pending), busy, picks: branches.map(branch => branch.picks.map(pick => pick.id)) };
+    }
+    scope(first);
     if (mode === 'cursor-rejection') {
       const completed = index => ({ ...state(index), returned_results: 0 });
       const limited = { ...state(1, 'limited'), cursor: 'B-rejected-cursor', returned_results: 0 };

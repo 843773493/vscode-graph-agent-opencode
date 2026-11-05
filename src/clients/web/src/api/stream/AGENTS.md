@@ -4,6 +4,8 @@
 
 `federatedSearch.ts` 消费 Gateway 的请求级搜索流，复用共享 SSE 与生成校验器，核对范围、事件顺序、领域归属及唯一终态。跨目标并发、配额、独立 cursor 和错误均由 Gateway 调度，本模块不预检工作区、不另建 fan-out、不自动重试分支。一个总期限覆盖建连与正文消费，取消回收原 reader。
 
+流正常结束但缺少最终汇总时直接抛出 `IncompleteSearchStreamError`，携带机器代码及原响应头的 request_id；即使尚无范围事件也保留请求归属，不把取消、超时或 HTTP 拒绝改标为该错误。
+
 与相邻文件的边界：
 
 - `api/http.ts`（上级目录）：统一请求屏障（Gateway 凭据、用户会话、重试、超时）与 JSON 解包。本包所有 HTTP 入口都基于它，不自带传输层。`sessionTraceStream` 走 `requestJson`，SSE 入口走 `requestGatewayResponse`。

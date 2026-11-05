@@ -147,6 +147,21 @@ test('正文流断开保留已完成 A，B 明确失败并显示原 request_id',
   expect(result.picks).toEqual([[`${ownerAKey}/2`], []]);
 });
 
+test('首个范围事件前断流保留原响应请求身份，明确重查原查询且不自动重试', async () => {
+  const result = await exercise('contentBranchContract', 'disconnect-before-scope');
+  expect(result.labels.every(label => label.includes('未收到完整终态'))).toBe(true);
+  expect(result.details).toEqual(['request_id: request-0', 'request_id: request-0']);
+  expect(result.requests).toHaveLength(2);
+  const [first, retry] = result.requests;
+  expect(first.scope).toEqual({ mode: 'selected', owners: federatedOwners });
+  expect(retry.scope).toEqual(first.scope);
+  expect(retry.queries).toEqual(first.queries);
+  expect(retry.continuations).toEqual([]);
+  expect(result.paths.filter(path => path === '/api/gateway/search')).toHaveLength(2);
+  expect(result.pending).toEqual([false, false]); expect(result.busy).toBe(false);
+  expect(result.picks).toEqual([[`${ownerAKey}/2`], [`${ownerBKey}/2`]]);
+});
+
 test('URI 原样交原 Opener 并冻结发起组，校验前不创建侧边组，后台接受保持原选项', async () => {
   const calls = await exercise('uriContract');
   expect(calls.map(call => call.uri)).toEqual([

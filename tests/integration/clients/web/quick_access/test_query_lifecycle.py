@@ -37,7 +37,8 @@ async def test_query_branches_cancel_expire_and_retry_only_their_selected_owner(
     for target in workspaces:
         install_test_workspace_config(workspace_root=target, config_path=Path(integration_workspace_config_path),
                                       schema_path=root / ".boxteam/workspace_schema.jsonc")
-        (target / "branchscope-file.txt").write_text(target.name + " query lifecycle\n", encoding="utf-8")
+        for filename in ("branchscope-file.txt", "streamdiagnostic-file.txt"):
+            (target / filename).write_text(target.name + " query lifecycle\n", encoding="utf-8")
     gateway = start_gateway_process(
         workspace_root=workspaces[0], default_backend_url=None, port=search_gateway_port,
         asgi_app="tests.integration.clients.web.quick_access.query_gateway_fixture:app",
@@ -61,6 +62,7 @@ async def test_query_branches_cancel_expire_and_retry_only_their_selected_owner(
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
         assert receipt["onlySelectedOwners"] is True
+        assert receipt["disconnectPreservesRequestIdentity"] is True
         assert receipt["serverBudget"] is True
         assert receipt["cancelledQueueAndLateResponses"] is True
         assert receipt["timeoutKeepsOtherBranches"] is True

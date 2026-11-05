@@ -12,6 +12,7 @@ const result = { classification: 'Integration', phase: 'prepare', requests: [], 
   boundary: '正式 Workbench、真实 Gateway 和隔离 A/B/C；Session 由产品 API 创建；指定 Gateway 出站分支注入失败或延迟真实响应；401 只在浏览器 HTTP 边界注入，不替代匹配／调度／SSE 或业务状态' };
 let page, failure;
 const responseReads = [], responseErrors = [];
+let truncatedRequest;
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
@@ -35,7 +36,7 @@ try {
     if (observed) result.cancelled.push({ path: observed.path, query: observed.query, categories: observed.categories, error: request.failure()?.errorText });
   });
   page.on('requestfinished', request => {
-    if (!searchRequest(request)) return;
+    if (!searchRequest(request) || request === truncatedRequest) return;
     responseReads.push(searchReceipt(request).then(receipt => result.receipts.push(receipt)).catch(error => responseErrors.push(String(error))));
   });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
@@ -67,7 +68,7 @@ try {
   await api(`/api/gateway/workspaces/${c.workspace_id}/runtime/stop`, owner(c), {});
   const a = initial.items.find(item => sameOwner(item, ownerA)), owners = [a, b];
   for (const target of owners) {
-    for (const title of ['branchscope', 'slowcancel', 'allfailure']) await api('/api/v1/sessions', owner(target), { title: `${title} ${target === a ? 'A' : 'B'}` });
+    for (const title of ['branchscope', 'slowcancel', 'allfailure', 'streamdiagnostic']) await api('/api/v1/sessions', owner(target), { title: `${title} ${target === a ? 'A' : 'B'}` });
   }
   // 经过真实 Gateway 验证总期限，不以浏览器取消或故障替身冒充服务端拒绝。
   result.deadlineRejection = await page.evaluate(async owner => {
@@ -130,6 +131,57 @@ try {
     await expectStatus(target, category, '不代表全局快照');
   }
   result.onlySelectedOwners = true;
+
+  result.phase = 'disconnect-before-scope';
+  const searchPattern = '**/api/gateway/search';
+  const truncateBeforeScope = async route => {
+    const observed = searchRequest(route.request());
+    if (truncatedRequest || observed.query !== 'streamdiagnostic' || observed.categories.includes('file')) return route.continue();
+    truncatedRequest = route.request();
+    // 明确的浏览器 HTTP 故障：原请求仍经真实 Gateway 完成，仅交付空正文，保留原响应头。
+    const response = await route.fetch(), original = await response.body();
+    expect(response.status()).toBe(200);
+    expect(response.headers()['content-type']).toContain('text/event-stream');
+    const requestId = response.headers()['x-request-id'];
+    expect(requestId).toBeTruthy(); expect(original.length).toBeGreaterThan(0);
+    result.disconnectedResponse = { requestId, headers: response.headers(), status: response.status(), originalBytes: original.length, deliveredBytes: 0,
+      query: observed.body, boundary: '仅原浏览器HTTP响应正文被截为空；原Gateway响应头及请求身份保留' };
+    await route.fulfill({ response, body: '' });
+  };
+  await page.route(searchPattern, truncateBeforeScope);
+  try {
+    await input.fill('streamdiagnostic');
+    for (const target of owners) for (const category of ['会话', 'Thread']) {
+      await expectStatus(target, category, '未收到完整终态');
+      await expectStatus(target, category, result.disconnectedResponse.requestId);
+    }
+    await expectStatus(b, '文件', '本次查询完成'); await inactive();
+    const names = queries('streamdiagnostic').filter(item => !item.categories.includes('file'));
+    expect(names).toHaveLength(1);
+    const fileReceipts = () => result.receipts.filter(item => item.query === 'streamdiagnostic'
+      && item.summary.branches.every(state => state.branch.category === 'file'));
+    await expect.poll(() => fileReceipts().length).toBe(1);
+    const fileReceipt = fileReceipts()[0];
+    expect(fileReceipt.scope.owners).toEqual(names[0].body.scope.owners);
+    result.disconnectedResponse.scopeSource = { requestId: fileReceipt.requestId, header: fileReceipt.header, scope: fileReceipt.scope };
+    await (await showStatus(a, 'Thread')).hover();
+    await status(a, 'Thread').getByRole('button', { name: '重新查询此类别', exact: true }).click();
+    await expectStatus(a, 'Thread', '本次查询完成');
+    for (const target of owners) for (const category of ['会话', 'Thread']) {
+      if (sameOwner(target, a) && category === 'Thread') continue;
+      await expectStatus(target, category, '未收到完整终态');
+      await expectStatus(target, category, result.disconnectedResponse.requestId);
+    }
+    await expectStatus(b, '文件', '本次查询完成');
+    await inactive();
+    const repeated = queries('streamdiagnostic').filter(item => !item.categories.includes('file'));
+    expect(repeated).toHaveLength(2);
+    expect(repeated[1].body.scope).toEqual({ mode: 'resume', scope: fileReceipt.scope, owners: [] });
+    expect(repeated[1].body.queries).toEqual(repeated[0].body.queries.filter(query => query.category === 'thread'));
+    expect(repeated[1].body.continuations).toEqual([{ branch: { owner: owner(a), category: 'thread', operation: 'name' } }]);
+    result.disconnectedRetry = { scopeSourceRequestId: fileReceipt.requestId, query: repeated[1].body };
+    result.disconnectPreservesRequestIdentity = true;
+  } finally { await page.unroute(searchPattern, truncateBeforeScope); }
 
   result.phase = 'cancel-gateway-queue';
   await searchFault(page, 'slowcancel', 'delay');

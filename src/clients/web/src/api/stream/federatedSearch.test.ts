@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { FederatedSearchRequest } from "../../types/protocol_generated/boxteam/search/v1/public";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../session/sessionApiFetchMock";
-import { streamFederatedSearch } from "./federatedSearch";
+import { IncompleteSearchStreamError, streamFederatedSearch } from "./federatedSearch";
 
 const owners = ["A", "B"].map(workspace_id => ({ gateway_id: "gateway", workspace_id }));
 const scope = { version: 1, gateway_id: "gateway", resolved_at: "2026-11-03T00:00:00Z", mode: "selected", owners };
@@ -42,6 +42,21 @@ async function until(condition: () => boolean) {
   throw new Error("搜索测试条件未收敛");
 }
 afterEach(unwrapSessionApiFetch);
+
+test.each([false, true])("未收到完整终态时保留响应头请求身份：已收到范围=%s", async scoped => {
+  const backend = install(), events: string[] = [];
+  const outcome = streamFederatedSearch(49_357, request(), { signal: new AbortController().signal,
+    onEvent: event => events.push(event.type) }).catch(error => error);
+  await until(() => backend.calls.length === 1);
+  if (scoped) backend.send("scope", { scope: resolution() });
+  backend.close();
+  const error = await outcome;
+  expect(error).toBeInstanceOf(IncompleteSearchStreamError);
+  expect(error).toMatchObject({ name: "IncompleteSearchStreamError", code: "incomplete_stream", requestId: "original-request" });
+  expect(error.message).toBe("搜索连接已结束，但未收到完整终态");
+  expect(events).toEqual(scoped ? ["scope"] : []);
+  expect(backend.calls).toHaveLength(1);
+});
 
 test("同 owner 多根各自结算，续查只接受原文件根而不合并游标", async () => {
   const roots = ["one", "two"].map(name => `boxteam://workspace/A/resources/files/root/${name}`);

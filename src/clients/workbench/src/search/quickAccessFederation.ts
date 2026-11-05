@@ -5,7 +5,7 @@ import type { CancellationToken } from '../../upstream/src/vs/base/common/cancel
 import { TriggerAction } from '../../upstream/src/vs/platform/quickinput/browser/pickerQuickAccess.js';
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from '../../../web/src/api/http.js';
-import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
+import { IncompleteSearchStreamError, streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
 import type { FederatedDiagnosticLogTargetDTO, FederatedSearchBranchDTO, FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
 import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import type { WorkspaceSearchResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
@@ -224,7 +224,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
         if (inFlight.get(branch) !== operation) continue;
         if (cursor) branch.picks = [];
         const message = error instanceof Error ? error.message : String(error);
-        const failureId = error instanceof HttpRequestError ? error.requestId : requestId;
+        const failureId = error instanceof HttpRequestError || error instanceof IncompleteSearchStreamError ? error.requestId : requestId;
         branch.status = { id: `status-${branch.key}`, label: `${branch.label} · 查询失败：${error instanceof DOMException && error.name === 'TimeoutError' ? '查询超时（含 Gateway 排队与目标读取）' : message}`,
           detail: failureId ? `request_id: ${failureId}` : undefined,
           buttons: [retryButton], trigger: async () => { await run(scope ? [branch] : branches); return TriggerAction.NO_ACTION; } };

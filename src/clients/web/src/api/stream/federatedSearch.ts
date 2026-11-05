@@ -10,6 +10,16 @@ import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse
 import { validateFederatedSearchEvent } from "../../sse/sseRuntimeSchemas";
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, requestGatewayResponse } from "../http";
 
+/** 未取得完整终态不等于搜索完成；请求身份来自原 HTTP 响应头。 */
+export class IncompleteSearchStreamError extends Error {
+  readonly code = "incomplete_stream";
+
+  constructor(readonly requestId: string) {
+    super("搜索连接已结束，但未收到完整终态");
+    this.name = "IncompleteSearchStreamError";
+  }
+}
+
 export function searchBranchKey(branch: FederatedSearchBranchKeyDTO): string {
   if (branch.diagnostics) {
     if (branch.owner || branch.category !== "runtime_log" || !branch.diagnostics.scope) throw new Error("诊断搜索分支归属无效");
@@ -125,7 +135,7 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
       }) },
     });
     abort.signal.throwIfAborted();
-    if (!summary) throw new Error("搜索连接已结束，但未收到完整终态");
+    if (!summary) throw new IncompleteSearchStreamError(requestId);
     return summary;
   } catch (error) {
     if (abort.signal.aborted) throw abort.signal.reason;
