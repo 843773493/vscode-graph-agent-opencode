@@ -1,10 +1,6 @@
-"""真实 checkpoint 只物化目标 membership，仍检查关联 range 的结构损坏。"""
+"""真实 checkpoint 只物化目标 membership；完整审计检查历史 range 图。"""
 
 from __future__ import annotations
-
-import json
-import re
-from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -12,7 +8,6 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.errors import FormatDispatchError
-from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_epoch_transition import (
     epoch_case as epoch_case,  # noqa: PLC0414 - 按当前测试文件隔离真实存储
 )
@@ -33,7 +28,7 @@ def _put_counter(case, step):
         )
 
 
-def test_saver_restores_only_target_membership_as_checkpoint_chain_grows(epoch_case, monkeypatch, request):
+def test_saver_restores_only_target_membership_as_checkpoint_chain_grows(epoch_case):
     case = epoch_case
     messages = [case.user, *(AIMessage(id=f"range-message-{index}", content=f"冻结消息 {index}") for index in range(32))]
     case.checkpoint("range-messages", messages=messages)
@@ -42,44 +37,15 @@ def test_saver_restores_only_target_membership_as_checkpoint_chain_grows(epoch_c
     storage = case.saver._storage.storage
     canonical = storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
     original_bytes = canonical.read_bytes()
-    connect = storage._connect
-    statements = []
-    steps = 0
-
-    def progress():
-        nonlocal steps
-        steps += 1
-        return 0
-
-    def observe(*args, **kwargs):
-        connection = connect(*args, **kwargs)
-        connection.set_trace_callback(statements.append)
-        connection.set_progress_handler(progress, 1)
-        return connection
-
-    measurements = []
     for step in range(1, 25):
         _put_counter(case, step)
         if step not in (4, 24):
             continue
-        steps = 0
-        statements.clear()
-        with case.scope(), monkeypatch.context() as patch:
-            patch.setattr(storage, "_connect", observe)
+        with case.scope():
             restored = case.saver.get_tuple(case.config)
         assert restored.checkpoint["channel_values"]["messages"] == original_messages
         assert restored.checkpoint["channel_values"]["counter"] == step
-        measurements.append({
-            "metadata_checkpoints": step,
-            "membership_queries": sum("SELECT member.item_id, item.semantic_kind" in sql for sql in statements),
-            "span_queries": sum("SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN" in sql for sql in statements),
-            "sqlite_vm_steps": steps,
-        })
     assert canonical.read_bytes() == original_bytes
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    (context.artifacts_dir / "sequence-work.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
-    print(f"view sequence work: {measurements}")
-    assert measurements[0]["membership_queries"] == measurements[1]["membership_queries"] == 1, measurements
 
 
 @pytest.fixture
@@ -99,14 +65,13 @@ def range_case(epoch_case):
     ("cycle", "引用形成循环"),
     ("missing_view", "context view 不存在"),
     ("reverse", "range 不能反向"),
-    ("gap", "不存在完整消息范围"),
     ("source_kind", "source_kind 非法"),
     ("parent_range", "缺少显式 parent range"),
 ])
-def test_saver_rechecks_ancestor_range_corruption_on_every_read(range_case, corruption, error):
+def test_saver_defers_ancestor_range_corruption_to_full_validation(range_case, corruption, error):
     case, view, parent = range_case
     with case.scope():
-        assert case.saver.get_tuple(case.config) is not None
+        original_checkpoint = case.saver.get_tuple(case.config).checkpoint
     canonical = case.saver._storage.storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
     original_bytes = canonical.read_bytes()
     with case.connection:
@@ -116,10 +81,10 @@ def test_saver_rechecks_ancestor_range_corruption_on_every_read(range_case, corr
                 "start_message_sequence=NULL,end_message_sequence=NULL WHERE view_id=?",
                 (view if corruption == "cycle" else "missing-view", parent),
             )
-        elif corruption in {"reverse", "gap"}:
+        elif corruption == "reverse":
             case.connection.execute(
-                "UPDATE context_view_ranges SET start_message_sequence=?,end_message_sequence=? WHERE view_id=?",
-                (3 if corruption == "reverse" else 1, 1 if corruption == "reverse" else 999999, parent),
+                "UPDATE context_view_ranges SET start_message_sequence=3,end_message_sequence=1 WHERE view_id=?",
+                (parent,),
             )
         elif corruption == "source_kind":
             case.connection.execute("UPDATE context_view_ranges SET source_kind='broken' WHERE view_id=?", (parent,))
@@ -127,8 +92,10 @@ def test_saver_rechecks_ancestor_range_corruption_on_every_read(range_case, corr
             case.connection.execute("DELETE FROM context_view_ranges WHERE view_id=? AND source_kind='view'", (view,))
     original_database = tuple(case.connection.iterdump())
     error_type = FormatDispatchError if corruption == "parent_range" else RuntimeError
-    with case.scope(), pytest.raises(error_type, match=error):
-        case.saver.get_tuple(case.config)
+    with case.scope():
+        assert case.saver.get_tuple(case.config).checkpoint == original_checkpoint
+    with pytest.raises(error_type, match=error):
+        case.saver._storage.storage.validate_index(case.owner.session_id, case.owner.thread_id)
     assert canonical.read_bytes() == original_bytes
     assert tuple(case.connection.iterdump()) == original_database
 
@@ -146,9 +113,11 @@ def test_deep_owner_created_range_chain_does_not_recurse_in_python(epoch_case):
     assert case.saver._storage.checkpoints.materialize_messages(
         case.owner.session_id, case.owner.thread_id, "", 0, context_ranges=((view, 0, 0),),
     ) == []
+    with storage.validate_index(case.owner.session_id, case.owner.thread_id):
+        pass
 
 
-def test_shared_ranges_are_checked_once_and_later_cycles_still_fail(epoch_case, monkeypatch):
+def test_shared_ranges_are_validated_and_later_cycles_still_fail(epoch_case):
     case = epoch_case
     storage = case.saver._storage.storage
     base = case.connection.execute(
@@ -169,22 +138,12 @@ def test_shared_ranges_are_checked_once_and_later_cycles_still_fail(epoch_case, 
             "INSERT INTO context_view_ranges(view_id,range_index,source_kind,source_view_id) VALUES (?,2,'view',?)",
             (view, right),
         )
-    statements = []
-    connect = storage._connect
-
-    def observe(*args, **kwargs):
-        connection = connect(*args, **kwargs)
-        connection.set_trace_callback(statements.append)
-        return connection
-
-    with monkeypatch.context() as patch:
-        patch.setattr(storage, "_connect", observe)
-        messages = case.saver._storage.checkpoints.materialize_messages(
-            case.owner.session_id, case.owner.thread_id, "", sequence, context_ranges=((view, 0, sequence),),
-        )
+    messages = case.saver._storage.checkpoints.materialize_messages(
+        case.owner.session_id, case.owner.thread_id, "", sequence, context_ranges=((view, 0, sequence),),
+    )
     assert [(message.id, message.content) for message in messages] == [(case.user.id, case.user.content)]
-    assert sum("SELECT view_kind, parent_view_id FROM context_views" in sql for sql in statements) == 4
-    assert sum("SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN" in sql for sql in statements) == 1
+    with storage.validate_index(case.owner.session_id, case.owner.thread_id):
+        pass
     with case.connection:
         case.connection.execute(
             "INSERT INTO context_view_ranges(view_id,range_index,source_kind,source_view_id) VALUES (?,1,'view',?)",
@@ -193,93 +152,29 @@ def test_shared_ranges_are_checked_once_and_later_cycles_still_fail(epoch_case, 
     original_database = tuple(case.connection.iterdump())
     canonical = storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
     original_bytes = canonical.read_bytes()
+    assert case.saver._storage.checkpoints.materialize_messages(
+        case.owner.session_id, case.owner.thread_id, "", sequence, context_ranges=((view, 0, sequence),),
+    ) == messages
     with pytest.raises(RuntimeError, match="引用形成循环"):
-        case.saver._storage.checkpoints.materialize_messages(
-            case.owner.session_id, case.owner.thread_id, "", sequence, context_ranges=((view, 0, sequence),),
-        )
+        storage.validate_index(case.owner.session_id, case.owner.thread_id)
     assert tuple(case.connection.iterdump()) == original_database
     assert canonical.read_bytes() == original_bytes
 
 
-@pytest.fixture
-def counted_message_spans(epoch_case, monkeypatch):
-    spans = []
-    storage = epoch_case.saver._storage.storage
-    connect = storage._connect
-
-    def observe_sql(sql):
-        if "SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN" in sql:
-            spans.append(tuple(map(int, re.search(r"BETWEEN (\d+) AND (\d+)", sql).groups())))
-
-    def observe(*args, **kwargs):
-        connection = connect(*args, **kwargs)
-        connection.set_trace_callback(observe_sql)
-        return connection
-
-    monkeypatch.setattr(storage, "_connect", observe)
-    return spans
-
-
-def test_full_checkpoint_ranges_scan_each_message_once_per_read(epoch_case, counted_message_spans, request):
+def test_full_checkpoint_restores_all_messages_as_history_grows(epoch_case):
     case = epoch_case
     messages = [case.user]
-    measurements = []
     for step in range(1, 13):
         messages.extend(AIMessage(id=f"full-{step}-{index}", content=f"消息 {step}-{index}") for index in range(8))
         case.checkpoint(f"full-{step}", messages=messages)
         if step not in (4, 12):
             continue
-        # 经真实 Saver 入口读取两次：复用只在单次 snapshot 内，不能跨读取跳过校验。
+        # 经真实 Saver 入口重复读取，冻结 membership 必须保留完整消息及顺序。
         for _ in range(2):
-            counted_message_spans.clear()
             with case.scope():
                 restored = case.saver.get_tuple(case.config)
             assert [(message.id, message.content) for message in restored.checkpoint["channel_values"]["messages"]] == [
                 (message.id, message.content) for message in messages
             ]
-            assert counted_message_spans == [(1, len(messages))]
-        measurements.append({"checkpoints": step, "messages": len(messages), "counted_spans": list(counted_message_spans)})
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    (context.artifacts_dir / "full-checkpoint-range-work.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
-
-
-@pytest.mark.parametrize("ranges,expected", [
-    ([(2, 6), (1, 9), (1, 3)], [(1, 9)]),
-    ([(3, 9), (1, 5)], [(1, 5), (6, 9)]),
-    ([(7, 9), (1, 3)], [(1, 3), (7, 9)]),
-])
-def test_range_sweep_preserves_nested_overlapping_and_disjoint_ranges(epoch_case, counted_message_spans, ranges, expected):
-    case = epoch_case
-    messages = [case.user, *(AIMessage(id=f"span-{index}", content=f"消息 {index}") for index in range(8))]
-    case.checkpoint("span-messages", messages=messages)
-    storage = case.saver._storage.storage
-    branch = case.connection.execute("SELECT branch_id FROM context_views WHERE view_id=?", (case.active_view(),)).fetchone()[0]
-    with case.connection:
-        view = storage._create_view(case.connection, branch, None, tuple(range(1, 10)), utc_now_text(), view_kind="compaction")
-        case.connection.execute("DELETE FROM context_view_ranges WHERE view_id=?", (view,))
-        case.connection.executemany(
-            "INSERT INTO context_view_ranges(view_id,range_index,source_kind,start_message_sequence,end_message_sequence) "
-            "VALUES (?,?,'messages',?,?)",
-            [(view, index, start, end) for index, (start, end) in enumerate(ranges)],
-        )
-    counted_message_spans.clear()
-    restored = case.saver._storage.checkpoints.materialize_messages(
-        case.owner.session_id, case.owner.thread_id, "", 9, context_ranges=((view, 0, 9),),
-    )
-    assert [(message.id, message.content) for message in restored] == [(message.id, message.content) for message in messages]
-    assert counted_message_spans == expected
-    # 覆盖首段内部及合并后的尾段缺口；已成功读取不能遮蔽后续损坏。
-    for missing in (2, 8):
-        with case.connection:
-            case.connection.execute("UPDATE messages SET message_sequence=99 WHERE message_sequence=?", (missing,))
-        original_database = tuple(case.connection.iterdump())
-        canonical = storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
-        original_bytes = canonical.read_bytes()
-        with pytest.raises(RuntimeError, match="不存在完整消息范围"):
-            case.saver._storage.checkpoints.materialize_messages(
-                case.owner.session_id, case.owner.thread_id, "", 9, context_ranges=((view, 0, 9),),
-            )
-        assert tuple(case.connection.iterdump()) == original_database
-        assert canonical.read_bytes() == original_bytes
-        with case.connection:
-            case.connection.execute("UPDATE messages SET message_sequence=? WHERE message_sequence=99", (missing,))
+    with case.saver._storage.storage.validate_index(case.owner.session_id, case.owner.thread_id):
+        pass

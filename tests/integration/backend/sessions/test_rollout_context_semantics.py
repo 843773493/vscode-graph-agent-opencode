@@ -325,20 +325,22 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
             {"source": "incremental-tool-test", "step": 1},
             {"messages": "1"},
         )
+        result_checkpoint = _checkpoint(
+            "checkpoint-tool-result",
+            [
+                ToolMessage(
+                    content="README 内容",
+                    id="tool-result",
+                    tool_call_id="call-tool-call",
+                    name="read_file",
+                    response_metadata={"turn_id": "turn-tool-call"},
+                )
+            ],
+        )
+        result_checkpoint["channel_versions"] = {"messages": "2"}
         saver.put(
             first_config,
-            _checkpoint(
-                "checkpoint-tool-result",
-                [
-                    ToolMessage(
-                        content="README 内容",
-                        id="tool-result",
-                        tool_call_id="call-tool-call",
-                        name="read_file",
-                        response_metadata={"turn_id": "turn-tool-call"},
-                    )
-                ],
-            ),
+            result_checkpoint,
             {"source": "incremental-tool-test", "step": 2},
             {"messages": "2"},
         )
@@ -378,8 +380,7 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
     assert isinstance(restored_result, ToolMessage)
     assert restored_call.tool_calls[0]["id"] == restored_result.tool_call_id
 
-    # v2 checkpoint 缺少 parent range 时必须明确拒绝，不能把损坏索引当成
-    # 可兼容的旧路径继续投影。
+    # range 是来源证据，普通恢复只读冻结 membership；完整校验仍须报告损坏。
     with sqlite3.connect(root / "index.sqlite") as connection:
         view_id = connection.execute(
             "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id = 'checkpoint-tool-result' AND channel_name='messages'"
@@ -389,8 +390,9 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
             (view_id,),
         )
         connection.commit()
+    assert saver.get_tuple(build_checkpoint_config(thread_id)).checkpoint == restored.checkpoint
     with pytest.raises(FormatDispatchError, match="parent range"):
-        saver.get_tuple(build_checkpoint_config(thread_id))
+        saver._storage.storage.validate_index(SESSION_ID, thread_id)
 
 
 def test_parallel_tool_continuation_restores_all_call_declarations(
@@ -435,14 +437,15 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
             {"messages": "1"},
         )
 
-    # LangGraph continuation 的增量 checkpoint 只带新 HumanMessage；旧 view
-    # 必须通过 parent range 继续提供整个并行 AI tool-call 声明组。
+    # LangGraph continuation 只带新 HumanMessage；冻结 membership 必须保留整个并行工具组。
     continuation = HumanMessage(content="继续处理", id="user-continuation")
     admission = accept_context_turn(continuation, "turn-continuation")
+    continuation_checkpoint = _checkpoint("parallel-continuation", [continuation])
+    continuation_checkpoint["channel_versions"] = {"messages": "2"}
     with execution_admission_scope(admission, langgraph_thread_id=thread_id):
         saver.put(
             parent_config,
-            _checkpoint("parallel-continuation", [continuation]),
+            continuation_checkpoint,
             {"source": "parallel-continuation-test", "step": 2},
             {"messages": "2"},
         )
@@ -481,7 +484,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
             == "view"
         )
 
-        # 损坏冻结 messages view，不能用独立 history selection 修补 channel。
+        # 损坏 range 来源证据不改变冻结 messages membership，交由完整校验报告。
         child_view = connection.execute(
             "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id='parallel-continuation' AND channel_name='messages'"
         ).fetchone()[0]
@@ -506,8 +509,9 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
         )
         connection.commit()
 
+    assert saver.get_tuple(build_checkpoint_config(thread_id)).checkpoint["channel_values"]["messages"] == restored_messages
     with pytest.raises(FormatDispatchError, match="parent range"):
-        saver.get_tuple(build_checkpoint_config(thread_id))
+        saver._storage.storage.validate_index(SESSION_ID, thread_id)
 
 
 def test_context_view_validation_accepts_single_message_range(

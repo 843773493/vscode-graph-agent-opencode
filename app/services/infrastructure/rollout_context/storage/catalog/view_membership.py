@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text
-from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import insert_view_jumps
+from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import (
+    insert_view_jumps,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
     append_members,
     clone_members,
@@ -473,10 +475,8 @@ class RolloutViewMembershipMixin:
                 ranges[-1] = (ranges[-1][0], sequence)
         range_index = 0
         if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
-            # 普通 checkpoint 可能只携带本次 LangGraph delta（例如单独的
-            # ToolMessage），而不是完整 messages 快照。parent_view_id 仅用于
-            # 跳转索引并不能参与消息物化；显式保留父 view，才能让对应的
-            # assistant tool call 与后续 ToolMessage 一起进入下一次模型请求。
+            # range 保留增量 checkpoint 的父来源证据，供完整审计检查；
+            # 实际消息选集已冻结在 membership，不在普通读取时展开祖先图。
             range_cursor = connection.execute(
                 "INSERT INTO context_view_ranges(view_id, range_index, source_kind, source_view_id, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'view', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL)",
                 (view_id, range_index, parent_view_id, range_index),

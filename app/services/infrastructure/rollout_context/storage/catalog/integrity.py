@@ -13,7 +13,7 @@ from copy import deepcopy
 
 from cachetools import LRUCache
 
-from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import payload_content_length
 from app.domain.itemized.records import (
     CanonicalItemRecord,
@@ -26,7 +26,11 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
     canonical_json_text,
 )
-from app.services.infrastructure.rollout_context.storage.transaction import strict_text
+from app.services.infrastructure.rollout_context.storage.transaction import (
+    strict_non_negative_int,
+    strict_optional_text,
+    strict_text,
+)
 
 _BODY_VALIDATION_MAX_BYTES = 8 * 1024 * 1024
 _BODY_VALIDATION_MAX_ENTRIES = 4096
@@ -209,6 +213,7 @@ def _validated_catalog_body(key: _BodyValidationKey) -> CanonicalItemRecord:
 
 def validate_projection_membership(connection: sqlite3.Connection) -> None:
     """完整审计 projection 的 catalog 归属及全部 view 的成员坐标与顺序。"""
+    _validate_context_view_ranges(connection)
     _validate_context_view_orders(connection)
     orphan = connection.execute(
         "SELECT p.item_id FROM item_projections p LEFT JOIN item_catalog c "
@@ -220,6 +225,75 @@ def validate_projection_membership(connection: sqlite3.Connection) -> None:
             f"item projection 与 canonical catalog membership 不一致: "
             f"orphan={orphan}"
         )
+
+
+def _validate_context_view_ranges(connection: sqlite3.Connection) -> None:
+    """完整审计 range 图、父引用及范围格式；普通读取只消费目标 membership。"""
+    # 一次取齐图结构，共享祖先只走一次，不为每个 view 重建历史闭包。
+    views = {
+        strict_text(row[0], field="context_views.view_id"): row[1:]
+        for row in connection.execute(
+            "SELECT view_id, view_kind, parent_view_id FROM context_views ORDER BY creation_sequence",
+        )
+    }
+    ranges_by_view: dict[str, list[tuple[object, ...]]] = {}
+    for view_id, *row in connection.execute(
+        "SELECT view_id, source_kind, source_view_id, start_message_sequence, end_message_sequence "
+        "FROM context_view_ranges ORDER BY view_id, range_index",
+    ):
+        if view_id not in views:
+            raise RuntimeError(f"context view 不存在: {view_id}")
+        ranges_by_view.setdefault(view_id, []).append(tuple(row))
+    active: set[str] = set()
+    completed: set[str] = set()
+    pending = [(view_id, False) for view_id in reversed(views)]
+    while pending:
+        current, exiting = pending.pop()
+        if exiting:
+            active.remove(current)
+            completed.add(current)
+            continue
+        if current in active:
+            raise RuntimeError(f"context view 引用形成循环: {current}")
+        if current in completed:
+            continue
+        active.add(current)
+        view_row = views.get(current)
+        if view_row is None:
+            raise RuntimeError(f"context view 不存在: {current}")
+        view_kind = strict_text(view_row[0], field=f"context_views.view_kind: {current}")
+        parent_view_id = strict_optional_text(
+            view_row[1], field=f"context_views.parent_view_id: {current}"
+        )
+        ranges = ranges_by_view.get(current, ())
+        sources: list[str] = []
+        for source_kind, source_view, start, end in ranges:
+            source_kind = strict_text(
+                source_kind, field=f"context_view_ranges.source_kind: {current}"
+            )
+            if source_kind == "view":
+                sources.append(strict_text(
+                    source_view, field=f"context_view_ranges.source_view_id: {current}"
+                ))
+            elif source_kind == "messages":
+                start_value = strict_non_negative_int(start, field=f"context view range start: {current}")
+                end_value = strict_non_negative_int(end, field=f"context view range end: {current}")
+                if start_value == 0 or end_value < start_value:
+                    raise RuntimeError(
+                        f"context view range 不能反向: view={current}, start={start_value}, end={end_value}"
+                    )
+            else:
+                raise RuntimeError(
+                    f"context view range source_kind 非法: view={current}, source_kind={source_kind}"
+                )
+        if view_kind in {"checkpoint", "checkpoint_messages"} and parent_view_id is not None and parent_view_id not in sources:
+            raise FormatDispatchError(
+                f"v2_migration_required: checkpoint view 缺少显式 parent range: view_id={current}"
+            )
+        pending.append((current, True))
+        pending.extend((source, False) for source in reversed(sources))
+    # range 保留来源证据；前缀 fork 会合法裁去未选正文，不能要求原范围
+    # 在当前库连续存在。实际读取按冻结 membership 定位并校验本地正文。
 
 
 def _validate_context_view_orders(connection: sqlite3.Connection) -> None:
