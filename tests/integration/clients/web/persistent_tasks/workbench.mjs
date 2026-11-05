@@ -20,7 +20,7 @@ export async function selectThread(page, owner, groupIndex) {
   await expect(group).toBeVisible();
   await page.evaluate(command => globalThis.workbench.commands.executeCommand(command),
     groupIndex === 0 ? "workbench.action.focusFirstEditorGroup" : "workbench.action.focusSecondEditorGroup");
-  const workspace = page.getByTestId(`workspace-node-${owner.routeId}`).locator("..");
+  const workspace = page.getByTestId(`workspace-node-${JSON.stringify([owner.gatewayId, owner.workspaceId])}`).locator("..");
   await workspace.locator(`button[data-session-id="${owner.sessionId}"]`).dblclick();
   const thread = group.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`);
   await expect(thread).toBeVisible();

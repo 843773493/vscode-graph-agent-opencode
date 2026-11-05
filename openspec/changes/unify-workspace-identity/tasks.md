@@ -265,3 +265,8 @@
 
 - 便携 Electron 的驱动、HTTP 审计、延迟 bootstrap 与只读文档读取统一使用原 `(gateway_id, workspace_id)`；移除 `BOXTEAM_ELECTRON_ROUTE_ID` 和临时 route 字段。Diff 选择先等待 Turn 变更集的实际 `aria-pressed`，避免仍展示旧 all 列表时提前打开；未修改产品行为或放宽请求次数。
 - 正式 `integration-electron-packaged-workbench` 矩阵 1 passed／198.64 秒，退出 0，重新构建并迁移到源码目录外的 ASAR。覆盖真实工具调用、保存、图片 200／304、Diff 分屏共享、来源只读、正常关闭重启及独立 profile，15 项产品断言通过，页面／存储／代理错误均为空。源码首尾指纹与当前磁盘一致，原失败回执仍保留。命令、指纹及原始输出见 `out/tests/temp/identity_thread_consumers_20261105/artifacts/electron-turn-selection-product-1793855365775026207.json`，正式产物为 `run-36601aaccd5d`。Python 静态复用此前相同源码的零诊断收据，最终驱动语法检查退出 0；此项不代替 Windows 或其余未完成消费者验收，6.4 保持未勾。
+
+### 2026-11-05：6.4 持久任务、资源纠正与历史分支消费者
+
+- 持久任务四组驱动和资源身份纠正统一传原生 Gateway／Workspace owner，目录节点选择使用完整 owner key；模型调用、目标切换、错误重读和浏览器刷新原断言保留。原组合前五项逐项通过，随后 fork 看门狗因未经矩阵退出，未将整组记为成功；fork 改由原正式矩阵单独补验 1 passed／186.41秒，Turn来源冻结矩阵另 1 passed／208.12秒。
+- 交付测试源码与各次验收前后SHA一致，Ruff／Pyright及JS语法沿相同源码既有零诊断收据复用，根线程核对差异及调用方。原始命令／退出码／失败与补验在 `out/tests/temp/identity_thread_consumers_20261105/artifacts/thread-owner-product-1793852080482450852.json`、`thread-owner-fork-matrix-1793854149195698064.json` 和 `thread-owner-turn-matrix-1793854497728786801.json`；不替代其余消费者，6.4继续未勾。

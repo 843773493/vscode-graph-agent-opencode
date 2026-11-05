@@ -18,7 +18,7 @@ try {
   page.on("pageerror", (error) => errors.push(String(error)));
   await openWorkbench(page, fixture.baseUrl);
   await selectThread(page, fixture.owner, 0);
-  const initialization = await page.evaluate(async (workspaceId) => {
+  const initialization = await page.evaluate(async (expectedOwner) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     assertResponse(credential);
     const headers = { "X-Local-Token": (await credential.json()).data.token };
@@ -28,17 +28,19 @@ try {
       const response = await fetch(url, { headers });
       assertResponse(response);
       const body = await response.json();
+      if (url === "/api/gateway/health" && body.data.gateway_id !== expectedOwner.gatewayId) throw new Error("Gateway归属不一致");
+      if (url === "/api/v1/workspace" && body.data.workspace_id !== expectedOwner.workspaceId) throw new Error("工作区UUID不一致");
       if (url === "/api/gateway/workspaces") {
-        owner = body.data.items.find((item) => item.backend_workspace_id === workspaceId);
+        owner = body.data.items.find((item) => item.gateway_id === expectedOwner.gatewayId && item.workspace_id === expectedOwner.workspaceId);
         if (!owner) throw new Error("Gateway未登记测试目标");
         headers["X-BoxTeam-Workspace-Id"] = owner.workspace_id;
-        headers["X-BoxTeam-Backend-Workspace-Id"] = owner.backend_workspace_id;
+        headers["X-BoxTeam-Target-Gateway-Id"] = owner.gateway_id;
       }
       results.push({ url, requestId: response.headers.get("x-request-id"), bodyRequestId: body.request_id });
     }
     return results;
     function assertResponse(response) { if (!response.ok) throw new Error(`产品初始化失败：${response.status}`); }
-  }, fixture.workspaceId);
+  }, fixture.owner);
   initialization.forEach((item) => { assert(item.requestId); assert.equal(item.requestId, item.bodyRequestId); });
   let panel = await automation(page);
   await panel.getByRole("button", { name: /同一owner的暂停目标/ }).waitFor();

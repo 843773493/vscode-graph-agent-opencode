@@ -62,8 +62,9 @@ async def test_workspace_switch_keeps_task_actions_history_and_goal_with_their_o
         product_case(secure, sibling, web=True, gateway_environment={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)}) as (client, replay, case),
     ):
         listed = (await client.get("/api/gateway/workspaces")).json()["data"]
-        primary = next(row for row in listed["items"] if row["backend_workspace_id"] == case.mount.workspace_id)
+        primary = next(row for row in listed["items"] if row["workspace_id"] == case.mount.workspace_id)
         client.headers["X-BoxTeam-Workspace-Id"] = primary["workspace_id"]
+        client.headers["X-BoxTeam-Target-Gateway-Id"] = primary["gateway_id"]
         first = await _prepare_owner(client, case.mount.workspace_id, "A")
         secondary_root = await asyncio.to_thread(prepare_default_test_workspace,
             workspace_root=case.context.workspace_root / "secondary",
@@ -77,12 +78,13 @@ async def test_workspace_switch_keeps_task_actions_history_and_goal_with_their_o
         })
         assert response.status_code == 200, response.text
         secondary, = [row for row in response.json()["data"]["items"] if row["workspace_id"] != primary["workspace_id"]]
+        assert secondary["gateway_id"] == primary["gateway_id"]
         headers = dict(client.headers)
         headers["x-boxteam-workspace-id"] = secondary["workspace_id"]
-        headers["x-workspace-id"] = secondary["backend_workspace_id"]
+        headers["x-boxteam-target-gateway-id"] = secondary["gateway_id"]
+        headers["x-workspace-id"] = secondary["workspace_id"]
         async with httpx.AsyncClient(base_url=client.base_url, headers=headers, cookies=client.cookies, timeout=30) as second_client:
-            second = await _prepare_owner(second_client, secondary["backend_workspace_id"], "B")
-            second["routeId"] = secondary["workspace_id"]
+            second = await _prepare_owner(second_client, secondary["workspace_id"], "B")
             result = await browser_runner(case, client, title="工作区 A 会话",
                 target_uri=first["targetUri"], other_target_uri=second["targetUri"], script="workspace_switch",
                 environment={"BOXTEAM_SECONDARY_WORKSPACE": json.dumps(second)})

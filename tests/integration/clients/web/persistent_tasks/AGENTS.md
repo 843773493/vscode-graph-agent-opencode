@@ -15,6 +15,6 @@
 - 正式产物镜像本目录测试路径；浏览器必须显式设置产物目录。
 - 使用正式matrix或进程外期限和内存保护，保留实际HTTP回执与退出码。
 - 四个页面场景通过 `web_workbench_assets` 构建完整 Workbench，由各自真实 Gateway 提供静态资源；`workbench.mjs` 只封装原版入口、会话资源与自动化视图的浏览器操作。展示态恢复使用同一浏览器的原版存储，业务状态仍核对后端权威对象。
-- Python 装具使用统一 URI parser 解析精确 Thread，并经真实 Gateway 注册表解析 route；浏览器操作显式传入完整 owner 和编辑器组。管理场景通过原版分屏验证同一 Thread 两组的任务详情独立，以及一组切换至无关联任务的另一会话时另一组仍保留原详情，不用全页 Session 选择器代替实例隔离。
+- Python 装具使用统一 URI parser 解析精确 Thread，按 URI 的 Gateway 归属（本机短 URI 使用真实 health 身份）及工作区 UUID 匹配真实登记；浏览器显式传入同一完整 owner 和编辑器组，不再换算路由别名。管理场景通过原版分屏验证同一 Thread 两组的任务详情独立，以及一组切换至无关联任务的另一会话时另一组仍保留原详情，不用全页 Session 选择器代替实例隔离。
 - `test_generation_activity.py` 只通过 phase 观察控制产品推进，读取真实空输出和已登记输出的 queued；由页面立即检查触发真实执行，未经点击输出会话也必须显示其模型回复。不伪造响应或写入运行结果。
 - `test_workspace_switch.py` 通过 Gateway 注册第二工作区，由各自产品入口创建任务和暂停 Goal；两个 HTTP 客户端共享同一真实用户会话，页面切换后编辑、检查和暂停，再核对两边权威对象及运行记录。第二工作区使用同名测试的 `workspace/secondary/`，不注册源码根目录。

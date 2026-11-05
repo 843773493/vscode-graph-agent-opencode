@@ -17,7 +17,7 @@ try {
   page.on("pageerror", (error) => errors.push(String(error)));
   await openWorkbench(page, fixture.baseUrl);
   await selectThread(page, fixture.owner, 0);
-  const headers = await page.evaluate(async (workspaceId) => {
+  const headers = await page.evaluate(async (expectedOwner) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     if (!credential.ok) throw new Error(`凭据读取失败：${credential.status}`);
     const headers = { "X-Local-Token": (await credential.json()).data.token };
@@ -26,15 +26,17 @@ try {
       if (!response.ok) throw new Error(`初始化失败：${url}/${response.status}`);
       const body = await response.json();
       if (!body.request_id || body.request_id !== response.headers.get("x-request-id")) throw new Error("初始化请求身份不一致");
+      if (url === "/api/gateway/health" && body.data.gateway_id !== expectedOwner.gatewayId) throw new Error("Gateway归属不一致");
+      if (url === "/api/v1/workspace" && body.data.workspace_id !== expectedOwner.workspaceId) throw new Error("工作区UUID不一致");
       if (url === "/api/gateway/workspaces") {
-        const owner = body.data.items.find((item) => item.backend_workspace_id === workspaceId);
+        const owner = body.data.items.find((item) => item.gateway_id === expectedOwner.gatewayId && item.workspace_id === expectedOwner.workspaceId);
         if (!owner) throw new Error("Gateway未登记目标");
         headers["X-BoxTeam-Workspace-Id"] = owner.workspace_id;
-        headers["X-BoxTeam-Backend-Workspace-Id"] = owner.backend_workspace_id;
+        headers["X-BoxTeam-Target-Gateway-Id"] = owner.gateway_id;
       }
     }
     return headers;
-  }, fixture.workspaceId);
+  }, fixture.owner);
   const request = async (url) => {
     const response = await context.request.get(fixture.baseUrl + url, { headers });
     assert.equal(response.status(), 200, await response.text());

@@ -18,10 +18,11 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   await openWorkbench(page, fixture.baseUrl);
-  const initialization = await page.evaluate(async () => {
+  const initialization = await page.evaluate(async (owner) => {
     const response = await fetch("/api/gateway/auth/local-credential");
     if (!response.ok) throw new Error(`凭据读取失败：${response.status}`);
-    const headers = { "X-Local-Token": (await response.json()).data.token };
+    const headers = { "X-Local-Token": (await response.json()).data.token,
+      "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId };
     const receipts = [];
     for (const url of ["/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"]) {
       const result = await fetch(url, { headers });
@@ -30,19 +31,19 @@ try {
       receipts.push({ url, requestId: result.headers.get("x-request-id"), bodyRequestId: body.request_id, data: body.data });
     }
     return receipts;
-  });
+  }, fixture.owner);
   for (const receipt of initialization) {
     assert(receipt.requestId); assert.equal(receipt.requestId, receipt.bodyRequestId);
   }
-  const primary = initialization.find((row) => row.url === "/api/gateway/workspaces").data.items.find((row) => row.backend_workspace_id === fixture.workspaceId);
+  const primary = initialization.find((row) => row.url === "/api/gateway/workspaces").data.items.find((row) => row.gateway_id === fixture.owner.gatewayId && row.workspace_id === fixture.owner.workspaceId);
   assert(primary);
   let summary;
   const activate = async (owner) => {
-    const routeId = owner.routeId;
-    const row = page.getByTestId(`workspace-node-${routeId}`);
+    const row = page.getByTestId(`workspace-node-${JSON.stringify([owner.gatewayId, owner.workspaceId])}`);
     if (await row.getAttribute("aria-current") !== "location") {
       const response = page.waitForResponse((entry) => entry.request().method() === "POST"
-        && new URL(entry.url()).pathname === `/api/gateway/workspaces/${routeId}/activate`);
+        && new URL(entry.url()).pathname === `/api/gateway/workspaces/${owner.workspaceId}/activate`
+        && entry.request().headers()["x-boxteam-target-gateway-id"] === owner.gatewayId);
       await row.locator(".workspace-label").click();
       assert.equal((await response).status(), 200);
     }

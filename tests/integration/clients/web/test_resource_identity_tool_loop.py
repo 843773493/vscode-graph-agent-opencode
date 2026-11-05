@@ -56,18 +56,20 @@ async def test_rejected_identity_and_correction_survive_workbench_refresh(
             assert guest.status_code == 200, guest.text
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            route_id = workspaces.json()["data"]["active_workspace_id"]
-            client.headers["X-BoxTeam-Workspace-Id"] = route_id
+            active_owner = workspaces.json()["data"]["active_workspace"]
+            client.headers["X-BoxTeam-Target-Gateway-Id"] = active_owner["gateway_id"]
+            client.headers["X-BoxTeam-Workspace-Id"] = active_owner["workspace_id"]
             created = await client.post("/api/v1/sessions", json={"title": "资源身份纠正验收", "agent_id": "default"})
             assert created.status_code == 200, created.text
             session = created.json()["data"]
+            assert session["workspace_id"] == active_owner["workspace_id"]
             session_id = session["session_id"]
             selected = await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "primary"})
             assert selected.status_code == 200 and selected.json()["data"]["current_provider_id"] == "primary"
             main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
             assert main.status_code == 200, main.text
             thread_id = main.json()["data"]["thread_id"]
-            owner = {"routeId": route_id, "workspaceId": session["workspace_id"], "sessionId": session_id, "threadId": thread_id}
+            owner = {"gatewayId": active_owner["gateway_id"], "workspaceId": session["workspace_id"], "sessionId": session_id, "threadId": thread_id}
             valid = {"resource_identity": str(workspace_session_inventory_identity(session["workspace_id"])),
                      "uri": workspace_session_inventory_uri(session["workspace_id"]), "scope": "workspace", "view": "inventory"}
             locations = ["/private/web-identity", r"C:\private\web-identity", r"\\target\private\web-identity"]

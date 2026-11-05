@@ -35,7 +35,7 @@ async function responseBody(pathname, owner, data, method = data === undefined ?
   const response = await page.request.fetch(new URL(pathname, baseUrl).href, {
     method,
     headers: { "X-Local-Token": token, "X-Request-ID": sentRequestId,
-      ...(owner ? { "X-BoxTeam-Workspace-Id": owner.routeId } : {}) },
+      ...(owner ? { "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId } : {}) },
     ...(data === undefined ? {} : { data }), timeout: 60_000,
   });
   try {
@@ -70,7 +70,7 @@ async function send(owner, thread, index, responses) {
     thread_id: owner.threadId, interactions: responses }));
   const responsePromise = page.waitForResponse(response => response.request().method() === "POST"
     && new URL(response.url()).pathname === `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`
-    && response.request().headers()["x-boxteam-workspace-id"] === owner.routeId);
+    && response.request().headers()["x-boxteam-workspace-id"] === owner.workspaceId);
   await thread.locator(webSelectors.composer).fill(prompts[index]);
   await thread.locator(webSelectors.sendButton).click();
   const response = await responsePromise;
@@ -119,15 +119,16 @@ try {
   token = (await credential.json()).data.token;
   await credential.dispose();
   const registry = await api("/api/gateway/workspaces");
-  const routeId = registry.active_workspace_id;
-  assert.equal(typeof routeId, "string");
-  await api("/api/gateway/health");
-  const workspace = await api("/api/v1/workspace", { routeId });
-  const created = await api("/api/v1/sessions", { routeId }, { title: "较早工具回答的前缀分支", agent_id: "default" });
-  const updated = await api(`/api/v1/sessions/${created.session_id}`, { routeId }, { provider_id: "primary" }, "PATCH");
+  const active = registry.active_workspace;
+  const workspaceOwner = { gatewayId: active.gateway_id, workspaceId: active.workspace_id };
+  assert.equal((await api("/api/gateway/health")).gateway_id, workspaceOwner.gatewayId);
+  const workspace = await api("/api/v1/workspace", workspaceOwner);
+  const created = await api("/api/v1/sessions", workspaceOwner, { title: "较早工具回答的前缀分支", agent_id: "default" });
+  assert.equal(created.workspace_id, workspaceOwner.workspaceId);
+  const updated = await api(`/api/v1/sessions/${created.session_id}`, workspaceOwner, { provider_id: "primary" }, "PATCH");
   assert.equal(updated.current_provider_id, "primary");
-  const main = await api(`/api/v1/sessions/${created.session_id}/main-thread`, { routeId });
-  const source = { routeId, workspaceId: created.workspace_id, sessionId: created.session_id, threadId: main.thread_id };
+  const main = await api(`/api/v1/sessions/${created.session_id}/main-thread`, workspaceOwner);
+  const source = { ...workspaceOwner, sessionId: created.session_id, threadId: main.thread_id };
   assert.equal(workspace.workspace_id, source.workspaceId);
   facts.source = source;
   facts.phase = "source-product-turns";
@@ -152,7 +153,7 @@ try {
     anchor_item_id: point.anchor_item_id, anchor_mode: "inclusive", mode: "view_prefix_fork",
     creation_kind: "new_child_thread", target_container_uri: point.child_container_uri };
   facts.forkRequest = request;
-  const deadline = await beginForkOperationDeadline({ target: `${source.routeId}/${source.sessionId}`, operationKey: request.idempotency_key });
+  const deadline = await beginForkOperationDeadline({ target: JSON.stringify([source.gatewayId, source.workspaceId, source.sessionId]), operationKey: request.idempotency_key });
   let fork;
   try {
     fork = await waitForForkOperation(api(`/api/v1/sessions/${source.sessionId}/fork-context`, source, request), deadline, "较早回答前缀发布");
@@ -181,9 +182,9 @@ try {
   facts.phase = "backend-hard-exit";
   // health 沿用平铺响应；普通业务 API 继续严格核对 APIResponse 的 request_id。
   const beforeCrash = (await responseBody("/api/v1/health", source)).body;
-  const registered = (await api("/api/gateway/workspaces")).items.find(item => item.workspace_id === source.routeId);
+  const registered = (await api("/api/gateway/workspaces")).items.find(item => item.gateway_id === source.gatewayId && item.workspace_id === source.workspaceId);
   assert(registered?.managed);
-  assert.equal(registered.backend_workspace_id, source.workspaceId);
+  assert.equal(registered.workspace_id, source.workspaceId);
   assert.equal(typeof registered.backend_generation, "string");
   // 离开真实页面关闭 SSE；首次正常关闭之前强杀，不让 shutdown 帮产品落盘。
   await page.goto("about:blank");
@@ -199,7 +200,7 @@ try {
   assert.equal(termination.alive, false);
   facts.backendCrash = { before: beforeCrash, termination, previousGeneration: registered.backend_generation };
   // 崩溃后的完整组恢复仍由公开 Gateway start 执行，保留原 generation 和成员前置条件。
-  const started = await api(`/api/gateway/workspaces/${source.routeId}/runtime/start`, undefined, {
+  const started = await api(`/api/gateway/workspaces/${source.workspaceId}/runtime/start`, source, {
     expected_backend_generation: registered.backend_generation,
     expected_workspace_ids: registered.affected_workspace_ids,
   });
@@ -218,7 +219,7 @@ try {
   assert.deepEqual(await history(source), before, "Backend 硬退出恢复不能改写 source 历史");
   facts.phase = "backend-restart";
   // 再保留原安全重启回归，完整组前置条件不能因硬退出补验而被删去。
-  const restart = await api(`/api/gateway/workspaces/${source.routeId}/runtime/restart-safe`, undefined, {
+  const restart = await api(`/api/gateway/workspaces/${source.workspaceId}/runtime/restart-safe`, source, {
     expected_backend_generation: started.backend_generation,
     expected_workspace_ids: started.affected_workspace_ids,
   });

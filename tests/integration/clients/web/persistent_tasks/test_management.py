@@ -41,12 +41,17 @@ def browser_runner():
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["request_id"] == response.headers["x-request-id"]
+        health = await client.get("/api/gateway/health")
+        assert health.status_code == 200, health.text
+        gateway_id = health.json()["data"]["gateway_id"]
         owners = []
         for uri in (target_uri, other_target_uri):
             parsed, session_id, thread_id = parse_session_thread_uri(uri)
             assert thread_id, "浏览器操作必须指定精确 Thread URI"
-            route, = [row for row in body["data"]["items"] if row["backend_workspace_id"] == parsed.scope_id]
-            owners.append({"routeId": route["workspace_id"], "workspaceId": parsed.scope_id,
+            owner, = [row for row in body["data"]["items"] if (
+                row["gateway_id"], row["workspace_id"]
+            ) == (parsed.gateway_authority or gateway_id, parsed.scope_id)]
+            owners.append({"gatewayId": owner["gateway_id"], "workspaceId": parsed.scope_id,
                            "sessionId": session_id, "threadId": thread_id})
         command = ["node", f"tests/integration/clients/web/persistent_tasks/{script}.mjs"]
         result = await asyncio.to_thread(subprocess.run, command, cwd=case.context.project_root,

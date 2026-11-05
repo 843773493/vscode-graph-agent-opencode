@@ -32,7 +32,7 @@ async function inspectTurn(thread, turnId) {
     if (!credential.ok) throw new Error(`本地凭据 HTTP ${credential.status}`);
     const response = await fetch(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": (await credential.json()).data.token,
-        "X-BoxTeam-Workspace-Id": owner.routeId },
+        "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId },
       body: JSON.stringify({ turn_ids: [turnId], include: ["tool_call", "tool_result"] }),
     });
     return { status: response.status, requestId: response.headers.get("x-request-id"), body: await response.json() };
@@ -115,7 +115,7 @@ try {
   await thread.locator(webSelectors.sendButton).click();
   const response = await sent;
   assert.equal(response.status(), 200, await response.text());
-  assert.equal(response.request().headers()["x-boxteam-workspace-id"], owner.routeId);
+  assert.equal(response.request().headers()["x-boxteam-workspace-id"], owner.workspaceId);
   assert.equal(response.request().postDataJSON().message.content, message);
   const body = await response.json();
   assert.equal(body.request_id, response.headers()["x-request-id"]);
@@ -129,7 +129,7 @@ try {
     const url = new URL(response.url());
     return response.request().method() === "GET" && url.pathname === `/api/v1/sessions/${owner.sessionId}/bootstrap`
       && url.searchParams.get("thread_id") === owner.threadId
-      && response.request().headers()["x-boxteam-workspace-id"] === owner.routeId;
+      && response.request().headers()["x-boxteam-workspace-id"] === owner.workspaceId;
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   thread = await selectThread(page, owner, 0);

@@ -98,11 +98,13 @@ async def verify_agents_source_boundary(
         assert guest.status_code == 200, guest.text
         registry = await client.get("/api/gateway/workspaces")
         assert registry.status_code == 200, registry.text
-        route_id = registry.json()["data"]["active_workspace_id"]
-        client.headers["X-BoxTeam-Workspace-Id"] = route_id
+        active_owner = registry.json()["data"]["active_workspace"]
+        client.headers["X-BoxTeam-Target-Gateway-Id"] = active_owner["gateway_id"]
+        client.headers["X-BoxTeam-Workspace-Id"] = active_owner["workspace_id"]
         created = await client.post("/api/v1/sessions", json={"title": "工具循环中更新来源", "agent_id": "default"})
         assert created.status_code == 200, created.text
         session = created.json()["data"]
+        assert session["workspace_id"] == active_owner["workspace_id"]
         session_id, thread_id = session["session_id"], session["thread_id"]
         updated = await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "primary"})
         assert updated.status_code == 200 and updated.json()["data"]["current_provider_id"] == "primary", updated.text
@@ -142,7 +144,7 @@ async def verify_agents_source_boundary(
         "BOXTEAM_BROWSER_BASE_URL": base_url,
         "BOXTEAM_BROWSER_ARTIFACT_ROOT": str(artifacts),
         "BOXTEAM_BROWSER_TEST_OWNER": str(request.node.path),
-        "BOXTEAM_BROWSER_OWNER": json.dumps({"routeId": route_id, "workspaceId": session["workspace_id"],
+        "BOXTEAM_BROWSER_OWNER": json.dumps({"gatewayId": active_owner["gateway_id"], "workspaceId": session["workspace_id"],
             "sessionId": session_id, "threadId": thread_id}),
         "BOXTEAM_BROWSER_CONTEXT_RESOURCE": json.dumps({key: session[key] for key in ("resource_identity", "uri", "scope")}),
         "BOXTEAM_BROWSER_AGENTS_FILE": str(agents_source),

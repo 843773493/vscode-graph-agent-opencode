@@ -42,7 +42,7 @@ function phase(value) {
 async function api(pathname, data, method = data === undefined ? "GET" : "POST") {
   const requestId = randomUUID();
   const response = await page.request.fetch(new URL(pathname, baseUrl).href, {
-    method, headers: { "X-Local-Token": token, "X-Request-ID": requestId, "X-BoxTeam-Workspace-Id": owner.routeId },
+    method, headers: { "X-Local-Token": token, "X-Request-ID": requestId, "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId },
     ...(data === undefined ? {} : { data }), timeout: 60_000,
   });
   try {
@@ -60,7 +60,7 @@ async function send(thread, prompt) {
   const [response] = await Promise.all([
     page.waitForResponse(response => response.request().method() === "POST"
       && new URL(response.url()).pathname === `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`
-      && response.request().headers()["x-boxteam-workspace-id"] === owner.routeId),
+      && response.request().headers()["x-boxteam-workspace-id"] === owner.workspaceId),
     thread.locator(webSelectors.sendButton).click(),
   ]);
   const body = await response.json();
@@ -174,7 +174,7 @@ try {
     token = (await credential.json()).data.token;
   } finally { await credential.dispose(); }
   await api("/api/gateway/health");
-  assert.equal((await api("/api/gateway/workspaces")).active_workspace_id, owner.routeId);
+  assert.deepEqual((await api("/api/gateway/workspaces")).active_workspace, { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId });
   assert.equal((await api("/api/v1/workspace")).workspace_id, owner.workspaceId);
   // 本场景从初始编辑器恢复结束后开始；不把Welcome的异步打开与目标会话混为一次导航。
   // TODO：product-006中目标Session/main-thread请求均为200，但目标Tab未出现且仍显示Welcome；初始化导航时序原因待前端owner核实。
@@ -254,9 +254,9 @@ try {
   await writeFile(agentsFile, mixedSkill?.currentAgents ?? versions[2]);
   if (mixedSkill) await unlink(mixedSkill.path);
   await page.goto("about:blank");
-  const registered = (await api("/api/gateway/workspaces")).items.find(entry => entry.workspace_id === owner.routeId);
+  const registered = (await api("/api/gateway/workspaces")).items.find(entry => entry.gateway_id === owner.gatewayId && entry.workspace_id === owner.workspaceId);
   assert(registered?.managed && registered.backend_generation);
-  facts.restart = await api(`/api/gateway/workspaces/${owner.routeId}/runtime/restart-safe`, {
+  facts.restart = await api(`/api/gateway/workspaces/${owner.workspaceId}/runtime/restart-safe`, {
     expected_backend_generation: registered.backend_generation, expected_workspace_ids: registered.affected_workspace_ids,
   });
   assert.equal(facts.restart.status, "restarted");
