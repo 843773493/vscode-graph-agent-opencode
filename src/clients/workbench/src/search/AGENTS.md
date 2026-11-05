@@ -16,4 +16,6 @@
 
 Quick Access 的 Session／Thread／文件名称及消息、工具结果、LLM 请求记录和 Trace 正文只通过共享 Gateway 联邦客户端查询；本层保留候选投影、原 Quick Input 展示及接受动作，续页／重试传回冻结范围和单个 owner 分支。Trace 沿精确 Thread 打开原事件详情，不拉全量日志、不查询未选运行日志来源。文件根元数据由原有界加载器读取，原 QueryBuilder 保留各根配置；领域查询不再接回前端跨目标队列。普通文件搜索自动继续各根原 cursor，Quick Access 明确单分支继续；两者复用同一后端文件 Provider，原 fuzzy scorer 只负责名称展示评分和高亮。
 
+Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显示取消、保留已有候选及原 code／reason／request_id，原 `retryable` 控制单分支明确重试；`failed` 与 `deadline` 保持原失败和超时语义，不从消息文本推断状态。
+
 运行日志与 Gateway 自有日志使用同一联邦客户端的 `runtime_log` 诊断分支；每个 Gateway 一条明确来源，工作区只筛选关联进程，共享文件不按工作区重复查询。原行引用仅作具名诊断定位动作，不新造资源 URI，接受后交给原 Gateway 诊断视图精确读取。

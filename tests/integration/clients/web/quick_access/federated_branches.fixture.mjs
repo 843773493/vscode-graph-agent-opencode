@@ -10,8 +10,9 @@ export function fileBranchContract(mode) { return federatedBranchContract(mode, 
 export function contentBranchContract(mode) { return federatedBranchContract(mode, '会话消息'); }
 export function nameBranchContract({ mode, category }) { return federatedBranchContract(mode, category); }
 export function cursorRejectionContract(rejection) { return federatedBranchContract('cursor-rejection', rejection.category, rejection); }
+export function branchStateContract(diagnostic) { return federatedBranchContract('terminal-state', '会话消息', diagnostic); }
 
-async function federatedBranchContract(mode, category, rejection) {
+async function federatedBranchContract(mode, category, diagnostic) {
   const originalFetch = globalThis.fetch, before = workspaceContext.getSnapshot();
   const names = { '会话消息': 'message', '会话': 'catalog', 'Thread': 'thread', '文件': 'file', 'LLM 请求记录': 'llm_request', 'Trace': 'trace' };
   const file = category === '文件';
@@ -117,6 +118,28 @@ async function federatedBranchContract(mode, category, rejection) {
         pending: branches.map(branch => branch.pending), busy, picks: branches.map(branch => branch.picks.map(pick => pick.id)) };
     }
     scope(first);
+    if (mode === 'terminal-state') {
+      page(first, 0, 2, 'limited'); page(first, 1, 2); end(first, [state(0, 'limited'), state(1)]);
+      await until(() => !busy);
+      const original = branches.map(branch => branch.picks[0]);
+      const continuing = branches[0].status.trigger();
+      await until(() => connections.length === 2); const next = connections[1]; scope(next);
+      const terminal = { ...state(0), ...diagnostic, returned_results: 0, cursor: 'A-original-cursor' };
+      send(next, 'branch', { branch: terminal }); end(next, [terminal]); await continuing;
+      const statuses = branches.map(branch => ({ label: branch.status.label, detail: branch.status.detail,
+        buttons: branch.status.buttons?.map(button => button.tooltip) ?? [], hasTrigger: typeof branch.status.trigger === 'function' }));
+      const retainedPicks = branches.map(branch => branch.picks.map(pick => pick.id));
+      const originalRetained = original.map((pick, index) => pick === branches[index].picks[0]);
+      const callsBeforeRetry = connections.length;
+      if (diagnostic.retryable) {
+        const retry = branches[0].status.trigger();
+        await until(() => connections.length === 3); const last = connections[2]; scope(last);
+        page(last, 0, 4); end(last, [state(0)]); await retry;
+      }
+      return { statuses, retainedPicks, originalRetained, callsBeforeRetry, requests: connections.map(connection => connection.request),
+        otherRetainedAfterRetry: original[1] === branches[1].picks[0], picks: branches.map(branch => branch.picks.map(pick => pick.id)),
+        pending: branches.map(branch => branch.pending), busy };
+    }
     if (mode === 'cursor-rejection') {
       const completed = index => ({ ...state(index), returned_results: 0 });
       const limited = { ...state(1, 'limited'), cursor: 'B-rejected-cursor', returned_results: 0 };
@@ -124,8 +147,8 @@ async function federatedBranchContract(mode, category, rejection) {
       end(first, [completed(0), limited]); await until(() => !busy);
       const continuation = branches[1].status.trigger();
       await until(() => connections.length === 2); const next = connections[1]; scope(next);
-      const failure = { ...state(1, 'failed'), code: rejection.code, error_owner: rejection.owner, reason: rejection.reason,
-        http_status: rejection.status, cursor: limited.cursor, message: '原 owner 拒绝此续点 [执行](command:workbench.action.closeWindow) <b>诊断</b>' };
+      const failure = { ...state(1, 'failed'), code: diagnostic.code, error_owner: diagnostic.owner, reason: diagnostic.reason,
+        http_status: diagnostic.status, cursor: limited.cursor, message: '原 owner 拒绝此续点 [执行](command:workbench.action.closeWindow) <b>诊断</b>' };
       send(next, 'branch', { branch: failure }); end(next, [failure]); await continuation;
       const failureLabel = branches[1].status.label, retryTooltip = branches[1].status.buttons[0].tooltip;
       // 使用 Quick Input 原标签渲染器核对文本，不在测试内复制 Markdown 或命令解析。

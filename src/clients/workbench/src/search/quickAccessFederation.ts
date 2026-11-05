@@ -118,15 +118,16 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
   const moreButton = { iconClass: ThemeIcon.asClassName(Codicon.more), tooltip: '继续查询此类别' };
   const retryButton = { iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: '重新查询此类别' };
   const status = (branch: SearchBranch<SearchCategory>, state: FederatedSearchBranchDTO, requestId: string) => {
-    const failed = state.state === 'failed' || state.state === 'cancelled';
+    const failed = state.state === 'failed', cancelled = state.state === 'cancelled';
     if (failed) branch.picks = [];
     const limited = state.state === 'limited';
     const continuation = limited && (state.cursor !== undefined && state.cursor !== null || state.code === 'output_limit');
     branch.status = { id: `status-${branch.key}`,
-      label: `${branch.label} · ${failed ? `查询失败：${state.code === 'deadline' ? '查询超时：' : ''}${state.message ?? state.code ?? state.state}`
+      label: `${branch.label} · ${cancelled ? `查询已取消：${state.message ?? state.code ?? state.state}`
+        : failed ? `查询失败：${state.code === 'deadline' ? '查询超时：' : ''}${state.message ?? state.code ?? state.state}`
         : limited ? `本次查询覆盖受限（${state.code ?? '还有更多结果'}）` : branch.picks.length ? '本次查询完成' : '没有匹配的资源'}`,
-      detail: `${branch.diagnosticSummary ?? `本次读取 ${branch.picks.length} 项，不代表全局快照`} · request_id: ${requestId}`,
-      ...((continuation || (failed && state.retryable)) ? { buttons: [continuation ? moreButton : retryButton],
+      detail: `${branch.diagnosticSummary ?? `本次读取 ${branch.picks.length} 项，不代表全局快照`}${cancelled && state.code ? ` · code: ${state.code}` : ''}${cancelled && state.reason ? ` · reason: ${state.reason}` : ''} · request_id: ${requestId}`,
+      ...((continuation || ((failed || cancelled) && state.retryable)) ? { buttons: [continuation ? moreButton : retryButton],
         trigger: async () => { await run([branch], continuation ? state.cursor : undefined); return TriggerAction.NO_ACTION; } } : {}) };
   };
   const run = async (active: SearchBranch<SearchCategory>[], cursor?: string): Promise<void> => {

@@ -147,6 +147,47 @@ test('正文流断开保留已完成 A，B 明确失败并显示原 request_id',
   expect(result.picks).toEqual([[`${ownerAKey}/2`], []]);
 });
 
+for (const diagnostic of [
+  { state: 'cancelled', code: 'cancelled', message: '原领域读取已停止', reason: 'original_cancel_reason', retryable: true },
+  { state: 'cancelled', code: 'cancelled', message: '原领域读取已停止', reason: 'original_cancel_reason', retryable: false },
+  { state: 'failed', code: 'deadline', message: '原领域查询期限已到', retryable: true },
+  { state: 'failed', code: 'upstream_error', message: '取消只是原始错误正文，不代表业务状态', retryable: false },
+]) test(`原分支 ${diagnostic.state}/${diagnostic.code}/retryable=${diagnostic.retryable} 保留状态和独立重试语义`, async () => {
+  const result = await exercise('branchStateContract', diagnostic), cancelled = diagnostic.state === 'cancelled';
+  expect(result.statuses[0].label).toContain(cancelled ? '查询已取消：' : '查询失败：');
+  expect(result.statuses[0].label).toContain(diagnostic.message);
+  expect(result.statuses[0].detail).toContain('request_id: request-1');
+  expect(result.statuses[1].label).toContain('本次查询完成');
+  expect(result.statuses[1].detail).toContain('request_id: request-0');
+  if (cancelled) {
+    expect(result.statuses[0].detail).toContain(`code: ${diagnostic.code}`);
+    expect(result.statuses[0].detail).toContain(`reason: ${diagnostic.reason}`);
+    expect(result.statuses[0].label).not.toContain('查询失败：');
+  } else {
+    expect(result.statuses[0].label).not.toContain('查询已取消：');
+    if (diagnostic.code === 'deadline') expect(result.statuses[0].label).toContain('查询失败：查询超时：');
+  }
+  expect(result.retainedPicks).toEqual([cancelled ? [`${ownerAKey}/2`] : [], [`${ownerBKey}/2`]]);
+  expect(result.originalRetained).toEqual([cancelled, true]);
+  expect(result.statuses[0].buttons).toEqual(diagnostic.retryable ? ['重新查询此类别'] : []);
+  expect(result.statuses[0].hasTrigger).toBe(diagnostic.retryable);
+  expect(result.callsBeforeRetry).toBe(2);
+  expect(result.requests).toHaveLength(diagnostic.retryable ? 3 : 2);
+  const continuation = result.requests[1];
+  expect(continuation.scope.mode).toBe('resume');
+  expect(continuation.scope.scope.owners).toEqual(federatedOwners);
+  expect(continuation.continuations).toEqual([{ branch: { owner: federatedOwners[0], category: 'message', operation: 'content' }, cursor: 'A-original-cursor' }]);
+  if (diagnostic.retryable) {
+    const retry = result.requests[2];
+    expect(retry.scope).toEqual(continuation.scope);
+    expect(retry.queries).toEqual(continuation.queries);
+    expect(retry.continuations).toEqual([{ branch: continuation.continuations[0].branch }]);
+    expect(result.picks).toEqual([[`${ownerAKey}/4`], [`${ownerBKey}/2`]]);
+  }
+  expect(result.otherRetainedAfterRetry).toBe(true);
+  expect(result.pending).toEqual([false, false]); expect(result.busy).toBe(false);
+});
+
 test('首个范围事件前断流保留原响应请求身份，明确重查原查询且不自动重试', async () => {
   const result = await exercise('contentBranchContract', 'disconnect-before-scope');
   expect(result.labels.every(label => label.includes('未收到完整终态'))).toBe(true);
