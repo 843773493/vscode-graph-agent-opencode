@@ -15,6 +15,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     VISIBLE_NORMAL_TURN_PREDICATE,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
+    read_last_visible_ordinal,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     ContextTurnItemWindow,
     HistorySnapshotBounds,
@@ -65,13 +68,8 @@ class InternalExecutionHistoryMixin:
             f"WHERE cvt.view_id = ? AND {VISIBLE_NORMAL_TURN_PREDICATE}",
             (view_id,),
         ).fetchone()
-        item_row = connection.execute(
-            "SELECT MAX(logical_item_ordinal) "
-            "FROM context_view_items "
-            "WHERE view_id = ? AND visible = 1",
-            (view_id,),
-        ).fetchone()
-        if turn_row is None or item_row is None:
+        item_ordinal = read_last_visible_ordinal(connection, view_id)
+        if turn_row is None:
             raise RuntimeError("history snapshot bounds aggregate 查询没有结果")
         upper_turn_ordinal = (
             strict_non_negative_int(
@@ -82,9 +80,9 @@ class InternalExecutionHistoryMixin:
         )
         upper_logical_item_ordinal = (
             strict_non_negative_int(
-                item_row[0], field="context_view_items.upper_logical_item_ordinal"
+                item_ordinal, field="context_view_items.upper_logical_item_ordinal"
             )
-            if item_row[0] is not None
+            if item_ordinal is not None
             else None
         )
         if upper_turn_ordinal == 0:

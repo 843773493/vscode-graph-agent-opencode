@@ -19,6 +19,35 @@ def read_members(connection: sqlite3.Connection, view_id: str) -> list[Member]:
     )]
 
 
+def read_last_visible_ordinal(connection: sqlite3.Connection, view_id: str) -> int | None:
+    """在块 owner 内读取可见边界，不物化整个逻辑成员集合。"""
+    # 块按 logical_item_ordinal 有序发布；逆序走块与块内索引，
+    # 只越过不可见尾部，不能按 canonical item 的物理写入顺序推导边界。
+    row = connection.execute(
+        "SELECT member.logical_item_ordinal FROM context_view_item_blocks AS refs "
+        "CROSS JOIN context_membership_items AS member ON member.block_id=refs.block_id "
+        "WHERE refs.view_id=? AND member.visible=1 "
+        "ORDER BY refs.block_ordinal DESC,member.logical_item_ordinal DESC LIMIT 1",
+        (view_id,),
+    ).fetchone()
+    return row[0] if row is not None else None
+
+
+def validate_block_order(connection: sqlite3.Connection) -> None:
+    """显式完整校验核对块顺序，普通追加与边界读取不遍历旧块。"""
+    invalid = connection.execute(
+        "SELECT view_id,block_ordinal FROM ("
+        "SELECT refs.view_id,refs.block_ordinal,MIN(member.logical_item_ordinal) AS first_ordinal,"
+        "LAG(MAX(member.logical_item_ordinal)) OVER (PARTITION BY refs.view_id "
+        "ORDER BY refs.block_ordinal) AS previous_last "
+        "FROM context_view_item_blocks AS refs LEFT JOIN context_membership_items AS member "
+        "ON member.block_id=refs.block_id GROUP BY refs.view_id,refs.block_ordinal) "
+        "WHERE first_ordinal IS NULL OR first_ordinal<=previous_last LIMIT 1",
+    ).fetchone()
+    if invalid is not None:
+        raise RuntimeError(f"context view 成员块为空或逻辑坐标顺序冲突: {invalid[0]}/{invalid[1]}")
+
+
 def store_block(connection: sqlite3.Connection, members: list[Member]) -> int:
     """只存不可变有序块；view 级唯一性由发布入口整体检查。"""
     if not connection.in_transaction:

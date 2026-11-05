@@ -23,6 +23,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.integrity impor
     validate_catalog_body,
     validate_projection_membership,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.view_items.store import (
+    validate_block_order,
+)
 from app.services.infrastructure.rollout_context.storage.guards import (
     mark_jsonl_commit_attempted,
 )
@@ -354,7 +357,7 @@ class RolloutSchemaIntrospectionMixin:
         if "rollout_format_version" not in columns:
             return
         row = connection.execute(
-            "SELECT rollout_format_version, committed_jsonl_offset, last_commit_id "
+            "SELECT rollout_format_version, committed_jsonl_offset, last_commit_id, schema_version "
             "FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
         if row is None or strict_non_negative_int(
@@ -540,6 +543,9 @@ class RolloutSchemaIntrospectionMixin:
                 f"catalog_end={expected_item_offset}, file={jsonl_size}"
             )
         validate_projection_membership(connection)
+        # TODO：旧库显式升级链路移除后，取消 schema 23 的分界；旧表尚未使用成员块。
+        if strict_non_negative_int(row[3], field="database_meta.schema_version") >= 23:
+            validate_block_order(connection)
 
     def _commit_connection(self, connection: sqlite3.Connection) -> None:
         """提交已经完成 JSONL durability barrier 的 SQLite 事务。"""
