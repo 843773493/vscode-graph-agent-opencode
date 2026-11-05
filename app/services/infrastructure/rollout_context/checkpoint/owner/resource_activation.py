@@ -98,12 +98,14 @@ class ResourceActivationOwnerMixin:
     def read_resource_activation_payload(
         self, snapshot: ResourceActivationSnapshotRef, binding: ResourceProvenanceRef, *,
         storage_owner: tuple[str, str], checkpoint_ns: str = "",
+        read_snapshot: RolloutReadSnapshot | None = None,
     ) -> object:
         """正文读取复用同一 storage/detail owner，不读当前 Registry 或来源。"""
         return ResourceActivationBodyStore(self._storage, self._detail_store).read_payload(
             snapshot=snapshot, binding=binding,
             storage_owner=storage_owner,
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+            read_snapshot=read_snapshot,
         )
 
     def load_tool_call_resource_activation(

@@ -396,8 +396,21 @@ async def test_previous_definition_revision_is_not_taken_from_a_partial_retained
     captured = []
 
     def observe_prepare(batch, **kwargs):
-        captured.append((batch, kwargs))
-        return prepare(batch, **kwargs)
+        catalogs, originals = [], {}
+
+        def read_catalog():
+            catalog = kwargs["catalog_supplier"]()
+            catalogs.append(catalog)
+            return catalog
+
+        def resolve(ref):
+            originals[ref] = kwargs["resolve_discovery"](ref)
+            return originals[ref]
+
+        result = prepare(batch, **{**kwargs, "catalog_supplier": read_catalog, "resolve_discovery": resolve})
+        # 重放冻结值，不把只在本次准备事务内有效的 I/O 回调带出作用域。
+        captured.append((batch, {**kwargs, "catalog_supplier": lambda: catalogs[-1], "resolve_discovery": originals.__getitem__}))
+        return result
 
     with monkeypatch.context() as patch:
         patch.setattr(preparation, "tool_definition_batch", observe_prepare)

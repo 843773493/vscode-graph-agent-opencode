@@ -32,7 +32,10 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.plans.contributions import ContributionResolver
-from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.domain.itemized.resource_activation import (
+    ResourceActivationSnapshotRef,
+    ResourceProvenanceRef,
+)
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.business.resource_derivations.team import (
     TEAM_FACETS,
@@ -102,8 +105,9 @@ from app.services.infrastructure.rollout_context.runtime.summary_compiler import
 
 
 def _activation_guidance_batch(
-    owner, activation: ResourceActivationSnapshotRef, previous: ContextAssemblySnapshot | None,
-    batch: PendingContextSourceBatch, *, checkpoint_ns: str,
+    read_payload: Callable[[ResourceActivationSnapshotRef, ResourceProvenanceRef], object],
+    activation: ResourceActivationSnapshotRef, previous: ContextAssemblySnapshot | None,
+    batch: PendingContextSourceBatch,
 ) -> PendingContextSourceBatch:
     """来源正文只由本次冻结 activation 派生，不登记第二个 CSM owner。"""
     specs = ((MCP_TOOL_CATALOG_RESOURCE_ID, MCP_GUIDANCE_SOURCE_ID, "mcp_tool_catalog", "MCP 工具指引", mcp_guidance_content),
@@ -121,10 +125,7 @@ def _activation_guidance_batch(
                                   if ref.source_identity == source_id), None)
         if not parents and previous_revision is None:
             continue
-        content = read_content(owner.read_resource_activation_payload(
-            activation, parents[0], checkpoint_ns=checkpoint_ns,
-            storage_owner=(activation.owner_session_id, activation.owner_thread_id),
-        )) if parents else ""
+        content = read_content(read_payload(activation, parents[0])) if parents else ""
         revision = parents[0].revision if parents else sha256_jcs({"content": ""})
         sources.append(ContextSourceSnapshot(
             descriptor=ContextSourceDescriptor(source_id=source_id, source_kind=source_kind, name=name,
@@ -343,63 +344,65 @@ def prepare_registered_context(
                 items = owner._storage.checkpoints.committed_context_items(read_snapshot, predecessor=previous)
                 retained_items = owner._storage.checkpoints.precompaction_context_items(read_snapshot) if summary_candidate is None else ()
                 canonical_manifest = read_snapshot.manifest
-            # 导入 assembly 是目标本地历史，不是目标已 applied 的请求前缀。
-            # 首次请求只携带实际复制并封存的来源，不回读源会话或未复制正文。
-            retained = rebuild.source_assembly if rebuild is not None else previous if initial_assembly else None
-            retained_refs = rebuild.retained_source_refs if rebuild is not None else frozenset(
-                (ref_id, identity[1]) for ref_id, identity in _frozen_source_refs(retained)[0].items()
-            ) if retained is not None else frozenset()
-            batch = _activation_guidance_batch(
-                owner, activation_snapshot, previous, batch, checkpoint_ns=checkpoint_ns,
-            )
-            if summary_candidate is None:
+                # 同批 guidance 与工具定义借用当前快照；关闭后才登记来源，避免逐正文重开连接。
                 def read_payload(frozen, binding):
                     return owner.read_resource_activation_payload(
                         frozen, binding, storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,
+                        read_snapshot=read_snapshot,
                     )
 
-                # 同批发现先按原调用验证归属，再按不可变 activation 解析一次目录；
-                # 不按工具反复读全目录，也不跨 prepare 复用正文或损坏校验结果。
-                discovery_catalogs: dict[str, dict[str, FrozenToolDefinition]] = {}
-
-                @cache
-                def discovery_definitions(
-                    tool_call_id: str, model_call_id: str, activation_snapshot_id: str,
-                ) -> dict[str, FrozenToolDefinition]:
-                    original, _original_call = owner.load_tool_call_resource_activation(
-                        session_id, thread_id=thread_id, tool_call_id=tool_call_id,
-                        model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
-                    )
-                    if original.activation_snapshot_id != activation_snapshot_id:
-                        raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
-                    if activation_snapshot_id not in discovery_catalogs:
-                        discovery_catalogs[activation_snapshot_id] = {
-                            value.metadata.tool_id: value
-                            for value in tool_catalog_from_activation(original, read_payload).definitions
-                        }
-                    return discovery_catalogs[activation_snapshot_id]
-
-                def resolve_discovery(ref: DiscoveredToolRef) -> FrozenToolDefinition:
-                    definition = discovery_definitions(
-                        ref.tool_call_id, ref.model_call_id, ref.activation_snapshot_id,
-                    ).get(ref.tool_id)
-                    if (definition is None or definition.provenance.resource_id != ref.resource_id
-                            or definition.provenance.revision != ref.revision):
-                        raise ExtensionCatalogUnavailableError("发现结果引用的原冻结定义缺失或身份冲突")
-                    return definition
-
-                guidance = next((source.content for source in batch.sources
-                                 if source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID), None)
-                automatic = frozenset(entry["tool_name"] for entry in json.loads(guidance)["automatic_definitions"]) if guidance else frozenset()
-                batch = tool_definition_batch(
-                    batch, catalog_supplier=lambda: tool_catalog_from_activation(
-                        activation_snapshot, read_payload,
-                    ), current_items=items, retained_items=retained_items,
-                    previous=previous, retained_assembly=retained if retained is not None else previous,
-                    retained_source_refs=retained_refs if retained is not None else None,
-                    resolve_discovery=resolve_discovery, policies_for=extension_policy_resolver,
-                    automatic_tool_ids=automatic, restoring=rebuild is not None or initial_assembly,
+                # 导入 assembly 是目标本地历史，不是目标已 applied 的请求前缀。
+                # 首次请求只携带实际复制并封存的来源，不回读源会话或未复制正文。
+                retained = rebuild.source_assembly if rebuild is not None else previous if initial_assembly else None
+                retained_refs = rebuild.retained_source_refs if rebuild is not None else frozenset(
+                    (ref_id, identity[1]) for ref_id, identity in _frozen_source_refs(retained)[0].items()
+                ) if retained is not None else frozenset()
+                batch = _activation_guidance_batch(
+                    read_payload, activation_snapshot, previous, batch,
                 )
+                if summary_candidate is None:
+                    # 同批发现先按原调用验证归属，再按不可变 activation 解析一次目录；
+                    # 不按工具反复读全目录，也不跨 prepare 复用正文或损坏校验结果。
+                    discovery_catalogs: dict[str, dict[str, FrozenToolDefinition]] = {}
+
+                    @cache
+                    def discovery_definitions(
+                        tool_call_id: str, model_call_id: str, activation_snapshot_id: str,
+                    ) -> dict[str, FrozenToolDefinition]:
+                        original, _original_call = owner.load_tool_call_resource_activation(
+                            session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+                            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
+                        )
+                        if original.activation_snapshot_id != activation_snapshot_id:
+                            raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
+                        if activation_snapshot_id not in discovery_catalogs:
+                            discovery_catalogs[activation_snapshot_id] = {
+                                value.metadata.tool_id: value
+                                for value in tool_catalog_from_activation(original, read_payload).definitions
+                            }
+                        return discovery_catalogs[activation_snapshot_id]
+
+                    def resolve_discovery(ref: DiscoveredToolRef) -> FrozenToolDefinition:
+                        definition = discovery_definitions(
+                            ref.tool_call_id, ref.model_call_id, ref.activation_snapshot_id,
+                        ).get(ref.tool_id)
+                        if (definition is None or definition.provenance.resource_id != ref.resource_id
+                                or definition.provenance.revision != ref.revision):
+                            raise ExtensionCatalogUnavailableError("发现结果引用的原冻结定义缺失或身份冲突")
+                        return definition
+
+                    guidance = next((source.content for source in batch.sources
+                                     if source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID), None)
+                    automatic = frozenset(entry["tool_name"] for entry in json.loads(guidance)["automatic_definitions"]) if guidance else frozenset()
+                    batch = tool_definition_batch(
+                        batch, catalog_supplier=lambda: tool_catalog_from_activation(
+                            activation_snapshot, read_payload,
+                        ), current_items=items, retained_items=retained_items,
+                        previous=previous, retained_assembly=retained if retained is not None else previous,
+                        retained_source_refs=retained_refs if retained is not None else None,
+                        resolve_discovery=resolve_discovery, policies_for=extension_policy_resolver,
+                        automatic_tool_ids=automatic, restoring=rebuild is not None or initial_assembly,
+                    )
             if summary_candidate is not None and summary_candidate.minimal_system:
                 # 最小摘要只携带本次 owner 产生的受信摘要规则；不沿用常规
                 # Agent 指引、overlay 或尚未 applied 的来源通知。
