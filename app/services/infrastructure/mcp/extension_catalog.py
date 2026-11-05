@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from bisect import bisect_left
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -168,6 +169,14 @@ def member_readiness(member: ResourceMemberBinding) -> ConnectionReadiness:
     return "ready"
 
 
+def _target_from_member(member: ResourceMemberBinding) -> ExtensionTargetBinding:
+    return ExtensionTargetBinding(
+        target_id=member.member_id, origin=member.member_kind,
+        schema_hash=member.schema_hash, server_id=member.server_id,
+        connection_ref=member.revision if member.member_kind == "mcp" else None,
+    )
+
+
 def _binding_id(
     generation: int, catalog_revision: str, members: tuple[ResourceMemberBinding, ...],
 ) -> str:
@@ -235,11 +244,7 @@ class ExtensionCatalogBindingRef:
         """从唯一 members 构造执行只读视图；不保存第二套 target 权威集合。"""
 
         return MappingProxyType({
-            member.member_id: ExtensionTargetBinding(
-                target_id=member.member_id, origin=member.member_kind,
-                schema_hash=member.schema_hash, server_id=member.server_id,
-                connection_ref=member.revision if member.member_kind == "mcp" else None,
-            )
+            member.member_id: _target_from_member(member)
             for member in self.members
             if member_readiness(member) == "ready"
         })
@@ -257,15 +262,17 @@ class ExtensionCatalogBindingRef:
 
     def resolve(self, tool_name: str) -> ExtensionTargetBinding:
         """按 sealed ref 解析精确 target；缺失显式失败，不回退 live 目录。"""
-        target = self.targets.get(tool_name)
-        if target is None:
-            if any(member.member_id == tool_name for member in self.members):
-                raise ExtensionTargetResolutionError(f"sealed target 的连接未就绪，须重新连接并取得新目录: {tool_name}")
+        # 冻结 members 已校验并按名称排序；只定位当前工具，避免重建并校验整份 targets。
+        index = bisect_left(self.members, tool_name, key=lambda member: member.member_id)
+        if index == len(self.members) or self.members[index].member_id != tool_name:
             raise ExtensionTargetResolutionError(
                 "sealed extension catalog binding 中不存在 target: "
                 f"tool_name={tool_name!r} binding_id={self.binding_id}"
             )
-        return target
+        member = self.members[index]
+        if member_readiness(member) != "ready":
+            raise ExtensionTargetResolutionError(f"sealed target 的连接未就绪，须重新连接并取得新目录: {tool_name}")
+        return _target_from_member(member)
 
 
 @dataclass(frozen=True, slots=True)
