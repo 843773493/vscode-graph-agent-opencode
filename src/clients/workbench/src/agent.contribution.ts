@@ -67,7 +67,7 @@ for (const [kind, title, icon, order] of [
   views.registerViews([{
     id: `${id}.view`, name: { value: title, original: title },
     canToggleVisibility: true, canMoveView: true,
-    ctorDescriptor: kind === 'mcp' ? new SyncDescriptor(McpServersListView, [{}]) : new SyncDescriptor(WorkspacePanel),
+    ctorDescriptor: kind === 'mcp' ? new SyncDescriptor(McpServersListView) : new SyncDescriptor(WorkspacePanel),
     openCommandActionDescriptor: { id: `${id}.focus`, title: { value: `打开${title}`, original: `Open ${kind}` } },
   }], container);
 }

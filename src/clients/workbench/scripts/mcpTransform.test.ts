@@ -4,6 +4,10 @@ import { resolve, join } from 'node:path';
 import ts from 'typescript';
 import { sourceTransform, pinnedUpstreamCommit } from './sourceTransform.mjs';
 import { mcpSourcePaths } from './mcpTransform.mjs';
+import { CancellationToken, CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
+import { CancellationError, isCancellationError, getErrorMessage } from '../upstream/src/vs/base/common/errors.js';
+import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
+import { PagedModel } from '../upstream/src/vs/base/common/paging.js';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
@@ -56,6 +60,138 @@ test.each(['AddConfigurationAction', 'InstallFromManifestAction', 'OpenUserMcpRe
   },
 );
 
+test('原 Browse 与 BrowsePage 都交给同一个 MCP 查询 seam，不扩大为 All Sources 查询', async () => {
+  const serviceId = Symbol('IMcpWorkbenchService');
+  const calls: string[] = [];
+  const accessor = { get(id: symbol) { expect(id).toBe(serviceId); return { openSearch: async (text: string) => { calls.push(text); } }; } };
+  for (const kind of ['McpBrowseCommand', 'McpBrowsePageCommand']) {
+    const run = new Function('IMcpWorkbenchService', `return async function(accessor) ${methodBody('mcpCommands.ts', kind, 'run')};`)(serviceId) as (accessor: object) => Promise<void>;
+    await run(accessor);
+  }
+  expect(calls).toEqual(['', '']);
+});
+
+test('新增原 MCP 搜索视图的查询拒绝进入既有通知通道，不产生未处理拒绝遮住整个工作台', async () => {
+  const body = methodBody('extensionsViewlet.ts', 'ExtensionsViewPaneContainer', 'onDidAddViewDescriptors');
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class Container extends Base { onDidAddViewDescriptors(added: object[]) ${body} }`);
+  const Container = new Function('Base', javascript + '\nreturn Container;')(class { onDidAddViewDescriptors(added: object[]) { return added; } }) as
+    new () => { onDidAddViewDescriptors(added: object[]): object[]; showExtensionsViews(added: object[]): Promise<void>; onError(error: Error): void };
+  const container = new Container();
+  const failure = new Error('目录未配置');
+  const received: Error[] = [];
+  container.showExtensionsViews = async () => { throw failure; };
+  container.onError = error => { received.push(error); };
+  const added = [{}];
+  expect(container.onDidAddViewDescriptors(added)).toBe(added);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(received).toEqual([failure]);
+});
+
+test('原刷新入口保留异步搜索与更新检查，搜索拒绝进入同一通知通道', async () => {
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function refresh() ${methodBody('extensionsViewlet.ts', 'ExtensionsViewPaneContainer', 'refresh')}`);
+  const refresh = new Function('AutoCheckUpdatesConfigurationKey', javascript + '\nreturn refresh;')('autoCheckUpdates') as (this: object) => Promise<void>;
+  const failure = new Error('目录 HTTP 503');
+  const events: unknown[] = [];
+  await refresh.call({
+    updateInstalledExtensionsContexts: async () => { events.push('contexts'); },
+    doSearch: async (force: boolean) => { events.push(force); throw failure; },
+    onError: (error: Error) => { events.push(error); },
+    configurationService: { getValue: () => true },
+    extensionsWorkbenchService: { checkForUpdates: () => { events.push('updates'); } },
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(events).toEqual(['contexts', true, 'updates', failure]);
+});
+
+test('原活动栏进度结束时只清理自身，原查询 Promise 仍拒绝且不另生未处理拒绝', async () => {
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class Progress {
+    withPaneCompositeProgress(paneCompositeId: string, viewContainerLocation: number, task: () => Promise<unknown>, options: object) ${methodBody('progressService.ts', 'ProgressService', 'withPaneCompositeProgress')}
+    showOnActivityBar(viewletId: string, options: object, promise: Promise<unknown>) ${methodBody('progressService.ts', 'ProgressService', 'showOnActivityBar')}
+  }`);
+  let time = 0;
+  const events: string[] = [];
+  const Progress = new Function('ViewContainerLocation', 'ProgressBadge', 'dispose', 'Date', javascript + '\nreturn Progress;')(
+    { Sidebar: 0 }, class {}, (value: { dispose(): void } | undefined) => value?.dispose(), { now: () => time += 400 },
+  ) as new () => { paneCompositeService: object; activityService: object; withPaneCompositeProgress(id: string, location: number, task: () => Promise<unknown>, options: object): Promise<unknown> };
+  const progress = new Progress();
+  progress.paneCompositeService = { getProgressIndicator: () => undefined };
+  progress.activityService = { showViewContainerActivity: () => { events.push('show'); return { dispose: () => events.push('dispose') }; } };
+  let fail!: (error: Error) => void;
+  const task = new Promise<never>((_resolve, reject) => { fail = reject; });
+  const returned = progress.withPaneCompositeProgress('extensions', 0, () => task, { delay: 1 });
+  expect(returned).toBe(task);
+  const failure = new Error('目录 HTTP 503');
+  const rejection = returned.then(() => undefined, error => error);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  fail(failure);
+  expect(await rejection).toBe(failure);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(events).toEqual(['show', 'dispose']);
+});
+
+test('原列表把唯一 manifest 的未配置状态作为提示展示，不发目录查询也不伪装无匹配', async () => {
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function query(text: string, token: object) ${methodBody('mcpServersView.ts', 'McpServersListView', 'query')}`);
+  const query = new Function('DisposableStore', 'CancellationError', 'PagedModel', 'localize', 'Severity', javascript + '\nreturn query;')(
+    DisposableStore, CancellationError, PagedModel, (_key: string, message: string) => message, { Info: 1 },
+  ) as (this: object, text: string, token: CancellationToken) => Promise<{ model: PagedModel<unknown>; disposables: DisposableStore; message: { text: string; severity: number } }>;
+  let queried = false;
+  const input = await query.call({
+    mcpGalleryManifestService: { getMcpGalleryManifest: async () => null },
+    updateTitleDescription: () => undefined,
+    mcpWorkbenchService: { queryGallery: async () => { queried = true; throw new Error('未配置不得进入查询'); } },
+  }, '@mcp', CancellationToken.None);
+  expect(queried).toBe(false);
+  expect(input.model.length).toBe(0);
+  expect(input.message).toEqual({ text: "The MCP gallery is not configured. Configure 'chat.mcp.gallery.serviceUrl'.", severity: 1 });
+  const render = new Function(`return function() ${methodBody('mcpServersView.ts', 'McpServersListView', 'renderInput')};`)() as (this: object) => void;
+  const displayed: unknown[] = [];
+  render.call({ input, list: null, updateBody: (message: unknown) => { displayed.push(message); } });
+  expect(displayed).toEqual([input.message]);
+  input.disposables.dispose();
+});
+
+test.each(['当前续页失败', '已取消查询', '已替换模型', '取消错误', '旧条目晚到'])(
+  '原分页 renderer 的%s沿当前 owner 处理，不覆盖新来源或产生未处理拒绝', async state => {
+    const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(declaration('listPaging.ts', 'PagedRenderer').getText());
+    const Renderer = new Function('CancellationTokenSource', 'isCancellationError', javascript + '\nreturn PagedRenderer;')(
+      CancellationTokenSource, isCancellationError,
+    ) as new (renderer: object, modelProvider: () => object, onResolveError: (error: unknown) => void) => {
+      renderElement(index: number, height: number, data: { data: object; disposable?: { dispose(): void } }): void;
+    };
+    let fail!: (error: Error) => void;
+    let complete!: (entry: object) => void;
+    const pending = new Promise<object>((resolve, reject) => { complete = resolve; fail = reject; });
+    const model = { isResolved: () => false, resolve: () => pending };
+    let current: object = model;
+    const messages: unknown[] = [];
+    const notifications: unknown[] = [];
+    const rendered: object[] = [];
+    const body = declaration('mcpServersView.ts', 'McpServersListView').members.find(node => ts.isMethodDeclaration(node) && node.name.getText() === 'renderBody')!;
+    let callback: ts.ArrowFunction | undefined;
+    const findCallback = (node: ts.Node) => {
+      if (ts.isPropertyAssignment(node) && node.name.getText() === 'onResolveError' && ts.isArrowFunction(node.initializer)) callback = node.initializer;
+      ts.forEachChild(node, findCallback);
+    };
+    findCallback(body);
+    if (!callback) throw new Error('原列表续页错误出口缺失');
+    const onResolveError = new Function('getErrorMessage', 'Severity', `return function(error) ${callback.body.getText()};`)(getErrorMessage, { Error: 3 }) as (this: object, error: unknown) => void;
+    const view = { updateBody: (message: unknown) => messages.push(message), notificationService: { error: (error: unknown) => notifications.push(error) } };
+    const renderer = new Renderer({ renderPlaceholder() {}, renderElement: (entry: object) => rendered.push(entry) }, () => current, error => onResolveError.call(view, error));
+    const data: { data: object; disposable?: { dispose(): void } } = { data: {} };
+    renderer.renderElement(50, 72, data);
+    if (state === '已取消查询') data.disposable!.dispose();
+    if (state === '已替换模型' || state === '旧条目晚到') current = {};
+    const failure = state === '取消错误' ? new CancellationError() : new Error('目录续页 HTTP 503');
+    if (state === '旧条目晚到') complete({ id: 'old-source' });
+    else fail(failure);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(messages).toEqual(state === '当前续页失败' ? [{ text: failure.message, severity: 3 }] : []);
+    expect(notifications).toEqual(state === '当前续页失败' ? [failure] : []);
+    expect(rendered).toEqual([]);
+    data.disposable!.dispose();
+  },
+);
+
 test('guard 迁移严格限定原 Start/Stop，未迁移的安装／配置动作保留 local 类型收窄', () => {
   for (const kind of ['StartServerAction', 'StopServerAction']) {
     expect(methodBody('mcpServerActions.ts', kind, 'getServer')).not.toContain('!this.mcpServer.local');
@@ -66,6 +202,39 @@ test('guard 迁移严格限定原 Start/Stop，未迁移的安装／配置动作
   }
   expect(methodBody('mcpServerActions.ts', 'StopServerAction', 'update')).toContain('server.isPending');
   expect(methodBody('mcpServerActions.ts', 'AuthServerAction', 'run')).toContain('await server.authorize()');
+});
+
+test('目录条目即使与工作区连接同 ID，原 Start/Stop/Authorize 也不能操作该连接', async () => {
+  let authorized = 0;
+  class ProjectServer {
+    readonly id = 'shared-id';
+    readonly definition = { id: this.id };
+    readonly canAuthorize = true;
+    async authorize() { ++authorized; }
+  }
+  const connection = new ProjectServer();
+  const service = { servers: { get: () => [connection] } };
+  const gallery = { id: connection.id };
+  for (const kind of ['StartServerAction', 'StopServerAction']) {
+    const getServer = new Function('WorkspaceMcpServer', `return function() ${methodBody('mcpServerActions.ts', kind, 'getServer')};`)(ProjectServer) as (this: object) => unknown;
+    expect(getServer.call({ mcpServer: gallery, mcpService: service })).toBeUndefined();
+    expect(getServer.call({ mcpServer: connection, mcpService: service })).toBe(connection);
+  }
+  const updateBody = new Bun.Transpiler({ loader: 'ts' }).transformSync(`function update() ${methodBody('mcpServerActions.ts', 'AuthServerAction', 'update')}`);
+  const runBody = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function run() ${methodBody('mcpServerActions.ts', 'AuthServerAction', 'run')}`);
+  const { update, run } = new Function('WorkspaceMcpServer', updateBody + runBody + '\nreturn { update, run };')(ProjectServer) as {
+    update(this: object): void; run(this: object): Promise<void>;
+  };
+  const action = { mcpServer: gallery as object, enabled: true, class: '' };
+  update.call(action);
+  expect(action.enabled).toBe(false);
+  await expect(run.call(action)).rejects.toThrow('原 MCP 目标已移除');
+  expect(authorized).toBe(0);
+  action.mcpServer = connection;
+  update.call(action);
+  expect(action.enabled).toBe(true);
+  await run.call(action);
+  expect(authorized).toBe(1);
 });
 
 test('原 renderer 状态刷新与成员删除使用最新目录，详情读取同一模型并观察可见性', () => {
@@ -80,12 +249,17 @@ test('原 renderer 状态刷新与成员删除使用最新目录，详情读取�
 test('首次目录失败保留原 show 拒绝，恢复只由同一 owner 的可用目录变化触发', async () => {
   const body = methodBody('mcpServersView.ts', 'McpServersListView', 'show');
   const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function run(query: string) ${body}`);
-  const run = new Function('return ' + js)() as (this: { workspaceMcpQueryFailed: boolean; currentQuery: string; input?: unknown }, query: string) => Promise<unknown>;
+  const run = new Function('CancellationTokenSource', 'isCancellationError', 'getErrorMessage', 'Severity', 'return ' + js)(
+    CancellationTokenSource, isCancellationError, getErrorMessage, { Error: 3 },
+  ) as (this: { workspaceMcpQueryFailed: boolean; currentQuery: string; input?: unknown }, query: string) => Promise<unknown>;
   const original = new Error('首次目录 503');
   const view = { workspaceMcpQueryFailed: false, currentQuery: '', input: undefined,
+    queryCancellation: undefined as CancellationTokenSource | undefined,
+    updateBody(message: { text: string }) { expect(message.text).toBe(original.message); },
     mpcViewOptions: {}, query: async () => { throw original; } };
   await expect(run.call(view, '')).rejects.toBe(original);
   expect(view.workspaceMcpQueryFailed).toBe(true);
+  view.queryCancellation?.dispose(true);
   const constructor = declaration('mcpServersView.ts', 'McpServersListView').members.find(ts.isConstructorDeclaration)!;
   expect(constructor.getText()).toContain('this.mcpWorkbenchService.isLocalCatalogAvailable');
   expect(constructor.getText()).toContain('this.workspaceMcpQueryFailed');

@@ -3,16 +3,22 @@ import { Emitter, type Event } from '../../upstream/src/vs/base/common/event.js'
 import { observableValue } from '../../upstream/src/vs/base/common/observable.js';
 import { MarkdownString } from '../../upstream/src/vs/base/common/htmlContent.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
+import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
+import { IIterativePage, IIterativePager } from '../../upstream/src/vs/base/common/paging.js';
+import { IMcpGalleryManifest } from '../../upstream/src/vs/platform/mcp/common/mcpGalleryManifest.js';
+import { IGalleryMcpServer, IMcpGalleryService, IQueryOptions } from '../../upstream/src/vs/platform/mcp/common/mcpManagement.js';
+import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { ContributionEnablementState, type IEnablementModel } from '../../upstream/src/vs/workbench/contrib/chat/common/enablement.js';
 import {
   IMcpService, IMcpWorkbenchService, IWorkbenchMcpServer,
-  LazyCollectionState, type IMcpServerEditorOptions,
+  LazyCollectionState, McpServerInstallState, type IMcpServerEditorOptions,
 } from '../../upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
+import { McpWorkbenchServer } from '../../upstream/src/vs/workbench/contrib/mcp/browser/mcpWorkbenchService.js';
 import { McpServerEditorInput } from '../../upstream/src/vs/workbench/contrib/mcp/browser/mcpServerEditorInput.js';
 import { IWorkbenchLocalMcpServer } from '../../upstream/src/vs/workbench/services/mcp/common/mcpWorkbenchManagementService.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
+import { IExtensionsWorkbenchService } from '../../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { WorkspaceMcpCatalog } from './catalog.js';
@@ -177,8 +183,11 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   readonly whenInitialLocalMcpServersLoaded: Promise<void>;
   constructor(
     @IMcpService service: IMcpService,
-    @IViewsService private readonly views: IViewsService,
+    @IExtensionsWorkbenchService private readonly extensions: IExtensionsWorkbenchService,
     @INotificationService notifications: INotificationService,
+    @IMcpGalleryService private readonly gallery: IMcpGalleryService,
+    @IInstantiationService private readonly instantiation: IInstantiationService,
+    @IEditorService private readonly editors: IEditorService,
   ) {
     if (!(service instanceof WorkspaceMcpService)) throw new Error('Workbench MCP 管理与连接服务必须使用同一个项目 owner');
     this.owner = service;
@@ -191,7 +200,15 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   observe(): IDisposable { return this.owner.observe(); }
   queryLocal(): Promise<WorkspaceMcpServer[]> { return this.owner.queryLocal(); }
   getEnabledLocalMcpServers(): IWorkbenchLocalMcpServer[] { throw unavailable(); }
-  async queryGallery(): Promise<never> { throw new Error('目标 MCP gallery 与制品安装尚未接入'); }
+  async queryGallery(options?: IQueryOptions, token = CancellationToken.None, manifest?: IMcpGalleryManifest): Promise<IIterativePager<IWorkbenchMcpServer>> {
+    const pager = await this.gallery.query(options, token, manifest);
+    const mapPage = (page: IIterativePage<IGalleryMcpServer>): IIterativePage<IWorkbenchMcpServer> => ({
+      items: page.items.map(server => this.instantiation.createInstance(McpWorkbenchServer,
+        () => McpServerInstallState.Uninstalled, () => undefined, undefined, server, undefined)),
+      hasMore: page.hasMore,
+    });
+    return { firstPage: mapPage(pager.firstPage), getNextPage: async ct => mapPage(await pager.getNextPage(ct)) };
+  }
   async getMcpServerFromGallery(): Promise<never> { throw unavailable(); }
   canInstall(): MarkdownString { return new MarkdownString().appendText(unavailable().message); }
   async install(): Promise<never> { throw unavailable(); }
@@ -201,10 +218,15 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   getMcpConfigPath(arg: URI): Promise<undefined>;
   getMcpConfigPath(arg: IWorkbenchLocalMcpServer | URI): undefined | Promise<undefined> { return URI.isUri(arg) ? Promise.resolve(undefined) : undefined; }
   async openSearch(searchValue: string): Promise<void> {
-    if (searchValue) throw new Error('目标 MCP gallery 查询尚未接入；已有服务请使用 MCP: List Servers');
-    await this.views.openView('boxteam.mcp.view', true);
+    await this.extensions.openSearch(`@mcp ${searchValue}`);
   }
-  open(server: IWorkbenchMcpServer | string, options?: IMcpServerEditorOptions): Promise<void> { return this.owner.open(server, options); }
+  async open(server: IWorkbenchMcpServer | string, options?: IMcpServerEditorOptions): Promise<void> {
+    if (server instanceof McpWorkbenchServer && server.gallery) {
+      await this.editors.openEditor(new McpServerEditorInput(server), options);
+      return;
+    }
+    await this.owner.open(server, options);
+  }
 }
 
 /** 原视图只在可见期间观察当前工作区；隐藏列表不维持永久轮询。 */

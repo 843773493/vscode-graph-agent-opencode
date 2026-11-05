@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { mcpGallerySourcePaths, transformMcpGallery } from './mcpGalleryTransform.mjs';
 
 export const mcpSourcePaths = [
   'src/vs/workbench/contrib/mcp/browser/mcp.contribution.ts',
@@ -7,6 +8,7 @@ export const mcpSourcePaths = [
   'src/vs/workbench/contrib/mcp/browser/mcpServerEditor.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpServersView.ts',
   'src/vs/workbench/contrib/mcp/browser/mcpWorkbenchService.ts',
+  ...mcpGallerySourcePaths,
 ];
 
 function replaceSection(source, from, to, replacement, replaceOnce) {
@@ -101,6 +103,7 @@ export function transformMcp(root, path, source, replaceOnce) {
       contents = replaceOnce(contents, original, original.slice(0, run) + `\n\toverride run(accessor: ServicesAccessor, serverId: unknown, options?: { waitForLiveTools?: boolean }): Promise<void> { return runWorkspaceMcpCommand(accessor, serverId, '${action}', options); }\n}\n\n`);
     }
     contents = replaceOnce(contents, "\t\tconst extensionsWorkbenchService = accessor.get(IExtensionsWorkbenchService);\n\t\tconst viewsService = accessor.get(IViewsService);\n\t\tawait extensionsWorkbenchService.openSearch('');\n\t\tawait viewsService.openView(InstalledMcpServersViewId, true);", "\t\tawait accessor.get(IMcpWorkbenchService).openSearch('');");
+    contents = replaceOnce(contents, '\t\tawait accessor.get(ICommandService).executeCommand(\n\t\t\tAICustomizationManagementCommands.OpenMarketplace,\n\t\t\tAICustomizationManagementSection.McpServers,\n\t\t);', "\t\tawait accessor.get(IMcpWorkbenchService).openSearch('');");
     contents = replaceOnce(contents, "McpConnectionState.toString(server.connectionState.read(reader)),", "server instanceof WorkspaceMcpServer ? server.statusLabel : McpConnectionState.toString(server.connectionState.read(reader)),");
     const addItem = "\t\t\t\t{ id: '$add', label: localize('mcp.addServer', 'Add Server'), description: localize('mcp.addServer.description', 'Add a new server configuration'), alwaysShow: true, iconClass: ThemeIcon.asClassName(Codicon.add) },\n";
     contents = replaceOnce(contents, addItem, '');
@@ -111,7 +114,7 @@ export function transformMcp(root, path, source, replaceOnce) {
       'ServicesAccessor', 'ILogService', 'mcpAutoStartConfig', 'McpAutoStartValue', 'INotificationService',
       'IQuickInputService', 'IQuickPickItem', 'IQuickPickSeparator', 'ActiveEditorContext', 'RemoteNameContext',
       'ResourceContextKey', 'WorkbenchStateContext', 'WorkspaceFolderCountContext',
-      'AICustomizationManagementCommands', 'AICustomizationManagementSection', 'ChatContextKeys', 'ChatModeKind',
+      'ChatContextKeys', 'ChatModeKind',
       'isContributionDisabled', 'extensionsFilterSubMenu', 'TEXT_FILE_EDITOR_ID', 'McpCommandIds',
       'mcpWorkspaceRootConfig', 'McpContextKeys', 'HasInstalledMcpServersContext', 'IMcpServer', 'IMcpService',
       'IMcpWorkbenchService', 'InstalledMcpServersViewId', 'McpConnectionState', 'McpResourceQuickAccess', 'McpResourceQuickPick',
@@ -126,17 +129,17 @@ export function transformMcp(root, path, source, replaceOnce) {
     contents = replaceOnce(contents, "import { IAuthenticationService } from '../../../services/authentication/common/authentication.js';", '');
     contents = replaceOnce(contents, "import { IAccountQuery, IAuthenticationQueryService } from '../../../services/authentication/common/authenticationQuery.js';", '');
     contents = replaceSection(contents, 'export class AuthServerAction extends McpServerAction {', 'export class ShowServerOutputAction', `export class AuthServerAction extends McpServerAction {
-  constructor(@IMcpService private readonly mcpService: IMcpService) {
+  constructor() {
     super('mcp.authorize', localize('mcp.authorize', 'Authorize'), 'extension-action label prominent account', false);
     this.update();
   }
   update(): void {
-    const server = this.mcpService.servers.get().find(server => server.definition.id === this.mcpServer?.id);
+    const server = this.mcpServer instanceof WorkspaceMcpServer ? this.mcpServer : undefined;
     this.enabled = server instanceof WorkspaceMcpServer && server.canAuthorize;
     this.class = 'extension-action label prominent account' + (this.enabled ? '' : ' hide');
   }
   override async run(): Promise<void> {
-    const server = this.mcpService.servers.get().find(server => server.definition.id === this.mcpServer?.id);
+    const server = this.mcpServer instanceof WorkspaceMcpServer ? this.mcpServer : undefined;
     if (!(server instanceof WorkspaceMcpServer)) throw new Error('原 MCP 目标已移除');
     await server.authorize();
   }
@@ -151,6 +154,7 @@ export function transformMcp(root, path, source, replaceOnce) {
       const begin = contents.indexOf(`export class ${name}`), end = contents.indexOf(`export class ${next}`, begin);
       let action = contents.slice(begin, end);
       action = replaceOnce(action, '\t\tif (!this.mcpServer.local) {\n\t\t\treturn;\n\t\t}\n', '');
+      action = replaceOnce(action, 'if (!this.mcpServer) {', 'if (!(this.mcpServer instanceof WorkspaceMcpServer)) {');
       action = replaceOnce(action, `if (${condition}) {`, `if (server instanceof WorkspaceMcpServer ? !server.${name === 'StartServerAction' ? 'canConnect' : 'canStop'} : ${condition}) {`);
       if (name === 'StopServerAction') action = replaceOnce(action, "this.label = localize('stop', \"Stop Server\");", "this.label = server instanceof WorkspaceMcpServer && server.isPending ? localize('mcp.cancelOperation', 'Cancel Connection Operation') : localize('stop', 'Stop Server');");
       contents = replaceOnce(contents, contents.slice(begin, end), action);
@@ -195,13 +199,17 @@ if (extension instanceof WorkspaceMcpServer) {
     contents = replaceOnce(contents, '\t\tthis.currentQuery = query;', '\t\tthis.workspaceMcpQueryFailed = false;\n\t\ttry {\n\t\tthis.currentQuery = query;');
     contents = replaceOnce(contents, '\t\treturn this.input.model;\n\t}\n\n\tprivate renderInput()', '\t\treturn this.input.model;\n\t\t} catch (error) { this.workspaceMcpQueryFailed = true; throw error; }\n\t}\n\n\tprivate renderInput()');
     contents = replaceOnce(contents, '\t\tthis._register(this.list.onContextMenu(e => this.onContextMenu(e), this));', `\t\tthis._register(this.list.onContextMenu(e => this.onContextMenu(e), this));
-if (this.id === 'boxteam.mcp.view') void this.show('').catch(error => this.updateBody({ text: String(error), severity: Severity.Error }));`);
+if (this.id === 'boxteam.mcp.view') void this.show('').catch(error => {
+  if (!isCancellationError(error)) this.updateBody({ text: String(error), severity: Severity.Error });
+});`);
     contents = replaceOnce(contents, '"MCP Servers - Installed"', '"MCP Servers - Configured"');
     contents = replaceOnce(contents, '\t\tthis._register(this.marketplaceConfigurationService.onDidChangeConfiguration(event => {', `\t\tthis._register(observeWorkspaceMcpView(this, this.mcpWorkbenchService));
 this._register(this.mcpWorkbenchService.onChange(() => {
   if (this.workspaceMcpQueryFailed && this.currentQuery === '' && this.isBodyVisible()
     && this.mcpWorkbenchService instanceof WorkspaceMcpWorkbenchService && this.mcpWorkbenchService.isLocalCatalogAvailable) {
-    void this.show('').catch(error => this.updateBody({ text: String(error), severity: Severity.Error }));
+    void this.show('').catch(error => {
+      if (!isCancellationError(error)) this.updateBody({ text: String(error), severity: Severity.Error });
+    });
   }
 }));
 \t\tthis._register(this.marketplaceConfigurationService.onDidChangeConfiguration(event => {`);
@@ -214,5 +222,5 @@ this._register(this.mcpWorkbenchService.onChange(() => {
     // Context key 复用唯一 owner 已处理真实错误的初次读取，避免另起查询留下未处理拒绝。
     contents = replaceOnce(contents, 'mcpWorkbenchService.queryLocal().finally(() => {', 'mcpWorkbenchService.whenInitialLocalMcpServersLoaded.then(() => {');
   }
-  return contents;
+  return transformMcpGallery(relative, contents, replaceOnce, replaceSection);
 }
