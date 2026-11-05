@@ -14,13 +14,17 @@ WITH carriers AS MATERIALIZED (
                 AND json_extract(relation.value, '$.target_model_call_id') IS NOT NULL
              LIMIT 1)
         ) AS part_scope
-    FROM context_view_items AS membership
-    JOIN item_catalog AS item ON item.item_id = membership.item_id
-    JOIN executions AS execution ON execution.execution_id = item.execution_id
+    -- 先按内部执行和 item 索引定位，再核当前 view 的成员；
+    -- 不能从整个 view 起扫，否则普通 Turn 历史也会拖慢空的 internal 分页。
+    FROM executions AS execution
+    CROSS JOIN item_catalog AS item ON item.execution_id = execution.execution_id
+    CROSS JOIN context_view_items AS membership ON membership.item_id = item.item_id
     WHERE membership.view_id = :view_id
         AND membership.visible = 1 AND membership.source_kind = 'display_only'
         AND item.turn_id IS NULL AND execution.execution_origin = 'internal'
         AND execution.turn_id IS NULL
-        AND membership.logical_item_ordinal <= :snapshot_upper
+        -- 一元 + 禁用 ordinal 范围索引，让已定位 item 走成员身份索引；
+        -- 否则 SQLite 展开 view 后会为每个 item 重扫当前 view 的全部块。
+        AND +membership.logical_item_ordinal <= :snapshot_upper
         AND (:execution_id IS NULL OR execution.execution_id = :execution_id)
 )
