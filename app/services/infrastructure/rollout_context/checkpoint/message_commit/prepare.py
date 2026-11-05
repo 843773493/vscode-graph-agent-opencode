@@ -79,12 +79,13 @@ def prepare_messages(
         ):
             message_value = codec.to_dict(message)
             explicit_anchor = canonical_message_anchor(message_value)
-            versions = connection.execute(
-                "SELECT COUNT(*) FROM messages WHERE message_id=?", (canonical_message_id,),
-            ).fetchone()[0]
+            # 有精确 anchor 时直接定位；否则找到第二个版本即足以判定需要 view 消歧。
+            multiple_versions = explicit_anchor is None and connection.execute(
+                "SELECT 1 FROM messages WHERE message_id=? LIMIT 1 OFFSET 1", (canonical_message_id,),
+            ).fetchone() is not None
             message_locator = find_message_locator(
                 connection, canonical_message_id, item_id=explicit_anchor,
-                sequences=locator_sequences if explicit_anchor is None and versions > 1 else None,
+                sequences=locator_sequences if multiple_versions else None,
             )
             canonical_anchor = connection.execute(
                 "SELECT jsonl_offset, jsonl_length, turn_id, execution_id "

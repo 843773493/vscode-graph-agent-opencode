@@ -67,9 +67,10 @@ class PendingMessageReferences:
         if item_ids is not None and message.id in item_ids:
             return self._canonical(item_ids[message.id])
         anchor = canonical_message_anchor(message)
+        # 只需确认存在第二个版本；找到后即停，不统计同一 logical ID 的全部历史版本。
         if anchor is None and self.connection.execute(
-            "SELECT COUNT(*) FROM messages WHERE message_id=?", (message.id,),
-        ).fetchone()[0] > 1:
+            "SELECT 1 FROM messages WHERE message_id=? LIMIT 1 OFFSET 1", (message.id,),
+        ).fetchone() is not None:
             # 原写入暂存到其 checkpoint 的正式发布事务取得版本坐标；不猜正文或 latest。
             return None
         locator = find_message_locator(
