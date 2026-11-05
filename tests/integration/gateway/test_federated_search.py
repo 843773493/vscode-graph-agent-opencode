@@ -82,31 +82,46 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
                 (target / name).write_text("🧪 needle\ncontext\nneedle\n", encoding="utf-8")
             (target / "covered.txt").write_bytes(b"\xffmodel body must not be read")
     ports = integration_port_block_for_file(Path(request.node.path))
-    monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(20)}")
-    lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 1, 20, 40, 42, 43)))
     gateway_home = runtime / "gateway-home"
     gateway_id = load_or_create_gateway_id(gateway_home / "state/gateway/identity.json")
-    fixture = Network(workspace, secondary, stopped, gateway_home, gateway_id, ports.port(20), ports.port(0), context.artifacts_dir, [])
     # 本机目录控制链和 Gateway 使用同一原生身份；独立 HOME 会产生互不相认的本机令牌。
-    credential = fixture.gateway_home / "state/gateway/credentials/local-token"
+    credential = gateway_home / "state/gateway/credentials/local-token"
     credential.parent.mkdir(parents=True, exist_ok=True)
     credential.write_text(LOCAL_TOKEN_HEADERS["X-Local-Token"] + "\n", encoding="utf-8")
     credential.chmod(0o600)
     with ExitStack() as cleanup:
-        lease.acquire()
-        cleanup.callback(lease.release)
+        preferred_offsets = {"backend-0": 0, "backend-1": 1, "gateway": 20, "terminal": 40,
+                             "browser-backend": 42, "browser-frontend": 43}
+        fallback_offsets = [offset for offset in range(ports.end - ports.start + 1)
+                            if offset not in preferred_offsets.values()]
+        service_ports: dict[str, int] = {}
+        port_probes: dict[str, list[tuple[int, bool]]] = {}
+        for service, preferred in preferred_offsets.items():
+            lease, probes = E2EProcessLease.acquire_available(
+                runtime / f"{service}-port.json", (ports.port(offset) for offset in (preferred, *fallback_offsets)),
+            )
+            cleanup.callback(lease.release)
+            service_ports[service] = lease.ports[0]
+            port_probes[service] = probes
+            fallback_offsets = [offset for offset in fallback_offsets if ports.port(offset) != lease.ports[0]]
+        (context.artifacts_dir / "port-allocation.json").write_text(
+            json.dumps({"ports": service_ports, "probes": port_probes}) + "\n", encoding="utf-8",
+        )
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{service_ports['gateway']}")
+        fixture = Network(workspace, secondary, stopped, gateway_home, gateway_id, service_ports["gateway"],
+                          service_ports["backend-0"], context.artifacts_dir, [])
         # fork 来源会读取真实资源状态；辅助服务使用本装具独占的端口和生命周期。
-        terminal = start_terminal_backend(backend_port=ports.port(40), workspace_root=str(workspace), artifacts_dir=fixture.artifacts)
+        terminal = start_terminal_backend(backend_port=service_ports["terminal"], workspace_root=str(workspace), artifacts_dir=fixture.artifacts)
         cleanup.callback(terminate_process, terminal)
         browser = start_browser_manager_processes(
-            workspace_root=workspace, backend_port=ports.port(42), frontend_port=ports.port(43),
+            workspace_root=workspace, backend_port=service_ports["browser-backend"], frontend_port=service_ports["browser-frontend"],
             backend_host="127.0.0.1", artifacts_dir=fixture.artifacts,
         )
         cleanup.callback(close_browser_manager_processes, browser)
         mount = MountedWorkspace(workspace_backend_id_for_root(workspace), workspace,
-                                 f"http://127.0.0.1:{ports.port(40)}", f"http://127.0.0.1:{ports.port(42)}")
+                                 f"http://127.0.0.1:{service_ports['terminal']}", f"http://127.0.0.1:{service_ports['browser-backend']}")
         for index, root in enumerate((workspace, secondary)):
-            backend = start_backend_process(workspace_root=str(root), port=ports.port(index), log_name=f"backend-{index}",
+            backend = start_backend_process(workspace_root=str(root), port=service_ports[f"backend-{index}"], log_name=f"backend-{index}",
                                             boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts,
                                             startup_mount=mount if index == 0 else None)
             cleanup.callback(close_backend_process, backend)
@@ -116,7 +131,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
         state = GatewayStateStore(path=gateway_root / "gateway.sqlite")
         registry = GatewayWorkspaceRegistry(gateway_id=gateway_id, storage_path=gateway_root / "workspaces.json", state_store=state)
         try:
-            for root, url, name in ((secondary, f"http://127.0.0.1:{ports.port(1)}", "Unrelated workspace"), (stopped, "", "Stopped")):
+            for root, url, name in ((secondary, f"http://127.0.0.1:{service_ports['backend-1']}", "Unrelated workspace"), (stopped, "", "Stopped")):
                 registry.upsert(WorkspaceTarget(
                     gateway_id=gateway_id, workspace_id=workspace_backend_id_for_root(root), name=name,
                     root_path=str(root), backend_url=url, connection_kind="local", desired_running=False,

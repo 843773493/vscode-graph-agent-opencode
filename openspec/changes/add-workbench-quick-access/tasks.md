@@ -906,3 +906,8 @@
 - 独立 Gateway 与 A/B Backend 经产品消息入口及 model_stream 生成 canonical 历史。A 原准入 worker 仍持 Session 读锁时注销立即拒绝新准入；原查询安全结算后才释放 registration，不发布迟到 A 页，B 持续可查。原版本释放前 v2 注册冲突，释放后旧 v1 在扫描前拒绝，v2 沿同一原查询执行；服务关闭与各 release 均核唯一终态。
 - 真实网络 1 passed／67.38 秒；共享树 Ruff 和 Python 3.12 Pyright 通过。完整快照、输入指纹、准确命令、原始输出与 wire 原件见 `out/tests/temp/2026/11/05/search_provider_lifecycle_next/artifacts/verification-001.json`。本片仅新增测试组合与用例，不改生产接口、前端或协议，不重复 Web 构建。
 - Provider 分层复用及缺口见同目录 `provider-evidence-001.json`：当前 ResourceNavigation 与最后直接产品指纹已变化，较新双后端收据未记录完整脏生产输入；当前 Trace owner 以精确指纹存储入口单测承接，未再次运行 HTTP／Web。16.3 及其余缓存／流式验收保持未勾，不将本片覆盖扩大到所有 Provider 或 16.20。
+
+### 2026-11-05：当前 ResourceNavigation 真实 HTTP 证据补齐（16.3 局部）
+
+- 完整隔离快照含当前 ResourceNavigation 及原调用方，5514 个输入文件运行前后指纹完全相同；原 `test_federated_search.py` 经独立 Gateway／双 Backend 完成30次真实搜索 SSE，115条原断言不变，`1 passed / 50.00s / exit 0`，Ruff／Python 3.12 Pyright 通过。六服务统一复用既有有界端口租约，仅修正装具准入；成功轮次首选端口均空闲，不声称实测跳过占用分支。
+- 收据：`out/tests/temp/2026/11/05/search_provider_current_http/artifacts/verification-004.json`（SHA256 `195baaa931ed2bf5676fc6d2e63268b96fed37f7e6ddc2e1dde56c0dc97d75cd`）。隔离快照后共享树四个文件仅将 SQL 资源路径改为 `migrations/`，归一该前缀后完整 AST 相同、32份原 SQL 字节相同；本项可分层复用查询／分页／正文／错误语义，不宣称尚未落位的新资源初始化或离线v10迁移通过。缺凭据快照及端口占用的前置失败原件保留，未进入搜索验收；临时凭据副本已删除、关联进程为零。Trace 当前 HTTP／Web 与其余生命周期、流式组合仍未齐，16.3／16.20保持原状态。
