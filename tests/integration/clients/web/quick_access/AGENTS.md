@@ -41,3 +41,5 @@
 `test_webview_resource_cache` 经真实 Gateway 和正式 Workbench 打开原 Markdown 预览；CSS、字体及贡献扩展脚本沿原隔离 Worker 加载，无响应替身。核首次正文、热读时仍有 describe 且不重传 raw、更新后新正文与样式、Cache Storage 的 ETag／字体 MIME。模型回放仅提供启动配置，要求零模型请求；本项不代替身份切换、配额失败诊断或打包 Electron 重启验收。回环代理的条件头／304 透传另由 `workbench_server.test.mjs` 的明确 HTTP 替身验证。
 
 资源淘汰场景仅通过原 Cache API 删除测试 CSS／字体两条记录，保留其它缓存条目；刷新仍经过原 Worker／宿主和真实文件 owner 重建。该具名故障注入不表示产品新增清理入口，也不证明配额失败诊断、工作台受保护数据清理或 Electron 重启。
+
+`test_language_models.py` 通过真实 Gateway 在 A/B 打开同名 JSON，原 Web 扩展和语言 Worker 计算符号；真实编辑、放弃修改及重开验证分析随模型变化和资源身份隔离。模型回放只供后端启动且要求零调用，不替换语言服务、预写分析结果或证明尚未接入的远端语言宿主。

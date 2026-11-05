@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-web-language-models` 经真实 Gateway 与正式 Workbench，在 A/B 同名 JSON 上调用原 Web 扩展的符号服务，核真实编辑、放弃修改和重开后的模型更新及身份隔离。固定300秒／4GiB及原集成独占闸门；启动模型回放零调用，不代替远端语言宿主或全部缓存验收。
+
 `integration-web-configuration-cache` 顺序验证正式 Workbench 的原 Profile／A-B 资源配置，以及独占资产副本中的精确 IDB 写入屏障。固定480秒／4GiB并沿原集成独占闸门；不修改共享构建，不代替 Electron 或全部缓存验收。
 
 `integration-identity-source-child-fork` 经真实 Gateway 与原 fork owner 验证新 Session main／原 Session child 的来源身份、附件冷读及续跑，固定480秒／4GiB并使用原 fork 看门狗。沿原集成独占门，不代表 Web、Windows 或全部身份迁移验收。
