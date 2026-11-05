@@ -8,9 +8,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from app.domain.itemized.errors import (
-    FormatDispatchError,
-)
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
@@ -63,16 +60,11 @@ class RolloutSchemaIntrospectionMixin:
         connection: sqlite3.Connection,
         checkpoint_ns: str,
     ) -> RolloutManifest:
-        meta_columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(database_meta)")
-        }
-        if "rollout_format_version" not in meta_columns:
-            raise FormatDispatchError(
-                "v1_migration_required: database_meta 缺少 rollout_format_version"
-            )
+        # 入口已校验格式和 schema；一次读取同一条 meta，不在 manifest 内重复自省结构。
         row = connection.execute(
-            "SELECT rollout_id, active_branch_id, last_message_sequence, projection_epoch, last_commit_id, database_state FROM database_meta WHERE singleton_id = 1"
+            "SELECT rollout_id, active_branch_id, last_message_sequence, projection_epoch, "
+            "last_commit_id, database_state, rollout_format_version, history_view_revision, "
+            "source_overlay_epoch FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
         if row is None:
             raise RuntimeError("rollout database_meta 缺失")
@@ -117,35 +109,14 @@ class RolloutSchemaIntrospectionMixin:
             if latest is not None
             else None
         )
-        format_row = connection.execute(
-            "SELECT rollout_format_version FROM database_meta WHERE singleton_id = 1"
-        ).fetchone()
-        if format_row is None:
-            raise FormatDispatchError(
-                "v1_migration_required: database_meta 缺少 rollout_format_version row"
-            )
         rollout_format = strict_non_negative_int(
-            format_row[0], field="database_meta.rollout_format_version"
+            row[6], field="database_meta.rollout_format_version"
         )
-        for required_meta_column in ("history_view_revision", "source_overlay_epoch"):
-            if required_meta_column not in meta_columns:
-                raise RuntimeError(
-                    f"v2 rollout database_meta 缺少必需字段: {required_meta_column}"
-                )
-        revision_row = connection.execute(
-            "SELECT history_view_revision, source_overlay_epoch "
-            "FROM database_meta WHERE singleton_id = 1"
-        ).fetchone()
-        if revision_row is None:
-            raise RuntimeError("v2 rollout database_meta revision row 缺失")
         history_view_revision = strict_non_negative_int(
-            revision_row[0], field="database_meta.history_view_revision"
+            row[7], field="database_meta.history_view_revision"
         )
         source_overlay_epoch = strict_non_negative_int(
-            revision_row[1], field="database_meta.source_overlay_epoch"
-        )
-        from app.services.infrastructure.rollout_context.storage.primitives import (
-            RolloutManifest,
+            row[8], field="database_meta.source_overlay_epoch"
         )
 
         return RolloutManifest(
@@ -285,6 +256,11 @@ class RolloutSchemaIntrospectionMixin:
             raise RuntimeError(
                 "schema-incompatible: rollout SQLite 缺少真实 Thread owner；原始 JSONL/SQLite 保留"
             )
+        for required_meta_column in ("history_view_revision", "source_overlay_epoch"):
+            if required_meta_column not in owner_columns:
+                raise RuntimeError(
+                    f"v2 rollout database_meta 缺少必需字段: {required_meta_column}"
+                )
         removed_journal = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'compaction_runs'"
         ).fetchone()
