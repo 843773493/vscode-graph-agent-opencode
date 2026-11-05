@@ -75,17 +75,27 @@ def browser_backend(
         # 整个服务组保留绑定，避免等待闸门或启动其它服务时被客户端临时源端口抢占。
         lease = E2EProcessLease(
             context.runtime_root_for_node(request.node.nodeid) / "service-ports.json",
-            tuple(port_block.port(offset) for offset in (0, 2, 3, 4, 10, 20)),
+            tuple(port_block.port(offset) for offset in (0, 2, 3, 10, 20)),
         )
         lease.acquire()
         services.callback(lease.release)
+        frontend_lease, frontend_probes = E2EProcessLease.acquire_available(
+            context.runtime_root_for_node(request.node.nodeid) / "browser-frontend-port.json",
+            range(port_block.port(4), port_block.port(10)),
+        )
+        services.callback(frontend_lease.release)
+        frontend_port = frontend_lease.ports[0]
+        (context.artifacts_dir / "browser-frontend-port-allocation.json").write_text(json.dumps({
+            "port": frontend_port,
+            "probes": [{"port": candidate, "available": available} for candidate, available in frontend_probes],
+        }, indent=2) + "\n", encoding="utf-8")
         terminal = start_terminal_backend(
             backend_port=port_block.port(2), workspace_root=str(workspace_root), artifacts_dir=context.artifacts_dir,
         )
         services.callback(terminate_process, terminal)
         browser = start_browser_manager_processes(
             workspace_root=workspace_root, artifacts_dir=context.artifacts_dir,
-            backend_port=port_block.port(3), frontend_port=port_block.port(4), backend_host="127.0.0.1",
+            backend_port=port_block.port(3), frontend_port=frontend_port, backend_host="127.0.0.1",
         )
         services.callback(close_browser_manager_processes, browser)
         backend = start_backend_process(
