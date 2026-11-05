@@ -65,7 +65,37 @@ def replace_members(connection: sqlite3.Connection, view_id: str, members: Itera
 
 
 def append_members(connection: sqlite3.Connection, view_id: str, members: Iterable[Member]) -> None:
-    replace_members(connection, view_id, [*read_members(connection, view_id), *members])
+    """追加 active view owner 已查重、分配好递增坐标的新成员。"""
+    if not connection.in_transaction:
+        raise RuntimeError("view members 追加必须位于原事务内")
+    if connection.execute("SELECT 1 FROM context_views WHERE view_id=?", (view_id,)).fetchone() is None:
+        raise ValueError(f"source-mismatch: view 不存在: {view_id}")
+    rows = [tuple(row) for row in members]
+    if not rows:
+        return
+    tail = connection.execute(
+        "SELECT block_ordinal,block_id FROM context_view_item_blocks "
+        "WHERE view_id=? ORDER BY block_ordinal DESC LIMIT 1", (view_id,),
+    ).fetchone()
+    start = 0
+    if tail is not None:
+        start = tail[0]
+        previous = [tuple(row) for row in connection.execute(
+            f"SELECT {COLUMNS} FROM context_membership_items WHERE block_id=? ORDER BY member_index",
+            (tail[1],),
+        )]
+        # item 查重与坐标分配已由 _append_context_view_items 完成；完整旧块保持原引用，
+        # 只合并末尾不足一块的成员，不能再读回全部历史、重算每个旧块摘要。
+        if len(previous) == BLOCK_SIZE:
+            start += 1
+        else:
+            rows = previous + rows
+    blocks = [store_block(connection, rows[index:index + BLOCK_SIZE]) for index in range(0, len(rows), BLOCK_SIZE)]
+    connection.execute("DELETE FROM context_view_item_blocks WHERE view_id=? AND block_ordinal>=?", (view_id, start))
+    connection.executemany(
+        "INSERT INTO context_view_item_blocks(view_id,block_ordinal,block_id) VALUES (?,?,?)",
+        ((view_id, start + index, block) for index, block in enumerate(blocks)),
+    )
 
 
 def clone_members(connection: sqlite3.Connection, source_view: str, target_view: str) -> None:

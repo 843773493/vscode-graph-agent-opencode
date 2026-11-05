@@ -231,18 +231,16 @@ class RolloutViewMembershipMixin:
         view_id = self._writable_active_context_view_id(
             connection, checkpoint_ns, branch_id
         )
+        # 两套坐标共享一次 metadata 聚合，不再为同一次追加扫描两遍 view。
+        next_ordinal, next_context = connection.execute(
+            "SELECT COALESCE(MAX(logical_item_ordinal), -1) + 1, "
+            "COALESCE(MAX(context_ordinal), -1) + 1 FROM context_view_items WHERE view_id=?",
+            (view_id,),
+        ).fetchone()
         next_ordinal = strict_non_negative_int(
-            connection.execute(
-                "SELECT COALESCE(MAX(logical_item_ordinal), -1) + 1 "
-                "FROM context_view_items WHERE view_id = ?",
-                (view_id,),
-            ).fetchone()[0],
+            next_ordinal,
             field="context_view_items.logical_item_ordinal",
         )
-        next_context = connection.execute(
-            "SELECT COALESCE(MAX(context_ordinal), -1) + 1 FROM context_view_items WHERE view_id=?",
-            (view_id,),
-        ).fetchone()[0]
         append_members(connection, view_id, (
             (item_id, next_ordinal + offset, 1, source_kind, 1, next_context + offset)
             for offset, item_id in enumerate(pending)
