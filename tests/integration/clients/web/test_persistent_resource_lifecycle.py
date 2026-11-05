@@ -86,9 +86,12 @@ async def test_persistent_resources_through_real_workbench(
             await acquire_gateway_guest(client)
             reply = await client.get("/api/gateway/workspaces")
             assert reply.status_code == 200, reply.text
-            workspace_id = reply.json()["data"]["active_workspace_id"]
+            owner = reply.json()["data"]["active_workspace"]
+            workspace_id = owner["workspace_id"]
+            gateway_id = owner["gateway_id"]
         environment = os.environ | temporary_environment | replay.environment | {
             "BOXTEAM_BROWSER_BASE_URL": base_url, "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
+            "BOXTEAM_BROWSER_GATEWAY_ID": gateway_id,
             "BOXTEAM_BROWSER_ARTIFACT_ROOT": str(artifacts), "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
         }
         for phase in phases:
@@ -105,6 +108,8 @@ async def test_persistent_resources_through_real_workbench(
             if phase == "before-unload":
                 async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=120) as client:
                     await acquire_gateway_guest(client)
+                    client.headers.update({"X-BoxTeam-Target-Gateway-Id": gateway_id,
+                                           "X-BoxTeam-Workspace-Id": workspace_id})
                     health_before = await client.get("/api/v1/health")
                     assert health_before.status_code == 200, health_before.text
                     restarted = await client.post(f"/api/gateway/workspaces/{workspace_id}/runtime/restart-safe")

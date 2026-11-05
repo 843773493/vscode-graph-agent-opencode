@@ -37,9 +37,13 @@ async function localToken(page) {
 async function api(page, pathname, init = {}) {
   const token = await localToken(page);
   return page.evaluate(
-    async ({ pathname: path, init: requestInit, token: localTokenValue }) => {
+    async ({ pathname: path, init: requestInit, token: localTokenValue, workspaceId, gatewayId }) => {
       const headers = new Headers(requestInit.headers ?? {});
       headers.set("X-Local-Token", localTokenValue);
+      if (path.startsWith("/api/v1/")) {
+        headers.set("X-BoxTeam-Workspace-Id", workspaceId);
+        headers.set("X-BoxTeam-Target-Gateway-Id", gatewayId);
+      }
       const response = await fetch(path, {
         ...requestInit,
         headers,
@@ -49,7 +53,7 @@ async function api(page, pathname, init = {}) {
       if (!response.ok) throw new Error(`API ${response.status}: ${body}`);
       return body ? JSON.parse(body) : null;
     },
-    { pathname, init, token },
+    { pathname, init, token, workspaceId, gatewayId: owner.gatewayId },
   );
 }
 

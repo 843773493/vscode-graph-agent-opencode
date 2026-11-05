@@ -14,6 +14,7 @@ function requiredEnvironment(name) {
 
 const baseUrl = requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
 const workspaceId = requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
+const gatewayId = requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");
 const sessionId = requiredEnvironment("BOXTEAM_BROWSER_SESSION_ID");
 const turnId = requiredEnvironment("BOXTEAM_BROWSER_TURN_ID");
 const resultPath = requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
@@ -36,9 +37,11 @@ async function localToken(page) {
 async function api(page, pathname, init = {}) {
   const token = await localToken(page);
   return page.evaluate(
-    async ({ pathname: path, init: requestInit, token: localTokenValue }) => {
+    async ({ pathname: path, init: requestInit, token: localTokenValue, gatewayId, workspaceId }) => {
       const headers = new Headers(requestInit.headers ?? {});
       headers.set("X-Local-Token", localTokenValue);
+      headers.set("X-BoxTeam-Target-Gateway-Id", gatewayId);
+      headers.set("X-BoxTeam-Workspace-Id", workspaceId);
       const response = await fetch(path, {
         ...requestInit,
         headers,
@@ -48,7 +51,7 @@ async function api(page, pathname, init = {}) {
       if (!response.ok) throw new Error(`API ${response.status}: ${body}`);
       return body ? JSON.parse(body) : null;
     },
-    { pathname, init, token },
+    { pathname, init, token, gatewayId, workspaceId },
   );
 }
 
@@ -103,7 +106,6 @@ try {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-BoxTeam-Workspace-Id": workspaceId,
       },
       body: JSON.stringify({
         turn_ids: [turnId],
@@ -119,9 +121,7 @@ try {
     throw new Error(`历史 API 未返回未知工具失败事实: ${JSON.stringify(historyItem)}`);
   }
 
-  const sessionList = await api(page, "/api/v1/sessions?limit=100", {
-    headers: { "X-BoxTeam-Workspace-Id": workspaceId },
-  });
+  const sessionList = await api(page, "/api/v1/sessions?limit=100");
   const sessionListed = sessionList.data.items.some(
     (item) => item.session_id === sessionId,
   );
@@ -132,8 +132,9 @@ try {
   // 认证和 Gateway 会话目录同步可能晚于首次页面挂载；确认 API 已就绪后重新加载，
   // 让前端从同一份权威会话列表启动，而不是把启动竞态误判为 UI 缺陷。
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator(`button[data-session-id="${sessionId}"]`).dblclick();
-  const thread = page.locator(`section.boxteam-thread[data-session-id="${sessionId}"]`);
+  await page.getByTestId(`workspace-node-${JSON.stringify([gatewayId, workspaceId])}`)
+    .locator("..").locator(`button[data-session-id="${sessionId}"]`).dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${workspaceId}"][data-session-id="${sessionId}"]`);
   await expect(thread).toBeVisible();
   const boundaryTurn = thread.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await boundaryTurn.waitFor({ state: "visible", timeout: 30_000 });

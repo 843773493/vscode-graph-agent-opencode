@@ -61,7 +61,7 @@ async function bootstrap() {
     if (!workspaces.ok) throw new Error(`读取工作区失败：${workspaces.status}`);
     return (await workspaces.json()).data;
   });
-  assert.equal(catalog.active_workspace_id, fixture.workspace_id);
+  assert.deepEqual(catalog.active_workspace, { gateway_id: fixture.gateway_id, workspace_id: fixture.workspace_id });
   await page.reload({ waitUntil: "domcontentloaded" });
   recordStage("bootstrap-completed");
 }
@@ -71,7 +71,7 @@ async function selectSession(sessionId) {
   await button.waitFor({ state: "visible" });
   await button.dblclick();
   const threadId = sessionId === fixture.session_id ? fixture.thread_id : fixture.other_thread_id;
-  thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspace_business_id}"][data-session-id="${sessionId}"][data-thread-id="${threadId}"]`);
+  thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspace_id}"][data-session-id="${sessionId}"][data-thread-id="${threadId}"]`);
   await expect(thread).toBeVisible();
 }
 

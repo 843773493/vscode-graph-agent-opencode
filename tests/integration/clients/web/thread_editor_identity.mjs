@@ -42,15 +42,18 @@ try {
   result.phase = 'create-through-product-api';
   const health = await api('/api/gateway/health');
   const workspaces = await api('/api/gateway/workspaces');
-  const routeId = workspaces.data.active_workspace_id;
-  const headers = { 'X-BoxTeam-Workspace-Id': routeId };
+  const active = workspaces.data.active_workspace;
+  expect(active.gateway_id).toBe(health.data.gateway_id);
+  const headers = { 'X-BoxTeam-Workspace-Id': active.workspace_id, 'X-BoxTeam-Target-Gateway-Id': active.gateway_id };
   const workspace = await api('/api/v1/workspace', { headers });
+  expect(workspace.data.workspace_id).toBe(active.workspace_id);
   result.initialization = [health, workspaces, workspace].map(body => ({ requestId: body.request_id }));
   const session = (await api('/api/v1/sessions', { method: 'POST', headers,
     body: JSON.stringify({ title: '稳定身份恢复验收', agent_id: 'default' }) })).data;
   const main = (await api(`/api/v1/sessions/${session.session_id}/main-thread`, { headers })).data;
-  const owner = { gatewayId: health.data.gateway_id, workspaceId: session.workspace_id,
-    sessionId: session.session_id, threadId: main.thread_id, routeId };
+  expect(session.workspace_id).toBe(active.workspace_id);
+  const owner = { gatewayId: active.gateway_id, workspaceId: active.workspace_id,
+    sessionId: session.session_id, threadId: main.thread_id };
   result.owner = owner;
   const uri = `boxteam-thread://${owner.gatewayId}/${owner.workspaceId}/${owner.sessionId}/${owner.threadId}`;
   const threadSelector = `section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${owner.sessionId}"][data-thread-id="${owner.threadId}"]`;
@@ -107,8 +110,9 @@ try {
   const duplicate = async route => {
     const response = await route.fetch();
     const body = await response.json();
-    const source = body.data.items.find(item => item.workspace_id === routeId);
-    body.data.items.push({ ...source, workspace_id: 'explicit-duplicate-route' });
+    const source = body.data.items.find(item => item.gateway_id === owner.gatewayId && item.workspace_id === owner.workspaceId);
+    expect(source).toBeDefined();
+    body.data.items.push({ ...source });
     await route.fulfill({ response, json: body });
   };
   const registryUrl = url => url.pathname === '/api/gateway/workspaces';

@@ -10,12 +10,14 @@ import shutil
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 
 import commentjson
 import httpx
 import pytest
 
 from app.core.resource_uri import file_uri_child, parse_resource_uri
+from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
@@ -51,7 +53,11 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
     gateway_id = health.json()["data"]["gateway_id"]
     listing = await client.get("/api/gateway/workspaces")
     assert listing.status_code == 200, listing.text
-    workspace_id = listing.json()["data"]["active_workspace_id"]
+    active = listing.json()["data"]["active_workspace"]
+    workspace_id = active["workspace_id"]
+    assert active == {"gateway_id": gateway_id, "workspace_id": read_workspace_id(workspace)}
+    client.headers["X-BoxTeam-Target-Gateway-Id"] = gateway_id
+    client.headers["X-BoxTeam-Workspace-Id"] = workspace_id
     session = await create_session(client, "附件目录浏览与编辑")
     main = await client.get(f"/api/v1/sessions/{session}/main-thread")
     assert main.status_code == 200, main.text
@@ -60,7 +66,7 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
     provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
 
     def plan(replies: list[dict[str, object]]) -> list[str]:
-        return replay.control.plan_model_calls(session, thread, [build_cassette(
+        return replay.control.plan_model_calls(session, thread, [cast(list[dict[str, object]], build_cassette(
             asset_id="attachment-directory-web", model=provider["model"],
             url=provider["endpoint"] + "/chat/completions",
             frames=chat_completion_frames(
@@ -68,7 +74,7 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
                 deltas=({"role": "assistant", **reply},),
                 finish_reason="tool_calls" if "tool_calls" in reply else "stop",
             ),
-        ).raw["interactions"][0] for index, reply in enumerate(replies)])
+        ).raw["interactions"])[0] for index, reply in enumerate(replies)])
 
     original = "上传原件保持不变 Ω\n"
     calls = plan([{"content": "附件目录已收到。"}])
@@ -106,7 +112,7 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
     result_path = context.artifacts_dir / "attachment-directory-browser.json"
     environment = {**os.environ,
         "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
-        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": workspace_id, "sessionId": session, "threadId": thread,
+        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"gatewayId": gateway_id, "workspaceId": workspace_id, "sessionId": session, "threadId": thread,
             "directoryUri": normalized, "attachment": attachment, "content": content, "edited": edited}),
         "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
         "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "attachment-directory-browser.png"),

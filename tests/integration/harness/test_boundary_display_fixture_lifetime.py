@@ -125,6 +125,7 @@ def test_boundary_display_failure_releases_resources_and_preserves_errors(
         # 所有故障均在业务访问前触发，不连接用户服务或构造历史业务数据。
         "BOXTEAM_BROWSER_BASE_URL": "http://127.0.0.1:1",
         "BOXTEAM_BROWSER_WORKSPACE_ID": "unused",
+        "BOXTEAM_BROWSER_GATEWAY_ID": "unused",
         "BOXTEAM_BROWSER_SESSION_ID": "unused",
         "BOXTEAM_BROWSER_TURN_ID": "unused",
         "BOXTEAM_BROWSER_FIXTURE": json.dumps({"nativeDirectory": {"sessionId": "unused"}}),

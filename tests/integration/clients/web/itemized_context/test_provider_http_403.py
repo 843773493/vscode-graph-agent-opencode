@@ -16,13 +16,16 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.workspace import close_backend_process, start_backend_process
+from tests.support.processes.workspace import (
+    close_backend_process,
+    start_backend_process,
+)
 
 PROVIDER_API_KEY = "provider-403-integration-key"
 PROVIDER_ERROR_MARKER = "provider-403-fixed-denial"
@@ -310,13 +313,17 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
         workspaces = _assert_request_envelope(
             await client.get("/api/gateway/workspaces")
         )
-        workspace_id = workspaces["data"]["active_workspace_id"]
-        workspace_headers = {"X-BoxTeam-Workspace-Id": workspace_id}
+        owner = workspaces["data"]["active_workspace"]
+        workspace_id = owner["workspace_id"]
+        assert health.json()["data"]["gateway_id"] == owner["gateway_id"]
+        workspace_headers = {"X-BoxTeam-Workspace-Id": workspace_id,
+                             "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"]}
         workspace_response = _assert_request_envelope(
             await client.get("/api/v1/workspace", headers=workspace_headers)
         )
-        active = next(item for item in workspaces["data"]["items"] if item["workspace_id"] == workspace_id)
-        assert workspace_response["data"]["workspace_id"] == active["backend_workspace_id"]
+        assert any(item["gateway_id"] == owner["gateway_id"] and item["workspace_id"] == workspace_id
+                   for item in workspaces["data"]["items"])
+        assert workspace_response["data"]["workspace_id"] == workspace_id
         assert "root_path" not in workspace_response["data"]
         assert "root" not in workspace_response["data"]["git"]
 

@@ -13,6 +13,7 @@ function requiredEnvironment(name) {
 
 const baseUrl = requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
 const expectedWorkspaceId = requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
+const expectedGatewayId = requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");
 const scope = TestRunContext.fromTestFile("tests/integration/clients/web/test_child_thread_panel.py");
 let parentThread;
 let threadOwner;
@@ -44,10 +45,13 @@ async function localToken(page) {
 async function api(page, pathname, init = {}) {
   const token = await localToken(page);
   return page.evaluate(
-    async ({ pathname: path, init: requestInit, token: localTokenValue, workspaceId }) => {
+    async ({ pathname: path, init: requestInit, token: localTokenValue, workspaceId, gatewayId }) => {
       const headers = new Headers(requestInit.headers ?? {});
       headers.set("X-Local-Token", localTokenValue);
-      if (path.startsWith("/api/v1/")) headers.set("X-BoxTeam-Workspace-Id", workspaceId);
+      if (path.startsWith("/api/v1/")) {
+        headers.set("X-BoxTeam-Workspace-Id", workspaceId);
+        headers.set("X-BoxTeam-Target-Gateway-Id", gatewayId);
+      }
       const response = await fetch(path, {
         ...requestInit,
         headers,
@@ -57,7 +61,7 @@ async function api(page, pathname, init = {}) {
       if (!response.ok) throw new Error(`API ${response.status}: ${body}`);
       return body ? JSON.parse(body) : null;
     },
-    { pathname, init, token, workspaceId: expectedWorkspaceId },
+    { pathname, init, token, workspaceId: expectedWorkspaceId, gatewayId: expectedGatewayId },
   );
 }
 
@@ -304,7 +308,8 @@ try {
 
   await ensureGuest(page);
   const workspaces = await api(page, "/api/gateway/workspaces");
-  assert.equal(workspaces?.data?.active_workspace_id, expectedWorkspaceId, "active workspace 不一致");
+  assert.deepEqual(workspaces?.data?.active_workspace,
+    { gateway_id: expectedGatewayId, workspace_id: expectedWorkspaceId }, "active workspace 不一致");
 
   result.sessionId = await createSessionThroughGateway(page, expectedWorkspaceId);
   const workspaceHeaders = {

@@ -40,15 +40,18 @@ try {
     return { status: response.status, body: await response.text() };
   });
   assert.equal(guest.status, 200, guest.body);
-  const thread = page.locator(`section.boxteam-thread[data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
   const metadata = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/workspace");
   await page.goto(target.href, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
-  await page.locator(`button[data-session-id="${fixture.sessionId}"]`).dblclick();
+  await page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)
+    .locator("..").locator(`button[data-session-id="${fixture.sessionId}"]`).dblclick();
   await expect(thread).toBeVisible();
   const response = await metadata;
   assert.equal(response.status(), 200, await response.text());
-  assert.equal(response.headers()["x-request-id"], (await response.json()).request_id);
+  const initialized = await response.json();
+  assert.equal(response.headers()["x-request-id"], initialized.request_id);
+  assert.equal(initialized.data.workspace_id, fixture.workspaceId);
   await thread.locator(`.chat-stream-virtual-shell[data-owner-session-id="${fixture.sessionId}"]`).waitFor({ state: "visible" });
   const card = thread.locator(".message-attachment").filter({ hasText: fixture.attachment.name });
   await card.getByRole("button", { name: `在右侧打开附件：${fixture.attachment.name}`, exact: true }).click();
@@ -82,7 +85,9 @@ try {
   assert.equal(saved.status(), 200, await saved.text());
   assert.equal((await saved.json()).data.path, fixture.directoryUri + "/derived/result.txt");
   result.saved = true;
-  assert.equal((await saved.request().allHeaders())["x-boxteam-workspace-id"], fixture.workspaceId);
+  const savedHeaders = await saved.request().allHeaders();
+  assert.equal(savedHeaders["x-boxteam-workspace-id"], fixture.workspaceId);
+  assert.equal(savedHeaders["x-boxteam-target-gateway-id"], fixture.gatewayId);
   await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   const restoredRead = page.waitForResponse((response) => {
     const url = new URL(response.url());

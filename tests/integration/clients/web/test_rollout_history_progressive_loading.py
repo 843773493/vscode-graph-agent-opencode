@@ -434,8 +434,10 @@ async def test_rollout_history_around_loading_real_web_chain(
             assert guest.status_code == 200, guest.text
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            workspace_id = workspaces.json()["data"]["active_workspace_id"]
-            assert isinstance(workspace_id, str) and workspace_id
+            owner = workspaces.json()["data"]["active_workspace"]
+            workspace_id = owner["workspace_id"]
+            gateway_id = owner["gateway_id"]
+            assert workspace_id == read_workspace_id(browser_backend[1])
 
         environment = os.environ.copy()
         environment.update(
@@ -444,7 +446,7 @@ async def test_rollout_history_around_loading_real_web_chain(
                 "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
                 "BOXTEAM_BROWSER_SESSION_ID": session_id,
                 "BOXTEAM_BROWSER_OWNER": json.dumps({
-                    "workspaceId": read_workspace_id(browser_backend[1]),
+                    "workspaceId": workspace_id, "gatewayId": gateway_id,
                     "sessionId": session_id, "threadId": resolver.main_thread_id(session_id),
                 }),
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),

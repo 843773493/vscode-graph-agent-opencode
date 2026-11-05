@@ -12,6 +12,7 @@ const required = (name) => {
 };
 const baseUrl = required("BOXTEAM_BROWSER_BASE_URL");
 const workspaceId = required("BOXTEAM_BROWSER_WORKSPACE_ID");
+const gatewayId = required("BOXTEAM_BROWSER_GATEWAY_ID");
 const artifacts = required("BOXTEAM_BROWSER_ARTIFACT_ROOT");
 const result = { phase, started_at: new Date().toISOString(), checks: [], page_errors: [], console_errors: [], failed_requests: [], http_errors: [], deleted_sessions: [] };
 const pendingResponses = new Set();
@@ -34,7 +35,6 @@ const page = await context.newPage();
 page.setDefaultTimeout(30000);
 let activeOwner;
 let activeThread;
-let backendWorkspaceId;
 
 function recordHttpError(response) {
   if (response.status() < 400) return;
@@ -42,7 +42,7 @@ function recordHttpError(response) {
   const record = {
     phase, step, method: request.method(), path: new URL(response.url()).pathname,
     query: new URL(response.url()).search, status: response.status(),
-    gateway_workspace_id: workspaceId, backend_workspace_id: backendWorkspaceId,
+    gateway_id: gatewayId, workspace_id: workspaceId,
     active_owner: activeOwner ? { ...activeOwner } : null,
     request_id: response.headers()["x-request-id"],
   };
@@ -55,6 +55,7 @@ function recordHttpError(response) {
   const capture = (async () => {
     const headers = await request.allHeaders();
     record.request_workspace_id = headers["x-boxteam-workspace-id"] ?? null;
+    record.request_gateway_id = headers["x-boxteam-target-gateway-id"] ?? null;
     record.request_body = request.postData();
     record.body = await response.text();
   })().catch((error) => { record.collection_error = error.stack || String(error); });
@@ -64,19 +65,19 @@ function recordHttpError(response) {
 context.on("response", recordHttpError);
 
 async function api(path, method = "GET", body, expectedStatus = 200) {
-  const reply = await page.evaluate(async ({ path, method, body, workspaceId }) => {
+  const reply = await page.evaluate(async ({ path, method, body, workspaceId, gatewayId }) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     if (!credential.ok) throw new Error(`凭据读取失败 ${credential.status}`);
     const token = (await credential.json()).data.token;
     const response = await fetch(path, {
       method, credentials: "include",
-      headers: { "X-Local-Token": token, "X-BoxTeam-Workspace-Id": workspaceId,
+      headers: { "X-Local-Token": token, "X-BoxTeam-Workspace-Id": workspaceId, "X-BoxTeam-Target-Gateway-Id": gatewayId,
         ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     return { status: response.status, request_id: response.headers.get("X-Request-ID"),
       body: await response.json() };
-  }, { path, method, body, workspaceId });
+  }, { path, method, body, workspaceId, gatewayId });
   assert.equal(reply.status, expectedStatus, `${path}: ${JSON.stringify(reply.body)}`);
   assert.equal(reply.body.request_id, reply.request_id, `${path}: request_id 不一致`);
   return reply.body.data;
@@ -94,7 +95,7 @@ async function selectSession(sessionId) {
   activeOwner = { session_id: sessionId, thread_id: main.thread_id };
   await page.getByRole("button", { name: "刷新资源树", exact: true }).click();
   await page.locator(`button[data-session-id="${sessionId}"]`).dblclick();
-  activeThread = page.locator(`section.boxteam-thread[data-workspace-id="${backendWorkspaceId}"][data-session-id="${sessionId}"][data-thread-id="${main.thread_id}"]`);
+  activeThread = page.locator(`section.boxteam-thread[data-workspace-id="${workspaceId}"][data-session-id="${sessionId}"][data-thread-id="${main.thread_id}"]`);
   await activeThread.locator("#input").waitFor({ state: "visible" });
 }
 async function createSession(title) {
@@ -237,6 +238,7 @@ async function auditHttpErrors() {
     if (conflict) {
       assert.match(body.detail, /版本冲突/);
       assert.equal(error.request_workspace_id, workspaceId);
+      assert.equal(error.request_gateway_id, gatewayId);
       assert.equal(JSON.parse(error.request_body).expected_revision,
         result.conflict_concurrent_owner_change.before_revision);
       assert.deepEqual(error.active_owner, result.conflict_concurrent_owner_change.thread);
@@ -265,9 +267,10 @@ try {
     await api("/api/gateway/users/guest", "POST", { tracking: { source: "persistent-resource-web-e2e" } });
     await page.reload({ waitUntil: "domcontentloaded" });
   } else assert.equal(authProbe.status, 200);
-  await api("/api/gateway/health");
-  assert.equal((await api("/api/gateway/workspaces")).active_workspace_id, workspaceId);
-  backendWorkspaceId = (await api("/api/v1/workspace")).workspace_id;
+  assert.equal((await api("/api/gateway/health")).gateway_id, gatewayId);
+  assert.deepEqual((await api("/api/gateway/workspaces")).active_workspace,
+    { gateway_id: gatewayId, workspace_id: workspaceId });
+  assert.equal((await api("/api/v1/workspace")).workspace_id, workspaceId);
   if (phase === "before-unload") {
     const source = await createSession("持久资源真实卸载验收");
     await planChatCalls(source.session_id, source.thread_id, [{ label: "resource-ready", text: "就绪" }]);
@@ -409,6 +412,7 @@ try {
     ]);
     assert.equal(workspaceCreated.status(), 200, await workspaceCreated.text());
     assert.equal(workspaceCreated.request().headers()["x-boxteam-workspace-id"], workspaceId);
+    assert.equal(workspaceCreated.request().headers()["x-boxteam-target-gateway-id"], gatewayId);
     const request = workspaceCreated.request().postDataJSON();
     assert.deepEqual({ session_id: request.session_id, thread_id: request.thread_id }, other);
     const createdBody = await workspaceCreated.json();

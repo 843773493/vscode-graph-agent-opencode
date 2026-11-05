@@ -199,14 +199,16 @@ async def test_child_thread_panel_delegate_flow_through_real_web_surface(
             await acquire_gateway_guest(client)
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            workspace_id = workspaces.json()["data"]["active_workspace_id"]
-            assert isinstance(workspace_id, str) and workspace_id
+            owner = workspaces.json()["data"]["active_workspace"]
+            workspace_id = owner["workspace_id"]
+            gateway_id = owner["gateway_id"]
 
         environment = os.environ.copy()
         environment.update(
             {
                 "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                 "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
+                "BOXTEAM_BROWSER_GATEWAY_ID": gateway_id,
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
                 "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,

@@ -207,13 +207,16 @@ async def browser_source(browser_runtime, browser_model_replay, inspection_resou
         assert guest.status_code == 200, guest.text
         workspace_response = await client.get("/api/gateway/workspaces")
         assert workspace_response.status_code == 200, workspace_response.text
-        workspace_id = workspace_response.json()["data"]["active_workspace_id"]
-        headers = {"X-BoxTeam-Workspace-Id": workspace_id}
+        owner = workspace_response.json()["data"]["active_workspace"]
+        workspace_id = owner["workspace_id"]
+        headers = {"X-BoxTeam-Workspace-Id": workspace_id,
+                   "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"]}
         created = await client.post(
             "/api/v1/sessions", headers=headers, json={"title": "冻结上下文浏览器合同"}
         )
         assert created.status_code == 200, created.text
         session = created.json()["data"]
+        assert session["workspace_id"] == workspace_id
         session_id = session["session_id"]
         other = await client.post(
             "/api/v1/sessions", headers=headers, json={"title": "空会话隔离对照"}
@@ -420,7 +423,7 @@ async def browser_source(browser_runtime, browser_model_replay, inspection_resou
             key: other_session[key] for key in ("resource_identity", "uri", "scope")
         },
         "workspace_id": workspace_id,
-        "workspace_business_id": session["workspace_id"],
+        "gateway_id": owner["gateway_id"],
         "thread_id": thread_id,
         "other_thread_id": other_session["thread_id"],
         "session_id": session_id,

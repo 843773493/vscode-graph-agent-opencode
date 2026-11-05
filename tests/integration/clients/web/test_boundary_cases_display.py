@@ -172,14 +172,18 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
             assert guest.status_code == 200, guest.text
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            workspace_id = workspaces.json()["data"]["active_workspace_id"]
-            assert isinstance(workspace_id, str) and workspace_id
+            owner = workspaces.json()["data"]["active_workspace"]
+            assert owner["workspace_id"] == read_workspace_id(browser_backend[1])
+            health = await client.get("/api/gateway/health")
+            assert health.status_code == 200, health.text
+            assert owner["gateway_id"] == health.json()["data"]["gateway_id"]
 
         environment = os.environ.copy()
         environment.update(
             {
                 "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
-                "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
+                "BOXTEAM_BROWSER_WORKSPACE_ID": owner["workspace_id"],
+                "BOXTEAM_BROWSER_GATEWAY_ID": owner["gateway_id"],
                 "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
                 "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(screenshot_path),
                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium_path,

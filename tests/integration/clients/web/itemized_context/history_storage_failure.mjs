@@ -39,7 +39,7 @@ async function api(path, data) {
   const sent = randomUUID();
   const response = await page.request.fetch(new URL(path, baseUrl).href, {
     method: data === undefined ? "GET" : "POST", timeout: 30_000,
-    headers: { "X-Local-Token": token, "X-BoxTeam-Workspace-Id": owner.routeId, "X-Request-ID": sent },
+    headers: { "X-Local-Token": token, "X-BoxTeam-Target-Gateway-Id": owner.gatewayId, "X-BoxTeam-Workspace-Id": owner.workspaceId, "X-Request-ID": sent },
     ...(data === undefined ? {} : { data }),
   });
   try {
@@ -68,7 +68,7 @@ async function send(thread, prompt, reply, planned) {
     thread_id: owner.threadId, interactions: planned }));
   const accepted = page.waitForResponse(response => response.request().method() === "POST"
     && new URL(response.url()).pathname === `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`
-    && response.request().headers()["x-boxteam-workspace-id"] === owner.routeId);
+    && response.request().headers()["x-boxteam-workspace-id"] === owner.workspaceId);
   await thread.locator(webSelectors.composer).fill(prompt);
   await thread.locator(webSelectors.sendButton).click();
   const response = await accepted;
@@ -119,7 +119,7 @@ try {
   resources.addCleanup("历史故障 Chromium", () => browser.close());
   const firstContext = await newPage(browser);
   const registry = await api("/api/gateway/workspaces");
-  assert.equal(registry.active_workspace_id, owner.routeId);
+  assert.deepEqual(registry.active_workspace, { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId });
   await api("/api/gateway/health");
   assert.equal((await api("/api/v1/workspace")).workspace_id, owner.workspaceId);
   const thread = await selectThread(page, owner, 0);
@@ -146,7 +146,7 @@ try {
     const url = new URL(response.url());
     return url.pathname === `/api/v1/sessions/${owner.sessionId}/bootstrap`
       && url.searchParams.get("thread_id") === owner.threadId
-      && response.request().headers()["x-boxteam-workspace-id"] === owner.routeId;
+      && response.request().headers()["x-boxteam-workspace-id"] === owner.workspaceId;
   };
   const failedResponse = page.waitForResponse(isBootstrap);
   const failedThread = await selectThread(page, owner, 0);

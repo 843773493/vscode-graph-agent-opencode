@@ -69,6 +69,7 @@ function requiredEnvironment(name) {
 
 const baseUrl = requiredEnvironment("BOXTEAM_BROWSER_BASE_URL");
 const workspaceId = requiredEnvironment("BOXTEAM_BROWSER_WORKSPACE_ID");
+const gatewayId = requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");
 const resultPath = requiredEnvironment("BOXTEAM_BROWSER_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
@@ -86,9 +87,11 @@ async function localToken(page) {
 async function api(page, pathname, init = {}) {
   const token = await localToken(page);
   return page.evaluate(
-    async ({ pathname: path, init: requestInit, token: localTokenValue }) => {
+    async ({ pathname: path, init: requestInit, token: localTokenValue, gatewayId, workspaceId }) => {
       const headers = new Headers(requestInit.headers ?? {});
       headers.set("X-Local-Token", localTokenValue);
+      headers.set("X-BoxTeam-Target-Gateway-Id", gatewayId);
+      headers.set("X-BoxTeam-Workspace-Id", workspaceId);
       const response = await fetch(path, {
         ...requestInit,
         headers,
@@ -98,7 +101,7 @@ async function api(page, pathname, init = {}) {
       if (!response.ok) throw new Error(`API ${response.status}: ${body}`);
       return body ? JSON.parse(body) : null;
     },
-    { pathname, init, token },
+    { pathname, init, token, gatewayId, workspaceId },
   );
 }
 
@@ -138,7 +141,6 @@ async function loadBoundaryCase(page, item) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-BoxTeam-Workspace-Id": workspaceId,
       },
       body: JSON.stringify({
         turn_ids: [item.turnId],
@@ -151,17 +153,16 @@ async function loadBoundaryCase(page, item) {
     throw new Error(`${item.name} 历史状态错误: ${JSON.stringify(historyItem)}`);
   }
 
-  const sessionList = await api(page, "/api/v1/sessions?limit=100", {
-    headers: { "X-BoxTeam-Workspace-Id": workspaceId },
-  });
+  const sessionList = await api(page, "/api/v1/sessions?limit=100");
   if (!sessionList.data.items.some((candidate) => candidate.session_id === item.sessionId)) {
     throw new Error(`${item.name} 会话未进入列表: ${item.sessionId}`);
   }
 
   // 会话目录同步完成后再刷新，避免把初始目录竞态误判为展示问题。
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator(`button[data-session-id="${item.sessionId}"]`).dblclick();
-  const thread = page.locator(`section.boxteam-thread[data-session-id="${item.sessionId}"]`);
+  await page.getByTestId(`workspace-node-${JSON.stringify([gatewayId, workspaceId])}`)
+    .locator("..").locator(`button[data-session-id="${item.sessionId}"]`).dblclick();
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${workspaceId}"][data-session-id="${item.sessionId}"]`);
   await expect(thread).toBeVisible();
   const turn = thread.locator(`.chat-turn[data-turn-id="${item.turnId}"]`);
   await turn.waitFor({ state: "visible", timeout: 30_000 });
