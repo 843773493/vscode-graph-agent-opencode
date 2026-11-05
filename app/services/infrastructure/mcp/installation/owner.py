@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 from app.core.identifier import create_uuid_hex
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.mcp_candidates import McpCandidateConflict
 from app.schemas.internal_v2.mcp import (
@@ -79,29 +80,28 @@ class McpInstallationOwner:
             nonlocal operation
             operation = operation.model_copy(update={"stage": cast(str, stage), "updated_at": time.time(),
                 "log": (operation.log + output)[-65536:]})
-            await asyncio.to_thread(self._store.update, operation)
+            operation = await run_sync_shielded(self._store.update, operation)
 
         try:
             command, lock_digest, distributions = await prepare_python_artifact(root,
                 name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress)
             await progress("publish")
-            digest = await asyncio.to_thread(artifact_digest, root)
+            digest = await run_sync_shielded(artifact_digest, root)
             artifact = McpInstalledArtifactDTO(
                 binding=McpManagedLaunchDTO(backend_id=self.backend_id, installation_id=installation_id,
                     generation=generation, artifact_digest=digest),
                 source=plan.source, manifest_digest=plan.manifest_digest, variant=plan.variant, platform=plan.platform,
                 identifier=name, version=version, entrypoint=request.entrypoint, command=command,
                 lock_digest=lock_digest, installed_distributions=distributions)
-            await asyncio.to_thread(self._store.publish, operation, artifact)
+            await run_sync_shielded(self._store.publish, operation, artifact)
         except BaseException as error:
-            current = await asyncio.to_thread(self._store.operation, operation.operation_id)
-            if current.status == "succeeded":
-                # 数据库已提交后取消观察者，不能把真实发布改写成回滚或中断。
-                return
             # 未发布目录保留给原操作核实，绝不返回可启动 binding，也不删除已发布旧版。
             operation = operation.model_copy(update={"status": "interrupted" if isinstance(error, asyncio.CancelledError) else "failed",
                 "updated_at": time.time(), "error": str(error) or type(error).__name__})
-            await asyncio.to_thread(self._store.update, operation)
+            try:
+                await run_sync_shielded(self._store.update, operation)
+            except BaseException as settlement_error:
+                raise error from settlement_error
             if isinstance(error, asyncio.CancelledError):
                 raise
 

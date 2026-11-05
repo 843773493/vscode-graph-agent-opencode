@@ -85,19 +85,36 @@ class InstallationStore:
         connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (interrupted.model_dump_json(), operation.operation_id))
         return interrupted
 
-    def update(self, operation: McpInstallationOperationDTO) -> None:
+    def _current(self, connection: sqlite3.Connection, operation: McpInstallationOperationDTO) -> McpInstallationOperationDTO:
+        row = connection.execute("SELECT payload FROM operations WHERE operation_id=?", (operation.operation_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("MCP 安装操作在写入阶段消失")
+        current = McpInstallationOperationDTO.model_validate_json(row[0])
+        if current.intent_digest != operation.intent_digest:
+            raise McpCandidateConflict("MCP 安装写入与原操作意图不一致")
+        return current
+
+    def update(self, operation: McpInstallationOperationDTO) -> McpInstallationOperationDTO:
+        if operation.status == "succeeded" or operation.artifact is not None:
+            raise ValueError("MCP 安装成功只能随制品发布提交")
         with self._connect() as connection:
-            result = connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (operation.model_dump_json(), operation.operation_id))
-            if result.rowcount != 1:
-                raise RuntimeError("MCP 安装操作在写入阶段消失")
+            connection.execute("BEGIN IMMEDIATE")
+            current = self._current(connection, operation)
+            # 迟到进度、取消或失败只能观察原终态，不能撤回已提交的真实结果。
+            if current.status != "running":
+                return current
+            connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (operation.model_dump_json(), operation.operation_id))
+            return operation
 
     def publish(self, operation: McpInstallationOperationDTO, artifact: McpInstalledArtifactDTO) -> None:
-        complete = operation.model_copy(update={"status": "succeeded", "stage": "complete", "updated_at": time.time(), "artifact": artifact})
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = self._current(connection, operation)
+            if current.status != "running":
+                raise McpCandidateConflict(f"MCP 安装操作已结算为 {current.status}，不能迟到发布制品")
+            complete = current.model_copy(update={"status": "succeeded", "stage": "complete", "updated_at": time.time(), "artifact": artifact})
             connection.execute("INSERT INTO artifacts VALUES (?, ?)", (artifact.binding.installation_id, artifact.model_dump_json()))
-            result = connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (complete.model_dump_json(), operation.operation_id))
-            if result.rowcount != 1:
-                raise RuntimeError("MCP 制品发布缺少原安装操作")
+            connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (complete.model_dump_json(), operation.operation_id))
 
     def artifacts(self) -> list[McpInstalledArtifactDTO]:
         with self._connect() as connection:

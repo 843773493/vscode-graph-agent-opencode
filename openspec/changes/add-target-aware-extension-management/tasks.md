@@ -21,6 +21,7 @@
   - 2026-11-05 候选后端切片：原 McpCatalogOwner 扩展三个无副作用 API，读取完整 v0.1／显式 v0 原件，确切选择与消费前重验使用唯一 JCS 摘要；新 secret input 在私有引用能力完成前明确拒绝，原显式 env／headers 沿原 parser 并脱敏展示。候选／API／原生权限短批 102 passed，旧 MCP／配置／代理及最终 API 回归 350 passed，公开 HTTP 合同 57 passed，各批有重叠不相加。真实双 Gateway／双 Backend socket 1 passed／50.08 秒，覆盖同 workspace UUID 不同 Backend、两种 mount、原生默认拒绝／精确主体／撤权和无权限零 Backend；仅 SSH 执行与隧道复用受控本机替身。另实际 localhost registry→HTTPX→owner→API 1 passed／3.39 秒，原件变化后旧计划 409。完整协议生成及一致性、Buf lint／build／完整 HEAD breaking、OpenAPI 导出、Web 构建与 OpenSpec strict 通过；Web tsc 的 28 条诊断与完整基线相同，无新增。准确命令、源码指纹、原始输出、静态基线对照及未验证边界见 `out/tests/temp/mcp_candidate_plan_20261105/artifacts/final-evidence.json`。未启用安装 UI、制品发布、配置保存或秘密引用；集成复核确认本项完成，1.4 保持未勾选。
 - [ ] 2.3 在目标侧建立唯一安装记录与真实制品发布链，复用生态工具／隔离环境、锁定依赖及不可变镜像 digest；核 launch 实际使用发布路径／generation，不能把原版动态 npx／uvx 配置视为安装。缺 runtime／安装能力明确失败，保留既有显式动态命令，不自动全局安装系统环境。
 - [ ] 2.4 实现有界进度、日志、意图指纹／幂等操作、取消及中断查询，暂存验证后发布；核同键异参数冲突、断流／重启不重放未知脚本，安装、配置与 ready 分阶段报告。
+  - PyPI 原操作终态／取消结算／进程退出查询已完成定向切片，见2026-11-05证据；尚无用户取消入口及其它生态验收，整项保持未完成。
 - [ ] 2.5 实现同安装域精确版本复用、工作区引用、更新失败保留旧版及物理卸载检查；制品引用绑定原 connection generation，沿原退休／监督释放；验证 A1/A2、并发同意图、旧调用／cleanup_failed／结果未知保留和有引用拒绝卸载。
 
 ## 3. MCP 与现有 Agent 唯一链路
@@ -101,3 +102,10 @@
   - 2026-11-04 Gateway 来源编辑切片：30 个不同来源单元参数实例有逐项通过记录，非一次整组全绿；SQL 升级／冷重开 21 项、HTTP／descriptor／Node 与 Web 协议消费者 51 项、原 loader／迁移／pending／hot／restart／补偿 12 项通过。真实来源进程的两项分别通过，restart 单例 55.37 秒，不重复计算前轮已通过实例。Buf 格式、breaking 与生成一致性及完整 Workbench 构建通过；Web tsc 与完整旧版本均为相同 28 条诊断，生产 Pyright 与完整 dc660 归档均为相同 25 条诊断，新增测试及独立网络测试 Pyright 零诊断，Ruff 无新增。原状态文件 current／dc660 基线均为 43 passed／16 failed，失败实例及异常原文一致，保留既有失败。发行 SQL 单例已迁齐 Gateway 20／Workspace 24 并通过，覆盖重开及缺 SQL 资产明确失败。各批可能重叠，不相加；准确命令、逐文件指纹、旧失败对照及原始输出见 `out/tests/temp/gateway_config_source_edit_20261104/artifacts/gateway-source-final-evidence-20261104.json`，独立网络证据见 7.6。最终仅清除 SQL owner 文件末尾空行，AST 不变并复用行为证据；该后端边界不代表设置界面、真实 SSH、Windows 或全部扩展功能验收。
   - 2026-11-04 来源 Relay：50 项集成、61 项 HTTP 合同、5 项 sender／退役回归及 2 项直接调用回归分别通过，各批可能重叠，不相加。完整 HEAD 静态对照 Ruff 10→10、Pyright 125→121，直接调用方 Pyright 47→47，无新增诊断；独立网络测试 Ruff／Pyright 均为零。扩大单元首批的旧 removal 装具缺 gateway_id，在 DTO 解析时失败，未扩修；新增三项关闭顺序断言迁齐原 terminate→close 后已由最终集成覆盖。未改 proto／TS 正文，复用同依赖的前批生成及构建证据。准确命令、退出码、日志、45 项 stable02 指纹与 owned SHA 见 `out/tests/temp/gateway_config_source_relay_20261104/artifacts/gateway-source-relay-final-evidence-20261104.json`；真实网络原件见同目录 `network-socket-1793818654614861011.json`。
 - [ ] 9.6 保留准确命令、源码指纹、原始输出、退出码、未验证阶段及真实兼容矩阵，按正式／临时目录规范落盘；交付前检查无双轨、静默失败、越权、无关改动和虚假完成，再按实际证据勾选。
+
+### 2026-11-05：2.4 PyPI 操作终态与中断查询
+
+- 原 SQLite 安装账本在同一写事务内读取原意图与状态；迟到进度／取消／失败只能观察既有终态，发布只能从 running 同事务提交制品和 succeeded。复用原 run_sync_shielded 等待进度／摘要／发布 worker 结算，删除失败前先读状态的竞态分支，不新增账本或 schema。
+- 定向19 passed／0.87秒，真实 Gateway→Backend→uv 恢复1 passed／56.98秒，均有外部超时与4GiB保护；四份owned Python的Ruff、Pyright零诊断。覆盖发布中取消后保留成功、进度中取消后中断、迟到发布拒绝、原错误及写失败原因保留；真实入口验证4个同键并发唯一操作、成功重试、异入口409、阻塞实际wheel下载后原PID退出、正式runtime/start恢复、原操作interrupted且不重放、旧制品保留及工作区配置不变。
+- 准确命令、源码／日志SHA、原始输出、实际退出码及owned patch见 `out/tests/temp/extension_next_20261105/artifacts/final-evidence.json`；产品原件为 `out/tests/integration/gateway/test_mcp_installation_recovery/runs/run-4f18389ed259/nodes/node-c9d6543a3801/artifacts/`。首轮误用要求存活drain端点的restart-force，改用既有死亡owner的runtime/start后通过；失败原件保留，未修改Gateway行为。
+- 仅完成既有PyPI链的终态与恢复子项；未新增用户取消API、npm／OCI／NuGet、版本复用、引用或物理卸载，不将2.4整项及其它生态记为完成。没有公开协议或前端变更，不重复运行无依赖变化的Workbench构建。
