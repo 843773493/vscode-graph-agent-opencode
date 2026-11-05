@@ -1,4 +1,8 @@
+2026-11-04 收口边界：本轮只完成已授权的通用上下文／存储、精确 Thread 执行、来源激活、fork 和恢复。团队、成员、委派与跨 Session 协作通信的待定设计及专项验收单独保留 TODO，不是本轮完成或归档的前置，也不能记为已实现。既有协作实现不在本次规划修订中删除或改行为。当前任务正文是本轮 checklist；历史收据中的旧总门、旧缺口和旧进度只作历史，不重新打开已经闭合的链路。真实入口、身份／顺序／hash、授权、事务及恢复断言保持；按本轮场景建立证据映射，可复用源码依赖未变的原件，不强制重跑含延期场景的完整 default 或为每次小改重复独审／变异。
+
 ## Context
+
+实施与测试提示：普通bootstrap／历史小页读取同时受[交互总延迟预算](../enforce-interactive-latency-budgets/design.md)约束，既有100–200ms reader合同不放宽。全量integrity/hash检查须归初始化／迁移／恢复／明确变化的原owner边界；回执复用计数或局部microbenchmark不能代替经Gateway的完整延迟，不为每次暖读叠加防御性全量扫描。
 
 当前 `app/core/rollout_storage.py` 以完整 LangChain message 作为 `rollout.jsonl` 的不可变记录，并在 SQLite 中维护 `messages`、tool call 和 reasoning 的投影。当前消息流协议已经有 block 生命周期和增量事件，但它是实时展示/恢复通道，不等同于 rollout 的 canonical history。现有 middleware 还会直接对 `ModelRequest` 的 messages、system message 和 tools 做请求级修改，缺少统一的来源、版本和 assembly provenance。
 
@@ -1005,7 +1009,7 @@ workspace catalog批量`deleting`提交是新副作用准入的线性化关闭�
 
 同工作区 fork 保留目录身份并建立目标关联，跨工作区从已冻结 manifest 导入独立目录；网络使用原 files/chunk，writer 未结束不释放 holder或原 claim。历史来源 URI、v2 snapshot、canonical bytes、item/Turn identity和请求 hash 原样保留，旧 URI 仅按迁入绑定与精确已提交 alias 解析，不读旧表或 live 来源补造历史。只有已支持的 schema 3 离线迁移可读取旧 blob/owner-ref；备份、停机核对、安装/撤销和原件保全由目录 owner 负责，正常线上只支持 schema 4。
 
-目录关联使用 tracker 实例与 generation，最后零关联后保留 30 天；queued 输入、pin、fork 和处理进程的原占用阻止 GC，重启不延长期限，旧代 detach 不删除新代关联。GC 先登记 deleting 再定点删除，失败继续原 locator。canonical 出现 URI不无限保活 live 目录；assembly/checkpoint 所需冻结正文由原 immutable asset owner 保留，目录修改/回收不改历史请求。
+目录关联使用 tracker 实例与 generation；最后关联实际解除且无有效占用时，原附件 owner 对照初始可重建基线，有修改保留目录，无修改且原件来源可靠则释放工作副本。queued 输入、pin、fork 与真实处理进程占用延后处理，旧代 detach 不移除新代关联。访问沿原 URI 重建；待处理及释放／重建中断复用原 catalog 恢复，不再使用统一 30 天到期或周期 GC。assembly/checkpoint 的冻结输入仍由原 immutable asset/version owner 保留，释放工作副本不改历史身份及 request_hash。
 
 为旧 Session 增加 lifecycle schema 仍须在 workspace/session maintenance gate 下显式排空已授权操作，依据权威 catalog 初始化 fence；已 deleting/tombstoned 沿原删除记录处理，无法证明状态或发现未知活动时明确拒绝并保全，不以默认 active 掩盖。旧非规范 Session/Thread ID 只在显式迁移分配新 ID并保留 lineage，不成为正常 runtime alias。
 
@@ -1319,3 +1323,192 @@ worker是上述四入口唯一文件副作用owner，按持久operation/有界st
 - 首个生产切换是否按新 session 默认、配置开关或显式迁移命令分阶段启用，延期到迁移 fixture、回滚演练和真实恢复证据完成后决定；该部署顺序不改变已冻结的 `rollout_format_version`/`format_version` 字段、legacy reader、v2 writer 不双写或 commit/replay 行为。
 
 启动恢复若遇仍由另一活进程持有的 Thread execution holder，必须在服务就绪前明确失败，并报告逻辑 Session/Thread/Job identity。当前本地 runtime 不支持热备接管；不得跳过活队首后继续服务，否则原进程退出后可能越过持久 FIFO 或让后继派发陷入冲突。旧进程停止后才能用原 admission/generation 再次启动恢复。
+
+## 延期跨 Session 协作设计参考（不属于本轮 delta）
+
+以下保留原通信要求供用户重新设计；本轮不新增实现或专项验收，不将其同步为已实现规范。main/child 通用执行、main-only Goal、资源／fork／恢复仍按本轮 checklist 交付。
+
+### Requirement: 跨 Session 协作必须只面向目标 main thread 且不共享协作状态
+
+系统 SHALL 接受裸`session_id`或会话上下文资源引用作为跨Session目标。**会话上下文资源引用的资源 URI语法、作用域/scope、网关授权段/gateway authority与解析 MUST 以 `migrate-session-context-resource-uri` change 为准；本 change MUST NOT 自行定义会话上下文 URI 形态，只引用该 change。** 会话上下文引用只是locator而非授权凭据。联邦部署 MUST支持中心Gateway hub通过SSH `-L`主动连接多个spoke，并在隧道内建立长期全双工WebSocket对等RPC channel；channel建立后hub与spoke均可主动发起request/response/event，无需反向SSH隧道或spoke直连。跨spoke路径最多为`B → A → C`，只允许一个hub transit且禁止继续多级转发。裸ID与未指定workspace的引用只能在该有界hub拓扑内唯一解析，workspace-qualified引用使用当前Gateway catalog identity，federated引用使用稳定`gateway_id + workspace_id`（按 `migrate-session-context-resource-uri` 的网关授权段表达）。持久`connection_id`只作本地连接配置身份，瞬时channel instance/epoch/seq/ack和route locator均不得进入引用、ResolvedSessionMainTarget、GlobalThreadAddress、outbox/inbox preimage或业务幂等key。target workspace MUST 从自己的权威catalog解析实际`main_thread_id`，hub MUST保留真实source gateway/Session/thread而不得伪装成业务source；零/多命中、未知gateway、未授权、不可达或main pointer无效时必须显式失败。
+
+send首次解析并提交source outbox后 MUST 将稳定`GlobalThreadAddress`作为immutable target。后续网络重试、source恢复、WebSocket/SSH重连或hub重启只能刷新指向该地址的临时route lease，不得重新用裸ID discovery选择另一个同名Session，也不得因connection/channel/route revision变化生成新communication/preimage；稳定target不可达时保持原target并返回可重试路由错误。read/wait snapshot、selector和response envelope同样只能绑定稳定地址。hub丢失瞬时relay correlation后由source以原operation/communication重试并由target dedupe恢复，不得要求hub持久化消息正文或成为communication业务owner。
+
+裸ID全拓扑解析 MUST 是有界exact-ID discovery：source查询自己的local workspace；spoke source通过唯一hub查询hub local workspace和其它active spoke，hub source直接查询自己的spoke。request必须携带完整visited gateway set、`max_transit_gateways=1`、`max_gateway_hops=2`和总deadline；hub可fan-out一次，spoke只查询本地且不得继续递归。workspace只做cold Session catalog lookup，不得加载thread runtime或扫描目录。只有在每个实际检查点按最新policy获准的候选可进入解析集；未授权存在与不存在必须统一为`target_not_resolvable`，多个已授权候选只返回不含locator的`target_ambiguous`和候选数并要求qualified引用。受认证、带catalog revision和短TTL的route hint只可优化路由；target workspace每次操作仍 MUST 重新验证Session与main pointer，hint不得成为业务事实、授权或第二份main catalog。
+
+远端裸ID discovery MUST 使用channel-bound origin envelope和独立hub transit discovery grant。spoke B发起时hub A从channel registration确认真实origin并拒绝冒充，按最新transit policy向每个target spoke C签发绑定issuer A、origin B及source thread、audience C、预期operation、canonical session ID、visited path、request/nonce/deadline的短期grant。C验证受信hub、path和replay，并按自己的最新policy只查询本地registered workspace cold catalog；不得执行业务operation、读取history、解析child或继续递归。受认证response只能返回零、一个已授权qualified route hint，或不含locator的ambiguity count。聚合唯一candidate后 MUST 再执行完整operation授权；grant、response和hint都不是模型可见能力。
+
+跨Gateway调用 MUST 使用channel-bound origin envelope和内部hub transit operation grant。spoke B发起时hub A从channel binding确认真实origin，按最新transit policy允许后向C签发绑定issuer A、origin B、transit path `[B,A,C]`、audience C、不可逆principal ref、单一operation、规范target、可选source全局thread地址、稳定operation invocation、request/nonce/expiry的grant。C不需要与B直接配对，但 MUST验证已登记hub A、grant完整性/audience/path/期限/replay，并按自己的最新policy授权“来自B、经A”的principal。C返回的受认证target response必须由A验证，再由A以绑定origin request、target response hash和path的relay envelope返回B；业务source始终为B。grant不得进入模型、URI、canonical item、outbox/inbox正文或普通日志；send receipt额外绑定communication/payload/acceptance。每个network attempt换request/nonce/grant但复用逻辑operation/communication，target dedupe为当前grant认证原acceptance而不重复注入。
+
+hub和target MUST 在任何lookup或workspace forward前，分别将收到的origin/transit envelope以`(issuer_gateway_id, origin_gateway_id, audience_gateway_id, grant_kind, nonce)`写入Gateway control-plane的持久原子first-use replay registry并绑定grant/request/path hash。同nonce不同preimage或重复first-use MUST拒绝；结果未知的网络重试使用新request/nonce/grant，send业务幂等仍复用原communication。record保留到expiry、clock skew和transport replay margin之后，Gateway重启不得清空有效窗口；registry、credential或key不可验证时 MUST fail closed且零workspace副作用。hub只能持久化peer/connection registry、policy/replay registry及脱敏audit，不得保存替代双端outbox/inbox的业务状态。
+
+Gateway federation权限的内置默认 MUST 对已认证、已登记在同一hub拓扑中的主体允许全部核心`discovery|send|read|wait|reply|transit`操作；限制规则为空且额外hardening默认关闭，用户不需要先配置allowlist。权限更新 MUST校验并原子发布带revision/hash的policy snapshot，无效候选明确失败且不部分生效，已有channel不得仅因policy变化重启。policy不得进入模型上下文、ToolSet、canonical item或sealed assembly；工具保持可见并在实际调用被拒时返回明确authorization错误。
+
+身份认证、channel identity binding、grant/response完整性、audience/path、防重放、target解析和业务幂等 MUST始终启用。每次discovery fan-out、hub transit、target admission、read分页、wait状态/terminal披露、send retry及hub relay response返回都 MUST读取对应Gateway的最新policy revision。远端wait grant覆盖`effective_timeout + bounded_clock_skew`；cursor/selector不承载权限。运行中撤权阻止尚未durable acceptance的send并停止后续read/wait披露，返回`authorization_revoked`；已durable acceptance的send不回滚。重新允许后下一次实际操作立即生效，不改写历史结果或上下文。
+
+跨Session当前只允许`send_message_to_session(target, content, kind="result", reply_to_communication_id?, delivery_policy="after_turn")`、`read_context(resource, ...)`和有界`wait_for_session(target, ...)`。send的`target`接受裸`session_id`或会话上下文资源引用，`content`必须非空，`kind`闭集为`question|reply|progress|result`，`delivery_policy`闭集为`after_turn|after_tool_result|after_interrupt`；输入 MUST NOT提供`communication_id`或`send_operation_id`，source outbox按软件持久化的稳定operation identity唯一分配communication，并返回resolved target、`communication_id`、durable delivery state、target acceptance ref和已知的`job_id/turn_id?`。模型可见schema还 MUST NOT提供`simulate_user`；只有受信外部UI/API ingress才能创建真实用户Turn。read的Session resource接受裸`session_id`或会话上下文资源引用；软件 MAY 把裸ID规范化为会话上下文资源引用，其 URI 形态与解析以 `migrate-session-context-resource-uri` 为准。
+
+`wait_for_session` MUST 接受至多一个`communication_id|job_id|turn_id`selector、`until=terminal|state_change`（默认terminal）和`timeout_seconds`（默认60、范围1–300秒）。有selector时只观察该对象，其中communication可在Job建立前从accepted等待到execution binding，不得因send→wait的排队窗口返回假idle；无selector时冻结准入时已有的active/runnable/pending identity集合，确实没有才返回idle，不订阅未来未知任务。结果状态闭集为`idle|pending|running|completed|failed|cancelled|timed_out`，timeout必须返回已观察identity/current state和可复用selector；未知selector返回`selector_not_found`而非idle。现有会持续订阅任意未来`AGENT_END`的`monitor_session_agent_end` MUST 被取代，不得与新wait并存为双语义。
+
+`WaitForSessionResult` MUST 返回resolved target、顶层status、`observed[{selector_kind, selector_id, state, revision}]`、准入baseline revision和最新target revision；显式selector只返回该对象及communication到job/turn的binding。无selector空集合返回`idle`；非空集合 MUST 按`failed > cancelled > running > pending > completed`聚合且不得依赖数组顺序。`until=terminal`等待全部冻结对象终态后返回`failed|cancelled|completed`；`until=state_change`在任一冻结对象revision变化后按相同优先级返回当时状态及完整observed列表。`timed_out`只表示预算耗尽，observed仍保存真实当前状态；调用方不得从顶层status推断未返回对象。
+
+wait MUST 由可注入的单调`Clock/DeadlineTimer`与目标状态订阅驱动，生产不得轮询数据库。测试 MAY 推进虚拟时间验证默认60秒和最大300秒，但 MUST NOT 缩短产品合同或改写communication、Job、Turn、residency及canonical时间戳。deadline与目标terminal/state-change并发时，系统 MUST 读取同一target owner的已提交revision：条件已满足则返回该状态，否则返回`timed_out`、该revision和可复用selector。
+
+可恢复wait MUST 在RemoteObservationRecord保存版本化`DurableDeadline{timeout_seconds, admitted_at_utc, deadline_at_utc, monotonic_origin_id, monotonic_deadline}`。相同host boot/clock origin中的进程重启必须继续原monotonic deadline；origin变化时只能用可信UTC估算且剩余值不得超过原deadline或原timeout。无法证明仍有正剩余、检测到时钟回拨/超界或clock不可用时返回原baseline的`timed_out`或`deadline-clock-unavailable`，不得重新授予完整timeout。fake clock MUST 同时提供稳定origin与UTC映射，且不能和residency clock串扰。
+
+`read_context` MUST 返回有界history/summary projection、revision/cursor和source refs，而非导入目标canonical item、Goal或CSM state。它作为模型工具时，返回projection只能由调用方thread的正常tool-call/result owner提交为一个带目标provenance的`tool_result` item，从而允许汇总Session生成周报；读取和等待不得修改或唤醒目标。send/read/wait结果 MUST 返回或审计实际解析的workspace、session和main thread身份，且重复投递必须遵守同一幂等目标。跨Session消息属于带source Session/thread和communication provenance的内部协作事件，不得伪造目标thread的真实用户Turn。
+
+首个分页read MUST 分配稳定`observation_id/read_series_id`并签发版本化AEAD保护、opaque且可自验证的不可变`ReadContextSnapshot`/cursor envelope；密文内冻结该identity、resolved `GlobalThreadAddress`、active history view revision、可见item/Turn上界、projection/visibility policy hash、总读取预算、offset及到期时间。模型或客户端不得读取或篡改内部字段，解密/认证失败统一返回不含内部细节的`read-snapshot-invalid`。token不得写ContextStore/canonical history，target只可写独立受限的访问/operation control记录。后续页是新的source tool/API调用与新的`operation_invocation_id`，但 MUST由cursor恢复同一observation/read series并继续同一snapshot，即使目标新增消息、rewind或切换view也不得切到最新；cursor/snapshot不是capability，每页重新授权并校验target、principal、policy、projection、limit和预算。同snapshot参数冲突返回`read-snapshot-mismatch`，超过有界retention、认证key rotation或所需view/detail不可恢复返回`read-snapshot-expired`或明确loss，不得静默重开。空页、终页和source refs都携带相同snapshot revision；token固定最大上界，重放旧cursor只能重读相同范围，不能绕过产品总读取预算。
+
+认证密钥轮换 MUST 仅由受现有本机管理授权保护的显式 Session 管理操作触发，普通进程重启 MUST 保留当前密钥代次和未到期游标。source 或 target Session 的轮换使该侧已签发的合法旧游标返回 `read-snapshot-expired`，不得静默建立新观察；篡改游标仍返回 `read-snapshot-invalid`。轮换 MUST 与该 Session 的读写及删除准入使用同一生命周期门，不改写既有 observation、snapshot、page、lease 或 canonical 记录；新无游标读取可以建立新观察并正常分页。密钥材料不得出现在管理响应或日志中。
+
+#### Scenario: 管理轮换明确终止旧游标而普通重启保留游标
+
+- **WHEN** 用户经现有本机管理授权对 source 或 target Session 显式轮换分页认证密钥
+- **THEN** 合法旧游标明确返回 `read-snapshot-expired`，篡改游标返回 `read-snapshot-invalid`，原观察记录保持不变，新无游标读取及后续分页可用；普通进程重启不触发轮换，未到期游标仍读取原 snapshot
+
+
+read/wait每个source tool/API调用 MUST 使用稳定`operation_invocation_id`：模型工具取source execution/tool invocation，受信UI/API取软件生成并持久提交的idempotency key；它是本次`source_call_id`，不得兼作跨多个分页调用的snapshot identity。source MUST由现有execution lease覆盖或先在source Session gate建立`federated_call` lease，再在网络前create-or-get `FederatedCallRecord`并冻结operation、稳定target、参数hash和page/selector语义；同identity不同preimage返回冲突。target MUST先在自己的Session gate验证active fence并建立`remote_observation` lease，才可在ContextStore/canonical history之外的Session-local有界operation store建立记录：read首调用以`(source_global_thread_address, first_source_call_id)`唯一create-or-get并分配`observation_id/read_series_id`，同call重试找回同一identity/snapshot；`RemoteObservationRecord`以observation identity保存冻结上界。后续页的新source call通过opaque cursor恢复该record，再以`(observation_id, page_ordinal)`唯一create-or-get绑定本次operation invocation与cursor hash的`RemoteObservationPageRecord`，且一个source call只能映射一个page、同ordinal不同preimage必须冲突。wait observation以`(source_global_thread_address, source_call_id)`唯一建立并冻结selector集合、baseline revision、effective deadline和subscription identity。grant/response同时绑定source call及适用的observation/page identity。source/target gate不得同时持有，网络attempt使用新grant但同一次source call MUST复用原operation identity。目标删除先行时不得创建snapshot/baseline/subscription；observation先行时删除把仍依赖node的调用收敛为明确target-deleted或原冻结结果并等待对应lease terminal。
+
+source在target冻结observation后、持久化response或canonical tool result前退出时，恢复同一tool/API operation invocation MUST取得相同read page或wait baseline/terminal envelope，每个source call最多提交一个tool result；read下一页使用新的source call ID但继续cursor绑定的同一observation/read series，不得新开当前view或重新冻结上界。timeout后继续wait使用原selector、新operation identity和新observation。operation retention MUST覆盖本地execution恢复与远端snapshot/deadline窗口；过期返回`operation-retry-expired`而不静默建立新baseline。Session逻辑删除前 MUST terminalize全部非终态observation lease；catalog成为不可复用ID tombstone后，隔离节点及其中只读operation replay记录必须保留到全部未过期observation/communication恢复窗口结束，只能由匹配source address、source call、observation/page preimage且通过新授权的定点恢复路径访问，普通Session/history/runtime resolver不得打开。窗口结束后才可物理清理，之后原调用返回`operation-retry-expired`。operation store不得保存team/task/Goal、写入目标context或唤醒target runtime。
+
+每次跨进程/服务器send MUST 使用两个本地持久事实而非伪造分布式事务：source thread node拥有`CommunicationOutboxRecord`，target main-thread node拥有`CommunicationInboxRecord`；Gateway只能逐跳授权、路由和保存Gateway级访问审计，不得成为communication业务状态owner或建立跨workspace共享数据库。两端记录都绑定source/target `GlobalThreadAddress=(gateway_id, workspace_id, session_id, thread_id)`、`communication_id`、immutable resolved target、payload hash、delivery policy和本端状态；outbox另绑定软件提供且模型不可见的`send_operation_id`并保存最新受认证target receipt，inbox保存target acceptance ref、ambient item/wakeup幂等键、`admission_id`、job/turn binding和terminal outcome。source outbox建立和target inbox acceptance MUST分别取得各自Session gate，并在各自`session-control.sqlite`建立覆盖本端communication的轻量`SessionOperationLease`；两个gate不得同时持有，网络与双端提交只组成可恢复saga。outbox只可`accepted → routing → target_accepted → execution_bound → terminal`，inbox只可`target_accepted → execution_bound → terminal`，任一侧可进入带原因的`failed|cancelled`；source只能用地址、communication、payload hash和acceptance ref匹配的受认证target receipt推进远端状态。
+
+每次逻辑send MUST 在任何route前取得稳定`send_operation_id`：模型工具调用绑定source `(session_id, thread_id, execution_id, tool_invocation_id)`，受信UI/API入口绑定软件生成并持久提交的idempotency key；该字段不得由模型传入。source MUST先在lifecycle gate内验证active generation并建立communication lease，再在该lease覆盖的本地ContextStore事务中以`(source_global_thread_address, send_operation_id)`create-or-get outbox和唯一`communication_id`，并冻结resolved target、payload hash、kind、reply correlation及delivery policy；同operation不同preimage返回冲突，lease/outbox中间崩溃按稳定identity定点继续或终结。outbox未提交时 MUST NOT发起本地或远程route，因此target acceptance后、source receipt持久化前崩溃时，恢复同一tool/API invocation只能找回原outbox和communication ID。
+
+source outbox和target inbox的dedupe scope都是`(source_global_thread_address, communication_id)`并各自在本地事务中强制；同key不同payload/target MUST返回冲突。target MUST先在自己的lifecycle gate内验证catalog/main pointer与active generation并建立target communication lease，再在该lease覆盖的同一ContextStore owner事务中提交inbox acceptance、唯一ambient item、wakeup idempotency和稳定`admission_id`；删除先关闭fence时不得建立lease/inbox，acceptance先行时删除必须发现并收敛该lease。JobService MUST 以`admission_id + admission preimage hash`create-or-get execution并由仍有效的target lease覆盖或重新准入，进程在Job创建后、inbox binding前退出时只能找回原Job/Turn并补写binding，不能在deleting generation晚到绑定。不得在event未提交时返回acceptance或在重启后创建重复Job。send只有收到target durable acceptance receipt后才返回成功；网络结果未知时返回可重试unknown outcome并要求复用原ID或原send operation。target在acceptance与execution binding之间重启后 MUST 从持久inbox/lease继续，wait通过target查询或受认证receipt沿同一communication恢复。系统不得引入跨workspace SQLite、两阶段提交或Gateway业务账本。
+
+communication retention MUST NOT以短TTL破坏幂等。pending/running记录及reply/wait/audit所需因果字段完整保留；terminal正文/detail可以按明确policy回收，但拥有者Session删除前 MUST 保留最小tombstone，包含双端地址、send operation/communication/acceptance/admission identity、payload/preimage hash、correlation、terminal state和receipt验证字段。Session删除 MUST 先把本地未终态outbox/inbox收敛为带`source_deleted|target_deleted`原因的failed/cancelled并提交catalog deletion tombstone；canonical Session ID不得复用，迟到route不得改投其它Session或main thread。
+
+target workspace MUST 由单一`InboxAdmissionWorker`恢复未绑定communication，而不得依赖read/wait触发。worker在acceptance提交事件和backend startup时从持久状态索引取得`target_accepted`且未`execution_bound`的inbox，以精确target main-thread address、wakeup idempotency key和`admission_id`取得或rehydrate owner并幂等create-or-get admission；成功时原子提交原job/turn binding，永久失败时提交failed outcome及受认证receipt。worker MUST NOT扫Session/thread目录、依赖内存future或建立第二ContextStore writer；并发worker必须以claim/lease或等价数据库约束保证单次有效admission。wait只观察已提交状态，不能因被调用才启动目标工作。
+
+#### Scenario: hub 主动连接仍允许 spoke 反向发起操作
+
+- **WHEN**中心Gateway A分别通过SSH `-L`和WebSocket建立到B、C的channel，B随后在A主动建立的channel上向C的qualified Session URI发起send/read/wait
+- **THEN**请求按`B → A → C`路由、响应按`C → A → B`返回，C看到的source仍是B的真实thread；系统不要求B到A反向SSH隧道、B与C直连或hub持久化消息正文
+
+#### Scenario: 默认权限直接开放核心联邦功能
+
+- **WHEN**A、B、C已经认证并登记在同一hub拓扑，且用户没有配置federation规则或启用额外hardening
+- **THEN**discovery、send、read、wait、reply和唯一hub transit默认允许，不能因为缺少allowlist而失败；身份、完整性、path、防重放和幂等校验仍然强制执行
+
+#### Scenario: 权限热更新只在操作边界生效
+
+- **WHEN**channel保持连接时管理员原子发布新policy revision，先撤销再恢复B经A访问C的read/wait权限
+- **THEN**撤权后的下一页、状态披露或新调用明确返回`authorization_revoked`且不产生目标副作用，恢复后的下一次调用立即允许；channel、ToolSet、canonical history和已提交wire prefix保持不变，已durable acceptance的send不回滚
+
+#### Scenario: backend startup 自动恢复未绑定 inbox
+
+- **WHEN**target在durable acceptance后、execution binding前退出，随后backend启动且source没有先调用wait/read
+- **THEN**InboxAdmissionWorker从状态索引恢复该记录并用原wakeup key只admit一次；wait稍后只观察既有binding/终态，不承担唤醒职责
+
+消息`kind`闭集 MUST 为`question|reply|progress|result`。`kind=reply`必须提供`reply_to_communication_id`，且target inbox必须证明被回复communication的source/target与本次方向相反；其它kind携带该字段必须被拒绝。reply correlation只能建立消息因果关系，不得成为跨Session共享task/team状态。
+
+跨Session transport或通信账本 MUST NOT保存或同步team/member/task/role/Goal；同Session协作只引用自己的child，另一个Session不能被attach为board成员。旧开发期跨Session team/member/task/coordinator与delegated Session数据按用户授权直接清理；生产只接受同Session child-thread协作和当前格式，不新增旧board迁移、物化或freeze/detach兼容入口。新格式创建、同事务发布、同版本重启和删除恢复仍须完整验证。
+
+公开fork的范围、历史身份/快照归属、URI目标、本地/跨端capture与publication、pinned及资源claim/settlement，以`add-itemized-rollout-context/specs/checkpoint-context-branching/spec.md`现行requirements为唯一owner；资源属性检查引用统一寻址owner，保固定revision、原历史事实、删除/GC恢复和两端不重叠gate，不复述逐项remap或同Workspace限制。
+
+#### Scenario: 实施 Session 通知 Git 管理 Session
+
+- **WHEN** 实施Session根据用户指令向Git管理Session的ID或link发送完成消息
+- **THEN** Gateway将消息路由到Git管理Session所在workspace，由目标workspace解析并投递其main thread；消息保留来源和幂等信息，但两个Session不建立共享team/task/Goal状态
+
+#### Scenario: Gateway 重连不改变已冻结目标
+
+- **WHEN**source outbox已冻结远端main地址，随后WebSocket channel epoch、SSH连接或remote route revision变化并重试原send operation
+- **THEN**Gateway只刷新指向同一gateway/workspace/session/thread的临时route lease，持久connection config ID、communication和preimage保持不变；若原稳定target不可达则显式失败，不重新用裸ID选择其它同名Session
+
+#### Scenario: 汇总 Session 跨工作区读取和等待
+
+- **WHEN** 报告汇总Session获得多个可达workspace或server上的Session link，并读取其main-thread结果或等待当前任务完成
+- **THEN** 每个操作独立解析目标main thread并返回带source ref的授权投影或被捕获execution的状态；返回值可作为汇总thread的单一tool result供模型生成报告，但目标canonical history/Goal/CSM state不被复制或改写，目标runtime不因read/wait被加载
+
+#### Scenario: 裸ID discovery 与 operation 授权分两阶段
+
+- **WHEN** 汇总Session只提供远端裸Session ID，source尚不知道目标workspace
+- **THEN**唯一hub先验证source channel/origin，再凭hub transit discovery grant让各target spoke只执行本地受限exact lookup并返回受认证候选结果；唯一target确定后才使用绑定完整target、origin和`B → A → C`路径的operation grant。discovery grant不能直接read/send/wait或继续递归，重复nonce在hub/target重启后仍被拒绝且无workspace副作用
+
+#### Scenario: read 分页期间目标继续变化
+
+- **WHEN**汇总Session读取第一页后，目标main新增Turn、rewind或切换active view，再使用原cursor读取后续页
+- **THEN**第二页使用新的source call/operation invocation，但opaque cursor恢复首请求的同一observation/read series；所有页面仍来自冻结的ReadContextSnapshot revision和上界，新变化不混入。权限撤销、参数篡改或snapshot过期分别显式失败，不以cursor绕过授权或静默切换到新snapshot
+
+#### Scenario: read 或 wait 回执前 source 退出
+
+- **WHEN** target已按source call与observation identity冻结read page或无selector wait baseline，而source在持久化远端response/tool result前退出并恢复同一invocation
+- **THEN** 新grant只恢复原RemoteObservationRecord/PageRecord及同一结果，该source call至多提交一个tool result；目标新增Turn/Job不得改变原snapshot或selector集合，record过期时明确失败而不重开
+
+#### Scenario: send 后立即 wait 不丢失排队任务
+
+- **WHEN** `send_message_to_session`返回communication回执后目标Job尚处于accepted/queued，调用方立即以该`communication_id`调用`wait_for_session`
+- **THEN** wait继续跟随该communication的delivery与execution binding并等待精确Job/Turn收敛，不返回idle、不改成订阅其它未来任务
+
+#### Scenario: wait 超时后可继续观察同一工作
+
+- **WHEN**`wait_for_session`在默认60秒或显式1–300秒预算内未达到请求的terminal/state-change条件
+- **THEN**返回`timed_out`及resolved target、观察identity、current state和原selector；后续调用复用该selector继续等待，不创建新通信或订阅无关Job
+
+#### Scenario: wait 期间进程或主机时钟域变化
+
+- **WHEN** wait observation已保存deadline后backend进程重启，或host boot/clock origin发生变化
+- **THEN** 相同origin继续原monotonic剩余预算；新origin只使用可信UTC且绝不延长原deadline，无法安全恢复时明确超时或返回`deadline-clock-unavailable`，不重新计算完整60/300秒
+
+#### Scenario: fake deadline timer 不篡改产品等待语义
+
+- **WHEN**验收通过注入的单调fake timer把默认等待推进到60秒或最大等待推进到300秒，同时目标状态可能在deadline边界提交
+- **THEN**系统不真实sleep、不缩短配置、不轮询数据库，并按target已提交revision裁决terminal/state-change或`timed_out`；虚拟时间不得改变其它业务时间戳或runtime residency
+
+#### Scenario: target acceptance 后重启不会重复投递
+
+- **WHEN**target已durable接受communication但尚未绑定execution时进程重启，source随后以同一ID重试send并wait
+- **THEN**target inbox只保留一次ambient event，恢复原target acceptance ref并最终补齐同一job/turn binding；不同payload或target复用该ID明确冲突
+
+#### Scenario: source 在 target acceptance 后丢失 receipt
+
+- **WHEN**target已提交acceptance，但source在验证并持久化receipt前退出，随后同一tool/API invocation被恢复
+- **THEN**source按原`send_operation_id`找回已提交outbox和communication ID，以新grant重查原acceptance；target只返回当前grant认证的原acceptance receipt，不创建第二个inbox、ambient item、Job或Turn
+
+#### Scenario: Job 已创建但 inbox binding 尚未提交
+
+- **WHEN**target进程在JobService已create-or-get execution之后、inbox写入job/turn binding之前退出
+- **THEN**InboxAdmissionWorker按原`admission_id`恢复同一Job/Turn并补写binding，不创建第二个execution
+
+#### Scenario: terminal communication 回收后仍保持幂等
+
+- **WHEN**terminal communication正文已按retention回收，但拥有者Session仍存在，随后收到相同ID的迟到重试或冲突payload
+- **THEN**最小tombstone分别返回原terminal identity/outcome或幂等冲突，不重新投递；删除Session后其canonical ID也不得被新Session复用
+
+#### Scenario: reply correlation 不能伪造来源
+
+- **WHEN**`kind=reply`缺少`reply_to_communication_id`、引用不存在/未授权的communication、或原communication方向与本次回复不相反
+- **THEN**target在创建outbox/inbox或ambient item前拒绝请求；非reply kind携带该字段同样拒绝，不通过文本或Session ID猜测因果关系
+
+#### Scenario: Agent 跨 Session 消息不能伪造用户
+
+- **WHEN** 模型调用`send_message_to_session`
+- **THEN** 工具schema不包含`simulate_user`，目标仅接收有provenance的ambient/pending event；任何试图传入该字段的请求都被schema拒绝
+
+#### Scenario: 裸 Session ID 解析有歧义
+
+- **WHEN** 同一裸`session_id`在Gateway catalog中没有唯一、已授权且可达的目标
+- **THEN** 操作只在有界exact-ID discovery内返回`target_ambiguous`和已授权候选数，并要求使用可唯一定位的Session link或workspace信息；不得披露候选locator、区分未授权存在与不存在、任选目标、递归查询peer或扫描服务器
+
+#### Scenario: federated link 经过真实 Gateway hop
+
+- **WHEN**验收以三个隔离Gateway进程配置`B ⇄ A ⇄ C`loopback hub-and-spoke channel，并由B调用C上带`gateway_id`的Session URI
+- **THEN**请求经过B origin channel、A唯一transit和C target授权后才到目标workspace，响应按原路返回且source仍为B；反向SSH、B/C直连、进程内resolver stub、直接请求远端workspace backend或共享Gateway home都不能作为通过证据
+
+#### Scenario: 默认允许不能关闭联邦协议校验
+
+- **WHEN**即使权限默认允许，federated请求仍使用错误origin/audience/path、过期或重放grant、失效channel identity/peer credential，或者命中用户运行时启用的明确deny rule
+- **THEN**hub或target Gateway在转发workspace前明确拒绝并记录脱敏decision audit；目标inbox、canonical history、runtime和outbox远端状态都不推进，模型与普通日志看不到grant或credential
+
+#### Scenario: 跨 Session 状态管理被拒绝
+
+- **WHEN** 调用方尝试把其它Session作为team member、向跨Session协议写入member/task/role/Goal状态，或让wait创建持久共享任务板
+- **THEN** 系统拒绝该操作并指向同Session child-thread协作或显式send/read/wait入口，不通过message metadata静默恢复旧状态机
+
+#### Scenario: 旧开发期跨Session team数据不进入新owner
+
+- **WHEN** 生产入口收到旧Session member或旧board格式
+- **THEN** 明确拒绝；按授权清理开发数据，不自动创建child、迁移历史或恢复旧membership，新格式创建与公开fork仍使用各自唯一owner

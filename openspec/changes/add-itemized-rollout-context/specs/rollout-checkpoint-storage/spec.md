@@ -290,7 +290,7 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 
 ### Requirement: 附件目录与历史冻结输入必须由原 owner 分工保存
 
-上传正文 SHALL 由 `managed-attachment-directories` 定义的工作区目录 owner 保存，每次独立上传拥有稳定目录身份、冻结 UTC 日期和受检 locator；相同 digest 只证明具体文件字节一致，MUST NOT 合并可变目录或复活已回收目录。目录 catalog 是 live 原件、预览、精确 Thread 关联、ingest/fork claim、期限和可用性的唯一权威；canonical item、模型、API 和跨端传输中的资源关联 MUST 使用规范 URI；正文、展示和诊断按统一 URI owner 的字段职责保留原生信息，不建立第二定位关系。文件 child、访问授权和旧历史来源解析分别消费唯一 URI owner 及原附件 owner，不从 digest 猜测消费 Thread 或跨端 alias。
+上传正文 SHALL 由 `managed-attachment-directories` 定义的工作区目录 owner 保存，每次独立上传拥有稳定目录身份、冻结 UTC 日期和受检 locator；相同 digest 只证明具体文件字节一致，MUST NOT 合并可变目录或复活已明确删除的身份；释放工作副本后按原身份重建不属于复活。目录 catalog 是原件版本／来源、工作副本、预览、精确 Thread 关联、ingest/fork claim、必要保留承诺及待处理／释放／重建可用性的唯一权威；canonical item、模型、API 和跨端传输中的资源关联 MUST 使用规范 URI；正文、展示和诊断按统一 URI owner 的字段职责保留原生信息，不建立第二定位关系。文件 child、访问授权和旧历史来源解析分别消费唯一 URI owner 及原附件 owner，不从 digest 猜测消费 Thread 或跨端 alias。
 
 上传 SHALL 先冻结消息 ID，在 topology shared → 单 Session gate 内核对 catalog、Thread 与 lifecycle generation 并建立原 durable attachment pin，再以稳定 operation identity 建立目录 ingest，冻结 pin/preimage、独立目录身份、staging 和最终 locator。正文写入与 durability 由原 holder 保护，在 Session gate 外完成；发布前重新取得短 gate，核对原 pin/fence/Thread，在同一附件 catalog 事务发布目录、文件版本、关联和 ingest。pin 与附件 catalog 是显式跨库 saga，MUST NOT 假设两个 SQLite 原子提交；同 operation 不同输入冲突，旧终态 intent 不重开，未登记文件不扫盘吸收。
 
@@ -298,7 +298,7 @@ storage resolver MUST 在读取catalog或构造路径前用共享canonical valid
 
 fork SHALL 复用原 journal/claim/publication 与 copy operation holder：同工作区复用目录身份并建立目标关联，跨工作区只导入冻结 manifest 和已核验文件，经既有 files/chunk 传输。capture 后不得读取 live 目录补造过去版本；失败、取消与目标删除须等待原 writer 退出并只结算本次 claim/关联，迟到回执不能复活目标。旧 v2 snapshot、canonical 原始身份与 hash 保持原文，schema 3 仅作显式离线迁移输入，不保留线上 blob writer、owner-ref 双读或 digest claim 回退。
 
-live 目录最后一次零关联后默认保留 30 天，冷上传、queued 输入、有效 fork claim 和经原 owner 核实的处理进程占用阻止回收；runtime 关联包含 tracker 实例和 generation，旧代释放不能移除新代关联。GC 与 attach/operation 互斥复核，先持久标记 deleting，再按原 locator 删除并提交 tombstone；失败或重启继续原记录，不重置期限或把未知进程当作停止。历史 URI 本身不构成永久 live 目录保活；checkpoint/assembly 需要的精确输入版本仍归原 immutable asset/version owner，MUST 从冻结内容重建并校验 request_hash，MUST NOT 随目录 GC 删除或从当前文件重新生成。
+最后 Thread 关联实际解除后，原附件 owner SHALL 在无 queued 输入、有效 fork claim、经核实处理进程或其它有效占用时，对照初始可重建基线检查目录：用户新增、修改或删除的文件／处理结果存在时保留现有目录，不自动到期；未修改且目标端原件版本可靠时释放物理工作副本，保留原身份、URI、原件版本及历史依赖。自动预览和单纯读取不算修改，原有处理结果不因下次无新增写入而丢失，明确删除结果回到基线后可释放。runtime 关联包含 tracker 实例和 generation，旧代释放不能移除新代关联。关联、operation、释放与重建 SHALL 沿原目录锁及占用事实互斥结算；访问／Shell／fork 沿原 owner 按原 URI 重建，不访问当前源文件补原件。失败保留目录及原因，待处理和释放／重建中断由原 catalog 定点恢复，不增加队列、lease 或周期 GC。schema 4 和既有 schema 3 离线转换及旧明确保留承诺按附件 owner 的新版迁移合同处理。checkpoint/assembly 的精确输入版本仍归原 immutable asset/version owner，MUST 从冻结内容重建并核对 request_hash，释放工作副本不能删除其依赖或改变历史身份。
 
 #### Scenario: 相同正文独立上传
 
@@ -325,10 +325,10 @@ live 目录最后一次零关联后默认保留 30 天，冷上传、queued 输�
 - **WHEN** 上传取得原 pin 后，与 Session deleting 竞争同一短 gate
 - **THEN** 删除先行则目录关联发布明确拒绝；上传先行则删除排空该操作并结算精确关联、ingest 与 pin后才隔离 Session，旧 writer 不能补挂关联
 
-#### Scenario: 目录回收后重建历史请求
+#### Scenario: 工作副本释放后重开与历史请求均保持原身份
 
-- **WHEN** 零关联目录到期由原 GC 回收，而保留的 assembly/checkpoint 仍引用过去输入
-- **THEN** 当前原件查看明确不可用，原请求从已冻结正文重建且 request_hash 不变，历史身份不重写，恢复资产不随 live 目录删除
+- **WHEN** 无修改且无有效占用的附件工作副本已释放，用户按原 URI 重开，保留的 assembly/checkpoint 仍引用过去输入
+- **THEN** 原附件 owner 从可靠原件版本重建相同目录身份和原字节；历史请求独立从当时冻结正文重建且 request_hash 不变。原件真实缺失或损坏明确失败，不读当前文件补洞，不将工作副本释放当成身份删除
 
 ### Requirement: Sealed ContextAssemblySnapshot 与 canonical commit 具有明确边界
 

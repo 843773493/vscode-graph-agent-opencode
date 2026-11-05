@@ -1,3 +1,5 @@
+2026-11-04 收口边界：本轮只完成已授权的通用上下文／存储、精确 Thread 执行、来源激活、fork 和恢复。团队、成员、委派与跨 Session 协作通信的待定设计及专项验收单独保留 TODO，不是本轮完成或归档的前置，也不能记为已实现。既有协作实现不在本次规划修订中删除或改行为。当前任务正文是本轮 checklist；历史收据中的旧总门、旧缺口和旧进度只作历史，不重新打开已经闭合的链路。真实入口、身份／顺序／hash、授权、事务及恢复断言保持；按本轮场景建立证据映射，可复用源码依赖未变的原件，不强制重跑含延期场景的完整 default 或为每次小改重复独审／变异。
+
 ## Why
 
 `add-itemized-rollout-context` 已经定义 canonical item、ContextRequestPlan、assembly 和 rewind/compaction 的基础合同，但 AGENTS、Skill、团队状态与 checkpoint reminder 仍由不同 producer 直接拼接消息，既无法保证已提交上下文前缀的字节级稳定，也缺少统一的 source revision、追踪和恢复语义。
