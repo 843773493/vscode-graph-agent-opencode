@@ -61,7 +61,7 @@ from app.agents.policy import (
     validate_tool_dependencies,
 )
 from app.agents.policy.tool_capability import metadata_for_tool
-from app.agents.provider_api_mode import parse_provider_api_mode
+from app.agents.provider_api_mode import ProviderApiMode, parse_provider_api_mode
 from app.agents.sealed_assembly_dispatch import ProviderInvocationPurpose
 from app.agents.skill_catalog import (
     PublishedSkillCatalog,
@@ -197,14 +197,10 @@ def _resolve_tool_policy(
     )
 
 
-def build_model_from_provider(
+def _validate_provider_configuration(
     provider: dict[str, Any],
-    runtime_config: dict[str, Any],
-    *,
-    prompt_cache_key: str | None = None,
-    invocation_purpose: ProviderInvocationPurpose = "agent",
-) -> Any:
-    """从 provider 构建模型；直连用途由实际调用方显式给出，默认必须封存。"""
+) -> tuple[ProviderApiMode, dict[str, Any]]:
+    """列表与执行共用本地配置和凭据校验，不导入或构造模型 SDK。"""
     api_mode = parse_provider_api_mode(provider)
     custom_llm_provider = provider.get("custom_llm_provider")
     if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
@@ -217,7 +213,6 @@ def build_model_from_provider(
         from app.runtime.chatgpt_auth import (
             configure_litellm_chatgpt_auth_directory,
             ensure_chatgpt_oauth_ready,
-            ensure_litellm_chatgpt_model_capabilities,
             is_chatgpt_oauth_provider,
         )
 
@@ -232,9 +227,29 @@ def build_model_from_provider(
             )
         token_dir = configure_litellm_chatgpt_auth_directory()
         ensure_chatgpt_oauth_ready(token_dir)
+    elif api_mode.protocol == "anthropic_messages" and custom_llm_provider != "anthropic":
+        raise ValueError(
+            "Anthropic Messages provider 必须配置 "
+            "custom_llm_provider='anthropic'"
+        )
+
+    return api_mode, _get_provider_request_options(provider)
+
+
+def build_model_from_provider(
+    provider: dict[str, Any],
+    runtime_config: dict[str, Any],
+    *,
+    prompt_cache_key: str | None = None,
+    invocation_purpose: ProviderInvocationPurpose = "agent",
+) -> Any:
+    """从 provider 构建模型；SDK 初始化与构造错误只在执行入口报告。"""
+    api_mode, request_options = _validate_provider_configuration(provider)
+    if provider["custom_llm_provider"] == "chatgpt":
+        from app.runtime.chatgpt_auth import ensure_litellm_chatgpt_model_capabilities
+
         ensure_litellm_chatgpt_model_capabilities(provider["model"])
 
-    request_options = _get_provider_request_options(provider)
     if api_mode.protocol == "responses":
         from app.agents.providers.openai_responses import build_openai_responses_model
 
@@ -246,14 +261,6 @@ def build_model_from_provider(
             invocation_purpose=invocation_purpose,
         )
     else:
-        if api_mode.protocol == "anthropic_messages" and custom_llm_provider != "anthropic":
-            raise ValueError(
-                "Anthropic Messages provider 必须配置 "
-                "custom_llm_provider='anthropic'"
-            )
-        if api_mode.protocol not in {"chat_completions", "anthropic_messages"}:
-            raise ValueError(f"provider.api_mode.protocol 不受支持: {api_mode.protocol!r}")
-
         from app.agents.providers.litellm_chat import build_litellm_chat_model
 
         model = build_litellm_chat_model(
@@ -274,11 +281,10 @@ def build_model_from_provider(
 
 def provider_configuration_error(
     provider: dict[str, Any],
-    runtime_config: dict[str, Any],
 ) -> str | None:
-    """返回单个 provider 的可展示配置错误，不让坏配置阻断 Agent 列表。"""
+    """返回本地配置及必要凭据错误；SDK 可构造性留到实际执行时校验。"""
     try:
-        build_model_from_provider(provider, runtime_config)
+        _validate_provider_configuration(provider)
     except Exception as error:  # noqa: BLE001 - 配置错误需要逐 provider 隔离展示
         return _provider_build_failure(provider, error)
     return None

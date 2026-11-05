@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from pathlib import Path
 from threading import Event, Thread
 
+import commentjson
 import pytest
 
+from app.agents import agent_factory
 from app.agents.policy import DEFAULT_AGENT_TOOL_NAMES
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.config_service import ConfigService
@@ -47,7 +51,7 @@ async def test_provider_configuration_error_is_returned_without_hiding_agent(
 ) -> None:
     monkeypatch.setattr(
         "app.services.business.agent_service.provider_configuration_error",
-        lambda provider, _runtime: (
+        lambda provider: (
             "OAuth 凭据缺少账号信息" if provider["id"] == "backup_1" else None
         ),
     )
@@ -66,6 +70,69 @@ async def test_provider_configuration_error_is_returned_without_hiding_agent(
 
 
 @pytest.mark.asyncio
+async def test_agent_list_defers_sdk_failure_to_execution(
+    monkeypatch: pytest.MonkeyPatch, agent_config_service: ConfigService,
+) -> None:
+    calls = []
+    error = RuntimeError("SDK 初始化失败")
+
+    def fail_sdk(provider, _runtime, **_kwargs):
+        calls.append(provider["id"])
+        raise error
+
+    monkeypatch.setattr(agent_factory, "build_model_from_provider", fail_sdk)
+    agents = await AgentService(config_service=agent_config_service).list()
+    assert agents and all(provider.available for agent in agents for provider in agent.providers)
+    assert calls == []
+    with pytest.raises(RuntimeError, match="当前选择的模型配置不可用") as caught:
+        agent_factory.build_runtime_for_agent("default", agent_config_service)
+    assert caught.value.__cause__ is error
+    assert calls == [agent_config_service.get_agent_runtime_config("default")["providers"][0]["id"]]
+
+
+@pytest.mark.asyncio
+async def test_agent_list_rechecks_oauth_credentials_without_sdk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.runtime import chatgpt_auth
+
+    config = commentjson.loads(Path("configs/workspace_inline.jsonc").read_text())
+    primary = config["agents"]["default"]["model"]["primary_provider"]
+    provider = next(value for value in config["llm"]["providers"] if value["id"] == primary)
+    provider.update({"custom_llm_provider": "chatgpt", "model": "chatgpt/gpt-5.6-codex",
+        "auth": {"type": "oauth", "method": "chatgpt"},
+        "api_mode": {"protocol": "responses", "model_info": {"supports_function_calling": True}}})
+    config_path = tmp_path / "oauth-workspace.jsonc"
+    config_path.write_text(json.dumps(config))
+    auth_dir = tmp_path / "oauth"
+    auth_dir.mkdir()
+    auth_file = auth_dir / "auth.json"
+    expires_at = int(time.time()) + 3600
+    auth_file.write_text(json.dumps({"expires_at": expires_at}))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(auth_dir))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "auth.json")
+
+    def unexpected_sdk(*_args, **_kwargs):
+        raise AssertionError("Agent 列表不得初始化 SDK 或登记 SDK 模型能力")
+
+    monkeypatch.setattr(agent_factory, "build_model_from_provider", unexpected_sdk)
+    monkeypatch.setattr(chatgpt_auth, "ensure_litellm_chatgpt_model_capabilities", unexpected_sdk)
+    service = AgentService(config_service=ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path))
+
+    def selected(agents):
+        default = next(agent for agent in agents if agent.agent_id == "default")
+        return next(value for value in default.providers if value.provider_id == primary)
+
+    first = selected(await service.list())
+    assert not first.available and "access_token" in first.configuration_error
+    assert str(auth_file) not in first.configuration_error
+    # 配置未变，仅更新凭据；下一次列表必须重新读取并反映可用状态。
+    auth_file.write_text(json.dumps({"access_token": "unit-token", "expires_at": expires_at}))
+    second = selected(await service.list())
+    assert second.available and second.configuration_error is None
+
+
+@pytest.mark.asyncio
 async def test_provider_validation_does_not_block_event_loop(
     monkeypatch: pytest.MonkeyPatch,
     agent_config_service: ConfigService,
@@ -75,7 +142,7 @@ async def test_provider_validation_does_not_block_event_loop(
     errors: list[str] = []
     loop = asyncio.get_running_loop()
 
-    def validate(_provider: object, _runtime: object) -> None:
+    def validate(_provider: object) -> None:
         if not entered.is_set():
             entered.set()
             if not release.wait(10):
