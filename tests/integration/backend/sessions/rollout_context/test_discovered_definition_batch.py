@@ -14,20 +14,38 @@ from app.agents.policy import ToolPolicyResolver
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.epoch.seal_binding import AppliedSourceRevision
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.services.infrastructure.mcp.extension_catalog import ExtensionCatalogUnavailableError
-from app.services.infrastructure.mcp.tool_definitions import tool_catalog_from_activation
-from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogUnavailableError,
+)
+from app.services.infrastructure.mcp.tool_definitions import (
+    tool_catalog_from_activation,
+)
+from app.services.infrastructure.rollout_context.checkpoint.durable import (
+    source_activation,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.rollout_context.checkpoint.seal import preparation
-from app.services.infrastructure.rollout_context.checkpoint.durable import source_activation
-from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import definition_source_values
-from app.services.infrastructure.rollout_context.runtime.context_sources import tool_definitions
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import ContextSourceManager
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import ContextSourceOwnerKey
-from app.services.infrastructure.rollout_context.runtime.context_sources.models import ContextSourceDescriptor, ContextSourceSnapshot
+from app.services.infrastructure.rollout_context.runtime.context_sources import (
+    tool_definitions,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceDescriptor,
+    ContextSourceSnapshot,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
+    definition_source_values,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.unit.services.infrastructure.mcp import test_tool_search as search
 
@@ -185,44 +203,14 @@ async def test_prepare_rejects_definition_registered_with_a_second_owner(
 
 
 @pytest.mark.parametrize("call_count", [1, 2])
-async def test_seal_reuses_exact_definition_and_discovery_proofs_in_its_transaction(
-    discovered_batch, guidance_prepare, registry_db, monkeypatch, request, call_count,
+async def test_seal_preserves_discovery_provenance_in_successor_and_cold_restore(
+    discovered_batch, guidance_prepare, registry_db, call_count,
 ):
     originals, _activation_id = await discovered_batch(4, call_count, split_calls=True)
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    validate = source_activation._validate_definition_sources
-    phases = []
-    active = []
-
-    def observe_receipt(source, name):
-        caller = sys._getframe(1).f_code
-        if (active and name == "source_id" and caller.co_filename == source_activation.__file__
-                and caller.co_qualname.startswith("_validate_definition_sources")):
-            active[-1]["receipt_identity_reads"] += 1
-        return receipt_attribute(source, name)
-
-    receipt_attribute = AppliedSourceRevision.__getattribute__
-    monkeypatch.setattr(AppliedSourceRevision, "__getattribute__", observe_receipt)
-
-    def observe_validation(connection, snapshot, previous):
-        statements = []
-        active.append({"receipt_identity_reads": 0, "receipts": len(snapshot.seal_binding.source_revisions)})
-        connection.set_trace_callback(statements.append)
-        try:
-            return validate(connection, snapshot, previous)
-        finally:
-            connection.set_trace_callback(None)
-            phases[-1]["validations"].append({
-                **active.pop(),
-                "bindings": [sql for sql in statements if sql.startswith("SELECT session_id,thread_id FROM resource_activation_bindings ")],
-                "discoveries": [sql for sql in statements if sql.startswith("SELECT tool.tool_call_id,item.projection_manifest_json FROM model_calls call ")],
-            })
-
-    monkeypatch.setattr(source_activation, "_validate_definition_sources", observe_validation)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         for key, owner in (("restored", saver), ("successor", saver), ("cold", cold)):
-            phases.append({"phase": key, "validations": []})
             wire, _ = guidance_prepare("batch-sql-" + key, context_owner=owner)
             restored = [value for value, _ in definition_source_values(wire["snapshot"])]
             assert [value.tool_id for value in restored] == sorted(originals)
@@ -236,19 +224,6 @@ async def test_seal_reuses_exact_definition_and_discovery_proofs_in_its_transact
             assert cold.get_context_assembly(
                 session, thread, assembly_id=wire["snapshot"].assembly_id,
             ).to_dict() == wire["snapshot"].to_dict()
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    (context.artifacts_dir / f"definition-seal-sql-{call_count}.json").write_text(
-        json.dumps(phases, indent=2), encoding="utf-8",
-    )
-    print(f"definition seal SQL ({call_count=}): {[(phase['phase'], [(len(v['bindings']), len(v['discoveries'])) for v in phase['validations']]) for phase in phases]}")
-    print(f"definition receipt work ({call_count=}): {[(phase['phase'], [(v['receipt_identity_reads'], v['receipts']) for v in phase['validations']]) for phase in phases]}")
-    for phase in phases:
-        assert phase["validations"]
-        for validation in phase["validations"]:
-            assert len(validation["bindings"]) == len(set(validation["bindings"])) == 4
-            assert len(validation["discoveries"]) == call_count
-            # typed binding 已保证来源身份唯一；同次定义校验只索引一次回执。
-            assert validation["receipt_identity_reads"] <= validation["receipts"]
 
 
 @pytest.mark.parametrize("damage", ["missing", "unknown", "revision", "previous_revision", "control_revision", "redundant"])

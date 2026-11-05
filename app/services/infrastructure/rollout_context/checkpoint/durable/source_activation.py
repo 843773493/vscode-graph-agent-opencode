@@ -8,12 +8,18 @@ from functools import cache
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.epoch.prefix_epoch import AppendedItemRef, ProviderProfileItemFrame
+from app.domain.itemized.epoch.prefix_epoch import (
+    AppendedItemRef,
+    ProviderProfileItemFrame,
+)
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
+from app.domain.itemized.identity.tool_call_identity import (
+    matches_tool_call_id,
+    provider_tool_call_id,
+)
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.business.resource_derivations.team import (
     TEAM_EVENT_SOURCE_ID,
@@ -139,6 +145,9 @@ def _validate_definition_sources(
 
     @cache
     def require_discovery(model_call_id: str, owner: tuple[str, str], activation_snapshot_id: str, tool_call_id: str) -> None:
+        raw_call_id = provider_tool_call_id(ItemProjectionIdentity(model_call_id=model_call_id), tool_call_id)
+        # 只定位本次定义实际引用的调用；逐定义取回全部并行发现会重复查询和解析整批 manifest。
+        # raw/scoped 两种载体仍由 domain 规则核对，owner、冻结 activation 与完成事实不变。
         rows = connection.execute(
             "SELECT tool.tool_call_id,item.projection_manifest_json FROM model_calls call "
             "JOIN resource_activation_assembly_bindings activation ON activation.assembly_id=call.assembly_id "
@@ -146,8 +155,9 @@ def _validate_definition_sources(
             "JOIN messages message ON message.jsonl_offset=item.jsonl_offset AND message.jsonl_length=item.jsonl_length "
             "JOIN tool_calls tool ON tool.assistant_message_sequence=message.message_sequence "
             "WHERE call.model_call_id=? AND call.session_id=? AND call.thread_id=? "
-            "AND activation.activation_snapshot_id=? AND tool.tool_name='search_tools' AND tool.result_message_sequence IS NOT NULL",
-            (model_call_id, *owner, activation_snapshot_id),
+            "AND activation.activation_snapshot_id=? AND tool.tool_name='search_tools' AND tool.result_message_sequence IS NOT NULL "
+            "AND tool.tool_call_id IN (?,?)",
+            (model_call_id, *owner, activation_snapshot_id, raw_call_id, f"{model_call_id}:tool-call:{raw_call_id}"),
         ).fetchall()
         if not any(matches_tool_call_id(
             ItemProjectionIdentity.from_dict(json.loads(manifest)["projection_identity"]), call_id, tool_call_id,
