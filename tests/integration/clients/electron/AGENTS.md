@@ -26,6 +26,7 @@
 - 每次启动保存 renderer 的原始 console error；正常关窗和重启的 IndexedDB 写入错误必须失败，不能归为原版 shutdown joiner 日志。
 - 延迟代理在客户端响应关闭时销毁对应上游请求，正常窗口关闭也必须释放 SSE；只关闭监听和客户端 socket 不能证明上游已释放，不用强制退出驱动掩盖保活连接。
 - 回放控制服务必须晚于 Backend 关闭，附件运行时释放仍会使用受控时钟；业务驱动退出后还要核对 Backend 的正常关闭日志，不能以 pytest 成功掩盖 ASGI 关闭失败。
+- 切换 Turn 变更集后先等待对应按钮的 `aria-pressed` 确认，再打开文件；旧列表仍可见不能证明异步选择已完成。Diff 的实际读取次数和完整 Gateway／Workspace 归属继续严格核对。
 - Linux 当前以 Xvfb 和显式 `--no-sandbox` 启动，记录实际参数；WebPreferences 的 sandbox 配置不证明 Chromium 进程沙箱已启用。Windows／macOS、真实 Provider 和崩溃恢复另行验收。
 - 正式工作区、profile、日志、截图和归档只写 `out/tests/integration/clients/electron/test_packaged_workbench/`，按 run／node 隔离；矩阵提供外部超时和 4GiB 数据段保护。
 - 打包和原生驱动都必须登记完整进程组 owner，超时也回收子进程并保存实际退出回执；不得直接复制旧下载缓存的散列目录假设当前下载库仍使用同一键。

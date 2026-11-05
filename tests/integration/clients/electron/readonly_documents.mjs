@@ -20,20 +20,22 @@ export function readonlyDocumentProbe(reads, checks) {
     observe(page) {
       page.on('request', request => {
         const path = new URL(request.url()).pathname;
-        if (/\/changesets\/.+$/.test(path)) reads.push({ phase, kind: 'change', path, route: request.headers()['x-boxteam-workspace-id'] });
+        if (/\/changesets\/.+$/.test(path)) reads.push({ phase, kind: 'change', path, gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
         if (path === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'read') {
-          reads.push({ phase, kind: 'source', uri: request.postDataJSON().uri, route: request.headers()['x-boxteam-workspace-id'] });
+          reads.push({ phase, kind: 'source', uri: request.postDataJSON().uri, gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
         }
       });
     },
-    async prepare(page, { owner, gatewayId, routeId, turnId }) {
-      target = { gatewayId, workspaceId: owner.workspace_id, sessionId: owner.session_id, threadId: owner.thread_id, routeId,
+    async prepare(page, { owner, gatewayId, turnId }) {
+      target = { gatewayId, workspaceId: owner.workspace_id, sessionId: owner.session_id, threadId: owner.thread_id,
         changesetPath: `/api/v1/sessions/${owner.session_id}/changesets/${encodeURIComponent('turn:' + turnId)}` };
       const thread = await selectThread(page, target, 0);
       const toggle = thread.getByRole('button', { name: '切换会话资源', exact: true });
       if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
       await thread.getByRole('tab', { name: '更改', exact: true }).click();
-      await thread.locator(`.session-changeset-row[title="显示任务 ${turnId} 中产生的文件变更"]`).click();
+      const changeset = thread.locator(`.session-changeset-row[title="显示任务 ${turnId} 中产生的文件变更"]`);
+      await changeset.click();
+      await expect(changeset).toHaveAttribute('aria-pressed', 'true');
       await expect(thread.locator('.session-change-file-main')).toHaveCount(1);
       phase = 'open-diff';
       await thread.locator('.session-change-file-main').click();
@@ -69,7 +71,7 @@ export function readonlyDocumentProbe(reads, checks) {
       await expect(tab).toHaveCount(1);
       await tab.click(); await showSource(page);
       expect(reads.filter(read => read.phase === 'restart' && read.kind === 'source')).toHaveLength(1);
-      expect(reads.filter(read => ['open-diff', 'open-source', 'restart'].includes(read.phase)).every(read => read.route === target.routeId)).toBe(true);
+      expect(reads.filter(read => ['open-diff', 'open-source', 'restart'].includes(read.phase)).every(read => read.gatewayId === target.gatewayId && read.workspaceId === target.workspaceId)).toBe(true);
       checks.readonlyDocumentsRestored = true;
       await selectThread(page, target, 0);
       phase = 'independent-profile';

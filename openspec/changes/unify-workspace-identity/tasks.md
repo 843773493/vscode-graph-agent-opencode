@@ -260,3 +260,8 @@
 - 文件 stat 沿已有固定工作区导航入口携完整 owner，远端返回补齐 authority 的等价 URI 不再被重复字符串比较拒绝。会话目录定位、高亮及删除判断从编辑器的会话 owner 取值，逐层显式传入；当前活动工作区改变时，不再把仍打开的另一 Gateway 会话发往新目标。
 - 双真实 Gateway／Backend、相同工作区 UUID 的正式 Workbench 经真实浏览器完成切换、文件打开、独立草稿、正文搜索、原标签重载恢复及 9 次 breadcrumb 请求归属核对；4 份完整 SSE 收据保留 owner，页面错误为空。最终单项 1 passed／142.22 秒、退出 0，依赖首尾指纹一致，原件为 `run-efd9469f6ee2`。准确命令、源码版本／指纹及原始日志在 `out/tests/temp/identity_browser_recovery_20261104/artifacts/integration-1793832896926473222.json`；沿原 SSH 本机装具，不声称真实跨机或 Windows 验收。
 - 文本搜索消费者迁为单 UUID 与完整 owner，原路径注册新工作区须为不同 UUID，原工作区搬迁再登记仍保留原 UUID；旧搜索失效时 404 且零下游，不误查新工作区，恢复后按原 owner 重查。与双 Gateway 首轮合跑 2 passed／444.55 秒（`owner-and-text-integration-1793832267838600683`），后续仅 breadcrumb 产品变更，双 Gateway 最新单项补验覆盖；未为无关源码重复整组长跑。文件 stat 单测 2 passed／29 断言，目录相关四文件 59 passed／276 断言；真实 sourceTransform 类型检查、JS 语法及 Python Ruff／Pyright 退出 0。最新产品测试完成同一正式 Workbench 构建，Web build 脚本也是该唯一构建入口，复用原构建产物与收据。
+
+### 2026-11-05：6.4 Electron 原生消费者补验
+
+- 便携 Electron 的驱动、HTTP 审计、延迟 bootstrap 与只读文档读取统一使用原 `(gateway_id, workspace_id)`；移除 `BOXTEAM_ELECTRON_ROUTE_ID` 和临时 route 字段。Diff 选择先等待 Turn 变更集的实际 `aria-pressed`，避免仍展示旧 all 列表时提前打开；未修改产品行为或放宽请求次数。
+- 正式 `integration-electron-packaged-workbench` 矩阵 1 passed／198.64 秒，退出 0，重新构建并迁移到源码目录外的 ASAR。覆盖真实工具调用、保存、图片 200／304、Diff 分屏共享、来源只读、正常关闭重启及独立 profile，15 项产品断言通过，页面／存储／代理错误均为空。源码首尾指纹与当前磁盘一致，原失败回执仍保留。命令、指纹及原始输出见 `out/tests/temp/identity_thread_consumers_20261105/artifacts/electron-turn-selection-product-1793855365775026207.json`，正式产物为 `run-36601aaccd5d`。Python 静态复用此前相同源码的零诊断收据，最终驱动语法检查退出 0；此项不代替 Windows 或其余未完成消费者验收，6.4 保持未勾。

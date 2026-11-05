@@ -12,6 +12,7 @@ import tarfile
 from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -167,7 +168,8 @@ async def test_packaged_electron_chat_files_and_restart_cache(
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60) as client:
             navigation = await client.get("/api/gateway/workspaces")
             assert navigation.status_code == 200, navigation.text
-            route_id = navigation.json()["data"]["active_workspace_id"]
+            active_owner = navigation.json()["data"]["active_workspace"]
+            assert active_owner["workspace_id"] == backend.workspace_id
         history_content = "".join(f"NATIVE_HISTORY_LINE_{index:02d}\n" for index in range(1, 21))
         replies = [
             ({"tool_calls": [{"index": 0, "id": "native-write-history", "type": "function", "function": {
@@ -176,18 +178,18 @@ async def test_packaged_electron_chat_files_and_restart_cache(
             }}]}, "tool_calls"),
             ({"content": ANSWER}, "stop"),
         ]
-        interactions = [build_cassette(
+        interactions = [cast(list[dict[str, object]], build_cassette(
             asset_id=f"packaged-electron-chat-{index}", model="big-pickle",
             url="https://opencode.ai/zen/v1/chat/completions",
             frames=chat_completion_frames(response_id=f"chatcmpl-packaged-electron-{index}", model="big-pickle",
                 deltas=({"role": "assistant"}, delta), finish_reason=reason),
-        ).raw["interactions"][0] for index, (delta, reason) in enumerate(replies)]
+        ).raw["interactions"])[0] for index, (delta, reason) in enumerate(replies)]
         result_path = artifacts / "native-result.json"
         environment = os.environ | replay.environment | {
             **browser_temporary,
             "BOXTEAM_ELECTRON_EXECUTABLE": str(packaged_electron),
             "BOXTEAM_ELECTRON_GATEWAY": base_url,
-            "BOXTEAM_ELECTRON_ROUTE_ID": route_id,
+            "BOXTEAM_ELECTRON_OWNER": json.dumps(active_owner),
             "BOXTEAM_ELECTRON_PROXY_PORT": str(ports.port(21)),
             "BOXTEAM_ELECTRON_RUNTIME": str(runtime),
             "BOXTEAM_ELECTRON_ARTIFACTS": str(artifacts),
@@ -223,7 +225,8 @@ async def test_packaged_electron_chat_files_and_restart_cache(
         assert (workspace / "native-history.txt").read_text() == history_content
         assert result["file"]["sha256"] == hashlib.sha256((workspace / "README.md").read_bytes()).hexdigest()
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS | {
-            "X-BoxTeam-Workspace-Id": route_id,
+            "X-BoxTeam-Target-Gateway-Id": active_owner["gateway_id"],
+            "X-BoxTeam-Workspace-Id": active_owner["workspace_id"],
         }, timeout=60) as client:
             await acquire_gateway_guest(client)
             history = await client.post(f"/api/v1/sessions/{owner['session_id']}/threads/{owner['thread_id']}/history", json={})

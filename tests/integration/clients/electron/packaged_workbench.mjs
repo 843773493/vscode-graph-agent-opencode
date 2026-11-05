@@ -20,7 +20,7 @@ function required(name) {
 }
 const executable = required('BOXTEAM_ELECTRON_EXECUTABLE');
 const gateway = required('BOXTEAM_ELECTRON_GATEWAY');
-const routeId = required('BOXTEAM_ELECTRON_ROUTE_ID');
+const { gateway_id: gatewayId, workspace_id: workspaceId } = JSON.parse(required('BOXTEAM_ELECTRON_OWNER'));
 const runtime = required('BOXTEAM_ELECTRON_RUNTIME');
 const artifacts = required('BOXTEAM_ELECTRON_ARTIFACTS');
 const scope = TestRunContext.fromTestFile('tests/integration/clients/electron/test_packaged_workbench.py');
@@ -59,8 +59,9 @@ const server = createServer((request, response) => {
   if (delay && request.method === 'GET' && owner
     && url.pathname === `/api/v1/sessions/${owner.session_id}/bootstrap`
     && url.searchParams.get('thread_id') === owner.thread_id
-    && request.headers['x-boxteam-workspace-id'] === routeId) {
-    heldRequests.push({ path: request.url, routeId: request.headers['x-boxteam-workspace-id'] });
+    && request.headers['x-boxteam-workspace-id'] === workspaceId
+    && request.headers['x-boxteam-target-gateway-id'] === gatewayId) {
+    heldRequests.push({ path: request.url, gatewayId: request.headers['x-boxteam-target-gateway-id'], workspaceId: request.headers['x-boxteam-workspace-id'] });
     void gate.then(() => proxy.web(request, response));
   } else proxy.web(request, response);
 });
@@ -89,16 +90,16 @@ async function payload(response) {
   return value.data;
 }
 async function api(target, path) {
-  return target.evaluate(async ({ path, routeId }) => {
+  return target.evaluate(async ({ path, gatewayId, workspaceId }) => {
     const credential = await fetch('/api/gateway/auth/local-credential');
     if (!credential.ok) throw new Error(`本地凭据 HTTP ${credential.status}`);
     const token = (await credential.json()).data.token;
-    const response = await fetch(path, { headers: { 'X-Local-Token': token, 'X-BoxTeam-Workspace-Id': routeId } });
+    const response = await fetch(path, { headers: { 'X-Local-Token': token, 'X-BoxTeam-Target-Gateway-Id': gatewayId, 'X-BoxTeam-Workspace-Id': workspaceId } });
     const value = await response.json();
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${JSON.stringify(value)}`);
     if (!value.request_id || response.headers.get('x-request-id') !== value.request_id) throw new Error(`request_id 不一致：${path}`);
     return value;
-  }, { path, routeId });
+  }, { path, gatewayId, workspaceId });
 }
 async function launch(home) {
   const args = ['--no-sandbox', `--gateway=${proxyOrigin}`];
@@ -169,7 +170,7 @@ try {
   for (const path of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) {
     const value = await api(page, path);
     receipts.push({ path, requestId: value.request_id });
-    if (path.endsWith('/workspaces')) assert.equal(value.data.active_workspace_id, routeId);
+    if (path.endsWith('/workspaces')) assert.deepEqual(value.data.active_workspace, { gateway_id: gatewayId, workspace_id: workspaceId });
   }
   assert.deepEqual(await page.evaluate(() => ({ require: typeof globalThis.require,
     process: typeof globalThis.process, electron: typeof globalThis.electron })),
@@ -186,9 +187,11 @@ try {
     && new URL(response.url()).pathname === '/api/v1/sessions');
   await page.getByTitle('新建会话', { exact: true }).click();
   const createdResponse = await created;
-  assert.equal(createdResponse.request().headers()['x-boxteam-workspace-id'], routeId);
+  assert.equal(createdResponse.request().headers()['x-boxteam-workspace-id'], workspaceId);
+  assert.equal(createdResponse.request().headers()['x-boxteam-target-gateway-id'], gatewayId);
   owner = await payload(createdResponse);
-  assert.ok(owner.session_id && owner.thread_id && owner.workspace_id);
+  assert.ok(owner.session_id && owner.thread_id);
+  assert.equal(owner.workspace_id, workspaceId);
   let thread = threadSurface(page);
   // 与正式 Web Composer 初始化同为 30 秒；新 profile 还需完成模型目录读取。
   await expect(thread.getByTestId('composer-input')).toBeVisible({ timeout: 30_000 });
@@ -201,7 +204,8 @@ try {
     && new URL(response.url()).pathname === messagePath);
   await thread.getByTestId('composer-send').click();
   const sentResponse = await sent;
-  assert.equal(sentResponse.request().headers()['x-boxteam-workspace-id'], routeId);
+  assert.equal(sentResponse.request().headers()['x-boxteam-workspace-id'], workspaceId);
+  assert.equal(sentResponse.request().headers()['x-boxteam-target-gateway-id'], gatewayId);
   const accepted = await payload(sentResponse);
   assert.equal(accepted.thread_id, owner.thread_id);
   await expect.poll(async () => {
@@ -259,7 +263,7 @@ try {
   const warmImage = await probeImage(imageOwner, 'warm', 304);
   assert.equal(warmImage.response.etag, coldImage.response.etag);
   checks.imageRevalidated = true;
-  await readonlyDocuments.prepare(page, { owner, gatewayId: imageOwner.gatewayId, routeId, turnId: accepted.turn_id });
+  await readonlyDocuments.prepare(page, { owner, gatewayId: imageOwner.gatewayId, turnId: accepted.turn_id });
   thread = threadSurface(page);
   await thread.getByTestId('composer-input').fill(draft);
   await page.screenshot({ path: join(artifacts, 'native-synced.png') });
