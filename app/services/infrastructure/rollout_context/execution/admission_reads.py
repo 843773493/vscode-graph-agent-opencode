@@ -207,14 +207,21 @@ class RolloutExecutionAdmissionReadMixin:
     ) -> tuple[ExecutionAdmissionCursor, frozenset[str]]:
         """一次核验准入游标与未来排除集，供上下文选择共用同一因果边界。"""
         cursor = self.execution_admission_cursor(admission, connection=connection, checkpoint_ns=checkpoint_ns)
+        # 按提交主键定位未来准入，再核候选的正文与身份；不为排除未来输入重读全部旧准入。
+        # NOT INDEXED 保持主键范围读取，避免按 commit_kind 索引扫描全部同类历史提交。
         rows = connection.execute(
-            "SELECT execution.execution_id FROM executions AS execution "
+            "SELECT execution.execution_id FROM storage_commits AS commit_record NOT INDEXED "
+            "CROSS JOIN executions AS execution ON execution.execution_id IN ("
+            "SELECT execution_id FROM executions WHERE execution_id=commit_record.subject_id "
+            "AND execution_origin='internal' AND commit_record.commit_kind='execution_admission' "
+            "UNION ALL SELECT execution_id FROM executions WHERE turn_id=commit_record.subject_id "
+            "AND execution_origin='user_turn' AND commit_record.commit_kind='acceptance') "
             "LEFT JOIN turn_records AS turn ON turn.turn_id=execution.turn_id "
             "AND turn.session_id=execution.session_id AND turn.thread_id=execution.thread_id "
-            "WHERE execution.session_id=? AND execution.thread_id=? "
-            "AND (execution.execution_origin='internal' OR execution.execution_origin='user_turn' "
-            "AND (execution.execution_id=turn.initial_execution_id OR turn.turn_id IS NULL))",
-            (admission.session_id, admission.thread_id),
+            "WHERE commit_record.commit_id>? AND commit_record.commit_kind IN ('execution_admission','acceptance') "
+            "AND execution.session_id=? AND execution.thread_id=? "
+            "AND (execution.execution_origin='internal' OR execution.execution_id=turn.initial_execution_id OR turn.turn_id IS NULL)",
+            (cursor.commit_id, admission.session_id, admission.thread_id),
         ).fetchall()
         excluded = set(self.runtime_notice_excluded_item_ids(admission, connection=connection))
         for row in rows:
