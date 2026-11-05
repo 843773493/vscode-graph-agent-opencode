@@ -279,9 +279,12 @@ class TraceEventStore:
         if missing:
             owners.update(TraceTurnIndex(trace_dir).job_threads(session_id, missing))
         result = {}
+        main: str | None = None
         for event in events:
             if event.type == "goal_updated" or event.type == "goal_cleared":
-                main = self._path_resolver.main_thread_id(session_id)
+                # catalog 的 main Thread 不可变，同批只查询一次；仍逐条检查事件归属。
+                if main is None:
+                    main = self._path_resolver.main_thread_id(session_id)
                 if event.payload.session_id != session_id or event.payload.thread_id != main:
                     raise ValueError("Goal 事件归属与 Session main Thread 不一致")
                 result[event.event_id] = main

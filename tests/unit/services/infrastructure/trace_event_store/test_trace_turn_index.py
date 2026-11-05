@@ -11,6 +11,8 @@ from app.schemas.event import (
     AgentStartPayload,
     GoalClearedEvent,
     GoalClearedPayload,
+    GoalUpdatedEvent,
+    GoalUpdatedPayload,
     JobCreatedEvent,
     JobCreatedPayload,
     StatusChangeEvent,
@@ -479,21 +481,20 @@ async def test_trace_owner_rejects_missing_drifting_or_foreign_job_facts(
         store.event_threads(session_id, [foreign])
 
 
+@pytest.mark.parametrize("updated", [False, True])
 def test_goal_trace_owner_is_explicitly_main_without_job_binding(
     tmp_path: Path,
     trace_event_store_factory,
+    updated: bool,
 ) -> None:
     session_id = "ses_019c4169dad7706c86613137c1972acb"
     store, _ = trace_event_store_factory(session_id)
-    event = GoalClearedEvent(
-        event_id="evt_goal_main",
-        job_id=f"goal:{session_id}",
-        timestamp=datetime.now(UTC),
-        payload=GoalClearedPayload(
-            session_id=session_id,
-            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
-        ),
-    )
+    common = {"event_id": "evt_goal_main", "job_id": f"goal:{session_id}",
+              "timestamp": datetime.now(UTC)}
+    owner = {"session_id": session_id,
+             "thread_id": get_session_path_resolver(tmp_path).main_thread_id(session_id)}
+    event = (GoalUpdatedEvent(**common, payload=GoalUpdatedPayload(**owner, goal={}))
+             if updated else GoalClearedEvent(**common, payload=GoalClearedPayload(**owner)))
     assert store.event_threads(session_id, [event]) == {
         event.event_id: get_session_path_resolver(tmp_path).main_thread_id(session_id),
     }
@@ -502,4 +503,4 @@ def test_goal_trace_owner_is_explicitly_main_without_job_binding(
             update={"payload": event.payload.model_copy(update=drift)}
         )
         with pytest.raises(ValueError, match="main Thread 不一致"):
-            store.event_threads(session_id, [wrong])
+            store.event_threads(session_id, [event, wrong])

@@ -10,6 +10,10 @@ from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import (
     AgentStartEvent,
     AgentStartPayload,
+    GoalClearedEvent,
+    GoalClearedPayload,
+    GoalUpdatedEvent,
+    GoalUpdatedPayload,
     JobCreatedEvent,
     JobCreatedPayload,
 )
@@ -156,6 +160,40 @@ def test_no_match_does_not_hash_or_resolve_threads(records, monkeypatch):
     monkeypatch.setattr(store, "_event_threads", unexpected)
     page = search(store, session, "不存在的独有词")
     assert page.complete and page.items == [] and page.position is None
+
+
+async def test_goal_search_resolves_catalog_main_once_per_batch(records, monkeypatch):
+    store, session, _file, main, _child = records
+    for ordinal in range(96):
+        common = {"event_id": f"goal-owner-needle-{ordinal}", "job_id": f"goal:{session}",
+                  "timestamp": datetime.now(UTC)}
+        event = (GoalUpdatedEvent(**common, payload=GoalUpdatedPayload(
+            session_id=session, thread_id=main, goal={"objective": "目标"},
+        )) if ordinal % 2 else GoalClearedEvent(**common, payload=GoalClearedPayload(
+            session_id=session, thread_id=main,
+        )))
+        await store.append(session, event)
+    resolve_main = store._path_resolver.main_thread_id
+    lookups = []
+
+    def observe(session_id):
+        lookups.append(session_id)
+        return resolve_main(session_id)
+
+    def unexpected_job_index(*_args):
+        raise AssertionError("Goal 归属必须直接来自 catalog main，不查询 Job 索引")
+
+    monkeypatch.setattr(store._path_resolver, "main_thread_id", observe)
+    monkeypatch.setattr(TraceTurnIndex, "job_threads", unexpected_job_index)
+    for _ in range(2):
+        lookups.clear()
+        page = search(store, session, "goal-owner-needle", limit=100)
+        assert page.complete and len(page.items) == 96
+        assert [hit.reference.event_id for hit in page.items] == [
+            f"goal-owner-needle-{ordinal}" for ordinal in reversed(range(96))
+        ]
+        assert {hit.reference.thread_id for hit in page.items} == {main}
+        assert lookups == [session]
 
 
 async def test_scan_budget_resumes_older_events_without_omission(records, monkeypatch):
