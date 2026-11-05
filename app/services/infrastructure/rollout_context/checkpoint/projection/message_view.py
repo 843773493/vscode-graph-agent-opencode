@@ -72,9 +72,14 @@ class RolloutMessageViewMixin:
         if execution_fenced:
             if connection is None:
                 raise RuntimeError("执行上下文过滤必须复用当前 checkpoint snapshot")
-            excluded_ids = self.execution_context_excluded_item_ids(
+            predecessor = self._context.assemblies._latest_context_assembly_connection(
+                connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+            )
+            # raw 消息过滤与当前执行选集共用一次准入计算，避免各自重验全部历史执行。
+            selected_ids, excluded_ids = self.execution_context_selection(
                 connection, session_id=session_id, thread_id=thread_id,
-                checkpoint_ns=checkpoint_ns,
+                checkpoint_ns=checkpoint_ns, view_id=execution_view_id or view_id,
+                predecessor=predecessor,
             )
             if excluded_ids:
                 placeholders = ",".join("?" for _ in excluded_ids)
@@ -84,14 +89,7 @@ class RolloutMessageViewMixin:
                     f"WHERE item.item_id IN ({placeholders})", tuple(excluded_ids),
                 )}
                 sequences = [sequence for sequence in sequences if sequence not in excluded_sequences]
-            predecessor = self._context.assemblies._latest_context_assembly_connection(
-                connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
-            )
-            allowed = set(self.execution_context_item_ids(
-                connection, session_id=session_id, thread_id=thread_id,
-                checkpoint_ns=checkpoint_ns, view_id=execution_view_id or view_id,
-                predecessor=predecessor,
-            ))
+            allowed = set(selected_ids)
             # frozen raw 中的 canonical 历史保持原序；display_only 必须经过
             # 与 Provider 完全相同的 current-admission/applied-prefix selection。
             allowed.update(row[0] for row in connection.execute(

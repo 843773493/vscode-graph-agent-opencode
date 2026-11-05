@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import Counter
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -145,6 +146,81 @@ def notice_case(request, session_bundle_factory, frozen_provider_wire, frozen_pr
     saver = RolloutCheckpointSaver(sessions)
     return NoticeCase(saver, session, saver._storage.storage.main_thread_id(session), sessions,
                       frozen_provider_wire, frozen_provider_activation)
+
+
+@pytest.fixture(params=["user_turn", "internal"])
+def fenced_checkpoint(notice_case, request):
+    case = notice_case
+    if request.param == "user_turn":
+        _accepted, admission = case.user("fence-reader")
+        root = case.saver._storage.executions.accepted_user_input(admission)
+    else:
+        admission, intent = case.internal("fence-reader")
+        root, = case.saver._storage.storage.read_items(case.session, case.thread, item_ids=(intent.notice_item_id,))
+    codec = case.saver._storage.storage._codec()
+    message = codec.from_dict(codec.project_message((root,)))
+    config = {"configurable": {"thread_id": case.thread, "checkpoint_ns": ""}}
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = "fence-reader-checkpoint"
+    checkpoint["channel_values"] = {"messages": [message]}
+    checkpoint["channel_versions"] = {"messages": "1"}
+    checkpoint["updated_channels"] = ["messages"]
+    with case.scope(admission):
+        case.saver.put(config, checkpoint, {"source": "loop", "step": 1}, checkpoint["channel_versions"])
+    return case, admission, config, message
+
+
+def test_latest_checkpoint_checks_each_admission_once_per_read(fenced_checkpoint, monkeypatch):
+    case, admission, config, message = fenced_checkpoint
+    expected = {admission.execution_id: 1}
+    for index in range(8):
+        if index % 2:
+            _accepted, future = case.user(f"future-{index}")
+        else:
+            future, _intent = case.internal(f"future-{index}")
+        expected[future.execution_id] = 1
+    executions = case.saver._storage.executions
+    cursor = executions.execution_admission_cursor
+    calls = []
+
+    def observe(admission, **kwargs):
+        calls.append(admission.execution_id)
+        return cursor(admission, **kwargs)
+
+    monkeypatch.setattr(executions, "execution_admission_cursor", observe)
+    canonical = case.saver._storage.storage.jsonl_path(case.session, thread_id=case.thread)
+    original_bytes = canonical.read_bytes()
+    for _ in range(2):
+        calls.clear()
+        with case.scope(admission):
+            restored = case.saver.get_tuple(config)
+        assert [(item.id, item.content) for item in restored.checkpoint["channel_values"]["messages"]] == [(message.id, message.content)]
+        assert Counter(calls) == expected
+    assert canonical.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("corrupt_current", [False, True])
+def test_latest_checkpoint_rechecks_current_and_future_admission_after_success(fenced_checkpoint, corrupt_current):
+    case, admission, config, _message = fenced_checkpoint
+    future, _intent = case.internal("future-corruption")
+    with case.scope(admission):
+        assert case.saver.get_tuple(config) is not None
+    with sqlite3.connect(case.saver._storage.storage.index_path(case.session, thread_id=case.thread)) as connection:
+        with connection:
+            connection.execute(
+                "UPDATE executions SET admission_payload_hash=? WHERE execution_id=?",
+                ("sha256:jcs:v1:" + "0" * 64, admission.execution_id if corrupt_current else future.execution_id),
+            )
+        original_database = tuple(connection.iterdump())
+        canonical = case.saver._storage.storage.jsonl_path(case.session, thread_id=case.thread)
+        original_bytes = canonical.read_bytes()
+        error = ("user_turn execution admission preimage 与 acceptance 不一致"
+                 if corrupt_current and admission.execution_origin == "user_turn"
+                 else "internal admission hash 与冻结 request 不一致")
+        with case.scope(admission), pytest.raises(RuntimeError, match=error):
+            case.saver.get_tuple(config)
+        assert tuple(connection.iterdump()) == original_database
+        assert canonical.read_bytes() == original_bytes
 
 
 def _wire_ids(snapshot):

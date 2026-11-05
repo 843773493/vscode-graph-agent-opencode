@@ -83,20 +83,6 @@ class RolloutCheckpointQueriesMixin:
             owners.extend(MutationIntentOwner(owner_session_id, child.thread_id) for child in children)
         return tuple(owners)
 
-    def execution_context_excluded_item_ids(
-        self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
-        checkpoint_ns: str = "",
-    ) -> frozenset[str]:
-        """用户与内部执行共用唯一 admission owner 的持久准入游标。"""
-        admission = current_execution_admission(langgraph_thread_id=thread_id)
-        if admission is None:
-            return frozenset()
-        if (admission.session_id, admission.thread_id) != (session_id, thread_id):
-            raise ValueError("execution context fence 与当前 owner 不一致")
-        return self._context.executions.execution_context_excluded_item_ids(
-            admission, connection=connection, checkpoint_ns=checkpoint_ns,
-        )
-
     @staticmethod
     def _preceding_terminal_tool_sequences(
         connection: sqlite3.Connection, *, session_id: str, thread_id: str,
@@ -305,7 +291,7 @@ class RolloutCheckpointQueriesMixin:
             raise RuntimeError(
                 "rollout active view 缺失，拒绝从 item_catalog 物理顺序推导 context"
             )
-        selected_ids = self.execution_context_item_ids(
+        selected_ids, _ = self.execution_context_selection(
             snapshot.connection, session_id=snapshot.session_id, thread_id=snapshot.thread_id,
             checkpoint_ns=snapshot.checkpoint_ns, view_id=view_id,
             predecessor=predecessor,
@@ -344,12 +330,12 @@ class RolloutCheckpointQueriesMixin:
             item_ids=ids, snapshot=snapshot,
         ))
 
-    def execution_context_item_ids(
+    def execution_context_selection(
         self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
         checkpoint_ns: str, view_id: str, include_pending_notices: bool = True,
         predecessor: ContextAssemblySnapshot | None,
-    ) -> tuple[str, ...]:
-        """Provider 与 LangGraph 执行读取共用 canonical/current admission selection。"""
+    ) -> tuple[tuple[str, ...], frozenset[str]]:
+        """Provider 与 LangGraph 共用一次计算的有序选集及准入排除集。"""
         selected = connection.execute(
             "SELECT item_id, context_ordinal FROM context_view_items WHERE view_id=? "
             "AND visible=1 AND context_selected=1 AND source_kind='canonical' "
@@ -357,16 +343,18 @@ class RolloutCheckpointQueriesMixin:
         ).fetchall()
         if any(type(ordinal) is not int or ordinal < 0 for _item_id, ordinal in selected):
             raise RuntimeError("active context selection 缺少合法顺序")
-        excluded = self.execution_context_excluded_item_ids(
-            connection, session_id=session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns,
-        )
-        item_ids = [item_id for item_id, _ordinal in selected if item_id not in excluded]
         admission = current_execution_admission(langgraph_thread_id=thread_id)
+        excluded: frozenset[str] = frozenset()
+        if admission is not None:
+            if (admission.session_id, admission.thread_id) != (session_id, thread_id):
+                raise ValueError("execution context fence 与当前 owner 不一致")
+            excluded = self._context.executions.execution_context_excluded_item_ids(
+                admission, connection=connection, checkpoint_ns=checkpoint_ns,
+            )
+        item_ids = [item_id for item_id, _ordinal in selected if item_id not in excluded]
         if not include_pending_notices or admission is None:
-            return tuple(item_ids)
-        self._context.executions.execution_admission_cursor(
-            admission, connection=connection, checkpoint_ns=checkpoint_ns,
-        )
+            return tuple(item_ids), excluded
+        # 排除集已在同一连接中完整校验当前准入游标，后续选集直接共用该结果。
         pending_ids = []
         # 从唯一 applied assembly 携带精确前缀，再追加当前准入自己的
         # 输入、输出和 retry 来源；用户执行同样可能产生 Turn 外来源。
@@ -386,7 +374,7 @@ class RolloutCheckpointQueriesMixin:
             if item_id not in known and item_id not in excluded:
                 item_ids.append(item_id)
                 known.add(item_id)
-        return tuple(item_ids)
+        return tuple(item_ids), excluded
 
     def selected_context_message_sequences(
         self,

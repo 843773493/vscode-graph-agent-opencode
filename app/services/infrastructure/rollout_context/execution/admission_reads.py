@@ -218,6 +218,9 @@ class RolloutExecutionAdmissionReadMixin:
         ).fetchall()
         excluded = set(self.runtime_notice_excluded_item_ids(admission, connection=connection))
         for row in rows:
+            # 当前准入已在本次排除计算开始时核验，不在历史枚举中再次读取正文与提交。
+            if row[0] == admission.execution_id:
+                continue
             future = self._read_execution_admission_connection(
                 connection, session_id=admission.session_id, thread_id=admission.thread_id,
                 execution_id=strict_text(row[0], field="executions.execution_id"),
