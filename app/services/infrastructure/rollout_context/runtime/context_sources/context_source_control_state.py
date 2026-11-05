@@ -204,8 +204,10 @@ class ContextSourceControlStatePort(Protocol):
     def load_context_source_control_states(
         self,
         owner: ContextSourceOwnerKey,
+        *,
+        source_ids: frozenset[str] | None = None,
     ) -> tuple[ContextSourceControlState, ...]:
-        """读取该 owner 的全部控制状态；没有记录时返回空 tuple。"""
+        """读取指定来源的控制状态；省略 source_ids 时读取全部，没有记录时返回空 tuple。"""
         ...
 
     def load_context_source_rebuild_state(

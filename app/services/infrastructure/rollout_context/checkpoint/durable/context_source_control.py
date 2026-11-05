@@ -231,8 +231,9 @@ class ContextSourceControlStorageMixin:
         session_id: str,
         *,
         thread_id: str,
+        source_ids: frozenset[str] | None = None,
     ) -> tuple[ContextSourceControlState, ...]:
-        """读取该 SessionThread 的全部控制状态，不建库、不执行恢复副作用。"""
+        """按需读取该 SessionThread 的控制状态，不建库、不执行恢复副作用。"""
         # 本次读取的 owner 检查与快照打开复用路径；退出后下次读取仍重新校验 catalog。
         with self._storage.fork_paths.thread_resolution_scope():
             resolved_thread_id = self._context_source_rollout_owner_or_none(
@@ -245,11 +246,17 @@ class ContextSourceControlStorageMixin:
             try:
                 with self._storage.read_connection(session_id, resolved_thread_id) as connection:
                     self._require_context_source_control_runtime(connection)
+                    where = "WHERE session_id = ? AND thread_id = ? "
+                    parameters = [session_id, resolved_thread_id]
+                    if source_ids is not None:
+                        # 普通 mutation 只消费候选来源；全量恢复仍省略过滤。
+                        # JSON 集合沿已有复合主键定位，也避免批量确认受 SQL 参数数量限制。
+                        where += "AND source_id IN (SELECT value FROM json_each(?)) "
+                        parameters.append(canonical_json_bytes(sorted(source_ids)).decode("utf-8"))
                     rows = connection.execute(
                         f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
-                        "WHERE session_id = ? AND thread_id = ? "
-                        "ORDER BY created_at, source_id",
-                        (session_id, resolved_thread_id),
+                        + where + "ORDER BY created_at, source_id",
+                        parameters,
                     ).fetchall()
             except RolloutNotMaterializedError:
                 return ()

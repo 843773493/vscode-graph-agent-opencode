@@ -219,9 +219,12 @@ class SourceRegistryMixin:
                             if value.source_kind == "skill" and _normalize_skill_name(value.name) == _normalize_skill_name(state.name)),
                     )
                 return
+            source_ids = {state.source_id}
+            if replaced_state is not None:
+                source_ids.add(replaced_state.source_id)
             durable_states = {
                 stored.source_id: stored
-                for stored in port.load_context_source_control_states(owner)
+                for stored in port.load_context_source_control_states(owner, source_ids=frozenset(source_ids))
             }
             durable = durable_states.get(state.source_id)
             snapshot = self._control_state_snapshot(state, durable)
@@ -313,9 +316,7 @@ class SourceRegistryMixin:
             owner = self._owner
             if port is None or owner is None:
                 return
-            for stored in port.load_context_source_control_states(owner):
-                if stored.source_id not in source_ids:
-                    continue
+            for stored in port.load_context_source_control_states(owner, source_ids=frozenset(source_ids)):
                 state = self._sources.get(stored.source_id)
                 if state is None:
                     continue

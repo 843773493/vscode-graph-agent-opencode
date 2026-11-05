@@ -364,7 +364,9 @@ class SourceLifecycleMixin:
             if port is not None and owner is not None:
                 persisted = {
                     state.source_id: state
-                    for state in port.load_context_source_control_states(owner)
+                    for state in port.load_context_source_control_states(
+                        owner, source_ids=frozenset(delta.source_id for delta in batch.deltas),
+                    )
                 }
                 for delta in batch.deltas:
                     stored = persisted.get(delta.source_id)

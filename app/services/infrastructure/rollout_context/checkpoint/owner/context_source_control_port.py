@@ -150,6 +150,8 @@ class ContextSourceControlOwnerMixin:
     def load_context_source_control_states(
         self,
         owner: ContextSourceOwnerKey,
+        *,
+        source_ids: frozenset[str] | None = None,
     ) -> tuple[ContextSourceControlState, ...]:
         if not isinstance(owner, ContextSourceOwnerKey):
             raise TypeError(
@@ -158,6 +160,7 @@ class ContextSourceControlOwnerMixin:
         return self._storage.checkpoints.read_context_source_control_states(
             owner.session_id,
             thread_id=owner.thread_id,
+            source_ids=source_ids,
         )
 
     def apply_context_source_control_mutation(
