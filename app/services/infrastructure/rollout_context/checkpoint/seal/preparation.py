@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import asdict, replace
 from typing import Literal
 
@@ -256,28 +257,33 @@ def prepare_registered_context(
                 raise TypeError("Tool producer 必须返回正向 ToolSetSnapshot")
             # context-control gate 内先接受权威 tracking/CAS，再消费本次冻结来源。
             context_source_manager.refresh_control_states()
-            frozen_skills = skill_catalog_from_activation(
-                activation_snapshot, lambda frozen, binding: owner.read_resource_activation_payload(
-                    frozen, binding, checkpoint_ns=checkpoint_ns,
-                    storage_owner=(session_id, thread_id),
-                ),
-            )
-            if frozen_skills is not None:
-                # 待封存的显式选择来自上一已封存请求的工具调用；同Turn下的
-                # model_call目录可以更新，不能用新版正文覆盖或拒绝原选择。
+            with ExitStack() as skill_reads:
+                skill_read_snapshot = None
+
+                def read_skill_payload(frozen, binding):
+                    nonlocal skill_read_snapshot
+                    # 同次目录恢复共用事务，逐正文仍核归属和摘要；无 Skill 时不打开快照。
+                    if skill_read_snapshot is None:
+                        skill_read_snapshot = skill_reads.enter_context(owner._context_reader.open_snapshot(
+                            session_id, thread_id, checkpoint_ns,
+                        ))
+                    return owner.read_resource_activation_payload(
+                        frozen, binding, checkpoint_ns=checkpoint_ns,
+                        storage_owner=(session_id, thread_id), read_snapshot=skill_read_snapshot,
+                    )
+
+                frozen_skills = skill_catalog_from_activation(activation_snapshot, read_skill_payload)
                 pending_catalog = None
-                if previous is not None:
+                if frozen_skills is not None and previous is not None:
+                    # 待封存的显式选择来自上一已封存调用，新目录不能覆盖原选择。
                     original = owner.load_sealed_resource_activation(
                         session_id, thread_id=thread_id, assembly_id=previous.assembly_id,
                         plan_hash=previous.plan_hash, request_hash=previous.request_hash,
                         checkpoint_ns=checkpoint_ns,
                     )
-                    pending_catalog = skill_catalog_from_activation(
-                        original, lambda frozen, binding: owner.read_resource_activation_payload(
-                            frozen, binding, checkpoint_ns=checkpoint_ns,
-                            storage_owner=(session_id, thread_id),
-                        ),
-                    )
+                    pending_catalog = skill_catalog_from_activation(original, read_skill_payload)
+            # 关闭正文读取快照后才安装 CSM 状态，避免持读锁进入控制状态写事务。
+            if frozen_skills is not None:
                 install_frozen_skill_catalog(
                     context_source_manager, frozen_skills,
                     include_instructions="skill_load" in tool_set.tool_names,
