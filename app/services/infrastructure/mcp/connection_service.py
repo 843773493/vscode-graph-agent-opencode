@@ -62,7 +62,10 @@ class McpConnectionService:
         return self._workspace_id
 
     def _configuration_ref(self, server_id: str) -> str:
-        return sha256_jcs(asdict(self._owner.server_configuration(server_id)))
+        server = self._owner.server_configuration(server_id)
+        payload = asdict(server)
+        payload["managed_launch"] = server.managed_launch.model_dump(mode="json") if server.managed_launch is not None else None
+        return sha256_jcs(payload)
 
     def _connection_id(self, server_id: str) -> str:
         return f"mcp-server:v1:{self._workspace_id}:{server_id}"

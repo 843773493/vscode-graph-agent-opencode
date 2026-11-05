@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
@@ -251,6 +252,119 @@ async def test_preparation_error_remains_primary_when_failure_recording_fails(tm
     assert owner.operation(request.operation_id).status == "running"
     assert owner.artifacts() == []
     await owner.close()
+
+
+async def _completed_installation(owner: McpInstallationOwner, operation_id: str) -> McpInstallationOperationDTO:
+    async with asyncio.timeout(3):
+        while (operation := owner.operation(operation_id)).status == "running":
+            await asyncio.sleep(0.01)
+    return operation
+
+
+@pytest.fixture
+def no_artifact_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def prepare(root: Path, *, name: str, version: str, index: str, entrypoint: str, progress: StageCallback) -> tuple[str, str, dict[str, str]]:
+        pytest.fail("暖复用不得重新准备或下载制品")
+
+    monkeypatch.setattr("app.services.infrastructure.mcp.installation.owner.prepare_python_artifact", prepare)
+
+
+@pytest.mark.usefixtures("no_artifact_preparation")
+async def test_warm_reuse_keeps_independent_operation_intent_and_exact_binding(
+    published_artifact: tuple[McpInstallationOwner, McpInstalledArtifactDTO, Path],
+    installation_intent: tuple[McpInstallationRequestDTO, McpCandidatePlanDTO, dict[str, object]],
+) -> None:
+    owner, artifact, dependency = published_artifact
+    request, plan, parameters = installation_intent
+    original = owner.operation("original")
+    first = await owner.install(request, plan=plan, parameters={**parameters, "arguments": ["A1"], "env": {"WORKSPACE": "A1"}})
+    completed = await _completed_installation(owner, first.operation_id)
+    assert completed.status == "succeeded" and completed.artifact == artifact
+    changed_digest = "sha256:jcs:v1:" + "f" * 64
+    second_request = request.model_copy(update={"operation_id": "warm-A2", "plan_digest": changed_digest})
+    second_plan = plan.model_copy(update={"plan_digest": changed_digest, "parameters": {**parameters, "arguments": ["A2"], "env": {"WORKSPACE": "A2"}}})
+    second = await owner.install(second_request, plan=second_plan, parameters=second_plan.parameters)
+    second_completed = await _completed_installation(owner, second.operation_id)
+    assert second_completed.status == "succeeded" and second_completed.artifact == artifact
+    assert second_completed.operation_id != completed.operation_id and second_completed.intent_digest != completed.intent_digest
+    assert second_completed.created_at > original.created_at
+    assert owner.operation("original") == original
+    assert owner.artifacts() == [artifact] and dependency.read_text(encoding="utf-8") == "VALUE = 'locked'\n"
+    assert await owner.install(second_request, plan=second_plan, parameters=second_plan.parameters) == second_completed
+    await owner.close()
+
+
+@pytest.mark.parametrize("field", ["source", "manifest_digest", "variant", "platform", "identifier", "version", "entrypoint"])
+def test_warm_reuse_requires_exact_artifact_identity(
+    published_artifact: tuple[McpInstallationOwner, McpInstalledArtifactDTO, Path],
+    installation_intent: tuple[McpInstallationRequestDTO, McpCandidatePlanDTO, dict[str, object]], tmp_path: Path, field: str,
+) -> None:
+    _, artifact, _ = published_artifact
+    _, plan, _ = installation_intent
+    values: dict[str, object] = {"identifier": artifact.identifier, "version": artifact.version, "entrypoint": artifact.entrypoint}
+    changed = plan.model_dump()
+    if field == "source":
+        changed["source"] = {**plan.source.model_dump(), "name": "another-source"}
+    elif field == "manifest_digest":
+        changed[field] = "sha256:jcs:v1:" + "0" * 64
+    elif field == "variant":
+        changed[field] = {**plan.variant.model_dump(), "index": 1}
+    elif field == "platform":
+        changed[field] = {**plan.platform.model_dump(), "architecture": "another-architecture"}
+    else:
+        values[field] = "2" if field == "version" else "another"
+    store = InstallationStore(tmp_path / "home/artifacts/mcp" / artifact.binding.backend_id)
+    assert store.reusable(McpCandidatePlanDTO.model_validate(changed), identifier=str(values["identifier"]),
+        version=str(values["version"]), entrypoint=str(values["entrypoint"])) is None
+    assert store.artifacts() == [artifact]
+
+
+@pytest.mark.usefixtures("no_artifact_preparation")
+@pytest.mark.parametrize("failure", ["ambiguous", "tampered", "missing"])
+async def test_warm_reuse_fails_without_rebuilding_or_changing_original_artifact(
+    published_artifact: tuple[McpInstallationOwner, McpInstalledArtifactDTO, Path],
+    installation_intent: tuple[McpInstallationRequestDTO, McpCandidatePlanDTO, dict[str, object]], tmp_path: Path, failure: str,
+) -> None:
+    owner, artifact, dependency = published_artifact
+    request, plan, parameters = installation_intent
+    expected_artifacts = [artifact]
+    if failure == "ambiguous":
+        second_binding = artifact.binding.model_copy(update={"installation_id": "e" * 32, "generation": "f" * 32})
+        destination = tmp_path / "home/artifacts/mcp" / second_binding.backend_id / "generations" / second_binding.installation_id / second_binding.generation
+        shutil.copytree(dependency.parent, destination)
+        duplicate = artifact.model_copy(update={"binding": second_binding, "command": str(destination / Path(artifact.command).relative_to(dependency.parent))})
+        store = InstallationStore(tmp_path / "home/artifacts/mcp" / artifact.binding.backend_id)
+        duplicate_operation = McpInstallationOperationDTO(operation_id="duplicate", intent_digest="another-operation", status="running", stage="prepare", created_at=2, updated_at=2)
+        store.reserve(duplicate_operation)
+        store.publish(duplicate_operation, duplicate)
+        assert owner.resolve(duplicate.binding, verify=True) == duplicate.command
+        expected_artifacts = [artifact, duplicate]
+        message = "多个已发布 generation"
+    elif failure == "tampered":
+        dependency.write_text("VALUE = 'changed'\n", encoding="utf-8")
+        message = "制品内容已改变"
+    else:
+        Path(artifact.command).unlink()
+        message = "制品发布路径丢失"
+    original = owner.operation("original")
+    await owner.install(request, plan=plan, parameters=parameters)
+    observed = await _completed_installation(owner, request.operation_id)
+    assert observed.status == "failed" and observed.artifact is None and message in (observed.error or "")
+    assert owner.operation("original") == original and owner.artifacts() == expected_artifacts
+    await owner.close()
+
+
+def test_reuse_publication_cannot_rewrite_existing_artifact(installation_store: InstallationStore, operation: McpInstallationOperationDTO,
+    published_artifact: tuple[McpInstallationOwner, McpInstalledArtifactDTO, Path]) -> None:
+    _, artifact, _ = published_artifact
+    installation_store.reserve(operation)
+    installation_store.publish(operation, artifact)
+    next_operation = operation.model_copy(update={"operation_id": "warm-operation"})
+    installation_store.reserve(next_operation)
+    with pytest.raises(McpCandidateConflict, match="不能改写原 generation"):
+        installation_store.publish(next_operation, artifact.model_copy(update={"lock_digest": "sha256:" + "0" * 64}))
+    assert installation_store.operation(next_operation.operation_id) == next_operation
+    assert installation_store.artifacts() == [artifact]
 
 
 def test_managed_launch_requires_owner_and_cannot_override_command(binding: McpManagedLaunchDTO, tmp_path: Path) -> None:

@@ -72,10 +72,6 @@ class McpInstallationOwner:
 
     async def _prepare(self, operation: McpInstallationOperationDTO, request: McpInstallationRequestDTO,
         plan: McpCandidatePlanDTO, name: str, version: str, index: str) -> None:
-        installation_id = create_uuid_hex(namespace="mcp-installation")
-        generation = create_uuid_hex(namespace="mcp-artifact")
-        root = self._root / "generations" / installation_id / generation
-
         async def progress(stage: str, output: str = "") -> None:
             nonlocal operation
             operation = operation.model_copy(update={"stage": cast(str, stage), "updated_at": time.time(),
@@ -83,16 +79,27 @@ class McpInstallationOwner:
             operation = await run_sync_shielded(self._store.update, operation)
 
         try:
-            command, lock_digest, distributions = await prepare_python_artifact(root,
-                name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress)
-            await progress("publish")
-            digest = await run_sync_shielded(artifact_digest, root)
-            artifact = McpInstalledArtifactDTO(
-                binding=McpManagedLaunchDTO(backend_id=self.backend_id, installation_id=installation_id,
-                    generation=generation, artifact_digest=digest),
-                source=plan.source, manifest_digest=plan.manifest_digest, variant=plan.variant, platform=plan.platform,
-                identifier=name, version=version, entrypoint=request.entrypoint, command=command,
-                lock_digest=lock_digest, installed_distributions=distributions)
+            # TODO(2.5)：这里只复用已发布制品；冷态并发同制品的准备归并仍需实现。
+            artifact = await run_sync_shielded(self._store.reusable, plan, identifier=name, version=version, entrypoint=request.entrypoint)
+            if artifact is not None:
+                await progress("verify", "核验已有精确制品，复用原 generation；不重新下载或解析依赖\n")
+                await run_sync_shielded(self.resolve, artifact.binding, verify=True)
+                await progress("publish")
+            else:
+                installation_id = create_uuid_hex(namespace="mcp-installation")
+                generation = create_uuid_hex(namespace="mcp-artifact")
+                root = self._root / "generations" / installation_id / generation
+                command, lock_digest, distributions = await prepare_python_artifact(root,
+                    name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress)
+                await progress("publish")
+                digest = await run_sync_shielded(artifact_digest, root)
+                artifact = McpInstalledArtifactDTO(
+                    binding=McpManagedLaunchDTO(backend_id=self.backend_id, installation_id=installation_id,
+                        generation=generation, artifact_digest=digest),
+                    source=plan.source, manifest_digest=plan.manifest_digest, variant=plan.variant, platform=plan.platform,
+                    identifier=name, version=version, entrypoint=request.entrypoint, command=command,
+                    lock_digest=lock_digest, installed_distributions=distributions)
+            # TODO(2.5)：工作区持久引用及物理卸载保护仍需实现，不能据此删除 generation。
             await run_sync_shielded(self._store.publish, operation, artifact)
         except BaseException as error:
             # 未发布目录保留给原操作核实，绝不返回可启动 binding，也不删除已发布旧版。

@@ -23,6 +23,7 @@
 - [ ] 2.4 实现有界进度、日志、意图指纹／幂等操作、取消及中断查询，暂存验证后发布；核同键异参数冲突、断流／重启不重放未知脚本，安装、配置与 ready 分阶段报告。
   - PyPI 原操作终态／取消结算／进程退出查询已完成定向切片，见2026-11-05证据；尚无用户取消入口及其它生态验收，整项保持未完成。
 - [ ] 2.5 实现同安装域精确版本复用、工作区引用、更新失败保留旧版及物理卸载检查；制品引用绑定原 connection generation，沿原退休／监督释放；验证 A1/A2、并发同意图、旧调用／cleanup_failed／结果未知保留和有引用拒绝卸载。
+  - 2026-11-05 已发布 PyPI 暖复用限定切片：原安装账本按完整来源、manifest／variant、平台、精确版本及入口匹配并全量校验原 generation；制品身份不含工作区 args／env 或 plan_digest，新 operation_id 保留独立意图和回执。真实 Gateway／Backend／uv／wheel 双工作区 1 passed／57.71 秒，覆盖 A1 发布后 A2 无新增索引或下载请求、仅一份制品与 generation、各自参数／cwd／环境／进程／连接，以及断开 A1 后 A2 原 connection_ref 仍 ready。原连接指纹已迁齐 managed_launch JSON 消费并保留 unmanaged 指纹与配置失效行为；31 项安装单测、8 项指纹／准入／重启对账单测及 Ruff／Pyright 通过。准确命令、源码指纹、原始失败与成功输出及补丁见 `out/tests/temp/extension_next_20261105/artifacts/warm-final-evidence.json`。冷态并发归并、工作区持久引用、旧调用／cleanup_failed／结果未知占用及物理卸载保护仍未完成，Windows／macOS 未验，整项保持未勾选。
 
 ## 3. MCP 与现有 Agent 唯一链路
 

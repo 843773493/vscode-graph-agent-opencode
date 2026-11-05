@@ -15,6 +15,7 @@ import psutil
 
 from app.domain.mcp_candidates import McpCandidateConflict
 from app.schemas.internal_v2.mcp import (
+    McpCandidatePlanDTO,
     McpInstallationOperationDTO,
     McpInstalledArtifactDTO,
 )
@@ -113,8 +114,23 @@ class InstallationStore:
             if current.status != "running":
                 raise McpCandidateConflict(f"MCP 安装操作已结算为 {current.status}，不能迟到发布制品")
             complete = current.model_copy(update={"status": "succeeded", "stage": "complete", "updated_at": time.time(), "artifact": artifact})
-            connection.execute("INSERT INTO artifacts VALUES (?, ?)", (artifact.binding.installation_id, artifact.model_dump_json()))
+            row = connection.execute("SELECT payload FROM artifacts WHERE installation_id=?", (artifact.binding.installation_id,)).fetchone()
+            if row is None:
+                connection.execute("INSERT INTO artifacts VALUES (?, ?)", (artifact.binding.installation_id, artifact.model_dump_json()))
+            elif McpInstalledArtifactDTO.model_validate_json(row[0]) != artifact:
+                raise McpCandidateConflict("MCP 已发布制品记录与本次发布不一致，不能改写原 generation")
             connection.execute("UPDATE operations SET payload=? WHERE operation_id=?", (complete.model_dump_json(), operation.operation_id))
+
+    def reusable(self, plan: McpCandidatePlanDTO, *, identifier: str, version: str, entrypoint: str) -> McpInstalledArtifactDTO | None:
+        # 制品身份不含工作区 args/env 或其 plan_digest；原件摘要已固定实际 index 与包定义。
+        matches = [artifact for artifact in self.artifacts()
+            if artifact.source == plan.source and artifact.manifest_digest == plan.manifest_digest
+            and artifact.variant == plan.variant and artifact.platform == plan.platform
+            and artifact.identifier == identifier
+            and artifact.version == version and artifact.entrypoint == entrypoint]
+        if len(matches) > 1:
+            raise McpCandidateConflict("MCP 精确制品匹配多个已发布 generation，必须先核实歧义，不能选择首项")
+        return matches[0] if matches else None
 
     def artifacts(self) -> list[McpInstalledArtifactDTO]:
         with self._connect() as connection:
