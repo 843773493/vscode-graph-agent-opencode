@@ -618,15 +618,18 @@ class ToolSetRef(ToolSetIdentityRef):
         )
 
     def __post_init__(self) -> None:
-        for name in ("tool_policy", "tools"):
-            object.__setattr__(self, name, copy_json_value(object.__getattribute__(self, name)))
+        # 构造内只检查本次冻结的值；公开 getter 的隔离副本留给外部读取。
+        policy = copy_json_value(object.__getattribute__(self, "tool_policy"))
+        tools = copy_json_value(object.__getattribute__(self, "tools"))
+        object.__setattr__(self, "tool_policy", policy)
+        object.__setattr__(self, "tools", tools)
         ToolSetIdentityRef.__post_init__(self)
-        if not isinstance(self.tool_policy, Mapping):
+        if not isinstance(policy, Mapping):
             raise ItemSchemaError("ToolSetRef.tool_policy 必须是 object")
-        if not isinstance(self.tools, tuple):
+        if not isinstance(tools, tuple):
             raise ItemSchemaError("ToolSetRef.tools 必须是 tuple")
         tool_ids: list[str] = []
-        for tool in self.tools:
+        for tool in tools:
             if not isinstance(tool, Mapping):
                 raise ItemSchemaError("ToolSetRef.tools 元素必须是 object")
             tool_ids.append(
@@ -636,7 +639,7 @@ class ToolSetRef(ToolSetIdentityRef):
             raise ItemSchemaError("ToolSetRef.tools 必须按 tool_id 稳定排序")
         if len(tool_ids) != len(set(tool_ids)):
             raise ItemSchemaError("ToolSetRef.tools 不得包含重复 tool_id")
-        wire_order = self.tool_policy.get("wire_tool_order")
+        wire_order = policy.get("wire_tool_order")
         if (
             not isinstance(wire_order, (list, tuple))
             or not all(isinstance(identity, str) for identity in wire_order)
