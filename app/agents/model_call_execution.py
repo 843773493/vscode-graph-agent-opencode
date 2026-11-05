@@ -13,7 +13,7 @@ from uuid import UUID
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse
 from langchain.agents.structured_output import ResponseFormat, ToolStrategy
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolCall, ToolMessage
 from langchain_core.runnables import Runnable, RunnableBinding
 
 from app.agents.model_capability_routing import current_selected_provider
@@ -170,6 +170,7 @@ def _bind_response_model_call(
     messages = []
     pending_assistants: list[AIMessage] = []
     call_counts: dict[str, int] = {}
+    retained_calls: list[ToolCall] = []
     for message in model_response.result:
         if isinstance(message, (AIMessage, ToolMessage)):
             existing = codec.model_call_id(message)
@@ -188,6 +189,8 @@ def _bind_response_model_call(
                         if isinstance(call["id"], str):
                             key = provider_tool_call_id(identity, call["id"])
                             call_counts[key] = call_counts.get(key, 0) + 1
+                        if retain_calls is not None:
+                            retained_calls.append(call)
                 pending_assistants.clear()
                 if call_counts.get(provider_tool_call_id(identity, message.tool_call_id), 0) != 1:
                     raise ValueError(
@@ -200,7 +203,9 @@ def _bind_response_model_call(
         messages.append(message)
     bound = replace(model_response, result=messages)
     if retain_calls is not None:
-        retain_calls([call for message in messages if isinstance(message, AIMessage) for call in message.tool_calls])
+        # 复用配对时已读取的原始声明，只补齐尾部尚未消费的声明，保留原顺序和列表契约。
+        retained_calls.extend(call for assistant in pending_assistants for call in assistant.tool_calls)
+        retain_calls(retained_calls)
     return replace(response, model_response=bound) if isinstance(response, ExtendedModelResponse) else bound
 
 
@@ -650,7 +655,8 @@ class ModelCallExecution:
         # 消费 on_chat_model_start。prepared handle 必须保留到该事件由
         # RolloutCheckpointSaver 绑定真实 model_call_id 后再移除，不能在
         # execution 的返回路径提前清理。
-        with prepared.get("extension_call_scope", nullcontext(lambda _calls: None)) as retain_calls, sealed_assembly_dispatch_scope(
+        # 无租约时传入 None，返回边界无需为无操作回调收集工具声明。
+        with prepared.get("extension_call_scope", nullcontext()) as retain_calls, sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], prepared["snapshot"],
             resource_refs=prepared["resource_refs"],
             native_projection=prepared.get("native_projection"),
@@ -688,7 +694,7 @@ class ModelCallExecution:
         prepared, messages, tools = self._project_prepared(request, await self._aprepare(request))
         # 同步执行入口的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。
-        with prepared.get("extension_call_scope", nullcontext(lambda _calls: None)) as retain_calls, sealed_assembly_dispatch_scope(
+        with prepared.get("extension_call_scope", nullcontext()) as retain_calls, sealed_assembly_dispatch_scope(
             prepared["dispatch_ref"], prepared["snapshot"],
             resource_refs=prepared["resource_refs"],
             native_projection=prepared.get("native_projection"),

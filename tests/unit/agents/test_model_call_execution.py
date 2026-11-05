@@ -151,8 +151,26 @@ async def test_response_pairing_visits_tool_declarations_linearly(
     assert assistant.response_metadata == {}
     assert all(message.response_metadata == {} for message in results)
     print(f"tools={tool_count}, mode={mode}, retain={retain}, declaration_visits={visits}")
-    # execute 默认的无操作 retention 也会消费一次完整声明列表。
-    assert visits <= tool_count * 2
+    # 配对已消费的原始声明可直接交给 retention，无需再次遍历声明列表。
+    assert visits <= tool_count
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_response_retention_keeps_consumed_and_tail_calls_in_original_order(
+    bridge, response_dispatch, mode,
+):
+    _model_call_id, dispatch = response_dispatch
+    first = AIMessage(content="", tool_calls=[{"id": "first", "name": "answer", "args": {}}])
+    second = AIMessage(content="", tool_calls=[{"id": "second", "name": "answer", "args": {}}])
+    tail = AIMessage(content="尾部声明").model_copy(update={"tool_calls": [{"name": "unconsumed"}]})
+    calls = []
+    bridge._prepare_projection.return_value[0]["extension_call_scope"] = nullcontext(calls.append)
+    await dispatch(ModelResponse(result=[
+        first, ToolMessage(content="第一项结果", tool_call_id="first"),
+        second, ToolMessage(content="第二项结果", tool_call_id="second"), tail,
+    ]), mode)
+    assert calls == [[*first.tool_calls, *second.tool_calls, *tail.tool_calls]]
+    assert isinstance(calls[0], list)
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
