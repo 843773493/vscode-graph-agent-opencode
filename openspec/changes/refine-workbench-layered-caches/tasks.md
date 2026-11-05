@@ -20,6 +20,8 @@
 
 2026-11-05，17.1 完成实际入口清点：原图片与 React Markdown 图片共用普通 raw，原 Webview 沿隔离 v6 Worker／FileService，附件保留 Session owner；第三方 URL、Range、下载／临时及失败边界独立。路径、源码指纹及证据归属见 `out/tests/temp/2026/11/05/cache_cancellation/artifacts/inventory-001.json`。17.4 修复原 Provider 在路由解析／字节转换取消后仍交付迟到结果的两个真实反例；同时迁齐旧 watcher 装具的稳定 owner、资源 URI 与具名导航入口，保持首次建连零伪更新。定向12用例／77断言、49份转换源码完整类型检查及正式Web构建通过，准确命令、前后失败原件及指纹见 `out/tests/temp/2026/11/05/cache_cancellation/artifacts/verification-001.json`。此片仅证明具名 Provider／传输边界，17.4 的身份切换、断连等及 Electron 仍待验收。
 
+2026-11-05，17.5／17.6 补齐 Webview 引擎淘汰场景：完整 `76649e377`／固定上游快照、正式 Workbench 和真实 Gateway `1 passed / 74.83s / exit 0`，4406份源码前后不变，正式构建 `exit 0 / 39.28s`。只通过原 Cache API 删除 CSS／字体两条记录，原 Worker／宿主重新读取并建立130／154012字节资源；另一个真实加载的52字节 CSS 条目保持原 ETag／MIME／正文长度且零新增 raw。无响应替身、无模型调用、pageErrors为空，原生关闭诊断保留；Ruff、Python类型及驱动ESM检查通过。首次空保留集结果另存，不用于证明非目标记录保留。收据 `out/tests/temp/2026/11/05/webview_eviction/artifacts/verification-003.json`（SHA256 `5aeec2fb6a94d3ffabcaf1bb045fd93550d0f6776a6dcf046315d1a12a8b098c`）；该片不代表产品新增清理入口，配额／写入诊断、身份／route、受保护数据和打包Electron仍待验收，17.5／17.6保持未勾。
+
 ## 18. 分层缓存接入与恢复数据保护（2026-11-03 扩展设计）
 
 覆盖规范：缓存必须按原服务分层管理；编辑器模型共享必须保持恢复与版本归属；派生缓存必须绑定适用身份与代际；缓存清理与升级不得删除受保护恢复数据；运行资源与代码缓存必须遵守实际构建和宿主边界。

@@ -61,6 +61,7 @@ try {
   const probe = body.locator('.cache-probe');
   await expect(probe).toHaveText('原文件 CSS 与字体', { timeout: 60000 });
   await expect(probe).toHaveCSS('color', 'rgb(17, 34, 51)');
+  await expect(probe).toHaveCSS('background-color', 'rgb(90, 91, 92)');
   await probe.evaluate(async element => {
     await element.ownerDocument.fonts.load('16px CacheProbe');
     if (!element.ownerDocument.fonts.check('16px CacheProbe')) throw new Error('原 Webview 字体未加载');
@@ -73,6 +74,7 @@ try {
   expect(result.failedRequests.filter(item => new URL(item.url).pathname.startsWith('/extensions/'))).toEqual([]);
   const cssUri = fixture.rootUri + '/webview-cache/style.css';
   const fontUri = fixture.rootUri + '/webview-cache/font.ttf';
+  const retainedUri = fixture.rootUri + '/webview-cache/retained.css';
   const raw = uri => result.requests.filter(item => new URL(item.url).pathname === '/api/v1/workspace/files/raw'
     && new URL(item.url).searchParams.get('path') === uri);
   expect(raw(cssUri).length).toBeGreaterThan(0);
@@ -95,6 +97,8 @@ try {
     item.url.includes('/webview-cache/style.css') && item.etag && item.bytes > 0)).toBe(true);
   await expect.poll(async () => (await inspectCache()).some(item =>
     item.url.includes('/webview-cache/font.ttf') && item.etag && item.bytes > 0)).toBe(true);
+  await expect.poll(async () => (await inspectCache()).some(item =>
+    item.url.includes('/webview-cache/retained.css') && item.etag && item.bytes > 0)).toBe(true);
   result.cacheEntries = await inspectCache();
   expect(result.cacheEntries.find(item => item.url.includes('/webview-cache/font.ttf'))?.mime).toBe('font/ttf');
   result.phase = 'warm-preview';
@@ -114,6 +118,42 @@ try {
   await command('markdown.preview.refresh');
   await expect(probe).toHaveCSS('color', 'rgb(61, 72, 83)');
   expect(raw(cssUri).length).toBeGreaterThan(before.css);
+  result.phase = 'evicted-resource-entries';
+  const originalEtag = result.cacheEntries.find(item => item.url.includes('/webview-cache/style.css')).etag;
+  await expect.poll(async () => {
+    const current = (await inspectCache()).find(item => item.url.includes('/webview-cache/style.css'));
+    return Boolean(current?.etag && current.etag !== originalEtag);
+  }).toBe(true);
+  const stored = await inspectCache();
+  const evicted = stored.filter(item => item.url.includes('/webview-cache/style.css')
+    || item.url.includes('/webview-cache/font.ttf'));
+  expect(evicted).toHaveLength(2);
+  // 只模拟引擎丢弃两条可再生资源；其它扩展资源与工作台存储均保持原件。
+  const removed = await outer.evaluate(async entries => {
+    const removed = [];
+    for (const entry of entries) {
+      if (await (await caches.open(entry.name)).delete(entry.url)) removed.push(entry.url);
+    }
+    return removed;
+  }, evicted);
+  expect(removed).toEqual(evicted.map(item => item.url));
+  const retained = stored.filter(item => !removed.includes(item.url));
+  expect(retained.some(item => item.url.includes('/webview-cache/retained.css') && item.bytes > 0)).toBe(true);
+  const afterEviction = await inspectCache();
+  expect(afterEviction).toEqual(expect.arrayContaining(retained));
+  expect(afterEviction.some(item => removed.includes(item.url))).toBe(false);
+  const beforeEviction = { css: raw(cssUri).length, font: raw(fontUri).length, retained: raw(retainedUri).length };
+  await command('markdown.preview.refresh');
+  await expect(probe).toHaveCSS('color', 'rgb(61, 72, 83)');
+  await expect(probe).toHaveCSS('background-color', 'rgb(90, 91, 92)');
+  await probe.evaluate(element => element.ownerDocument.fonts.load('16px CacheProbe').then(() => undefined));
+  await expect.poll(() => raw(cssUri).length).toBeGreaterThan(beforeEviction.css);
+  await expect.poll(() => raw(fontUri).length).toBeGreaterThan(beforeEviction.font);
+  await expect.poll(async () => (await inspectCache()).filter(item => removed.includes(item.url))
+    .filter(item => item.etag && item.bytes > 0).length).toBe(2);
+  expect(raw(retainedUri)).toHaveLength(beforeEviction.retained);
+  expect(await inspectCache()).toEqual(expect.arrayContaining(retained));
+  result.eviction = { removed, retained, restored: (await inspectCache()).filter(item => removed.includes(item.url)) };
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';
 } catch (error) {

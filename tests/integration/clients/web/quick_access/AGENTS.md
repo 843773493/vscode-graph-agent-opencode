@@ -38,4 +38,6 @@
 
 `test_development_hmr` 使用完整 Git 源码快照和当前差异、固定上游副本及只读依赖链接，经产品 Node／Vite 入口和真实 Gateway 打开页面；只在独占副本中修改导航观测属性，验证自动更新通知及新页面内容，不手动刷新、不替换响应。Vite 可以按原行为自动整页重载；脚本 URL 按路径核对并保留查询参数原件。依赖链接引起的字体访问拒绝及原生关闭诊断如实保留，不据 HMR 通过宣称界面零错误、发行或 Electron 验收。
 
-`test_webview_resource_cache` 经真实 Gateway 和正式 Workbench 打开原 Markdown 预览；CSS、字体及贡献扩展脚本沿原隔离 Worker 加载，无响应替身。核首次正文、热读时仍有 describe 且不重传 raw、更新后新正文与样式、Cache Storage 的 ETag／字体 MIME。模型回放仅提供启动配置，要求零模型请求；本项不代替身份切换、淘汰或打包 Electron 重启验收。回环代理的条件头／304 透传另由 `workbench_server.test.mjs` 的明确 HTTP 替身验证。
+`test_webview_resource_cache` 经真实 Gateway 和正式 Workbench 打开原 Markdown 预览；CSS、字体及贡献扩展脚本沿原隔离 Worker 加载，无响应替身。核首次正文、热读时仍有 describe 且不重传 raw、更新后新正文与样式、Cache Storage 的 ETag／字体 MIME。模型回放仅提供启动配置，要求零模型请求；本项不代替身份切换、配额失败诊断或打包 Electron 重启验收。回环代理的条件头／304 透传另由 `workbench_server.test.mjs` 的明确 HTTP 替身验证。
+
+资源淘汰场景仅通过原 Cache API 删除测试 CSS／字体两条记录，保留其它缓存条目；刷新仍经过原 Worker／宿主和真实文件 owner 重建。该具名故障注入不表示产品新增清理入口，也不证明配额失败诊断、工作台受保护数据清理或 Electron 重启。

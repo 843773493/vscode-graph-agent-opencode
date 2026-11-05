@@ -52,7 +52,11 @@ async def test_original_markdown_webview_revalidates_css_and_font(
     directory.mkdir()
     (directory / "preview.md").write_text(
         '# 原 Webview 缓存\n\n<link rel="stylesheet" href="./style.css">\n\n'
+        '<link rel="stylesheet" href="./retained.css">\n\n'
         '<p class="cache-probe">原文件 CSS 与字体</p>\n', encoding="utf-8",
+    )
+    (directory / "retained.css").write_text(
+        '.cache-probe { background-color: rgb(90, 91, 92); }\n', encoding="utf-8",
     )
     (directory / "style.css").write_text(
         '@font-face { font-family: CacheProbe; src: url("./font.ttf"); }\n'
@@ -83,6 +87,8 @@ async def test_original_markdown_webview_revalidates_css_and_font(
     assert process.returncode == 0, process.stdout + process.stderr
     result = json.loads(result_path.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
+    assert len(result["eviction"]["removed"]) == len(result["eviction"]["restored"]) == 2
+    assert any("/webview-cache/retained.css" in entry["url"] for entry in result["eviction"]["retained"])
     with provider.control._condition:
         calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}
     assert calls == {}, "原文件 Webview 读取不应触发模型请求"
