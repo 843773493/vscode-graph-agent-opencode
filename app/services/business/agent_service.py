@@ -28,6 +28,8 @@ class AgentService:
                 )
                 provider_dtos: list[AgentProviderDTO] = []
                 for provider_config in agent_runtime_config["providers"]:
+                    # TODO: 明确“配置就绪”与“SDK 可构造”的对外语义后，再将重型构造移到执行入口。
+                    # OAuth 凭据可独立更新，不能仅按配置 revision 缓存这里的检查结果。
                     # 首次 SDK 导入及模型目录等待不能阻塞同循环的健康检查和业务请求。
                     configuration_error = await asyncio.to_thread(
                         provider_configuration_error,
