@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Literal, Self, cast
 
 from app.core.config_sources import config_revision
 from app.core.sqlite_state import (
@@ -43,6 +45,9 @@ from .apply import WorkspaceStateStoreApplyMixin
 from .pending import WorkspaceStateStorePendingMixin
 from .restart import WorkspaceStateStoreRestartMixin
 from .snapshot import WorkspaceStateStoreSnapshotMixin
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 
 __all__ = [
     "WorkspaceActivityCursorGoneError",
@@ -172,6 +177,7 @@ class WorkspaceStateStore(
 ):
     def __init__(self, *, workspace_root: Path) -> None:
         self.workspace_root = workspace_root.expanduser().resolve()
+        self._mcp_installations: McpInstallationOwner | None = None
         self._database = SQLiteStateDatabase(
             path=self.workspace_root / ".boxteam" / "state" / "workspace.sqlite",
             schema_version=len(_WORKSPACE_MIGRATIONS),
@@ -184,6 +190,51 @@ class WorkspaceStateStore(
 
     def connection(self) -> sqlite3.Connection:
         return self._database.connection()
+
+    def bind_mcp_installations(self, owner: McpInstallationOwner) -> None:
+        if self._mcp_installations is not None:
+            raise RuntimeError("工作区配置只能绑定一个原生 MCP 安装 owner")
+        self._mcp_installations = owner
+
+    @contextmanager
+    def _mcp_config_write(self, payload: dict[str, object] | None) -> Iterator[sqlite3.Connection]:
+        from app.services.infrastructure.mcp.installation.references import (
+            managed_launches,
+        )
+
+        bindings = tuple(binding for _, binding in managed_launches(payload))
+        if bindings and self._mcp_installations is None:
+            raise ValueError("受管 MCP 配置写入缺少原生安装 owner 准入")
+        guard = self._mcp_installations.reference_write(bindings) if bindings and self._mcp_installations is not None else nullcontext()
+        # 安装事务先于工作区事务；卸载只读工作区，不反向取得 writer 锁。
+        with guard:
+            connection = self._database.connection()
+            try:
+                with connection:
+                    yield connection
+            finally:
+                connection.close()
+
+    @staticmethod
+    def mcp_reference_payloads(workspace_root: Path) -> list[tuple[Literal["source_layer", "active", "pending"], str, str, dict[str, object]]]:
+        """只读原权威表；不创建库、不迁移、不把历史终态候选算作当前引用。"""
+        path = workspace_root / ".boxteam" / "state" / "workspace.sqlite"
+        connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+        try:
+            connection.execute("BEGIN")
+            versions = tuple(row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version"))
+            if versions != tuple(range(1, len(_WORKSPACE_MIGRATIONS) + 1)):
+                raise RuntimeError("工作区配置 schema 未核实，不能推定无制品引用")
+            rows = connection.execute(
+                "SELECT 'source_layer', config_key, presence, payload_json FROM config_source_layers WHERE presence='present' "
+                "UNION ALL SELECT 'active', config_domain, state, payload_json FROM config_active_snapshot WHERE config_domain='workspace' "
+                "UNION ALL SELECT 'pending', candidate_id, state, payload_json FROM config_pending_candidate "
+                "WHERE config_domain='workspace' AND state NOT IN ('active','discarded')"
+            ).fetchall()
+            return [(cast(Literal["source_layer", "active", "pending"], kind), key, state,
+                load_json_object(payload, field="MCP configuration reference")) for kind, key, state, payload in rows]
+        finally:
+            connection.close()
 
     def diagnostics(self) -> SQLiteDiagnostics:
         return self._database.diagnostics()

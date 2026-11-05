@@ -42,8 +42,9 @@
 
 # 规范
 
-- `WorkspaceConfigSourceMixin` 只依赖宿主类提供的 `_database`；不得假设
-  `WorkspaceStateStore` 的其它族方法存在。
+- `WorkspaceConfigSourceMixin` 只依赖宿主类提供的 `_database` 和
+  `_mcp_config_write(payload)` 事务准入钩子，不依赖具体宿主类型或其它族方法。
+  后者在安装域准入后提供原工作区连接；本族继续独占 layer／journal 的同一事务写入。
 - 本族三张表的 DDL 仍由宿主 `_WORKSPACE_MIGRATIONS` 装配，本模块只承载读写方法族，
   不重复定义建表语句；调整表结构须同步迁移序号与 `schema_version`。
 - `sync_config_source` 是 layer 行的唯一 writer，且必须在同一事务内完成

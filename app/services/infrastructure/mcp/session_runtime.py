@@ -184,6 +184,10 @@ class McpServerRuntime:
         return self.lifecycle.process.state if self.server.transport == "stdio" else None
 
     @property
+    def cleanup_failed(self) -> bool:
+        return self._close_failed
+
+    @property
     def running(self) -> bool:
         return self._session is not None and not self._closing and self._failure is None
 

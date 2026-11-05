@@ -407,18 +407,50 @@ class McpInstalledArtifactDTO(_McpCandidateModel):
     command: str
     lock_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     installed_distributions: dict[str, str]
+    state: Literal["published", "removing", "removal_failed", "removed"] = "published"
+    removal_operation_id: str | None = None
+    removal_error: str | None = None
 
 
 class McpInstallationOperationDTO(_McpCandidateModel):
     operation_id: str
     intent_digest: str
     status: Literal["running", "succeeded", "failed", "interrupted"]
-    stage: Literal["prepare", "lock", "install", "verify", "publish", "complete"]
+    stage: Literal["prepare", "lock", "install", "verify", "publish", "remove", "complete"]
     created_at: float
     updated_at: float
     artifact: McpInstalledArtifactDTO | None = None
     error: str | None = None
     log: str = Field(default="", max_length=65536)
+    kind: Literal["install", "uninstall"] = "install"
+
+
+class McpUninstallationRequestDTO(_McpCandidateModel):
+    target: McpInstallationTargetDTO
+    binding: McpManagedLaunchDTO
+    operation_id: str = Field(min_length=1)
+
+
+class McpArtifactReferenceDTO(_McpCandidateModel):
+    workspace_id: str
+    kind: Literal["source_layer", "active", "pending", "connection", "lease", "unavailable"]
+    status: str
+    reason: str
+    server_id: str | None = None
+    source_key: str | None = None
+    candidate_id: str | None = None
+    connection_ref: str | None = None
+    lease_id: str | None = None
+    operation_id: str | None = None
+
+
+class McpArtifactReferencesDTO(_McpCandidateModel):
+    binding: McpManagedLaunchDTO
+    references: list[McpArtifactReferenceDTO]
+
+
+class McpArtifactReferencesResponseDTO(_McpCandidateResponse):
+    data: McpArtifactReferencesDTO
 
 
 class McpInstallationOperationResponseDTO(_McpCandidateResponse):
@@ -439,7 +471,7 @@ class McpInstallationCapabilitiesDTO(_McpCandidateModel):
         "只安装 wheel，不运行 sdist 构建或自定义 runtimeArguments",
         "入口须显式选择并验证为根 distribution 的 console entry point",
         "依赖使用 uv.lock 校验，暂不支持目录单文件 fileSha256",
-        "安装不写入工作区配置、不等于连接 ready；物理卸载尚未接入",
+        "安装不写入工作区配置、不等于连接 ready；物理卸载须先结清全部实际引用",
     ])
 
 

@@ -95,8 +95,7 @@ class WorkspaceConfigSourceLayerMixin:
         if (enforce_active_cas or expected_active_revision is not None) and not config_domain:
             raise ValueError("active CAS 必须声明 config_domain")
 
-        connection = self._database.connection()
-        try:
+        with self._mcp_config_write(payload) as connection:
             connection.execute("BEGIN IMMEDIATE")
             if enforce_active_cas or expected_active_revision is not None:
                 active = connection.execute(
@@ -260,11 +259,6 @@ class WorkspaceConfigSourceLayerMixin:
                     ),
                 )
             connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
 
         record = self.get_source_layer(config_key)
         if record is None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +21,7 @@ from app.schemas.internal_v2.mcp import (
     McpCandidatePlanDTO,
     McpInstallationOperationDTO,
     McpInstalledArtifactDTO,
+    McpManagedLaunchDTO,
 )
 
 _INTERRUPTED = "原安装进程已退出；仅保留已确认阶段，未发布制品不可启动，请检查原操作后创建新意图"
@@ -56,7 +57,7 @@ class InstallationStore:
         self._process_started = psutil.Process(os.getpid()).create_time()
 
     def _execute_sql(self, connection: sqlite3.Connection, resource: str) -> None:
-        # 两份仓库固定资产均为简单 DDL；逐条执行，避免 executescript 隐式提交。
+        # 仓库固定资产均为简单 DDL；逐条执行，避免 executescript 隐式提交。
         for statement in load_sql("app.services.infrastructure.mcp.installation", resource).split(";"):
             if statement.strip():
                 connection.execute(statement)
@@ -69,7 +70,9 @@ class InstallationStore:
                 self._execute_sql(connection, "schema.sql")
             elif version == 1:
                 self._migrate_v1(connection)
-            elif version != 2:
+            elif version == 2:
+                self._execute_sql(connection, "upgrade_v2.sql")
+            elif version != 3:
                 raise RuntimeError(f"MCP 安装账本版本不受支持: {version}")
 
     def _migrate_v1(self, connection: sqlite3.Connection) -> None:
@@ -127,6 +130,88 @@ class InstallationStore:
         finally:
             connection.close()
 
+    @contextmanager
+    def reference_write(self) -> Iterator[sqlite3.Connection]:
+        """首个引用写入与卸载复用原安装事务；锁序始终先安装域再工作区。"""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+
+    def register_workspace(self, connection: sqlite3.Connection, workspace_id: str, root: Path) -> bool:
+        rows = connection.execute("SELECT workspace_id, root FROM workspace_locators WHERE workspace_id=? OR root=?",
+            (workspace_id, str(root))).fetchall()
+        if rows:
+            if rows != [(workspace_id, str(root))]:
+                raise McpCandidateConflict("MCP 安装域的工作区定位与稳定身份冲突，不能借用同名目录")
+            return False
+        connection.execute("INSERT INTO workspace_locators VALUES (?, ?)", (workspace_id, str(root)))
+        return True
+
+    def workspaces(self) -> list[tuple[str, Path]]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT workspace_id, root FROM workspace_locators ORDER BY workspace_id").fetchall()
+        return [(workspace_id, Path(root)) for workspace_id, root in rows]
+
+    @staticmethod
+    def require_artifact(connection: sqlite3.Connection, binding: McpManagedLaunchDTO, *, published: bool = True) -> McpInstalledArtifactDTO:
+        row = connection.execute("SELECT payload FROM artifacts WHERE installation_id=?", (binding.installation_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"MCP 制品尚未发布或不存在: {binding.installation_id}")
+        artifact = McpInstalledArtifactDTO.model_validate_json(row[0])
+        if artifact.binding != binding:
+            raise McpCandidateConflict("受管 MCP generation／digest 与唯一安装记录不匹配")
+        if published and artifact.state != "published":
+            raise McpCandidateConflict(f"MCP 制品当前为 {artifact.state}，拒绝新增配置、连接或安装复用；原卸载操作: {artifact.removal_operation_id}")
+        return artifact
+
+    def reserve_uninstall(self, operation: McpInstallationOperationDTO, binding: McpManagedLaunchDTO,
+        check_references: Callable[[], None]) -> tuple[McpInstallationOperationDTO, bool]:
+        with self.reference_write() as connection:
+            row = connection.execute("SELECT payload FROM operations WHERE operation_id=?", (operation.operation_id,)).fetchone()
+            if row is not None:
+                existing = McpInstallationOperationDTO.model_validate_json(row[0])
+                if existing.intent_digest != operation.intent_digest or existing.kind != "uninstall":
+                    raise McpCandidateConflict("MCP operation_id 已绑定另一安装或卸载意图")
+                return self._reconcile(connection, existing), False
+            artifact = self.require_artifact(connection, binding, published=False)
+            if artifact.state == "removing":
+                if artifact.removal_operation_id is None:
+                    raise RuntimeError("MCP 卸载中制品缺少原操作身份")
+                self._reconcile(connection, self._read_operation(connection, artifact.removal_operation_id))
+                artifact = self.require_artifact(connection, binding, published=False)
+                if artifact.state == "removing":
+                    raise McpCandidateConflict(f"MCP 制品仍由原卸载操作持有: {artifact.removal_operation_id}")
+            check_references()
+            key, = connection.execute("SELECT artifact_key FROM artifacts WHERE installation_id=?", (binding.installation_id,)).fetchone()
+            removing = artifact.model_copy(update={"state": "removing", "removal_operation_id": operation.operation_id, "removal_error": None})
+            operation = operation.model_copy(update={"artifact": removing})
+            connection.execute("INSERT INTO operations VALUES (?, ?, ?, ?)",
+                (operation.operation_id, key, operation.operation_id, operation.model_dump_json()))
+            connection.execute("INSERT INTO operation_owners VALUES (?, ?, ?)", (operation.operation_id, os.getpid(), self._process_started))
+            connection.execute("UPDATE artifacts SET payload=? WHERE installation_id=?", (removing.model_dump_json(), binding.installation_id))
+            return operation, True
+
+    def finish_uninstall(self, operation: McpInstallationOperationDTO, *, error: str | None = None,
+        interrupted: bool = False) -> McpInstallationOperationDTO:
+        with self.reference_write() as connection:
+            current, _ = self._current(connection, operation)
+            if current.status != "running":
+                return current
+            if current.kind != "uninstall" or current.artifact is None:
+                raise McpCandidateConflict("该操作不持有原制品卸载身份")
+            artifact = self.require_artifact(connection, current.artifact.binding, published=False)
+            if artifact.state != "removing" or artifact.removal_operation_id != current.operation_id:
+                raise McpCandidateConflict("MCP 卸载写入不属于原操作")
+            updated = artifact.model_copy(update={"state": "removal_failed" if error is not None else "removed", "removal_error": error})
+            if error is None:
+                connection.execute("DELETE FROM artifacts WHERE installation_id=?", (artifact.binding.installation_id,))
+            else:
+                connection.execute("UPDATE artifacts SET payload=? WHERE installation_id=?", (updated.model_dump_json(), artifact.binding.installation_id))
+            complete = current.model_copy(update={"status": "interrupted" if interrupted else "failed" if error is not None else "succeeded",
+                "stage": "remove" if error is not None else "complete", "updated_at": time.time(), "artifact": updated, "error": error})
+            self._write_execution(connection, complete)
+            return complete
+
     @staticmethod
     def _owner_alive(owner: tuple[int, float] | None, *, operation_id: str) -> bool:
         if owner is None:
@@ -148,6 +233,8 @@ class InstallationStore:
                 return InstallationReservation(self._reconcile(connection, existing))
             artifact_row = connection.execute("SELECT payload FROM artifacts WHERE artifact_key=?", (key,)).fetchone()
             artifact = McpInstalledArtifactDTO.model_validate_json(artifact_row[0]) if artifact_row is not None else None
+            if artifact is not None and artifact.state != "published":
+                raise McpCandidateConflict(f"MCP 制品正在卸载或尚待清理，不能复用: {artifact.removal_operation_id}")
             preparation = None
             producer_id = operation.operation_id
             if artifact is None:
@@ -194,7 +281,18 @@ class InstallationStore:
         owner = connection.execute("SELECT pid, started FROM operation_owners WHERE operation_id=?", (producer_id,)).fetchone()
         if self._owner_alive(owner, operation_id=producer_id):
             return operation
-        interrupted = producer.model_copy(update={"status": "interrupted", "updated_at": time.time(), "error": _INTERRUPTED})
+        reason = ("原卸载进程已退出；目录清理结果尚未核实，禁止启动或重放，请核实原操作后创建新清理意图"
+            if producer.kind == "uninstall" else _INTERRUPTED)
+        interrupted = producer.model_copy(update={"status": "interrupted", "updated_at": time.time(), "error": reason})
+        if producer.kind == "uninstall":
+            if producer.artifact is None:
+                raise RuntimeError("MCP 卸载操作缺少原制品")
+            artifact = self.require_artifact(connection, producer.artifact.binding, published=False)
+            if artifact.removal_operation_id != producer.operation_id or artifact.state != "removing":
+                raise McpCandidateConflict("MCP 中断卸载与原制品状态不一致")
+            failed = artifact.model_copy(update={"state": "removal_failed", "removal_error": reason})
+            connection.execute("UPDATE artifacts SET payload=? WHERE installation_id=?", (failed.model_dump_json(), artifact.binding.installation_id))
+            interrupted = interrupted.model_copy(update={"artifact": failed})
         self._write_execution(connection, interrupted)
         return self._read_operation(connection, operation.operation_id)
 
@@ -243,6 +341,8 @@ class InstallationStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current, key = self._current(connection, operation)
+            if current.kind != "install" or artifact.state != "published":
+                raise McpCandidateConflict("只有原安装操作可以发布已验证制品")
             if current.status != "running":
                 raise McpCandidateConflict(f"MCP 安装操作已结算为 {current.status}，不能迟到发布制品")
             if artifact_key(artifact, identifier=artifact.identifier, version=artifact.version, entrypoint=artifact.entrypoint) != key:

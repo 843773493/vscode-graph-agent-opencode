@@ -87,6 +87,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "McpManagedLaunchDTO", "McpInstallationRequestDTO", "McpInstalledArtifactDTO",
         "McpInstallationOperationDTO", "McpInstallationOperationResponseDTO", "McpInstalledArtifactListResponseDTO",
         "McpInstallationCapabilitiesDTO", "McpInstallationCapabilitiesResponseDTO",
+        "McpUninstallationRequestDTO", "McpArtifactReferenceDTO", "McpArtifactReferencesDTO", "McpArtifactReferencesResponseDTO",
         "ToolDTO", "ToolSelectionPatchRequest", "ToolTestStartRequest", "ToolTestRunDTO", "ToolTestRunListDTO",
         "PersistentTaskCreateRequest", "PersistentTaskUpdateRequest", "PersistentTaskControlRequest",
         "PersistentTaskCheckRequest", "PersistentTaskNotificationRequest", "SessionGeneratorImportRequest",

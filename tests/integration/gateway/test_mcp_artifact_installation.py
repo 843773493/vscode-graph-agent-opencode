@@ -25,6 +25,10 @@ import commentjson
 import httpx
 import pytest
 
+from app.schemas.internal_v2.mcp import McpArtifactReferencesResponseDTO
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
@@ -146,6 +150,7 @@ def installation_case(request: pytest.FixtureRequest, web_workbench_assets: Path
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
     provider.update({"model": "e2e-stub-model", "api_key": "artifact-fixture-key"})
+    config["llm"]["providers"] = [provider]
     config["agents"]["default"]["model"] = {"primary_provider": "primary", "fallback_providers": []}
     config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
     runtime = context.runtime_root_for_node(request.node.nodeid)
@@ -259,6 +264,113 @@ def test_real_installation_publishes_locked_generation_and_original_thread_uses_
     assert len(original_servers) == 1 and original_servers[0]["status"] == "ready"
     (case.context.artifacts_dir / "installation-evidence.json").write_text(json.dumps({"http": evidence, "artifact": artifact,
         "tool_wire": tool_message, "second_workspace": second_id}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_original_api_retains_shared_generation_until_both_workspaces_release_it(
+    installation_case: InstallationCase, artifact_index: ArtifactIndex,
+) -> None:
+    case = installation_case
+    evidence: list[dict[str, object]] = []
+
+    def exchange(method: str, path: str, key: str, body: dict[str, object] | None = None, *, status: int = 200) -> dict:
+        response = case.client.request(method, path, json=body, headers={"X-Request-ID": key})
+        assert response.status_code == status, response.text
+        result = response.json()
+        assert response.headers["X-Request-ID"] == result["request_id"] == key
+        evidence.append({"method": method, "path": path, "status": status, "response": result})
+        if status == 409:
+            McpArtifactReferencesResponseDTO.model_validate(result)
+            assert response.headers["Cache-Control"] == "no-store"
+            assert "artifact-fixture-key" not in response.text and str(case.workspace) not in response.text
+        return result
+
+    workspace_id = exchange("GET", "/api/gateway/workspaces", "retention-workspaces")["data"]["items"][0]["workspace_id"]
+    base = f"/api/v1/workspaces/{workspace_id}"
+    target = exchange("GET", base + "/mcp/installation-capabilities", "retention-capabilities")["target"]
+    inspected = exchange("POST", base + "/mcp/candidate-manifests", "retention-inspect", {"target": target, "source": artifact_index.source()})["data"]
+    candidate = {"target": target, "source": artifact_index.source(), "manifest_digest": inspected["manifest_digest"], "variant": inspected["variants"][0]["ref"]}
+    plan = exchange("POST", base + "/mcp/candidate-plans", "retention-plan", candidate)["data"]
+    operation = exchange("POST", base + "/mcp/installations", "retention-install", {
+        "candidate": candidate, "plan_digest": plan["plan_digest"], "operation_id": "shared-install", "entrypoint": "artifact-server"})["data"]
+    deadline = time.monotonic() + 40
+    while operation["status"] == "running":
+        assert time.monotonic() < deadline, operation
+        time.sleep(.1)
+        operation = exchange("GET", base + "/mcp/installation-operations/shared-install", "retention-install-observe")["data"]
+    assert operation["status"] == "succeeded", operation
+    artifact = operation["artifact"]
+    command = Path(artifact["command"])
+    assert command.is_file()
+
+    second = prepare_test_workspace(workspace_root=case.context.workspace_root / "retention-A2",
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=())
+    install_test_workspace_config(workspace_root=second, config_path=case.workspace / ".boxteam/workspace.jsonc",
+        schema_path=case.workspace / ".boxteam/workspace_schema.jsonc")
+    registered = exchange("POST", "/api/gateway/managed-workspaces", "retention-register-A2", {"root_path": str(second), "name": "共享制品 A2"})["data"]
+    second_id = next(item["workspace_id"] for item in registered["items"] if item["workspace_id"] != workspace_id)
+    second_base = f"/api/v1/workspaces/{second_id}"
+    assert exchange("GET", second_base + "/mcp/installation-capabilities", "retention-A2-target")["target"] == target
+
+    def configure(prefix: str, server: dict[str, object] | None, key: str) -> None:
+        path = prefix + "/config/sources/workspace_root_mutable_override"
+        document = exchange("GET", path, key + "-source")["data"]
+        configuration = commentjson.loads(document["jsonc"])
+        configuration["mcp"] = {"servers": {"shared": server} if server is not None else {}}
+        edit = {"gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"], "source_key": document["source_key"], "jsonc": json.dumps(configuration),
+            "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"], "base_layer_digest": document["layer_digest"],
+            "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"], "idempotency_key": key}
+        exchange("POST", path + "/preflight", key + "-preflight", edit)
+        exchange("PUT", path, key + "-save", edit)
+
+    server = {"enabled": True, "transport": "stdio", "managed_launch": artifact["binding"]}
+    configure(base, server, "retention-bind-A1")
+    configure(second_base, server, "retention-bind-A2")
+    first_server, = exchange("GET", base + "/mcp/servers", "retention-A1-ready")["data"]
+    second_server, = exchange("GET", second_base + "/mcp/servers", "retention-A2-ready")["data"]
+    first_ref, second_ref = first_server["connection_ref"], second_server["connection_ref"]
+    assert first_server["status"] == second_server["status"] == "ready" and first_ref != second_ref
+    second_config = (second / ".boxteam/workspace.jsonc").read_bytes()
+    second_resources = (second / ".boxteam/resources.json").read_bytes()
+    uninstall_path = base + "/mcp/installations/" + artifact["binding"]["installation_id"]
+    intent = {"target": target, "binding": artifact["binding"], "operation_id": "shared-uninstall"}
+    retained = exchange("GET", uninstall_path + "/references", "retention-both-references")["data"]["references"]
+    assert {reference["workspace_id"] for reference in retained} == {workspace_id, second_id}
+    assert {reference["connection_ref"] for reference in retained if reference["kind"] == "connection"} == {first_ref, second_ref}
+
+    configure(base, None, "retention-remove-A1")
+    refused = exchange("DELETE", uninstall_path, "retention-A2-refusal", intent, status=409)["data"]
+    assert refused["binding"] == artifact["binding"]
+    assert any(reference["workspace_id"] == second_id and reference["connection_ref"] == second_ref for reference in refused["references"])
+    assert command.is_file() and (second / ".boxteam/workspace.jsonc").read_bytes() == second_config
+    assert (second / ".boxteam/resources.json").read_bytes() == second_resources
+    assert exchange("GET", second_base + "/mcp/servers", "retention-A2-unchanged")["data"] == [second_server]
+    configure(second_base, None, "retention-remove-A2")
+    deadline = time.monotonic() + 15
+    while True:
+        references = exchange("GET", uninstall_path + "/references", "retention-draining")["data"]["references"]
+        if not references:
+            break
+        assert time.monotonic() < deadline, references
+        time.sleep(.05)
+    for root, connection_ref in ((case.workspace, first_ref), (second, second_ref)):
+        ledger = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+        record = ledger.get(connection_ref)
+        assert record is not None and record.managed_launch is not None and record.managed_launch.model_dump() == artifact["binding"]
+        assert record.status == "stopped" and record.process is not None and record.process.exit_verified
+        assert not record.cleanup_failed and ledger.leases_for_resource(connection_ref) == []
+    removing = exchange("DELETE", uninstall_path, "retention-uninstall", intent)["data"]
+    assert removing["kind"] == "uninstall" and removing["artifact"]["state"] == "removing"
+    deadline = time.monotonic() + 10
+    while removing["status"] == "running":
+        assert time.monotonic() < deadline, removing
+        time.sleep(.05)
+        removing = exchange("GET", base + "/mcp/installation-operations/shared-uninstall", "retention-uninstall-observe")["data"]
+    assert removing["status"] == "succeeded" and removing["artifact"]["state"] == "removed", removing
+    assert not command.parent.parent.parent.exists()
+    assert exchange("DELETE", uninstall_path, "retention-repeat", intent)["data"] == removing
+    assert exchange("GET", second_base + "/mcp/installations", "retention-removed-in-A2")["data"] == []
+    (case.context.artifacts_dir / "retention-evidence.json").write_text(json.dumps({"http": evidence,
+        "connections": [first_ref, second_ref], "artifact": artifact}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def test_original_workbench_install_action_publishes_without_configuring(installation_case: InstallationCase, artifact_index: ArtifactIndex) -> None:

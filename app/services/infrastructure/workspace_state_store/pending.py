@@ -148,8 +148,7 @@ class WorkspaceStateStorePendingMixin:
     ) -> ConfigPendingCandidateRecord:
         if state != "candidate_validated":
             validate_state_transition("none", state)
-        connection = self._database.connection()
-        try:
+        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """
@@ -249,11 +248,6 @@ class WorkspaceStateStorePendingMixin:
                         ),
                     )
                 connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_pending_config_candidate(
             config_domain=config_domain,
             candidate_id=candidate_id,
@@ -380,8 +374,7 @@ class WorkspaceStateStorePendingMixin:
     ) -> ConfigPendingCandidateRecord:
         """原来源 intent 绑定导入结果；尚未取得 claim 时才能推进同一候选行。"""
         store = cast("WorkspaceStateStore", self)
-        connection = store._database.connection()
-        try:
+        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT state, source_edit_json FROM config_pending_candidate WHERE config_domain=? AND candidate_id=?",
@@ -423,8 +416,6 @@ class WorkspaceStateStorePendingMixin:
             if updated.rowcount != 1:
                 raise ConfigConflictError("来源 intent 导入结果绑定 CAS 冲突")
             connection.commit()
-        finally:
-            connection.close()
         result = store.get_pending_config_candidate(config_domain=candidate.config_domain, candidate_id=candidate.candidate_id)
         if result is None:
             raise RuntimeError("来源 intent 绑定后无法读取原 pending candidate")

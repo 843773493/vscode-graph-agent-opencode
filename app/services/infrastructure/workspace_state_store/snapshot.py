@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from app.core.failures import failure_detail
 from app.core.sqlite_state import utc_now_text
@@ -26,6 +26,10 @@ from .sql_statements import (
 )
 
 __all__ = ["WorkspaceStateStoreSnapshotMixin"]
+
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
 class WorkspaceStateStoreSnapshotMixin:
@@ -144,8 +148,7 @@ class WorkspaceStateStoreSnapshotMixin:
         existing = self.get_active_config_snapshot(config_domain)
         if existing is not None:
             return existing
-        connection = self._database.connection()
-        try:
+        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing_row = connection.execute(
                 "SELECT 1 FROM config_active_snapshot WHERE config_domain = ?",
@@ -182,11 +185,6 @@ class WorkspaceStateStoreSnapshotMixin:
                     ),
                 )
             connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_active_config_snapshot(config_domain)
         if result is None:
             raise RuntimeError(f"active snapshot 提交后无法读取: {config_domain}")
@@ -217,8 +215,7 @@ class WorkspaceStateStoreSnapshotMixin:
         expected_fencing_token: str | None = None,
         event: ConfigEventInput | None = None,
     ) -> ConfigActiveSnapshotRecord:
-        connection = self._database.connection()
-        try:
+        with cast("WorkspaceStateStore", self)._mcp_config_write(payload) as connection:
             connection.execute("BEGIN IMMEDIATE")
             active_row = connection.execute(
                 "SELECT active_revision FROM config_active_snapshot WHERE config_domain = ?",
@@ -466,11 +463,6 @@ class WorkspaceStateStoreSnapshotMixin:
                         "Workspace active promotion 的 apply journal CAS 失败"
                     )
             connection.execute("COMMIT")
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
         result = self.get_active_config_snapshot(config_domain)
         if result is None:
             raise RuntimeError(f"active snapshot promotion 后无法读取: {config_domain}")

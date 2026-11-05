@@ -919,6 +919,9 @@ message McpInstalledArtifactDTO {
   string command = 10;
   string lock_digest = 11;
   map<string, string> installed_distributions = 12;
+  string state = 13;
+  optional string removal_operation_id = 14;
+  optional string removal_error = 15;
 }
 
 message McpInstallationOperationDTO {
@@ -931,6 +934,40 @@ message McpInstallationOperationDTO {
   optional McpInstalledArtifactDTO artifact = 7;
   optional string error = 8;
   string log = 9;
+  string kind = 10;
+}
+
+message McpUninstallationRequestDTO {
+  McpInstallationTargetDTO target = 1;
+  McpManagedLaunchDTO binding = 2;
+  string operation_id = 3;
+}
+
+message McpArtifactReferenceDTO {
+  string workspace_id = 1;
+  string kind = 2;
+  string status = 3;
+  string reason = 4;
+  optional string server_id = 5;
+  optional string source_key = 6;
+  optional string candidate_id = 7;
+  optional string connection_ref = 8;
+  optional string lease_id = 9;
+  optional string operation_id = 10;
+}
+
+message McpArtifactReferencesDTO {
+  McpManagedLaunchDTO binding = 1;
+  repeated McpArtifactReferenceDTO references = 2;
+}
+
+message McpArtifactReferencesResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpArtifactReferencesDTO data = 3;
+  string request_id = 4;
+  McpInstallationTargetDTO target = 5;
+  uint32 protocol_version = 6;
 }
 
 message McpInstallationOperationResponseDTO {

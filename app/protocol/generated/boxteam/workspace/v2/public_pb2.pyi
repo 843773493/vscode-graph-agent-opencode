@@ -1541,7 +1541,7 @@ class McpInstallationRequestDTO(_message.Message):
     def __init__(self, candidate: _Optional[_Union[McpCandidatePlanRequestDTO, _Mapping]] = ..., plan_digest: _Optional[str] = ..., operation_id: _Optional[str] = ..., entrypoint: _Optional[str] = ...) -> None: ...
 
 class McpInstalledArtifactDTO(_message.Message):
-    __slots__ = ("binding", "source", "manifest_digest", "variant", "platform", "registry_type", "identifier", "version", "entrypoint", "command", "lock_digest", "installed_distributions")
+    __slots__ = ("binding", "source", "manifest_digest", "variant", "platform", "registry_type", "identifier", "version", "entrypoint", "command", "lock_digest", "installed_distributions", "state", "removal_operation_id", "removal_error")
     class InstalledDistributionsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -1561,6 +1561,9 @@ class McpInstalledArtifactDTO(_message.Message):
     COMMAND_FIELD_NUMBER: _ClassVar[int]
     LOCK_DIGEST_FIELD_NUMBER: _ClassVar[int]
     INSTALLED_DISTRIBUTIONS_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    REMOVAL_OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    REMOVAL_ERROR_FIELD_NUMBER: _ClassVar[int]
     binding: McpManagedLaunchDTO
     source: McpCandidateProvenanceDTO
     manifest_digest: str
@@ -1573,10 +1576,13 @@ class McpInstalledArtifactDTO(_message.Message):
     command: str
     lock_digest: str
     installed_distributions: _containers.ScalarMap[str, str]
-    def __init__(self, binding: _Optional[_Union[McpManagedLaunchDTO, _Mapping]] = ..., source: _Optional[_Union[McpCandidateProvenanceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., variant: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ..., entrypoint: _Optional[str] = ..., command: _Optional[str] = ..., lock_digest: _Optional[str] = ..., installed_distributions: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    state: str
+    removal_operation_id: str
+    removal_error: str
+    def __init__(self, binding: _Optional[_Union[McpManagedLaunchDTO, _Mapping]] = ..., source: _Optional[_Union[McpCandidateProvenanceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., variant: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ..., entrypoint: _Optional[str] = ..., command: _Optional[str] = ..., lock_digest: _Optional[str] = ..., installed_distributions: _Optional[_Mapping[str, str]] = ..., state: _Optional[str] = ..., removal_operation_id: _Optional[str] = ..., removal_error: _Optional[str] = ...) -> None: ...
 
 class McpInstallationOperationDTO(_message.Message):
-    __slots__ = ("operation_id", "intent_digest", "status", "stage", "created_at", "updated_at", "artifact", "error", "log")
+    __slots__ = ("operation_id", "intent_digest", "status", "stage", "created_at", "updated_at", "artifact", "error", "log", "kind")
     OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     INTENT_DIGEST_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -1586,6 +1592,7 @@ class McpInstallationOperationDTO(_message.Message):
     ARTIFACT_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
     LOG_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
     operation_id: str
     intent_digest: str
     status: str
@@ -1595,7 +1602,66 @@ class McpInstallationOperationDTO(_message.Message):
     artifact: McpInstalledArtifactDTO
     error: str
     log: str
-    def __init__(self, operation_id: _Optional[str] = ..., intent_digest: _Optional[str] = ..., status: _Optional[str] = ..., stage: _Optional[str] = ..., created_at: _Optional[float] = ..., updated_at: _Optional[float] = ..., artifact: _Optional[_Union[McpInstalledArtifactDTO, _Mapping]] = ..., error: _Optional[str] = ..., log: _Optional[str] = ...) -> None: ...
+    kind: str
+    def __init__(self, operation_id: _Optional[str] = ..., intent_digest: _Optional[str] = ..., status: _Optional[str] = ..., stage: _Optional[str] = ..., created_at: _Optional[float] = ..., updated_at: _Optional[float] = ..., artifact: _Optional[_Union[McpInstalledArtifactDTO, _Mapping]] = ..., error: _Optional[str] = ..., log: _Optional[str] = ..., kind: _Optional[str] = ...) -> None: ...
+
+class McpUninstallationRequestDTO(_message.Message):
+    __slots__ = ("target", "binding", "operation_id")
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    BINDING_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    target: McpInstallationTargetDTO
+    binding: McpManagedLaunchDTO
+    operation_id: str
+    def __init__(self, target: _Optional[_Union[McpInstallationTargetDTO, _Mapping]] = ..., binding: _Optional[_Union[McpManagedLaunchDTO, _Mapping]] = ..., operation_id: _Optional[str] = ...) -> None: ...
+
+class McpArtifactReferenceDTO(_message.Message):
+    __slots__ = ("workspace_id", "kind", "status", "reason", "server_id", "source_key", "candidate_id", "connection_ref", "lease_id", "operation_id")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    SERVER_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_KEY_FIELD_NUMBER: _ClassVar[int]
+    CANDIDATE_ID_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_REF_FIELD_NUMBER: _ClassVar[int]
+    LEASE_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    kind: str
+    status: str
+    reason: str
+    server_id: str
+    source_key: str
+    candidate_id: str
+    connection_ref: str
+    lease_id: str
+    operation_id: str
+    def __init__(self, workspace_id: _Optional[str] = ..., kind: _Optional[str] = ..., status: _Optional[str] = ..., reason: _Optional[str] = ..., server_id: _Optional[str] = ..., source_key: _Optional[str] = ..., candidate_id: _Optional[str] = ..., connection_ref: _Optional[str] = ..., lease_id: _Optional[str] = ..., operation_id: _Optional[str] = ...) -> None: ...
+
+class McpArtifactReferencesDTO(_message.Message):
+    __slots__ = ("binding", "references")
+    BINDING_FIELD_NUMBER: _ClassVar[int]
+    REFERENCES_FIELD_NUMBER: _ClassVar[int]
+    binding: McpManagedLaunchDTO
+    references: _containers.RepeatedCompositeFieldContainer[McpArtifactReferenceDTO]
+    def __init__(self, binding: _Optional[_Union[McpManagedLaunchDTO, _Mapping]] = ..., references: _Optional[_Iterable[_Union[McpArtifactReferenceDTO, _Mapping]]] = ...) -> None: ...
+
+class McpArtifactReferencesResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: McpArtifactReferencesDTO
+    request_id: str
+    target: McpInstallationTargetDTO
+    protocol_version: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Union[McpArtifactReferencesDTO, _Mapping]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpInstallationTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
 
 class McpInstallationOperationResponseDTO(_message.Message):
     __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")

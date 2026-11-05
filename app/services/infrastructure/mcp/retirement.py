@@ -9,6 +9,7 @@ from time import monotonic
 from typing import Literal
 
 from app.core.lifecycle import LifetimeScope
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.config import McpCleanupDTO
 from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
@@ -104,6 +105,10 @@ class McpConnectionRetirement:
             async with asyncio.timeout(self._timeout_seconds):
                 await retired.runtime.scope.close()
         except Exception as error:
+            record = self._leases.get(connection_ref)
+            if record is not None:
+                await run_sync_shielded(self._leases.update_external_state, connection_ref,
+                    lifetime_scope="workspace", status=record.status, cleanup_failed=True)
             with self._lock:
                 self._retired[connection_ref] = replace(
                     self._retired[connection_ref], phase="cleanup_failed", error_type=type(error).__name__,

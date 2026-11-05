@@ -413,11 +413,27 @@ def test_two_store_transactions_claim_only_one_cold_preparation(tmp_path: Path,
     assert observed.stage == progress.stage and observed.log == progress.log
     assert observed.intent_digest == follower.operation.intent_digest and observed.created_at == follower.operation.created_at
     with sqlite3.connect(root / "installations.sqlite") as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
         assert connection.execute("SELECT COUNT(*) FROM artifact_preparations").fetchone() == (1,)
         assert connection.execute("SELECT COUNT(*) FROM operation_owners").fetchone() == (1,)
         assert connection.execute("SELECT producer_operation_id FROM operations").fetchall() == [(producer.operation.operation_id,)] * 2
     assert stores[0].artifacts() == []
+
+
+def test_v2_migration_adds_only_workspace_locators(installation_store: InstallationStore,
+    prepared_artifact: tuple[McpInstalledArtifactDTO, Path], operation: McpInstallationOperationDTO, tmp_path: Path) -> None:
+    artifact, _ = prepared_artifact
+    installation_store.publish(operation, artifact)
+    original = installation_store.operation(operation.operation_id)
+    root = tmp_path / "home/artifacts/mcp" / artifact.binding.backend_id
+    with sqlite3.connect(root / "installations.sqlite") as connection:
+        connection.execute("DROP TABLE workspace_locators")
+        connection.execute("PRAGMA user_version=2")
+    upgraded = InstallationStore(root)
+    assert upgraded.operation(operation.operation_id) == original and upgraded.artifacts() == [artifact]
+    assert upgraded.workspaces() == []
+    with sqlite3.connect(root / "installations.sqlite") as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
 
 
 def test_follower_observes_original_process_and_cannot_write_or_publish(installation_store: InstallationStore,
@@ -637,7 +653,7 @@ def test_v1_migration_keys_exact_artifacts_and_keeps_terminal_intents(v1_ledger:
     warm = store.reserve(operation.model_copy(update={"operation_id": "new-warm-intent"}), key=artifact_key_value)
     assert warm.artifact == artifact and warm.preparation is None
     with sqlite3.connect(root / "installations.sqlite") as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
         assert connection.execute("SELECT artifact_key FROM artifacts").fetchall() == [(artifact_key_value,)]
         assert connection.execute("SELECT producer_operation_id FROM operations WHERE operation_id='original'").fetchone() == (None,)
 

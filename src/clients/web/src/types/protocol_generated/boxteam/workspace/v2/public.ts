@@ -927,6 +927,9 @@ export interface McpInstalledArtifactDTO {
   command: string;
   lock_digest: string;
   installed_distributions: { [key: string]: string };
+  state: string;
+  removal_operation_id?: string | undefined;
+  removal_error?: string | undefined;
 }
 
 export interface McpInstalledArtifactDTO_InstalledDistributionsEntry {
@@ -944,6 +947,40 @@ export interface McpInstallationOperationDTO {
   artifact?: McpInstalledArtifactDTO | undefined;
   error?: string | undefined;
   log: string;
+  kind: string;
+}
+
+export interface McpUninstallationRequestDTO {
+  target: McpInstallationTargetDTO | undefined;
+  binding: McpManagedLaunchDTO | undefined;
+  operation_id: string;
+}
+
+export interface McpArtifactReferenceDTO {
+  workspace_id: string;
+  kind: string;
+  status: string;
+  reason: string;
+  server_id?: string | undefined;
+  source_key?: string | undefined;
+  candidate_id?: string | undefined;
+  connection_ref?: string | undefined;
+  lease_id?: string | undefined;
+  operation_id?: string | undefined;
+}
+
+export interface McpArtifactReferencesDTO {
+  binding: McpManagedLaunchDTO | undefined;
+  references: McpArtifactReferenceDTO[];
+}
+
+export interface McpArtifactReferencesResponseDTO {
+  code: number;
+  message: string;
+  data: McpArtifactReferencesDTO | undefined;
+  request_id: string;
+  target: McpInstallationTargetDTO | undefined;
+  protocol_version: number;
 }
 
 export interface McpInstallationOperationResponseDTO {
@@ -9671,6 +9708,9 @@ function createBaseMcpInstalledArtifactDTO(): McpInstalledArtifactDTO {
     command: "",
     lock_digest: "",
     installed_distributions: {},
+    state: "",
+    removal_operation_id: undefined,
+    removal_error: undefined,
   };
 }
 
@@ -9702,6 +9742,11 @@ export const McpInstalledArtifactDTO: MessageFns<McpInstalledArtifactDTO> = {
           {},
         )
         : {},
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      removal_operation_id: isSet(object.removal_operation_id)
+        ? globalThis.String(object.removal_operation_id)
+        : undefined,
+      removal_error: isSet(object.removal_error) ? globalThis.String(object.removal_error) : undefined,
     };
   },
 
@@ -9749,6 +9794,15 @@ export const McpInstalledArtifactDTO: MessageFns<McpInstalledArtifactDTO> = {
         });
       }
     }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.removal_operation_id !== undefined) {
+      obj.removal_operation_id = message.removal_operation_id;
+    }
+    if (message.removal_error !== undefined) {
+      obj.removal_error = message.removal_error;
+    }
     return obj;
   },
 
@@ -9786,6 +9840,9 @@ export const McpInstalledArtifactDTO: MessageFns<McpInstalledArtifactDTO> = {
         },
         {},
       );
+    message.state = object.state ?? "";
+    message.removal_operation_id = object.removal_operation_id ?? undefined;
+    message.removal_error = object.removal_error ?? undefined;
     return message;
   },
 };
@@ -9841,6 +9898,7 @@ function createBaseMcpInstallationOperationDTO(): McpInstallationOperationDTO {
     artifact: undefined,
     error: undefined,
     log: "",
+    kind: "",
   };
 }
 
@@ -9856,6 +9914,7 @@ export const McpInstallationOperationDTO: MessageFns<McpInstallationOperationDTO
       artifact: isSet(object.artifact) ? McpInstalledArtifactDTO.fromJSON(object.artifact) : undefined,
       error: isSet(object.error) ? globalThis.String(object.error) : undefined,
       log: isSet(object.log) ? globalThis.String(object.log) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
     };
   },
 
@@ -9888,6 +9947,9 @@ export const McpInstallationOperationDTO: MessageFns<McpInstallationOperationDTO
     if (message.log !== "") {
       obj.log = message.log;
     }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
     return obj;
   },
 
@@ -9907,6 +9969,235 @@ export const McpInstallationOperationDTO: MessageFns<McpInstallationOperationDTO
       : undefined;
     message.error = object.error ?? undefined;
     message.log = object.log ?? "";
+    message.kind = object.kind ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpUninstallationRequestDTO(): McpUninstallationRequestDTO {
+  return { target: undefined, binding: undefined, operation_id: "" };
+}
+
+export const McpUninstallationRequestDTO: MessageFns<McpUninstallationRequestDTO> = {
+  fromJSON(object: any): McpUninstallationRequestDTO {
+    return {
+      target: isSet(object.target) ? McpInstallationTargetDTO.fromJSON(object.target) : undefined,
+      binding: isSet(object.binding) ? McpManagedLaunchDTO.fromJSON(object.binding) : undefined,
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+    };
+  },
+
+  toJSON(message: McpUninstallationRequestDTO): unknown {
+    const obj: any = {};
+    if (message.target !== undefined) {
+      obj.target = McpInstallationTargetDTO.toJSON(message.target);
+    }
+    if (message.binding !== undefined) {
+      obj.binding = McpManagedLaunchDTO.toJSON(message.binding);
+    }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpUninstallationRequestDTO>, I>>(base?: I): McpUninstallationRequestDTO {
+    return McpUninstallationRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpUninstallationRequestDTO>, I>>(object: I): McpUninstallationRequestDTO {
+    const message = createBaseMcpUninstallationRequestDTO();
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpInstallationTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.binding = (object.binding !== undefined && object.binding !== null)
+      ? McpManagedLaunchDTO.fromPartial(object.binding)
+      : undefined;
+    message.operation_id = object.operation_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpArtifactReferenceDTO(): McpArtifactReferenceDTO {
+  return {
+    workspace_id: "",
+    kind: "",
+    status: "",
+    reason: "",
+    server_id: undefined,
+    source_key: undefined,
+    candidate_id: undefined,
+    connection_ref: undefined,
+    lease_id: undefined,
+    operation_id: undefined,
+  };
+}
+
+export const McpArtifactReferenceDTO: MessageFns<McpArtifactReferenceDTO> = {
+  fromJSON(object: any): McpArtifactReferenceDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : undefined,
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : undefined,
+      candidate_id: isSet(object.candidate_id) ? globalThis.String(object.candidate_id) : undefined,
+      connection_ref: isSet(object.connection_ref) ? globalThis.String(object.connection_ref) : undefined,
+      lease_id: isSet(object.lease_id) ? globalThis.String(object.lease_id) : undefined,
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : undefined,
+    };
+  },
+
+  toJSON(message: McpArtifactReferenceDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.reason !== "") {
+      obj.reason = message.reason;
+    }
+    if (message.server_id !== undefined) {
+      obj.server_id = message.server_id;
+    }
+    if (message.source_key !== undefined) {
+      obj.source_key = message.source_key;
+    }
+    if (message.candidate_id !== undefined) {
+      obj.candidate_id = message.candidate_id;
+    }
+    if (message.connection_ref !== undefined) {
+      obj.connection_ref = message.connection_ref;
+    }
+    if (message.lease_id !== undefined) {
+      obj.lease_id = message.lease_id;
+    }
+    if (message.operation_id !== undefined) {
+      obj.operation_id = message.operation_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpArtifactReferenceDTO>, I>>(base?: I): McpArtifactReferenceDTO {
+    return McpArtifactReferenceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpArtifactReferenceDTO>, I>>(object: I): McpArtifactReferenceDTO {
+    const message = createBaseMcpArtifactReferenceDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.kind = object.kind ?? "";
+    message.status = object.status ?? "";
+    message.reason = object.reason ?? "";
+    message.server_id = object.server_id ?? undefined;
+    message.source_key = object.source_key ?? undefined;
+    message.candidate_id = object.candidate_id ?? undefined;
+    message.connection_ref = object.connection_ref ?? undefined;
+    message.lease_id = object.lease_id ?? undefined;
+    message.operation_id = object.operation_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpArtifactReferencesDTO(): McpArtifactReferencesDTO {
+  return { binding: undefined, references: [] };
+}
+
+export const McpArtifactReferencesDTO: MessageFns<McpArtifactReferencesDTO> = {
+  fromJSON(object: any): McpArtifactReferencesDTO {
+    return {
+      binding: isSet(object.binding) ? McpManagedLaunchDTO.fromJSON(object.binding) : undefined,
+      references: globalThis.Array.isArray(object?.references)
+        ? object.references.map((e: any) => McpArtifactReferenceDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: McpArtifactReferencesDTO): unknown {
+    const obj: any = {};
+    if (message.binding !== undefined) {
+      obj.binding = McpManagedLaunchDTO.toJSON(message.binding);
+    }
+    if (message.references?.length) {
+      obj.references = message.references.map((e) => McpArtifactReferenceDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpArtifactReferencesDTO>, I>>(base?: I): McpArtifactReferencesDTO {
+    return McpArtifactReferencesDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpArtifactReferencesDTO>, I>>(object: I): McpArtifactReferencesDTO {
+    const message = createBaseMcpArtifactReferencesDTO();
+    message.binding = (object.binding !== undefined && object.binding !== null)
+      ? McpManagedLaunchDTO.fromPartial(object.binding)
+      : undefined;
+    message.references = object.references?.map((e) => McpArtifactReferenceDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseMcpArtifactReferencesResponseDTO(): McpArtifactReferencesResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpArtifactReferencesResponseDTO: MessageFns<McpArtifactReferencesResponseDTO> = {
+  fromJSON(object: any): McpArtifactReferencesResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? McpArtifactReferencesDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpInstallationTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpArtifactReferencesResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = McpArtifactReferencesDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpInstallationTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpArtifactReferencesResponseDTO>, I>>(
+    base?: I,
+  ): McpArtifactReferencesResponseDTO {
+    return McpArtifactReferencesResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpArtifactReferencesResponseDTO>, I>>(
+    object: I,
+  ): McpArtifactReferencesResponseDTO {
+    const message = createBaseMcpArtifactReferencesResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? McpArtifactReferencesDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpInstallationTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
     return message;
   },
 };

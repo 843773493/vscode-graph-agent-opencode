@@ -26,6 +26,7 @@ from pydantic import ConfigDict, TypeAdapter
 from app.core.child_process import ChildProcessState
 from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.schemas.internal_v2.mcp import McpManagedLaunchDTO
 from app.services.infrastructure.events.channel_events import (
     RESOURCE_STATE_STATES,
     ResourceStateEventPublisher,
@@ -46,6 +47,9 @@ class ResourceRecord:
     status: str = "running"
     updated_at: str = ""
     process: ChildProcessState | None = None
+    mcp_server_id: str | None = None
+    managed_launch: McpManagedLaunchDTO | None = None
+    cleanup_failed: bool = False
 
 
 @dataclass(slots=True)
@@ -115,6 +119,8 @@ class ExternalResourceLeaseLedger:
         created_by_turn_id: str | None = None,
         initial_status: Literal["running", "unknown"] = "running",
         process: ChildProcessState | None = None,
+        mcp_server_id: str | None = None,
+        managed_launch: McpManagedLaunchDTO | None = None,
     ) -> ResourceRecord:
         """幂等登记身份；已有资源的状态与保留范围由实际 owner 发布。"""
         with self._write_lock:
@@ -131,6 +137,8 @@ class ExternalResourceLeaseLedger:
                     created_by_turn_id=created_by_turn_id,
                     status=initial_status,
                     process=process,
+                    mcp_server_id=mcp_server_id,
+                    managed_launch=managed_launch,
                     updated_at=self._now(),
                 )
             else:
@@ -139,6 +147,8 @@ class ExternalResourceLeaseLedger:
                         f"资源类型发生冲突: resource_id={resource_id} "
                         f"existing={record.kind} incoming={kind}"
                     )
+                if (record.mcp_server_id, record.managed_launch) != (mcp_server_id, managed_launch):
+                    raise RuntimeError(f"资源的原 MCP Server／制品绑定不可改变: resource_id={resource_id}")
                 # 重复登记不是续期或运行观察，不重写时间戳及整个持久账本。
                 return self._copy_record(record)
             self._commit(records=(record,))
@@ -205,6 +215,8 @@ class ExternalResourceLeaseLedger:
         created_by_turn_id: str | None = None,
         initial_status: Literal["running", "unknown"] = "running",
         process: ChildProcessState | None = None,
+        mcp_server_id: str | None = None,
+        managed_launch: McpManagedLaunchDTO | None = None,
     ) -> ResourceRecord:
         """登记外部 owner 已核实的资源身份，不创建或停止资源。"""
         if kind not in self.EXTERNAL_RESOURCE_KINDS:
@@ -216,6 +228,8 @@ class ExternalResourceLeaseLedger:
             created_by_turn_id=created_by_turn_id,
             initial_status=initial_status,
             process=process,
+            mcp_server_id=mcp_server_id,
+            managed_launch=managed_launch,
         )
 
     def acquire_operation(
@@ -462,6 +476,7 @@ class ExternalResourceLeaseLedger:
         self, resource_id: str, *, lifetime_scope: str, status: str,
         unresolved_lease_id: str | None = None,
         process: ChildProcessState | None = None,
+        cleanup_failed: bool | None = None,
     ) -> None:
         """只有实际 owner 已核实的范围与运行事实能更新登记投影。"""
         with self._write_lock:
@@ -476,10 +491,12 @@ class ExternalResourceLeaseLedger:
             # 列表读取会逐项同步；相同状态不重写并 fsync 整个账本。
             if (record.lifetime_scope == lifetime_scope and record.status == status
                     and (process is None or process == record.process)
+                    and (cleanup_failed is None or cleanup_failed == record.cleanup_failed)
                     and (lease is None or lease.status not in {"active", "dispatching"})):
                 return
             record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now(),
-                process=process if process is not None else record.process)
+                process=process if process is not None else record.process,
+                cleanup_failed=cleanup_failed if cleanup_failed is not None else record.cleanup_failed)
             changed_leases = ()
             if lease is not None and lease.status in {"active", "dispatching"}:
                 # 只保留本次未核实操作；同资源其它已返回的操作仍正常收尾。
@@ -566,7 +583,7 @@ class ExternalResourceLeaseLedger:
                 self._state_path.parent.mkdir(parents=True, exist_ok=True)
                 temp_path = self._state_path.with_suffix(".tmp")
                 payload = {
-                    "records": [asdict(record) for record in next_records.values()],
+                    "records": [_RESOURCE_RECORD.dump_python(record, mode="json") for record in next_records.values()],
                     "leases": [asdict(lease) for lease in next_leases.values()],
                 }
                 with temp_path.open("w", encoding="utf-8") as stream:
@@ -576,6 +593,14 @@ class ExternalResourceLeaseLedger:
                 temp_path.replace(self._state_path)
         self._records = next_records
         self._leases = next_leases
+
+    def ensure_persisted(self, *, state_path: Path) -> None:
+        """安装域登记 locator 前由原账本创建空快照；既有 locator 缺失时由调用方拒绝。"""
+        with self._write_lock:
+            if self._state_path != state_path:
+                raise ValueError("MCP 安装引用必须使用所属工作区的原持久资源账本")
+            if not state_path.exists():
+                self._commit()
 
     @staticmethod
     def _now() -> str:

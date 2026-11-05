@@ -21,6 +21,7 @@ import asyncio
 import logging
 from _thread import RLock
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -1015,9 +1016,15 @@ class McpCatalogOwner:
         # TODO(5.4)：封存资格/调用占用等同步访问及整个operation/shutdown期限仍须收口。
         def commit() -> None:
             resource_id = self._connection_ref(runtime)
-            self._leases.register_external(resource_id=resource_id, kind="mcp_connection",
-                lifetime_scope="workspace", initial_status="unknown", process=runtime.process_state)
-            self._leases.update_external_state(resource_id, lifetime_scope="workspace", status="unknown", process=runtime.process_state)
+            binding = runtime.server.managed_launch
+            if binding is not None and self._installation_owner is None:
+                raise ValueError("受管 MCP connection generation 缺少原生安装准入")
+            guard = self._installation_owner.reference_write((binding,)) if binding is not None and self._installation_owner is not None else nullcontext()
+            with guard:
+                self._leases.register_external(resource_id=resource_id, kind="mcp_connection",
+                    lifetime_scope="workspace", initial_status="unknown", process=runtime.process_state,
+                    mcp_server_id=runtime.server.server_id, managed_launch=binding)
+                self._leases.update_external_state(resource_id, lifetime_scope="workspace", status="unknown", process=runtime.process_state)
 
         await run_sync_shielded(commit)
 
@@ -1032,6 +1039,7 @@ class McpCatalogOwner:
             if self._leases.get(resource_id) is not None:
                 self._leases.update_external_state(
                     resource_id, lifetime_scope="workspace", status="stopped" if verified else "unknown", process=runtime.process_state,
+                    cleanup_failed=runtime.cleanup_failed,
                 )
 
         await run_sync_shielded(commit)

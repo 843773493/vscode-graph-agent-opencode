@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import ValidationError
+from starlette.responses import JSONResponse
 
 from app.api.deps import (
     get_config_service,
@@ -18,6 +19,7 @@ from app.api.deps import (
 from app.core.trace_middleware import get_current_gateway_id
 from app.domain.mcp_candidates import McpCandidateConflict
 from app.schemas.internal_v2.mcp import (
+    McpArtifactReferencesResponseDTO,
     McpAuthorizationCallbackDTO,
     McpAuthorizationResponseDTO,
     McpCandidateConfigurationRequestDTO,
@@ -42,6 +44,7 @@ from app.schemas.internal_v2.mcp import (
     McpServerDTO,
     McpServerListResponseDTO,
     McpToolDTO,
+    McpUninstallationRequestDTO,
     McpWorkspaceTargetDTO,
 )
 from app.services.infrastructure.config.state import ConfigConflictError
@@ -52,6 +55,7 @@ from app.services.infrastructure.mcp.candidate_source import (
 )
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.mcp.installation.python import InstallationUnavailable
+from app.services.infrastructure.mcp.installation.references import McpArtifactInUse
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -231,6 +235,45 @@ async def list_mcp_installations(
     with _candidate_errors():
         data = await asyncio.to_thread(owner.installations.artifacts)
     return McpInstalledArtifactListResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.get("/installations/{installation_id}/references", response_model=McpArtifactReferencesResponseDTO,
+    summary="从原工作区配置和资源账本列出精确 MCP 制品的实际保留引用")
+async def get_mcp_artifact_references(
+    installation_id: str,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        data = await asyncio.to_thread(owner.installations.references, installation_id)
+    return McpArtifactReferencesResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.delete("/installations/{installation_id}", response_model=McpInstallationOperationResponseDTO,
+    responses={409: {"model": McpArtifactReferencesResponseDTO}}, summary="仅在原引用全部结清后物理卸载精确 MCP generation")
+async def uninstall_mcp_artifact(
+    installation_id: str,
+    payload: McpUninstallationRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        if installation_id != payload.binding.installation_id:
+            raise McpCandidateConflict("MCP 卸载路径与原制品身份不一致")
+        try:
+            data = await owner.installations.uninstall(payload, actual_target=target)
+        except McpArtifactInUse as error:
+            retained = McpArtifactReferencesResponseDTO(code=409, message=str(error), data=error.references, request_id=request_id, target=target)
+            return JSONResponse(status_code=409, content=retained.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+    return McpInstallationOperationResponseDTO(data=data, request_id=request_id, target=target)
 
 
 @router.post("/candidate-plans/validate", response_model=McpCandidatePlanResponseDTO, summary="消费前重新核验原 MCP 候选，不执行安装或配置")

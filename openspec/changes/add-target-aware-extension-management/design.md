@@ -1,5 +1,7 @@
 ## Context
 
+实施与验收提示：普通目录、配置和状态读取遵守[交互总延迟预算](../enforce-interactive-latency-budgets/design.md)。包首次验证、迁移／恢复及用户明确执行的安装单独计时；不能将制品全量校验、整个环境预检或每层独立长超时默认放进每次列表／状态暖读。鉴权、精确owner、CAS和实际数据检查保留，不另建性能监控体系。
+
 本稿只制定规划；新增 capability 与任务不代表实现完成。一个 Gateway 可管理一个多工作区 Backend，并通过远端 Gateway 管理其它 Backend；同一 Workbench 可以同时显示这些工作区的编辑器。项目业务 workspace 与 Code OSS 的窗口级 Workspace／WorkspaceFolder 不能直接互换。
 
 ### 已有 owner 与上游接入点
@@ -98,7 +100,7 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 
 同一 BOXTEAM_HOME 的稳定 Backend 安装域允许多个真实 Backend 进程共享账本；schema 初始化仅短持锁，安装意图由 SQLite 唯一 reserve，不持生命周期独占锁。操作 owner 记录 PID 与进程创建时间；另一个活 Backend 不得中断原操作，只有确认原进程已退出时才将运行中记录标为 interrupted。相同意图始终返回原操作，不因重启重放，未发布目录不具备可启动 binding。
 
-工作区 stdio 配置以 `managed_launch` 精确引用 Backend／installation／generation／artifact digest，与显式 command 互斥；原安装 owner 解析已发布绝对 executable，原 SDK 启动准入再次核完整摘要，禁止动态 uvx／npx 解析替代。该 binding 随原连接 generation／retirement 保留；本批不提供物理卸载或版本指针迁投，也不宣称已完成共享引用删除闭包。原 Workbench InstallAction 仅发布制品并返回原发布事实，明确提示尚未配置；配置仍经原 source preflight／CAS 显式提交，连接 ready 由原 MCP owner 独立核实。
+工作区 stdio 配置以 `managed_launch` 精确引用 Backend／installation／generation／artifact digest，与显式 command 互斥；原安装 owner 解析已发布绝对 executable，原 SDK 启动准入再次核完整摘要，禁止动态 uvx／npx 解析替代。该 binding 随原连接 generation／retirement 保留；物理卸载由原安装 owner 核对工作区配置与资源账本引用，未知占用或未结清调用明确拒绝，版本不随安装指针迁投。原 Workbench InstallAction 仅发布制品并返回原发布事实，明确提示尚未配置；配置仍经原 source preflight／CAS 显式提交，连接 ready 由原 MCP owner 独立核实。新旧 stdio 连接的升级切换及真实旧调用验收仍待闭环，不以卸载保护代替。
 
 ### D5. 安装操作可追踪，更新与删除尊重已有引用
 
@@ -194,7 +196,7 @@ capability discovery 只读取版本与实际已支持服务，不启动 Agent�
 
 Gateway 来源编辑的预检和保存要求连接具有稳定身份。缺少 `connection_id` 的既有条目只从原 connection ID owner 只读复用可明确匹配的身份；真正新增或不能明确匹配的条目返回 409，指出位置并要求显式提供 ID，不按数组位置借用其它连接的身份。该输入边界仅适用于新增 source writer；原文件 loader 对已支持旧配置的 ID 分配和迁移行为保持。writer 不兼作版本迁移入口：若 v1 缺 ID 会使原 loader 另行改写来源文件，预检和保存先明确要求沿原迁移入口处理或补齐 ID。预检不创建迁移记录、备份、ID 或来源导入事实，也不另建预览 token／身份账本。
 
-原生 Gateway 来源 JSON 的 Relay 沿现有目标 Gateway 请求头选择稳定归属，连接仅提供当前路由。唯一连接可从原 registry 解析；多个连接须明确选择，显式 `gateway_connection_id` 必须与目标 Gateway 一致。Relay 复用原管理发送链及原生来源 API，不新增远端配置副本或 `federation/config` 别名；认证后的联邦入站不得借本机凭据再次转发。首次网络等待前固定目标、连接、URL 和凭据，短请求占用归原 registry，释放只结清本次引用，不删除合法的无工作区连接；旧隧道仍有请求时继续受原 retired 跟踪保护。目标状态、错误、CAS、幂等键和同一请求的 request_id 原样贯通，断流不自动重放保存。尚未接通的配置状态／pending／事件及开发重启入口面对显式远端目标时明确拒绝，不落回本机；该阶段拒绝不计作相应远端管理能力完成。
+原生 Gateway 来源 JSON 的 Relay 沿现有目标 Gateway 请求头选择稳定归属，连接仅提供当前路由。唯一连接可从原 registry 解析；多个连接须明确选择，显式 `gateway_connection_id` 必须与目标 Gateway 一致。Relay 复用原管理发送链及原生来源 API，不新增远端配置副本或 `federation/config` 别名；认证后的联邦入站不得借本机凭据再次转发。首次网络等待前固定目标、连接、URL 和凭据，短请求占用归原 registry，释放只结清本次引用，不删除合法的无工作区连接；旧隧道仍有请求时继续受原 retired 跟踪保护。目标状态、错误、CAS、幂等键和同一请求的 request_id 原样贯通，断流不自动重放保存。配置状态、pending retry／resolve／discard 和事件列表沿同一目标选择及发送链抵达 B，保留原 candidate_ref、证明、CAS 与错误，配置 retry 不启动进程。事件 SSE 透传 after／Last-Event-ID、原 id／config／error／heartbeat，由 B 在实际披露点核现行权限；A 不创建第二个 consumer、不推进游标、不自动重连或重放。开放响应及原客户端由唯一关闭任务持有，响应头失败、流未开始或重复取消仍等实际关闭后结清原连接引用。Gateway 开发栈重启继续限定原生本机管理入口，不借配置能力新增远端重启。
 
 设置搜索与 `@modified`、`@ext`、`@lang` 等原过滤器基于当前编辑器冻结的域、目标、来源层及实际注册 schema／扩展集合计算；切焦点不换搜索上下文。业务配置仅展示真实支持的过滤维度，不造虚假的扩展或语言归属；查询旧代际失效，不能把 A 的命中或修改标志显示为 B 的值。
 

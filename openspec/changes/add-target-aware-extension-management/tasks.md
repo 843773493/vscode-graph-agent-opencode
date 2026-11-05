@@ -29,6 +29,8 @@
 
   - 2026-11-05 唯一 stdio Process 前置切片：启动前冻结原 connection_ref 并在原资源账本登记 unknown，实际 Process 持有 PID／创建时间／wait 退出码，POSIX 核原进程组、Windows 使用 suspended→Job→resume 并核 Job 归零。stdio 复用官方协议类型和同一 ClientSession，删除原无句柄启动链；物理 stopped 与协议失败、目录资格及未结算 invocation 分离。Linux 331 项单元、真实 EOF、原登记／关闭及非合作关闭场景按源码依赖验收；Windows 8 项原生场景及最终受影响单项通过，覆盖真实 exe／cmd／npm／npx。精确合入后50项定向和真实 EOF 1项、Ruff通过，Pyright零错误／4条pywin32来源警告。完整原件与复用边界见 `out/tests/temp/2026/11/05/mcp_process_lifecycle/artifacts/delivery-manifest-v2.json`，共享树收据 `out/tests/temp/2026/11/05/mcp_process_lifecycle/artifacts/root-integration-002.json`。完整generation引用、旧调用／未知占用及物理卸载仍未闭环，2.5不勾选。
 
+  - 2026-11-05 generation 引用与卸载切片：原安装账本仅登记工作区 locator，引用从原 source／active／未终结 pending 及资源账本核实；首次引用与卸载共用安装事务，保留 disabled／遮蔽来源、旧连接、cleanup_failed 和未结清调用。卸载先提交 removing，再删除精确目录；失败／中断明确持久化，不允许启动或重放原意图。核心 Integration 14 passed／12.57 秒（SDK session 为明确替身），真实 Gateway 双工作区／uv wheel／真实进程 API 1 passed／121.32 秒，核 A1 移除后 A2 原配置及连接仍阻止卸载，退出和租约结清后才删除。精确合入后136项定向单元、Ruff及具名生产模块Pyright通过；正式构建与生成一致性复用代理同源码证据。完整命令、原始结果、源码指纹及混合文件边界见 `out/tests/temp/2026/11/05/mcp_generation_retention/artifacts/delivery-manifest.json` 和 `root-integration-002.json`。真实新generation升级、旧调用持续执行及失败保留仍待闭环；stdio并行策略已向用户澄清，2.5保持未勾，不以本片代替远端、卸载UI或原生矩阵。
+
 ## 3. MCP 与现有 Agent 唯一链路
 
 - [ ] 3.1 在原 MCP 管理服务 seam 消费目标配置、安装及原 MCP owner 的完整对象，迁齐旧 React 连接入口；移除该运行面重复 client、enabled/status 与目录，不复制原列表／详情。

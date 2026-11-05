@@ -640,6 +640,9 @@ def _build_app_container(
         state_path=resolved_boxteam_root / "resources.json",
         state_events=external_resource_state_events,
     )
+    if mcp_installations is not None:
+        mcp_installations.register_workspace(resolved_workspace_root, external_resource_leases)
+        workspace_activity_service.store.bind_mcp_installations(mcp_installations)
     def native_directories() -> GatewayNativeDirectoryClient:
         return GatewayNativeDirectoryClient(
             workspace_id=workspace_id,

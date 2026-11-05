@@ -4036,6 +4036,21 @@ export declare type McpInstalledArtifactDTO = Message<"boxteam.workspace.v2.McpI
    * @generated from field: map<string, string> installed_distributions = 12;
    */
   installedDistributions: { [key: string]: string };
+
+  /**
+   * @generated from field: string state = 13;
+   */
+  state: string;
+
+  /**
+   * @generated from field: optional string removal_operation_id = 14;
+   */
+  removalOperationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string removal_error = 15;
+   */
+  removalError?: string | undefined;
 };
 
 /**
@@ -4092,6 +4107,11 @@ export declare type McpInstallationOperationDTO = Message<"boxteam.workspace.v2.
    * @generated from field: string log = 9;
    */
   log: string;
+
+  /**
+   * @generated from field: string kind = 10;
+   */
+  kind: string;
 };
 
 /**
@@ -4099,6 +4119,155 @@ export declare type McpInstallationOperationDTO = Message<"boxteam.workspace.v2.
  * Use `create(McpInstallationOperationDTOSchema)` to create a new message.
  */
 export declare const McpInstallationOperationDTOSchema: GenMessage<McpInstallationOperationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpUninstallationRequestDTO
+ */
+export declare type McpUninstallationRequestDTO = Message<"boxteam.workspace.v2.McpUninstallationRequestDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpInstallationTargetDTO target = 1;
+   */
+  target?: McpInstallationTargetDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpManagedLaunchDTO binding = 2;
+   */
+  binding?: McpManagedLaunchDTO | undefined;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpUninstallationRequestDTO.
+ * Use `create(McpUninstallationRequestDTOSchema)` to create a new message.
+ */
+export declare const McpUninstallationRequestDTOSchema: GenMessage<McpUninstallationRequestDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpArtifactReferenceDTO
+ */
+export declare type McpArtifactReferenceDTO = Message<"boxteam.workspace.v2.McpArtifactReferenceDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string kind = 2;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string status = 3;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string reason = 4;
+   */
+  reason: string;
+
+  /**
+   * @generated from field: optional string server_id = 5;
+   */
+  serverId?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_key = 6;
+   */
+  sourceKey?: string | undefined;
+
+  /**
+   * @generated from field: optional string candidate_id = 7;
+   */
+  candidateId?: string | undefined;
+
+  /**
+   * @generated from field: optional string connection_ref = 8;
+   */
+  connectionRef?: string | undefined;
+
+  /**
+   * @generated from field: optional string lease_id = 9;
+   */
+  leaseId?: string | undefined;
+
+  /**
+   * @generated from field: optional string operation_id = 10;
+   */
+  operationId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpArtifactReferenceDTO.
+ * Use `create(McpArtifactReferenceDTOSchema)` to create a new message.
+ */
+export declare const McpArtifactReferenceDTOSchema: GenMessage<McpArtifactReferenceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpArtifactReferencesDTO
+ */
+export declare type McpArtifactReferencesDTO = Message<"boxteam.workspace.v2.McpArtifactReferencesDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpManagedLaunchDTO binding = 1;
+   */
+  binding?: McpManagedLaunchDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.McpArtifactReferenceDTO references = 2;
+   */
+  references: McpArtifactReferenceDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpArtifactReferencesDTO.
+ * Use `create(McpArtifactReferencesDTOSchema)` to create a new message.
+ */
+export declare const McpArtifactReferencesDTOSchema: GenMessage<McpArtifactReferencesDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpArtifactReferencesResponseDTO
+ */
+export declare type McpArtifactReferencesResponseDTO = Message<"boxteam.workspace.v2.McpArtifactReferencesResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpArtifactReferencesDTO data = 3;
+   */
+  data?: McpArtifactReferencesDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpInstallationTargetDTO target = 5;
+   */
+  target?: McpInstallationTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpArtifactReferencesResponseDTO.
+ * Use `create(McpArtifactReferencesResponseDTOSchema)` to create a new message.
+ */
+export declare const McpArtifactReferencesResponseDTOSchema: GenMessage<McpArtifactReferencesResponseDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.McpInstallationOperationResponseDTO
