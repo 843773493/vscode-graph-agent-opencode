@@ -396,10 +396,13 @@ class RolloutCheckpointPersistenceMixin:
             if view_kind == "compaction":
                 # raw channel 仍保存被压缩的声明；协议闭合必须核新的
                 # prefix/summary/tail，不能用历史完整性掩盖尾部孤立结果。
+                # 按本次选集定位消息；压缩后的短上下文不能先物化全部历史 locator。
                 selected_messages = dict(connection.execute(
                     "SELECT item.item_id,message.message_sequence FROM item_catalog item "
                     "JOIN messages message ON message.jsonl_offset=item.jsonl_offset "
-                    "AND message.jsonl_length=item.jsonl_length",
+                    "AND message.jsonl_length=item.jsonl_length "
+                    "WHERE item.item_id IN (SELECT value FROM json_each(?))",
+                    (_json(compaction_selection),),
                 ).fetchall())
                 selected_sequences = list(dict.fromkeys(
                     selected_messages[item_id] for item_id in compaction_selection if item_id in selected_messages
