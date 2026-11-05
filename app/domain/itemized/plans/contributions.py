@@ -267,15 +267,14 @@ class ContextContribution:
 
     def to_dict(self) -> dict[str, object]:
         """草稿与封存共享唯一字段投影；保护正文与 registry ordinal 不补写。"""
+        # 保护正文直接省略，避免深拷贝后丢弃；其余 JSON getter 已隔离嵌套容器。
         result = {
-            entry.name: getattr(self, entry.name)
+            entry.name: None if entry.name == "body" and self.protection != DetailProtection.PUBLIC
+            else getattr(self, entry.name)
             for entry in fields(self)
             if entry.init
         }
-        result["extensions"] = dict(self.extensions)
         result["source_binding"] = self.source_binding.to_dict() if self.source_binding is not None else None
-        if self.protection != DetailProtection.PUBLIC:
-            result["body"] = None
         if self.source_ordinal is None:
             result.pop("source_ordinal")
         return result

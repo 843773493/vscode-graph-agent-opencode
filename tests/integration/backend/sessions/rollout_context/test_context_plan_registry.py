@@ -20,6 +20,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.plans import contributions as contribution_domain
 from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.content_store import (
@@ -805,6 +806,82 @@ def test_saver_plan_body_cache_never_overwrites_another_plan(registry_db, draft)
             )["detail"]
             == expected_body
         )
+
+
+@pytest.mark.parametrize("protection", ["public", "redacted", "protected"])
+def test_contribution_projection_copies_only_exported_values_once(
+    registry_db, draft, monkeypatch, request, protection,
+):
+    saver, session, connection, accepted = registry_db
+    body = {"parts": [{"text": "冻结规则", "labels": ["原始正文"]} for _ in range(128)]}
+    extensions = {"vendor.annotation": {
+        "extension_version": "1", "protection": "public", "value": {"labels": ["原始扩展"]},
+    }}
+    contribution = replace(
+        draft.contributions[0], body=body, content_hash=contribution_content_hash("prompt", body),
+        content_length=None, extensions=extensions, protection=protection,
+    )
+    plan = replace(
+        draft, contributions=(contribution,), tool_set_refs=(),
+        refs=(replace(draft.refs[0], content_hash=contribution.content_hash,
+                      content_length=contribution.content_length, protection=protection),),
+    )
+    project, copy_value = ContextContribution.to_dict, contribution_domain.copy_json_value
+    active, measurements = [], []
+
+    def observe_copy(value):
+        if active:
+            if value == body:
+                active[-1]["body_copies"] += 1
+            elif value == extensions:
+                active[-1]["extension_copies"] += 1
+        return copy_value(value)
+
+    def observe_projection(source):
+        measurement = {"has_body": source.body is not None, "body_copies": 0, "extension_copies": 0}
+        active.append(measurement)
+        try:
+            result = project(source)
+        finally:
+            active.pop()
+        measurements.append(measurement)
+        # 每次返回都隔离嵌套容器，调用方修改投影不能污染原贡献或下次投影。
+        assert result["extensions"] == extensions
+        result["extensions"]["vendor.annotation"]["value"]["labels"].append("投影修改")
+        assert source.extensions == extensions
+        result["extensions"]["vendor.annotation"]["value"]["labels"].pop()
+        if source.body is not None and protection == "public":
+            assert result["body"] == body
+            result["body"]["parts"][0]["labels"].append("投影修改")
+            assert source.body == body
+            result["body"]["parts"][0]["labels"].pop()
+        else:
+            assert result["body"] is None
+        return result
+
+    monkeypatch.setattr(contribution_domain, "copy_json_value", observe_copy)
+    monkeypatch.setattr(ContextContribution, "to_dict", observe_projection)
+    registered = saver.create_context_plan(session, plan)
+    assert registered.draft.contributions[0].body is None
+    snapshot = saver.seal_context_plan(
+        session, draft.thread_id, registered.draft, turn_id=accepted["turn_id"],
+        execution_id=accepted["initial_execution_id"], provider_version="projection-copy-provider",
+        wire_profile=None, wire_params=None, seal_idempotency_key="seal-projection-copy",
+    )
+    detail_ref = next(entry.detail_ref for entry in snapshot.selection if entry.included)
+    assert saver.read_context_plan_detail(
+        session, draft.thread_id, detail_ref=detail_ref, include_sensitive=True,
+    )["detail"] == body
+    assert "冻结规则" not in "\n".join(connection.iterdump())
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "contribution-projection-copies.json").write_text(
+        json.dumps({"protection": protection, "measurements": measurements}, indent=2), encoding="utf-8",
+    )
+    print(f"contribution projection copies ({protection}): {measurements}")
+    assert any(item["has_body"] for item in measurements)
+    assert all(item["extension_copies"] == 1 for item in measurements)
+    assert all(item["body_copies"] == int(item["has_body"] and protection == "public")
+               for item in measurements)
 
 
 def test_nested_body_mutation_is_isolated_before_manifest_redaction(registry_db, draft):
