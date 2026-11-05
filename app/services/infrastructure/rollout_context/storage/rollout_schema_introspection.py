@@ -239,18 +239,20 @@ class RolloutSchemaIntrospectionMixin:
         *, expected_version: int | None = None,
     ) -> None:
         expected_version = storage_version.ROLLOUT_SCHEMA_VERSION if expected_version is None else expected_version
+        # 普通读写仍检查实时结构；只取所需列名，不把全部列定义搬入 Python 再筛选。
         for table in ("item_catalog", "context_contributions", "context_assembly_contributions"):
-            columns = {
-                str(row[1])
-                for row in connection.execute(f"PRAGMA table_info({table})")
-            }
-            if "metadata_json" in columns:
+            if connection.execute(
+                "SELECT 1 FROM pragma_table_info(?) WHERE name='metadata_json'", (table,),
+            ).fetchone() is not None:
                 raise RuntimeError(
                     "schema-incompatible: 检测到旧实验 v2 metadata 字段形态；"
                     f"table={table}。原始 JSONL/SQLite 保留，请重建对应 rollout/。"
                 )
         owner_columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(database_meta)")
+            row[0] for row in connection.execute(
+                "SELECT name FROM pragma_table_info('database_meta') "
+                "WHERE name IN ('thread_id','history_view_revision','source_overlay_epoch')"
+            )
         }
         if "thread_id" not in owner_columns:
             raise RuntimeError(
@@ -306,12 +308,14 @@ class RolloutSchemaIntrospectionMixin:
                 "schema-incompatible: rollout 缺少必需的 canonical ToolResult identity 索引"
             )
         if schema_version >= 26:
-            columns = {column[1] for column in connection.execute("PRAGMA table_info(context_views)")}
+            creation_column = connection.execute(
+                "SELECT 1 FROM pragma_table_info('context_views') WHERE name='creation_sequence'"
+            ).fetchone()
             required = {"context_views_creation_sequence", "context_views_assign_creation_sequence", "context_views_preserve_creation_sequence"}
             registered = {row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE tbl_name='context_views' AND type IN ('index','trigger')",
             )}
-            if "creation_sequence" not in columns or not required <= registered:
+            if creation_column is None or not required <= registered:
                 raise RuntimeError("schema-incompatible: rollout 缺少 view 创建顺序结构")
             if connection.execute("SELECT 1 FROM context_views WHERE creation_sequence<=0 LIMIT 1").fetchone() is not None:
                 raise RuntimeError("source-mismatch: context view 缺少已提交创建顺序")
@@ -327,10 +331,9 @@ class RolloutSchemaIntrospectionMixin:
         """校验 committed offset 的单一权威和 storage commit 链。"""
         # 完整历史审计只用于恢复、迁移与显式完整校验；普通快照只检查当前提交边界。
         # 必须先审计成功再回收未提交尾部，损坏历史不得触发截断。
-        columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(database_meta)")
-        }
-        if "rollout_format_version" not in columns:
+        if connection.execute(
+            "SELECT 1 FROM pragma_table_info('database_meta') WHERE name='rollout_format_version'"
+        ).fetchone() is None:
             return
         row = connection.execute(
             "SELECT rollout_format_version, committed_jsonl_offset, last_commit_id, schema_version, last_item_sequence "

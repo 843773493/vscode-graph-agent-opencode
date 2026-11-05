@@ -65,10 +65,10 @@ class RolloutSerializationMixin:
         connection: sqlite3.Connection,
     ) -> None:
         columns = {
-            str(row[1])
+            row[0]
             for row in connection.execute(
-                "PRAGMA table_info(reasoning_blocks)"
-            ).fetchall()
+                "SELECT name FROM pragma_table_info('reasoning_blocks')"
+            )
         }
         if {"block_index", "block_kind"} & columns:
             raise RuntimeError(
@@ -104,11 +104,9 @@ class RolloutSerializationMixin:
 
     @staticmethod
     def _rollout_format(connection: sqlite3.Connection) -> int:
-        columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(database_meta)")
-        }
-        if "rollout_format_version" not in columns:
+        if connection.execute(
+            "SELECT 1 FROM pragma_table_info('database_meta') WHERE name='rollout_format_version'"
+        ).fetchone() is None:
             return 1
         row = connection.execute(
             "SELECT rollout_format_version FROM database_meta WHERE singleton_id = 1"
