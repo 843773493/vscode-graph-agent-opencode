@@ -148,7 +148,11 @@ class IndexedRecordQueryMixin:
             )
             params.append(view_id)
         rows = connection.execute(
-            "SELECT m.message_sequence, m.turn_id, m.jsonl_offset, m.jsonl_length FROM messages m WHERE "
+            # 未指定精确序号时按 Turn 索引定位；role 索引会扫描整个历史的同角色消息。
+            "SELECT m.message_sequence, m.turn_id, m.jsonl_offset, m.jsonl_length "
+            "FROM messages m "
+            + ("" if selected else "INDEXED BY messages_turn_index ")
+            + "WHERE "
             + " AND ".join(predicates)
             + " ORDER BY m.message_sequence",
             tuple(params),

@@ -88,11 +88,12 @@ class TurnProjectionReadMixin:
         tool_rows = connection.execute(
             "SELECT m.turn_id, ic.item_id, tc.tool_call_id, tc.tool_name, tc.status, "
             "tc.result_message_sequence, tc.assistant_message_sequence, tc.call_index, "
-            "ic.projection_manifest_json FROM tool_calls tc "
-            "JOIN messages m ON m.message_sequence = tc.assistant_message_sequence "
-            "JOIN item_catalog ic ON ic.jsonl_offset = m.jsonl_offset "
+            # 从本页 Turn 的消息定位工具，不能先扫描整个 view 再筛 Turn。
+            "ic.projection_manifest_json FROM messages m "
+            "CROSS JOIN tool_calls tc ON tc.assistant_message_sequence = m.message_sequence "
+            "CROSS JOIN item_catalog ic ON ic.jsonl_offset = m.jsonl_offset "
             "AND ic.jsonl_length = m.jsonl_length "
-            "JOIN context_view_items membership ON membership.item_id = ic.item_id "
+            "CROSS JOIN context_view_items membership ON membership.item_id = ic.item_id "
             "AND membership.view_id = ? AND membership.visible = 1 "
             "AND membership.source_kind = 'canonical' "
             f"WHERE m.turn_id IN ({placeholders}) "
@@ -100,6 +101,15 @@ class TurnProjectionReadMixin:
             (view_id, *ids),
         ).fetchall()
         final_rows = connection.execute(
+            # 先按本页 final 定位成员，再做 LEFT JOIN；直接连接多表 view
+            # 会物化整个父 view，连没有 final 的进行中 Turn 也会扫描旧历史。
+            "WITH final_membership AS MATERIALIZED ("
+            "SELECT member.item_id,member.logical_item_ordinal,member.visible,member.source_kind "
+            "FROM turns t CROSS JOIN messages m ON m.message_sequence=t.final_message_sequence "
+            "CROSS JOIN item_catalog item ON item.jsonl_offset=m.jsonl_offset "
+            "AND item.jsonl_length=m.jsonl_length "
+            "CROSS JOIN context_view_items member ON member.item_id=item.item_id "
+            f"WHERE t.turn_id IN ({placeholders}) AND member.view_id=?) "
             "SELECT t.turn_id, t.final_message_sequence, mp.visible_text, "
             "mp.visible_text_truncated, m.message_id, m.turn_id, "
             "item.item_id, item.turn_id, item.semantic_kind, item.status, "
@@ -114,13 +124,12 @@ class TurnProjectionReadMixin:
             "AND item.jsonl_length = m.jsonl_length "
             "LEFT JOIN context_view_turns selected_turn ON selected_turn.turn_id = t.turn_id "
             "AND selected_turn.view_id = ? "
-            "LEFT JOIN context_view_items AS membership ON membership.item_id = item.item_id "
-            "AND membership.view_id = ? "
+            "LEFT JOIN final_membership AS membership ON membership.item_id = item.item_id "
             "LEFT JOIN message_projections mp ON mp.message_sequence = t.final_message_sequence "
             "AND selected_turn.final_message_sequence = t.final_message_sequence "
             "AND membership.visible = 1 AND membership.source_kind = 'canonical' "
             f"WHERE t.turn_id IN ({placeholders})",
-            (view_id, view_id, *ids),
+            (*ids, view_id, view_id, *ids),
         ).fetchall()
         activity_rows = connection.execute(
             "SELECT ic.turn_id, ic.item_sequence, ic.item_id, ic.semantic_kind, "
