@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -13,6 +15,9 @@ from app.core.resource_uri import resource_display_uri, thread_resource_uri
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session import SessionForkRequest
 from app.services.infrastructure.rollout_context.fork import source_capture, transfer
+from app.services.infrastructure.rollout_context.fork.source_snapshot import (
+    _tree_manifest,
+)
 from tests.unit.services.infrastructure.rollout_context.test_capture_io_errors import (
     capture_files,
     frozen,
@@ -22,14 +27,19 @@ __all__ = ["capture_files", "frozen"]
 
 
 @pytest.fixture
-def receive_case(frozen, tmp_path):
-    name = frozen.record.source_session_id + "/rollout/rollout.jsonl"
-    request = SessionForkRequest(idempotency_key="receive-test", source_view_id="view-test", source_view_revision=0,
+def transfer_request(capture_files):
+    return SessionForkRequest(idempotency_key="receive-test", source_view_id="view-test", source_view_revision=0,
         creation_kind="new_session_main", mode="full_rollout_copy",
-        source_uri=thread_resource_uri("workspace-source", frozen.record.source_session_id,
-            frozen.record.source_thread_id, gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729"),
+        source_uri=thread_resource_uri("workspace-source", capture_files.record.source_session_id,
+            capture_files.record.source_thread_id, gateway_authority="gateway_4aae160f813ed87bcf65a8bb8bfd3729"),
         target_container_uri=resource_display_uri(scope="workspace", scope_id="workspace-target", kind="session",
             tail_segments=(), gateway_authority="gateway_2d2ab24c1f08e28f5f0217140c8be744"))
+
+
+@pytest.fixture
+def receive_case(frozen, tmp_path, transfer_request):
+    name = frozen.record.source_session_id + "/rollout/rollout.jsonl"
+    request = transfer_request
     calls = []
 
     async def send(payload):
@@ -176,3 +186,84 @@ async def test_import_cleanup_failure_keeps_native_cause_and_original_transport(
     assert native.__context__ is upstream
     assert partial.read_bytes() == b"unpublished transfer"
     assert receive_case.source.read_bytes() == receive_case.original
+
+
+@pytest.fixture
+def import_case(capture_files, transfer_request, tmp_path):
+    source = capture_files
+    rollout = source.snapshot.captured_root / "rollout"
+    for index in range(9):
+        payload = b"large" * transfer.FORK_TRANSFER_CHUNK_BYTES if index == 0 else f"part-{index}".encode()
+        (rollout / f"part-{index:02}.bin").write_bytes(payload)
+    snapshot = replace(source.snapshot, rollout=replace(source.snapshot.rollout, files=_tree_manifest(rollout)))
+    marker = source_capture.publish_captured_snapshot(source.record, snapshot)
+    record = replace(source.record, state="source_captured", marker_sha256=marker,
+        snapshot_sha256=snapshot.snapshot_sha256, source_point_json=snapshot.source_point.frozen_json(
+            preimage_hash=source.record.preimage_hash, snapshot_sha256=snapshot.snapshot_sha256, marker_sha256=marker))
+    token = set_current_gateway_id("gateway_2d2ab24c1f08e28f5f0217140c8be744")
+    try:
+        yield SimpleNamespace(source=source, record=record, snapshot=snapshot, request=transfer_request,
+                              target=tmp_path / "target/sessions", original=source.bytes())
+    finally:
+        reset_current_gateway_id(token)
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["drain-page", "cancel-writers"])
+async def test_import_keeps_workers_busy_and_settles_them_before_publication_or_cleanup(import_case, fail):
+    case = import_case
+    last_file = asyncio.Event()
+    large_waiting = asyncio.Event()
+    active = peak = 0
+    completed = set()
+    cancelled = []
+    failure = ConnectionError("源分块失败")
+
+    async def send(payload):
+        nonlocal active, peak
+        if payload.action == "capture":
+            return transfer.SessionForkTransferResultDTO(capture=transfer.ForkSourceCaptureDTO.from_record(case.record))
+        if payload.action == "files":
+            return transfer.export_file_batch(case.source.sessions, case.record, payload.cursor)
+        assert payload.action == "chunk"
+        active += 1
+        peak = max(peak, active)
+        try:
+            if payload.file_name.endswith("part-00.bin") and payload.offset == 0:
+                large_waiting.set()
+                await last_file.wait()
+            if payload.file_name.endswith("part-08.bin"):
+                await large_waiting.wait()
+                if fail:
+                    raise failure
+                last_file.set()
+            if payload.file_name == "captured.json":
+                assert completed == set(case.original) - {"captured.json"} and active == 1
+            reply = transfer.export_file_chunk(case.source.sessions, case.record, payload.file_name, payload.offset)
+            assert reply.chunk_base64 is not None
+            if payload.offset + len(transfer.base64.b64decode(reply.chunk_base64)) == len(case.original[payload.file_name]):
+                completed.add(payload.file_name)
+            return reply
+        except asyncio.CancelledError:
+            cancelled.append(payload.file_name)
+            raise
+        finally:
+            active -= 1
+
+    class Transport:
+        async def fork_transfer(self, request: transfer.SessionForkTransferRequest) -> transfer.SessionForkTransferResultDTO:
+            return await send(request)
+
+    operation = transfer.import_captured_artifact(Transport(), case.request, case.target, case.record)
+    if fail:
+        with pytest.raises(ConnectionError) as caught:
+            await asyncio.wait_for(operation, 5)
+        assert caught.value is failure
+        assert any(name.endswith("part-00.bin") for name in cancelled)
+        assert not transfer.capture_directory(case.target, case.record).exists()
+    else:
+        received, marker = await asyncio.wait_for(operation, 5)
+        root = transfer.capture_directory(case.target, case.record)
+        assert {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()} == case.original
+        assert received.source_point == case.snapshot.source_point
+        assert received.snapshot_sha256 == case.snapshot.snapshot_sha256 and marker == case.record.marker_sha256
+    assert active == 0 and 1 < peak <= 4 and case.source.bytes() == case.original

@@ -163,6 +163,11 @@ async def import_captured_artifact(
         await receive_transfer_file(transport, request, frozen, path=path, size_bytes=file.size_bytes,
                                     file_name=file.name)
 
+    async def receive_files(files: Iterator[ForkTransferFileDTO]) -> None:
+        # 同页共用迭代器；空闲 worker 立即取下一文件，不等待最慢文件结束。
+        for file in files:
+            await receive_file(file)
+
     try:
         reply = await transport.fork_transfer(source_transfer_request(request, record, action="capture"))
         frozen = verify_capture_receipt(record, reply.capture)
@@ -177,16 +182,15 @@ async def import_captured_artifact(
                         raise RuntimeError("fork artifact 重复 captured marker")
                     marker = file
             files = (file for file in page.files if file.name != "captured.json")
-            while batch := tuple(islice(files, _TRANSFER_FILE_CONCURRENCY)):
-                transfers = [asyncio.create_task(receive_file(file)) for file in batch]
-                try:
-                    await asyncio.gather(*transfers)
-                except BaseException:
-                    # 先回收同页写入者，再由外层清理快照；保留原失败类型与身份。
-                    for task in transfers:
-                        task.cancel()
-                    await asyncio.gather(*transfers, return_exceptions=True)
-                    raise
+            transfers = [asyncio.create_task(receive_files(files)) for _ in range(_TRANSFER_FILE_CONCURRENCY)]
+            try:
+                await asyncio.gather(*transfers)
+            except BaseException:
+                # 先回收同页写入者，再由外层清理快照；保留原失败类型与身份。
+                for task in transfers:
+                    task.cancel()
+                await asyncio.gather(*transfers, return_exceptions=True)
+                raise
             if page.next_cursor is None:
                 break
             if page.next_cursor != cursor + FORK_TRANSFER_FILE_BATCH or len(page.files) != FORK_TRANSFER_FILE_BATCH:
