@@ -2279,7 +2279,7 @@ async function runBasicChat(surface) {
     }
     assert.ok(context.sources[1].body.length > 0, "实际 MCP 导航指引不得丢失");
     assert.deepEqual(JSON.parse(context.sources[1].body).navigation.map(group => group.group),
-      ["agent-collaboration", "debugging", "extension:browser", "extension:testing", "extension:web"]);
+      ["agent-collaboration", "debugging", "extension:browser", "extension:resource_search", "extension:testing", "extension:web"]);
     for (const source of context.sources) {
       assert.equal(source.operation, "activate");
       assert.equal(source.representation, "full");
