@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from configs.runtime import read_jsonc_object
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -54,14 +55,19 @@ async def test_generator_import_uses_workspace_owner_and_does_not_overwrite_late
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
         await acquire_gateway_guest(client)
         targets = (await client.get("/api/gateway/workspaces")).json()["data"]
-        alias = targets["active_workspace_id"]
-        client.headers["X-BoxTeam-Workspace-Id"] = alias
-        owner = (await client.get("/api/v1/workspace")).json()["data"]["workspace_id"]
+        owner = targets["active_workspace"]
+        workspace_id = owner["workspace_id"]
+        assert workspace_id == read_workspace_id(workspace)
+        client.headers.update({
+            "X-BoxTeam-Workspace-Id": workspace_id,
+            "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+        })
+        assert (await client.get("/api/v1/workspace")).json()["data"]["workspace_id"] == workspace_id
         now = datetime.now(UTC).isoformat()
         definition = {
             "generator_id": "gen_migrated", "revision": 9, "name": "旧任务", "enabled": True,
-            "trigger": {"type": "manual"}, "placement": {"kind": "workspace", "workspace_id": alias},
-            "execution_workspace_id": alias, "config": {"prompt": "等待用户手动触发"},
+            "trigger": {"type": "manual"}, "placement": {"kind": "workspace", "workspace_id": workspace_id},
+            "execution_workspace_id": workspace_id, "config": {"prompt": "等待用户手动触发"},
             "created_at": now, "updated_at": now,
         }
         path = control_root / "generators/gen_migrated.json"
@@ -81,9 +87,9 @@ async def test_generator_import_uses_workspace_owner_and_does_not_overwrite_late
         task_response = await client.get("/api/v1/persistent-tasks/gen_migrated")
         assert task_response.status_code == 200, task_response.text
         task = task_response.json()["data"]
-        assert task["workspace_id"] == owner and task["revision"] == 9
+        assert task["workspace_id"] == workspace_id and task["revision"] == 9
         assert task["configuration"]["action"]["type_id"] == "builtin.session_generation"
-        assert task["configuration"]["action"]["generation"]["placement"]["workspace_id"] == owner
+        assert task["configuration"]["action"]["generation"]["placement"]["workspace_id"] == workspace_id
         assert task["configuration"]["condition"]["type_id"] == "builtin.always"
         assert (await client.get("/api/v1/persistent-tasks/gen_migrated/runs")).json()["data"]["items"] == []
         assert not path.exists()
