@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     )
 
 
+# 可见性先按 Turn 索引选 item，再查 membership；CROSS JOIN 固定此顺序，
+# 避免每个候选 Turn 都从头扫描整个 view，所有 canonical/可见性条件保持独立核验。
 VISIBLE_NORMAL_TURN_PREDICATE = (
     "EXISTS (SELECT 1 FROM turn_records AS canonical_turn "
     "JOIN item_catalog AS root ON root.item_id = canonical_turn.root_input_item_id "
@@ -29,11 +31,12 @@ VISIBLE_NORMAL_TURN_PREDICATE = (
     "AND root.turn_id = canonical_turn.turn_id "
     "AND root.semantic_kind = 'user_input' AND root.turn_scope = 'turn_root' "
     "AND root.status = 'completed' AND membership.source_kind = 'canonical' "
-    "AND EXISTS (SELECT 1 FROM context_view_items AS visible_membership "
-    "JOIN item_catalog AS visible_item ON visible_item.item_id = visible_membership.item_id "
-    "WHERE visible_membership.view_id = cvt.view_id "
+    "AND EXISTS (SELECT 1 FROM item_catalog AS visible_item "
+    "CROSS JOIN context_view_items AS visible_membership "
+    "WHERE visible_item.turn_id = canonical_turn.turn_id "
+    "AND visible_membership.item_id = visible_item.item_id "
+    "AND visible_membership.view_id = cvt.view_id "
     "AND visible_membership.visible = 1 AND visible_membership.source_kind = 'canonical' "
-    "AND visible_item.turn_id = canonical_turn.turn_id "
     "AND visible_item.turn_scope IN ('turn_root', 'turn_member')))"
 )
 
