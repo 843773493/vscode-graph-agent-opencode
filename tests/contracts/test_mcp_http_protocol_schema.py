@@ -98,7 +98,8 @@ def test_mcp_candidate_actual_routes_publish_complete_request_roots(http_openapi
 def test_mcp_target_and_generation_fields_cannot_drift(
     http_openapi: JsonSchemaValue, model: str, field: str,
 ) -> None:
-    http_openapi["components"]["schemas"][model]["properties"][field] = {"type": "string" if field == "download_required" else "boolean"}
+    fields = http_openapi["components"]["schemas"][model]["properties"]
+    fields[field] = {"type": "string" if fields[field].get("type") == "boolean" else "boolean"}
     with pytest.raises(ValueError, match="公开结构与 proto 类型不一致") as caught:
         assert_public_http_schemas(http_openapi)
     assert "/" + field in str(caught.value)
