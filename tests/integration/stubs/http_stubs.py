@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import threading
@@ -220,23 +219,6 @@ def generation_target_stub(
                     },
                 )
                 return
-            if self.path.startswith("/api/v1/session-generations/status?"):
-                _json_response(
-                    self,
-                    {
-                        "data": {
-                            "run_id": "grun_stub_report",
-                            "status": "completed",
-                            "outputs": [],
-                            "message_id": "msg_stub_child",
-                            "job_id": "job_stub_child",
-                            "report_back_job_id": "job_stub_report_back",
-                            "error": None,
-                        },
-                        "request_id": "req_e2e_generation_stub",
-                    },
-                )
-                return
             _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
 
         def do_POST(self) -> None:
@@ -264,39 +246,7 @@ def generation_target_stub(
                     "target_session_id": preview_request.target_session_id,
                 }})
                 return
-            if self.path != "/api/v1/session-generations/execute":
-                _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
-                return
-            if not self.has_expected_workspace_identity():
-                return
-            payload = _request_json(self)
-            state.requests.append(
-                {"method": "POST", "path": self.path, "json": payload}
-            )
-            digest = hashlib.sha256(
-                str(payload["idempotency_key"]).encode("utf-8")
-            ).hexdigest()[:24]
-            _json_response(
-                self,
-                {
-                    "data": {
-                        "run_id": payload["run_id"],
-                        "status": "queued",
-                        "message_id": f"msg_{digest}",
-                        "job_id": f"job_{digest}",
-                        "outputs": [
-                            {
-                                "kind": "session",
-                                "workspace_id": workspace_id,
-                                "session_id": f"ses_{digest}",
-                                "title": payload["title"],
-                                "navigation_path": payload["navigation_path"],
-                            }
-                        ],
-                    },
-                    "request_id": "req_e2e_generation_stub",
-                },
-            )
+            _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
 
     with _running_http_stub_server(Handler, port):
         yield state
