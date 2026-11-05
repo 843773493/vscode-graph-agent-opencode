@@ -114,7 +114,6 @@ from app.services.infrastructure.mcp.catalog_activation import (
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.mcp.extension_catalog import (
-    ExtensionCatalogBindingError,
     ExtensionCatalogUnavailableError,
     ExtensionTargetBinding,
     ExtensionTargetResolutionError,
@@ -140,9 +139,6 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
-from app.services.infrastructure.rollout_context.activation.common import (
-    ResourceActivationStoreError,
-)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
@@ -157,11 +153,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
-    SkillCatalogSnapshotConflict,
     SkillLoadMode,
-)
-from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
-    skill_catalog_from_activation,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.workspace_files.text_owner import (
@@ -794,24 +786,11 @@ def create_my_deep_agent(
             raise
 
         def resolve_skill_snapshot():
-            try:
-                snapshot, _model_call_id = checkpointer.load_tool_call_resource_activation(
-                    session_id, thread_id=thread_id,
-                    tool_call_id=tool_invocation_context.require_tool_call_id(),
-                    model_call_id=tool_invocation_context.require_model_call_id(),
-                )
-                frozen_catalog = skill_catalog_from_activation(
-                    snapshot, lambda frozen, binding: checkpointer.read_resource_activation_payload(
-                        frozen, binding, storage_owner=(session_id, thread_id),
-                    ),
-                )
-            except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
-                raise SkillCatalogSnapshotConflict(
-                    "skill-catalog-snapshot-conflict: 原 tool-call 的冻结 Skill 正文无法恢复"
-                ) from error
-            if frozen_catalog is None:
-                raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 原 tool-call 缺少冻结 Skill catalog")
-            return frozen_catalog
+            return checkpointer.load_tool_call_skill_catalog(
+                session_id, thread_id=thread_id,
+                tool_call_id=tool_invocation_context.require_tool_call_id(),
+                model_call_id=tool_invocation_context.require_model_call_id(),
+            )
 
         skill_snapshot_resolver = resolve_skill_snapshot
 

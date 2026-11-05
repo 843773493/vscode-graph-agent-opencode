@@ -25,6 +25,7 @@ from app.services.infrastructure.mcp.catalog_activation import (
     extension_dispatch_from_activation,
 )
 from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogBindingError,
     ExtensionCatalogUnavailableError,
     ExtensionDispatchBindingRef,
 )
@@ -35,8 +36,18 @@ from app.services.infrastructure.mcp.tool_definitions import (
 from app.services.infrastructure.rollout_context.activation.body import (
     ResourceActivationBodyStore,
 )
+from app.services.infrastructure.rollout_context.activation.common import (
+    ResourceActivationStoreError,
+)
 from app.services.infrastructure.rollout_context.activation.store import (
     ResourceActivationStore,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    SkillCatalogActivationSnapshot,
+    SkillCatalogSnapshotConflict,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
+    skill_catalog_from_activation,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
@@ -128,6 +139,33 @@ class ResourceActivationOwnerMixin:
         )
         assert assembly.model_call_id is not None
         return snapshot, assembly.model_call_id
+
+    def load_tool_call_skill_catalog(
+        self, session_id: str, *, thread_id: str, tool_call_id: str,
+        model_call_id: str | None = None, checkpoint_ns: str = "",
+    ) -> SkillCatalogActivationSnapshot:
+        """恢复原调用的 Skill 目录；catalog、metadata 和正文共用一次读取快照。"""
+        checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
+        try:
+            activation, _ = self.load_tool_call_resource_activation(
+                session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+                model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
+            )
+            # 复用仅限本次同步读取，每份正文仍由同一 owner 校验归属和摘要。
+            with self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as current:
+                catalog = skill_catalog_from_activation(
+                    activation, lambda frozen, binding: self.read_resource_activation_payload(
+                        frozen, binding, storage_owner=(session_id, thread_id),
+                        checkpoint_ns=checkpoint_ns, read_snapshot=current,
+                    ),
+                )
+        except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
+            raise SkillCatalogSnapshotConflict(
+                "skill-catalog-snapshot-conflict: 原 tool-call 的冻结 Skill 正文无法恢复"
+            ) from error
+        if catalog is None:
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 原 tool-call 缺少冻结 Skill catalog")
+        return catalog
 
     def load_tool_call_extension_catalog(
         self, session_id: str, *, thread_id: str, tool_call_id: str,
