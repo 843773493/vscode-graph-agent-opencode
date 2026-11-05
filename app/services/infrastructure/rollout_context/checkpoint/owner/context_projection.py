@@ -457,15 +457,21 @@ class ContextProjectionOwnerMixin:
         ref: ContextRef, contribution_id: str | None,
     ) -> object:
         """先按 typed locator 冷读；旧封存选择仅查询匹配来源的索引事实。"""
-        if isinstance(ref.source_ref, DetailRef):
-            record = self._request_source_record(
-                session_id, thread_id, checkpoint_ns, ref.source_ref, ref,
-            )
-            return self._detail_store.read(
-                session_id=session_id, thread_id=thread_id, record=record,
-                include_sensitive=ref.protection != "public",
-            )["detail"]
-        with self._storage.storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+        # 一次恢复从候选查询到 manifest、正文共用快照，避免各层重开连接和解析节点。
+        # locator 与正文仅在当前调用内复用；新 seal 仍重读并校验实际消费的来源。
+        with self._storage.storage.open_read_snapshot(
+            session_id, thread_id, checkpoint_ns,
+        ) as read_snapshot:
+            if isinstance(ref.source_ref, DetailRef):
+                record = self._request_source_record(
+                    session_id, thread_id, checkpoint_ns, ref.source_ref, ref,
+                    snapshot=read_snapshot,
+                )
+                return self._detail_store.read(
+                    session_id=session_id, thread_id=thread_id, record=record,
+                    include_sensitive=ref.protection != "public", snapshot=read_snapshot,
+                )["detail"]
+            connection = read_snapshot.connection
             candidates = connection.execute(
                 "SELECT DISTINCT assembly.assembly_id FROM context_assembly_selections selected "
                 "JOIN context_assemblies assembly ON assembly.assembly_id=selected.assembly_id "
@@ -503,10 +509,11 @@ class ContextProjectionOwnerMixin:
                     entry.detail_ref.require_owner(snapshot.session_id, snapshot.thread_id, snapshot.assembly_id)
                     record = self._request_source_record(
                         session_id, thread_id, checkpoint_ns, entry.detail_ref, ref,
+                        snapshot=read_snapshot,
                     )
                     return self._detail_store.read(
                         session_id=session_id, thread_id=thread_id, record=record,
-                        include_sensitive=ref.protection != "public",
+                        include_sensitive=ref.protection != "public", snapshot=read_snapshot,
                     )["detail"]
         raise DetailUnavailableError(f"detail-unavailable: no committed request-only source: {ref.ref_id}")
 

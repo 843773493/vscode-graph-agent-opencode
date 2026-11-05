@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.core.identifier import create_uuid_hex
+from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.domain.itemized import hashing
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
@@ -46,6 +47,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import DetailUnavailableError
 from app.services.infrastructure.rollout_context.storage.schema import (
     ROLLOUT_SCHEMA_VERSION,
 )
@@ -630,6 +632,122 @@ def test_saver_registry_restarts_and_revises_through_one_owner(registry_db, draf
         == current
     )
     assert saver.create_context_plan(session, draft) == current
+
+
+@pytest.mark.parametrize("locator", ["typed_detail", "history_alias", "contribution"])
+def test_cold_seal_recovers_source_in_one_snapshot(registry_db, draft, monkeypatch, request, locator):
+    saver, session, connection, accepted = registry_db
+    thread = draft.thread_id
+    body = draft.contributions[0].body
+    original = replace(draft, tool_set_refs=())
+    if locator != "contribution":
+        original = replace(original, contributions=(), refs=(replace(draft.refs[0], content_hash=sha256_jcs(body)),))
+
+    def seal(reader, plan, *, content=None):
+        registered = reader.create_context_plan(session, plan)
+        return reader.seal_context_plan(
+            session, thread, registered.draft, turn_id=accepted["turn_id"],
+            execution_id=accepted["initial_execution_id"], provider_version="source-recovery-provider",
+            wire_profile=None, wire_params=None, seal_idempotency_key="seal:" + plan.plan_id,
+            request_only_content=content,
+        )
+
+    content_key = original.contributions[0].contribution_id if original.contributions else original.refs[0].ref_id
+    first = seal(saver, original, content={content_key: body})
+    first_detail = next(entry.detail_ref for entry in first.selection if entry.included)
+    persisted = saver.get_context_plan_registration(session, thread_id=thread, plan_id=original.plan_id).draft
+    if locator == "history_alias":
+        # 更新的同名来源有不同 revision，冷恢复仍须匹配旧来源的完整 manifest。
+        newer_body = {"instructions": "其它 revision 的来源不能替代目标正文"}
+        newer_ref = ContextRef.request_only_ref(
+            original.refs[0].ref_id, session_id=session, thread_id=thread, plan_id="newer-source-plan",
+            source_ref=original.refs[0].source_ref, source_revision="newer:1", content=newer_body,
+        )
+        seal(saver, ContextRequestPlan(
+            session, thread, "newer-source-plan", refs=(newer_ref,),
+            plan_creation_idempotency_key="newer-source-create",
+        ), content={newer_ref.ref_id: newer_body})
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        backend = cold._storage.storage
+        connect, open_snapshot = backend._connect, backend.open_read_snapshot
+        resolve = SessionCatalogPathResolver.resolve_thread_node
+        recover, read_detail = cold._recover_request_source, cold._detail_store.read
+        active, calls = [], []
+
+        def observe_connect(*args, **kwargs):
+            if active:
+                active[-1]["connections"] += 1
+            return connect(*args, **kwargs)
+
+        def observe_snapshot(*args, **kwargs):
+            snapshot = open_snapshot(*args, **kwargs)
+            if active:
+                active[-1]["snapshots"].append(snapshot)
+            return snapshot
+
+        def observe_resolve(resolver, session_id, thread_id):
+            if active:
+                active[-1]["resolutions"] += 1
+            return resolve(resolver, session_id, thread_id)
+
+        def observe_read(*args, **kwargs):
+            if active:
+                active[-1]["details"].append(kwargs.get("snapshot"))
+            return read_detail(*args, **kwargs)
+
+        def observe_recover(*args, **kwargs):
+            call = {"connections": 0, "resolutions": 0, "snapshots": [], "details": []}
+            calls.append(call)
+            active.append(call)
+            try:
+                return recover(*args, **kwargs)
+            finally:
+                active.pop()
+
+        monkeypatch.setattr(backend, "_connect", observe_connect)
+        monkeypatch.setattr(backend, "open_read_snapshot", observe_snapshot)
+        monkeypatch.setattr(SessionCatalogPathResolver, "resolve_thread_node", observe_resolve)
+        monkeypatch.setattr(cold._detail_store, "read", observe_read)
+        monkeypatch.setattr(cold, "_recover_request_source", observe_recover)
+        recovered_ref = replace(
+            persisted.refs[0], plan_id="recovered-plan",
+            source_ref=first_detail if locator == "typed_detail" else persisted.refs[0].source_ref,
+        )
+        recovered_plan = replace(
+            persisted, plan_id="recovered-plan", refs=(recovered_ref,),
+            plan_creation_idempotency_key="recovered-create",
+        )
+        recovered = seal(cold, recovered_plan)
+        recovered_detail = next(entry.detail_ref for entry in recovered.selection if entry.included)
+        assert cold.read_context_plan_detail(session, thread, detail_ref=recovered_detail)["detail"] == body
+        assert len(calls) == 1
+        measurement = {"locator": locator, "connections": calls[0]["connections"],
+                       "resolutions": calls[0]["resolutions"], "snapshots": len(calls[0]["snapshots"])}
+        context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+        (context.artifacts_dir / "request-source-recovery.json").write_text(
+            json.dumps(measurement, indent=2), encoding="utf-8",
+        )
+        print(f"request source recovery work: {measurement}")
+        assert measurement == {"locator": locator, "connections": 1, "resolutions": 1, "snapshots": 1}
+        assert calls[0]["details"] == calls[0]["snapshots"]
+        assert calls[0]["snapshots"][0].closed
+        damage_ref = first_detail if locator == "typed_detail" else recovered_detail
+        target = cold._detail_store._files.path(damage_ref)
+        raw = target.read_bytes()
+        before = connection.execute("SELECT assembly_id,request_hash FROM context_assemblies ORDER BY rowid").fetchall()
+        try:
+            target.write_bytes(b"{}")
+            failed_plan = replace(
+                recovered_plan, plan_id="failed-recovery", refs=(replace(recovered_ref, plan_id="failed-recovery"),),
+                plan_creation_idempotency_key="failed-recovery-create",
+            )
+            with pytest.raises(DetailUnavailableError, match="typed v3"):
+                seal(cold, failed_plan)
+            assert target.read_bytes() == b"{}"
+            assert connection.execute("SELECT assembly_id,request_hash FROM context_assemblies ORDER BY rowid").fetchall() == before
+            assert all(snapshot.closed for snapshot in calls[-1]["snapshots"])
+        finally:
+            target.write_bytes(raw)
 
 
 def test_saver_plan_body_cache_never_overwrites_another_plan(registry_db, draft):
