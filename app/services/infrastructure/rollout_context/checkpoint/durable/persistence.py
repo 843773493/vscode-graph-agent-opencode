@@ -360,15 +360,17 @@ class RolloutCheckpointPersistenceMixin:
                     connection, sequence, message_value, timestamp,
                     canonical_items=tuple(item for item, _offset, _length in canonical_locations),
                 )
-            publish_message_write_references(
-                PendingMessageReferences(
-                    self._storage, connection, session_id=owner.session_id,
-                    thread_id=owner.thread_id, checkpoint_ns=checkpoint_ns,
-                ),
-                validate_row=_pending_write_row,
-                parent_checkpoint_id=parent_checkpoint_id,
-                item_ids={message_id: members[-1] for message_id, members in batch.message_item_ids.items()},
-            )
+            if current_messages is not None and parent_checkpoint_id is not None:
+                # 纯 selection 继承没有消费 pending 正文，也无需顺便发布旧引用。
+                publish_message_write_references(
+                    PendingMessageReferences(
+                        self._storage, connection, session_id=owner.session_id,
+                        thread_id=owner.thread_id, checkpoint_ns=checkpoint_ns,
+                    ),
+                    validate_row=_pending_write_row,
+                    parent_checkpoint_id=parent_checkpoint_id,
+                    item_ids={message_id: members[-1] for message_id, members in batch.message_item_ids.items()},
+                )
             # Turn-less 输出与 typed display notice 在同一事务登记；fork 的
             # target-local item 也从已校验的 canonical group 恢复 membership。
             self._storage._append_context_view_items(

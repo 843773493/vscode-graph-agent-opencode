@@ -99,26 +99,27 @@ class PendingMessageReferences:
 def publish_message_write_references(
     references: PendingMessageReferences, *,
     validate_row: Callable[[tuple[object, ...]], tuple[str, str, int, str, str, bytes, int, str, str, str]],
-    parent_checkpoint_id: str | None = None,
-    item_ids: Mapping[str, str] | None = None,
+    parent_checkpoint_id: str,
+    item_ids: Mapping[str, str],
 ) -> None:
     """JSONL/catalog 已在当前事务准备完毕；失败时引用与正文共同回滚。"""
     connection = references.connection
     if not connection.in_transaction:
         raise RuntimeError("pending message 引用发布必须属于 checkpoint 原事务")
+    # 本次提交只消费声明的父 checkpoint 写入；旧分支的暂存正文仍原样保留，
+    # 不能在每次提交中全表扫描、解码并顺便校验未消费的历史 pending。
     rows = connection.execute(
-        "SELECT checkpoint_id,task_id,task_path,write_index,channel,serializer_name,value_blob,"
+        "SELECT task_id,task_path,write_index,channel,serializer_name,value_blob,"
         "value_length,value_hash,status,created_at FROM pending_writes "
-        "WHERE channel='messages' AND substr(serializer_name,1,?)<>?",
-        (len(MESSAGE_REFERENCE_SERIALIZER), MESSAGE_REFERENCE_SERIALIZER),
+        "WHERE checkpoint_id=? AND channel='messages' AND substr(serializer_name,1,?)<>?",
+        (parent_checkpoint_id, len(MESSAGE_REFERENCE_SERIALIZER), MESSAGE_REFERENCE_SERIALIZER),
     ).fetchall()
     for row in rows:
-        validated = validate_row(tuple(row[1:]))
+        validated = validate_row(tuple(row))
         serializer, blob, length, digest = validated[4:8]
         value = references.storage.decode_value((serializer, blob))
-        selected_ids = item_ids if row[0] == parent_checkpoint_id else None
-        descriptor = reference_message_write(value, lambda message, selected_ids=selected_ids: references.locate(
-            message, item_ids=selected_ids,
+        descriptor = reference_message_write(value, lambda message: references.locate(
+            message, item_ids=item_ids,
         ))
         if descriptor is None:
             # 未发布或不同版本仍是同一 pending row 的暂存态；不能丢掉崩溃恢复所需原写入。
@@ -130,7 +131,7 @@ def publish_message_write_references(
         connection.execute(
             "UPDATE pending_writes SET serializer_name=?,value_blob=?,value_length=?,value_hash=? "
             "WHERE checkpoint_id=? AND task_id=? AND task_path=? AND write_index=?",
-            (MESSAGE_REFERENCE_SERIALIZER + encoded_serializer, encoded, encoded_length, encoded_hash, *row[:4]),
+            (MESSAGE_REFERENCE_SERIALIZER + encoded_serializer, encoded, encoded_length, encoded_hash, parent_checkpoint_id, *row[:3]),
         )
 
 
