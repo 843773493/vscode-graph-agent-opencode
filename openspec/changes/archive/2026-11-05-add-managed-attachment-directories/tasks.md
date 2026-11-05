@@ -37,9 +37,9 @@
 - [x] 6.1 通过产品上传/消息/卸载/原 URI 重开，验证无修改及仅系统预览目录释放、原件重建、稳定身份与原字节、真实缺件错误；关键状态由产品生成，不手填关联或恢复事实。
 - [x] 6.2 通过文件工具与原生 Shell 生成结果，验证修改保留、连续多次卸载/重启不丢失、删除结果回到基线可释放，以及 Session 删除后工作区处理结果保留。
 - [x] 6.3 验证多 Thread、排队输入、真实后台处理/延迟写入、关联/准入竞争及原占用结清后处理；覆盖释放/重建中断与新代使用，保持原身份、冲突、顺序及错误归属断言。
-- [ ] 6.4 验证同/跨工作区 fork、来源离线后的目标重建和历史请求 hash；按受影响实现补 Linux/Windows 文件及真实 PTY 检查，远端目录始终在目标机器解释。旧跨平台通过记录不能替代新策略验收。
+- [x] 6.4 验证同/跨工作区 fork、来源离线后的目标重建和历史请求 hash；按受影响实现补 Linux/Windows 文件及真实 PTY 检查，远端目录始终在目标机器解释。旧跨平台通过记录不能替代新策略验收。
 - [x] 6.5 完成相关静态检查、OpenSpec strict，以及实际受影响的协议生成一致性/前端类型和构建；测试带进程外超时/内存保护，保留准确命令、源码指纹、原始输出和实际退出码。无需为未改动运行面重复全仓长回归。
-- [ ] 6.6 核对唯一调用链及旧实现物理下线，确认新合同全部必做项有证据后同步主规范并归档；仅文档更新不归档、不把旧 30 天验收记作新策略通过。
+- [x] 6.6 核对唯一调用链及旧实现物理下线，确认新合同全部必做项有证据后同步主规范并归档；仅文档更新不归档、不把旧 30 天验收记作新策略通过。
 
 ## 后续 TODO：不作为本次附件归档门槛
 
@@ -99,3 +99,11 @@ runtime/entry/Shell/terminal、离线转换/安装/回退及原目录释放中�
 2026-11-05 公共文件系统收口（`ddb377c3f`）：Windows 句柄、目录同步、独占 rename 与私有 ACL 集中到 `app/runtime/windows_fs.py` 的 pywin32 边界，删除对应 ctypes／icacls；附件只调用公共原件保护及窄范围只读清理。Windows 新策略正式矩阵分别通过目录入口 18 项、工作副本恢复 4 项、目录 Shell 11 项（2 项既有跳过）、产品 fork／冷重启 1 项及终端回执 7 项；凭据错误定向 8 项（2 项 POSIX 场景跳过）通过。各批不重复相加；混合单元首批的旧平台预期失败及 Windows Pyright 既有 `os.fchmod` stub 诊断保留，不能称全部 Windows 检查通过。18 个 owned 文件及五份生产源码已按最终 manifest 逐项核 SHA；准确命令、原日志与适用限制见 `out/tests/temp/attachment_windows_new_policy_20261105/artifacts/remote_validation/passed-evidence-index-01.json` 与 `public_fs_before_after_11.json`。冻结历史首次启动缺少的环境凭据引用已通过既有同步入口修复；第二次已进入附件／工具／fork，随后在 Backend 重启端口绑定处失败，旁路原件保留，原因继续核对。6.4／6.6 尚未完成，不归档。
 
 2026-11-05 Windows 冻结历史补验：10048 的完整现场确认公共停止装具只等待 venv 启动器，实际 Uvicorn 子解释器仍持有监听。公共 `terminate_process` 现于停止前枚举自有子树，并在启动器退出后等待实际子进程；硬退出调用方统一使用同入口的 `force=True`，不删除端口检查、不增加固定 sleep。`hyf-win` 正式 `integration-attachment-frozen-history` 矩阵 1 passed／189.15 秒、退出 0；原生普通停止／硬退出 Uvicorn 与装具单测共 8 passed，本地相邻装具 76 passed。公共停止实现及新增单测 Pyright 零诊断，Ruff 通过；宽查的 242 条诊断均在与 HEAD 相同的旧测试语句，未称宽查通过。准确命令、源码 SHA 和原日志位于 `out/tests/temp/windows_process_stop_20261105/artifacts/`；矩阵及回执已成功保存，临时采集脚本随后打印原始 Windows 日志时因 UTF-8 解码退出 1，另存 `windows-history-collection.json` 说明，未覆盖原日志或重跑测试；两次错误启动方式的原件也保留，不计业务通过。本次关闭 Windows 冻结历史重启缺口，不代替尚未闭合的完整跨 Gateway fork 验收。
+
+
+### 2026-11-05 最终跨 Gateway 历史与归档核对
+
+- `7e403e670` 将当前目标请求投影与历史 wire 冷读明确分开。历史读取复用原 assembly、canonical、detail、prefix 与 activation 校验，返回该次已封存的规范化 wire；不查询当前附件 alias、不读取当前文件或配置、不新增消息历史。新请求仍按当前目标投影。强反例覆盖独立已登记 owner 拒绝、返回副本隔离及 assembly/activation 损坏；Chat/Responses 所在完整文件 63 passed。后续图片 setup 因未走正式 matrix 被拒绝，保留组合退出1；只补正式 `integration-attachment-frozen-history`，1 passed／162.87秒、退出0。
+- 正式 `integration-identity-source-child-fork`：2 passed／276.07秒、退出0，覆盖 main/child 来源隔离、实际后继执行、来源离线后目标工作副本释放与原 URI 重建、完整冻结请求和 request_hash；main 场景再完成第二次跨工作区 fork，关闭前两端后冷重启读取原请求并实际发送新目标 URI。模型请求数、来源身份、字节及 hash 强断言保留，不手填关键恢复事实。
+- 准确命令、首尾 SHA、原始失败与最终回执保留于 `out/tests/temp/frozen_wire_20261105/artifacts/`：`frozen-wire-cross-gateway-with-source-services-1793867977877409747`、`frozen-wire-prefix-and-image-history-1793868280048412988`、`frozen-wire-image-history-formal-1793868474416575959`。最终 Ruff退出0；完整提交归档类型对照 `owner-types-final-comparison-1793868235602303677.json` 的84条既存诊断无增减，不称类型全绿。本批未改平台文件/PTY实现，复用前述新策略 Windows 产品与历史矩阵，不以Linux结果替代Windows。
+- 原附件 owner 全部24份源码 SHA 与 `fork_transfer_batched_20261105/artifacts/attachment-chain-scan.json` 一致；旧期限/周期GC已物理下线，仍有命中的共享资源字段属于其它资源及只读格式拒绝。同步 `managed-attachment-directories` 和 `structured-user-message-attachments` 主规范后归档，通用生命周期、外部GUI持续占用及已登记性能TODO保持未实现。
