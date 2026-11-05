@@ -288,17 +288,130 @@ class ContextOverlayStorageMixin:
         )
         if status == "active" and not values["delta_ref"] and not values["base_ref"]:
             raise ValueError("active source overlay 必须声明 base_ref 或 delta_ref")
-        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._storage._connect(
-                thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._storage._require_v2_runtime(connection)
-                existing = connection.execute(
-                    'SELECT session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?',
-                    (overlay_id, session_id, thread_id),
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
+            existing = connection.execute(
+                'SELECT session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?',
+                (overlay_id, session_id, thread_id),
+            ).fetchone()
+            expected = (
+                session_id,
+                thread_id,
+                checkpoint_ns,
+                source_kind,
+                source_revision,
+                source_overlay_epoch,
+                values["base_ref"],
+                values["delta_ref"],
+                values["base_source_revision"],
+                values["base_content_length"],
+                values["base_content_hash"],
+                values["delta_source_revision"],
+                values["delta_content_length"],
+                values["delta_content_hash"],
+                values["delta_from_revision"],
+                values["delta_to_revision"],
+                values["delta_diff_hash"],
+                values["supersedes_overlay_id"],
+                values["materializes_overlay_id"],
+                status,
+                idempotency_key,
+            )
+            if existing is not None:
+                if tuple(existing) == expected:
+                    return
+                raise ValueError("source overlay identity 冲突")
+            duplicate = connection.execute(
+                "SELECT overlay_id FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? AND idempotency_key = ?",
+                (session_id, thread_id, checkpoint_ns, idempotency_key),
+            ).fetchone()
+            if duplicate is not None:
+                raise ValueError(
+                    "source overlay idempotency_key 已绑定其它 overlay_id: "
+                    f"{idempotency_key}"
+                )
+            latest_epoch = connection.execute(
+                "SELECT MAX(source_overlay_epoch) FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?",
+                (session_id, thread_id, checkpoint_ns),
+            ).fetchone()
+            if latest_epoch is None:
+                raise RuntimeError("source overlay latest epoch 查询失败")
+            latest_epoch_value = _optional_non_negative_int(
+                {"value": latest_epoch[0]}, "value"
+            )
+            if (
+                latest_epoch_value is not None
+                and source_overlay_epoch < latest_epoch_value
+            ):
+                raise ValueError("source_overlay_epoch 不能回退")
+            relation_targets: list[tuple[str, str]] = []
+            for relation_name in (
+                "supersedes_overlay_id",
+                "materializes_overlay_id",
+            ):
+                relation_id = values[relation_name]
+                if relation_id is None:
+                    continue
+                if not isinstance(relation_id, str) or not relation_id:
+                    raise ValueError(
+                        f"source overlay {relation_name} 不能为空字符串"
+                    )
+                if relation_id == overlay_id:
+                    raise ValueError("source overlay lineage 不得自引用")
+                target = connection.execute(
+                    "SELECT session_id, thread_id, checkpoint_ns, status FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
+                    (relation_id, session_id, thread_id),
                 ).fetchone()
-                expected = (
+                if target is None:
+                    raise KeyError(
+                        f"source overlay lineage target 不存在: {relation_name}={relation_id}"
+                    )
+                target_session_id = _required_text(
+                    {"session_id": target[0]}, "session_id"
+                )
+                target_thread_id = _required_text(
+                    {"thread_id": target[1]}, "thread_id"
+                )
+                target_checkpoint_ns = target[2]
+                if not isinstance(target_checkpoint_ns, str):
+                    raise TypeError(
+                        "source overlay lineage target checkpoint_ns 必须是字符串"
+                    )
+                target_status = _required_text({"status": target[3]}, "status")
+                if (
+                    target_session_id != session_id
+                    or target_thread_id != thread_id
+                    or target_checkpoint_ns != checkpoint_ns
+                ):
+                    raise ValueError(
+                        "source overlay lineage 不得跨 session/thread/checkpoint namespace"
+                    )
+                if target_status != "active":
+                    raise ValueError(
+                        f"source overlay lineage target 不是 active: {relation_id}"
+                    )
+                relation_targets.append((relation_name, relation_id))
+            if values["materializes_overlay_id"] is not None and (
+                latest_epoch_value is not None
+                and source_overlay_epoch <= latest_epoch_value
+            ):
+                raise ValueError(
+                    "materializes source overlay 必须推进 source_overlay_epoch"
+                )
+            for relation_name, relation_id in relation_targets:
+                next_status = (
+                    "materialized"
+                    if relation_name == "materializes_overlay_id"
+                    else "superseded"
+                )
+                cursor = connection.execute(
+                    "UPDATE source_overlays SET status = ? WHERE overlay_id = ? AND session_id = ? AND thread_id = ? AND status = 'active'",
+                    (next_status, relation_id, session_id, thread_id),
+                )
+                _assert_one_row(cursor, context="source overlay lineage 状态更新")
+            cursor = connection.execute(
+                'INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (
+                    overlay_id,
                     session_id,
                     thread_id,
                     checkpoint_ns,
@@ -320,134 +433,16 @@ class ContextOverlayStorageMixin:
                     values["materializes_overlay_id"],
                     status,
                     idempotency_key,
-                )
-                if existing is not None:
-                    if tuple(existing) == expected:
-                        return
-                    raise ValueError("source overlay identity 冲突")
-                duplicate = connection.execute(
-                    "SELECT overlay_id FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? AND idempotency_key = ?",
-                    (session_id, thread_id, checkpoint_ns, idempotency_key),
-                ).fetchone()
-                if duplicate is not None:
-                    raise ValueError(
-                        "source overlay idempotency_key 已绑定其它 overlay_id: "
-                        f"{idempotency_key}"
-                    )
-                latest_epoch = connection.execute(
-                    "SELECT MAX(source_overlay_epoch) FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?",
-                    (session_id, thread_id, checkpoint_ns),
-                ).fetchone()
-                if latest_epoch is None:
-                    raise RuntimeError("source overlay latest epoch 查询失败")
-                latest_epoch_value = _optional_non_negative_int(
-                    {"value": latest_epoch[0]}, "value"
-                )
-                if (
-                    latest_epoch_value is not None
-                    and source_overlay_epoch < latest_epoch_value
-                ):
-                    raise ValueError("source_overlay_epoch 不能回退")
-                relation_targets: list[tuple[str, str]] = []
-                for relation_name in (
-                    "supersedes_overlay_id",
-                    "materializes_overlay_id",
-                ):
-                    relation_id = values[relation_name]
-                    if relation_id is None:
-                        continue
-                    if not isinstance(relation_id, str) or not relation_id:
-                        raise ValueError(
-                            f"source overlay {relation_name} 不能为空字符串"
-                        )
-                    if relation_id == overlay_id:
-                        raise ValueError("source overlay lineage 不得自引用")
-                    target = connection.execute(
-                        "SELECT session_id, thread_id, checkpoint_ns, status FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
-                        (relation_id, session_id, thread_id),
-                    ).fetchone()
-                    if target is None:
-                        raise KeyError(
-                            f"source overlay lineage target 不存在: {relation_name}={relation_id}"
-                        )
-                    target_session_id = _required_text(
-                        {"session_id": target[0]}, "session_id"
-                    )
-                    target_thread_id = _required_text(
-                        {"thread_id": target[1]}, "thread_id"
-                    )
-                    target_checkpoint_ns = target[2]
-                    if not isinstance(target_checkpoint_ns, str):
-                        raise TypeError(
-                            "source overlay lineage target checkpoint_ns 必须是字符串"
-                        )
-                    target_status = _required_text({"status": target[3]}, "status")
-                    if (
-                        target_session_id != session_id
-                        or target_thread_id != thread_id
-                        or target_checkpoint_ns != checkpoint_ns
-                    ):
-                        raise ValueError(
-                            "source overlay lineage 不得跨 session/thread/checkpoint namespace"
-                        )
-                    if target_status != "active":
-                        raise ValueError(
-                            f"source overlay lineage target 不是 active: {relation_id}"
-                        )
-                    relation_targets.append((relation_name, relation_id))
-                if values["materializes_overlay_id"] is not None and (
-                    latest_epoch_value is not None
-                    and source_overlay_epoch <= latest_epoch_value
-                ):
-                    raise ValueError(
-                        "materializes source overlay 必须推进 source_overlay_epoch"
-                    )
-                for relation_name, relation_id in relation_targets:
-                    next_status = (
-                        "materialized"
-                        if relation_name == "materializes_overlay_id"
-                        else "superseded"
-                    )
-                    cursor = connection.execute(
-                        "UPDATE source_overlays SET status = ? WHERE overlay_id = ? AND session_id = ? AND thread_id = ? AND status = 'active'",
-                        (next_status, relation_id, session_id, thread_id),
-                    )
-                    _assert_one_row(cursor, context="source overlay lineage 状态更新")
-                cursor = connection.execute(
-                    'INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (
-                        overlay_id,
-                        session_id,
-                        thread_id,
-                        checkpoint_ns,
-                        source_kind,
-                        source_revision,
-                        source_overlay_epoch,
-                        values["base_ref"],
-                        values["delta_ref"],
-                        values["base_source_revision"],
-                        values["base_content_length"],
-                        values["base_content_hash"],
-                        values["delta_source_revision"],
-                        values["delta_content_length"],
-                        values["delta_content_hash"],
-                        values["delta_from_revision"],
-                        values["delta_to_revision"],
-                        values["delta_diff_hash"],
-                        values["supersedes_overlay_id"],
-                        values["materializes_overlay_id"],
-                        status,
-                        idempotency_key,
-                        _now(),
-                    ),
-                )
-                _assert_one_row(cursor, context="source overlay 写入")
-                cursor = connection.execute(
-                    "UPDATE database_meta SET source_overlay_epoch = MAX(source_overlay_epoch, ?), updated_at = ? WHERE singleton_id = 1",
-                    (source_overlay_epoch, _now()),
-                )
-                _assert_one_row(cursor, context="source overlay database_meta 更新")
-                connection.commit()
+                    _now(),
+                ),
+            )
+            _assert_one_row(cursor, context="source overlay 写入")
+            cursor = connection.execute(
+                "UPDATE database_meta SET source_overlay_epoch = MAX(source_overlay_epoch, ?), updated_at = ? WHERE singleton_id = 1",
+                (source_overlay_epoch, _now()),
+            )
+            _assert_one_row(cursor, context="source overlay database_meta 更新")
+            connection.commit()
 
     def list_source_overlays(
         self,

@@ -59,11 +59,7 @@ class RolloutTurnLifecycleMixin:
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True,
         )
-        self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._storage._connect(
-            thread_id, checkpoint_ns, session_id=session_id, read_only=True,
-        ) as connection:
-            self._storage._require_v2_runtime(connection)
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
             execution = connection.execute(
                 "SELECT COALESCE(last_execution_id, initial_execution_id) "
                 "FROM turn_records WHERE session_id = ? AND thread_id = ? "

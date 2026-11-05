@@ -166,22 +166,14 @@ class DetailRegistryMixin(DetailRetentionMixin):
         if not isinstance(detail, DetailRecord):
             raise TypeError("detail registry 只接受完整 DetailRecord")
         ref = detail.detail_ref
-        with self._storage._lock(
-            ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
-        ):
-            self._storage.initialize(
-                ref.session_id, detail.checkpoint_ns, thread_id=ref.thread_id
-            )
-            with self._storage._connect(
-                ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
-            ) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                for record in details:
-                    self._register_context_plan_detail(
-                        connection, record, session_id=ref.session_id,
-                        thread_id=ref.thread_id, checkpoint_ns=detail.checkpoint_ns,
-                    )
-                connection.commit()
+        with self._storage.write_connection(ref.session_id, ref.thread_id, detail.checkpoint_ns) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for record in details:
+                self._register_context_plan_detail(
+                    connection, record, session_id=ref.session_id,
+                    thread_id=ref.thread_id, checkpoint_ns=detail.checkpoint_ns,
+                )
+            connection.commit()
 
     def _register_context_plan_detail(
         self, connection: sqlite3.Connection, detail: DetailRecord, *,

@@ -70,16 +70,14 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         contribution_id, expected = self._context_contribution_values(
             session_id, thread_id, contribution, checkpoint_ns=checkpoint_ns,
         )
-        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                source_ordinal = self._write_context_contribution(
-                    connection, contribution_id, expected,
-                    expected_source_revision=expected_source_revision,
-                )
-                connection.commit()
-                return source_ordinal
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            source_ordinal = self._write_context_contribution(
+                connection, contribution_id, expected,
+                expected_source_revision=expected_source_revision,
+            )
+            connection.commit()
+            return source_ordinal
 
     def _register_context_contribution(
         self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,

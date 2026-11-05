@@ -266,44 +266,41 @@ class DetailRetentionMixin:
         refs = tuple(dict.fromkeys(keys))
         if not refs:
             return
-        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
-                self._storage._require_v2_runtime(connection)
-                if current_scope(connection) != (session_id, thread_id):
-                    raise ValueError("source-mismatch: detail GC owner 与 rollout catalog 不一致")
-                for ref_session_id, ref_thread_id in owners.values():
-                    require_historical_scope(
-                        connection, ref_session_id, ref_thread_id,
-                        current_owner=(session_id, thread_id),
-                    )
-                for key, ref in ref_by_key.items():
-                    row = connection.execute(
-                        "SELECT session_id, thread_id, assembly_id, checkpoint_ns "
-                        "FROM context_plan_details WHERE detail_ref = ?",
-                        (key,),
-                    ).fetchone()
-                    if row != (ref.session_id, ref.thread_id, ref.assembly_id, checkpoint_ns):
-                        raise RuntimeError("detail tombstone 目标缺失或 identity 不一致")
-                # 候选扫描和实际 tombstone 之间可能发生 seal；在同一个写锁内
-                # 重新检查，不能依赖 GC 调用方之前拿到的过期候选快照。
-                protected = tuple(
-                    ref for ref in refs
-                    if _referenced(
-                        connection, *owners[ref], checkpoint_ns, ref
-                    )
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
+            if current_scope(connection) != (session_id, thread_id):
+                raise ValueError("source-mismatch: detail GC owner 与 rollout catalog 不一致")
+            for ref_session_id, ref_thread_id in owners.values():
+                require_historical_scope(
+                    connection, ref_session_id, ref_thread_id,
+                    current_owner=(session_id, thread_id),
                 )
-                if protected:
-                    raise RuntimeError(
-                        "detail-retention-protected: committed context source 仍引用 detail: "
-                        + ",".join(protected)
-                    )
-                placeholders = ",".join("?" for _ in refs)
-                result = connection.execute(
-                    "UPDATE context_plan_details SET status = 'unavailable', availability = 'unavailable' "
-                    f"WHERE checkpoint_ns = ? AND detail_ref IN ({placeholders})",
-                    (checkpoint_ns, *refs),
-                )
-                if result.rowcount != len(refs):
+            for key, ref in ref_by_key.items():
+                row = connection.execute(
+                    "SELECT session_id, thread_id, assembly_id, checkpoint_ns "
+                    "FROM context_plan_details WHERE detail_ref = ?",
+                    (key,),
+                ).fetchone()
+                if row != (ref.session_id, ref.thread_id, ref.assembly_id, checkpoint_ns):
                     raise RuntimeError("detail tombstone 目标缺失或 identity 不一致")
-                connection.commit()
+            # 候选扫描和实际 tombstone 之间可能发生 seal；在同一个写锁内
+            # 重新检查，不能依赖 GC 调用方之前拿到的过期候选快照。
+            protected = tuple(
+                ref for ref in refs
+                if _referenced(
+                    connection, *owners[ref], checkpoint_ns, ref
+                )
+            )
+            if protected:
+                raise RuntimeError(
+                    "detail-retention-protected: committed context source 仍引用 detail: "
+                    + ",".join(protected)
+                )
+            placeholders = ",".join("?" for _ in refs)
+            result = connection.execute(
+                "UPDATE context_plan_details SET status = 'unavailable', availability = 'unavailable' "
+                f"WHERE checkpoint_ns = ? AND detail_ref IN ({placeholders})",
+                (checkpoint_ns, *refs),
+            )
+            if result.rowcount != len(refs):
+                raise RuntimeError("detail tombstone 目标缺失或 identity 不一致")
+            connection.commit()

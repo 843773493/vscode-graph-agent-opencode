@@ -184,64 +184,60 @@ class RolloutWriteMixin:
         strict_text(checkpoint_id, field="append_writes.checkpoint_id")
         strict_text(task_id, field="append_writes.task_id")
         strict_text(task_path, field="append_writes.task_path")
-        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._storage._connect(
-                thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                for index, (channel, value) in enumerate(writes):
-                    serializer, blob, length, digest = self._storage._encode(value)
-                    channel = strict_text(channel, field="pending_writes.channel")
-                    # 官方控制槽可更新，且不能与恢复后节点的普通第零项互相占用。
-                    # 普通业务写入仍保持原有的不可变重试核对。
-                    index = WRITES_IDX_MAP.get(channel, index)
-                    expected = _pending_write_row(
-                        (
-                            task_id,
-                            task_path,
-                            index,
-                            channel,
-                            strict_text(
-                                serializer, field="pending_writes.serializer_name"
-                            ),
-                            bytes(blob),
-                            strict_non_negative_int(
-                                length, field="pending_writes.value_length"
-                            ),
-                            strict_text(digest, field="pending_writes.value_hash"),
-                            "pending",
-                            _now(),
-                        )
-                    )
-                    existing = connection.execute(
-                        "SELECT task_id, task_path, write_index, channel, serializer_name, value_blob, value_length, value_hash, status, created_at FROM pending_writes WHERE checkpoint_id = ? AND task_id = ? AND task_path = ? AND write_index = ?",
-                        (checkpoint_id, task_id, task_path, index),
-                    ).fetchone()
-                    if existing is not None:
-                        stored = _pending_write_row(tuple(existing))
-                        if index < 0:
-                            if stored[:4] != expected[:4]:
-                                raise RuntimeError("pending_writes 控制槽身份冲突")
-                            cursor = connection.execute(
-                                "UPDATE pending_writes SET serializer_name=?, value_blob=?, value_length=?, value_hash=? "
-                                "WHERE checkpoint_id=? AND task_id=? AND task_path=? AND write_index=?",
-                                (*expected[4:8], checkpoint_id, task_id, task_path, index),
-                            )
-                            _assert_one_row(cursor, context="更新 pending_writes 控制槽")
-                            continue
-                        if (stored[:4] != expected[:4] or stored[8] != expected[8]
-                                or original_write_fingerprint(*stored[4:8], storage=self._storage) != original_write_fingerprint(*expected[4:8], storage=self._storage)):
-                            raise RuntimeError(
-                                "pending_writes 重试内容不一致: "
-                                f"task={task_id}, path={task_path}, index={index}"
-                            )
-                        continue
-                    cursor = connection.execute(
-                        "INSERT INTO pending_writes(checkpoint_id, task_id, task_path, write_index, channel, serializer_name, value_blob, value_length, value_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-                        (
-                            checkpoint_id,
-                            *expected[:8],
-                            expected[9],
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
+            for index, (channel, value) in enumerate(writes):
+                serializer, blob, length, digest = self._storage._encode(value)
+                channel = strict_text(channel, field="pending_writes.channel")
+                # 官方控制槽可更新，且不能与恢复后节点的普通第零项互相占用。
+                # 普通业务写入仍保持原有的不可变重试核对。
+                index = WRITES_IDX_MAP.get(channel, index)
+                expected = _pending_write_row(
+                    (
+                        task_id,
+                        task_path,
+                        index,
+                        channel,
+                        strict_text(
+                            serializer, field="pending_writes.serializer_name"
                         ),
+                        bytes(blob),
+                        strict_non_negative_int(
+                            length, field="pending_writes.value_length"
+                        ),
+                        strict_text(digest, field="pending_writes.value_hash"),
+                        "pending",
+                        _now(),
                     )
-                    _assert_one_row(cursor, context="追加 pending_writes")
+                )
+                existing = connection.execute(
+                    "SELECT task_id, task_path, write_index, channel, serializer_name, value_blob, value_length, value_hash, status, created_at FROM pending_writes WHERE checkpoint_id = ? AND task_id = ? AND task_path = ? AND write_index = ?",
+                    (checkpoint_id, task_id, task_path, index),
+                ).fetchone()
+                if existing is not None:
+                    stored = _pending_write_row(tuple(existing))
+                    if index < 0:
+                        if stored[:4] != expected[:4]:
+                            raise RuntimeError("pending_writes 控制槽身份冲突")
+                        cursor = connection.execute(
+                            "UPDATE pending_writes SET serializer_name=?, value_blob=?, value_length=?, value_hash=? "
+                            "WHERE checkpoint_id=? AND task_id=? AND task_path=? AND write_index=?",
+                            (*expected[4:8], checkpoint_id, task_id, task_path, index),
+                        )
+                        _assert_one_row(cursor, context="更新 pending_writes 控制槽")
+                        continue
+                    if (stored[:4] != expected[:4] or stored[8] != expected[8]
+                            or original_write_fingerprint(*stored[4:8], storage=self._storage) != original_write_fingerprint(*expected[4:8], storage=self._storage)):
+                        raise RuntimeError(
+                            "pending_writes 重试内容不一致: "
+                            f"task={task_id}, path={task_path}, index={index}"
+                        )
+                    continue
+                cursor = connection.execute(
+                    "INSERT INTO pending_writes(checkpoint_id, task_id, task_path, write_index, channel, serializer_name, value_blob, value_length, value_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    (
+                        checkpoint_id,
+                        *expected[:8],
+                        expected[9],
+                    ),
+                )
+                _assert_one_row(cursor, context="追加 pending_writes")

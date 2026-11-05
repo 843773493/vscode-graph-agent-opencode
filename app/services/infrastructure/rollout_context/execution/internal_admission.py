@@ -64,13 +64,10 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
         self, session_id: str, thread_id: str, checkpoint_ns: str = "",
     ) -> Iterator[sqlite3.Connection]:
         """执行输入只使用连接持有的 SQLite/JSONL 提交与回滚边界。"""
-        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._storage._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
-                self._storage._require_v2_runtime(connection)
-                connection.execute("BEGIN IMMEDIATE")
-                yield connection
-                self._storage._commit_connection(connection)
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            self._storage._commit_connection(connection)
 
 
     def _admit_internal_execution_transaction(

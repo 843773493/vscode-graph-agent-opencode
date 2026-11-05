@@ -1,10 +1,7 @@
 """真实 seal 的同次 canonical 读取、首错顺序与提交完整性合同。"""
 
-from collections import Counter
-from contextlib import contextmanager, nullcontext
-from contextvars import ContextVar
+from contextlib import nullcontext
 from dataclasses import replace
-from functools import partial
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -20,13 +17,8 @@ from app.services.infrastructure.rollout_context.checkpoint.seal import preparat
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
-from app.services.infrastructure.rollout_context.storage import (
-    rollout_schema_introspection,
-)
 from app.services.infrastructure.rollout_context.storage.catalog import (
     integrity,
-    item_reader,
-    items,
 )
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 按当前文件隔离正式工作区
@@ -220,166 +212,37 @@ def test_wire_seal_rejects_nested_payload_mutation_after_first_projection(
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_wire_seal_writer_initialize_rejects_damage_after_projection(
-    production_context, monkeypatch, target_format,
+@pytest.mark.parametrize("damage", ["catalog", "body"])
+def test_full_audit_rejects_storage_damage_after_projection(
+    production_context, monkeypatch, target_format, damage,
 ):
-    saver, session, _thread, connection, manager, prepare = production_context
-    storage = saver._storage.storage
-    original_project = saver._project_context_projection
-    original_validate = saver._validate_snapshot_sources
-    original_initialize = storage.initialize
-    original_jsonl = storage.jsonl_path(session).read_bytes()
-    pending = manager.prepare_pending()
-    events = []
-
-    def project(*args, **kwargs):
-        result = original_project(*args, **kwargs)
-        connection.execute("UPDATE item_catalog SET content_hash='forged-after-projection'")
-        connection.commit()
-        events.append("project-damage")
-        return result
-
-    def validate(*args, **kwargs):
-        result = original_validate(*args, **kwargs)
-        events.append("source-valid")
-        return result
-
-    def initialize(*args, **kwargs):
-        if "project-damage" in events:
-            assert kwargs.get("validate_jsonl_items", True)
-            events.append("writer-initialize")
-        return original_initialize(*args, **kwargs)
-
-    monkeypatch.setattr(saver, "_project_context_projection", project)
-    monkeypatch.setattr(saver, "_validate_snapshot_sources", validate)
-    monkeypatch.setattr(storage, "initialize", initialize)
-    with pytest.raises(RuntimeError, match="catalog 与 JSONL identity 不一致"):
-        prepare("damaged-durable-source", target_format=target_format)
-    assert events[:3] == ["project-damage", "source-valid", "writer-initialize"]
-    assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
-    assert connection.execute("SELECT plan_state FROM context_plans").fetchall() == [("unsealed",)]
-    assert manager.prepare_pending() == pending
-    assert storage.jsonl_path(session).read_bytes() == original_jsonl
-
-
-@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
-def test_wire_seal_rechecks_same_length_body_damage_after_successful_validation(
-    production_context, monkeypatch, target_format,
-):
-    saver, session, thread, connection, manager, prepare = production_context
+    saver, session, thread, connection, _manager, prepare = production_context
     storage = saver._storage.storage
     path = storage.jsonl_path(session, thread_id=thread)
     original_project = saver._project_context_projection
-    original_line = integrity.canonical_json_line
-    successful_reads = []
-    damaged_bytes = []
-    source_state = []
-    pending = manager.prepare_pending()
-
-    def observe(value):
-        result = original_line(value)
-        if value.get("payload") in ("独立草稿", "损坏草稿"):
-            successful_reads.append(result)
-        return result
+    original_bytes = path.read_bytes()
+    damaged_bytes = original_bytes.replace("独立草稿".encode(), "损坏草稿".encode())
+    assert original_bytes != damaged_bytes and len(original_bytes) == len(damaged_bytes)
 
     def project(*args, **kwargs):
         result = original_project(*args, **kwargs)
-        assert successful_reads
-        source_state.append((connection.execute(
-            "SELECT item_id,jsonl_offset,jsonl_length,content_hash,payload_length,source_revision "
-            "FROM item_catalog ORDER BY item_sequence"
-        ).fetchall(), connection.execute(
-            "SELECT committed_jsonl_offset,last_commit_id FROM database_meta"
-        ).fetchone()))
-        before = path.read_bytes()
-        damaged = before.replace("独立草稿".encode(), "损坏草稿".encode())
-        assert before != damaged and len(before) == len(damaged)
-        path.write_bytes(damaged)
-        damaged_bytes.append(damaged)
+        if damage == "catalog":
+            connection.execute("UPDATE item_catalog SET content_hash='forged-after-projection'")
+            connection.commit()
+        else:
+            path.write_bytes(damaged_bytes)
         return result
 
-    monkeypatch.setattr(integrity, "canonical_json_line", observe)
     monkeypatch.setattr(saver, "_project_context_projection", project)
-    with pytest.raises(RuntimeError, match="schema/content 非法"):
-        prepare("same-length-body-damage", target_format=target_format)
-    assert len(successful_reads) >= 2
-    assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
-    assert connection.execute("SELECT plan_state FROM context_plans").fetchall() == [("unsealed",)]
-    assert connection.execute(
-        "SELECT item_id,jsonl_offset,jsonl_length,content_hash,payload_length,source_revision "
-        "FROM item_catalog ORDER BY item_sequence"
-    ).fetchall() == source_state[0][0]
-    assert connection.execute(
-        "SELECT committed_jsonl_offset,last_commit_id FROM database_meta"
-    ).fetchone() == source_state[0][1]
-    assert manager.prepare_pending() == pending
-    assert path.read_bytes() == damaged_bytes[0]
-
-
-def test_provider_uses_storage_body_validation_scope_and_ends_after_success(production_context, monkeypatch):
-    saver, session, thread, _connection, _manager, prepare = production_context
-    storage = saver._storage.storage
-    storage._catalog_body_validation_cache = integrity.CatalogBodyValidationCache()
-    original_scope = storage.catalog_body_validation_scope
-    original_validate = rollout_schema_introspection.validate_catalog_body
-    original_read = integrity.read_catalog_body
-    original_line = integrity.canonical_json_line
-    scope_events = []
-    phase = "before"
-    requests = {label: Counter() for label in ("before", "inside", "after")}
-    validations = {label: Counter() for label in ("before", "inside", "after")}
-    active_request: ContextVar[
-        tuple[str, tuple[bytes, int, str, str, int, str]] | None
-    ] = ContextVar("body_validation_request", default=None)
-
-    @contextmanager
-    def observe_scope():
-        nonlocal phase
-        previous_phase = phase
-        scope_events.append("enter")
-        with original_scope():
-            phase = "inside"
-            yield
-        phase = "inside" if previous_phase == "inside" else "after"
-        scope_events.append("exit")
-
-    def observe_validation(operation, raw, *, sequence, item_id, catalog_hash, payload_length, source_revision, **options):
-        key = (raw, sequence, item_id, catalog_hash, payload_length, source_revision)
-        requests[phase][key] += 1
-        token = active_request.set((phase, key))
-        try:
-            return operation(
-                raw, sequence=sequence, item_id=item_id, catalog_hash=catalog_hash,
-                payload_length=payload_length, source_revision=source_revision,
-                **options,
-            )
-        finally:
-            active_request.reset(token)
-
-    def observe(value):
-        result = original_line(value)
-        request = active_request.get()
-        assert request is not None
-        request_phase, key = request
-        validations[request_phase][key] += 1
-        return result
-
-    monkeypatch.setattr(storage, "catalog_body_validation_scope", observe_scope)
-    monkeypatch.setattr(rollout_schema_introspection, "validate_catalog_body", partial(observe_validation, original_validate))
-    monkeypatch.setattr(items, "read_catalog_body", partial(observe_validation, original_read))
-    monkeypatch.setattr(item_reader, "read_catalog_body", partial(observe_validation, original_read))
-    monkeypatch.setattr(integrity, "canonical_json_line", observe)
-    prepare("body-validation-success-scope")
-    assert scope_events == ["enter", "enter", "exit", "exit"]
-    assert requests["inside"]
-    assert all(count >= 2 for count in requests["inside"].values())
-    expected_validations = Counter({key: 1 for key in requests["inside"]})
-    assert requests["before"] == validations["before"] == expected_validations
-    assert validations["inside"] == expected_validations
-    storage.initialize(session, thread_id=thread)
-    assert scope_events == ["enter", "enter", "exit", "exit"]
-    assert requests["after"] == expected_validations
-    assert validations["after"] == Counter()
+    # wire 使用已读取并校验的不可变副本；后续磁盘篡改由完整审计报告，不在每次写入重扫历史。
+    result = prepare("storage-damage-after-projection", target_format=target_format)
+    assert result["snapshot"].sealed
+    assert any(message.content == "独立草稿" for message in result["messages"])
+    assert connection.execute("SELECT plan_state FROM context_plans").fetchall() == [("sealed",)]
+    error = "catalog 与 JSONL identity 不一致" if damage == "catalog" else "schema/content 非法"
+    with pytest.raises(RuntimeError, match=error):
+        storage.validate_index(session, thread)
+    assert path.read_bytes() == (original_bytes if damage == "catalog" else damaged_bytes)
 
 
 @pytest.mark.parametrize("target_format", ["chat_completions", "responses"])

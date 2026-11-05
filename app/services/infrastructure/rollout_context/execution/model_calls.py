@@ -133,270 +133,263 @@ class RolloutModelCallsMixin:
             or attempt <= 0
         ):
             raise ValueError("model call identity/provider/attempt 非法")
-        with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(
-                session_id, checkpoint_ns, thread_id=owner_thread_id
+        with self._storage.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            existing = connection.execute(
+                "SELECT execution_id, attempt, provider, provider_request_id, "
+                "retry_of_model_call_id, assembly_id, dispatch_state, outcome "
+                "FROM model_calls WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
+                (session_id, owner_thread_id, model_call_id),
+            ).fetchone()
+            if existing is not None:
+                existing_execution_id = strict_text(
+                    existing[0], field=f"model_calls.execution_id: {model_call_id}"
+                )
+                existing_attempt = strict_non_negative_int(
+                    existing[1], field=f"model_calls.attempt: {model_call_id}"
+                )
+                if existing_attempt == 0:
+                    raise RuntimeError(
+                        f"model_calls.attempt 必须为正数: {model_call_id}"
+                    )
+                existing_provider = strict_text(
+                    existing[2], field=f"model_calls.provider: {model_call_id}"
+                )
+                existing_provider_request_id = strict_optional_text(
+                    existing[3],
+                    field=f"model_calls.provider_request_id: {model_call_id}",
+                )
+                existing_retry_id = strict_optional_text(
+                    existing[4],
+                    field=f"model_calls.retry_of_model_call_id: {model_call_id}",
+                )
+                existing_assembly_id = strict_text(
+                    existing[5], field=f"model_calls.assembly_id: {model_call_id}"
+                )
+                strict_text(
+                    existing[6], field=f"model_calls.dispatch_state: {model_call_id}"
+                )
+                strict_text(
+                    existing[7], field=f"model_calls.outcome: {model_call_id}"
+                )
+                if (
+                    existing_execution_id,
+                    existing_attempt,
+                    existing_provider,
+                    existing_provider_request_id,
+                    existing_retry_id,
+                    existing_assembly_id,
+                ) == (
+                    execution_id,
+                    attempt,
+                    provider,
+                    provider_request_id,
+                    retry_of_model_call_id,
+                    assembly_id,
+                ):
+                    return
+                raise ValueError(
+                    "model_call_id 已存在但 execution/attempt/provider/"
+                    "request/retry/assembly identity 冲突"
+                )
+            if dispatch_state not in {
+                "ready",
+                "dispatched",
+                "completed",
+                "failed",
+                "unknown",
+            }:
+                raise ValueError(
+                    f"未知 model call dispatch_state: {dispatch_state}"
+                )
+            execution = connection.execute(
+                """
+                SELECT e.turn_id, e.execution_origin, e.outcome, tr.status
+                FROM executions AS e
+                LEFT JOIN turn_records AS tr
+                  ON tr.session_id = e.session_id
+                 AND tr.thread_id = e.thread_id
+                 AND tr.turn_id = e.turn_id
+                WHERE e.session_id = ? AND e.thread_id = ? AND e.execution_id = ?
+                """,
+                (session_id, owner_thread_id, execution_id),
+            ).fetchone()
+            if execution is None:
+                raise KeyError(f"execution 不存在: {execution_id}")
+            execution_turn_id = strict_optional_text(
+                execution[0], field=f"executions.turn_id: {execution_id}"
             )
-            with self._storage._connect(
-                owner_thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._storage._require_v2_runtime(connection)
-                existing = connection.execute(
-                    "SELECT execution_id, attempt, provider, provider_request_id, "
-                    "retry_of_model_call_id, assembly_id, dispatch_state, outcome "
+            execution_origin = strict_text(
+                execution[1], field=f"executions.execution_origin: {execution_id}"
+            )
+            if execution_origin == "user_turn":
+                if execution_turn_id is None:
+                    raise RuntimeError(
+                        f"user_turn execution 缺少 Turn: {execution_id}"
+                    )
+                execution_status = strict_text(
+                    execution[3],
+                    field=f"turn_records.status: {execution_id}",
+                )
+                if execution_status not in {
+                    TurnStatus.OPEN.value,
+                    TurnStatus.ACTIVE.value,
+                }:
+                    raise ValueError(
+                        "turn_not_resumable: model call 不能绑定 terminal Turn: "
+                        f"status={execution_status}"
+                    )
+            elif execution_origin == "internal":
+                if execution_turn_id is not None:
+                    raise RuntimeError(
+                        f"internal execution 不得绑定 Turn: {execution_id}"
+                    )
+                if strict_text(
+                    execution[2], field=f"executions.outcome: {execution_id}"
+                ) != "unknown":
+                    raise ValueError(
+                        "internal execution 已终态，不能登记新的 model call: "
+                        f"execution_id={execution_id}"
+                    )
+            else:
+                raise RuntimeError(
+                    f"execution_origin 非法: {execution_origin!r}"
+                )
+            retry_assembly_id: str | None = None
+            retry_outcome: str | None = None
+            retry_dispatch_state: str | None = None
+            if retry_of_model_call_id is not None:
+                retry = connection.execute(
+                    "SELECT execution_id, attempt, assembly_id, outcome, dispatch_state "
                     "FROM model_calls WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
-                    (session_id, owner_thread_id, model_call_id),
+                    (session_id, owner_thread_id, retry_of_model_call_id),
                 ).fetchone()
-                if existing is not None:
-                    existing_execution_id = strict_text(
-                        existing[0], field=f"model_calls.execution_id: {model_call_id}"
+                if retry is None:
+                    raise ValueError(
+                        "retry_of_model_call_id 不是同一 execution 的旧 attempt"
                     )
-                    existing_attempt = strict_non_negative_int(
-                        existing[1], field=f"model_calls.attempt: {model_call_id}"
+                retry_execution_id = strict_text(
+                    retry[0],
+                    field=f"model_calls.execution_id: {retry_of_model_call_id}",
+                )
+                retry_attempt = strict_non_negative_int(
+                    retry[1],
+                    field=f"model_calls.attempt: {retry_of_model_call_id}",
+                )
+                retry_assembly_id = strict_text(
+                    retry[2],
+                    field=f"model_calls.assembly_id: {retry_of_model_call_id}",
+                )
+                retry_outcome = strict_text(
+                    retry[3],
+                    field=f"model_calls.outcome: {retry_of_model_call_id}",
+                )
+                retry_dispatch_state = strict_text(
+                    retry[4],
+                    field=(
+                        "model_calls.dispatch_state: "
+                        f"{retry_of_model_call_id}"
+                    ),
+                )
+                if retry_execution_id != execution_id or retry_attempt >= attempt:
+                    raise ValueError(
+                        "retry_of_model_call_id 不是同一 execution 的旧 attempt"
                     )
-                    if existing_attempt == 0:
-                        raise RuntimeError(
-                            f"model_calls.attempt 必须为正数: {model_call_id}"
-                        )
-                    existing_provider = strict_text(
-                        existing[2], field=f"model_calls.provider: {model_call_id}"
-                    )
-                    existing_provider_request_id = strict_optional_text(
-                        existing[3],
-                        field=f"model_calls.provider_request_id: {model_call_id}",
-                    )
-                    existing_retry_id = strict_optional_text(
-                        existing[4],
-                        field=f"model_calls.retry_of_model_call_id: {model_call_id}",
-                    )
-                    existing_assembly_id = strict_text(
-                        existing[5], field=f"model_calls.assembly_id: {model_call_id}"
-                    )
-                    strict_text(
-                        existing[6], field=f"model_calls.dispatch_state: {model_call_id}"
-                    )
-                    strict_text(
-                        existing[7], field=f"model_calls.outcome: {model_call_id}"
-                    )
-                    if (
-                        existing_execution_id,
-                        existing_attempt,
-                        existing_provider,
-                        existing_provider_request_id,
-                        existing_retry_id,
-                        existing_assembly_id,
-                    ) == (
+            assembly = connection.execute(
+                "SELECT session_id, thread_id, turn_id, execution_id, status, model_call_id "
+                "FROM context_assemblies WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
+                (session_id, owner_thread_id, assembly_id),
+            ).fetchone()
+            if assembly is None:
+                raise KeyError(f"sealed assembly 不存在: {assembly_id}")
+            assembly_session_id = strict_text(
+                assembly[0], field=f"context_assemblies.session_id: {assembly_id}"
+            )
+            assembly_turn_id = strict_optional_text(
+                assembly[2], field=f"context_assemblies.turn_id: {assembly_id}"
+            )
+            assembly_execution_id = strict_text(
+                assembly[3], field=f"context_assemblies.execution_id: {assembly_id}"
+            )
+            assembly_status = strict_text(
+                assembly[4], field=f"context_assemblies.status: {assembly_id}"
+            )
+            assembly_model_call_id = strict_optional_text(
+                assembly[5], field=f"context_assemblies.model_call_id: {assembly_id}"
+            )
+            reuses_failed_retry_assembly = (
+                retry_of_model_call_id is not None
+                and assembly_model_call_id == retry_of_model_call_id
+                and retry_assembly_id == assembly_id
+                and retry_outcome == "failed"
+                and retry_dispatch_state == "failed"
+            )
+            if (
+                (assembly_session_id, strict_text(assembly[1], field=f"context_assemblies.thread_id: {assembly_id}"))
+                != (session_id, owner_thread_id)
+                or assembly_turn_id != execution_turn_id
+                or assembly_execution_id != execution_id
+                or assembly_status != "sealed"
+                or (
+                    assembly_model_call_id not in {None, model_call_id}
+                    and not reuses_failed_retry_assembly
+                )
+            ):
+                raise ValueError("model_call 与 sealed assembly 关联冲突")
+            timestamp = _now()
+            try:
+                inserted = connection.execute(
+                    "INSERT INTO model_calls(model_call_id, session_id, thread_id, execution_id, attempt, attempt_ordinal, provider, provider_request_id, retry_of_model_call_id, assembly_id, dispatch_state, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?)",
+                    (
+                        model_call_id,
+                        session_id,
+                        owner_thread_id,
                         execution_id,
+                        attempt,
                         attempt,
                         provider,
                         provider_request_id,
                         retry_of_model_call_id,
                         assembly_id,
-                    ):
-                        return
-                    raise ValueError(
-                        "model_call_id 已存在但 execution/attempt/provider/"
-                        "request/retry/assembly identity 冲突"
-                    )
-                if dispatch_state not in {
-                    "ready",
-                    "dispatched",
-                    "completed",
-                    "failed",
-                    "unknown",
-                }:
-                    raise ValueError(
-                        f"未知 model call dispatch_state: {dispatch_state}"
-                    )
-                execution = connection.execute(
-                    """
-                    SELECT e.turn_id, e.execution_origin, e.outcome, tr.status
-                    FROM executions AS e
-                    LEFT JOIN turn_records AS tr
-                      ON tr.session_id = e.session_id
-                     AND tr.thread_id = e.thread_id
-                     AND tr.turn_id = e.turn_id
-                    WHERE e.session_id = ? AND e.thread_id = ? AND e.execution_id = ?
-                    """,
-                    (session_id, owner_thread_id, execution_id),
-                ).fetchone()
-                if execution is None:
-                    raise KeyError(f"execution 不存在: {execution_id}")
-                execution_turn_id = strict_optional_text(
-                    execution[0], field=f"executions.turn_id: {execution_id}"
-                )
-                execution_origin = strict_text(
-                    execution[1], field=f"executions.execution_origin: {execution_id}"
-                )
-                if execution_origin == "user_turn":
-                    if execution_turn_id is None:
-                        raise RuntimeError(
-                            f"user_turn execution 缺少 Turn: {execution_id}"
-                        )
-                    execution_status = strict_text(
-                        execution[3],
-                        field=f"turn_records.status: {execution_id}",
-                    )
-                    if execution_status not in {
-                        TurnStatus.OPEN.value,
-                        TurnStatus.ACTIVE.value,
-                    }:
-                        raise ValueError(
-                            "turn_not_resumable: model call 不能绑定 terminal Turn: "
-                            f"status={execution_status}"
-                        )
-                elif execution_origin == "internal":
-                    if execution_turn_id is not None:
-                        raise RuntimeError(
-                            f"internal execution 不得绑定 Turn: {execution_id}"
-                        )
-                    if strict_text(
-                        execution[2], field=f"executions.outcome: {execution_id}"
-                    ) != "unknown":
-                        raise ValueError(
-                            "internal execution 已终态，不能登记新的 model call: "
-                            f"execution_id={execution_id}"
-                        )
-                else:
-                    raise RuntimeError(
-                        f"execution_origin 非法: {execution_origin!r}"
-                    )
-                retry_assembly_id: str | None = None
-                retry_outcome: str | None = None
-                retry_dispatch_state: str | None = None
-                if retry_of_model_call_id is not None:
-                    retry = connection.execute(
-                        "SELECT execution_id, attempt, assembly_id, outcome, dispatch_state "
-                        "FROM model_calls WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
-                        (session_id, owner_thread_id, retry_of_model_call_id),
-                    ).fetchone()
-                    if retry is None:
-                        raise ValueError(
-                            "retry_of_model_call_id 不是同一 execution 的旧 attempt"
-                        )
-                    retry_execution_id = strict_text(
-                        retry[0],
-                        field=f"model_calls.execution_id: {retry_of_model_call_id}",
-                    )
-                    retry_attempt = strict_non_negative_int(
-                        retry[1],
-                        field=f"model_calls.attempt: {retry_of_model_call_id}",
-                    )
-                    retry_assembly_id = strict_text(
-                        retry[2],
-                        field=f"model_calls.assembly_id: {retry_of_model_call_id}",
-                    )
-                    retry_outcome = strict_text(
-                        retry[3],
-                        field=f"model_calls.outcome: {retry_of_model_call_id}",
-                    )
-                    retry_dispatch_state = strict_text(
-                        retry[4],
-                        field=(
-                            "model_calls.dispatch_state: "
-                            f"{retry_of_model_call_id}"
-                        ),
-                    )
-                    if retry_execution_id != execution_id or retry_attempt >= attempt:
-                        raise ValueError(
-                            "retry_of_model_call_id 不是同一 execution 的旧 attempt"
-                        )
-                assembly = connection.execute(
-                    "SELECT session_id, thread_id, turn_id, execution_id, status, model_call_id "
-                    "FROM context_assemblies WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
-                    (session_id, owner_thread_id, assembly_id),
-                ).fetchone()
-                if assembly is None:
-                    raise KeyError(f"sealed assembly 不存在: {assembly_id}")
-                assembly_session_id = strict_text(
-                    assembly[0], field=f"context_assemblies.session_id: {assembly_id}"
-                )
-                assembly_turn_id = strict_optional_text(
-                    assembly[2], field=f"context_assemblies.turn_id: {assembly_id}"
-                )
-                assembly_execution_id = strict_text(
-                    assembly[3], field=f"context_assemblies.execution_id: {assembly_id}"
-                )
-                assembly_status = strict_text(
-                    assembly[4], field=f"context_assemblies.status: {assembly_id}"
-                )
-                assembly_model_call_id = strict_optional_text(
-                    assembly[5], field=f"context_assemblies.model_call_id: {assembly_id}"
-                )
-                reuses_failed_retry_assembly = (
-                    retry_of_model_call_id is not None
-                    and assembly_model_call_id == retry_of_model_call_id
-                    and retry_assembly_id == assembly_id
-                    and retry_outcome == "failed"
-                    and retry_dispatch_state == "failed"
-                )
-                if (
-                    (assembly_session_id, strict_text(assembly[1], field=f"context_assemblies.thread_id: {assembly_id}"))
-                    != (session_id, owner_thread_id)
-                    or assembly_turn_id != execution_turn_id
-                    or assembly_execution_id != execution_id
-                    or assembly_status != "sealed"
-                    or (
-                        assembly_model_call_id not in {None, model_call_id}
-                        and not reuses_failed_retry_assembly
-                    )
-                ):
-                    raise ValueError("model_call 与 sealed assembly 关联冲突")
-                timestamp = _now()
-                try:
-                    inserted = connection.execute(
-                        "INSERT INTO model_calls(model_call_id, session_id, thread_id, execution_id, attempt, attempt_ordinal, provider, provider_request_id, retry_of_model_call_id, assembly_id, dispatch_state, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?)",
-                        (
-                            model_call_id,
-                            session_id,
-                            owner_thread_id,
-                            execution_id,
-                            attempt,
-                            attempt,
-                            provider,
-                            provider_request_id,
-                            retry_of_model_call_id,
-                            assembly_id,
-                            dispatch_state,
-                            timestamp,
-                        ),
-                    )
-                    if inserted.rowcount != 1:
-                        raise RuntimeError("model_calls 插入未产生恰好一条记录")
-                except sqlite3.IntegrityError as error:
-                    raise ValueError(
-                        "同一 execution 的 model-call attempt identity 冲突"
-                    ) from error
-                execution_update = connection.execute(
-                    "UPDATE executions SET first_model_call_id = COALESCE(first_model_call_id, ?), last_model_call_id = ?, updated_at = ? WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
-                    (
-                        model_call_id,
-                        model_call_id,
+                        dispatch_state,
                         timestamp,
-                        session_id,
-                        owner_thread_id,
-                        execution_id,
                     ),
                 )
-                if execution_update.rowcount != 1:
-                    raise RuntimeError("execution 的 model-call 指针更新失败")
-                assembly_update = connection.execute(
-                    "UPDATE context_assemblies SET model_call_id = ? WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
-                    (model_call_id, session_id, owner_thread_id, assembly_id),
+                if inserted.rowcount != 1:
+                    raise RuntimeError("model_calls 插入未产生恰好一条记录")
+            except sqlite3.IntegrityError as error:
+                raise ValueError(
+                    "同一 execution 的 model-call attempt identity 冲突"
+                ) from error
+            execution_update = connection.execute(
+                "UPDATE executions SET first_model_call_id = COALESCE(first_model_call_id, ?), last_model_call_id = ?, updated_at = ? WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
+                (
+                    model_call_id,
+                    model_call_id,
+                    timestamp,
+                    session_id,
+                    owner_thread_id,
+                    execution_id,
+                ),
+            )
+            if execution_update.rowcount != 1:
+                raise RuntimeError("execution 的 model-call 指针更新失败")
+            assembly_update = connection.execute(
+                "UPDATE context_assemblies SET model_call_id = ? WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
+                (model_call_id, session_id, owner_thread_id, assembly_id),
+            )
+            if assembly_update.rowcount != 1:
+                raise RuntimeError("assembly 的 model-call 指针更新失败")
+            if execution_origin == "user_turn":
+                connection.execute(
+                    "UPDATE turn_records SET status='active', updated_at=? "
+                    "WHERE session_id=? AND thread_id=? AND turn_id=? AND status='open'",
+                    (timestamp, session_id, owner_thread_id, execution_turn_id),
                 )
-                if assembly_update.rowcount != 1:
-                    raise RuntimeError("assembly 的 model-call 指针更新失败")
-                if execution_origin == "user_turn":
-                    connection.execute(
-                        "UPDATE turn_records SET status='active', updated_at=? "
-                        "WHERE session_id=? AND thread_id=? AND turn_id=? AND status='open'",
-                        (timestamp, session_id, owner_thread_id, execution_turn_id),
-                    )
-                    connection.execute(
-                        "UPDATE turns SET status='running', updated_at=? WHERE turn_id=? AND status='accepted'",
-                        (timestamp, execution_turn_id),
-                    )
-                connection.commit()
+                connection.execute(
+                    "UPDATE turns SET status='running', updated_at=? WHERE turn_id=? AND status='accepted'",
+                    (timestamp, execution_turn_id),
+                )
+            connection.commit()
 
     def update_model_call_outcome(
         self,
@@ -418,57 +411,50 @@ class RolloutModelCallsMixin:
         )
         if outcome not in {value.value for value in ControlOutcome}:
             raise ValueError(f"未知 model call outcome: {outcome}")
-        with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(
-                session_id, checkpoint_ns, thread_id=owner_thread_id
+        with self._storage.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            row = connection.execute(
+                "SELECT outcome, dispatch_state FROM model_calls WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
+                (session_id, owner_thread_id, model_call_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"model_call 不存在: {model_call_id}")
+            stored_outcome = strict_text(
+                row[0], field=f"model_calls.outcome: {model_call_id}"
             )
-            with self._storage._connect(
-                owner_thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._storage._require_v2_runtime(connection)
-                row = connection.execute(
-                    "SELECT outcome, dispatch_state FROM model_calls WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
-                    (session_id, owner_thread_id, model_call_id),
-                ).fetchone()
-                if row is None:
-                    raise KeyError(f"model_call 不存在: {model_call_id}")
-                stored_outcome = strict_text(
-                    row[0], field=f"model_calls.outcome: {model_call_id}"
+            stored_dispatch = strict_text(
+                row[1], field=f"model_calls.dispatch_state: {model_call_id}"
+            )
+            target_dispatch = dispatch_state or stored_dispatch
+            if target_dispatch not in {
+                "ready",
+                "dispatched",
+                "completed",
+                "failed",
+                "unknown",
+            }:
+                raise ValueError(
+                    f"未知 model call dispatch_state: {target_dispatch}"
                 )
-                stored_dispatch = strict_text(
-                    row[1], field=f"model_calls.dispatch_state: {model_call_id}"
+            allowed_dispatch = {
+                ControlOutcome.COMPLETED.value: {"completed"},
+                ControlOutcome.COMPLETED_EMPTY.value: {"completed"},
+                ControlOutcome.FAILED.value: {"failed"},
+                ControlOutcome.INTERRUPTED.value: {"failed", "unknown"},
+                ControlOutcome.CANCELLED.value: {"failed"},
+                ControlOutcome.EXECUTION_LOST.value: {"unknown"},
+                ControlOutcome.UNKNOWN.value: {"unknown", "ready", "dispatched"},
+            }
+            if target_dispatch not in allowed_dispatch[outcome]:
+                raise ValueError(
+                    "model_call outcome/dispatch_state 不匹配: "
+                    f"outcome={outcome}, dispatch_state={target_dispatch}"
                 )
-                target_dispatch = dispatch_state or stored_dispatch
-                if target_dispatch not in {
-                    "ready",
-                    "dispatched",
-                    "completed",
-                    "failed",
-                    "unknown",
-                }:
-                    raise ValueError(
-                        f"未知 model call dispatch_state: {target_dispatch}"
-                    )
-                allowed_dispatch = {
-                    ControlOutcome.COMPLETED.value: {"completed"},
-                    ControlOutcome.COMPLETED_EMPTY.value: {"completed"},
-                    ControlOutcome.FAILED.value: {"failed"},
-                    ControlOutcome.INTERRUPTED.value: {"failed", "unknown"},
-                    ControlOutcome.CANCELLED.value: {"failed"},
-                    ControlOutcome.EXECUTION_LOST.value: {"unknown"},
-                    ControlOutcome.UNKNOWN.value: {"unknown", "ready", "dispatched"},
-                }
-                if target_dispatch not in allowed_dispatch[outcome]:
-                    raise ValueError(
-                        "model_call outcome/dispatch_state 不匹配: "
-                        f"outcome={outcome}, dispatch_state={target_dispatch}"
-                    )
-                if stored_outcome not in {"unknown", outcome}:
-                    raise ValueError("model_call outcome 已收敛且不可逆")
-                updated = connection.execute(
-                    "UPDATE model_calls SET outcome = ?, dispatch_state = ? WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
-                    (outcome, target_dispatch, session_id, owner_thread_id, model_call_id),
-                )
-                if updated.rowcount != 1:
-                    raise RuntimeError("model_call outcome 更新失败")
-                connection.commit()
+            if stored_outcome not in {"unknown", outcome}:
+                raise ValueError("model_call outcome 已收敛且不可逆")
+            updated = connection.execute(
+                "UPDATE model_calls SET outcome = ?, dispatch_state = ? WHERE session_id = ? AND thread_id = ? AND model_call_id = ?",
+                (outcome, target_dispatch, session_id, owner_thread_id, model_call_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("model_call outcome 更新失败")
+            connection.commit()

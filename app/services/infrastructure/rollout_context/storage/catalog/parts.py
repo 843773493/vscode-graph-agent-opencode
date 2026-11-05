@@ -279,120 +279,115 @@ class RolloutPartsMixin:
             raise ItemSchemaError(
                 "content part json_pointer 必须锚定父 CanonicalItemRecord.payload"
             )
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._connect(
-                owner_thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._require_v2_runtime(connection)
-                parent = connection.execute(
-                    "SELECT jsonl_offset, jsonl_length, semantic_kind FROM item_catalog WHERE item_id = ?",
-                    (item_id,),
-                ).fetchone()
-                if parent is None:
-                    raise KeyError(f"content part parent item 不存在: {item_id}")
-                parent_offset = strict_non_negative_int(
-                    parent[0], field=f"item_catalog.jsonl_offset:{item_id}"
+        with self.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            parent = connection.execute(
+                "SELECT jsonl_offset, jsonl_length, semantic_kind FROM item_catalog WHERE item_id = ?",
+                (item_id,),
+            ).fetchone()
+            if parent is None:
+                raise KeyError(f"content part parent item 不存在: {item_id}")
+            parent_offset = strict_non_negative_int(
+                parent[0], field=f"item_catalog.jsonl_offset:{item_id}"
+            )
+            parent_length = strict_non_negative_int(
+                parent[1], field=f"item_catalog.jsonl_length:{item_id}"
+            )
+            if parent_length == 0:
+                raise RuntimeError(
+                    f"content part parent JSONL length 为 0: {item_id}"
                 )
-                parent_length = strict_non_negative_int(
-                    parent[1], field=f"item_catalog.jsonl_length:{item_id}"
+            with self.jsonl_path(
+                session_id, checkpoint_ns, thread_id=owner_thread_id
+            ).open("rb") as stream:
+                stream.seek(parent_offset)
+                raw_line = stream.read(parent_length)
+            if len(raw_line) != parent_length:
+                raise RuntimeError(
+                    f"content part parent JSONL locator 越界: {item_id}"
                 )
-                if parent_length == 0:
-                    raise RuntimeError(
-                        f"content part parent JSONL length 为 0: {item_id}"
-                    )
-                with self.jsonl_path(
-                    session_id, checkpoint_ns, thread_id=owner_thread_id
-                ).open("rb") as stream:
-                    stream.seek(parent_offset)
-                    raw_line = stream.read(parent_length)
-                if len(raw_line) != parent_length:
-                    raise RuntimeError(
-                        f"content part parent JSONL locator 越界: {item_id}"
-                    )
-                line_hash = _hash_bytes(raw_line)
-                try:
-                    envelope = json.loads(raw_line.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise RuntimeError(
-                        f"content part parent item JSONL 无法解码: {item_id}"
-                    ) from error
-                if not isinstance(envelope, Mapping):
-                    raise TypeError(f"content part parent envelope 非法: {item_id}")
-                selected: object = envelope
-                for raw_token in pointer.split("/")[1:]:
-                    token = raw_token.replace("~1", "/").replace("~0", "~")
-                    if isinstance(selected, Mapping) and token in selected:
-                        selected = selected[token]
-                    elif (
-                        isinstance(selected, list)
-                        and token.isdigit()
-                        and int(token) < len(selected)
-                    ):
-                        selected = selected[int(token)]
-                    else:
-                        raise ItemSchemaError(
-                            f"content part json_pointer 不存在: {item_id}{pointer}"
-                        )
-                selected_bytes, selected_hash = canonical_json_bytes_and_hash(selected)
-                if selected_hash != part.content_hash:
+            line_hash = _hash_bytes(raw_line)
+            try:
+                envelope = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RuntimeError(
+                    f"content part parent item JSONL 无法解码: {item_id}"
+                ) from error
+            if not isinstance(envelope, Mapping):
+                raise TypeError(f"content part parent envelope 非法: {item_id}")
+            selected: object = envelope
+            for raw_token in pointer.split("/")[1:]:
+                token = raw_token.replace("~1", "/").replace("~0", "~")
+                if isinstance(selected, Mapping) and token in selected:
+                    selected = selected[token]
+                elif (
+                    isinstance(selected, list)
+                    and token.isdigit()
+                    and int(token) < len(selected)
+                ):
+                    selected = selected[int(token)]
+                else:
                     raise ItemSchemaError(
-                        f"content part 正文与父 JSONL payload 不一致: {item_id}/{part.part_id}"
+                        f"content part json_pointer 不存在: {item_id}{pointer}"
                     )
-                selected_length = len(selected_bytes)
-                if length != selected_length:
-                    raise ItemSchemaError(
-                        "content part locator length 与 JCS fragment 长度不一致: "
-                        f"expected={selected_length}, actual={length}"
-                    )
-                values = (
-                    item_id,
-                    part.part_id,
+            selected_bytes, selected_hash = canonical_json_bytes_and_hash(selected)
+            if selected_hash != part.content_hash:
+                raise ItemSchemaError(
+                    f"content part 正文与父 JSONL payload 不一致: {item_id}/{part.part_id}"
+                )
+            selected_length = len(selected_bytes)
+            if length != selected_length:
+                raise ItemSchemaError(
+                    "content part locator length 与 JCS fragment 长度不一致: "
+                    f"expected={selected_length}, actual={length}"
+                )
+            values = (
+                item_id,
+                part.part_id,
+                part.part_ordinal,
+                part.part_semantic_kind,
+                part.prefix_hash,
+                part.content_hash,
+                _json(dict(locator)),
+                line_hash,
+                _now(),
+            )
+            existing = connection.execute(
+                "SELECT part_ordinal, part_semantic_kind, content_prefix_hash, content_hash, locator_json, line_hash FROM item_parts WHERE item_id = ? AND part_id = ?",
+                (item_id, part.part_id),
+            ).fetchone()
+            if existing is not None:
+                existing_values = (
+                    strict_non_negative_int(
+                        existing[0],
+                        field=f"item_parts.part_ordinal:{item_id}/{part.part_id}",
+                    ),
+                    strict_text(existing[1], field="item_parts.part_semantic_kind"),
+                    strict_optional_text(
+                        existing[2], field="item_parts.content_prefix_hash"
+                    ),
+                    strict_text(existing[3], field="item_parts.content_hash"),
+                    strict_text(existing[4], field="item_parts.locator_json"),
+                    strict_text(existing[5], field="item_parts.line_hash"),
+                )
+                if existing_values == (
                     part.part_ordinal,
                     part.part_semantic_kind,
                     part.prefix_hash,
                     part.content_hash,
                     _json(dict(locator)),
                     line_hash,
-                    _now(),
+                ):
+                    return
+                raise ValueError("content part identity/hash 冲突")
+            result = connection.execute(
+                "INSERT INTO item_parts(item_id, part_id, part_ordinal, part_semantic_kind, content_prefix_hash, content_hash, locator_json, line_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            if result.rowcount != 1:
+                raise RuntimeError(
+                    f"content part locator 写入失败: {item_id}/{part.part_id}"
                 )
-                existing = connection.execute(
-                    "SELECT part_ordinal, part_semantic_kind, content_prefix_hash, content_hash, locator_json, line_hash FROM item_parts WHERE item_id = ? AND part_id = ?",
-                    (item_id, part.part_id),
-                ).fetchone()
-                if existing is not None:
-                    existing_values = (
-                        strict_non_negative_int(
-                            existing[0],
-                            field=f"item_parts.part_ordinal:{item_id}/{part.part_id}",
-                        ),
-                        strict_text(existing[1], field="item_parts.part_semantic_kind"),
-                        strict_optional_text(
-                            existing[2], field="item_parts.content_prefix_hash"
-                        ),
-                        strict_text(existing[3], field="item_parts.content_hash"),
-                        strict_text(existing[4], field="item_parts.locator_json"),
-                        strict_text(existing[5], field="item_parts.line_hash"),
-                    )
-                    if existing_values == (
-                        part.part_ordinal,
-                        part.part_semantic_kind,
-                        part.prefix_hash,
-                        part.content_hash,
-                        _json(dict(locator)),
-                        line_hash,
-                    ):
-                        return
-                    raise ValueError("content part identity/hash 冲突")
-                result = connection.execute(
-                    "INSERT INTO item_parts(item_id, part_id, part_ordinal, part_semantic_kind, content_prefix_hash, content_hash, locator_json, line_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    values,
-                )
-                if result.rowcount != 1:
-                    raise RuntimeError(
-                        f"content part locator 写入失败: {item_id}/{part.part_id}"
-                    )
-                connection.commit()
+            connection.commit()
 
     def register_content_part_anchor(
         self,
@@ -407,17 +402,125 @@ class RolloutPartsMixin:
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
         owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._connect(
-                owner_thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._require_v2_runtime(connection)
-                existing = connection.execute(
-                    "SELECT item_id, part_id, mode, view_id, branch_id, recovery_capability, fragment_identity, fragment_length, fragment_hash, fragment_layout_json FROM operation_anchors WHERE anchor_id = ?",
-                    (anchor.anchor_id,),
-                ).fetchone()
-                expected = (
+        with self.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            existing = connection.execute(
+                "SELECT item_id, part_id, mode, view_id, branch_id, recovery_capability, fragment_identity, fragment_length, fragment_hash, fragment_layout_json FROM operation_anchors WHERE anchor_id = ?",
+                (anchor.anchor_id,),
+            ).fetchone()
+            expected = (
+                anchor.item_id,
+                anchor.part_id,
+                anchor.mode,
+                anchor.view_id,
+                anchor.branch_id,
+                anchor.capability,
+                anchor.fragment_identity,
+                anchor.fragment_length,
+                anchor.fragment_hash,
+                _json(dict(anchor.fragment_layout))
+                if anchor.fragment_layout is not None
+                else None,
+            )
+            part_row = connection.execute(
+                "SELECT content_hash, content_prefix_hash FROM item_parts WHERE item_id = ? AND part_id = ?",
+                (anchor.item_id, anchor.part_id),
+            ).fetchone()
+            if existing is not None:
+                existing_values = (
+                    strict_text(existing[0], field="operation_anchors.item_id"),
+                    strict_text(existing[1], field="operation_anchors.part_id"),
+                    strict_text(existing[2], field="operation_anchors.mode"),
+                    strict_text(existing[3], field="operation_anchors.view_id"),
+                    strict_text(existing[4], field="operation_anchors.branch_id"),
+                    strict_text(
+                        existing[5],
+                        field="operation_anchors.recovery_capability",
+                    ),
+                    strict_optional_text(
+                        existing[6], field="operation_anchors.fragment_identity"
+                    ),
+                    strict_optional_non_negative_int(
+                        existing[7], field="operation_anchors.fragment_length"
+                    ),
+                    strict_optional_text(
+                        existing[8], field="operation_anchors.fragment_hash"
+                    ),
+                    (
+                        _json(
+                            json_mapping(
+                                existing[9],
+                                field="operation_anchors.fragment_layout_json",
+                            )
+                        )
+                        if existing[9] is not None
+                        else None
+                    ),
+                )
+                if existing_values == expected:
+                    if part_row is None:
+                        raise KeyError(
+                            "content part anchor 的 parent part 已不可达"
+                        )
+                    existing_content_hash = strict_text(
+                        part_row[0], field="item_parts.content_hash"
+                    )
+                    existing_prefix_hash = strict_optional_text(
+                        part_row[1], field="item_parts.content_prefix_hash"
+                    )
+                    if existing_content_hash != anchor.content_hash or (
+                        anchor.prefix_hash is not None
+                        and existing_prefix_hash != anchor.prefix_hash
+                    ):
+                        raise ValueError(
+                            "content part anchor 的既有 identity 与当前 part hash 不一致"
+                        )
+                    return
+                raise ValueError("operation anchor identity 冲突")
+            if part_row is None:
+                raise KeyError(
+                    f"content part anchor 指向不存在的 part: "
+                    f"{anchor.item_id}/{anchor.part_id}"
+                )
+            part_content_hash = strict_text(
+                part_row[0], field="item_parts.content_hash"
+            )
+            part_prefix_hash = strict_optional_text(
+                part_row[1], field="item_parts.content_prefix_hash"
+            )
+            if part_content_hash != anchor.content_hash or (
+                anchor.prefix_hash is not None
+                and part_prefix_hash != anchor.prefix_hash
+            ):
+                raise ValueError("content part anchor hash 与 part 不一致")
+            visible = connection.execute(
+                "SELECT 1 FROM context_view_items WHERE view_id = ? AND item_id = ? AND visible = 1",
+                (anchor.view_id, anchor.item_id),
+            ).fetchone()
+            if visible is None:
+                raise ValueError("content part anchor 的 item 不在指定 view 中")
+            branch = connection.execute(
+                "SELECT branch_id FROM context_views WHERE view_id = ?",
+                (anchor.view_id,),
+            ).fetchone()
+            if (
+                branch is None
+                or strict_text(branch[0], field="context_views.branch_id")
+                != anchor.branch_id
+            ):
+                raise ValueError("content part anchor 的 view/branch 不一致")
+            if not _view_in_active_branch_lineage(
+                connection,
+                checkpoint_ns,
+                anchor.view_id,
+            ):
+                raise ValueError(
+                    "content part anchor 的 view 不在 active branch lineage: "
+                    f"{anchor.view_id}"
+                )
+            result = connection.execute(
+                "INSERT INTO operation_anchors(anchor_id, anchor_kind, item_id, part_id, mode, view_id, branch_id, recovery_capability, fragment_identity, fragment_length, fragment_hash, fragment_layout_json, created_at) VALUES (?, 'content_part', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    anchor.anchor_id,
                     anchor.item_id,
                     anchor.part_id,
                     anchor.mode,
@@ -430,127 +533,14 @@ class RolloutPartsMixin:
                     _json(dict(anchor.fragment_layout))
                     if anchor.fragment_layout is not None
                     else None,
+                    _now(),
+                ),
+            )
+            if result.rowcount != 1:
+                raise RuntimeError(
+                    f"content part anchor 写入失败: {anchor.anchor_id}"
                 )
-                part_row = connection.execute(
-                    "SELECT content_hash, content_prefix_hash FROM item_parts WHERE item_id = ? AND part_id = ?",
-                    (anchor.item_id, anchor.part_id),
-                ).fetchone()
-                if existing is not None:
-                    existing_values = (
-                        strict_text(existing[0], field="operation_anchors.item_id"),
-                        strict_text(existing[1], field="operation_anchors.part_id"),
-                        strict_text(existing[2], field="operation_anchors.mode"),
-                        strict_text(existing[3], field="operation_anchors.view_id"),
-                        strict_text(existing[4], field="operation_anchors.branch_id"),
-                        strict_text(
-                            existing[5],
-                            field="operation_anchors.recovery_capability",
-                        ),
-                        strict_optional_text(
-                            existing[6], field="operation_anchors.fragment_identity"
-                        ),
-                        strict_optional_non_negative_int(
-                            existing[7], field="operation_anchors.fragment_length"
-                        ),
-                        strict_optional_text(
-                            existing[8], field="operation_anchors.fragment_hash"
-                        ),
-                        (
-                            _json(
-                                json_mapping(
-                                    existing[9],
-                                    field="operation_anchors.fragment_layout_json",
-                                )
-                            )
-                            if existing[9] is not None
-                            else None
-                        ),
-                    )
-                    if existing_values == expected:
-                        if part_row is None:
-                            raise KeyError(
-                                "content part anchor 的 parent part 已不可达"
-                            )
-                        existing_content_hash = strict_text(
-                            part_row[0], field="item_parts.content_hash"
-                        )
-                        existing_prefix_hash = strict_optional_text(
-                            part_row[1], field="item_parts.content_prefix_hash"
-                        )
-                        if existing_content_hash != anchor.content_hash or (
-                            anchor.prefix_hash is not None
-                            and existing_prefix_hash != anchor.prefix_hash
-                        ):
-                            raise ValueError(
-                                "content part anchor 的既有 identity 与当前 part hash 不一致"
-                            )
-                        return
-                    raise ValueError("operation anchor identity 冲突")
-                if part_row is None:
-                    raise KeyError(
-                        f"content part anchor 指向不存在的 part: "
-                        f"{anchor.item_id}/{anchor.part_id}"
-                    )
-                part_content_hash = strict_text(
-                    part_row[0], field="item_parts.content_hash"
-                )
-                part_prefix_hash = strict_optional_text(
-                    part_row[1], field="item_parts.content_prefix_hash"
-                )
-                if part_content_hash != anchor.content_hash or (
-                    anchor.prefix_hash is not None
-                    and part_prefix_hash != anchor.prefix_hash
-                ):
-                    raise ValueError("content part anchor hash 与 part 不一致")
-                visible = connection.execute(
-                    "SELECT 1 FROM context_view_items WHERE view_id = ? AND item_id = ? AND visible = 1",
-                    (anchor.view_id, anchor.item_id),
-                ).fetchone()
-                if visible is None:
-                    raise ValueError("content part anchor 的 item 不在指定 view 中")
-                branch = connection.execute(
-                    "SELECT branch_id FROM context_views WHERE view_id = ?",
-                    (anchor.view_id,),
-                ).fetchone()
-                if (
-                    branch is None
-                    or strict_text(branch[0], field="context_views.branch_id")
-                    != anchor.branch_id
-                ):
-                    raise ValueError("content part anchor 的 view/branch 不一致")
-                if not _view_in_active_branch_lineage(
-                    connection,
-                    checkpoint_ns,
-                    anchor.view_id,
-                ):
-                    raise ValueError(
-                        "content part anchor 的 view 不在 active branch lineage: "
-                        f"{anchor.view_id}"
-                    )
-                result = connection.execute(
-                    "INSERT INTO operation_anchors(anchor_id, anchor_kind, item_id, part_id, mode, view_id, branch_id, recovery_capability, fragment_identity, fragment_length, fragment_hash, fragment_layout_json, created_at) VALUES (?, 'content_part', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        anchor.anchor_id,
-                        anchor.item_id,
-                        anchor.part_id,
-                        anchor.mode,
-                        anchor.view_id,
-                        anchor.branch_id,
-                        anchor.capability,
-                        anchor.fragment_identity,
-                        anchor.fragment_length,
-                        anchor.fragment_hash,
-                        _json(dict(anchor.fragment_layout))
-                        if anchor.fragment_layout is not None
-                        else None,
-                        _now(),
-                    ),
-                )
-                if result.rowcount != 1:
-                    raise RuntimeError(
-                        f"content part anchor 写入失败: {anchor.anchor_id}"
-                    )
-                connection.commit()
+            connection.commit()
 
     def register_provenance_edge(
         self,
@@ -566,35 +556,30 @@ class RolloutPartsMixin:
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
-            with self._connect(
-                owner_thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._require_v2_runtime(connection)
-                existing = connection.execute(
-                    "SELECT relation, source_ref, target_ref, attempt, supersedes_relation_id, replay_input FROM item_relations WHERE relation_id = ?",
-                    (edge.edge_id,),
-                ).fetchone()
-                expected = (
-                    edge.relation,
-                    edge.source_ref,
-                    edge.target_ref,
-                    edge.attempt,
-                    edge.supersedes_edge_id,
-                    int(edge.replay_input),
-                )
-                if existing is not None:
-                    if tuple(existing) == expected:
-                        return
-                    raise ValueError("provenance edge identity 冲突")
-                result = connection.execute(
-                    "INSERT INTO item_relations(relation_id, relation, source_ref, target_ref, attempt, supersedes_relation_id, replay_input, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (edge.edge_id, *expected, _now()),
-                )
-                if result.rowcount != 1:
-                    raise RuntimeError(f"provenance edge 写入失败: {edge.edge_id}")
-                connection.commit()
+        with self.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            existing = connection.execute(
+                "SELECT relation, source_ref, target_ref, attempt, supersedes_relation_id, replay_input FROM item_relations WHERE relation_id = ?",
+                (edge.edge_id,),
+            ).fetchone()
+            expected = (
+                edge.relation,
+                edge.source_ref,
+                edge.target_ref,
+                edge.attempt,
+                edge.supersedes_edge_id,
+                int(edge.replay_input),
+            )
+            if existing is not None:
+                if tuple(existing) == expected:
+                    return
+                raise ValueError("provenance edge identity 冲突")
+            result = connection.execute(
+                "INSERT INTO item_relations(relation_id, relation, source_ref, target_ref, attempt, supersedes_relation_id, replay_input, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (edge.edge_id, *expected, _now()),
+            )
+            if result.rowcount != 1:
+                raise RuntimeError(f"provenance edge 写入失败: {edge.edge_id}")
+            connection.commit()
 
 
 __all__ = ["RolloutPartsMixin"]

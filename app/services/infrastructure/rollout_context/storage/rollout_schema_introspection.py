@@ -190,32 +190,68 @@ class RolloutSchemaIntrospectionMixin:
             strict_text(
                 existing[0], field="checkpoint_namespace_state.active_branch_id"
             )
-            return
-        if checkpoint_ns == _DEFAULT_NAMESPACE:
-            meta = connection.execute(
-                "SELECT active_branch_id FROM database_meta WHERE singleton_id = 1"
-            ).fetchone()
-            if meta is None or meta[0] is None:
-                raise RuntimeError(
-                    "rollout 默认 checkpoint namespace 缺少 active branch"
-                )
-            branch_id = strict_text(meta[0], field="database_meta.active_branch_id")
         else:
-            branch_id = "branch-" + uuid4().hex[:12]
-            branch_result = connection.execute(
-                "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, head_checkpoint_id, created_at, updated_at) VALUES (?, 'root', 'active', NULL, NULL, ?, ?)",
-                (branch_id, timestamp, timestamp),
-            )
-            if branch_result.rowcount != 1:
-                raise RuntimeError(
-                    f"rollout namespace branch 创建失败: {checkpoint_ns!r}"
+            if checkpoint_ns == _DEFAULT_NAMESPACE:
+                meta = connection.execute(
+                    "SELECT active_branch_id FROM database_meta WHERE singleton_id = 1"
+                ).fetchone()
+                if meta is None or meta[0] is None:
+                    raise RuntimeError(
+                        "rollout 默认 checkpoint namespace 缺少 active branch"
+                    )
+                branch_id = strict_text(meta[0], field="database_meta.active_branch_id")
+            else:
+                branch_id = "branch-" + uuid4().hex[:12]
+                branch_result = connection.execute(
+                    "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, head_checkpoint_id, created_at, updated_at) VALUES (?, 'root', 'active', NULL, NULL, ?, ?)",
+                    (branch_id, timestamp, timestamp),
                 )
-        namespace_result = connection.execute(
-            "INSERT INTO checkpoint_namespace_state(checkpoint_ns, active_branch_id, projection_epoch, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
-            (checkpoint_ns, branch_id, timestamp, timestamp),
+                if branch_result.rowcount != 1:
+                    raise RuntimeError(
+                        f"rollout namespace branch 创建失败: {checkpoint_ns!r}"
+                    )
+            namespace_result = connection.execute(
+                "INSERT INTO checkpoint_namespace_state(checkpoint_ns, active_branch_id, projection_epoch, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
+                (checkpoint_ns, branch_id, timestamp, timestamp),
+            )
+            if namespace_result.rowcount != 1:
+                raise RuntimeError(f"rollout namespace state 创建失败: {checkpoint_ns!r}")
+
+        active_branch = connection.execute(
+            "SELECT branch_id, head_view_id FROM branches WHERE branch_id = (SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?) AND status = 'active'",
+            (checkpoint_ns,),
+        ).fetchone()
+        if active_branch is None:
+            raise RuntimeError(
+                "active branch 缺失，不能创建 rollout context view"
+            )
+        active_branch_id = strict_text(
+            active_branch[0], field="branches.branch_id"
         )
-        if namespace_result.rowcount != 1:
-            raise RuntimeError(f"rollout namespace state 创建失败: {checkpoint_ns!r}")
+        active_head_view_id = strict_optional_text(
+            active_branch[1], field="branches.head_view_id"
+        )
+        if active_head_view_id is None:
+            # acceptance 可以先于第一个 LangGraph checkpoint 到达；
+            # 为这个空但真实存在的 active branch 建立 root view，
+            # 使 Turn/root 在 acceptance-time 就有稳定的 view-local
+            # 索引，而不是等下一次 checkpoint 偶然补齐。
+            initial_view_id = self._host._create_view(
+                connection,
+                active_branch_id,
+                None,
+                (),
+                timestamp,
+                view_kind="root",
+            )
+            head_result = connection.execute(
+                "UPDATE branches SET head_view_id = ?, updated_at = ? WHERE branch_id = ?",
+                (initial_view_id, timestamp, active_branch_id),
+            )
+            if head_result.rowcount != 1:
+                raise RuntimeError(
+                    f"rollout active branch head view 更新失败: {active_branch_id}"
+                )
 
     @staticmethod
     def _is_removed_rollout_layout(root: Path) -> bool:

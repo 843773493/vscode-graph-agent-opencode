@@ -90,213 +90,206 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
             raise TypeError("assembly.checkpoint_ns 必须是字符串")
         if not snapshot.sealed:
             raise ValueError("ContextAssemblySnapshot 必须先 seal 再持久化")
-        with self._storage._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self._storage.initialize(
-                session_id, checkpoint_ns, thread_id=thread_id
-            )
-            with self._storage._connect(
-                thread_id, checkpoint_ns, session_id=session_id
-            ) as connection:
-                self._storage._require_v2_runtime(connection)
-                # 同一个写事务覆盖注册核验、快照/selection 和最终 plan 绑定。
-                # 未注册的快照不能绕过 draft 生命周期进入 dispatch。
-                connection.execute("BEGIN IMMEDIATE")
-                # 哈希准入、当前 draft 和 CAS 版本在唯一写事务内核验一次。
-                try:
-                    seal = preflight_seal(
-                        connection, snapshot,
-                        seal_idempotency_key=seal_idempotency_key,
-                        seal_input_hash=seal_input_hash, detail_key=detail_key,
-                    )
-                except ItemSchemaError as error:
-                    raise ValueError(
-                        f"context assembly hash 校验失败，拒绝 seal: {snapshot.assembly_id}: {error}"
-                    ) from error
-                registration = seal.registered
-                existing = connection.execute(
-                    "SELECT plan_hash, request_hash, status, detail_ref, snapshot_json FROM context_assemblies WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
-                    (session_id, thread_id, snapshot.assembly_id),
-                ).fetchone()
-                if existing is not None:
-                    if prepared_details:
-                        raise ValueError("assembly-idempotency-conflict: 已提交重试不能发布新 detail")
-                    # 损坏快照必须暴露解析错误，不能伪装成普通幂等键冲突。
-                    existing_snapshot_matches = canonical_json_bytes(
-                        load_snapshot(connection, existing[4])
-                    ) == seal.snapshot_json.encode("utf-8")
-                    existing_plan_hash = strict_text(
-                        existing[0], field="context_assemblies.plan_hash"
-                    )
-                    existing_request_hash = strict_text(
-                        existing[1], field="context_assemblies.request_hash"
-                    )
-                    existing_status = strict_text(
-                        existing[2], field="context_assemblies.status"
-                    )
-                    existing_detail_ref = strict_optional_text(
-                        existing[3], field="context_assemblies.detail_ref"
-                    )
-                    if (
-                        existing_plan_hash == snapshot.plan_hash
-                        and existing_request_hash == snapshot.request_hash
-                        and existing_status in {"sealed", "terminal"}
-                        and existing_detail_ref == detail_key
-                        and existing_snapshot_matches
-                    ):
-                        commit_row = connection.execute(
-                            "SELECT commit_id, status FROM storage_commits WHERE commit_kind = 'assembly_sealed' AND subject_id = ? AND idempotency_key = ? ORDER BY commit_id LIMIT 1",
-                            (
-                                snapshot.assembly_id,
-                                f"assembly:{snapshot.assembly_id}",
-                            ),
-                        ).fetchone()
-                        if commit_row is None:
-                            raise RuntimeError("assembly 已存在但 sealed commit 缺失")
-                        if (
-                            required_text(commit_row[1], field="commit.status")
-                            != "committed"
-                        ):
-                            raise RuntimeError(
-                                "assembly 已存在但 sealed commit 尚未 committed: "
-                                f"assembly_id={snapshot.assembly_id} status={commit_row[1]}"
-                            )
-                        self._validate_context_assembly_manifest(
-                            connection, snapshot, registration=registration,
-                            header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
-                            validated_predecessors=validated_predecessors,
-                        )
-                        return ContextAssemblySealReceipt(
-                            non_negative_int(commit_row[0], field="commit_id"),
-                            seal.snapshot,
-                        )
-                    raise ValueError("assembly-idempotency-conflict: assembly_id 已存在但输入不一致")
-                turn = connection.execute(
-                    "SELECT status FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
-                    (snapshot.session_id, snapshot.thread_id, snapshot.turn_id),
-                ).fetchone() if snapshot.turn_id is not None else None
-                if snapshot.turn_id is not None:
-                    if turn is None:
-                        raise KeyError(f"assembly Turn 不存在: {snapshot.turn_id}")
-                    if required_text(turn[0], field="turn.status") not in {
-                        TurnStatus.OPEN.value,
-                        TurnStatus.ACTIVE.value,
-                    }:
-                        raise ValueError(
-                            "turn_not_resumable: sealed assembly 只能绑定可 dispatch Turn: "
-                            f"{snapshot.turn_id} status={turn[0]}"
-                        )
-                execution = connection.execute(
-                    "SELECT turn_id, execution_origin FROM executions "
-                    "WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
-                    (snapshot.session_id, snapshot.thread_id, snapshot.execution_id),
-                ).fetchone()
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
+            # 同一个写事务覆盖注册核验、快照/selection 和最终 plan 绑定。
+            # 未注册的快照不能绕过 draft 生命周期进入 dispatch。
+            connection.execute("BEGIN IMMEDIATE")
+            # 哈希准入、当前 draft 和 CAS 版本在唯一写事务内核验一次。
+            try:
+                seal = preflight_seal(
+                    connection, snapshot,
+                    seal_idempotency_key=seal_idempotency_key,
+                    seal_input_hash=seal_input_hash, detail_key=detail_key,
+                )
+            except ItemSchemaError as error:
+                raise ValueError(
+                    f"context assembly hash 校验失败，拒绝 seal: {snapshot.assembly_id}: {error}"
+                ) from error
+            registration = seal.registered
+            existing = connection.execute(
+                "SELECT plan_hash, request_hash, status, detail_ref, snapshot_json FROM context_assemblies WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
+                (session_id, thread_id, snapshot.assembly_id),
+            ).fetchone()
+            if existing is not None:
+                if prepared_details:
+                    raise ValueError("assembly-idempotency-conflict: 已提交重试不能发布新 detail")
+                # 损坏快照必须暴露解析错误，不能伪装成普通幂等键冲突。
+                existing_snapshot_matches = canonical_json_bytes(
+                    load_snapshot(connection, existing[4])
+                ) == seal.snapshot_json.encode("utf-8")
+                existing_plan_hash = strict_text(
+                    existing[0], field="context_assemblies.plan_hash"
+                )
+                existing_request_hash = strict_text(
+                    existing[1], field="context_assemblies.request_hash"
+                )
+                existing_status = strict_text(
+                    existing[2], field="context_assemblies.status"
+                )
+                existing_detail_ref = strict_optional_text(
+                    existing[3], field="context_assemblies.detail_ref"
+                )
                 if (
-                    execution is None
-                    or execution[0] != snapshot.turn_id
-                    or required_text(execution[1], field="execution.execution_origin")
-                    != ("internal" if snapshot.turn_id is None else "user_turn")
+                    existing_plan_hash == snapshot.plan_hash
+                    and existing_request_hash == snapshot.request_hash
+                    and existing_status in {"sealed", "terminal"}
+                    and existing_detail_ref == detail_key
+                    and existing_snapshot_matches
                 ):
-                    raise ValueError(
-                        "assembly execution 不存在或不属于 snapshot session/thread/Turn"
-                    )
-                prepared_refs = set()
-                for prepared in prepared_details:
-                    if not isinstance(prepared, PreparedDetail):
-                        raise TypeError("assembly detail 必须是 PreparedDetail")
-                    prepared.record.detail_ref.require_owner(
-                        session_id, thread_id, snapshot.assembly_id,
-                    )
-                    if prepared.record.detail_ref in prepared_refs:
-                        raise ValueError("source-mismatch: prepared detail identity 重复")
-                    prepared_refs.add(prepared.record.detail_ref)
-                    self._register_context_plan_detail(
-                        connection, prepared.record, session_id=session_id,
-                        thread_id=thread_id, checkpoint_ns=checkpoint_ns,
-                    )
-                validate_assembly_details(connection, snapshot, checkpoint_ns, detail_key)
-                commit_id, _offset = self._storage._append_v2_records_transaction(
-                    connection,
-                    thread_id,
-                    checkpoint_ns,
-                    (),
-                    session_id=session_id,
-                    commit_kind=CommitKind.ASSEMBLY_SEALED.value,
-                    commit_mode=CommitMode.METADATA_ONLY.value,
-                    subject_id=snapshot.assembly_id,
-                    idempotency_key=f"assembly:{snapshot.assembly_id}",
-                    begin_transaction=False,
-                    metadata={
-                        "session_id": snapshot.session_id,
-                        "thread_id": snapshot.thread_id,
-                        "assembly_id": snapshot.assembly_id,
-                        "plan_hash": snapshot.plan_hash,
-                        "request_hash": snapshot.request_hash,
-                    },
-                )
-                timestamp = _now()
-                cursor = connection.execute(
-                    "INSERT INTO context_assemblies(assembly_id, session_id, thread_id, turn_id, execution_id, plan_id, plan_hash, request_hash, history_view_revision, source_overlay_epoch, snapshot_json, model_call_id, status, detail_ref, created_at, sealed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?)",
-                    (
-                        snapshot.assembly_id,
-                        session_id,
-                        thread_id,
-                        snapshot.turn_id,
-                        snapshot.execution_id,
-                        snapshot.plan_id,
-                        snapshot.plan_hash,
-                        snapshot.request_hash,
-                        snapshot.history_view_revision,
-                        snapshot.source_overlay_epoch,
-                        store_snapshot(connection, json.loads(seal.snapshot_json)),
-                        snapshot.model_call_id,
-                        detail_key,
-                        timestamp,
-                        timestamp,
-                    ),
-                )
-                _assert_one_row(cursor, context="context assembly 写入")
-                self._write_context_assembly_manifest(
-                    connection, snapshot, checkpoint_ns=checkpoint_ns,
-                    validated_predecessors=validated_predecessors,
-                )
-                registration = bind_sealed_registration(connection, seal)
-                if activation_binding is not None:
-                    # activation 行与 assembly 行必须原子提交：任何一侧失败都在
-                    # 同一回滚边界内，绝不留下「assembly 已 dispatch 但无
-                    # provenance」或反之的半发布状态。
-                    activation_binding(connection)
-                if snapshot.selection_policy != "summary_candidate":
-                    previous = self._latest_context_assembly_connection(
-                        connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
-                        excluding_assembly_id=snapshot.assembly_id,
+                    commit_row = connection.execute(
+                        "SELECT commit_id, status FROM storage_commits WHERE commit_kind = 'assembly_sealed' AND subject_id = ? AND idempotency_key = ? ORDER BY commit_id LIMIT 1",
+                        (
+                            snapshot.assembly_id,
+                            f"assembly:{snapshot.assembly_id}",
+                        ),
+                    ).fetchone()
+                    if commit_row is None:
+                        raise RuntimeError("assembly 已存在但 sealed commit 缺失")
+                    if (
+                        required_text(commit_row[1], field="commit.status")
+                        != "committed"
+                    ):
+                        raise RuntimeError(
+                            "assembly 已存在但 sealed commit 尚未 committed: "
+                            f"assembly_id={snapshot.assembly_id} status={commit_row[1]}"
+                        )
+                    self._validate_context_assembly_manifest(
+                        connection, snapshot, registration=registration,
+                        header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
                         validated_predecessors=validated_predecessors,
                     )
-                    self._context.checkpoints._apply_sealed_context_sources(
-                        connection, snapshot, previous=previous,
+                    return ContextAssemblySealReceipt(
+                        non_negative_int(commit_row[0], field="commit_id"),
+                        seal.snapshot,
                     )
-                    self._context.checkpoints._consume_context_epoch_transition(
-                        connection, snapshot, checkpoint_ns, previous=previous,
+                raise ValueError("assembly-idempotency-conflict: assembly_id 已存在但输入不一致")
+            turn = connection.execute(
+                "SELECT status FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
+                (snapshot.session_id, snapshot.thread_id, snapshot.turn_id),
+            ).fetchone() if snapshot.turn_id is not None else None
+            if snapshot.turn_id is not None:
+                if turn is None:
+                    raise KeyError(f"assembly Turn 不存在: {snapshot.turn_id}")
+                if required_text(turn[0], field="turn.status") not in {
+                    TurnStatus.OPEN.value,
+                    TurnStatus.ACTIVE.value,
+                }:
+                    raise ValueError(
+                        "turn_not_resumable: sealed assembly 只能绑定可 dispatch Turn: "
+                        f"{snapshot.turn_id} status={turn[0]}"
                     )
-                self._validate_context_assembly_manifest(
-                    connection, snapshot, registration=registration,
-                    header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
+            execution = connection.execute(
+                "SELECT turn_id, execution_origin FROM executions "
+                "WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
+                (snapshot.session_id, snapshot.thread_id, snapshot.execution_id),
+            ).fetchone()
+            if (
+                execution is None
+                or execution[0] != snapshot.turn_id
+                or required_text(execution[1], field="execution.execution_origin")
+                != ("internal" if snapshot.turn_id is None else "user_turn")
+            ):
+                raise ValueError(
+                    "assembly execution 不存在或不属于 snapshot session/thread/Turn"
+                )
+            prepared_refs = set()
+            for prepared in prepared_details:
+                if not isinstance(prepared, PreparedDetail):
+                    raise TypeError("assembly detail 必须是 PreparedDetail")
+                prepared.record.detail_ref.require_owner(
+                    session_id, thread_id, snapshot.assembly_id,
+                )
+                if prepared.record.detail_ref in prepared_refs:
+                    raise ValueError("source-mismatch: prepared detail identity 重复")
+                prepared_refs.add(prepared.record.detail_ref)
+                self._register_context_plan_detail(
+                    connection, prepared.record, session_id=session_id,
+                    thread_id=thread_id, checkpoint_ns=checkpoint_ns,
+                )
+            validate_assembly_details(connection, snapshot, checkpoint_ns, detail_key)
+            commit_id, _offset = self._storage._append_v2_records_transaction(
+                connection,
+                thread_id,
+                checkpoint_ns,
+                (),
+                session_id=session_id,
+                commit_kind=CommitKind.ASSEMBLY_SEALED.value,
+                commit_mode=CommitMode.METADATA_ONLY.value,
+                subject_id=snapshot.assembly_id,
+                idempotency_key=f"assembly:{snapshot.assembly_id}",
+                begin_transaction=False,
+                metadata={
+                    "session_id": snapshot.session_id,
+                    "thread_id": snapshot.thread_id,
+                    "assembly_id": snapshot.assembly_id,
+                    "plan_hash": snapshot.plan_hash,
+                    "request_hash": snapshot.request_hash,
+                },
+            )
+            timestamp = _now()
+            cursor = connection.execute(
+                "INSERT INTO context_assemblies(assembly_id, session_id, thread_id, turn_id, execution_id, plan_id, plan_hash, request_hash, history_view_revision, source_overlay_epoch, snapshot_json, model_call_id, status, detail_ref, created_at, sealed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?)",
+                (
+                    snapshot.assembly_id,
+                    session_id,
+                    thread_id,
+                    snapshot.turn_id,
+                    snapshot.execution_id,
+                    snapshot.plan_id,
+                    snapshot.plan_hash,
+                    snapshot.request_hash,
+                    snapshot.history_view_revision,
+                    snapshot.source_overlay_epoch,
+                    store_snapshot(connection, json.loads(seal.snapshot_json)),
+                    snapshot.model_call_id,
+                    detail_key,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            _assert_one_row(cursor, context="context assembly 写入")
+            self._write_context_assembly_manifest(
+                connection, snapshot, checkpoint_ns=checkpoint_ns,
+                validated_predecessors=validated_predecessors,
+            )
+            registration = bind_sealed_registration(connection, seal)
+            if activation_binding is not None:
+                # activation 行与 assembly 行必须原子提交：任何一侧失败都在
+                # 同一回滚边界内，绝不留下「assembly 已 dispatch 但无
+                # provenance」或反之的半发布状态。
+                activation_binding(connection)
+            if snapshot.selection_policy != "summary_candidate":
+                previous = self._latest_context_assembly_connection(
+                    connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
+                    excluding_assembly_id=snapshot.assembly_id,
                     validated_predecessors=validated_predecessors,
                 )
-                published = []
-                try:
-                    for prepared in prepared_details:
-                        published.extend(detail_store.publish(prepared))
-                    self._storage._commit_connection(connection)
-                except BaseException:
-                    if connection.in_transaction:
-                        connection.rollback()
-                    # commit 成功后返回路径抛错也必须保留已提交的正文。
-                    committed = connection.execute(
-                        "SELECT 1 FROM context_assemblies WHERE assembly_id = ? "
-                        "AND session_id = ? AND thread_id = ?",
-                        (snapshot.assembly_id, session_id, thread_id),
-                    ).fetchone()
-                    if committed is None and published:
-                        detail_store.discard_published(published)
-                    raise
-                return ContextAssemblySealReceipt(commit_id, seal.snapshot)
+                self._context.checkpoints._apply_sealed_context_sources(
+                    connection, snapshot, previous=previous,
+                )
+                self._context.checkpoints._consume_context_epoch_transition(
+                    connection, snapshot, checkpoint_ns, previous=previous,
+                )
+            self._validate_context_assembly_manifest(
+                connection, snapshot, registration=registration,
+                header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
+                validated_predecessors=validated_predecessors,
+            )
+            published = []
+            try:
+                for prepared in prepared_details:
+                    published.extend(detail_store.publish(prepared))
+                self._storage._commit_connection(connection)
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                # commit 成功后返回路径抛错也必须保留已提交的正文。
+                committed = connection.execute(
+                    "SELECT 1 FROM context_assemblies WHERE assembly_id = ? "
+                    "AND session_id = ? AND thread_id = ?",
+                    (snapshot.assembly_id, session_id, thread_id),
+                ).fetchone()
+                if committed is None and published:
+                    detail_store.discard_published(published)
+                raise
+            return ContextAssemblySealReceipt(commit_id, seal.snapshot)

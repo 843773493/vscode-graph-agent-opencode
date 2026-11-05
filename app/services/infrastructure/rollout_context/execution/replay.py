@@ -45,14 +45,7 @@ class RolloutReplayMixin:
             acceptance_idempotency_key,
             field="acceptance_idempotency_key",
         )
-        self._storage.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-        with self._storage._connect(
-            thread_id,
-            checkpoint_ns,
-            session_id=session_id,
-            read_only=True,
-        ) as connection:
-            self._storage._require_v2_runtime(connection)
+        with self._storage.write_connection(session_id, thread_id, checkpoint_ns) as connection:
             source = connection.execute(
                 "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
                 (source_turn_id,),

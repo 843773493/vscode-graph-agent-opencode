@@ -17,6 +17,7 @@ from typing import Protocol
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import require_current_session_thread_owner
+from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.fork.path_scope import ForkPathScope
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
@@ -64,6 +65,10 @@ from app.services.infrastructure.rollout_context.storage.rollout_maintenance_own
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     RolloutSerializationMixin,
+)
+from app.services.infrastructure.rollout_context.storage.transaction import (
+    strict_text,
+    validate_commit_boundary,
 )
 from app.services.infrastructure.rollout_context.storage.transaction_projections import (
     RolloutTransactionProjectionMixin,
@@ -217,6 +222,47 @@ class RolloutStorage(
             index_path, read_only=read_only,
             frozen_source=self.fork_paths.source_snapshot(session_id) is not None,
         )
+
+    @contextmanager
+    def write_connection(
+        self, session_id: str, thread_id: str, checkpoint_ns: str = "",
+    ) -> Iterator[sqlite3.Connection]:
+        """普通写入只核当前边界；首次建库、崩溃恢复和完整审计由 initialize 负责。"""
+        session_id = strict_text(session_id, field="session_id")
+        thread_id = self.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
+        with (
+            self._lock(thread_id, checkpoint_ns, session_id=session_id),
+            self.fork_paths.thread_resolution_scope(),
+        ):
+            root = self.root(session_id, checkpoint_ns, thread_id=thread_id)
+            if self._is_removed_rollout_layout(root):
+                raise RuntimeError("rollout 使用了已移除的旧布局")
+            index = self.index_path(session_id, checkpoint_ns, thread_id=thread_id)
+            if not index.exists() or index.stat().st_size == 0:
+                self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
+                self._require_v2_runtime(connection)
+                self._validate_schema_state(connection)
+                self._validate_reasoning_projection_connection(connection)
+                meta = connection.execute(
+                    "SELECT session_id, thread_id, database_state FROM database_meta WHERE singleton_id = 1"
+                ).fetchone()
+                if meta is None or meta[:2] != (session_id, thread_id):
+                    raise RuntimeError(f"thread_owner_rollout_mismatch: rollout owner 不一致: {meta}")
+                if meta[2] != "active":
+                    raise RuntimeError(f"recovery_required: rollout SQLite 状态不可写入: {meta[2]}")
+                jsonl = self.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id)
+                if jsonl.is_symlink() or not jsonl.is_file():
+                    raise RuntimeError(f"rollout.jsonl 不是安全普通文件: {jsonl}")
+                size = jsonl.stat().st_size
+                offset = validate_commit_boundary(connection, size)
+                # 普通写入不截断未知尾部；恢复须先完整审计，再按权威边界回收。
+                if size != offset:
+                    raise RuntimeError(f"recovery_required: rollout.jsonl 存在未恢复尾部: file={size}, committed={offset}")
+                self._ensure_namespace_state(connection, checkpoint_ns, utc_now_text())
+                connection.commit()
+                yield connection
 
     @staticmethod
     def _snapshot_connection(snapshot: RolloutReadSnapshot) -> sqlite3.Connection:

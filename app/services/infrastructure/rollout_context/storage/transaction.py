@@ -309,6 +309,51 @@ def strict_optional_text(value: object, *, field: str) -> str | None:
     return strict_text(value, field=field)
 
 
+def validate_commit_boundary(connection: sqlite3.Connection, jsonl_size: int) -> int:
+    """普通读写共用末尾提交边界；未消费旧历史由恢复或显式全检报告。"""
+    meta = connection.execute(
+        "SELECT committed_jsonl_offset,last_commit_id,last_item_sequence "
+        "FROM database_meta WHERE singleton_id=1"
+    ).fetchone()
+    if meta is None:
+        raise RuntimeError("database_meta 缺少 committed_jsonl_offset")
+    offset = strict_non_negative_int(meta[0], field="database_meta.committed_jsonl_offset")
+    last_commit_id = strict_optional_non_negative_int(meta[1], field="database_meta.last_commit_id")
+    last_sequence = strict_non_negative_int(meta[2], field="database_meta.last_item_sequence")
+    commits = connection.execute(
+        "SELECT " + STORED_COMMIT_COLUMNS
+        + "FROM storage_commits commit_record ORDER BY commit_record.commit_id DESC LIMIT 2"
+    ).fetchall()
+    if commits:
+        commit_id, start, end, _count = validate_stored_commit(commits[0])
+        if commit_id != last_commit_id:
+            raise RuntimeError("database_meta.last_commit_id 与 storage_commits 不一致")
+        previous_end = strict_non_negative_int(
+            commits[1][2], field="storage commit jsonl_end_offset",
+        ) if len(commits) == 2 else 0
+        if start != previous_end or end != offset:
+            raise RuntimeError("database_meta.committed_jsonl_offset 与 storage_commits 不一致：末尾提交链断裂")
+    elif last_commit_id is not None or offset != 0:
+        raise RuntimeError("database_meta.last_commit_id 或 committed_jsonl_offset 指向不存在的 storage commit")
+    item = connection.execute(
+        "SELECT item_sequence,jsonl_offset,jsonl_length FROM item_catalog ORDER BY item_sequence DESC LIMIT 1"
+    ).fetchone()
+    if item is None:
+        catalog_end, sequence = 0, 0
+    else:
+        sequence = strict_non_negative_int(item[0], field="item_catalog.item_sequence")
+        item_offset = strict_non_negative_int(item[1], field="item_catalog.jsonl_offset")
+        length = strict_non_negative_int(item[2], field="item_catalog.jsonl_length")
+        if length == 0:
+            raise RuntimeError("item_catalog.jsonl_length 必须大于 0")
+        catalog_end = item_offset + length
+    if catalog_end != offset or sequence != last_sequence:
+        raise RuntimeError("database_meta 与 item catalog 末尾边界不一致")
+    if jsonl_size < offset:
+        raise RuntimeError("recovery_required: rollout.jsonl 小于 SQLite 已提交偏移")
+    return offset
+
+
 @dataclass(frozen=True, slots=True)
 class CommittedStorageCommit:
     """已提交幂等记录的严格投影，供所有 terminal caller 复用。"""
@@ -713,6 +758,7 @@ __all__ = [
     "strict_optional_non_negative_int",
     "strict_optional_text",
     "strict_text",
+    "validate_commit_boundary",
     "validate_commit_contract",
     "validate_item_storage_projection",
 ]

@@ -376,29 +376,22 @@ class RolloutItemsMixin:
         """记录没有 JSONL item 的 control/terminal outcome。"""
         if outcome not in {value.value for value in ControlOutcome}:
             raise ValueError(f"未知 control outcome: {outcome}")
-        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
-            with self._connect(
+        with self.write_connection(session_id, thread_id, checkpoint_ns) as connection:
+            commit_id, _offset = self._append_v2_records_transaction(
+                connection,
                 thread_id,
                 checkpoint_ns,
+                (),
                 session_id=session_id,
-            ) as connection:
-                self._require_v2_runtime(connection)
-                commit_id, _offset = self._append_v2_records_transaction(
-                    connection,
-                    thread_id,
-                    checkpoint_ns,
-                    (),
-                    session_id=session_id,
-                    commit_kind=commit_kind,
-                    commit_mode=CommitMode.METADATA_ONLY.value,
-                    outcome=outcome,
-                    metadata=metadata,
-                    subject_id=subject_id,
-                    idempotency_key=idempotency_key,
-                )
-                self._commit_connection(connection)
-                return commit_id
+                commit_kind=commit_kind,
+                commit_mode=CommitMode.METADATA_ONLY.value,
+                outcome=outcome,
+                metadata=metadata,
+                subject_id=subject_id,
+                idempotency_key=idempotency_key,
+            )
+            self._commit_connection(connection)
+            return commit_id
 
     def read_ref_items(
         self,

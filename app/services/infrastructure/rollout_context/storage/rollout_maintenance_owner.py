@@ -59,7 +59,6 @@ from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
-    strict_optional_text,
     strict_text,
 )
 
@@ -471,9 +470,8 @@ class RolloutMaintenanceOwner(
                             )
                         )
             path = root / "rollout.jsonl"
-            # 只读历史请求会频繁经过 initialize；已有文件不能重复 touch，
-            # 否则会改变 rollout.jsonl 的 mtime，触发工作区文件监听并造成
-            # 无意义的资源刷新。首次创建时才建立空的 canonical 文件。
+            # 显式初始化与恢复也不能重复 touch 已有文件，避免改变 mtime
+            # 并触发无意义的工作区资源刷新；首次创建时才建立 canonical 文件。
             with _storage_io(path, "rollout JSONL 初始化失败", "jsonl_initialization", artifact="rollout_jsonl"):
                 if path.is_symlink() or (path.exists() and not path.is_file()):
                     raise _storage_failure(path, RuntimeError("rollout.jsonl 不是安全普通文件"), "jsonl_initialization", artifact="rollout_jsonl")
@@ -552,41 +550,6 @@ class RolloutMaintenanceOwner(
                         "thread_owner_rollout_mismatch: database_meta owner 与实际 rollout 路径不一致; "
                         f"expected={expected_owner!r}, actual={database_owner!r}"
                     )
-                active_branch = connection.execute(
-                    "SELECT branch_id, head_view_id FROM branches WHERE branch_id = (SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?) AND status = 'active'",
-                    (checkpoint_ns,),
-                ).fetchone()
-                if active_branch is None:
-                    raise RuntimeError(
-                        "active branch 缺失，不能创建 rollout context view"
-                    )
-                active_branch_id = strict_text(
-                    active_branch[0], field="branches.branch_id"
-                )
-                active_head_view_id = strict_optional_text(
-                    active_branch[1], field="branches.head_view_id"
-                )
-                if active_head_view_id is None:
-                    # acceptance 可以先于第一个 LangGraph checkpoint 到达；
-                    # 为这个空但真实存在的 active branch 建立 root view，
-                    # 使 Turn/root 在 acceptance-time 就有稳定的 view-local
-                    # 索引，而不是等下一次 checkpoint 偶然补齐。
-                    initial_view_id = self._host._create_view(
-                        connection,
-                        active_branch_id,
-                        None,
-                        (),
-                        _now(),
-                        view_kind="root",
-                    )
-                    head_result = connection.execute(
-                        "UPDATE branches SET head_view_id = ?, updated_at = ? WHERE branch_id = ?",
-                        (initial_view_id, _now(), active_branch_id),
-                    )
-                    if head_result.rowcount != 1:
-                        raise RuntimeError(
-                            f"rollout active branch head view 更新失败: {active_branch_id}"
-                        )
                 if needs_schema:
                     self._validate_schema_state(connection)
                 if (
