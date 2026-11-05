@@ -356,16 +356,25 @@ class RolloutViewMembershipMixin:
         }
         rows: list[tuple[str, int, int, int | None, str | None]] = []
         sequence_set = set(materialized_sequences)
+        last_turn_ordinal = strict_non_negative_int(
+            connection.execute(
+                "SELECT COALESCE(MAX(logical_turn_ordinal), 0) FROM context_view_turns WHERE view_id=?",
+                (parent_view_id,),
+            ).fetchone()[0],
+            field="context_view_turns.logical_turn_ordinal",
+        )
         # 完整性只取决于本次选集；每个 Turn 核一次，不能对未完整选入的 Turn 逐消息重扫。
         for value in dict.fromkeys(turn_by_sequence.get(sequence) for sequence in materialized_sequences):
             if value is None:
                 continue
             row = connection.execute(
                 "SELECT turn.turn_kind,turn.first_message_sequence,turn.last_message_sequence,"
-                "turn.user_message_sequence,turn.final_message_sequence,record.root_input_item_id "
+                "turn.user_message_sequence,turn.final_message_sequence,record.root_input_item_id,"
+                "parent.logical_turn_ordinal,parent.final_message_sequence "
                 "FROM turns turn LEFT JOIN turn_records record ON record.turn_id=turn.turn_id "
+                "LEFT JOIN context_view_turns parent ON parent.view_id=? AND parent.turn_id=turn.turn_id "
                 "WHERE turn.turn_id=?",
-                (value,),
+                (parent_view_id, value),
             ).fetchone()
             if row is None:
                 raise RuntimeError(f"message Turn projection 缺失: {value}")
@@ -395,10 +404,7 @@ class RolloutViewMembershipMixin:
             # 完整性相对于冻结来源 view 判断；全局 catalog 还包含其它分支、
             # 被替换版本及 fork 的增量恢复 backing，不能要求它们全部可见。
             # 新出现的 Turn 才使用当前已提交消息；并发序号仍不能按连续范围推断。
-            inherited_turn = parent_view_id is not None and connection.execute(
-                "SELECT 1 FROM context_view_turns WHERE view_id=? AND turn_id=?",
-                (parent_view_id, value),
-            ).fetchone() is not None
+            inherited_turn = row[6] is not None
             turn_sequences = {
                 strict_non_negative_int(
                     message_row[0], field=f"messages.message_sequence: {value}"
@@ -420,15 +426,17 @@ class RolloutViewMembershipMixin:
             # 复用同一查询中已校验的 Turn 坐标与 root，不再逐 Turn 回读、重复解码。
             # 前缀 fork 的隐藏 final 仍按父 view 判断；本来没有 final 时无需查父指针。
             if final_sequence is not None and final_sequence not in sequence_set:
-                parent_turn = connection.execute(
-                    "SELECT final_message_sequence FROM context_view_turns WHERE view_id=? AND turn_id=?",
-                    (parent_view_id, value),
-                ).fetchone()
-                if parent_turn is None or parent_turn[0] is not None:
+                if not inherited_turn or row[7] is not None:
                     raise RuntimeError(f"context view 丢失 canonical final message: {view_id}/{value}")
                 final_sequence = None
+            # fork 的稀疏 Turn 坐标沿父 view 保留；局部历史刷新不能混入重编号坐标。
+            if inherited_turn:
+                ordinal = strict_non_negative_int(row[6], field="context_view_turns.logical_turn_ordinal")
+            else:
+                last_turn_ordinal += 1
+                ordinal = last_turn_ordinal
             rows.append((
-                value, len(rows) + 1, user_sequence, final_sequence,
+                value, ordinal, user_sequence, final_sequence,
                 strict_text(row[5], field="turn_records.root_input_item_id") if row[5] is not None else None,
             ))
         turn_ids = [row[0] for row in rows]

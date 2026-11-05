@@ -399,6 +399,11 @@ def test_checkpoint_preserves_sparse_history_coordinates_and_hidden_high_water(
             "context_ordinal=CASE item_id WHEN 'item-accepted-user-root' THEN 0 "
             "WHEN 'item-second-root' THEN 1 END WHERE view_id=?", (source_view,),
         )
+        # fork 可移除中间 Turn；继承的 Turn ordinal 同样允许有空洞。
+        connection.execute(
+            "UPDATE context_view_turns SET logical_turn_ordinal=5 WHERE view_id=? AND turn_id=?",
+            (source_view, second["turn_id"]),
+        )
         connection.commit()
     membership_sql = (
         "SELECT item_id,logical_item_ordinal,visible,context_selected,context_ordinal "
@@ -411,6 +416,7 @@ def test_checkpoint_preserves_sparse_history_coordinates_and_hidden_high_water(
     ]
     initial = saver.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user"]))
     expected_roots = [(USER_TURN_ID, 0), (second["turn_id"], 5)]
+    assert [turn.ordinal for turn in initial.items] == [1, 5]
     assert [(turn.turn_id, turn.root_logical_item_ordinal) for turn in initial.items] == expected_roots
     messages: list[object] = all_messages if materialize_backing else [first_message, second_message]
     for number in range(2):
@@ -424,6 +430,7 @@ def test_checkpoint_preserves_sparse_history_coordinates_and_hidden_high_water(
         history = saver.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user"]))
         assert history.projection_epoch == initial.projection_epoch
         assert [(turn.turn_id, turn.root_logical_item_ordinal) for turn in history.items] == expected_roots
+        assert [turn.ordinal for turn in history.items] == [1, 5]
         with (
             session_thread_owner_scope(_owner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
             execution_admission_scope(admission, langgraph_thread_id=thread_id),
@@ -441,6 +448,8 @@ def test_checkpoint_preserves_sparse_history_coordinates_and_hidden_high_water(
         admission_idempotency_key="third-admission", payload="新的续写输入",
         root_item_id="item-third-root", initial_execution_id="third-execution",
     )
+    accepted = saver.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user"]))
+    assert [turn.ordinal for turn in accepted.items] == [1, 5, 6]
     third_admission = saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id="third-execution")
     _put_with_admission(
         saver, session_id=SESSION_ID, thread_id=thread_id, admission=third_admission,
@@ -461,6 +470,7 @@ def test_checkpoint_preserves_sparse_history_coordinates_and_hidden_high_water(
         assert [(turn.turn_id, turn.root_logical_item_ordinal) for turn in history.items] == [
             *expected_roots, (third["turn_id"], 16),
         ]
+        assert [turn.ordinal for turn in history.items] == [1, 5, 6]
 
 
 def test_internal_notice_and_tool_outputs_remain_turnless_and_do_not_reopen_final_turn(
