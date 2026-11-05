@@ -347,6 +347,18 @@ class RolloutCheckpointSaver(
         )
 
 
+    def list_context_assembly_ids(
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        turn_id: str | None = None,
+    ) -> tuple[str, ...]:
+        """由 Saver 提供已提交 assembly 身份，避免定位时恢复全部历史正文。"""
+        return self._storage.assemblies.list_context_assembly_ids(
+            session_id, thread_id, turn_id=turn_id,
+        )
+
     def list_context_assemblies(
         self,
         session_id: str,

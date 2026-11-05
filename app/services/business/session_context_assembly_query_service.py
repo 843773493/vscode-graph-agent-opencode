@@ -111,25 +111,32 @@ class SessionContextAssemblyQueryService:
         if request.assembly_ref is None:
             raise ValueError("assembly 查询缺少 assembly_ref")
         thread_id = self._require_main_thread_id(session)
-        snapshots = await asyncio.to_thread(
-            self._assembly_source.list_context_assemblies,
+        # assembly_ref 是不可逆身份，只枚举 ID 定位；无关历史正文留到对应读取时校验。
+        assembly_ids = await asyncio.to_thread(
+            self._assembly_source.list_context_assembly_ids,
             session.session_id,
             thread_id,
         )
-        snapshot = next(
+        assembly_id = next(
             (
                 candidate
-                for candidate in snapshots
+                for candidate in assembly_ids
                 if context_assembly_identity(
                     resource.resource_identity,
-                    candidate.assembly_id,
+                    candidate,
                 )
                 == request.assembly_ref
             ),
             None,
         )
-        if snapshot is None:
+        if assembly_id is None:
             raise KeyError(f"assembly_ref 不存在: {request.assembly_ref}")
+        snapshot = await asyncio.to_thread(
+            self._assembly_source.get_context_assembly,
+            session.session_id,
+            thread_id,
+            assembly_id=assembly_id,
+        )
         plan = snapshot.as_sealed_plan()
         # include 属于 projection 参数；不能用另一 include 的 cursor 跳过记录。
         include_hash = hashlib.sha256(

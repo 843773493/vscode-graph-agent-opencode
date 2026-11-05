@@ -340,7 +340,8 @@ async def test_assembly_history_projection_uses_session_thread_pair():
     snapshot.loss = ()
     plan = object()
     snapshot.as_sealed_plan.return_value = plan
-    assembly_source.list_context_assemblies.return_value = (snapshot,)
+    assembly_source.list_context_assembly_ids.return_value = (snapshot.assembly_id,)
+    assembly_source.get_context_assembly.return_value = snapshot
     message = AIMessage(id="msg-protected", content=[{
         "type": "reasoning_items", "reasoning_items": [{
             "type": "reasoning", "content": [{"type": "reasoning_text", "text": "保留正文"}],
@@ -376,10 +377,14 @@ async def test_assembly_history_projection_uses_session_thread_pair():
     assert isinstance(inner, dict)
     assert inner["encrypted_content"] == "assembly-opaque-fixture"
 
-    assembly_source.list_context_assemblies.assert_called_once_with(
+    assembly_source.list_context_assembly_ids.assert_called_once_with(
         "ses_target",
         "thread_target",
     )
+    assembly_source.get_context_assembly.assert_called_once_with(
+        "ses_target", "thread_target", assembly_id="asm_target",
+    )
+    assembly_source.list_context_assemblies.assert_not_called()
     assembly_source.project_context_plan_to_history_with_diagnostics.assert_called_once_with(
         "ses_target",
         "thread_target",
@@ -444,6 +449,8 @@ def assembly_selection_query() -> AssemblySelectionQueryFixture:
     )
     assembly_source = create_autospec(SessionContextAssemblySourceProtocol, spec_set=True)
     assembly_source.list_context_assemblies.return_value = (snapshot,)
+    assembly_source.list_context_assembly_ids.return_value = (snapshot.assembly_id,)
+    assembly_source.get_context_assembly.return_value = snapshot
     assembly_source.project_context_plan_to_history_with_diagnostics.return_value = SessionContextHistoryProjection(
         assembly=snapshot, messages=[], losses=(), resource_activation=None,
     )

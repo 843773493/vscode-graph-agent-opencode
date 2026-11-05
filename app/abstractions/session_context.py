@@ -85,6 +85,14 @@ class SessionContextHistoryProjection:
 class SessionContextAssemblySourceProtocol(Protocol):
     """上下文检查面只消费 Saver 冻结的 assembly 和 history diagnostics。"""
 
+    def list_context_assembly_ids(
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        turn_id: str | None = None,
+    ) -> tuple[str, ...]: ...
+
     def list_context_assemblies(
         self,
         session_id: str,

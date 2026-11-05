@@ -279,6 +279,36 @@ class ContextAssemblyReaderMixin:
         return snapshot, header_ref, registration
 
 
+    @staticmethod
+    def _list_context_assembly_ids_connection(
+        connection: sqlite3.Connection, *, turn_id: str | None,
+    ) -> tuple[str, ...]:
+        query = (
+            "SELECT assembly_id FROM context_assemblies "
+            "WHERE status IN ('sealed','terminal')"
+        )
+        params: tuple[object, ...] = ()
+        if turn_id is not None:
+            query += " AND turn_id = ?"
+            params = (turn_id,)
+        query += " ORDER BY rowid"
+        return tuple(
+            required_text(row[0], field="assembly_id")
+            for row in connection.execute(query, params)
+        )
+
+    def list_context_assembly_ids(
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        turn_id: str | None = None,
+        checkpoint_ns: str = "",
+    ) -> tuple[str, ...]:
+        """在当前提交边界内列 ID；命中后由完整 reader 校验正文及 manifest。"""
+        with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+            return self._list_context_assembly_ids_connection(snapshot.connection, turn_id=turn_id)
+
     def list_context_assemblies(
         self,
         session_id: str,
@@ -289,23 +319,13 @@ class ContextAssemblyReaderMixin:
     ) -> tuple[ContextAssemblySnapshot, ...]:
         """按 immutable creation order 返回已提交 assembly。"""
         with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
-            query = (
-                "SELECT assembly_id FROM context_assemblies "
-                "WHERE status IN ('sealed','terminal')"
-            )
-            params: list[object] = []
-            if turn_id is not None:
-                query += " AND turn_id = ?"
-                params.append(turn_id)
-            query += " ORDER BY rowid"
-            rows = snapshot.connection.execute(query, tuple(params)).fetchall()
             return tuple(
                 self._read_context_assembly_connection(
                     snapshot.connection, session_id, thread_id,
-                    assembly_id=required_text(row[0], field="assembly_id"),
+                    assembly_id=assembly_id,
                     checkpoint_ns=checkpoint_ns,
                 )[0]
-                for row in rows
+                for assembly_id in self._list_context_assembly_ids_connection(snapshot.connection, turn_id=turn_id)
             )
 
 
