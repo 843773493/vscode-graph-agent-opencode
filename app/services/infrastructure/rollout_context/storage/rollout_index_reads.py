@@ -101,6 +101,7 @@ class RolloutIndexMixin:
                 )
                 cleanup.callback(connection.close)
                 connection.execute("BEGIN")
+                # 在事务入口校验一次格式，后续分页、投影与 checkpoint 共用同一快照。
                 self._host._require_v2_runtime(connection)
                 self._validate_schema_state(connection)
                 self._host._validate_reasoning_projection_connection(connection)

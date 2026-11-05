@@ -368,7 +368,6 @@ class IndexedRecordQueryMixin:
                 ):
                     raise ValueError(f"未知 indexed record kind: {kind}")
         connection = self._storage._snapshot_connection(snapshot)
-        self._storage._require_v2_runtime(connection)
         session_id = strict_text(
             snapshot.session_id, field="read_indexed_records_batch.session_id"
         )
@@ -464,7 +463,6 @@ class IndexedRecordQueryMixin:
                 return self._read_record_envelopes(
                     session_id, thread_id, checkpoint_ns, row_values, connection=owned,
                 )
-        self._storage._require_v2_runtime(connection)
         indexed_rows = tuple(row_values)
         message_rows = connection.execute(
             "SELECT message_sequence, message_id, turn_id, role, created_at "
@@ -564,7 +562,6 @@ class IndexedRecordQueryMixin:
         def read(
             connection: sqlite3.Connection, active_branch_id: str
         ) -> list[tuple[str, int, int]]:
-            self._storage._require_v2_runtime(connection)
             active_branch_id = strict_text(
                 active_branch_id, field="indexed_turn_spans.active_branch_id"
             )
@@ -608,7 +605,6 @@ class IndexedRecordQueryMixin:
             return []
         view_id = values[-1][0]
         connection = self._storage._snapshot_connection(snapshot)
-        self._storage._require_v2_runtime(connection)
         rows = connection.execute(
             f"SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence FROM context_view_turns cvt JOIN turns t ON t.turn_id = cvt.turn_id WHERE cvt.view_id = ? AND {VISIBLE_NORMAL_TURN_PREDICATE} ORDER BY cvt.logical_turn_ordinal",
             (view_id,),

@@ -266,6 +266,7 @@ class RolloutStorage(
 
     @staticmethod
     def _snapshot_connection(snapshot: RolloutReadSnapshot) -> sqlite3.Connection:
+        # 格式与 schema 已在建立快照时校验，且由只读事务固定；消费者不再重复查询。
         if snapshot.closed:
             raise RuntimeError("rollout read snapshot 已关闭")
         return snapshot.connection

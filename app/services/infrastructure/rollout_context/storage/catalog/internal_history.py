@@ -53,7 +53,6 @@ class InternalExecutionHistoryMixin:
         """读取同一 view/snapshot 的两条分页 lane 共用 logical item 坐标上界。"""
         view_id = strict_text(view_id, field="context_views.view_id")
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         if (
             connection.execute(
                 "SELECT 1 FROM context_views WHERE view_id = ?",
@@ -128,7 +127,6 @@ class InternalExecutionHistoryMixin:
             raise ValueError("Turn item window 起始 ordinal 不得大于结束 ordinal")
 
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         view_exists = (
             connection.execute(
                 "SELECT 1 FROM context_views WHERE view_id = ?",
@@ -259,7 +257,6 @@ class InternalExecutionHistoryMixin:
         self, snapshot: RolloutReadSnapshot, view_id: str,
     ) -> tuple[sqlite3.Connection, str, str]:
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         if connection.execute(
             "SELECT 1 FROM context_views WHERE view_id = ?", (view_id,),
         ).fetchone() is None:

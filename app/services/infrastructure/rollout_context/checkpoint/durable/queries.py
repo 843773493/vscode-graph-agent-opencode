@@ -263,7 +263,6 @@ class RolloutCheckpointQueriesMixin:
         snapshot: RolloutReadSnapshot,
     ) -> str | None:
         connection = self._storage._snapshot_connection(snapshot)
-        self._storage._require_v2_runtime(connection)
         row = connection.execute(
             "SELECT head_view_id FROM branches WHERE branch_id = ?",
             (snapshot.manifest.active_branch_id,),
@@ -431,7 +430,6 @@ class RolloutCheckpointQueriesMixin:
         try:
             with self._storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
                 connection = snapshot.connection
-                self._storage._require_v2_runtime(connection)
                 before = (
                     connection.execute(
                         "SELECT cv.control_sequence FROM checkpoints AS c "
@@ -504,7 +502,6 @@ class RolloutCheckpointQueriesMixin:
         )
 
         def read(connection: sqlite3.Connection) -> dict[str, object]:
-            self._storage._require_v2_runtime(connection)
             channel_filter = ""
             parameters: tuple[object, ...] = (index.checkpoint_id,)
             if requested_channels is not None:

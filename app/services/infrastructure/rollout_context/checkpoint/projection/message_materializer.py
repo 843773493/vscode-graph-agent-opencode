@@ -264,7 +264,6 @@ class RolloutMessageMaterializerMixin:
     ) -> tuple[tuple[str, int, int], ...]:
         """省略序号读取 active view；显式序号读取冻结 checkpoint selection。"""
         connection = self._storage._snapshot_connection(snapshot)
-        self._storage._require_v2_runtime(connection)
         row = None
         if message_sequence is not None:
             row = connection.execute(

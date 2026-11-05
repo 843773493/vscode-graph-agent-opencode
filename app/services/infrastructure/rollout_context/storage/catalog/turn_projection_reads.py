@@ -47,7 +47,6 @@ class TurnProjectionReadMixin:
         if not ids:
             return set()
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         placeholders = ",".join("?" for _ in ids)
         return {
             strict_text(row[0], field="turn_records.turn_id")
@@ -70,7 +69,6 @@ class TurnProjectionReadMixin:
             return {}
         placeholders = ",".join("?" for _ in ids)
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         if connection.execute("SELECT 1 FROM context_views WHERE view_id = ?", (view_id,)).fetchone() is None:
             raise KeyError(f"context view 不存在: {view_id}")
         turns = connection.execute(

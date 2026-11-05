@@ -101,7 +101,6 @@ class TurnProjectionQueryMixin:
         if upper_ordinal == 0:
             raise ValueError("turn_page.upper_ordinal 必须大于 0")
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         if (
             connection.execute(
                 "SELECT 1 FROM context_views WHERE view_id = ?",
@@ -167,7 +166,6 @@ class TurnProjectionQueryMixin:
         if anchor_ordinal < 1:
             raise ValueError("around keyset 参数非法")
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         rows = connection.execute(
             "SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence, "
             "cvt.logical_turn_ordinal, root_membership.logical_item_ordinal "
@@ -196,7 +194,6 @@ class TurnProjectionQueryMixin:
         if not ids:
             return []
         connection = self._snapshot_connection(snapshot)
-        self._require_v2_runtime(connection)
         placeholders = ",".join("?" for _ in ids)
         rows = connection.execute(
             f"SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence, "
