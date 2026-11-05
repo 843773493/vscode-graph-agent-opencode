@@ -20,6 +20,9 @@ from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
 )
+from app.domain.itemized.resource_activation.shared_contract import (
+    _CODE_PARENT_INVALID,
+)
 from app.services.infrastructure.rollout_context.activation.common import (
     ASSEMBLY_BINDING_COLUMNS,
     BINDING_COLUMNS,
@@ -558,51 +561,39 @@ class ResourceActivationReadMixin:
                 f"{activation_snapshot_id}",
             )
         try:
-            snapshot = ResourceActivationSnapshotRef.from_dict(
-                {
-                    "activation_snapshot_id": activation_snapshot_id,
-                    "snapshot_kind": record["snapshot_kind"],
-                    "parent_execution_snapshot_id": record["parent_execution_snapshot_id"],
-                    "activation_policy_revision": record[
-                        "activation_policy_revision"
-                    ],
-                    "activation_policy_hash": record["activation_policy_hash"],
-                    "activation_policy": ResourceActivationPolicySnapshot.from_dict(
-                        json.loads(strict_text(record["activation_policy_json"], field="activation_policy_json"))
-                    ).to_dict(),
-                    "registry_generation": record["registry_generation"],
-                    "owner_session_id": session_id,
-                    "owner_thread_id": record["thread_id"],
-                    "execution_id": record["execution_id"],
-                    "turn_id": record["turn_id"],
-                    "model_call_id": record["model_call_id"],
-                    "captured_at": record["captured_at"],
-                    "bindings_hash": record["bindings_hash"],
-                    "activation_provenance_hash": record[
-                        "activation_provenance_hash"
-                    ],
-                    "bindings": [binding.to_dict() for binding in bindings],
-                },
-                parent=parent,
+            if record["snapshot_kind"] == "model_call" and parent is None:
+                raise ResourceActivationContractError(
+                    _CODE_PARENT_INVALID, "恢复 model_call snapshot 必须提供 typed parent execution snapshot",
+                )
+            if record["snapshot_kind"] != "model_call" and parent is not None:
+                raise ResourceActivationContractError(
+                    _CODE_PARENT_INVALID, "execution snapshot 的 parent_execution_snapshot_id 必须是 null",
+                )
+            # SQL 行及 protected lineage 已恢复成 typed 值；直接构造，避免再经 dict 重建整批 bindings。
+            snapshot = ResourceActivationSnapshotRef(
+                activation_snapshot_id=activation_snapshot_id,
+                snapshot_kind=record["snapshot_kind"],
+                activation_policy_revision=record["activation_policy_revision"],
+                activation_policy_hash=record["activation_policy_hash"],
+                activation_policy=ResourceActivationPolicySnapshot.from_dict(
+                    json.loads(strict_text(record["activation_policy_json"], field="activation_policy_json"))
+                ),
+                registry_generation=record["registry_generation"],
+                owner_session_id=session_id, owner_thread_id=record["thread_id"],
+                execution_id=record["execution_id"], turn_id=record["turn_id"],
+                captured_at=record["captured_at"], model_call_id=record["model_call_id"],
+                bindings=bindings, parent=parent,
             )
+            for name in ("bindings_hash", "activation_provenance_hash"):
+                if record[name] != getattr(snapshot, name):
+                    raise ResourceActivationContractError(
+                        HASH_MISMATCH_CODE, f"恢复的 {name} 与重算结果不一致",
+                    )
         except (ResourceActivationContractError, TypeError, ValueError) as error:
             raise ResourceActivationStoreError(
                 HASH_MISMATCH_CODE,
                 f"恢复 activation snapshot 失败: {error}",
             ) from error
-        if record["bindings_hash"] != snapshot.bindings_hash:
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
-                f"bindings_hash 与重算结果不一致: {activation_snapshot_id}",
-            )
-        if record["activation_provenance_hash"] != (
-            snapshot.activation_provenance_hash
-        ):
-            raise ResourceActivationStoreError(
-                HASH_MISMATCH_CODE,
-                "activation_provenance_hash 与重算结果不一致: "
-                f"{activation_snapshot_id}",
-            )
         return snapshot
 
     @staticmethod
