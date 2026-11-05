@@ -108,12 +108,22 @@ def workspace_backend_id_for_root(workspace_root: str | Path) -> str:
 
 
 def _process_is_listening(process: subprocess.Popen[str], port: int, addresses: set[str]) -> bool:
-    """先观察本进程的监听事实，避免探针提前连接而占据服务端口。"""
+    """先观察所属进程的监听事实，避免探针提前连接而占据服务端口。"""
+    owner = psutil.Process(process.pid)
+    connections = owner.net_connections(kind="tcp")
+    if sys.platform == "win32":
+        # Windows venv launcher 持有子解释器；只检查本测试已持有的进程树。
+        for child in owner.children(recursive=True):
+            try:
+                connections.extend(child.net_connections(kind="tcp"))
+            except psutil.NoSuchProcess:
+                # 子进程可以在枚举后退出；根进程退出仍由原等待入口明确报错。
+                continue
     return any(
         connection.status == psutil.CONN_LISTEN
         and connection.laddr.ip in addresses
         and connection.laddr.port == port
-        for connection in psutil.Process(process.pid).net_connections(kind="tcp")
+        for connection in connections
     )
 
 

@@ -54,6 +54,7 @@ def backend_connections(monkeypatch: pytest.MonkeyPatch) -> Mock:
     backend.net_connections.return_value = [SimpleNamespace(
         status=psutil.CONN_LISTEN, laddr=SimpleNamespace(ip="127.0.0.1", port=4312),
     )]
+    backend.children.return_value = []
     monkeypatch.setattr(workspace_processes, "psutil", SimpleNamespace(
         Process=Mock(return_value=backend), CONN_LISTEN=psutil.CONN_LISTEN,
         NoSuchProcess=psutil.NoSuchProcess,
@@ -323,6 +324,88 @@ def test_workspace_other_listener_does_not_start_health_probe(
         workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
     connect.assert_not_called()
     assert clock.now == pytest.approx(0.12)
+
+
+@pytest.mark.parametrize("entry", ["gateway", "http", "workspace"])
+def test_windows_launcher_accepts_its_child_listener(
+    entry: str, process: Mock, backend_connections: Mock, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child = Mock()
+    child.net_connections.return_value = backend_connections.net_connections.return_value
+    backend_connections.net_connections.return_value = []
+    backend_connections.children.return_value = [child]
+    monkeypatch.setattr(workspace_processes, "sys", SimpleNamespace(platform="win32"))
+    connect = Mock(side_effect=lambda *_args, **_kwargs: workspace_health_response({"workspace_id": "workspace-expected"}))
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+    if entry == "gateway":
+        gateway_processes.wait_for_gateway_ready(4312, process)
+    elif entry == "http":
+        workspace_processes.wait_for_http_ok("http://127.0.0.1:4312/health", process)
+    else:
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
+    backend_connections.children.assert_called_once_with(recursive=True)
+    child.net_connections.assert_called_once_with(kind="tcp")
+    connect.assert_called_once()
+
+
+@pytest.mark.parametrize("state,address", [
+    (psutil.CONN_ESTABLISHED, ("127.0.0.1", 4312)),
+    (psutil.CONN_LISTEN, ("127.0.0.2", 4312)),
+    (psutil.CONN_LISTEN, ("127.0.0.1", 4313)),
+])
+def test_windows_child_still_requires_target_listen_address(
+    state: str, address: tuple[str, int], clock: ManualClock, process: Mock,
+    backend_connections: Mock, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child = Mock()
+    child.net_connections.return_value = [SimpleNamespace(
+        status=state, laddr=SimpleNamespace(ip=address[0], port=address[1]),
+    )]
+    backend_connections.net_connections.return_value = []
+    backend_connections.children.return_value = [child]
+    monkeypatch.setattr(workspace_processes, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(workspace_processes, "TEST_READY_TIMEOUT_SECONDS", 0.12)
+    connect = Mock()
+    monkeypatch.setattr(workspace_processes, "urlopen", connect)
+    with pytest.raises(TimeoutError):
+        workspace_processes.wait_for_backend_ready(4312, process, "workspace-expected")
+    connect.assert_not_called()
+    assert clock.now == pytest.approx(0.12)
+
+
+def test_windows_child_exit_does_not_hide_another_owned_listener(
+    process: Mock, backend_connections: Mock, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vanished, listening = Mock(), Mock()
+    vanished.net_connections.side_effect = psutil.NoSuchProcess(999)
+    listening.net_connections.return_value = backend_connections.net_connections.return_value
+    backend_connections.net_connections.return_value = []
+    backend_connections.children.return_value = [vanished, listening]
+    monkeypatch.setattr(workspace_processes, "sys", SimpleNamespace(platform="win32"))
+    assert workspace_processes._process_is_listening(process, 4312, {"127.0.0.1"})
+
+
+def test_windows_child_inspection_denial_remains_an_error(
+    process: Mock, backend_connections: Mock, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child = Mock()
+    error = psutil.AccessDenied(999)
+    child.net_connections.side_effect = error
+    backend_connections.net_connections.return_value = []
+    backend_connections.children.return_value = [child]
+    monkeypatch.setattr(workspace_processes, "sys", SimpleNamespace(platform="win32"))
+    with pytest.raises(psutil.AccessDenied) as failure:
+        workspace_processes._process_is_listening(process, 4312, {"127.0.0.1"})
+    assert failure.value is error
+
+
+def test_posix_listener_does_not_enumerate_descendants(
+    process: Mock, backend_connections: Mock, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend_connections.net_connections.return_value = []
+    monkeypatch.setattr(workspace_processes, "sys", SimpleNamespace(platform="linux"))
+    assert not workspace_processes._process_is_listening(process, 4312, {"127.0.0.1"})
+    backend_connections.children.assert_not_called()
 
 
 def test_workspace_listener_inspection_consumes_readiness_budget(
