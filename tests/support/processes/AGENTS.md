@@ -28,6 +28,7 @@ processes/
 - `workspace.py` 与 `gateway.py` 分别拥有对应运行面的启动参数和就绪合同。
 - 创建进程前检查端口并准备日志；创建失败关闭日志，成功后由句柄接管。
 - 公共 HTTP 和 Backend 就绪探针共用持有 PID 的监听观察；Gateway、Terminal、Browser 等调用方不在服务监听前连接，避免 TCP 自连接阻止正式绑定。监听和 HTTP 等待共用原总期限，Backend 仍核目标回环地址与工作区 UUID，HTTP 拒绝继续立即暴露。
+  - Windows venv launcher 的监听可能属于其子解释器，监听观察覆盖本测试根进程的现存子树；POSIX 保持单 PID 观察。枚举后消失的子进程可跳过，访问拒绝和根进程退出继续报错；不得用系统任意同端口监听代替归属证明。
 - 更新本目录文件时同步维护 `tests/support/AGENTS.md` 的树形索引与调用方导入路径。
 
 - Backend 显式传入 `boxteam_home` 时，配置安装与子进程环境使用同一绝对目录；联邦装具与 Gateway 共用该 owner 的 HOME，不能只改环境或只迁移 Gateway 控制面。
