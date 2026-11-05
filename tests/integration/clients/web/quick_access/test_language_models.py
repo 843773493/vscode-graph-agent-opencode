@@ -74,6 +74,11 @@ async def test_json_symbols_follow_model_version_and_workspace_identity(
     assert result["initial"] == [["alphaOwner"], ["betaOwner"]]
     assert result["edited"] == [["alphaAfter"], ["betaOwner"]]
     assert result["reopened"] == ["alphaOwner"]
+    assert result["restoredLanguage"] == [["alphaOwner"], ["betaOwner"]]
+    assert result["plainTextToken"] == "No grammar or semantic tokens available."
+    assert len(result["initialTokens"]) == 2
+    for token in [*result["initialTokens"], result["editedToken"], result["reopenedToken"], result["restoredToken"]]:
+        assert "support.type.property-name.json" in token
     assert result["workerScripts"], "必须观察原扩展宿主／语言服务脚本加载"
     for root, text in zip((workspace, other), originals, strict=True):
         assert (root / "same.json").read_text(encoding="utf-8") == text

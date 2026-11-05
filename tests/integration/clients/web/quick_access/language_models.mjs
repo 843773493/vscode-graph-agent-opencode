@@ -78,6 +78,39 @@ try {
   }, resource);
   const groups = page.locator('.editor-group-container');
   const editor = index => groups.nth(index).locator('.editor-instance .monaco-editor').filter({ visible: true });
+  // 同一前景色可能附带括号匹配等装饰；只比较原 token metadata 的数字颜色类。
+  const renderedTokenClasses = index => editor(index).locator('.view-line').first().locator('span[class^="mtk"]')
+    .evaluateAll(spans => [...new Set(spans.flatMap(span => [...span.classList].filter(name => /^mtk\d+$/.test(name))))]);
+  const inspectJsonToken = async (index, name) => {
+    await editor(index).getByRole('textbox').focus();
+    await page.keyboard.press('ControlOrMeta+Home');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await command('editor.action.inspectTMScopes');
+    const widget = editor(index).locator('.token-inspect-widget');
+    await expect(widget).toBeVisible();
+    await expect(widget.locator('.tiw-token')).toContainText(name);
+    await expect(widget.locator('tr').filter({ has: page.getByText('language', { exact: true }) })
+      .locator('.tiw-metadata-value')).toHaveText('json');
+    await expect(widget.locator('.tiw-metadata-scopes')).toContainText('support.type.property-name.json');
+    const text = await widget.textContent();
+    expect(text).toContain(name);
+    await command('editor.action.inspectTMScopes');
+    await expect(widget).toHaveCount(0);
+    return text;
+  };
+  const changeLanguage = async (id, label) => {
+    await editor(1).getByRole('textbox').focus();
+    // TODO：固定上游的字符串参数只赋 label、未赋 id；本项沿真实选择器验证语言切换。
+    await Promise.all([command('workbench.action.editor.changeLanguageMode'), (async () => {
+      const quick = page.locator('.quick-input-widget');
+      await expect(quick).toBeVisible();
+      await quick.locator('input').fill(label);
+      await quick.locator(`[data-quick-input-id="${id}"]`).click();
+    })()]);
+    // CodeEditorWidget 把模型语言登记在宿主容器，内部 .monaco-editor 是渲染节点。
+    await expect.poll(() => editor(1).evaluate(node => node.closest('[data-mode-id]')?.getAttribute('data-mode-id'))).toBe(id);
+  };
   await writeWorkspaceSettings({ page, command }, { 'files.autoSave': 'off' });
   // 先通过原命令关闭初始 README，之后才能把关闭 A 视为释放该组最后一个编辑器。
   await command('workbench.action.closeAllEditors');
@@ -92,6 +125,7 @@ try {
   await expect.poll(() => symbols(resources[0]), { timeout: 30_000 }).toEqual(['alphaOwner']);
   await expect.poll(() => symbols(resources[1]), { timeout: 30_000 }).toEqual(['betaOwner']);
   result.initial = await Promise.all(resources.map(symbols));
+  result.initialTokens = [await inspectJsonToken(0, 'alphaOwner'), await inspectJsonToken(1, 'betaOwner')];
   for (const target of targets) {
     expect(result.reads.some(read => read.uri === target.rootUri + '/same.json'
       && read.workspaceId === target.workspaceId && read.gatewayId === target.gatewayId)).toBe(true);
@@ -105,6 +139,7 @@ try {
   await expect.poll(() => symbols(resources[0])).toEqual(['alphaAfter']);
   await expect.poll(() => symbols(resources[1])).toEqual(['betaOwner']);
   result.edited = await Promise.all(resources.map(symbols));
+  result.editedToken = await inspectJsonToken(0, 'alphaAfter');
   await expect(editor(1).locator('.view-lines')).toContainText('betaOwner');
   result.phase = 'release-and-reopen';
   await command('workbench.action.revertAndCloseActiveEditor');
@@ -115,13 +150,39 @@ try {
   await expect(editor(1).locator('.view-lines')).toContainText('alphaOwner');
   await expect.poll(() => symbols(resources[0])).toEqual(['alphaOwner']);
   result.reopened = await symbols(resources[0]);
+  result.reopenedToken = await inspectJsonToken(1, 'alphaOwner');
+  await expect.poll(async () => (await renderedTokenClasses(1)).length).toBeGreaterThan(1);
+  result.renderedTokens = { json: await renderedTokenClasses(1) };
+  result.phase = 'language-mode-invalidation';
+  await changeLanguage('plaintext', 'Plain Text');
+  await expect.poll(() => symbols(resources[0])).toEqual([]);
+  await expect.poll(() => symbols(resources[1])).toEqual(['betaOwner']);
+  await expect.poll(async () => (await renderedTokenClasses(1)).length).toBe(1);
+  result.renderedTokens.plainText = await renderedTokenClasses(1);
+  await command('editor.action.inspectTMScopes');
+  const plainTokens = editor(1).locator('.token-inspect-widget');
+  await expect(plainTokens).toHaveText('No grammar or semantic tokens available.');
+  result.plainTextToken = await plainTokens.innerText();
+  await command('editor.action.inspectTMScopes');
+  await expect(plainTokens).toHaveCount(0);
+  await changeLanguage('json', 'JSON');
+  await expect.poll(() => symbols(resources[0])).toEqual(['alphaOwner']);
+  await expect.poll(() => symbols(resources[1])).toEqual(['betaOwner']);
+  result.restoredLanguage = await Promise.all(resources.map(symbols));
+  result.restoredToken = await inspectJsonToken(1, 'alphaOwner');
+  await expect.poll(async () => (await renderedTokenClasses(1)).length).toBeGreaterThan(1);
+  result.renderedTokens.restoredJson = await renderedTokenClasses(1);
+  expect(result.renderedTokens.restoredJson).toEqual(result.renderedTokens.json);
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';
 } catch (error) {
   failure = error;
   result.error = String(error);
   if (page) {
-    try { await page.screenshot({ path: join(dirname(output), 'language-models-failure.png'), fullPage: true }); }
+    try {
+      result.renderedDom = await page.locator('.editor-group-container .view-line').evaluateAll(lines => lines.map(line => line.innerHTML));
+      await page.screenshot({ path: join(dirname(output), 'language-models-failure.png'), fullPage: true });
+    }
     catch (diagnostic) { failure = new AggregateError([failure, diagnostic], '语言模型验收与截图失败'); }
   }
 } finally {
