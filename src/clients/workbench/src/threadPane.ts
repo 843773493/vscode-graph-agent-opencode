@@ -11,7 +11,7 @@ import { Dimension } from '../upstream/src/vs/base/browser/dom.js';
 import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
 import { IEditorOptions } from '../upstream/src/vs/platform/editor/common/editor.js';
-import { IEditorOpenContext } from '../upstream/src/vs/workbench/common/editor.js';
+import { createEditorOpenError, IEditorOpenContext } from '../upstream/src/vs/workbench/common/editor.js';
 import { ThreadInput, UnavailableThreadInput } from './threadInput.js';
 import { ChatSurface } from './react/chatView.js';
 import { showFileOpenMenu } from './fileOpenMenu.js';
@@ -67,9 +67,10 @@ export class ThreadPane extends EditorPane {
     this.conversation?.dispose(); this.conversation = undefined; this.current = undefined;
     await super.setInput(input, options, context, token);
     if (token.isCancellationRequested || this.input !== input) return;
-    if (input instanceof UnavailableThreadInput) throw new Error(input.reason);
+    if (input instanceof UnavailableThreadInput) throw createEditorOpenError(input.reason, [], { forceMessage: true });
     if (!(input instanceof ThreadInput)) throw new Error('ThreadPane 只接受 ThreadInput');
-    await input.resolveOwner();
+    try { await input.resolveOwner(); }
+    catch (error) { throw createEditorOpenError(error instanceof Error ? error : String(error), [], { forceMessage: true }); }
     if (token.isCancellationRequested || this.input !== input) return;
     this.current = input;
     if (options?.viewState) input.restoreViewState({ ...input.getViewState(), ...options.viewState });

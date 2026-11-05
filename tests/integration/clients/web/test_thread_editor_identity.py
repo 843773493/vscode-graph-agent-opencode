@@ -77,6 +77,8 @@ async def test_thread_editor_stable_owner_and_restore(
         receipt = json.loads(result_path.read_text())
         assert receipt["stableOpenDeduplicated"] is True
         assert receipt["splitAndReloadPreserved"] is True
+        assert receipt["unavailableRecordsPreserved"] is True
+        assert receipt["removalPreservedSessionAndDraft"] is True
         assert receipt["unknownGatewayRejected"] is True
         assert receipt["ambiguousRouteRejected"] is True
         assert receipt["pageErrors"] == []

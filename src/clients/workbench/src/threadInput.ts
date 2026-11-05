@@ -26,7 +26,7 @@ interface StoredThread {
 /** 缺失归属的旧展示记录仍可关闭／移除，不向当前 Gateway 猜测请求。 */
 export class UnavailableThreadInput extends EditorInput {
   readonly resource = undefined;
-  constructor(readonly stored: object, readonly reason: string, private readonly title: string) { super(); }
+  constructor(readonly stored: unknown, readonly reason: string, private readonly title: string) { super(); }
   get typeId(): string { return ThreadInput.ID; }
   override get editorId(): string { return ThreadInput.ID; }
   override getName(): string { return this.title; }
@@ -109,15 +109,29 @@ export class ThreadSerializer implements IEditorSerializer {
     return JSON.stringify(stored);
   }
   deserialize(_instantiation: IInstantiationService, serialized: string): ThreadInput | UnavailableThreadInput {
-    const data = JSON.parse(serialized) as StoredThread & { unavailable?: object; reason?: string; owner?: ThreadOwner };
+    let parsed: unknown;
+    try { parsed = JSON.parse(serialized); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      return new UnavailableThreadInput(serialized, `Thread 编辑器恢复 JSON 损坏：${error.message}`, '无法恢复的 Thread');
+    }
+    // 原生组恢复会调用此 serializer；损坏的一条记录不能使整组恢复失败。
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return new UnavailableThreadInput(parsed, 'Thread 编辑器恢复记录必须是对象', '无法恢复的 Thread');
+    }
+    const data = parsed as Partial<StoredThread> & { unavailable?: unknown; reason?: string; owner?: ThreadOwner };
+    const title = typeof data.title === 'string' && data.title ? data.title
+      : typeof data.owner?.title === 'string' && data.owner.title ? data.owner.title : '无法恢复的 Thread';
     // 缺少来源的旧记录保留原件；显式导入恢复材料也不能猜当前 Gateway。
     if (data.version === undefined && data.owner) return new UnavailableThreadInput(data,
-      '旧 Thread 记录尚未确认 Gateway 身份；可运行“导入工作区身份恢复材料”重试，或从会话导航重新打开。', data.owner.title);
-    if (data.version !== 2) throw new Error(`不支持的 Thread 编辑器恢复版本：${String(data.version)}`);
-    if (data.unavailable) return new UnavailableThreadInput(data.unavailable, data.reason ?? 'Thread 记录无法恢复', data.title);
+      '旧 Thread 记录尚未确认 Gateway 身份；可运行“导入工作区身份恢复材料”重试，或从会话导航重新打开。', title);
+    if (data.version !== 2) return new UnavailableThreadInput(data, `不支持的 Thread 编辑器恢复版本：${String(data.version)}`, title);
+    if (Object.hasOwn(data, 'unavailable')) return new UnavailableThreadInput(data.unavailable, data.reason ?? 'Thread 记录无法恢复', title);
     if (!data.target || Object.values(data.target).some(value => typeof value !== 'string' || !value.trim())
-      || !data.target.gatewayId || !data.target.workspaceId || !data.target.sessionId || !data.target.threadId) throw new Error('Thread 编辑器恢复数据缺少精确 owner');
-    const input = new ThreadInput({ ...data.target, title: data.title, workspaceKey: '' });
+      || !data.target.gatewayId || !data.target.workspaceId || !data.target.sessionId || !data.target.threadId) {
+      return new UnavailableThreadInput(data, 'Thread 编辑器恢复数据缺少精确 owner', title);
+    }
+    const input = new ThreadInput({ ...data.target, title, workspaceKey: '' });
     input.restoreViewState(data.viewState);
     return input;
   }

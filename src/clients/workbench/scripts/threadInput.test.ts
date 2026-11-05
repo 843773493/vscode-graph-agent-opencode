@@ -56,8 +56,30 @@ describe('Thread 编辑器稳定身份', () => {
     expect(restored.stored).toEqual(legacy);
     expect(restored.reason).toContain('尚未确认 Gateway 身份');
     expect(serializer.deserialize(instantiation, serializer.serialize(restored)!)).toBeInstanceOf(UnavailableThreadInput);
-    expect(() => serializer.deserialize(instantiation, '{"version":3}')).toThrow('不支持');
-    expect(() => serializer.deserialize(instantiation, '{"version":2,"target":{}}')).toThrow('缺少精确 owner');
+  });
+
+  test.each([
+    ['{"version":3,"title":"未来记录"}', '不支持的 Thread 编辑器恢复版本'],
+    ['{"version":2,"title":"原记录","target":{}}', '缺少精确 owner'],
+    ['{"version":2,"target":null}', '缺少精确 owner'],
+    ['null', '必须是对象'],
+    ['[]', '必须是对象'],
+    ['false', '必须是对象'],
+    ['"旧正文"', '必须是对象'],
+    ['{"version":2,', 'JSON 损坏'],
+  ])('损坏或未知记录保留原件并能重复恢复：%s', (serialized, reason) => {
+    let restored = serializer.deserialize(instantiation, serialized);
+    const original = serialized === '{"version":2,' ? serialized : JSON.parse(serialized);
+    for (let round = 0; round < 3; round++) {
+      expect(restored).toBeInstanceOf(UnavailableThreadInput);
+      if (!(restored instanceof UnavailableThreadInput)) throw new Error('损坏记录被错误恢复为业务目标');
+      expect(restored.resource).toBeUndefined();
+      expect(restored.stored).toEqual(original);
+      expect(restored.reason).toContain(reason);
+      expect(restored.getName()).toBeTruthy();
+      expect(serializer.canSerialize(restored)).toBe(true);
+      restored = serializer.deserialize(instantiation, serializer.serialize(restored)!);
+    }
   });
 
   test('并发只解析一次，重解与失败后重试保持归属并透传失效错误', async () => {

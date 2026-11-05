@@ -9,7 +9,7 @@ const screenshotPath = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 if (!baseUrl || !resultPath || !screenshotPath) throw new Error('Thread 身份验收缺少运行参数');
 const scope = TestRunContext.fromTestFile('tests/integration/clients/web/test_thread_editor_identity.py');
 const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], initialization: [],
-  boundary: '真实 Gateway、完整工作台与托管后端；仅歧义场景将登记列表复制一条，其余响应保持真实' };
+  boundary: '真实 Gateway、完整工作台与托管后端；在产品保存的展示状态加入三条损坏记录，歧义场景将登记列表复制一条；会话、草稿和其余响应保持真实' };
 let page;
 let failure;
 
@@ -27,6 +27,110 @@ async function command(id, ...args) {
   return page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
 }
 async function open(uri) { await command('_workbench.open', uri, [undefined, { pinned: true }]); }
+
+/** 仅损坏产品已保存的展示记录；会话、草稿和组布局先经真实入口生成。 */
+async function verifyUnavailableRecovery(context, baseUrl, owner, threadSelector) {
+  const future = { version: 3, title: '未知版本恢复记录', target: { ...owner, sessionId: 'future-must-not-be-requested' } };
+  const missing = { version: 2, title: '缺失归属恢复记录', target: { sessionId: 'missing-must-not-be-requested' } };
+  const malformed = '{"version":2,';
+  const faults = [JSON.stringify(future), JSON.stringify(missing), malformed];
+  const helper = await context.newPage();
+  await helper.goto(`${baseUrl}/api/gateway/health`, { waitUntil: 'domcontentloaded' });
+  const storage = async insert => helper.evaluate(async ({ insert, faults }) => {
+    const read = request => new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    const rows = [];
+    for (const { name } of await indexedDB.databases()) {
+      if (!name?.startsWith('vscode-web-state-db-')) continue;
+      const db = await read(indexedDB.open(name));
+      try {
+        const store = db.transaction('ItemTable').objectStore('ItemTable');
+        const [keys, values] = await Promise.all([read(store.getAllKeys()), read(store.getAll())]);
+        keys.forEach((key, index) => {
+          if (key === 'memento/workbench.parts.editor') rows.push({ database: name, key, value: values[index] });
+        });
+      } finally { db.close(); }
+    }
+    if (rows.length !== 1) throw new Error(`恢复测试必须取得唯一原编辑器状态，实际 ${rows.length}`);
+    const row = rows[0], state = JSON.parse(row.value), groups = [];
+    const visit = node => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node.editors) && node.editors.some(editor => editor.id === 'boxteam.editor.thread')) groups.push(node);
+      for (const value of Object.values(node)) if (value && typeof value === 'object') visit(value);
+    };
+    visit(state);
+    if (groups.length !== 2) throw new Error(`原产品分屏状态未保存，实际 ${groups.length}`);
+    if (insert) {
+      const group = groups[0];
+      for (const value of faults) {
+        group.mru.push(group.editors.length);
+        group.editors.push({ id: 'boxteam.editor.thread', value });
+      }
+      const db = await read(indexedDB.open(row.database));
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction('ItemTable', 'readwrite');
+          tx.objectStore('ItemTable').put(JSON.stringify(state), row.key);
+          tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
+        });
+      } finally { db.close(); }
+    }
+    return { database: row.database, key: row.key,
+      records: groups.flatMap(group => group.editors.filter(editor => editor.id === 'boxteam.editor.thread').map(editor => editor.value)) };
+  }, { insert, faults });
+  const attach = current => current.on('pageerror', error => result.pageErrors.push(String(error)));
+  const rejectedReads = [];
+  const watch = current => current.on('request', request => {
+    if (/future-must-not-be-requested|missing-must-not-be-requested/.test(request.url())) rejectedReads.push(request.url());
+  });
+  const baselineTabs = await page.locator('.tabs-container .tab').count();
+  result.recoveryBaselineTabs = baselineTabs;
+  const select = async label => {
+    await command('workbench.action.quickOpen', `edt ${label}`);
+    const quick = page.locator('.quick-input-widget');
+    await quick.getByRole('option', { name: new RegExp(label) }).click();
+    await expect(quick).toBeHidden();
+  };
+  await command('boxteam.flushViewState');
+  await page.close();
+  result.injectedRecoveryState = await storage(true);
+  for (let round = 0; round < 2; round++) {
+    page = await context.newPage(); attach(page); watch(page);
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('.tabs-container .tab')).toHaveCount(baselineTabs + faults.length);
+    await expect(page.locator(threadSelector).getByTestId('composer-input').first()).toHaveValue('刷新后保留的草稿');
+    for (const [label, reason] of [
+      ['未知版本恢复记录', '不支持的 Thread 编辑器恢复版本：3'],
+      ['缺失归属恢复记录', 'Thread 编辑器恢复数据缺少精确 owner'],
+      ['无法恢复的 Thread', 'Thread 编辑器恢复 JSON 损坏'],
+    ]) {
+      await select(label);
+      await expect(page.getByText(reason, { exact: false }).first()).toBeVisible();
+    }
+    await command('boxteam.flushViewState');
+    if (round === 0) {
+      await page.close();
+      const saved = await storage(false);
+      const unavailable = saved.records.map(value => JSON.parse(value)).filter(value => Object.hasOwn(value, 'unavailable'));
+      expect(unavailable.map(value => value.unavailable)).toEqual([future, missing, malformed]);
+      result.preservedRecoveryState = saved;
+    }
+  }
+  // 原生关闭只移除展示记录，不能删除原会话或其它组的草稿。
+  for (const label of ['未知版本恢复记录', '缺失归属恢复记录', '无法恢复的 Thread']) {
+    await select(label);
+    await command('workbench.action.closeActiveEditor');
+  }
+  await expect(page.locator('.tabs-container .tab')).toHaveCount(baselineTabs);
+  await expect(page.locator(threadSelector).getByTestId('composer-input').first()).toHaveValue('刷新后保留的草稿');
+  expect((await api(`/api/v1/sessions/${owner.sessionId}`, { headers: {
+    'X-BoxTeam-Workspace-Id': owner.workspaceId, 'X-BoxTeam-Target-Gateway-Id': owner.gatewayId,
+  } })).data.session_id).toBe(owner.sessionId);
+  expect(rejectedReads).toEqual([]);
+  result.unavailableRecordsPreserved = true; result.removalPreservedSessionAndDraft = true;
+  await helper.close();
+}
 
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
@@ -95,13 +199,16 @@ try {
   await expect(groups.nth(1).locator(threadSelector).getByRole('button', { name: '切换会话资源', exact: true })).toHaveAttribute('aria-expanded', 'false');
   result.splitAndReloadPreserved = true;
 
+  result.phase = 'preserve-unavailable-records-with-valid-group';
+  await verifyUnavailableRecovery(context, baseUrl, owner, threadSelector);
+
   result.phase = 'reject-unknown-gateway';
   const rejectedSession = 'session-must-not-be-requested';
   const reads = [];
   const observe = request => { if (new URL(request.url()).pathname.includes(rejectedSession)) reads.push(request.url()); };
   page.on('request', observe);
   await open(`boxteam-thread://gateway-unknown/${owner.workspaceId}/${rejectedSession}/${owner.threadId}`);
-  await expect(page.getByText('目标 Gateway／工作区缺少唯一的已登记路由，无法打开资源', { exact: false }).first()).toBeVisible();
+  await expect(page.getByText('目标 Gateway／UUID 缺少唯一已登记工作区', { exact: true }).first()).toBeVisible();
   expect(reads).toEqual([]);
   result.unknownGatewayRejected = true;
   await command('workbench.action.closeActiveEditor');
@@ -119,7 +226,7 @@ try {
   await page.route(registryUrl, duplicate);
   try {
     await open(`boxteam-thread://${owner.gatewayId}/${owner.workspaceId}/${rejectedSession}/${owner.threadId}`);
-    await expect(page.getByText('目标 Gateway／工作区缺少唯一的已登记路由，无法打开资源', { exact: false }).first()).toBeVisible();
+    await expect(page.getByText('目标 Gateway／UUID 缺少唯一已登记工作区', { exact: true }).first()).toBeVisible();
     expect(reads).toEqual([]);
     result.ambiguousRouteRejected = true;
   } finally {
