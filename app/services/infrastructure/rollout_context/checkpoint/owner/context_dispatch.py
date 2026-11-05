@@ -378,7 +378,7 @@ class ContextDispatchOwnerMixin:
                 existing_groups = self._storage.storage.read_request_groups(
                     session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
                     message_locators=tuple(
-                        (message_id, canonical_message_anchor(codec.to_dict(message)))
+                        (message_id, canonical_message_anchor(message))
                         for _index, message, message_id, _role in eligible
                     ), checkpoint_ns=checkpoint_ns,
                     writer_connection=connection,

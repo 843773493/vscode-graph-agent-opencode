@@ -8,7 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from langchain_core.messages import BaseMessage, message_to_dict
+from langchain_core.messages import BaseMessage
 
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     canonical_message_anchor,
@@ -66,7 +66,7 @@ class PendingMessageReferences:
     def locate(self, message: BaseMessage, *, item_ids: Mapping[str, str] | None = None) -> tuple[dict[str, object], Mapping[str, object]] | None:
         if item_ids is not None and message.id in item_ids:
             return self._canonical(item_ids[message.id])
-        anchor = canonical_message_anchor(message_to_dict(message))
+        anchor = canonical_message_anchor(message)
         if anchor is None and self.connection.execute(
             "SELECT COUNT(*) FROM messages WHERE message_id=?", (message.id,),
         ).fetchone()[0] > 1:

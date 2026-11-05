@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from langchain_core.messages import AIMessage, BaseMessage, message_to_dict
 
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     canonical_message_anchor,
@@ -62,6 +63,33 @@ def test_canonical_anchor_uses_explicit_group_order():
     assert canonical_message_anchor({"data": {"id": "logical", "response_metadata": {
         "canonical_item_manifests": [{"item_id": "content"}, {"item_id": "exact-anchor"}],
     }}}) == "exact-anchor"
+
+
+def test_carrier_anchor_reads_metadata_without_serializing_or_caching_body(monkeypatch):
+    carrier = AIMessage(content="正文" * 4096, id="logical", response_metadata={
+        "canonical_item_manifests": [{"item_id": "content"}, {"item_id": "old-anchor"}],
+    })
+    assert canonical_message_anchor(message_to_dict(carrier)) == "old-anchor"
+
+    def refuse_dump(*args, **kwargs):
+        raise AssertionError("读取 anchor 不得序列化正文")
+
+    monkeypatch.setattr(BaseMessage, "model_dump", refuse_dump)
+    assert canonical_message_anchor(carrier) == "old-anchor"
+    carrier.response_metadata["canonical_item_manifests"][-1]["item_id"] = "new-anchor"
+    assert canonical_message_anchor(carrier) == "new-anchor"
+    carrier.response_metadata.clear()
+    assert canonical_message_anchor(carrier) is None
+
+
+@pytest.mark.parametrize("manifests", [[], {}, [None], [{"item_id": ""}], [{"item_id": "same"}, {"item_id": "same"}]])
+def test_carrier_anchor_keeps_serialized_manifest_validation(manifests):
+    carrier = AIMessage(content="不应影响身份校验", id="logical", response_metadata={
+        "canonical_item_manifests": manifests,
+    })
+    for value in (carrier, message_to_dict(carrier)):
+        with pytest.raises(ValueError, match="canonical group manifest"):
+            canonical_message_anchor(value)
 
 
 @pytest.mark.parametrize("manifests", [[], {}, [None], [{"item_id": ""}], [{"item_id": "same"}, {"item_id": "same"}]])

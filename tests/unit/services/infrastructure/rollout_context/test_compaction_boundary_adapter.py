@@ -335,6 +335,39 @@ def test_candidate_batch_reads_pairing_once_without_copying_each_prefix(
     assert copied_prefix_items == 0
 
 
+@pytest.mark.parametrize("message_count", [8, 64])
+def test_preflight_does_not_serialize_bodies_to_resolve_anchors(
+    tmp_path: Path, session_bundle_factory, monkeypatch, message_count: int,
+) -> None:
+    saver = _make_saver(tmp_path, session_bundle_factory)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    messages = [HumanMessage(content="读取配置", id="user-1"), *[
+        AIMessage(content="正文" * 4096, id=f"anchor-history-{index}")
+        for index in range(1, message_count)
+    ]]
+    _put_checkpoint(saver, build_checkpoint_config(thread), "anchor-preflight", messages, 1)
+    serialized_bodies = 0
+    serialized_characters = 0
+    original = LangChainMessageCodec.to_dict
+
+    def observe(self, message):
+        nonlocal serialized_bodies, serialized_characters
+        serialized_bodies += 1
+        result = original(self, message)
+        serialized_characters += len(result["data"]["content"])
+        return result
+
+    monkeypatch.setattr(LangChainMessageCodec, "to_dict", observe)
+    assert saver.safe_compaction_prefix_cutoffs(
+        SESSION_ID, thread, checkpoint_ns="", state_messages=messages,
+        cutoff_indexes=[0, message_count],
+    ) == frozenset({0, message_count})
+    print({"anchor_history": message_count, "serialized_bodies": serialized_bodies,
+           "serialized_characters": serialized_characters})
+    # 冷恢复构造 frozen carrier 可逐条投影；anchor 定位不能额外序列化长正文。
+    assert serialized_bodies <= message_count
+
+
 @pytest.mark.parametrize("checkpoint_ns", ["", "model:provider-call"])
 @pytest.mark.parametrize("summary_visible", [True, False])
 def test_repeated_compaction_validates_event_summary_in_active_history(

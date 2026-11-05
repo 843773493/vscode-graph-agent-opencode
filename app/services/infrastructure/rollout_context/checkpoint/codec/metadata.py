@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 from copy import deepcopy
 
+from langchain_core.messages import BaseMessage
+
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import (
     GENERATED_RESULT_ANNOTATION_FIELDS,
@@ -20,10 +22,15 @@ TOOL_BINDING_KEYS = {
 _MISSING_ANNOTATION = object()
 
 
-def canonical_message_anchor(message: Mapping[str, object]) -> str | None:
+def canonical_message_anchor(message: BaseMessage | Mapping[str, object]) -> str | None:
     """读取 carrier 的显式版本坐标，不从 logical message ID 猜 canonical ID。"""
-    data = message.get("data")
-    response = data.get("response_metadata") if isinstance(data, Mapping) else None
+    # 版本定位只消费 manifest；完整序列化会重复遍历长正文、工具输出和附件。
+    # 已序列化的提交输入与内存 carrier 共用下面的身份校验，不缓存可变 metadata。
+    if isinstance(message, BaseMessage):
+        response = message.response_metadata
+    else:
+        data = message.get("data")
+        response = data.get("response_metadata") if isinstance(data, Mapping) else None
     manifests = response.get(CANONICAL_GROUP_FIELD) if isinstance(response, Mapping) else None
     if manifests is None:
         return None

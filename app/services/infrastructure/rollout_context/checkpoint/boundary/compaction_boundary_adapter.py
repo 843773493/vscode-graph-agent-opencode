@@ -141,7 +141,7 @@ class RolloutCompactionPreflightOwnerMixin:
             frozen_messages = values["messages"]
             frozen_locators = [find_message_locator(
                 connection, codec.message_id(message, index),
-                item_id=canonical_message_anchor(codec.to_dict(message)),
+                item_id=canonical_message_anchor(message),
             ) for index, message in enumerate(frozen_messages)]
             if any(locator is None for locator in frozen_locators):
                 raise RuntimeError("compaction preflight 冻结消息缺少 canonical locator")
@@ -185,7 +185,7 @@ class RolloutCompactionPreflightOwnerMixin:
                 summary_message = event.get("summary_message")
                 summary_locator = find_message_locator(
                     connection, codec.message_id(summary_message, 0),
-                    item_id=canonical_message_anchor(codec.to_dict(summary_message)),
+                    item_id=canonical_message_anchor(summary_message),
                 )
                 if summary_locator is None or summary_locator[0] not in active_sequences:
                     raise RuntimeError("compaction preflight 已冻结摘要脱离 active history")
@@ -195,7 +195,7 @@ class RolloutCompactionPreflightOwnerMixin:
             for index, message in enumerate(state_messages):
                 message_id = codec.message_id(message, index)
                 row = find_message_locator(
-                    connection, message_id, item_id=canonical_message_anchor(codec.to_dict(message)),
+                    connection, message_id, item_id=canonical_message_anchor(message),
                     sequences=view_sequences,
                 )
                 if row is None:
