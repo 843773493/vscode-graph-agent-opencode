@@ -111,6 +111,13 @@ def sealed_assembly_dispatch_scope(
 def read_sealed_assembly_dispatch(
     *, invocation_purpose: ProviderInvocationPurpose,
 ) -> SealedAssemblyDispatch | None:
+    """返回独立副本，调用方修改嵌套正文不会污染 scope。"""
+    return copy.deepcopy(_require_dispatch(invocation_purpose))
+
+
+def _require_dispatch(
+    invocation_purpose: ProviderInvocationPurpose,
+) -> SealedAssemblyDispatch | None:
     """用途由真实构建方给出；缺 binding/admission 不产生直连豁免。"""
     value = _SEALED_ASSEMBLY_DISPATCH.get()
     if invocation_purpose == "tool_test":
@@ -121,7 +128,7 @@ def read_sealed_assembly_dispatch(
         raise ValueError("source-mismatch: Provider invocation_purpose 非法")
     if value is None:
         raise ValueError("source-mismatch: Agent Provider 发送缺少 sealed assembly binding")
-    # scope 入口已完整校验并私有复制，所有读取也只返回副本；内部封存值不会被调用方改写。
+    # scope 入口已完整校验并私有复制，对外读取只返回副本；内部校验不暴露封存值。
     # 读取时只联校当前执行归属，避免每个 callback、日志和发送步骤重复计算完整历史 hash。
     admission = require_current_execution_admission(langgraph_thread_id=value.reference.thread_id)
     if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != (
@@ -129,7 +136,7 @@ def read_sealed_assembly_dispatch(
         value.reference.execution_id, value.reference.turn_id,
     ):
         raise ValueError("sealed-assembly binding violation: reference 与当前 execution 不一致")
-    return copy.deepcopy(value)
+    return value
 
 
 def validate_sealed_assembly_dispatch(
@@ -139,7 +146,8 @@ def validate_sealed_assembly_dispatch(
     wire_request: Mapping[str, object],
 ) -> None:
     """在真实网络入口前校 profile、完整 finalized body 与同一 request hash。"""
-    binding = read_sealed_assembly_dispatch(invocation_purpose=invocation_purpose)
+    # 内部校验只读 scope 私有封存值；不为丢弃的副本深拷贝整份历史和工具集。
+    binding = _require_dispatch(invocation_purpose)
     if binding is None:
         return
     snapshot = binding.snapshot
