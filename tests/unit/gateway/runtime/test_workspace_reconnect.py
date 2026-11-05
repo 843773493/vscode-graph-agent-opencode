@@ -640,6 +640,49 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(workspace_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exited", [False, True])
+async def test_failed_stop_only_rechecks_health_while_original_backend_is_running(
+    workspace_runtime_controller_case, monkeypatch: pytest.MonkeyPatch, exited: bool,
+) -> None:
+    case = workspace_runtime_controller_case
+    owner = case.graph.owner
+    process = owner.process
+    assert isinstance(process, ProcessProbe)
+    original_close = process.close
+    original_error = TimeoutError("原生优雅关闭超时，进程可能已强制回收")
+    verified: list[object] = []
+
+    def fail_close(**kwargs: object) -> None:
+        if exited:
+            original_close()
+        raise original_error
+
+    async def verify(contract, **kwargs):
+        verified.append(contract)
+        assert process.is_alive(), "已退出后端不得进入120秒健康恢复等待"
+        return process.pid
+
+    with monkeypatch.context() as patch:
+        patch.setattr(process, "close", fail_close)
+        patch.setattr("app.gateway.runtime.group_actions.verify_managed_backend_group", verify)
+        with pytest.raises(TimeoutError) as raised:
+            await case.controller.stop_managed_backend(
+                UUID_A, request_id="stop-after-native-timeout", group_request=case.graph.group_request,
+            )
+
+    assert raised.value is original_error
+    assert verified == ([] if exited else [owner.contract])
+    assert owner.process is process
+    assert (owner.error is not None) is exited
+    assert all(case.registry.has_runtime(member_id) for member_id in owner.contract.workspace_ids)
+    assert all(handle.is_alive() for runtime in case.graph.runtimes.values() for handle in runtime.processes.values())
+    if exited:
+        assert not any(path.endswith("/drain/cancel") for _, path in case.runtime_actions)
+    else:
+        assert all(case.lifecycle_states[member_id] == "ready" for member_id in owner.contract.workspace_ids)
+
+
+@pytest.mark.asyncio
 async def test_runtime_controller_blocks_stop_for_gateway_proxy_stream(workspace_runtime_controller_case) -> None:
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph

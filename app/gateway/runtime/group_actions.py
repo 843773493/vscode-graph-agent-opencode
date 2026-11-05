@@ -307,7 +307,7 @@ class ManagedBackendGroupActions:
                 except BaseException as error:
                     if owner not in self._registry.backend_owners() or candidate_contract is not None and owner.contract is candidate_contract:
                         raise
-                    recovered = owner.process is not None and owner.error is None
+                    recovered = owner.process is not None and owner.process.is_alive() and owner.error is None
                     if recovered:
                         try:
                             await verify_managed_backend_group(owner.contract, mounts=self._registry.resolve_backend_mounts(owner.contract))

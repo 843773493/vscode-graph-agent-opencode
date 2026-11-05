@@ -141,7 +141,8 @@ def _terminate_windows_process_tree(
             ) from error
 
 
-# TODO: Windows 的 taskkill 优雅模式对子进程返回非零是正常的，必须交给 close() 的 /F 阶段收尾。
+# TODO(windows-graceful-stop): 无窗口 Uvicorn 不响应 taskkill /T，当前只能在期限后
+# /F 回收并保留关闭失败；需为受管服务接通可验证的原生优雅关闭，不能把强杀伪报成功。
 def _taskkill_process_tree(pid: int, *, force: bool) -> None:
     arguments = ["taskkill", "/T"]
     if force:
