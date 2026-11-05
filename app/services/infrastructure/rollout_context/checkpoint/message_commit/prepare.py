@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -10,12 +11,19 @@ from pathlib import Path
 
 from app.core.execution_admission_context import require_current_execution_admission
 from app.domain.itemized.enums import PayloadKind
-from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    RuntimeNoticePayload,
+    parse_item_projection_manifest,
+)
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     canonical_message_anchor,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.revisions import (
     resolve_message_group,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     find_message_locator,
@@ -24,7 +32,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.message_groups 
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
+    canonical_json_text,
 )
+from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
 ItemLocation = tuple[CanonicalItemRecord, int, int]
 PreparedMessage = tuple[
@@ -51,6 +61,56 @@ class MessageBatch:
     item_ids: list[str] = field(default_factory=list)
     display_only_item_ids: list[str] = field(default_factory=list)
     message_item_ids: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+
+def inherit_message_selection(
+    connection: sqlite3.Connection, *, sequences: Sequence[int], history_view_id: str,
+    next_item_sequence: int, last_message_sequence: int, owner: tuple[str, str],
+) -> MessageBatch:
+    """继承冻结引用，只消费 catalog 归属和组成员，不重新还原旧正文。"""
+    batch = MessageBatch(next_item_sequence, last_message_sequence, visible_sequences=list(sequences))
+    rows = connection.execute(
+        "SELECT message.message_sequence,message.message_id,message.turn_id,message.execution_id,"
+        "anchor.projection_manifest_json,member.item_id,member.turn_id,member.execution_id,"
+        "execution.session_id,execution.thread_id,history.source_kind "
+        "FROM json_each(?) selected JOIN messages message ON message.message_sequence=selected.value "
+        "LEFT JOIN item_catalog anchor ON anchor.jsonl_offset=message.jsonl_offset AND anchor.jsonl_length=message.jsonl_length "
+        "LEFT JOIN item_catalog member ON member.item_id=anchor.item_id OR ("
+        "anchor.message_group_id IS NOT NULL AND member.message_group_id=anchor.message_group_id) "
+        "LEFT JOIN executions execution ON execution.execution_id=member.execution_id "
+        "LEFT JOIN context_view_items history ON history.view_id=? AND history.item_id=member.item_id AND history.visible=1 "
+        "ORDER BY selected.key,member.item_sequence",
+        (canonical_json_text(sequences), history_view_id),
+    ).fetchall()
+    groups: dict[int, list[str]] = {}
+    group_sizes: dict[int, int] = {}
+    message_ids: dict[int, str] = {}
+    scopes: set[tuple[str, str]] = set()
+    for sequence, message_id, turn_id, execution_id, manifest, item_id, item_turn, item_execution, session, thread, source_kind in rows:
+        if item_id is None or item_turn != turn_id or item_execution != execution_id or not execution_id:
+            raise RuntimeError(f"继承消息组的 catalog 归属不一致: {message_id}/{item_id}")
+        scope = (strict_text(session, field="executions.session_id"), strict_text(thread, field="executions.thread_id"))
+        if scope not in scopes:
+            require_historical_scope(connection, *scope, current_owner=owner)
+            scopes.add(scope)
+        if sequence not in groups:
+            group = parse_item_projection_manifest(json.loads(manifest))["projection_group"]
+            group_sizes[sequence] = group["size"] if group is not None else 1
+            groups[sequence] = []
+            message_ids[sequence] = strict_text(message_id, field="messages.message_id")
+        groups[sequence].append(strict_text(item_id, field="item_catalog.item_id"))
+        # display_only 是否进入展示历史沿父 checkpoint 的冻结 membership，
+        # 不能仅凭 Turn-less 消息把隐藏通知重新发布成展示项。
+        if source_kind == "display_only":
+            batch.display_only_item_ids.append(item_id)
+    if set(groups) != set(sequences) or any(len(group) != group_sizes[sequence] for sequence, group in groups.items()):
+        raise RuntimeError("继承消息 selection 缺少完整 canonical group")
+    if len(set(message_ids.values())) != len(message_ids):
+        raise ValueError("一个 checkpoint 不能重复引用同一个 canonical message_id")
+    for sequence in sequences:
+        batch.item_ids.extend(groups[sequence])
+        batch.message_item_ids[message_ids[sequence]] = tuple(groups[sequence])
+    return batch
 
 
 def prepare_messages(

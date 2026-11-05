@@ -16,7 +16,7 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
     get_checkpoint_metadata,
 )
-from langgraph.checkpoint.serde.types import ERROR, _DeltaSnapshot
+from langgraph.checkpoint.serde.types import ERROR
 
 from app.core.failures import failure_detail
 from app.core.phase_observer import observe_phase_sync
@@ -232,44 +232,32 @@ class RolloutLangGraphCheckpointMixin:
         if not isinstance(channel_values, dict):
             raise TypeError("checkpoint.channel_values 必须是 dict")
         checkpoint = dict(checkpoint)
-        parent_checkpoint = None
         parent_channel_versions = {}
         parent_delta = False
         parent_exists = False
         parent_checkpoint_id = config["configurable"].get("checkpoint_id")
         if isinstance(parent_checkpoint_id, str) and parent_checkpoint_id:
-            if "messages" in channel_values:
-                # 本次完整输入仍由 durable owner 核正文和归属；父 checkpoint
-                # 只提供版本与 Delta 状态，不读取其旧正文和未消费的 pending writes。
-                owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
-                try:
-                    snapshot = self._context_reader.open_snapshot(owner.session_id, thread_id, checkpoint_ns)
-                except RolloutNotMaterializedError:
-                    snapshot = None
-                if snapshot is not None:
-                    with snapshot:
-                        index = self._context_reader.latest_checkpoint(snapshot, parent_checkpoint_id)
-                        if index is not None:
-                            self._storage.checkpoints.checkpoint_values(
-                                owner.session_id, thread_id, checkpoint_ns, index,
-                                snapshot=snapshot, requested_channels=frozenset(),
-                            )
-                            parent_channel_versions, _, parent_state = self._storage.checkpoints.checkpoint_versions(
-                                snapshot, index.checkpoint_id,
-                            )
-                            parent_exists = True
-                            parent_delta = parent_state == "snapshot" or (
-                                parent_state == "delta" and "messages" in parent_channel_versions
-                            )
-            else:
-                parent_checkpoint = self.get_tuple(config)
-                if parent_checkpoint is not None:
-                    parent_exists = True
-                    parent_channel_versions = parent_checkpoint.checkpoint["channel_versions"]
-                    parent_values = parent_checkpoint.checkpoint["channel_values"]
-                    parent_delta = isinstance(parent_values.get("messages"), _DeltaSnapshot) or (
-                        "messages" not in parent_values and "messages" in parent_channel_versions
-                    )
+            # 写入先只取父版本与冻结选择；正文恢复由本次实际消费的 Delta/压缩决定。
+            owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+            try:
+                snapshot = self._context_reader.open_snapshot(owner.session_id, thread_id, checkpoint_ns)
+            except RolloutNotMaterializedError:
+                snapshot = None
+            if snapshot is not None:
+                with snapshot:
+                    index = self._context_reader.latest_checkpoint(snapshot, parent_checkpoint_id)
+                    if index is not None:
+                        self._storage.checkpoints.checkpoint_values(
+                            owner.session_id, thread_id, checkpoint_ns, index,
+                            snapshot=snapshot, requested_channels=frozenset(),
+                        )
+                        parent_channel_versions, _, parent_state = self._storage.checkpoints.checkpoint_versions(
+                            snapshot, index.checkpoint_id,
+                        )
+                        parent_exists = True
+                        parent_delta = parent_state == "snapshot" or (
+                            parent_state == "delta" and "messages" in parent_channel_versions
+                        )
         if not parent_exists and isinstance(parent_checkpoint_id, str) and "messages" in channel_values:
             # 首个完整基准可独立建立根；省略值不能掩盖已引用父链的丢失。
             parent_checkpoint_id = None
@@ -277,10 +265,10 @@ class RolloutLangGraphCheckpointMixin:
             raise RuntimeError(f"父 checkpoint 不可读取: {parent_checkpoint_id}")
         current_messages, messages_state = prepare_message_values(
             self, values=channel_values, versions=checkpoint.get("channel_versions", {}),
-            new_versions=new_versions, metadata=metadata, parent=parent_checkpoint,
+            new_versions=new_versions, metadata=metadata, parent_config=config if parent_exists else None,
             parent_delta=parent_delta,
         )
-        if messages_state == "view" and "messages" not in channel_values:
+        if messages_state == "view" and current_messages is not None and "messages" not in channel_values:
             channel_values = {**channel_values, "messages": current_messages}
             checkpoint["channel_values"] = channel_values
         channel_versions = checkpoint.get("channel_versions", {})
@@ -291,7 +279,8 @@ class RolloutLangGraphCheckpointMixin:
             if channel_name in channel_versions and channel_versions[channel_name] != version:
                 raise ValueError(f"checkpoint new_versions 与 channel_versions 不一致: {channel_name}")
             merged_channel_versions.setdefault(channel_name, version)
-        for channel_name in channel_values:
+        channel_names = (*channel_values, "messages") if current_messages is None and messages_state == "view" else channel_values
+        for channel_name in channel_names:
             if merged_channel_versions.get(channel_name) is None:
                 version = new_versions.get(channel_name)
                 if version is None and isinstance(parent_channel_versions, dict):
@@ -307,7 +296,7 @@ class RolloutLangGraphCheckpointMixin:
         effective_metadata = get_checkpoint_metadata(config, metadata)
         # checkpoint worker 也会先于 stream sink 收到真实 ToolMessage。
         # 屏障必须在 storage 锁前，允许同 Thread 的 queued root 正常接受。
-        for call_id in LangChainMessageCodec().tool_result_call_ids(current_messages):
+        for call_id in LangChainMessageCodec().tool_result_call_ids(current_messages or ()):
             observe_phase_sync(call_id, "canonical.tool_result.before_commit")
         self._writer.append_checkpoint(
             thread_id=thread_id,

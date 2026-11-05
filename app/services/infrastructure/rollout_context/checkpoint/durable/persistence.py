@@ -39,6 +39,7 @@ from app.services.infrastructure.rollout_context.checkpoint.message_commit.compa
     prepare_compaction,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
+    inherit_message_selection,
     prepare_messages,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
@@ -66,7 +67,7 @@ class RolloutCheckpointPersistenceMixin:
         checkpoint: Checkpoint,
         metadata: CheckpointMetadata,
         parent_checkpoint_id: str | None,
-        current_messages: list[object],
+        current_messages: list[object] | None,
         messages_state: str = "view",
         new_versions: ChannelVersions,
         branch_id: str | None = None,
@@ -173,38 +174,57 @@ class RolloutCheckpointPersistenceMixin:
             jsonl_offset_before = strict_non_negative_int(meta[2], field="database_meta.committed_jsonl_offset")
             if jsonl.stat().st_size != jsonl_offset_before:
                 raise RuntimeError("checkpoint append 前 JSONL 与 committed offset 不一致")
-            locator_checkpoint = checkpoint_id if repeated_checkpoint else parent_checkpoint_id
+            parent_messages = connection.execute(
+                "SELECT context_view_id,channel_version FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
+                (parent[0] if parent is not None else None,),
+            ).fetchone()
             locator_view = connection.execute(
                 "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
-                (locator_checkpoint,),
-            ).fetchone() if locator_checkpoint is not None else None
+                (checkpoint_id,),
+            ).fetchone() if repeated_checkpoint else (
+                parent_messages if parent_checkpoint_id is not None else None
+            )
             message_version = new_versions.get("messages")
-            parent_message_version = connection.execute(
-                "SELECT channel_version FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
-                (parent_checkpoint_id,),
-            ).fetchone()
             # 版本递增属于当前父链；其它 branch 可以合法地产生相同版本号。
+            # 未声明父 checkpoint 的完整输入仍独立分配版本，不借 active head 消歧。
             new_message_version = message_version is not None and (
-                parent_message_version is None or parent_message_version[0] != message_version
+                parent_checkpoint_id is None or parent_messages is None or parent_messages[1] != message_version
             )
-            batch = prepare_messages(
-                connection=connection, jsonl=jsonl, codec=self._storage._codec(),
-                read_item=self._storage._read_v2_item_at, thread_id=thread_id,
-                messages=current_messages,
-                last_message_sequence=strict_non_negative_int(meta[1], field="database_meta.last_message_sequence"),
-                next_item_sequence=strict_non_negative_int(meta[3], field="database_meta.last_item_sequence") + 1,
-                offset=jsonl_offset_before,
-                read_locator_sequences=(
-                    lambda: self._storage._view_message_sequences_from_connection(connection, locator_view[0])
-                ) if locator_view else None,
-                allow_revisions=new_message_version and not repeated_checkpoint,
-            )
+            last_message_sequence = strict_non_negative_int(meta[1], field="database_meta.last_message_sequence")
+            next_item_sequence = strict_non_negative_int(meta[3], field="database_meta.last_item_sequence") + 1
+            if current_messages is None:
+                if parent is None or parent_messages is None:
+                    raise RuntimeError("继承 messages 缺少父 checkpoint selection")
+                inherited_view = self._require_checkpoint_messages_view(
+                    connection, checkpoint_id=parent[0], history_view_id=parent[6],
+                    branch_id=parent[7], messages_view_id=parent_messages[0],
+                )
+                batch = inherit_message_selection(
+                    connection, sequences=self._storage._view_message_sequences_from_connection(connection, inherited_view),
+                    history_view_id=parent[6], next_item_sequence=next_item_sequence,
+                    last_message_sequence=last_message_sequence, owner=(owner.session_id, owner.thread_id),
+                )
+                message_count = len(batch.visible_sequences)
+            else:
+                batch = prepare_messages(
+                    connection=connection, jsonl=jsonl, codec=self._storage._codec(),
+                    read_item=self._storage._read_v2_item_at, thread_id=thread_id,
+                    messages=current_messages, last_message_sequence=last_message_sequence,
+                    next_item_sequence=next_item_sequence, offset=jsonl_offset_before,
+                    read_locator_sequences=(
+                        lambda: self._storage._view_message_sequences_from_connection(connection, locator_view[0])
+                    ) if locator_view else None,
+                    allow_revisions=new_message_version and not repeated_checkpoint,
+                )
+                message_count = len(current_messages)
             compaction_event = new_compaction_event(
                 connection, checkpoint, parent_checkpoint_id=parent_checkpoint_id,
             )
             compaction_selection = None
             compaction_summary_sequence = None
             if compaction_event is not None:
+                if current_messages is None:
+                    raise RuntimeError("新压缩事件必须提供已恢复的 messages")
                 compaction_selection, compaction_summary_sequence = prepare_compaction(
                     connection=connection, codec=self._storage._codec(), batch=batch,
                     event=compaction_event, messages=current_messages, thread_id=thread_id,
@@ -453,18 +473,13 @@ class RolloutCheckpointPersistenceMixin:
             parent_messages_view = None
             messages_sequences = visible_sequences
             if parent is not None and view_kind == "checkpoint" and messages_state == "view":
-                parent_channel = connection.execute(
-                    "SELECT context_view_id FROM checkpoint_channels "
-                    "WHERE checkpoint_id = ? AND channel_name = 'messages'",
-                    (parent[0],),
-                ).fetchone()
-                if parent_channel is None:
+                if parent_messages is None:
                     raise RuntimeError("父 checkpoint 缺少 messages channel selection")
                 parent_messages_view = self._require_checkpoint_messages_view(
                     connection, checkpoint_id=strict_text(parent[0], field="checkpoints.checkpoint_id"),
                     history_view_id=strict_text(parent[6], field="checkpoints.view_id"),
                     branch_id=strict_text(parent[7], field="checkpoints.branch_id"),
-                    messages_view_id=strict_text(parent_channel[0], field="checkpoint_channels.context_view_id"),
+                    messages_view_id=strict_text(parent_messages[0], field="checkpoint_channels.context_view_id"),
                 )
                 if parent[7] != active_branch:
                     if active_view_id is None:
@@ -498,7 +513,7 @@ class RolloutCheckpointPersistenceMixin:
                     checkpoint_ns,
                     commit_id,
                     message_sequence,
-                    len(current_messages),
+                    message_count,
                     parent_checkpoint_id,
                     view_id,
                     active_branch,
@@ -554,7 +569,7 @@ class RolloutCheckpointPersistenceMixin:
                     session_id=owner.session_id,
                     thread_id=owner.thread_id,
                     view_id=view_id,
-                    message_count=len(current_messages),
+                    message_count=message_count,
                     message_sequences=batch.visible_sequences,
                     compaction_event=compaction_event,
                 ),

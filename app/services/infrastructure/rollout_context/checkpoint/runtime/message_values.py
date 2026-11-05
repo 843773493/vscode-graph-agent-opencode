@@ -6,7 +6,8 @@ from collections.abc import Mapping
 from typing import Literal
 
 from langchain_core.messages import BaseMessage
-from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.serde.types import _DeltaSnapshot
 
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
@@ -20,8 +21,8 @@ MessagesState = Literal["view", "delta", "snapshot"]
 def prepare_message_values(
     saver: BaseCheckpointSaver, *, values: Mapping[str, object],
     versions: Mapping[str, object], new_versions: Mapping[str, object],
-    metadata: Mapping[str, object], parent: CheckpointTuple | None, parent_delta: bool,
-) -> tuple[list[BaseMessage], MessagesState]:
+    metadata: Mapping[str, object], parent_config: RunnableConfig | None, parent_delta: bool,
+) -> tuple[list[BaseMessage] | None, MessagesState]:
     candidate = values.get("messages")
     counters = metadata.get("counters_since_delta_snapshot", {})
     if not isinstance(counters, Mapping):
@@ -32,20 +33,25 @@ def prepare_message_values(
         current = candidate.value if isinstance(candidate, _DeltaSnapshot) else candidate
         if delta:
             state = "snapshot"
-    elif delta:
-        state = "delta"
+    else:
+        state = "delta" if delta else "view"
+        if parent_config is not None and not delta and "_summarization_event" not in values:
+            # None 表示继承冻结 selection，绝不把省略值伪装成空消息。
+            # Delta 依赖祖先 pending writes，压缩消费正文，仍走官方恢复链路。
+            return None, state
+        parent = saver.get_tuple(parent_config) if parent_config is not None else None
+        if parent_config is not None and parent is None:
+            raise RuntimeError("messages 恢复缺少已引用的父 checkpoint")
         if parent is None:
-            if "messages" in versions:
+            if delta and "messages" in versions:
                 raise RuntimeError("messages Delta 缺少已引用的父 checkpoint 或基准")
             current = []
         else:
             current = checkpoint_messages(saver, parent)
-            if "messages" in new_versions:
+            if delta and "messages" in new_versions:
                 current = replay_message_values(current, [
                     value for _, channel, value in parent.pending_writes if channel == "messages"
                 ])
-    else:
-        current = checkpoint_messages(saver, parent) if parent is not None else []
     if not isinstance(current, list) or not all(isinstance(message, BaseMessage) for message in current):
         raise TypeError("checkpoint messages 必须是 LangChain BaseMessage 列表")
     return current, state

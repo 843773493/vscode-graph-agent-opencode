@@ -36,7 +36,7 @@ class RolloutAppendWriter:
         checkpoint: Checkpoint,
         metadata: CheckpointMetadata,
         parent_checkpoint_id: str | None,
-        current_messages: list[object],
+        current_messages: list[object] | None,
         messages_state: str = "view",
         new_versions: ChannelVersions,
         branch_id: str | None = None,
