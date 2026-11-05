@@ -235,11 +235,17 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
             assert guest.status_code == 200, guest.text
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
-            workspace_id = workspaces.json()["data"]["active_workspace_id"]
-            assert isinstance(workspace_id, str) and workspace_id
+            active = workspaces.json()["data"]["active_workspace"]
+            workspace_id = active["workspace_id"]
+            gateway_id = active["gateway_id"]
+            assert workspace_id == session_owner["workspace_id"]
+            health = await client.get("/api/gateway/health")
+            assert health.status_code == 200, health.text
+            assert health.json()["data"]["gateway_id"] == gateway_id
         environment = os.environ | {
             "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
             "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
+            "BOXTEAM_BROWSER_GATEWAY_ID": gateway_id,
             "BOXTEAM_BROWSER_OWNER": json.dumps(session_owner),
             "BOXTEAM_BROWSER_UNOPENED_SESSION_ID": unopened_session_id,
             "BOXTEAM_BROWSER_UNOPENED_THREAD_ID": unopened_thread_id,
@@ -271,7 +277,8 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
             assert item["workspaceId"] == session_owner["workspace_id"]
             assert item["threadId"] == session_owner["thread_id"]
             assert item["heldRequests"]
-            assert all(held["workspaceId"] == workspace_id for held in item["heldRequests"])
+            assert all(held["workspaceId"] == workspace_id and held["gatewayId"] == gateway_id
+                       for held in item["heldRequests"])
             assert all(held["threadId"] == session_owner["thread_id"] for held in item["heldRequests"])
             assert item["requestId"]
             assert item["liveAfterSync"] is True
@@ -288,11 +295,12 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
         assert read_proof["threadId"] == unopened_thread_id
         assert read_proof["requestId"]
         assert read_proof["heldRequests"]
-        assert all(item["workspaceId"] == workspace_id for item in read_proof["heldRequests"])
+        assert all(item["workspaceId"] == workspace_id and item["gatewayId"] == gateway_id
+                   for item in read_proof["heldRequests"])
         search_proof = read_proof["search"]
         assert search_proof["requestId"]
         assert search_proof["workspaceId"] == session_owner["workspace_id"]
-        assert search_proof["targetId"] == workspace_id
+        assert search_proof["gatewayId"] == gateway_id
         assert search_proof["sessionId"] == unopened_session_id
         assert search_proof["unreadBeforeEditorOpened"] is True
         access = await _verify_access_contract(f"http://127.0.0.1:{gateway.port}")

@@ -3,6 +3,8 @@ import { writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
+import { gatewayWorkspaceKey } from "../../../../src/clients/web/src/api/workspaceIdentity.ts";
+import { browserViewKey } from "../../../../src/clients/web/src/state/browserViewStore.ts";
 
 function required(name) {
   const value = process.env[name];
@@ -12,6 +14,7 @@ function required(name) {
 
 const baseUrl = required("BOXTEAM_BROWSER_BASE_URL");
 const workspaceId = required("BOXTEAM_BROWSER_WORKSPACE_ID");
+const gatewayId = required("BOXTEAM_BROWSER_GATEWAY_ID");
 const owner = JSON.parse(required("BOXTEAM_BROWSER_OWNER"));
 const unopenedSessionId = required("BOXTEAM_BROWSER_UNOPENED_SESSION_ID");
 const unopenedThreadId = required("BOXTEAM_BROWSER_UNOPENED_THREAD_ID");
@@ -31,13 +34,16 @@ let pageA;
 let failure;
 
 async function api(page, pathname, init = {}) {
-  return page.evaluate(async ({ pathname, init, workspaceId }) => {
+  return page.evaluate(async ({ pathname, init, workspaceId, gatewayId }) => {
     const credential = await fetch("/api/gateway/auth/local-credential");
     if (!credential.ok) throw new Error(`读取本地凭据失败 ${credential.status}`);
     const token = (await credential.json()).data.token;
     const headers = new Headers(init.headers ?? {});
     headers.set("X-Local-Token", token);
-    if (pathname.startsWith("/api/v1/")) headers.set("X-BoxTeam-Workspace-Id", workspaceId);
+    if (pathname.startsWith("/api/v1/")) {
+      headers.set("X-BoxTeam-Workspace-Id", workspaceId);
+      headers.set("X-BoxTeam-Target-Gateway-Id", gatewayId);
+    }
     const response = await fetch(pathname, { ...init, headers, credentials: "include" });
     const payload = await response.json();
     if (!response.ok) throw new Error(`API ${response.status}: ${JSON.stringify(payload)}`);
@@ -45,7 +51,7 @@ async function api(page, pathname, init = {}) {
       throw new Error(`响应 request_id 不一致：${pathname}`);
     }
     return payload.data;
-  }, { pathname, init, workspaceId });
+  }, { pathname, init, workspaceId, gatewayId });
 }
 
 async function waitUntil(predicate, label, timeout = 30_000) {
@@ -73,8 +79,8 @@ async function initialize(page) {
   await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
   assert.equal((await api(page, "/api/gateway/users/current")).kind, "guest");
   const workspaces = await api(page, "/api/gateway/workspaces");
-  assert.equal(workspaces.active_workspace_id, workspaceId);
-  await api(page, "/api/v1/workspace");
+  assert.deepEqual(workspaces.active_workspace, { gateway_id: gatewayId, workspace_id: workspaceId });
+  assert.equal((await api(page, "/api/v1/workspace")).workspace_id, workspaceId);
   await expect(page.getByRole("button", { name: "用户视图", exact: true })).toHaveCount(0);
 }
 
@@ -89,7 +95,8 @@ async function openThread(page) {
 
 /** 只读真实数据库；展示态必须由真实控件操作产生，不能向数据库预写输入。 */
 async function readView(page, gatewayId) {
-  const key = JSON.stringify([gatewayId, "session", workspaceId, owner.session_id, owner.thread_id]);
+  const selection = gatewayWorkspaceKey({ gatewayId, workspaceId });
+  const key = browserViewKey(gatewayId, "session", selection, owner.session_id, owner.thread_id);
   return page.evaluate(async key => {
     const databases = await indexedDB.databases();
     if (!databases.some(database => database.name === "boxteam-browser-views")) return null;
@@ -133,11 +140,12 @@ async function verifyHistoryBootstrap(page, expectCache, open) {
   const released = new Promise(resolve => { release = resolve; });
   const intercept = async route => {
     const request = route.request();
-    if (request.method() !== "GET" || request.headers()["x-boxteam-workspace-id"] !== workspaceId) {
+    if (request.method() !== "GET" || request.headers()["x-boxteam-workspace-id"] !== workspaceId
+      || request.headers()["x-boxteam-target-gateway-id"] !== gatewayId) {
       await route.continue();
       return;
     }
-    heldRequests.push({ url: request.url(), workspaceId: request.headers()["x-boxteam-workspace-id"],
+    heldRequests.push({ url: request.url(), gatewayId: request.headers()["x-boxteam-target-gateway-id"], workspaceId: request.headers()["x-boxteam-workspace-id"],
       threadId: new URL(request.url()).searchParams.get("thread_id") });
     await released;
     await route.continue();
@@ -175,7 +183,8 @@ async function verifyHistoryBootstrap(page, expectCache, open) {
     const responseReady = page.waitForResponse(response => {
       const request = response.request();
       return matches(new URL(response.url())) && request.method() === "GET"
-        && request.headers()["x-boxteam-workspace-id"] === workspaceId;
+        && request.headers()["x-boxteam-workspace-id"] === workspaceId
+        && request.headers()["x-boxteam-target-gateway-id"] === gatewayId;
     });
     release();
     const response = await responseReady;
@@ -208,7 +217,7 @@ try {
   pageA = await contextA.newPage();
   observe(pageA, "A");
   await initialize(pageA);
-  const gatewayId = (await api(pageA, "/api/gateway/health")).gateway_id;
+  assert.equal((await api(pageA, "/api/gateway/health")).gateway_id, gatewayId);
   let threadA = await openThread(pageA);
   await expect(threadA.locator('.chat-turn[data-turn-id="job-0008"]')).toBeVisible();
   await threadA.locator("#input").fill(draftA);
@@ -232,6 +241,7 @@ try {
     saved = await readView(pageA, gatewayId);
     return saved?.follow_latest === false && saved.turn_anchor !== null;
   }, "浏览器持久化滚动位置");
+  assert.equal(saved.gateway_id, gatewayId);
   assert.equal(saved.workspace_id, workspaceId);
   assert.equal(saved.session_id, owner.session_id);
   // 原版 Workbench 的 IndexedDB 在卸载时只能乐观提交；明确等待既有生命周期完成。
@@ -285,11 +295,12 @@ try {
   const matchesRead = url => url.pathname === `/api/v1/sessions/${unopenedSessionId}/main-thread`;
   await pageB.route(matchesRead, async route => {
     const request = route.request();
-    if (request.method() !== "GET" || request.headers()["x-boxteam-workspace-id"] !== workspaceId) {
+    if (request.method() !== "GET" || request.headers()["x-boxteam-workspace-id"] !== workspaceId
+      || request.headers()["x-boxteam-target-gateway-id"] !== gatewayId) {
       await route.continue();
       return;
     }
-    unreadReadProof.heldRequests.push({ url: request.url(), workspaceId });
+    unreadReadProof.heldRequests.push({ url: request.url(), gatewayId, workspaceId });
     await readReleased;
     await route.continue();
   });
@@ -318,11 +329,12 @@ try {
     assert.ok(searchEvents.every(event => event.request_id === searchPayload.request_id));
     const catalogPages = searchEvents.filter(event => event.type === "page" && event.page.category === "catalog");
     const foundItems = catalogPages.flatMap(event => event.page.catalog.items.map(item => ({
-      ...item.node, workspace_id: event.branch.branch.owner.workspace_id,
+      ...item.node, gateway_id: event.branch.branch.owner.gateway_id, workspace_id: event.branch.branch.owner.workspace_id,
     })));
     assert.equal(foundItems.length, 1, "精确 Session ID 必须只返回所属会话");
     const found = foundItems[0];
     assert.equal(found.workspace_id, owner.workspace_id);
+    assert.equal(found.gateway_id, gatewayId);
     assert.equal(found.session_id, unopenedSessionId);
     assert.equal(found.kind, "session");
     const searchResult = pageB.getByRole("region", { name: "跨工作区搜索结果", exact: true })
@@ -332,12 +344,13 @@ try {
     await expect(threadB.getByTestId("composer-input")).toBeVisible();
     await expect(pageB.locator(`section.boxteam-thread[data-session-id="${unopenedSessionId}"]`)).toHaveCount(0);
     const searchedOwner = searchEvents.find(event => event.type === "scope").scope.branches
-      .find(branch => branch.owner.workspace_id === found.workspace_id);
-    assert.equal(searchedOwner.target_id, workspaceId);
-    unreadReadProof.search = { requestId: searchPayload.request_id, workspaceId: found.workspace_id, targetId: searchedOwner.target_id,
+      .find(branch => branch.owner.workspace_id === found.workspace_id && branch.owner.gateway_id === gatewayId);
+    assert.deepEqual(searchedOwner.owner, { gateway_id: gatewayId, workspace_id: workspaceId });
+    unreadReadProof.search = { requestId: searchPayload.request_id, gatewayId: found.gateway_id, workspaceId: found.workspace_id,
       sessionId: found.session_id, unreadBeforeEditorOpened: true };
     const responseReady = pageB.waitForResponse(response => matchesRead(new URL(response.url()))
-      && response.request().method() === "GET" && response.request().headers()["x-boxteam-workspace-id"] === workspaceId);
+      && response.request().method() === "GET" && response.request().headers()["x-boxteam-workspace-id"] === workspaceId
+      && response.request().headers()["x-boxteam-target-gateway-id"] === gatewayId);
     releaseRead();
     const response = await responseReady;
     assert.equal(response.status(), 200, await response.text());
@@ -377,7 +390,7 @@ try {
     historyCacheBeforeSync: true, historyCacheContextsIsolated: true,
     unopenedSessionUnread: true, openedSessionRead: true, unreadPagesIsolated: true,
     noPrivateActivityContent: true, noServerViewWrites: true,
-    owner, routeWorkspaceId: workspaceId, savedView: saved, historyRecovery, unreadReadProof, pageErrors, requests, scrollMeasurements }, null, 2));
+    owner, gatewayId, workspaceId, savedView: saved, historyRecovery, unreadReadProof, pageErrors, requests, scrollMeasurements }, null, 2));
 } catch (error) {
   failure = error;
 } finally {
