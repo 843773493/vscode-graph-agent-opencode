@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -41,27 +40,26 @@ def test_user_profile_writes_with_private_windows_acl(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[list[str]] = []
+    calls: list[Path] = []
 
-    def run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        calls.append(arguments)
-        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+    def set_acl(path: Path, *, is_directory: bool) -> None:
+        calls.append(path)
 
     monkeypatch.setattr(file_permissions, "_is_windows", lambda: True)
     monkeypatch.setattr(
-        file_permissions,
-        "_windows_acl_is_private",
+        file_permissions.windows_fs,
+        "private_acl_is_current",
         lambda *_args, **_kwargs: False,
     )
-    monkeypatch.setattr(file_permissions.subprocess, "run", run)
+    monkeypatch.setattr(file_permissions.windows_fs, "set_private_acl", set_acl)
     store = UserProfileStore(gateway_root=tmp_path / "gateway")
 
     store.ensure_user(user_id="user-a", display_name="用户 A")
 
-    assert len(calls) == 4
+    assert len(calls) == 2
     assert all(
-        Path(arguments[1]).parent == tmp_path / "gateway" / "users" / "user-a"
-        for arguments in calls
+        path.parent == file_permissions.native_io_path(tmp_path / "gateway/users/user-a")
+        for path in calls
     )
 
 

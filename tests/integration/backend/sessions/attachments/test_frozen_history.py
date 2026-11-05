@@ -185,7 +185,7 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
         resolver = get_session_path_resolver(target.workspace / ".boxteam/sessions")
         index = resolver.resolve_thread_node(session, thread) / "rollout/index.sqlite"
         canonical = index.with_name("rollout.jsonl").read_bytes()
-        captures = {call: json.loads((target.replay.artifacts / (call + ".json")).read_text()) for call in calls}
+        captures = {call: json.loads((target.replay.artifacts / (call + ".json")).read_text(encoding="utf-8")) for call in calls}
         last_wire = canonical_json_bytes(captures[calls[-1]]["request"])
         assert frozen_text.strip().encode() in last_wire and changed_text.strip().encode() not in last_wire
         assert base64.b64encode(original) in last_wire
@@ -230,7 +230,7 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
         })
         assert warmed.status_code == 200, warmed.text
         await wait_for_job_done(client, warmed.json()["data"]["job_id"])
-        warm_capture = json.loads((target.replay.artifacts / (warm_call + ".json")).read_text())
+        warm_capture = json.loads((target.replay.artifacts / (warm_call + ".json")).read_text(encoding="utf-8"))
         assert (warm_capture["identity"]["session_id"], warm_capture["identity"]["thread_id"]) == (fork_session, fork_thread)
         fork_canonical = fork_index.with_name("rollout.jsonl").read_bytes()
         assert fork_canonical.startswith(canonical) and fork_canonical != canonical
@@ -254,12 +254,12 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
             assert (root / "preview/512.webp").is_file()
             with Image.open(root / "preview/512.webp") as preview:
                 assert preview.size == (512, 256)
-            assert (root / "derived/result.txt").read_text() == changed_text
+            assert (root / "derived/result.txt").read_text(encoding="utf-8") == changed_text
         with closing(AttachmentBlobStore(target.workspace, leases=ExternalResourceLeaseLedger(
                 state_path=target.workspace / ".boxteam/resources.json",
             ))) as store:
             assert await store.process_pending_directories() == ()
-            assert (root / "derived/result.txt").read_text() == changed_text
+            assert (root / "derived/result.txt").read_text(encoding="utf-8") == changed_text
 
         await asyncio.to_thread(target.restart)
         available = await client.get(f"/api/v1/sessions/{session}/attachments/content", params={"file_id": ref["file_id"]})
@@ -281,7 +281,7 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
             client, "delete_session", target_node_id=session, wait_for_settlement=True,
         )
         assert (deleted["state"], deleted["settlement"]) == ("committed", "settled"), deleted
-        assert not index.exists() and (root / "derived/result.txt").read_text() == changed_text
+        assert not index.exists() and (root / "derived/result.txt").read_text(encoding="utf-8") == changed_text
         await asyncio.to_thread(target.restart)
         loaded_fork = await client.post(f"/api/v1/sessions/{fork_session}/history", json={"direction": "head", "turns": 10})
         assert loaded_fork.status_code == 200, loaded_fork.text
@@ -310,7 +310,7 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
         })
         assert accepted.status_code == 200, accepted.text
         await wait_for_job_done(client, accepted.json()["data"]["job_id"])
-        continued = json.loads((target.replay.artifacts / (continuation + ".json")).read_text())
+        continued = json.loads((target.replay.artifacts / (continuation + ".json")).read_text(encoding="utf-8"))
         assert (continued["identity"]["session_id"], continued["identity"]["thread_id"]) == (fork_session, fork_thread)
         continued_wire = canonical_json_bytes(continued["request"])
         assert frozen_text.strip().encode() in continued_wire and changed_text.strip().encode() not in continued_wire
@@ -323,7 +323,7 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
             assert {row[0] for row in connection.execute(
                 "SELECT model_call_id FROM model_calls WHERE session_id=? AND thread_id=?", (fork_session, fork_thread),
             )} == {warm_call, removal, continuation}
-        removed = json.loads((target.replay.artifacts / (removal + ".json")).read_text())
+        removed = json.loads((target.replay.artifacts / (removal + ".json")).read_text(encoding="utf-8"))
         fork_evidence = audit_sealed_requests(
             fork_index, (resolver.resolve_session_node(fork_session) / "logs/llm_requests").glob("*.json"),
             {warm_call: warm_capture, removal: removed, continuation: continued},

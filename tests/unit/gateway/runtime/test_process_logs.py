@@ -66,34 +66,29 @@ def test_process_log_store_uses_private_windows_acl(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    calls: list[list[str]] = []
+    calls: list[Path] = []
 
-    def run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        calls.append(arguments)
-        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+    def set_acl(path: Path, *, is_directory: bool) -> None:
+        calls.append(path)
 
     monkeypatch.setattr(file_permissions, "_is_windows", lambda: True)
     monkeypatch.setattr(
-        file_permissions,
-        "_windows_acl_is_private",
+        file_permissions.windows_fs,
+        "private_acl_is_current",
         lambda *_args, **_kwargs: False,
     )
-    monkeypatch.setattr(file_permissions.subprocess, "run", run)
+    monkeypatch.setattr(file_permissions.windows_fs, "set_private_acl", set_acl)
 
     with ProcessLogStore(tmp_path / "logs").open("gateway") as stream:
         stream.write("private log\n")
 
-    paths = [arguments[1] for arguments in calls]
-    assert paths[:6] == [
-        str(tmp_path / "logs/gateway"),
-        str(tmp_path / "logs/gateway"),
-        str(tmp_path / "logs/gateway/gateway.log.owner.lock"),
-        str(tmp_path / "logs/gateway/gateway.log.owner.lock"),
-        str(tmp_path / "logs/gateway/gateway.log"),
-        str(tmp_path / "logs/gateway/gateway.log"),
+    assert calls[:3] == [
+        file_permissions.native_io_path(tmp_path / "logs/gateway"),
+        file_permissions.native_io_path(tmp_path / "logs/gateway/gateway.log.owner.lock"),
+        file_permissions.native_io_path(tmp_path / "logs/gateway/gateway.log"),
     ]
-    assert paths[6] == paths[7] and paths[6].startswith(str(tmp_path / "logs/gateway/gateway.log.owner.json."))
-    assert paths[8:] == paths[2:4]
+    assert calls[3].parent == calls[0] and calls[3].name.startswith("gateway.log.owner.json.")
+    assert calls[4:] == calls[1:2]
 
 
 def test_process_log_store_rotates_an_oversized_previous_log(tmp_path: Path) -> None:

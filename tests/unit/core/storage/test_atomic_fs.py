@@ -82,15 +82,15 @@ def test_fsync_directory_observable(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     """目录同步必须实际到达平台屏障。"""
     if os.name == "nt":
         directories: list[Path] = []
-        original = atomic_fs._flush_windows_directory
+        original = atomic_fs.windows_fs.flush_directory
 
         def recording_flush(directory: Path) -> None:
             directories.append(directory)
             original(directory)
 
-        monkeypatch.setattr(atomic_fs, "_flush_windows_directory", recording_flush)
+        monkeypatch.setattr(atomic_fs.windows_fs, "flush_directory", recording_flush)
         atomic_fs.fsync_directory(tmp_path)
-        assert directories == [tmp_path]
+        assert directories == [atomic_fs.native_io_path(tmp_path)]
         return
     calls: list[int] = []
     real_fsync = os.fsync

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -47,27 +46,26 @@ def test_atomic_write_json_sets_private_windows_acl(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[list[str]] = []
+    calls: list[Path] = []
 
-    def run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        calls.append(arguments)
-        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+    def set_acl(path: Path, *, is_directory: bool) -> None:
+        calls.append(path)
 
     monkeypatch.setattr(file_permissions, "_is_windows", lambda: True)
     monkeypatch.setattr(
-        file_permissions,
-        "_windows_acl_is_private",
+        file_permissions.windows_fs,
+        "private_acl_is_current",
         lambda *_args, **_kwargs: False,
     )
-    monkeypatch.setattr(file_permissions.subprocess, "run", run)
+    monkeypatch.setattr(file_permissions.windows_fs, "set_private_acl", set_acl)
     target = tmp_path / "gateway.json"
 
     storage.atomic_write_json(target, {"value": "serializable"})
 
     assert target.is_file()
-    assert len(calls) == 2
-    assert all(Path(arguments[1]).parent == tmp_path for arguments in calls)
-    assert all(Path(arguments[1]) != target for arguments in calls)
+    assert len(calls) == 1
+    assert calls[0].parent == file_permissions.native_io_path(tmp_path)
+    assert calls[0] != file_permissions.native_io_path(target)
 
 
 def test_write_error_remains_primary_when_temporary_cleanup_fails(

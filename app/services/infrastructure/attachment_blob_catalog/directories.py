@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import BinaryIO
 
 from app.core.atomic_fs import fsync_directory, native_io_path
-from app.core.file_permissions import restrict_private_path_access
+from app.core.file_permissions import (
+    prepare_readonly_directory_removal,
+    protect_readonly_file,
+    restrict_private_path_access,
+)
 from app.services.infrastructure.attachment_blob_catalog.locator import (
     resolve_attachment_file,
     resolve_file_version,
@@ -143,13 +147,7 @@ def protect_original(root: Path) -> None:
     original = resolve_attachment_file(root, ("original",))
     for file in original.iterdir():
         if file.is_file():
-            # 本入口只处理发布前的目录。Windows 重试须先撤下只读位取得
-            # 可写句柄，再保护并同步同一文件，不能跳过失败后的 durability。
-            if os.name == "nt":
-                file.chmod(0o600)
-            with file.open("r+b" if os.name == "nt" else "rb") as stream:
-                file.chmod(0o400)
-                os.fsync(stream.fileno())
+            protect_readonly_file(file)
     original.chmod(0o500)
     fsync_directory(original)
 
@@ -160,14 +158,6 @@ def remove_directory(path: Path) -> None:
         raise RuntimeError("附件目录删除不能经过符号链接")
     if not path.exists():
         return
-    original = path / "original"
-    if original.is_symlink():
-        raise RuntimeError("附件原件目录不能是符号链接")
-    if original.is_dir():
-        original.chmod(0o700)
-        # Windows 的只读位也阻止删除文件；仅恢复已核对的普通原件。
-        for file in original.iterdir():
-            if not file.is_symlink() and file.is_file():
-                file.chmod(0o600)
+    prepare_readonly_directory_removal(path / "original")
     shutil.rmtree(path)
     fsync_directory(path.parent)

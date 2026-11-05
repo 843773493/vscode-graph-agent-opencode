@@ -1086,6 +1086,7 @@ async def remote_fork_target(
         target = registry.get(workspace_id)
         cleanup.callback(target.workspace_activity_service.store.close)
         cleanup.callback(target.attachment_blob_store.close)
+        cleanup.callback(target.workspace_service.close)
         cleanup.push_async_callback(production_fork_container.workspace_session_context_transport.aclose)
         cleanup.push_async_callback(target.workspace_session_context_transport.aclose)
         transport = SourceForkOwnerTransport(production_fork_container.session_context_fork_service, [])

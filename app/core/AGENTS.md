@@ -58,7 +58,7 @@ app/core/
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/
   `atomic_write_bytes`）。会话创建、child thread 创建与子树删除共用同一套
   tempfile + fsync + os.replace + 目录 fsync 语义，单点承载。
-- `file_permissions.py`：私有文件与目录权限原语。POSIX 使用 `0600/0700`，Windows 通过 `icacls` 移除继承权限并只授予所有者、SYSTEM 与本机管理员；不承载凭据格式或业务策略。
+- `file_permissions.py`：私有文件与目录权限、只读保护和指定只读目录的清理原语。POSIX 使用 `0600/0700`；Windows ACL 查询与写入统一调用 runtime 的 pywin32 边界，只授予所有者、SYSTEM 与本机管理员，不启动外部权限命令。清理只恢复指定目录及其直接普通文件的写位，不递归提权或跟随链接；不承载凭据格式或附件业务策略。
 - `time_schedule.py`：interval/cron、时区及skip/run_latest/catch_up的纯计划点计算，Gateway旧生成器与工作区持久任务共用；不保存游标、不调度执行。
 - `key_lock_pool.py`：进程内 per-key 串行锁的中立实现（`KeyLockPool` 固定分片锁池）。
   同一 key 经 `crc32` 恒命中同一把 `asyncio.Lock`，锁对象数量恒为分片数，不随历史

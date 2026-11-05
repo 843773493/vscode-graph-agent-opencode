@@ -96,7 +96,7 @@ def test_frozen_copy_reads_each_source_and_target_once(
     manifest = directory_manifest(source)
     if existing:
         copy_directory_files(source, target, *manifest)
-    paths = (source / "original/content", target / "original/content")
+    paths = tuple(native_io_path(root / "original/content") for root in (source, target))
     reads: list[Path] = []
     original_open = Path.open
 
@@ -140,7 +140,7 @@ def test_frozen_copy_rejects_source_changes_during_read(
 ) -> None:
     source, target = attachment_directory, tmp_path / "target"
     manifest = directory_manifest(source)
-    content = source / "original/content"
+    content = native_io_path(source / "original/content")
     original_open = Path.open
     changed = False
 

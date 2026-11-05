@@ -7,22 +7,14 @@ import sys
 from pathlib import Path
 
 from app.core.atomic_fs import native_io_path
+from app.runtime import windows_fs
 
 _DARWIN_RENAME_EXCL = 0x00000004
 
 
 def rename_entry_exclusive(source: Path, target: Path) -> None:
     if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        move = kernel.MoveFileExW
-        move.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
-        move.restype = wintypes.BOOL
-        # WRITE_THROUGH；不允许覆盖或跨卷 copy/delete 回退。
-        if not move(str(native_io_path(source)), str(native_io_path(target)), 8):
-            raise ctypes.WinError(ctypes.get_last_error())
+        windows_fs.rename_entry_exclusive(native_io_path(source), native_io_path(target))
         return
     if sys.platform == "darwin":
         import ctypes

@@ -3,7 +3,6 @@ from __future__ import annotations
 import errno
 import logging
 import os
-import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -18,28 +17,26 @@ from app.gateway.federation.identity import load_or_create_signing_key, public_k
 
 
 @pytest.fixture
-def windows_acl_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    calls: list[list[str]] = []
+def windows_acl_calls(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    calls: list[Path] = []
 
-    def run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        if "/grant:r" in arguments:
-            calls.append(arguments)
-        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+    def set_acl(path: Path, *, is_directory: bool) -> None:
+        calls.append(path)
 
     monkeypatch.setattr(file_permissions, "_is_windows", lambda: True)
     monkeypatch.setattr(
-        file_permissions,
-        "_windows_acl_is_private",
+        file_permissions.windows_fs,
+        "private_acl_is_current",
         lambda *_args, **_kwargs: False,
     )
-    monkeypatch.setattr(file_permissions.subprocess, "run", run)
+    monkeypatch.setattr(file_permissions.windows_fs, "set_private_acl", set_acl)
     return calls
 
 
 def test_gateway_local_token_sets_and_checks_private_acl(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    windows_acl_calls: list[list[str]],
+    windows_acl_calls: list[Path],
 ) -> None:
     gateway_root = tmp_path / "gateway"
     monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(gateway_root))
@@ -49,15 +46,12 @@ def test_gateway_local_token_sets_and_checks_private_acl(
 
     credential_path = gateway_root / "credentials" / "local-token"
     assert first_token == second_token
-    assert [arguments[1] for arguments in windows_acl_calls] == [
-        str(credential_path),
-        str(credential_path),
-    ]
+    assert windows_acl_calls == [file_permissions.native_io_path(credential_path)] * 2
 
 
 def test_federation_credential_store_secures_written_and_read_tokens(
     tmp_path: Path,
-    windows_acl_calls: list[list[str]],
+    windows_acl_calls: list[Path],
 ) -> None:
     credential_path = tmp_path / "gateway" / "federation.json"
     store = FederationCredentialStore(storage_path=credential_path)
@@ -70,24 +64,22 @@ def test_federation_credential_store_secures_written_and_read_tokens(
 
     assert loaded.token == issued.token
     assert len(windows_acl_calls) == 2
-    temporary_path = Path(windows_acl_calls[0][1])
-    assert temporary_path.parent == credential_path.parent
-    assert temporary_path != credential_path
-    assert windows_acl_calls[1][1] == str(credential_path)
+    temporary_path = windows_acl_calls[0]
+    physical = file_permissions.native_io_path(credential_path)
+    assert temporary_path.parent == physical.parent
+    assert temporary_path != physical
+    assert windows_acl_calls[1] == physical
 
 
 def test_federation_signing_key_secures_written_and_read_private_key(
     tmp_path: Path,
-    windows_acl_calls: list[list[str]],
+    windows_acl_calls: list[Path],
 ) -> None:
     first_key = load_or_create_signing_key(tmp_path)
     second_key = load_or_create_signing_key(tmp_path)
 
     assert public_key_pem(first_key) == public_key_pem(second_key)
-    assert [arguments[1] for arguments in windows_acl_calls] == [
-        str(tmp_path / "identity-signing-key.pem"),
-        str(tmp_path / "identity-signing-key.pem"),
-    ]
+    assert windows_acl_calls == [file_permissions.native_io_path(tmp_path / "identity-signing-key.pem")] * 2
 
 
 @pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows DACL")
@@ -105,12 +97,14 @@ def test_windows_private_path_acl_uses_real_dacl_and_fast_path(
 
     file_permissions.restrict_private_path_access(path, is_directory=is_directory)
 
-    assert file_permissions._windows_acl_is_private(path, is_directory=is_directory)
+    assert file_permissions.windows_fs.private_acl_is_current(
+        file_permissions.native_io_path(path), is_directory=is_directory,
+    )
 
-    def reject_acl_rewrite(*_: object, **__: object) -> subprocess.CompletedProcess[str]:
-        raise AssertionError("已符合预期 DACL 时不得再次启动 icacls")
+    def reject_acl_rewrite(*_: object, **__: object) -> None:
+        raise AssertionError("已符合预期 DACL 时不得再次写入")
 
-    monkeypatch.setattr(file_permissions.subprocess, "run", reject_acl_rewrite)
+    monkeypatch.setattr(file_permissions.windows_fs, "set_private_acl", reject_acl_rewrite)
     file_permissions.restrict_private_path_access(path, is_directory=is_directory)
 
 
@@ -167,7 +161,7 @@ def test_local_token_read_errors_preserve_credentials_and_explicit_retry(
     elif damage == "directory":
         path.unlink()
         path.mkdir()
-        expected, stage = IsADirectoryError, "open"
+        expected, stage = PermissionError if os.name == "nt" else IsADirectoryError, "open"
     elif damage == "permissions":
         path.chmod(0o644)
         expected, stage = PermissionError, "permissions"
@@ -196,10 +190,11 @@ def test_local_token_read_errors_preserve_credentials_and_explicit_retry(
     assert str(path) in record.getMessage() and token not in record.getMessage()
     assert (record.exc_info is not None) == isinstance(cause, (OSError, RuntimeError))
     if local_token_diagnostics.destination is not None:
-        assert "diagnostic_sink_error=NotADirectoryError" in str(error)
+        diagnostic_error = FileNotFoundError if os.name == "nt" else NotADirectoryError
+        assert f"diagnostic_sink_error={diagnostic_error.__name__}" in str(error)
         assert str(local_token_diagnostics.destination) not in str(error)
         assert cause is not None
-        assert str(local_token_diagnostics.destination) in "\n".join(cause.__notes__)
+        assert repr(str(local_token_diagnostics.destination)) in "\n".join(cause.__notes__)
         assert len(local_token_diagnostics.errors) == 1
     else:
         assert "diagnostic_sink_error=" not in str(error)

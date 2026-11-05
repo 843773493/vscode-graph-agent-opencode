@@ -54,6 +54,7 @@ def _build_owned_container(
         # 独立服务图没有生产lifespan；先释放业务存储，再关闭registry的catalog。
         request.addfinalizer(container.attachment_blob_store.close)
         request.addfinalizer(container.workspace_activity_service.store.close)
+        request.addfinalizer(container.workspace_service.close)
     monkeypatch.setattr(main, "WorkspaceContainerRegistry", lambda **_: registry)
     return container
 

@@ -7,11 +7,11 @@
 
 from __future__ import annotations
 
-import ctypes
 import os
 import tempfile
-from ctypes import wintypes
 from pathlib import Path
+
+from app.runtime import windows_fs
 
 __all__ = ["atomic_write_bytes", "fsync_directory", "fsync_file", "native_io_path"]
 
@@ -26,33 +26,10 @@ def native_io_path(path: Path) -> Path:
     return Path("\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value)
 
 
-def _flush_windows_directory(directory: Path) -> None:
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                       ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
-    create.restype = wintypes.HANDLE
-    flush, close = kernel.FlushFileBuffers, kernel.CloseHandle
-    for function in (flush, close):
-        function.argtypes = (wintypes.HANDLE,)
-        function.restype = wintypes.BOOL
-    # GENERIC_WRITE、共享读/写/删除、OPEN_EXISTING、BACKUP_SEMANTICS。
-    # 只读句柄不能 flush；不支持该屏障的文件系统必须透明失败。
-    handle = create(str(native_io_path(directory)), 0x40000000, 7, None, 3, 0x02000000, None)
-    if handle == ctypes.c_void_p(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        if not flush(handle):
-            raise ctypes.WinError(ctypes.get_last_error())
-    finally:
-        if not close(handle):
-            raise ctypes.WinError(ctypes.get_last_error())
-
-
 def fsync_directory(directory: Path) -> None:
     """请求目标文件系统同步目录元数据；不支持时明确抛错。"""
     if os.name == "nt":
-        _flush_windows_directory(directory)
+        windows_fs.flush_directory(native_io_path(directory))
         return
     descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
