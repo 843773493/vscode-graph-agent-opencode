@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from tests.support.ports import (
     TEST_FILE_PORT_BLOCK_SIZE,
     TEST_FILE_PORT_END,
     TEST_FILE_PORT_MAX_FILES,
+    TEST_FILE_PORT_RANGES,
     TEST_FILE_PORT_START,
     TestFilePortBlock,
     e2e_port_block_for_file,
@@ -36,7 +38,7 @@ def port_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PortTree:
     return prepare
 
 
-def test_repository_files_have_adjacent_disjoint_blocks_with_valid_ports() -> None:
+def test_repository_files_have_disjoint_blocks_with_valid_ports() -> None:
     root = Path.cwd() / "tests"
     blocks = [
         allocate(path)
@@ -53,8 +55,12 @@ def test_repository_files_have_adjacent_disjoint_blocks_with_valid_ports() -> No
         assert block.index == index
         assert block.end - block.start + 1 == TEST_FILE_PORT_BLOCK_SIZE
         assert block.backend_port == block.start
-        if index:
-            assert block.start == blocks[index - 1].end + 1
+        assert any(start <= block.start <= block.end <= end for start, end in TEST_FILE_PORT_RANGES)
+        assert block.end < 8000 or block.start >= 8800
+        if index and block.start != blocks[index - 1].end + 1:
+            assert (blocks[index - 1].end, block.start) == (TEST_FILE_PORT_END, TEST_FILE_PORT_RANGES[1][0])
+    ordered = sorted(blocks, key=lambda block: block.start)
+    assert all(left.end < right.start for left, right in pairwise(ordered))
     assert blocks[-1].end <= TEST_FILE_PORT_END <= 65535
 
 
@@ -74,15 +80,28 @@ def test_unused_layer_capacity_is_available_to_the_other_layer(
 
 
 @pytest.mark.parametrize("integration_count", [0, 450, 500, TEST_FILE_PORT_MAX_FILES])
-def test_full_shared_pool_ends_at_the_last_complete_block(
+def test_full_shared_pool_ends_at_the_last_complete_block_in_its_range(
     port_tree: PortTree, integration_count: int,
 ) -> None:
     integration, e2e = port_tree(integration_count, TEST_FILE_PORT_MAX_FILES - integration_count)
     block = e2e_port_block_for_file(e2e[-1]) if e2e else integration_port_block_for_file(integration[-1])
 
     assert block.index == TEST_FILE_PORT_MAX_FILES - 1
-    assert block.end == TEST_FILE_PORT_END <= 65535
-    assert block.end + TEST_FILE_PORT_BLOCK_SIZE > 65535
+    start, end = TEST_FILE_PORT_RANGES[-1]
+    assert block.end == start + (end - start + 1) // TEST_FILE_PORT_BLOCK_SIZE * TEST_FILE_PORT_BLOCK_SIZE - 1
+    assert block.end + TEST_FILE_PORT_BLOCK_SIZE > end
+
+
+def test_exhausted_high_range_uses_disjoint_low_range_without_wrapping(port_tree: PortTree) -> None:
+    high_start, high_end = TEST_FILE_PORT_RANGES[0]
+    high_capacity = (high_end - high_start + 1) // TEST_FILE_PORT_BLOCK_SIZE
+    integration, e2e = port_tree(high_capacity, 1)
+    previous = integration_port_block_for_file(integration[-1])
+    overflow = e2e_port_block_for_file(e2e[0])
+    assert previous.end == TEST_FILE_PORT_END
+    assert overflow.start == TEST_FILE_PORT_RANGES[1][0]
+    assert overflow.end < 8000
+    assert overflow.index == previous.index + 1
 
 
 def test_pool_overflow_rejects_even_the_first_file_in_either_layer(port_tree: PortTree) -> None:

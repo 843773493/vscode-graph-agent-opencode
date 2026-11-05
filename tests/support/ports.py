@@ -9,8 +9,10 @@ from typing import ClassVar, Literal
 
 TEST_FILE_PORT_BLOCK_SIZE = 100
 TEST_FILE_PORT_START = 8800
-TEST_FILE_PORT_MAX_FILES = (65536 - TEST_FILE_PORT_START) // TEST_FILE_PORT_BLOCK_SIZE
-TEST_FILE_PORT_END = TEST_FILE_PORT_START + TEST_FILE_PORT_BLOCK_SIZE * TEST_FILE_PORT_MAX_FILES - 1
+# 先保留既有高端口块，耗尽后使用低段；跳过特权端口及 8000–8799 开发服务段。
+TEST_FILE_PORT_RANGES = ((TEST_FILE_PORT_START, 65535), (1024, 7999))
+TEST_FILE_PORT_MAX_FILES = sum((end - start + 1) // TEST_FILE_PORT_BLOCK_SIZE for start, end in TEST_FILE_PORT_RANGES)
+TEST_FILE_PORT_END = max(start + (end - start + 1) // TEST_FILE_PORT_BLOCK_SIZE * TEST_FILE_PORT_BLOCK_SIZE - 1 for start, end in TEST_FILE_PORT_RANGES)
 
 
 @lru_cache(maxsize=16)
@@ -77,7 +79,15 @@ def port_block_for_file(
             f"count={test_file_count}, max={TEST_FILE_PORT_MAX_FILES}"
         )
 
-    start = TEST_FILE_PORT_START + index * TEST_FILE_PORT_BLOCK_SIZE
+    remaining_index = index
+    for range_start, range_end in TEST_FILE_PORT_RANGES:
+        capacity = (range_end - range_start + 1) // TEST_FILE_PORT_BLOCK_SIZE
+        if remaining_index < capacity:
+            start = range_start + remaining_index * TEST_FILE_PORT_BLOCK_SIZE
+            break
+        remaining_index -= capacity
+    else:
+        raise RuntimeError(f"测试端口块索引超出容量: index={index}")
     return TestFilePortBlock(
         test_file=resolved_file,
         index=index,
