@@ -113,6 +113,7 @@ async def open_communication_triad(
     resource_service_nodes: tuple[str, ...] = (),
     shared_session_ids: tuple[str, ...] = (),
     ports: TestFilePortBlock | None = None,
+    node_port_offsets: tuple[int, int, int] = (0, 20, 40),
     backend_asgi_app: str = "app.main:app",
     backend_environment: dict[str, str] | None = None,
     gateway_environment: dict[str, str] | None = None,
@@ -141,7 +142,9 @@ async def open_communication_triad(
         "UsePAM no", "PasswordAuthentication no", "KbdInteractiveAuthentication no",
         "PubkeyAuthentication yes", "StrictModes no", "AllowTcpForwarding yes", "LogLevel VERBOSE", "",
     ]))
-    layout = (("a", 0), ("b", 20)) if same_backend_routes else (("a", 0), ("b", 20), ("c", 40))
+    layout = tuple(zip(("a", "b", "c"), node_port_offsets, strict=True))
+    if same_backend_routes:
+        layout = layout[:2]
     backend_layout = layout[:1] if same_backend_routes else layout
     service_offsets = {60, *range(70, 80)}
     service_offsets.update(offset for _, offset in backend_layout)

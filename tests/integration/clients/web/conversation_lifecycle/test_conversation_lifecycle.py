@@ -46,6 +46,8 @@ from tests.support.workspaces import (
     prepare_default_test_workspace,
 )
 
+SECTION8_NODE_PORT_OFFSETS = (0, 10, 40)
+
 
 @pytest.fixture(scope="module")
 def section8_context(request: pytest.FixtureRequest) -> TestRunContext:
@@ -68,7 +70,9 @@ def section8_runtime(request: pytest.FixtureRequest, section8_context: TestRunCo
 def section8_ports(request: pytest.FixtureRequest, section8_context: TestRunContext) -> Iterator[TestFilePortBlock]:
     block = integration_port_block_for_file(Path(request.node.fspath))
     # 只检查实际服务和 SSH 隧道池；模型回放不再启动独立 HTTP 服务。
-    offsets = (0, 1, 4, 5, 6, 20, 21, 24, 25, 26, 40, 41, 44, 45, 46, 60, *range(70, 80))
+    offsets = (*(
+        offset + step for offset in SECTION8_NODE_PORT_OFFSETS for step in (0, 1, 4, 5, 6)
+    ), 60, *range(70, 80))
     probes: list[dict[str, object]] = []
     allocation = section8_context.artifacts_dir / "port-allocation.json"
     lease_path = section8_context.runtime_root_for_node(request.node.nodeid) / "test-control/process-lease.json"
@@ -237,7 +241,7 @@ async def section8_product_nodes(
         return workspace
 
     async with open_communication_triad(
-        context, prepare, ports=section8_ports,
+        context, prepare, ports=section8_ports, node_port_offsets=SECTION8_NODE_PORT_OFFSETS,
         resource_service_nodes=("a", "b", "c"),
         gateway_runtime_root=section8_runtime / "gateways",
         backend_asgi_app="tests.support.e2e_control.backend_app:app",
@@ -293,6 +297,7 @@ async def test_conversation_lifecycle_through_real_workbench(
         "tests/integration/clients/web/conversation_lifecycle/test_conversation_lifecycle.py",
         "tests/integration/clients/web/conversation_lifecycle/conversation_lifecycle.mjs",
         "tests/integration/clients/web/conversation_lifecycle/generated_internal_history_oracle.mjs",
+        "tests/integration/clients/web/conversation_lifecycle/fork_history_oracle.mjs",
         "tests/integration/clients/web/conversation_lifecycle/native_shutdown.mjs",
         "tests/integration/clients/web/conversation_lifecycle/diagnostic_response_bodies.mjs",
         "tests/support/communication/federation.py",
@@ -500,27 +505,35 @@ async def test_conversation_lifecycle_through_real_workbench(
             captures[call] = capture
         audits = {}
         covered_calls = set()
+        audit_targets = []
         for scenario, node_name in (
             ("basic_chat", "a"), ("child", "a"), ("team_turn", "a"),
             ("team_model_call", "c"), ("mcp_turn", "a"), ("mcp_model_call", "c"),
-            ("background_mailbox", "a"),
+            ("background_mailbox", "a"), ("compaction", "a"),
         ):
             if scenario not in selected:
                 continue
+            facts = result if scenario == "basic_chat" else result["section8"][scenario]
+            audit_targets.append((scenario, node_name, facts["sessionId"]))
+        if "fork_successor_rewind" in selected:
+            audit_targets.extend(
+                ("fork_successor_rewind", owner["name"], owner["sessionId"])
+                for owner in result["section8"]["fork_successor_rewind"]["auditOwners"]
+            )
+        for scenario, node_name, session in audit_targets:
             owner = section8_product_nodes[node_name]
             resolver = get_session_path_resolver(owner.workspace / ".boxteam/sessions")
-            facts = result if scenario == "basic_chat" else result["section8"][scenario]
-            session = facts["sessionId"]
             threads = {capture["identity"]["thread_id"] for capture in captures.values()
                        if capture["identity"]["session_id"] == session}
             assert threads, f"场景缺少真实transport请求: {scenario}/{session}"
-            audits[scenario] = {}
+            scenario_audits = audits.setdefault(scenario, {})
             for thread in sorted(threads):
                 report = audit_sealed_requests(
                     resolver.resolve_thread_node(session, thread) / "rollout/index.sqlite",
                     (resolver.resolve_session_node(session) / "logs/llm_requests").glob("*.json"), captures,
                 )
-                audits[scenario][thread] = report
+                assert thread not in scenario_audits, f"场景重复审计thread: {scenario}/{session}/{thread}"
+                scenario_audits[thread] = report
                 covered_calls.update(proof["model_call_id"] for proof in report["requests"])
             assert covered_calls.issuperset(
                 call for call, capture in captures.items() if capture["identity"]["session_id"] == session

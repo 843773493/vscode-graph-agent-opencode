@@ -9,6 +9,7 @@ import { beginForkOperationDeadline, beginForkSubmissionDeadline, bindForkOperat
   assertForkDeadlineCloseSemanticsForTest, closeForkDeadlineWatchdog, planGoldenLoop, planChatCalls, testControl,
   uuidText, waitForForkOperation } from "../../../../support/e2e_control/browser_client.mjs";
 import { expectedTypedInternalHistoryMembership } from "./generated_internal_history_oracle.mjs";
+import { expectedForkPrefixParts, freezeForkCanonicalItems } from "./fork_history_oracle.mjs";
 import { readDiagnosticResponseBody, runDiagnosticResponseLifetimeSelfTest } from "./diagnostic_response_bodies.mjs";
 import { WORKBENCH_LIFECYCLE_MARKER, classifyNativeShutdownLogs, observeNativeShutdown, originalConsoleLocation,
   runNativeShutdownClassifierSelfTest } from "./native_shutdown.mjs";
@@ -72,6 +73,7 @@ function section8ScenarioRegistry(surfaces, facts) {
     initial_admission_recovery: { default: true, run: () => runInitialAdmissionRecovery(surfaces) },
     generated_internal_history: { default: true, run: () => runGeneratedInternalHistory(surfaces) },
     owner_turns_navigation_smoke: { default: false, run: () => runOwnerTurnsNavigationSmoke(surfaces.a) },
+    fork_successor_rewind: { default: false, run: () => runForkSuccessorRewind(surfaces) },
     read_cursor_expiry: { default: true, run: () => runReadCursorExpiry(surfaces, facts.read_recovery) },
     skill_untrack: { default: true, run: () => runSkillUntrack(surfaces.a) },
   };
@@ -6149,7 +6151,7 @@ async function requestForkHttpResponse(source, request, targetSurface) {
 }
 
 async function forkHistoryEvidence(owner) {
-  const viewQuery = "SELECT d.rollout_id,d.active_branch_id,d.projection_epoch,d.history_view_revision,b.head_view_id AS view_id FROM database_meta d JOIN branches b ON b.branch_id=d.active_branch_id WHERE d.singleton_id=1";
+  const viewQuery = "SELECT d.rollout_id,n.active_branch_id,n.projection_epoch,d.history_view_revision,b.head_view_id AS view_id FROM database_meta d JOIN checkpoint_namespace_state n ON n.checkpoint_ns='' JOIN branches b ON b.branch_id=n.active_branch_id WHERE d.singleton_id=1";
   const frozenView = await readRollout(owner, viewQuery);
   assert.equal(frozenView.length, 1);
   assert.equal(typeof frozenView[0].view_id, "string");
@@ -6165,6 +6167,10 @@ async function forkHistoryEvidence(owner) {
     "SELECT t.turn_id,t.root_input_item_id,m.logical_item_ordinal FROM context_view_turns t JOIN context_view_items m ON m.view_id=t.view_id AND m.item_id=t.root_input_item_id WHERE t.view_id=? AND m.source_kind='canonical'", [frozenView[0].view_id]);
   const turns = await readRollout(owner,
     "SELECT tr.turn_id,tr.root_input_item_id,tr.initial_execution_id,tr.last_execution_id,tr.status,tr.final_item_id,tr.created_at,tr.updated_at,t.created_at AS projection_start,t.updated_at AS projection_end FROM turn_records tr JOIN turns t USING(turn_id) ORDER BY tr.turn_ordinal");
+  const node = await sessionCatalogNode(owner);
+  const canonicalItems = freezeForkCanonicalItems(await testControl({ action: "read_canonical_items", name: owner.name,
+    relative_path: await threadRolloutLocator(owner, node), item_ids: members.map(member => member.item_id) }), members);
+  assert.deepEqual(await readRollout(owner, viewQuery), frozenView, "canonical 原件必须与 history 使用同一冻结 view/revision");
   const inheritedExecutionOwners = freezeInternalExecutionOwners(history.internal_executions);
   const byItem = new Map(members.map((member) => [member.item_id, member]));
   for (const turn of history.items) {
@@ -6193,7 +6199,7 @@ async function forkHistoryEvidence(owner) {
       "SELECT i.item_id FROM context_view_items m JOIN item_catalog i USING(item_id) JOIN executions e USING(execution_id) WHERE m.view_id=? AND m.visible=1 AND m.context_selected=1 AND e.execution_origin='internal' AND e.outcome IN ('completed','completed_empty') ORDER BY m.context_ordinal DESC LIMIT 1", [frozenView[0].view_id]);
     completedAnchorItemId = internal[0]?.item_id ?? null;
   }
-  return { history, members, turns, view: frozenView[0], completedAnchorItemId, inheritedExecutionOwners };
+  return { history, members, turns, canonicalItems, view: frozenView[0], completedAnchorItemId, inheritedExecutionOwners };
 }
 
 function turnsWithoutHistorySnapshot(items) {
@@ -6556,6 +6562,11 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
     request.mode === "full_rollout_copy"
       ? "完整复制必须逐项保留源 context selection 与 ordinal"
       : "前缀复制必须保留截点内的 context selection，并按源顺序连续重编 ordinal");
+  const sourceCanonical = new Map(sourceEvidence.canonicalItems.map(entry => [entry.item.item_id, entry]));
+  const targetCanonical = new Map(targetEvidence.canonicalItems.map(entry => [entry.item.item_id, entry]));
+  assert.deepEqual(selectedMembers.map(member => targetCanonical.get(member.item_id)?.bytes),
+    selectedMembers.map(member => sourceCanonical.get(member.item_id)?.bytes),
+    "目标 visible canonical 原件必须逐字等于请求前冻结的 source，不能从目标投影反推预期");
   const selectedIds = new Set(selectedMembers.map((row) => row.item_id));
   assertForkInternalExecutionSet(sourceEvidence, after, selectedIds, request.mode);
   assert.deepEqual(after.items.map((turn) => turn.turn_id), before.items.filter((turn) =>
@@ -6569,9 +6580,15 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
     const rootSelected = selectedIds.has(sourceEvidence.turns.find((row) => row.turn_id === original.turn_id).root_input_item_id);
     assert.deepEqual(copied.user_messages.map((message) => message.content), rootSelected
       ? original.user_messages.map((message) => message.content) : []);
-    const selectedParts = original.response_parts.filter((part) => targetMembers.has(part.source.item_id));
+    const selectedParts = request.mode === "full_rollout_copy" ? original.response_parts
+      : expectedForkPrefixParts(sourceEvidence.canonicalItems, selectedMembers,
+        sourceEvidence.turns.find(row => row.turn_id === copied.turn_id));
     assert.deepEqual(copied.response_parts.map((part) => [part.part_id, part.kind, part.text ?? part.result ?? part.tool_name]),
       selectedParts.map((part) => [part.part_id, part.kind, part.text ?? part.result ?? part.tool_name]));
+    const tools = parts => parts.filter(part => ["tool_call", "tool_result"].includes(part.kind))
+      .map(part => [part.kind, part.tool_call_id,
+        typeof part.arguments === "string" ? JSON.parse(part.arguments) : part.arguments ?? null, part.result ?? null]);
+    assert.deepEqual(tools(copied.response_parts), tools(selectedParts), "fork 工具调用身份、参数与完整结果必须来自选中原件");
     if (request.mode === "full_rollout_copy") assert.deepEqual(copied.activity_stats, original.activity_stats);
     assert.deepEqual(copied.response_parts.map((part) => [part.source.item_id, part.source.part_ordinal, part.source.created_at, part.source.elapsed_ms]),
       selectedParts.map((part) => [part.source.item_id, part.source.part_ordinal, part.source.created_at, part.source.elapsed_ms]));
@@ -8658,8 +8675,76 @@ async function runRealCompaction(surface) {
   const restoredHistory = await loadThreadHistory(owner);
   assert.deepEqual(restoredHistory.items, history.items, "压缩后的历史在实际 backend 重启后保持原身份/顺序/统计");
   const evidence = await verifyOwnerTurns(owner);
+  // 压缩保留 seed2 的旧输出，但不再选择其 root 与 seed1；公开 root 分支
+  // 仍会把 seed2 final 的原 assembly 作为历史前驱，不能借 backing 重新带入旧正文。
+  const compactedSource = (await mcpAssemblies(owner, [actual.calls[2]]))[0];
+  const forkPredecessor = (await mcpAssemblies(owner, [prepared[2].calls.at(-1)]))[0];
+  const prefixFork = await forkOwner(owner, {
+    mode: "view_prefix_fork", creationKind: "new_child_thread", turnId: actual.sent.turnId,
+  });
+  const target = prefixFork.owner;
+  assert.equal(target.sessionId, owner.sessionId);
+  assert.notEqual(target.threadId, owner.threadId);
+  const selectedMembers = prefixFork.targetEvidence.members
+    .filter(row => row.context_selected === 1 && row.source_kind === "canonical")
+    .sort((left, right) => left.context_ordinal - right.context_ordinal);
+  const selectedIds = new Set(selectedMembers.map(row => row.item_id));
+  const sourceTurns = new Map(prefixFork.sourceEvidence.turns.map(row => [row.turn_id, row]));
+  const excludedRootIds = [prepared[1], prepared[2]].map(entry => sourceTurns.get(entry.sent.turnId).root_input_item_id);
+  const predecessorIds = forkPredecessor.snapshot.selection
+    .filter(entry => entry.included && entry.ref.ref_type === "canonical_item").map(entry => entry.ref.ref_id);
+  assert.ok(excludedRootIds.every(id => !selectedIds.has(id) && predecessorIds.includes(id)),
+    "真实 imported predecessor 必须含目标不选的两个旧 root，保证能够检出 backing 回流");
+  const sourceRefs = compactedSource.snapshot.selection
+    .filter(entry => entry.included && entry.ref.ref_type === "canonical_item").map(entry => entry.ref);
+  const sourceRefIds = new Set(sourceRefs.map(ref => ref.ref_id));
+  const expectedRefs = sourceRefs.filter(ref => selectedIds.has(ref.ref_id));
+  const expectedIds = expectedRefs.map(ref => ref.ref_id);
+  assert.deepEqual(expectedIds, selectedMembers.filter(row => sourceRefIds.has(row.item_id)).map(row => row.item_id),
+    "目标冻结前缀必须保持真实已压缩请求的有效 canonical 顺序");
+  assert.ok([sourceTurns.get(prepared[0].sent.turnId).root_input_item_id,
+    sourceTurns.get(prepared[0].sent.turnId).final_item_id, sourceTurns.get(prepared[2].sent.turnId).final_item_id,
+    sourceTurns.get(actual.sent.turnId).root_input_item_id, summaries[0].source.item_id]
+    .every(id => expectedIds.includes(id)), "缓存前缀、保留的 seed2 final、压缩摘要和点击 root 都必须入选");
+  const node = await sessionCatalogNode(target);
+  const importedRequest = { action: "read_assemblies", name: target.name,
+    relative_path: await threadRolloutLocator(target, node), session_id: owner.sessionId,
+    thread_id: owner.threadId, model_call_ids: [forkPredecessor.call] };
+  const imported = await testControl(importedRequest);
+  assert.deepEqual(imported, [forkPredecessor], "目标必须逐字保留该异 Thread 前驱的 bytes、hash 和 selection");
+  const successor = await completeOwnerTurn(target, "压缩来源分支只沿冻结前缀完成首次续写。", [
+    finalResponse("compact-prefix-fork-successor", "压缩来源的前缀分支已独立续写。"),
+  ]);
+  assert.equal(successor.turn.ordinal, Math.max(...prefixFork.targetHistory.items.map(turn => turn.ordinal)) + 1,
+    "首次 checkpoint 必须保留 fork 的稀疏 Turn 序号，新 Turn 沿父 view 最大序号追加");
+  assert.equal(successor.calls.length, 1);
+  const forkSealed = (await mcpAssemblies(target, successor.calls))[0];
+  assert.equal(forkSealed.snapshot.seal_binding.previous_assembly_id, forkPredecessor.snapshot.assembly_id,
+    "首次新调用必须真实使用含未选旧 root 的 imported predecessor");
+  const forkTransport = await modelRequest(successor.calls[0]);
+  assert.deepEqual([forkSealed.snapshot.session_id, forkSealed.snapshot.thread_id, forkSealed.snapshot.turn_id,
+    forkSealed.snapshot.execution_id, forkSealed.snapshot.model_call_id],
+    [target.sessionId, target.threadId, successor.sent.turnId, successor.executions[0].execution_id, successor.calls[0]]);
+  assert.deepEqual([forkTransport.identity.session_id, forkTransport.identity.thread_id, forkTransport.identity.model_call_id],
+    [target.sessionId, target.threadId, successor.calls[0]]);
+  const targetRefs = forkSealed.snapshot.selection
+    .filter(entry => entry.included && entry.ref.ref_type === "canonical_item").map(entry => entry.ref);
+  const newRoots = await readRollout(target, "SELECT root_input_item_id FROM turn_records WHERE turn_id=?", [successor.sent.turnId]);
+  assert.equal(newRoots.length, 1);
+  assert.deepEqual(targetRefs.map(ref => ref.ref_id), [...expectedIds, newRoots[0].root_input_item_id],
+    "首次请求只含精确冻结的有效前缀与一个新 root，不能从 backing 恢复已压缩正文");
+  assert.deepEqual(targetRefs.slice(0, -1), expectedRefs.map(ref => ({ ...ref,
+    session_id: target.sessionId, thread_id: target.threadId })), "只改变请求 owner，canonical ID、manifest、hash 和顺序全部保真");
+  const forkWire = JSON.stringify(forkTransport.request.messages);
+  assert.ok(forkWire.includes("压缩素材 0") && forkWire.includes("第 2 轮已确认 README") && forkWire.includes(actual.sent.prompt));
+  assert.ok(!forkWire.includes("压缩素材 1") && !forkWire.includes("第 1 轮已确认 README") && !forkWire.includes("压缩素材 2"),
+    "首次 transport 不能重新出现已压缩 seed1 或已移除的 seed2 root");
+  assert.deepEqual(await testControl(importedRequest), imported, "续写不能改写 imported predecessor 的封存事实");
+  assert.deepEqual(await readRollout(owner, activationQuery), frozenAfter, "目标续写不能改写来源 assembly/activation");
   return { sessionId: owner.sessionId, threadId: owner.threadId, prepared, actual, summary: summaries[0], archiveRead,
     compactedRequest: compactedRequest.identity, activity: turn.activity_stats,
+    forkSuccessor: { request: prefixFork.request, result: prefixFork.result, excludedRootIds, expectedIds,
+      predecessor: forkPredecessor, imported, successor, sealed: forkSealed, transportIdentity: forkTransport.identity },
     activationRecovery: { frozenBefore, frozenAtRestart, frozenAfter, control, refs, killed, restarted, evidence } };
 }
 
@@ -11144,6 +11229,230 @@ async function runMcpActivation(surface, boundary) {
   }
 }
 
+async function runForkSuccessorRewind(surfaces) {
+  const source = await createProductSession(surfaces.b, "非协作 fork 续写与用户回退来源");
+  const base = await completeOwnerTurn(source, "保留在所有 fork 中的来源用户输入。", [
+    finalResponse("fork-successor-base", "保留在所有 fork 中的来源回复。"),
+  ]);
+  const tailReasoning = "精确截点之后的来源 reasoning，不得从 backing 重新进入前缀分支。";
+  const tailFinal = "精确截点之后的来源 final，只允许完整 copy 继承。";
+  const anchor = await completeOwnerTurn(source, "以此用户 root 作为前缀分支的 inclusive 截点。", [
+    toolResponse("fork-successor-source-read", "read_file", { path: "README.md" }, tailReasoning),
+    finalResponse("fork-successor-source-final", tailFinal),
+  ]);
+  const sourceCalls = [...base.calls, ...anchor.calls];
+  const sourceSealed = await mcpAssemblies(source, sourceCalls);
+  const sourceByCall = new Map(sourceSealed.map(row => [row.call, row]));
+  const sourceItems = await readRollout(source,
+    "SELECT item_id,item_sequence,semantic_kind,payload_length,source_revision,content_hash FROM item_catalog ORDER BY item_sequence");
+  const sourceByItem = new Map(sourceItems.map(row => [row.item_id, row]));
+  const sourceTurns = await readRollout(source,
+    "SELECT turn_id,root_input_item_id,final_item_id FROM turn_records WHERE turn_id IN (?,?) ORDER BY turn_ordinal",
+    [base.sent.turnId, anchor.sent.turnId]);
+  assert.deepEqual(sourceTurns.map(row => row.turn_id), [base.sent.turnId, anchor.sent.turnId]);
+  const toolCarriers = await readRollout(source,
+    "SELECT item_id,semantic_kind,tool_call_id,status,projection_manifest_json FROM item_catalog WHERE json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=? AND (json_type(projection_manifest_json,'$.projection_group')='object' OR json_type(projection_manifest_json,'$.projection_identity.projection_message_id')='text') ORDER BY item_sequence",
+    [anchor.calls[0]]);
+  assert.deepEqual(toolCarriers.map(row => row.semantic_kind), ["reasoning", "tool_call", "tool_result"]);
+  const toolManifests = toolCarriers.map(row => JSON.parse(row.projection_manifest_json));
+  assert.deepEqual(toolManifests.map(row => row.projection_identity.model_call_id), Array(3).fill(anchor.calls[0]));
+  assert.deepEqual(toolManifests.slice(0, 2).map(row => row.projection_group), [
+    { content_form: "list", ordinal: 0, size: 2 }, { content_form: "list", ordinal: 1, size: 2 },
+  ]);
+  assert.ok(toolManifests.slice(1).every(row => typeof row.projection_identity.projection_message_id === "string"
+    && row.projection_identity.projection_message_id.length > 0));
+  assert.equal(toolCarriers[2].status, "completed");
+  assert.equal(toolCarriers[2].tool_call_id, "fork-successor-source-read");
+  // 本负载的有效消息由真实 root/final 和已闭合 checkpoint 工具组组成；
+  // 原 membership 仍保留实时分片及被 replaces 取代的载体，不能把它们再次投给 Provider。
+  const prefixIds = [sourceTurns[0].root_input_item_id, sourceTurns[0].final_item_id, sourceTurns[1].root_input_item_id];
+  const fullIds = [...prefixIds, ...toolCarriers.map(row => row.item_id), sourceTurns[1].final_item_id];
+  assert.equal(new Set(fullIds).size, 7);
+  assert.ok(fullIds.every(id => sourceByItem.has(id)));
+  const full = await forkOwner(source, { mode: "full_rollout_copy" }, surfaces.a);
+  const prefix = await forkOwner(source, {
+    mode: "view_prefix_fork", creationKind: "new_child_thread", turnId: anchor.sent.turnId,
+  }, full.owner);
+  assert.deepEqual([prefix.owner.sessionId, prefix.owner.child], [full.owner.sessionId, true]);
+  assert.notEqual(prefix.owner.threadId, full.owner.threadId);
+  const cases = [full, prefix].map(fork => ({ fork, owner: fork.owner,
+    label: fork.request.creation_kind,
+    retainedIds: fork.request.mode === "full_rollout_copy" ? fullIds : prefixIds,
+  }));
+  for (const entry of cases) assert.ok(entry.retainedIds.every(id => entry.fork.targetEvidence.members
+    .some(row => row.item_id === id && row.context_selected === 1)));
+  const imported = async (entry) => {
+    const { owner, fork } = entry;
+    const rows = await readRollout(owner,
+      "SELECT model_call_id FROM context_assemblies WHERE session_id=? AND thread_id=? ORDER BY model_call_id",
+      [source.sessionId, source.threadId]);
+    const calls = rows.map(row => row.model_call_id);
+    assert.ok(calls.length > 0, "目标必须保留有原来源 owner 的封存历史 backing");
+    if (fork.request.mode === "full_rollout_copy") assert.deepEqual(calls, [...sourceCalls].sort());
+    const node = await sessionCatalogNode(owner);
+    const sealed = await testControl({ action: "read_assemblies", name: owner.name,
+      relative_path: await threadRolloutLocator(owner, node), session_id: source.sessionId,
+      thread_id: source.threadId, model_call_ids: calls });
+    for (const row of sealed) {
+      assert.ok(sourceByCall.has(row.call), "imported assembly 只能来自原实际 transport 调用");
+      assert.deepEqual(row, sourceByCall.get(row.call), "imported source 的 bytes、hash、refs 及 owner 必须逐字保真");
+    }
+    return sealed;
+  };
+  const proveCall = async (entry, calls, sent, first = false) => {
+    const { owner, retainedIds } = entry;
+    assert.equal(calls.length, 1);
+    const sealed = (await mcpAssemblies(owner, calls))[0];
+    const snapshot = sealed.snapshot;
+    const transport = await modelRequest(calls[0]);
+    const execution = await readRollout(owner,
+      "SELECT m.execution_id,t.root_input_item_id FROM model_calls m JOIN executions e USING(execution_id) JOIN turn_records t ON t.turn_id=e.turn_id WHERE m.model_call_id=? AND e.job_id=? AND m.session_id=? AND m.thread_id=?",
+      [calls[0], sent.jobId, owner.sessionId, owner.threadId]);
+    assert.equal(execution.length, 1);
+    assert.deepEqual([snapshot.session_id, snapshot.thread_id, snapshot.turn_id, snapshot.execution_id, snapshot.model_call_id],
+      [owner.sessionId, owner.threadId, sent.turnId, execution[0].execution_id, calls[0]]);
+    assert.deepEqual([transport.identity.session_id, transport.identity.thread_id, transport.identity.model_call_id],
+      [owner.sessionId, owner.threadId, calls[0]], "新调用必须属于真实 factory 绑定的新目标执行");
+    if (first) assert.ok(entry.imported.some(row => row.snapshot.assembly_id === snapshot.seal_binding.previous_assembly_id),
+      "首次续写必须真实经过异 owner imported predecessor，不能以未触及 guard 的请求代替");
+    const refs = snapshot.selection.filter(item => item.included && item.ref.ref_type === "canonical_item").map(item => item.ref);
+    const ids = refs.map(ref => ref.ref_id);
+    assert.equal(new Set(ids).size, ids.length);
+    assert.deepEqual(ids.filter(id => sourceByItem.has(id)), retainedIds,
+      "目标请求只能按原冻结顺序继承精确截点内 canonical item，不能重新带入 backing");
+    for (const ref of refs) {
+      assert.deepEqual([ref.session_id, ref.thread_id], [owner.sessionId, owner.threadId]);
+      const original = sourceByItem.get(ref.ref_id);
+      if (original) assert.deepEqual([ref.item_sequence, ref.semantic_kind, ref.content_length, ref.source_revision, ref.content_hash],
+        [original.item_sequence, original.semantic_kind, original.payload_length, original.source_revision, original.content_hash],
+        "新目标 ref 只改变请求归属，原 canonical ID、manifest 和 bytes 身份保持");
+    }
+    assert.equal(ids.filter(id => id === execution[0].root_input_item_id).length, 1);
+    const wire = JSON.stringify(transport.request.messages);
+    assert.ok(wire.includes(base.sent.prompt) && wire.includes(anchor.sent.prompt));
+    const fullCopy = entry.fork.request.mode === "full_rollout_copy";
+    assert.equal(wire.includes(tailReasoning), fullCopy);
+    assert.equal(wire.includes(tailFinal), fullCopy);
+    return { sealed, canonicalIds: ids, transportIdentity: transport.identity, wire: transport.request.messages };
+  };
+  for (const entry of cases) {
+    assert.equal(entry.fork.result.export_release.state, "confirmed");
+    entry.imported = await imported(entry);
+    entry.binding = await graphBinding(entry.owner);
+    entry.first = await completeOwnerTurn(entry.owner, `${entry.label} 的首次本地新输入。`, [
+      finalResponse(`fork-${entry.label}-first`, `${entry.label} 已使用精确冻结来源首次续写。`),
+    ]);
+    entry.firstProof = await proveCall(entry, entry.first.calls, entry.first.sent, true);
+    entry.beforeRestart = await loadCompleteThreadHistory(entry.owner);
+    const inheritedRoots = entry.fork.targetEvidence.history.items
+      .map(turn => [turn.turn_id, turn.root_logical_item_ordinal]);
+    assert.deepEqual(entry.beforeRestart.items.slice(0, inheritedRoots.length)
+      .map(turn => [turn.turn_id, turn.root_logical_item_ordinal]), inheritedRoots,
+    "首次续写不得重编号继承 Turn 的历史坐标");
+  }
+  const reopen = await replaceNodePage(surfaces.a, cases.map(entry => entry.owner));
+  const killed = await testControl({ action: "process", name: "a", operation: "kill" });
+  const restarted = await testControl({ action: "process", name: "a", operation: "start" });
+  assert.notEqual(killed.before_pid, restarted.after_pid);
+  await reopen();
+  for (const entry of cases) {
+    assert.deepEqual(await graphBinding(entry.owner), entry.binding);
+    entry.coldHistory = await loadCompleteThreadHistory(entry.owner);
+    assert.deepEqual(turnsWithoutHistorySnapshot(entry.coldHistory.items), turnsWithoutHistorySnapshot(entry.beforeRestart.items));
+    assert.deepEqual(await imported(entry), entry.imported, "冷恢复不能重写 imported source 封存事实");
+    assert.deepEqual(await mcpAssemblies(entry.owner, entry.first.calls), [entry.firstProof.sealed],
+      "重启不能重写首次本地调用的 sealed bytes/hash");
+    entry.afterRestart = await completeOwnerTurn(entry.owner, `${entry.label} 在 Backend 重启后的独立新输入。`, [
+      finalResponse(`fork-${entry.label}-cold`, `${entry.label} 已在原 owner 冷恢复后继续。`),
+    ]);
+    entry.coldProof = await proveCall(entry, entry.afterRestart.calls, entry.afterRestart.sent);
+  }
+  const main = cases[0], child = cases[1];
+  const nativeBeforeReplay = await mcpAssemblies(main.owner, [...main.first.calls, ...main.afterRestart.calls]);
+  const childBeforeReplay = await forkHistoryEvidence(child.owner);
+  await openOwner(main.owner);
+  const beforeReplay = await forkHistoryEvidence(main.owner);
+  const removedTurns = [main.first.sent.turnId, main.afterRestart.sent.turnId];
+  const removedIds = beforeReplay.members.filter(row => removedTurns.includes(row.turn_id)).map(row => row.item_id);
+  assert.ok(removedIds.length > 0);
+  const replacement = "用户已编辑原续写输入，只沿回退后的上下文继续。";
+  const replayCalls = await planChatCalls(main.owner.sessionId, main.owner.threadId, [
+    finalResponse("fork-user-edit-replay", "主窗口的独立用户回退已完成。"),
+  ]);
+  const transcript = expectedTranscript(beforeReplay.history);
+  const index = transcript.findIndex(item => item.kind === "turn" && item.turnId === main.first.sent.turnId);
+  assert.ok(index >= 0);
+  await visitTranscriptIndex(main.owner, transcript, index);
+  const article = threadSurface(main.owner).locator(`.chat-turn[data-turn-id="${main.first.sent.turnId}"]`);
+  await article.getByRole("button", { name: "消息操作", exact: true }).click();
+  await main.owner.page.getByRole("menuitem", { name: "编辑并从此处继续", exact: true }).click();
+  await article.getByRole("textbox", { name: "编辑用户消息", exact: true }).fill(replacement);
+  const replayPath = `/api/v1/sessions/${main.owner.sessionId}/messages/${main.first.sent.accepted.message_id}/replay`;
+  const [response] = await Promise.all([
+    main.owner.page.waitForResponse(item => item.request().method() === "POST"
+      && new URL(item.url()).pathname === replayPath, { timeout: 30_000 }),
+    article.getByRole("button", { name: "编辑并从此处继续", exact: true }).click(),
+  ]);
+  assert.equal(response.status(), 200, await response.text());
+  const replayRequest = response.request();
+  assert.deepEqual(replayRequest.postDataJSON(), { action: "edit_and_continue", content: replacement, acknowledge_context_only: true });
+  assert.deepEqual([replayRequest.headers()["x-boxteam-workspace-id"], replayRequest.headers()["x-boxteam-target-gateway-id"]],
+    [main.owner.workspaceId, main.owner.gatewayId]);
+  const accepted = await response.json();
+  assert.equal(accepted.request_id, response.headers()["x-request-id"]);
+  assert.ok(accepted.request_id);
+  assert.deepEqual([accepted.data.session_id, accepted.data.thread_id, accepted.data.action, accepted.data.replaced_message_id, accepted.data.workspace_changes_reverted],
+    [main.owner.sessionId, main.owner.threadId, "edit_and_continue", main.first.sent.accepted.message_id, false]);
+  assert.notEqual(accepted.data.message_id, main.first.sent.accepted.message_id);
+  assert.notEqual(accepted.data.turn_id, main.first.sent.turnId);
+  assert.notEqual(accepted.data.job_id, main.first.sent.jobId);
+  const replaySent = { prompt: replacement, accepted: accepted.data, turnId: accepted.data.turn_id,
+    jobId: accepted.data.job_id, requestId: accepted.request_id };
+  await waitForJobStatus(main.owner, replaySent.jobId);
+  await waitForPlannedExecutions(main.owner, replayCalls);
+  const replayTurn = await assertAcceptedTurn(main.owner, replaySent);
+  assert.equal(replayTurn.status, "completed");
+  const replayProof = await proveCall(main, replayCalls, replaySent);
+  assert.ok(removedIds.every(id => !replayProof.canonicalIds.includes(id)), "回退后的首个请求不能继承旧 Turn canonical item");
+  const afterReplay = await forkHistoryEvidence(main.owner);
+  assert.notDeepEqual(afterReplay.view, beforeReplay.view);
+  const originalIndex = beforeReplay.history.items.findIndex(turn => turn.turn_id === main.first.sent.turnId);
+  assert.deepEqual(afterReplay.history.items.map(turn => turn.turn_id), [
+    ...beforeReplay.history.items.slice(0, originalIndex).map(turn => turn.turn_id), replaySent.turnId,
+  ], "有效 history 必须精确裁掉旧用户轮次和尾部，只增加一个新回退 Turn");
+  const replayTranscript = expectedTranscript(afterReplay.history);
+  await visitTranscriptIndex(main.owner, replayTranscript, replayTranscript.findIndex(item => item.turnId === replaySent.turnId));
+  const notice = () => threadSurface(main.owner).locator(`.chat-turn[data-turn-id="${replaySent.turnId}"]`)
+    .getByText("已回退上下文，从编辑后的消息继续", { exact: true });
+  await expect(notice()).toBeVisible();
+  const replayDom = await verifyOwnerTurns(main.owner);
+  await expect(notice()).toBeVisible();
+  assert.deepEqual(await mcpAssemblies(main.owner, [...main.first.calls, ...main.afterRestart.calls]), nativeBeforeReplay,
+    "回退只改变有效 view，不得改写被裁掉调用的 sealed bytes/hash");
+  const next = await completeOwnerTurn(main.owner, "回退完成后的下一轮独立用户输入。", [
+    finalResponse("fork-user-after-replay", "后续请求仍只消费回退后的有效上下文。"),
+  ]);
+  const nextProof = await proveCall(main, next.calls, next.sent);
+  for (const proof of [replayProof, nextProof]) {
+    assert.ok(removedIds.every(id => !proof.canonicalIds.includes(id)));
+    const wire = JSON.stringify(proof.wire);
+    assert.ok(!wire.includes(main.first.sent.prompt) && !wire.includes(main.afterRestart.sent.prompt));
+  }
+  assert.deepEqual(await imported(main), main.imported);
+  assert.deepEqual(await imported(child), child.imported);
+  assert.deepEqual(turnsWithoutHistorySnapshot((await loadCompleteThreadHistory(child.owner)).items),
+    turnsWithoutHistorySnapshot(childBeforeReplay.history.items), "main 用户回退不能裁切 child 的独立历史");
+  assert.deepEqual(await mcpAssemblies(source, sourceCalls), sourceSealed, "所有目标操作不得重写来源 sealed bytes/hash");
+  return { auditOwners: [{ name: "b", sessionId: source.sessionId }, { name: "a", sessionId: full.owner.sessionId }],
+    source: { sessionId: source.sessionId, threadId: source.threadId, base, anchor, sealed: sourceSealed }, killed, restarted,
+    targets: cases.map(entry => ({ sessionId: entry.owner.sessionId, threadId: entry.owner.threadId,
+      request: entry.fork.request, result: entry.fork.result, retainedIds: entry.retainedIds,
+      imported: entry.imported, first: entry.first, firstProof: entry.firstProof, coldHistory: entry.coldHistory,
+      afterRestart: entry.afterRestart, coldProof: entry.coldProof, binding: entry.binding })),
+    rewind: { before: beforeReplay.view, after: afterReplay.view, removedTurns, removedIds,
+      sent: replaySent, calls: replayCalls, proof: replayProof, dom: replayDom, next, nextProof } };
+}
+
 async function runOwnerTurnsNavigationSmoke(surface) {
   const owner = await createProductSession(surface, "单 Turn 主窗口历史校验导航");
   const completed = await completeOwnerTurn(owner, "完成单 Turn 历史校验导航 smoke。", [
@@ -12521,9 +12830,15 @@ try {
       diagnostics[name] = value;
     }
   }
+  const completedScenarioFiles = {};
+  for (const name of result.completedScenarios ?? []) {
+    const file = `${resultPath}.scenario-${name}.json`;
+    await writeFile(file, JSON.stringify(result.section8[name], null, 2));
+    completedScenarioFiles[name] = file;
+  }
   await writeFile(resultPath, JSON.stringify({ ...failure, screenshotError,
     section8Mode: result.section8Mode, focusedScenarios: result.focusedScenarios,
-    completedScenarios: result.completedScenarios ?? [], navigationFailure: result.navigationFailure,
+    completedScenarios: result.completedScenarios ?? [], completedScenarioFiles, navigationFailure: result.navigationFailure,
     copyMissingAttachmentProgress: result.copyMissingAttachmentProgress, diagnostics }, null, 2));
   throw error;
 } finally {

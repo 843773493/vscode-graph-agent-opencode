@@ -387,13 +387,35 @@ class E2ETestControlHarness:
             if not path.is_relative_to(root) or not path.is_dir():
                 raise ValueError("只读目录路径不属于当前 pytest fixture 的目录")
             return sorted(entry.name for entry in path.iterdir())
-        if action in {"read_sql", "read_assemblies"}:
+        if action in {"read_sql", "read_assemblies", "read_canonical_items"}:
             root = self._trace_roots[cast(str, request["name"])]
             path = (root / cast(str, request["relative_path"])).resolve(strict=True)
             if not path.is_relative_to(root) or not path.is_file():
                 raise ValueError("只读 trace 路径不属于当前 pytest fixture")
             with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
                 connection.execute("PRAGMA query_only=ON")
+                if action == "read_canonical_items":
+                    item_ids = cast(list[str], request["item_ids"])
+                    if len(set(item_ids)) != len(item_ids):
+                        raise ValueError("canonical 原件读取不能重复 item_id")
+                    if not item_ids:
+                        return []
+                    placeholders = ",".join("?" for _ in item_ids)
+                    rows = connection.execute(
+                        "SELECT item_id,jsonl_offset,jsonl_length FROM item_catalog "
+                        f"WHERE item_id IN ({placeholders}) ORDER BY item_sequence", item_ids,
+                    ).fetchall()
+                    if len(rows) != len(item_ids):
+                        raise LookupError("冻结 canonical item 不完整")
+                    result: list[dict[str, object]] = []
+                    with path.with_name("rollout.jsonl").open("rb") as stream:
+                        for item_id, offset, length in rows:
+                            stream.seek(offset)
+                            value = stream.read(length)
+                            if len(value) != length or json.loads(value)["item_id"] != item_id:
+                                raise ValueError("canonical 原件 offset/identity 不一致")
+                            result.append({"bytes": value.decode("utf-8")})
+                    return result
                 if action == "read_assemblies":
                     from app.services.infrastructure.rollout_context.assembly.content_store import (
                         load_snapshot,

@@ -358,7 +358,12 @@ class RolloutCheckpointQueriesMixin:
         pending_ids = []
         # 从唯一 applied assembly 携带精确前缀，再追加当前准入自己的
         # 输入、输出和 retry 来源；用户执行同样可能产生 Turn 外来源。
-        if predecessor is not None and self._pending_context_epoch_row(connection, checkpoint_ns) is None:
+        # fork 导入的 assembly 只作历史 backing，不能作为目标已应用的执行前缀。
+        if (
+            predecessor is not None
+            and (predecessor.session_id, predecessor.thread_id) == (session_id, thread_id)
+            and self._pending_context_epoch_row(connection, checkpoint_ns) is None
+        ):
             pending_ids.extend(entry.ref.ref_id for entry in predecessor.selection
                                if entry.included and entry.ref.ref_type == "canonical_item")
         pending_ids.extend(row[0] for row in connection.execute(
