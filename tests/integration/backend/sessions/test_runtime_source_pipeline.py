@@ -89,6 +89,12 @@ from tests.harness.python.browser_manager import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import start_terminal_backend
+from tests.integration.backend.sessions.test_session_generation_strategies import (
+    _accepted_generation,
+    _check_generation,
+    _create_generation,
+    _generation_configuration,
+)
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2ETestControlHarness, control_request
 from tests.support.e2e_control.runtime_ports import (
@@ -1094,28 +1100,30 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     parent_job, _child_job, intent = await _team_child(case)
     session_id, child_thread_id = parent_job["session_id"], intent.thread_id
     main_thread_id = parent_job["thread_id"]
+    assert isinstance(session_id, str) and isinstance(main_thread_id, str)
     report_call, = await case.plan(session_id, [{"content": "H4-exact-child-origin-ack"}], thread_id=child_thread_id)
     case.control.arm_match("h4-generated", "thread.runtime.acquired", {"execution_origin": "user_turn"})
     workspace_id = case.client.headers["X-BoxTeam-Workspace-Id"]
-    payload = {
-        "run_id": "h4-run", "generator_id": "h4-generator", "idempotency_key": "h4-stable-key",
-        "generator_type": {"type_id": "builtin.agent_prompt", "version": "1"}, "name": "H4 生成器",
+    configuration = _generation_configuration(
+        mode="fork_new_and_report_back", workspace_id=workspace_id,
+        target_session_id=session_id, target_thread_id=child_thread_id, report_back="continue_agent",
+    )
+    configuration["name"] = "H4 生成器"
+    generation = configuration["action"]["generation"]
+    generation.update({
         "config": {"prompt": "H4-private-generator-prompt：返回 H4-generated-result。"},
         "placement": {"kind": "workspace", "workspace_id": workspace_id},
-        "execution_workspace_id": workspace_id, "context_source": {"kind": "fresh"},
-        "session_strategy": {"mode": "fork_new_and_report_back", "concurrency": "queue",
-            "report_back": "continue_agent", "target": {"workspace_id": workspace_id,
-                "session_id": session_id, "thread_id": child_thread_id}},
-        "title": "H4 生成分支", "navigation_path": [],
-    }
-    response = await case.client.post("/api/v1/session-generations/execute", json=payload)
-    assert response.status_code == 200, response.text
-    accepted = response.json()["data"]
+        "title_template": "H4 生成分支", "path_template": [],
+    })
+    task, run = await _create_generation(case.client, configuration, "h4-stable-key")
+    accepted_run = await _accepted_generation(case.client, task, run)
+    accepted = accepted_run["generation"]
     generated_session_id = accepted["outputs"][0]["session_id"]
     generated = await asyncio.to_thread(case.control.acknowledged_match, "h4-generated")
     try:
-        assert generated["details"]["session_id"] == generated_session_id
-        generated_call, = await case.plan(generated_session_id, [{"content": "H4-generated-result"}], thread_id=generated["details"]["thread_id"])
+        details = generated["details"]
+        assert isinstance(details, dict) and details["session_id"] == generated_session_id
+        generated_call, = await case.plan(generated_session_id, [{"content": "H4-generated-result"}], thread_id=details["thread_id"])
     finally:
         control_request(json.loads(case.control.environment["BOXTEAM_E2E_TEST_CONTROL"]), {
             "action": "release_match", "barrier_id": "h4-generated",
@@ -1123,21 +1131,24 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     generated_job = await _job(case, accepted["job_id"])
     async with asyncio.timeout(45):
         while True:
-            status_response = await case.client.get("/api/v1/session-generations/status", params={
-                "generator_id": "h4-generator", "idempotency_key": "h4-stable-key"})
+            status_response = await case.client.get(f"/api/v1/persistent-tasks/{task['task_id']}/runs")
             assert status_response.status_code == 200, status_response.text
-            result = status_response.json()["data"]
+            assert status_response.headers["X-Request-ID"] == status_response.json()["request_id"]
+            current, = [item for item in status_response.json()["data"]["items"] if item["run_id"] == run["run_id"]]
+            result = current["generation"]
             if result["status"] in {"completed", "failed"}:
                 assert result["status"] == "completed", result
                 break
             await asyncio.sleep(0.05)
-    report_job = await _job(case, result["report_back_job_id"])
+    report_job_id = result["report_back_job_id"]
+    report_job = await _job(case, report_job_id)
     assert report_job["session_id"] == session_id and report_job["thread_id"] == child_thread_id
     assert case.sql(session_id, child_thread_id, "SELECT COUNT(*) FROM turn_records")[0][0] == 0
     assert case.sql(session_id, main_thread_id, "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind='runtime_notice'")[0][0] == 1
     child_notices = case.sql(session_id, child_thread_id, "SELECT item_id FROM item_catalog WHERE semantic_kind='runtime_notice'")
     assert len(child_notices) == 1
     generated_thread_id = generated_job["thread_id"]
+    assert isinstance(generated_thread_id, str)
     generated_execution = case.sql(generated_session_id, generated_thread_id,
         "SELECT execution.execution_id, turn.final_item_id FROM executions AS execution "
         "JOIN turn_records AS turn ON turn.turn_id=execution.turn_id WHERE execution.job_id=?",
@@ -1175,11 +1186,13 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     )
     generated_contexts = [_wire_text(case.request(generated_call)["messages"])]
     assert "H4-private-generator-prompt" in generated_contexts[0]
-    report_prompts = [_wire_text(message["content"]) for message in case.request(report_call)["messages"]
+    report_messages = case.request(report_call)["messages"]
+    assert isinstance(report_messages, list)
+    report_prompts = [_wire_text(message["content"]) for message in report_messages
                       if message["role"] == "user" and "<generated_session_result" in _wire_text(message["content"])]
     assert len(report_prompts) == 1 and report_prompts[0].count("H4-generated-result") == 1
     report_admission = case.container.checkpointer.execution_admission_for_job(
-        session_id, thread_id=child_thread_id, job_id=report_job["job_id"],
+        session_id, thread_id=child_thread_id, job_id=report_job_id,
     )
     history_response = await case.client.post(
         f"/api/v1/sessions/{session_id}/threads/{child_thread_id}/history",
@@ -1192,11 +1205,17 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     assert [part["text"] for part in report_history["display_parts"]] == ["生成分支已结束，主会话正在处理返回结果。"]
     assert all(private not in canonical_json_bytes(history).decode()
                for private in ("H4-generated-result", "H4-private-generator-prompt"))
-    repeat = await case.client.post("/api/v1/session-generations/execute", json=payload)
-    assert repeat.status_code == 200 and repeat.json()["data"] == result, repeat.text
+    current_task_response = await case.client.get(f"/api/v1/persistent-tasks/{task['task_id']}")
+    assert current_task_response.status_code == 200, current_task_response.text
+    current_task = current_task_response.json()["data"]
+    assert current_task["task_id"] == task["task_id"]
+    repeated_task, repeated_run = await _create_generation(case.client, configuration, "h4-stable-key")
+    assert repeated_task == current_task
+    assert repeated_run == await _check_generation(case.client, task, "h4-stable-key") == current
+    assert repeated_run["generation"] == result
     assert case.sql(session_id, child_thread_id, "SELECT COUNT(*) FROM executions")[0][0] == 2
     case.write_actual("h4", {"generated_session_id": generated_session_id, "generated_job": generated_job,
-        "report_job": report_job, "result": result, "exact_origin_thread_id": child_thread_id,
+        "report_job": report_job, "task": task, "run": current, "result": result, "exact_origin_thread_id": child_thread_id,
         "child_runtime_inputs": child_notices, "canonical_report": canonical_report,
         "report_provider_prompts": report_prompts, "report_history": report_history,
         "private_seed_in_generated_context": any("private-seed-h1" in value for value in generated_contexts),
