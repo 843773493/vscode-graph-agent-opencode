@@ -57,15 +57,17 @@ class ContextAssemblyReaderMixin:
             connection = snapshot.connection
             row = connection.execute(
                 "SELECT assembly.assembly_id,call.model_call_id,call.execution_id FROM context_assemblies assembly "
-                "JOIN model_calls call ON call.assembly_id=assembly.assembly_id "
+                "CROSS JOIN model_calls call ON call.assembly_id=assembly.assembly_id "
                 "AND call.session_id=assembly.session_id AND call.thread_id=assembly.thread_id "
                 "AND call.execution_id=assembly.execution_id "
                 "WHERE assembly.session_id=? AND assembly.thread_id=? AND call.dispatch_state IN ('dispatched','completed') "
                 "AND assembly.status IN ('sealed','terminal') "
-                "AND json_extract(assembly.snapshot_json,'$.selection_policy')<>'summary_candidate' AND EXISTS ("
-                "SELECT 1 FROM context_assembly_selections selection LEFT JOIN context_assembly_contributions contribution "
+                # 先按输入身份定位 selection，再核封存和派发状态；不能逐个历史请求重查同一输入。
+                # 保留 assembly/attempt 原序，失败重试可复用同一 assembly，不能只查其最新 call 指针。
+                "AND json_extract(assembly.snapshot_json,'$.selection_policy')<>'summary_candidate' AND assembly.assembly_id IN ("
+                "SELECT selection.assembly_id FROM context_assembly_selections selection LEFT JOIN context_assembly_contributions contribution "
                 "ON contribution.assembly_id=selection.assembly_id AND contribution.contribution_id=selection.contribution_id "
-                "WHERE selection.assembly_id=assembly.assembly_id AND selection.included=1 AND " + predicate + ") "
+                "WHERE selection.included=1 AND " + predicate + ") "
                 "ORDER BY assembly.rowid,call.attempt LIMIT 1", (session_id, thread_id, *values),
             ).fetchone()
             if row is None:
