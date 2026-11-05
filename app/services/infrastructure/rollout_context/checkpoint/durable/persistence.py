@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Mapping
+from functools import partial
 from uuid import uuid4
 
 from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
@@ -206,9 +207,11 @@ class RolloutCheckpointPersistenceMixin:
                 )
                 message_count = len(batch.visible_sequences)
             else:
+                # 同批复用已成功校验的提交与历史授权；每个 item 的边界、正文和投影仍逐条核对。
                 batch = prepare_messages(
                     connection=connection, jsonl=jsonl, codec=self._storage._codec(),
-                    read_item=self._storage._read_v2_item_at, thread_id=thread_id,
+                    read_item=partial(self._storage._read_v2_item_at, validated_commits=set(), validated_scopes=set()),
+                    thread_id=thread_id,
                     messages=current_messages, last_message_sequence=last_message_sequence,
                     next_item_sequence=next_item_sequence, offset=jsonl_offset_before,
                     read_locator_sequences=(
