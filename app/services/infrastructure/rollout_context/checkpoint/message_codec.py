@@ -345,9 +345,12 @@ class LangChainMessageCodec:
                 f"message_id={message_id!r}, caller={model_call_id!r}, "
                 f"message={message_model_call_id!r}"
             )
-        message_value = self.to_dict(message)
-        data = message_value.get("data")
-        data_mapping = data if isinstance(data, Mapping) else {}
+        if not isinstance(message, BaseMessage):
+            raise TypeError("消息 codec 只接受 LangChain BaseMessage")
+        # 这里只适配正文；typed 身份和 annotations 已从 metadata 单独读取，
+        # 不再序列化整份 metadata、artifact 和其它未消费字段。
+        data_mapping = message.model_dump(include={"content", "tool_calls", "invalid_tool_calls", "tool_call_id", "name"})
+        tool_calls = self.tool_calls({"data": data_mapping})
         if canonical_items and canonical_items[-1].semantic_kind == SemanticKind.COMPACTION_SUMMARY:
             stored = canonical_items[-1]
             if (len(canonical_items) != 1 or not isinstance(message, HumanMessage)
@@ -461,11 +464,11 @@ class LangChainMessageCodec:
             }
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
-        elif self.tool_calls(message_value):
+        elif tool_calls:
             semantic_kind = SemanticKind.TOOL_CALL
             payload_kind = PayloadKind.TOOL_CALL
             payload = {
-                "tool_calls": [dict(call) for call in self.tool_calls(message_value)]
+                "tool_calls": [dict(call) for call in tool_calls]
             }
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
@@ -534,9 +537,10 @@ class LangChainMessageCodec:
         )
         group = expand_tool_message(primary, data_mapping.get("content", ""))
         if canonical_items and len(group) == len(canonical_items):
-            # 身份只来自 locator 读出的规范组；正文和 typed 镜像仍须逐成员重验。
+            # 坐标相同就复用已构造的候选；无变化的 replace 仍会重新校验、摘要整份正文。
             group = tuple(
-                replace(item, item_id=stored.item_id, message_group_id=stored.message_group_id)
+                item if (item.item_id, item.message_group_id) == (stored.item_id, stored.message_group_id)
+                else replace(item, item_id=stored.item_id, message_group_id=stored.message_group_id)
                 for item, stored in zip(group, canonical_items, strict=True)
             )
         return restore_group_manifests(group, response_metadata)
