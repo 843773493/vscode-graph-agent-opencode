@@ -322,3 +322,7 @@
 
 - 样式阻塞的真实Chromium最小复现确认：原HTML在提交监听器安装前接受回车，触发原生表单跳转、清空地址及owner查询参数。现将同一早期处理提前到样式前，模块完成后继续复用原navigate，不新增导航链路；回归明确阻塞首次样式并核URL、双目标创建头及Thread归属。
 - 真实Gateway/Workbench手动Browser场景通过，保留首次导航、焦点、空白标签、导航错误恢复、无randomUUID和模块失败重载断言；同组合file-cache与session-info通过，catalog在随后main打开阶段失败，整体3 passed／1 failed，不记全组通过。HTML／JS静态通过，准确命令、首尾源码及独立patch见 `out/tests/temp/browser_early_navigation_20261105/artifacts/source-attribution.json`；viewport的他人改动未纳入本提交。6.4继续未勾。
+
+### 2026-11-05：6.4 文件缓存与会话信息产品消费者
+
+- 正式Workbench的文件缓存与会话信息两项通过，工作区身份从真实文件／Gateway登记核对并以完整owner保存，所有业务调用双目标头；保留图片私有缓存重验、跨工作区隔离与会话信息实际展示断言。它们所属组合仍有catalog失败，未表述全绿。源码首尾和静态一致，复核记录 `out/tests/temp/identity_remaining_web_20261105/artifacts/cache-session-info-source-attribution.json`；6.4仍未勾。

@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - pytest 显式导入共享构建装具
@@ -88,13 +89,25 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
             timeout=30,
         ) as client:
             await acquire_gateway_guest(client)
+            health_response = await client.get("/api/gateway/health")
+            assert health_response.status_code == 200, health_response.text
+            owner = {
+                "gateway_id": health_response.json()["data"]["gateway_id"],
+                "workspace_id": read_workspace_id(workspace_root),
+            }
             workspaces_response = await client.get("/api/gateway/workspaces")
             assert workspaces_response.status_code == 200, workspaces_response.text
-            workspace_id = workspaces_response.json()["data"]["active_workspace_id"]
+            workspaces = workspaces_response.json()["data"]
+            assert workspaces["active_workspace"] == owner
+            targets = [item for item in workspaces["items"] if all(item[key] == value for key, value in owner.items())]
+            assert len(targets) == 1 and targets[0]["connection_kind"] == "local"
+            client.headers.update({
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+            })
             create_response = await client.post(
                 "/api/v1/sessions",
                 json={"title": "超长诊断标题" * 300},
-                headers={"X-BoxTeam-Workspace-Id": workspace_id},
             )
             assert create_response.status_code == 200, create_response.text
             session_id = create_response.json()["data"]["session_id"]
@@ -104,7 +117,7 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
             {
                 "BOXTEAM_E2E_BASE_URL": f"http://127.0.0.1:{port}",
                 "BOXTEAM_E2E_FIXTURE": json.dumps(
-                    {"sessionId": session_id, "workspacePath": str(workspace_root)},
+                    {"sessionId": session_id, "workspacePath": str(workspace_root), "owner": owner},
                     ensure_ascii=False,
                 ),
                 "BOXTEAM_E2E_RESULT_PATH": str(result_path),
@@ -134,9 +147,7 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
         assert browser_result["kind"] == "session_diagnostic_snapshot"
         assert browser_result["schemaVersion"] == 2
         assert browser_result["noPhysicalLocator"] is True
-        assert (
-            browser_result["apiWorkspaceId"] == browser_result["clipboardWorkspaceId"]
-        )
+        assert browser_result["apiOwner"] == browser_result["clipboardOwner"] == owner
         assert browser_result["titleTruncated"] is True
         assert browser_result["titleLength"] == 512
         assert browser_result["activeResourceCount"] <= 32

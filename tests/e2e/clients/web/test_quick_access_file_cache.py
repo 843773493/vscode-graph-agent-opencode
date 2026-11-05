@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
@@ -109,6 +110,11 @@ async def test_original_image_editor_revalidates_private_file_cache(
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": process.returncode}) + "\n")
         assert process.returncode == 0, f"{process.stdout}\n{process.stderr}\n{result_path}"
         result = json.loads(result_path.read_text())
+        first, second = result["targets"]
+        assert first["gatewayId"] == second["gatewayId"] and first["gatewayId"]
+        assert first["workspaceId"] == read_workspace_id(workspace)
+        assert second["workspaceId"] == read_workspace_id(other)
+        assert first["workspaceId"] != second["workspaceId"]
         assert result["phase"] == "passed" and result["pageErrors"] == []
         assert result["imageRevalidated"] and result["updatedImage"] and result["ownerIsolated"]
         assert result["watcherUpdatedImage"]

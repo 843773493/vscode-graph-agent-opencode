@@ -10,6 +10,8 @@ function requiredEnvironment(name) {
 
 const baseUrl = requiredEnvironment("BOXTEAM_E2E_BASE_URL");
 const fixture = JSON.parse(requiredEnvironment("BOXTEAM_E2E_FIXTURE"));
+const owner = fixture.owner;
+if (!owner?.gateway_id || !owner?.workspace_id) throw new Error("会话信息装具缺少完整工作区 owner");
 const resultPath = requiredEnvironment("BOXTEAM_E2E_RESULT_PATH");
 const screenshotPath = requiredEnvironment("BOXTEAM_E2E_SCREENSHOT_PATH");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
@@ -44,6 +46,12 @@ try {
   const informationText = await informationResponse.text();
   const informationPayload = JSON.parse(informationText);
   const information = informationPayload.data;
+  const requestHeaders = informationResponse.request().headers();
+  const requestOwner = { gateway_id: requestHeaders["x-boxteam-target-gateway-id"], workspace_id: requestHeaders["x-boxteam-workspace-id"] };
+  if (requestOwner.gateway_id !== owner.gateway_id || requestOwner.workspace_id !== owner.workspace_id
+    || informationPayload.request_id !== informationResponse.headers()["x-request-id"]) {
+    throw new Error("会话信息请求的完整 owner 或 request_id 不一致");
+  }
   if (information.kind !== "session_diagnostic_snapshot") {
     throw new Error(`后端返回了错误的会话信息 kind: ${information.kind}`);
   }
@@ -86,7 +94,8 @@ try {
     throw new Error("剪贴板没有保留有界诊断投影");
   }
   if (information.session.session_id !== fixture.sessionId || dump.session.id !== fixture.sessionId
-    || information.workspace.workspace_id !== dump.workspace.backend_workspace_id) {
+    || information.workspace.workspace_id !== owner.workspace_id
+    || dump.workspace.workspace_id !== owner.workspace_id || dump.workspace.gateway_id !== owner.gateway_id) {
     throw new Error("API 与剪贴板的稳定会话/工作区身份不一致");
   }
   // 软件生成的真实定位字段必须由原 information owner 下线，浏览器不补地址。
@@ -103,8 +112,8 @@ try {
     kind: dump.kind,
     schemaVersion: dump.schema_version,
     noPhysicalLocator: true,
-    apiWorkspaceId: information.workspace.workspace_id,
-    clipboardWorkspaceId: dump.workspace.backend_workspace_id,
+    apiOwner: requestOwner,
+    clipboardOwner: { gateway_id: dump.workspace.gateway_id, workspace_id: dump.workspace.workspace_id },
     titleLength: dump.session.title.length,
     titleTruncated: dump.session.title_truncated,
     activeResourceCount: dump.resources.active.length,

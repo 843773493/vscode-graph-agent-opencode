@@ -1,4 +1,4 @@
-import { chmod, stat, writeFile, unlink } from 'node:fs/promises';
+import { chmod, readFile, stat, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
@@ -21,7 +21,7 @@ try {
   const record = id => { if (!records.has(id)) records.set(id, { id, encodedBodyBytes: 0 }); return records.get(id); };
   const selectedHeaders = headers => Object.fromEntries(Object.entries(headers).filter(([key]) =>
     ['if-none-match', 'etag', 'cache-control', 'vary', 'range', 'content-range', 'content-length',
-      'content-type', 'x-request-id', 'x-boxteam-workspace-id'].includes(key.toLowerCase())).map(([key, value]) => [key.toLowerCase(), value]));
+      'content-type', 'x-request-id', 'x-boxteam-target-gateway-id', 'x-boxteam-workspace-id'].includes(key.toLowerCase())).map(([key, value]) => [key.toLowerCase(), value]));
   cdp.on('Network.requestWillBeSent', event => {
     if (new URL(event.request.url).pathname !== '/api/v1/workspace/files/raw') return;
     const item = record(event.requestId);
@@ -44,11 +44,25 @@ try {
     return { status: response.status, body };
   }, { path, init });
   await page.goto(new URL('/api/gateway/health', baseUrl).href);
-  const initial = await api('/api/gateway/workspaces'), routeA = initial.body.data.active_workspace_id;
+  const initialHealth = await api('/api/gateway/health'), initial = await api('/api/gateway/workspaces');
+  expect(initialHealth.status).toBe(200); expect(initial.status).toBe(200);
+  const ownerA = { gatewayId: initialHealth.body.data.gateway_id,
+    workspaceId: JSON.parse(await readFile(join(workspace, '.boxteam/workspace-identity.json'), 'utf8')).workspace_id };
+  expect(initial.body.data.active_workspace).toEqual({ gateway_id: ownerA.gatewayId, workspace_id: ownerA.workspaceId });
+  const ownTargets = initial.body.data.items.filter(item => item.gateway_id === ownerA.gatewayId && item.workspace_id === ownerA.workspaceId);
+  expect(ownTargets).toHaveLength(1); expect(ownTargets[0].connection_kind).toBe('local');
   const registered = await api('/api/gateway/managed-workspaces', { method: 'POST', body: JSON.stringify({ root_path: other, name: 'Cache B' }) });
   expect(registered.status).toBe(200);
-  const routeB = registered.body.data.items.find(item => item.name === 'Cache B').workspace_id;
-  expect((await api(`/api/gateway/workspaces/${routeA}/activate`, { method: 'POST' })).status).toBe(200);
+  const ownerB = { gatewayId: ownerA.gatewayId,
+    workspaceId: JSON.parse(await readFile(join(other, '.boxteam/workspace-identity.json'), 'utf8')).workspace_id };
+  expect(ownerB.workspaceId).not.toBe(ownerA.workspaceId);
+  const otherTargets = registered.body.data.items.filter(item => item.gateway_id === ownerB.gatewayId && item.workspace_id === ownerB.workspaceId);
+  expect(otherTargets).toHaveLength(1); expect(otherTargets[0].name).toBe('Cache B');
+  expect(registered.body.data.gateway_id).toBe(ownerB.gatewayId); expect(registered.body.data.connection_kind).toBe('local');
+  const ownerHeaders = owner => ({ 'X-BoxTeam-Target-Gateway-Id': owner.gatewayId, 'X-BoxTeam-Workspace-Id': owner.workspaceId });
+  const activation = await api(`/api/gateway/workspaces/${ownerA.workspaceId}/activate`, { method: 'POST', headers: ownerHeaders(ownerA) });
+  expect(activation.status).toBe(200);
+  expect(activation.body.data.active_workspace).toEqual({ gateway_id: ownerA.gatewayId, workspace_id: ownerA.workspaceId });
   await page.goto(baseUrl);
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), listing = await api('/api/gateway/workspaces');
@@ -73,11 +87,13 @@ try {
   expect(missingWorker.status).toBe(404);
   result.staticCachePolicy = true;
   const targets = [];
-  for (const route of [routeA, routeB]) {
-    const current = await api('/api/v1/workspace', { headers: { 'X-BoxTeam-Workspace-Id': route } });
-    const roots = await api('/api/v1/workspace/files/roots', { headers: { 'X-BoxTeam-Workspace-Id': route } });
+  for (const owner of [ownerA, ownerB]) {
+    const current = await api('/api/v1/workspace', { headers: ownerHeaders(owner) });
+    const roots = await api('/api/v1/workspace/files/roots', { headers: ownerHeaders(owner) });
     expect(current.status).toBe(200); expect(roots.status).toBe(200);
-    targets.push({ route, gatewayId: health.body.data.gateway_id, workspaceId: current.body.data.workspace_id, rootUri: roots.body.data.workspace_uri });
+    expect(current.body.data.workspace_id).toBe(owner.workspaceId);
+    expect(health.body.data.gateway_id).toBe(owner.gatewayId);
+    targets.push({ ...owner, rootUri: roots.body.data.workspace_uri });
   }
   result.targets = targets;
   const imageUri = target => target.rootUri + '/cache-image.png';
@@ -93,6 +109,8 @@ try {
   const completeRead = async (target, after, status) => {
     await expect.poll(() => imageReads(target).slice(after).some(item => item.finished && item.wireStatus === status)).toBe(true);
     const item = imageReads(target).slice(after).find(item => item.finished && item.wireStatus === status);
+    expect(item.wireRequest['x-boxteam-target-gateway-id']).toBe(target.gatewayId);
+    expect(item.wireRequest['x-boxteam-workspace-id']).toBe(target.workspaceId);
     expect(item.response['cache-control']).toBe('private, no-cache');
     expect(item.response['x-request-id']).toBeTruthy();
     return item;
@@ -138,7 +156,8 @@ try {
       [target.rootUri + '/cache-image.png', `/api/v1/workspaces/${target.workspaceId}`, 'explicit-invalid-credential'],
     ]) {
       const response = await fetch(`${prefix}/workspace/files/raw?${new URLSearchParams({ path })}`, { headers: {
-        'X-Local-Token': credential, 'X-BoxTeam-Workspace-Id': target.route, 'If-None-Match': etag,
+        'X-Local-Token': credential, 'X-BoxTeam-Target-Gateway-Id': target.gatewayId,
+        'X-BoxTeam-Workspace-Id': target.workspaceId, 'If-None-Match': etag,
       } });
       receipts.push({ status: response.status, etag: response.headers.get('etag'), policy: response.headers.get('cache-control'),
         requestId: response.headers.get('x-request-id'), bodyLength: (await response.arrayBuffer()).byteLength });
@@ -185,12 +204,13 @@ try {
   const raw = (target, name, headers = {}, endpoint = 'raw') => page.evaluate(async ({ target, name, headers, endpoint }) => {
     const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
     const response = await fetch(`/api/v1/workspace/files/${endpoint}?${new URLSearchParams({ path: target.rootUri + '/' + name })}`,
-      { headers: { 'X-Local-Token': token, 'X-BoxTeam-Workspace-Id': target.route, ...headers } });
+      { headers: { 'X-Local-Token': token, 'X-BoxTeam-Target-Gateway-Id': target.gatewayId,
+        'X-BoxTeam-Workspace-Id': target.workspaceId, ...headers } });
     return { status: response.status, headers: Object.fromEntries(response.headers), bytes: [...new Uint8Array(await response.arrayBuffer())] };
   }, { target, name, headers, endpoint });
   result.phase = 'text-revalidation-and-save-cas';
   const original = await api(`/api/v1/workspace/files/content?${new URLSearchParams({ path: targets[0].rootUri + '/cache-text.txt' })}`,
-    { headers: { 'X-BoxTeam-Workspace-Id': routeA } });
+    { headers: ownerHeaders(ownerA) });
   expect(original.status).toBe(200);
   const textCold = await raw(targets[0], 'cache-text.txt'), textWarm = await raw(targets[0], 'cache-text.txt');
   expect(new TextDecoder().decode(new Uint8Array(textWarm.bytes))).toBe('原文件 A 🧪\n');
@@ -203,7 +223,7 @@ try {
   const changed = await raw(targets[0], 'cache-text.txt');
   expect(new TextDecoder().decode(new Uint8Array(changed.bytes))).toBe('external change 🧪\n');
   const conflict = await api(`/api/v1/workspace/files/content?${new URLSearchParams({ path: targets[0].rootUri + '/cache-text.txt' })}`,
-    { method: 'PUT', headers: { 'X-BoxTeam-Workspace-Id': routeA }, body: JSON.stringify({ content: 'stale save', expected_revision: original.body.data.revision }) });
+    { method: 'PUT', headers: ownerHeaders(ownerA), body: JSON.stringify({ content: 'stale save', expected_revision: original.body.data.revision }) });
   expect(conflict.status).toBe(409); result.staleSaveRejected = true;
   result.phase = 'range-download-and-failure-boundaries';
   const range = await raw(targets[0], 'cache-image.png', { Range: 'bytes=1-3', 'If-None-Match': watched.response.etag });
@@ -213,7 +233,7 @@ try {
   expect(download.status).toBe(200); expect(download.headers['cache-control']).toBe('no-store');
   const denied = await raw(targets[0], 'cache-image.png', { 'X-Local-Token': 'explicit-invalid-credential', 'If-None-Match': watched.response.etag });
   expect(denied.status).toBe(401); expect(denied.headers['cache-control']).toBe('no-store');
-  const wrongOwner = await raw(targets[0], 'cache-image.png', { 'X-BoxTeam-Workspace-Id': routeB, 'If-None-Match': watched.response.etag });
+  const wrongOwner = await raw(targets[0], 'cache-image.png', { ...ownerHeaders(ownerB), 'If-None-Match': watched.response.etag });
   expect(wrongOwner.status).toBe(400); expect(wrongOwner.headers['cache-control']).toBe('no-store');
   await unlink(join(workspace, 'cache-image.png'));
   const missing = await raw(targets[0], 'cache-image.png');
