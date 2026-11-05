@@ -114,13 +114,13 @@ def bind_captured_namespace(
     """在私有目标事务中继承旧 binding，并登记直接来源；不改历史实体。"""
     if not connection.in_transaction:
         raise RuntimeError("冻结 namespace binding 必须属于 snapshot 安装事务")
-    for existing in read_namespace_bindings(connection):
-        if (existing.session_id, existing.thread_id) == (
-            binding.session_id, binding.thread_id
-        ):
-            if existing != binding:
-                raise ValueError("source-mismatch: namespace binding 的不可变前像冲突")
-            return
+    # 登记来源只消费同主键前像；全历史 binding 校验留给显式完整审计。
+    for existing in read_namespace_bindings(
+        connection, historical_scope_key=(binding.session_id, binding.thread_id),
+    ):
+        if existing != binding:
+            raise ValueError("source-mismatch: namespace binding 的不可变前像冲突")
+        return
     values = binding.to_dict()
     if any(not isinstance(value, str) or not value for value in values.values()):
         raise ValueError("source-mismatch: namespace binding 缺少捕获 scope")
