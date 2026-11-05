@@ -445,6 +445,75 @@ async def test_query_cancellation_keeps_its_identity_and_does_not_unregister_pro
         await asyncio.gather(pending, service.aclose(), return_exceptions=True)
 
 
+@pytest.mark.parametrize("close_provider", [False, True])
+@pytest.mark.parametrize("failure_type", [OSError, sqlite3.DatabaseError, RuntimeError])
+async def test_query_cancellation_keeps_owner_settlement_failure_as_cause(
+    capability: SearchProviderCapabilityDTO, query: AsyncMock, search_request: WorkspaceSearchRequest,
+    worker: tuple[threading.Event, threading.Event], failure_type: type[Exception], close_provider: bool,
+) -> None:
+    started, finish = worker
+    failure = failure_type("owner 读取结算失败")
+    settled = asyncio.Event()
+    released = AsyncMock()
+
+    def read() -> None:
+        started.set()
+        assert finish.wait(5), "测试 worker 未获释放"
+        raise failure
+
+    async def owner(request: WorkspaceSearchRequest, gateway_id: str | None) -> WorkspaceSearchResultDTO:
+        try:
+            await run_sync_shielded(read)
+        finally:
+            settled.set()
+        return await query(request, gateway_id)
+
+    service = WorkspaceSearchService("workspace-A")
+    registration = service.register(capability, owner, release=released)
+    pending = asyncio.create_task(service.search(search_request))
+    closing: asyncio.Task[None] | None = None
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        pending.cancel("原查询取消")
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(pending), 0.02)
+        assert not settled.is_set()
+        released.assert_not_called()
+        pending.cancel("后续取消不能替换原取消")
+        if close_provider:
+            registration.close_admission()
+            closing = asyncio.create_task(registration.aclose())
+            with pytest.raises(SearchContractError) as unavailable:
+                await service.search(search_request)
+            assert unavailable.value.code == "provider_unavailable"
+            assert service.capabilities().providers == []
+            released.assert_not_called()
+        finish.set()
+        if close_provider:
+            with pytest.raises(SearchContractError) as closed:
+                await pending
+            assert closed.value.code == "provider_unavailable"
+            assert closed.value.__cause__ is failure
+            assert closing is not None
+            await closing
+        else:
+            with pytest.raises(asyncio.CancelledError) as cancelled:
+                await pending
+            assert cancelled.value.args == ("原查询取消",)
+            assert cancelled.value.__cause__ is failure
+            assert registration.active and service.capabilities().providers == [capability]
+        assert settled.is_set() and registration.tasks == set()
+        query.assert_not_called()
+        await service.aclose()
+        released.assert_awaited_once()
+    finally:
+        finish.set()
+        tasks = [pending, asyncio.create_task(service.aclose())]
+        if closing is not None:
+            tasks.append(closing)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.parametrize("release_fails", [False, True])
 async def test_cancelled_registration_observer_keeps_original_result_for_later_close(
     capability: SearchProviderCapabilityDTO, query: AsyncMock, release_fails: bool,

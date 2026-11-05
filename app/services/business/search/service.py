@@ -161,19 +161,20 @@ class WorkspaceSearchService:
             if not registration.active:
                 raise SearchContractError("provider_unavailable", f"搜索 Provider 已注销: {capability.provider_id}")
             return result
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as failure:
             if not task.cancelling():
                 task.cancel()
 
             async def settle() -> None:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+                # 等待原 owner 退出；读取失败留给原取消或注销错误的原因链。
+                await asyncio.gather(task, return_exceptions=True)
 
             await run_cleanup_shielded(settle)
+            error = None if task.cancelled() else task.exception()
             if not registration.active:
-                raise SearchContractError("provider_unavailable", f"搜索 Provider 已注销: {capability.provider_id}") from None
+                raise SearchContractError("provider_unavailable", f"搜索 Provider 已注销: {capability.provider_id}") from error
+            if error is not None:
+                raise failure from error
             raise
         except TimeoutError:
             # TimeoutError 也是 OSError；原期限不能被改标为读取失败。

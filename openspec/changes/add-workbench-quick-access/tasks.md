@@ -894,3 +894,9 @@
 - 后端定向186项、前端31项通过；包含共享文件单次读取、独立来源、范围越界、零配额、分页、原鉴权、远端错误／总期限／取消和引用释放。正式 Gateway＋受管 Backend＋Workbench＋Chromium 验收1 passed／117.45秒、退出0，原件 `out/tests/integration/clients/web/quick_access/test_runtime_log_content/runs/run-85556df0c000/nodes/node-e85125f74669/artifacts/`；关键日志由真实文件失败和原 DTO 拒绝产生，核A/B进程隔离、同Pane另一处emoji、追加后精确定位、旧版本拒绝及零整批诊断读取，5份搜索收据，页面错误为空。共享Backend由真实owner单测覆盖，此页面的A/B是独立进程；联邦传输／故障为显式替身，未声称真实跨机或Windows通过。
 - 真实Workbench类型检查44份转换源码、正式Web构建、protocol生成一致性／Buf breaking及OpenAPI校验退出0；最终产品Python Ruff／Pyright零诊断。完整Web类型与原基线28／28诊断一致，无新增。命令、源码指纹、原输出、失败归因和退出码保留在 `out/tests/temp/quick_access_logs_20261105/artifacts/` 的 `final-backend-12.json`、`final-browser-tests-13.json`、`runtime-browser-diagnostic-14.json`、`final-ruff-15.json`、`final-pyright-15.json`、`final-web-types-15.json`、`web-types-comparison-12.json`、`workbench-typecheck-08.json`、`web-build-11.json`、`protocol-check-09.json` 和 `openapi-check-09.json`；根复核当前owned源码与相应回执一致，复用成功构建。早期错误装具假定共享进程、注册后未刷新列表及QuickInput切换观察的失败保留，不以放宽业务断言处理。
 - 仅关闭9.6；9.1、9.7、9.8及第15／16组的完整组合验收继续按原任务推进，不以本切片替代Electron、Windows或其它领域动作。
+
+
+### 2026-11-05：搜索取消保留原结算错误原因（16.3／16.20 部分）
+
+- 原查询取消后等待同一个 owner 安全退出；读取期间出现的 OSError、SQLite 错误或 RuntimeError 不再替换最初取消。Provider 仍有效时保留首次 CancelledError 及参数，期间注销仍按原 provider_unavailable 出口，读取失败保留为 cause；不发布迟到命中、不重复释放。
+- 六个判别场景在原实现全部失败；隔离搜索目录 70 passed／13.80 秒，精确合入共享树后 70 passed／11.55 秒，Ruff 与 Python 3.12 Pyright 零诊断。完整输入、命令、源码指纹、原始输出和退出码：`out/tests/temp/2026/11/05/search_provider_lifecycle/artifacts/verification-001.json`；根集成收据：`out/tests/temp/2026/11/05/search_provider_lifecycle/artifacts/root-integration-002.json`。本片未改前端或协议，不重复构建；真实 Gateway 关闭、同类别版本交接和其它流式验收仍未闭合，16.3／16.20 保持未勾选。
