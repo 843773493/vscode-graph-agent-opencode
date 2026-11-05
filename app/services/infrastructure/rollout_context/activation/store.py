@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 
 from app.core.sqlite_state import utc_now_text as _now
@@ -81,6 +82,9 @@ class ResourceActivationStore(ResourceActivationReadMixin):
             raise ValueError("source-mismatch: captured activation catalog 不属于 source 存储 owner")
         require_resource_activation_schema(connection)
 
+        # captured catalog 与正文在本次校验中已冻结；父、当前及重试来源清单最多保留三份，
+        # 避免每个 binding 重读整份清单。结果仅活到本次调用结束，下次仍重新读取并验摘要。
+        @lru_cache(maxsize=3)
         def read_lineage(ref: DetailRef) -> tuple[Mapping[str, object], str]:
             return read_captured_lineage_manifest(connection, ref, captured_node=captured_node)
 
