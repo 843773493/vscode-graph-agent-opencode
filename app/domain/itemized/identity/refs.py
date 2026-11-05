@@ -8,11 +8,9 @@ from dataclasses import dataclass, field, fields
 
 from app.domain.itemized.enums import (
     BaseDeltaRole,
-    CanonicalItemStatus,
     DetailAvailability,
     DetailProtection,
     PayloadKind,
-    SemanticKind,
 )
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
@@ -25,7 +23,16 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.schema import validate_item_compatibility
+from app.domain.itemized.schema import (
+    AVAILABILITIES,
+    BASE_DELTA_ROLES,
+    ITEM_STATUSES,
+    PAYLOAD_KINDS,
+    PROTECTIONS,
+    SEMANTIC_KINDS,
+    VISIBILITIES,
+    validate_item_compatibility,
+)
 from app.domain.itemized.validation import _non_empty_string
 
 
@@ -189,9 +196,7 @@ class ContextRef:
             _non_empty_string(self.plan_id, "ContextRef.plan_id")
         elif self.plan_id is not None:
             raise ItemSchemaError("canonical ContextRef 不得携带 plan_id")
-        if not isinstance(self.base_delta_role, str) or self.base_delta_role not in {
-            item.value for item in BaseDeltaRole
-        }:
+        if not isinstance(self.base_delta_role, str) or self.base_delta_role not in BASE_DELTA_ROLES:
             raise ItemSchemaError(
                 f"未知 ContextRef.base_delta_role: {self.base_delta_role}"
             )
@@ -201,20 +206,11 @@ class ContextRef:
             or self.source_overlay_epoch < 0
         ):
             raise ItemSchemaError("ContextRef.source_overlay_epoch 必须是非负整数")
-        if not isinstance(self.visibility, str) or self.visibility not in {
-            "public", "internal", "private"
-        }:
+        if not isinstance(self.visibility, str) or self.visibility not in VISIBILITIES:
             raise ItemSchemaError(f"未知 ContextRef.visibility: {self.visibility}")
-        if not isinstance(self.protection, str) or self.protection not in {
-            "public", "redacted", "protected"
-        }:
+        if not isinstance(self.protection, str) or self.protection not in PROTECTIONS:
             raise ItemSchemaError(f"未知 ContextRef.protection: {self.protection}")
-        if not isinstance(self.availability, str) or self.availability not in {
-            "available",
-            "unavailable",
-            "forbidden",
-            "expired",
-        }:
+        if not isinstance(self.availability, str) or self.availability not in AVAILABILITIES:
             raise ItemSchemaError(f"未知 ContextRef.availability: {self.availability}")
         if self.content_length is not None and (
             not isinstance(self.content_length, int)
@@ -226,19 +222,19 @@ class ContextRef:
             _non_empty_string(self.content_hash, "ContextRef.content_hash")
         if self.semantic_kind is not None:
             _non_empty_string(self.semantic_kind, "ContextRef.semantic_kind")
-            if self.semantic_kind not in {item.value for item in SemanticKind}:
+            if self.semantic_kind not in SEMANTIC_KINDS:
                 raise ItemSchemaError(
                     f"未知 ContextRef.semantic_kind: {self.semantic_kind}"
                 )
         if self.payload_kind is not None:
             _non_empty_string(self.payload_kind, "ContextRef.payload_kind")
-            if self.payload_kind not in {item.value for item in PayloadKind}:
+            if self.payload_kind not in PAYLOAD_KINDS:
                 raise ItemSchemaError(
                     f"未知 ContextRef.payload_kind: {self.payload_kind}"
                 )
         if self.status is not None:
             _non_empty_string(self.status, "ContextRef.status")
-            if self.status not in {item.value for item in CanonicalItemStatus}:
+            if self.status not in ITEM_STATUSES:
                 raise ItemSchemaError(f"未知 ContextRef.status: {self.status}")
         if self.availability == 'available' or self.content_hash is not None:
             require_manifest_token(self)
@@ -393,7 +389,7 @@ class ContextRef:
         _non_empty_string(source_revision, "ContextRef.source_revision")
         if payload_kind is not None:
             _non_empty_string(payload_kind, "ContextRef.payload_kind")
-            if payload_kind not in {item.value for item in PayloadKind}:
+            if payload_kind not in PAYLOAD_KINDS:
                 raise ItemSchemaError(f"未知 ContextRef.payload_kind: {payload_kind}")
         effective_payload_kind = (
             PayloadKind.STRUCTURED_CONTENT if payload_kind is None else payload_kind
@@ -519,13 +515,9 @@ class ToolSetIdentityRef:
             raise ItemSchemaError('ToolSetRef 必须包含 content_hash ')
         if self.content_hash is not None:
             validate_hash_token(self.content_hash, "ToolSetRef.content_hash")
-        if not isinstance(self.protection, str) or self.protection not in {
-            item.value for item in DetailProtection
-        }:
+        if not isinstance(self.protection, str) or self.protection not in PROTECTIONS:
             raise ItemSchemaError(f"未知 ToolSetRef.protection: {self.protection}")
-        if not isinstance(self.availability, str) or self.availability not in {
-            item.value for item in DetailAvailability
-        }:
+        if not isinstance(self.availability, str) or self.availability not in AVAILABILITIES:
             raise ItemSchemaError(f"未知 ToolSetRef.availability: {self.availability}")
         if self.assembly_id is not None:
             _non_empty_string(self.assembly_id, "ToolSetRef.assembly_id")

@@ -7,14 +7,20 @@ from dataclasses import dataclass
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     DetailAvailability,
-    DetailProtection,
     SelectionKind,
 )
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import validate_hash_token
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetIdentityRef, ToolSetRef
-from app.domain.itemized.schema import validate_selection_compatibility
+from app.domain.itemized.schema import (
+    AVAILABILITIES,
+    BASE_DELTA_ROLES,
+    PROTECTIONS,
+    SELECTION_KINDS,
+    VISIBILITIES,
+    validate_selection_compatibility,
+)
 from app.domain.itemized.validation import _non_empty_string
 
 
@@ -74,9 +80,9 @@ class ContextSelectionEntry:
                 raise ItemSchemaError(
                     f"ContextSelectionEntry.{name} 必须是非负整数或 NULL"
                 )
-        if self.selection_kind not in {item.value for item in SelectionKind}:
+        if self.selection_kind not in SELECTION_KINDS:
             raise ItemSchemaError(f"未知 selection_kind: {self.selection_kind}")
-        if self.base_delta_role not in {item.value for item in BaseDeltaRole}:
+        if self.base_delta_role not in BASE_DELTA_ROLES:
             raise ItemSchemaError(f"未知 base_delta_role: {self.base_delta_role}")
         for name, value in (
             ("visibility", self.visibility),
@@ -84,11 +90,11 @@ class ContextSelectionEntry:
             ("availability", self.availability),
         ):
             _non_empty_string(value, f"ContextSelectionEntry.{name}")
-        if self.visibility not in {"public", "internal", "private"}:
+        if self.visibility not in VISIBILITIES:
             raise ItemSchemaError(f"未知 selection visibility: {self.visibility}")
-        if self.protection not in {item.value for item in DetailProtection}:
+        if self.protection not in PROTECTIONS:
             raise ItemSchemaError(f"未知 selection protection: {self.protection}")
-        if self.availability not in {item.value for item in DetailAvailability}:
+        if self.availability not in AVAILABILITIES:
             raise ItemSchemaError(f"未知 selection availability: {self.availability}")
         if self.included:
             if self.availability != DetailAvailability.AVAILABLE:
@@ -156,6 +162,7 @@ class ContextSelectionEntry:
         ref_type = getattr(self.ref, "ref_type", None)
         if not isinstance(ref_type, str):
             raise ItemSchemaError("selection ref 缺少 ref_type")
+        # tag/ref_type/role 的组合只由统一矩阵判断；下方继续核对实际类型和 manifest。
         validate_selection_compatibility(
             self.selection_kind,
             ref_type,
@@ -173,36 +180,8 @@ class ContextSelectionEntry:
                 for value in (self.detail_ref, self.contribution_id, self.contribution_ordinal)
             ):
                 raise ItemSchemaError("ToolSetRef selection 不得绑定 detail/contribution")
-        else:
-            if not isinstance(self.ref, ContextRef):
-                raise ItemSchemaError("非 tool_set selection 必须绑定 ContextRef")
-            if self.ref.ref_type == "canonical_item":
-                if self.selection_kind != SelectionKind.CANONICAL_HISTORY:
-                    raise ItemSchemaError(
-                        "canonical_item selection 必须使用 canonical_history"
-                    )
-                if self.base_delta_role != BaseDeltaRole.NONE:
-                    raise ItemSchemaError(
-                        "canonical history 不得使用 base/delta selection role"
-                    )
-            else:
-                if self.selection_kind not in {
-                    SelectionKind.REQUEST_ONLY,
-                    SelectionKind.OVERLAY_BASE,
-                    SelectionKind.OVERLAY_DELTA,
-                }:
-                    raise ItemSchemaError(
-                        "request_only selection 必须使用 request_only/overlay tag"
-                    )
-                expected_role = {
-                    SelectionKind.REQUEST_ONLY: BaseDeltaRole.NONE,
-                    SelectionKind.OVERLAY_BASE: BaseDeltaRole.BASE,
-                    SelectionKind.OVERLAY_DELTA: BaseDeltaRole.DELTA,
-                }[self.selection_kind]
-                if self.base_delta_role != expected_role:
-                    raise ItemSchemaError(
-                        "request_only selection 的 base_delta_role 与 tag 不一致"
-                    )
+        elif not isinstance(self.ref, ContextRef):
+            raise ItemSchemaError("非 tool_set selection 必须绑定 ContextRef")
         ref_base_delta_role = (
             self.ref.base_delta_role if isinstance(self.ref, ContextRef) else BaseDeltaRole.NONE.value
         )

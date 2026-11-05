@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     CanonicalItemStatus,
+    DetailAvailability,
+    DetailProtection,
     PayloadKind,
     SelectionKind,
     SemanticKind,
@@ -38,6 +40,10 @@ CORE_FIELDS = (
 ITEM_STATUSES = frozenset(item.value for item in CanonicalItemStatus)
 PAYLOAD_KINDS = frozenset(item.value for item in PayloadKind)
 SEMANTIC_KINDS = frozenset(item.value for item in SemanticKind)
+# 固定值域只展开一次；ref/selection 的输入和跨字段组合仍逐条校验。
+BASE_DELTA_ROLES = frozenset(item.value for item in BaseDeltaRole)
+SELECTION_KINDS = frozenset(item.value for item in SelectionKind)
+AVAILABILITIES = frozenset(item.value for item in DetailAvailability)
 TOOL_OUTCOMES = frozenset({"success", "failure", "cancelled", "unknown"})
 PRODUCER_KINDS = frozenset(
     {"user", "provider", "middleware", "tool", "system", "runtime"}
@@ -59,7 +65,7 @@ PROVENANCE_RELATIONS = frozenset(
     }
 )
 VISIBILITIES = frozenset({"public", "internal", "private"})
-PROTECTIONS = frozenset({"public", "redacted", "protected"})
+PROTECTIONS = frozenset(item.value for item in DetailProtection)
 
 
 def validate_extensions(value: object, *, field: str = "extensions") -> None:
