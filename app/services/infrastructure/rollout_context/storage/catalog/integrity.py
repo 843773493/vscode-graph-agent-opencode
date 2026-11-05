@@ -233,7 +233,7 @@ def _validate_context_view_ranges(connection: sqlite3.Connection) -> None:
     views = {
         strict_text(row[0], field="context_views.view_id"): row[1:]
         for row in connection.execute(
-            "SELECT view_id, view_kind, parent_view_id FROM context_views ORDER BY creation_sequence",
+            "SELECT view_id, view_kind, parent_view_id FROM context_views",
         )
     }
     ranges_by_view: dict[str, list[tuple[object, ...]]] = {}
