@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../../../src/clients/web/src/api/workspaceIdentity";
 import React, { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import WorkspaceFileTree from "../../../../src/clients/web/src/components/workspace/fileTree/WorkspaceFileTree";
@@ -12,7 +13,7 @@ import "../../../../src/clients/web/src/styles/foundation/workbenchLayout.css";
 interface MeasurementConfig {
   gatewayPort: number;
   workspaceId: string;
-  backendWorkspaceId: string;
+  gatewayId: string;
   workspaceRoot: string;
   workspaceUri: string;
   sessionId: string;
@@ -107,7 +108,7 @@ window.fetch = new Proxy(window.fetch, { async apply(target, _this, args) {
       const publishedItems = receipt.items.filter((item) => item.state === "published");
       let targetPathTitle: string | null = null;
       for (const snapshot of receipt.snapshots) {
-        const item = snapshot.items.find((entry) => publishedItems.some((published) =>
+        const item = snapshot.items?.find((entry) => publishedItems.some((published) =>
           entry.kind === published.kind && entry.path === published.path));
         if (item) {
           targetPathTitle = item.path;
@@ -157,8 +158,9 @@ declare global {
 }
 
 const config = window.measurementConfig;
-const workspaces = [{ workspace_id: config.workspaceId,
-  backend_workspace_id: config.backendWorkspaceId, connection_kind: "local" as const }];
+const owner = { gateway_id: config.gatewayId, workspace_id: config.workspaceId };
+const workspaceKey = gatewayWorkspaceKey(owner);
+const workspaces = [owner];
 const catalogSyncKeys = new Map<string, string>();
 const catalogRefreshVersions = new Map<string, number>();
 
@@ -329,8 +331,8 @@ function MeasurementHarness() {
     )),
   ]);
   const explorer = useSessionResourceExplorer({
-    apiPort: config.gatewayPort, workspaces, activeWorkspaceId: config.workspaceId,
-    searchOpen: false, searchQuery: "", currentSessionId: "",
+    apiPort: config.gatewayPort, workspaces, activeWorkspaceId: workspaceKey,
+    searchOpen: false, searchQuery: "", currentSessionId: "", currentSessionWorkspaceId: null,
     workspaceNavigationSyncKey: "measurement", catalogSyncKeys,
     catalogRefreshVersions,
   });
@@ -350,8 +352,8 @@ function MeasurementHarness() {
   };
   return <main>
     <section style={{ display: "flex", flexDirection: "column", height: 8000, width: 900 }}>
-      <WorkspaceFileTree active apiPort={config.gatewayPort} workspaceId={config.workspaceId}
-        workspaceName="量化工作区" workspaceRoot={config.workspaceRoot} sessionId={config.sessionId}
+      <WorkspaceFileTree active apiPort={config.gatewayPort} workspaceId={workspaceKey}
+        workspaceName="量化工作区" sessionId={config.sessionId}
         activeFilePath={null} searchOpen={false} collapseVersion={0} expandedPaths={expanded}
         onExpandedPathsChange={setExpanded} onCloseSearch={() => undefined}
         onOpenFile={() => undefined} onStatusChange={handleFileStatusChange} />
@@ -368,7 +370,8 @@ function MeasurementHarness() {
     </section>
     <ul id="gateway-navigation" data-revision={explorer.navigation?.revision}>
       {explorer.navigation?.nodes.map((node) => <li key={node.node_id} data-node-id={node.node_id} data-kind={node.kind}
-        data-workspace-id={node.workspace_id ?? ""} data-parent={node.parent_node_id ?? "root"}>{node.name}</li>)}
+        data-workspace-id={node.workspace?.workspace_id ?? ""} data-gateway-id={node.workspace?.gateway_id ?? ""}
+        data-parent={node.parent_node_id ?? "root"}>{node.name}</li>)}
     </ul>
   </main>;
 }

@@ -25,7 +25,9 @@ const screenshotPath = join(
 );
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 const harnessPath = dirname(testFile);
-const workspaceRoot = "boxteam://workspace/backend_files/resources/files/root";
+const owner = { gatewayId: "gateway_layout", workspaceId: "00000000-0000-4000-8000-000000000021" };
+const workspaceRoot = `boxteam://workspace/${owner.workspaceId}/resources/files/root`;
+const workspaceRequests = [];
 const secondFilePath = `${workspaceRoot}/second.ts`;
 
 async function measureFileTreeLayout(page) {
@@ -159,10 +161,16 @@ try {
       await ok({ kind: "guest", user_id: null });
       return;
     }
+    const requestOwner = { gatewayId: request.headers()["x-boxteam-target-gateway-id"],
+      workspaceId: request.headers()["x-boxteam-workspace-id"] };
+    if (requestOwner.gatewayId !== owner.gatewayId || requestOwner.workspaceId !== owner.workspaceId) {
+      throw new Error(`布局装具收到错误工作区 owner: ${JSON.stringify(requestOwner)}`);
+    }
+    workspaceRequests.push({ path: url.pathname, ...requestOwner });
     if (url.pathname === "/api/v1/workspace/files/roots") {
       await ok({
         workspace_uri: workspaceRoot,
-        filesystem_uri: "boxteam://gateway/gateway_layout/resources/files/root",
+        filesystem_uri: `boxteam://gateway/${owner.gatewayId}/resources/files/root`,
         filesystem_label: "/",
       });
       return;
@@ -171,7 +179,7 @@ try {
       const path = url.searchParams.get("path") || workspaceRoot;
       await ok({
         directory_key: {
-          workspace_id: "backend_files",
+          workspace_id: owner.workspaceId,
           scope: "workspace",
           root: workspaceRoot,
           path,
@@ -225,6 +233,8 @@ try {
     });
   });
   const result = {
+    owner,
+    workspaceRequests,
     anchor: null,
     overlay: null,
     fileTreeNotice: null,
@@ -238,15 +248,20 @@ try {
       && response.status() === 500
     ), { timeout: 10_000 });
     await page.goto(
-      `http://127.0.0.1:${address.port}/anchored_overlay_positioning_harness.html`,
+      `http://127.0.0.1:${address.port}/anchored_overlay_positioning_harness.html?${new URLSearchParams(owner)}`,
       { waitUntil: "networkidle", timeout: 30_000 },
     );
-    const workspaceRootRow = page.locator(".files-tree-item.root").filter({
-      hasText: "layout-fixture",
-    });
+    // 根行在 roots 请求完成前已可见；按真实 URI 等待目录就绪后再读取展开态。
+    const workspaceRootRow = page.locator(".files-tree-item.root").and(
+      page.getByTitle(workspaceRoot, { exact: true }),
+    );
     await workspaceRootRow.waitFor({ state: "visible", timeout: 10_000 });
     if (await workspaceRootRow.getAttribute("aria-expanded") === "true") {
       await workspaceRootRow.click();
+      await page.waitForFunction((uri) => (
+        document.querySelector(`.files-tree-item.root[title="${uri}"]`)
+          ?.getAttribute("aria-expanded") === "false"
+      ), workspaceRoot, { timeout: 10_000 });
     }
     await workspaceRootRow.click();
     const secondFileRow = page.getByTitle(`${workspaceRoot}/second.ts`, { exact: true });

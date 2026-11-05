@@ -116,7 +116,7 @@ function actualMutationRequestSummary(requestFact) {
     request_error: requestFact.request_error ?? null,
     upstream_dispatch_started: requestFact.upstream_dispatch_started,
     auth_headers_present: requestFact.auth_headers_present,
-    workspace_id_header: requestFact.workspace_id_header, has_local_token: requestFact.has_local_token,
+    workspace_id_header: requestFact.workspace_id_header, gateway_id_header: requestFact.gateway_id_header, has_local_token: requestFact.has_local_token,
     content_type: requestFact.content_type, body_bytes: requestFact.body_bytes,
     payload: requestFact.payload_summary, ...(requestFact.payload_error ? { payload_error: requestFact.payload_error } : {}) };
 }
@@ -271,6 +271,7 @@ async function captureActualMutationRequest(request, url) {
       proxy_dispatch_started: null, upstream_response_headers: null, upstream_response_body_end: null },
     upstream_dispatch_started: false,
     workspace_id_header: request.headers["x-boxteam-workspace-id"] ?? null,
+    gateway_id_header: request.headers["x-boxteam-target-gateway-id"] ?? null,
     has_local_token: Boolean(request.headers["x-local-token"]), content_type: contentType, body_bytes: 0,
     request_body_complete: false, request_aborted: false, request_error: null,
     auth_headers_present: [...new Set(request.rawHeaders.filter((_, index) => index % 2 === 0 && isSecretHeader(request.rawHeaders[index])))],
@@ -334,7 +335,7 @@ async function saveBackendConcurrentObservation() {
       "/api/v1/test/navigation-measurements/concurrent-trace", measurementConfig.gatewayUrl,
     ).href, { timeout: 30_000, headers: { ...observationHeaders,
       "X-BoxTeam-Workspace-Id": measurementConfig.workspaceId,
-      "X-BoxTeam-Backend-Workspace-Id": measurementConfig.backendWorkspaceId } });
+      "X-BoxTeam-Target-Gateway-Id": measurementConfig.gatewayId } });
     let responseBody;
     try {
       responseBody = await response.text();
@@ -559,8 +560,8 @@ function attachMeasurementPageObservers(page) {
         && record.path.startsWith("/api/gateway/workspace-navigation/") && record.status === 200) {
         const navigation = (await response.json()).data;
         record.node_phase_times.response_body_observed_complete = nodePhaseTimestamp();
-        record.navigation_nodes = navigation.nodes.map(({ node_id, name, kind, parent_node_id, workspace_id }) =>
-          ({ node_id, name, kind, parent_node_id, workspace_id }));
+        record.navigation_nodes = navigation.nodes.map(({ node_id, name, kind, parent_node_id, workspace }) =>
+          ({ node_id, name, kind, parent_node_id, workspace }));
       }
     })().then(async () => {
       if (isActualMutationRequest(record.method, record.path)
@@ -801,7 +802,7 @@ async function verifyFileTreeNotificationDoesNotReflow(page) {
       notice.remove();
     }
   });
-  if (layout.notification_position !== "absolute"
+  if (layout.notification_position !== "static"
     || Math.abs(layout.tree_top_delta_px) > 0.25
     || Math.abs(layout.tree_height_delta_px) > 0.25) {
     throw new Error("文件树提示改变了列表布局: " + JSON.stringify(layout));
@@ -956,7 +957,7 @@ async function readCounters(page, runtime) {
   try {
     const response = await page.request.get(probe.target_url, {
       headers: { ...observationHeaders, "X-BoxTeam-Workspace-Id": measurementConfig.workspaceId,
-        "X-BoxTeam-Backend-Workspace-Id": measurementConfig.backendWorkspaceId,
+        "X-BoxTeam-Target-Gateway-Id": measurementConfig.gatewayId,
         "X-Test-Navigation-Probe-Id": probe.probe_id },
     });
     traceProbe(probe, "client_response", { status: response.status() });
@@ -995,7 +996,8 @@ function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
     || actualUrl.searchParams.get("path") !== workspaceFileUri(sample.directory)
     || actualUrl.searchParams.get("scope") !== "workspace"
     || targetUrl.href !== expectedTarget.href
-    || fact.workspace_id_header !== measurementConfig.workspaceId || !fact.has_local_token
+    || fact.workspace_id_header !== measurementConfig.workspaceId
+    || fact.gateway_id_header !== measurementConfig.gatewayId || !fact.has_local_token
     || !sameDirectoryKey(intent?.directory_key, expectedDirectoryKey)) return false;
   if (sample.kind === "file" || sample.kind === "directory") {
     return payload.name === sample.name && payload.kind === (sample.kind === "directory" ? "directory" : "file");
@@ -1017,7 +1019,7 @@ function actualRequestMatchesSample(fact, sample, expectedDirectoryKey) {
 }
 
 async function freezeFileOperation(sample) {
-  const expectedDirectoryKey = { workspace_id: measurementConfig.backendWorkspaceId, scope: "workspace",
+  const expectedDirectoryKey = { workspace_id: measurementConfig.workspaceId, scope: "workspace",
     root: measurementConfig.workspaceUri, path: workspaceFileUri(sample.directory) };
   const deadline = performance.now() + 30000;
   while (performance.now() < deadline) {
@@ -1528,7 +1530,7 @@ async function finishFileMutation(page, operation, sample) {
   const actualUrl = new URL(acceptedRequest.url);
   const expectedGatewayUrl = new URL(actualUrl.pathname + actualUrl.search, measurementConfig.gatewayUrl);
   const observedGatewayUrl = new URL(acceptedRequest.gateway_target_url);
-  const expectedDirectoryKey = { workspace_id: measurementConfig.backendWorkspaceId, scope: "workspace",
+  const expectedDirectoryKey = { workspace_id: measurementConfig.workspaceId, scope: "workspace",
     root: measurementConfig.workspaceUri, path: workspaceFileUri(sample.directory) };
   const requestPayload = acceptedRequest.payload;
   const requestIntent = requestPayload?.intent;
@@ -1537,7 +1539,8 @@ async function finishFileMutation(page, operation, sample) {
     || actualUrl.searchParams.get("path") !== workspaceFileUri(sample.directory)
     || actualUrl.searchParams.get("scope") !== expectedDirectoryKey.scope
     || observedGatewayUrl.href !== expectedGatewayUrl.href
-    || acceptedRequest.workspace_id_header !== measurementConfig.workspaceId || !acceptedRequest.has_local_token
+    || acceptedRequest.workspace_id_header !== measurementConfig.workspaceId
+    || acceptedRequest.gateway_id_header !== measurementConfig.gatewayId || !acceptedRequest.has_local_token
     || !sameDirectoryKey(requestIntent?.directory_key, operation.directory_key)
     || !sameDirectoryKey(requestIntent?.directory_key, expectedDirectoryKey)
     || requestIntent.client_operation_id !== operation.operation_id
@@ -2009,18 +2012,21 @@ async function measureMutations() {
           || (kind === "move_workspace" && (write.path !== "/api/gateway/workspace-navigation/placement"
             || payload.node_id !== measurementConfig.workspaceNodeId || payload.parent_node_id !== parent || payload.mode !== "last"))
           || !returnedNode || returnedNode.parent_node_id !== (kind === "create_folder" ? null : parent)
-          || (kind === "move_workspace" && returnedNode.workspace_id !== measurementConfig.workspaceId)) {
+          || (kind === "move_workspace" && (returnedNode.workspace?.workspace_id !== measurementConfig.workspaceId
+            || returnedNode.workspace?.gateway_id !== measurementConfig.gatewayId))) {
           throw new Error(`Gateway mutation 请求或返回节点目标不一致: ${JSON.stringify({ kind, write, payload, returnedNode })}`);
         }
         uiNode = await page.locator("#gateway-navigation li").evaluateAll((nodes, identity) =>
           nodes.filter((node) => node.getAttribute("data-node-id") === identity.nodeId)
             .map((node) => ({ name: node.textContent, kind: node.getAttribute("data-kind"),
-              parent: node.getAttribute("data-parent"), workspaceId: node.getAttribute("data-workspace-id") })),
+              parent: node.getAttribute("data-parent"), workspaceId: node.getAttribute("data-workspace-id"),
+              gatewayId: node.getAttribute("data-gateway-id") })),
           { nodeId: returnedNode.node_id });
         if (uiNode.length !== 1 || uiNode[0].parent !== (expectedParent ?? "root")
           || uiNode[0].kind !== (kind === "create_folder" ? "workspace_folder" : "workspace_ref")
           || (kind === "create_folder" && uiNode[0].name !== name)
-          || (kind === "move_workspace" && uiNode[0].workspaceId !== measurementConfig.workspaceId)) {
+          || (kind === "move_workspace" && (uiNode[0].workspaceId !== measurementConfig.workspaceId
+            || uiNode[0].gatewayId !== measurementConfig.gatewayId))) {
           throw new Error(`Gateway UI 未显示原操作目标节点: ${JSON.stringify({ kind, uiNode, returnedNode })}`);
         }
       }

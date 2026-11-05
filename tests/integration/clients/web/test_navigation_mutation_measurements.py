@@ -242,14 +242,16 @@ async def test_navigation_mutation_measurement_gate(
         navigation = navigation_response.json()["data"]
         workspace_response = await client.get("/api/gateway/workspaces")
         assert workspace_response.status_code == 200, workspace_response.text
-        workspace_id = workspace_response.json()["data"]["active_workspace_id"]
+        owner = workspace_response.json()["data"]["active_workspace"]
+        workspace_id = owner["workspace_id"]
+        assert workspace_id == session["workspace_id"]
         nodes = navigation["nodes"]
         assert isinstance(nodes, list)
-        workspace_node = next(node for node in nodes if node.get("workspace_id") == workspace_id)
+        workspace_node = next(node for node in nodes if node.get("workspace") == owner)
         folders = [node["node_id"] for node in nodes if node["kind"] == "workspace_folder"]
         configuration = {
             "gatewayUrl": str(client.base_url), "gatewayPort": client.base_url.port,
-            "workspaceId": workspace_id, "backendWorkspaceId": session["workspace_id"],
+            "workspaceId": workspace_id, "gatewayId": owner["gateway_id"],
             "workspaceRoot": str(context.workspace_root), "workspaceUri": await _workspace_file_root_uri(client),
             "sessionId": session["session_id"],
             "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders[:2],
@@ -326,14 +328,16 @@ async def test_navigation_mutation_measurement_gate(
         navigation = response.json()["data"]
     workspace_response = await client.get("/api/gateway/workspaces")
     assert workspace_response.status_code == 200, workspace_response.text
-    workspace_id = workspace_response.json()["data"]["active_workspace_id"]
+    owner = workspace_response.json()["data"]["active_workspace"]
+    workspace_id = owner["workspace_id"]
+    assert workspace_id == last_session["workspace_id"]
     nodes = navigation["nodes"]
     assert isinstance(nodes, list)
-    workspace_node = next(node for node in nodes if node.get("workspace_id") == workspace_id)
+    workspace_node = next(node for node in nodes if node.get("workspace") == owner)
     folders = [node["node_id"] for node in nodes if node["kind"] == "workspace_folder"]
     configuration = {
         "gatewayUrl": str(client.base_url), "gatewayPort": client.base_url.port,
-        "workspaceId": workspace_id, "backendWorkspaceId": last_session["workspace_id"],
+        "workspaceId": workspace_id, "gatewayId": owner["gateway_id"],
         "workspaceRoot": str(context.workspace_root), "workspaceUri": await _workspace_file_root_uri(client),
         "sessionId": last_session["session_id"],
         "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders[:2],
@@ -439,14 +443,16 @@ async def test_navigation_mutation_measurement_minimal_samples(
         navigation = response.json()["data"]
     workspace_response = await client.get("/api/gateway/workspaces")
     assert workspace_response.status_code == 200, workspace_response.text
-    workspace_id = workspace_response.json()["data"]["active_workspace_id"]
+    owner = workspace_response.json()["data"]["active_workspace"]
+    workspace_id = owner["workspace_id"]
+    assert workspace_id == session["workspace_id"]
     nodes = navigation["nodes"]
     assert isinstance(nodes, list)
-    workspace_node = next(node for node in nodes if node.get("workspace_id") == workspace_id)
+    workspace_node = next(node for node in nodes if node.get("workspace") == owner)
     folders = [node["node_id"] for node in nodes if node["kind"] == "workspace_folder"]
     configuration = {
         "gatewayUrl": str(client.base_url), "gatewayPort": client.base_url.port,
-        "workspaceId": workspace_id, "backendWorkspaceId": session["workspace_id"],
+        "workspaceId": workspace_id, "gatewayId": owner["gateway_id"],
         "workspaceRoot": str(context.workspace_root), "workspaceUri": await _workspace_file_root_uri(client),
         "sessionId": session["session_id"],
         "workspaceNodeId": workspace_node["node_id"], "gatewayFolderIds": folders,
@@ -478,7 +484,7 @@ async def test_navigation_mutation_measurement_minimal_samples(
     measurements = json.loads((context.artifacts_dir / "measurements.json").read_text(encoding="utf-8"))
     notification_layout = measurements["file_tree_notification_layout"]
     assert len(notification_layout) == 1
-    assert all(item["notification_position"] == "absolute"
+    assert all(item["notification_position"] == "static"
         and abs(item["tree_top_delta_px"]) <= 0.25
         and abs(item["tree_height_delta_px"]) <= 0.25 for item in notification_layout)
     clock_alignment = measurements["clock_alignment"]
@@ -657,7 +663,7 @@ async def test_navigation_mutation_measurement_minimal_samples(
     assert persisted_navigation.status_code == 200, persisted_navigation.text
     persisted_nodes = persisted_navigation.json()["data"]["nodes"]
     created_folder = next(node for node in persisted_nodes if node["name"] == "gateway_measure_0")
-    moved_workspace = next(node for node in persisted_nodes if node.get("workspace_id") == workspace_id)
+    moved_workspace = next(node for node in persisted_nodes if node.get("workspace") == owner)
     assert created_folder["kind"] == "workspace_folder" and created_folder.get("parent_node_id") is None
     assert moved_workspace["parent_node_id"] == folders[0]
     print(json.dumps({"file_samples": file_samples, "gateway_samples": gateway_samples,
@@ -681,10 +687,11 @@ async def test_navigation_observation_requests_use_fixture_credentials(
     assert workspace_response.status_code == 200, workspace_response.text
     backend_response = await client.get("/api/v1/workspace")
     assert backend_response.status_code == 200, backend_response.text
+    assert backend_response.json()["data"]["workspace_id"] == workspace_response.json()["data"]["active_workspace"]["workspace_id"]
     configuration = {
         "gatewayUrl": str(client.base_url),
-        "workspaceId": workspace_response.json()["data"]["active_workspace_id"],
-        "backendWorkspaceId": backend_response.json()["data"]["workspace_id"],
+        "workspaceId": backend_response.json()["data"]["workspace_id"],
+        "gatewayId": workspace_response.json()["data"]["active_workspace"]["gateway_id"],
         "cookies": [{"name": cookie.name, "value": cookie.value} for cookie in client.cookies.jar],
         "observationHeaders": dict(LOCAL_TOKEN_HEADERS),
     }

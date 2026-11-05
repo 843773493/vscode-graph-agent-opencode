@@ -7,8 +7,14 @@ import "../../../../../src/clients/web/src/styles/foundation/theme.css";
 import "../../../../../src/clients/web/src/index.css";
 import "../../../../../src/clients/web/src/styles/foundation/workbenchLayout.css";
 import type { WorkspaceFileNode } from "../../../../../src/clients/web/src/types/backend";
+import { gatewayWorkspaceKey } from "../../../../../src/clients/web/src/api/workspaceIdentity";
 
-const WORKSPACE_ROOT = "boxteam://workspace/backend_files/resources/files/root";
+const parameters = new URLSearchParams(window.location.search);
+const gatewayId = parameters.get("gatewayId");
+const workspaceId = parameters.get("workspaceId");
+if (!gatewayId || !workspaceId) throw new Error("布局装具缺少完整工作区 owner");
+const workspaceKey = gatewayWorkspaceKey({ gatewayId, workspaceId });
+const WORKSPACE_ROOT = `boxteam://workspace/${workspaceId}/resources/files/root`;
 const ignoreExpandedPathsChange = (_paths: string[]) => {};
 const ignoreSearchClose = () => {};
 const ignoreFileOpen = (_node: WorkspaceFileNode) => {};
@@ -55,7 +61,7 @@ function AnchoredOverlayHarness(): React.ReactNode {
         <WorkspaceFileTree
           active
           apiPort={8014}
-          workspaceId="gw_layout"
+          workspaceId={workspaceKey}
           workspaceName="layout-fixture"
           sessionId="ses_layout"
           activeFilePath={null}
