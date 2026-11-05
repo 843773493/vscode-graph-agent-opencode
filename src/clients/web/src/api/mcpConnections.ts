@@ -4,6 +4,7 @@ import type {
   McpCandidateInspectRequestDTO, McpCandidateInspectResponseDTO, McpCandidatePlanRequestDTO, McpCandidatePlanResponseDTO,
   McpInstallationCapabilitiesResponseDTO, McpInstallationTargetDTO, McpInstallationRequestDTO,
   McpInstallationOperationResponseDTO, McpInstalledArtifactListResponseDTO,
+  McpPrivateHeaderRefDTO, McpPrivateHeaderWriteRequestDTO, McpPrivateHeaderWriteResponseDTO,
 } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData } from "./http";
@@ -56,7 +57,8 @@ export function listMcpInstalledArtifacts(port: number, workspace: GatewayWorksp
   return installationRequest<McpInstalledArtifactListResponseDTO>(port, workspace, "installations", {}, target);
 }
 
-type McpResponse = McpServerListResponseDTO | McpConnectionOperationListResponseDTO | McpConnectionOperationResponseDTO | McpAuthorizationResponseDTO;
+type McpResponse = McpServerListResponseDTO | McpConnectionOperationListResponseDTO | McpConnectionOperationResponseDTO | McpAuthorizationResponseDTO
+  | McpPrivateHeaderWriteResponseDTO;
 
 async function request<T extends McpResponse>(port: number, target: GatewayWorkspaceRequestTarget, path: string, init: RequestInit = {}): Promise<T> {
   const { gateway_id, workspace_id } = target;
@@ -70,6 +72,27 @@ async function request<T extends McpResponse>(port: number, target: GatewayWorks
     throw new Error("MCP 管理响应不属于请求的 Gateway／工作区");
   }
   return response;
+}
+
+export async function writeMcpPrivateHeader(
+  port: number, target: GatewayWorkspaceRequestTarget, payload: McpPrivateHeaderWriteRequestDTO, signal?: AbortSignal,
+) {
+  const { gateway_id, workspace_id } = target;
+  const { server_id, header_name, endpoint } = payload;
+  if (payload.target?.kind !== "workspace" || payload.target.gateway_id !== gateway_id
+      || payload.target.workspace_id !== workspace_id) {
+    throw new Error("MCP 私有 header 必须提交给原 Gateway／工作区");
+  }
+  const response = await request<McpPrivateHeaderWriteResponseDTO>(port, target, "private-headers", {
+    method: "POST", body: JSON.stringify(payload), signal,
+  });
+  const reference = unwrapApiData<McpPrivateHeaderRefDTO>({ ...response, data: response.data ?? null });
+  if (reference.kind !== "mcp_private_header" || reference.workspace_id !== workspace_id
+      || reference.server_id !== server_id || reference.header_name !== header_name
+      || reference.endpoint !== endpoint || !/^[0-9a-f]{32}$/.test(reference.version)) {
+    throw new Error("MCP 私有 header 回执不属于原输入身份或缺少精确版本");
+  }
+  return reference;
 }
 
 export async function getMcpCatalog(port: number, target: GatewayWorkspaceRequestTarget, { refresh = true, signal }: { refresh?: boolean; signal?: AbortSignal } = {}) {

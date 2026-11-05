@@ -1,8 +1,16 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    model_validator,
+)
 
 from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
 
@@ -105,6 +113,68 @@ class _McpResponse(BaseModel):
     request_id: str
     target: McpWorkspaceTargetDTO
     protocol_version: Literal[1] = 1
+
+
+def require_mcp_http_url(url: str, *, field: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{field} 必须是有效 HTTP(S) URL")
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError(f"{field} 仅允许 loopback 地址使用 HTTP")
+
+
+def _private_header_endpoint(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if parsed.username is not None or parsed.password is not None or "#" in endpoint:
+        raise ValueError("MCP 私有 header 的公开 endpoint 不得包含凭据或 fragment")
+    if endpoint != endpoint.strip():
+        raise ValueError("MCP 私有 header endpoint 不得包含首尾空白")
+    require_mcp_http_url(endpoint, field="MCP 私有 header endpoint")
+    return endpoint
+
+
+McpPrivateHeaderEndpoint = Annotated[str, Field(min_length=1), AfterValidator(_private_header_endpoint)]
+
+
+class McpPrivateHeaderRefDTO(BaseModel):
+    """可公开往返的身份；不包含秘密值，也不接受路径或秘密 URI。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    kind: Literal["mcp_private_header"] = "mcp_private_header"
+    workspace_id: CanonicalWorkspaceId
+    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
+    header_name: str = Field(min_length=1, max_length=256, pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+    endpoint: McpPrivateHeaderEndpoint
+    version: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+def _private_header_value(value: SecretStr) -> SecretStr:
+    text = value.get_secret_value()
+    if not text.isascii() or any(ord(char) < 32 or ord(char) == 127 for char in text):
+        raise ValueError("私有 header 值必须是无控制字符的 ASCII 文本")
+    if text != text.strip():
+        raise ValueError("私有 header 值不得包含首尾空格")
+    return value
+
+
+McpPrivateHeaderValue = Annotated[
+    SecretStr, Field(min_length=1, max_length=8192), AfterValidator(_private_header_value),
+]
+
+
+class McpPrivateHeaderWriteRequestDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    target: McpWorkspaceTargetDTO
+    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
+    header_name: str = Field(min_length=1, max_length=256, pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+    endpoint: McpPrivateHeaderEndpoint
+    value: McpPrivateHeaderValue = Field(repr=False)
+
+
+class McpPrivateHeaderWriteResponseDTO(_McpResponse):
+    data: McpPrivateHeaderRefDTO
 
 
 class McpServerListResponseDTO(_McpResponse):

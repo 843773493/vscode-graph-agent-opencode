@@ -35,6 +35,7 @@ from app.agents.policy.tool_capability import metadata_for_tool
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
+from app.core.workspace_identity import read_workspace_id
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.mcp_candidates import (
     McpCandidateConflict,
@@ -53,6 +54,9 @@ from app.schemas.internal_v2.mcp import (
     McpInstallationOperationDTO,
     McpInstallationRequestDTO,
     McpInstallationTargetDTO,
+    McpPrivateHeaderRefDTO,
+    McpPrivateHeaderWriteRequestDTO,
+    McpWorkspaceTargetDTO,
 )
 from app.services.infrastructure.config.contracts import (
     ConfigApplyRecorder,
@@ -94,6 +98,7 @@ from app.services.infrastructure.mcp.installation.owner import McpInstallationOw
 from app.services.infrastructure.mcp.installation.python import InstallationUnavailable
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from app.services.infrastructure.mcp.oauth import is_authorization_required
+from app.services.infrastructure.mcp.private_headers import McpPrivateHeaderStore
 from app.services.infrastructure.mcp.retirement import McpConnectionRetirement
 from app.services.infrastructure.mcp.session_runtime import (
     McpChangeNotifyCallback,
@@ -577,6 +582,18 @@ class McpCatalogOwner:
             protocol=source.protocol, entry_url=source.entry_url, entry_id=manifest.entry_id,
         )
         return manifest, provenance
+
+    async def write_private_header(
+        self, request: McpPrivateHeaderWriteRequestDTO, *, actual_target: McpWorkspaceTargetDTO,
+    ) -> McpPrivateHeaderRefDTO:
+        """私有写入只分配不可变引用，配置生效仍由原来源候选/CAS 链负责。"""
+        if request.target != actual_target or actual_target.workspace_id != read_workspace_id(self._workspace_root):
+            raise McpCandidateConflict("MCP 私有 header 写入目标已改变，必须重新读取原工作区")
+        return await asyncio.to_thread(
+            McpPrivateHeaderStore(workspace_root=self._workspace_root).write,
+            server_id=request.server_id, header_name=request.header_name,
+            endpoint=request.endpoint, value=request.value,
+        )
 
     async def inspect_installation_candidate(
         self, request: McpCandidateInspectRequestDTO, *, actual_target: McpInstallationTargetDTO,

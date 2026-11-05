@@ -283,6 +283,7 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/mcp/servers/*/url", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*/headers", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*/headers/*", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/headers/*/*", "immediate_read", "current"),
         ),
     )
 

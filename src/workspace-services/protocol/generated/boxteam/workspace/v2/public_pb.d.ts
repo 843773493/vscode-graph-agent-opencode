@@ -2919,6 +2919,128 @@ export declare type McpWorkspaceTargetDTO = Message<"boxteam.workspace.v2.McpWor
 export declare const McpWorkspaceTargetDTOSchema: GenMessage<McpWorkspaceTargetDTO>;
 
 /**
+ * 工作区配置只保存精确私有引用；值仅由实际 owner 的 HTTP 连接消费。
+ *
+ * @generated from message boxteam.workspace.v2.McpPrivateHeaderRefDTO
+ */
+export declare type McpPrivateHeaderRefDTO = Message<"boxteam.workspace.v2.McpPrivateHeaderRefDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string server_id = 3;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: string header_name = 4;
+   */
+  headerName: string;
+
+  /**
+   * @generated from field: string endpoint = 5;
+   */
+  endpoint: string;
+
+  /**
+   * @generated from field: string version = 6;
+   */
+  version: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpPrivateHeaderRefDTO.
+ * Use `create(McpPrivateHeaderRefDTOSchema)` to create a new message.
+ */
+export declare const McpPrivateHeaderRefDTOSchema: GenMessage<McpPrivateHeaderRefDTO>;
+
+/**
+ * 仅通过受保护的 no-store POST 交付私有值，禁止复制到日志或普通配置。
+ *
+ * @generated from message boxteam.workspace.v2.McpPrivateHeaderWriteRequestDTO
+ */
+export declare type McpPrivateHeaderWriteRequestDTO = Message<"boxteam.workspace.v2.McpPrivateHeaderWriteRequestDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 1;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: string server_id = 2;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: string header_name = 3;
+   */
+  headerName: string;
+
+  /**
+   * @generated from field: string endpoint = 4;
+   */
+  endpoint: string;
+
+  /**
+   * @generated from field: string value = 5;
+   */
+  value: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpPrivateHeaderWriteRequestDTO.
+ * Use `create(McpPrivateHeaderWriteRequestDTOSchema)` to create a new message.
+ */
+export declare const McpPrivateHeaderWriteRequestDTOSchema: GenMessage<McpPrivateHeaderWriteRequestDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpPrivateHeaderWriteResponseDTO
+ */
+export declare type McpPrivateHeaderWriteResponseDTO = Message<"boxteam.workspace.v2.McpPrivateHeaderWriteResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpPrivateHeaderRefDTO data = 3;
+   */
+  data?: McpPrivateHeaderRefDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpPrivateHeaderWriteResponseDTO.
+ * Use `create(McpPrivateHeaderWriteResponseDTOSchema)` to create a new message.
+ */
+export declare const McpPrivateHeaderWriteResponseDTOSchema: GenMessage<McpPrivateHeaderWriteResponseDTO>;
+
+/**
  * 保留原 data 数组/对象；目标与协议版本在接收业务内容前核对。
  *
  * @generated from message boxteam.workspace.v2.McpServerListResponseDTO

@@ -126,6 +126,8 @@ VSIX 定义 SHALL 绑定公开 extension ID、稳定目标／安装实例、host
 
 现有 OAuth token store 不代表已具备通用 input secret 能力。系统 SHALL 在原 MCP 凭据／配置 owner 补齐工作区私有输入写入、引用 schema／API、连接端解析及版本合同，身份区分稳定 workspace、server、输入键／版本及服务来源／endpoint。值保存在该工作区 `.boxteam/credentials/`，不放目标共享制品区；未实现该能力前明确拒绝依赖它的新条目。旧明文输入和 OAuth 保持原合同，不能自动迁移或用遮罩覆盖原值。
 
+单个 Streamable HTTP 私有 header 的写入口 SHALL 只返回绑定 workspace、server、header 名、精确 endpoint 及不可变版本的引用；原 source／candidate／CAS 保存该引用，原 SDK session 准备时在实际消费工作区解引用。私有值 MUST 是无控制字符、无首尾空格的非空 ASCII 文本，非法值在写入前拒绝，不静默修剪，也不交给 transport 生成含原值的异常。引用不得随 HTTP 重定向送至另一地址。经联邦管理入口写入 SHALL 同时满足原 configuration_read／configuration_write，且在等待和响应披露边界重验；该能力不表示已支持任意目录 input、env 私有引用或完整安装 UI。
+
 #### Scenario: 只有发现权限的远端连接
 - **WHEN** 用户可查看 B 目录但没有 B 的安装或配置管理能力
 - **THEN** 实际管理请求被 B 明确拒绝，B 没有下载、配置提交或进程执行，本地也不改投替代目标
@@ -133,6 +135,10 @@ VSIX 定义 SHALL 绑定公开 extension ID、稳定目标／安装实例、host
 #### Scenario: 同名服务的私有输入重启恢复
 - **WHEN** A1/A2 为同名服务设置不同 secret header／env 并重启，再从各自 Thread 调用，B 同时查看允许的配置诊断
 - **THEN** 消费端解析各自有效引用且工具实际使用正确值；B、普通来源正文／DTO、事件、日志及浏览器存储均不取得秘密，换 endpoint 不自动借用旧秘密
+
+#### Scenario: 私有 header 的非法空白在写入前拒绝
+- **WHEN** 用户写入带首空格、尾空格或控制字符的私有 header
+- **THEN** 原写入口明确拒绝，私有文件和配置没有新增版本，响应与普通日志均不包含原值，不因自动修剪改变用户输入
 
 ### Requirement: MCP 管理必须复用原入口并暴露真实操作
 

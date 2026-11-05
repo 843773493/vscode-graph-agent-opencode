@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -13,6 +13,7 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.mcp import (
     McpConnectionOperationDTO,
     McpManagedLaunchDTO,
+    McpPrivateHeaderRefDTO,
     McpServerDTO,
 )
 from app.services.infrastructure.mcp import connection_service
@@ -65,7 +66,25 @@ def test_unmanaged_configuration_keeps_original_fingerprint(connection_case: Con
             connection={"transport": "streamable_http", "url": "http://localhost/mcp", "headers": {}},
             oauth=McpOAuthConfig(redirect_uri="http://localhost/callback")))
     connection_case.owner.server_configuration.return_value = server
-    assert connection_case.service._configuration_ref("plain") == sha256_jcs(asdict(server))
+    assert connection_case.service._configuration_ref("plain") == sha256_jcs({
+        "server_id": "plain", "enabled": True, "transport": transport, "connection": server.connection,
+        "oauth": None if transport == "stdio" else {"redirect_uri": "http://localhost/callback"},
+        "managed_launch": None,
+    })
+
+
+def test_private_header_exact_version_participates_in_original_operation_admission(connection_case: ConnectionCase) -> None:
+    case = connection_case
+    reference = McpPrivateHeaderRefDTO(workspace_id="00000000-0000-4000-8000-000000000001",
+        server_id="managed", header_name="X-Secret", endpoint="https://service.test/mcp", version="a" * 32)
+    server = McpServerConfig(server_id="managed", enabled=True, transport="streamable_http",
+        connection={"transport": "streamable_http", "url": reference.endpoint, "headers": {}}, private_headers=(reference,))
+    case.owner.server_configuration.return_value = server
+    case.operations.configuration_ref.return_value = case.service._configuration_ref("managed")
+    case.service._admit(case.operation.operation_id)
+    case.owner.server_configuration.return_value = replace(server, private_headers=(reference.model_copy(update={"version": "b" * 32}),))
+    with pytest.raises(PermissionError, match="配置已改变"):
+        case.service._admit(case.operation.operation_id)
 
 
 @pytest.mark.parametrize("field,value", [

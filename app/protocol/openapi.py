@@ -77,6 +77,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionSkillUntrackRequest", "SessionSkillUntrackResultDTO",
         "McpServerDTO", "McpConnectionOperationDTO", "McpConnectionRequestDTO",
         "McpAuthorizationDTO", "McpAuthorizationCallbackDTO",
+        "McpPrivateHeaderRefDTO", "McpPrivateHeaderWriteRequestDTO", "McpPrivateHeaderWriteResponseDTO",
         "McpServerListResponseDTO", "McpConnectionOperationListResponseDTO",
         "McpConnectionOperationResponseDTO", "McpAuthorizationResponseDTO",
         "McpCandidateInspectRequestDTO", "McpCandidatePlanRequestDTO", "McpCandidatePlanValidationRequestDTO",

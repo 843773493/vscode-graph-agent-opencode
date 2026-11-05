@@ -9,12 +9,15 @@ import json
 import os
 import sys
 import wave
+from collections.abc import Callable
 from pathlib import Path
 
 from mcp import types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import UrlElicitationRequiredError
+from starlette.datastructures import Headers
+from starlette.requests import Request
 
 RESULT_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMQCegBAAFsAPH6cDjBAAAAAElFTkSuQmCC"
 
@@ -30,7 +33,10 @@ def audio_asset() -> str:
 RESULT_AUDIO_BASE64 = audio_asset()
 
 
-def build_server(definitions_path: Path, receipt_path: Path) -> Server:
+def build_server(
+    definitions_path: Path, receipt_path: Path,
+    *, call_observer: Callable[[str, dict[str, object], Headers], None] | None = None,
+) -> Server:
     server = Server("full-schema-fixture")
 
     @server.list_tools()
@@ -41,6 +47,11 @@ def build_server(definitions_path: Path, receipt_path: Path) -> Server:
 
     @server.call_tool(validate_input=False)
     async def call_tool(name: str, arguments: dict[str, object]) -> list[types.TextContent] | types.CallToolResult:
+        if call_observer is not None:
+            request = server.request_context.request
+            if not isinstance(request, Request):
+                raise TypeError("HTTP MCP 观察必须取得原 tools/call Request")
+            call_observer(name, arguments, request.headers)
         receipt = {"name": name, "arguments": arguments}
         with receipt_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(receipt, ensure_ascii=False) + "\n")

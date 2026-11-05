@@ -9,8 +9,10 @@ from typing import cast
 
 from commentjson.commentjson import parser
 from lark import Token, Tree
+from pydantic import ValidationError
 
 from app.core.config_sources import StableConfigFile, parse_stable_config_file
+from app.schemas.internal_v2.mcp import McpPrivateHeaderRefDTO
 from app.services.infrastructure.config.state import redact_config_payload
 
 _MASK_PREFIX = "boxteam-redacted:"
@@ -51,6 +53,13 @@ def _secret(path: tuple[str, ...], value: str) -> bool:
 
 def redact_source_payload(value: object, path: tuple[str, ...] = ()) -> object:
     if isinstance(value, dict):
+        if len(path) == 5 and path[:2] == ("mcp", "servers") and path[3] == "headers":
+            try:
+                reference = McpPrivateHeaderRefDTO.model_validate(value)
+            except ValidationError:
+                pass  # 非引用对象继续逐叶脱敏，不能借对象外形公开任意秘密。
+            else:
+                return reference.model_dump(mode="json")
         return {str(key): redact_source_payload(item, (*path, str(key))) for key, item in value.items()}
     if isinstance(value, list):
         return [redact_source_payload(item, (*path, str(index))) for index, item in enumerate(value)]
@@ -65,13 +74,23 @@ def _replace_tokens(text: str, replacements: list[tuple[int, int, str]]) -> str:
     return text
 
 
+def _at_path(payload: object, path: tuple[str, ...]) -> object:
+    for part in path:
+        if isinstance(payload, list):
+            payload = payload[int(part)]
+        else:
+            payload = cast(dict[str, object], payload)[part]
+    return payload
+
+
 def redact_source_text(text: str) -> str:
-    parse_source_text(text)
+    redacted = redact_source_payload(parse_source_text(text))
     replacements = []
     for path, token in _strings(parser.parse(text)):
         value = json.loads(str(token))
-        if _secret(path, value):
-            replacement = json.dumps(redact_source_payload(value, path), ensure_ascii=False)
+        replacement_value = _at_path(redacted, path)
+        if replacement_value != value:
+            replacement = json.dumps(replacement_value, ensure_ascii=False)
             replacements.append((token.pos_in_stream, token.pos_in_stream + len(token), replacement))
     return _replace_tokens(text, replacements)
 
@@ -79,6 +98,7 @@ def redact_source_text(text: str) -> str:
 def restore_source_text(text: str, original: str) -> str:
     """占位只能在相同路径、相同对象绑定中还原，绝不把遮罩当密码保存。"""
     incoming, previous = parse_source_text(text), parse_source_text(original)
+    redacted_previous = redact_source_payload(previous)
     originals = {path: (json.loads(str(token)), str(token)) for path, token in _strings(parser.parse(original))}
     replacements = []
     for path, token in _strings(parser.parse(text)):
@@ -86,7 +106,7 @@ def restore_source_text(text: str, original: str) -> str:
         if not _secret(path, value) or not value.startswith(_MASK_PREFIX):
             continue
         old = originals.get(path)
-        if old is None or not _secret(path, old[0]) or redact_source_payload(old[0], path) != value:
+        if old is None or _at_path(redacted_previous, path) != value:
             raise ValueError("秘密脱敏占位不属于当前来源路径，必须重新读取原目标")
         # 数组元素重排、Server/Provider 换身份后不能沿旧位置借用秘密。
         left: object = previous

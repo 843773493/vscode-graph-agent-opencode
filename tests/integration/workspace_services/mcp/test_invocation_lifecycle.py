@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -274,12 +275,16 @@ def http_schema_endpoint_factory(request: pytest.FixtureRequest, monkeypatch: py
     monkeypatch.setattr(AppStatus, "should_exit", False)
 
     @asynccontextmanager
-    async def endpoint(label: str, *, required_headers: dict[str, str] | None = None):
+    async def endpoint(
+        label: str, *, required_headers: dict[str, str] | None = None,
+        request_observer: Callable[[Headers], None] | None = None,
+        call_observer: Callable[[str, dict[str, object], Headers], None] | None = None,
+    ):
         context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
         definitions = context.artifacts_dir / f"{label}-definitions.json"
         definitions.write_text(json.dumps({"probe": {"type": "object"}}), encoding="utf-8")
         receipts = context.artifacts_dir / f"{label}-receipts.jsonl"
-        manager = StreamableHTTPSessionManager(app=build_server(definitions, receipts))
+        manager = StreamableHTTPSessionManager(app=build_server(definitions, receipts, call_observer=call_observer))
 
         @asynccontextmanager
         async def lifespan(_app):
@@ -287,9 +292,11 @@ def http_schema_endpoint_factory(request: pytest.FixtureRequest, monkeypatch: py
                 yield
 
         async def handle_request(scope, receive, send):
-            if scope["type"] == "http" and required_headers is not None:
+            if scope["type"] == "http":
                 headers = Headers(scope=scope)
-                if any(headers.get(key) != value for key, value in required_headers.items()):
+                if request_observer is not None:
+                    request_observer(headers)
+                if required_headers is not None and any(headers.get(key) != value for key, value in required_headers.items()):
                     await Response(status_code=401)(scope, receive, send)
                     return
             await manager.handle_request(scope, receive, send)

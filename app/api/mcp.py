@@ -32,6 +32,8 @@ from app.schemas.internal_v2.mcp import (
     McpInstallationRequestDTO,
     McpInstallationTargetDTO,
     McpInstalledArtifactListResponseDTO,
+    McpPrivateHeaderWriteRequestDTO,
+    McpPrivateHeaderWriteResponseDTO,
     McpServerDTO,
     McpServerListResponseDTO,
     McpToolDTO,
@@ -63,6 +65,22 @@ def _candidate_errors():
         if isinstance(error, ValidationError):
             raise
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post("/private-headers", response_model=McpPrivateHeaderWriteResponseDTO, summary="向精确工作区写入单个私有 HTTP header，返回不可变引用")
+async def write_mcp_private_header(
+    payload: McpPrivateHeaderWriteRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    service: Annotated[McpConnectionService, Depends(get_mcp_connection_service)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    target = _target(service)
+    with _candidate_errors():
+        data = await owner.write_private_header(payload, actual_target=target)
+    return McpPrivateHeaderWriteResponseDTO(data=data, request_id=request_id, target=target)
 
 
 @router.post("/candidate-manifests", response_model=McpCandidateInspectResponseDTO, summary="读取 MCP 安装候选原始来源与全部 variant")

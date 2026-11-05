@@ -14,7 +14,11 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.api import mcp
-from app.api.deps import get_mcp_catalog_owner, verify_local_token
+from app.api.deps import (
+    get_mcp_catalog_owner,
+    get_mcp_connection_service,
+    verify_local_token,
+)
 from app.core.backend_identity import load_or_create_backend_id
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
@@ -29,6 +33,8 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner
+from app.services.infrastructure.mcp.connection_service import McpConnectionService
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 PEER = "gateway_" + "a" * 32
 
@@ -87,6 +93,9 @@ async def mcp_access(
     backend.include_router(mcp.router, prefix="/api/v1/workspaces/{workspace_id}")
     backend.state.backend_id = backend_id
     backend.dependency_overrides[get_mcp_catalog_owner] = lambda: owner
+    connection_store = WorkspaceStateStore(workspace_root=root)
+    connection_service = McpConnectionService(owner=owner, store=connection_store, workspace_id=workspace_id)
+    backend.dependency_overrides[get_mcp_connection_service] = lambda: connection_service
     backend.dependency_overrides[verify_local_token] = lambda: "local"
     for error_type in (HTTPException, RequestValidationError):
         backend.add_exception_handler(error_type, workspace_app.exception_handlers[error_type])
@@ -129,6 +138,7 @@ async def mcp_access(
                 yield case
                 assert not owner.started and owner._session_scope is None
     finally:
+        connection_store.close()
         registry.close()
 
 
@@ -210,4 +220,72 @@ async def test_native_revocation_before_disclosure_hides_candidate(mcp_access: M
 async def test_encoded_management_paths_cannot_bypass_native_capability(mcp_access: McpAccess, path: str) -> None:
     case = mcp_access
     response = await case.client.post(f"/api/v1/workspaces/{case.workspace_id}/{path}", json=case.request())
+    assert response.status_code in {400, 403} and not case.calls
+
+
+def _private_request(case: McpAccess) -> dict[str, object]:
+    return {"target": {"kind": "workspace", "gateway_id": case.target["gateway_id"], "workspace_id": case.workspace_id},
+            "server_id": "secure", "header_name": "Authorization", "endpoint": "https://service.test/mcp",
+            "value": "Bearer private-gateway-unit-only"}
+
+
+@pytest.mark.parametrize("mount", ["direct", "workspace"])
+@pytest.mark.parametrize("capability", ["read", "configuration_read", "configuration_write", "mcp_installation_manage"])
+async def test_private_header_requires_configuration_read_and_write_before_backend(
+    mcp_access: McpAccess, mount: str, capability: Capability,
+) -> None:
+    case = mcp_access
+    case.allow(capability)
+    response = await case.client.post(case.path(mount, "private-headers"), json=_private_request(case))
+    assert response.status_code == 403 and "configuration_" in response.text
+    assert not case.calls and case.registry.route_reference_counts(case.workspace_id) == (0, 0)
+
+
+@pytest.mark.parametrize("mount", ["direct", "workspace"])
+async def test_private_header_transparently_routes_to_exact_workspace_and_returns_no_value(mcp_access: McpAccess, mount: str) -> None:
+    case = mcp_access
+    case.allow("configuration_read", "configuration_write")
+    payload = _private_request(case)
+    response = await case.client.post(case.path(mount, "private-headers"), json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["target"] == payload["target"] and body["data"]["workspace_id"] == case.workspace_id
+    assert body["data"]["endpoint"] == payload["endpoint"] and body["data"]["header_name"] == payload["header_name"]
+    assert response.headers["Cache-Control"] == "no-store"
+    assert body["request_id"] == response.headers["X-Request-ID"] == "mcp-installation-access"
+    assert payload["value"] not in response.text and "value" not in body["data"]
+    assert case.calls == [("POST", case.path(mount, "private-headers"))]
+
+
+@pytest.mark.parametrize("mount", ["direct", "workspace"])
+async def test_private_header_rechecks_native_write_permission_after_runtime_wait(mcp_access: McpAccess, mount: str, monkeypatch) -> None:
+    case = mcp_access
+    case.allow("configuration_read", "configuration_write")
+
+    async def wait(request: Request, target: WorkspaceTarget) -> None:
+        case.allow("configuration_read")
+
+    monkeypatch.setattr(workspace_proxy, "_wait_for_workspace_runtime", wait)
+    response = await case.client.post(case.path(mount, "private-headers"), json=_private_request(case))
+    assert response.status_code == 403 and "configuration_write" in response.text
+    assert not case.calls and case.registry.route_reference_counts(case.workspace_id) == (0, 0)
+
+
+@pytest.mark.parametrize("mount", ["direct", "workspace"])
+async def test_private_header_rechecks_native_write_permission_before_disclosing_reference(mcp_access: McpAccess, mount: str) -> None:
+    case = mcp_access
+    case.allow("configuration_read", "configuration_write")
+    case.before_response = lambda: case.allow("configuration_read")
+    response = await case.client.post(case.path(mount, "private-headers"), json=_private_request(case))
+    assert response.status_code == 403 and "configuration_write" in response.text and "version" not in response.text
+    assert len(case.calls) == 1 and case.registry.route_reference_counts(case.workspace_id) == (0, 0)
+
+
+@pytest.mark.parametrize("mount", ["direct", "workspace"])
+@pytest.mark.parametrize("path", ["mcp/%2570rivate-headers", "mcp/unused/%252e%252e/private-headers"])
+async def test_encoded_private_header_path_cannot_bypass_native_write_permission(mcp_access: McpAccess, mount: str, path: str) -> None:
+    case = mcp_access
+    case.allow("read")
+    prefix = f"/api/v1/workspaces/{case.workspace_id}/" if mount == "workspace" else "/api/v1/"
+    response = await case.client.post(prefix + path, json=_private_request(case))
     assert response.status_code in {400, 403} and not case.calls

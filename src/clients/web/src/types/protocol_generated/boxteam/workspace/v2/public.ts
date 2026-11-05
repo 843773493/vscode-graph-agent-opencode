@@ -674,6 +674,34 @@ export interface McpWorkspaceTargetDTO {
   workspace_id: string;
 }
 
+/** 工作区配置只保存精确私有引用；值仅由实际 owner 的 HTTP 连接消费。 */
+export interface McpPrivateHeaderRefDTO {
+  kind: string;
+  workspace_id: string;
+  server_id: string;
+  header_name: string;
+  endpoint: string;
+  version: string;
+}
+
+/** 仅通过受保护的 no-store POST 交付私有值，禁止复制到日志或普通配置。 */
+export interface McpPrivateHeaderWriteRequestDTO {
+  target: McpWorkspaceTargetDTO | undefined;
+  server_id: string;
+  header_name: string;
+  endpoint: string;
+  value: string;
+}
+
+export interface McpPrivateHeaderWriteResponseDTO {
+  code: number;
+  message: string;
+  data: McpPrivateHeaderRefDTO | undefined;
+  request_id: string;
+  target: McpWorkspaceTargetDTO | undefined;
+  protocol_version: number;
+}
+
 /** 保留原 data 数组/对象；目标与协议版本在接收业务内容前核对。 */
 export interface McpServerListResponseDTO {
   code: number;
@@ -8018,6 +8046,175 @@ export const McpWorkspaceTargetDTO: MessageFns<McpWorkspaceTargetDTO> = {
     message.kind = object.kind ?? "";
     message.gateway_id = object.gateway_id ?? undefined;
     message.workspace_id = object.workspace_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpPrivateHeaderRefDTO(): McpPrivateHeaderRefDTO {
+  return { kind: "", workspace_id: "", server_id: "", header_name: "", endpoint: "", version: "" };
+}
+
+export const McpPrivateHeaderRefDTO: MessageFns<McpPrivateHeaderRefDTO> = {
+  fromJSON(object: any): McpPrivateHeaderRefDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      header_name: isSet(object.header_name) ? globalThis.String(object.header_name) : "",
+      endpoint: isSet(object.endpoint) ? globalThis.String(object.endpoint) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+    };
+  },
+
+  toJSON(message: McpPrivateHeaderRefDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.header_name !== "") {
+      obj.header_name = message.header_name;
+    }
+    if (message.endpoint !== "") {
+      obj.endpoint = message.endpoint;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpPrivateHeaderRefDTO>, I>>(base?: I): McpPrivateHeaderRefDTO {
+    return McpPrivateHeaderRefDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpPrivateHeaderRefDTO>, I>>(object: I): McpPrivateHeaderRefDTO {
+    const message = createBaseMcpPrivateHeaderRefDTO();
+    message.kind = object.kind ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.server_id = object.server_id ?? "";
+    message.header_name = object.header_name ?? "";
+    message.endpoint = object.endpoint ?? "";
+    message.version = object.version ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpPrivateHeaderWriteRequestDTO(): McpPrivateHeaderWriteRequestDTO {
+  return { target: undefined, server_id: "", header_name: "", endpoint: "", value: "" };
+}
+
+export const McpPrivateHeaderWriteRequestDTO: MessageFns<McpPrivateHeaderWriteRequestDTO> = {
+  fromJSON(object: any): McpPrivateHeaderWriteRequestDTO {
+    return {
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      header_name: isSet(object.header_name) ? globalThis.String(object.header_name) : "",
+      endpoint: isSet(object.endpoint) ? globalThis.String(object.endpoint) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: McpPrivateHeaderWriteRequestDTO): unknown {
+    const obj: any = {};
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.header_name !== "") {
+      obj.header_name = message.header_name;
+    }
+    if (message.endpoint !== "") {
+      obj.endpoint = message.endpoint;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpPrivateHeaderWriteRequestDTO>, I>>(base?: I): McpPrivateHeaderWriteRequestDTO {
+    return McpPrivateHeaderWriteRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpPrivateHeaderWriteRequestDTO>, I>>(
+    object: I,
+  ): McpPrivateHeaderWriteRequestDTO {
+    const message = createBaseMcpPrivateHeaderWriteRequestDTO();
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.server_id = object.server_id ?? "";
+    message.header_name = object.header_name ?? "";
+    message.endpoint = object.endpoint ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpPrivateHeaderWriteResponseDTO(): McpPrivateHeaderWriteResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpPrivateHeaderWriteResponseDTO: MessageFns<McpPrivateHeaderWriteResponseDTO> = {
+  fromJSON(object: any): McpPrivateHeaderWriteResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? McpPrivateHeaderRefDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpPrivateHeaderWriteResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = McpPrivateHeaderRefDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpPrivateHeaderWriteResponseDTO>, I>>(
+    base?: I,
+  ): McpPrivateHeaderWriteResponseDTO {
+    return McpPrivateHeaderWriteResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpPrivateHeaderWriteResponseDTO>, I>>(
+    object: I,
+  ): McpPrivateHeaderWriteResponseDTO {
+    const message = createBaseMcpPrivateHeaderWriteResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? McpPrivateHeaderRefDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
     return message;
   },
 };

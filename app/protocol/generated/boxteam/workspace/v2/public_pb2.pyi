@@ -1138,6 +1138,52 @@ class McpWorkspaceTargetDTO(_message.Message):
     workspace_id: str
     def __init__(self, kind: _Optional[str] = ..., gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...
 
+class McpPrivateHeaderRefDTO(_message.Message):
+    __slots__ = ("kind", "workspace_id", "server_id", "header_name", "endpoint", "version")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SERVER_ID_FIELD_NUMBER: _ClassVar[int]
+    HEADER_NAME_FIELD_NUMBER: _ClassVar[int]
+    ENDPOINT_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    workspace_id: str
+    server_id: str
+    header_name: str
+    endpoint: str
+    version: str
+    def __init__(self, kind: _Optional[str] = ..., workspace_id: _Optional[str] = ..., server_id: _Optional[str] = ..., header_name: _Optional[str] = ..., endpoint: _Optional[str] = ..., version: _Optional[str] = ...) -> None: ...
+
+class McpPrivateHeaderWriteRequestDTO(_message.Message):
+    __slots__ = ("target", "server_id", "header_name", "endpoint", "value")
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    SERVER_ID_FIELD_NUMBER: _ClassVar[int]
+    HEADER_NAME_FIELD_NUMBER: _ClassVar[int]
+    ENDPOINT_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    target: McpWorkspaceTargetDTO
+    server_id: str
+    header_name: str
+    endpoint: str
+    value: str
+    def __init__(self, target: _Optional[_Union[McpWorkspaceTargetDTO, _Mapping]] = ..., server_id: _Optional[str] = ..., header_name: _Optional[str] = ..., endpoint: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
+class McpPrivateHeaderWriteResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: McpPrivateHeaderRefDTO
+    request_id: str
+    target: McpWorkspaceTargetDTO
+    protocol_version: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Union[McpPrivateHeaderRefDTO, _Mapping]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpWorkspaceTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
+
 class McpServerListResponseDTO(_message.Message):
     __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version", "catalog_revision", "catalog_generation")
     CODE_FIELD_NUMBER: _ClassVar[int]

@@ -3,6 +3,7 @@ import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
   listMcpOperations, getMcpCatalog, submitMcpOperation,
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation,
+  writeMcpPrivateHeader,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
 import type { McpServerListResponseDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
@@ -37,6 +38,42 @@ function installFetch(respond: (url: URL, init: RequestInit | undefined) => unkn
 }
 
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("私有 header 只交给精确工作区，核对原输入和不透明版本后消费引用", async () => {
+  const payload = { target: { kind: "workspace", ...target }, server_id: "secure", header_name: "Authorization",
+    endpoint: "https://service.test/mcp?region=1", value: "Bearer private-client-unit-only" };
+  const reference = { kind: "mcp_private_header", workspace_id: target.workspace_id, server_id: payload.server_id,
+    header_name: payload.header_name, endpoint: payload.endpoint, version: "a".repeat(32) };
+  const requests: RequestInit[] = [];
+  let current = reference;
+  const port = installFetch((url, init) => {
+    expect(url.pathname).toBe("/api/v1/mcp/private-headers");
+    expect(init?.method).toBe("POST");
+    expect(init?.cache).toBe("no-store");
+    requests.push(init!);
+    return envelope(current);
+  });
+  expect(await writeMcpPrivateHeader(port, target, payload)).toEqual(reference);
+  expect(JSON.parse(String(requests[0]!.body))).toEqual(payload);
+  expect(new Headers(requests[0]!.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+  for (const change of [{ endpoint: "https://other.test/mcp" }, { server_id: "other" }, { header_name: "authorization" },
+    { version: "" }, { workspace_id: "00000000-0000-4000-8000-000000000099" }]) {
+    current = { ...reference, ...change };
+    await expect(writeMcpPrivateHeader(port, target, payload)).rejects.toThrow("原输入身份");
+  }
+  const before = requests.length;
+  await expect(writeMcpPrivateHeader(port, target, { ...payload, target: { ...payload.target, gateway_id: otherGateway } }))
+    .rejects.toThrow("原 Gateway");
+  expect(requests).toHaveLength(before);
+  current = reference;
+  const mutableTarget = { ...target };
+  const mutablePayload = { ...payload, target: { ...payload.target } };
+  const pending = writeMcpPrivateHeader(port, mutableTarget, mutablePayload);
+  mutableTarget.workspace_id = "00000000-0000-4000-8000-000000000099";
+  mutablePayload.server_id = "changed";
+  mutablePayload.endpoint = "https://changed.test/mcp";
+  expect(await pending).toEqual(reference);
+});
 
 test("制品入口冻结原生 Backend，实际安装与查询沿相同目标且不替换为workspace响应", async () => {
   const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };

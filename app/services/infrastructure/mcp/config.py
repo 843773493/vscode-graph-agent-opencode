@@ -10,7 +10,12 @@ from urllib.parse import urlparse
 
 from langchain_mcp_adapters.sessions import Connection
 
-from app.schemas.internal_v2.mcp import McpManagedLaunchDTO
+from app.schemas.internal_v2.mcp import (
+    McpManagedLaunchDTO,
+    McpPrivateHeaderRefDTO,
+    require_mcp_http_url,
+)
+from app.services.infrastructure.mcp.private_headers import McpPrivateHeaderStore
 
 McpTransport = Literal["stdio", "streamable_http"]
 _SERVER_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
@@ -33,6 +38,7 @@ class McpServerConfig:
     connection: Connection
     oauth: McpOAuthConfig | None = None
     managed_launch: McpManagedLaunchDTO | None = None
+    private_headers: tuple[McpPrivateHeaderRefDTO, ...] = ()
 
 
 def parse_mcp_server_configs(
@@ -116,16 +122,14 @@ def _parse_server(
             managed_launch=binding,
         )
     if transport == "streamable_http":
+        connection, private_headers = _parse_http_connection(server_id, raw_server, workspace_root=workspace_root)
         return McpServerConfig(
             server_id=server_id,
             enabled=enabled,
             transport=transport,
-            connection=_parse_http_connection(
-                server_id,
-                raw_server,
-                workspace_root=workspace_root,
-            ),
+            connection=connection,
             oauth=_parse_oauth(server_id, raw_server, workspace_root=workspace_root),
+            private_headers=private_headers,
         )
     raise ValueError(
         f"mcp.servers.{server_id}.transport 仅支持 stdio 或 streamable_http"
@@ -144,22 +148,14 @@ def _parse_oauth(
         _required_string(oauth["redirect_uri"], f"mcp.servers.{server_id}.oauth.redirect_uri"),
         workspace_root=workspace_root,
     )
-    _require_http_url(redirect_uri, field=f"mcp.servers.{server_id}.oauth.redirect_uri")
+    require_mcp_http_url(redirect_uri, field=f"mcp.servers.{server_id}.oauth.redirect_uri")
     parsed = urlparse(redirect_uri)
     if parsed.fragment or parsed.username or parsed.password:
         raise ValueError(f"mcp.servers.{server_id}.oauth.redirect_uri 不得包含凭据或 fragment")
-    headers = cast(dict[str, str], raw_server.get("headers", {}))
+    headers = cast(dict[str, object], raw_server.get("headers", {}))
     if any(str(key).lower() == "authorization" for key in headers):
         raise ValueError(f"mcp.servers.{server_id} 不得同时配置 OAuth 与 Authorization header")
     return McpOAuthConfig(redirect_uri=redirect_uri)
-
-
-def _require_http_url(url: str, *, field: str) -> None:
-    parsed_url = urlparse(url)
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
-        raise ValueError(f"{field} 必须是有效 HTTP(S) URL")
-    if parsed_url.scheme == "http" and parsed_url.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        raise ValueError(f"{field} 仅允许 loopback 地址使用 HTTP")
 
 
 def _parse_stdio_connection(
@@ -212,29 +208,34 @@ def _parse_http_connection(
     raw_server: dict[str, object],
     *,
     workspace_root: Path,
-) -> Connection:
+) -> tuple[Connection, tuple[McpPrivateHeaderRefDTO, ...]]:
     _reject_unknown_fields(server_id, raw_server, _HTTP_FIELDS)
     url = _expand_value(
         _required_string(raw_server.get("url"), f"mcp.servers.{server_id}.url"),
         workspace_root=workspace_root,
     )
-    _require_http_url(url, field=f"mcp.servers.{server_id}.url")
+    require_mcp_http_url(url, field=f"mcp.servers.{server_id}.url")
     raw_headers = raw_server.get("headers", {})
-    if not isinstance(raw_headers, dict) or not all(
-        isinstance(key, str) and isinstance(value, str)
-        for key, value in raw_headers.items()
-    ):
-        raise TypeError(
-            f"mcp.servers.{server_id}.headers 必须是字符串到字符串的对象"
-        )
+    if not isinstance(raw_headers, dict):
+        raise TypeError(f"mcp.servers.{server_id}.headers 必须是对象")
+    headers: dict[str, str] = {}
+    private_headers = []
+    for key, value in raw_headers.items():
+        if not isinstance(key, str):
+            raise TypeError(f"mcp.servers.{server_id}.headers 名称必须是字符串")
+        if isinstance(value, str):
+            headers[key] = _expand_value(value, workspace_root=workspace_root)
+        else:
+            reference = McpPrivateHeaderRefDTO.model_validate(value)
+            McpPrivateHeaderStore(workspace_root=workspace_root).require_binding(
+                reference, server_id=server_id, header_name=key, endpoint=url,
+            )
+            private_headers.append(reference)
     return {
         "transport": "streamable_http",
         "url": url,
-        "headers": {
-            key: _expand_value(value, workspace_root=workspace_root)
-            for key, value in raw_headers.items()
-        },
-    }
+        "headers": headers,
+    }, tuple(private_headers)
 
 
 def _expand_value(value: str, *, workspace_root: Path) -> str:

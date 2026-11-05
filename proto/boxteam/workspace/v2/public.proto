@@ -666,6 +666,34 @@ message McpWorkspaceTargetDTO {
   string workspace_id = 3;
 }
 
+// 工作区配置只保存精确私有引用；值仅由实际 owner 的 HTTP 连接消费。
+message McpPrivateHeaderRefDTO {
+  string kind = 1;
+  string workspace_id = 2;
+  string server_id = 3;
+  string header_name = 4;
+  string endpoint = 5;
+  string version = 6;
+}
+
+// 仅通过受保护的 no-store POST 交付私有值，禁止复制到日志或普通配置。
+message McpPrivateHeaderWriteRequestDTO {
+  McpWorkspaceTargetDTO target = 1;
+  string server_id = 2;
+  string header_name = 3;
+  string endpoint = 4;
+  string value = 5;
+}
+
+message McpPrivateHeaderWriteResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpPrivateHeaderRefDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
 // 保留原 data 数组/对象；目标与协议版本在接收业务内容前核对。
 message McpServerListResponseDTO {
   int32 code = 1;

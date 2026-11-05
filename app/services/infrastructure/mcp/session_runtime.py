@@ -19,6 +19,7 @@ from app.services.infrastructure.mcp.oauth import (
     McpOAuthProvider,
     is_authorization_required,
 )
+from app.services.infrastructure.mcp.private_headers import McpPrivateHeaderStore
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
 from mcp import StdioServerParameters
 from mcp import types as mcp_types
@@ -91,11 +92,22 @@ async def production_mcp_session_factory(
                 yield streams
         else:
             connection = cast(StreamableHttpConnection, server.connection)
-            async with (
-                create_mcp_http_client(headers=connection.get("headers"), auth=auth) as client,
-                streamable_http_client(connection["url"], http_client=client) as (read, write, _),
-            ):
-                yield read, write
+            headers = dict(connection.get("headers") or {})
+            if server.private_headers:
+                if workspace_root is None:
+                    raise ValueError("MCP 私有 header session 必须显式指定所属工作区")
+                store = McpPrivateHeaderStore(workspace_root=workspace_root)
+                for reference in server.private_headers:
+                    headers[reference.header_name] = await asyncio.to_thread(
+                        store.resolve, reference, server_id=server.server_id,
+                        header_name=reference.header_name, endpoint=connection["url"],
+                    )
+            async with create_mcp_http_client(headers=headers, auth=auth) as client:
+                if server.private_headers:
+                    # 引用只授权精确 endpoint；不能随 SDK 默认重定向把任意 header 交给另一地址。
+                    client.follow_redirects = False
+                async with streamable_http_client(connection["url"], http_client=client) as (read, write, _):
+                    yield read, write
 
     # 两种传输均使用 SDK，原 task 创建和退出 session，不保留旧适配器连接分路。
     async with transport() as (read, write), CancellableMcpClientSession(

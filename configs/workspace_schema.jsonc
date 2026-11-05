@@ -50,7 +50,8 @@
     { "pattern": "/mcp/servers/*/cwd", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/url", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/headers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
-    { "pattern": "/mcp/servers/*/headers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null }
+    { "pattern": "/mcp/servers/*/headers/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/headers/*/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null }
   ],
   "title": "BoxTeam Workspace Config Schema",
   "type": "object",
@@ -670,6 +671,25 @@
       }
     },
 
+    "mcpPrivateHeaderRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "workspace_id", "server_id", "header_name", "endpoint", "version"],
+      "description": "仅引用工作区私有凭据的不可变版本；精确绑定 Server、header 名与展开后的 endpoint。更换任一身份必须重新写入，不迁移明文。",
+      "properties": {
+        "kind": { "const": "mcp_private_header" },
+        "workspace_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "server_id": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$" },
+        "header_name": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+        "endpoint": {
+          "type": "string", "format": "uri", "minLength": 1,
+          "pattern": "^[^#]*$",
+          "not": { "pattern": "^[^:/?#]+://[^/?#]*@" }
+        },
+        "version": { "type": "string", "pattern": "^[0-9a-f]{32}$" }
+      }
+    },
+
     "mcpStreamableHttpServer": {
       "type": "object",
       "additionalProperties": false,
@@ -693,7 +713,10 @@
         "headers": {
           "type": "object",
           "additionalProperties": {
-            "type": "string"
+            "oneOf": [
+              { "type": "string" },
+              { "$ref": "#/$defs/mcpPrivateHeaderRef" }
+            ]
           },
           "default": {}
         },

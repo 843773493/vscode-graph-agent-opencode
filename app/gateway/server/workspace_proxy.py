@@ -398,7 +398,8 @@ async def _proxy_workspace_request(
             detail="bounded federation 禁止通过远程 Gateway 继续代理嵌套工作区",
         )
     segments = _workspace_path_segments(path)
-    configuration_request = bool(segments) and segments[0] == "config"
+    private_header_request = len(segments) >= 2 and segments[:2] == ["mcp", "private-headers"]
+    configuration_request = (bool(segments) and segments[0] == "config") or private_header_request
     installation_request = len(segments) >= 2 and segments[0] == "mcp" and segments[1] in {
         "candidate-manifests", "candidate-plans", "installations", "installation-operations", "installation-capabilities",
     }
@@ -627,6 +628,8 @@ async def _proxy_workspace_request(
                 await response.aclose()
             assert auth is not None
             require_federation_capability(request, auth, "configuration_read" if configuration_request else "mcp_installation_manage")
+            if private_header_request:
+                require_federation_capability(request, auth, "configuration_write")
             return Response(content=body, status_code=response.status_code,
                             headers=_response_headers(response), media_type=media_type)
         if navigation_deadline_at is not None:
