@@ -72,8 +72,8 @@ class FederatedSearchQueryDTO(BaseModel):
                 raise ValueError("运行日志查询需要明确 diagnostics 来源，并只支持 content v1 literal 合同")
         elif self.diagnostic_targets:
             raise ValueError("只有运行日志搜索接受 diagnostics 来源")
-        if len({target.gateway_id for target in self.diagnostic_targets}) != len(self.diagnostic_targets):
-            raise ValueError("同一次运行日志查询每个 Gateway 只能声明一个明确来源")
+        if len({(target.gateway_id, target.scope.source) for target in self.diagnostic_targets}) != len(self.diagnostic_targets):
+            raise ValueError("同一次运行日志查询每个 Gateway 的同一明确来源只能声明一次")
         keys = [(item.owner, item.target.uri) for item in self.file_targets]
         if len(set(keys)) != len(keys):
             raise ValueError("文件根不得重复声明；不同局部选项不能隐式覆盖")

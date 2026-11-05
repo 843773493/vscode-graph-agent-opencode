@@ -49,6 +49,15 @@ import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '
 import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { COPY_RESOURCE_URI, supportsResourceReference } from '../resourceActions.js';
 
+const contentChoices: readonly { id: string; label: ContentSearchCategory; description: string }[] = [
+  { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child' },
+  { id: 'content-category-tool', label: '工具结果', description: 'canonical 结果及不可变完整输出 · 不重放工具' },
+  { id: 'content-category-request', label: 'LLM 请求记录', description: 'Session 级原请求／响应 · 精确记录定位' },
+  { id: 'content-category-trace', label: 'Trace', description: '工作区原事件 · 精确 Thread／记录定位' },
+  { id: 'content-category-runtime-logs', label: '运行日志', description: '所选工作区关联的受管进程 · 共享来源会明确标示' },
+  { id: 'content-category-gateway-logs', label: 'Gateway 日志', description: '明确查询所选 Gateway 自有来源 · 不含工作区进程' },
+];
+
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
   owner?: WorkspaceOwner;
@@ -70,7 +79,7 @@ interface AccessRun {
   invalidated?: boolean;
 }
 interface AccessOptions extends IAnythingQuickAccessProviderRunOptions, SearchInvocationOptions {
-  contentCategory?: ContentSearchCategory;
+  contentCategories?: readonly ContentSearchCategory[];
   searchGroup?: number;
   searchRestore?: { query: string; activeId?: string };
 }
@@ -102,6 +111,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   override provide(picker: AccessRun['picker'], token: CancellationToken, options: AccessOptions = {}) {
+    options = { ...options, contentCategories: options.contentCategories && [...new Set(options.contentCategories)] };
     const lifetime = new DisposableStore(), editorState = lifetime.add(this.instantiation.createInstance(PickerEditorState));
     const access = new CancellationTokenSource(token);
     const run: AccessRun = { picker, token: access.token, group: options.searchGroup ?? this.groups.activeGroup.id, owners: [], editorState, options, cache: {},
@@ -128,13 +138,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       picker.items = [{ id: 'identity-invalidated', label: 'Gateway 或用户身份已改变，请重新打开快速访问' }];
       picker.busy = false;
     };
-    lifetime.add(toDisposable(onGatewayUserSessionInvalidated(0, invalidate)));
-    const gatewayId = workspaceContext.getSnapshot().gatewayId;
-    lifetime.add(toDisposable(workspaceContext.subscribe(() => {
-      const current = workspaceContext.getSnapshot().gatewayId;
-      if (gatewayId && current && gatewayId !== current) invalidate();
-    })));
-    picker.placeholder = options.placeholder ?? (this.contentMode ? `搜索正文 · ${options.contentCategory ?? '请选择类别'} · ${run.owners.map(owner => owner.workspaceId).join('、')}` : options.filesOnly ? '查找文件' : `查找${this.category ?? '会话、Thread 和文件'} · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
+    this.watchIdentity(lifetime, invalidate);
+    picker.placeholder = options.placeholder ?? (this.contentMode ? `搜索正文 · ${options.contentCategories?.join('、') || '请选择类别'} · ${run.owners.map(owner => owner.workspaceId).join('、')}` : options.filesOnly ? '查找文件' : `查找${this.category ?? '会话、Thread 和文件'} · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
     if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !picker.quickNavigate) {
       const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择搜索范围' };
       picker.buttons = [...picker.buttons, button];
@@ -143,14 +148,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       if (this.contentMode) {
         const categories = { iconClass: ThemeIcon.asClassName(Codicon.listSelection), tooltip: '选择正文类别' };
         picker.buttons = [...picker.buttons, categories];
-        lifetime.add(picker.onDidTriggerButton(selected => {
-          if (selected === categories) {
-            const query = picker.value;
-            picker.hide();
-            const providerOptions: AccessOptions = { ...run.options, contentCategory: undefined, searchGroup: run.group, searchOwners: run.owners };
-            this.quickInput.quickAccess.show(query, { preserveValue: true, providerOptions });
-          }
-        }));
+        lifetime.add(picker.onDidTriggerButton(selected => { if (selected === categories) this.report(this.chooseContentCategories(run)); }));
         lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(item => item !== categories); }));
       }
 
@@ -185,7 +183,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const openLink = !this.contentMode && !this.category && !run.options.filesOnly && !run.options.fileSearchDelegate
       && !run.options.handleAccept && /^[a-z][a-z0-9+.-]+:\/\//i.test(original);
     const resourceLink = openLink || /^boxteam:/i.test(original);
-    if (this.contentMode && !run.options.contentCategory) return this.contentCategories(run, original);
+    if (this.contentMode && !run.options.contentCategories?.length) return this.contentCategories(run, original);
     const parsed = this.contentMode || this.category || run.options.filesOnly || resourceLink ? undefined : extractRangeFromFilter(original, ['@']);
     run.range = parsed?.range;
     const filter = parsed?.filter ?? original;
@@ -246,7 +244,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (!run.owners.length) return [...fast, { id: 'scope-error', label: run.error ?? '请先选择明确工作区' }];
     if (!this.contentMode && !this.category && this.configuration.getValue<boolean>('search.quickOpen.includeSymbols')) fast.push({ id: 'workspace-symbols-unavailable', label: '工作区符号未启用：当前没有可限定业务根的符号服务' });
 
-    const categories: SearchCategory[] = this.contentMode ? [run.options.contentCategory!] : this.category ? [this.category]
+    const categories: readonly SearchCategory[] = this.contentMode ? run.options.contentCategories! : this.category ? [this.category]
       : run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
     const seen = new Set(recent.map(pick => pick.id));
     // 文件名查询在追加行列／符号时仍是同一次查询；只有新名称或浮层结束才释放其续查操作。
@@ -276,26 +274,51 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         query.busy = value;
         if (queryAlive() && !run.symbolMode) run.picker.busy = value;
       }, label => { if (queryAlive() && !run.symbolMode) run.picker.placeholder = run.options.placeholder
-        ?? `${this.contentMode ? '搜索正文 · ' + run.options.contentCategory : '查找' + (run.options.filesOnly ? '文件' : this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation);
+        ?? `${this.contentMode ? '搜索正文 · ' + run.options.contentCategories!.join('、') : '查找' + (run.options.filesOnly ? '文件' : this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation);
     return [...fast, ...branches.map(branch => branch.status)];
   }
 
   private contentCategories(run: AccessRun, filter: string): ResourcePick[] {
-    const select = (prefix: string, category?: ContentSearchCategory) => {
-      this.assertAccess(run);
-      run.picker.hide();
-      const providerOptions: AccessOptions = { ...run.options, contentCategory: category, searchOwners: run.owners, searchGroup: run.group };
-      this.quickInput.quickAccess.show(prefix + filter, { preserveValue: true, providerOptions });
-    };
+    const categories = contentChoices.map(choice => ({ ...choice, accept: () => this.report(this.chooseContentCategories(run, [choice.label])) }));
     return [
-      { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child', accept: () => select('content ', '会话消息') },
-      { id: 'content-category-tool', label: '工具结果', description: 'canonical 结果及不可变完整输出 · 不重放工具', accept: () => select('content ', '工具结果') },
-      { id: 'content-category-file', label: '文件', description: '转到 % 文件内容搜索，保留所选工作区', accept: () => select('%') },
-      { id: 'content-category-request', label: 'LLM 请求记录', description: 'Session 级原请求／响应 · 精确记录定位', accept: () => select('content ', 'LLM 请求记录') },
-      { id: 'content-category-trace', label: 'Trace', description: '工作区原事件 · 精确 Thread／记录定位', accept: () => select('content ', 'Trace') },
-      { id: 'content-category-runtime-logs', label: '运行日志', description: '所选工作区关联的受管进程 · 共享来源会明确标示', accept: () => select('content ', '运行日志') },
-      { id: 'content-category-gateway-logs', label: 'Gateway 日志', description: '明确查询所选 Gateway 自有来源 · 不含工作区进程', accept: () => select('content ', 'Gateway 日志') },
+      ...categories.slice(0, 2),
+      { id: 'content-category-file', label: '文件', description: '转到 % 文件内容搜索，保留所选工作区', accept: () => {
+        this.assertAccess(run);
+        run.picker.hide();
+        const providerOptions: AccessOptions = {
+          ...run.options, contentCategories: undefined, searchOwners: run.owners, searchGroup: run.group,
+        };
+        this.quickInput.quickAccess.show('%' + filter, { preserveValue: true, providerOptions });
+      } },
+      ...categories.slice(2),
     ];
+  }
+
+  private async chooseContentCategories(run: AccessRun, initial = run.options.contentCategories ?? []): Promise<void> {
+    this.assertAccess(run);
+    const query = run.picker.value, activeId = run.picker.activeItems[0]?.id;
+    const lifetime = new DisposableStore(), cancellation = new CancellationTokenSource();
+    this.watchIdentity(lifetime, () => { run.invalidated = true; cancellation.cancel(); });
+    let selected: ContentSearchCategory[] | undefined;
+    try {
+      const result = await this.quickInput.pick(contentChoices.map(choice => ({ ...choice, picked: initial.includes(choice.label) })), {
+        canPickMany: true, title: '选择正文类别', placeHolder: '确认后仅查询所选类别；文件内容使用 % 独立搜索',
+      }, cancellation.token);
+      this.assertAccess(run);
+      if (result) {
+        if (!result.length) throw new Error('正文搜索至少需要一个类别');
+        selected = result.map(choice => choice.label);
+      }
+    } finally {
+      lifetime.dispose(); cancellation.dispose();
+      if (!run.invalidated && !this.quickInput.currentQuickInput) {
+        const providerOptions: AccessOptions = {
+          ...run.options, contentCategories: selected ?? run.options.contentCategories, searchOwners: run.owners, searchGroup: run.group,
+          searchRestore: selected ? undefined : { query, activeId },
+        };
+        this.quickInput.quickAccess.show(query, { preserveValue: true, providerOptions });
+      }
+    }
   }
 
   private failure(category: string, error: unknown): ResourcePick {
@@ -445,6 +468,15 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   private openPinned(): boolean {
     return this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
       || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
+  }
+
+  private watchIdentity(lifetime: DisposableStore, invalidate: () => void): void {
+    lifetime.add(toDisposable(onGatewayUserSessionInvalidated(0, invalidate)));
+    const gatewayId = workspaceContext.getSnapshot().gatewayId;
+    lifetime.add(toDisposable(workspaceContext.subscribe(() => {
+      const current = workspaceContext.getSnapshot().gatewayId;
+      if (gatewayId && current && gatewayId !== current) invalidate();
+    })));
   }
 
   private assertAccess(run: AccessRun): void {

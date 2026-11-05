@@ -14,6 +14,7 @@ from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes.diagnostic_logs import router as diagnostics_router
 from app.gateway.routes.search import router as search_router
 from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
+from app.schemas.gateway.diagnostics import GatewayDiagnosticLogQueryResultDTO
 from app.schemas.search_federation import FederatedSearchEventDTO
 
 GATEWAY = "gateway_00000000000040008000000000000001"
@@ -66,7 +67,10 @@ async def test_shared_process_is_one_diagnostic_branch_and_one_hit(log_http: htt
     page = actual[1].diagnostic_logs
     assert page is not None and actual[1].page is None
     assert len(page.items) == 1 and page.items[0].source.workspace_ids == [A, SHARED]
-    branch, = actual[-1].summary.branches
+    summary = actual[-1].summary
+    assert summary is not None
+    branch, = summary.branches
+    assert branch.branch.diagnostics is not None
     assert branch.branch.owner is None and branch.branch.diagnostics.scope.workspace_ids == (A, SHARED)
     assert branch.returned_results == 1 and branch.state == "limited" and branch.code == "source_unavailable"
     assert "only-b" not in actual[1].model_dump_json() and "only-g" not in actual[1].model_dump_json()
@@ -76,24 +80,84 @@ async def test_shared_process_is_one_diagnostic_branch_and_one_hit(log_http: htt
 async def test_gateway_source_requires_separate_explicit_selection(log_http: httpx.AsyncClient) -> None:
     actual = events(await log_http.post("/api/gateway/search", json=body((A,), source="gateway")))
     page = actual[1].diagnostic_logs
+    assert page is not None
     assert page.complete and {item.preview for item in page.items} == {"only-g sharedword", "launcher sharedword"}
     assert all(source.source == "gateway" and not source.workspace_ids for source in page.sources)
-    assert actual[-1].summary.state == "complete"
+    summary = actual[-1].summary
+    assert summary is not None and summary.state == "complete"
+
+
+async def test_both_log_sources_keep_scope_quota_and_independent_continuation(log_http: httpx.AsyncClient) -> None:
+    request = body((A,))
+    request["queries"][0]["diagnostic_targets"].append({"gateway_id": GATEWAY, "scope": {"source": "gateway"}})
+    request["max_results"] = 2
+    first = events(await log_http.post("/api/gateway/search", json=request))
+    summary, scope = first[-1].summary, first[0].scope
+    assert summary is not None and scope is not None
+    branches = summary.branches
+    assert len(branches) == 2 and [branch.allocated_results for branch in branches] == [1, 1]
+    assert all(branch.branch.owner is None for branch in branches)
+    assert [branch.branch.diagnostics.scope.source for branch in branches if branch.branch.diagnostics is not None] == ["workspace", "gateway"]
+    assert summary.returned_results == 2
+    pages: dict[str, GatewayDiagnosticLogQueryResultDTO] = {}
+    for event in first:
+        if event.type == "page":
+            assert event.branch is not None and event.branch.branch.diagnostics is not None
+            assert event.diagnostic_logs is not None
+            pages[event.branch.branch.diagnostics.scope.source] = event.diagnostic_logs
+    assert set(pages) == {"workspace", "gateway"}
+    assert pages["workspace"].scope.workspace_ids == (A,)
+    assert [item.preview for item in pages["workspace"].items] == ["only-a sharedword 😀needle needle"]
+    assert pages["workspace"].items[0].source.workspace_ids == [A, SHARED]
+    assert all(item.source.source == "gateway" and not item.source.workspace_ids for item in pages["gateway"].items)
+    gateway = branches[1]
+    assert gateway.cursor and gateway.state == "limited"
+    request.update(scope={"mode": "resume", "scope": scope.scope.model_dump(mode="json")},
+                   continuations=[{"branch": gateway.branch.model_dump(mode="json"), "cursor": gateway.cursor}])
+    second = events(await log_http.post("/api/gateway/search", json=request))
+    resumed_summary = second[-1].summary
+    assert resumed_summary is not None
+    continued, = resumed_summary.branches
+    assert continued.branch == gateway.branch and continued.allocated_results == 2
+    assert continued.state == "complete" and continued.cursor is None
+    next_page, = [event.diagnostic_logs for event in second if event.type == "page"]
+    assert next_page is not None
+    assert {item.preview for item in [*pages["gateway"].items, *next_page.items]} == {
+        "only-g sharedword", "launcher sharedword"}
+
+
+@pytest.mark.parametrize("source,workspaces", [("workspace", (A,)), ("workspace", (SHARED,)), ("gateway", ())])
+async def test_same_gateway_same_log_source_is_rejected_even_with_different_workspace_filters(
+    log_http: httpx.AsyncClient, source: str, workspaces: tuple[str, ...],
+) -> None:
+    request = body(source=source)
+    request["queries"][0]["diagnostic_targets"].append({"gateway_id": GATEWAY, "scope": {
+        "source": source, "workspace_ids": workspaces,
+    }})
+    response = await log_http.post("/api/gateway/search", json=request)
+    assert response.status_code == 422 and "同一明确来源只能声明一次" in response.text
 
 
 async def test_original_cursor_resumes_same_diagnostic_branch(log_http: httpx.AsyncClient) -> None:
     request = body((A,), query="needle", limit=1)
     first = events(await log_http.post("/api/gateway/search", json=request))
-    branch, = first[-1].summary.branches
+    summary, scope = first[-1].summary, first[0].scope
+    assert summary is not None and scope is not None
+    branch, = summary.branches
     assert branch.cursor
-    request.update(scope={"mode": "resume", "scope": first[0].scope.scope.model_dump(mode="json")},
+    request.update(scope={"mode": "resume", "scope": scope.scope.model_dump(mode="json")},
                    continuations=[{"branch": branch.branch.model_dump(mode="json"), "cursor": branch.cursor}])
     second = events(await log_http.post("/api/gateway/search", json=request))
-    assert len(second[-1].summary.branches) == 1
-    assert second[1].diagnostic_logs.items[0].reference.start_codepoint > first[1].diagnostic_logs.items[0].reference.start_codepoint
+    resumed_summary = second[-1].summary
+    assert resumed_summary is not None and len(resumed_summary.branches) == 1
+    first_page, second_page = first[1].diagnostic_logs, second[1].diagnostic_logs
+    assert first_page is not None and second_page is not None
+    assert second_page.items[0].reference.start_codepoint > first_page.items[0].reference.start_codepoint
     request["continuations"][0]["cursor"] = "broken"
     rejected = events(await log_http.post("/api/gateway/search", json=request))
-    failure, = rejected[-1].summary.branches
+    rejected_summary = rejected[-1].summary
+    assert rejected_summary is not None
+    failure, = rejected_summary.branches
     assert failure.state == "failed" and failure.code == "invalid_runtime_log_cursor"
     assert failure.error_owner == "runtime_log" and failure.reason == "malformed" and failure.cursor == "broken"
     assert not any(event.type == "page" for event in rejected)
@@ -105,7 +169,9 @@ async def test_zero_quota_does_not_open_logs(log_http: httpx.AsyncClient, monkey
     monkeypatch.setattr("app.gateway.control.diagnostic_logs._sources", unexpected)
     actual = events(await log_http.post("/api/gateway/search", json={**body(), "max_results": 0}))
     assert [event.type for event in actual] == ["scope", "branch", "end"]
-    branch, = actual[-1].summary.branches
+    summary = actual[-1].summary
+    assert summary is not None
+    branch, = summary.branches
     assert branch.state == "limited" and branch.code == "output_limit" and branch.allocated_results == 0
 
 

@@ -195,7 +195,7 @@
 
 ### Requirement: 运行日志以明确诊断来源接入同一联邦生命周期
 
-`runtime_log/content` SHALL 通过同一个 Gateway SearchJob 队列、剩余期限、配额、增量输出和唯一终态查询原 diagnostics owner。查询 SHALL 显式携带 `diagnostic_targets`，每个 Gateway 一条来源分支；分支的工作区 `owner` 与具名 `diagnostics` 归属必须二选一，原工作区冻结 scope 与 Provider 合同不变。Gateway 必须来自原冻结集合的 Gateway，workspace 来源只接受同 Gateway 的已选工作区子集；Gateway 自有来源单独明确选择，不隐式添加。事件 SHALL 携带原 Gateway typed 日志页及独立续点，不以虚假的工作区页承载共享进程日志。
+`runtime_log/content` SHALL 通过同一个 Gateway SearchJob 队列、剩余期限、配额、增量输出和唯一终态查询原 diagnostics owner。查询 SHALL 显式携带 `diagnostic_targets`，每个 Gateway 的每种明确来源各一条分支；同一查询可同时包含 workspace 与 gateway 来源，同 Gateway 同来源不得重复声明。分支的工作区 `owner` 与具名 `diagnostics` 归属必须二选一，原工作区冻结 scope 与 Provider 合同不变。Gateway 必须来自原冻结集合的 Gateway，workspace 来源只接受同 Gateway 的已选工作区子集；Gateway 自有来源单独明确选择，不隐式添加。事件 SHALL 携带原 Gateway typed 日志页及独立续点，不以虚假的工作区页承载共享进程日志。
 
 Quick Access SHALL 经同一个 `streamFederatedSearch` 展示有界命中、原来源与共享工作区、受限状态及继续动作。接受命中 SHALL 沿具名 diagnostics 精确定位入口在原诊断视图临时显示原行并高亮码点位置；不得仅导航到视图再要求重新搜索。日志查询和定位继续遵守原受认证管理权限，不作为普通文件、URI 或上下文引用发布。
 
@@ -208,6 +208,11 @@ Quick Access SHALL 经同一个 `streamFederatedSearch` 展示有界命中、原
 
 - **WHEN** 用户单独明确选择 Gateway 来源并接受一个正文命中
 - **THEN** 同一联邦客户端返回该来源的原行引用，原诊断视图精确读取并定位该行；旧行失效明确报错，不回退到最新 tail
+
+#### Scenario: 同时选择工作区与 Gateway 日志
+
+- **WHEN** 用户在同一冻结范围明确同时选择运行日志与 Gateway 日志
+- **THEN** 客户端合为一条 `runtime_log/content` 查询，保留两种明确来源的独立分支；原工作区筛选和共享总配额继续生效，继续或重试一种来源不重新分发另一种来源
 
 ### Requirement: 索引必须由各搜索 owner 自主负责
 

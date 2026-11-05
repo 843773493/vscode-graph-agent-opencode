@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -45,12 +46,12 @@ async def test_message_content_search_opens_unloaded_child_and_exact_original_ra
     command = ["bun", "tests/integration/clients/web/quick_access/message_content.mjs"]
     model = "browser-chat-tool-loop-stub"
     endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
-    interactions = [build_cassette(
+    interactions = [cast(list[dict[str, object]], build_cassette(
         asset_id="message-content", model=model, url=f"http://127.0.0.1:{endpoint}/v1/chat/completions",
         frames=chat_completion_frames(response_id=f"message-content-{index}", model=model,
                                       deltas=[{"role": "assistant", "content": text}], finish_reason="stop"),
-    ).raw["interactions"][0] for index, text in enumerate(["助手独有😀正文", *[f"已完成 {index}" for index in range(6)]])]
-    interactions.insert(0, build_cassette(
+    ).raw["interactions"])[0] for index, text in enumerate(["助手独有😀正文", *[f"已完成 {index}" for index in range(6)]])]
+    interactions.insert(0, cast(list[dict[str, object]], build_cassette(
         asset_id="tool-content", model=model, url=f"http://127.0.0.1:{endpoint}/v1/chat/completions",
         frames=chat_completion_frames(response_id="tool-content", model=model, deltas=[{
             "role": "assistant", "tool_calls": [{"index": 0, "id": "content-output", "type": "function",
@@ -58,7 +59,7 @@ async def test_message_content_search_opens_unloaded_child_and_exact_original_ra
                     "tool_name": "large_test_output", "arguments": {},
                 })}}],
         }], finish_reason="tool_calls"),
-    ).raw["interactions"][0])
+    ).raw["interactions"])[0])
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(
@@ -79,7 +80,8 @@ async def test_message_content_search_opens_unloaded_child_and_exact_original_ra
         receipt = json.loads(result_path.read_text())
         for key in ("unselectedHasNoContentQuery", "unopenedChildLocated", "longOriginalRangeVisible",
                     "reusedPaneRevealsAnotherMatch", "staleReferenceRejected", "fileUsesOriginalProvider",
-                    "unopenedToolChildLocated", "fullToolOutputVisible", "toolCategoryIsolated"):
+                    "unopenedToolChildLocated", "fullToolOutputVisible", "toolCategoryIsolated",
+                    "multiCategorySelectionIsolated", "cancelKeepsContentCategories", "noExecutionDuringCategorySelection"):
             assert receipt[key] is True, key
         assert receipt["pageErrors"] == []
     finally:

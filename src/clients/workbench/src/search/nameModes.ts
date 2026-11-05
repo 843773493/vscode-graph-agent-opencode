@@ -17,7 +17,7 @@ class ThreadQuickAccess extends WorkspaceQuickAccess {
   protected override get category(): NameSearchCategory { return 'Thread'; }
 }
 
-class ContentQuickAccess extends WorkspaceQuickAccess {
+export class ContentQuickAccess extends WorkspaceQuickAccess {
   static override readonly PREFIX = 'content ';
   protected override get contentMode(): boolean { return true; }
 }

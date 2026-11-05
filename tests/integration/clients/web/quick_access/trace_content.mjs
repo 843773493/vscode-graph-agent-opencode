@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
+import { confirmContentCategories } from './default_interactions.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH, query = process.env.BOXTEAM_TRACE_SEARCH_QUERY;
@@ -74,6 +75,7 @@ try {
   result.unselectedHasNoContentQuery = true;
   const openSearch = async () => {
     await quick.locator('[data-quick-input-id="content-category-trace"]').click();
+    await confirmContentCategories(quick, ['trace']);
     await expect(quick).toContainText('Trace · 本次查询完成');
   };
   await openSearch();

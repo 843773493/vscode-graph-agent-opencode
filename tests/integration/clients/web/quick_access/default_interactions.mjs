@@ -1,6 +1,15 @@
 import { expect } from 'playwright/test';
 import { scrollQuickInput } from '../../../../support/workbench/quick-input.mjs';
 
+/** 正文逐类入口只预勾；实际类别集合经原多选浮层确认。 */
+export async function confirmContentCategories(quick, categories) {
+  await expect(quick.locator('.quick-input-title')).toHaveText('选择正文类别');
+  for (const category of categories) {
+    await quick.locator(`.monaco-list-row:has([data-quick-input-id="content-category-${category}"])`).getByRole('checkbox').check();
+  }
+  await quick.getByRole('button', { name: 'OK', exact: true }).click();
+}
+
 /** 用真实滚轮访问末尾状态，避免滚动条鼠标按下清空列表焦点。 */
 export async function expectLastSearchStatus({ page, quick, label }) {
   const list = quick.getByRole('listbox');

@@ -3,14 +3,14 @@ import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
-import { expectLastSearchStatus } from './default_interactions.mjs';
+import { confirmContentCategories, expectLastSearchStatus } from './default_interactions.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 import { searchReceipt } from '../../../../support/workbench/search-observation.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 if (!base || !output) throw new Error('消息正文验收缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_message_content.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], nameSearches: [], around: [], queries: [], apiReceipts: [], workspaceRequests: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], nameSearches: [], around: [], queries: [], apiReceipts: [], workspaceRequests: [], executionRequests: [],
   boundary: '真实 Gateway／正式 Workbench；消息和 fork 经产品 API 创建；model_stream 精确回放，不预写历史或缓存' };
 const responseReads = [], responseErrors = [];
 let page, failure;
@@ -27,6 +27,7 @@ try {
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (path.startsWith('/api/v1/')) result.workspaceRequests.push({ path, targetOwner: requestOwner(request) });
+    if (request.method() === 'POST' && /\/threads\/[^/]+\/messages$/.test(path)) result.executionRequests.push({ path, targetOwner: requestOwner(request) });
     if (/\/api\/(gateway\/(health|workspaces)|v1\/(session-catalog\/search|session-threads\/search|workspace\/files\/roots))$/.test(path)) {
       const observation = { url: request.url(), phase: result.phase, state: 'pending' };
       queries.set(request, observation);
@@ -103,7 +104,8 @@ try {
     }, { timeout: 30_000 }).toBe('completed');
     return accepted;
   };
-  const query = '定位😀词', original = '起始😀\n' + 'a'.repeat(66_000) + query + '\n第二处' + query + '\n尾';
+  const query = '定位😀词', toolQuery = process.env.BOXTEAM_TOOL_SEARCH_QUERY;
+  const original = '起始😀\n' + 'a'.repeat(66_000) + query + '\n第二处' + query + '\n' + toolQuery + '\n尾';
   const first = await send(main, original);
   for (let index = 0; index < 6; index += 1) await send(main, `后续轮次 ${index}`);
   const source = await api(`/api/v1/sessions/${sessionId}/fork-source-point`, owner);
@@ -150,6 +152,7 @@ try {
   expect(result.searches).toHaveLength(0);
   result.unselectedHasNoContentQuery = true;
   await quick.locator('[data-quick-input-id="content-category-message"]').click();
+  await confirmContentCategories(quick, ['message']);
   await expect(quick).toContainText('会话消息 · 本次查询完成');
   expect(result.searches).toHaveLength(1);
   expect(result.searches[0].path).toBe('/api/gateway/search');
@@ -183,6 +186,7 @@ try {
   // 复用同一个 Pane 接受另一处命中，不能沿用第一次位置或跳到 main。
   await command('workbench.action.quickOpen', 'content ' + query);
   await quick.locator('[data-quick-input-id="content-category-message"]').click();
+  await confirmContentCategories(quick, ['message']);
   await expect(quick).toContainText('会话消息 · 本次查询完成');
   await quick.locator(`[data-quick-input-id^="${threadUri(child)}#"]`).last().click();
   await expect.poll(() => result.around.length).toBe(2);
@@ -197,6 +201,7 @@ try {
   result.phase = 'stale-reference';
   await command('workbench.action.quickOpen', 'content ' + query);
   await quick.locator('[data-quick-input-id="content-category-message"]').click();
+  await confirmContentCategories(quick, ['message']);
   await expect(quick).toContainText('会话消息 · 本次查询完成');
   const stalePattern = `**/threads/${child}/history`;
   const stale = async route => {
@@ -217,11 +222,12 @@ try {
   await quick.locator('[data-quick-input-id="content-category-file"]').click();
   await expect(input).toHaveValue('%README');
   await expect(input).toHaveAttribute('placeholder', /搜索文件内容/);
+  await expect.poll(() => result.searches.find(search => search.body.queries.some(query => query.category === 'file'
+    && query.query === 'README'))?.receipt?.summary.state, { timeout: 20_000 }).toBe('complete');
   result.fileUsesOriginalProvider = true;
   await page.keyboard.press('Escape');
 
   result.phase = 'tool-result-content';
-  const toolQuery = process.env.BOXTEAM_TOOL_SEARCH_QUERY;
   const toolFork = await api(`/api/v1/sessions/${sessionId}/fork-context`, owner, {
     idempotency_key: 'tool-content-child', source_uri: source.source_uri, source_view_id: source.source_view_id,
     source_view_revision: source.source_view_revision, anchor_item_id: source.anchor_item_id,
@@ -230,11 +236,48 @@ try {
   expect(await page.locator(threadSelector(toolFork.thread_id)).count()).toBe(0);
   await command('workbench.action.quickOpen', 'content ' + toolQuery);
   await quick.locator('[data-quick-input-id="content-category-message"]').click();
-  await expect(quick).toContainText('会话消息 · 没有匹配的资源');
-  expect(await quick.locator('[data-quick-input-id^="boxteam-thread://"]').count()).toBe(0);
+  await confirmContentCategories(quick, ['message']);
+  await expect(quick).toContainText('会话消息 · 本次查询完成');
+  expect(result.searches.at(-1).body.queries.map(query => query.category)).toEqual(['message']);
   await page.keyboard.press('Escape');
+
+  // 同一原多选确认消息＋工具；勾选和取消均不能扩出所选类别或工作区。
+  const beforeSelection = result.searches.length, executionsBeforeSelection = result.executionRequests.length;
+  await command('workbench.action.quickOpen', 'content ' + toolQuery);
+  await quick.locator('[data-quick-input-id="content-category-message"]').click();
+  expect(result.searches).toHaveLength(beforeSelection);
+  await confirmContentCategories(quick, ['message', 'tool']);
+  await expect(quick).toContainText('会话消息 · 本次查询完成');
+  await expect(quick).toContainText('工具结果 · 本次查询完成');
+  expect(result.searches).toHaveLength(beforeSelection + 1);
+  const combinedSearch = result.searches.at(-1), combined = combinedSearch.body;
+  expect(combined.scope).toEqual({ mode: 'selected', owners: [owner] });
+  expect(combined.queries.map(({ category, operation }) => ({ category, operation }))).toEqual([
+    { category: 'message', operation: 'content' }, { category: 'tool_result', operation: 'content' },
+  ]);
+  await Promise.all(responseReads);
+  expect(new Set(combinedSearch.receipt.pages.filter(page => page.page.messages.items.length > 0).map(page => page.page.category)))
+    .toEqual(new Set(['message', 'tool_result']));
+  result.multiCategorySelectionIsolated = true;
+  await quick.getByRole('button', { name: '选择正文类别', exact: true }).press('Enter');
+  const checkbox = category => quick.locator(`.monaco-list-row:has([data-quick-input-id="content-category-${category}"])`).getByRole('checkbox');
+  await expect(checkbox('message')).toBeChecked(); await expect(checkbox('tool')).toBeChecked();
+  await checkbox('message').uncheck(); await checkbox('trace').check();
+  expect(result.searches).toHaveLength(beforeSelection + 1);
+  await page.keyboard.press('Escape');
+  await expect(input).toHaveValue('content ' + toolQuery);
+  await expect(quick).toContainText('工具结果 · 本次查询完成');
+  expect(result.searches).toHaveLength(beforeSelection + 2);
+  expect(result.searches.at(-1).body.queries).toEqual(combined.queries);
+  expect(result.searches.at(-1).body.scope).toEqual(combined.scope);
+  expect(result.executionRequests).toHaveLength(executionsBeforeSelection);
+  result.noExecutionDuringCategorySelection = true;
+  result.cancelKeepsContentCategories = true;
+  await page.keyboard.press('Escape');
+
   await command('workbench.action.quickOpen', 'content ' + toolQuery);
   await quick.locator('[data-quick-input-id="content-category-tool"]').click();
+  await confirmContentCategories(quick, ['tool']);
   await expect(quick).toContainText('工具结果 · 本次查询完成');
   const toolPick = quick.locator(`[data-quick-input-id^="${threadUri(toolFork.thread_id)}#"]`);
   await expect(toolPick).toHaveCount(1);

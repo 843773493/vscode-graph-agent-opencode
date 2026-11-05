@@ -44,6 +44,66 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+test('正文类别集合确认后同时查询消息和工具，未选类别及工作区零请求', async () => {
+  const result = await exercise('contentSelectionContract', 'confirm');
+  expect(result.beforeConfirm).toBe(0); expect(result.canPickMany).toBe(true);
+  expect(result.preset).toEqual(['会话消息']);
+  expect(result.choices).toEqual(['会话消息', '工具结果', 'LLM 请求记录', 'Trace', '运行日志', 'Gateway 日志']);
+  expect(result.requests).toHaveLength(1);
+  expect(result.requests[0].scope.owners).toEqual([federatedOwners[0]]);
+  expect(result.requests[0].queries.map(({ category, operation, query, match_mode }) => ({ category, operation, query, match_mode }))).toEqual(
+    ['message', 'tool_result'].map(category => ({ category, operation: 'content', query: '原始😀查询', match_mode: 'literal' })));
+  expect(result.shows[0]).toMatchObject({ value: 'content 原始😀查询', preserveValue: true, contentCategories: ['会话消息', '工具结果'],
+    searchOwners: [{ gatewayId: federatedOwners[0].gateway_id, workspaceId: sharedWorkspaceId }], searchGroup: 7 });
+  expect(result.placeholder).toContain('会话消息、工具结果');
+  expect(result.labels).toContain('会话消息 · 没有匹配的资源'); expect(result.labels).toContain('工具结果 · 没有匹配的资源');
+  expect(result.errors).toEqual([]);
+});
+
+test('正文类别集合取消恢复原查询、类别、范围和发起组', async () => {
+  const result = await exercise('contentSelectionContract', 'cancel');
+  expect(result.beforeConfirm).toBe(1); expect(result.preset).toEqual(['会话消息', '工具结果']);
+  expect(result.query).toBe('content 原始😀查询'); expect(result.requests).toHaveLength(2);
+  expect(result.requests[1].queries).toEqual(result.requests[0].queries);
+  expect(result.requests[1].scope).toEqual(result.requests[0].scope);
+  expect(result.shows[0]).toMatchObject({ contentCategories: ['会话消息', '工具结果'], searchGroup: 7,
+    searchOwners: [{ gatewayId: federatedOwners[0].gateway_id, workspaceId: sharedWorkspaceId }], searchRestore: { query: 'content 原始😀查询' } });
+  expect(result.errors).toEqual([]);
+});
+
+test('正文类别集合同时选择两类日志只发一个 wire query，来源和工作区筛选独立且只重试失败来源', async () => {
+  const result = await exercise('contentSelectionContract', 'logs');
+  const gateway_id = federatedOwners[0].gateway_id, other = '019a0000-0000-7000-8000-000000000002';
+  const workspace = { gateway_id, scope: { source: 'workspace', workspace_ids: [sharedWorkspaceId, other] } };
+  const gateway = { gateway_id, scope: { source: 'gateway', workspace_ids: [] } };
+  expect(result.beforeConfirm).toBe(0); expect(result.preset).toEqual(['运行日志']);
+  expect(result.requests).toHaveLength(2);
+  const [first, retry] = result.requests;
+  expect(first.scope.owners).toEqual([federatedOwners[0], { gateway_id, workspace_id: other }]);
+  expect(first.queries).toHaveLength(1);
+  expect(first.queries[0]).toMatchObject({ category: 'runtime_log', operation: 'content', match_mode: 'literal', query: '原始😀查询', diagnostic_targets: [workspace, gateway] });
+  expect(retry.scope.mode).toBe('resume'); expect(retry.scope.scope.owners).toEqual(first.scope.owners);
+  expect(retry.queries).toEqual([{ ...first.queries[0], diagnostic_targets: [gateway] }]);
+  expect(retry.continuations).toEqual([{ branch: { diagnostics: gateway, category: 'runtime_log', operation: 'content' } }]);
+  expect(result.retryLabel).toContain('Gateway 原日志读取失败'); expect(result.errors).toEqual([]);
+});
+
+for (const mode of ['user', 'gateway']) test(`正文类别集合在 ${mode} 身份失效时取消旧选择且零查询`, async () => {
+  const result = await exercise('contentSelectionContract', mode);
+  expect(result.cancelled).toBe(true); expect(result.beforeConfirm).toBe(0);
+  expect(result.requests).toEqual([]); expect(result.shows).toEqual([]);
+  expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或用户身份已改变');
+});
+
+test('正文类别集合保留文件独立转 %，不发送正文类别请求', async () => {
+  const result = await exercise('contentSelectionContract', 'file');
+  expect(result.requests).toEqual([]); expect(result.choices).toBe(0);
+  expect(result.shows).toHaveLength(1);
+  expect(result.shows[0]).toMatchObject({ value: '%原始😀查询', searchGroup: 7,
+    searchOwners: [{ gatewayId: federatedOwners[0].gateway_id, workspaceId: sharedWorkspaceId }] });
+  expect(result.shows[0].contentCategories).toBeUndefined();
+});
+
 test('原非文本大纲前插保持身份，空匹配仍可续页，续页后取消恢复而接受保留位置', async () => {
   for (const accept of [false, true]) {
     const result = await exercise('outlineContract', accept);

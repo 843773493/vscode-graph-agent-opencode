@@ -13,6 +13,7 @@ import { WorkspaceSymbolProviderRegistry } from '../../../../../src/clients/work
 import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 export { contentBranchContract, nameBranchContract, fileBranchContract, cursorRejectionContract, branchStateContract } from './federated_branches.fixture.mjs';
+export { contentSelectionContract } from './content_selection.fixture.mjs';
 
 /** 原非文本 Provider 的分页更新，不替代真实 Thread 页面接线验收。 */
 export async function outlineContract(accept) {

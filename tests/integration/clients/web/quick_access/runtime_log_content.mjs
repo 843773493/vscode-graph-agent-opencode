@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { searchReceipt } from '../../../../support/workbench/search-observation.mjs';
+import { confirmContentCategories } from './default_interactions.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
@@ -78,6 +79,7 @@ try {
   const openSearch = async (query, category) => {
     await command('workbench.action.quickOpen', 'content ' + query);
     await quick.locator(`[data-quick-input-id="content-category-${category}"]`).click();
+    await confirmContentCategories(quick, [category]);
     await expect(rows().first()).toBeVisible({ timeout: 15000 });
     await expect(quick.locator('.monaco-progress-container.active')).toHaveCount(0);
   };
@@ -87,6 +89,7 @@ try {
   expect(result.searches).toHaveLength(0);
   result.unselectedHasNoQuery = true;
   await quick.locator('[data-quick-input-id="content-category-runtime-logs"]').click();
+  await confirmContentCategories(quick, ['runtime-logs']);
   await expect(rows().first()).toBeVisible();
   await quick.getByRole('button', { name: '选择搜索范围', exact: true }).click();
   await quick.locator('.monaco-list-row').filter({ hasText: b.workspace_id }).getByRole('checkbox').check();
@@ -139,8 +142,31 @@ try {
   expect(gatewayLocation.scope).toEqual({ source: 'gateway', workspace_ids: [] });
   await expect(pane).toContainText('Gateway 自有来源');
   result.gatewaySourceSeparate = true;
-  result.phase = 'stale-reference';
   await pane.getByRole('button', { name: '关闭定位', exact: true }).click();
+  result.phase = 'combined-log-sources';
+  const combinedQuery = '日志验收😀词', searchesBeforeCombined = result.searches.length;
+  await command('workbench.action.quickOpen', 'content ' + combinedQuery);
+  await quick.locator('[data-quick-input-id="content-category-runtime-logs"]').click();
+  expect(result.searches).toHaveLength(searchesBeforeCombined);
+  await confirmContentCategories(quick, ['runtime-logs', 'gateway-logs']);
+  await expect(rows().first()).toBeVisible();
+  await expect(quick.locator('.monaco-progress-container.active')).toHaveCount(0);
+  await Promise.all(reads);
+  expect(result.searches).toHaveLength(searchesBeforeCombined + 1);
+  const combinedRequest = result.searches.at(-1), combinedWire = combinedRequest.queries[0];
+  expect(combinedRequest.queries).toHaveLength(1);
+  expect(combinedWire).toMatchObject({ category: 'runtime_log', operation: 'content', query: combinedQuery });
+  expect(combinedWire.diagnostic_targets).toEqual([
+    { gateway_id: a.gateway_id, scope: { source: 'workspace', workspace_ids: combinedRequest.scope.owners.map(owner => owner.workspace_id) } },
+    { gateway_id: a.gateway_id, scope: { source: 'gateway', workspace_ids: [] } },
+  ]);
+  const combinedReceipt = result.receipts.find(receipt => receipt.pages.some(page => page.diagnostic_logs.query === combinedQuery));
+  expect(combinedReceipt.summary.branches).toHaveLength(2);
+  expect(new Set(combinedReceipt.pages.filter(page => page.diagnostic_logs.items.length > 0)
+    .map(page => page.branch.branch.diagnostics.scope.source))).toEqual(new Set(['workspace', 'gateway']));
+  result.combinedLogSourcesKeepIndependentBranches = true;
+  await page.keyboard.press('Escape');
+  result.phase = 'stale-reference';
   await page.route('**/api/gateway/diagnostics/locate', route => {
     const body = route.request().postDataJSON();
     return route.continue({ postData: JSON.stringify({ ...body, reference: { ...body.reference, content_version: '0'.repeat(64) } }) });
@@ -155,7 +181,7 @@ try {
   expect(result.fullDiagnostics).toEqual([]);
   result.noFullDiagnosticsRead = true;
   expect(result.searches.every(request => request.queries.length === 1 && request.queries[0].category === 'runtime_log'
-    && request.queries[0].diagnostic_targets.length === 1)).toBe(true);
+    && request.queries[0].diagnostic_targets.length === (request === combinedRequest ? 2 : 1))).toBe(true);
   result.onlyFederatedSearch = true;
   result.phase = 'complete';
 } catch (error) {

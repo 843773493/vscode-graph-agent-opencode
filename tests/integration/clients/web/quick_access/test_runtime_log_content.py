@@ -59,7 +59,8 @@ async def test_runtime_logs_use_process_sources_and_original_diagnostics(
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
         for key in ("unselectedHasNoQuery", "workspaceSourcesIsolated", "gatewaySourceSeparate", "samePaneNewLocation",
-                    "exactRecordAfterAppend", "staleReferenceRejected", "noFullDiagnosticsRead", "onlyFederatedSearch"):
+                    "exactRecordAfterAppend", "staleReferenceRejected", "noFullDiagnosticsRead", "onlyFederatedSearch",
+                    "combinedLogSourcesKeepIndependentBranches"):
             assert receipt[key], key
         assert receipt["pageErrors"] == []
         diagnostic = receipt["cursorDiagnostic"]

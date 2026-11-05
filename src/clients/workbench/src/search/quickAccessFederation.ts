@@ -81,7 +81,7 @@ function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, labe
   throw new Error('联邦搜索缺少原 owner 的领域页');
 }
 
-export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], selected: SearchCategory[], filter: string,
+export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], selected: readonly SearchCategory[], filter: string,
   disposables: DisposableStore, token: CancellationToken, cache: FuzzyScorerCache, map: (item: ResourceSearchItem, owner: WorkspaceOwner) => ResourcePick,
   progress: (branches: SearchBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void, instantiation: IInstantiationService): SearchBranch[] {
   const abort = new AbortController();
@@ -171,9 +171,16 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
       }
       const ready = active.filter(branch => !settled.has(branch));
       if (!ready.length) return;
-      const queries = [...new Set(ready.map(branch => branch.category))].map(category => {
+      const queryGroups = new Map<string, SearchBranch<SearchCategory>[]>();
+      for (const branch of ready) {
+        const groupKey = `${categories[branch.category]}/${isContentSearchCategory(branch.category) ? 'content' : 'name'}`;
+        const group = queryGroups.get(groupKey) ?? [];
+        group.push(branch); queryGroups.set(groupKey, group);
+      }
+      const queries = [...queryGroups.values()].map(group => {
+        const category = group[0].category;
         if (category === '文件') {
-          const selectedFiles = ready.filter(branch => branch.category === '文件');
+          const selectedFiles = group;
           const first = fileQueries.get(selectedFiles[0])!;
           if (selectedFiles.some(branch => { const query = fileQueries.get(branch)!; return query.query !== first.query || query.match_mode !== first.match_mode; })) {
             throw new Error('文件根查询条件冲突，请分开查询');
@@ -182,7 +189,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
         }
         return { category: categories[category], operation: isContentSearchCategory(category) ? 'content' : 'name',
           contract_version: 1, query: filter, match_mode: isContentSearchCategory(category) ? 'literal' : 'fuzzy', limit: 50, file_targets: [],
-          diagnostic_targets: ready.filter(branch => branch.category === category && branch.diagnostics).map(branch => branch.diagnostics!) };
+          diagnostic_targets: group.flatMap(branch => branch.diagnostics ? [branch.diagnostics] : []) };
       });
       await streamFederatedSearch(0, {
         scope: scope ? { mode: 'resume', scope, owners: [] } : { mode: 'selected', owners: owners.map(owner => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId })) },
