@@ -59,9 +59,13 @@ def build_detail(
         if isinstance(message, HumanMessage) and not is_internal(message)
     ]
     first = user_messages[0] if user_messages else next(iter(messages), None)
-    created_at = message_time(
-        first,
-        fallback=projection_time(projection, "created_at") if projection else None,
+    projection_created_at = projection_time(projection, "created_at") if projection is not None else None
+    first_message_at = message_time(first, fallback=projection_created_at)
+    # root 不可见时仍使用原消息时间；Turn 索引时间只作为活动统计基准。
+    created_at = (
+        projection_time(projection, "user_created_at")
+        if not user_messages and projection is not None
+        else first_message_at
     )
     final = (
         final_message(

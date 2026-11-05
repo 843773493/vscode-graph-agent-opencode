@@ -16,6 +16,7 @@ def _tool_projection(*items: dict[str, object]) -> dict[str, object]:
     return {
         "status": "completed",
         "created_at": NOW.isoformat(),
+        "user_created_at": NOW.isoformat(),
         "updated_at": NOW.isoformat(),
         "tool_items": list(items),
     }

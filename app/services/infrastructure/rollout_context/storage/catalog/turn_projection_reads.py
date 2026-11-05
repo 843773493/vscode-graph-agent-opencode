@@ -74,7 +74,11 @@ class TurnProjectionReadMixin:
         if connection.execute("SELECT 1 FROM context_views WHERE view_id = ?", (view_id,)).fetchone() is None:
             raise KeyError(f"context view 不存在: {view_id}")
         turns = connection.execute(
-            f"SELECT turn_id, first_message_sequence, last_message_sequence, final_message_sequence, final_message_id, status, created_at, updated_at FROM turns WHERE turn_id IN ({placeholders})",
+            "SELECT t.turn_id, t.first_message_sequence, t.last_message_sequence, "
+            "t.final_message_sequence, t.final_message_id, t.status, t.created_at, t.updated_at, "
+            "root.created_at FROM turns t LEFT JOIN messages root "
+            "ON root.message_sequence=t.user_message_sequence AND root.turn_id=t.turn_id "
+            f"AND root.role='user' WHERE t.turn_id IN ({placeholders})",
             ids,
         ).fetchall()
         v2_turns = connection.execute(
@@ -169,7 +173,7 @@ class TurnProjectionReadMixin:
         ).fetchall()
         result: dict[str, dict[str, object]] = {}
         for row in turns:
-            if len(row) != 8:
+            if len(row) != 9:
                 raise RuntimeError("Turn projection source row 字段数量不一致")
             turn_id = strict_text(row[0], field="turns.turn_id")
             first_sequence = strict_non_negative_int(
@@ -193,6 +197,8 @@ class TurnProjectionReadMixin:
             status = strict_text(row[5], field=f"turns.status:{turn_id}")
             created_at = strict_text(row[6], field=f"turns.created_at:{turn_id}")
             updated_at = strict_text(row[7], field=f"turns.updated_at:{turn_id}")
+            # root 即便退出当前 visible 集合，消息时间仍来自同一冻结索引。
+            user_created_at = strict_text(row[8], field=f"messages.user_created_at:{turn_id}")
             result[turn_id] = {
                 "first_sequence": first_sequence,
                 "last_sequence": last_sequence,
@@ -208,6 +214,7 @@ class TurnProjectionReadMixin:
                 "tool_items": [],
                 "activity_items": [],
                 "created_at": created_at,
+                "user_created_at": user_created_at,
                 "updated_at": updated_at,
                 "activity_stats": {
                     "duration_ms": None,

@@ -18,6 +18,7 @@ def history_projection() -> dict[str, object]:
     return {
         "status": "running",
         "created_at": "2026-10-04T12:00:00.123456+02:00",
+        "user_created_at": "2026-10-04T12:00:00.123456+02:00",
         "updated_at": "2026-10-04T12:00:02.124456+02:00",
         "activity_stats": {"item_count": 2, "first_item_sequence": 1, "last_item_sequence": 2},
     }
@@ -113,6 +114,41 @@ def test_metadata_only_history_uses_projection_clock_and_keeps_source_text(
     assert detail.activity_stats.duration_ms == 2001
     assert detail.user_messages == []
     assert history_projection == original
+
+
+def test_rootless_history_keeps_frozen_turn_start_in_detail_and_summary(
+    history_detail, history_projection: dict[str, object],
+) -> None:
+    # 原消息、canonical 落盘与后续回答三个时钟有意不同，防止用邻近时间替代。
+    history_projection["user_created_at"] = "2026-10-04T18:00:00.121838+08:00"
+    original = dict(history_projection)
+    later = "2026-10-04T10:00:01.987654+00:00"
+    message = AIMessage(content="压缩后仍保留的回答", response_metadata={"created_at": later})
+    detail = history_detail([message], history_projection)
+    expected = datetime.fromisoformat(str(original["user_created_at"]))
+    assert detail.created_at == expected
+    assert detail.created_at.utcoffset() == timedelta(hours=8)
+    assert detail.created_at.microsecond == 121838
+    assert detail.user_messages == []
+    assert detail.assistant_text == ["压缩后仍保留的回答"]
+    assert detail.activity_stats.duration_ms == 2001
+    assert detail.updated_at == datetime.fromisoformat(str(original["updated_at"]))
+    assert detail.completed_at == detail.updated_at
+    projected = summary(detail)
+    assert projected.created_at == detail.created_at
+    assert projected.updated_at == detail.updated_at
+    assert projected.model_dump(mode="json")["created_at"] == original["user_created_at"]
+    assert message.response_metadata["created_at"] == later
+    assert history_projection == original
+
+
+@pytest.mark.parametrize("invalid_time", [None, "", "invalid-date", "2026-10-04T12:00:00"])
+def test_rootless_history_rejects_missing_or_invalid_root_time(
+    history_detail, history_projection: dict[str, object], invalid_time: object,
+) -> None:
+    history_projection["user_created_at"] = invalid_time
+    with pytest.raises(ValueError):
+        history_detail([], history_projection)
 
 
 @pytest.mark.parametrize("delta", [timedelta(seconds=-1), timedelta(microseconds=-1)])
