@@ -8,9 +8,12 @@ import {
 } from "./WorkspaceFileReferenceContext";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import MarkdownContent from "../chat/MarkdownContent";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 
 const port = 49_601;
-const workspaceRoot = "boxteam://workspace/backend-uuid/resources/files/root";
+const OWNER = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const workspaceRoot = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
@@ -45,8 +48,13 @@ function installBackend(
   const listingPaths: string[] = [];
   globalThis.fetch = Object.assign(
     async (...args: Parameters<typeof fetch>) => {
-      const [input] = args;
+      const [input, init] = args;
       const url = new URL(String(input), `http://127.0.0.1:${port}`);
+      if (url.pathname.startsWith("/api/v1/")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+        expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+      }
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return Response.json({
           code: 0,
@@ -71,7 +79,7 @@ function installBackend(
           request_id: "req_files",
           data: {
             path: workspaceRoot,
-            directory_key: { workspace_id: "backend-uuid", scope: "workspace", root: workspaceRoot, path: workspaceRoot },
+            directory_key: { workspace_id: OWNER.workspaceId, scope: "workspace", root: workspaceRoot, path: workspaceRoot },
             directory_revision: 1,
             items: [
               { name: ".boxteam", path: `${workspaceRoot}/.boxteam`, kind: "directory", has_children: true },
@@ -117,7 +125,7 @@ async function renderProvider(): Promise<Harness> {
     renderer = create(
       <WorkspaceFileReferenceProvider
         apiPort={port}
-        workspaceId="ws_test"
+        workspaceId={WORKSPACE_KEY}
         onOpen={() => {}}
       >
         <Capture />
@@ -176,7 +184,7 @@ describe("文件引用固定目标与 URI 回执", () => {
     "/native/外部 目录%/broken.ts",
     String.raw`C:\目标 目录\broken.ts`,
     String.raw`\\server\share\broken.ts`,
-    "boxteam://gateway_target/workspace/backend-uuid/resources/files/root/含%20%252F.ts",
+    `boxteam://${OWNER.gatewayId}/workspace/${OWNER.workspaceId}/resources/files/root/含%20%252F.ts`,
   ])("显式输入原样直达后端且不枚举同名文件：%s", async (target) => {
     installWindow();
     const observed = installBackend(() => fileContent());
@@ -231,10 +239,10 @@ test("真实 Markdown 管线保留原生路径的空格、中文和字面百分�
   installWindow();
   const observed = installBackend(() => fileContent());
   const targets = ["/native/引用 外部%2F/broken.ts", "引用 相对%2F/broken.ts",
-    "boxteam://workspace/backend-uuid/resources/files/root/引用%20%252F.ts"];
+    `${workspaceRoot}/引用%20%252F.ts`];
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = create(<WorkspaceFileReferenceProvider apiPort={port} workspaceId="ws_test" onOpen={() => {}}>
+    renderer = create(<WorkspaceFileReferenceProvider apiPort={port} workspaceId={WORKSPACE_KEY} onOpen={() => {}}>
       <MarkdownContent value={targets.map((target, index) => `[目标${index}](<${target}#L2>)`).join("\n\n")
         + "\n\n[普通链接](running) [外部链接](https://example.com/file.ts)"} />
     </WorkspaceFileReferenceProvider>);

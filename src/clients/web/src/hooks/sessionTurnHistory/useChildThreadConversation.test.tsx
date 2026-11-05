@@ -2,7 +2,13 @@ import { afterEach, expect, jest, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../../api/session/sessionApiFetchMock";
 import type { ChildThreadSummary, MessageRunAccepted } from "../../types/backend";
+import { gatewayWorkspaceKey, type WorkspaceOwner } from "../../api/workspaceIdentity";
 import { resolveTerminalResourceTarget, useChildThreadConversation } from "./useChildThreadConversation";
+
+const OWNER_A = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" };
+const OWNER_B = { ...OWNER_A, gatewayId: "gateway_00000000000040008000000000000002" };
+const WORKSPACE_A = gatewayWorkspaceKey(OWNER_A);
+const WORKSPACE_B = gatewayWorkspaceKey(OWNER_B);
 
 const SESSION = "ses_019fca64740070008000000000000001";
 const CHILDREN: ChildThreadSummary[] = [1, 2].map((index) => ({
@@ -20,7 +26,7 @@ const history = (threadId: string) => ({
 });
 
 function Harness({
-  workspaceId = "workspace-a",
+  workspaceId = WORKSPACE_A,
   sessionId = SESSION,
   threads = CHILDREN,
   enabled = true,
@@ -126,11 +132,12 @@ test("fork 初选在新 owner 未解析时保留 owner，加载后可选择并�
 });
 
 test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独立保存", async () => {
-  const requests: { path: string; body: Record<string, unknown>; workspace: string | null }[] = [];
+  const requests: { path: string; body: Record<string, unknown>; owner: WorkspaceOwner }[] = [];
   installSessionApiFetchMock(({ path, init }) => {
     const body = JSON.parse(String(init?.body));
     const threadId = path.split("/").slice(-2)[0]!;
-    requests.push({ path, body, workspace: new Headers(init?.headers).get("X-BoxTeam-Workspace-Id") });
+    const headers = new Headers(init?.headers);
+    requests.push({ path, body, owner: { gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id")!, workspaceId: headers.get("X-BoxTeam-Workspace-Id")! } });
     return response(body.execution_id ? {
       ...history(threadId), internal_executions: [{
         execution_id: body.execution_id, job_id: "job-internal", session_id: SESSION, thread_id: threadId,
@@ -154,7 +161,8 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   await act(async () => { await current.openReport(); });
   expect(current.isUnread(CHILDREN[0]!)).toBe(false);
   expect(current.isUnread(CHILDREN[1]!)).toBe(true);
-  expect(requests.every((request) => request.workspace === "workspace-a" && request.path.includes("/threads/thr_"))).toBe(true);
+  expect(requests.every((request) => request.owner.gatewayId === OWNER_A.gatewayId
+    && request.owner.workspaceId === OWNER_A.workspaceId && request.path.includes("/threads/thr_"))).toBe(true);
   expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
 });
 
@@ -258,7 +266,7 @@ test("来源报告固定历史 execution，新报告发布后不改投或误标�
   });
   act(() => { renderer = create(<Harness />); });
   act(() => current.selectThreadForOwner(
-    { workspaceId: "workspace-a", sessionId: SESSION }, CHILDREN[0]!.thread_id, "report", "historical-execution",
+    { workspaceId: WORKSPACE_A, sessionId: SESSION }, CHILDREN[0]!.thread_id, "report", "historical-execution",
   ));
   await until(() => current.snapshot.report !== null && !current.snapshot.loading);
   expect(executionIds).toEqual(["historical-execution"]);
@@ -284,7 +292,7 @@ test("同一 child 快速切换报告，旧成功和错误都不能覆盖新 exe
     return new Promise<Response>((resolve) => { replies.set(executionId, resolve); });
   });
   const select = (execution: string) => act(() => current.selectThreadForOwner(
-    { workspaceId: "workspace-a", sessionId: SESSION }, CHILDREN[0]!.thread_id, "report", execution,
+    { workspaceId: WORKSPACE_A, sessionId: SESSION }, CHILDREN[0]!.thread_id, "report", execution,
   ));
   act(() => { renderer = create(<Harness />); });
   select("old-success");
@@ -317,7 +325,7 @@ test("报告选择已提交但 passive effect 尚未取消旧请求时，旧正�
     return new Promise<Response>((resolve) => { reply = resolve; });
   });
   act(() => { renderer = create(<Harness />); });
-  const owner = { workspaceId: "workspace-a", sessionId: SESSION };
+  const owner = { workspaceId: WORKSPACE_A, sessionId: SESSION };
   act(() => current.selectThreadForOwner(owner, CHILDREN[0]!.thread_id, "report", "old-execution"));
   await until(() => signal !== null);
   // 刻意不包 act：观察 render 已更新选择、passive effect 尚未 abort 的真实窗口。
@@ -458,11 +466,12 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
 
 test("发送期间切到 sibling 后，原 child 的迟到回执不覆盖 sibling 历史", async () => {
   let completeSend: ((reply: Response) => void) | null = null;
-  const sends: { path: string; workspace: string | null; content: string }[] = [];
+  const sends: { path: string; owner: WorkspaceOwner; content: string }[] = [];
   installSessionApiFetchMock(({ path, init }) => {
     if (path.endsWith("/messages")) {
       const body = JSON.parse(String(init?.body));
-      sends.push({ path, workspace: new Headers(init?.headers).get("X-BoxTeam-Workspace-Id"), content: body.message.content });
+      const headers = new Headers(init?.headers);
+      sends.push({ path, owner: { gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id")!, workspaceId: headers.get("X-BoxTeam-Workspace-Id")! }, content: body.message.content });
       return new Promise<Response>((resolve) => { completeSend = resolve; });
     }
     return response(history(path.split("/").slice(-2)[0]!));
@@ -480,7 +489,7 @@ test("发送期间切到 sibling 后，原 child 的迟到回执不覆盖 siblin
     completeSend!(response({ message_id: "message-a", job_id: "job-a", turn_id: "turn-a", thread_id: CHILDREN[0]!.thread_id, status: "queued", dispatch: {} }));
     await pending!;
   });
-  expect(sends).toEqual([{ path: `/api/v1/sessions/${SESSION}/threads/${CHILDREN[0]!.thread_id}/messages`, workspace: "workspace-a", content: "只发给 child A" }]);
+  expect(sends).toEqual([{ path: `/api/v1/sessions/${SESSION}/threads/${CHILDREN[0]!.thread_id}/messages`, owner: OWNER_A, content: "只发给 child A" }]);
   expect(current.selectedThread?.thread_id).toBe(CHILDREN[1]!.thread_id);
   expect(current.snapshot.history?.thread_id).toBe(CHILDREN[1]!.thread_id);
   expect(current.snapshot.accepted).toBeNull();
@@ -489,9 +498,18 @@ test("发送期间切到 sibling 后，原 child 的迟到回执不覆盖 siblin
 
 test.each(["accepted", "rejected"] as const)("跨工作区切换后原 child 的 %s 回执只结算原 owner", async (outcome) => {
   let completeSend: ((reply: Response) => void) | null = null;
-  installSessionApiFetchMock(({ path }) => path.endsWith("/messages")
-    ? new Promise<Response>((resolve) => { completeSend = resolve; })
-    : response(history(path.split("/").slice(-2)[0]!)));
+  const requestOwners: WorkspaceOwner[] = [];
+  const sendOwners: WorkspaceOwner[] = [];
+  installSessionApiFetchMock(({ path, init }) => {
+    const headers = new Headers(init?.headers);
+    const owner = { gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id")!, workspaceId: headers.get("X-BoxTeam-Workspace-Id")! };
+    requestOwners.push(owner);
+    if (path.endsWith("/messages")) {
+      sendOwners.push(owner);
+      return new Promise<Response>((resolve) => { completeSend = resolve; });
+    }
+    return response(history(path.split("/").slice(-2)[0]!));
+  });
   act(() => { renderer = create(<Harness />); });
   act(() => current.selectThread(CHILDREN[0]!.thread_id));
   await until(() => current.snapshot.history !== null);
@@ -500,10 +518,14 @@ test.each(["accepted", "rejected"] as const)("跨工作区切换后原 child 的
   act(() => { pending = current.send(); });
   await until(() => completeSend !== null && current.snapshot.sending);
 
-  act(() => { renderer!.update(<Harness workspaceId="workspace-b" />); });
+  act(() => { renderer!.update(<Harness workspaceId={WORKSPACE_B} />); });
   act(() => current.selectThread(CHILDREN[0]!.thread_id));
   await until(() => current.snapshot.history !== null);
   act(() => current.setDraft("另一工作区草稿"));
+  expect(sendOwners).toEqual([OWNER_A]);
+  expect(requestOwners).toContainEqual(OWNER_B);
+  expect(requestOwners.every(owner => owner.workspaceId === OWNER_A.workspaceId
+    && [OWNER_A.gatewayId, OWNER_B.gatewayId].includes(owner.gatewayId))).toBe(true);
   const accepted: MessageRunAccepted = {
     message_id: "message-a", job_id: "job-a", turn_id: "turn-a", thread_id: CHILDREN[0]!.thread_id, status: "queued",
     dispatch: { session_id: SESSION, thread_id: CHILDREN[0]!.thread_id, job_id: "job-a", job_status: "queued",

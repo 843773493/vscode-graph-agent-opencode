@@ -307,3 +307,8 @@
 
 - 原生Gateway的Skill publication／联邦路由、catalog端口刷新、WebSocket、目录注册及lifespan装具删除旧身份字段；registry与controller明确读取同隔离Gateway根的权威身份。Skill43项通过；Gateway原51项中的41项通过后保持源码不变，修正controller身份装具的完整文件补验10项通过，原失败保留。
 - 日志面板3 passed／24断言，以相同UUID、不同Gateway验证真实API双目标头，保留迟到输出、切换空窗和隐藏停止读取的原断言。最终Ruff／ESM与diff检查通过，八文件Pyright当前26／完整提交归档基线36，无新增；完整Web tsc28／28无新增。根复核差异及交付SHA，命令、源码和原始结果在 `out/tests/temp/identity_remaining_backend_20261105/artifacts/extra-evidence-index-04.json`、`extra-checks-index-04.json`、`extra-pyright-attribution-seal-04.json` 与 `extra-web-type-attribution-04.json`。此组不代替真实Web／联邦网络验收，6.4保持未勾。
+
+### 2026-11-05：6.4 文件树、正文引用与消息流消费者
+
+- 八份客户端测试使用正式完整owner key，核真实API双目标头；同UUID跨Gateway的child列表切换保留原空窗与迟到隔离。消息流的终态缓存定位复用原 `sessionScopeKey`，删除测试自身的裸字符串拼键，保留全部终态清理、失败归属及410重连断言；文件树的健康请求期望按现行固定owner链删除，目录重读次数不放宽。
+- 最终定向67 passed／510断言；首轮消息流23／25的缓存键装具失败和整文件25／25补验均保留。完整Web tsc仍28／28原诊断，本批八文件零诊断，新增0。根复核差异和完整交付SHA，准确命令／外部保护／原始输出在 `out/tests/temp/identity_remaining_backend_20261105/artifacts/src-evidence-index-05.json`、`src-checks-index-05.json` 与 `src-web-type-attribution-05.json`；不代替真实浏览器或原生客户端验收，6.4仍未完成。

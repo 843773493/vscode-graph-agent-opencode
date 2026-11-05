@@ -3,10 +3,13 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { fileTreeNodeFixture } from "./workspaceFileTreeTestFixtures";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 
 
-const ROOT = "boxteam://workspace/backend_files/resources/files/root";
-const FILESYSTEM = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001";
+const OWNER = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const ROOT = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
+const FILESYSTEM = `boxteam://gateway/${OWNER.gatewayId}/resources/files/01900000000070008000000000000001`;
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -56,7 +59,7 @@ function installWindow(port: number): void {
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: data.path },
+    data = { directory_key: { workspace_id: OWNER.workspaceId, scope: "workspace", root: ROOT, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({ code: 0, message: "ok", request_id: "req", data });
@@ -75,8 +78,13 @@ async function mount(
       fileTreeNodeFixture(`${ROOT}/file-${index}.ts`, "file", index)
     ),
   ];
-  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
+    if (url.pathname.startsWith("/api/v1/")) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+      expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    }
     if (url.pathname === "/api/gateway/auth/local-credential") return apiResponse({ token: "t" });
     if (url.pathname === "/api/v1/workspace/files/roots") return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
     if (url.pathname === "/api/gateway/users/current") return apiResponse({ kind: "guest", user_id: null });
@@ -98,7 +106,7 @@ async function mount(
         <WorkspaceFileTree
           active
           apiPort={port}
-          workspaceId="gw_virt"
+          workspaceId={WORKSPACE_KEY}
           workspaceName="project"
           sessionId=""
           activeFilePath={activeFilePath}

@@ -17,6 +17,7 @@ import { applySessionListConvergence } from "../../state/session/sessions";
 import { useChildThreadLoader } from "./useChildThreadLoader";
 import { useRequestLogLoader } from "../runtime/useRequestLogLoader";
 import type { ChildThreadList } from "../../types/backend";
+import { gatewayWorkspaceKey, type WorkspaceOwner } from "../../api/workspaceIdentity";
 import { createAppStateMirror } from "../../tests/fixtures/session/appState";
 import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
 import {
@@ -27,6 +28,17 @@ import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBr
 import {
   createSessionMessageStreamHarness,
 } from "../../tests/fixtures/session/sessionMessageStream";
+
+const OWNER = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" };
+const REMOTE_OWNER = { ...OWNER, gatewayId: "gateway_00000000000040008000000000000002" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const REMOTE_WORKSPACE_KEY = gatewayWorkspaceKey(REMOTE_OWNER);
+
+function expectOwnerHeaders(init: RequestInit | undefined): void {
+  const headers = new Headers(init?.headers);
+  expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+  expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+}
 
 afterEach(restoreGatewayTestEnvironment);
 
@@ -220,7 +232,7 @@ function streamHarness(props: {
     sessionId: props.sessionId,
     turnId: props.turnId,
     workspaceId: props.workspaceId,
-    sessionCacheKey: `${props.workspaceId}::${props.sessionId}`,
+    sessionCacheKey: sessionScopeKey(props.workspaceId, props.sessionId),
   }, mirror.setState);
   return { mirror, Harness };
 }
@@ -265,15 +277,17 @@ describe("useSessionMessageStream 有界重连", () => {
   test("child 列表切到同 Session ID 的另一 Gateway 时，新 render 不暴露旧 owner 列表", async () => {
     installGatewayTestWindow(49_761);
     const sessionId = "ses_same_children";
-    const requests: string[] = [];
+    const requests: WorkspaceOwner[] = [];
     let resolveSecond!: (response: Response) => void;
     installGatewayFetch(({ path, init }) => {
       if (!path.endsWith("/child-threads")) return undefined;
-      const owner = new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")!;
+      const headers = new Headers(init?.headers);
+      const owner = { gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id")!, workspaceId: headers.get("X-BoxTeam-Workspace-Id")! };
+      expect([OWNER, REMOTE_OWNER]).toContainEqual(owner);
       requests.push(owner);
       const result: ChildThreadList = { parent_session_id: sessionId, teams: [], total: 1,
         items: [{ thread_id: "thr_child_a", created_at: "2026-10-14T00:00:00Z", status: "idle" }] };
-      return owner === "gateway_a" ? Response.json({ data: result, request_id: "req_child_a" })
+      return owner.gatewayId === OWNER.gatewayId ? Response.json({ data: result, request_id: "req_child_a" })
         : new Promise((resolve) => { resolveSecond = resolve; });
     });
     const renders: Array<{ owner: string; threads: string[] }> = [];
@@ -283,12 +297,12 @@ describe("useSessionMessageStream 有界重连", () => {
       return null;
     }
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<Harness owner="gateway_a" />); await Promise.resolve(); });
+    await act(async () => { renderer = create(<Harness owner={WORKSPACE_KEY} />); await Promise.resolve(); });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-    expect(renders[renders.length - 1]).toEqual({ owner: "gateway_a", threads: ["thr_child_a"] });
-    await act(async () => { renderer.update(<Harness owner="gateway_b" />); await Promise.resolve(); });
-    expect(renders.filter((render) => render.owner === "gateway_b").every((render) => render.threads.length === 0)).toBe(true);
-    expect(requests).toEqual(["gateway_a", "gateway_b"]);
+    expect(renders[renders.length - 1]).toEqual({ owner: WORKSPACE_KEY, threads: ["thr_child_a"] });
+    await act(async () => { renderer.update(<Harness owner={REMOTE_WORKSPACE_KEY} />); await Promise.resolve(); });
+    expect(renders.filter((render) => render.owner === REMOTE_WORKSPACE_KEY).every((render) => render.threads.length === 0)).toBe(true);
+    expect(requests).toEqual([OWNER, REMOTE_OWNER]);
     resolveSecond(Response.json({ data: { parent_session_id: sessionId, items: [], teams: [], total: 0 }, request_id: "req_child_b" }));
     await act(async () => { await Promise.resolve(); renderer.unmount(); });
   });
@@ -572,7 +586,8 @@ describe("useSessionMessageStream 首次连接", () => {
     const port = 49_410;
     installGatewayTestWindow(port);
     let streamRequests = 0;
-    installGatewayFetch(() => {
+    installGatewayFetch(({ init }) => {
+      expectOwnerHeaders(init);
       streamRequests += 1;
       if (streamRequests === 1) {
         return new Response("not ready", { status: 404, statusText: "Not Found" });
@@ -584,7 +599,7 @@ describe("useSessionMessageStream 首次连接", () => {
       port,
       sessionId: "ses_stream_retry",
       turnId: "turn_stream_retry",
-      workspaceId: "workspace_stream_retry",
+      workspaceId: WORKSPACE_KEY,
     });
     await runFor(Harness, 1_600);
 
@@ -599,7 +614,8 @@ describe("useSessionMessageStream 首次连接", () => {
     installGatewayTestWindow(port);
     let streamRequests = 0;
     let releaseStream: ((response: Response) => void) | undefined;
-    installGatewayFetch(() => {
+    installGatewayFetch(({ init }) => {
+      expectOwnerHeaders(init);
       streamRequests += 1;
       return new Promise<Response>((resolve) => {
         releaseStream = resolve;
@@ -610,7 +626,7 @@ describe("useSessionMessageStream 首次连接", () => {
       port,
       sessionId: "ses_stream_stable",
       turnId: "turn_stream_stable",
-      workspaceId: "workspace_stream_stable",
+      workspaceId: WORKSPACE_KEY,
     });
     const { renderer, unmount } = await renderHarness(Harness);
     await act(async () => {
@@ -636,13 +652,16 @@ describe("useSessionMessageStream 首次连接", () => {
     const port = 49_412;
     installGatewayTestWindow(port);
     installGatewayFetch(
-      () => openAfterTerminalStreamResponse(),
+      ({ init }) => {
+        expectOwnerHeaders(init);
+        return openAfterTerminalStreamResponse();
+      },
       { token: "stream-terminal-token" },
     );
 
     const initialState = minimalState();
-    initialState.activeJobIdsBySession.set("workspace_stream_open::ses_stream_open", "job_stream_open");
-    initialState.pendingConversations.set("workspace_stream_open::ses_stream_open", [{
+    initialState.activeJobIdsBySession.set(sessionScopeKey(WORKSPACE_KEY, "ses_stream_open"), "job_stream_open");
+    initialState.pendingConversations.set(sessionScopeKey(WORKSPACE_KEY, "ses_stream_open"), [{
       conversationId: "msg_stream_open", threadId: "thr_00000000400070008000000000000002", displayMode: "live", sessionId: "ses_stream_open",
       userMessage: null, events: [], status: "running", jobId: "job_stream_open",
       turnId: "turn_stream_open", pending: true, source: "pending",
@@ -651,12 +670,12 @@ describe("useSessionMessageStream 首次连接", () => {
       port,
       sessionId: "ses_stream_open",
       turnId: "turn_stream_open",
-      workspaceId: "workspace_stream_open",
+      workspaceId: WORKSPACE_KEY,
       initialState,
     });
     await runFor(Harness, 200);
 
-    expect(mirror.current().activeJobIdsBySession.has("workspace_stream_open::ses_stream_open")).toBe(false);
+    expect(mirror.current().activeJobIdsBySession.has(sessionScopeKey(WORKSPACE_KEY, "ses_stream_open"))).toBe(false);
     expect(streamOf(mirror)?.streamStatus).toBe("completed");
   });
 
@@ -753,7 +772,8 @@ describe("useSessionMessageStream 首次连接", () => {
     installGatewayTestWindow(port);
     const messageStreamUrls: string[] = [];
     let streamRequests = 0;
-    installGatewayFetch(({ url }) => {
+    installGatewayFetch(({ url, init }) => {
+      expectOwnerHeaders(init);
       messageStreamUrls.push(url);
       streamRequests += 1;
       return streamRequests === 1
@@ -766,7 +786,7 @@ describe("useSessionMessageStream 首次连接", () => {
     // 本用例必须走真实 React 状态更新，才能复现异步 setState 下的游标丢失，
     // 因此保留独立的 useState Harness，不复用闭包镜像夹具。
     const initialState = minimalState();
-    initialState.sessionsByWorkspace.set("workspace_stream_async", [
+    initialState.sessionsByWorkspace.set(WORKSPACE_KEY, [
       { session_id: "ses_stream_async", thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>,
     ]);
     let latestState = initialState;
@@ -777,8 +797,8 @@ describe("useSessionMessageStream 首次连接", () => {
         apiPort: port,
         sessionId: "ses_stream_async",
         turnId: "turn_stream_async",
-        workspaceId: "workspace_stream_async",
-        sessionCacheKey: "workspace_stream_async::ses_stream_async",
+        workspaceId: WORKSPACE_KEY,
+        sessionCacheKey: sessionScopeKey(WORKSPACE_KEY, "ses_stream_async"),
         setState,
       });
       return null;
@@ -839,17 +859,20 @@ describe("useSessionMessageStream 终态 failure 归一", () => {
     response: Response,
   ): Promise<{ status: string; failure: unknown }> {
     installGatewayTestWindow(port);
-    installGatewayFetch(() => response, { token: "failure-norm-token" });
+    installGatewayFetch(({ init }) => {
+      expectOwnerHeaders(init);
+      return response;
+    }, { token: "failure-norm-token" });
     const initialState = minimalState();
     initialState.status = "任务失败前";
     initialState.currentSession = { session_id: "ses_failure_norm", thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>;
-    initialState.currentSessionWorkspaceId = "workspace_failure_norm";
-    initialState.activeGatewayWorkspaceId = "workspace_failure_norm";
+    initialState.currentSessionWorkspaceId = WORKSPACE_KEY;
+    initialState.activeGatewayWorkspaceId = WORKSPACE_KEY;
     const { mirror, Harness } = streamHarness({
       port,
       sessionId: "ses_failure_norm",
       turnId: "turn_failure_norm",
-      workspaceId: "workspace_failure_norm",
+      workspaceId: WORKSPACE_KEY,
       initialState,
     });
     await runFor(Harness, 250);
@@ -876,13 +899,16 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     const port = 49_719;
     installGatewayTestWindow(port);
     installGatewayFetch(
-      (): Response => new Response(
-        // 信封缺失 event_id / turn_stream_id：非法事件，重复取同一字节永远失败。
-        "id: 1\n"
-        + "event: block.delta\n"
-        + 'data: {"session_id":"ses_protocol","turn_id":"turn_protocol","event_seq":1,"type":"block.delta","payload":{}}\n\n',
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      ),
+      ({ init }): Response => {
+        expectOwnerHeaders(init);
+        return new Response(
+          // 信封缺失 event_id / turn_stream_id：非法事件，重复取同一字节永远失败。
+          "id: 1\n"
+          + "event: block.delta\n"
+          + 'data: {"session_id":"ses_protocol","turn_id":"turn_protocol","event_seq":1,"type":"block.delta","payload":{}}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      },
       { token: "ms-protocol-token" },
     );
 
@@ -890,7 +916,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
       port,
       sessionId: "ses_protocol",
       turnId: "turn_protocol",
-      workspaceId: "ws_protocol",
+      workspaceId: WORKSPACE_KEY,
     });
     await runFor(Harness, 250);
 
@@ -902,7 +928,8 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     const port = 49_720;
     installGatewayTestWindow(port);
     let snapshotRequests = 0;
-    installGatewayFetch(({ path }) => {
+    installGatewayFetch(({ path, init }) => {
+      expectOwnerHeaders(init);
       if (path.includes("/message-stream/snapshot")) {
         snapshotRequests += 1;
         return new Response(JSON.stringify({ detail: "快照服务不可用" }), {
@@ -925,7 +952,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
       port,
       sessionId: "ses_gap",
       turnId: "turn_gap",
-      workspaceId: "ws_gap",
+      workspaceId: WORKSPACE_KEY,
     });
     await runFor(Harness, 400);
 
@@ -939,17 +966,20 @@ describe("useSessionMessageStream 连接与终态语义", () => {
   test("interrupted 终态归类为已取消而不是任务失败", async () => {
     const port = 49_721;
     installGatewayTestWindow(port);
-    installGatewayFetch(() => sseResponse([
-      streamEvent("cancel", "ses_cancel", "turn_cancel", 1, "stream.interrupted", { interrupt_request_id: "ir_1", status: "interrupted" }),
-    ]), { token: "ms-guard-cancel-token" });
+    installGatewayFetch(({ init }) => {
+      expectOwnerHeaders(init);
+      return sseResponse([
+        streamEvent("cancel", "ses_cancel", "turn_cancel", 1, "stream.interrupted", { interrupt_request_id: "ir_1", status: "interrupted" }),
+      ]);
+    }, { token: "ms-guard-cancel-token" });
 
     const initialState = minimalState();
     initialState.status = "任务失败前";
     initialState.currentSession = { session_id: "ses_cancel", thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>;
-    initialState.currentSessionWorkspaceId = "ws_cancel";
-    initialState.activeGatewayWorkspaceId = "ws_cancel";
-    initialState.activeJobIdsBySession.set("ws_cancel::ses_cancel", "job_cancel");
-    initialState.pendingConversations.set("ws_cancel::ses_cancel", [
+    initialState.currentSessionWorkspaceId = WORKSPACE_KEY;
+    initialState.activeGatewayWorkspaceId = WORKSPACE_KEY;
+    initialState.activeJobIdsBySession.set(sessionScopeKey(WORKSPACE_KEY, "ses_cancel"), "job_cancel");
+    initialState.pendingConversations.set(sessionScopeKey(WORKSPACE_KEY, "ses_cancel"), [
       {
         conversationId: "msg_cancel", threadId: "thr_00000000400070008000000000000002",
         displayMode: "live",
@@ -969,14 +999,14 @@ describe("useSessionMessageStream 连接与终态语义", () => {
       port,
       sessionId: "ses_cancel",
       turnId: "turn_cancel",
-      workspaceId: "ws_cancel",
+      workspaceId: WORKSPACE_KEY,
       initialState,
     });
     await runFor(Harness, 250);
 
     // 用户主动取消产生的 interrupted 必须归入 cancelled，不能报成任务失败。
     expect(mirror.current().status).toBe("任务已取消");
-    const pending = mirror.current().pendingConversations.get("ws_cancel::ses_cancel") ?? [];
+    const pending = mirror.current().pendingConversations.get(sessionScopeKey(WORKSPACE_KEY, "ses_cancel")) ?? [];
     expect(pending[0]?.turnStatus).toBe("cancelled");
   });
 
@@ -984,7 +1014,8 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     const port = 49_723;
     jest.useFakeTimers();
     installGatewayTestWindow(port);
-    installGatewayFetch(({ path }) => {
+    installGatewayFetch(({ path, init }) => {
+      expectOwnerHeaders(init);
       if (path.includes("/message-stream")) {
         // 建立连接后一个字节都不再发送：进程被 SIGSTOP / TCP 半开 / 网络黑洞。
         return new Response(
@@ -999,7 +1030,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
       port,
       sessionId: "ses_idle_visible",
       turnId: "turn_idle_visible",
-      workspaceId: "ws_idle_visible",
+      workspaceId: WORKSPACE_KEY,
     });
     const { unmount } = await renderHarness(Harness);
     // 逐轮推进计时器直到连接建立：凭据 + 流两条请求都要落地，且全程无业务字节。
@@ -1028,6 +1059,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     let streamSignal: AbortSignal | null = null;
     const hanging = createDeferredResult<Response>();
     installGatewayFetch(({ path, init }) => {
+      expectOwnerHeaders(init);
       if (path.includes("/message-stream/snapshot")) {
         return new Response(JSON.stringify({ detail: "无快照" }), {
           status: 404,
@@ -1045,7 +1077,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
       port,
       sessionId: "ses_abort",
       turnId: "turn_abort",
-      workspaceId: "ws_abort",
+      workspaceId: WORKSPACE_KEY,
     });
     const { unmount } = await renderHarness(Harness);
     await act(async () => {
@@ -1066,7 +1098,8 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     // 连接保持打开：1、2 连续，随后直接跳到 5，制造一个本连接内的事件序号缺口。
     // 这条路径没有任何错误分支可命中（连接没断），旧实现只能被动等 service 补发
     // stream.snapshot，页面会永久停在缺口态。
-    installGatewayFetch(({ path }) => {
+    installGatewayFetch(({ path, init }) => {
+      expectOwnerHeaders(init);
       if (!path.includes("/message-stream")) return undefined;
       const encoder = new TextEncoder();
       return new Response(new ReadableStream<Uint8Array>({
@@ -1104,7 +1137,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
       port,
       sessionId: "ses_gap_rescue",
       turnId: "turn_gap_rescue",
-      workspaceId: "ws_gap_rescue",
+      workspaceId: WORKSPACE_KEY,
     });
     const { unmount } = await renderHarness(Harness);
     await act(async () => {

@@ -4,9 +4,12 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import WorkspaceFileTree from "./WorkspaceFileTree";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 
-const ROOT = "boxteam://workspace/backend_files/resources/files/root";
-const FILESYSTEM = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001";
+const OWNER = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const ROOT = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
+const FILESYSTEM = `boxteam://gateway/${OWNER.gatewayId}/resources/files/01900000000070008000000000000001`;
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -37,7 +40,7 @@ function installWindow(port: number): void {
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: data.path },
+    data = { directory_key: { workspace_id: OWNER.workspaceId, scope: "workspace", root: ROOT, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({
@@ -83,8 +86,13 @@ async function mountTree(
     holdRoots,
     releaseRoots: null,
   };
-  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
+    if (url.pathname.startsWith("/api/v1/")) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+      expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    }
     if (url.pathname === "/api/gateway/auth/local-credential") {
       return apiResponse({ token: "token" });
     }
@@ -145,7 +153,7 @@ async function mountTree(
       <WorkspaceFileTree
         active
         apiPort={port}
-        workspaceId="gw_settings"
+        workspaceId={WORKSPACE_KEY}
         workspaceName="project"
         sessionId="ses_settings"
         activeFilePath={null}

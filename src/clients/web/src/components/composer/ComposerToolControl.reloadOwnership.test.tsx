@@ -10,6 +10,13 @@ import {
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import { installComposerTestGlobals } from "./composerTestFixtures";
 import ComposerToolControl from "./ComposerToolControl";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+
+const OWNERS = [
+  { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" },
+  { gatewayId: "gateway_00000000000040008000000000000002", workspaceId: "00000000-0000-4000-8000-000000000001" },
+];
+const WORKSPACE_KEYS = OWNERS.map(gatewayWorkspaceKey);
 
 /**
  * 工具面板的 owner 归属契约。
@@ -73,6 +80,9 @@ interface Deferred {
 /** 工具目录响应按 agent 分别受控：返回 pending 句柄供用例决定完成顺序。 */
 function installToolCatalogFetch(catalogs: Record<string, Deferred>): void {
   installGatewayFetch((request: GatewayFetchRequest) => {
+    const headers = new Headers(request.init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNERS[0].gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNERS[0].workspaceId);
     if (request.path === "/api/v1/tools") {
       const agentId = new URL(request.url, "http://localhost").searchParams.get("agent_id");
       const deferred = agentId ? catalogs[agentId] : undefined;
@@ -149,14 +159,14 @@ describe("工具目录加载的 owner 归属", () => {
     };
     installToolCatalogFetch(catalogs);
 
-    const renderer = await renderAndOpen({ agentId: "agent_a", workspaceId: "ws_1" });
+    const renderer = await renderAndOpen({ agentId: "agent_a", workspaceId: WORKSPACE_KEYS[0] });
     // agent_a 的目录请求此刻仍在途；外部把 Agent 切到 agent_b 并触发重新加载。
     await act(async () => {
       renderer.update(
         <ComposerToolControl
           apiPort={49_501}
           agentId="agent_b"
-          workspaceId="ws_1"
+          workspaceId={WORKSPACE_KEYS[0]}
           onStatus={() => undefined}
         />,
       );
@@ -196,6 +206,9 @@ describe("工具测试进度轮询的 owner 归属", () => {
     let runPollRequests = 0;
 
     installGatewayFetch((request: GatewayFetchRequest) => {
+      const headers = new Headers(request.init?.headers);
+      expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNERS[0].workspaceId);
+      expect(OWNERS.some(owner => owner.gatewayId === headers.get("X-BoxTeam-Target-Gateway-Id"))).toBe(true);
       if (request.path === "/api/v1/tools") {
         return new Promise<Response>((resolve) => {
           catalogs.agent_a.resolve = resolve;
@@ -218,6 +231,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
         });
       }
       if (request.path === "/api/v1/tools/tests/tooltest_1") {
+        expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNERS[0].gatewayId);
         runPollRequests += 1;
         return new Promise<Response>((resolve) => {
           runPoll.resolve = resolve;
@@ -226,7 +240,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
       return undefined;
     }, { token: "tool-poll-token" });
 
-    const renderer = await renderAndOpen({ agentId: "agent_a", workspaceId: "ws_1" });
+    const renderer = await renderAndOpen({ agentId: "agent_a", workspaceId: WORKSPACE_KEYS[0] });
     await act(async () => {
       catalogs.agent_a.resolve(apiSuccessResponse(toolCatalogPayload("alpha_tool")));
     });
@@ -237,20 +251,20 @@ describe("工具测试进度轮询的 owner 归属", () => {
     });
     await flush();
 
-    // 触发一轮轮询：请求发出后保持挂起，属于 ws_1。
+    // 触发一轮轮询：请求发出后保持挂起，属于第一个 Gateway。
     await act(async () => {
       tickIntervals();
     });
     await flush();
     expect(runPollRequests).toBeGreaterThan(0);
 
-    // 外部把工作区切到 ws_2；旧轮询请求此刻仍在途。
+    // 切到另一 Gateway 的同 UUID 工作区；旧轮询请求此刻仍在途。
     await act(async () => {
       renderer.update(
         <ComposerToolControl
           apiPort={49_501}
           agentId="agent_a"
-          workspaceId="ws_2"
+          workspaceId={WORKSPACE_KEYS[1]}
           onStatus={() => undefined}
         />,
       );

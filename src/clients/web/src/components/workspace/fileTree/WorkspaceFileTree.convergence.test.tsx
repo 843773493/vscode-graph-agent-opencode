@@ -11,9 +11,12 @@ import {
 } from "../../../state/workspaceFileTreeEvents";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 import { installWorkspaceFileIntentStoreMock } from "../../../tests/workspaceFileIntentStoreMock";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 
-const ROOT = "boxteam://workspace/backend_files/resources/files/root";
-const FILESYSTEM = "boxteam://gateway/gateway_01900000000070008000000000000001/resources/files/01900000000070008000000000000001";
+const OWNER = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" };
+const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const ROOT = `boxteam://workspace/${OWNER.workspaceId}/resources/files/root`;
+const FILESYSTEM = `boxteam://gateway/${OWNER.gatewayId}/resources/files/01900000000070008000000000000001`;
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -71,7 +74,7 @@ function installWindow(port: number, promptValue: string | null = null): Documen
 
 function apiResponse(data: unknown): Response {
   if (data && typeof data === "object" && "items" in data && "path" in data) {
-    data = { directory_key: { workspace_id: "backend_files", scope: "workspace", root: ROOT, path: data.path },
+    data = { directory_key: { workspace_id: OWNER.workspaceId, scope: "workspace", root: ROOT, path: data.path },
       directory_revision: 1, ...data };
   }
   return Response.json({
@@ -104,11 +107,13 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
   const receipts = new Map<string, Record<string, unknown>>();
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
-    if (["/api/gateway/health", "/api/v1/workspace", "/api/v1/workspace/files/roots"].includes(url.pathname)) {
+    if (url.pathname.startsWith("/api/v1/")) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+      expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+    }
+    if (["/api/v1/workspace", "/api/v1/workspace/files/roots"].includes(url.pathname)) {
       identityRequests.push(url.pathname);
-      if (url.pathname !== "/api/gateway/health") {
-        expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe("gw_conv");
-      }
     }
     if (url.pathname === "/api/gateway/auth/local-credential") {
       return apiResponse({ token: "token" });
@@ -117,10 +122,9 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
     if (url.pathname === "/api/gateway/users/current") {
       return apiResponse({ kind: "guest", user_id: null });
     }
-    if (url.pathname === "/api/gateway/health") return apiResponse({ gateway_id: "gateway_files" });
-    if (url.pathname === "/api/v1/workspace") return apiResponse({ workspace_id: "backend_files", root_path: ROOT });
+    if (url.pathname === "/api/v1/workspace") return apiResponse({ workspace_id: OWNER.workspaceId, root_path: ROOT });
     if (url.pathname === "/api/v1/workspace/files/operations") {
-      expect(url.searchParams.get("expected_workspace_id")).toBe("backend_files");
+      expect(url.searchParams.get("expected_workspace_id")).toBe(OWNER.workspaceId);
       const receipt = receipts.get(url.searchParams.get("operation_id") ?? "");
       return receipt ? apiResponse({ operations: [receipt], worker_state: "running" })
         : Response.json({ detail: "原操作不存在" }, { status: 404 });
@@ -142,7 +146,7 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
       directoryItems.set(path, next);
       const command = JSON.parse(String(init?.body));
       const key = command.intent.directory_key;
-      expect(key).toEqual({ workspace_id: "backend_files", scope: "workspace", root: ROOT, path: `${ROOT}/src` });
+      expect(key).toEqual({ workspace_id: OWNER.workspaceId, scope: "workspace", root: ROOT, path: `${ROOT}/src` });
       expect(command.intent.expected_directory_revision).toBe(1);
       const snapshot = { root_path: ROOT, path, items: next, truncated: false, limit: 500,
         next_cursor: null, directory_key: key, directory_revision: 2 };
@@ -161,7 +165,7 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
       <WorkspaceFileTree
         active
         apiPort={port}
-        workspaceId="gw_conv"
+        workspaceId={WORKSPACE_KEY}
         workspaceName="project"
         sessionId=""
         activeFilePath={null}
@@ -225,7 +229,7 @@ function dispatchChange(handle: Harness, kind: string, absolutePath: string): vo
   act(() => {
     handle.window.dispatch(new CustomEvent<WorkspaceFileChangesEventDetail>(
       WORKSPACE_FILE_CHANGES_EVENT,
-      { detail: { workspaceId: "gw_conv", directories: [], snapshots: [], changes: [{ kind, path: absolutePath }] } },
+      { detail: { workspaceId: WORKSPACE_KEY, directories: [], snapshots: [], changes: [{ kind, path: absolutePath }] } },
     ));
   });
 }
@@ -275,7 +279,7 @@ describe("工作区文件树精确收敛", () => {
     expect(requestCount(handle, ROOT)).toBe(1);
     expect(handle.listingRequests).toEqual([ROOT, `${ROOT}/src`, `${ROOT}/other`]);
     expect(handle.identityRequests.slice(identityBefore)).toEqual(expect.arrayContaining([
-      "/api/gateway/health", "/api/v1/workspace", "/api/v1/workspace/files/roots",
+      "/api/v1/workspace", "/api/v1/workspace/files/roots",
     ]));
     expect(titlesOf(handle.renderer)).toContain(`${ROOT}/src/new.ts`);
   });
