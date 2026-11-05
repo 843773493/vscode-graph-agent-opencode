@@ -72,21 +72,22 @@ class ContextSourceVersionsStorageMixin:
         if assembly is None or assembly.seal_binding is None:
             return None
         binding = assembly.seal_binding
-        selected = None
-        for source in (() if binding.root is None else binding.root.sources):
-            if source.source_kind == "skill" and _normalize_skill_name(source.name) == _normalize_skill_name(name):
-                selected = source.source_identity
-        for frame in binding.prefix.state.frames:
+        normalized_name = _normalize_skill_name(name)
+        # 最后出现的同名来源生效，倒序命中后不再解析已被覆盖的旧来源帧。
+        for frame in reversed(binding.prefix.state.frames):
             if frame.role == "user" and frame.source_protocol is not None:
-                for source in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
-                    if source.source_kind == "skill" and _normalize_skill_name(source.name) == _normalize_skill_name(name):
-                        selected = source.source_identity
+                for source in reversed(parse_source_blocks(frame.content, expected_version=frame.source_protocol)):
+                    if source.source_kind == "skill" and _normalize_skill_name(source.name) == normalized_name:
+                        return source.source_identity
             elif frame.role == "user":
                 # 统一来源协议之前的封存帧已有 typed 来源身份，不能重读当前文件补名。
-                for ref in frame.item_refs:
+                for ref in reversed(frame.item_refs):
                     if ref.source_identity in source_ids:
-                        selected = ref.source_identity
-        return selected
+                        return ref.source_identity
+        for source in (() if binding.root is None else reversed(binding.root.sources)):
+            if source.source_kind == "skill" and _normalize_skill_name(source.name) == normalized_name:
+                return source.source_identity
+        return None
 
     def consume_context_epoch_rebuild_intent(
         self,
