@@ -3,7 +3,7 @@
 - [x] 1.1 全仓检索工作区别名生成、`backend_workspace_id`／`remote_workspace_id` 及其直接和间接消费者，标出真实工作区引用与独立连接／导航身份。包括 camelCase、旧身份头、projection 生成器和不含旧字段名的持久引用；范围见 design 的迁移输入表。
 - [x] 1.2 明确支持的 registry、配置及客户端旧版本，确认需迁移的实际表、字段和恢复格式；与多工作区、quick-access、扩展管理规划对齐，避免新增旧映射调用方。输入基线与正确 owner 不改写边界见 design；迁移实现及恢复验收仍在第 5／6 组。
 - [x] 1.3 在现有受控身份入口完成注册前 UUID 获取、已有 UUID 保留及同原生 Gateway 根冲突拒绝，不增加第二身份源或占位 workspace_id。
-- [x] 1.3a 身份文件完整写入后原子不覆盖发布，消除并发读取空文件；覆盖创建／绑定竞争、候选失败清理与真实 Gateway 损坏恢复。此子项不代表 1.3 的登记与根冲突验收完成。Windows 实机验证尚未完成：`hyf-win` 目标已有两项本地删除，快照激活拒绝，未覆盖目标改动。
+- [x] 1.3a 身份文件完整写入后原子不覆盖发布，消除并发读取空文件；覆盖创建／绑定竞争、候选失败清理与真实 Gateway 损坏恢复。此子项不代表 1.3 的登记与根冲突验收完成。Windows 身份原子发布／绑定竞争及故障注入已于2026-11-05实机通过112项（2项POSIX场景跳过），目标同步和激活成功；额外真实Gateway恢复场景停在managed Backend停止阶段，尚未进入损坏／恢复步骤，另行核对，不计作通过。
 
 ## 2. 原生 Gateway 登记与本地请求链
 
@@ -38,7 +38,7 @@
 - [x] 6.1 实现只读预览与显式可恢复迁移，核验完整映射、owner、引用和未结算状态；仅按实际结构变化提升 schema，离线或歧义时保留原记录并阻塞发布。
 - [x] 6.2 原子迁移 registry／metadata、root binding、managed_backends、活动选择、目录／Generator 和 user_view_state；保留有效 URI、canonical 正文、历史 hash 及 Session／Thread 身份。
 - [x] 6.3 用受支持旧版本完整输入验证成功、重入、冲突、远端离线、写入中断恢复和维护窗口回退，检查迁移后真实重启与客户端恢复，不手工补齐产品应生成的关联。
-- [ ] 6.4 迁齐后物理删除旧别名生成器、重复字段、换算接口、死代码和旧协议分支；完成全仓消费者核对、相关静态分析及定向回归，保留准确命令、源码版本与原始结果。所有测试使用既有矩阵或进程外超时／内存保护。
+- [x] 6.4 迁齐后物理删除旧别名生成器、重复字段、换算接口、死代码和旧协议分支；完成全仓消费者核对、相关静态分析及定向回归，保留准确命令、源码版本与原始结果。所有测试使用既有矩阵或进程外超时／内存保护。
   - 2026-11-05 搜索元数据消费者：发现与冻结范围测试改用完整 Gateway／workspace owner，远端准备沿正式 projection 发布入口；保留相同 UUID 不同 Gateway、发现零启动、分页不改活动项／导航、重启后旧 owner 不重定向到同名新工作区的断言。发现补验 13 passed，冻结范围真实 Gateway 重启单项沿首批通过记录复用，源码指纹未变；两文件 Ruff／Pyright 零诊断。准确命令、失败归因与补验原件见 `out/tests/temp/identity_metadata_consumers_20261105/artifacts/final-index.json`；全仓其余消费者仍待核齐，本项不勾选。
   - 2026-11-05 名称／文件联邦搜索验收迁齐：外部后端登记和请求统一使用原生 Gateway／workspace UUID，移除测试中的路由别名及退役 DTO 字段；真实 Gateway 与双 Backend 1 passed／118.02 秒，覆盖重启续页、目录及 child 版本冲突、文件正文／UTF-16 列、实际读失败、停止目标和连接拒绝。原身份、顺序、游标、错误归属及输出字节预算断言保留，Session／child 状态仍由产品入口生成；Ruff／Pyright 零诊断。命令、原始输出和收据见 `out/tests/temp/identity_federated_search_20261105/artifacts/final-index.json`；本场景不代表跨 Gateway 实网或客户端验收。
 
@@ -331,3 +331,14 @@
 
 - 12份测试迁齐完整owner key、URI、directory_key及sessionScopeKey；真实API均核业务端点确实被请求和双目标头，不让用户屏障或别名解析失败产生空转通过。目录、资源、Goal、Trace和RunActions保留切换、迟到、错误归属及失败重读断言；纯标签与零请求负例保持原边界。
 - 首轮130 passed／1006断言（46+19+30+35），均有60秒／4GiB外部保护。真实Web tsc仍28条既存诊断，输出与05逐字节相同，本批零诊断；复用相同实际产品输入的成功Web构建。源码、准确命令、原始输出和输入覆盖见 `out/tests/temp/identity_remaining_backend_20261105/artifacts/src-evidence-index-06.json` 与 `src-web-build-reuse-06.json`。根复核12文件SHA和独立patch；菜单507只证明目录快照失败后的重读，不冒充multipart失败，6.4仍未勾。
+
+
+### 2026-11-05：6.4 最终核对与适用边界
+
+- 旧身份消费者已随 `e3e493c59`、`5566d1fe0` 及前述逐链提交迁齐；独立审查原件 `out/tests/temp/identity_independent_review_20261105/artifacts/identity-review-final-evidence-1793867887770663654.json` 的9份交付源码及32份审查链源码SHA与最终磁盘逐项一致。注册／完整组／联邦／目录／Generator／用户视图／客户端持久恢复不再有运行中的别名生成、双字段、UUID换算或旧协议回退。24份实际生成descriptor中旧活字段0，reserved旧名3；迁移输入、负例与仅表示同一个UUID的局部变量按职责保留。
+- 独审收口的Web58项、Gateway174项通过，真实Workbench类型及规定build退出0；Ruff/Pyright/Web的既存诊断、并发协议改动及完整提交归档对照均在上述原件中逐条保留，不表述全仓静态全绿。其它真实客户端、HTTP、Browser、Electron及联邦验收沿前述相同源码回执复用，不为补统计重复长跑。
+- 跨Gateway最后缺口由 `7e403e670` 补齐：正式source-child fork矩阵2 passed／276.07秒，包含第二代fork、来源离线、目标冷启、原请求hash及实际后继新URI；图片历史正式矩阵1 passed／162.87秒。原失败及补验命令、首尾SHA、实际退出码在 `out/tests/temp/frozen_wire_20261105/artifacts/`，不能将组合中图片未获正式watchdog的setup退出1记作通过。
+- Windows身份原子创建／绑定竞争／候选清理／直接cause与errno实机112 passed、2 skipped／6.68秒，退出0；POSIX两项跳过不计Windows通过。修正故障注入匹配目标平台实际native I/O路径（`b531bb1df`），Linux相邻身份两文件110 passed／5.02秒，Ruff/Pyright零诊断。准确命令、目标快照及原始结果在同目录 `windows-identity-atomic-tests-fixed-1793868156190513509`、`identity-native-io-linux-1793868136462308149` 与相应静态回执；本项关闭原快照无法激活的过时缺口。
+- 额外Windows真实Gateway损坏恢复测试仍未通过：已经注册正确UUID，停止managed Backend时超时，尚未进入身份损坏／恢复。原日志及精确采集保留于同目录 `windows-identity-gateway-recovery-1793868217590726576` 和 `windows-identity-native/gateway-test_workspace_identity_errors.zip`。原生Uvicorn小探针确认既存taskkill普通模式无法优雅关闭、最后强杀并保留原关闭失败；Linux同探针通过。该平台关闭能力未由本次身份切换引入，不把它记作身份或Windows全链验收通过，也不以取消端口检查／固定sleep／忽略错误掩盖。
+- `cb67d11bc` 修正上述失败后的独立错误判定：仅原后端仍运行时才核验旧组恢复，已退出句柄不再进入120秒健康等待；原超时、完整owner、辅助服务与错误归属保留。停止／候选恢复／退出／辅助服务相关12 passed／3.08秒，Ruff退出0，完整HEAD类型66／66既存诊断无新增。原生优雅关闭仍保留代码TODO(windows-graceful-stop)，不伪报强杀成功；会话生成汇报8.90秒的既存长尾继续按原测量TODO跟踪，均不改写本变更的身份完成范围。
+- 本次同步workspace-identity、managed-backend-lifecycle、configuration-domains及remote-gateway-federation后归档；只替换delta覆盖的身份条文，保留其它场景。归档不代表Windows原生服务优雅关闭或既存性能长尾已实现。
