@@ -126,7 +126,10 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
       label: `${branch.label} · ${cancelled ? `查询已取消：${state.message ?? state.code ?? state.state}`
         : failed ? `查询失败：${state.code === 'deadline' ? '查询超时：' : ''}${state.message ?? state.code ?? state.state}`
         : limited ? `本次查询覆盖受限（${state.code ?? '还有更多结果'}）` : branch.picks.length ? '本次查询完成' : '没有匹配的资源'}`,
-      detail: `${branch.diagnosticSummary ?? `本次读取 ${branch.picks.length} 项，不代表全局快照`}${cancelled && state.code ? ` · code: ${state.code}` : ''}${cancelled && state.reason ? ` · reason: ${state.reason}` : ''} · request_id: ${requestId}`,
+      detail: [branch.diagnosticSummary ?? `本次读取 ${branch.picks.length} 项，不代表全局快照`,
+        !failed && !cancelled && state.message, state.code && `code: ${state.code}`,
+        state.error_owner && `error_owner: ${state.error_owner}`, state.reason && `reason: ${state.reason}`,
+        state.http_status !== undefined && `http_status: ${state.http_status}`, `request_id: ${requestId}`].filter(Boolean).join(' · '),
       ...((continuation || ((failed || cancelled) && state.retryable)) ? { buttons: [continuation ? moreButton : retryButton],
         trigger: async () => { await run([branch], continuation ? state.cursor : undefined); return TriggerAction.NO_ACTION; } } : {}) };
   };

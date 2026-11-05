@@ -196,16 +196,17 @@ async function federatedBranchContract(mode, category, diagnostic) {
       const failure = { ...state(1, 'failed'), code: diagnostic.code, error_owner: diagnostic.owner, reason: diagnostic.reason,
         http_status: diagnostic.status, cursor: limited.cursor, message: '原 owner 拒绝此续点 [执行](command:workbench.action.closeWindow) <b>诊断</b>' };
       send(next, 'branch', { branch: failure }); end(next, [failure]); await continuation;
-      const failureLabel = branches[1].status.label, retryTooltip = branches[1].status.buttons[0].tooltip;
+      const failureLabel = branches[1].status.label, failureDetail = branches[1].status.detail,
+        retryTooltip = branches[1].status.buttons[0].tooltip;
       // 使用 Quick Input 原标签渲染器核对文本，不在测试内复制 Markdown 或命令解析。
       const rendering = lifetime.add(new IconLabel(document.createElement('div'), { supportHighlights: true, supportIcons: true }));
-      rendering.setLabel(failureLabel);
+      rendering.setLabel(failureLabel, failureDetail);
       const diagnosticText = rendering.element.textContent, diagnosticLinks = rendering.element.querySelectorAll('a[href]').length,
         diagnosticMarkup = rendering.element.querySelectorAll('b').length;
       const retry = branches[1].status.trigger();
       await until(() => connections.length === 3); const last = connections[2]; scope(last);
       send(last, 'branch', { branch: completed(1) }); end(last, [completed(1)]); await retry;
-      return { requests: connections.map(connection => connection.request), paths, failureLabel, retryTooltip, busy, diagnosticText, diagnosticLinks, diagnosticMarkup,
+      return { requests: connections.map(connection => connection.request), paths, failureLabel, failureDetail, retryTooltip, busy, diagnosticText, diagnosticLinks, diagnosticMarkup,
         pending: branches.map(branch => branch.pending), status: branches.map(branch => branch.status.detail) };
     }
     if (mode === 'cancel' || mode === 'late') {

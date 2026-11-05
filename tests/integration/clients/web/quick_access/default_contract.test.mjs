@@ -197,6 +197,8 @@ for (const rejection of [
   expect(retry.queries).toEqual(continuation.queries);
   expect(retry.continuations).toEqual([{ branch: { owner: federatedOwners[1], category, operation: 'content' } }]);
   expect(result.failureLabel).toContain('原 owner 拒绝此续点');
+  for (const field of [`code: ${rejection.code}`, `error_owner: ${rejection.owner}`, `reason: ${rejection.reason}`,
+    `http_status: ${rejection.status}`, 'request_id: request-1']) expect(result.failureDetail).toContain(field);
   expect(result.diagnosticText).toContain('[执行](command:workbench.action.closeWindow) <b>诊断</b>');
   expect(result.diagnosticLinks).toBe(0); expect(result.diagnosticMarkup).toBe(0);
   expect(result.retryTooltip).toBe('重新查询此类别');
@@ -263,13 +265,17 @@ test('正文流断开保留已完成 A，B 明确失败并显示原 request_id',
 for (const diagnostic of [
   { state: 'cancelled', code: 'cancelled', message: '原领域读取已停止', reason: 'original_cancel_reason', retryable: true },
   { state: 'cancelled', code: 'cancelled', message: '原领域读取已停止', reason: 'original_cancel_reason', retryable: false },
-  { state: 'failed', code: 'deadline', message: '原领域查询期限已到', retryable: true },
-  { state: 'failed', code: 'upstream_error', message: '取消只是原始错误正文，不代表业务状态', retryable: false },
+  { state: 'failed', code: 'deadline', message: '原领域查询期限已到', error_owner: 'gateway_search', reason: 'deadline', retryable: true },
+  { state: 'failed', code: 'upstream_error', message: '取消只是原始错误正文，不代表业务状态', error_owner: 'canonical_history', reason: 'read_failed', http_status: 500, retryable: false },
 ]) test(`原分支 ${diagnostic.state}/${diagnostic.code}/retryable=${diagnostic.retryable} 保留状态和独立重试语义`, async () => {
   const result = await exercise('branchStateContract', diagnostic), cancelled = diagnostic.state === 'cancelled';
   expect(result.statuses[0].label).toContain(cancelled ? '查询已取消：' : '查询失败：');
   expect(result.statuses[0].label).toContain(diagnostic.message);
   expect(result.statuses[0].detail).toContain('request_id: request-1');
+  for (const field of ['code', 'error_owner', 'reason', 'http_status']) {
+    if (diagnostic[field] === undefined) expect(result.statuses[0].detail).not.toContain(`${field}:`);
+    else expect(result.statuses[0].detail).toContain(`${field}: ${diagnostic[field]}`);
+  }
   expect(result.statuses[1].label).toContain('本次查询完成');
   expect(result.statuses[1].detail).toContain('request_id: request-0');
   if (cancelled) {
@@ -298,6 +304,25 @@ for (const diagnostic of [
     expect(result.picks).toEqual([[`${ownerAKey}/4`], [`${ownerBKey}/2`]]);
   }
   expect(result.otherRetainedAfterRetry).toBe(true);
+  expect(result.pending).toEqual([false, false]); expect(result.busy).toBe(false);
+});
+
+test('受限分支保留原原因与续点，正常完成不伪造诊断或 HTTP 状态', async () => {
+  const diagnostic = { state: 'limited', code: 'scan_limit', message: '本次仅检查一部分记录，原目录仍有未读取内容',
+    error_owner: 'canonical_history', reason: 'item_budget', retryable: false };
+  const result = await exercise('branchStateContract', diagnostic);
+  expect(result.statuses[0].label).toContain('本次查询覆盖受限（scan_limit）');
+  for (const field of [diagnostic.message, 'code: scan_limit', 'error_owner: canonical_history', 'reason: item_budget', 'request_id: request-1']) {
+    expect(result.statuses[0].detail).toContain(field);
+  }
+  expect(result.statuses[0].detail).not.toContain('http_status:');
+  expect(result.statuses[0].buttons).toEqual(['继续查询此类别']);
+  expect(result.statuses[0].hasTrigger).toBe(true);
+  expect(result.retainedPicks).toEqual([[`${ownerAKey}/2`], [`${ownerBKey}/2`]]);
+  expect(result.originalRetained).toEqual([true, true]);
+  expect(result.statuses[1].label).toContain('本次查询完成');
+  expect(result.statuses[1].detail).toBe('本次读取 1 项，不代表全局快照 · request_id: request-0');
+  expect(result.requests).toHaveLength(2);
   expect(result.pending).toEqual([false, false]); expect(result.busy).toBe(false);
 });
 
