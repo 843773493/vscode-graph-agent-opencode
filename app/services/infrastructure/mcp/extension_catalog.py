@@ -177,14 +177,6 @@ def _target_from_member(member: ResourceMemberBinding) -> ExtensionTargetBinding
     )
 
 
-def _binding_id(
-    generation: int, catalog_revision: str, members: tuple[ResourceMemberBinding, ...],
-) -> str:
-    # 相同 schema 的重连保持语义 revision，但不能复用旧 binding identity。
-    member_hash = sha256_jcs([member.to_dict() for member in sorted(members, key=lambda member: member.member_id)])
-    return f"{_BINDING_ID_PREFIX}:{generation}:{catalog_revision}:{member_hash}"
-
-
 @dataclass(frozen=True, slots=True)
 class ExtensionCatalogBindingRef:
     """一次 model-call preparation 封存的扩展目录 binding。
@@ -195,7 +187,7 @@ class ExtensionCatalogBindingRef:
     provider_binding_identity 并进入 hard rebase 合同。
     """
 
-    binding_id: str
+    binding_id: str = field(init=False)
     catalog_revision: str
     generation: int
     provider_binding_identity: str
@@ -203,8 +195,6 @@ class ExtensionCatalogBindingRef:
     binding_hash: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.binding_id, str) or not self.binding_id:
-            raise ValueError("ExtensionCatalogBindingRef.binding_id 不能为空")
         if not self.catalog_revision.startswith("sha256:"):
             raise ValueError(
                 "ExtensionCatalogBindingRef.catalog_revision 必须是 sha256 revision"
@@ -219,10 +209,6 @@ class ExtensionCatalogBindingRef:
             isinstance(member, ResourceMemberBinding) for member in self.members
         ):
             raise TypeError("ExtensionCatalogBindingRef.members 必须是领域成员元组")
-        if self.binding_id != _binding_id(self.generation, self.catalog_revision, self.members):
-            raise ExtensionCatalogUnavailableError(
-                "binding 契约版本不支持恢复执行；历史记录可读，必须从新模型调用获取完整定义"
-            )
         member_ids = [member.member_id for member in self.members]
         if len(member_ids) != len(set(member_ids)):
             raise ExtensionTargetConflictError("extension catalog member_id 必须唯一")
@@ -231,6 +217,9 @@ class ExtensionCatalogBindingRef:
         object.__setattr__(
             self, "members", tuple(sorted(self.members, key=lambda member: member.member_id)),
         )
+        # identity 是已校验成员的派生值，只构造一次；历史声明在反序列化入口核对。
+        member_hash = sha256_jcs([member.to_dict() for member in self.members])
+        object.__setattr__(self, "binding_id", f"{_BINDING_ID_PREFIX}:{self.generation}:{self.catalog_revision}:{member_hash}")
         try:
             binding_hash = sha256_jcs(self.binding_preimage())
         except ItemSchemaError as error:
@@ -321,7 +310,6 @@ def build_extension_catalog_binding(
             revision=revision,
         )
     return ExtensionCatalogBindingRef(
-        binding_id=_binding_id(generation, catalog_revision, tuple(entries.values())),
         catalog_revision=catalog_revision,
         generation=generation,
         provider_binding_identity=provider_binding_identity,
@@ -336,7 +324,6 @@ def extension_catalog_binding_from_members(
 ) -> ExtensionCatalogBindingRef:
     """typed members 是唯一集合；restore 不读取 live tools 或重建 schema。"""
     return ExtensionCatalogBindingRef(
-        binding_id=_binding_id(generation, catalog_revision, members),
         catalog_revision=catalog_revision, generation=generation,
         provider_binding_identity=provider_binding_identity, members=members,
     )
@@ -472,16 +459,21 @@ class ExtensionDispatchBindingRef:
         model_call_id = value.get("model_call_id")
         catalog_snapshot_ref = value.get("catalog_snapshot_ref")
         try:
+            declared_binding_id = str(value["binding_id"])
+            if not declared_binding_id:
+                raise ValueError("ExtensionCatalogBindingRef.binding_id 不能为空")
+            catalog = ExtensionCatalogBindingRef(
+                catalog_revision=str(value["catalog_revision"]),
+                generation=int(value["generation"]),
+                provider_binding_identity=str(value["provider_binding_identity"]),
+                members=members,
+            )
+            if declared_binding_id != catalog.binding_id:
+                raise ExtensionCatalogUnavailableError(
+                    "binding 契约版本不支持恢复执行；历史记录可读，必须从新模型调用获取完整定义"
+                )
             restored = cls(
-                binding_ref=ExtensionCatalogBindingRef(
-                    binding_id=str(value["binding_id"]),
-                    catalog_revision=str(value["catalog_revision"]),
-                    generation=int(value["generation"]),
-                    provider_binding_identity=str(
-                        value["provider_binding_identity"]
-                    ),
-                    members=members,
-                ),
+                binding_ref=catalog,
                 guidance_revision=str(value["guidance_revision"]),
                 activation_policy_revision=str(
                     value["activation_policy_revision"]
@@ -498,7 +490,7 @@ class ExtensionDispatchBindingRef:
                     if catalog_snapshot_ref is None
                     else str(catalog_snapshot_ref)
                 ),
-            ).verify()
+            )
         except (TypeError, ValueError) as error:
             raise ExtensionCatalogUnavailableError(
                 "历史 extension dispatch binding 字段非法，拒绝 dispatch: "
