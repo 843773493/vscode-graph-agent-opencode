@@ -396,13 +396,14 @@ class IndexedRecordQueryMixin:
             connection=connection,
         )
         required = required_sequences or {}
+        # 先校验全部必需序号，再只补查基础选集缺少的消息；普通分页的 final 通常已在选集中。
         required_values = {
             _positive_int(
                 sequence, field="read_indexed_records_batch.required_sequence"
             )
             for sequences in required.values()
             for sequence in sequences
-        }
+        } - {row[0] for row in rows}
         if required_values:
             rows.extend(
                 self._records_for_turns(
@@ -415,15 +416,11 @@ class IndexedRecordQueryMixin:
                     connection=connection,
                 )
             )
-        unique_rows = {
-            (sequence, turn_id, offset, length): (sequence, turn_id, offset, length)
-            for sequence, turn_id, offset, length in rows
-        }
         records = self._read_record_envelopes(
             session_id,
             thread_id,
             checkpoint_ns,
-            sorted(unique_rows.values()),
+            sorted(rows),
             connection=connection,
         )
         for record in records:
