@@ -38,6 +38,10 @@ class _AssemblyContentStore(ExitStack):
         self.sources: dict[str, dict[str, object]] = {}
         self.dependencies: set[str] = set()
         self._canonical_stream: BinaryIO | None = None
+        # 与本次文件句柄同寿命；内容节点写入不修改 canonical item/commit。
+        # 复用同批提交和 scope 校验，下一次 store/load 仍从空集合重新检查。
+        self._validated_commits: set[int] = set()
+        self._validated_scopes: set[tuple[str, str]] = set()
 
     def _canonical_item_payload(
         self, canonical_item_id: str, historical_owner: tuple[str, str],
@@ -67,6 +71,8 @@ class _AssemblyContentStore(ExitStack):
             self._canonical_stream = stream
         item = RolloutCanonicalReadMixin._read_v2_item_at(
             self.connection, stream, sequence=locator[0], offset=locator[1], length=locator[2],
+            validated_commits=self._validated_commits,
+            validated_scopes=self._validated_scopes,
         )
         self.canonical_payloads[canonical_identity] = item.payload
         self.dependencies.add(canonical_item_id)
