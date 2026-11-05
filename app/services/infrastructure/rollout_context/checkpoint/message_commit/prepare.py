@@ -24,7 +24,6 @@ from app.services.infrastructure.rollout_context.storage.catalog.message_groups 
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
-    canonical_json_text,
 )
 
 ItemLocation = tuple[CanonicalItemRecord, int, int]
@@ -186,15 +185,13 @@ def prepare_messages(
                 if message_role == "assistant"
                 else None
             )
-            group, created = resolve_message_group(
+            group, serialized = resolve_message_group(
                 connection, codec=codec, message=message, message_value=message_value,
                 explicit_anchor=explicit_anchor, stored_group=message_item_group,
                 message_id=canonical_message_id, turn_id=turn_id, execution_id=execution_id,
                 model_call_id=model_call_id, next_item_sequence=batch.next_item_sequence,
                 timestamp=datetime.now(UTC).isoformat(), allow_revisions=allow_revisions,
             )
-            if created:
-                message_locator = None
             batch.item_ids.extend(item.item_id for item in group)
             batch.message_item_ids[canonical_message_id] = tuple(item.item_id for item in group)
             for item in group:
@@ -211,7 +208,7 @@ def prepare_messages(
                         continue
                 if item.turn_scope is None or item.semantic_kind == "runtime_notice":
                     batch.display_only_item_ids.append(item.item_id)
-            if message_locator is not None:
+            if serialized is None:
                 # 候选组只验证内容与身份；已存消息继续引用原 locator，不写候选坐标。
                 batch.visible_sequences.append(message_locator[0])
                 continue
@@ -223,7 +220,6 @@ def prepare_messages(
                 offset += len(raw)
             _, message_offset, message_length = locations[-1]
             batch.next_item_sequence += len(group)
-            serialized = codec.project_message(group)
             # 派生 message projection 也从唯一 canonical group 构造，不保存第二份正文。
             batch.prepared.append(
                 (
@@ -231,7 +227,7 @@ def prepare_messages(
                     canonical_message_id,
                     turn_id,
                     codec.message_role(message),
-                    canonical_json_text(serialized),
+                    serialized,
                     message_offset,
                     message_length,
                     "internal" if codec.is_internal(message) else "visible",

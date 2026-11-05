@@ -61,7 +61,8 @@ def resolve_message_group(
     stored_group: Sequence[CanonicalItemRecord], message_id: str,
     turn_id: str | None, execution_id: str, model_call_id: str | None,
     next_item_sequence: int, timestamp: str, allow_revisions: bool,
-) -> tuple[tuple[CanonicalItemRecord, ...], bool]:
+) -> tuple[tuple[CanonicalItemRecord, ...], str | None]:
+    """返回规范组及新组的已校验投影；复用原 locator 时无需待提交正文。"""
     created = not stored_group
     candidate_message = message
     stored_value = codec.project_message(stored_group) if stored_group else None
@@ -87,7 +88,7 @@ def resolve_message_group(
         canonical_items=stored_group,
     )
     # codec 自身验证 group 完整性；不能接受返回顺序与投影不一致的适配器。
-    codec.project_message(group)
+    projected = codec.project_message(group)
     if stored_group:
         source = stored_group[-1]
         source_revisions = tuple(relation for relation in source.provenance_relations
@@ -126,6 +127,8 @@ def resolve_message_group(
                                            if not (relation.relation == "replaces" and relation.target_kind == "canonical_item"))
                 + ((relation,) if ordinal == len(group) - 1 else ()),
             ) for ordinal, item in enumerate(group))
-            codec.project_message(group)
+            projected = codec.project_message(group)
             created = True
-    return tuple(group), created
+    # 新组的最终投影同时用于校验和提交，不能在 prepare 中重走长正文。
+    # revision 替换身份/来源后已重新投影；既有组只校验，不再准备写入。
+    return tuple(group), canonical_json_text(projected) if created else None
