@@ -3,10 +3,8 @@
 import pytest
 
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.session_navigation import (
-    SessionCatalogService,
-    thread_search,
-)
+from app.services.business.session_navigation import thread_search
+from app.services.business.session_navigation.service import SessionCatalogService
 from tests.unit.services.business.session_navigation.test_fuzzy_catalog_search import (
     catalog as catalog,  # noqa: PLC0414 - 复用真实目录/Session owner fixture
 )

@@ -53,7 +53,6 @@ from app.schemas.internal_v2.session_navigation.thread_search import (
 )
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_generation import SessionGenerationService
-from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.catalog_query import CatalogCursorError
 from app.services.business.session_navigation.name_search_budget import (
     NAME_SEARCH_DEADLINE_HEADER,
@@ -66,6 +65,7 @@ from app.services.business.session_navigation.queue_store import (
     NavigationMutationConflictError,
     NavigationQueueOwnerError,
 )
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_navigation.thread_search import (
     ThreadSearchCursorError,
 )

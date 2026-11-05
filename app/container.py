@@ -75,7 +75,7 @@ from app.services.business.session_generation import (
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_information_service import SessionInformationService
 from app.services.business.session_interrupt_service import SessionInterruptService
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_resource_providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,

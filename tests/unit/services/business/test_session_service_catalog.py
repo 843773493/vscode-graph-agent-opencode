@@ -19,7 +19,7 @@ from app.core.path_utils import (
 )
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.session_navigation.catalog_intents import (

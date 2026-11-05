@@ -28,7 +28,6 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueResultDTO,
     NavigationMutationIntentDTO,
 )
-from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import (
     NavigationAuthScope,
@@ -40,6 +39,7 @@ from app.services.business.session_navigation.queue_store import (
     NavigationMutationQueueStore,
     NavigationQueueOwnerError,
 )
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext

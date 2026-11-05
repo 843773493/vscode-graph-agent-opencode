@@ -31,7 +31,7 @@ from app.services.business.session_generation.naming import render_generation_na
 from app.services.business.session_generation.providers import (
     SessionGenerationProviderProtocol,
 )
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 
 

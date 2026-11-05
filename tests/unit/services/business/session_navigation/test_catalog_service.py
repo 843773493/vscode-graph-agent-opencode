@@ -15,8 +15,8 @@ from app.core.path_utils import get_session_creation_service, get_session_path_r
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
-from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.catalog_query import encode_catalog_cursor
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.canonical_id_at import uuid7_hex_from_name

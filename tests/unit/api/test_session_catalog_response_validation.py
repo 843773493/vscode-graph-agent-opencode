@@ -24,10 +24,10 @@ from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session_navigation import SessionCatalogPageDTO
 from app.services.business.search.providers import register_navigation_search
 from app.services.business.search.service import WorkspaceSearchService
-from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.read_service import (
     SessionCatalogReadService,
 )
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 
 BASE = "/api/v1/session-catalog"

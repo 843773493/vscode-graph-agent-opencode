@@ -1,3 +1,1 @@
-from .service import SessionCatalogService
-
-__all__ = ["SessionCatalogService"]
+"""会话目录各入口显式导入所属模块，纯查询不加载会话执行服务。"""

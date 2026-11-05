@@ -30,7 +30,7 @@ from app.services.business.session_generation.providers import (
     AgentPromptGenerationProvider,
 )
 from app.services.business.session_generation.service import SessionGenerationService
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 

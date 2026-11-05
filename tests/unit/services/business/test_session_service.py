@@ -26,7 +26,7 @@ from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
 )
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

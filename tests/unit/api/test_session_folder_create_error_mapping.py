@@ -17,10 +17,10 @@ from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,
 )
-from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.queue_store import (
     NavigationMutationConflictError,
 )
+from app.services.business.session_navigation.service import SessionCatalogService
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"

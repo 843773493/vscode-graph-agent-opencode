@@ -6,7 +6,7 @@
 
 ```text
 session_navigation/
-├── __init__.py                 对外导出 SessionCatalogService
+├── __init__.py                 无业务导入的包标识；Service 显式从 service 导入
 ├── service.py                  mutation、生命周期与读服务装配
 ├── read_service.py             catalog 快照、投影与树读取
 ├── catalog_query.py            在线与 Gateway 镜像共用的匹配、分页、breadcrumb 与原 cursor

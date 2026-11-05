@@ -18,7 +18,7 @@ from app.api.deps import (
 from app.core import failures
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session_navigation.operations import validate_operation_id
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.infrastructure.workspace_service import WorkspaceService
 
 REQUEST_ID = "req-operation-id-unit"

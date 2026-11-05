@@ -28,10 +28,10 @@ from app.schemas.internal_v2.session_navigation.operations import (
 )
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job.service import JobService, JobState
-from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.operations_service import (
     local_navigation_scope,
 )
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore

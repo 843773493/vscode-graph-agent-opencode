@@ -14,7 +14,7 @@ from app.core.background_task_contracts import BackgroundTaskHandle
 from app.domain.itemized.enums import PayloadKind
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.message_service import MessageService
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_resource_providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,

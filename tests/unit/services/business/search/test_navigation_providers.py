@@ -8,7 +8,7 @@ from app.schemas.internal_v2.search import WorkspaceSearchRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.search.providers import register_navigation_search
 from app.services.business.search.service import WorkspaceSearchService
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from tests.unit.services.business.session_navigation.test_fuzzy_catalog_search import (
     catalog as catalog,  # noqa: PLC0414 - 复用真实 Session／目录 owner 装具。
 )

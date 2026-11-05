@@ -10,7 +10,7 @@ from app.schemas.internal_v2.search import WorkspaceSearchRequest
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.search.providers import register_llm_request_search
 from app.services.business.search.service import WorkspaceSearchService
-from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.infrastructure.llm_request_log_service import (
     LLMRequestLogError,
     LLMRequestLogService,

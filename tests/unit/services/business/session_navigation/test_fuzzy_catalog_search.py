@@ -4,8 +4,8 @@ import pytest
 
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_creation_service, get_session_path_resolver
-from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.catalog_query import encode_catalog_cursor
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.unit.services.business.session_service_test_support import (

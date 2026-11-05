@@ -7,11 +7,9 @@ import pytest
 
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.session_navigation import (
-    SessionCatalogService,
-    thread_search,
-)
 from app.services.business.session_navigation import name_search_budget as budgets
+from app.services.business.session_navigation import thread_search
+from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.mapping import session_catalog_search as catalog_matching
 from tests.unit.services.business.session_navigation.test_fuzzy_catalog_search import (
     catalog as catalog,  # noqa: PLC0414 - 复用真实 catalog 和 Session owner。
