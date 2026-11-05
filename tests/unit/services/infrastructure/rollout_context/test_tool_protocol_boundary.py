@@ -26,6 +26,9 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.business.message_display import project_message_for_display
+from app.services.infrastructure.rollout_context.checkpoint.boundary import (
+    tool_protocol_boundary,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     CONFLICT_CODE,
     ToolProtocolBoundaryConflict,
@@ -364,6 +367,70 @@ def test_model_boundary_validates_each_body_once_and_releases_after_return(
         # 正常与预期冲突返回都必须释放正文；后续独立读取不能沿用本次缓存。
         assert len(storage.storage.read_items(SESSION_ID, thread)) == expected_items
         assert set(validations.values()) == {1}
+
+
+@pytest.mark.parametrize("tool_count", [8, 64, 128])
+def test_parallel_tools_boundary_visits_prefix_indices_linearly(
+    protocol_case, monkeypatch, tool_count: int,
+) -> None:
+    saver, _storage, thread, accepted = protocol_case
+    messages = [AIMessage(
+        id="parallel-tools", content="",
+        tool_calls=[{"name": "read_file", "args": {}, "id": f"parallel-{index}"}
+                    for index in range(tool_count)],
+    ), *[ToolMessage(
+        id=f"parallel-result-{index}", content="工具正文",
+        tool_call_id=f"parallel-{index}", name="read_file",
+    ) for index in range(tool_count)]]
+    arguments = dict(
+        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"], messages=messages,
+    )
+    saver.ensure_request_items(SESSION_ID, thread, **arguments)
+    visits = 0
+
+    def observed_range(*arguments):
+        nonlocal visits
+        for index in range(*arguments):
+            visits += 1
+            yield index
+
+    monkeypatch.setattr(tool_protocol_boundary, "range", observed_range, raising=False)
+    assert saver.prepare_model_call_boundary(
+        SESSION_ID, thread, **arguments, validated_predecessors={},
+    ) == (None, None)
+    print({"parallel_tools": tool_count, "prefix_index_visits": visits})
+    assert visits <= 4 * (tool_count + 2)
+
+
+@pytest.mark.parametrize("completed", [0, 2, 4])
+def test_parallel_tools_keep_exact_safe_cutoffs_and_neighbors(protocol_case, completed: int) -> None:
+    saver, storage, thread, accepted = protocol_case
+    messages = [AIMessage(
+        id="cutoff-tools", content="",
+        tool_calls=[{"name": "read_file", "args": {}, "id": f"cutoff-{index}"}
+                    for index in range(4)],
+    ), *[ToolMessage(
+        id=f"cutoff-result-{index}", content="工具正文",
+        tool_call_id=f"cutoff-{index}", name="read_file",
+    ) for index in range(completed)]]
+    saver.ensure_request_items(
+        SESSION_ID, thread, turn_id=accepted["turn_id"],
+        execution_id=accepted["initial_execution_id"], messages=messages,
+    )
+    with storage.storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+        items = storage.checkpoints.committed_context_items(snapshot, predecessor=None)
+        sequences = storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
+        assert len(sequences) == completed + 2
+        safe = {0, 1, len(sequences)} if completed == 4 else {0, 1}
+        for cutoff in range(len(sequences) + 1):
+            if cutoff in safe:
+                tool_protocol_boundary.validate_tool_protocol_closure(snapshot.connection, sequences, cutoff)
+                continue
+            with pytest.raises(ToolProtocolBoundaryConflict) as error:
+                tool_protocol_boundary.validate_tool_protocol_closure(snapshot.connection, sequences, cutoff)
+            expected = [1, len(sequences)] if completed == 4 else [1]
+            assert [(anchor.cutoff_index, anchor.cutoff_message_sequence)
+                    for anchor in error.value.safe_anchors] == [(index, sequences[index - 1]) for index in expected]
 
 
 @pytest.mark.parametrize("damage", ["body", "projection"])

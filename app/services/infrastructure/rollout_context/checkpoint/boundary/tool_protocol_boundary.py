@@ -122,8 +122,15 @@ def _unsafe_cutoff_indices(
     没有配对行的结果。隐藏的跨 sink 镜像只有在实际 carrier 的唯一声明
     已选中时才可忽略，不向 view 补回任何声明。
     """
-    unsafe: set[int] = set()
     total = len(ordered_sequences)
+    # 并行工具共享 assistant，禁用区间会大量重叠；只登记起止再累加，
+    # 不为每个配对重走全部切点，计算量保持为消息数与配对数之和。
+    coverage_changes = [0] * (total + 2)
+
+    def mark_unsafe(start: int, stop: int) -> None:
+        coverage_changes[start] += 1
+        coverage_changes[stop] -= 1
+
     rows: set[tuple[str, int, int | None]] = set()
     for offset in range(0, total, _QUERY_CHUNK_SIZE):
         chunk = ordered_sequences[offset : offset + _QUERY_CHUNK_SIZE]
@@ -180,27 +187,33 @@ def _unsafe_cutoff_indices(
                 # carrier 配对检查，不能让隐藏镜像制造第二个未闭合工具组。
                 continue
             # 可见 result 的声明被压缩或截去时，不能借 backing 补回可见 call。
-            unsafe.update(range(position[result_sequence] + 1, total + 1))
+            mark_unsafe(position[result_sequence] + 1, total + 1)
             continue
         call_index = position[assistant_sequence]
         if result_sequence is None or result_sequence not in position:
             # result 尚未提交或不在 source view 内：包含 call 的任何更长
             # 前缀都未闭合。
-            unsafe.update(range(call_index + 1, total + 1))
+            mark_unsafe(call_index + 1, total + 1)
             continue
         result_index = position[result_sequence]
         if not paired or result_index <= call_index:
             # 身份错配或 result 早于 call 都属于损坏的配对投影。
-            unsafe.update(range(min(call_index, result_index) + 1, total + 1))
+            mark_unsafe(min(call_index, result_index) + 1, total + 1)
             continue
         # cutoff ∈ (call_index, result_index] 时 call 已入、result 未入。
-        unsafe.update(range(call_index + 1, result_index + 1))
+        mark_unsafe(call_index + 1, result_index + 1)
     for sequence in ordered_sequences:
         carrier = carriers.get(sequence)
         if carrier is not None and carrier.role == "tool" and sequence not in visible_results:
             # 完全没有 declaration 行的真实 result 同样是 orphan，不能因
             # 配对查询零行而被误判为闭合。
-            unsafe.update(range(position[sequence] + 1, total + 1))
+            mark_unsafe(position[sequence] + 1, total + 1)
+    unsafe: set[int] = set()
+    coverage = 0
+    for index in range(total + 1):
+        coverage += coverage_changes[index]
+        if coverage:
+            unsafe.add(index)
     return unsafe
 
 
