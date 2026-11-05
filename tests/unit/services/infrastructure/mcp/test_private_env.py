@@ -101,7 +101,7 @@ def test_invalid_private_env_is_rejected_without_file_or_value_in_error(private_
     assert list((root / ".boxteam/credentials/mcp-inputs").glob("*.json")) == before
 
 
-async def test_original_stdio_sdk_resolves_private_env_only_during_prepare(private_env, monkeypatch):
+async def test_original_stdio_sdk_resolves_private_env_only_during_prepare(private_env, monkeypatch, mcp_session_lifecycle):
     root, _, reference, raw = private_env
     server, = parse_mcp_server_configs({"servers": {"secure": {**raw, "env": {"API_KEY": reference.model_dump(), "PLAIN": "${workspaceRoot}"}}}}, workspace_root=root)
     assert server.private_env == (reference,) and dict(server.connection).get("env") == {"PLAIN": str(root)}
@@ -112,21 +112,21 @@ async def test_original_stdio_sdk_resolves_private_env_only_during_prepare(priva
         pass
 
     @asynccontextmanager
-    async def transport(parameters):
+    async def transport(parameters, process, on_started):
         reached.append(parameters)
         assert parameters.env == {"API_KEY": SECRET, "PLAIN": str(root)}
         raise TransportReached
         yield  # 在原 SDK transport 边界停止，不伪造 initialize 成功。
 
-    monkeypatch.setattr(session_runtime, "stdio_client", transport)
+    monkeypatch.setattr(session_runtime, "mcp_stdio_transport", transport)
     with pytest.raises(TransportReached):
-        async with session_runtime.production_mcp_session_factory(server, lambda: None, workspace_root=root):
+        async with session_runtime.production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, workspace_root=root):
             pytest.fail("不能越过 transport 探针")
     assert SECRET not in repr(server) and len(reached) == 1
     file, = (root / ".boxteam/credentials/mcp-inputs").glob("*.json")
     file.unlink()
     with pytest.raises(ValueError, match="版本不存在"):
-        async with session_runtime.production_mcp_session_factory(server, lambda: None, workspace_root=root):
+        async with session_runtime.production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, workspace_root=root):
             pytest.fail("缺失私有版本不能进入 transport")
     assert len(reached) == 1
 

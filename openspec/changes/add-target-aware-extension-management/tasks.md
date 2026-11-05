@@ -27,6 +27,8 @@
 
   - 2026-11-05 冷态并发归并切片：同安装域按精确制品身份在原 SQLite 事务选定唯一 producer，各 operation 保留独立意图、ID 和回执，共享真实进度／失败／发布；进程退出整批 interrupted，原 ID 不重放，显式新意图才重试。v1→v2 迁移在原事务内核活进程、歧义和成功记录一致性，DDL 与升级语句均归 SQL。真实双 Backend／Gateway 的 warm、cold、cold-failure 三模式 3 passed／170.82 秒，核唯一下载／准备／generation、独立工作区参数与连接、403 原失败及新操作恢复；48 单测、Ruff 与真实 Pyright 通过。准确命令、源码指纹、原始输出与退出码见 `out/tests/temp/frozen_wire_20261105/artifacts/mcp-cold-root-evidence-001.json`；工作区持久引用、旧调用／结果未知占用及物理卸载保护仍未完成，整项保持未勾选。
 
+  - 2026-11-05 唯一 stdio Process 前置切片：启动前冻结原 connection_ref 并在原资源账本登记 unknown，实际 Process 持有 PID／创建时间／wait 退出码，POSIX 核原进程组、Windows 使用 suspended→Job→resume 并核 Job 归零。stdio 复用官方协议类型和同一 ClientSession，删除原无句柄启动链；物理 stopped 与协议失败、目录资格及未结算 invocation 分离。Linux 331 项单元、真实 EOF、原登记／关闭及非合作关闭场景按源码依赖验收；Windows 8 项原生场景及最终受影响单项通过，覆盖真实 exe／cmd／npm／npx。精确合入后50项定向和真实 EOF 1项、Ruff通过，Pyright零错误／4条pywin32来源警告。完整原件与复用边界见 `out/tests/temp/2026/11/05/mcp_process_lifecycle/artifacts/delivery-manifest-v2.json`，共享树收据 `out/tests/temp/2026/11/05/mcp_process_lifecycle/artifacts/root-integration-002.json`。完整generation引用、旧调用／未知占用及物理卸载仍未闭环，2.5不勾选。
+
 ## 3. MCP 与现有 Agent 唯一链路
 
 - [ ] 3.1 在原 MCP 管理服务 seam 消费目标配置、安装及原 MCP owner 的完整对象，迁齐旧 React 连接入口；移除该运行面重复 client、enabled/status 与目录，不复制原列表／详情。

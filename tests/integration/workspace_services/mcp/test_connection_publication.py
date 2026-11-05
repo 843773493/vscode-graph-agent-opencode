@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -13,12 +14,16 @@ from threading import Event, get_ident
 
 import psutil
 import pytest
+from mcp.shared.exceptions import McpError
+from mcp.types import CONNECTION_CLOSED
 
 from app.core.lifecycle import LifetimeScope
+from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogError, McpCatalogOwner
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.workspace_services.mcp.test_full_schema_invocation import (
     SchemaServerCase,
 )
@@ -81,6 +86,45 @@ def contains_error(error: BaseException, expected: BaseException) -> bool:
     return error.__cause__ is not None and contains_error(error.__cause__, expected)
 
 
+@pytest.fixture
+def initializing_exit_owner(request: pytest.FixtureRequest):
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    return McpCatalogOwner(
+        leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
+        raw_config={"servers": {"exiting": {"enabled": True, "transport": "stdio", "command": sys.executable,
+            "args": ["-c", "import sys; sys.stdin.buffer.readline(); sys.exit(17)"]}}},
+        workspace_root=context.workspace_root, event_service=EventChannelService(),
+    ), context
+
+
+async def test_initialize_eof_keeps_protocol_error_and_cold_verified_exit(initializing_exit_owner):
+    owner, context = initializing_exit_owner
+    with pytest.raises(McpCatalogError, match="stage=startup") as caught:
+        await owner.start()
+    errors: list[BaseException] = []
+    pending: list[BaseException] = [caught.value]
+    while pending:
+        error = pending.pop()
+        errors.append(error)
+        if isinstance(error, BaseExceptionGroup):
+            pending.extend(error.exceptions)
+        if error.__cause__ is not None:
+            pending.append(error.__cause__)
+    assert any(isinstance(error, McpError) and error.error.code == CONNECTION_CLOSED for error in errors)
+    assert not owner.started
+    with pytest.raises(RuntimeError, match="尚未启动"):
+        owner.get_tool_ids()
+    record, = [record for record in owner._leases.records_by_kind("mcp_connection")
+               if record.resource_id.startswith(f"mcp-connection:v1:{owner._instance_id}:")]
+    assert record.status == "stopped" and record.process is not None
+    assert record.process.pid is not None and record.process.created_at is not None
+    assert record.process.phase == "exited" and record.process.returncode == 17 and record.process.exit_verified
+    cold = ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json")
+    assert cold.get(record.resource_id) == record
+    assert owner._session_scope is None
+    await owner.shutdown()
+
+
 async def test_close_during_registration_never_publishes_readiness(
     schema_server_case: SchemaServerCase, publication_gate: PublicationGate,
 ) -> None:
@@ -95,7 +139,10 @@ async def test_close_during_registration_never_publishes_readiness(
         closing = asyncio.create_task(runtime.scope.close())
         await asyncio.sleep(0.02)
         assert not opening.done() and not closing.done()
-        assert gate.cold_status() is None and not owner.started
+        assert gate.cold_status() == "unknown" and not owner.started
+        record = ExternalResourceLeaseLedger(state_path=gate.path).get(gate.resource_id)
+        assert record is not None and record.process == runtime.process_state
+        assert record.process is not None and record.process.phase == "running" and not record.process.exit_verified
         gate.release.set()
         with pytest.raises(McpCatalogError, match="stage=startup"):
             await opening
@@ -121,8 +168,8 @@ async def test_start_cancel_and_scope_close_wait_for_same_sdk_cleanup(
     sdk_tasks: list[asyncio.Task[object]] = []
 
     @asynccontextmanager
-    async def observe_cleanup(server, on_change):
-        async with factory(server, on_change) as session:
+    async def observe_cleanup(server, on_change, lifecycle):
+        async with factory(server, on_change, lifecycle) as session:
             task = asyncio.current_task()
             assert task is not None
             sdk_tasks.append(task)
@@ -228,7 +275,11 @@ async def test_registration_settles_before_readiness_or_cancel_returns(
     try:
         await asyncio.wait_for(gate.entered.wait(), 6)
         assert gate.writer_thread != get_ident(), "连接登记仍在事件循环中阻塞"
-        assert gate.cold_status() is None
+        # 启动身份已预登记；running 提交前仍须保留 unknown，不能伪报就绪。
+        assert gate.cold_status() == "unknown"
+        record = ExternalResourceLeaseLedger(state_path=gate.path).get(gate.resource_id)
+        assert record is not None and record.process is not None
+        assert record.process.phase == "running" and record.process.pid is not None and not record.process.exit_verified
         assert not opening.done() and not initialized
         if entry == "startup":
             assert not owner.started
@@ -241,19 +292,19 @@ async def test_registration_settles_before_readiness_or_cancel_returns(
             opening.cancel("重复取消")
             await asyncio.sleep(0.02)
             assert not opening.done(), "取消遗弃了原连接登记或 SDK 清理"
-            assert gate.cold_status() is None
+            assert gate.cold_status() == "unknown"
         gate.release.set()
         if outcome.startswith("cancel"):
             with pytest.raises(asyncio.CancelledError, match="原连接取消") as caught:
                 await opening
             if gate.failure is not None:
                 assert contains_error(caught.value, gate.failure)
-            assert gate.cold_status() == (None if gate.failure else "stopped")
+            assert gate.cold_status() == "stopped"
         elif gate.failure is not None:
             with pytest.raises(Exception) as caught:
                 await opening
             assert contains_error(caught.value, gate.failure)
-            assert gate.cold_status() is None
+            assert gate.cold_status() == "stopped"
         else:
             await opening
             assert gate.cold_status() == "running"
@@ -269,7 +320,10 @@ async def test_registration_settles_before_readiness_or_cancel_returns(
                 await close()
             except ExceptionGroup as error:
                 assert gate.failure is not None and contains_error(error, gate.failure)
-    assert gate.cold_status() == (None if gate.failure else "stopped")
+    assert gate.cold_status() == "stopped"
+    record = ExternalResourceLeaseLedger(state_path=gate.path).get(gate.resource_id)
+    assert record is not None and record.process is not None
+    assert record.process.phase == "exited" and record.process.exit_verified
 
 
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])

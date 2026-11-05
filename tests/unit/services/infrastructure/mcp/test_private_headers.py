@@ -159,7 +159,7 @@ def test_source_jsonc_round_trip_exposes_reference_and_masks_existing_literals(p
     assert SECRET not in json.dumps(redact_source_payload(invalid))
 
 
-async def test_original_http_session_resolves_immediately_before_transport_without_redirects(private_header, monkeypatch):
+async def test_original_http_session_resolves_immediately_before_transport_without_redirects(private_header, monkeypatch, mcp_session_lifecycle):
     root, _, reference = private_header
     server, = parse_mcp_server_configs(_config(reference), workspace_root=root)
     observed: list[httpx.AsyncClient] = []
@@ -179,13 +179,13 @@ async def test_original_http_session_resolves_immediately_before_transport_witho
 
     monkeypatch.setattr(session_runtime, "streamable_http_client", transport)
     with pytest.raises(TransportReached):
-        async with session_runtime.production_mcp_session_factory(server, lambda: None, workspace_root=root):
+        async with session_runtime.production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, workspace_root=root):
             pytest.fail("不应越过 transport 探针")
     assert len(observed) == 1 and observed[0].is_closed
     assert SECRET not in repr(server)
     path, = (root / ".boxteam/credentials/mcp-headers").glob("*.json")
     path.unlink()
     with pytest.raises(ValueError, match="版本不存在"):
-        async with session_runtime.production_mcp_session_factory(server, lambda: None, workspace_root=root):
+        async with session_runtime.production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, workspace_root=root):
             pytest.fail("缺失版本不能启动 transport")
     assert len(observed) == 1

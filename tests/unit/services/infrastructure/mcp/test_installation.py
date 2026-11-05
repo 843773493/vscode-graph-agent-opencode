@@ -97,7 +97,7 @@ def published_artifact(tmp_path: Path, operation: McpInstallationOperationDTO, i
     return McpInstallationOwner(home=tmp_path / "home", backend_id=artifact.binding.backend_id), artifact, dependency
 
 
-async def test_original_sdk_launch_rejects_artifact_changed_after_config_parse(published_artifact: tuple[McpInstallationOwner, McpInstalledArtifactDTO, Path]) -> None:
+async def test_original_sdk_launch_rejects_artifact_changed_after_config_parse(published_artifact: tuple[McpInstallationOwner, McpInstalledArtifactDTO, Path], mcp_session_lifecycle) -> None:
     owner, artifact, dependency = published_artifact
     raw = {"transport": "stdio", "managed_launch": artifact.binding.model_dump()}
     server, = parse_mcp_server_configs({"servers": {"managed": raw}}, workspace_root=dependency.parent,
@@ -105,7 +105,7 @@ async def test_original_sdk_launch_rejects_artifact_changed_after_config_parse(p
     assert owner.resolve(artifact.binding, verify=True) == artifact.command
     dependency.write_text("VALUE = 'tampered'\n", encoding="utf-8")
     with pytest.raises(ValueError, match="制品内容已改变"):
-        async with production_mcp_session_factory(server, lambda: None, installation_owner=owner):
+        async with production_mcp_session_factory(server, lambda: None, mcp_session_lifecycle, installation_owner=owner):
             pytest.fail("被篡改的 generation 不得进入原 SDK session")
     assert owner.artifacts() == [artifact]
     await owner.close()

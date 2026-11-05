@@ -23,6 +23,7 @@ from typing import ClassVar, Literal, Never, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter
 
+from app.core.child_process import ChildProcessState
 from app.core.failures import failure_detail
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.services.infrastructure.events.channel_events import (
@@ -44,6 +45,7 @@ class ResourceRecord:
     created_by_turn_id: str | None
     status: str = "running"
     updated_at: str = ""
+    process: ChildProcessState | None = None
 
 
 @dataclass(slots=True)
@@ -111,6 +113,8 @@ class ExternalResourceLeaseLedger:
         kind: str,
         lifetime_scope: str,
         created_by_turn_id: str | None = None,
+        initial_status: Literal["running", "unknown"] = "running",
+        process: ChildProcessState | None = None,
     ) -> ResourceRecord:
         """幂等登记身份；已有资源的状态与保留范围由实际 owner 发布。"""
         with self._write_lock:
@@ -125,6 +129,8 @@ class ExternalResourceLeaseLedger:
                     kind=kind,
                     lifetime_scope=lifetime_scope,
                     created_by_turn_id=created_by_turn_id,
+                    status=initial_status,
+                    process=process,
                     updated_at=self._now(),
                 )
             else:
@@ -197,6 +203,8 @@ class ExternalResourceLeaseLedger:
         kind: str,
         lifetime_scope: str = "session",
         created_by_turn_id: str | None = None,
+        initial_status: Literal["running", "unknown"] = "running",
+        process: ChildProcessState | None = None,
     ) -> ResourceRecord:
         """登记外部 owner 已核实的资源身份，不创建或停止资源。"""
         if kind not in self.EXTERNAL_RESOURCE_KINDS:
@@ -206,6 +214,8 @@ class ExternalResourceLeaseLedger:
             kind=kind,
             lifetime_scope=lifetime_scope,
             created_by_turn_id=created_by_turn_id,
+            initial_status=initial_status,
+            process=process,
         )
 
     def acquire_operation(
@@ -451,6 +461,7 @@ class ExternalResourceLeaseLedger:
     def update_external_state(
         self, resource_id: str, *, lifetime_scope: str, status: str,
         unresolved_lease_id: str | None = None,
+        process: ChildProcessState | None = None,
     ) -> None:
         """只有实际 owner 已核实的范围与运行事实能更新登记投影。"""
         with self._write_lock:
@@ -464,9 +475,11 @@ class ExternalResourceLeaseLedger:
                 raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
             # 列表读取会逐项同步；相同状态不重写并 fsync 整个账本。
             if (record.lifetime_scope == lifetime_scope and record.status == status
+                    and (process is None or process == record.process)
                     and (lease is None or lease.status not in {"active", "dispatching"})):
                 return
-            record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now())
+            record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now(),
+                process=process if process is not None else record.process)
             changed_leases = ()
             if lease is not None and lease.status in {"active", "dispatching"}:
                 # 只保留本次未核实操作；同资源其它已返回的操作仍正常收尾。
@@ -570,7 +583,7 @@ class ExternalResourceLeaseLedger:
 
     @staticmethod
     def _copy_record(record: ResourceRecord) -> ResourceRecord:
-        return ResourceRecord(**asdict(record))
+        return replace(record)
 
     @staticmethod
     def _copy_lease(lease: ResourceLease) -> ResourceLease:

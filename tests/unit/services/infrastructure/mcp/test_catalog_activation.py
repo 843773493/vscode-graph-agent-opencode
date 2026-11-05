@@ -55,6 +55,7 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
     extension_schema_hash,
 )
+from app.services.infrastructure.mcp.session_runtime import McpSessionLifecycle
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
     ResourceRegistryCapture,
@@ -114,7 +115,7 @@ class CatalogSessionFactory:
 
     @asynccontextmanager
     async def __call__(
-        self, server: McpServerConfig, notify: Callable[[], None],
+        self, server: McpServerConfig, notify: Callable[[], None], lifecycle: McpSessionLifecycle,
     ) -> AsyncIterator[CatalogSession]:
         assert server.server_id == "mini"
         self.notify = notify

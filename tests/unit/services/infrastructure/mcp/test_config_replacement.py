@@ -41,8 +41,8 @@ class ReplacementFactory(FakeMcpSessionFactory):
         self.fail_server = None
         self.notify_during_list = False
 
-    def __call__(self, server, notify):
-        original = super().__call__(server, notify)
+    def __call__(self, server, notify, lifecycle):
+        original = super().__call__(server, notify, lifecycle)
         address = server.connection["command"] if server.transport == "stdio" else server.connection["url"]
         session = self.sessions[server.server_id]
 
@@ -376,6 +376,9 @@ async def test_stdio_stop_is_journaled_before_close_and_replacement_cannot_reuse
         assert case.effects == [{"resource": "mcp_connection", "action": "stop", "server_id": "alpha", "connection_ref": binding.connection_ref}]
         assert case.owner.publication_snapshot().status == "unavailable"
         assert not old.running
+        snapshot = next(server for server in case.owner.list_servers() if server.server_id == "alpha")
+        assert snapshot.status == "failed" and snapshot.connection_ref is None
+        assert [tool.tool_id for tool in snapshot.tools] == ["mcp__alpha__echo"]
         with pytest.raises(ExtensionTargetResolutionError), case.owner.execution_handles.execution_target(binding, use):
             pytest.fail("停止准入后不能派发原调用")
         await old_close()

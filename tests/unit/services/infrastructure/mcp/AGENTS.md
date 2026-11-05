@@ -5,6 +5,7 @@
 ```text
 mcp/
 ├── AGENTS.md
+├── conftest.py                        # 直接调用原工厂的生命周期 fixture
 ├── test_catalog_activation.py          # catalog 成员向资源平台发布与激活
 ├── test_catalog_owner.py               # owner 生命周期、刷新、generation 与事件
 ├── test_config.py                      # MCP 配置规范化与校验
@@ -12,6 +13,7 @@ mcp/
 ├── test_extension_binding_errors.py    # 完整 schema／冷恢复拒绝的公开说明与原始原因
 ├── test_naming.py                      # MCP server/tool 命名合同
 ├── test_session_lifecycle.py           # Server 原 task、取消、失败关闭及通知失效
+├── test_stdio_transport.py             # 关闭原进程后排空阻塞管道读取
 ├── test_config_replacement.py          # HTTP 候选隔离、stdio 停启、共同切换与退役资格排空
 ├── test_invocation_leases.py           # 精确调用占用、冷启动核对与写盘失败
 ├── test_tool_adapter.py                # SDK 完整分页、原参数与协议结果转换

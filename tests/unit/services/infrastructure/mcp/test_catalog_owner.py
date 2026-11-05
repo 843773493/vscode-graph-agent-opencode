@@ -88,7 +88,7 @@ async def test_startup_failure_keeps_exception_chain_without_public_raw_text(
 ) -> None:
     failure, expected = startup_failure
 
-    def fail_connect(server, on_change):
+    def fail_connect(server, on_change, lifecycle):
         raise failure
 
     owner = McpCatalogOwner(
@@ -221,7 +221,8 @@ async def test_management_snapshot_tracks_publication_and_exact_connection_gener
 
         await owner.disconnect_server("mini", admit=lambda: None)
         disconnected = owner.management_snapshot()
-        assert next(server for server in disconnected.servers if server.server_id == "mini").connection_ref is None
+        stopped = next(server for server in disconnected.servers if server.server_id == "mini")
+        assert stopped.connection_ref is None and stopped.status == "failed" and stopped.tools == ()
         await owner.connect_server("mini", admit=lambda: None, on_initialized=lambda: None)
         reconnected = owner.management_snapshot()
         current = next(server for server in reconnected.servers if server.server_id == "mini")

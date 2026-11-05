@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import StdioConnection, StreamableHttpConnection
 
+from app.core.child_process import ChildProcessState, OwnedChildProcess
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.services.infrastructure.mcp.config import McpServerConfig
@@ -25,10 +27,10 @@ from app.services.infrastructure.mcp.private_inputs import (
     stdio_env_definition,
 )
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
+from app.services.infrastructure.mcp.transport.stdio import mcp_stdio_transport
 from mcp import StdioServerParameters
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
-from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 
@@ -38,6 +40,12 @@ if TYPE_CHECKING:
 McpChangeNotifyCallback: TypeAlias = Callable[[], None]
 
 
+@dataclass(frozen=True, slots=True)
+class McpSessionLifecycle:
+    process: OwnedChildProcess
+    on_process_started: Callable[[], Awaitable[None]]
+
+
 class McpServerSessionPort(Protocol):
     async def list_tools(self) -> list[BaseTool]: ...
 
@@ -45,7 +53,7 @@ class McpServerSessionPort(Protocol):
 
 
 McpSessionFactory: TypeAlias = Callable[
-    [McpServerConfig, McpChangeNotifyCallback],
+    [McpServerConfig, McpChangeNotifyCallback, McpSessionLifecycle],
     AbstractAsyncContextManager[McpServerSessionPort],
 ]
 
@@ -64,7 +72,7 @@ class _McpServerSession:
 
 @asynccontextmanager
 async def production_mcp_session_factory(
-    server: McpServerConfig, on_tools_list_changed: McpChangeNotifyCallback,
+    server: McpServerConfig, on_tools_list_changed: McpChangeNotifyCallback, lifecycle: McpSessionLifecycle,
     *, workspace_root: Path | None = None, oauth_provider: McpOAuthProvider | None = None,
     installation_owner: McpInstallationOwner | None = None,
 ) -> AsyncIterator[McpServerSessionPort]:
@@ -102,10 +110,10 @@ async def production_mcp_session_factory(
                 for reference in server.private_env:
                     env[reference.input_key] = await asyncio.to_thread(store.resolve_env, reference,
                         server_id=server.server_id, input_key=reference.input_key, definition_digest=definition)
-            async with stdio_client(StdioServerParameters(
+            async with mcp_stdio_transport(StdioServerParameters(
                 command=connection["command"], args=connection["args"],
                 env=env, cwd=connection.get("cwd"),
-            )) as streams:
+            ), lifecycle.process, lifecycle.on_process_started) as streams:
                 yield streams
         else:
             connection = cast(StreamableHttpConnection, server.connection)
@@ -136,14 +144,16 @@ async def production_mcp_session_factory(
 
 class McpServerRuntime:
     def __init__(
-        self, *, server: McpServerConfig, generation: int,
+        self, *, server: McpServerConfig, generation: int, connection_ref: str,
         session_factory: McpSessionFactory, on_change: McpChangeNotifyCallback,
         on_failure: Callable[[McpServerRuntime, BaseException], None], scope: LifetimeScope,
         on_started: Callable[[McpServerRuntime], Awaitable[None]],
+        on_preparing: Callable[[McpServerRuntime], Awaitable[None]],
         on_closed: Callable[[McpServerRuntime, bool], Awaitable[None]],
     ) -> None:
         self.server = server
         self.generation = generation
+        self.connection_ref = connection_ref
         self.scope = scope
         self.last_relist_error: str | None = None
         self.relist_sequence = 0
@@ -156,7 +166,9 @@ class McpServerRuntime:
         self._on_change = changed
         self._on_failure = on_failure
         self._on_started = on_started
+        self._on_preparing = on_preparing
         self._on_closed = on_closed
+        self.lifecycle = McpSessionLifecycle(OwnedChildProcess(connection_ref), lambda: self._on_preparing(self))
         self._session: McpServerSessionPort | None = None
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
@@ -166,6 +178,10 @@ class McpServerRuntime:
         self._task: asyncio.Task[None] | None = None
         # scope 释放回调持有并排空原 task，不能在释放 task 中退出 SDK 上下文。
         scope.register(self.close, label=f"mcp-session:{server.server_id}:{generation}")
+
+    @property
+    def process_state(self) -> ChildProcessState | None:
+        return self.lifecycle.process.state if self.server.transport == "stdio" else None
 
     @property
     def running(self) -> bool:
@@ -203,7 +219,8 @@ class McpServerRuntime:
 
     async def _serve(self) -> None:
         try:
-            async with self._session_factory(self.server, self._on_change) as session:
+            await self._on_preparing(self)
+            async with self._session_factory(self.server, self._on_change, self.lifecycle) as session:
                 self._session = session
                 await self._on_started(self)
                 self._ready.set()
@@ -218,7 +235,13 @@ class McpServerRuntime:
         finally:
             self._session = None
             try:
-                await self._on_closed(self, self._failure is None)
+                if self.process_state is not None and self.process_state.phase == "reserved":
+                    # 工厂在进入传输前已拒绝／取消；尚无实际进程，核实未创建事实。
+                    await run_cleanup_shielded(self.lifecycle.process.close)
+                # 协议失败不改变原进程已退出的事实；未知调用仍由原 invocation lease 保留。
+                process = self.process_state
+                verified = process.exit_verified if process is not None else self._failure is None
+                await self._on_closed(self, verified)
             except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001 - 原task保存持久终态失败，交回start/close。
                 self._close_failed = True
                 self._failure = error if self._failure is None else BaseExceptionGroup(

@@ -898,10 +898,11 @@ class McpCatalogOwner:
             self._connection_generation += 1
             generation = self._connection_generation
             return McpServerRuntime(
-                server=server, generation=generation, session_factory=session_factory or self._session_factory,
+                server=server, generation=generation, connection_ref=f"mcp-connection:v1:{self._instance_id}:{generation}",
+                session_factory=session_factory or self._session_factory,
                 on_change=self._make_tools_list_changed_callback(server.server_id, generation),
                 on_failure=self._handle_session_failure, on_started=self._handle_session_started,
-                on_closed=self._handle_session_closed,
+                on_preparing=self._handle_session_preparing, on_closed=self._handle_session_closed,
                 scope=self._session_scope.child(f"server:{server.server_id}:{generation}"),
             )
 
@@ -1009,13 +1010,20 @@ class McpCatalogOwner:
                 readiness_overrides={server_id: "authorization_required"},
             )
 
-    async def _handle_session_started(self, runtime: McpServerRuntime) -> None:
+    async def _handle_session_preparing(self, runtime: McpServerRuntime) -> None:
         # 原session task串行登记和关闭；不跨worker持有目录publication锁。
         # TODO(5.4)：封存资格/调用占用等同步访问及整个operation/shutdown期限仍须收口。
-        await run_sync_shielded(
-            self._leases.register_external,
-            resource_id=self._connection_ref(runtime), kind="mcp_connection", lifetime_scope="workspace",
-        )
+        def commit() -> None:
+            resource_id = self._connection_ref(runtime)
+            self._leases.register_external(resource_id=resource_id, kind="mcp_connection",
+                lifetime_scope="workspace", initial_status="unknown", process=runtime.process_state)
+            self._leases.update_external_state(resource_id, lifetime_scope="workspace", status="unknown", process=runtime.process_state)
+
+        await run_sync_shielded(commit)
+
+    async def _handle_session_started(self, runtime: McpServerRuntime) -> None:
+        await run_sync_shielded(self._leases.update_external_state, self._connection_ref(runtime),
+            lifetime_scope="workspace", status="running", process=runtime.process_state)
 
     async def _handle_session_closed(self, runtime: McpServerRuntime, verified: bool) -> None:
         resource_id = self._connection_ref(runtime)
@@ -1023,13 +1031,13 @@ class McpCatalogOwner:
         def commit() -> None:
             if self._leases.get(resource_id) is not None:
                 self._leases.update_external_state(
-                    resource_id, lifetime_scope="workspace", status="stopped" if verified else "unknown",
+                    resource_id, lifetime_scope="workspace", status="stopped" if verified else "unknown", process=runtime.process_state,
                 )
 
         await run_sync_shielded(commit)
 
     def _connection_ref(self, runtime: McpServerRuntime) -> str:
-        return f"mcp-connection:v1:{self._instance_id}:{runtime.generation}"
+        return runtime.connection_ref
 
     def get_tool_ids(self) -> frozenset[str]:
         return frozenset(self.publication_snapshot().tools)
@@ -1372,10 +1380,11 @@ class McpCatalogOwner:
             runtime = self._runtimes.get(server.server_id)
             connection_ref = self._connection_ref(runtime) if runtime is not None and runtime.running else None
             connected = connection_ref is not None
-            known_authorization = self._publication is not None and any(
-                self._publication.definitions[descriptor.tool_id].readiness == "authorization_required"
-                for descriptor in self._descriptors_by_server.get(server.server_id, ())
-            )
+            descriptors = self._descriptors_by_server.get(server.server_id, ())
+            known_readiness = {
+                self._publication.definitions[descriptor.tool_id].readiness
+                for descriptor in descriptors
+            } if self._publication is not None else set()
             snapshots.append(
                 McpServerSnapshot(
                     server_id=server.server_id,
@@ -1384,9 +1393,10 @@ class McpCatalogOwner:
                     status=(
                         "disabled" if not server.enabled else
                         "ready" if connected else
-                        "authorization_required" if known_authorization or runtime is not None and runtime.authorization_required else "failed"
+                        "authorization_required" if "authorization_required" in known_readiness or runtime is not None and runtime.authorization_required else "failed"
                     ),
-                    tools=self._descriptors_by_server.get(server.server_id, ()) if connected else (),
+                    # 失败／关闭保留原描述；主动断开沿唯一 publication 的 readiness 隐去管理视图工具。
+                    tools=descriptors if runtime is not None and "disconnected" not in known_readiness else (),
                     last_relist_error=
                     runtime.last_relist_error if runtime is not None else None,
                     connection_ref=connection_ref,

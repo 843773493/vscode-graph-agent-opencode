@@ -25,6 +25,7 @@ app/core/
 │   ├── resource_uri.py
 │   └── exceptions.py / failures.py
 ├── 并发、生命周期与后台工作
+│   ├── child_process/（直接子进程句柄、原容器与退出核验）
 │   ├── key_lock_pool.py / lifecycle.py / session_lifecycle_gate.py
 │   ├── shielded_cleanup.py / phase_observer.py / job_event_bus.py
 │   ├── background_task_contracts.py / background_task_registry.py
@@ -47,6 +48,7 @@ app/core/
 
 ## 共享原语与专用子包说明
 
+- `child_process/`：直接持有 AnyIO Process 与创建时原进程组／Job 的唯一监督边界；记录预留身份、真实 PID/创建时刻及 wait 后的退出核实，不处理 MCP、安装或调用租约。Windows 原生依赖沿 `runtime/windows_process.py` 懒加载，不扫描进程树或增加启动包装进程。
 - `http_cache.py`：对显式登记的 HTTP 路由模板统一设置失败响应 no-store，Backend 与 Gateway 共用；沿 Starlette 的路由模板匹配，不解析资源 URI、不处理权限或正文校验器，不改变其它接口策略。
 - `shielded_cleanup.py`：同步 worker 结算前保留调用方准入；线程桥接以结果值传递原异常，再在原异步任务抛出，保留异常身份、cause 与 notes，避免标准库重建 TimeoutError 等异常。正常返回的异常对象仍为返回值；取消继续等待 worker 结算。
 - `turn_execution_scope.py`：Turn 注册表持有原 scope／inbox 直到资源与控制文件清理成功；失败或等待者取消保留同一身份供重试，迟到关闭须核对象身份，不得删除后继登记或文件。inbox 经异步 open 加载，控制文件读写及删除交既有受保护 worker，提交结算后才在事件循环发布命令；控制提交与关闭沿原锁串行，不新增写入链。清理执行与重试仍由原 LifetimeScope 单点拥有，不新增关闭任务表。

@@ -8,10 +8,15 @@ from contextlib import asynccontextmanager
 import anyio
 import pytest
 
+from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogError, McpCatalogOwner
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionTargetResolutionError,
+)
+from app.services.infrastructure.mcp.invocation import McpResourceUse
 from tests.support.mcp.session_doubles import FakeMcpSessionFactory
 
 
@@ -31,8 +36,8 @@ def lifecycle_factory():
             self.cleanup_entered = asyncio.Event()
             self.cleanup_release = asyncio.Event()
 
-        def __call__(self, server, on_change):
-            original = super().__call__(server, on_change)
+        def __call__(self, server, on_change, lifecycle):
+            original = super().__call__(server, on_change, lifecycle)
 
             async def crash_when_requested():
                 await self.crash.wait()
@@ -168,6 +173,25 @@ async def test_cancel_start_drains_initializing_server(lifecycle_owner, lifecycl
     assert not lifecycle_owner.started
 
 
+async def test_connection_identity_is_persisted_before_factory_admission(lifecycle_owner, lifecycle_factory):
+    owner, factory = lifecycle_owner, lifecycle_factory
+    factory.block_connect = True
+    starting = asyncio.create_task(owner.start())
+    await asyncio.wait_for(factory.connecting.wait(), 2)
+    runtime = owner._runtimes["alpha"]
+    record = owner._leases.get(runtime.connection_ref)
+    assert record is not None and record.status == "unknown"
+    assert record.process is not None and record.process.instance_id == runtime.connection_ref
+    assert record.process.phase == "reserved" and record.process.pid is None
+    assert not record.process.exit_verified
+    starting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await starting
+    record = owner._leases.get(runtime.connection_ref)
+    assert record is not None and record.process is not None
+    assert record.process.phase == "not_started" and record.process.exit_verified
+
+
 @pytest.mark.parametrize("request_close_first", [False, True])
 async def test_scope_close_does_not_cancel_initializing_session_cleanup_twice(
     lifecycle_owner, lifecycle_factory, request_close_first,
@@ -219,7 +243,11 @@ async def test_startup_and_cleanup_failures_keep_both_causes(lifecycle_owner, li
     assert lifecycle_factory.closed == lifecycle_factory.entered
     assert lifecycle_owner._session_scope is not None
     assert lifecycle_owner._session_scope.state == "close_failed"
-    assert {record.status for record in lifecycle_owner._leases.records_by_kind("mcp_connection")} == {"unknown"}
+    records = lifecycle_owner._leases.records_by_kind("mcp_connection")
+    assert {record.status for record in records} == {"stopped"}
+    # 显式 session 替身未创建进程；物理事实不抹除上面的 cleanup_failed 与原异常。
+    assert all(record.process is not None and record.process.phase == "not_started" and record.process.exit_verified
+               for record in records)
 
 
 async def test_sdk_task_failure_invalidates_publication_and_rejects_late_notification(
@@ -239,6 +267,8 @@ async def test_sdk_task_failure_invalidates_publication_and_rejects_late_notific
     try:
         await asyncio.wait_for(wait_failed(), 2)
         assert owner.publication_snapshot().status == "unavailable"
+        assert all(server.connection_ref is None for server in owner.list_servers())
+        assert all([tool.remote_name for tool in server.tools] == ["echo"] for server in owner.list_servers())
         assert owner.catalog_revision() == revision
         assert all(snapshot.last_relist_error for snapshot in owner.list_servers())
         before = tuple(publications)
@@ -250,6 +280,36 @@ async def test_sdk_task_failure_invalidates_publication_and_rejects_late_notific
         unsubscribe()
         await owner.shutdown()
     assert factory.closed == factory.entered
+
+
+async def test_explicit_disconnect_hides_known_tools_while_original_cleanup_is_pending(
+    lifecycle_owner, lifecycle_factory,
+):
+    owner, factory = lifecycle_owner, lifecycle_factory
+    await owner.start()
+    binding = owner.binding_snapshot()
+    with owner.execution_handles.reserve_model_call(binding, session_id="session", thread_id="thread", model_call_id="model") as retain:
+        retain([{"name": "invoke_extension_tool", "id": "call", "args": {"tool_name": "mcp__alpha__echo"}}])
+    use = McpResourceUse("holder", software_tool_operation_id("mcp_call", "session", "thread", "model", "call"), "session", "thread", "model")
+    factory.block_cleanup = True
+    closing = asyncio.create_task(owner.disconnect_server("alpha", admit=lambda: None))
+    try:
+        await asyncio.wait_for(factory.cleanup_entered.wait(), 2)
+        assert not closing.done()
+        disconnected = next(server for server in owner.list_servers() if server.server_id == "alpha")
+        assert disconnected.status == "failed" and disconnected.connection_ref is None
+        assert disconnected.tools == ()
+        assert [tool.tool_id for tool in owner._descriptors_by_server["alpha"]] == ["mcp__alpha__echo"]
+        assert owner.publication_snapshot().definitions["mcp__alpha__echo"].readiness == "disconnected"
+        with pytest.raises(ExtensionTargetResolutionError), owner.execution_handles.execution_target(binding.resolve("mcp__alpha__echo"), use):
+            pytest.fail("主动断开已撤销原调用资格，不能派发")
+        factory.cleanup_release.set()
+        await closing
+        assert next(server for server in owner.list_servers() if server.server_id == "alpha").tools == ()
+    finally:
+        factory.cleanup_release.set()
+        await asyncio.gather(closing, return_exceptions=True)
+        await owner.shutdown()
 
 
 async def test_close_failure_remains_visible_and_blocks_reopening(lifecycle_owner, lifecycle_factory):

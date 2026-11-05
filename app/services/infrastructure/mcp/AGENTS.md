@@ -10,8 +10,9 @@
 - MCP Server 连接生命周期、工具目录 relist/通知消费/generation lease 与调用、状态查询。
 - `connection_service.py` 协调持久连接意图、短观察、deadline、取消与私有 OAuth 回调；实际网络及目录仍由原 Owner 发布。`operation_store.py` 只使用唯一 WorkspaceStateStore，持久幂等 alias 与安全状态，不保存授权 URL、code、state 或 token。运行时断开不改 JSONC，重启仍按已启用配置创建新连接；遗留操作只对账，不重放交换。
 - `session_runtime.py` 在每个 Server 的原 task 中创建、初始化并关闭 SDK session；现有 LifetimeScope 持有关闭与排空回调，外层启动／关闭 task 不拥有 SDK CancelScope。目录发布和通知 fencing 仍只由 `McpCatalogOwner` 决定。
-- 原 session task 通过异步回调等待唯一资源账本登记后才通知就绪，SDK 退出后等待关闭投影；两者经原 worker 串行结算，不持目录 publication 锁。启动取消排空原 task，关闭及迟到写盘错误交回原 owner，不在三个连接入口重新登记。
-- stdio 与 Streamable HTTP 统一使用 SDK transport 和 `CancellableMcpClientSession`；`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease。取消通知按原 RPC ID 投递，投递成功不代表远端停止。
+- 原 session task 在创建前先经原资源账本预留 connection_ref，真实 spawn 后登记原 PID／创建时刻，初始化成功后才登记 running 并通知就绪；退出经原 Process.wait 与原容器核实后投影原记录。各次写入仍在同一原 task 的受保护 worker 中串行结算，不持目录 publication 锁；启动取消排空原 task，不在三个连接入口重新登记。
+- `transport/stdio.py` 是唯一 stdio transport，使用官方 StdioServerParameters、JSONRPCMessage／SessionMessage 编解码并持有通用 Process 边界；Streamable HTTP 沿原 SDK transport。两者继续共用原 `CancellableMcpClientSession`，不保留第二 stdio 分路。`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease；取消通知投递成功不代表远端停止。
+- 管理视图在原 runtime 失败／关闭期间保留唯一已知 descriptors，执行准入与 connection_ref 仍只来自真实 running；主动断开依唯一 publication.definitions 的 disconnected readiness 保持工具列表为空，不建立第二目录或状态源。
 - `mcp.catalog/*` 目录事件合同的发布接线。
 - MCP Tool 名称映射和 LangChain 适配。
 - `tool_adapter.py` 是 SDK 完整分页和调用的唯一工具适配入口；公开参数不能与 Python 注入参数重名后被吞掉，协议结果继续复用现有库转换，不另写传输协议。

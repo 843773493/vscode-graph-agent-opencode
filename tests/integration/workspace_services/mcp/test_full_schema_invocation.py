@@ -133,6 +133,14 @@ async def test_real_stdio_lifecycle_is_owned_across_distinct_caller_tasks(
     await asyncio.create_task(case.owner.start())
     runtimes = tuple(case.owner._runtimes.values())
     try:
+        for runtime in runtimes:
+            process = runtime.lifecycle.process.process
+            assert process is not None and runtime.process_state is not None
+            assert runtime.process_state.pid == process.pid and runtime.process_state.created_at is not None
+            record = case.owner._leases.get(runtime.connection_ref)
+            assert record is not None and record.status == "running" and record.process == runtime.process_state
+            cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+            assert cold.get(runtime.connection_ref) == record
         case.publish({"type": "object", "required": ["text"]})
         await asyncio.create_task(case.owner.relist_servers_without_notifications())
         result = await asyncio.create_task(case.invoker().ainvoke({
@@ -145,6 +153,10 @@ async def test_real_stdio_lifecycle_is_owned_across_distinct_caller_tasks(
     assert not case.owner.started
     for runtime in runtimes:
         assert runtime._task is not None and runtime._task.done() and not runtime.running
+        assert runtime.process_state is not None and runtime.process_state.phase == "exited"
+        assert runtime.process_state.exit_verified and runtime.process_state.returncode == 0
+        record = case.owner._leases.get(runtime.connection_ref)
+        assert record is not None and record.status == "stopped" and record.process == runtime.process_state
 
 
 @pytest.mark.parametrize("result_mode", ["success", "error"])

@@ -110,6 +110,9 @@ async def test_noncooperative_stdio_obeys_close_deadline_without_overlapping_ins
                 assert server["tools"][0]["tool_id"] == "mcp__schema__probe"
                 assert [(row["phase"], row["version"]) for row in case.phases()] == [("start", "old"), ("eof", "old")]
                 assert psutil.pid_exists(old_pid)
+                records = json.loads((backend.mount.workspace_root / ".boxteam/resources.json").read_text())["records"]
+                old_record = next(record for record in records if record["resource_id"] == original["connection_ref"])
+                assert old_record["process"]["pid"] == old_pid and not old_record["process"]["exit_verified"]
                 with pytest.raises(portalocker.exceptions.LockException), portalocker.Lock(case.lock, timeout=0):
                     pytest.fail("超时后真实关闭尚未结束，不能释放单实例锁")
                 failed = backend.facts()
@@ -136,6 +139,11 @@ async def test_noncooperative_stdio_obeys_close_deadline_without_overlapping_ins
             else:
                 assert status["healthy"] and elapsed < deadline
             assert not psutil.pid_exists(old_pid)
+            records = json.loads((backend.mount.workspace_root / ".boxteam/resources.json").read_text())["records"]
+            old_record = next(record for record in records if record["resource_id"] == original["connection_ref"])
+            assert old_record["status"] == "stopped" and old_record["process"]["pid"] == old_pid
+            assert old_record["process"]["phase"] == "exited" and old_record["process"]["returncode"] == -9
+            assert old_record["process"]["exit_verified"]
             phases = case.phases()
             assert [(row["phase"], row["version"]) for row in phases] == [
                 ("start", "old"), ("eof", "old"), ("sigterm", "old"),

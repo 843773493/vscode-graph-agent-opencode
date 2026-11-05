@@ -21,7 +21,8 @@ app/runtime/
 ├── 原生命令保护
 │   ├── native_command.py      共用监督器入口与有界标准流收集
 │   ├── posix_job.py           独立期限、每进程数据段限额及进程组回收
-│   └── windows_job.py         Windows Job Object整树内存、期限及退出回收
+│   ├── windows_job.py         Windows Job Object整树内存、期限及退出回收
+│   └── windows_process.py     长驻子进程真实句柄；挂入原 Job 后恢复并核实退出
 ├── 原生文件系统
 │   └── windows_fs.py          pywin32懒加载、目录句柄同步与私有ACL读写
 ├── 辅助服务传输
@@ -48,6 +49,7 @@ app/runtime/
 - 依赖提供协议优先于直接 import 具体实现；新增外部依赖时同步在协议与 `app/container.py` 装配处补齐，并移除旧的兼容分支（发现 `hasattr` / TODO 兼容分支应尽快消除）。
 - 懒加载：需要重依赖的模块只在运行时真正使用时导入，不要提到模块顶层。
 - Windows文件系统的pywin32依赖只在`windows_fs.py`函数执行时加载；目录句柄与ACL错误保留公共文件系统的OSError子类及Windows错误码，不回退到外部权限命令或吞掉查询失败。
+- `windows_process.py` 只适配通用子进程边界的长驻 Process／管道：原线程挂入 Job 前保持 suspended，失败须终止并等待原进程、释放原句柄；不承担原生命令监督器的期限／内存预算或 MCP 业务。pywin32 仅在方法执行时加载。
 - 失败必须显式抛出包含上下文的异常，禁止静默降级。
 - 本目录的单元测试放在 `tests/unit/runtime/`，外部边界（模型、认证服务）必须显式替换。
 - ChatGPT/Codex 凭据读取和结构拒绝只向普通调用方公布逻辑 artifact、阶段及适用的原生错误事实；文件位置和原始读取异常留在诊断，日志不得记录凭据正文。凭据迁移、同步与写入仍由本模块唯一持有。
