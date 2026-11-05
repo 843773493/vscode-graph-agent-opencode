@@ -152,7 +152,7 @@ async def test_committed_lineage_corruption_rejects_public_read_and_cold_restore
 
     agents.unlink()
     with RolloutCheckpointSaver(resolver.sessions_root) as cold:
-        restored = cold.project_context_plan_to_history_with_diagnostics(session, thread, original.as_sealed_plan())
+        restored = cold.read_context_assembly_history(session, thread, original.assembly_id)
         assert restored.resource_activation == activation
         assert canonical_json_bytes(restored.assembly.to_dict()) == originals[original.assembly_id]
     recovered = await case.client.post("/api/v1/context/read", json=query)

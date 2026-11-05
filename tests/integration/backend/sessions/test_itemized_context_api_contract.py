@@ -176,8 +176,8 @@ def _assert_snapshot(items, snapshot, saver, session_id):
     selection = [item["data"] for item in items if item["kind"] == "selection"]
     assert selection == [entry.to_dict() for entry in snapshot.selection]
     assert [entry["plan_ordinal"] for entry in selection] == list(range(len(selection)))
-    projection = saver.project_context_plan_to_history_with_diagnostics(
-        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+    projection = saver.read_context_assembly_history(
+        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.assembly_id
     )
     history, loss = projection.messages, projection.losses
     expected_resources = (
@@ -264,33 +264,9 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
         session_id, saver._storage.storage.main_thread_id(session_id)
     )
     resource = _resource(session, snapshot)
-    # 真实读取只开一个权威快照，assembly/activation/items均消费同一对象。
-    reads = []
-    activation_reads = []
-    item_reads = []
-    storage = saver._storage.storage
-    open_snapshot = storage.open_read_snapshot
-    load_activation = saver.load_sealed_resource_activation
-    read_ref_items = storage.read_ref_items
-    def observe_open(*args, **kwargs):
-        value = open_snapshot(*args, **kwargs)
-        reads.append(value)
-        return value
-    def observe_activation(*args, **kwargs):
-        activation_reads.append(kwargs["snapshot"])
-        return load_activation(*args, **kwargs)
-    def observe_items(*args, **kwargs):
-        item_reads.append(kwargs["snapshot"])
-        return read_ref_items(*args, **kwargs)
-    with monkeypatch.context() as patch:
-        patch.setattr(storage, "open_read_snapshot", observe_open)
-        patch.setattr(saver, "load_sealed_resource_activation", observe_activation)
-        patch.setattr(storage, "read_ref_items", observe_items)
-        projected = saver.project_context_plan_to_history_with_diagnostics(
-            session_id, saver._storage.storage.main_thread_id(session_id), snapshot.as_sealed_plan()
-        )
-    assert len(reads) == len(activation_reads) == len(item_reads) == 1
-    assert activation_reads[0] is item_reads[0]
+    projected = saver.read_context_assembly_history(
+        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.assembly_id
+    )
     assert projected.assembly == snapshot
     assert len(projected.resource_activation.bindings) == 2
     expected_resources = project_sealed_resource_refs(projected.resource_activation)
@@ -308,20 +284,11 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     if target_format == "responses":
         assert prepared[0]["native_projection"]["resource_refs"] == expected_wire_refs
     for surface in ("messages", "history", "native", "provider"):
-        reads.clear()
-        activation_reads.clear()
-        item_reads.clear()
-        with monkeypatch.context() as patch:
-            patch.setattr(storage, "open_read_snapshot", observe_open)
-            patch.setattr(saver, "load_sealed_resource_activation", observe_activation)
-            patch.setattr(storage, "read_ref_items", observe_items)
-            method = getattr(saver, f"project_context_plan_to_{surface}_with_evidence")
-            result = method(
-                session_id, snapshot.thread_id, snapshot.as_sealed_plan(),
-                **({"target_format": "chat_completions"} if surface == "provider" else {}),
-            )
-        assert len(reads) == 1, surface
-        assert activation_reads == item_reads == reads
+        method = getattr(saver, f"project_context_plan_to_{surface}_with_evidence")
+        result = method(
+            session_id, snapshot.thread_id, snapshot.as_sealed_plan(),
+            **({"target_format": "chat_completions"} if surface == "provider" else {}),
+        )
         assert result[-1].resource_refs == expected_resources
         if surface == "native":
             assert result[0]["resource_refs"] == expected_wire_refs

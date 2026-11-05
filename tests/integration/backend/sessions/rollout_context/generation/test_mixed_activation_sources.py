@@ -198,7 +198,7 @@ async def test_mixed_sources_keep_turn_agents_and_call_frozen_skill(
             assert {row.facet for row in skill_refs} == {"metadata", "activation"}
             assert all(row.effective_boundary == "model_call" for row in skill_refs)
             frozen.append(activation)
-            projection = cold.project_context_plan_to_history_with_diagnostics(session, thread, assembly.as_sealed_plan())
+            projection = cold.read_context_assembly_history(session, thread, assembly.assembly_id)
             assert projection.resource_activation == activation
         # 同一raw来源的metadata语义未变，但正文和lineage确实变化。
         metadata = [next(row for row in activation.bindings if row.resource_kind == "skill"

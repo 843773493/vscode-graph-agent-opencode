@@ -167,8 +167,8 @@ async def browser_model_replay(
 
 def _projection_evidence(saver, session_id, snapshot):
     plan = snapshot.as_sealed_plan()
-    projection = saver.project_context_plan_to_history_with_diagnostics(
-        session_id, saver._storage.storage.main_thread_id(session_id), plan
+    projection = saver.read_context_assembly_history(
+        session_id, saver._storage.storage.main_thread_id(session_id), snapshot.assembly_id
     )
     history, history_loss = projection.messages, projection.losses
     _, langchain_loss = saver.project_context_plan_with_diagnostics(

@@ -234,9 +234,9 @@ def _project(saver: RolloutCheckpointSaver, session_id: str, assembly_id: str) -
     snapshot = saver.get_context_assembly(session_id, thread, assembly_id=assembly_id)
     plan = snapshot.as_sealed_plan()
     messages, losses = saver.project_context_plan_with_diagnostics(session_id, thread, plan)
-    projection = saver.project_context_plan_to_history_with_diagnostics(
+    projection = saver.read_context_assembly_history(
         session_id, thread,
-        plan,
+        snapshot.assembly_id,
     )
     history, history_losses = projection.messages, projection.losses
     native = saver.project_context_plan_to_native(session_id, thread, plan)

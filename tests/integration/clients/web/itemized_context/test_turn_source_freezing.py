@@ -223,7 +223,7 @@ async def verify_agents_source_boundary(
         for ordinal, call in enumerate(calls):
             assembly_id = by_call[call]["assembly_id"]
             snapshot = cold.get_context_assembly(session_id, thread_id, assembly_id=assembly_id)
-            projection = cold.project_context_plan_to_history_with_diagnostics(session_id, thread_id, snapshot.as_sealed_plan())
+            projection = cold.read_context_assembly_history(session_id, thread_id, snapshot.assembly_id)
             activation = projection.resource_activation
             assert activation is not None
             policies.append(activation.activation_policy.to_dict())

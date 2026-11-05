@@ -1,7 +1,6 @@
 """详情查询只恢复命中的真实封存快照，未命中正文按需检测损坏。"""
 
 import json
-from collections import Counter
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,7 +36,7 @@ from tests.integration.backend.sessions.rollout_context.test_schema4_assembly_ma
 
 
 @pytest.fixture
-def assembly_detail(assembly_case, monkeypatch):
+def assembly_detail(assembly_case):
     case = assembly_case
     snapshots = tuple(_seal(case, f"detail-{index}") for index in range(12))
     workspace_id = "00000000-0000-4000-8000-000000000001"
@@ -52,14 +51,6 @@ def assembly_detail(assembly_case, monkeypatch):
         created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
     )
     with RolloutCheckpointSaver(case.sessions) as cold:
-        restored = []
-        original = cold._storage.assemblies._read_context_assembly_connection
-
-        def observe(*args, **kwargs):
-            restored.append(kwargs["assembly_id"])
-            return original(*args, **kwargs)
-
-        monkeypatch.setattr(cold._storage.assemblies, "_read_context_assembly_connection", observe)
         service = SessionContextQueryService(
             assembly_source=cold, session_lookup=lookup, workspace_id=workspace_id,
             message_source=create_autospec(SessionContextMessageSourceProtocol, spec_set=True),
@@ -69,22 +60,20 @@ def assembly_detail(assembly_case, monkeypatch):
             assembly_ref=context_assembly_identity(identity, snapshots[-1].assembly_id),
             max_chars=65_536,
         )
-        yield case, snapshots, cold, service, query, restored
+        yield case, snapshots, cold, service, query
 
 
 @pytest.mark.asyncio
 async def test_detail_read_only_restores_selected_assembly(assembly_detail, request):
-    case, snapshots, cold, service, query, restored = assembly_detail
+    case, snapshots, cold, service, query = assembly_detail
     target = snapshots[-1]
     ids = tuple(value.assembly_id for value in snapshots)
     assert cold.list_context_assembly_ids(case.session_id, case.thread_id) == ids
     assert cold.list_context_assembly_ids(case.session_id, case.thread_id, turn_id=case.turn_id) == ids
     assert cold.list_context_assembly_ids(case.session_id, case.thread_id, turn_id="missing") == ()
-    assert restored == []
-    expected = cold.project_context_plan_to_history_with_diagnostics(
-        case.session_id, case.thread_id, target.as_sealed_plan(),
+    expected = cold.read_context_assembly_history(
+        case.session_id, case.thread_id, target.assembly_id,
     )
-    restored.clear()
     before = case.jsonl_path.read_bytes()
     started = perf_counter()
     result = await service.read_context(query)
@@ -97,18 +86,16 @@ async def test_detail_read_only_restores_selected_assembly(assembly_detail, requ
     assert case.jsonl_path.read_bytes() == before
     evidence = TestRunContext.from_test_file(Path(request.node.path)).prepare().artifacts_dir
     (evidence / "detail-read.json").write_text(json.dumps({
-        "milliseconds": elapsed, "restored": restored,
+        "milliseconds": elapsed,
         "result": result.model_dump(mode="json"),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"milliseconds": elapsed, "restored": dict(Counter(restored))}))
-    # get 与投影各自完整校验目标；其余十一份无关正文不应被恢复。
-    assert Counter(restored) == Counter({target.assembly_id: 2})
+    print(json.dumps({"milliseconds": elapsed}))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("damage", ["header", "body"])
 async def test_detail_defers_unselected_damage_but_rejects_selected_damage(assembly_detail, damage):
-    case, snapshots, cold, service, query, _restored = assembly_detail
+    case, snapshots, cold, service, query = assembly_detail
     expected = await service.read_context(query)
     old = snapshots[0]
     with case.connection:

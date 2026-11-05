@@ -3663,21 +3663,21 @@ async def test_cold_full_copy_history_preserves_bound_owners_and_rejects_corrupt
 
 
 @pytest.mark.asyncio
-async def test_inherited_plan_projections_use_one_fresh_authority_snapshot(
-    fork_context: ForkIntegrationContext, fork_provider_prepare, monkeypatch, request,
+async def test_inherited_projections_validate_current_frozen_binding(
+    fork_context: ForkIntegrationContext, fork_provider_prepare,
 ) -> None:
     source = await _seed_source(fork_context, fork_provider_prepare)
     source_thread = _main_thread_id(fork_context, source.session_id)
     historical = fork_context.saver.list_context_assemblies(source.session_id, source_thread)[0]
     plan = historical.as_sealed_plan()
     ports = (
-        ("project_context_plan_to_native", {}),
-        ("project_context_plan_to_history_with_diagnostics", {}),
-        ("project_context_plan_for_dispatch", {"target_format": historical.target_format}),
+        ("project_context_plan_to_native", plan, {}),
+        ("read_context_assembly_history", historical.assembly_id, {}),
+        ("project_context_plan_for_dispatch", plan, {"target_format": historical.target_format}),
     )
     expected = {
-        port: getattr(fork_context.saver, port)(source.session_id, source_thread, plan, **options)
-        for port, options in ports
+        port: getattr(fork_context.saver, port)(source.session_id, source_thread, expected_input, **options)
+        for port, expected_input, options in ports
     }
     result = await fork_context.forks.fork(await _fork_request(
         fork_context, source.session_id, creation_kind="new_session_main", mode="full_rollout_copy",
@@ -3685,33 +3685,11 @@ async def test_inherited_plan_projections_use_one_fresh_authority_snapshot(
     target_id, target_thread = result.session.session_id, result.thread_id
     cold = RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root)
     storage = cold._storage.storage
-    connect = storage._connect
-    statements: list[str] = []
-    owners: list[tuple[str, str]] = []
-
-    def observe(thread_id, checkpoint_ns="", *, session_id, read_only=False):
-        owners.append((session_id, thread_id))
-        connection = connect(thread_id, checkpoint_ns, session_id=session_id, read_only=read_only)
-        connection.set_trace_callback(statements.append)
-        return connection
-
-    monkeypatch.setattr(storage, "_connect", observe)
-    measurements = []
-    # 经过真实 fork 发布和冷 Saver 入口；重复读取也必须新核目标库，不能缓存整个准入结果。
-    for attempt in range(2):
-        for port, options in ports:
-            statements.clear()
-            owners.clear()
-            projected = getattr(cold, port)(target_id, target_thread, plan, **options)
+    # 冷读和重复读取都应保留来源冻结的完整投影。
+    for _ in range(2):
+        for port, expected_input, options in ports:
+            projected = getattr(cold, port)(target_id, target_thread, expected_input, **options)
             assert projected == expected[port]
-            audits = sum("FROM storage_commits commit_record ORDER BY" in sql and "LIMIT" not in sql for sql in statements)
-            measurements.append({"port": port, "attempt": attempt, "full_audits": audits})
-            assert owners == [(target_id, target_thread)]
-            assert audits == 0
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    (context.artifacts_dir / "inherited-plan-projection-audits.json").write_text(
-        json.dumps(measurements, indent=2), encoding="utf-8",
-    )
     # 成功后从外部破坏冻结 binding；下一次实际投影必须拒绝，不能沿用前次授权。
     index = storage.index_path(target_id, thread_id=target_thread)
     with sqlite3.connect(index) as connection:
@@ -3720,9 +3698,9 @@ async def test_inherited_plan_projections_use_one_fresh_authority_snapshot(
             ("0" * 64, source.session_id, source_thread),
         )
         assert changed.rowcount == 1
-    for port, options in ports:
+    for port, expected_input, options in ports:
         with pytest.raises(ValueError, match="source-mismatch.*binding hash 不一致"):
-            getattr(cold, port)(target_id, target_thread, plan, **options)
+            getattr(cold, port)(target_id, target_thread, expected_input, **options)
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,9 @@ from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
+from app.services.infrastructure.rollout_context.assembly.validation import (
+    required_text,
+)
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailRecord,
     DetailUnavailableError,
@@ -161,7 +164,7 @@ class ContextProjectionOwnerMixin:
         self,
         session_id: str,
         thread_id: str,
-        expected: ContextRequestPlan | SealedContextDispatchRef,
+        expected: ContextRequestPlan | SealedContextDispatchRef | str,
         *,
         checkpoint_ns: str,
         request_only_content: Mapping[str, object] | None = None,
@@ -177,14 +180,14 @@ class ContextProjectionOwnerMixin:
                     session_id, thread_id, checkpoint_ns,
                 ))
             except RolloutNotMaterializedError as error:
-                if (expected.session_id, expected.thread_id) != (session_id, thread_id):
+                if not isinstance(expected, str) and (expected.session_id, expected.thread_id) != (session_id, thread_id):
                     raise ValueError(
                         "source-mismatch: target rollout is not materialized; "
                         "frozen history scope cannot be authorized"
                     ) from error
                 raise
             # 历史 owner 的准入与 assembly/正文共用下面这一个冻结快照；
-            # 提前另开快照只做归属预检，会让同一次投影重复全扫 commit/catalog。
+            # 提前另开快照只做归属预检，会重复读取和校验同一份冻结材料。
             committed_snapshot = self._committed_context_snapshot(
                 expected,
                 snapshot=read_snapshot,
@@ -232,17 +235,17 @@ class ContextProjectionOwnerMixin:
         native["resource_refs"] = [ref.model_dump(mode="json") for ref in resource_refs]
         return native
 
-    def project_context_plan_to_history_with_diagnostics(
+    def read_context_assembly_history(
         self,
         session_id: str,
         thread_id: str,
-        plan: ContextRequestPlan,
+        assembly_id: str,
         *,
         checkpoint_ns: str = "",
     ) -> SessionContextHistoryProjection:
-        """从一次权威读取返回 history、loss 与封存资源，不读取 request-only 正文。"""
+        """按 ID 从一次权威读取返回 assembly、history、loss 与封存资源。"""
         committed, items, content = self._read_committed_context_projection(
-            session_id, thread_id, plan,
+            session_id, thread_id, required_text(assembly_id, field="assembly_id"),
             checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
             include_request_only=False,
         )

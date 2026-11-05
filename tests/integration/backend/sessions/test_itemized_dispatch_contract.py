@@ -1098,7 +1098,7 @@ def test_foreign_session_plan_is_rejected_without_io(
             elif port == "messages":
                 saver.project_context_plan_to_messages(target_id, target_thread, draft)
             elif port == "history":
-                saver.project_context_plan_to_history_with_diagnostics(
+                saver.project_context_plan_to_history(
                     target_id, target_thread, draft
                 )
             elif port == "bind":

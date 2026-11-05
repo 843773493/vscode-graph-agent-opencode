@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
 
     from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-    from app.domain.itemized.plans.request import ContextRequestPlan
     from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
@@ -101,19 +100,11 @@ class SessionContextAssemblySourceProtocol(Protocol):
         turn_id: str | None = None,
     ) -> tuple[ContextAssemblySnapshot, ...]: ...
 
-    def get_context_assembly(
+    def read_context_assembly_history(
         self,
         session_id: str,
         thread_id: str,
-        *,
         assembly_id: str,
-    ) -> ContextAssemblySnapshot: ...
-
-    def project_context_plan_to_history_with_diagnostics(
-        self,
-        session_id: str,
-        thread_id: str,
-        plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
     ) -> SessionContextHistoryProjection: ...

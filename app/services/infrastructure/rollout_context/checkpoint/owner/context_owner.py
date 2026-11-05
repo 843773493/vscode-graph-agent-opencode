@@ -422,11 +422,11 @@ class ContextOwnerMixin(
 
     def _committed_context_snapshot(
         self,
-        expected: ContextRequestPlan | SealedContextDispatchRef,
+        expected: ContextRequestPlan | SealedContextDispatchRef | str,
         *,
         snapshot: RolloutReadSnapshot,
     ) -> CommittedContextSnapshot:
-        """从当前快照核对已提交 assembly 与 plan 或派发引用。
+        """从当前快照读取 assembly，并核对调用方提供的 plan 或派发引用。
 
         ``ContextRequestPlan`` 是不可变值对象，但调用方仍可能自行构造一个
         形式上 sealed 的对象。assembly snapshot 才是持久化授权边界；投影前
@@ -443,13 +443,14 @@ class ContextOwnerMixin(
         ) as connection:
             persisted, _ = self._storage.assemblies._read_context_assembly_connection(
                 connection, session_id, thread_id,
-                assembly_id=expected.assembly_id, checkpoint_ns=checkpoint_ns,
+                assembly_id=expected if isinstance(expected, str) else expected.assembly_id,
+                checkpoint_ns=checkpoint_ns,
             )
         if isinstance(expected, SealedContextDispatchRef):
             # 冷派发引用在同一次权威读取中核对全部 binding，再读取 activation 和正文。
             # 不先读 assembly 再拿其 plan 重开快照，避免重复审计和重复展开 registry。
             expected.validate_snapshot(persisted)
-        elif (
+        elif isinstance(expected, ContextRequestPlan) and (
             persisted.plan_id != expected.plan_id
             or persisted.plan_hash != expected.plan_hash()
             or persisted.selection != expected.selection

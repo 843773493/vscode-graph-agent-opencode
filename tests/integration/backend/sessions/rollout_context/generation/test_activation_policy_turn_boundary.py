@@ -53,7 +53,7 @@ async def test_hot_policy_keeps_running_turn_frozen_and_applies_to_next_turn(
         first, = saver.list_context_assemblies(session, thread)
         assert first.model_call_id == first_call
         first_bytes = canonical_json_bytes(first.to_dict())
-        first_projection = saver.project_context_plan_to_history_with_diagnostics(session, thread, first.as_sealed_plan())
+        first_projection = saver.read_context_assembly_history(session, thread, first.assembly_id)
         first_activation = first_projection.resource_activation
         assert first_activation is not None and first_activation.activation_policy.to_dict() == initial_policy
         assert versions[0].strip() in json.dumps(case.request(first_call)["messages"], ensure_ascii=False)
@@ -121,7 +121,7 @@ async def test_hot_policy_keeps_running_turn_frozen_and_applies_to_next_turn(
         assert canonical_json_bytes(by_call[first_call].to_dict()) == first_bytes
         for index, call in enumerate(calls):
             snapshot = by_call[call]
-            projection = cold.project_context_plan_to_history_with_diagnostics(session, thread, snapshot.as_sealed_plan())
+            projection = cold.read_context_assembly_history(session, thread, snapshot.assembly_id)
             activation = projection.resource_activation
             assert activation is not None
             assert (activation.owner_session_id, activation.owner_thread_id) == (session, thread)
