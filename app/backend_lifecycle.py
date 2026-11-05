@@ -118,6 +118,7 @@ class BackendLifespan:
         # TODO(5.4)：原生线程终止、其它同步关闭及生产进程退出仍须单独核实。
         if self.registry is not None:
             self.registry.close_admission()
+            await self.registry.close_installations()
             await run_sync_shielded(self.registry.close)
 
     async def _close_model_stream(self) -> None:

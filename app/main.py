@@ -81,6 +81,7 @@ async def lifespan(application: FastAPI):
         application.state.backend_id = await asyncio.to_thread(load_or_create_backend_id, get_boxteam_home())
         registry = WorkspaceContainerRegistry(
             mounted_workspaces=mounted, project_root=Path.cwd(), clock_ports=application.state.clock_ports,
+            backend_id=application.state.backend_id,
         )
         lifecycle.registry = registry
         lifecycle.acquire_access()

@@ -94,6 +94,12 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 
 包安装复用各生态标准工具与隔离环境，仓库 JS／Python 依赖仍遵守 bun／uv；不自动全局安装缺失的 Node、Python 或容器环境。目录要求的能力不具备时给出目标侧具体原因，不转换成另一种执行方式冒充原计划。
 
+首批制品发布仅支持目标已有 uv／Python 与标准 PyPI wheel，使用明确 index 的 `uv lock` 和 `uv sync --locked --no-build`，拒绝自定义 runtimeArguments、sdist、单文件 fileSha256 及尚无验证链的 npm／OCI／NuGet。console entry point 由用户显式输入，并核根 distribution 的实际版本和可调用入口。准备开始即使用最终 installation／generation 绝对路径，避免改名破坏 venv shebang；验证完整文件内容、权限和符号链接后，由唯一 SQLite 事务同时发布制品与操作完成。
+
+同一 BOXTEAM_HOME 的稳定 Backend 安装域允许多个真实 Backend 进程共享账本；schema 初始化仅短持锁，安装意图由 SQLite 唯一 reserve，不持生命周期独占锁。操作 owner 记录 PID 与进程创建时间；另一个活 Backend 不得中断原操作，只有确认原进程已退出时才将运行中记录标为 interrupted。相同意图始终返回原操作，不因重启重放，未发布目录不具备可启动 binding。
+
+工作区 stdio 配置以 `managed_launch` 精确引用 Backend／installation／generation／artifact digest，与显式 command 互斥；原安装 owner 解析已发布绝对 executable，原 SDK 启动准入再次核完整摘要，禁止动态 uvx／npx 解析替代。该 binding 随原连接 generation／retirement 保留；本批不提供物理卸载或版本指针迁投，也不宣称已完成共享引用删除闭包。原 Workbench InstallAction 仅发布制品并返回原发布事实，明确提示尚未配置；配置仍经原 source preflight／CAS 显式提交，连接 ready 由原 MCP owner 独立核实。
+
 ### D5. 安装操作可追踪，更新与删除尊重已有引用
 
 安装服务保存有界操作状态、幂等身份、目标／制品基线和可复查日志，阶段至少可区分计划、准备、验证、发布、完成／失败／取消／中断待核实。复用该服务唯一记录，不复用会话任务数据库或新建外部队列。网络重试只能查询原操作或提交相同幂等意图；取消不等于系统包管理器已停止，超时不伪报回滚完成。

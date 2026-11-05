@@ -242,3 +242,70 @@ class McpCandidateInspectResponseDTO(_McpCandidateResponse):
 
 class McpCandidatePlanResponseDTO(_McpCandidateResponse):
     data: McpCandidatePlanDTO
+
+
+class McpManagedLaunchDTO(_McpCandidateModel):
+    """工作区只引用已发布制品；可执行路径由原生安装 owner 解析。"""
+
+    backend_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    installation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    generation: str = Field(pattern=r"^[0-9a-f]{32}$")
+    artifact_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+
+
+class McpInstallationRequestDTO(McpCandidatePlanValidationRequestDTO):
+    operation_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_:-]+$")
+    entrypoint: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+
+
+class McpInstalledArtifactDTO(_McpCandidateModel):
+    binding: McpManagedLaunchDTO
+    source: McpCandidateProvenanceDTO
+    manifest_digest: str
+    variant: McpCandidateVariantRefDTO
+    platform: McpTargetPlatformDTO
+    registry_type: Literal["pypi"] = "pypi"
+    identifier: str
+    version: str
+    entrypoint: str
+    command: str
+    lock_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    installed_distributions: dict[str, str]
+
+
+class McpInstallationOperationDTO(_McpCandidateModel):
+    operation_id: str
+    intent_digest: str
+    status: Literal["running", "succeeded", "failed", "interrupted"]
+    stage: Literal["prepare", "lock", "install", "verify", "publish", "complete"]
+    created_at: float
+    updated_at: float
+    artifact: McpInstalledArtifactDTO | None = None
+    error: str | None = None
+    log: str = Field(default="", max_length=65536)
+
+
+class McpInstallationOperationResponseDTO(_McpCandidateResponse):
+    data: McpInstallationOperationDTO
+
+
+class McpInstalledArtifactListResponseDTO(_McpCandidateResponse):
+    data: list[McpInstalledArtifactDTO]
+
+
+class McpInstallationCapabilitiesDTO(_McpCandidateModel):
+    platform: McpTargetPlatformDTO
+    pypi_wheel_available: bool
+    unavailable_reason: str | None = None
+    unsupported_registry_types: list[str] = Field(default_factory=lambda: ["npm", "oci", "nuget"])
+    limitations: list[str] = Field(default_factory=lambda: [
+        "仅使用目标已有 uv／Python，不自动安装系统 runtime",
+        "只安装 wheel，不运行 sdist 构建或自定义 runtimeArguments",
+        "入口须显式选择并验证为根 distribution 的 console entry point",
+        "依赖使用 uv.lock 校验，暂不支持目录单文件 fileSha256",
+        "安装不写入工作区配置、不等于连接 ready；物理卸载尚未接入",
+    ])
+
+
+class McpInstallationCapabilitiesResponseDTO(_McpCandidateResponse):
+    data: McpInstallationCapabilitiesDTO

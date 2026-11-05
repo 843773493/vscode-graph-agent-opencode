@@ -42,6 +42,8 @@
     { "pattern": "/mcp/servers/*/enabled", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/transport", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/command", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/managed_launch", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/managed_launch/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/args", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/env", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/env/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -615,8 +617,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "transport",
-        "command"
+        "transport"
+      ],
+      "oneOf": [
+        { "required": ["command"], "not": { "required": ["managed_launch"] } },
+        { "required": ["managed_launch"], "not": { "required": ["command"] } }
       ],
       "properties": {
         "enabled": {
@@ -630,6 +635,7 @@
           "type": "string",
           "minLength": 1
         },
+        "managed_launch": { "$ref": "#/$defs/mcpManagedLaunch" },
         "args": {
           "type": "array",
           "items": {
@@ -648,6 +654,19 @@
           "type": "string",
           "minLength": 1
         }
+      }
+    },
+
+    "mcpManagedLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend_id", "installation_id", "generation", "artifact_digest"],
+      "description": "引用当前 Backend 唯一安装 owner 已发布的精确 generation；可执行路径不由工作区配置提供。安装记录与工作区连接事实分别保存。",
+      "properties": {
+        "backend_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "installation_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "generation": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "artifact_digest": { "type": "string", "pattern": "^sha256:jcs:v1:[0-9a-f]{64}$" }
       }
     },
 

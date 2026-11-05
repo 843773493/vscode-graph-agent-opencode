@@ -132,7 +132,10 @@ test('原 query 实际委托严格 queryPage，原 parser 消费 v0.1/v0，curso
     return context({ servers: [document(next ? 'selected/second' : 'selected/first')], metadata: { count: 1, nextCursor: next ? undefined : 'opaque+/=' } });
   });
   const pager = await service.query({ text: ' alpha beta ' });
-  expect(pager.firstPage.items[0].name).toBe('selected/first');
+  expect(pager.firstPage.items[0]).toMatchObject({ name: 'selected/first', installationSource: {
+    endpoint: 'https://selected.test', protocol: 'v0.1',
+    entryUrl: 'https://selected.test/v0.1/servers/selected%2Ffirst/versions/1.0.0',
+  } });
   expect((await pager.getNextPage(CancellationToken.None)).items[0].name).toBe('selected/second');
   expect(requests).toEqual([
     'https://selected.test/v0.1/servers?limit=50&version=latest&search=alpha%20beta',

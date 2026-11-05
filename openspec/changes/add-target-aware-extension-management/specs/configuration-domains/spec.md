@@ -50,3 +50,17 @@ Gateway 与 Workspace 配置 owner SHALL 公布各来源层的读取与写入能
 #### Scenario: 来源保存需要先完成旧版本迁移
 - **WHEN** 提交的 v1 来源缺少连接 ID，原 loader 需要另外迁移并改写来源字节
 - **THEN** 预检和保存明确拒绝并提示沿原迁移入口处理或补齐 ID，不在文件保存后悄悄换成另一份正文；读取与原迁移入口行为保持
+
+### Requirement: 受管 MCP 启动配置必须精确引用已发布制品
+
+Workspace stdio 配置 SHALL 允许 `managed_launch` 绑定稳定 Backend、installation、generation 及完整 artifact digest，并与显式 `command` 互斥。原 MCP parser SHALL 通过目标安装 owner 的唯一发布记录解析实际绝对 executable；不存在、目标不匹配或 generation／digest 不符时明确拒绝，不回落动态命令或同名制品。工作区 args／env 继续沿原 schema 解析，受管 Python 配置不得通过 PYTHONPATH／PYTHONHOME／PYTHONUSERBASE 替换锁定依赖。
+
+制品发布 MUST NOT 自动修改工作区来源或配置 active；启用仍经所选 workspace 的原 source preflight／文件及层／active CAS、候选准备和原 MCP publication。已有显式动态命令保持原合同，不自动追认为受管制品。
+
+#### Scenario: 已发布制品经来源 CAS 启用
+- **WHEN** 用户安装制品后，另行在目标工作区来源提交该制品的完整 managed_launch
+- **THEN** 发布后、配置提交前工作区来源字节和 MCP 目录保持原样；原 source writer 核对所有基线并沿原连接准备激活，实际 launch 使用该 generation 的绝对路径
+
+#### Scenario: 受管引用与显式命令冲突
+- **WHEN** stdio 配置同时包含 managed_launch 与 command，或引用另一 Backend／未发布 generation
+- **THEN** schema／parser 明确拒绝，不择一执行、不使用本机同名路径，也不改写为动态 uvx

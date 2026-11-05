@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from typing import Annotated
 
@@ -26,7 +27,11 @@ from app.schemas.internal_v2.mcp import (
     McpConnectionOperationListResponseDTO,
     McpConnectionOperationResponseDTO,
     McpConnectionRequestDTO,
+    McpInstallationCapabilitiesResponseDTO,
+    McpInstallationOperationResponseDTO,
+    McpInstallationRequestDTO,
     McpInstallationTargetDTO,
+    McpInstalledArtifactListResponseDTO,
     McpServerDTO,
     McpServerListResponseDTO,
     McpToolDTO,
@@ -37,6 +42,7 @@ from app.services.infrastructure.mcp.candidate_source import (
     McpCandidateSourceUnavailable,
 )
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
+from app.services.infrastructure.mcp.installation.python import InstallationUnavailable
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -51,7 +57,7 @@ def _candidate_errors():
         yield
     except McpCandidateConflict as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    except McpCandidateSourceUnavailable as error:
+    except (McpCandidateSourceUnavailable, InstallationUnavailable) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except (TypeError, ValueError) as error:
         if isinstance(error, ValidationError):
@@ -87,6 +93,67 @@ async def prepare_mcp_candidate(
     with _candidate_errors():
         data = await owner.prepare_installation_candidate(payload, actual_target=target)
     return McpCandidatePlanResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.post("/installations", response_model=McpInstallationOperationResponseDTO, summary="在精确 Backend 准备并发布锁定 MCP 制品，不写工作区配置")
+async def install_mcp_artifact(
+    payload: McpInstallationRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        data = await owner.install_artifact(payload, actual_target=target)
+    return McpInstallationOperationResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.get("/installation-capabilities", response_model=McpInstallationCapabilitiesResponseDTO, summary="读取精确 Backend 的实际 MCP 制品安装能力")
+async def get_mcp_installation_capabilities(
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        data = owner.installations.capabilities()
+    return McpInstallationCapabilitiesResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.get("/installation-operations/{operation_id}", response_model=McpInstallationOperationResponseDTO, summary="查询原 MCP 安装阶段，不重放安装")
+async def get_mcp_installation_operation(
+    operation_id: str,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        try:
+            data = await asyncio.to_thread(owner.installations.operation, operation_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    return McpInstallationOperationResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.get("/installations", response_model=McpInstalledArtifactListResponseDTO, summary="读取唯一 Backend 已发布 MCP 制品记录")
+async def list_mcp_installations(
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        data = await asyncio.to_thread(owner.installations.artifacts)
+    return McpInstalledArtifactListResponseDTO(data=data, request_id=request_id, target=target)
 
 
 @router.post("/candidate-plans/validate", response_model=McpCandidatePlanResponseDTO, summary="消费前重新核验原 MCP 候选，不执行安装或配置")

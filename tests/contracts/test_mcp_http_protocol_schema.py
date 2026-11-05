@@ -34,6 +34,10 @@ WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
     ("post", "/candidate-manifests", "McpCandidateInspectResponseDTO"),
     ("post", "/candidate-plans", "McpCandidatePlanResponseDTO"),
     ("post", "/candidate-plans/validate", "McpCandidatePlanResponseDTO"),
+    ("post", "/installations", "McpInstallationOperationResponseDTO"),
+    ("get", "/installations", "McpInstalledArtifactListResponseDTO"),
+    ("get", "/installation-operations/{operation_id}", "McpInstallationOperationResponseDTO"),
+    ("get", "/installation-capabilities", "McpInstallationCapabilitiesResponseDTO"),
 ])
 def test_mcp_actual_routes_publish_complete_response_roots(
     http_openapi: JsonSchemaValue, method: str, path: str, model: str,
@@ -49,6 +53,7 @@ def test_mcp_actual_routes_publish_complete_response_roots(
     ("/candidate-manifests", "McpCandidateInspectRequestDTO"),
     ("/candidate-plans", "McpCandidatePlanRequestDTO"),
     ("/candidate-plans/validate", "McpCandidatePlanValidationRequestDTO"),
+    ("/installations", "McpInstallationRequestDTO"),
 ])
 def test_mcp_candidate_actual_routes_publish_complete_request_roots(http_openapi: JsonSchemaValue, path: str, model: str) -> None:
     operation = http_openapi["paths"]["/api/v1/workspaces/{workspace_id}/mcp" + path]["post"]
@@ -81,6 +86,14 @@ def test_mcp_candidate_actual_routes_publish_complete_request_roots(http_openapi
     ("McpCandidatePlanDTO", "download_required"),
     ("McpCandidatePlanDTO", "parameters"),
     ("McpCandidatePlanValidationRequestDTO", "candidate"),
+    ("McpManagedLaunchDTO", "backend_id"),
+    ("McpManagedLaunchDTO", "generation"),
+    ("McpManagedLaunchDTO", "artifact_digest"),
+    ("McpInstallationRequestDTO", "entrypoint"),
+    ("McpInstalledArtifactDTO", "binding"),
+    ("McpInstalledArtifactDTO", "installed_distributions"),
+    ("McpInstallationOperationDTO", "artifact"),
+    ("McpInstallationCapabilitiesDTO", "pypi_wheel_available"),
 ])
 def test_mcp_target_and_generation_fields_cannot_drift(
     http_openapi: JsonSchemaValue, model: str, field: str,
@@ -99,6 +112,9 @@ def test_mcp_target_and_generation_fields_cannot_drift(
     "McpCandidateVariantRefDTO", "McpCandidateVariantDTO", "McpCandidateInspectRequestDTO", "McpCandidateInspectDTO",
     "McpCandidatePlanRequestDTO", "McpCandidatePlanDTO", "McpCandidatePlanValidationRequestDTO",
     "McpCandidateInspectResponseDTO", "McpCandidatePlanResponseDTO",
+    "McpManagedLaunchDTO", "McpInstallationRequestDTO", "McpInstalledArtifactDTO", "McpInstallationOperationDTO",
+    "McpInstallationOperationResponseDTO", "McpInstalledArtifactListResponseDTO",
+    "McpInstallationCapabilitiesDTO", "McpInstallationCapabilitiesResponseDTO",
 ])
 def test_mcp_candidate_descriptor_is_rejected_before_snapshot_publication(
     http_descriptor_bundle: FileDescriptorSet, tmp_path: Path, model: str,

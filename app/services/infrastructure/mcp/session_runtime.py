@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import StdioConnection, StreamableHttpConnection
@@ -26,6 +26,9 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 
 McpChangeNotifyCallback: TypeAlias = Callable[[], None]
 
@@ -58,6 +61,7 @@ class _McpServerSession:
 async def production_mcp_session_factory(
     server: McpServerConfig, on_tools_list_changed: McpChangeNotifyCallback,
     *, workspace_root: Path | None = None, oauth_provider: McpOAuthProvider | None = None,
+    installation_owner: McpInstallationOwner | None = None,
 ) -> AsyncIterator[McpServerSessionPort]:
     auth = oauth_provider
     if server.oauth is not None and auth is None:
@@ -74,6 +78,12 @@ async def production_mcp_session_factory(
     async def transport():
         if server.transport == "stdio":
             connection = cast(StdioConnection, server.connection)
+            if server.managed_launch is not None:
+                if installation_owner is None:
+                    raise ValueError("受管 MCP launch 缺少原生 Backend 安装 owner")
+                command = await asyncio.to_thread(installation_owner.resolve, server.managed_launch, verify=True)
+                if connection["command"] != command:
+                    raise ValueError("受管 MCP 连接配置与已发布 generation 的实际启动命令不一致")
             async with stdio_client(StdioServerParameters(
                 command=connection["command"], args=connection["args"],
                 env=connection.get("env"), cwd=connection.get("cwd"),

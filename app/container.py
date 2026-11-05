@@ -31,6 +31,7 @@ from app.core.path_utils import (
     SessionCatalogComponents,
     build_session_catalog_components,
     catalog_provider_scope,
+    get_boxteam_home,
     get_session_catalog_components,
     get_user_config_root,
     workspace_context,
@@ -131,6 +132,7 @@ from app.services.infrastructure.llm_request_log_service import LLMRequestLogSer
 from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
+from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.fork import (
@@ -439,10 +441,12 @@ class WorkspaceContainerRegistry:
         mounted_workspaces: MountedWorkspaceRegistry,
         project_root: str | Path | None = None,
         clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
+        backend_id: str | None = None,
     ) -> None:
         self._mounted_workspaces = mounted_workspaces
         self._project_root = project_root
         self._clock_ports = clock_ports
+        self._mcp_installations = McpInstallationOwner(home=get_boxteam_home(), backend_id=backend_id) if backend_id is not None else None
         self._containers: dict[str, AppContainer] = {}
         self._catalog_components: dict[str, SessionCatalogComponents] = {}
         self._pending_catalog_closes: set[str] = set()
@@ -500,6 +504,7 @@ class WorkspaceContainerRegistry:
                             workspace_root=mount.workspace_root,
                             startup_mount=mount,
                             clock_ports=self._clock_ports,
+                            mcp_installations=self._mcp_installations,
                         )
                     components = self.get_catalog_components(
                         mount.workspace_root / ".boxteam" / "sessions", mount.workspace_id
@@ -539,6 +544,11 @@ class WorkspaceContainerRegistry:
     def close_admission(self) -> None:
         """线程排队或原生关闭持锁前撤销装配准入；锁内仍须复核。"""
         self._closed = True
+
+    async def close_installations(self) -> None:
+        """工作区连接排空后等待原安装子进程，关闭唯一 Backend 安装域。"""
+        if self._mcp_installations is not None:
+            await self._mcp_installations.close()
 
     def close(self) -> None:
         """所有writer排空后关闭catalog；失败保留原组件供同入口重试。"""
@@ -583,6 +593,7 @@ def _build_app_container(
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
     construction: ExitStack,
+    mcp_installations: McpInstallationOwner | None = None,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
     if workspace_root is None:
@@ -706,6 +717,7 @@ def _build_app_container(
         event_service=job_event_bus.event_channel_service,
         leases=external_resource_leases,
         publication_lock=config_service.publication_lock,
+        installation_owner=mcp_installations,
     )
     config_service.set_mcp_cleanup_provider(mcp_catalog_owner.cleanup_diagnostics)
     mcp_connection_service = McpConnectionService(
@@ -1226,6 +1238,7 @@ def build_app_container(
     workspace_root: str | Path,
     startup_mount: MountedWorkspace | None = None,
     clock_ports: RuntimeClockPorts = DEFAULT_RUNTIME_CLOCK_PORTS,
+    mcp_installations: McpInstallationOwner | None = None,
 ) -> AppContainer:
     """在显式工作区上下文中装配唯一完整服务图。"""
 
@@ -1241,6 +1254,7 @@ def build_app_container(
                 startup_mount=startup_mount,
                 clock_ports=clock_ports,
                 construction=construction,
+                mcp_installations=mcp_installations,
             )
             # 未发布服务图的持久owner由构造作用域回收；成功后交给原WorkspaceLifespan。
             construction.pop_all()

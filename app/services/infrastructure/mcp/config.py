@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -9,11 +10,13 @@ from urllib.parse import urlparse
 
 from langchain_mcp_adapters.sessions import Connection
 
+from app.schemas.internal_v2.mcp import McpManagedLaunchDTO
+
 McpTransport = Literal["stdio", "streamable_http"]
 _SERVER_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
 _PLACEHOLDER_PATTERN = re.compile(r"\$\{([^}]+)\}")
 _COMMON_FIELDS = frozenset({"enabled", "transport"})
-_STDIO_FIELDS = _COMMON_FIELDS | frozenset({"command", "args", "env", "cwd"})
+_STDIO_FIELDS = _COMMON_FIELDS | frozenset({"command", "managed_launch", "args", "env", "cwd"})
 _HTTP_FIELDS = _COMMON_FIELDS | frozenset({"url", "headers", "oauth"})
 
 
@@ -29,12 +32,14 @@ class McpServerConfig:
     transport: McpTransport
     connection: Connection
     oauth: McpOAuthConfig | None = None
+    managed_launch: McpManagedLaunchDTO | None = None
 
 
 def parse_mcp_server_configs(
     raw_config: object,
     *,
     workspace_root: Path,
+    installation_resolver: Callable[[McpManagedLaunchDTO], str] | None = None,
 ) -> tuple[McpServerConfig, ...]:
     if raw_config is None:
         return ()
@@ -60,6 +65,7 @@ def parse_mcp_server_configs(
                 server_id,
                 raw_server,
                 workspace_root=workspace_root,
+                installation_resolver=installation_resolver,
             )
         )
     return tuple(server_configs)
@@ -85,6 +91,7 @@ def _parse_server(
     raw_server: object,
     *,
     workspace_root: Path,
+    installation_resolver: Callable[[McpManagedLaunchDTO], str] | None,
 ) -> McpServerConfig:
     if not isinstance(raw_server, dict):
         raise TypeError(f"mcp.servers.{server_id} 必须是对象")
@@ -93,6 +100,9 @@ def _parse_server(
         raise TypeError(f"mcp.servers.{server_id}.enabled 必须是布尔值")
     transport = raw_server.get("transport")
     if transport == "stdio":
+        binding = McpManagedLaunchDTO.model_validate(raw_server["managed_launch"]) if "managed_launch" in raw_server else None
+        if binding is not None and ("command" in raw_server or installation_resolver is None):
+            raise ValueError(f"mcp.servers.{server_id} 受管 launch 必须由目标安装 owner 解析，且不能另设 command")
         return McpServerConfig(
             server_id=server_id,
             enabled=enabled,
@@ -101,7 +111,9 @@ def _parse_server(
                 server_id,
                 raw_server,
                 workspace_root=workspace_root,
+                managed_command=installation_resolver(binding) if binding is not None and installation_resolver is not None else None,
             ),
+            managed_launch=binding,
         )
     if transport == "streamable_http":
         return McpServerConfig(
@@ -155,9 +167,10 @@ def _parse_stdio_connection(
     raw_server: dict[str, object],
     *,
     workspace_root: Path,
+    managed_command: str | None = None,
 ) -> Connection:
     _reject_unknown_fields(server_id, raw_server, _STDIO_FIELDS)
-    command = _required_string(raw_server.get("command"), f"mcp.servers.{server_id}.command")
+    command = managed_command or _required_string(raw_server.get("command"), f"mcp.servers.{server_id}.command")
     args = _string_list(raw_server.get("args", []), f"mcp.servers.{server_id}.args")
     raw_env = raw_server.get("env", {})
     if not isinstance(raw_env, dict) or not all(
@@ -165,6 +178,10 @@ def _parse_stdio_connection(
         for key, value in raw_env.items()
     ):
         raise TypeError(f"mcp.servers.{server_id}.env 必须是字符串到字符串的对象")
+    if managed_command is not None:
+        if any(key.upper() in {"PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE"} for key in raw_env):
+            raise ValueError("受管 MCP 制品不能通过 Python 导入路径环境变量替换锁定依赖")
+        raw_env = {**raw_env, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
 
     raw_cwd = raw_server.get("cwd")
     cwd = (
@@ -177,7 +194,7 @@ def _parse_stdio_connection(
     )
     return {
         "transport": "stdio",
-        "command": _expand_value(command, workspace_root=workspace_root),
+        "command": managed_command if managed_command is not None else _expand_value(command, workspace_root=workspace_root),
         "args": [
             _expand_value(argument, workspace_root=workspace_root)
             for argument in args

@@ -19,12 +19,16 @@ import { McpServerEditorInput } from '../../upstream/src/vs/workbench/contrib/mc
 import { IWorkbenchLocalMcpServer } from '../../upstream/src/vs/workbench/services/mcp/common/mcpWorkbenchManagementService.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IExtensionsWorkbenchService } from '../../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
+import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
+import type { IWorkbencMcpServerInstallOptions } from '../../upstream/src/vs/workbench/services/mcp/common/mcpWorkbenchManagementService.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { WorkspaceMcpCatalog } from './catalog.js';
+import { galleryInstallationSource, publishMcpArtifact } from './installation.js';
 import { WorkspaceMcpServer } from './server.js';
 
-export const unavailableWorkspaceMcpWrite = () => new Error('此目标的 MCP 制品安装、配置与凭据写入、Node host 尚未接入；已有动态命令不表示已安装制品');
+export const unavailableWorkspaceMcpWrite = () => new Error('此目标的 MCP 工作区配置与凭据写入、Node host 尚未接入；已有动态命令不表示已安装制品');
 const unavailable = unavailableWorkspaceMcpWrite;
 
 /** 原 IMcpService 的唯一实现：查询／操作 Gateway 后的项目 owner，不启动浏览器 MCP client。 */
@@ -146,6 +150,13 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     return this.local;
   }
 
+  installationTarget(): { target: WorkspaceMcpCatalog['target']; label: string } {
+    this.synchronizeTargets();
+    if (this.selectionError) throw this.selectionError;
+    if (!this.selected) throw new Error('请先选择制品安装所属的目标工作区');
+    return { target: this.selected.target, label: this.selected.label };
+  }
+
   private report(catalog: WorkspaceMcpCatalog, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     if (this.reportedErrors.get(catalog) !== message) this.notifications.error(message);
@@ -184,10 +195,12 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   constructor(
     @IMcpService service: IMcpService,
     @IExtensionsWorkbenchService private readonly extensions: IExtensionsWorkbenchService,
-    @INotificationService notifications: INotificationService,
+    @INotificationService private readonly notifications: INotificationService,
     @IMcpGalleryService private readonly gallery: IMcpGalleryService,
     @IInstantiationService private readonly instantiation: IInstantiationService,
     @IEditorService private readonly editors: IEditorService,
+    @IQuickInputService private readonly quickInput: IQuickInputService,
+    @IProgressService private readonly progress: IProgressService,
   ) {
     if (!(service instanceof WorkspaceMcpService)) throw new Error('Workbench MCP 管理与连接服务必须使用同一个项目 owner');
     this.owner = service;
@@ -210,8 +223,26 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
     return { firstPage: mapPage(pager.firstPage), getNextPage: async ct => mapPage(await pager.getNextPage(ct)) };
   }
   async getMcpServerFromGallery(): Promise<never> { throw unavailable(); }
-  canInstall(): MarkdownString { return new MarkdownString().appendText(unavailable().message); }
-  async install(): Promise<never> { throw unavailable(); }
+  canInstall(server: IWorkbenchMcpServer): true | MarkdownString {
+    try {
+      if (!server.gallery) throw new Error('当前安装入口只支持具有精确来源的 MCP 目录制品');
+      galleryInstallationSource(server.gallery);
+      if (!server.gallery.configuration.packages?.some(item => item.registryType === 'pypi' && item.transport.type === 'stdio')) {
+        throw new Error('当前目标只支持 PyPI wheel 制品，所选目录没有该运行方式');
+      }
+      this.owner.installationTarget();
+      return true;
+    } catch (error) { return new MarkdownString().appendText(error instanceof Error ? error.message : String(error)); }
+  }
+  async install(server: IWorkbenchMcpServer, options?: IWorkbencMcpServerInstallOptions): Promise<IWorkbenchMcpServer> {
+    if (!server.gallery) throw new Error('请从原 MCP 目录选择待安装制品');
+    if (options && Object.values(options).some(value => value !== undefined)) throw new Error('制品安装不消费工作区配置选项，请从明确目标的制品入口安装');
+    const { target, label } = this.owner.installationTarget();
+    const artifact = await this.progress.withProgress({ location: ProgressLocation.Notification, title: `安装 MCP 制品 · ${label}` },
+      progress => publishMcpArtifact(server.gallery!, target, label, this.quickInput, progress));
+    this.notifications.info(`MCP 制品 ${artifact.identifier} ${artifact.version} 已在 ${label} 发布。工作区尚未配置或连接；generation ${artifact.binding!.generation}`);
+    return server;
+  }
   async uninstall(): Promise<never> { throw unavailable(); }
   async resolveEditableMcpServerConfiguration(): Promise<never> { throw unavailable(); }
   getMcpConfigPath(arg: IWorkbenchLocalMcpServer): undefined;

@@ -46,10 +46,14 @@ class Workspace:
 @dataclass
 class Registry:
     closes: int = 0
+    installation_closes: int = 0
     admission_closed: bool = False
 
     def close_admission(self) -> None:
         self.admission_closed = True
+
+    async def close_installations(self) -> None:
+        self.installation_closes += 1
 
     def close(self) -> None:
         self.closes += 1
@@ -168,6 +172,32 @@ async def test_cancelling_one_waiter_keeps_the_shared_close_owner(case: Case) ->
         for workspace in case.workspaces:
             workspace.release.set()
         await asyncio.gather(first, second, return_exceptions=True)
+
+
+async def test_installation_tasks_drain_after_connections_before_catalog_close(case: Case, monkeypatch: pytest.MonkeyPatch) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def close_installations() -> None:
+        assert all(workspace.closed for workspace in case.workspaces)
+        assert case.registry.admission_closed and case.registry.closes == 0
+        entered.set()
+        await release.wait()
+        case.registry.installation_closes += 1
+
+    monkeypatch.setattr(case.registry, "close_installations", close_installations)
+    for workspace in case.workspaces:
+        workspace.release.set()
+    waiting = asyncio.create_task(case.backend.close())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert not waiting.done() and case.registry.closes == 0
+        release.set()
+        await asyncio.wait_for(waiting, 2)
+        assert case.registry.installation_closes == case.registry.closes == 1
+        assert case.backend.closed
+    finally:
+        release.set()
+        await asyncio.gather(waiting, return_exceptions=True)
 
 
 async def test_late_failure_is_reported_and_retry_keeps_completed_mounts(case: Case, caplog: pytest.LogCaptureFixture) -> None:

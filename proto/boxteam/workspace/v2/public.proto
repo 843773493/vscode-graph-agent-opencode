@@ -809,6 +809,83 @@ message McpCandidatePlanResponseDTO {
   uint32 protocol_version = 6;
 }
 
+// Workspace 保存引用；实际可执行路径只从 Backend 唯一已发布记录解析。
+message McpManagedLaunchDTO {
+  string backend_id = 1;
+  string installation_id = 2;
+  string generation = 3;
+  string artifact_digest = 4;
+}
+
+message McpInstallationRequestDTO {
+  McpCandidatePlanRequestDTO candidate = 1;
+  string plan_digest = 2;
+  string operation_id = 3;
+  string entrypoint = 4;
+}
+
+message McpInstalledArtifactDTO {
+  McpManagedLaunchDTO binding = 1;
+  McpCandidateProvenanceDTO source = 2;
+  string manifest_digest = 3;
+  McpCandidateVariantRefDTO variant = 4;
+  McpTargetPlatformDTO platform = 5;
+  string registry_type = 6;
+  string identifier = 7;
+  string version = 8;
+  string entrypoint = 9;
+  string command = 10;
+  string lock_digest = 11;
+  map<string, string> installed_distributions = 12;
+}
+
+message McpInstallationOperationDTO {
+  string operation_id = 1;
+  string intent_digest = 2;
+  string status = 3;
+  string stage = 4;
+  double created_at = 5;
+  double updated_at = 6;
+  optional McpInstalledArtifactDTO artifact = 7;
+  optional string error = 8;
+  string log = 9;
+}
+
+message McpInstallationOperationResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpInstallationOperationDTO data = 3;
+  string request_id = 4;
+  McpInstallationTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
+message McpInstalledArtifactListResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  repeated McpInstalledArtifactDTO data = 3;
+  string request_id = 4;
+  McpInstallationTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
+message McpInstallationCapabilitiesDTO {
+  McpTargetPlatformDTO platform = 1;
+  bool pypi_wheel_available = 2;
+  optional string unavailable_reason = 3;
+  repeated string unsupported_registry_types = 4;
+  repeated string limitations = 5;
+}
+
+message McpInstallationCapabilitiesResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpInstallationCapabilitiesDTO data = 3;
+  string request_id = 4;
+  McpInstallationTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
 message MessageCreateRequest {
   optional string role = 1;
   string content = 2;

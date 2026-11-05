@@ -180,12 +180,13 @@ try {
   const detail = page.locator('.mcp-server-editor').filter({ has: page.getByRole('heading', { name: 'Gallery Alpha 0', exact: true }) }).filter({ visible: true });
   await expect(detail).toBeVisible();
   await expect(detail).toContainText(`${fixture.registryUrl}/alpha`);
-  await expect(detail.getByRole('button', { name: /^(Start Server|Stop Server|Authorize|Install)$/ })).toHaveCount(0);
+  await expect(detail.getByRole('button', { name: /^(Start Server|Stop Server|Authorize)$/ })).toHaveCount(0);
+  await expect(detail.getByRole('button', { name: 'Install', exact: true })).toBeDisabled();
   const writeRefusal = await page.evaluate(async () => {
     try { await globalThis.workbench.commands.executeCommand('workbench.mcp.addConfiguration'); return null; }
     catch (error) { return String(error); }
   });
-  assert.match(writeRefusal, /安装、配置与凭据写入.*尚未接入/);
+  assert.match(writeRefusal, /工作区配置与凭据写入.*尚未接入/);
   result.readOnlyDetails = true;
 
   result.phase = 'empty-and-http-error';

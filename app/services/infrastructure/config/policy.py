@@ -274,6 +274,8 @@ def workspace_config_policy() -> ConfigPolicyRegistry:
             ConfigPolicyRule("/mcp/servers/*/enabled", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*/transport", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*/command", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/managed_launch", "immediate_read", "current"),
+            ConfigPolicyRule("/mcp/servers/*/managed_launch/*", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*/args", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*/env", "immediate_read", "current"),
             ConfigPolicyRule("/mcp/servers/*/env/*", "immediate_read", "current"),

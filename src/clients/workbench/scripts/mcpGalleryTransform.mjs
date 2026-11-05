@@ -18,6 +18,8 @@ export const mcpGallerySourcePaths = [
 export function transformMcpGallery(path, source, replaceOnce, replaceSection) {
   let contents = source;
   if (path.endsWith('/mcpManagement.ts')) {
+    contents = replaceOnce(contents, 'export interface IGalleryMcpServer {', `export interface IGalleryMcpServer {
+\treadonly installationSource?: { readonly endpoint: string; readonly protocol: string; readonly entryUrl: string };`);
     contents = replaceOnce(contents, "export const mcpGalleryServiceUrlConfig = 'chat.mcp.gallery.serviceUrl';", "export const mcpGalleryServiceUrlConfig = 'chat.mcp.gallery.serviceUrl';\nexport const mcpGalleryServiceVersionConfig = 'chat.mcp.gallery.version';");
   }
   if (path === 'src/vs/platform/mcp/common/mcpGalleryManifestService.ts') {
@@ -74,6 +76,12 @@ export function transformMcpGallery(path, source, replaceOnce, replaceSection) {
     contents = replaceOnce(contents, "\t\t\tincluded: false,\n\t\t\tpolicy: {\n\t\t\t\tname: 'McpGalleryServiceUrl',", "\t\t\tpolicy: {\n\t\t\t\tname: 'McpGalleryServiceUrl',");
   }
   if (path.endsWith('/mcpGalleryService.ts')) {
+    contents = replaceOnce(contents, '\t\t\tgalleryUrl: manifest?.url,', `\t\t\tgalleryUrl: manifest?.url,
+\t\t\tinstallationSource: manifest ? (() => {
+\t\t\t\tconst template = getMcpGalleryManifestResourceUri(manifest, McpGalleryResourceType.McpServerVersionUri);
+\t\t\t\treturn template ? { endpoint: manifest.url, protocol: manifest.version,
+\t\t\t\t\tentryUrl: format2(template, { name: encodeURIComponent(server.name), version: encodeURIComponent(server.version) }) } : undefined;
+\t\t\t})() : undefined,`);
     contents = replaceOnce(contents, "import { CancellationToken } from '../../../base/common/cancellation.js';", "import { CancellationToken, CancellationTokenSource } from '../../../base/common/cancellation.js';");
     contents = replaceOnce(contents, "import { Disposable } from '../../../base/common/lifecycle.js';", "import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';");
     contents = replaceOnce(contents, '\tprivate galleryMcpServerDataSerializers:', '\tprivate queryCancellation = new CancellationTokenSource();\n\tprivate galleryMcpServerDataSerializers:');

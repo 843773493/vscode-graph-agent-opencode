@@ -33,6 +33,15 @@ from app.services.infrastructure.mcp import McpCatalogOwner
 PEER = "gateway_" + "a" * 32
 
 
+@pytest.mark.parametrize("mount", ["workspace", "active"])
+@pytest.mark.parametrize("method,suffix", [("GET", "installation-capabilities"), ("GET", "installations"),
+    ("GET", "installation-operations/original"), ("POST", "installations")])
+async def test_artifact_routes_require_installation_permission_before_backend(mcp_access: McpAccess, mount: str, method: str, suffix: str) -> None:
+    response = await mcp_access.client.request(method, mcp_access.path(mount, suffix), json={})
+    assert response.status_code == 403 and "mcp_installation_manage" in response.text
+    assert mcp_access.calls == []
+
+
 @dataclass
 class McpAccess:
     client: httpx.AsyncClient

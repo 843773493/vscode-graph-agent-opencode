@@ -399,7 +399,9 @@ async def _proxy_workspace_request(
         )
     segments = _workspace_path_segments(path)
     configuration_request = bool(segments) and segments[0] == "config"
-    installation_request = len(segments) >= 2 and segments[0] == "mcp" and segments[1] in {"candidate-manifests", "candidate-plans"}
+    installation_request = len(segments) >= 2 and segments[0] == "mcp" and segments[1] in {
+        "candidate-manifests", "candidate-plans", "installations", "installation-operations", "installation-capabilities",
+    }
     if configuration_request:
         if auth is None:
             raise RuntimeError("配置代理请求缺少已认证 Gateway 主体")

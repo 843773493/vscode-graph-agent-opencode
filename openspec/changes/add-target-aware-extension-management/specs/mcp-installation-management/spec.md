@@ -56,6 +56,14 @@
 
 目标侧实际制品安装是新增能力，不能以原版写 gallery manifest／动态 npx、uvx、docker、dnx 启动配置代替。受管 launch SHALL 绑定已验证的隔离制品 generation／digest 和锁定依赖，容器绑定不可变镜像 digest；不具备该安装方式时明确不支持。已有用户显式动态命令保持原合同，不追认为受管安装或自动改写。
 
+首批 PyPI wheel 能力 SHALL 使用目标已有 uv／Python、显式 index 和锁定依赖，不自动安装系统 runtime。标准 wheel、根 distribution 的实际版本及用户显式 console entry point 验证完成后才发布；npm／OCI／NuGet、sdist、自定义 runtimeArguments 和目录单文件 fileSha256 未有验证链时明确拒绝，并在 capability 返回具体限制。venv 准备 SHALL 从最终固定 generation 路径开始，不能先准备再改名破坏绝对 shebang。
+
+同一 BOXTEAM_HOME／稳定 Backend 安装域的多个进程 SHALL 共享唯一 SQLite 安装账本；操作 reserve 由事务竞争唯一取得，活进程持有的操作不因另一 Backend 启动被判中断。只有原 PID 与创建时间已确认不存在时才标记 interrupted，相同意图不重放；发布制品和操作成功 SHALL 在同一事务中提交。
+
+#### Scenario: 同 home 第二 Backend 观察原安装
+- **WHEN** 同一安装域的另一真实 Backend 启动并查询原安装或操作
+- **THEN** 它观察唯一发布记录及活进程状态，不能阻止第二 Backend 装配或中断原操作；两个工作区的配置和 MCP 连接保持独立
+
 #### Scenario: 包已安装而配置准备失败
 - **WHEN** 包验证完成，但目标工作区配置因无效参数未能激活
 - **THEN** 包状态如实保留已安装，配置显示真实失败与原原因，Agent 不得到伪造 ready 目录

@@ -50,6 +50,8 @@ from app.schemas.internal_v2.mcp import (
     McpCandidatePlanRequestDTO,
     McpCandidatePlanValidationRequestDTO,
     McpCandidateProvenanceDTO,
+    McpInstallationOperationDTO,
+    McpInstallationRequestDTO,
     McpInstallationTargetDTO,
 )
 from app.services.infrastructure.config.contracts import (
@@ -88,6 +90,8 @@ from app.services.infrastructure.mcp.extension_catalog import (
     extension_schema_hash,
     payload_digest,
 )
+from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
+from app.services.infrastructure.mcp.installation.python import InstallationUnavailable
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from app.services.infrastructure.mcp.oauth import is_authorization_required
 from app.services.infrastructure.mcp.retirement import McpConnectionRetirement
@@ -295,16 +299,20 @@ class McpCatalogOwner:
         leases: ExternalResourceLeaseLedger,
         publication_lock: RLock | None = None,
         session_factory: McpSessionFactory | None = None,
+        installation_owner: McpInstallationOwner | None = None,
     ) -> None:
+        self._installation_owner = installation_owner
+        self._installation_resolver = installation_owner.resolve if installation_owner is not None else None
         self._servers = parse_mcp_server_configs(
             raw_config,
             workspace_root=workspace_root,
+            installation_resolver=self._installation_resolver,
         )
         self._publisher = McpCatalogEventPublisher(event_service=event_service)
         self._workspace_root = workspace_root
         self._leases = leases
         self._session_factory: McpSessionFactory = (
-            session_factory or partial(production_mcp_session_factory, workspace_root=workspace_root)
+            session_factory or partial(production_mcp_session_factory, workspace_root=workspace_root, installation_owner=installation_owner)
         )
         self._session_scope: LifetimeScope | None = None
         self._started = False
@@ -583,12 +591,19 @@ class McpCatalogOwner:
     async def prepare_installation_candidate(
         self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO,
     ) -> McpCandidatePlanDTO:
+        plan, _ = await self._resolved_installation_candidate(request, actual_target=actual_target)
+        return plan
+
+    async def _resolved_installation_candidate(
+        self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO,
+    ) -> tuple[McpCandidatePlanDTO, dict[str, object]]:
         manifest, provenance = await self._installation_candidate(request, actual_target)
         selected = request.variant
         variant = manifest.select(request.manifest_digest, selected.kind, selected.index, selected.digest)
         disposition, parameters = candidate_parameters(variant, request.inputs)
         if disposition != "requires_artifact":
-            server, = parse_mcp_server_configs({"servers": {"candidate": parameters}}, workspace_root=self._workspace_root)
+            server, = parse_mcp_server_configs({"servers": {"candidate": parameters}}, workspace_root=self._workspace_root,
+                installation_resolver=self._installation_resolver)
             # 沿原配置 parser 在目标侧解析环境引用，不向浏览器泄露 env/headers 值。
             parameters = dict(server.connection)
             if server.oauth is not None:
@@ -602,7 +617,7 @@ class McpCatalogOwner:
             "source": provenance, "manifest_digest": manifest.digest, "variant": variant.ref(), "platform": platform,
             "plan_digest": sha256_jcs(fingerprint), "disposition": disposition,
             "download_required": disposition == "requires_artifact", "parameters": redacted,
-        })
+        }), parameters
 
     async def validate_installation_candidate(
         self, request: McpCandidatePlanValidationRequestDTO, *, actual_target: McpInstallationTargetDTO,
@@ -613,12 +628,25 @@ class McpCatalogOwner:
             raise McpCandidateConflict("MCP 候选的目标平台或参数已改变，必须重新生成计划")
         return plan
 
+    @property
+    def installations(self) -> McpInstallationOwner:
+        if self._installation_owner is None:
+            raise InstallationUnavailable("当前 Backend 未装配目标制品安装 owner，不能把动态命令视为安装")
+        return self._installation_owner
+
+    async def install_artifact(self, request: McpInstallationRequestDTO, *, actual_target: McpInstallationTargetDTO) -> McpInstallationOperationDTO:
+        plan, parameters = await self._resolved_installation_candidate(request.candidate, actual_target=actual_target)
+        if plan.plan_digest != request.plan_digest:
+            raise McpCandidateConflict("MCP 安装候选的目标、平台或参数已改变，请重新生成计划")
+        return await self.installations.install(request, plan=plan, parameters=parameters)
+
     async def prepare_config(
         self, raw_config: object, scope: LifetimeScope, record_side_effect: ConfigApplyRecorder,
     ) -> tuple[ConfigPublication, frozenset[str]]:
         """按 Server 准备；stdio 先记录停止意图，全部验证后共同激活。"""
         self._require_started()
-        servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root)
+        servers = parse_mcp_server_configs(raw_config, workspace_root=self._workspace_root,
+            installation_resolver=self._installation_resolver)
         proposed = {server.server_id: server for server in servers}
         prepared: dict[str, McpServerRuntime] = {}
         tools: dict[str, BaseTool] = {}

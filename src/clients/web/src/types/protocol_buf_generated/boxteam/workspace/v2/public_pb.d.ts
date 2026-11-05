@@ -3551,6 +3551,356 @@ export declare type McpCandidatePlanResponseDTO = Message<"boxteam.workspace.v2.
 export declare const McpCandidatePlanResponseDTOSchema: GenMessage<McpCandidatePlanResponseDTO>;
 
 /**
+ * Workspace 保存引用；实际可执行路径只从 Backend 唯一已发布记录解析。
+ *
+ * @generated from message boxteam.workspace.v2.McpManagedLaunchDTO
+ */
+export declare type McpManagedLaunchDTO = Message<"boxteam.workspace.v2.McpManagedLaunchDTO"> & {
+  /**
+   * @generated from field: string backend_id = 1;
+   */
+  backendId: string;
+
+  /**
+   * @generated from field: string installation_id = 2;
+   */
+  installationId: string;
+
+  /**
+   * @generated from field: string generation = 3;
+   */
+  generation: string;
+
+  /**
+   * @generated from field: string artifact_digest = 4;
+   */
+  artifactDigest: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpManagedLaunchDTO.
+ * Use `create(McpManagedLaunchDTOSchema)` to create a new message.
+ */
+export declare const McpManagedLaunchDTOSchema: GenMessage<McpManagedLaunchDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstallationRequestDTO
+ */
+export declare type McpInstallationRequestDTO = Message<"boxteam.workspace.v2.McpInstallationRequestDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpCandidatePlanRequestDTO candidate = 1;
+   */
+  candidate?: McpCandidatePlanRequestDTO | undefined;
+
+  /**
+   * @generated from field: string plan_digest = 2;
+   */
+  planDigest: string;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string entrypoint = 4;
+   */
+  entrypoint: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstallationRequestDTO.
+ * Use `create(McpInstallationRequestDTOSchema)` to create a new message.
+ */
+export declare const McpInstallationRequestDTOSchema: GenMessage<McpInstallationRequestDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstalledArtifactDTO
+ */
+export declare type McpInstalledArtifactDTO = Message<"boxteam.workspace.v2.McpInstalledArtifactDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpManagedLaunchDTO binding = 1;
+   */
+  binding?: McpManagedLaunchDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpCandidateProvenanceDTO source = 2;
+   */
+  source?: McpCandidateProvenanceDTO | undefined;
+
+  /**
+   * @generated from field: string manifest_digest = 3;
+   */
+  manifestDigest: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpCandidateVariantRefDTO variant = 4;
+   */
+  variant?: McpCandidateVariantRefDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpTargetPlatformDTO platform = 5;
+   */
+  platform?: McpTargetPlatformDTO | undefined;
+
+  /**
+   * @generated from field: string registry_type = 6;
+   */
+  registryType: string;
+
+  /**
+   * @generated from field: string identifier = 7;
+   */
+  identifier: string;
+
+  /**
+   * @generated from field: string version = 8;
+   */
+  version: string;
+
+  /**
+   * @generated from field: string entrypoint = 9;
+   */
+  entrypoint: string;
+
+  /**
+   * @generated from field: string command = 10;
+   */
+  command: string;
+
+  /**
+   * @generated from field: string lock_digest = 11;
+   */
+  lockDigest: string;
+
+  /**
+   * @generated from field: map<string, string> installed_distributions = 12;
+   */
+  installedDistributions: { [key: string]: string };
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstalledArtifactDTO.
+ * Use `create(McpInstalledArtifactDTOSchema)` to create a new message.
+ */
+export declare const McpInstalledArtifactDTOSchema: GenMessage<McpInstalledArtifactDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstallationOperationDTO
+ */
+export declare type McpInstallationOperationDTO = Message<"boxteam.workspace.v2.McpInstallationOperationDTO"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string intent_digest = 2;
+   */
+  intentDigest: string;
+
+  /**
+   * @generated from field: string status = 3;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string stage = 4;
+   */
+  stage: string;
+
+  /**
+   * @generated from field: double created_at = 5;
+   */
+  createdAt: number;
+
+  /**
+   * @generated from field: double updated_at = 6;
+   */
+  updatedAt: number;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.McpInstalledArtifactDTO artifact = 7;
+   */
+  artifact?: McpInstalledArtifactDTO | undefined;
+
+  /**
+   * @generated from field: optional string error = 8;
+   */
+  error?: string | undefined;
+
+  /**
+   * @generated from field: string log = 9;
+   */
+  log: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstallationOperationDTO.
+ * Use `create(McpInstallationOperationDTOSchema)` to create a new message.
+ */
+export declare const McpInstallationOperationDTOSchema: GenMessage<McpInstallationOperationDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstallationOperationResponseDTO
+ */
+export declare type McpInstallationOperationResponseDTO = Message<"boxteam.workspace.v2.McpInstallationOperationResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpInstallationOperationDTO data = 3;
+   */
+  data?: McpInstallationOperationDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpInstallationTargetDTO target = 5;
+   */
+  target?: McpInstallationTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstallationOperationResponseDTO.
+ * Use `create(McpInstallationOperationResponseDTOSchema)` to create a new message.
+ */
+export declare const McpInstallationOperationResponseDTOSchema: GenMessage<McpInstallationOperationResponseDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstalledArtifactListResponseDTO
+ */
+export declare type McpInstalledArtifactListResponseDTO = Message<"boxteam.workspace.v2.McpInstalledArtifactListResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.McpInstalledArtifactDTO data = 3;
+   */
+  data: McpInstalledArtifactDTO[];
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpInstallationTargetDTO target = 5;
+   */
+  target?: McpInstallationTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstalledArtifactListResponseDTO.
+ * Use `create(McpInstalledArtifactListResponseDTOSchema)` to create a new message.
+ */
+export declare const McpInstalledArtifactListResponseDTOSchema: GenMessage<McpInstalledArtifactListResponseDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstallationCapabilitiesDTO
+ */
+export declare type McpInstallationCapabilitiesDTO = Message<"boxteam.workspace.v2.McpInstallationCapabilitiesDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpTargetPlatformDTO platform = 1;
+   */
+  platform?: McpTargetPlatformDTO | undefined;
+
+  /**
+   * @generated from field: bool pypi_wheel_available = 2;
+   */
+  pypiWheelAvailable: boolean;
+
+  /**
+   * @generated from field: optional string unavailable_reason = 3;
+   */
+  unavailableReason?: string | undefined;
+
+  /**
+   * @generated from field: repeated string unsupported_registry_types = 4;
+   */
+  unsupportedRegistryTypes: string[];
+
+  /**
+   * @generated from field: repeated string limitations = 5;
+   */
+  limitations: string[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstallationCapabilitiesDTO.
+ * Use `create(McpInstallationCapabilitiesDTOSchema)` to create a new message.
+ */
+export declare const McpInstallationCapabilitiesDTOSchema: GenMessage<McpInstallationCapabilitiesDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpInstallationCapabilitiesResponseDTO
+ */
+export declare type McpInstallationCapabilitiesResponseDTO = Message<"boxteam.workspace.v2.McpInstallationCapabilitiesResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpInstallationCapabilitiesDTO data = 3;
+   */
+  data?: McpInstallationCapabilitiesDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpInstallationTargetDTO target = 5;
+   */
+  target?: McpInstallationTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpInstallationCapabilitiesResponseDTO.
+ * Use `create(McpInstallationCapabilitiesResponseDTOSchema)` to create a new message.
+ */
+export declare const McpInstallationCapabilitiesResponseDTOSchema: GenMessage<McpInstallationCapabilitiesResponseDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.MessageCreateRequest
  */
 export declare type MessageCreateRequest = Message<"boxteam.workspace.v2.MessageCreateRequest"> & {

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
   listMcpOperations, getMcpCatalog, submitMcpOperation,
+  getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
@@ -35,6 +36,35 @@ function installFetch(respond: (url: URL, init: RequestInit | undefined) => unkn
 }
 
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("制品入口冻结原生 Backend，实际安装与查询沿相同目标且不替换为workspace响应", async () => {
+  const native = { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" };
+  const requests: { url: URL; init: RequestInit | undefined }[] = [];
+  let actual = native;
+  const port = installFetch((url, init) => {
+    requests.push({ url, init });
+    return envelope({ status: "running" }, { target: actual });
+  });
+  const candidate = { target: native, source: { kind: "manual", name: "exact", version: "1", definition: { packages: [] } },
+    manifest_digest: "sha256:jcs:v1:" + "a".repeat(64), variant: { kind: "package", index: 2, digest: "sha256:jcs:v1:" + "b".repeat(64) }, inputs: {} };
+  await getMcpInstallationCapabilities(port, target);
+  await inspectMcpInstallationCandidate(port, target, candidate);
+  await planMcpInstallation(port, target, candidate);
+  const intent = { candidate, plan_digest: "sha256:jcs:v1:" + "c".repeat(64), operation_id: "original", entrypoint: "selected-entry" };
+  await installMcpArtifact(port, target, intent);
+  await getMcpInstallationOperation(port, target, native, "original/id");
+  expect(requests.map(({ url }) => url.pathname)).toEqual([
+    "/api/v1/mcp/installation-capabilities", "/api/v1/mcp/candidate-manifests", "/api/v1/mcp/candidate-plans",
+    "/api/v1/mcp/installations", "/api/v1/mcp/installation-operations/original%2Fid",
+  ]);
+  expect(JSON.parse(String(requests[3]!.init?.body))).toEqual(intent);
+  for (const { init } of requests) {
+    expect(new Headers(init?.headers).get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
+    expect(new Headers(init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+  }
+  actual = { ...native, backend_id: "00000000-0000-4000-8000-000000000012" };
+  await expect(getMcpInstallationOperation(port, target, native, "original")).rejects.toThrow("Backend 已改变");
+});
 
 test("所有 MCP 消费者传递完整 owner，保留完整目录封套及原操作对象", async () => {
   const requests: { url: URL; init: RequestInit | undefined }[] = [];

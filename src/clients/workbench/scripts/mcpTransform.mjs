@@ -126,6 +126,17 @@ export function transformMcp(root, path, source, replaceOnce) {
     contents = `import { WorkspaceMcpService, unavailableWorkspaceMcpWrite } from ${JSON.stringify(join(root, 'src/mcp/service.js'))};\nimport { showWorkspaceMcpOptions, runWorkspaceMcpCommand } from ${JSON.stringify(join(root, 'src/mcp/commands.js'))};\n` + serverImport + contents;
   }
   if (relative.endsWith('/mcpServerActions.ts')) {
+    const installBegin = contents.indexOf('export class InstallAction extends McpServerAction {');
+    const installEnd = contents.indexOf('export class InstallInWorkspaceAction', installBegin);
+    if (installBegin < 0 || installEnd < 0) throw new Error('上游 MCP InstallAction 边界缺失');
+    const originalInstall = contents.slice(installBegin, installEnd);
+    let install = replaceOnce(originalInstall, '\t\t@IMcpService private readonly mcpService: IMcpService,\n', '');
+    install = replaceOnce(install, `\t\tconst installed = await this.mcpWorkbenchService.install(this.mcpServer);
+
+\t\tawait startServerByFilter(this.mcpService, s => {
+\t\t\treturn s.definition.id === installed.id;
+\t\t});`, '\t\tawait this.mcpWorkbenchService.install(this.mcpServer);');
+    contents = replaceOnce(contents, originalInstall, install);
     contents = replaceOnce(contents, "import { IAuthenticationService } from '../../../services/authentication/common/authentication.js';", '');
     contents = replaceOnce(contents, "import { IAccountQuery, IAuthenticationQueryService } from '../../../services/authentication/common/authenticationQuery.js';", '');
     contents = replaceSection(contents, 'export class AuthServerAction extends McpServerAction {', 'export class ShowServerOutputAction', `export class AuthServerAction extends McpServerAction {
@@ -164,8 +175,9 @@ export function transformMcp(root, path, source, replaceOnce) {
   if (relative.endsWith('/mcpServerEditor.ts')) {
     const actionImports = contents.split('\n').find(line => line.startsWith('import { ButtonWithDropDownExtensionAction,') && line.endsWith("from './mcpServerActions.js';"));
     if (!actionImports) throw new Error('上游 MCP 详情 action import 锚点缺失');
-    contents = replaceOnce(contents, actionImports, "import { StartServerAction, StopServerAction, AuthServerAction, ButtonWithDropDownExtensionAction, ButtonWithDropdownExtensionActionViewItem, DropDownAction, McpServerStatusAction } from './mcpServerActions.js';");
+    contents = replaceOnce(contents, actionImports, "import { InstallAction, StartServerAction, StopServerAction, AuthServerAction, ButtonWithDropDownExtensionAction, ButtonWithDropdownExtensionActionViewItem, DropDownAction, McpServerStatusAction } from './mcpServerActions.js';");
     contents = replaceSection(contents, '\t\tconst actions = [', '\n\t\tconst actionsAndStatusContainer', `\t\tconst actions = [
+      this.instantiationService.createInstance(InstallAction, false),
       this.instantiationService.createInstance(StartServerAction),
       this.instantiationService.createInstance(StopServerAction),
       this.instantiationService.createInstance(AuthServerAction),
