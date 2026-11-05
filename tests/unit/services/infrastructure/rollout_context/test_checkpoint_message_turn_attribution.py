@@ -27,7 +27,12 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
+from app.schemas.internal_v2.common import MessageRole
+from app.schemas.internal_v2.message import MessageCreateRequest
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    ANNOTATION_SCHEMA,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -35,6 +40,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from tests.support.message_service import accept_queued_message, build_message_service
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.rollout.view_mutations import mutate_view_members
 
@@ -303,6 +309,56 @@ def test_new_user_turn_append_uses_acceptance_and_prefix_replay_needs_no_admissi
         ("accepted-user-root", USER_EXECUTION_ID),
         ("accepted-final", USER_EXECUTION_ID),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["retry_failed", "regenerate", "edit_and_continue"])
+async def test_message_admission_preserves_replay_annotations_in_cold_history(
+    tmp_path: Path, session_bundle_factory, empty_workspace_scope, action: str,
+) -> None:
+    storage, saver, thread_id = _make_saver(tmp_path, session_bundle_factory)
+    metadata: dict[str, object] = {"replay_action": action, "replaced_message_id": "msg-replaced"}
+    service = build_message_service(
+        storage.storage.sessions_dir, checkpointer=saver,
+        workspace_root=empty_workspace_scope[1],
+    )
+    message = await service.create(SESSION_ID, MessageCreateRequest(
+        role=MessageRole.user, content="从回退后的输入继续。", metadata=metadata,
+    ))
+    # 真实 acceptance 必须取得并保存标签，不能靠 checkpoint 或前端乐观态补写。
+    accept_queued_message(service, message)
+    (root,) = storage.storage.read_items(
+        SESSION_ID, thread_id, item_ids=(f"item-{message.message_id}",),
+    )
+    assert root.extensions == {
+        ANNOTATION_SCHEMA: {
+            "extension_version": "1", "protection": "public", "value": metadata,
+        },
+    }
+    assert root.payload == message.content
+    (warm,) = saver.load_history(
+        SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user", "metadata"]),
+    ).items
+    runtime_input = saver.accepted_user_message(
+        SESSION_ID, thread_id=thread_id, job_id=warm.job_id, message_id=message.message_id,
+    )
+    assert runtime_input.id == message.message_id and runtime_input.content == message.content
+    assert {key: runtime_input.response_metadata[key] for key in metadata} == metadata
+    with RolloutCheckpointSaver(storage.storage.sessions_dir) as cold:
+        default_history = cold.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest())
+        default_metadata = default_history.items[0].user_messages[0].metadata
+        assert {key: default_metadata[key] for key in metadata} == metadata
+        history = cold.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user", "metadata"]))
+        (restored,) = history.items
+        (user,) = restored.user_messages
+        assert (restored.turn_id, restored.job_id, restored.root_logical_item_ordinal) == (
+            warm.turn_id, warm.job_id, 0,
+        )
+        assert restored.source_message_ids == [message.message_id]
+        assert user.message_id == message.message_id and user.content == message.content
+        assert {key: user.metadata[key] for key in metadata} == metadata
+        serialized_user = history.model_dump(mode="json")["items"][0]["user_messages"][0]
+        assert {key: serialized_user["metadata"][key] for key in metadata} == metadata
 
 
 @pytest.mark.parametrize("materialize_backing", [False, True])

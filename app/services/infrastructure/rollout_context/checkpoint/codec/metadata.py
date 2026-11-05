@@ -59,6 +59,7 @@ ANNOTATION_FIELDS = (
     "tool_name",
     "task_id",
     "interrupted_at",
+    "replay_action", "replaced_message_id",
     "parent_session_id",
     "token_usage",
 )

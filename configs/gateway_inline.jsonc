@@ -36,12 +36,12 @@
         "progressive": {
           "initial": {
             "turns": 5,
-            "include": ["user", "thinking", "tool_summary", "final_response", "internal"]
+            "include": ["user", "metadata", "thinking", "tool_summary", "final_response", "internal"]
           },
           "anchor": {
             "before_turns": 3,
             "after_turns": 3,
-            "include": ["user", "final_response", "internal"]
+            "include": ["user", "metadata", "final_response", "internal"]
           }
         }
       }

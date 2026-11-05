@@ -22,7 +22,7 @@ const EMPTY: ChildThreadConversationSnapshot = {
   history: null, report: null, view: "history", draft: "", loading: false,
   sending: false, error: null, accepted: null, paged: false,
 };
-const INCLUDE = ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] as const;
+const INCLUDE = ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] as const;
 
 function sameHistoryRevision(previous: TurnHistoryPage | null, next: TurnHistoryPage): boolean {
   return previous !== null

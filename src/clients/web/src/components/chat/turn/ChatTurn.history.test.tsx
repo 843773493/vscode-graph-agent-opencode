@@ -430,6 +430,7 @@ describe("ChatTurn 历史详情", () => {
     });
     expect(loadedInclude).toEqual([
       "user",
+      "metadata",
       "text",
       "reasoning_detail",
       "encrypted_reasoning_meta",

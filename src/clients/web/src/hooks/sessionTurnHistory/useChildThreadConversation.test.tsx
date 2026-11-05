@@ -163,7 +163,7 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   expect(current.isUnread(CHILDREN[1]!)).toBe(true);
   expect(requests.every((request) => request.owner.gatewayId === OWNER_A.gatewayId
     && request.owner.workspaceId === OWNER_A.workspaceId && request.path.includes("/threads/thr_"))).toBe(true);
-  expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
+  expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
 });
 
 test("静默轮询遇到相同历史版本不触发重渲染，版本变化时刷新历史", async () => {
@@ -437,7 +437,7 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
       body: {
         direction: "tail",
         execution_id: "execution-1",
-        include: ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"],
+        include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"],
       },
     },
     {
@@ -446,7 +446,7 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
         direction: "before",
         cursor: "cursor-before-256",
         execution_id: "execution-1",
-        include: ["user", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"],
+        include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"],
       },
     },
   ]);

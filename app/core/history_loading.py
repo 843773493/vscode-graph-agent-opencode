@@ -9,12 +9,13 @@ from app.schemas.internal_v2.turn import TurnInclude
 
 DEFAULT_INITIAL_INCLUDE: tuple[str, ...] = (
     "user",
+    "metadata",
     "reasoning_summary",
     "tool_summary",
     "final_response",
     "internal",
 )
-DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "final_response", "internal")
+DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "metadata", "final_response", "internal")
 DEFAULT_INITIAL_TURNS = 5
 DEFAULT_ANCHOR_BEFORE_TURNS = 3
 DEFAULT_ANCHOR_AFTER_TURNS = 3

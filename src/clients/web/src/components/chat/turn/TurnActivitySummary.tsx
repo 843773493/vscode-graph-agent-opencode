@@ -199,6 +199,7 @@ export function TurnActivitySummary({
           false,
           [
             "user",
+            "metadata",
             "text",
             "reasoning_detail",
             "encrypted_reasoning_meta",

@@ -216,7 +216,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         expectedRequests.push({ direction: "around", turn_ids: [turnId] });
       }
       if (order === "completed_metadata_expand") {
-        expectedRequests.push({ direction: "around", turn_ids: [turnId], include: ["user", "text",
+        expectedRequests.push({ direction: "around", turn_ids: [turnId], include: ["user", "metadata", "text",
           "reasoning_detail", "encrypted_reasoning_meta", "tool_summary", "tool_call", "tool_result", "final_response"] });
       }
       expect(requests).toEqual(expectedRequests);

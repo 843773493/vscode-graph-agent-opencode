@@ -483,6 +483,8 @@ def test_gateway_history_loading_config_is_nested_and_uses_anchor_window(
     assert result.history_loading.anchor_after_turns == 5
     assert result.history_loading.anchor_limit("before") == 2
     assert result.history_loading.anchor_limit("after") == 5
+    assert result.history_loading.initial_include == ("user", "tool_summary", "final_response")
+    assert result.history_loading.anchor_include == ("user", "final_response")
 
 
 def test_gateway_history_loading_defaults_use_five_initial_and_three_sided_turns(
@@ -497,6 +499,8 @@ def test_gateway_history_loading_defaults_use_five_initial_and_three_sided_turns
     assert result.history_loading.anchor_after_turns == 3
     assert "internal" in result.history_loading.initial_include
     assert "internal" in result.history_loading.anchor_include
+    assert "metadata" in result.history_loading.initial_include
+    assert "metadata" in result.history_loading.anchor_include
 
 
 def test_load_gateway_config_merges_local_override_and_records_sources(
