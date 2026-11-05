@@ -151,7 +151,9 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   }
 
   installationTarget(): { target: WorkspaceMcpCatalog['target']; label: string } {
-    this.synchronizeTargets();
+    const snapshot = workspaceContext.getSnapshot();
+    if (snapshot.loading) throw new Error('工作区目标尚未完成初始化');
+    if (snapshot.error) throw new Error(snapshot.error);
     if (this.selectionError) throw this.selectionError;
     if (!this.selected) throw new Error('请先选择制品安装所属的目标工作区');
     return { target: this.selected.target, label: this.selected.label };
