@@ -25,7 +25,7 @@ from app.services.infrastructure.rollout_context.activation.reads import (
     read_activation_refs_for_view,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
-    validate_tool_protocol_closure,
+    ToolProtocolBoundary,
 )
 from app.services.infrastructure.rollout_context.checkpoint.durable.message_writes import (
     PendingMessageReferences,
@@ -419,7 +419,7 @@ class RolloutCheckpointPersistenceMixin:
                     selected_sequences = list(dict.fromkeys(
                         selected_messages[item_id] for item_id in compaction_selection if item_id in selected_messages
                     ))
-                    validate_tool_protocol_closure(connection, selected_sequences, len(selected_sequences))
+                    ToolProtocolBoundary(connection, selected_sequences).validate(len(selected_sequences))
                 # 完整 Turn 只补展示历史；Provider 选择继承冻结成员和本次新消息。
                 parent_members = connection.execute(
                     "SELECT item_id, context_selected, context_ordinal FROM context_view_items "

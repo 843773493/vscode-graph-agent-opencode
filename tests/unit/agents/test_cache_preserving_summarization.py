@@ -53,7 +53,7 @@ from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
-    prefix_has_open_tool_group,
+    closed_tool_prefix_cutoffs,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
@@ -133,11 +133,7 @@ class _InMemoryPreflight:
             _PREFLIGHT_OWNER.session_id,
             _PREFLIGHT_OWNER.thread_id,
         )
-        return frozenset(
-            index
-            for index in cutoff_indexes  # type: ignore[arg-type]
-            if not prefix_has_open_tool_group(state_messages, index)  # type: ignore[arg-type]
-        )
+        return closed_tool_prefix_cutoffs(state_messages, cutoff_indexes)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -194,11 +190,7 @@ def _make_preflight_middleware(
 
 def _in_memory_safe_boundaries(middle: list[AnyMessage]) -> frozenset[int]:
     """测试侧合成 preflight：内存闭合初筛（与调度预览合同一致）。"""
-    return frozenset(
-        index
-        for index in range(2, len(middle))
-        if not prefix_has_open_tool_group(middle, index)
-    )
+    return closed_tool_prefix_cutoffs(middle, range(2, len(middle)))
 
 
 def test_first_compaction_preserves_complete_prefix_and_recent_tail() -> None:

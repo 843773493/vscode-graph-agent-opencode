@@ -3,20 +3,19 @@
 cache_preserving 压缩的全部边界候选（稳定前缀切点、state cutoff、
 overflow retry 切点）都规范为 source view 上的前缀切点。本模块不解析
 消息正文，不维护第二套配对判断，统一经
-validate_tool_protocol_closure 验证；冲突时抛出唯一边界异常。
+ToolProtocolBoundary 验证；冲突时抛出唯一边界异常。
 """
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
+from itertools import islice
 from typing import Protocol
 
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
-    ToolProtocolBoundaryConflict,
-    validate_tool_protocol_closure,
+    ToolProtocolBoundary,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     canonical_message_anchor,
@@ -28,27 +27,10 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
 
-
-def validate_compaction_prefix_cutoffs(
-    connection: sqlite3.Connection,
-    ordered_sequences: Sequence[int],
-    cutoff_indexes: Iterable[int],
-) -> None:
-    """逐个验证 compaction 候选前缀切点，冲突时抛出唯一边界异常。
-
-    任一切点拆散 assistant tool-call group 与匹配 terminal result 即抛出
-    ToolProtocolBoundaryConflict（code=tool-protocol-boundary-conflict）。
-    本函数只读，不产生任何持久化副作用。
-    """
-    for cutoff_index in cutoff_indexes:
-        validate_tool_protocol_closure(connection, ordered_sequences, cutoff_index)
-
-
 __all__ = [
     "CompactionPreflightPort",
     "RolloutCompactionPreflightOwnerMixin",
-    "prefix_has_open_tool_group",
-    "validate_compaction_prefix_cutoffs",
+    "closed_tool_prefix_cutoffs",
 ]
 
 
@@ -72,35 +54,41 @@ class CompactionPreflightPort(Protocol):
         ...
 
 
-def prefix_has_open_tool_group(
+def closed_tool_prefix_cutoffs(
     state_messages: Sequence[object],
-    cutoff_index: int,
-) -> bool:
-    """检测 in-flight tool group：call 已入前缀但 terminal result 未入。
+    cutoff_indexes: Iterable[int],
+) -> frozenset[int]:
+    """一次扫描筛选已校验的候选，不复制、重走每个 in-flight 消息前缀。
 
-    未持久化的配对无法经 SQLite tool_calls 索引验证，按协议在内存侧
-    fail closed；call 缺少可配对 id 同样视为未闭合。
+    只读到最远候选；call 缺少可配对 id 时，此后所有前缀都视为未闭合。
+    这里只做内存初筛，持久化配对仍交唯一 ToolProtocolBoundary 核验。
     """
+    candidates = set(cutoff_indexes)
+    if not candidates:
+        return frozenset()
+    closed = {0} & candidates
     pending_call_ids: set[str] = set()
-    for message in state_messages[:cutoff_index]:
+    for index, message in enumerate(islice(state_messages, max(candidates)), start=1):
         if isinstance(message, AIMessage):
             for tool_call in message.tool_calls:
                 call_id = (
                     tool_call.get("id") if isinstance(tool_call, Mapping) else None
                 )
                 if not isinstance(call_id, str) or not call_id:
-                    return True
+                    return frozenset(closed)
                 pending_call_ids.add(call_id)
         elif isinstance(message, ToolMessage):
             pending_call_ids.discard(message.tool_call_id)
-    return bool(pending_call_ids)
+        if not pending_call_ids and index in candidates:
+            closed.add(index)
+    return frozenset(closed)
 
 
 class RolloutCompactionPreflightOwnerMixin:
     """compaction preflight 只读 owner：state 切点 → durable view 前缀闭包。
 
     由 RolloutContextStore 组合；唯一配对事实来源仍是 tool_calls 投影与
-    validate_tool_protocol_closure，本模块不维护第二套配对判断。
+    ToolProtocolBoundary，本模块不维护第二套配对判断。
     """
 
     def safe_compaction_prefix_cutoffs(
@@ -242,22 +230,16 @@ class RolloutCompactionPreflightOwnerMixin:
                     "active view 前缀顺序不一致 "
                     f"persisted={persisted[:8]} view={view_sequences[:8]}"
                 )
-            safe: set[int] = set()
             for cutoff in candidates:
                 if cutoff < 0 or cutoff > len(state_messages):
                     raise ValueError(
                         "compaction preflight 切点超出 state 消息范围: "
                         f"cutoff={cutoff}, state_messages={len(state_messages)}"
                     )
-                if prefix_has_open_tool_group(state_messages, cutoff):
-                    continue
-                try:
-                    validate_tool_protocol_closure(
-                        connection,
-                        view_sequences,
-                        durable_cutoffs[cutoff],
-                    )
-                except ToolProtocolBoundaryConflict:
-                    continue
-                safe.add(cutoff)
-            return frozenset(safe)
+            closed = closed_tool_prefix_cutoffs(state_messages, candidates)
+            # 同一只读事务的候选共用冻结配对事实，不逐候选读库或构造预期冲突。
+            boundary = ToolProtocolBoundary(connection, view_sequences)
+            return frozenset(
+                cutoff for cutoff in candidates
+                if cutoff in closed and boundary.is_safe(durable_cutoffs[cutoff])
+            )

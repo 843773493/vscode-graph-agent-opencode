@@ -38,8 +38,8 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    ToolProtocolBoundary,
     ToolProtocolBoundaryConflict,
-    validate_tool_protocol_closure,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     canonical_message_anchor,
@@ -445,7 +445,7 @@ class ContextDispatchOwnerMixin:
                 )
                 sequences = self._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
                 try:
-                    validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+                    ToolProtocolBoundary(snapshot.connection, sequences).validate(len(sequences))
                 except ToolProtocolBoundaryConflict as conflict:
                     return conflict, predecessor
         return None, predecessor

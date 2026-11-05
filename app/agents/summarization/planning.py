@@ -31,7 +31,7 @@ from app.agents.summarization.state import (
     CachePreservingPartition,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
-    prefix_has_open_tool_group,
+    closed_tool_prefix_cutoffs,
 )
 
 
@@ -88,20 +88,13 @@ def build_cache_preserving_partition(
         middle_start = len(prefix_messages)
         # effective_messages 中紧随稳定前缀的是上一次摘要，也要滚入新摘要。
     else:
-        candidates = (
-            prefix_cutoff_candidates
-            if prefix_cutoff_candidates is not None
+        candidates = prefix_cutoff_candidates
+        if candidates is None:
             # 调度预览合同：没有 preflight 信息时用内存闭合初筛，
             # 最终 durable 安全门在 model-call 路径的 preflight port。
-            else [
-                index
-                for index in _prefix_cutoff_candidates(
-                    effective_messages,
-                    summarize_end,
-                )
-                if not prefix_has_open_tool_group(effective_messages, index)
-            ]
-        )
+            proposed = _prefix_cutoff_candidates(effective_messages, summarize_end)
+            closed = closed_tool_prefix_cutoffs(effective_messages, proposed)
+            candidates = [index for index in proposed if index in closed]
         middle_start = next(iter(candidates), 0)
         if middle_start == 0:
             return None

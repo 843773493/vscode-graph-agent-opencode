@@ -15,12 +15,16 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.boundary import (
+    tool_protocol_boundary,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
-    validate_compaction_prefix_cutoffs,
+    closed_tool_prefix_cutoffs,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     CONFLICT_CODE,
+    ToolProtocolBoundary,
     ToolProtocolBoundaryConflict,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
@@ -50,7 +54,7 @@ def test_conflict_raises_with_code_and_zero_side_effect(
         before = tuple(snapshot.connection.iterdump())
         # call 位于 2，result 位于 4；压缩切点 3 必须拒绝真实 typed pair。
         with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
-            validate_compaction_prefix_cutoffs(snapshot.connection, sequences, [3])
+            ToolProtocolBoundary(snapshot.connection, sequences).validate(3)
         assert exc_info.value.code == CONFLICT_CODE
         assert tuple(snapshot.connection.iterdump()) == before
     assert jsonl.read_bytes() == before_jsonl
@@ -64,7 +68,73 @@ def test_closed_boundaries_pass(paired_saver: RolloutCheckpointSaver) -> None:
             snapshot, predecessor=paired_saver._storage.assemblies.latest_context_assembly(snapshot),
         )
         sequences = paired_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
-        validate_compaction_prefix_cutoffs(snapshot.connection, sequences, [1, 4])
+        boundary = ToolProtocolBoundary(snapshot.connection, sequences)
+        for cutoff in (1, 4):
+            boundary.validate(cutoff)
+
+
+def test_boundary_rejects_bad_cutoffs_before_pairing_read(paired_saver, monkeypatch) -> None:
+    storage = paired_saver._storage.storage
+    thread = storage.main_thread_id(SESSION_ID)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("无效切点不能读取配对")
+
+    monkeypatch.setattr(tool_protocol_boundary, "_unsafe_cutoff_indices", refuse)
+    with storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+        boundary = ToolProtocolBoundary(snapshot.connection, [1, 2, 3, 4])
+        for cutoff in (True, 1.0, None):
+            with pytest.raises(TypeError, match="cutoff_index 必须是 int"):
+                boundary.validate(cutoff)
+        for cutoff in (-1, 5):
+            with pytest.raises(ValueError, match="超出 source view 范围"):
+                boundary.is_safe(cutoff)
+
+
+def test_boundary_rechecks_pairing_in_next_operation(paired_saver) -> None:
+    storage = paired_saver._storage.storage
+    thread = storage.main_thread_id(SESSION_ID)
+    with storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+        sequences = [row[0] for row in snapshot.connection.execute(
+            "SELECT message_sequence FROM messages ORDER BY message_sequence",
+        )]
+        assert ToolProtocolBoundary(snapshot.connection, sequences).is_safe(len(sequences))
+    with sqlite3.connect(storage.index_path(SESSION_ID, thread_id=thread)) as connection:
+        connection.execute("UPDATE tool_calls SET result_message_sequence=NULL")
+    with storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
+        boundary = ToolProtocolBoundary(snapshot.connection, sequences)
+        assert not boundary.is_safe(len(sequences))
+        with pytest.raises(ToolProtocolBoundaryConflict) as error:
+            boundary.validate(len(sequences))
+        assert [anchor.cutoff_index for anchor in error.value.safe_anchors] == [1]
+
+
+@pytest.mark.parametrize("case", ["paired", "pending", "duplicate", "orphan", "invalid"])
+def test_memory_cutoff_batch_preserves_pending_id_semantics(case: str) -> None:
+    call = AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "call"}])
+    result = ToolMessage(content="结果", tool_call_id="call")
+    messages, closed = {
+        "paired": ([call, result], {0, 2}),
+        "pending": ([call, HumanMessage(content="等待")], {0}),
+        "duplicate": ([call, call, result], {0, 3}),
+        "orphan": ([result, HumanMessage(content="继续")], {0, 1, 2}),
+        "invalid": ([HumanMessage(content="开始"), AIMessage.model_construct(
+            content="", tool_calls=[{"name": "read_file", "args": {}, "id": None}],
+        ), result], {0, 1}),
+    }[case]
+    candidates = [*range(len(messages), -1, -1), len(messages)]
+    assert closed_tool_prefix_cutoffs(messages, candidates) == frozenset(closed)
+
+
+def test_memory_cutoff_batch_does_not_consume_unrequested_tail() -> None:
+    class UnreadTail(list[object]):
+        def __iter__(self):
+            yield HumanMessage(content="安全前缀")
+            raise AssertionError("最远候选之后的消息不能提前读取")
+
+    state = UnreadTail([HumanMessage(content="前缀"), HumanMessage(content="未读尾部")])
+    assert closed_tool_prefix_cutoffs(state, [1, 0, 1]) == frozenset({0, 1})
+    assert closed_tool_prefix_cutoffs(state, []) == frozenset()
 
 
 def _checkpoint(checkpoint_id: str, messages: list[object], version: str) -> dict[str, object]:
@@ -222,6 +292,47 @@ def test_safe_cutoffs_reject_out_of_range_candidate(
             state_messages=[user, call, result],
             cutoff_indexes=[4],
         )
+
+
+@pytest.mark.parametrize("message_count", [8, 64])
+def test_candidate_batch_reads_pairing_once_without_copying_each_prefix(
+    tmp_path: Path, session_bundle_factory, monkeypatch, message_count: int,
+) -> None:
+    saver = _make_saver(tmp_path, session_bundle_factory)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    messages = [HumanMessage(content="读取配置", id="user-1"), *[
+        AIMessage(content=f"历史正文-{index}", id=f"batch-history-{index}")
+        for index in range(1, message_count)
+    ]]
+    _put_checkpoint(saver, build_checkpoint_config(thread), "batch-candidates", messages, 1)
+    copied_prefix_items = 0
+    analyses = 0
+
+    class ObservedState(list[object]):
+        def __getitem__(self, index):
+            nonlocal copied_prefix_items
+            result = super().__getitem__(index)
+            if isinstance(index, slice):
+                copied_prefix_items += len(result)
+            return result
+
+    original = tool_protocol_boundary._unsafe_cutoff_indices
+
+    def observe(*args, **kwargs):
+        nonlocal analyses
+        analyses += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tool_protocol_boundary, "_unsafe_cutoff_indices", observe)
+    candidates = [*range(message_count, -1, -1), message_count]
+    assert saver.safe_compaction_prefix_cutoffs(
+        SESSION_ID, thread, state_messages=ObservedState(messages), checkpoint_ns="",
+        cutoff_indexes=candidates,
+    ) == frozenset(range(message_count + 1))
+    print({"candidate_history": message_count, "candidates": len(candidates),
+           "pairing_analyses": analyses, "copied_prefix_items": copied_prefix_items})
+    assert analyses == 1
+    assert copied_prefix_items == 0
 
 
 @pytest.mark.parametrize("checkpoint_ns", ["", "model:provider-call"])

@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.activation.reads import (
     read_activation_refs_for_view,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
-    validate_tool_protocol_closure,
+    ToolProtocolBoundary,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     find_message_locator,
@@ -168,11 +168,7 @@ class RolloutCheckpointOperationsMixin:
                 )
                 # 在创建目标 view/branch 前验证 tool protocol closure：
                 # 冲突时旧 active view 与全部状态保持零副作用。
-                validate_tool_protocol_closure(
-                    connection,
-                    source_sequences,
-                    cutoff,
-                )
+                ToolProtocolBoundary(connection, source_sequences).validate(cutoff)
                 timestamp = _now()
                 old_active_branch, _projection_epoch = self._storage._namespace_state(
                     connection, checkpoint_ns

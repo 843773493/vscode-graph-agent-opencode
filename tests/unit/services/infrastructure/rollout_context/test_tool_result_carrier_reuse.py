@@ -63,8 +63,8 @@ from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     CONFLICT_CODE,
+    ToolProtocolBoundary,
     ToolProtocolBoundaryConflict,
-    validate_tool_protocol_closure,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -817,7 +817,7 @@ def test_compaction_preflight_does_not_restore_hidden_declarations(
         assert "live-call" not in {ids[sequence] for sequence in selected}
         assert "request-call" not in {ids[sequence] for sequence in selected}
         with pytest.raises(ToolProtocolBoundaryConflict, match=CONFLICT_CODE):
-            validate_tool_protocol_closure(snapshot.connection, selected, len(selected))
+            ToolProtocolBoundary(snapshot.connection, selected).validate(len(selected))
         before = tuple(snapshot.connection.iterdump())
     jsonl = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
     before_jsonl = jsonl.read_bytes()
@@ -926,11 +926,11 @@ def test_tool_pairing_survives_selected_carrier_replacement(
         assert "request-result" in selected_messages
         assert "live-call" not in selected_messages
         assert f"{LIVE_EXECUTION_ID}-result-{SCOPED_TOOL_CALL_ID}" not in selected_messages
-        validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+        ToolProtocolBoundary(snapshot.connection, sequences).validate(len(sequences))
         all_sequences = [row[0] for row in snapshot.connection.execute(
             "SELECT message_sequence FROM messages ORDER BY message_sequence"
         )]
-        validate_tool_protocol_closure(snapshot.connection, all_sequences, len(all_sequences))
+        ToolProtocolBoundary(snapshot.connection, all_sequences).validate(len(all_sequences))
         pairings = dict(snapshot.connection.execute(
             "SELECT call.tool_call_id, result.message_id FROM tool_calls AS call "
             "JOIN messages AS result ON result.message_sequence = call.result_message_sequence"
@@ -969,7 +969,7 @@ def test_shared_result_requires_visible_ordered_actual_declaration(
             sequences[call_index], sequences[result_index] = sequences[result_index], sequences[call_index]
         before = snapshot.connection.total_changes
         with pytest.raises(ToolProtocolBoundaryConflict) as error:
-            validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+            ToolProtocolBoundary(snapshot.connection, sequences).validate(len(sequences))
         assert error.value.code == CONFLICT_CODE
         assert snapshot.connection.total_changes == before
     assert storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes() == committed_bytes
@@ -993,7 +993,7 @@ def test_tool_result_without_any_declaration_is_not_closed(
         sequences = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
         before = snapshot.connection.total_changes
         with pytest.raises(ToolProtocolBoundaryConflict) as error:
-            validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+            ToolProtocolBoundary(snapshot.connection, sequences).validate(len(sequences))
         assert error.value.code == CONFLICT_CODE
         assert snapshot.connection.total_changes == before
     assert storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes() == committed_bytes
@@ -1054,7 +1054,7 @@ def test_shared_result_rejects_damaged_hidden_carrier_identity(
         state_before = connection.execute("SELECT * FROM database_meta").fetchall()
         pairs_before = connection.execute("SELECT * FROM tool_calls").fetchall()
         with pytest.raises(ToolProtocolBoundaryConflict) as error:
-            validate_tool_protocol_closure(connection, sequences, len(sequences))
+            ToolProtocolBoundary(connection, sequences).validate(len(sequences))
         assert error.value.code == CONFLICT_CODE
         assert connection.execute("SELECT * FROM database_meta").fetchall() == state_before
         assert connection.execute("SELECT * FROM tool_calls").fetchall() == pairs_before
@@ -1087,7 +1087,7 @@ def test_shared_result_requires_unique_actual_carrier_declaration(
         ).fetchone() == (2,)
         before = snapshot.connection.total_changes
         with pytest.raises(ToolProtocolBoundaryConflict) as error:
-            validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+            ToolProtocolBoundary(snapshot.connection, sequences).validate(len(sequences))
         assert error.value.code == CONFLICT_CODE
         assert snapshot.connection.total_changes == before
     assert storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes() == committed_bytes
@@ -1169,7 +1169,7 @@ def test_new_execution_restores_preceding_terminal_tool_group(
                         snapshot, predecessor=restored._storage.assemblies.latest_context_assembly(snapshot),
                     )
                     sequences = restored._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
-                    validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+                    ToolProtocolBoundary(snapshot.connection, sequences).validate(len(sequences))
                     assert snapshot.connection.execute(
                         "SELECT turn_id, execution_id FROM item_catalog WHERE semantic_kind='tool_result'",
                     ).fetchall() == [(TURN_ID, MODEL_CALL_ID)]

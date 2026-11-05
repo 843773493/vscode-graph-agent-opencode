@@ -54,7 +54,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     ResourceTargetFacts,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
-    validate_tool_protocol_closure,
+    ToolProtocolBoundary,
 )
 from app.services.infrastructure.rollout_context.fork.copy_items import (
     EFFECTIVE_PREFIX_SQL,
@@ -727,7 +727,7 @@ class CheckpointForkSource:
                     "ORDER BY member.context_ordinal",
                     (anchor_item_id, source_view_id, 1 if anchor_mode == "before" else 0),
                 )]
-                validate_tool_protocol_closure(connection, visible_sequences, len(visible_sequences))
+                ToolProtocolBoundary(connection, visible_sequences).validate(len(visible_sequences))
                 selected_checkpoint = connection.execute(
                     "WITH RECURSIVE lineage(view_id) AS (SELECT ? UNION "
                     "SELECT view.parent_view_id FROM context_views view JOIN lineage "

@@ -28,7 +28,7 @@ from app.agents.upstream_request_trace import (
 from app.core.checkpoint_config import build_checkpoint_config
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
-    prefix_has_open_tool_group,
+    closed_tool_prefix_cutoffs,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -47,11 +47,7 @@ class _E2ECompactionPreflight:
         state_messages: object,
         cutoff_indexes: object,
     ) -> frozenset[int]:
-        return frozenset(
-            index
-            for index in cutoff_indexes  # type: ignore[arg-type]
-            if not prefix_has_open_tool_group(state_messages, index)  # type: ignore[arg-type]
-        )
+        return closed_tool_prefix_cutoffs(state_messages, cutoff_indexes)  # type: ignore[arg-type]
 
 
 # TODO：缓存命中专项仍需迁为产品消息入口生成历史，手填 checkpoint 不作为完整执行验收。

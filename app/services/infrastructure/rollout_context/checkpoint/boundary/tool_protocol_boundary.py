@@ -13,6 +13,7 @@ import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
@@ -228,56 +229,56 @@ def _safe_anchor(
     )
 
 
-def validate_tool_protocol_closure(
-    connection: sqlite3.Connection,
-    source_sequences: Sequence[int],
-    cutoff_index: int,
-) -> None:
-    """验证 source_sequences[:cutoff_index] 不拆散 tool-call 配对。
+class ToolProtocolBoundary:
+    """同一冻结选集的闭合事实；只在当前操作内复用，不跨事务保存。"""
 
-    调用方必须在创建目标 view/branch/pending transition 之前调用本函数，
-    保证冲突时旧 active view 与全局状态零副作用。
-    """
-    if type(cutoff_index) is not int:
-        raise TypeError("tool protocol boundary cutoff_index 必须是 int")
-    ordered = list(dict.fromkeys(source_sequences))
-    if cutoff_index < 0 or cutoff_index > len(ordered):
-        raise ValueError(
-            "tool protocol boundary cutoff_index 超出 source view 范围: "
-            f"cutoff_index={cutoff_index}, view_size={len(ordered)}"
+    def __init__(self, connection: sqlite3.Connection, source_sequences: Sequence[int]) -> None:
+        self._connection = connection
+        self._ordered = list(dict.fromkeys(source_sequences))
+
+    @cached_property
+    def _unsafe(self) -> set[int]:
+        position = {sequence: index for index, sequence in enumerate(self._ordered)}
+        return _unsafe_cutoff_indices(self._connection, self._ordered, position)
+
+    def is_safe(self, cutoff_index: int) -> bool:
+        """批量筛选共用一次配对读取；无效切点仍先于持久化分析报错。"""
+        if type(cutoff_index) is not int:
+            raise TypeError("tool protocol boundary cutoff_index 必须是 int")
+        if cutoff_index < 0 or cutoff_index > len(self._ordered):
+            raise ValueError(
+                "tool protocol boundary cutoff_index 超出 source view 范围: "
+                f"cutoff_index={cutoff_index}, view_size={len(self._ordered)}"
+            )
+        return cutoff_index not in self._unsafe
+
+    def validate(self, cutoff_index: int) -> None:
+        """创建目标 view/branch 前验证，冲突时保留旧状态和精确安全候选。"""
+        if self.is_safe(cutoff_index):
+            return
+        below = max(
+            (index for index in range(cutoff_index) if index not in self._unsafe),
+            default=None,
         )
-    position = {sequence: index for index, sequence in enumerate(ordered)}
-    unsafe = _unsafe_cutoff_indices(connection, ordered, position)
-    if cutoff_index not in unsafe:
-        return
-    below = max(
-        (index for index in range(cutoff_index) if index not in unsafe),
-        default=None,
-    )
-    above = min(
-        (
-            index
-            for index in range(cutoff_index + 1, len(ordered) + 1)
-            if index not in unsafe
-        ),
-        default=None,
-    )
-    safe_anchors = tuple(
-        _safe_anchor(ordered, index)
-        for index in (below, above)
-        if index is not None
-    )
-    raise ToolProtocolBoundaryConflict(
-        f"{CONFLICT_CODE}: 目标前缀未包含完整且有序的 assistant tool-call group 与匹配 "
-        f"terminal result: cutoff_index={cutoff_index}, "
-        f"source_view_size={len(ordered)}",
-        safe_anchors=safe_anchors,
-    )
+        above = min(
+            (index for index in range(cutoff_index + 1, len(self._ordered) + 1)
+             if index not in self._unsafe),
+            default=None,
+        )
+        raise ToolProtocolBoundaryConflict(
+            f"{CONFLICT_CODE}: 目标前缀未包含完整且有序的 assistant tool-call group 与匹配 "
+            f"terminal result: cutoff_index={cutoff_index}, "
+            f"source_view_size={len(self._ordered)}",
+            safe_anchors=tuple(
+                _safe_anchor(self._ordered, index)
+                for index in (below, above) if index is not None
+            ),
+        )
 
 
 __all__ = [
     "CONFLICT_CODE",
+    "ToolProtocolBoundary",
     "ToolProtocolBoundaryConflict",
     "ToolProtocolSafeAnchor",
-    "validate_tool_protocol_closure",
 ]

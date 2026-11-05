@@ -62,7 +62,7 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
-    validate_tool_protocol_closure,
+    ToolProtocolBoundary,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle import (
     seal_registered_plan,
@@ -438,7 +438,7 @@ def prepare_registered_context(
                 sequences = owner._storage.checkpoints.selected_context_message_sequences(
                     read_snapshot, items=items,
                 )
-                validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
+                ToolProtocolBoundary(read_snapshot.connection, sequences).validate(len(sequences))
             overlay_bodies = {}
             contribution_resolver = ContributionResolver(full_plan.contributions)
             for ref in full_plan.refs:

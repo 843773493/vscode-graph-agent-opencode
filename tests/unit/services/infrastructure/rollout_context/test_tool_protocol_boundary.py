@@ -338,10 +338,10 @@ def test_model_boundary_validates_each_body_once_and_releases_after_return(
                 id=f"boundary-result-{index}", content="工具正文",
                 tool_call_id=f"call-{index}", name="read_file",
             ))
-    arguments = dict(
-        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
-        messages=messages,
-    )
+    arguments = {
+        "turn_id": accepted["turn_id"], "execution_id": accepted["initial_execution_id"],
+        "messages": messages,
+    }
     saver.ensure_request_items(SESSION_ID, thread, **arguments)
     original_line = integrity.canonical_json_line
     validations = Counter()
@@ -382,9 +382,9 @@ def test_parallel_tools_boundary_visits_prefix_indices_linearly(
         id=f"parallel-result-{index}", content="工具正文",
         tool_call_id=f"parallel-{index}", name="read_file",
     ) for index in range(tool_count)]]
-    arguments = dict(
-        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"], messages=messages,
-    )
+    arguments = {
+        "turn_id": accepted["turn_id"], "execution_id": accepted["initial_execution_id"], "messages": messages,
+    }
     saver.ensure_request_items(SESSION_ID, thread, **arguments)
     visits = 0
 
@@ -424,10 +424,10 @@ def test_parallel_tools_keep_exact_safe_cutoffs_and_neighbors(protocol_case, com
         safe = {0, 1, len(sequences)} if completed == 4 else {0, 1}
         for cutoff in range(len(sequences) + 1):
             if cutoff in safe:
-                tool_protocol_boundary.validate_tool_protocol_closure(snapshot.connection, sequences, cutoff)
+                tool_protocol_boundary.ToolProtocolBoundary(snapshot.connection, sequences).validate(cutoff)
                 continue
             with pytest.raises(ToolProtocolBoundaryConflict) as error:
-                tool_protocol_boundary.validate_tool_protocol_closure(snapshot.connection, sequences, cutoff)
+                tool_protocol_boundary.ToolProtocolBoundary(snapshot.connection, sequences).validate(cutoff)
             expected = [1, len(sequences)] if completed == 4 else [1]
             assert [(anchor.cutoff_index, anchor.cutoff_message_sequence)
                     for anchor in error.value.safe_anchors] == [(index, sequences[index - 1]) for index in expected]
@@ -438,10 +438,10 @@ def test_model_boundary_rechecks_changed_bytes_and_projection(
     protocol_case, monkeypatch, damage: str,
 ) -> None:
     saver, storage, thread, accepted = protocol_case
-    arguments = dict(
-        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
-        messages=(), validated_predecessors={},
-    )
+    arguments = {
+        "turn_id": accepted["turn_id"], "execution_id": accepted["initial_execution_id"],
+        "messages": (), "validated_predecessors": {},
+    }
     assert saver.prepare_model_call_boundary(SESSION_ID, thread, **arguments) == (None, None)
     path = storage.storage.jsonl_path(SESSION_ID, thread_id=thread)
     before = path.read_bytes()
