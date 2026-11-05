@@ -159,16 +159,6 @@ def _runtime_notice_payload(
     )
 
 
-def _serialized_tool_calls(value: Mapping[str, object]) -> list[Mapping[str, object]]:
-    data = value.get("data")
-    calls = data.get("tool_calls") if isinstance(data, Mapping) else None
-    return (
-        [call for call in calls if isinstance(call, Mapping)]
-        if isinstance(calls, list)
-        else []
-    )
-
-
 class LangChainMessageCodec:
     """LangChain 专用 codec；其输出永远是临时 projection。"""
 
@@ -234,8 +224,16 @@ class LangChainMessageCodec:
     def tool_calls(
         self, message: object | Mapping[str, object]
     ) -> list[Mapping[str, object]]:
-        value = self.to_dict(message) if not isinstance(message, Mapping) else message
-        return _serialized_tool_calls(value)
+        if isinstance(message, Mapping):
+            data = message.get("data")
+        elif isinstance(message, BaseMessage):
+            # 工具识别与归属匹配会反复遍历历史，只序列化需要的字段。
+            # 保留 model_dump 的嵌套容器隔离，不能直接返回消息里的可变 tools。
+            data = message.model_dump(include={"tool_calls"})
+        else:
+            raise TypeError("消息 codec 只接受 LangChain BaseMessage")
+        calls = data.get("tool_calls") if isinstance(data, Mapping) else None
+        return [call for call in calls if isinstance(call, Mapping)] if isinstance(calls, list) else []
 
     def model_call_id(self, message: object) -> str | None:
         """从消息自身的持久 identity 读取所属模型调用。"""

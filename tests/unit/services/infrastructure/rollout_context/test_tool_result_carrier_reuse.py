@@ -558,6 +558,37 @@ def test_tool_result_owner_keeps_request_projection_and_original_attempt(
     assert storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes() == committed_bytes
 
 
+@pytest.mark.parametrize("history_size", [1, 64])
+def test_request_tool_inspection_does_not_serialize_unselected_history(
+    storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver,
+    monkeypatch: pytest.MonkeyPatch, history_size: int,
+) -> None:
+    thread_id = storage.storage.main_thread_id(SESSION_ID)
+    messages = [HumanMessage(
+        id=f"unselected-{index}",
+        content=[{"type": "text", "text": "历史正文" * 64} for _ in range(16)],
+    ) for index in range(history_size)]
+    serialized_bodies = []
+    original = BaseMessage.model_dump
+
+    def observe_serialization(message, *args, **kwargs):
+        value = original(message, *args, **kwargs)
+        if "content" in value:
+            serialized_bodies.append(message.id)
+        return value
+
+    monkeypatch.setattr(BaseMessage, "model_dump", observe_serialization)
+    jsonl_path = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
+    before = jsonl_path.read_bytes()
+    assert carrier_saver.ensure_request_items(
+        SESSION_ID, thread_id, turn_id=TURN_ID, execution_id=MODEL_CALL_ID,
+        messages=messages,
+    ) == ()
+    assert jsonl_path.read_bytes() == before
+    print(f"request history={history_size}, serialized_bodies={len(serialized_bodies)}")
+    assert serialized_bodies == []
+
+
 @pytest.mark.parametrize("changed", ["tool_invocation_id", "content", "artifact", "tool_outcome"])
 def test_tool_result_owner_rejects_same_attempt_identity_or_payload_changes(
     storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver, tool_result_owner,
