@@ -138,6 +138,41 @@ describe('后端文件目录根和稳定投影', () => {
     }
   });
 
+  for (const stage of ['route', 'body'] as const) {
+    test(`取消后迟到的 ${stage} 不交付字节或推进保存基线`, async () => {
+      const files = fileService(), resource = workspaceFileUri(owner, root + '/cancelled.txt', root);
+      const provider = files.getProvider(resource.scheme)!;
+      if (!provider.readFile || !provider.readFileStream || !provider.writeFile) throw new Error('缺少文件字节能力');
+      const resolve = spyOn(gateway, 'resolveWorkspace').mockResolvedValue('current-route');
+      const raw = spyOn(fileApi, 'getWorkspaceRawFileBlob').mockResolvedValue(new Blob(['original']));
+      const request = spyOn(gateway, 'request').mockResolvedValue({ path: root + '/cancelled.txt', revision: '3'.repeat(64) });
+      const cancellation = new CancellationTokenSource(), started = Promise.withResolvers<void>();
+      const route = Promise.withResolvers<string>(), body = Promise.withResolvers<ArrayBuffer>();
+      try {
+        await provider.readFile(resource);
+        const before = raw.mock.calls.length;
+        if (stage === 'route') {
+          resolve.mockImplementationOnce(() => { started.resolve(); return route.promise; });
+        } else {
+          // 字节转换已经脱离 fetch；显式控制此异步边界，验证取消后不会交付旧结果。
+          class PendingBlob extends Blob {
+            override arrayBuffer(): Promise<ArrayBuffer> { started.resolve(); return body.promise; }
+          }
+          raw.mockResolvedValueOnce(new PendingBlob());
+        }
+        const pending = consumeStream(provider.readFileStream(resource, {}, cancellation.token), chunks => chunks);
+        await started.promise;
+        cancellation.cancel();
+        route.resolve('late-route');
+        body.resolve(new TextEncoder().encode('late bytes').buffer);
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        expect(raw.mock.calls.length - before).toBe(stage === 'route' ? 0 : 1);
+        await provider.writeFile(resource, new TextEncoder().encode('saved'), { create: false, overwrite: true, unlock: false, atomic: false });
+        expect(JSON.parse(String(request.mock.calls.at(-1)?.[1]?.body)).expected_revision).toBe(createHash('sha256').update('original').digest('hex'));
+      } finally { cancellation.dispose(true); request.mockRestore(); raw.mockRestore(); resolve.mockRestore(); files.dispose(); }
+    });
+  }
+
   test('同根多个文件及重复 watch 共用原 SSE，变化通知不读正文，最后解除才取消', async () => {
     const files = fileService(), first = workspaceFileUri(owner, root + '/dir/a.txt', root);
     const second = workspaceFileUri(owner, root + '/b.txt', root);
@@ -159,6 +194,8 @@ describe('后端文件目录根和稳定投影', () => {
       expect(stream.mock.calls[0].slice(0, 2)).toEqual([0, [root]]);
       expect(options.workspaceId).toBe('watch-route');
       expect(resolve.mock.calls[0][1]).toBe(options.signal);
+      options.onConnected?.();
+      expect(changes).toEqual([]);
       options.onConnected?.();
       expect(changes.pop()?.map(change => change.resource.toString())).toEqual([first.toString(), second.toString()]);
       options.onBatch?.({ changes: [{ kind: 'edit', path: root + '/dir/a.txt' },

@@ -56,6 +56,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
   private async access<T>(resource: URI, action: (workspaceKey: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const source = workspaceFileSource(resource);
     const workspaceKey = await gateway.resolveWorkspace(source, signal);
+    signal?.throwIfAborted();
     try { return await action(workspaceKey); }
     catch (error) {
       if (error instanceof GatewayRequestError && error.status === 404) throw createFileSystemProviderError(error, FileSystemProviderErrorCode.FileNotFound);
@@ -97,10 +98,11 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     const source = workspaceFileSource(resource);
     const blob = await this.access(resource, workspaceKey => getWorkspaceRawFileBlob(0, source.path, workspaceKey, signal, range), signal);
     const bytes = new Uint8Array(await blob.arrayBuffer());
+    signal?.throwIfAborted();
     if (!range) {
       // 复用后端 expected_revision 的原字节 SHA-256；不额外请求文本正文或重读磁盘。
       const revision = encodeHex(VSBuffer.wrap(sha256(bytes)));
-      if (!signal?.aborted) this.revisions.set(resource.toString(), revision);
+      this.revisions.set(resource.toString(), revision);
     }
     return bytes;
   }

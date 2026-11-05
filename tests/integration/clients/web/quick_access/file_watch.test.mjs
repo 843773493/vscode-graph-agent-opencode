@@ -14,16 +14,16 @@ await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/
   bundle: true, format: 'esm', platform: 'browser', target: 'es2024', logLevel: 'silent',
   tsconfig: join(root, 'tsconfig.jsonc'), plugins: [buildSourcePlugin(root, sourceTransform(root, { commit: pinnedUpstreamCommit }, []))] });
 const { fileProvider, FileChangeType, FileSystemProviderErrorCode, toFileSystemProviderErrorCode,
-  gateway, workspaceFileUri, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
+  gateway, workspaceFileUri, gatewayWorkspaceKey, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
 const owner = workspaceId => ({ gatewayId: 'gateway-test', workspaceId });
-const rootUri = id => `boxteam://workspace/${id}/resources/files/root`;
+const rootUri = id => `boxteam://gateway-test/workspace/${id}/resources/files/root`;
 const uri = (id, name, root = rootUri(id)) => workspaceFileUri(owner(id), root + '/' + name, root);
 const encoder = new TextEncoder();
 const receipt = { boundary: '真实注册入口、Provider及观察者SSE解码；仅路由解析和HTTP响应为显式资产', checks: [] };
 
 async function withTransport(callback) {
   const connections = [], handles = [], provider = fileProvider(), events = [], errors = [];
-  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async target => target.workspaceId);
+  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async target => gatewayWorkspaceKey(target));
   handles.push(provider.onDidChangeFile(changes => events.push(changes.map(change => ({ uri: change.resource.toString(), type: change.type })))),
     provider.onDidWatchError(error => errors.push(error)));
   installSessionApiFetchMock(async ({ path, init }) => {
@@ -119,7 +119,7 @@ test('共享流重建只使已连接根重新核实，溢出保留失效且不�
 /** 元数据和 raw 使用真实请求链；只有 HTTP 数据、错误及路由解析为具名装具。 */
 async function withMetadata(callback) {
   const provider = fileProvider(), calls = [], state = { status: 200, body: 'old A', size: 5, mtime: 1 };
-  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async target => target.workspaceId);
+  const routes = spyOn(gateway, 'resolveWorkspace').mockImplementation(async target => gatewayWorkspaceKey(target));
   const hash = value => createHash('sha256').update(value).digest('hex');
   installSessionApiFetchMock(async ({ path, init, url, method }) => {
     const owner = new Headers(init.headers).get('X-BoxTeam-Workspace-Id');
@@ -129,7 +129,7 @@ async function withMetadata(callback) {
     const response = (data, status = 200) => Response.json({ code: status === 200 ? 0 : status,
       message: status === 200 ? 'ok' : '明确的元数据拒绝', request_id: requestId, data },
     { status, headers: { 'X-Request-ID': requestId } });
-    if (path === '/api/v1/resources/navigation') {
+    if (path === `/api/v1/workspaces/${owner}/resources/navigation`) {
       expect(body.operation).toBe('describe');
       expect(body.uri).toBe(rootUri(owner) + '/same.txt');
       if (state.status !== 200) return response(null, state.status);
@@ -163,7 +163,7 @@ test('stat 保持轻量实时描述，not-found／权限错误恢复后按原身
     }
     expect((await provider.stat(b)).size).toBe(17);
     expect(calls.map(call => call.owner)).toEqual(['A', 'A', 'A', 'A', 'A', 'A', 'B']);
-    expect(calls.every(call => call.path === '/api/v1/resources/navigation' && call.body.operation === 'describe')).toBe(true);
+    expect(calls.every(call => call.path === `/api/v1/workspaces/${call.owner}/resources/navigation` && call.body.operation === 'describe')).toBe(true);
     receipt.checks.push('stat无缓存且只describe；404/403恢复；A/B按完整URI隔离');
   });
 });
@@ -175,7 +175,7 @@ test('外部更新后的 stat 不读取正文或推进原保存 revision', async
     state.body = 'new authoritative A'; state.size = state.body.length; state.mtime = 3;
     expect((await provider.stat(a)).mtime).toBe(3);
     await provider.writeFile(a, encoder.encode('user unsaved A'), { create: true, overwrite: true });
-    expect(calls.map(call => call.path)).toEqual(['/api/v1/workspace/files/raw', '/api/v1/resources/navigation', '/api/v1/workspace/files/content']);
+    expect(calls.map(call => call.path)).toEqual(['/api/v1/workspace/files/raw', '/api/v1/workspaces/A/resources/navigation', '/api/v1/workspace/files/content']);
     expect(calls.at(-1).body.expected_revision).toBe(hash('old A'));
     expect(calls.at(-1).body.expected_revision).not.toBe(hash(state.body));
     receipt.checks.push('实际raw建立基线；更新后的describe零正文且不推进PUT expected_revision');
