@@ -10,7 +10,7 @@
 app/core/
 ├── 环境、身份与路径
 │   ├── env.py / config_sources.py / distribution_identity.py
-│   ├── user_identity.py / workspace_identity.py / mounted_workspaces.py
+│   ├── user_identity.py / workspace_identity.py / backend_identity.py / mounted_workspaces.py
 │   ├── path_utils.py / path_segments.py
 │   ├── user_storage_migration.py
 │   └── logging_config.py / logging_contract.py
@@ -95,3 +95,4 @@ app/core/
 - 失败时抛出包含稳定 owner、逻辑资源与操作阶段的明确异常；原生参数、展示与诊断位置按目标机器和字段职责保留，不得作为第二权威定位关系或虚假默认路径。
 - `distribution_identity.py` 唯一读取发行 manifest 并推导 inline 身份；拒绝只公布逻辑 artifact、阶段、字段与规则，安装位置及非法原值保留诊断。原生访问保留错误类别/错误码与原因，失败不修改输入或缓存默认身份。
 - `workspace_identity.py` 独占工作区UUID文件的读取、首次创建和显式绑定；同目录候选文件写完并 fsync 后，以不覆盖的硬链接原子发布，随后同步目录。普通失败仅公布`workspace_identity`逻辑artifact、阶段、UUID或错误事实，位置及原异常留诊断。保持原生错误类别/错误码/直接cause和解码坐标，正常缺失与并发已创建仍沿原流程处理，不重建损坏身份、不覆盖并发文件，不重复包装读取失败。
+- `backend_identity.py` 独占目标 BOXTEAM_HOME 的稳定安装域身份，首次发布沿跨进程锁及原子写，正常读取不重复加锁或写盘。Backend 健康响应与 Gateway 本机启动、接管共用该身份；进程组 owner、成员、端口和 generation 不构成安装域身份，损坏记录不得重新分配。

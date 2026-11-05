@@ -13,10 +13,12 @@ from fastapi import FastAPI, HTTPException
 
 import app.gateway.runtime.controller as runtime_controller_module
 from app.core import failures
+from app.core.backend_identity import load_or_create_backend_id, read_backend_id
 from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
 )
+from app.core.path_utils import get_boxteam_home
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import (
     GatewayAuthContext,
@@ -65,6 +67,7 @@ UUID_C = "00000000-0000-4000-8000-000000000003"
 
 @dataclass
 class ProcessBoundary:
+    backend_id: str
     identities: dict[Path, str] = field(default_factory=dict)
     proofs: dict[str, tuple[tuple[MountedWorkspace, ...], str, int]] = field(default_factory=dict)
     config_proofs: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -111,6 +114,7 @@ class ProcessBoundary:
         mounts, generation, pid = self.proofs[backend_url]
         assert workspace_id in {mount.workspace_id for mount in mounts}
         result = {
+            "backend_id": self.backend_id,
             "workspace_id": workspace_id, "status": "ok", "process_id": pid,
             "backend_generation": generation, "mount_manifest_digest": mounted_workspace_manifest_digest(mounts),
         }
@@ -131,7 +135,7 @@ class WorkspaceRuntimeControllerCase:
 
 @pytest.fixture
 def process_boundary(monkeypatch: pytest.MonkeyPatch) -> ProcessBoundary:
-    boundary = ProcessBoundary()
+    boundary = ProcessBoundary(backend_id=load_or_create_backend_id(get_boxteam_home()))
     monkeypatch.setattr(local_workspace, "resolve_backend_workspace_id", lambda _project, root, **_: boundary.identities[root.resolve()])
     monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda _project, root, **_: boundary.identities[root.resolve()])
     monkeypatch.setattr(local_workspace, "allocate_local_port", boundary.allocate)
@@ -899,12 +903,13 @@ async def test_gateway_rejects_mismatched_node_manager_without_adoption(local_ht
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mismatch", [None, "generation", "manifest", "pid"])
+@pytest.mark.parametrize("mismatch", [None, "backend_id", "missing-backend-id", "generation", "manifest", "pid"])
 async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_controller_case, local_http, mismatch, tmp_path, monkeypatch) -> None:
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     contract = graph.owner.contract
     requests = []
+    adopted_logs = []
     ownership = object()
     logging_state = {
         "service": "backend", "pid": 43212, "runtime_instance_id": "backend-instance",
@@ -913,6 +918,7 @@ async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_contr
     def adopt_log(store, role, port, proof):
         assert store.root == tmp_path / "logs"
         assert role == "backend" and proof == logging_state
+        adopted_logs.append(proof)
         return ownership
     monkeypatch.setattr("app.gateway.runtime.local_workspace.ProcessLogStore.adopt", adopt_log)
     def response(request):
@@ -922,8 +928,13 @@ async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_contr
         identity = request.headers["X-BoxTeam-Workspace-Id"]
         requests.append(identity)
         payload = {"workspace_id": identity, "status": "ok", "process_id": 43212,
+                   "backend_id": read_backend_id(get_boxteam_home()),
                    "backend_generation": contract.generation, "mount_manifest_digest": mounted_workspace_manifest_digest(registry.resolve_backend_mounts(contract))}
-        if mismatch == "generation":
+        if mismatch == "backend_id":
+            payload["backend_id"] = "00000000-0000-4000-8000-000000000099"
+        elif mismatch == "missing-backend-id":
+            payload.pop("backend_id")
+        elif mismatch == "generation":
             payload["backend_generation"] = "stale"
         elif mismatch == "manifest":
             payload["mount_manifest_digest"] = "wrong"
@@ -935,9 +946,11 @@ async def test_gateway_adopts_matching_workspace_backend(workspace_runtime_contr
         adopted = await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract), log_dir=tmp_path / "logs")
         assert adopted.pid == 43212 and requests == [UUID_A, UUID_B]
         assert adopted.log_ownership is ownership
+        assert adopted_logs == [logging_state]
     else:
         with pytest.raises(RuntimeError, match="完整组"):
             await _adopt_workspace_backend(contract=contract, mounts=registry.resolve_backend_mounts(contract), log_dir=tmp_path / "logs")
+        assert not adopted_logs
 
 
 @pytest.mark.asyncio

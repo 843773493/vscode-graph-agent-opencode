@@ -4,6 +4,7 @@
 
 - [ ] 1.1 清点原扩展／MCP／设置 UI、源配置、所有直接与间接调用、生成协议及测试，列明权威写入／读取 owner、单链路迁移与删除清单，不改变他人已有任务证据。
 - [ ] 1.2 在现有协议 owner 明确安装目标、配置范围、宿主视图／generation、能力和操作状态的 typed 合同；稳定 Gateway／Backend／workspace 身份与临时 route 分开，不新建通用插件对象体系。
+  - 2026-11-05 安装域身份基础切片：目标 `BOXTEAM_HOME/state/backend/identity.json` 一次分配稳定 Backend UUID，正常读取不写盘，首次发布沿跨进程锁和原子写；Backend lifespan／health 与原 Gateway 本机启动、接管、完整组验证共用该 owner，进程组 owner／成员／generation 不作安装域身份。相关单测 277 项通过，补充错误／缺失身份接管边界 6 项通过；真实 Gateway 1 passed／99.19 秒，覆盖独立启动、挂载合并、切换活动工作区及 Gateway 重启。跨进程首次创建在最终集成位置 1 passed，身份负面单测最终 8 passed；Ruff 通过，生产类型诊断与改前同为 3 项且新增 0。原件见 `out/tests/temp/backend_installation_identity_20261105/artifacts/`；公开安装／host typed 合同、目标发现、远端及 Windows 尚未验证，本项保持未勾选。
 - [ ] 1.3 迁齐目标管理 API、host 通道协商、proto／OpenAPI／生成客户端和消费者；验证实际序列化、未知类型／版本拒绝与单请求 request_id，全链真实类型检查先于产品验收。
 - [ ] 1.4 在原联邦 policy 登记安装／宿主管理能力及 configuration_read／configuration_write 与 schema，迁齐默认拒绝／认证主体规则和调用方；覆盖脱敏读取、订阅披露、预检／提交／pending 管理和独立重启权限，验证撤权、Relay 不提权、只有发现权限时无目标写入，不另建权限系统。
   - 配置能力已沿原 policy／schema 接入 Gateway 自有配置路由与两种 workspace 代理 mount；安装／宿主管理能力和实网目标验收仍未完成，整项保持未勾选。

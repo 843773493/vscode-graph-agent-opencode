@@ -14,10 +14,12 @@ from uuid import uuid4
 
 import httpx
 
+from app.core.backend_identity import load_or_create_backend_id, read_backend_id
 from app.core.mounted_workspaces import (
     MountedWorkspace,
     mounted_workspace_manifest_digest,
 )
+from app.core.path_utils import get_boxteam_home
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.runtime.logging_control import RuntimeLoggingProcessControl
@@ -298,9 +300,10 @@ async def _adopt_process_log(
 
 def _validate_group_health(
     payload: dict[str, object], contract: ManagedBackendContract, mount: MountedWorkspace,
-    *, manifest_digest: str, process_id: int | None = None, startup_contract: dict[str, object] | None = None,
+    *, backend_id: str, manifest_digest: str, process_id: int | None = None, startup_contract: dict[str, object] | None = None,
 ) -> int:
     expected = {
+        "backend_id": backend_id,
         "workspace_id": mount.workspace_id, "backend_generation": contract.generation,
         "mount_manifest_digest": manifest_digest, "status": "ok",
     }
@@ -334,6 +337,7 @@ async def verify_managed_backend_group(
     if tuple(mount.workspace_id for mount in mounts) != tuple(member.workspace_id for member in contract.members):
         raise RuntimeError("Backend 启动输入与完整成员身份不匹配")
     manifest_digest = mounted_workspace_manifest_digest(mounts)
+    backend_id = await asyncio.to_thread(read_backend_id, get_boxteam_home())
     process_id = None
     for member, mount in zip(contract.members, mounts, strict=True):
         payload = await wait_for_workspace_health(
@@ -342,7 +346,7 @@ async def verify_managed_backend_group(
             poll_interval_seconds=poll_interval_seconds,
         )
         process_id = _validate_group_health(
-            payload, contract, mount, manifest_digest=manifest_digest, process_id=process_id,
+            payload, contract, mount, backend_id=backend_id, manifest_digest=manifest_digest, process_id=process_id,
             startup_contract=(startup_contracts or {}).get(member.workspace_id),
         )
     if process_id is None:
@@ -358,6 +362,7 @@ async def _adopt_workspace_backend(
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
         raise ValueError(f"持久化 Workspace API URL 必须是本机 HTTP 地址: {contract.backend_url}")
     process_id = None
+    backend_id = await asyncio.to_thread(read_backend_id, get_boxteam_home())
     async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
         for mount in mounts:
             try:
@@ -371,7 +376,8 @@ async def _adopt_workspace_backend(
             payload = response.json()
             if not isinstance(payload, dict):
                 raise TypeError("Backend 健康响应必须是 JSON 对象")
-            process_id = _validate_group_health(payload, contract, mount, manifest_digest=mounted_workspace_manifest_digest(mounts), process_id=process_id)
+            process_id = _validate_group_health(payload, contract, mount, backend_id=backend_id,
+                manifest_digest=mounted_workspace_manifest_digest(mounts), process_id=process_id)
     if process_id is None:
         raise RuntimeError("Backend 接管合同没有成员")
     ownership = await _adopt_process_log(
@@ -471,6 +477,7 @@ async def start_managed_backend_runtime(
         isinstance(preferred_backend_port, bool) or not 1 <= preferred_backend_port <= 65535
     ):
         raise ValueError(f"Backend 首选端口非法: {preferred_backend_port}")
+    await asyncio.to_thread(load_or_create_backend_id, get_boxteam_home())
     adopted = await _adopt_workspace_backend(contract=previous, mounts=mounts, log_dir=log_dir) if previous.backend_url else None
     if adopted is not None and adopt_existing_backend and preferred_backend_port is not None and urlparse(previous.backend_url).port != preferred_backend_port:
         adopted.detach()

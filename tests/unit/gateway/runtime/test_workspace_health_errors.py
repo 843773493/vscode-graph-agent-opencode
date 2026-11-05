@@ -156,15 +156,15 @@ def backend_contract() -> ManagedBackendContract:
     return ManagedBackendContract(gateway_id=GATEWAY_ID, owner_id="owner-test", generation="generation-test", members=(ManagedBackendMember(UUID),), backend_url=URL)
 
 
-@pytest.mark.parametrize("field", ["workspace_id", "backend_generation", "mount_manifest_digest", "status"])
+@pytest.mark.parametrize("field", ["backend_id", "workspace_id", "backend_generation", "mount_manifest_digest", "status"])
 def test_group_proof_reports_field_without_copying_bad_values(
     backend_contract: ManagedBackendContract, tmp_path: Path, field: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    payload = {"workspace_id": UUID, "backend_generation": "generation-test", "mount_manifest_digest": "manifest-test", "status": "ok"}
+    payload = {"backend_id": UUID, "workspace_id": UUID, "backend_generation": "generation-test", "mount_manifest_digest": "manifest-test", "status": "ok"}
     payload[field] = str(tmp_path / "private-health-marker")
     with pytest.raises(RuntimeError) as failure:
         local_workspace._validate_group_health(
-            payload, backend_contract, MountedWorkspace(UUID, tmp_path), manifest_digest="manifest-test",
+            payload, backend_contract, MountedWorkspace(UUID, tmp_path), backend_id=UUID, manifest_digest="manifest-test",
         )
     assert str(failure.value) == f"Backend 完整组健康证明不匹配: {field}"
     assert "private-health-marker" in caplog.text
@@ -182,10 +182,10 @@ def test_group_config_proof_reports_field_without_copying_bad_values(
 ) -> None:
     proof = local_workspace.workspace_config_proof_expectation(startup_contract)
     proof["candidate_id"] = str(tmp_path / "private-health-marker")
-    payload = {"workspace_id": UUID, "backend_generation": "generation-test", "mount_manifest_digest": "manifest-test", "status": "ok", "process_id": 123, "config_proof": proof}
+    payload = {"backend_id": UUID, "workspace_id": UUID, "backend_generation": "generation-test", "mount_manifest_digest": "manifest-test", "status": "ok", "process_id": 123, "config_proof": proof}
     with pytest.raises(RuntimeError) as failure:
         local_workspace._validate_group_health(
-            payload, backend_contract, MountedWorkspace(UUID, tmp_path), manifest_digest="manifest-test", startup_contract=startup_contract,
+            payload, backend_contract, MountedWorkspace(UUID, tmp_path), backend_id=UUID, manifest_digest="manifest-test", startup_contract=startup_contract,
         )
     assert str(failure.value) == "Workspace config proof 不匹配: candidate_id"
     assert "private-health-marker" in caplog.text

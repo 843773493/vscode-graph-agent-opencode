@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -35,6 +36,7 @@ from app.api.workspace import router as workspace_router
 from app.api.workspace_observation import router as workspace_observation_router
 from app.backend_lifecycle import BackendLifespan
 from app.container import WorkspaceContainerRegistry
+from app.core.backend_identity import load_or_create_backend_id
 from app.core.env import load_boxteam_env
 from app.core.exceptions import BaseAPIException
 from app.core.http_cache import NoStoreErrorsMiddleware
@@ -42,6 +44,7 @@ from app.core.logging_config import configure_application_logging
 from app.core.mounted_workspaces import MountedWorkspaceRegistry
 from app.core.path_utils import (
     catalog_provider_scope,
+    get_boxteam_home,
     initialize_directories,
 )
 from app.core.trace_middleware import TraceMiddleware, get_request_id
@@ -75,6 +78,7 @@ async def lifespan(application: FastAPI):
     try:
         # 业务初始化前取得全部共享锁，只有原writer全部排空后才归还。
         mounted = MountedWorkspaceRegistry.from_environment()
+        application.state.backend_id = await asyncio.to_thread(load_or_create_backend_id, get_boxteam_home())
         registry = WorkspaceContainerRegistry(
             mounted_workspaces=mounted, project_root=Path.cwd(), clock_ports=application.state.clock_ports,
         )
@@ -218,6 +222,7 @@ async def health(request: Request):
         "status": "degraded" if errors else "ok",
         "process_id": os.getpid(),
         "workspace_id": container.workspace_id,
+        "backend_id": request.app.state.backend_id,
         "backend_generation": os.environ.get("BOXTEAM_BACKEND_GENERATION"),
         "mount_manifest_digest": request.app.state.workspace_container_registry.mounted_workspaces.manifest_digest,
         "config_proof": container.config_service.get_loaded_config_proof(),
