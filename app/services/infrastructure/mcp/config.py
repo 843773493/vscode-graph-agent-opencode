@@ -11,11 +11,17 @@ from urllib.parse import urlparse
 from langchain_mcp_adapters.sessions import Connection
 
 from app.schemas.internal_v2.mcp import (
+    McpInstalledArtifactDTO,
     McpManagedLaunchDTO,
+    McpPrivateEnvRefDTO,
     McpPrivateHeaderRefDTO,
     require_mcp_http_url,
 )
-from app.services.infrastructure.mcp.private_headers import McpPrivateHeaderStore
+from app.services.infrastructure.mcp.private_inputs import (
+    McpPrivateInputStore,
+    candidate_env_definition,
+    stdio_env_definition,
+)
 
 McpTransport = Literal["stdio", "streamable_http"]
 _SERVER_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
@@ -39,13 +45,14 @@ class McpServerConfig:
     oauth: McpOAuthConfig | None = None
     managed_launch: McpManagedLaunchDTO | None = None
     private_headers: tuple[McpPrivateHeaderRefDTO, ...] = ()
+    private_env: tuple[McpPrivateEnvRefDTO, ...] = ()
 
 
 def parse_mcp_server_configs(
     raw_config: object,
     *,
     workspace_root: Path,
-    installation_resolver: Callable[[McpManagedLaunchDTO], str] | None = None,
+    installation_resolver: Callable[[McpManagedLaunchDTO], McpInstalledArtifactDTO] | None = None,
 ) -> tuple[McpServerConfig, ...]:
     if raw_config is None:
         return ()
@@ -97,7 +104,7 @@ def _parse_server(
     raw_server: object,
     *,
     workspace_root: Path,
-    installation_resolver: Callable[[McpManagedLaunchDTO], str] | None,
+    installation_resolver: Callable[[McpManagedLaunchDTO], McpInstalledArtifactDTO] | None,
 ) -> McpServerConfig:
     if not isinstance(raw_server, dict):
         raise TypeError(f"mcp.servers.{server_id} 必须是对象")
@@ -109,17 +116,16 @@ def _parse_server(
         binding = McpManagedLaunchDTO.model_validate(raw_server["managed_launch"]) if "managed_launch" in raw_server else None
         if binding is not None and ("command" in raw_server or installation_resolver is None):
             raise ValueError(f"mcp.servers.{server_id} 受管 launch 必须由目标安装 owner 解析，且不能另设 command")
+        artifact = installation_resolver(binding) if binding is not None and installation_resolver is not None else None
+        connection, private_env = _parse_stdio_connection(server_id, raw_server, workspace_root=workspace_root,
+            managed_artifact=artifact)
         return McpServerConfig(
             server_id=server_id,
             enabled=enabled,
             transport=transport,
-            connection=_parse_stdio_connection(
-                server_id,
-                raw_server,
-                workspace_root=workspace_root,
-                managed_command=installation_resolver(binding) if binding is not None and installation_resolver is not None else None,
-            ),
+            connection=connection,
             managed_launch=binding,
+            private_env=private_env,
         )
     if transport == "streamable_http":
         connection, private_headers = _parse_http_connection(server_id, raw_server, workspace_root=workspace_root)
@@ -163,21 +169,26 @@ def _parse_stdio_connection(
     raw_server: dict[str, object],
     *,
     workspace_root: Path,
-    managed_command: str | None = None,
-) -> Connection:
+    managed_artifact: McpInstalledArtifactDTO | None = None,
+) -> tuple[Connection, tuple[McpPrivateEnvRefDTO, ...]]:
     _reject_unknown_fields(server_id, raw_server, _STDIO_FIELDS)
+    managed_command = managed_artifact.command if managed_artifact is not None else None
     command = managed_command or _required_string(raw_server.get("command"), f"mcp.servers.{server_id}.command")
     args = _string_list(raw_server.get("args", []), f"mcp.servers.{server_id}.args")
     raw_env = raw_server.get("env", {})
-    if not isinstance(raw_env, dict) or not all(
-        isinstance(key, str) and isinstance(value, str)
-        for key, value in raw_env.items()
-    ):
-        raise TypeError(f"mcp.servers.{server_id}.env 必须是字符串到字符串的对象")
+    if not isinstance(raw_env, dict) or not all(isinstance(key, str) for key in raw_env):
+        raise TypeError(f"mcp.servers.{server_id}.env 必须是字符串键的对象")
+    if any(not isinstance(value, (str, dict)) for value in raw_env.values()):
+        raise TypeError(f"mcp.servers.{server_id}.env 只接受字符串或私有引用对象")
+    private_env = {key: McpPrivateEnvRefDTO.model_validate(value) for key, value in raw_env.items() if not isinstance(value, str)}
+    plain_env = {key: value for key, value in raw_env.items() if isinstance(value, str)}
     if managed_command is not None:
         if any(key.upper() in {"PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE"} for key in raw_env):
             raise ValueError("受管 MCP 制品不能通过 Python 导入路径环境变量替换锁定依赖")
-        raw_env = {**raw_env, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
+        plain_env = {**plain_env, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
+        if any(key.upper() in {"PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE"} and not isinstance(value, str)
+               for key, value in raw_env.items()):
+            raise ValueError("受管 MCP 制品的 Python 隔离参数不能使用私有输入替换")
 
     raw_cwd = raw_server.get("cwd")
     cwd = (
@@ -188,7 +199,7 @@ def _parse_stdio_connection(
             workspace_root=workspace_root,
         )
     )
-    return {
+    connection: Connection = {
         "transport": "stdio",
         "command": managed_command if managed_command is not None else _expand_value(command, workspace_root=workspace_root),
         "args": [
@@ -197,10 +208,18 @@ def _parse_stdio_connection(
         ],
         "env": {
             key: _expand_value(value, workspace_root=workspace_root)
-            for key, value in raw_env.items()
+            for key, value in plain_env.items()
         },
         "cwd": cwd,
     }
+    if private_env:
+        definition = (candidate_env_definition(managed_artifact.source, managed_artifact.manifest_digest, managed_artifact.variant)
+                      if managed_artifact is not None else stdio_env_definition(connection))
+        private_store = McpPrivateInputStore(workspace_root=workspace_root)
+        for key, reference in private_env.items():
+            private_store.require_env_binding(reference, server_id=server_id,
+                input_key=key, definition_digest=definition)
+    return connection, tuple(private_env.values())
 
 
 def _parse_http_connection(
@@ -227,7 +246,7 @@ def _parse_http_connection(
             headers[key] = _expand_value(value, workspace_root=workspace_root)
         else:
             reference = McpPrivateHeaderRefDTO.model_validate(value)
-            McpPrivateHeaderStore(workspace_root=workspace_root).require_binding(
+            McpPrivateInputStore(workspace_root=workspace_root).require_binding(
                 reference, server_id=server_id, header_name=key, endpoint=url,
             )
             private_headers.append(reference)

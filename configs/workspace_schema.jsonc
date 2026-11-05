@@ -47,6 +47,12 @@
     { "pattern": "/mcp/servers/*/args", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/env", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/env/*", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/env/*/kind", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/env/*/workspace_id", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/env/*/server_id", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/env/*/input_key", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/env/*/definition_digest", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
+    { "pattern": "/mcp/servers/*/env/*/version", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/cwd", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/url", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
     { "pattern": "/mcp/servers/*/headers", "policy": "immediate_read", "activation_scope": "current", "identity_key": null },
@@ -647,7 +653,7 @@
         "env": {
           "type": "object",
           "additionalProperties": {
-            "type": "string"
+            "oneOf": [{ "type": "string" }, { "$ref": "#/$defs/mcpPrivateEnvRef" }]
           },
           "default": {}
         },
@@ -668,6 +674,21 @@
         "installation_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
         "generation": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
         "artifact_digest": { "type": "string", "pattern": "^sha256:jcs:v1:[0-9a-f]{64}$" }
+      }
+    },
+
+    "mcpPrivateEnvRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "workspace_id", "server_id", "input_key", "definition_digest", "version"],
+      "description": "私有 env 仅引用本工作区不可变版本；原来源和 manifest/variant 或手动启动定义由消费端核对，不按安装 generation 借用秘密。",
+      "properties": {
+        "kind": { "const": "mcp_private_env" },
+        "workspace_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "server_id": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$" },
+        "input_key": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$" },
+        "definition_digest": { "type": "string", "pattern": "^sha256:jcs:v1:[0-9a-f]{64}$" },
+        "version": { "type": "string", "pattern": "^[0-9a-f]{32}$" }
       }
     },
 

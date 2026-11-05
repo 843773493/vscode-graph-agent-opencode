@@ -800,6 +800,7 @@ message McpCandidatePlanRequestDTO {
   string manifest_digest = 3;
   McpCandidateVariantRefDTO variant = 4;
   google.protobuf.Struct inputs = 5;
+  optional string server_id = 6;
 }
 
 // 此计划不代表安装或配置成功；parameters 是脱敏展示，消费时重新校验原始请求。
@@ -843,6 +844,59 @@ message McpManagedLaunchDTO {
   string installation_id = 2;
   string generation = 3;
   string artifact_digest = 4;
+}
+
+// 手动 stdio 的私有输入绑定实际展开后的启动定义，不包括 env 或秘密值。
+message McpStdioLaunchDefinitionDTO {
+  string command = 1;
+  repeated string args = 2;
+  optional string cwd = 3;
+}
+
+message McpPrivateEnvRefDTO {
+  string kind = 1;
+  string workspace_id = 2;
+  string server_id = 3;
+  string input_key = 4;
+  string definition_digest = 5;
+  string version = 6;
+}
+
+// candidate 与 launch 恰好选一；目录绑定由原 owner 重读原件后生成。
+message McpPrivateEnvWriteRequestDTO {
+  McpWorkspaceTargetDTO target = 1;
+  string server_id = 2;
+  string input_key = 3;
+  optional McpCandidatePlanRequestDTO candidate = 4;
+  optional McpStdioLaunchDefinitionDTO launch = 5;
+  string value = 6;
+}
+
+message McpPrivateEnvWriteResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpPrivateEnvRefDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
+// 不另存计划；重新消费原 candidate 后交原 source/candidate/CAS writer。
+message McpCandidateConfigurationRequestDTO {
+  McpWorkspaceTargetDTO target = 1;
+  string server_id = 2;
+  McpCandidatePlanValidationRequestDTO plan = 3;
+  optional McpManagedLaunchDTO managed_launch = 4;
+  ConfigSourceEditRequest source_edit = 5;
+}
+
+message McpCandidateConfigurationResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  ConfigSourceDocumentDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
 }
 
 message McpInstallationRequestDTO {

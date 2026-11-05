@@ -808,6 +808,7 @@ export interface McpCandidatePlanRequestDTO {
   manifest_digest: string;
   variant: McpCandidateVariantRefDTO | undefined;
   inputs: { [key: string]: any } | undefined;
+  server_id?: string | undefined;
 }
 
 /** 此计划不代表安装或配置成功；parameters 是脱敏展示，消费时重新校验原始请求。 */
@@ -851,6 +852,59 @@ export interface McpManagedLaunchDTO {
   installation_id: string;
   generation: string;
   artifact_digest: string;
+}
+
+/** 手动 stdio 的私有输入绑定实际展开后的启动定义，不包括 env 或秘密值。 */
+export interface McpStdioLaunchDefinitionDTO {
+  command: string;
+  args: string[];
+  cwd?: string | undefined;
+}
+
+export interface McpPrivateEnvRefDTO {
+  kind: string;
+  workspace_id: string;
+  server_id: string;
+  input_key: string;
+  definition_digest: string;
+  version: string;
+}
+
+/** candidate 与 launch 恰好选一；目录绑定由原 owner 重读原件后生成。 */
+export interface McpPrivateEnvWriteRequestDTO {
+  target: McpWorkspaceTargetDTO | undefined;
+  server_id: string;
+  input_key: string;
+  candidate?: McpCandidatePlanRequestDTO | undefined;
+  launch?: McpStdioLaunchDefinitionDTO | undefined;
+  value: string;
+}
+
+export interface McpPrivateEnvWriteResponseDTO {
+  code: number;
+  message: string;
+  data: McpPrivateEnvRefDTO | undefined;
+  request_id: string;
+  target: McpWorkspaceTargetDTO | undefined;
+  protocol_version: number;
+}
+
+/** 不另存计划；重新消费原 candidate 后交原 source/candidate/CAS writer。 */
+export interface McpCandidateConfigurationRequestDTO {
+  target: McpWorkspaceTargetDTO | undefined;
+  server_id: string;
+  plan: McpCandidatePlanValidationRequestDTO | undefined;
+  managed_launch?: McpManagedLaunchDTO | undefined;
+  source_edit: ConfigSourceEditRequest | undefined;
+}
+
+export interface McpCandidateConfigurationResponseDTO {
+  code: number;
+  message: string;
+  data: ConfigSourceDocumentDTO | undefined;
+  request_id: string;
+  target: McpWorkspaceTargetDTO | undefined;
+  protocol_version: number;
 }
 
 export interface McpInstallationRequestDTO {
@@ -8872,7 +8926,14 @@ export const McpCandidateInspectDTO: MessageFns<McpCandidateInspectDTO> = {
 };
 
 function createBaseMcpCandidatePlanRequestDTO(): McpCandidatePlanRequestDTO {
-  return { target: undefined, source: undefined, manifest_digest: "", variant: undefined, inputs: undefined };
+  return {
+    target: undefined,
+    source: undefined,
+    manifest_digest: "",
+    variant: undefined,
+    inputs: undefined,
+    server_id: undefined,
+  };
 }
 
 export const McpCandidatePlanRequestDTO: MessageFns<McpCandidatePlanRequestDTO> = {
@@ -8883,6 +8944,7 @@ export const McpCandidatePlanRequestDTO: MessageFns<McpCandidatePlanRequestDTO> 
       manifest_digest: isSet(object.manifest_digest) ? globalThis.String(object.manifest_digest) : "",
       variant: isSet(object.variant) ? McpCandidateVariantRefDTO.fromJSON(object.variant) : undefined,
       inputs: isObject(object.inputs) ? object.inputs : undefined,
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : undefined,
     };
   },
 
@@ -8903,6 +8965,9 @@ export const McpCandidatePlanRequestDTO: MessageFns<McpCandidatePlanRequestDTO> 
     if (message.inputs !== undefined) {
       obj.inputs = message.inputs;
     }
+    if (message.server_id !== undefined) {
+      obj.server_id = message.server_id;
+    }
     return obj;
   },
 
@@ -8922,6 +8987,7 @@ export const McpCandidatePlanRequestDTO: MessageFns<McpCandidatePlanRequestDTO> 
       ? McpCandidateVariantRefDTO.fromPartial(object.variant)
       : undefined;
     message.inputs = object.inputs ?? undefined;
+    message.server_id = object.server_id ?? undefined;
     return message;
   },
 };
@@ -9203,6 +9269,344 @@ export const McpManagedLaunchDTO: MessageFns<McpManagedLaunchDTO> = {
     message.installation_id = object.installation_id ?? "";
     message.generation = object.generation ?? "";
     message.artifact_digest = object.artifact_digest ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpStdioLaunchDefinitionDTO(): McpStdioLaunchDefinitionDTO {
+  return { command: "", args: [], cwd: undefined };
+}
+
+export const McpStdioLaunchDefinitionDTO: MessageFns<McpStdioLaunchDefinitionDTO> = {
+  fromJSON(object: any): McpStdioLaunchDefinitionDTO {
+    return {
+      command: isSet(object.command) ? globalThis.String(object.command) : "",
+      args: globalThis.Array.isArray(object?.args)
+        ? object.args.map((e: any) => globalThis.String(e))
+        : [],
+      cwd: isSet(object.cwd) ? globalThis.String(object.cwd) : undefined,
+    };
+  },
+
+  toJSON(message: McpStdioLaunchDefinitionDTO): unknown {
+    const obj: any = {};
+    if (message.command !== "") {
+      obj.command = message.command;
+    }
+    if (message.args?.length) {
+      obj.args = message.args;
+    }
+    if (message.cwd !== undefined) {
+      obj.cwd = message.cwd;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpStdioLaunchDefinitionDTO>, I>>(base?: I): McpStdioLaunchDefinitionDTO {
+    return McpStdioLaunchDefinitionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpStdioLaunchDefinitionDTO>, I>>(object: I): McpStdioLaunchDefinitionDTO {
+    const message = createBaseMcpStdioLaunchDefinitionDTO();
+    message.command = object.command ?? "";
+    message.args = object.args?.map((e) => e) || [];
+    message.cwd = object.cwd ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpPrivateEnvRefDTO(): McpPrivateEnvRefDTO {
+  return { kind: "", workspace_id: "", server_id: "", input_key: "", definition_digest: "", version: "" };
+}
+
+export const McpPrivateEnvRefDTO: MessageFns<McpPrivateEnvRefDTO> = {
+  fromJSON(object: any): McpPrivateEnvRefDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      input_key: isSet(object.input_key) ? globalThis.String(object.input_key) : "",
+      definition_digest: isSet(object.definition_digest) ? globalThis.String(object.definition_digest) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+    };
+  },
+
+  toJSON(message: McpPrivateEnvRefDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.input_key !== "") {
+      obj.input_key = message.input_key;
+    }
+    if (message.definition_digest !== "") {
+      obj.definition_digest = message.definition_digest;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpPrivateEnvRefDTO>, I>>(base?: I): McpPrivateEnvRefDTO {
+    return McpPrivateEnvRefDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpPrivateEnvRefDTO>, I>>(object: I): McpPrivateEnvRefDTO {
+    const message = createBaseMcpPrivateEnvRefDTO();
+    message.kind = object.kind ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.server_id = object.server_id ?? "";
+    message.input_key = object.input_key ?? "";
+    message.definition_digest = object.definition_digest ?? "";
+    message.version = object.version ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpPrivateEnvWriteRequestDTO(): McpPrivateEnvWriteRequestDTO {
+  return { target: undefined, server_id: "", input_key: "", candidate: undefined, launch: undefined, value: "" };
+}
+
+export const McpPrivateEnvWriteRequestDTO: MessageFns<McpPrivateEnvWriteRequestDTO> = {
+  fromJSON(object: any): McpPrivateEnvWriteRequestDTO {
+    return {
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      input_key: isSet(object.input_key) ? globalThis.String(object.input_key) : "",
+      candidate: isSet(object.candidate) ? McpCandidatePlanRequestDTO.fromJSON(object.candidate) : undefined,
+      launch: isSet(object.launch) ? McpStdioLaunchDefinitionDTO.fromJSON(object.launch) : undefined,
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: McpPrivateEnvWriteRequestDTO): unknown {
+    const obj: any = {};
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.input_key !== "") {
+      obj.input_key = message.input_key;
+    }
+    if (message.candidate !== undefined) {
+      obj.candidate = McpCandidatePlanRequestDTO.toJSON(message.candidate);
+    }
+    if (message.launch !== undefined) {
+      obj.launch = McpStdioLaunchDefinitionDTO.toJSON(message.launch);
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpPrivateEnvWriteRequestDTO>, I>>(base?: I): McpPrivateEnvWriteRequestDTO {
+    return McpPrivateEnvWriteRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpPrivateEnvWriteRequestDTO>, I>>(object: I): McpPrivateEnvWriteRequestDTO {
+    const message = createBaseMcpPrivateEnvWriteRequestDTO();
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.server_id = object.server_id ?? "";
+    message.input_key = object.input_key ?? "";
+    message.candidate = (object.candidate !== undefined && object.candidate !== null)
+      ? McpCandidatePlanRequestDTO.fromPartial(object.candidate)
+      : undefined;
+    message.launch = (object.launch !== undefined && object.launch !== null)
+      ? McpStdioLaunchDefinitionDTO.fromPartial(object.launch)
+      : undefined;
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpPrivateEnvWriteResponseDTO(): McpPrivateEnvWriteResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpPrivateEnvWriteResponseDTO: MessageFns<McpPrivateEnvWriteResponseDTO> = {
+  fromJSON(object: any): McpPrivateEnvWriteResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? McpPrivateEnvRefDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpPrivateEnvWriteResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = McpPrivateEnvRefDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpPrivateEnvWriteResponseDTO>, I>>(base?: I): McpPrivateEnvWriteResponseDTO {
+    return McpPrivateEnvWriteResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpPrivateEnvWriteResponseDTO>, I>>(
+    object: I,
+  ): McpPrivateEnvWriteResponseDTO {
+    const message = createBaseMcpPrivateEnvWriteResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? McpPrivateEnvRefDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
+    return message;
+  },
+};
+
+function createBaseMcpCandidateConfigurationRequestDTO(): McpCandidateConfigurationRequestDTO {
+  return { target: undefined, server_id: "", plan: undefined, managed_launch: undefined, source_edit: undefined };
+}
+
+export const McpCandidateConfigurationRequestDTO: MessageFns<McpCandidateConfigurationRequestDTO> = {
+  fromJSON(object: any): McpCandidateConfigurationRequestDTO {
+    return {
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      server_id: isSet(object.server_id) ? globalThis.String(object.server_id) : "",
+      plan: isSet(object.plan) ? McpCandidatePlanValidationRequestDTO.fromJSON(object.plan) : undefined,
+      managed_launch: isSet(object.managed_launch) ? McpManagedLaunchDTO.fromJSON(object.managed_launch) : undefined,
+      source_edit: isSet(object.source_edit) ? ConfigSourceEditRequest.fromJSON(object.source_edit) : undefined,
+    };
+  },
+
+  toJSON(message: McpCandidateConfigurationRequestDTO): unknown {
+    const obj: any = {};
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.server_id !== "") {
+      obj.server_id = message.server_id;
+    }
+    if (message.plan !== undefined) {
+      obj.plan = McpCandidatePlanValidationRequestDTO.toJSON(message.plan);
+    }
+    if (message.managed_launch !== undefined) {
+      obj.managed_launch = McpManagedLaunchDTO.toJSON(message.managed_launch);
+    }
+    if (message.source_edit !== undefined) {
+      obj.source_edit = ConfigSourceEditRequest.toJSON(message.source_edit);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateConfigurationRequestDTO>, I>>(
+    base?: I,
+  ): McpCandidateConfigurationRequestDTO {
+    return McpCandidateConfigurationRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateConfigurationRequestDTO>, I>>(
+    object: I,
+  ): McpCandidateConfigurationRequestDTO {
+    const message = createBaseMcpCandidateConfigurationRequestDTO();
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.server_id = object.server_id ?? "";
+    message.plan = (object.plan !== undefined && object.plan !== null)
+      ? McpCandidatePlanValidationRequestDTO.fromPartial(object.plan)
+      : undefined;
+    message.managed_launch = (object.managed_launch !== undefined && object.managed_launch !== null)
+      ? McpManagedLaunchDTO.fromPartial(object.managed_launch)
+      : undefined;
+    message.source_edit = (object.source_edit !== undefined && object.source_edit !== null)
+      ? ConfigSourceEditRequest.fromPartial(object.source_edit)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseMcpCandidateConfigurationResponseDTO(): McpCandidateConfigurationResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpCandidateConfigurationResponseDTO: MessageFns<McpCandidateConfigurationResponseDTO> = {
+  fromJSON(object: any): McpCandidateConfigurationResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? ConfigSourceDocumentDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpCandidateConfigurationResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = ConfigSourceDocumentDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateConfigurationResponseDTO>, I>>(
+    base?: I,
+  ): McpCandidateConfigurationResponseDTO {
+    return McpCandidateConfigurationResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateConfigurationResponseDTO>, I>>(
+    object: I,
+  ): McpCandidateConfigurationResponseDTO {
+    const message = createBaseMcpCandidateConfigurationResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? ConfigSourceDocumentDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
     return message;
   },
 };

@@ -162,6 +162,7 @@ class _Inputs:
             if flag in definition and not isinstance(definition[flag], bool):
                 raise ValueError(f"MCP input.{flag} 必须是布尔值")
         if definition.get("isSecret") is True:
+            # TODO(3.2)：secret arguments、模板变量和非 env 输入尚未实现私有引用消费。
             raise ValueError("MCP secret input 尚无工作区私有引用能力，不能创建此候选")
         choices = definition.get("choices")
         if choices is not None and (not isinstance(choices, list) or not all(isinstance(item, str) for item in choices)):
@@ -267,8 +268,34 @@ def _arguments(value: object, inputs: _Inputs) -> list[str]:
     return result
 
 
-def _key_values(value: object, inputs: _Inputs) -> dict[str, str]:
-    result: dict[str, str] = {}
+def _private_env_definition(definition: dict[str, object]) -> None:
+    if "isRequired" in definition and not isinstance(definition["isRequired"], bool):
+        raise ValueError("MCP input.isRequired 必须是布尔值")
+    if definition.get("isSecret") is not True or definition.get("format", "string") != "string":
+        raise ValueError("MCP 私有 env 必须是明确的 secret string input")
+    if any(field in definition for field in ("variables", "value", "default", "choices")):
+        raise ValueError("MCP secret env 不支持固定值、默认值、choices 或模板拼接，必须直接引用私有输入")
+
+
+def secret_env_input_keys(variant: McpCandidateVariant) -> frozenset[str]:
+    """写入前核实际声明；不读取输入值，不把其它 secret 映射为 env。"""
+    if variant.kind != "package":
+        raise ValueError("MCP 私有 env 仅支持 stdio package 的 environmentVariables")
+    payload = _object(json.loads(variant.payload), "MCP variant")
+    if _object(payload.get("transport"), "MCP package.transport").get("type") != "stdio":
+        raise ValueError("MCP 私有 env 仅支持 stdio package")
+    keys = set()
+    for item in _list(payload.get("environmentVariables", []), "MCP environmentVariables"):
+        definition = _object(item, "MCP env input")
+        _fields(definition, _VARIABLE_FIELDS | {"name"}, "MCP env input")
+        if definition.get("isSecret") is True:
+            _private_env_definition(definition)
+            keys.add(_text(definition.get("name"), "MCP input.name"))
+    return frozenset(keys)
+
+
+def _key_values(value: object, inputs: _Inputs, *, private_env: bool = False) -> dict[str, object]:
+    result: dict[str, object] = {}
     names: set[str] = set()
     for item in _list(value, "MCP key/value inputs"):
         definition = _object(item, "MCP key/value input")
@@ -277,6 +304,18 @@ def _key_values(value: object, inputs: _Inputs) -> dict[str, str]:
         if key in names:
             raise ValueError("MCP key/value input 名称重复")
         names.add(key)
+        if private_env and definition.get("isSecret") is True:
+            _private_env_definition(definition)
+            if key not in inputs.values:
+                if definition.get("isRequired"):
+                    raise ValueError("MCP 候选缺少必需私有 env 引用")
+                continue
+            reference = _object(inputs.values[key], "MCP 私有 env 引用")
+            if reference.get("kind") != "mcp_private_env":
+                raise ValueError("MCP secret env 必须使用工作区私有引用，不能提交明文")
+            inputs.used.add(key)
+            result[key] = reference
+            continue
         selected = _resolve_values(definition, key, inputs)
         if selected:
             result[key] = selected[0]
@@ -321,6 +360,6 @@ def candidate_parameters(variant: McpCandidateVariant, values: dict[str, object]
                   "expected_sha256": expected_sha, "runtime_hint": payload.get("runtimeHint"),
                   "runtime_arguments": _arguments(payload.get("runtimeArguments", []), inputs),
                   "arguments": _arguments(payload.get("packageArguments", []), inputs),
-                  "env": _key_values(payload.get("environmentVariables", []), inputs)}
+                  "env": _key_values(payload.get("environmentVariables", []), inputs, private_env=True)}
     inputs.finish()
     return "requires_artifact", parameters

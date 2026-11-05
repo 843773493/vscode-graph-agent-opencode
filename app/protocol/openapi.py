@@ -78,6 +78,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "McpServerDTO", "McpConnectionOperationDTO", "McpConnectionRequestDTO",
         "McpAuthorizationDTO", "McpAuthorizationCallbackDTO",
         "McpPrivateHeaderRefDTO", "McpPrivateHeaderWriteRequestDTO", "McpPrivateHeaderWriteResponseDTO",
+        "McpStdioLaunchDefinitionDTO", "McpPrivateEnvRefDTO", "McpPrivateEnvWriteRequestDTO", "McpPrivateEnvWriteResponseDTO",
+        "McpCandidateConfigurationRequestDTO", "McpCandidateConfigurationResponseDTO",
         "McpServerListResponseDTO", "McpConnectionOperationListResponseDTO",
         "McpConnectionOperationResponseDTO", "McpAuthorizationResponseDTO",
         "McpCandidateInspectRequestDTO", "McpCandidatePlanRequestDTO", "McpCandidatePlanValidationRequestDTO",

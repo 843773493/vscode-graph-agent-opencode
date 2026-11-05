@@ -3,7 +3,7 @@ import {
   cancelMcpOperation, completeMcpAuthorization, getMcpAuthorization,
   listMcpOperations, getMcpCatalog, submitMcpOperation,
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation,
-  writeMcpPrivateHeader,
+  writeMcpPrivateHeader, writeMcpPrivateEnv,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
 import type { McpServerListResponseDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
@@ -38,6 +38,28 @@ function installFetch(respond: (url: URL, init: RequestInit | undefined) => unkn
 }
 
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("私有 env 按手动或原目录请求选择能力路由，只消费精确引用", async () => {
+  const payload = { target: { kind: "workspace", ...target }, server_id: "secure", input_key: "API_KEY",
+    launch: { command: "/tools/server", args: [] }, value: "private-env-client-only" };
+  const reference = { kind: "mcp_private_env", workspace_id: target.workspace_id, server_id: "secure", input_key: "API_KEY",
+    definition_digest: "sha256:jcs:v1:" + "a".repeat(64), version: "b".repeat(32) };
+  const paths: string[] = [];
+  const port = installFetch((url, init) => {
+    paths.push(url.pathname);
+    expect(JSON.parse(String(init?.body)).value).toBe(payload.value);
+    return envelope(reference);
+  });
+  expect(await writeMcpPrivateEnv(port, target, payload)).toEqual(reference);
+  const candidate = { target: { kind: "backend", gateway_id: target.gateway_id, backend_id: "00000000-0000-4000-8000-000000000011" },
+    source: { kind: "gallery", name: "server", version: "1", protocol: "v0.1", endpoint: "https://registry.test", entry_url: "https://registry.test/server" },
+    manifest_digest: "sha256:jcs:v1:" + "a".repeat(64), variant: { kind: "package", index: 0, digest: "sha256:jcs:v1:" + "b".repeat(64) },
+    inputs: {}, server_id: "secure" };
+  expect(await writeMcpPrivateEnv(port, target, { ...payload, candidate, launch: undefined })).toEqual(reference);
+  expect(paths).toEqual(["/api/v1/mcp/private-env", "/api/v1/mcp/candidate-plans/private-env"]);
+  const wrong = installFetch(() => envelope({ ...reference, input_key: "OTHER" }));
+  await expect(writeMcpPrivateEnv(wrong, target, payload)).rejects.toThrow("原输入身份");
+});
 
 test("私有 header 只交给精确工作区，核对原输入和不透明版本后消费引用", async () => {
   const payload = { target: { kind: "workspace", ...target }, server_id: "secure", header_name: "Authorization",

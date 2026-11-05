@@ -3508,6 +3508,11 @@ export declare type McpCandidatePlanRequestDTO = Message<"boxteam.workspace.v2.M
    * @generated from field: google.protobuf.Struct inputs = 5;
    */
   inputs?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional string server_id = 6;
+   */
+  serverId?: string | undefined;
 };
 
 /**
@@ -3704,6 +3709,238 @@ export declare type McpManagedLaunchDTO = Message<"boxteam.workspace.v2.McpManag
  * Use `create(McpManagedLaunchDTOSchema)` to create a new message.
  */
 export declare const McpManagedLaunchDTOSchema: GenMessage<McpManagedLaunchDTO>;
+
+/**
+ * 手动 stdio 的私有输入绑定实际展开后的启动定义，不包括 env 或秘密值。
+ *
+ * @generated from message boxteam.workspace.v2.McpStdioLaunchDefinitionDTO
+ */
+export declare type McpStdioLaunchDefinitionDTO = Message<"boxteam.workspace.v2.McpStdioLaunchDefinitionDTO"> & {
+  /**
+   * @generated from field: string command = 1;
+   */
+  command: string;
+
+  /**
+   * @generated from field: repeated string args = 2;
+   */
+  args: string[];
+
+  /**
+   * @generated from field: optional string cwd = 3;
+   */
+  cwd?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpStdioLaunchDefinitionDTO.
+ * Use `create(McpStdioLaunchDefinitionDTOSchema)` to create a new message.
+ */
+export declare const McpStdioLaunchDefinitionDTOSchema: GenMessage<McpStdioLaunchDefinitionDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpPrivateEnvRefDTO
+ */
+export declare type McpPrivateEnvRefDTO = Message<"boxteam.workspace.v2.McpPrivateEnvRefDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string server_id = 3;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: string input_key = 4;
+   */
+  inputKey: string;
+
+  /**
+   * @generated from field: string definition_digest = 5;
+   */
+  definitionDigest: string;
+
+  /**
+   * @generated from field: string version = 6;
+   */
+  version: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpPrivateEnvRefDTO.
+ * Use `create(McpPrivateEnvRefDTOSchema)` to create a new message.
+ */
+export declare const McpPrivateEnvRefDTOSchema: GenMessage<McpPrivateEnvRefDTO>;
+
+/**
+ * candidate 与 launch 恰好选一；目录绑定由原 owner 重读原件后生成。
+ *
+ * @generated from message boxteam.workspace.v2.McpPrivateEnvWriteRequestDTO
+ */
+export declare type McpPrivateEnvWriteRequestDTO = Message<"boxteam.workspace.v2.McpPrivateEnvWriteRequestDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 1;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: string server_id = 2;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: string input_key = 3;
+   */
+  inputKey: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.McpCandidatePlanRequestDTO candidate = 4;
+   */
+  candidate?: McpCandidatePlanRequestDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.McpStdioLaunchDefinitionDTO launch = 5;
+   */
+  launch?: McpStdioLaunchDefinitionDTO | undefined;
+
+  /**
+   * @generated from field: string value = 6;
+   */
+  value: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpPrivateEnvWriteRequestDTO.
+ * Use `create(McpPrivateEnvWriteRequestDTOSchema)` to create a new message.
+ */
+export declare const McpPrivateEnvWriteRequestDTOSchema: GenMessage<McpPrivateEnvWriteRequestDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpPrivateEnvWriteResponseDTO
+ */
+export declare type McpPrivateEnvWriteResponseDTO = Message<"boxteam.workspace.v2.McpPrivateEnvWriteResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpPrivateEnvRefDTO data = 3;
+   */
+  data?: McpPrivateEnvRefDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpPrivateEnvWriteResponseDTO.
+ * Use `create(McpPrivateEnvWriteResponseDTOSchema)` to create a new message.
+ */
+export declare const McpPrivateEnvWriteResponseDTOSchema: GenMessage<McpPrivateEnvWriteResponseDTO>;
+
+/**
+ * 不另存计划；重新消费原 candidate 后交原 source/candidate/CAS writer。
+ *
+ * @generated from message boxteam.workspace.v2.McpCandidateConfigurationRequestDTO
+ */
+export declare type McpCandidateConfigurationRequestDTO = Message<"boxteam.workspace.v2.McpCandidateConfigurationRequestDTO"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 1;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: string server_id = 2;
+   */
+  serverId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpCandidatePlanValidationRequestDTO plan = 3;
+   */
+  plan?: McpCandidatePlanValidationRequestDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.McpManagedLaunchDTO managed_launch = 4;
+   */
+  managedLaunch?: McpManagedLaunchDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ConfigSourceEditRequest source_edit = 5;
+   */
+  sourceEdit?: ConfigSourceEditRequest | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpCandidateConfigurationRequestDTO.
+ * Use `create(McpCandidateConfigurationRequestDTOSchema)` to create a new message.
+ */
+export declare const McpCandidateConfigurationRequestDTOSchema: GenMessage<McpCandidateConfigurationRequestDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpCandidateConfigurationResponseDTO
+ */
+export declare type McpCandidateConfigurationResponseDTO = Message<"boxteam.workspace.v2.McpCandidateConfigurationResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ConfigSourceDocumentDTO data = 3;
+   */
+  data?: ConfigSourceDocumentDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpCandidateConfigurationResponseDTO.
+ * Use `create(McpCandidateConfigurationResponseDTOSchema)` to create a new message.
+ */
+export declare const McpCandidateConfigurationResponseDTOSchema: GenMessage<McpCandidateConfigurationResponseDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.McpInstallationRequestDTO

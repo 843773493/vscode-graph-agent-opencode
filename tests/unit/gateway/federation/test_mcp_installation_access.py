@@ -229,6 +229,28 @@ def _private_request(case: McpAccess) -> dict[str, object]:
             "value": "Bearer private-gateway-unit-only"}
 
 
+async def test_manual_env_uses_configuration_permissions_without_installation_permission(mcp_access: McpAccess) -> None:
+    case = mcp_access
+    case.allow("configuration_read", "configuration_write")
+    payload = {"target": _private_request(case)["target"], "server_id": "secure", "input_key": "API_KEY",
+               "launch": {"command": "/tools/server", "args": []}, "value": "private-env-gateway-unit"}
+    response = await case.client.post(case.path("workspace", "private-env"), json=payload)
+    assert response.status_code == 200 and payload["value"] not in response.text
+    assert response.json()["data"]["input_key"] == "API_KEY"
+    case.before_response = lambda: case.allow("configuration_read")
+    revoked = await case.client.post(case.path("workspace", "private-env"), json=payload)
+    assert revoked.status_code == 403 and "definition_digest" not in revoked.text
+    assert case.registry.route_reference_counts(case.workspace_id) == (0, 0)
+
+
+@pytest.mark.parametrize("method,path", [("POST", "candidate-plans/private-env"), ("PUT", "candidate-configurations")])
+async def test_catalog_secret_and_configuration_also_require_installation_before_backend(mcp_access: McpAccess, method: str, path: str) -> None:
+    case = mcp_access
+    case.allow("configuration_read", "configuration_write")
+    response = await case.client.request(method, case.path("workspace", path), json={})
+    assert response.status_code == 403 and "mcp_installation_manage" in response.text and not case.calls
+
+
 @pytest.mark.parametrize("mount", ["direct", "workspace"])
 @pytest.mark.parametrize("capability", ["read", "configuration_read", "configuration_write", "mcp_installation_manage"])
 async def test_private_header_requires_configuration_read_and_write_before_backend(

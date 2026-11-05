@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import ValidationError
 
 from app.api.deps import (
+    get_config_service,
     get_mcp_catalog_owner,
     get_mcp_connection_service,
     get_mcp_installation_target,
@@ -19,6 +20,8 @@ from app.domain.mcp_candidates import McpCandidateConflict
 from app.schemas.internal_v2.mcp import (
     McpAuthorizationCallbackDTO,
     McpAuthorizationResponseDTO,
+    McpCandidateConfigurationRequestDTO,
+    McpCandidateConfigurationResponseDTO,
     McpCandidateInspectRequestDTO,
     McpCandidateInspectResponseDTO,
     McpCandidatePlanRequestDTO,
@@ -32,6 +35,8 @@ from app.schemas.internal_v2.mcp import (
     McpInstallationRequestDTO,
     McpInstallationTargetDTO,
     McpInstalledArtifactListResponseDTO,
+    McpPrivateEnvWriteRequestDTO,
+    McpPrivateEnvWriteResponseDTO,
     McpPrivateHeaderWriteRequestDTO,
     McpPrivateHeaderWriteResponseDTO,
     McpServerDTO,
@@ -39,6 +44,8 @@ from app.schemas.internal_v2.mcp import (
     McpToolDTO,
     McpWorkspaceTargetDTO,
 )
+from app.services.infrastructure.config.state import ConfigConflictError
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
 from app.services.infrastructure.mcp.candidate_source import (
     McpCandidateSourceUnavailable,
@@ -57,7 +64,7 @@ def _target(service: McpConnectionService) -> McpWorkspaceTargetDTO:
 def _candidate_errors():
     try:
         yield
-    except McpCandidateConflict as error:
+    except (McpCandidateConflict, ConfigConflictError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (McpCandidateSourceUnavailable, InstallationUnavailable) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -81,6 +88,58 @@ async def write_mcp_private_header(
     with _candidate_errors():
         data = await owner.write_private_header(payload, actual_target=target)
     return McpPrivateHeaderWriteResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.post("/private-env", response_model=McpPrivateEnvWriteResponseDTO, summary="写入手动 stdio 定义的私有 env，返回不可变引用")
+async def write_mcp_private_env(
+    payload: McpPrivateEnvWriteRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    service: Annotated[McpConnectionService, Depends(get_mcp_connection_service)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    target = _target(service)
+    with _candidate_errors():
+        data = await owner.write_private_env(payload, actual_target=target, installation_target=None, candidate_required=False)
+    return McpPrivateEnvWriteResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.post("/candidate-plans/private-env", response_model=McpPrivateEnvWriteResponseDTO, summary="重读原目录定义并写入其声明的私有 env")
+async def write_mcp_candidate_private_env(
+    payload: McpPrivateEnvWriteRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    service: Annotated[McpConnectionService, Depends(get_mcp_connection_service)],
+    installation_target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    target = _target(service)
+    with _candidate_errors():
+        data = await owner.write_private_env(payload, actual_target=target, installation_target=installation_target, candidate_required=True)
+    return McpPrivateEnvWriteResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.put("/candidate-configurations", response_model=McpCandidateConfigurationResponseDTO, summary="重新消费原 MCP 候选并经原来源候选／CAS 保存配置")
+async def save_mcp_candidate_configuration(
+    payload: McpCandidateConfigurationRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    service: Annotated[McpConnectionService, Depends(get_mcp_connection_service)],
+    installation_target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    target = _target(service)
+    with _candidate_errors():
+        data = await owner.save_candidate_configuration(payload, actual_target=target,
+            installation_target=installation_target, config_service=config_service)
+    return McpCandidateConfigurationResponseDTO(data=data, request_id=request_id, target=target)
 
 
 @router.post("/candidate-manifests", response_model=McpCandidateInspectResponseDTO, summary="读取 MCP 安装候选原始来源与全部 variant")

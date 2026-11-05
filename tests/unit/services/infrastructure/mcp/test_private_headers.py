@@ -23,7 +23,7 @@ from app.services.infrastructure.config.source_document import (
 )
 from app.services.infrastructure.mcp import session_runtime
 from app.services.infrastructure.mcp.config import parse_mcp_server_configs
-from app.services.infrastructure.mcp.private_headers import McpPrivateHeaderStore
+from app.services.infrastructure.mcp.private_inputs import McpPrivateInputStore
 
 ENDPOINT = "https://service.test/mcp?region=1"
 HEADER = "Authorization"
@@ -33,7 +33,7 @@ SECRET = "Bearer private-unit-only"
 @pytest.fixture
 def private_header(empty_workspace_scope: tuple[str, Path]):
     _, root = empty_workspace_scope
-    store = McpPrivateHeaderStore(workspace_root=root)
+    store = McpPrivateInputStore(workspace_root=root)
     reference = store.write(server_id="secure", header_name=HEADER, endpoint=ENDPOINT, value=SecretStr(SECRET))
     return root, store, reference
 
@@ -49,7 +49,7 @@ def test_private_header_recovers_exact_version_and_rotates_without_overwriting(p
     root, store, reference = private_header
     second = store.write(server_id="secure", header_name=HEADER, endpoint=ENDPOINT, value=SecretStr("Bearer rotated"))
     assert second.version != reference.version
-    restarted = McpPrivateHeaderStore(workspace_root=root)
+    restarted = McpPrivateInputStore(workspace_root=root)
     assert restarted.resolve(reference, server_id="secure", header_name=HEADER, endpoint=ENDPOINT) == SECRET
     assert restarted.resolve(second, server_id="secure", header_name=HEADER, endpoint=ENDPOINT) == "Bearer rotated"
     files = list((root / ".boxteam/credentials/mcp-headers").glob("*.json"))
@@ -74,7 +74,7 @@ def test_reference_cannot_cross_workspace_or_borrow_unknown_version(private_head
     other = root / "workspace-b"
     load_or_create_workspace_id(other)
     with pytest.raises(ValueError, match="不属于"):
-        McpPrivateHeaderStore(workspace_root=other).resolve(
+        McpPrivateInputStore(workspace_root=other).resolve(
             reference, server_id="secure", header_name=HEADER, endpoint=ENDPOINT,
         )
     unknown = reference.model_copy(update={"version": "0" * 32})

@@ -13,6 +13,10 @@ from pydantic import (
 )
 
 from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
+from app.schemas.internal_v2.config import (
+    ConfigSourceDocumentDTO,
+    ConfigSourceEditRequest,
+)
 
 
 class McpInvocationReceipt(BaseModel):
@@ -280,6 +284,7 @@ class McpCandidatePlanRequestDTO(McpCandidateInspectRequestDTO):
     manifest_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
     variant: McpCandidateVariantRefDTO
     inputs: dict[str, object] = Field(default_factory=dict, repr=False)
+    server_id: str | None = Field(default=None, pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
 
 
 class McpCandidatePlanDTO(_McpCandidateModel):
@@ -321,6 +326,67 @@ class McpManagedLaunchDTO(_McpCandidateModel):
     installation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     generation: str = Field(pattern=r"^[0-9a-f]{32}$")
     artifact_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+
+
+class McpStdioLaunchDefinitionDTO(_McpCandidateModel):
+    command: str = Field(min_length=1)
+    args: list[str] = Field(default_factory=list)
+    cwd: str | None = Field(default=None, min_length=1)
+
+
+class McpPrivateEnvRefDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    kind: Literal["mcp_private_env"] = "mcp_private_env"
+    workspace_id: CanonicalWorkspaceId
+    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
+    input_key: str = Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+    definition_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+    version: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+def _private_env_value(value: SecretStr) -> SecretStr:
+    if any(char == "\x00" or 0xD800 <= ord(char) <= 0xDFFF for char in value.get_secret_value()):
+        raise ValueError("MCP 私有 env 值必须可编码为 UTF-8 且不得包含 NUL")
+    return value
+
+
+McpPrivateEnvValue = Annotated[SecretStr, Field(min_length=1), AfterValidator(_private_env_value)]
+
+
+class McpPrivateEnvWriteRequestDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    target: McpWorkspaceTargetDTO
+    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
+    input_key: str = Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+    candidate: McpCandidatePlanRequestDTO | None = None
+    launch: McpStdioLaunchDefinitionDTO | None = None
+    value: McpPrivateEnvValue = Field(repr=False)
+
+    @model_validator(mode="after")
+    def require_definition(self) -> McpPrivateEnvWriteRequestDTO:
+        if (self.candidate is None) == (self.launch is None):
+            raise ValueError("MCP 私有 env 必须明确选择原 candidate 或手动 stdio launch")
+        return self
+
+
+class McpPrivateEnvWriteResponseDTO(_McpResponse):
+    data: McpPrivateEnvRefDTO
+
+
+class McpCandidateConfigurationRequestDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    target: McpWorkspaceTargetDTO
+    server_id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9._-]{1,63}$")
+    plan: McpCandidatePlanValidationRequestDTO
+    managed_launch: McpManagedLaunchDTO | None = None
+    source_edit: ConfigSourceEditRequest
+
+
+class McpCandidateConfigurationResponseDTO(_McpResponse):
+    data: ConfigSourceDocumentDTO
 
 
 class McpInstallationRequestDTO(McpCandidatePlanValidationRequestDTO):

@@ -5,6 +5,8 @@ import type {
   McpInstallationCapabilitiesResponseDTO, McpInstallationTargetDTO, McpInstallationRequestDTO,
   McpInstallationOperationResponseDTO, McpInstalledArtifactListResponseDTO,
   McpPrivateHeaderRefDTO, McpPrivateHeaderWriteRequestDTO, McpPrivateHeaderWriteResponseDTO,
+  McpPrivateEnvRefDTO, McpPrivateEnvWriteRequestDTO, McpPrivateEnvWriteResponseDTO,
+  McpCandidateConfigurationRequestDTO, McpCandidateConfigurationResponseDTO,
 } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData } from "./http";
@@ -58,7 +60,7 @@ export function listMcpInstalledArtifacts(port: number, workspace: GatewayWorksp
 }
 
 type McpResponse = McpServerListResponseDTO | McpConnectionOperationListResponseDTO | McpConnectionOperationResponseDTO | McpAuthorizationResponseDTO
-  | McpPrivateHeaderWriteResponseDTO;
+  | McpPrivateHeaderWriteResponseDTO | McpPrivateEnvWriteResponseDTO | McpCandidateConfigurationResponseDTO;
 
 async function request<T extends McpResponse>(port: number, target: GatewayWorkspaceRequestTarget, path: string, init: RequestInit = {}): Promise<T> {
   const { gateway_id, workspace_id } = target;
@@ -93,6 +95,43 @@ export async function writeMcpPrivateHeader(
     throw new Error("MCP 私有 header 回执不属于原输入身份或缺少精确版本");
   }
   return reference;
+}
+
+export async function writeMcpPrivateEnv(
+  port: number, target: GatewayWorkspaceRequestTarget, payload: McpPrivateEnvWriteRequestDTO, signal?: AbortSignal,
+) {
+  const { gateway_id, workspace_id } = target;
+  const { server_id, input_key } = payload;
+  if (payload.target?.gateway_id !== gateway_id || payload.target.workspace_id !== workspace_id) {
+    throw new Error("MCP 私有 env 必须提交给原 Gateway／工作区");
+  }
+  const response = await request<McpPrivateEnvWriteResponseDTO>(port, target,
+    payload.candidate ? "candidate-plans/private-env" : "private-env", { method: "POST", body: JSON.stringify(payload), signal });
+  const reference = unwrapApiData<McpPrivateEnvRefDTO>({ ...response, data: response.data ?? null });
+  if (reference.kind !== "mcp_private_env" || reference.workspace_id !== workspace_id
+      || reference.server_id !== server_id || reference.input_key !== input_key
+      || !/^sha256:jcs:v1:[0-9a-f]{64}$/.test(reference.definition_digest) || !/^[0-9a-f]{32}$/.test(reference.version)) {
+    throw new Error("MCP 私有 env 回执不属于原输入身份或缺少精确版本");
+  }
+  return reference;
+}
+
+export async function saveMcpCandidateConfiguration(
+  port: number, target: GatewayWorkspaceRequestTarget, payload: McpCandidateConfigurationRequestDTO, signal?: AbortSignal,
+) {
+  const { gateway_id, workspace_id } = target;
+  const sourceKey = payload.source_edit?.source_key;
+  if (payload.target?.gateway_id !== gateway_id || payload.target.workspace_id !== workspace_id) {
+    throw new Error("MCP 候选配置必须提交给原 Gateway／工作区");
+  }
+  const response = await request<McpCandidateConfigurationResponseDTO>(port, target, "candidate-configurations",
+    { method: "PUT", body: JSON.stringify(payload), signal });
+  const document = unwrapApiData({ ...response, data: response.data ?? null });
+  if (document.gateway_id !== gateway_id || document.workspace_id !== workspace_id
+      || document.source_key !== sourceKey) {
+    throw new Error("MCP 候选配置回执不属于原来源");
+  }
+  return document;
 }
 
 export async function getMcpCatalog(port: number, target: GatewayWorkspaceRequestTarget, { refresh = true, signal }: { refresh?: boolean; signal?: AbortSignal } = {}) {

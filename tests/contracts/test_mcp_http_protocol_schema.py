@@ -33,6 +33,9 @@ WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
     ("post", "/connection-operations/{operation_id}/callback", "McpConnectionOperationResponseDTO"),
     ("post", "/candidate-manifests", "McpCandidateInspectResponseDTO"),
     ("post", "/private-headers", "McpPrivateHeaderWriteResponseDTO"),
+    ("post", "/private-env", "McpPrivateEnvWriteResponseDTO"),
+    ("post", "/candidate-plans/private-env", "McpPrivateEnvWriteResponseDTO"),
+    ("put", "/candidate-configurations", "McpCandidateConfigurationResponseDTO"),
     ("post", "/candidate-plans", "McpCandidatePlanResponseDTO"),
     ("post", "/candidate-plans/validate", "McpCandidatePlanResponseDTO"),
     ("post", "/installations", "McpInstallationOperationResponseDTO"),
@@ -53,6 +56,8 @@ def test_mcp_actual_routes_publish_complete_response_roots(
 @pytest.mark.parametrize(("path", "model"), [
     ("/candidate-manifests", "McpCandidateInspectRequestDTO"),
     ("/private-headers", "McpPrivateHeaderWriteRequestDTO"),
+    ("/private-env", "McpPrivateEnvWriteRequestDTO"),
+    ("/candidate-plans/private-env", "McpPrivateEnvWriteRequestDTO"),
     ("/candidate-plans", "McpCandidatePlanRequestDTO"),
     ("/candidate-plans/validate", "McpCandidatePlanValidationRequestDTO"),
     ("/installations", "McpInstallationRequestDTO"),

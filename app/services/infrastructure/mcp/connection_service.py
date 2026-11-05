@@ -66,9 +66,12 @@ class McpConnectionService:
         payload = asdict(server)
         # 可选输入只在实际存在时参与身份，空集合不改变已持久化操作的原指纹合同。
         payload.pop("private_headers")
+        payload.pop("private_env")
         payload["managed_launch"] = server.managed_launch.model_dump(mode="json") if server.managed_launch is not None else None
         if server.private_headers:
             payload["private_headers"] = [reference.model_dump(mode="json") for reference in server.private_headers]
+        if server.private_env:
+            payload["private_env"] = [reference.model_dump(mode="json") for reference in server.private_env]
         return sha256_jcs(payload)
 
     def _connection_id(self, server_id: str) -> str:

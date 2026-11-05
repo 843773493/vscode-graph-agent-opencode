@@ -125,7 +125,7 @@ class McpInstallationOwner:
         # 暖读只读唯一账本，文件全量校验仅在安装发布与实际 launch 准入执行。
         return self._store.artifacts()
 
-    def resolve(self, binding: McpManagedLaunchDTO, *, verify: bool = False) -> str:
+    def artifact(self, binding: McpManagedLaunchDTO) -> McpInstalledArtifactDTO:
         if binding.backend_id != self.backend_id:
             raise ValueError("受管 MCP launch 不属于当前 Backend，不能使用同名本机路径")
         artifact = self._store.artifact(binding.installation_id)
@@ -136,6 +136,11 @@ class McpInstallationOwner:
             artifact.entrypoint + ".exe" if os.name == "nt" else artifact.entrypoint)
         if artifact.command != str(expected_command) or not expected_command.is_file():
             raise ValueError("受管 MCP 制品发布路径丢失或与唯一安装记录不一致")
+        return artifact
+
+    def resolve(self, binding: McpManagedLaunchDTO, *, verify: bool = False) -> str:
+        artifact = self.artifact(binding)
+        root = self._root / "generations" / binding.installation_id / binding.generation
         if verify and artifact_digest(root) != binding.artifact_digest:
             raise ValueError("受管 MCP 制品内容已改变；拒绝启动，必须重新验证并发布新 generation")
         return artifact.command

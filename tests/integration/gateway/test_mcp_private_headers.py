@@ -57,7 +57,7 @@ class PrivateHeaderCase:
 
     def require_public(self, data: bytes) -> None:
         if any(value.encode("ascii") in data for value in self.private_values.values()):
-            raise AssertionError("私有 header 原值进入了公开响应、配置、模型请求或普通日志")
+            raise AssertionError("私有输入原值进入了公开响应、配置、模型请求或普通日志")
 
 
 @pytest.fixture
@@ -123,7 +123,8 @@ async def private_header_case(request: pytest.FixtureRequest, http_schema_endpoi
                     (context.artifacts_dir / "remote-observations.json").write_text(json.dumps({
                         "http_requests": requests, "tool_calls": calls, "new_endpoint_requests": changed_requests,
                     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                    private_directories = [workspace / ".boxteam/credentials/mcp-headers" for workspace in workspaces.values()]
+                    private_directories = [workspace / ".boxteam/credentials" / name
+                        for workspace in workspaces.values() for name in ("mcp-headers", "mcp-inputs")]
                     for root in (context.workspace_root, context.run_root, runtime, replay.artifacts):
                         for path in root.rglob("*"):
                             if path.is_file() and not any(path.is_relative_to(directory) for directory in private_directories):

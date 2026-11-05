@@ -19,7 +19,11 @@ from app.services.infrastructure.mcp.oauth import (
     McpOAuthProvider,
     is_authorization_required,
 )
-from app.services.infrastructure.mcp.private_headers import McpPrivateHeaderStore
+from app.services.infrastructure.mcp.private_inputs import (
+    McpPrivateInputStore,
+    candidate_env_definition,
+    stdio_env_definition,
+)
 from app.services.infrastructure.mcp.tool_adapter import list_mcp_tools
 from mcp import StdioServerParameters
 from mcp import types as mcp_types
@@ -85,9 +89,22 @@ async def production_mcp_session_factory(
                 command = await asyncio.to_thread(installation_owner.resolve, server.managed_launch, verify=True)
                 if connection["command"] != command:
                     raise ValueError("受管 MCP 连接配置与已发布 generation 的实际启动命令不一致")
+            env = dict(connection.get("env") or {})
+            if server.private_env:
+                if workspace_root is None:
+                    raise ValueError("MCP 私有 env session 必须显式指定所属工作区")
+                definition = stdio_env_definition(connection)
+                if server.managed_launch is not None:
+                    assert installation_owner is not None
+                    artifact = await asyncio.to_thread(installation_owner.artifact, server.managed_launch)
+                    definition = candidate_env_definition(artifact.source, artifact.manifest_digest, artifact.variant)
+                store = McpPrivateInputStore(workspace_root=workspace_root)
+                for reference in server.private_env:
+                    env[reference.input_key] = await asyncio.to_thread(store.resolve_env, reference,
+                        server_id=server.server_id, input_key=reference.input_key, definition_digest=definition)
             async with stdio_client(StdioServerParameters(
                 command=connection["command"], args=connection["args"],
-                env=connection.get("env"), cwd=connection.get("cwd"),
+                env=env, cwd=connection.get("cwd"),
             )) as streams:
                 yield streams
         else:
@@ -96,7 +113,7 @@ async def production_mcp_session_factory(
             if server.private_headers:
                 if workspace_root is None:
                     raise ValueError("MCP 私有 header session 必须显式指定所属工作区")
-                store = McpPrivateHeaderStore(workspace_root=workspace_root)
+                store = McpPrivateInputStore(workspace_root=workspace_root)
                 for reference in server.private_headers:
                     headers[reference.header_name] = await asyncio.to_thread(
                         store.resolve, reference, server_id=server.server_id,

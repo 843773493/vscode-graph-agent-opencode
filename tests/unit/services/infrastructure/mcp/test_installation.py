@@ -101,7 +101,7 @@ async def test_original_sdk_launch_rejects_artifact_changed_after_config_parse(p
     owner, artifact, dependency = published_artifact
     raw = {"transport": "stdio", "managed_launch": artifact.binding.model_dump()}
     server, = parse_mcp_server_configs({"servers": {"managed": raw}}, workspace_root=dependency.parent,
-        installation_resolver=owner.resolve)
+        installation_resolver=owner.artifact)
     assert owner.resolve(artifact.binding, verify=True) == artifact.command
     dependency.write_text("VALUE = 'tampered'\n", encoding="utf-8")
     with pytest.raises(ValueError, match="制品内容已改变"):
@@ -728,15 +728,16 @@ def test_v1_schema_rebuild_rolls_back_as_one_transaction(v1_ledger: LegacyLedger
         assert connection.execute("SELECT payload FROM operations").fetchone() == (terminal.model_dump_json(),)
 
 
-def test_managed_launch_requires_owner_and_cannot_override_command(binding: McpManagedLaunchDTO, tmp_path: Path) -> None:
+def test_managed_launch_requires_owner_and_cannot_override_command(binding: McpManagedLaunchDTO, tmp_path: Path,
+    prepared_artifact: tuple[McpInstalledArtifactDTO, Path]) -> None:
     raw = {"transport": "stdio", "managed_launch": binding.model_dump(), "args": ["--workspace", "${workspaceRoot}"]}
     with pytest.raises(ValueError, match="目标安装 owner"):
         parse_mcp_server_configs({"servers": {"managed": raw}}, workspace_root=tmp_path)
     seen: list[McpManagedLaunchDTO] = []
 
-    def resolve(reference: McpManagedLaunchDTO) -> str:
+    def resolve(reference: McpManagedLaunchDTO) -> McpInstalledArtifactDTO:
         seen.append(reference)
-        return "/published/bin/verified-server"
+        return prepared_artifact[0].model_copy(update={"binding": reference, "command": "/published/bin/verified-server"})
 
     server, = parse_mcp_server_configs({"servers": {"managed": raw}}, workspace_root=tmp_path, installation_resolver=resolve)
     connection = cast(StdioConnection, server.connection)
