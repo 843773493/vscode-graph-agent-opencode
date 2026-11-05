@@ -90,13 +90,14 @@ def _jcs_input(value: object) -> object:
 
 def _has_mapping_adapter(value: object) -> bool:
     """定位需按 Mapping.items() 语义适配的嵌套对象。"""
-    if value is None or isinstance(value, (str, int, float)):
+    # 普通 JSON 叶值复用精确类型集合；子类仍按既有标量/Mapping 语义判断。
+    if type(value) in _JSON_SCALAR_TYPES:
         return False
     if type(value) is dict:
         return any(_has_mapping_adapter(child) for child in value.values())
     if isinstance(value, (list, tuple)):
         return any(_has_mapping_adapter(child) for child in value)
-    return isinstance(value, Mapping)
+    return not isinstance(value, (str, int, float)) and isinstance(value, Mapping)
 
 
 def canonical_json_bytes(value: object) -> bytes:
