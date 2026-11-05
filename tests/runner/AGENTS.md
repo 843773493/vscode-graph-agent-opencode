@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-web-configuration-cache` 顺序验证正式 Workbench 的原 Profile／A-B 资源配置，以及独占资产副本中的精确 IDB 写入屏障。固定480秒／4GiB并沿原集成独占闸门；不修改共享构建，不代替 Electron 或全部缓存验收。
+
 `integration-identity-source-child-fork` 经真实 Gateway 与原 fork owner 验证新 Session main／原 Session child 的来源身份、附件冷读及续跑，固定480秒／4GiB并使用原 fork 看门狗。沿原集成独占门，不代表 Web、Windows 或全部身份迁移验收。
 
 `integration-workspace-process-exclusivity` 使用三个真实 Backend 子进程、独立 home 和现有 model_stream，验证物理工作区锁拒绝重复挂载、占用者继续服务及退出后的接管，保留产品入口生成的 Session／main Thread、UUID、执行历史与冷恢复请求前缀，并从原检查点继续执行；固定180秒／4GiB及原集成闸门，不代表 Gateway 身份迁移或 Windows 验收。

@@ -23,10 +23,12 @@
 - [ ] 18.1 按 design 分层矩阵核实际缓存及全部直接／间接消费者、key／版本、存储、失效／释放和容量／淘汰；明确 metadata 仅观察值、条件服务未启用及纯内存缓存。落实唯一 owner、必要 scope 与代际，保留无缓存时原读取；不创建 CacheManager、全局索引、统一字节库或运行时注册平台。
 - [ ] 18.2 沿原 TextFileEditorModelManager／resolver 迁齐文件、只读来源、Diff／历史输入与 editor consumers；验证同资源并发 resolve、分屏正文共享／视图独立、关闭一组不影响另一组、最后引用释放、dirty 遇后端更新不丢编辑及不同 owner／revision 隔离。无需为干净正文新增持久模型镜像。
 - [x] 18.3 核原文件 Provider stat／describe、导航缓存及 watcher 实际语义，已有缓存按完整资源身份在更新／删除／重连／overflow 后失效；没有则保留真实轻量请求。验证不永久缓存 not-found／权限失败、不因校验推进保存 revision，复用第 17 组字节合同而非再造 stat 缓存。
-- [ ] 18.4 接通实际 ConfigurationCache 的 needsCaching／type-key／队列与原 profile／资源归属，保持本地 workbench 设置不重复缓存、非本地配置按原链更新；验证修改后刷新／正常关闭竞态、范围／身份变化及迟到写入，不改变后端业务配置 owner 或以清空数据修复错误。
+- [x] 18.4 接通实际 ConfigurationCache 的 needsCaching／type-key／队列与原 profile／资源归属，保持本地 workbench 设置不重复缓存、非本地配置按原链更新；验证修改后刷新／正常关闭竞态、范围／身份变化及迟到写入，不改变后端业务配置 owner 或以清空数据修复错误。
 - [ ] 18.5 核模型 tokenization、实际语言 Worker／索引、Web 扩展扫描／元数据缓存的真实入口与适用条件；按模型／语言／配置／扩展版本失效和原生命周期释放，验证迟到分析不能覆盖新模型、业务 URI 和范围有效。无真实服务列明未启用，不因 Electron 引入 native CachedData／scanner、扩展宿主、LSP 或全局符号索引。
 - [ ] 18.6 按原 owner 核查询缓存、已加载导航页、Gateway 目录镜像、聊天历史镜像和领域索引的用途隔离，复用快速访问原第 16 组受限预热／cursor 合同；验证 revision／身份改变、明确 stale 及原历史镜像先显后同步，不把文件读取失败的规则误用于删除既有只读历史预览，不扫描私有目录重建。
 - [ ] 18.7 在唯一构建／server factory 及原静态资源消费者落实内容地址长期复用、未 hash main／Worker／入口再验证和升级一致性；保持 OAuth no-store、Vite/HMR 及原 Webview 隔离版本。验证旧缓存存在时新 bundle／Worker 实际生效、缺资源失败，Chromium 代码缓存只记录真实宿主边界而不导入 native bootstrap。
 - [ ] 18.8 复用原命令面板／设置／输出和 owner 清理方法，按具名可再生类别与明确作用域释放，补实际命中／再验证／stale／未命中／绕过／存储失败诊断；清理不删除备份／本地历史／草稿／设置／恢复数据／信任／凭据，无选择性 API 时沿 reload／淘汰，不加 bridge、清站点数据按钮或遥测后台。
 - [ ] 18.9 沿原 browser WorkingCopyBackup／History、Composer 及原展示态存储核正常关闭、既有恢复能力、升级和格式失配；可再生缓存可以失效，受保护数据保持原件并明确错误。通过实际未保存正文、草稿、分屏／光标／滚动、设置、最近记录证明清缓存／重启未丢数据，不对原服务未承诺的异常退出扩大恢复保证。
 - [ ] 18.10 在隔离工作区按层选有判别力的冷／热态、失效、取消、释放、清理与升级场景，通过真实 Gateway 的 Web 和可迁移打包 Electron 分别验收；同时有多个业务工作区与模型，核实际网络、引用／模型身份和保留数据，而非只凭耗时。复用快速访问原第 13～16 组和本变更第 17 组的同源码已通过证据，按变化依赖补受保护静态／真实类型／构建和定向检查，不默认全套重跑；保存源码指纹、真实产物、命令、原始结果及未验证条件。
+
+2026-11-05，18.4 当前 Web 运行面验收：`test_configuration_cache.py` 原版正式 Workbench 与独占资产副本精确 IDB 写屏障两变体 `2 passed / 220.74s / exit 0`；真实 Profile、A/B 非本地配置、迟到写 21→22 及写 23 未放行正常关闭重开均通过，未清空存储且模型请求为零。正式构建 `exit 0 / 38.82s`，同源 ConfigurationCache／FolderConfiguration 的 7 用例与历史连续保存刷新按指纹复用。完整命令、源码／资产指纹、原始结果及边界见 `out/tests/temp/2026/11/05/configuration_cache_delivery/artifacts/verification-002.json`（SHA256 `4a07b239659772dedd85318a32e4ac5ca14ee66ef290b08d2628fef7f04cb888`）。两节点 pageErrors／diagnosticErrors 为空；console 511／754 条包含尚未逐一归因的 404／fetch 错误，不能据此声明产品零错误。18.10、Electron、其它缓存层及当前全树类型／构建不由本收据代替；插桩仅限独占资产副本，另保留未插桩对照。
