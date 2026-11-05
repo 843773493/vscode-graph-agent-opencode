@@ -900,3 +900,9 @@
 
 - 原查询取消后等待同一个 owner 安全退出；读取期间出现的 OSError、SQLite 错误或 RuntimeError 不再替换最初取消。Provider 仍有效时保留首次 CancelledError 及参数，期间注销仍按原 provider_unavailable 出口，读取失败保留为 cause；不发布迟到命中、不重复释放。
 - 六个判别场景在原实现全部失败；隔离搜索目录 70 passed／13.80 秒，精确合入共享树后 70 passed／11.55 秒，Ruff 与 Python 3.12 Pyright 零诊断。完整输入、命令、源码指纹、原始输出和退出码：`out/tests/temp/2026/11/05/search_provider_lifecycle/artifacts/verification-001.json`；根集成收据：`out/tests/temp/2026/11/05/search_provider_lifecycle/artifacts/root-integration-002.json`。本片未改前端或协议，不重复构建；真实 Gateway 关闭、同类别版本交接和其它流式验收仍未闭合，16.3／16.20 保持未勾选。
+
+### 2026-11-05：真实 Provider 注销及版本交接（16.3／16.20 部分）
+
+- 独立 Gateway 与 A/B Backend 经产品消息入口及 model_stream 生成 canonical 历史。A 原准入 worker 仍持 Session 读锁时注销立即拒绝新准入；原查询安全结算后才释放 registration，不发布迟到 A 页，B 持续可查。原版本释放前 v2 注册冲突，释放后旧 v1 在扫描前拒绝，v2 沿同一原查询执行；服务关闭与各 release 均核唯一终态。
+- 真实网络 1 passed／67.38 秒；共享树 Ruff 和 Python 3.12 Pyright 通过。完整快照、输入指纹、准确命令、原始输出与 wire 原件见 `out/tests/temp/2026/11/05/search_provider_lifecycle_next/artifacts/verification-001.json`。本片仅新增测试组合与用例，不改生产接口、前端或协议，不重复 Web 构建。
+- Provider 分层复用及缺口见同目录 `provider-evidence-001.json`：当前 ResourceNavigation 与最后直接产品指纹已变化，较新双后端收据未记录完整脏生产输入；当前 Trace owner 以精确指纹存储入口单测承接，未再次运行 HTTP／Web。16.3 及其余缓存／流式验收保持未勾，不将本片覆盖扩大到所有 Provider 或 16.20。
