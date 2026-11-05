@@ -65,7 +65,7 @@ async def test_prepare_restores_pending_skills_with_linear_name_work(
     prepare("skill-batch-initial")
     frozen = manager.frozen_skill_catalog()
     tool = create_skill_load_tool(manager, control_admission=lambda _name, _mode: nullcontext(),
-        activation_snapshot_resolver=lambda: frozen)
+        activation_snapshot_resolver=lambda _name: frozen)
     for name in names:
         receipt = json.loads(await tool.ainvoke({"name": name}))
         assert receipt["status"] == "loaded" and receipt["queued"] and not receipt["tracked"]

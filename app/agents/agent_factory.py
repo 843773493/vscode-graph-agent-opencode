@@ -785,9 +785,9 @@ def create_my_deep_agent(
             unsubscribe_selection()
             raise
 
-        def resolve_skill_snapshot():
+        def resolve_skill_snapshot(name: str):
             return checkpointer.load_tool_call_skill_catalog(
-                session_id, thread_id=thread_id,
+                session_id, thread_id=thread_id, skill_name=name,
                 tool_call_id=tool_invocation_context.require_tool_call_id(),
                 model_call_id=tool_invocation_context.require_model_call_id(),
             )

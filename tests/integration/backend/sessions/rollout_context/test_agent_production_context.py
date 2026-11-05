@@ -394,7 +394,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
 
     reads = []
 
-    def sealed_catalog():
+    def sealed_catalog(name):
         reads.append(sealed.assembly_id)
         restored = saver.load_sealed_resource_activation(
             session, thread_id=thread, assembly_id=sealed.assembly_id,
@@ -404,6 +404,7 @@ def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
             restored, lambda snapshot, binding: saver.read_resource_activation_payload(
                 snapshot, binding, storage_owner=(session, thread),
             ),
+            skill_name=name,
         )
 
     tool = create_skill_load_tool(manager, activation_snapshot_resolver=sealed_catalog, control_admission=skill_control_admission)

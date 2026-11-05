@@ -284,7 +284,7 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
         restarted_manager = ContextSourceManager(owner=owner, control_state_port=restarted)
         historical_tool = create_skill_load_tool(
             restarted_manager, control_admission=lambda _name, _mode: nullcontext(),
-            activation_snapshot_resolver=lambda: restored_catalog(restarted, sealed),
+            activation_snapshot_resolver=lambda _name: restored_catalog(restarted, sealed),
         )
         with (
             session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
@@ -299,7 +299,7 @@ async def test_workspace_shadow_keeps_gateway_tracked_and_sealed_binding(
         assert WORKSPACE_BODY not in json.dumps(historical_receipt, ensure_ascii=False)
         current_tool = create_skill_load_tool(
             restarted_manager, control_admission=lambda _name, _mode: nullcontext(),
-            activation_snapshot_resolver=lambda: restored_catalog(restarted, current),
+            activation_snapshot_resolver=lambda _name: restored_catalog(restarted, current),
         )
         with (
             session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),

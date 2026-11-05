@@ -141,10 +141,10 @@ class ResourceActivationOwnerMixin:
         return snapshot, assembly.model_call_id
 
     def load_tool_call_skill_catalog(
-        self, session_id: str, *, thread_id: str, tool_call_id: str,
+        self, session_id: str, *, thread_id: str, tool_call_id: str, skill_name: str,
         model_call_id: str | None = None, checkpoint_ns: str = "",
     ) -> SkillCatalogActivationSnapshot:
-        """恢复原调用的 Skill 目录；catalog、metadata 和正文共用一次读取快照。"""
+        """按原调用的目录解析所选 Skill；catalog、metadata 和正文共用读取快照。"""
         checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
         try:
             activation, _ = self.load_tool_call_resource_activation(
@@ -158,6 +158,7 @@ class ResourceActivationOwnerMixin:
                         frozen, binding, storage_owner=(session_id, thread_id),
                         checkpoint_ns=checkpoint_ns, read_snapshot=current,
                     ),
+                    skill_name=skill_name,
                 )
         except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
             raise SkillCatalogSnapshotConflict(

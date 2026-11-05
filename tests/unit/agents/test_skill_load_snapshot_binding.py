@@ -168,7 +168,7 @@ async def test_frozen_call_is_unaffected_by_same_name_new_revision(skill_control
     catalog = manager.frozen_skill_catalog()
     skill_load = create_skill_load_tool(
         manager, control_admission=skill_control_admission,
-        activation_snapshot_resolver=lambda: catalog,
+        activation_snapshot_resolver=lambda _name: catalog,
     )
 
     frozen = json.loads(await skill_load.ainvoke({"name": "shared"}))

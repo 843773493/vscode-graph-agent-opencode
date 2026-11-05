@@ -59,7 +59,7 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     frozen = manager.frozen_skill_catalog()
     tool = create_skill_load_tool(
         manager, control_admission=lambda _name, _mode: nullcontext(),
-        activation_snapshot_resolver=lambda: frozen,
+        activation_snapshot_resolver=lambda _name: frozen,
     )
     first = json.loads(await tool.ainvoke({"name": "shared", "mode": "tracked"}))
     assert first["status"] == "loaded" and first["tracked"] is True
@@ -135,7 +135,7 @@ async def test_real_skill_refresh_and_modes_share_sealed_body(
     selected = {state.source_id: state for state in saver.load_context_source_control_states(owner)}[gateway_source]
     assert selected.selection_sequence == selected.latest_visible_selection_sequence == pending.selection_sequence
     tool = create_skill_load_tool(manager, control_admission=lambda _name, _mode: nullcontext(),
-                                  activation_snapshot_resolver=lambda: frozen)
+                                  activation_snapshot_resolver=lambda _name: frozen)
     assert json.loads(await tool.ainvoke({"name": "shared"}))["append_status"] == "already_active"
     assert manager.prepare_pending() is None
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
