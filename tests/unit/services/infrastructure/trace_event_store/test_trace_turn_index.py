@@ -17,6 +17,50 @@ from app.schemas.event import (
     StatusChangePayload,
 )
 from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
+from app.services.infrastructure.turn_history.trace_index_storage import (
+    TraceIndexStorage,
+)
+
+
+@pytest.mark.asyncio
+async def test_indexed_trace_append_recovers_once_per_event(
+    tmp_path: Path,
+    trace_event_store_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ses_019c3e6c2a7a7208aa9f84e0f0478714"
+    store, session_dir = trace_event_store_factory(session_id)
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    recover = TraceIndexStorage.recover
+    recoveries = 0
+
+    def observe_recover(storage, *args, **kwargs):
+        nonlocal recoveries
+        recoveries += 1
+        return recover(storage, *args, **kwargs)
+
+    monkeypatch.setattr(TraceIndexStorage, "recover", observe_recover)
+    for ordinal in range(3):
+        event = JobCreatedEvent(
+            event_id=f"evt_append_recovery_{ordinal}",
+            job_id=f"job_append_recovery_{ordinal}",
+            timestamp=datetime.now(UTC),
+            payload=JobCreatedPayload(
+                session_id=session_id, thread_id=thread_id,
+                message=f"append-{ordinal}", agent_id="default",
+            ),
+        )
+        recoveries = 0
+        receipt = await store.append(session_id, event)
+        traces = session_dir / "logs" / "traces"
+        assert receipt.trace_end_offset == (traces / "events.jsonl").stat().st_size
+        assert receipt.projected_event_offset == (traces / "messages.jsonl").stat().st_size
+        assert recoveries == 1
+        batch = store.read_turn_bootstrap_batch(session_id, max_events=128, max_bytes=65536)
+        assert batch.event_cursor == event.event_id
+        assert [entry.event.event_id for entry in batch.events] == [event.event_id]
+    assert len(store.read_events(session_id)) == 3
+    assert len(store.read_message_events(session_id)) == 3
 
 
 @pytest.mark.asyncio
@@ -103,9 +147,12 @@ def test_trace_turn_prepare_serializes_source_event_once(
         return original_model_dump(self, *args, **kwargs)
 
     monkeypatch.setattr(JobCreatedEvent, "model_dump", count_model_dump)
-    prepared = TraceTurnIndex(tmp_path / "logs" / "traces").prepare(
+    index = TraceTurnIndex(tmp_path / "logs" / "traces")
+    manifest, trace_start = index.recover_before_append()
+    prepared = index.prepare(
         event,
-        trace_start=0,
+        manifest=manifest,
+        trace_start=trace_start,
         serialized_size=serialized_size,
         projects_turn=True,
     )

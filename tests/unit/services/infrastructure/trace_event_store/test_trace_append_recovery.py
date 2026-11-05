@@ -23,6 +23,49 @@ from app.services.infrastructure.turn_history.trace_writer import TraceEventWrit
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("changed_file", ["events.jsonl", "messages.jsonl", "turn-events.index.jsonl"])
+async def test_trace_append_rejects_file_changes_after_recovery(
+    tmp_path: Path,
+    trace_event_store_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_file: str,
+) -> None:
+    session_id = "ses_019c3e6c2a7a7208aa9f84e0f0478715"
+    store, session_dir = trace_event_store_factory(session_id)
+    recover = TraceTurnIndex.recover_before_append
+    traces = session_dir / "logs" / "traces"
+
+    def change_after_recovery(index):
+        recovered = recover(index)
+        with (traces / changed_file).open("ab") as stream:
+            stream.write(b"unexpected-change\n")
+        return recovered
+
+    monkeypatch.setattr(TraceTurnIndex, "recover_before_append", change_after_recovery)
+    with pytest.raises(RuntimeError, match="Trace 文件|messages.jsonl|Trace Turn index"):
+        await store.append(
+            session_id,
+            JobCreatedEvent(
+                event_id="evt_changed_after_recovery",
+                job_id="job_changed_after_recovery",
+                timestamp=datetime.now(UTC),
+                payload=JobCreatedPayload(
+                    session_id=session_id,
+                    thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
+                    message="must not append", agent_id="default",
+                ),
+            ),
+        )
+    assert (traces / changed_file).read_bytes() == b"unexpected-change\n"
+    for unchanged in {"events.jsonl", "messages.jsonl", "turn-events.index.jsonl"} - {changed_file}:
+        path = traces / unchanged
+        if unchanged == "turn-events.index.jsonl":
+            assert path.read_bytes() == b""
+        else:
+            assert not path.exists()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cutpoint", ["after_index", "after_message", "partial_trace"])
 async def test_next_append_recovers_incomplete_trace_transaction(
     tmp_path: Path,

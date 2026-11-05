@@ -48,7 +48,7 @@ class TraceEventWriter:
 
     def append(self, session_id: str, event: Event) -> TraceAppendReceipt:
         line = event.model_dump_json().encode("utf-8") + b"\n"
-        trace_start = self._turn_index.recover_before_append()
+        manifest, trace_start = self._turn_index.recover_before_append()
         if event.type not in self._indexed_event_types:
             written_end = self._append_bytes(
                 self._trace_file,
@@ -67,6 +67,7 @@ class TraceEventWriter:
 
         prepared = self._turn_index.prepare(
             event,
+            manifest=manifest,
             trace_start=trace_start,
             serialized_size=len(line),
             projects_turn=is_turn_projected_event(event),

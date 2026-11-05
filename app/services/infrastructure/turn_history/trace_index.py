@@ -37,25 +37,29 @@ class TraceTurnIndex:
         self,
         event: Event,
         *,
+        manifest: TraceTurnIndexManifest,
         trace_start: int,
         serialized_size: int,
         projects_turn: bool,
     ) -> PreparedTraceTurnEntry:
-        manifest = self._recover(self._storage.load_manifest())
+        # 同一追加临界区沿用恢复结果；只重新核对即将写入的数据文件边界。
         actual_trace_start = self._trace_size()
         if actual_trace_start != trace_start:
             raise RuntimeError(
                 "Trace 文件在 append 临界区内发生变化: "
                 f"expected={trace_start}, actual={actual_trace_start}"
             )
-        if self._message_size() != manifest.committed_message_offset:
+        message_start = self._message_size()
+        if message_start != manifest.committed_message_offset:
             raise RuntimeError(
                 "Trace Turn index 与 messages.jsonl 水位不一致: "
                 f"indexed={manifest.committed_message_offset}, "
-                f"actual={self._message_size()}"
+                f"actual={message_start}"
             )
+        index_start = self._index_path.stat().st_size
+        if index_start != manifest.committed_index_offset:
+            raise RuntimeError("Trace Turn index 在 append 临界区内发生变化")
         trace_end = trace_start + serialized_size
-        message_start = self._message_size()
         message_end = message_start + serialized_size
         full_payload = event.model_dump(mode="json")
         compact_payload = compact_event_json(full_payload)
@@ -77,10 +81,6 @@ class TraceTurnIndex:
                 "Trace Turn index 事件超过固定上限: "
                 f"event_id={event.event_id}, bytes={len(line)}"
             )
-        self._trace_dir.mkdir(parents=True, exist_ok=True)
-        index_start = (
-            self._index_path.stat().st_size if self._index_path.exists() else 0
-        )
         with self._index_path.open("ab") as stream:
             stream.write(line)
             stream.flush()
@@ -92,11 +92,11 @@ class TraceTurnIndex:
             previous_manifest=manifest,
         )
 
-    def recover_before_append(self) -> int:
-        """在统一 append 分支前恢复 pending 事务并返回稳定 Trace 末端。"""
+    def recover_before_append(self) -> tuple[TraceTurnIndexManifest, int]:
+        """在统一 append 分支前恢复 pending 事务，返回 manifest 和稳定 Trace 末端。"""
         manifest = self._recover(self._storage.load_manifest())
         self._storage.repair_uncommitted_trace_tail(manifest)
-        return self._trace_size()
+        return manifest, self._trace_size()
 
     def commit(self, prepared: PreparedTraceTurnEntry) -> None:
         entry = prepared.entry
