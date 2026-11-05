@@ -16,6 +16,7 @@ from app.services.infrastructure.rollout_context.storage import (
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     current_scope,
+    read_local_scopes,
     require_historical_scope,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
@@ -386,8 +387,9 @@ class RolloutSchemaIntrospectionMixin:
         )
         expected_item_offset = 0
         storage_owner = current_scope(connection)
+        # 完整审计核验全部冻结来源；逐 item 只检查归属成员，不随 owner 切换重算 binding hash。
+        local_scopes = read_local_scopes(connection)
         expected_item_sequence = 1
-        last_checked_item_owner: tuple[str, str] | None = None
         # 合法 locator 连续且 commit 边界不重叠，item 的 commit 归属必与提交顺序一致。
         # 两个主键有序流同步前进：在当前 commit 内核 catalog 数量及 locator，
         # 不再先 GROUP BY 全表，也不保存全部 commit 边界；每条正文仍按原字节复验。
@@ -459,10 +461,8 @@ class RolloutSchemaIntrospectionMixin:
                     if execution_scope is not None and turn_scope is not None and execution_scope != turn_scope:
                         raise ValueError(f"source-mismatch: canonical item 的 Turn/execution 历史 owner 不一致: {item_id}")
                     item_owner = execution_scope or turn_scope or storage_owner
-                    # 同一冻结读取中仅在 owner 变化时核 binding；逐项的 owner 一致性和序号仍独立校验。
-                    if item_owner != last_checked_item_owner:
+                    if item_owner not in local_scopes:
                         require_historical_scope(connection, *item_owner, current_owner=storage_owner)
-                        last_checked_item_owner = item_owner
                     # 历史 prefix 可跳过未继承的原序号；当前 owner 的新事实仍逐项连续。
                     if sequence < expected_item_sequence or (sequence != expected_item_sequence and item_owner == storage_owner):
                         raise RuntimeError(

@@ -414,14 +414,16 @@ class RolloutItemsMixin:
             owner = current_scope(connection)
             if owner != (session_id, thread_id):
                 raise ValueError("source-mismatch: canonical ref reader 物理 owner 不一致")
-            local_scopes = read_local_scopes(connection)
             groups: dict[tuple[str, str], list[ContextRef]] = {}
             for ref in references:
                 groups.setdefault((ref.session_id, ref.thread_id), []).append(ref)
             result: dict[tuple[str, str, str], CanonicalItemRecord] = {}
             for scope, group in groups.items():
                 # binding 是已捕获历史的权威；本地缺失必须报错，不能在线回源。
-                local = scope in local_scopes
+                # 只核实际引用的冻结来源，当前 owner 不遍历无关的历史 binding。
+                local = scope == owner or scope in read_local_scopes(
+                    connection, historical_scope_key=scope,
+                )
                 items = self.read_items(
                     *(owner if local else scope), checkpoint_ns=checkpoint_ns,
                     item_ids=(ref.ref_id for ref in group),
