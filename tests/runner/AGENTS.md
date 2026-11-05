@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-identity-source-child-fork` 经真实 Gateway 与原 fork owner 验证新 Session main／原 Session child 的来源身份、附件冷读及续跑，固定480秒／4GiB并使用原 fork 看门狗。沿原集成独占门，不代表 Web、Windows 或全部身份迁移验收。
+
 `integration-workspace-process-exclusivity` 使用三个真实 Backend 子进程、独立 home 和现有 model_stream，验证物理工作区锁拒绝重复挂载、占用者继续服务及退出后的接管，保留产品入口生成的 Session／main Thread、UUID、执行历史与冷恢复请求前缀，并从原检查点继续执行；固定180秒／4GiB及原集成闸门，不代表 Gateway 身份迁移或 Windows 验收。
 
 `integration-search-scope-changes` 通过真实 Gateway／双后端与正式搜索 SDK，验 origin／A+B／all、控制面发现、独有正文、空／未知范围、移除 owner 和旧 route 被新离线 owner 复用后的冻结续查；核后端逐 request_id 的实际分发。固定180秒／4GiB及原集成闸门，不代替离线目标管理 UI、Web／Electron 或 Windows canonical 验收。

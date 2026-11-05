@@ -2146,6 +2146,8 @@ export interface SessionForkTransferRequest {
 export interface ForkTransferFileDTO {
   name: string;
   size_bytes: number;
+  /** 小文件随有界清单页携带原始字节，大文件沿原分块链路读取。 */
+  content_base64?: string | undefined;
 }
 
 export interface SessionForkTransferResultDTO {
@@ -17460,7 +17462,7 @@ export const SessionForkTransferRequest: MessageFns<SessionForkTransferRequest> 
 };
 
 function createBaseForkTransferFileDTO(): ForkTransferFileDTO {
-  return { name: "", size_bytes: 0 };
+  return { name: "", size_bytes: 0, content_base64: undefined };
 }
 
 export const ForkTransferFileDTO: MessageFns<ForkTransferFileDTO> = {
@@ -17468,6 +17470,7 @@ export const ForkTransferFileDTO: MessageFns<ForkTransferFileDTO> = {
     return {
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       size_bytes: isSet(object.size_bytes) ? globalThis.Number(object.size_bytes) : 0,
+      content_base64: isSet(object.content_base64) ? globalThis.String(object.content_base64) : undefined,
     };
   },
 
@@ -17479,6 +17482,9 @@ export const ForkTransferFileDTO: MessageFns<ForkTransferFileDTO> = {
     if (message.size_bytes !== 0) {
       obj.size_bytes = Math.round(message.size_bytes);
     }
+    if (message.content_base64 !== undefined) {
+      obj.content_base64 = message.content_base64;
+    }
     return obj;
   },
 
@@ -17489,6 +17495,7 @@ export const ForkTransferFileDTO: MessageFns<ForkTransferFileDTO> = {
     const message = createBaseForkTransferFileDTO();
     message.name = object.name ?? "";
     message.size_bytes = object.size_bytes ?? 0;
+    message.content_base64 = object.content_base64 ?? undefined;
     return message;
   },
 };

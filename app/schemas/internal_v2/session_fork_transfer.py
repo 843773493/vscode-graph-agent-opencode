@@ -19,6 +19,9 @@ from app.schemas.internal_v2.session import SessionForkRequest, SessionForkResul
 
 FORK_TRANSFER_CHUNK_BYTES = 64 * 1024
 FORK_TRANSFER_FILE_BATCH = 128
+FORK_TRANSFER_INLINE_BYTES = 512 * 1024
+ForkTransferAction = Literal["intent", "capture", "files", "chunk", "release", "create"]
+ForkExportReleaseState = Literal["committed", "aborted"]
 
 
 class ForkSourceCaptureDTO(BaseModel):
@@ -65,14 +68,14 @@ class SessionForkTransferRequest(BaseModel):
 
     source_gateway_id: str
     fork_target: ForkGrantTarget
-    action: Literal["intent", "capture", "files", "chunk", "release", "create"]
+    action: ForkTransferAction
     request: SessionForkRequest
     capture: ForkSourceCaptureDTO | None = None
     cursor: int = Field(default=0, ge=0)
     file_name: str | None = None
     offset: int = Field(default=0, ge=0, description="分块起点，单位 bytes；相对 file_name 冻结文件")
     generation_origin: SessionGenerationOriginDTO | None = None
-    release_state: Literal["committed", "aborted"] | None = None
+    release_state: ForkExportReleaseState | None = None
 
     @model_validator(mode="after")
     def validate_scope(self) -> SessionForkTransferRequest:
@@ -98,6 +101,7 @@ class ForkTransferFileDTO(BaseModel):
 
     name: str
     size_bytes: int = Field(ge=0)
+    content_base64: str | None = Field(default=None, max_length=4 * ((FORK_TRANSFER_CHUNK_BYTES + 2) // 3))
 
 
 class SessionForkTransferResultDTO(BaseModel):

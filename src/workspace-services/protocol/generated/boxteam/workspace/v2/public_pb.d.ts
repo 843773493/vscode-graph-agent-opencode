@@ -9282,6 +9282,13 @@ export declare type ForkTransferFileDTO = Message<"boxteam.workspace.v2.ForkTran
    * @generated from field: int64 size_bytes = 2;
    */
   sizeBytes: bigint;
+
+  /**
+   * 小文件随有界清单页携带原始字节，大文件沿原分块链路读取。
+   *
+   * @generated from field: optional string content_base64 = 3;
+   */
+  contentBase64?: string | undefined;
 };
 
 /**

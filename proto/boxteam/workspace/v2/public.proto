@@ -2122,6 +2122,8 @@ message SessionForkTransferRequest {
 message ForkTransferFileDTO {
   string name = 1;
   int64 size_bytes = 2;
+  // 小文件随有界清单页携带原始字节，大文件沿原分块链路读取。
+  optional string content_base64 = 3;
 }
 
 message SessionForkTransferResultDTO {

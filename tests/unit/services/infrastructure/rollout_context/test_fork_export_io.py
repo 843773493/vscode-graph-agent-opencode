@@ -13,6 +13,7 @@ import pytest
 from app.schemas.internal_v2.session_fork_transfer import (
     FORK_TRANSFER_CHUNK_BYTES,
     FORK_TRANSFER_FILE_BATCH,
+    FORK_TRANSFER_INLINE_BYTES,
 )
 from app.services.infrastructure.rollout_context.fork import transfer
 from tests.unit.services.infrastructure.rollout_context.test_capture_io_errors import (
@@ -77,7 +78,7 @@ def test_export_pages_and_chunks_keep_frozen_identity_order_and_bytes(frozen: Ca
     directory = frozen.snapshot.captured_root / "rollout/parts"
     directory.mkdir()
     for index in range(FORK_TRANSFER_FILE_BATCH + 5):
-        (directory / f"part-{index:03}.bin").write_bytes(str(index).encode())
+        (directory / f"part-{index:03}.bin").write_bytes(str(index).encode() * (FORK_TRANSFER_CHUNK_BYTES // 32))
     large = directory / "large.bin"
     payload = bytes(range(256)) * (FORK_TRANSFER_CHUNK_BYTES // 256 + 1)
     large.write_bytes(payload)
@@ -88,11 +89,18 @@ def test_export_pages_and_chunks_keep_frozen_identity_order_and_bytes(frozen: Ca
         assert page == transfer.export_file_batch(frozen.sessions, frozen.record, cursor)
         assert page.capture.to_record() == frozen.record
         assert len(page.files) <= FORK_TRANSFER_FILE_BATCH
+        assert sum(file.size_bytes for file in page.files if file.content_base64 is not None) <= FORK_TRANSFER_INLINE_BYTES
         names.extend(file.name for file in page.files)
         assert all(file.size_bytes == len(expected[file.name]) for file in page.files)
+        for file in page.files:
+            if file.size_bytes <= FORK_TRANSFER_CHUNK_BYTES:
+                assert file.content_base64 is not None
+                assert base64.b64decode(file.content_base64, validate=True) == expected[file.name]
+            else:
+                assert file.content_base64 is None
         if page.next_cursor is None:
             break
-        assert page.next_cursor == cursor + FORK_TRANSFER_FILE_BATCH
+        assert page.next_cursor == cursor + len(page.files)
         cursor = page.next_cursor
     assert len(names) == len(set(names)) and set(names) == set(expected)
     name = large.relative_to(frozen.root).as_posix()

@@ -903,15 +903,32 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     for node in (source, target):
         inventory = await node.client.get("/api/gateway/workspaces")
         assert inventory.status_code == 200, inventory.text
-        own = next(item for item in inventory.json()["data"]["items"]
-                   if item["backend_workspace_id"] == node.workspace_id and item["connection_kind"] == "local")
-        node.client.headers["X-BoxTeam-Workspace-Id"] = own["workspace_id"]
+        own, = (item for item in inventory.json()["data"]["items"]
+                if (item["gateway_id"], item["workspace_id"]) == (node.gateway_id, node.workspace_id))
+        assert own["connection_kind"] == "local"
+        node.client.headers.update({
+            "X-BoxTeam-Target-Gateway-Id": own["gateway_id"],
+            "X-BoxTeam-Workspace-Id": own["workspace_id"],
+        })
     hub_inventory = await hub.client.get("/api/gateway/workspaces")
     assert hub_inventory.status_code == 200, hub_inventory.text
     hub_items = hub_inventory.json()["data"]["items"]
-    source_route = next(item for item in hub_items if (item.get("remote") or {}).get("gateway_id") == source.gateway_id)
-    hub_local = next(item for item in hub_items
-                     if item["backend_workspace_id"] == hub.workspace_id and item["connection_kind"] == "local")
+    source_projection, = (item for item in hub_items
+                          if (item["gateway_id"], item["workspace_id"]) == (source.gateway_id, source.workspace_id))
+    assert source_projection["connection_kind"] == "remote_gateway"
+    hub_local, = (item for item in hub_items
+                  if (item["gateway_id"], item["workspace_id"]) == (hub.gateway_id, hub.workspace_id))
+    assert hub_local["connection_kind"] == "local"
+    source_owner = {"gateway_id": source.gateway_id, "workspace_id": source.workspace_id}
+    hub_owner = {"gateway_id": hub.gateway_id, "workspace_id": hub.workspace_id}
+    source_headers = {
+        "X-BoxTeam-Target-Gateway-Id": source_owner["gateway_id"],
+        "X-BoxTeam-Workspace-Id": source_owner["workspace_id"],
+    }
+    hub_headers = {
+        "X-BoxTeam-Target-Gateway-Id": hub_owner["gateway_id"],
+        "X-BoxTeam-Workspace-Id": hub_owner["workspace_id"],
+    }
     inherited = "来源 B 主线程的共同历史。"
     child_only = "来源 B child 独有输入：目标必须继承这个 thread。"
     main_only = "来源 B main 后来的独有输入：不能混入 child 分支。"
@@ -1023,12 +1040,15 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     provider_requests_before_fork = _provider_call_count(model)
     key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
     phase = "copy.target.prepared"
-    activation = await hub.client.post(f"/api/gateway/workspaces/{source_route['workspace_id']}/activate")
+    activation = await hub.client.post(
+        f"/api/gateway/workspaces/{source_projection['workspace_id']}/activate", headers=source_headers,
+    )
     assert activation.status_code == 200, activation.text
+    assert activation.json()["data"]["active_workspace"] == source_owner
     control.arm(key, phase)
     fork_call = asyncio.create_task(hub.client.post(
         f"/api/v1/sessions/{source_session_id}/fork-context", json=request,
-        headers={"X-BoxTeam-Workspace-Id": source_route["workspace_id"]},
+        headers=source_headers,
     ))
     reached = asyncio.create_task(asyncio.to_thread(control.acknowledged, key, phase))
     deadline = _fork_deadline(target, request, fork_deadlines)
@@ -1044,13 +1064,16 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
         await deadline.wait(reached, "phase_acknowledged")
         prepared = _creation_record(target, key, child_session_node)
         assert prepared["state"] == "preparing"
-        switched = await hub.client.post(f"/api/gateway/workspaces/{hub_local['workspace_id']}/activate")
+        switched = await hub.client.post(
+            f"/api/gateway/workspaces/{hub_local['workspace_id']}/activate", headers=hub_headers,
+        )
         assert switched.status_code == 200, switched.text
+        assert switched.json()["data"]["active_workspace"] == hub_owner
         health = await hub.client.get("/api/gateway/health")
         assert health.status_code == 200, health.text
-        assert health.json()["data"]["active_workspace_id"] == hub_local["workspace_id"]
+        assert health.json()["data"]["active_workspace"] == hub_owner
         (artifacts / "source-child-workspace-switch.json").write_text(json.dumps({
-            "fixed_source_route": source_route["workspace_id"], "activated_workspace": hub_local["workspace_id"],
+            "fixed_source_owner": source_owner, "activated_workspace": hub_owner,
             "prepared": prepared, "health": health.json(),
         }, ensure_ascii=False, indent=2) + "\n")
         deadline.set_stage("release_phase_barrier")
@@ -1092,7 +1115,21 @@ async def test_real_source_child_fork_cold_history_attachment_and_successor(
     claims = _attachment_claims(target, key)
     assert len(claims) == 1 and claims[0]["state"] == "committed"
     assert (claims[0]["target_session_id"], claims[0]["target_thread_id"]) == (target_session_id, target_thread_id)
-    assert _attachment_claims(source, key) == []
+    # 来源保留冻结导出事实；释放占用不删除 claim，也不能伪装成在来源发布了目标目录。
+    source_claim, = _attachment_claims(source, key)
+    assert (source_claim["state"], source_claim["export_released"]) == ("prepared", 1)
+    assert claims[0]["export_released"] == 0
+    immutable_claim_fields = (
+        "claim_id", "copy_operation_id", "source_snapshot_id", "operation_preimage_hash", "preimage_hash",
+        "source_attachment_id", "target_attachment_id", "target_session_id", "target_thread_id", "snapshot_json",
+    )
+    assert {name: source_claim[name] for name in immutable_claim_fields} == {
+        name: claims[0][name] for name in immutable_claim_fields
+    }
+    assert (source_claim["source_snapshot_id"], source_claim["operation_preimage_hash"]) == (
+        source_capture["snapshot_id"], source_capture["preimage_hash"],
+    )
+    assert source_claim["source_attachment_id"] != source_claim["target_attachment_id"]
     assert len(published["resources"]) == 1
     target_file_id = published["resources"][0]["target_uri"]
     target_file = parse_resource_uri(target_file_id)

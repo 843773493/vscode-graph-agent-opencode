@@ -3574,12 +3574,14 @@ class SessionForkTransferRequest(_message.Message):
     def __init__(self, source_gateway_id: _Optional[str] = ..., fork_target: _Optional[_Union[ForkGrantTarget, _Mapping]] = ..., action: _Optional[str] = ..., request: _Optional[_Union[SessionForkRequest, _Mapping]] = ..., capture: _Optional[_Union[ForkSourceCaptureDTO, _Mapping]] = ..., cursor: _Optional[int] = ..., file_name: _Optional[str] = ..., offset: _Optional[int] = ..., generation_origin: _Optional[_Union[SessionGenerationOriginDTO, _Mapping]] = ..., release_state: _Optional[str] = ...) -> None: ...
 
 class ForkTransferFileDTO(_message.Message):
-    __slots__ = ("name", "size_bytes")
+    __slots__ = ("name", "size_bytes", "content_base64")
     NAME_FIELD_NUMBER: _ClassVar[int]
     SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_BASE64_FIELD_NUMBER: _ClassVar[int]
     name: str
     size_bytes: int
-    def __init__(self, name: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
+    content_base64: str
+    def __init__(self, name: _Optional[str] = ..., size_bytes: _Optional[int] = ..., content_base64: _Optional[str] = ...) -> None: ...
 
 class SessionForkTransferResultDTO(_message.Message):
     __slots__ = ("capture", "intent", "files", "next_cursor", "chunk_base64", "chunk_sha256", "offset", "result")

@@ -209,14 +209,36 @@ def import_case(capture_files, transfer_request, tmp_path):
 
 
 @pytest.mark.parametrize("fail", [False, True], ids=["drain-page", "cancel-writers"])
-async def test_import_keeps_workers_busy_and_settles_them_before_publication_or_cleanup(import_case, fail):
+async def test_import_keeps_workers_busy_and_settles_them_before_publication_or_cleanup(import_case, fail, monkeypatch):
     case = import_case
+    # 用真正需要分块的文件保留 worker 调度/取消证明；小文件另验批内复用。
+    for index in range(1, 9):
+        (case.source.snapshot.captured_root / f"rollout/part-{index:02}.bin").write_bytes(
+            bytes([index]) * (transfer.FORK_TRANSFER_CHUNK_BYTES + 1),
+        )
+    snapshot = replace(case.snapshot, rollout=replace(case.snapshot.rollout,
+        files=_tree_manifest(case.source.snapshot.captured_root / "rollout")))
+    marker = source_capture.publish_captured_snapshot(case.record, snapshot)
+    case.record = replace(case.record, snapshot_sha256=snapshot.snapshot_sha256, marker_sha256=marker,
+        source_point_json=snapshot.source_point.frozen_json(preimage_hash=case.record.preimage_hash,
+            snapshot_sha256=snapshot.snapshot_sha256, marker_sha256=marker))
+    case.snapshot, case.original = snapshot, case.source.bytes()
     last_file = asyncio.Event()
     large_waiting = asyncio.Event()
     active = peak = 0
     completed = set()
     cancelled = []
     failure = ConnectionError("源分块失败")
+    real_flush = transfer._flush_received_file
+
+    def record_flush(path, stream):
+        name = path.relative_to(transfer.capture_directory(case.target, case.record)).as_posix()
+        if name == "captured.json":
+            assert completed == set(case.original) - {"captured.json"} and active == 0
+        real_flush(path, stream)
+        completed.add(name)
+
+    monkeypatch.setattr(transfer, "_flush_received_file", record_flush)
 
     async def send(payload):
         nonlocal active, peak
@@ -236,12 +258,8 @@ async def test_import_keeps_workers_busy_and_settles_them_before_publication_or_
                 if fail:
                     raise failure
                 last_file.set()
-            if payload.file_name == "captured.json":
-                assert completed == set(case.original) - {"captured.json"} and active == 1
             reply = transfer.export_file_chunk(case.source.sessions, case.record, payload.file_name, payload.offset)
             assert reply.chunk_base64 is not None
-            if payload.offset + len(transfer.base64.b64decode(reply.chunk_base64)) == len(case.original[payload.file_name]):
-                completed.add(payload.file_name)
             return reply
         except asyncio.CancelledError:
             cancelled.append(payload.file_name)
@@ -267,3 +285,43 @@ async def test_import_keeps_workers_busy_and_settles_them_before_publication_or_
         assert received.source_point == case.snapshot.source_point
         assert received.snapshot_sha256 == case.snapshot.snapshot_sha256 and marker == case.record.marker_sha256
     assert active == 0 and 1 < peak <= 4 and case.source.bytes() == case.original
+
+
+@pytest.mark.parametrize("corrupt", [False, True], ids=["shared-page", "corrupt-inline"])
+async def test_import_small_files_share_pages_and_keep_final_frozen_verification(import_case, corrupt):
+    case = import_case
+    calls = []
+
+    class Transport:
+        async def fork_transfer(self, request: transfer.SessionForkTransferRequest) -> transfer.SessionForkTransferResultDTO:
+            calls.append(request)
+            if request.action == "capture":
+                return transfer.SessionForkTransferResultDTO(capture=transfer.ForkSourceCaptureDTO.from_record(case.record))
+            if request.action == "files":
+                reply = transfer.export_file_batch(case.source.sessions, case.record, request.cursor)
+                if corrupt:
+                    files = [file.model_copy(update={"content_base64": transfer.base64.b64encode(
+                        b"x" * file.size_bytes).decode("ascii")}) if file.name.endswith("part-01.bin") else file
+                        for file in reply.files]
+                    reply = reply.model_copy(update={"files": files})
+                return reply
+            assert request.action == "chunk" and request.file_name is not None
+            assert len(case.original[request.file_name]) > transfer.FORK_TRANSFER_CHUNK_BYTES
+            return transfer.export_file_chunk(case.source.sessions, case.record, request.file_name, request.offset)
+
+    operation = transfer.import_captured_artifact(Transport(), case.request, case.target, case.record)
+    if corrupt:
+        with pytest.raises(RuntimeError, match="files hash/length"):
+            await operation
+        assert not transfer.capture_directory(case.target, case.record).exists()
+    else:
+        received, marker = await operation
+        root = transfer.capture_directory(case.target, case.record)
+        assert {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()} == case.original
+        assert received.snapshot_sha256 == case.snapshot.snapshot_sha256 and marker == case.record.marker_sha256
+    assert sum(request.action == "chunk" for request in calls) == sum(
+        (len(content) + transfer.FORK_TRANSFER_CHUNK_BYTES - 1) // transfer.FORK_TRANSFER_CHUNK_BYTES
+        for content in case.original.values() if len(content) > transfer.FORK_TRANSFER_CHUNK_BYTES
+    )
+    assert len(calls) < len(case.original)
+    assert case.source.bytes() == case.original

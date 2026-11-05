@@ -25,7 +25,10 @@ from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_fork_transfer import (
     FORK_TRANSFER_CHUNK_BYTES,
     FORK_TRANSFER_FILE_BATCH,
+    FORK_TRANSFER_INLINE_BYTES,
+    ForkExportReleaseState,
     ForkSourceCaptureDTO,
+    ForkTransferAction,
     ForkTransferFileDTO,
     SessionForkTransferRequest,
     SessionForkTransferResultDTO,
@@ -46,9 +49,9 @@ _TRANSFER_FILE_CONCURRENCY = 4
 
 
 def source_transfer_request(
-    request: SessionForkRequest, capture: ForkSourceCaptureRecord | None, *, action: str,
+    request: SessionForkRequest, capture: ForkSourceCaptureRecord | None, *, action: ForkTransferAction,
     cursor: int = 0, file_name: str | None = None, offset: int = 0,
-    release_state: str | None = None,
+    release_state: ForkExportReleaseState | None = None,
 ) -> SessionForkTransferRequest:
     origin = require_current_gateway_id("fork source artifact transport")
     source = parse_resource_uri(request.source_uri, local_gateway_id=origin)
@@ -105,9 +108,23 @@ def _artifact_files(root: Path, record: ForkSourceCaptureRecord) -> Iterator[For
 def export_file_batch(sessions_root: Path, record: ForkSourceCaptureRecord, cursor: int) -> SessionForkTransferResultDTO:
     root = capture_directory(sessions_root, record)
     batch = list(islice(_artifact_files(root, record), cursor, cursor + FORK_TRANSFER_FILE_BATCH + 1))
+    files = []
+    inline_bytes = 0
+    with _storage_io(root, "fork artifact 批内正文读取失败", "export_manifest", artifact="fork_transfer"):
+        for file in batch[:FORK_TRANSFER_FILE_BATCH]:
+            if file.size_bytes <= FORK_TRANSFER_CHUNK_BYTES:
+                if inline_bytes + file.size_bytes > FORK_TRANSFER_INLINE_BYTES:
+                    break
+                # 清单已核固定快照内的普通文件；不再逐层重复解析同一相对位置。
+                content = native_io_path(root / file.name).read_bytes()
+                if len(content) != file.size_bytes:
+                    raise RuntimeError("fork artifact 批内正文长度与冻结清单不一致")
+                file = file.model_copy(update={"content_base64": base64.b64encode(content).decode("ascii")})
+                inline_bytes += len(content)
+            files.append(file)
     return SessionForkTransferResultDTO(
-        capture=ForkSourceCaptureDTO.from_record(record), files=batch[:FORK_TRANSFER_FILE_BATCH],
-        next_cursor=cursor + FORK_TRANSFER_FILE_BATCH if len(batch) > FORK_TRANSFER_FILE_BATCH else None,
+        capture=ForkSourceCaptureDTO.from_record(record), files=files,
+        next_cursor=cursor + len(files) if len(batch) > len(files) else None,
     )
 
 
@@ -153,15 +170,14 @@ async def import_captured_artifact(
     transport: SessionForkTransportProtocol, request: SessionForkRequest,
     sessions_root: Path, record: ForkSourceCaptureRecord,
 ) -> tuple[ForkSourceSnapshot, str]:
-    # TODO(fork-transfer-budget): 大附件/Goal 的真实 B→A→C 请求在基线和本批均触发
-    # 8 秒中继期限，目标随后仍完成物化；测量见 fork-capture-point 的 012/016 原件。
-    # 后续优化整笔传输成本与期限协调，保留当前 60 秒验收预算和持久幂等恢复合同。
+    # TODO(fork-transfer-budget): 大附件/Goal 仍须按原 8 秒中继期限复验；
+    # fork-capture-point 的 012/016 历史测量不由本批小文件密集场景代替。
     root = capture_directory(sessions_root, record)
 
     async def receive_file(file: ForkTransferFileDTO) -> None:
         path = await run_sync_shielded(_received_file_path, root, record, file.name)
         await receive_transfer_file(transport, request, frozen, path=path, size_bytes=file.size_bytes,
-                                    file_name=file.name)
+                                    file_name=file.name, content_base64=file.content_base64)
 
     async def receive_files(files: Iterator[ForkTransferFileDTO]) -> None:
         # 同页共用迭代器；空闲 worker 立即取下一文件，不等待最慢文件结束。
@@ -193,7 +209,7 @@ async def import_captured_artifact(
                 raise
             if page.next_cursor is None:
                 break
-            if page.next_cursor != cursor + FORK_TRANSFER_FILE_BATCH or len(page.files) != FORK_TRANSFER_FILE_BATCH:
+            if not page.files or page.next_cursor != cursor + len(page.files):
                 raise RuntimeError("fork artifact 文件分页未按冻结顺序前进")
             cursor = page.next_cursor
         if marker is None:
@@ -258,6 +274,7 @@ def _publish_received_snapshot(sessions_root: Path, record: ForkSourceCaptureRec
 async def receive_transfer_file(
     transport: SessionForkTransportProtocol, request: SessionForkRequest, capture: ForkSourceCaptureRecord,
     *, path: Path, size_bytes: int, file_name: str,
+    content_base64: str | None = None,
 ) -> None:
     """全部冻结文件共用固定块 reader；正文总长度不影响单次内存。"""
     path = native_io_path(path)
@@ -266,16 +283,24 @@ async def receive_transfer_file(
         # worker 先将句柄登记到原调用；打开后取消但尚未交付返回值也不能泄漏句柄。
         stream = await run_sync_shielded(lifetime.enter_context, _received_stream(path))
         offset = 0
-        while offset < size_bytes:
-            chunk = await transport.fork_transfer(source_transfer_request(
-                request, capture, action="chunk", file_name=file_name, offset=offset,
-            ))
-            verify_capture_receipt(capture, chunk.capture)
-            if chunk.offset != offset or chunk.chunk_base64 is None or chunk.chunk_sha256 is None:
-                raise RuntimeError("fork transport 分块 bytes offset 或正文回执缺失")
-            payload = base64.b64decode(chunk.chunk_base64, validate=True)
-            if not payload or len(payload) > min(FORK_TRANSFER_CHUNK_BYTES, size_bytes - offset) or hashlib.sha256(payload).hexdigest() != chunk.chunk_sha256:
-                raise RuntimeError("fork transport 分块 hash/长度不一致")
+        while offset < size_bytes or content_base64 is not None:
+            if content_base64 is not None:
+                payload = base64.b64decode(content_base64, validate=True)
+                content_base64 = None
+                if len(payload) != size_bytes:
+                    raise RuntimeError("fork transport 批内正文长度与冻结清单不一致")
+            else:
+                chunk = await transport.fork_transfer(source_transfer_request(
+                    request, capture, action="chunk", file_name=file_name, offset=offset,
+                ))
+                verify_capture_receipt(capture, chunk.capture)
+                if chunk.offset != offset or chunk.chunk_base64 is None or chunk.chunk_sha256 is None:
+                    raise RuntimeError("fork transport 分块 bytes offset 或正文回执缺失")
+                payload = base64.b64decode(chunk.chunk_base64, validate=True)
+                if hashlib.sha256(payload).hexdigest() != chunk.chunk_sha256:
+                    raise RuntimeError("fork transport 分块 hash 不一致")
+            if (not payload and size_bytes != 0) or len(payload) > min(FORK_TRANSFER_CHUNK_BYTES, size_bytes - offset):
+                raise RuntimeError("fork transport 正文长度不一致")
             await run_sync_shielded(_write_received_chunk, path, stream, payload)
             offset += len(payload)
         await run_sync_shielded(_flush_received_file, path, stream)
