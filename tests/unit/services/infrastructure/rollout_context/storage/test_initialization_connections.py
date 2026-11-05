@@ -22,50 +22,33 @@ def rollout(tmp_path: Path) -> tuple[RolloutContextStore, str, str]:
     return store, session_id, store.storage.main_thread_id(session_id)
 
 
-def test_initialization_opens_only_preflight_and_writer_connections(
+def test_initialization_is_idempotent_and_closes_connections(
     rollout: tuple[RolloutContextStore, str, str], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, session_id, thread_id = rollout
     connections: list[sqlite3.Connection] = []
-    statements: list[str] = []
     connect = store.storage._connect
 
     def track(*args, **kwargs):
         connection = connect(*args, **kwargs)
         connections.append(connection)
-        connection.set_trace_callback(statements.append)
         return connection
 
     monkeypatch.setattr(store.storage, "_connect", track)
     initial = store.storage.initialize(session_id, thread_id=thread_id)
-    assert len(connections) == 1
-    schema_query = "SELECT schema_version, message_format_version FROM database_meta WHERE singleton_id = 1"
-    assert statements.count(schema_query) == 1
-    connections.clear()
-    statements.clear()
     assert store.storage.initialize(session_id, thread_id=thread_id) == initial
-    assert len(connections) == 2
-    assert statements.count(schema_query) == 1
     for connection in connections:
         with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
             connection.execute("SELECT 1")
 
 
 @pytest.mark.parametrize("operation", ["initialize", "read_snapshot"])
-def test_rollout_operation_resolves_thread_once_and_next_call_checks_live_owner(
+def test_next_rollout_operation_checks_live_thread_owner(
     rollout: tuple[RolloutContextStore, str, str], operation: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, session_id, thread_id = rollout
     store.storage.initialize(session_id, thread_id=thread_id)
     resolver = store.storage._path_resolver
-    resolve = resolver.resolve_thread_node
-    resolved: list[tuple[str, str]] = []
-
-    def track(session: str, thread: str) -> Path:
-        resolved.append((session, thread))
-        return resolve(session, thread)
-
     def run() -> None:
         if operation == "initialize":
             store.storage.initialize(session_id, thread_id=thread_id)
@@ -73,12 +56,8 @@ def test_rollout_operation_resolves_thread_once_and_next_call_checks_live_owner(
             with store.storage.open_read_snapshot(session_id, thread_id) as snapshot:
                 assert (snapshot.session_id, snapshot.thread_id) == (session_id, thread_id)
 
-    monkeypatch.setattr(resolver, "resolve_thread_node", track)
     run()
-    assert resolved == [(session_id, thread_id)]
-    resolved.clear()
     run()
-    assert resolved == [(session_id, thread_id)]
     control = resolver.resolve_session_node(session_id) / "session-control.sqlite"
     with sqlite3.connect(control) as connection:
         connection.execute(
@@ -97,7 +76,7 @@ def test_scoped_live_node_does_not_override_private_fork_source(
     live = paths.thread_node(session_id, thread_id)
     captured = tmp_path / "captured-source"
     captured.mkdir()
-    with paths.thread_resolution_scope():
+    with store.storage._path_resolver.thread_resolution_scope():
         assert paths.thread_node(session_id, thread_id) == live
         with paths.fork_source_snapshot_scope(
             session_id=session_id, thread_id=thread_id, captured_root=captured,

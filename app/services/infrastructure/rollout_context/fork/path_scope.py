@@ -39,20 +39,6 @@ class ForkPathScope:
         self._path_resolver = resolver
         self._prepared_target: ContextVar[PreparedForkTarget | None] = ContextVar("prepared_fork_target", default=None)
         self._source_snapshot: ContextVar[ForkSourceSnapshot | None] = ContextVar("fork_source_snapshot", default=None)
-        self._resolved_thread_nodes: ContextVar[dict[tuple[str, str], Path] | None] = ContextVar("resolved_thread_nodes", default=None)
-
-    @contextmanager
-    def thread_resolution_scope(self) -> Iterator[None]:
-        """单次同步存储操作复用已验证节点；退出后不保留定位结果。"""
-        # owner 检查和内层快照属于同次同步操作，共用定位结果；不延长到下一次操作。
-        if self._resolved_thread_nodes.get() is not None:
-            yield
-            return
-        token = self._resolved_thread_nodes.set({})
-        try:
-            yield
-        finally:
-            self._resolved_thread_nodes.reset(token)
 
     def thread_identity(self, session_id: str, thread_id: str | None) -> str:
         """解析 (session_id, thread_id) 的 thread 半。
@@ -118,13 +104,7 @@ class ForkPathScope:
             return record.thread_node
         if snapshot is not None:
             raise RuntimeError("fork source snapshot 只授予冻结 source Thread 的路径能力")
-        nodes = self._resolved_thread_nodes.get()
-        if nodes is None:
-            return self._path_resolver.resolve_thread_node(session_id, thread_id)
-        key = (session_id, thread_id)
-        if key not in nodes:
-            nodes[key] = self._path_resolver.resolve_thread_node(session_id, thread_id)
-        return nodes[key]
+        return self._path_resolver.resolve_thread_node(session_id, thread_id)
 
     @contextmanager
     def prepared_fork_target_scope(

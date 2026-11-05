@@ -411,7 +411,7 @@ class ContextSourceVersionsStorageMixin:
         frozenset[tuple[str, str]],
     ] | None:
         # owner 检查和读取快照共用本次定位；不跨重建状态读取保留路径或权限结果。
-        with self._storage.fork_paths.thread_resolution_scope():
+        with self._storage._path_resolver.thread_resolution_scope():
             thread_id = self._context_source_rollout_owner_or_none(session_id, thread_id)
             if thread_id is None:
                 return None

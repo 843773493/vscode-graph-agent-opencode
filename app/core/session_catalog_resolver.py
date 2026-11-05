@@ -6,7 +6,8 @@
 
 红线（模块边界，违反即失去本轮资格）：
 
-- **唯一权威**：SQLite catalog 是唯一目录数据源；节点读取不依赖进程内缓存。
+- **唯一权威**：SQLite catalog 是唯一目录数据源；定位只在单次同步操作内复用，
+  不跨操作保存节点或替代 catalog 读取。
 - **folder 无物理目录**：新模型 folder 是 SQLite-only 节点，使用独立的
   ``SessionCatalogFolderProjection``；``resolve_folder_dir`` 恒
   ``RuntimeError``。
@@ -25,7 +26,9 @@ folder 无物理目录；Gateway 只消费受控 catalog export）。
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -153,6 +156,9 @@ class SessionCatalogPathResolver:
         self._workspace_id = workspace_id
         self._delete_service = delete_service
         self._consistency_verified = False
+        self._resolved_thread_nodes: ContextVar[dict[tuple[str, str], Path] | None] = ContextVar(
+            "resolved_thread_nodes", default=None,
+        )
 
     # ------------------------------------------------------------------
     # 公开装配属性
@@ -519,6 +525,18 @@ class SessionCatalogPathResolver:
             )
         return thread_path
 
+    @contextmanager
+    def thread_resolution_scope(self) -> Iterator[None]:
+        """同次同步操作共用已验证 locator；不得跨 await，退出后下次重新校验。"""
+        if self._resolved_thread_nodes.get() is not None:
+            yield
+            return
+        token = self._resolved_thread_nodes.set({})
+        try:
+            yield
+        finally:
+            self._resolved_thread_nodes.reset(token)
+
     def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
         """按受检 SessionThread 解析线程资源目录。
 
@@ -531,6 +549,10 @@ class SessionCatalogPathResolver:
           ``threads/``，也不从日期桶猜测路径。
         """
         validate_thread_id(thread_id)
+        nodes = self._resolved_thread_nodes.get()
+        key = (session_id, thread_id)
+        if nodes is not None and key in nodes:
+            return nodes[key]
         session_dir = self.resolve_session_node(session_id)
         node = self._store.get_node(session_id)
         control_path = session_dir / CONTROL_DATABASE_NAME
@@ -556,6 +578,8 @@ class SessionCatalogPathResolver:
                 f"拒绝解析（fail closed）: session_id={session_id}, "
                 f"thread_id={thread_id}"
             )
+        if nodes is not None:
+            nodes[key] = thread_path
         return thread_path
 
     def resolve_session_node_for_runtime(self, session_id: str) -> Path:

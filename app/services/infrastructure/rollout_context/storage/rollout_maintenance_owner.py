@@ -355,7 +355,7 @@ class RolloutMaintenanceOwner(
         )
         with (
             self._host._lock(thread_id, checkpoint_ns, session_id=session_id),
-            self._host.fork_paths.thread_resolution_scope(),
+            self._host._path_resolver.thread_resolution_scope(),
         ):
             root = self._host.root(
                 session_id, checkpoint_ns, thread_id=thread_id

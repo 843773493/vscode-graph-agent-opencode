@@ -271,7 +271,11 @@ class ContextDispatchOwnerMixin:
         ``wire_params`` 是 execution 从实际模型绑定提取的纯数据有效参数
         （wire_finalize 提取器输出），Saver 只透传，不持有模型实例。
         """
-        with self._storage.storage.catalog_body_validation_scope():
+        # 同步 prepare 的 storage/detail 共用已验证 locator，退出后下一请求重新检查。
+        with (
+            self._storage.storage._path_resolver.thread_resolution_scope(),
+            self._storage.storage.catalog_body_validation_scope(),
+        ):
             prepared = prepare_registered_context(
                 self,
                 session_id,

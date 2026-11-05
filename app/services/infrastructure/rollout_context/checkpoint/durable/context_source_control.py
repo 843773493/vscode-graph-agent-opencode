@@ -236,7 +236,7 @@ class ContextSourceControlStorageMixin:
     ) -> tuple[ContextSourceControlState, ...]:
         """按需读取该 SessionThread 的控制状态，不建库、不执行恢复副作用。"""
         # 本次读取的 owner 检查与快照打开复用路径；退出后下次读取仍重新校验 catalog。
-        with self._storage.fork_paths.thread_resolution_scope():
+        with self._storage._path_resolver.thread_resolution_scope():
             resolved_thread_id = self._context_source_rollout_owner_or_none(
                 session_id, thread_id
             )

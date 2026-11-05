@@ -233,7 +233,7 @@ class RolloutStorage(
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         with (
             self._lock(thread_id, checkpoint_ns, session_id=session_id),
-            self.fork_paths.thread_resolution_scope(),
+            self._path_resolver.thread_resolution_scope(),
         ):
             root = self.root(session_id, checkpoint_ns, thread_id=thread_id)
             if self._is_removed_rollout_layout(root):
@@ -300,7 +300,7 @@ class RolloutStorage(
             yield connection
         else:
             # 定位与正文读取属于同次操作；共用已验证目录，退出后下一次读取重新校验。
-            with self.fork_paths.thread_resolution_scope(), self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as owned:
+            with self._path_resolver.thread_resolution_scope(), self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as owned:
                 yield owned.connection
 
     def backup_index(self, thread_id: str, checkpoint_ns: str='', *, session_id: str, destination: str | Path | None=None) -> Path:

@@ -76,7 +76,7 @@ class RolloutIndexMixin:
         """打开只读事务；未指定 namespace 时从同库选择已发布的 manifest。"""
         if checkpoint_ns is not None and not isinstance(checkpoint_ns, str):
             raise TypeError("rollout checkpoint_ns 必须是字符串或 null")
-        with self._host.fork_paths.thread_resolution_scope(), ExitStack() as cleanup:
+        with self._host._path_resolver.thread_resolution_scope(), ExitStack() as cleanup:
             root = self._host.root(session_id, checkpoint_ns or "", thread_id=thread_id)
             jsonl_path = root / "rollout.jsonl"
             index_path = root / "index.sqlite"
