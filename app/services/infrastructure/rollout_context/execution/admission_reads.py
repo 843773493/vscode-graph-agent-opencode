@@ -201,11 +201,11 @@ class RolloutExecutionAdmissionReadMixin:
         return ExecutionAdmissionCursor(admission, commit.commit_id, kind)
 
 
-    def execution_context_excluded_item_ids(
+    def execution_context_fence(
         self, admission: ExecutionAdmission, *, connection: sqlite3.Connection,
         checkpoint_ns: str = "",
-    ) -> frozenset[str]:
-        """只排除未来准入 root/notice 及所属执行，当前执行的晚到输出继续可见。"""
+    ) -> tuple[ExecutionAdmissionCursor, frozenset[str]]:
+        """一次核验准入游标与未来排除集，供上下文选择共用同一因果边界。"""
         cursor = self.execution_admission_cursor(admission, connection=connection, checkpoint_ns=checkpoint_ns)
         rows = connection.execute(
             "SELECT execution.execution_id FROM executions AS execution "
@@ -235,7 +235,7 @@ class RolloutExecutionAdmissionReadMixin:
                 (future.execution_id, future.turn_id, future.turn_id),
             ).fetchall()
             excluded.update(strict_text(item[0], field="item_catalog.item_id") for item in items)
-        return frozenset(excluded)
+        return cursor, frozenset(excluded)
 
 
     def accepted_user_input(

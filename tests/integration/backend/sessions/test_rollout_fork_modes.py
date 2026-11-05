@@ -7811,14 +7811,11 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
             admission = context.saver._storage.executions._read_execution_admission_connection(
                 connection, session_id=source.session_id, thread_id=source_owner.thread_id, execution_id=row[0],
             )
-            cursor = context.saver._storage.executions.execution_admission_cursor(
+            cursor, excluded = context.saver._storage.executions.execution_context_fence(
                 admission, connection=connection,
             )
             cursors[row[0]] = cursor.commit_id
             assert cursor.commit_kind == ("execution_admission" if row is internal else "acceptance")
-            excluded = context.saver._storage.executions.execution_context_excluded_item_ids(
-                admission, connection=connection,
-            )
             # internal 排除未来用户 Turn；同一用户 Turn 的 retry 复用 acceptance 冻结的 notice 排除集。
             expected = ({item.item_id for item in target_items if item.turn_id == initial[1]}
                         if row is internal else {"item-retry-notice"})

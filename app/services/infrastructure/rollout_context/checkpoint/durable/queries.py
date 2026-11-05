@@ -344,15 +344,15 @@ class RolloutCheckpointQueriesMixin:
         if any(type(ordinal) is not int or ordinal < 0 for _item_id, ordinal in selected):
             raise RuntimeError("active context selection 缺少合法顺序")
         admission = current_execution_admission(langgraph_thread_id=thread_id)
-        excluded: frozenset[str] = frozenset()
-        if admission is not None:
-            if (admission.session_id, admission.thread_id) != (session_id, thread_id):
-                raise ValueError("execution context fence 与当前 owner 不一致")
-            excluded = self._context.executions.execution_context_excluded_item_ids(
-                admission, connection=connection, checkpoint_ns=checkpoint_ns,
-            )
+        if admission is None:
+            return tuple(item_id for item_id, _ordinal in selected), frozenset()
+        if (admission.session_id, admission.thread_id) != (session_id, thread_id):
+            raise ValueError("execution context fence 与当前 owner 不一致")
+        cursor, excluded = self._context.executions.execution_context_fence(
+            admission, connection=connection, checkpoint_ns=checkpoint_ns,
+        )
         item_ids = [item_id for item_id, _ordinal in selected if item_id not in excluded]
-        if not include_pending_notices or admission is None:
+        if not include_pending_notices:
             return tuple(item_ids), excluded
         # 排除集已在同一连接中完整校验当前准入游标，后续选集直接共用该结果。
         pending_ids = []
@@ -364,9 +364,14 @@ class RolloutCheckpointQueriesMixin:
         pending_ids.extend(row[0] for row in connection.execute(
             "SELECT item.item_id FROM context_view_items member "
             "JOIN item_catalog item ON item.item_id=member.item_id "
+            "JOIN executions execution ON execution.execution_id=item.execution_id "
             "WHERE member.view_id=? AND member.visible=1 AND member.context_selected=1 "
-            "AND item.execution_id=? ORDER BY member.context_ordinal",
-            (view_id, admission.execution_id),
+            # 当前执行允许晚到 retry；先前用户执行的通知只读取本次接纳前已提交的事实。
+            "AND (item.execution_id=? OR execution.session_id=? AND execution.thread_id=? "
+            "AND execution.execution_origin='user_turn' AND item.semantic_kind='runtime_notice' "
+            "AND item.turn_scope='pending_next_turn' AND item.turn_id IS NULL AND item.commit_id<=?) "
+            "ORDER BY member.context_ordinal",
+            (view_id, admission.execution_id, session_id, thread_id, cursor.commit_id),
         ).fetchall())
         known = set(item_ids)
         for raw_id in pending_ids:

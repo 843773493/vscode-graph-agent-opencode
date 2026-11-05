@@ -78,6 +78,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
 )
+from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 from app.services.orchestration.execution_step import runner
 from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindingWorker,
@@ -1025,6 +1026,130 @@ async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpo
     case.write_actual("e07-reminder-reasons", {"execution_id": active.execution_id, "sources": sorted(source_ids),
         "canonical_bytes_hash": sha256_jcs([item.to_dict() for item in items]),
         "unchanged_checkpoint_ids": [row[0] for row in checkpoint_headers], "provider_requests": calls})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_case", [{"managed_gateway": True}], indirect=True)
+async def test_e07_job_timeout_entry_publishes_pending_source_for_next_real_turn(
+    source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = source_case
+    session_id = await create_session(case.client, "E07-real-job-timeout")
+    thread_id = await case.container.session_service.resolve_main_thread(session_id)
+    _read_call, warm_call = await case.plan(session_id, [
+        _tool_reply("read_file", {"path": "README.md"}, "call_e07_timeout_read"),
+        {"content": "E07-timeout-frozen-history"},
+    ])
+    warm = await _send(case, session_id, "先读取 README.md 并保留真实工具结果。")
+    warm_job_id = warm["job_id"]
+    assert isinstance(warm_job_id, str)
+    await _job(case, warm_job_id)
+    saver = case.container.checkpointer
+    storage = saver._storage.storage
+    prefix_items = storage.read_items(session_id, thread_id)
+    superseded = superseded_item_ids(prefix_items)
+    read_result, = [item for item in prefix_items if item.semantic_kind == "tool_result" and item.item_id not in superseded]
+    read_payload = read_result.payload
+    assert isinstance(read_payload, dict)
+    assert read_payload["tool_call_id"] == "call_e07_timeout_read"
+    assert read_payload["execution_confirmed"] is True and read_payload["tool_outcome"] == "success"
+    read_content = read_payload["content"]
+    assert isinstance(read_content, str) and "# 统一测试工作区" in read_content
+    assert "sha256:" + hashlib.sha256((case.workspace / "README.md").read_bytes()).hexdigest() in read_content
+    prefix_ids = tuple(item.item_id for item in prefix_items)
+    prefix_bytes = canonical_json_bytes([item.to_dict() for item in prefix_items])
+    warm_wire_bytes = canonical_json_bytes(case.request(warm_call))
+    assemblies = [saver.get_context_assembly(session_id, thread_id, assembly_id=row[0])
+                  for row in case.sql(session_id, thread_id, "SELECT assembly_id FROM context_assemblies ORDER BY created_at")]
+    sealed_bytes = canonical_json_bytes([snapshot.to_dict() for snapshot in assemblies])
+
+    timeout_call, = await case.plan(session_id, [{"content": "超时后不得采纳的回复"}])
+    case.control.arm(timeout_call, "model.response_ready")
+    try:
+        # 只替换每 Job 读取的预算提供者；计时器、宽限、执行器和失败 owner 保持真实。
+        with monkeypatch.context() as budget:
+            budget.setattr(case.container.job_service, "_job_timeout_seconds_provider", lambda: 5.0)
+            accepted = await _send(case, session_id, "等待原任务总超时，不进行用户中断。")
+            job_id, turn_id = accepted["job_id"], accepted["turn_id"]
+            assert isinstance(job_id, str) and isinstance(turn_id, str)
+            await asyncio.to_thread(case.control.acknowledged, timeout_call, "model.response_ready", 20)
+            admission = saver.execution_admission_for_job(session_id, thread_id=thread_id, job_id=job_id)
+            assert admission.turn_id == turn_id and admission.execution_origin == "user_turn"
+            timeout_wire = case.request(timeout_call)
+            timeout_wire_bytes = canonical_json_bytes(timeout_wire)
+            assembly_id, = case.sql(session_id, thread_id,
+                "SELECT assembly_id FROM model_calls WHERE model_call_id=?", (timeout_call,))[0]
+            timeout_snapshot = saver.get_context_assembly(session_id, thread_id, assembly_id=assembly_id)
+            frozen_request = canonical_json_bytes(timeout_snapshot.request_hash_preimage)
+            frozen_seal = canonical_json_bytes(timeout_snapshot.to_dict()["seal_binding"])
+            timed_out = await _job(case, job_id, "timed_out")
+    finally:
+        # 失败也释放传输屏障；预算在 context 退出时恢复，不能污染下一 Job。
+        case.control.release(timeout_call, "model.response_ready")
+
+    assert saver.execution_admission_for_job(session_id, thread_id=thread_id, job_id=job_id) == admission
+    assert case.sql(session_id, thread_id,
+        "SELECT e.execution_id,e.job_id,e.turn_id,e.outcome,t.status FROM executions e "
+        "JOIN turn_records t ON t.turn_id=e.turn_id WHERE e.job_id=?", (job_id,)
+    ) == [(admission.execution_id, job_id, turn_id, "interrupted", "interrupted")]
+    failures = [event.payload.model_dump(mode="json") for event in case.container.trace_event_store.read_events(session_id)
+                if event.job_id == job_id and event.type == "job_failed"]
+    assert len(failures) == 1 and failures[0]["code"] == "job_timeout" and failures[0]["timeout_seconds"] == 5.0
+    assert not any(event.type == "session_interrupted" for event in case.container.trace_event_store.read_events(session_id))
+    source_id = f"checkpoint:job_timeout:{turn_id}"
+    notice, = [item for item in storage.read_items(session_id, thread_id) if item.semantic_kind == "runtime_notice"]
+    assert notice.item_id == f"item-{source_id}" and notice.producer_ref["producer_id"] == source_id
+    assert notice.turn_id is None and notice.turn_scope == "pending_next_turn"
+    annotation_extension = notice.extensions["boxteam.checkpoint.annotations"]
+    assert isinstance(annotation_extension, dict)
+    annotations = annotation_extension["value"]
+    assert isinstance(annotations, dict)
+    assert annotations["checkpoint_source"] == annotations["source"] == "job_timeout"
+    assert case.sql(session_id, thread_id, "SELECT execution_id FROM item_catalog WHERE item_id=?", (notice.item_id,)) == [(admission.execution_id,)]
+    notice_bytes = canonical_json_bytes(notice.to_dict())
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM executions") == [(2,)]
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(2,)]
+    assert len(await case.container.job_service.list(session_id=session_id)) == 2
+
+    continued_call, = await case.plan(session_id, [{"content": "E07-timeout-next-turn-ack"}])
+    continued = await _send(case, session_id, "根据超时提醒和已有工具结果继续。")
+    continued_job_id = continued["job_id"]
+    assert isinstance(continued_job_id, str)
+    await _job(case, continued_job_id)
+    following_wire = case.request(continued_call)
+    messages, previous_messages = following_wire["messages"], timeout_wire["messages"]
+    assert isinstance(messages, list) and isinstance(previous_messages, list)
+    assert messages[:len(previous_messages)] == previous_messages
+    assert following_wire["tools"] == timeout_wire["tools"]
+    reminder_text = _wire_text(notice.payload)
+    assert [_wire_text(message["content"]) for message in messages
+            if _wire_text(message.get("content", "")) == reminder_text] == [reminder_text]
+    requested_tools = [call["id"] for message in messages for call in message.get("tool_calls", [])]
+    completed_tools = [message["tool_call_id"] for message in messages if message["role"] == "tool"]
+    assert requested_tools == completed_tools == ["call_e07_timeout_read"]
+    assert canonical_json_bytes(case.request(warm_call)) == warm_wire_bytes
+    assert canonical_json_bytes(case.request(timeout_call)) == timeout_wire_bytes
+    assert canonical_json_bytes([item.to_dict() for item in storage.read_items(session_id, thread_id, item_ids=prefix_ids)]) == prefix_bytes
+    assert canonical_json_bytes([saver.get_context_assembly(session_id, thread_id, assembly_id=snapshot.assembly_id).to_dict()
+                                 for snapshot in assemblies]) == sealed_bytes
+    assert len(case.requests()) == 4
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM executions") == [(3,)]
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(3,)]
+    assert {job.job_id for job in await case.container.job_service.list(session_id=session_id)} == {warm_job_id, job_id, continued_job_id}
+    with RolloutCheckpointSaver(storage.sessions_dir) as cold:
+        for _read in range(2):
+            restored, = cold._storage.storage.read_items(session_id, thread_id, item_ids=(notice.item_id,))
+            assert canonical_json_bytes(restored.to_dict()) == notice_bytes
+            assert cold.execution_admission_for_job(session_id, thread_id=thread_id, job_id=job_id) == admission
+            frozen = cold.get_context_assembly(session_id, thread_id, assembly_id=assembly_id)
+            assert canonical_json_bytes(frozen.request_hash_preimage) == frozen_request
+            assert canonical_json_bytes(frozen.to_dict()["seal_binding"]) == frozen_seal
+    assert case.sql(session_id, thread_id, "SELECT COUNT(*) FROM item_catalog WHERE item_id=?", (notice.item_id,)) == [(1,)]
+    case.write_actual("e07-real-job-timeout", {"job": timed_out, "execution_id": admission.execution_id,
+        "failure": failures[0], "notice": notice.to_dict(), "continued": continued,
+        "prefix_bytes_hash": hashlib.sha256(prefix_bytes).hexdigest(),
+        "sealed_bytes_hash": hashlib.sha256(sealed_bytes).hexdigest(),
+        "timeout_request_hash": hashlib.sha256(frozen_request).hexdigest(), "provider_requests": 4})
 
 
 @pytest.mark.asyncio

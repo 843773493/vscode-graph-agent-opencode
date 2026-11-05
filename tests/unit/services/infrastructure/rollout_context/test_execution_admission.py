@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import PayloadKind
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
@@ -34,6 +36,9 @@ from app.domain.itemized.serde.runtime import (
     execution_record_to_dict,
 )
 from app.prompting.factory import PromptSection, internal_message_factory
+from app.services.business.system_reminder_checkpoint_service import (
+    submit_checkpoint_reminder,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -66,6 +71,85 @@ def _internal_notice(message_id: str, *, control: str = "任务已完成") -> Hu
             "message_metadata": prepared.metadata,
         },
     )
+
+
+@pytest.fixture
+def notice_turn_factory(saver: RolloutCheckpointSaver) -> Callable[[str], ExecutionAdmission]:
+    def accept(suffix: str) -> ExecutionAdmission:
+        thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
+        accepted = saver.accept_turn(
+            SESSION_ID, thread_id=thread_id,
+            accepted_ingress_id=f"ingress-notice-{suffix}",
+            acceptance_idempotency_key=f"acceptance-notice-{suffix}",
+            job_id=f"job-notice-{suffix}", admission_idempotency_key=f"admission-notice-{suffix}",
+            root_item_id=f"item-root-notice-{suffix}", payload=f"真实用户输入 {suffix}",
+        )
+        execution_id = accepted["initial_execution_id"]
+        assert isinstance(execution_id, str)
+        return saver.execution_admission(
+            SESSION_ID, thread_id=thread_id, execution_id=execution_id,
+        )
+    return accept
+
+
+@pytest.mark.parametrize("timing", ["prior_before_acceptance", "prior_after_acceptance", "current_after_acceptance"])
+def test_pending_notice_selection_preserves_acceptance_cut_and_internal_owner(
+    saver: RolloutCheckpointSaver,
+    notice_turn_factory: Callable[[str], ExecutionAdmission],
+    timing: str,
+) -> None:
+    previous = notice_turn_factory("previous")
+    thread_id = previous.thread_id
+    kind = "empty_response_retry" if timing == "current_after_acceptance" else "job_timeout"
+    source_id = f"checkpoint:{kind}:notice-fence"
+    notice_id = f"item-{source_id}"
+    if timing == "prior_before_acceptance":
+        submit_checkpoint_reminder(
+            checkpointer=saver, session_id=SESSION_ID, thread_id=thread_id,
+            reminder="真实接纳游标前的来源", response_metadata={"source": kind},
+            checkpoint_source=kind, event_identity="notice-fence", execution_id=previous.execution_id,
+        )
+    intent = InternalExecutionIntent(
+        message_id="msg-notice-internal", execution_id="execution-notice-internal",
+        admission_idempotency_key="admission-notice-internal",
+    )
+    saver.admit_internal_execution(
+        SESSION_ID, thread_id=thread_id, job_id="job-notice-internal",
+        intent=intent, message=_internal_notice(intent.message_id),
+    )
+    current = notice_turn_factory("current")
+    if timing != "prior_before_acceptance":
+        submit_checkpoint_reminder(
+            checkpointer=saver, session_id=SESSION_ID, thread_id=thread_id,
+            reminder="真实接纳游标后的来源", response_metadata={"source": kind},
+            checkpoint_source=kind, event_identity="notice-fence",
+            execution_id=current.execution_id if timing == "current_after_acceptance" else previous.execution_id,
+        )
+    stored, = saver._storage.storage.read_items(SESSION_ID, thread_id, item_ids=(notice_id,))
+    original_hash = stored.content_hash
+    # 先前执行的晚到通知到下一次真实 acceptance 才可见；当前请求仍沿原 cut。
+    checks = [(current, set() if timing == "prior_after_acceptance" else {notice_id})]
+    if timing == "prior_after_acceptance":
+        checks.append((notice_turn_factory("following"), {notice_id}))
+    tools = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+    for admission, expected_notices in checks:
+        with (
+            session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            plan = saver.compose_committed_context_plan(
+                SESSION_ID, thread_id, plan_id=f"notice-cut-{admission.execution_id}", tool_set=tools,
+            )
+        selected = {ref.ref_id for ref in plan.refs if ref.ref_type == "canonical_item"}
+        assert {ref.ref_id for ref in plan.refs if ref.semantic_kind == "runtime_notice"} == expected_notices
+        assert intent.notice_item_id not in selected
+        expected_roots = {"item-root-notice-previous", "item-root-notice-current"}
+        if admission is not current:
+            expected_roots.add("item-root-notice-following")
+        assert {ref.ref_id for ref in plan.refs if ref.semantic_kind == "user_input"} == expected_roots
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored, = cold._storage.storage.read_items(SESSION_ID, thread_id, item_ids=(notice_id,))
+        assert restored.to_dict() == stored.to_dict() and restored.content_hash == original_hash
 
 
 def test_terminal_pages_keep_first_end_order_when_control_correction_follows_another_execution(
