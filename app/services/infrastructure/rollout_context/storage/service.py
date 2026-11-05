@@ -298,7 +298,8 @@ class RolloutStorage(
                 raise ValueError("借用的 writer connection 与目标 rollout owner 不一致")
             yield connection
         else:
-            with self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as owned:
+            # 定位与正文读取属于同次操作；共用已验证目录，退出后下一次读取重新校验。
+            with self.fork_paths.thread_resolution_scope(), self.open_read_snapshot(session_id, thread_id, checkpoint_ns) as owned:
                 yield owned.connection
 
     def backup_index(self, thread_id: str, checkpoint_ns: str='', *, session_id: str, destination: str | Path | None=None) -> Path:
