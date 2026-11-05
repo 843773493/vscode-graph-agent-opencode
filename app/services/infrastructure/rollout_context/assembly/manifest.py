@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Iterable
 
@@ -37,14 +36,6 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 def validate_sealed_selection(entries: Iterable[object]) -> tuple[object, ...]:
     """确认 selection 由 Saver 预先编号，禁止 assembly 层重新排序。"""
     return ordered_selection(entries)
-
-def _persisted_manifest_rows(
-    rows: Iterable[tuple[object, ...]],
-) -> tuple[tuple[object, ...], ...]:
-    """按 snapshot_json 的 JCS 边界恢复 SQL 字段，不触碰 omitted source 正文。"""
-    # domain 可持有 str Enum，持久 JSON/SQLite 只持有字符串；转换实际比较
-    # 的 manifest 字段，不放宽 exact_row 类型检查，也不序列化工具定义。
-    return tuple(tuple(row) for row in json.loads(_json(list(rows))))
 
 
 def _frozen_source_refs(
@@ -384,7 +375,7 @@ class ContextAssemblyManifestMixin:
         ]
         exact_row(
             tuple(ref_rows),
-            _persisted_manifest_rows(expected_refs),
+            tuple(expected_refs),
             field=f"context assembly refs manifest: {snapshot.assembly_id}",
         )
 
@@ -421,7 +412,7 @@ class ContextAssemblyManifestMixin:
             )
         exact_row(
             tuple(contribution_rows),
-            _persisted_manifest_rows(expected_contributions),
+            tuple(expected_contributions),
             field=f"context assembly contribution manifest: {snapshot.assembly_id}",
         )
         source_frontiers = self._context_source_cut_frontiers(
@@ -463,7 +454,7 @@ class ContextAssemblyManifestMixin:
         ]
         exact_row(
             tuple(selection_rows),
-            _persisted_manifest_rows(expected_selection),
+            tuple(expected_selection),
             field=f"context assembly selection manifest: {snapshot.assembly_id}",
         )
 

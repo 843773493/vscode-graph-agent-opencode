@@ -54,8 +54,13 @@ def _exact_value(actual: object, expected: object, *, field: str) -> None:
         ):
             _exact_value(actual_value, expected_value, field=f"{field}[{index}]")
         return
+    # domain 枚举按 SQL 标量比较，避免整批行经 JCS 编码再解析；实际 SQL 类型仍严格核对。
     if expected is None:
         valid = actual is None
+    elif isinstance(expected, str):
+        valid = type(actual) is str and actual == expected
+    elif isinstance(expected, int) and not isinstance(expected, bool):
+        valid = type(actual) is int and actual == expected
     else:
         valid = type(actual) is type(expected) and actual == expected
     if not valid:
