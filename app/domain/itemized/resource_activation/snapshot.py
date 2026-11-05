@@ -171,6 +171,9 @@ class ResourceActivationSnapshotRef:
                     "model_call snapshot 必须携带非空 model_call_id",
                 )
         ordered = _ordered_bindings(self.bindings)
+        # 每个资源只有一个冻结绑定；正文读取复用这个构造期不变量。
+        if len({binding.resource_id for binding in ordered}) != len(ordered):
+            raise _schema_error("resource_id 在同一 snapshot 内必须唯一")
         for binding in ordered:
             if binding.effective_boundary != self.activation_policy.effective_boundary(binding.resource_kind):
                 raise _schema_error("binding effective boundary 与完整冻结 policy 不一致")

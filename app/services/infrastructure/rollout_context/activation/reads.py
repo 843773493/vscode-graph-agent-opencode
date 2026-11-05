@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from bisect import bisect_left
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 
@@ -151,9 +152,9 @@ def binding_assembly_id(
         binding, ResourceProvenanceRef
     ):
         raise TypeError("payload 读取需要 typed activation snapshot 与 binding")
-    by_resource = tuple(item for item in snapshot.bindings if item.resource_id == binding.resource_id)
-    by_ordinal = tuple(item for item in snapshot.bindings if item.activation_ordinal == binding.activation_ordinal)
-    if by_resource != (binding,) or by_ordinal != (binding,):
+    # snapshot 已校验 resource/ordinal 唯一并排序，不对每份正文重扫全部绑定。
+    position = bisect_left(snapshot.bindings, binding.activation_ordinal, key=lambda item: item.activation_ordinal)
+    if position == len(snapshot.bindings) or snapshot.bindings[position] != binding:
         raise ResourceActivationStoreError(
             HASH_MISMATCH_CODE,
             "payload binding 的 resource_id/activation_ordinal 不属于 snapshot: "
@@ -162,7 +163,7 @@ def binding_assembly_id(
     root = (
         snapshot.parent
         if snapshot.snapshot_kind == "model_call" and snapshot.parent is not None
-        and binding in snapshot.parent.bindings else snapshot
+        and position < len(snapshot.parent.bindings) else snapshot
     )
     require_historical_scope(
         connection, root.owner_session_id, root.owner_thread_id, current_owner=storage_owner,
