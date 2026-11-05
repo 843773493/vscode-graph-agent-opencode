@@ -14,10 +14,15 @@ from app.domain.itemized.errors import ItemSchemaError
 
 _SHA256_JCS_PATTERN = re.compile(r"^sha256:jcs:v1:[0-9a-f]{64}$")
 _UNICODE_SURROGATE_PATTERN = re.compile(r"[\ud800-\udfff]")
+_JSON_SCALAR_TYPES = frozenset({str, int, float, bool, type(None)})
 
 
 def copy_json_value(value: object) -> object:
     """隔离 JSON 容器的引用，保留 list/tuple 的既有序列化形状。"""
+    # 普通 JSON 叶值不可变，无需逐个执行 Mapping ABC 检测。
+    # 只匹配精确类型，子类仍按原 Mapping/容器语义复制，不改变隔离边界。
+    if type(value) in _JSON_SCALAR_TYPES:
+        return value
     if isinstance(value, Mapping):
         return {key: copy_json_value(child) for key, child in value.items()}
     if isinstance(value, list):
