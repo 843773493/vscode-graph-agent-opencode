@@ -99,7 +99,6 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetBindingInput,
     ExtensionTargetResolutionError,
     build_extension_catalog_binding,
-    extension_schema_hash,
     payload_digest,
 )
 from app.services.infrastructure.mcp.installation.owner import McpInstallationOwner
@@ -549,7 +548,8 @@ class McpCatalogOwner:
                 raise ExtensionTargetResolutionError(
                     f"sealed target 的原连接执行 handle 已不可用: {binding.target_id}"
                 )
-            if extension_schema_hash(export_model_tool_json_schema(handle.tool)) != binding.schema_hash:
+            # 完整契约在同锁的目录发布时已验证；执行准入只比较已发布摘要。
+            if self.publication_snapshot().definitions[binding.target_id].schema_hash != binding.schema_hash:
                 raise ExtensionTargetResolutionError(
                     f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
                 )
@@ -576,7 +576,7 @@ class McpCatalogOwner:
             active = self._active_execution_handle(binding)
             if active is None:
                 return f"sealed target 的原连接执行 handle 已不可用: {binding.target_id}"
-            if extension_schema_hash(export_model_tool_json_schema(active.tool)) != binding.schema_hash:
+            if self.publication_snapshot().definitions[binding.target_id].schema_hash != binding.schema_hash:
                 return f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
             return None
 
