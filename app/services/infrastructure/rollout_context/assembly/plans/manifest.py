@@ -145,14 +145,17 @@ def _included_tool_draft(
             raise ValueError(
                 "plan-order-integrity: ToolSetRef 与 draft source manifest 不一致"
             )
-    included = {
+    included = sorted({
         (entry.ref.ref_type, entry.ref.ref_id)
         for entry in snapshot.selection
         if entry.included and isinstance(entry.ref, ToolSetRef)
-    }
+    })
     # 不改动持久 draft，也不从 snapshot 反向补造 source；included 正文仍由
     # 原始 draft 参与 domain manifest 校验与逐字段比较，selection 原序不变。
-    return replace(draft, tool_set_refs=tuple(sources[key] for key in sorted(included)))
+    # 工具身份及顺序未变时复用已校验的不可变 draft，避免重建后再次遍历工具正文。
+    if list(sources) == included:
+        return draft
+    return replace(draft, tool_set_refs=tuple(sources[key] for key in included))
 
 
 def _require_seal_input_hash(input_hash: str) -> None:
