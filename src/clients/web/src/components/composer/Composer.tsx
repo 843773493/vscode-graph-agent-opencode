@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useComposerState } from "../../hooks/app/appContext";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
-import { useComposerAttachments, useComposerDraft, writeComposerAttachments } from "../../hooks/composer/useComposerDraft";
+import { useComposerAttachments, useComposerDraft, writeComposerAttachments, type ComposerDraftController } from "../../hooks/composer/useComposerDraft";
 import { useSkillUntrackCommand } from "../../hooks/composer/useSkillUntrackCommand";
 import {
   composerDraftScopeKey,
@@ -70,7 +70,7 @@ function nextDeliveryPolicy(policy: DeliveryPolicy): DeliveryPolicy {
   return "after_turn";
 }
 
-function Composer({ threadId }: { threadId?: string }) {
+function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?: (controller: ComposerDraftController | undefined) => void }) {
   const {
     state,
     setStatus,
@@ -126,7 +126,7 @@ function Composer({ threadId }: { threadId?: string }) {
     ? sessionScopeKey(currentWorkspaceId, currentSessionId) : currentSessionId;
   const currentSessionCacheKey = threadId === undefined ? sessionKey
     : JSON.stringify([currentWorkspaceId, currentSessionId, threadId]);
-  const [input, setInput] = useComposerDraft(
+  const [input, setInput, draftController] = useComposerDraft(
     currentWorkspaceId,
     currentSessionId,
     state.browserViewScope,
@@ -134,6 +134,10 @@ function Composer({ threadId }: { threadId?: string }) {
     setAttachmentError,
   );
   const draftScopeKey = composerDraftScopeKey(currentWorkspaceId, currentSessionId, state.browserViewScope, threadId);
+  useEffect(() => {
+    onDraftReady?.(draftController);
+    return () => onDraftReady?.(undefined);
+  }, [onDraftReady, draftController]);
   const [attachments, setAttachments] = useComposerAttachments(draftScopeKey, setAttachmentError);
   // 最近一次渲染的会话作用域键。提交失败回填必须按「发起提交时的作用域」归属，
   // 否则用户在发送在途期间切走会话后，失败回填会把上一个会话的输入写进新会话。

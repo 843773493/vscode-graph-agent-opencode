@@ -28,6 +28,13 @@ export declare type GatewayResourceAddressRequest = Message<"boxteam.gateway.v2.
    * @generated from field: string local_gateway_id = 2;
    */
   localGatewayId: string;
+
+  /**
+   * 编辑器已有的来源归属；用于解释目标后端返回的无 authority 简称，不授予访问权限。
+   *
+   * @generated from field: optional string resource_gateway_id = 3;
+   */
+  resourceGatewayId?: string | undefined;
 };
 
 /**

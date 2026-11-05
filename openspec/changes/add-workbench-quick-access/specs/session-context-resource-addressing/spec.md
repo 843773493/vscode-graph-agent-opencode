@@ -9,6 +9,11 @@ Gateway 资源地址解析 SHALL 在保留原 `uri`、文件根及定位字段�
 - **WHEN** 用户复制本机简称或带明确远端 Gateway 的资源
 - **THEN** 返回的引用携带其原 Gateway，接收方不会把简称解释成自己的本机资源；原非法 URI 仍由同一 grammar 拒绝
 
+#### Scenario: 远端后端返回相对于自身的简称
+
+- **WHEN** 编辑器已有明确来源 Gateway，而原后端资源地址使用无 authority 简称
+- **THEN** 地址解析分别核对发起 Gateway 身份和明确来源归属，按来源 Gateway 解释该简称并生成完整引用；URI 的显式 Gateway 与来源冲突时拒绝，不改投发起机器
+
 ### Requirement: 联邦上下文查询复用原来源与分页
 
 工作区搜索 SHALL 提供独立 `context/content` Provider，委托原上下文查询 owner，保留 `effective_context`、`session_catalog`、`session_information` 来源、literal／regex、大小写、字符预算及原 revision／cursor。省略来源仍为有效上下文。该类别 MUST NOT 用 canonical 消息正文、文件或日志搜索替代；精确单资源读取及 inventory 继续沿原接口。

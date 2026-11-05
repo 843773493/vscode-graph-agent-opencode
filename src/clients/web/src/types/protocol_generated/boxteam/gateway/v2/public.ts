@@ -13,6 +13,8 @@ export interface GatewayResourceAddressRequest {
   uri: string;
   /** 打开发起时的 Gateway 身份；防止异步期间重连改变无 authority 引用的含义。 */
   local_gateway_id: string;
+  /** 编辑器已有的来源归属；用于解释目标后端返回的无 authority 简称，不授予访问权限。 */
+  resource_gateway_id?: string | undefined;
 }
 
 export interface GatewayResourceAddressDTO {
@@ -972,7 +974,7 @@ export interface WorkspaceNavigationTreeDTO {
 }
 
 function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
-  return { uri: "", local_gateway_id: "" };
+  return { uri: "", local_gateway_id: "", resource_gateway_id: undefined };
 }
 
 export const GatewayResourceAddressRequest: MessageFns<GatewayResourceAddressRequest> = {
@@ -980,6 +982,9 @@ export const GatewayResourceAddressRequest: MessageFns<GatewayResourceAddressReq
     return {
       uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       local_gateway_id: isSet(object.local_gateway_id) ? globalThis.String(object.local_gateway_id) : "",
+      resource_gateway_id: isSet(object.resource_gateway_id)
+        ? globalThis.String(object.resource_gateway_id)
+        : undefined,
     };
   },
 
@@ -990,6 +995,9 @@ export const GatewayResourceAddressRequest: MessageFns<GatewayResourceAddressReq
     }
     if (message.local_gateway_id !== "") {
       obj.local_gateway_id = message.local_gateway_id;
+    }
+    if (message.resource_gateway_id !== undefined) {
+      obj.resource_gateway_id = message.resource_gateway_id;
     }
     return obj;
   },
@@ -1003,6 +1011,7 @@ export const GatewayResourceAddressRequest: MessageFns<GatewayResourceAddressReq
     const message = createBaseGatewayResourceAddressRequest();
     message.uri = object.uri ?? "";
     message.local_gateway_id = object.local_gateway_id ?? "";
+    message.resource_gateway_id = object.resource_gateway_id ?? undefined;
     return message;
   },
 };

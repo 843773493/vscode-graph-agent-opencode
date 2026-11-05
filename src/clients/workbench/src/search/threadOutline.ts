@@ -30,12 +30,12 @@ class ThreadOutline extends Disposable implements IOutline<ThreadOutlineEntry> {
   private error?: string;
   private restart = false;
   private readonly continuation: ThreadOutlineEntry = { ordinal: -1, label: '加载更早轮次' };
-  private readonly target: NonNullable<ThreadPane['outlineTarget']>;
+  private readonly target: NonNullable<ThreadPane['threadTarget']>;
   readonly config: IOutlineListConfig<ThreadOutlineEntry>;
 
   constructor(private readonly pane: ThreadPane, token: CancellationToken) {
     super();
-    const target = pane.outlineTarget;
+    const target = pane.threadTarget;
     if (!target) throw new Error('Thread 编辑器尚未就绪');
     this.target = target;
     this._register(toDisposable(() => this.controller.abort()));
@@ -69,7 +69,7 @@ class ThreadOutline extends Disposable implements IOutline<ThreadOutlineEntry> {
   private get coverage() {
     return `已载入 ${this.entries.length} 轮${this.error ? '，历史读取失败' : this.hasBefore ? '，更早历史未载入' : '，本次历史已覆盖'}`;
   }
-  private isTarget() { return this.pane.outlineTarget?.conversation === this.target.conversation; }
+  private isTarget() { return this.pane.threadTarget?.conversation === this.target.conversation; }
   private isCurrent() { return !this.controller.signal.aborted && this.isTarget(); }
 
   async load(): Promise<void> {
@@ -122,11 +122,11 @@ export class ThreadOutlineCreator extends Disposable implements IOutlineCreator<
   constructor(@IOutlineService outline: IOutlineService) { super(); this._register(outline.registerOutlineCreator(this)); }
   matches(candidate: IEditorPane): candidate is ThreadPane { return candidate instanceof ThreadPane; }
   async createOutline(editor: ThreadPane, _target: OutlineTarget, token: CancellationToken): Promise<IOutline<ThreadOutlineEntry> | undefined> {
-    const target = editor.outlineTarget;
+    const target = editor.threadTarget;
     if (!target || token.isCancellationRequested) return undefined;
     const outline = new ThreadOutline(editor, token);
     await outline.load();
-    if (token.isCancellationRequested || editor.outlineTarget?.conversation !== target.conversation) { outline.dispose(); return undefined; }
+    if (token.isCancellationRequested || editor.threadTarget?.conversation !== target.conversation) { outline.dispose(); return undefined; }
     return outline;
   }
 }

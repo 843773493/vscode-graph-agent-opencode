@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import React from "react";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { useComposerDraft, useComposerAttachments } from "./useComposerDraft";
+import { useComposerDraft, useComposerAttachments, type ComposerDraftController } from "./useComposerDraft";
 import { composerDraftScopeKey, readComposerDraft, writeComposerDraft } from "../../state/composerDrafts/storage";
 import * as drafts from "../../state/composerDrafts/storage";
 import { readBrowserView } from "../../state/browserViewStore";
@@ -97,5 +97,54 @@ test("切换 Thread 后，前一个 Thread 的在途读取不能显示在当前�
     expect(m.values.get("b")).toBe("");
     await act(async () => { pending.get(composerDraftScopeKey("switch-pending", "session", "gateway", "b")!)!("B 的内容"); await flush(); });
     expect(m.values.get("b")).toBe("B 的内容");
+  } finally { reader.mockRestore(); }
+});
+
+
+test("外部附加沿原草稿writer保存最新输入，旧Thread句柄在切换及返回后仍失效", async () => {
+  const values = new Map<string, string>(), controllers = new Map<string, ComposerDraftController | undefined>();
+  const setters = new Map<string, React.Dispatch<React.SetStateAction<string>>>();
+  function Draft({ thread }: { thread: string }) {
+    const [value, update, controller] = useComposerDraft("external-draft", "session", "gateway", thread);
+    values.set(thread, value); setters.set(thread, update); controllers.set(thread, controller);
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<Draft thread="a" />); await flush(); });
+  renderers.push(renderer);
+  const first = controllers.get("a")!;
+  await act(async () => { setters.get("a")!("刚输入的正文"); await first.append("boxteam://明确来源"); });
+  expect(values.get("a")).toBe("刚输入的正文\nboxteam://明确来源");
+  expect(await readComposerDraft(composerDraftScopeKey("external-draft", "session", "gateway", "a"))).toBe(values.get("a")!);
+  await act(async () => { renderer.update(<Draft thread="b" />); await flush(); });
+  await expect(first.append("不得改投B")).rejects.toThrow("接收草稿已关闭或改变");
+  expect(values.get("b")).toBe("");
+  await act(async () => { renderer.update(<Draft thread="a" />); await flush(); });
+  await expect(first.append("旧句柄不得复活")).rejects.toThrow("接收草稿已关闭或改变");
+  expect(values.get("a")).toBe("刚输入的正文\nboxteam://明确来源");
+});
+
+test("草稿恢复前不发布外部writer，附加写入失败保留输入并明确拒绝", async () => {
+  let finish!: (value: string) => void;
+  const reader = spyOn(drafts, "readComposerDraft").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  let value = "", controller: ComposerDraftController | undefined;
+  const errors: string[] = [];
+  function Draft() {
+    [value, , controller] = useComposerDraft("external-restore", "session", "gateway", "a", message => errors.push(message));
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => { renderer = create(<Draft />); await flush(); });
+    renderers.push(renderer);
+    expect(controller).toBeUndefined();
+    await act(async () => { finish("原有草稿"); await flush(); });
+    expect(controller).toBeDefined();
+    const writer = spyOn(drafts, "writeComposerDraft").mockRejectedValue(new Error("存储配额不足"));
+    try {
+      await act(async () => { await expect(controller!.append("保留选定正文")).rejects.toThrow("存储配额不足"); });
+      expect(value).toBe("原有草稿\n保留选定正文");
+      expect(errors.join()).toContain("草稿尚未保存：存储配额不足");
+    } finally { writer.mockRestore(); }
   } finally { reader.mockRestore(); }
 });

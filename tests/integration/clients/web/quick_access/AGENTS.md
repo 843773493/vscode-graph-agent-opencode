@@ -14,6 +14,10 @@
 
 `test_resource_opener_sources` 经真实执行生成工具结果，再由正式 Workbench 的原只读编辑器打开、分屏和恢复；复制通过真实命令面板、原 Command 与候选按钮，核对完整 Gateway 引用、原 request_id、零额外正文读取和不打开候选、保留搜索框焦点。剪贴板使用浏览器权限，不预写历史或替换资源响应；不据此证明 Composer 附加、固定版本或 Electron。
 
+`test_composer_resource_actions` 使用真实 Gateway、双工作区、产品创建的 Session 和正式 Workbench；两个可见 Thread 经原输入框写草稿，来源工作区的文件通过原 Opener 打开。引用与选定正文走不同命令及原接收者 Quick Input，核取消不变、更改精确草稿、无额外正文读取、来源修改与刷新后保留正文，以及零执行／模型调用。不预写 IndexedDB 或历史，不以编辑器选项绕过规范 URI 的 Opener，不代替固定版本或 Electron 验收。
+
+发起 Thread 优先场景仅在浏览器 HTTP 边界暂缓真实地址解析回执，期间通过原命令切换活动编辑器组；放行原响应后仍只追加原草稿。该具名延迟不模拟真实 TCP 故障，也不替换来源身份或正文。关闭／切换后的旧句柄和存储失败另由原草稿 hook 的定向测试验证。
+
 `test_thread_restore_health` 经产品 API 创建 A 的 Session，正式页面打开精确 Thread；B 仅在外部健康 HTTP 边界提供可释放的无响应屏障。核真实 bootstrap 归属／request_id、Composer 可操作总时间及显式健康刷新离线诊断，不预写历史、不替换 A 或 Gateway 响应，不代替真实远端断网验收。
 
 服务装具经生产 esbuild 与 legacy decorators 编译真实源码。明确记录 Gateway 传输替身和模型装具边界；真实页面通过 Gateway。产物按测试文件镜像，保留外部超时和内存保护。

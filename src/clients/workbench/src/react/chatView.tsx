@@ -8,6 +8,7 @@ import { toDisposable, type IDisposable } from '../../upstream/src/vs/base/commo
 import ContentViewSlots from '../../../web/src/components/shell/ContentViewSlots.js';
 import PendingQueueBar from '../../../web/src/components/chat/pending/PendingQueueBar.js';
 import Composer from '../../../web/src/components/composer/Composer.js';
+import type { ComposerDraftController } from '../../../web/src/hooks/composer/useComposerDraft.js';
 import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmProvider.js';
 import { ComposerContext } from '../../../web/src/hooks/app/appContext.js';
 import { useThreadSessionRuntime, type ThreadSessionSeed } from '../../../web/src/hooks/session/useThreadSessionRuntime.js';
@@ -45,12 +46,13 @@ interface ThreadViewportController extends TurnViewportController {
   capturePresentation(): () => void;
 }
 
-function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady }: {
+function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: {
   input: ThreadInput; seed: ThreadSessionSeed; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void;
   onFileOpenMenu: FileOpenMenuHandler;
   onError: (message: string) => void;
   navigation?: SearchNavigation;
   onViewportReady: (controller: ThreadViewportController | undefined) => void;
+  onDraftReady: (controller: ComposerDraftController | undefined) => void;
 }) {
   const owner = input.owner;
   const messageNavigation = navigation?.kind === 'message' ? navigation.match : undefined;
@@ -166,7 +168,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
         onRemovePending={actions.removePendingRequest} onChangePendingPolicy={actions.updatePendingRequestPolicy} />
       <PendingQueueBar conversations={runtime.conversations} onClear={actions.clearPendingRequests}
         onRemove={actions.removePendingRequest} onChangePolicy={actions.updatePendingRequestPolicy} />
-      <Composer threadId={owner.threadId} />
+      <Composer threadId={owner.threadId} onDraftReady={onDraftReady} />
     </div>{input.resourcesVisible ? <button type="button" className="layout-sash" aria-label="调整会话资源宽度"
       title="拖拽调整会话资源宽度，双击还原" onDoubleClick={() => { input.resourceRatio = 0.42; setResourceRatio(0.42); }}
       onPointerDown={event => {
@@ -188,7 +190,7 @@ function ThreadConversation({ input, seed, active, editors, onTheme, onUpdate, o
   </ComposerContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady }: { input: ThreadInput; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void }) {
+function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; active: boolean; editors: IEditorService; onTheme: (theme: GatewayResolvedThemeConfig) => void; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -234,7 +236,7 @@ function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, o
   }, [owner, attempt]);
   const retry = () => setAttempt(value => value + 1);
   return <>{cacheError ? <p role="alert">{cacheError}</p> : null}
-    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} onTheme={onTheme} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} />
+    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} onTheme={onTheme} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} />
       : cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? `会话同步失败：${error}` : null} onRetry={retry} />
         : error ? <p role="alert">会话初始化失败：{error}</p> : <p role="status">正在恢复会话…</p>}</>;
 }
@@ -244,12 +246,17 @@ export class ChatSurface {
   private active: boolean;
   private navigation?: SearchNavigation;
   private viewport?: ThreadViewportController;
+  private draft?: ComposerDraftController;
   private previewGeneration = 0;
   constructor(container: HTMLElement, private readonly input: ThreadInput, private readonly editors: IEditorService, visible: boolean,
     private readonly onPresentationChange: () => void, private readonly onFileOpenMenu: FileOpenMenuHandler,
     private readonly notifications: INotificationService) {
     this.surface = new ReactSurface(container, [...productStyles, viewStyle]);
     this.active = visible; this.render();
+  }
+  captureDraft(): ComposerDraftController {
+    if (!this.draft) throw new Error('接收 Thread 的草稿尚未恢复，请稍后重试');
+    return this.draft;
   }
   update(): void { this.render(); }
   revealMessage(match: TurnMessageMatchDTO): void { this.navigation = { kind: 'message', match: { ...match } }; this.render(); }
@@ -277,11 +284,12 @@ export class ChatSurface {
     if (!this.viewport) throw new Error('Thread 历史视口尚未就绪，请稍后重试');
     return this.viewport;
   }
+  private readonly onDraftReady = (controller: ComposerDraftController | undefined) => { this.draft = controller; };
   private readonly onViewportReady = (controller: ThreadViewportController | undefined) => { this.viewport = controller; };
   focus(): void { this.surface.focus('textarea'); }
-  dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.surface.dispose(); }
+  dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.draft = undefined; this.surface.dispose(); }
   private readonly onUpdate = () => { this.onPresentationChange(); this.render(); };
   private readonly onTheme = (theme: GatewayResolvedThemeConfig) => this.surface.applyTheme(theme, this.notifications);
   private readonly onError = (message: string) => this.notifications.error(`${this.input.owner.title} (${this.input.owner.sessionId}/${this.input.owner.threadId})：${message}`);
-  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} active={this.active} onTheme={this.onTheme} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} />); }
+  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} active={this.active} onTheme={this.onTheme} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
 }

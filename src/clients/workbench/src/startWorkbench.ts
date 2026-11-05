@@ -3,6 +3,7 @@ import { isCancellationError } from '../upstream/src/vs/base/common/errors.js';
 import { workspaceFolder } from './filesystem.js';
 import './thread.contribution.js';
 import './resourceOpener.js';
+import './composerActions.js';
 import './changeFiles.js';
 import { installReadonlyDocumentSerialization } from './readonlyDocuments.js';
 import './search/nameModes.js';

@@ -36,6 +36,7 @@ composer/
 # 规范
 
 - 草稿与命令逻辑优先复用 `state/composerDrafts/`、`state/slashCommands`、`state/composerState` 下的纯函数。
+- 外部资源动作与输入共用原草稿 writer；恢复后才发布可等待保存结果的追加句柄，使用最新输入、固定挂载作用域，切换后旧句柄即使返回同一 Thread 也不得复活。存储失败保留输入并明确拒绝，不把旧作用域错误写入新 Thread。
 - 导入其他 hook 或共享模块时使用显式相对路径，禁止任何指向旧平铺路径的转发层。
 - 代码注释使用中文，专业术语除外。
 - 修改本目录后需要运行前端静态检查和 `bun run build`。

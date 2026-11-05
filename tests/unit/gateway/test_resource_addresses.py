@@ -69,6 +69,30 @@ def test_file_root_comes_from_same_uri_owner(address_client: TestClient) -> None
     assert data["session_id"] is data["thread_id"] is None
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_remote_backend_shorthand_uses_its_frozen_gateway(address_client: TestClient, explicit: bool) -> None:
+    uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE, kind="files", tail_segments=("root", "文件.txt"),
+                               gateway_authority=REMOTE if explicit else None)
+    response = address_client.post("/api/gateway/resource-addresses/parse", json={
+        "uri": uri, "local_gateway_id": GATEWAY, "resource_gateway_id": REMOTE,
+    })
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["gateway_id"] == REMOTE
+    assert data["reference_uri"] == resource_display_uri(scope="workspace", scope_id=WORKSPACE, kind="files",
+        tail_segments=("root", "文件.txt"), gateway_authority=REMOTE)
+    assert data["uri"] == resource_display_uri(scope="workspace", scope_id=WORKSPACE, kind="files", tail_segments=("root", "文件.txt"))
+
+
+def test_explicit_uri_cannot_override_frozen_source_gateway(address_client: TestClient) -> None:
+    uri = thread_resource_uri(WORKSPACE, SESSION, THREAD, gateway_authority=GATEWAY)
+    response = address_client.post("/api/gateway/resource-addresses/parse", json={
+        "uri": uri, "local_gateway_id": GATEWAY, "resource_gateway_id": REMOTE,
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "resource_owner_mismatch"
+
+
 @pytest.mark.parametrize("suffix", ["?version=1", "#L2", "/..", "/%2F", "/%FF"])
 def test_invalid_uri_is_not_rewritten_as_a_different_target(address_client: TestClient, suffix: str) -> None:
     uri = thread_resource_uri(WORKSPACE, SESSION, THREAD) + suffix

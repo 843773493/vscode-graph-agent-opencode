@@ -11,12 +11,14 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class GatewayResourceAddressRequest(_message.Message):
-    __slots__ = ("uri", "local_gateway_id")
+    __slots__ = ("uri", "local_gateway_id", "resource_gateway_id")
     URI_FIELD_NUMBER: _ClassVar[int]
     LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     uri: str
     local_gateway_id: str
-    def __init__(self, uri: _Optional[str] = ..., local_gateway_id: _Optional[str] = ...) -> None: ...
+    resource_gateway_id: str
+    def __init__(self, uri: _Optional[str] = ..., local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ...) -> None: ...
 
 class GatewayResourceAddressDTO(_message.Message):
     __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id", "reference_uri")

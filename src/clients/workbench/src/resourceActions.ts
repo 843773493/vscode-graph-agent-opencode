@@ -13,6 +13,8 @@ import { workspaceContext } from './workspaceContext.js';
 import { workspaceFileSource } from './workspaceFiles.js';
 
 export const COPY_RESOURCE_URI = 'boxteam.resource.copyUri';
+export const ATTACH_RESOURCE_URI = 'boxteam.resource.attachToChat';
+export const PASTE_SELECTED_CONTENT = 'boxteam.resource.pasteSelectionToChat';
 
 export function supportsResourceReference(resource: URI): boolean {
   return resource.scheme === 'boxteam-file' || resource.scheme === 'boxteam-source';
@@ -29,7 +31,8 @@ export async function resourceReference(resource: URI): Promise<string> {
   const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
   try {
     const address = await gateway.request<GatewayResourceAddressDTO>('/api/gateway/resource-addresses/parse', {
-      method: 'POST', body: JSON.stringify({ uri: 'path' in source ? source.path : source.uri, local_gateway_id: gatewayId }),
+      method: 'POST', body: JSON.stringify({ uri: 'path' in source ? source.path : source.uri,
+        local_gateway_id: gatewayId, resource_gateway_id: source.gatewayId }),
     });
     if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或用户身份已改变，请重新复制资源引用');
     if (address.gateway_id !== source.gatewayId || address.scope !== 'workspace' || address.scope_id !== source.workspaceId) {

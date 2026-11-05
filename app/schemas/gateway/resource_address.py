@@ -7,6 +7,7 @@ class GatewayResourceAddressRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     uri: str = Field(min_length=1)
     local_gateway_id: str = Field(min_length=1)
+    resource_gateway_id: str | None = Field(default=None, min_length=1)
 
 
 class GatewayResourceAddressDTO(BaseModel):
