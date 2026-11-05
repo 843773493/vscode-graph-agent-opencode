@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import cast
 
 from langchain_core.tools import BaseTool
 
@@ -33,31 +32,31 @@ def definition_resource_id(tool_id: str) -> str:
     return "extension-tool-definition:v1:" + sha256_jcs(tool_id).rsplit(":", 1)[1]
 
 
-def definition_payload(tool: BaseTool, metadata: ToolMetadata) -> dict[str, object]:
-    """参数契约不含 injected 字段；策略身份与执行入口共用。"""
-    return {
-        "description": tool.description,
-        "input_schema": export_model_tool_json_schema(tool),
-        "kind": metadata.kind,
-        "group_id": metadata.group_id,
-    }
-
-
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     metadata: ToolMetadata
     schema_hash: str
-    _payload_json: bytes
+    description: str
+    _input_schema_json: bytes
     readiness: ConnectionReadiness = field(default="ready", kw_only=True)
 
     @property
     def payload(self) -> dict[str, object]:
-        # 不把可变 JSON 引用交给搜索调用方。
-        return json.loads(self._payload_json)
+        return {
+            "description": self.description, "input_schema": self.input_schema,
+            "kind": self.metadata.kind, "group_id": self.metadata.group_id,
+        }
 
     @property
     def input_schema(self) -> dict[str, object]:
-        return cast(dict[str, object], self.payload["input_schema"])
+        # 描述检索不解码 schema；完整契约每次返回独立值，不共享可变 JSON。
+        return json.loads(self._input_schema_json)
+
+
+def definition_from_tool(tool: BaseTool, metadata: ToolMetadata) -> ToolDefinition:
+    """只导出一次完整参数契约，摘要与冻结正文共用该值。"""
+    schema = export_model_tool_json_schema(tool)
+    return ToolDefinition(metadata, extension_schema_hash(schema), tool.description, canonical_json_bytes(schema))
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +112,7 @@ def tool_catalog_from_activation(
         definitions.append(FrozenToolDefinition(
             metadata=ToolMetadata(member.member_id, member.member_kind, payload["kind"], payload["group_id"]),
             schema_hash=member.schema_hash, server_id=member.server_id, provenance=binding,
-            _payload_json=canonical_json_bytes(payload),
+            description=payload["description"], _input_schema_json=canonical_json_bytes(payload["input_schema"]),
             # TODO: 历史 v2 没有连接身份，只沿原合同恢复定义；v3 执行入口仍拒绝其 lineage。
             readiness=member_readiness(member) if lineage_id == EXTENSION_CATALOG_SOURCE_ID else "ready",
         ))

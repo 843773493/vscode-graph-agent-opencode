@@ -37,7 +37,7 @@ from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.core.workspace_identity import read_workspace_id
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.mcp_candidates import (
     McpCandidateConflict,
     McpCandidateManifest,
@@ -120,7 +120,7 @@ from app.services.infrastructure.mcp.session_runtime import (
 )
 from app.services.infrastructure.mcp.tool_definitions import (
     ToolDefinition,
-    definition_payload,
+    definition_from_tool,
 )
 from mcp.shared.exceptions import McpError
 
@@ -249,7 +249,7 @@ def _compute_catalog_revision(
                     descriptor.tool_id,
                     descriptor.remote_name,
                     descriptor.description,
-                    definition.payload["input_schema"],
+                    definition.input_schema,
                 ]
             )
         payload.append([server_id, server_entries])
@@ -1297,10 +1297,7 @@ class McpCatalogOwner:
                     tool = candidate_tools.get(descriptor.tool_id)
                     if tool is not None:
                         metadata = metadata_for_tool(tool, origin="mcp")
-                        definitions[descriptor.tool_id] = ToolDefinition(
-                            metadata, extension_schema_hash(export_model_tool_json_schema(tool)),
-                            canonical_json_bytes(definition_payload(tool, metadata)),
-                        )
+                        definitions[descriptor.tool_id] = definition_from_tool(tool, metadata)
                     else:
                         if self._publication is None:
                             raise McpCatalogError("未知 MCP 目录不能补造定义")

@@ -42,14 +42,9 @@ def _normalized(value: str) -> str:
     return unicodedata.normalize("NFKC", value).casefold().strip()
 
 
-def _rank(definition: FrozenToolDefinition, query: str) -> tuple[int, list[str]]:
+def _rank(definition: FrozenToolDefinition, phrase: str, terms: set[str]) -> tuple[int, list[str]]:
     name = _normalized(definition.metadata.tool_id)
-    description = _normalized(str(definition.payload["description"]))
-    phrase = _normalized(query)
-    terms = set(re.findall(r"[^\W_]+", phrase))
-    # 连续中文任务句按双字片段匹配，不额外请求模型或 embedding。
-    for segment in re.findall(r"[\u3400-\u9fff]+", phrase):
-        terms.update(segment[index:index + 2] for index in range(len(segment) - 1))
+    description = _normalized(definition.description)
     name_matches = sorted(term for term in terms if term in name)
     description_matches = sorted(term for term in terms if term in description)
     score = (100 if phrase == name else 30 if phrase in name else 0)
@@ -140,7 +135,12 @@ async def search_tool_catalog(
     if tool_ids is not None:
         candidates = [(name, ["精确工具 ID"]) for name in tool_ids]
     else:
-        ranked = [(entry, *_rank(entry, query or "")) for entry in catalog.definitions
+        # 查询只分词一次；连续中文任务句按双字片段匹配，不请求模型或 embedding。
+        phrase = _normalized(query or "")
+        terms = set(re.findall(r"[^\W_]+", phrase))
+        for segment in re.findall(r"[\u3400-\u9fff]+", phrase):
+            terms.update(segment[index:index + 2] for index in range(len(segment) - 1))
+        ranked = [(entry, *_rank(entry, phrase, terms)) for entry in catalog.definitions
                   if policies[entry.metadata.tool_id].execution_enabled and not policies[entry.metadata.tool_id].model_visibility_locked]
         ranked.sort(key=lambda item: (-item[1], item[0].metadata.tool_id))
         candidates = [(entry.metadata.tool_id, reasons) for entry, score, reasons in ranked if score > 0]

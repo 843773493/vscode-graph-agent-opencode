@@ -40,7 +40,7 @@ def extension_tool_guidance(
         {"group": _label(group, MAX_NAVIGATION_LABEL_LENGTH), "tool_count": len(entries),
          **({"connection_required_count": sum(entry.readiness != "ready" for entry in entries)}
             if any(entry.readiness != "ready" for entry in entries) else {}),
-         "example_capability": _label(str(entries[0].payload["description"]), MAX_NAVIGATION_DESCRIPTION_LENGTH)}
+         "example_capability": _label(entries[0].description, MAX_NAVIGATION_DESCRIPTION_LENGTH)}
         for group, entries in sorted(groups.items())[:MAX_NAVIGATION_GROUPS]
     ]
     automatic = [

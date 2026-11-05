@@ -27,8 +27,7 @@ def definition_factory():
         }
         return ToolDefinition(
             ToolMetadata(name, origin, "extension", group), extension_schema_hash(schema),
-            canonical_json_bytes({"description": description, "input_schema": schema,
-                                  "kind": "extension", "group_id": group}),
+            description, canonical_json_bytes(schema),
         )
     return create
 

@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import cast
 
 from langchain_core.tools import BaseTool
 
@@ -17,7 +16,7 @@ from app.agents.policy.tool_capability import (
     ToolMetadata,
     metadata_for_tool,
 )
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
@@ -30,13 +29,12 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetBindingInput,
     build_extension_catalog_binding,
     extension_catalog_binding_from_members,
-    extension_schema_hash,
     payload_digest,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
     DEFINITION_FACET,
     ToolDefinition,
-    definition_payload,
+    definition_from_tool,
     definition_resource_id,
 )
 from app.services.infrastructure.mcp.tool_guidance import extension_tool_guidance
@@ -77,12 +75,7 @@ class McpCatalogResourcePublisher:
                     for tool in entries}
         self._custom_definitions: dict[str, ToolDefinition] = {}
         for tool in entries:
-            # 同次注册只导出、校验一次 schema；hash、正文与绑定共用该冻结定义。
-            payload = definition_payload(tool, metadata[tool.name])
-            self._custom_definitions[tool.name] = ToolDefinition(
-                metadata[tool.name], extension_schema_hash(cast(Mapping[str, object], payload["input_schema"])),
-                canonical_json_bytes(payload),
-            )
+            self._custom_definitions[tool.name] = definition_from_tool(tool, metadata[tool.name])
         self._definition_ids: set[str] = set()
         self._custom_revision = payload_digest(
             [[name, definition.payload] for name, definition in self._custom_definitions.items()],
