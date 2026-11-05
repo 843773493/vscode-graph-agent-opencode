@@ -354,14 +354,17 @@ class RolloutViewMembershipMixin:
             )
             for sequence, turn_id, _message_id, _item_id, _item_count in message_rows
         }
-        turn_ids: list[str] = []
+        rows: list[tuple[str, int, int, int | None, str | None]] = []
         sequence_set = set(materialized_sequences)
         # 完整性只取决于本次选集；每个 Turn 核一次，不能对未完整选入的 Turn 逐消息重扫。
         for value in dict.fromkeys(turn_by_sequence.get(sequence) for sequence in materialized_sequences):
             if value is None:
                 continue
             row = connection.execute(
-                "SELECT turn_kind, first_message_sequence, last_message_sequence, user_message_sequence, final_message_sequence FROM turns WHERE turn_id = ?",
+                "SELECT turn.turn_kind,turn.first_message_sequence,turn.last_message_sequence,"
+                "turn.user_message_sequence,turn.final_message_sequence,record.root_input_item_id "
+                "FROM turns turn LEFT JOIN turn_records record ON record.turn_id=turn.turn_id "
+                "WHERE turn.turn_id=?",
                 (value,),
             ).fetchone()
             if row is None:
@@ -410,46 +413,23 @@ class RolloutViewMembershipMixin:
                     (parent_view_id, value) if inherited_turn else (value,),
                 ).fetchall()
             }
-            if turn_sequences and turn_sequences.issubset(sequence_set):
-                turn_ids.append(value)
-        rows: list[tuple[str, int, object, object, str | None]] = []
-        for ordinal, turn_id in enumerate(turn_ids, start=1):
-            row = connection.execute(
-                "SELECT user_message_sequence, final_message_sequence FROM turns WHERE turn_id = ?",
-                (turn_id,),
-            ).fetchone()
-            if row is not None:
-                user_sequence_value = strict_optional_non_negative_int(
-                    row[0], field=f"turns.user_message_sequence: {turn_id}"
-                )
-                final_sequence_value = strict_optional_non_negative_int(
-                    row[1], field=f"turns.final_message_sequence: {turn_id}"
-                )
-                # Turn 保留来源 final 身份；派生视图只索引本次实际包含的消息，
-                # 不能把前缀 fork 隐藏的恢复 backing 重新变成展示指针。
-                if final_sequence_value not in sequence_set:
-                    parent_turn = connection.execute(
-                        "SELECT final_message_sequence FROM context_view_turns WHERE view_id=? AND turn_id=?",
-                        (parent_view_id, turn_id),
-                    ).fetchone()
-                    if final_sequence_value is not None and (parent_turn is None or parent_turn[0] is not None):
-                        raise RuntimeError(f"context view 丢失 canonical final message: {view_id}/{turn_id}")
-                    final_sequence_value = None
-                root_row = connection.execute(
-                    "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
-                    (turn_id,),
+            if not turn_sequences or not turn_sequences.issubset(sequence_set):
+                continue
+            # 复用同一查询中已校验的 Turn 坐标与 root，不再逐 Turn 回读、重复解码。
+            # 前缀 fork 的隐藏 final 仍按父 view 判断；本来没有 final 时无需查父指针。
+            if final_sequence is not None and final_sequence not in sequence_set:
+                parent_turn = connection.execute(
+                    "SELECT final_message_sequence FROM context_view_turns WHERE view_id=? AND turn_id=?",
+                    (parent_view_id, value),
                 ).fetchone()
-                rows.append(
-                    (
-                        turn_id,
-                        ordinal,
-                        user_sequence_value,
-                        final_sequence_value,
-                        strict_text(root_row[0], field="turn_records.root_input_item_id")
-                        if root_row is not None and root_row[0] is not None
-                        else None,
-                    )
-                )
+                if parent_turn is None or parent_turn[0] is not None:
+                    raise RuntimeError(f"context view 丢失 canonical final message: {view_id}/{value}")
+                final_sequence = None
+            rows.append((
+                value, len(rows) + 1, user_sequence, final_sequence,
+                strict_text(row[5], field="turn_records.root_input_item_id") if row[5] is not None else None,
+            ))
+        turn_ids = [row[0] for row in rows]
         head_turn = rows[-1][0] if rows else None
         head_message_sequence = (
             max(materialized_sequences) if materialized_sequences else 0
