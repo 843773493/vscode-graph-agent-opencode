@@ -336,10 +336,10 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
         phases[-1]["calls"].append((kwargs["tool_call_id"], kwargs["model_call_id"]))
         return load(owner, *args, **kwargs)
 
-    def observe_catalog(frozen, read_payload):
+    def observe_catalog(frozen, read_payload, **kwargs):
         if frozen.activation_snapshot_id == activation_id:
             phases[-1]["catalogs"] += 1
-        return catalog(frozen, read_payload)
+        return catalog(frozen, read_payload, **kwargs)
 
     def observe_read(owner, frozen, binding, **kwargs):
         if frozen.activation_snapshot_id == activation_id:
@@ -396,20 +396,21 @@ async def test_previous_definition_revision_is_not_taken_from_a_partial_retained
     captured = []
 
     def observe_prepare(batch, **kwargs):
-        catalogs, originals = [], {}
+        catalogs, originals = {}, {}
 
-        def read_catalog():
-            catalog = kwargs["catalog_supplier"]()
-            catalogs.append(catalog)
-            return catalog
+        def read_catalog(tool_ids):
+            catalogs[tool_ids] = kwargs["catalog_supplier"](tool_ids)
+            return catalogs[tool_ids]
 
-        def resolve(ref):
-            originals[ref] = kwargs["resolve_discovery"](ref)
-            return originals[ref]
+        def resolve(refs):
+            values = kwargs["resolve_discoveries"](refs)
+            originals.update(values)
+            return values
 
-        result = prepare(batch, **{**kwargs, "catalog_supplier": read_catalog, "resolve_discovery": resolve})
+        result = prepare(batch, **{**kwargs, "catalog_supplier": read_catalog, "resolve_discoveries": resolve})
         # 重放冻结值，不把只在本次准备事务内有效的 I/O 回调带出作用域。
-        captured.append((batch, {**kwargs, "catalog_supplier": lambda: catalogs[-1], "resolve_discovery": originals.__getitem__}))
+        captured.append((batch, {**kwargs, "catalog_supplier": catalogs.__getitem__,
+                                 "resolve_discoveries": lambda refs: {ref: originals[ref] for ref in refs}}))
         return result
 
     with monkeypatch.context() as patch:

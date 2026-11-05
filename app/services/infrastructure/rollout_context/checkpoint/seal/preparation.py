@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
-from functools import cache
 from typing import Literal
 
 from langchain_core.messages import BaseMessage
@@ -361,46 +360,49 @@ def prepare_registered_context(
                     read_payload, activation_snapshot, previous, batch,
                 )
                 if summary_candidate is None:
-                    # 同批发现先按原调用验证归属，再按不可变 activation 解析一次目录；
-                    # 不按工具反复读全目录，也不跨 prepare 复用正文或损坏校验结果。
-                    discovery_catalogs: dict[str, dict[str, FrozenToolDefinition]] = {}
-
-                    @cache
-                    def discovery_definitions(
-                        tool_call_id: str, model_call_id: str, activation_snapshot_id: str,
-                    ) -> dict[str, FrozenToolDefinition]:
-                        original, _original_call = owner.load_tool_call_resource_activation(
-                            session_id, thread_id=thread_id, tool_call_id=tool_call_id,
-                            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
-                        )
-                        if original.activation_snapshot_id != activation_snapshot_id:
-                            raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
-                        if activation_snapshot_id not in discovery_catalogs:
-                            discovery_catalogs[activation_snapshot_id] = {
-                                value.metadata.tool_id: value
-                                for value in tool_catalog_from_activation(original, read_payload).definitions
-                            }
-                        return discovery_catalogs[activation_snapshot_id]
-
-                    def resolve_discovery(ref: DiscoveredToolRef) -> FrozenToolDefinition:
-                        definition = discovery_definitions(
-                            ref.tool_call_id, ref.model_call_id, ref.activation_snapshot_id,
-                        ).get(ref.tool_id)
-                        if (definition is None or definition.provenance.resource_id != ref.resource_id
-                                or definition.provenance.revision != ref.revision):
-                            raise ExtensionCatalogUnavailableError("发现结果引用的原冻结定义缺失或身份冲突")
-                        return definition
+                    def resolve_discoveries(
+                        refs: Sequence[DiscoveredToolRef],
+                    ) -> dict[DiscoveredToolRef, FrozenToolDefinition]:
+                        # 先汇总实际消费的定义，再逐原调用核归属；同一 activation 只读取这些正文。
+                        requested: dict[str, set[str]] = {}
+                        for ref in refs:
+                            requested.setdefault(ref.activation_snapshot_id, set()).add(ref.tool_id)
+                        activations: dict[str, ResourceActivationSnapshotRef] = {}
+                        for tool_call_id, original_call_id, activation_id in dict.fromkeys(
+                            (ref.tool_call_id, ref.model_call_id, ref.activation_snapshot_id) for ref in refs
+                        ):
+                            original, _ = owner.load_tool_call_resource_activation(
+                                session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+                                model_call_id=original_call_id, checkpoint_ns=checkpoint_ns,
+                            )
+                            if original.activation_snapshot_id != activation_id:
+                                raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
+                            activations[activation_id] = original
+                        definitions = {
+                            activation_id: {value.metadata.tool_id: value for value in tool_catalog_from_activation(
+                                original, read_payload, tool_ids=frozenset(requested[activation_id]),
+                            ).definitions}
+                            for activation_id, original in activations.items()
+                        }
+                        resolved = {}
+                        for ref in refs:
+                            definition = definitions[ref.activation_snapshot_id].get(ref.tool_id)
+                            if (definition is None or definition.provenance.resource_id != ref.resource_id
+                                    or definition.provenance.revision != ref.revision):
+                                raise ExtensionCatalogUnavailableError("发现结果引用的原冻结定义缺失或身份冲突")
+                            resolved[ref] = definition
+                        return resolved
 
                     guidance = next((source.content for source in batch.sources
                                      if source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID), None)
                     automatic = frozenset(entry["tool_name"] for entry in json.loads(guidance)["automatic_definitions"]) if guidance else frozenset()
                     batch = tool_definition_batch(
-                        batch, catalog_supplier=lambda: tool_catalog_from_activation(
-                            activation_snapshot, read_payload,
+                        batch, catalog_supplier=lambda tool_ids: tool_catalog_from_activation(
+                            activation_snapshot, read_payload, tool_ids=tool_ids,
                         ), current_items=items, retained_items=retained_items,
                         previous=previous, retained_assembly=retained if retained is not None else previous,
                         retained_source_refs=retained_refs if retained is not None else None,
-                        resolve_discovery=resolve_discovery, policies_for=extension_policy_resolver,
+                        resolve_discoveries=resolve_discoveries, policies_for=extension_policy_resolver,
                         automatic_tool_ids=automatic, restoring=rebuild is not None or initial_assembly,
                     )
             if summary_candidate is not None and summary_candidate.minimal_system:

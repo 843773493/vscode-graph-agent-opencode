@@ -67,6 +67,8 @@ class FrozenToolDefinition(ToolDefinition):
 
 @dataclass(frozen=True, slots=True)
 class FrozenToolCatalog:
+    """冻结目录的定义视图；按 ID 选取时仍保留完整目录的 revision。"""
+
     catalog_revision: str
     activation_snapshot_id: str
     definitions: tuple[FrozenToolDefinition, ...]
@@ -75,6 +77,7 @@ class FrozenToolCatalog:
 def tool_catalog_from_activation(
     snapshot: ResourceActivationSnapshotRef,
     read_payload: Callable[[ResourceActivationSnapshotRef, ResourceProvenanceRef], object],
+    *, tool_ids: frozenset[str] | None = None,
 ) -> FrozenToolCatalog:
     """只解析调用所属快照；缺失历史定义时拒绝，不从 live 同名工具补齐。"""
     # 发布模块依赖本模块，读取路径延迟引用以免形成模块初始化环。
@@ -95,6 +98,9 @@ def tool_catalog_from_activation(
               if binding.resource_kind == "mcp_tool_catalog" and binding.facet == DEFINITION_FACET}
     definitions = []
     for member in parent.members:
+        # 准备只消费已发现的定义；完整搜索仍读取全部正文，不跨操作保留校验结果。
+        if tool_ids is not None and member.member_id not in tool_ids:
+            continue
         binding = facets.get(definition_resource_id(member.member_id))
         # lineage_id 由 resource_id 派生，来源事实必须逐项相等。
         if (binding is None or binding.members != (member,)

@@ -157,13 +157,13 @@ def definition_source_values(
 
 def tool_definition_batch(
     batch: PendingContextSourceBatch, *,
-    catalog_supplier: Callable[[], FrozenToolCatalog],
+    catalog_supplier: Callable[[frozenset[str]], FrozenToolCatalog],
     current_items: Sequence[CanonicalItemRecord],
     retained_items: Sequence[CanonicalItemRecord],
     previous: ContextAssemblySnapshot | None,
     retained_assembly: ContextAssemblySnapshot | None,
     retained_source_refs: frozenset[tuple[str, str]] | None,
-    resolve_discovery: Callable[[DiscoveredToolRef], FrozenToolDefinition],
+    resolve_discoveries: Callable[[Sequence[DiscoveredToolRef]], Mapping[DiscoveredToolRef, FrozenToolDefinition]],
     policies_for: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]] | None,
     automatic_tool_ids: frozenset[str],
     restoring: bool,
@@ -190,13 +190,15 @@ def tool_definition_batch(
         return batch
     if policies_for is None:
         raise ExtensionCatalogUnavailableError("发现定义恢复缺少完整策略解析器")
-    originals = {name: resolve_discovery(ref) for name, ref in discoveries.items()}
+    # 一次交出当前与历史发现的完整引用集，让读取方按原 activation 分组选取正文。
+    resolved = resolve_discoveries(tuple(dict.fromkeys((*discoveries.values(), *(entry.ref for entry in entries)))))
+    originals = {name: resolved[ref] for name, ref in discoveries.items()}
     for entry in entries:
-        original = resolve_discovery(entry.ref)
+        original = resolved[entry.ref]
         if (entry.schema_hash != original.schema_hash or entry.inline_payload is not None
                 and canonical_json_bytes(entry.inline_payload) != canonical_json_bytes(original.payload)):
             raise ExtensionCatalogUnavailableError("发现结果正文与原冻结定义不一致")
-    catalog = catalog_supplier()
+    catalog = catalog_supplier(frozenset(originals))
     current = {definition.metadata.tool_id: definition for definition in catalog.definitions}
     policies = policies_for(tuple(current.get(name, definition).metadata for name, definition in originals.items()))
     if set(policies) != set(originals):
