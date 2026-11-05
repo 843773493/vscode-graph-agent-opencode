@@ -119,8 +119,9 @@ def companion_extensions(primary: CanonicalItemRecord) -> dict[str, object]:
 
 def producer_response_metadata(response: Mapping[str, object]) -> dict[str, object]:
     """新消息保留显式扩展，移除只属于旧 canonical group 的临时镜像。"""
-    result = deepcopy(dict(response))
-    manifests = result.pop(CANONICAL_GROUP_FIELD, None)
+    # 旧组镜像随即丢弃，只复制保留字段；anchor 扩展仍单独深拷贝以保持隔离。
+    result = deepcopy({key: value for key, value in response.items() if key != CANONICAL_GROUP_FIELD})
+    manifests = response.get(CANONICAL_GROUP_FIELD)
     if manifests is not None:
         if not isinstance(manifests, list) or not manifests:
             raise ValueError("checkpoint canonical group manifest 必须是非空有序 array")
