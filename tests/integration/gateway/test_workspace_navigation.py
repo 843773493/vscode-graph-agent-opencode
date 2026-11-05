@@ -34,12 +34,11 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
         "# workspace navigation secondary\n",
         encoding="utf-8",
     )
-    secondary_backend_workspace_id = workspace_backend_id_for_root(secondary_workspace)
+    secondary_workspace_id = workspace_backend_id_for_root(secondary_workspace)
     secondary_backend_port = port_block.port(1)
     with generation_target_stub(
         secondary_backend_port,
-        output_workspace_id=secondary_backend_workspace_id,
-        backend_workspace_id=secondary_backend_workspace_id,
+        workspace_id=secondary_workspace_id,
     ):
         gateway = start_gateway_process(
             workspace_root=workspace_root,
@@ -66,12 +65,12 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
                 },
             )
             assert add_response.status_code == 200, add_response.text
-            secondary_workspace_id = next(
+            registered_workspace_id = next(
                 item["workspace_id"]
                 for item in add_response.json()["data"]["items"]
                 if item["workspace_id"] == read_workspace_id(secondary_workspace)
             )
-            assert secondary_workspace_id == secondary_backend_workspace_id
+            assert registered_workspace_id == secondary_workspace_id
             secondary_owner = {
                 "gateway_id": default_owner["gateway_id"],
                 "workspace_id": secondary_workspace_id,

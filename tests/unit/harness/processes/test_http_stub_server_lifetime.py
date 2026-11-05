@@ -33,7 +33,7 @@ def stub_lifetime(
     monkeypatch.setattr(http_stubs.threading, "Thread", thread_factory)
     if request.param == "generation":
         context = http_stubs.generation_target_stub(
-            18000, output_workspace_id="output-workspace", backend_workspace_id="backend-workspace",
+            18000, workspace_id="00000000-0000-4000-8000-000000000001",
         )
     elif request.param == "chat":
         context = http_stubs.openai_chat_stub(18000)

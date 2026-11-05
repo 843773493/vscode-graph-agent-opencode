@@ -94,8 +94,7 @@ def _running_http_stub_server(
 def generation_target_stub(
     port: int,
     *,
-    output_workspace_id: str,
-    backend_workspace_id: str,
+    workspace_id: str,
     catalog_items: list[dict[str, object]] | None = None,
     catalog_revision: str = "rev_e2e_generation_stub",
 ) -> Iterator[HTTPStubState]:
@@ -103,15 +102,15 @@ def generation_target_stub(
     exported_catalog_items = catalog_items or []
 
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, _format: str, *_args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             return
 
-        def has_expected_backend_identity(self) -> bool:
-            if self.headers.get("X-BoxTeam-Workspace-Id") == backend_workspace_id:
+        def has_expected_workspace_identity(self) -> bool:
+            if self.headers.get("X-BoxTeam-Workspace-Id") == workspace_id:
                 return True
             _json_response(
                 self,
-                {"detail": "backend workspace identity mismatch"},
+                {"detail": "workspace identity mismatch"},
                 status=400,
             )
             return False
@@ -120,14 +119,14 @@ def generation_target_stub(
             state.requests.append(
                 {"method": "GET", "path": self.path, "json": None}
             )
-            if not self.has_expected_backend_identity():
+            if not self.has_expected_workspace_identity():
                 return
             if self.path == "/api/v1/health":
                 _json_response(
                     self,
                     {
                         "status": "ok",
-                        "workspace_id": backend_workspace_id,
+                        "workspace_id": workspace_id,
                         "process_id": os.getpid(),
                     },
                 )
@@ -242,23 +241,23 @@ def generation_target_stub(
 
         def do_POST(self) -> None:
             if self.path == "/api/v1/session-generations/validate-definition":
-                if not self.has_expected_backend_identity():
+                if not self.has_expected_workspace_identity():
                     return
                 payload = _request_json(self)
                 state.requests.append({"method": "POST", "path": self.path, "json": payload})
                 _json_response(self, {"data": {
-                    "workspace_id": backend_workspace_id, "provider_available": True, "reason": None,
+                    "workspace_id": workspace_id, "provider_available": True, "reason": None,
                 }})
                 return
             if self.path == "/api/v1/session-generations/preview-placement":
-                if not self.has_expected_backend_identity():
+                if not self.has_expected_workspace_identity():
                     return
                 payload = _request_json(self)
                 state.requests.append({"method": "POST", "path": self.path, "json": payload})
                 preview_request = SessionGenerationPreviewRequest.model_validate(payload)
                 title, segments = render_generation_names(preview_request)
                 _json_response(self, {"data": {
-                    "workspace_id": backend_workspace_id,
+                    "workspace_id": workspace_id,
                     "title": title, "path_segments": segments,
                     "navigation_path": [*segments, title],
                     "physical_location": "unallocated",
@@ -268,7 +267,7 @@ def generation_target_stub(
             if self.path != "/api/v1/session-generations/execute":
                 _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
                 return
-            if not self.has_expected_backend_identity():
+            if not self.has_expected_workspace_identity():
                 return
             payload = _request_json(self)
             state.requests.append(
@@ -288,7 +287,7 @@ def generation_target_stub(
                         "outputs": [
                             {
                                 "kind": "session",
-                                "workspace_id": output_workspace_id,
+                                "workspace_id": workspace_id,
                                 "session_id": f"ses_{digest}",
                                 "title": payload["title"],
                                 "navigation_path": payload["navigation_path"],
@@ -315,7 +314,7 @@ def openai_chat_stub(
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def log_message(self, _format: str, *_args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             return
 
         def do_POST(self) -> None:
@@ -396,7 +395,7 @@ def openai_chat_tool_loop_stub(port: int) -> Iterator[HTTPStubState]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def log_message(self, _format: str, *_args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             return
 
         def do_POST(self) -> None:
