@@ -327,19 +327,24 @@ class ContextSourceControlStorageMixin:
                 if mutation.operation not in {"observe", "activate_skill"} and state.latest_revision != stored.latest_revision:
                     raise RuntimeError("context-source-control-state-conflict: 内容观察必须使用 observe 或 activate_skill")
             if mutation.operation == "activate_skill":
+                # 选择次序只消费同名来源的 ID 和序号，不为每次激活还原全部控制状态。
+                normalized_name = _normalize_skill_name(state.name)
                 rows = connection.execute(
-                    f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                    f"SELECT source_id, name, selection_sequence FROM {_TABLE_NAME} "
                     "WHERE session_id=? AND thread_id=? AND source_kind='skill' AND latest_revision IS NOT NULL",
                     (owner.session_id, owner.thread_id),
-                ).fetchall()
-                siblings = tuple(value for value in map(_state_from_row, rows)
-                                 if _normalize_skill_name(value.name) == _normalize_skill_name(state.name))
+                )
+                siblings = tuple((
+                    strict_text(source_id, field=f"{_TABLE_NAME}.source_id"),
+                    strict_non_negative_int(sequence, field=f"{_TABLE_NAME}.selection_sequence"),
+                ) for source_id, name, sequence in rows
+                    if _normalize_skill_name(strict_text(name, field=f"{_TABLE_NAME}.name")) == normalized_name)
                 sequence = next_skill_selection_sequence(
-                    state.source_id, tuple((value.source_id, value.selection_sequence) for value in siblings),
+                    state.source_id, siblings,
                     fallback_source_id=self._sealed_skill_selection(
-                        connection, owner, state.name, frozenset(value.source_id for value in siblings),
+                        connection, owner, state.name, frozenset(source_id for source_id, _ in siblings),
                     )
-                    if not any(value.selection_sequence for value in siblings) else None,
+                    if not any(sequence for _, sequence in siblings) else None,
                 )
                 state = replace(state, selection_sequence=sequence)
             # 旧行只从同事务的权威记录派生；两次写入任一失败均整体回滚。
