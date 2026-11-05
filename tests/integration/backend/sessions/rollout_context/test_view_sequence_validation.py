@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -13,8 +14,10 @@ from app.core.sqlite_state import utc_now_text
 from app.domain.itemized.errors import FormatDispatchError
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_epoch_transition import (
-    epoch_case as epoch_case,
-    epoch_db as epoch_db,
+    epoch_case as epoch_case,  # noqa: PLC0414 - 按当前测试文件隔离真实存储
+)
+from tests.integration.backend.sessions.rollout_context.test_context_epoch_transition import (
+    epoch_db as epoch_db,  # noqa: PLC0414 - 注入真实 SQLite/JSONL owner
 )
 
 
@@ -196,3 +199,87 @@ def test_shared_ranges_are_checked_once_and_later_cycles_still_fail(epoch_case, 
         )
     assert tuple(case.connection.iterdump()) == original_database
     assert canonical.read_bytes() == original_bytes
+
+
+@pytest.fixture
+def counted_message_spans(epoch_case, monkeypatch):
+    spans = []
+    storage = epoch_case.saver._storage.storage
+    connect = storage._connect
+
+    def observe_sql(sql):
+        if "SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN" in sql:
+            spans.append(tuple(map(int, re.search(r"BETWEEN (\d+) AND (\d+)", sql).groups())))
+
+    def observe(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.set_trace_callback(observe_sql)
+        return connection
+
+    monkeypatch.setattr(storage, "_connect", observe)
+    return spans
+
+
+def test_full_checkpoint_ranges_scan_each_message_once_per_read(epoch_case, counted_message_spans, request):
+    case = epoch_case
+    messages = [case.user]
+    measurements = []
+    for step in range(1, 13):
+        messages.extend(AIMessage(id=f"full-{step}-{index}", content=f"消息 {step}-{index}") for index in range(8))
+        case.checkpoint(f"full-{step}", messages=messages)
+        if step not in (4, 12):
+            continue
+        # 经真实 Saver 入口读取两次：复用只在单次 snapshot 内，不能跨读取跳过校验。
+        for _ in range(2):
+            counted_message_spans.clear()
+            with case.scope():
+                restored = case.saver.get_tuple(case.config)
+            assert [(message.id, message.content) for message in restored.checkpoint["channel_values"]["messages"]] == [
+                (message.id, message.content) for message in messages
+            ]
+            assert counted_message_spans == [(1, len(messages))]
+        measurements.append({"checkpoints": step, "messages": len(messages), "counted_spans": list(counted_message_spans)})
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "full-checkpoint-range-work.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
+
+
+@pytest.mark.parametrize("ranges,expected", [
+    ([(2, 6), (1, 9), (1, 3)], [(1, 9)]),
+    ([(3, 9), (1, 5)], [(1, 5), (6, 9)]),
+    ([(7, 9), (1, 3)], [(1, 3), (7, 9)]),
+])
+def test_range_sweep_preserves_nested_overlapping_and_disjoint_ranges(epoch_case, counted_message_spans, ranges, expected):
+    case = epoch_case
+    messages = [case.user, *(AIMessage(id=f"span-{index}", content=f"消息 {index}") for index in range(8))]
+    case.checkpoint("span-messages", messages=messages)
+    storage = case.saver._storage.storage
+    branch = case.connection.execute("SELECT branch_id FROM context_views WHERE view_id=?", (case.active_view(),)).fetchone()[0]
+    with case.connection:
+        view = storage._create_view(case.connection, branch, None, tuple(range(1, 10)), utc_now_text(), view_kind="compaction")
+        case.connection.execute("DELETE FROM context_view_ranges WHERE view_id=?", (view,))
+        case.connection.executemany(
+            "INSERT INTO context_view_ranges(view_id,range_index,source_kind,start_message_sequence,end_message_sequence) "
+            "VALUES (?,?,'messages',?,?)",
+            [(view, index, start, end) for index, (start, end) in enumerate(ranges)],
+        )
+    counted_message_spans.clear()
+    restored = case.saver._storage.checkpoints.materialize_messages(
+        case.owner.session_id, case.owner.thread_id, "", 9, context_ranges=((view, 0, 9),),
+    )
+    assert [(message.id, message.content) for message in restored] == [(message.id, message.content) for message in messages]
+    assert counted_message_spans == expected
+    # 覆盖首段内部及合并后的尾段缺口；已成功读取不能遮蔽后续损坏。
+    for missing in (2, 8):
+        with case.connection:
+            case.connection.execute("UPDATE messages SET message_sequence=99 WHERE message_sequence=?", (missing,))
+        original_database = tuple(case.connection.iterdump())
+        canonical = storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
+        original_bytes = canonical.read_bytes()
+        with pytest.raises(RuntimeError, match="不存在完整消息范围"):
+            case.saver._storage.checkpoints.materialize_messages(
+                case.owner.session_id, case.owner.thread_id, "", 9, context_ranges=((view, 0, 9),),
+            )
+        assert tuple(case.connection.iterdump()) == original_database
+        assert canonical.read_bytes() == original_bytes
+        with case.connection:
+            case.connection.execute("UPDATE messages SET message_sequence=? WHERE message_sequence=99", (missing,))

@@ -86,11 +86,11 @@ class RolloutViewSequenceMixin:
     ) -> list[int]:
         """canonical membership 是唯一选择根；range 只校验既有 view 结构。"""
         view_id = strict_text(view_id, field="context_views.view_id")
-        # range 只校验结构，不物化随后被丢弃的祖先 membership；共享祖先与
-        # 相同消息范围在本次调用内只检查一次，显式栈也不受 Python 递归深度限制。
+        # range 只校验结构，不物化随后被丢弃的祖先 membership；共享祖先
+        # 在本次调用内只检查一次，显式栈也不受 Python 递归深度限制。
         active: set[str] = set()
         completed: set[str] = set()
-        checked_spans: set[tuple[int, int]] = set()
+        spans: dict[tuple[int, int], str] = {}
         pending = [(view_id, False)]
         while pending:
             current, exiting = pending.pop()
@@ -134,17 +134,7 @@ class RolloutViewSequenceMixin:
                         raise RuntimeError(
                             f"context view range 不能反向: view={current}, start={start_value}, end={end_value}"
                         )
-                    span = (start_value, end_value)
-                    if span not in checked_spans:
-                        count = connection.execute(
-                            "SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN ? AND ?", span,
-                        ).fetchone()[0]
-                        if count != end_value - start_value + 1:
-                            raise RuntimeError(
-                                f"context view range 引用不存在完整消息范围: view={current}, "
-                                f"start={start_value}, end={end_value}"
-                            )
-                        checked_spans.add(span)
+                    spans.setdefault((start_value, end_value), current)
                 else:
                     raise RuntimeError(
                         f"context view range source_kind 非法: view={current}, source_kind={source_kind}"
@@ -155,6 +145,23 @@ class RolloutViewSequenceMixin:
                 )
             pending.append((current, True))
             pending.extend((source, False) for source in reversed(sources))
+        # 完整消息 checkpoint 会留下相互包含的历史范围。按起点排序后只计数
+        # 尚未验证的尾部，避免同一 snapshot 内反复扫描；下一次读取仍重新校验。
+        checked_end = 0
+        for start, end in sorted(spans, key=lambda span: (span[0], -span[1])):
+            if end <= checked_end:
+                continue
+            unchecked_start = max(start, checked_end + 1)
+            count = connection.execute(
+                "SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN ? AND ?",
+                (unchecked_start, end),
+            ).fetchone()[0]
+            if count != end - unchecked_start + 1:
+                raise RuntimeError(
+                    f"context view range 引用不存在完整消息范围: view={spans[start, end]}, "
+                    f"start={start}, end={end}"
+                )
+            checked_end = end
         rows = connection.execute(
             "SELECT member.item_id, item.semantic_kind, item.projection_manifest_json, "
             "message.message_sequence FROM context_view_items AS member "
