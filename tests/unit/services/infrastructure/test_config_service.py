@@ -21,6 +21,7 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config.contracts import ConfigPublication
+from app.services.infrastructure.config.snapshot import ConfigSnapshot
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventCursorGoneError,
@@ -1318,6 +1319,52 @@ def test_agent_runtime_omits_unspecified_generation_parameters(
     assert "top_p" not in runtime
     assert "max_output_tokens" not in runtime
     assert runtime["require_delegated_report"] is False
+
+
+@pytest.fixture
+def runtime_provider_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ConfigService:
+    monkeypatch.setenv("TEST_API_KEY", "initial-key")
+    config = _base_config()
+    config["llm"]["providers"][0]["request_options"] = {"default_headers": {"X-Runtime": "original"}}
+    config["llm"]["providers"].append({
+        **config["llm"]["providers"][0], "id": "backup", "model": "model-b",
+    })
+    config["agents"]["default"]["model"]["fallback_providers"] = ["backup"]
+    service = ConfigService(config_dir=Path.cwd() / "configs",
+                            config_path=_write_workspace_config(tmp_path, config))
+    service.get_revision()
+    return service
+
+
+@pytest.mark.parametrize("preferred", [None, "backup"])
+def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_isolated(
+    runtime_provider_service: ConfigService, monkeypatch: pytest.MonkeyPatch, preferred: str | None,
+) -> None:
+    service = runtime_provider_service
+    decode = ConfigSnapshot.to_dict
+    reads = []
+
+    def observe(snapshot):
+        reads.append(snapshot.revision)
+        return decode(snapshot)
+
+    monkeypatch.setattr(ConfigSnapshot, "to_dict", observe)
+    first = service.get_agent_runtime_config("default", preferred_provider_id=preferred)
+    assert len(reads) == 1
+    expected_order = ["backup", "primary"] if preferred else ["primary", "backup"]
+    assert [provider["id"] for provider in first["providers"]] == expected_order
+    assert first["system_prompt"] == "hello"
+    assert all(provider["api_key"] == "initial-key" for provider in first["providers"])
+    first["providers"][0]["request_options"]["default_headers"]["X-Runtime"] = "caller mutation"
+
+    # 不缓存展开后的凭据或可变配置；同一 revision 的下一次读取仍反映环境变化。
+    monkeypatch.setenv("TEST_API_KEY", "updated-key")
+    second = service.get_agent_runtime_config("default", preferred_provider_id=preferred)
+    assert len(reads) == 2 and len(set(reads)) == 1
+    assert [provider["id"] for provider in second["providers"]] == expected_order
+    assert all(provider["api_key"] == "updated-key" for provider in second["providers"])
+    assert second["providers"][0]["request_options"]["default_headers"]["X-Runtime"] == "original"
+    assert service.get_llm_providers()[0]["api_key"] == "updated-key"
 
 
 def test_instruction_inputs_use_merged_configuration_without_python_prompt_defaults(

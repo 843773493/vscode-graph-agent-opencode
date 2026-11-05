@@ -68,8 +68,7 @@ class LlmResolution:
 
         raise ValueError(f"default agent 引用了不存在的 provider: {provider_id}")
 
-    def get_llm_providers(self) -> list[dict]:
-        config = self._effective_config_provider()
+    def get_llm_providers(self, config: dict[str, Any]) -> list[dict]:
         providers = config.get("llm", {}).get("providers", [])
 
         return [self.expand_provider(provider) for provider in providers]

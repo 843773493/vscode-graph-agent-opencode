@@ -79,7 +79,8 @@ class ConfigAgentsMixin:
         preferred_provider_id: str | None = None,
     ) -> dict[str, Any]:
         config = self._get_effective_config()
-        providers = self.get_llm_providers()
+        # 沿用本次已解析的快照，避免 Provider 解析再次反序列化整份配置。
+        providers = self._llm_resolution.get_llm_providers(config)
 
         if not providers:
             raise ValueError("未配置任何 LLM provider")

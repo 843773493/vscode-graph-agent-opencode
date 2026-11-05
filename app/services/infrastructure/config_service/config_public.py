@@ -209,7 +209,7 @@ class ConfigPublicMixin:
         return {**raw_public_config, **self._runtime_config_overrides}
 
     def get_llm_providers(self) -> list[dict]:
-        return self._llm_resolution.get_llm_providers()
+        return self._llm_resolution.get_llm_providers(self._get_effective_config())
 
     def get_llm_provider(self, provider_id: str) -> dict[str, Any]:
         return self._llm_resolution.get_llm_provider(provider_id)
