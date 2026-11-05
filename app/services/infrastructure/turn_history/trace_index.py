@@ -263,11 +263,14 @@ class TraceTurnIndex:
         # TODO: 10 万条合成索引归属查询中位约 1.46s（8.6 测量收据）；
         # 后续复用现有索引增加按 Job 的定位，不得另存可变归属。调用端已移出事件循环。
         with self._index_path.open("rb") as stream:
-            while stream.tell() < manifest.committed_index_offset:
+            # 顺序累计实际读取字节，避免每条记录两次 tell；仍检查全部已提交行。
+            remaining = manifest.committed_index_offset
+            while remaining > 0:
                 line = stream.readline(MAX_COMPACT_LINE_BYTES + 1)
+                remaining -= len(line)
                 if (
                     not line.endswith(b"\n")
-                    or stream.tell() > manifest.committed_index_offset
+                    or remaining < 0
                 ):
                     raise RuntimeError("Trace 归属索引越过已提交边界")
                 entry = TraceTurnIndexEntry.model_validate_json(line)

@@ -392,6 +392,40 @@ async def test_turn_index_recovers_commit_after_trace_files_were_flushed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["line_end", "schema"])
+async def test_trace_owner_validates_last_index_line_after_finding_owner(
+    tmp_path: Path,
+    trace_event_store_factory,
+    damage: str,
+) -> None:
+    session_id = "ses_019c3e6c2a7a7208aa9f84e0f0478718"
+    store, directory = trace_event_store_factory(session_id)
+    event = JobCreatedEvent(
+        event_id="evt_owner_before_damage", job_id="job_owner_before_damage",
+        timestamp=datetime.now(UTC),
+        payload=JobCreatedPayload(
+            session_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
+            message="owner", agent_id="default",
+        ),
+    )
+    await store.append(session_id, event)
+    await store.append(session_id, AgentStartEvent(
+        event_id="evt_damaged_last_index_line", job_id=event.job_id,
+        timestamp=event.timestamp, payload=AgentStartPayload(agent_id="default"),
+    ))
+    index_path = directory / "logs/traces/turn-events.index.jsonl"
+    raw = index_path.read_bytes()
+    last_start = raw.rfind(b"\n", 0, len(raw) - 1) + 1
+    damaged = (raw[:-1] + b" " if damage == "line_end" else
+        raw[:last_start] + raw[last_start:].replace(b'"schema_version":1', b'"schema_version":9', 1))
+    assert damaged != raw and len(damaged) == len(raw)
+    index_path.write_bytes(damaged)
+    with pytest.raises((RuntimeError, ValueError), match="已提交边界|schema_version"):
+        store.event_threads(session_id, [event])
+
+
+@pytest.mark.asyncio
 async def test_trace_owner_rejects_missing_drifting_or_foreign_job_facts(
     tmp_path: Path,
     trace_event_store_factory,
