@@ -37,6 +37,7 @@ from app.services.infrastructure.rollout_context.storage.rollout_schema_introspe
     RolloutSchemaIntrospectionMixin,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
+    COMMIT_IDEMPOTENCY_INDEX_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
     ITEM_CATALOG_LOCATOR_INDEX_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
@@ -599,4 +600,5 @@ class RolloutMaintenanceOwner(
                 # 非唯一索引只加速定位，重复坐标继续由原读取校验明确报告。
                 if not needs_schema:
                     connection.execute(ITEM_CATALOG_LOCATOR_INDEX_SQL)
+                    connection.execute(COMMIT_IDEMPOTENCY_INDEX_SQL)
                 return manifest

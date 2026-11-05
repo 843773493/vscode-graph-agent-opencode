@@ -22,6 +22,7 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
 
 ROLLOUT_SCHEMA_VERSION = 26
 ITEM_CATALOG_LOCATOR_INDEX_SQL = load_sql(__package__, "sql/item_catalog_locator_index.sql")
+COMMIT_IDEMPOTENCY_INDEX_SQL = load_sql(__package__, "sql/commit_idempotency_index.sql")
 EXECUTION_QUEUE_SCHEMA_SQL = load_sql(__package__, "sql/execution_queue.sql")
 SKILL_SELECTION_MIGRATION_SQL = load_sql("app.services.infrastructure.rollout_context.storage", "sql/skill_selection_024_025.sql")
 VIEW_CREATION_SCHEMA_SQL = load_sql(__package__, "sql/view_creation.sql")
@@ -81,6 +82,7 @@ def initialize_rollout_schema(
         + MESSAGES_SCHEMA_SQL
         + load_sql(__package__, "sql/rollout.sql")
         + ITEM_CATALOG_LOCATOR_INDEX_SQL
+        + COMMIT_IDEMPOTENCY_INDEX_SQL
         + VIEW_CREATION_SCHEMA_SQL
         + ASSEMBLY_CONTENT_SCHEMA_SQL
         + VIEW_MEMBERSHIP_SCHEMA_SQL

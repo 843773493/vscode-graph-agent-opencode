@@ -457,9 +457,10 @@ def load_committed_idempotency_commit(
         "jsonl_record_count, jsonl_offset_before, jsonl_offset_after, "
         "jsonl_start_offset, jsonl_end_offset, status "
         "FROM storage_commits WHERE commit_kind = ? "
-        "AND ((subject_id = ?) OR (subject_id IS NULL AND ? IS NULL)) "
+        # IS 保留 NULL subject 的幂等语义，并让复合索引按三个键直接定位。
+        "AND subject_id IS ? "
         "AND idempotency_key = ? ORDER BY commit_id LIMIT 1",
-        (commit_kind, subject_id, subject_id, idempotency_key),
+        (commit_kind, subject_id, idempotency_key),
     ).fetchone()
     if row is None:
         return None
