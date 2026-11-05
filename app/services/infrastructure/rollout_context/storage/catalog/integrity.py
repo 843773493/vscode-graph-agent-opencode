@@ -105,8 +105,9 @@ def validate_catalog_projection(
     relation_rows: Sequence[tuple[object, ...]],
 ) -> None:
     """所有正文读取入口共用 typed 镜像与有序关系索引校验。"""
-    manifest = parse_item_projection_manifest(json.loads(projection_manifest_json))
-    if canonical_json_text(manifest) != projection_manifest_json or manifest != item.projection_manifest():
+    # JSONL item 已完成 typed 校验；直接比较其 JCS 镜像，失败时才解析目录以保留格式诊断。
+    if canonical_json_text(item.projection_manifest()) != projection_manifest_json:
+        parse_item_projection_manifest(json.loads(projection_manifest_json))
         raise RuntimeError(f"item catalog 与 JSONL typed projection manifest 不一致: {item.item_id}")
     if tool_call_id != item.tool_call_id:
         raise RuntimeError(f"item catalog 与 JSONL tool_call_id 不一致: {item.item_id}")
