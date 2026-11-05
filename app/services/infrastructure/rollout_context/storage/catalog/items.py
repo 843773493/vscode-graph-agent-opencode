@@ -62,7 +62,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
     strict_text,
-    validate_item_storage_projection,
 )
 
 if TYPE_CHECKING:
@@ -174,8 +173,10 @@ class RolloutItemsMixin:
         commit_recorded_at: str,
     ) -> None:
         """写入唯一 canonical catalog，并生成对应 item projection。"""
-        # metadata 入口已完整校验 item，不能在相邻步骤再次编码并核对同一正文。
-        source_revision, part_ordinal = validate_item_storage_projection(item)
+        # 提交事务在追加 JSONL 前已完整校验 item；这里只提取镜像字段，不重复编码正文。
+        source_revision = item.source_manifest.source_revision if item.source_manifest is not None else None
+        identity = item.projection_identity
+        part_ordinal = identity.block_index if identity is not None and identity.block_id is not None else 0
         if item.projection_group is None or item.projection_group.ordinal == item.projection_group.size - 1:
             validate_message_revision_source(connection, item)
         if (

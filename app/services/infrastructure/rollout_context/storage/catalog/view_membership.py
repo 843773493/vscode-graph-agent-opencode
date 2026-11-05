@@ -232,6 +232,7 @@ class RolloutViewMembershipMixin:
             connection, checkpoint_ns, branch_id
         )
         # 两套坐标共享一次 metadata 聚合，不再为同一次追加扫描两遍 view。
+        # context 顺序可按 selection 独立重排；末块的 context 坐标不能代表全局最大值。
         next_ordinal, next_context = connection.execute(
             "SELECT COALESCE(MAX(logical_item_ordinal), -1) + 1, "
             "COALESCE(MAX(context_ordinal), -1) + 1 FROM context_view_items WHERE view_id=?",

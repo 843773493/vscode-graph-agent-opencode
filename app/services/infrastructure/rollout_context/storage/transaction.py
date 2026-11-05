@@ -275,15 +275,6 @@ def _canonical_metadata_text(value: object, *, field: str) -> str:
 
 
 
-def validate_item_storage_projection(item: CanonicalItemRecord) -> tuple[str | None, int]:
-    """typed domain 已校验 source manifest 与 stream block；存储不补造缺字段。"""
-    item.validate()
-    revision = item.source_manifest.source_revision if item.source_manifest is not None else None
-    identity = item.projection_identity
-    ordinal = identity.block_index if identity is not None and identity.block_id is not None else 0
-    return revision, ordinal
-
-
 def strict_non_negative_int(value: object, *, field: str) -> int:
     """向其它 durable owner 暴露统一的 SQLite 非负整数读取合同。"""
     return _non_negative_int(value, field=field)
@@ -760,5 +751,4 @@ __all__ = [
     "strict_text",
     "validate_commit_boundary",
     "validate_commit_contract",
-    "validate_item_storage_projection",
 ]

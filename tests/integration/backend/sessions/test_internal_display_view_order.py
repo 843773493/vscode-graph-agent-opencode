@@ -49,9 +49,6 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
     canonical_json_text,
 )
-from app.services.infrastructure.rollout_context.storage.transaction import (
-    validate_item_storage_projection,
-)
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
@@ -323,7 +320,8 @@ def _seed_rollout(
         )
         item_offset = 0
         for (item, execution_id), line in zip(items, item_lines, strict=True):
-            source_revision, _part_ordinal = validate_item_storage_projection(item)
+            item.validate()
+            source_revision = item.source_manifest.source_revision if item.source_manifest is not None else None
             connection.execute(
                 "INSERT INTO item_catalog "
                 "(item_sequence, item_id, semantic_kind, payload_kind, status, turn_id, "
