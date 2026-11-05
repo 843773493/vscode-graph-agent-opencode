@@ -16,6 +16,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.core.resource_uri import parse_resource_uri
+from app.core.workspace_identity import read_workspace_id
 from app.gateway.lifespan import lifespan
 from app.gateway.routes import native_directories
 from app.schemas.gateway.native_directories import (
@@ -98,8 +99,15 @@ def test_native_directory_rejects_copied_path_and_retries_same_binding(
     context, control, client = native_gateway
     registry = client.get("/api/gateway/workspaces", params={"check_health": "false"})
     assert registry.status_code == 200, registry.text
-    targets = registry.json()["data"]["items"]
-    workspace_id = targets[0]["backend_workspace_id"]
+    listing = registry.json()["data"]
+    targets = listing["items"]
+    active = listing["active_workspace"]
+    workspace_id = active["workspace_id"]
+    assert workspace_id == read_workspace_id(context.workspace_root)
+    assert any(
+        {"gateway_id": target["gateway_id"], "workspace_id": target["workspace_id"]} == active
+        for target in targets
+    )
     native_root = context.runtime_root_for_node("native-root") / "unregistered"
     native_root.mkdir(parents=True, exist_ok=True)
     original = native_root / "original.txt"
@@ -111,6 +119,7 @@ def test_native_directory_rejects_copied_path_and_retries_same_binding(
     root_uri = owner.bind(native_root)
     parsed = parse_resource_uri(root_uri)
     assert parsed.scope == "gateway" and parsed.kind == "files" and len(parsed.tail_segments) == 1
+    assert parsed.scope_id == active["gateway_id"]
     assert owner.resolve(parsed) == native_root
     endpoint = f"/api/gateway/native-directories/workspaces/{workspace_id}"
     evidence: list[dict[str, object]] = []
@@ -150,8 +159,8 @@ def test_native_directory_rejects_copied_path_and_retries_same_binding(
         json.dumps({"before": targets, "after": after_targets}, ensure_ascii=False, indent=2), encoding="utf-8",
     )
     # 健康探测可更新运行投影；目录绑定不得修改注册身份、路由或管理配置。
-    registration_keys = ("workspace_id", "backend_workspace_id", "backend_generation", "affected_workspace_ids",
-                         "parent_workspace_id", "name", "backend_url", "connection_kind", "active", "managed",
+    registration_keys = ("gateway_id", "workspace_id", "backend_generation", "affected_workspace_ids",
+                         "parent_workspace", "name", "backend_url", "connection_kind", "active", "managed",
                          "removable", "system_default")
     assert [{key: item[key] for key in registration_keys} for item in after_targets] == [
         {key: item[key] for key in registration_keys} for item in targets
