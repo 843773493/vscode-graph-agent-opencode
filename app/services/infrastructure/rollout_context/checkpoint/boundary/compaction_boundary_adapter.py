@@ -139,16 +139,21 @@ class RolloutCompactionPreflightOwnerMixin:
             # channel 内已被最终 carrier 替代的中间 checkpoint 消息。
             codec = self._storage._codec()
             frozen_messages = values["messages"]
+            frozen_ids = [codec.message_id(message, index) for index, message in enumerate(frozen_messages)]
             frozen_locators = [find_message_locator(
-                connection, codec.message_id(message, index),
+                connection, message_id,
                 item_id=canonical_message_anchor(message),
-            ) for index, message in enumerate(frozen_messages)]
+            ) for message_id, message in zip(frozen_ids, frozen_messages, strict=True)]
             if any(locator is None for locator in frozen_locators):
                 raise RuntimeError("compaction preflight 冻结消息缺少 canonical locator")
             view_sequences = [locator[0] for locator in frozen_locators]
+            # 冻结 locator 已核对 logical ID；按 ID 分组选集，避免每条 state
+            # 都重传完整 view。保留同 ID 的全部版本，仍由唯一 locator 查询消歧。
+            sequences_by_message: dict[str, list[int]] = {}
+            for message_id, sequence in zip(frozen_ids, view_sequences, strict=True):
+                sequences_by_message.setdefault(message_id, []).append(sequence)
             message_sequences = {
-                codec.message_id(message, index): sequence
-                for index, (message, sequence) in enumerate(zip(frozen_messages, view_sequences, strict=True))
+                message_id: sequences[-1] for message_id, sequences in sequences_by_message.items()
             }
             active_sequences = {row[0] for row in connection.execute(
                 "SELECT message.message_sequence FROM context_view_items AS member "
@@ -196,7 +201,7 @@ class RolloutCompactionPreflightOwnerMixin:
                 message_id = codec.message_id(message, index)
                 row = find_message_locator(
                     connection, message_id, item_id=canonical_message_anchor(message),
-                    sequences=view_sequences,
+                    sequences=sequences_by_message.get(message_id, ()),
                 )
                 if row is None:
                     row = find_message_locator(connection, message_id)

@@ -19,6 +19,7 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
     checkpoint_messages,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    CANONICAL_GROUP_FIELD,
     canonical_message_anchor,
 )
 from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
@@ -131,12 +132,35 @@ async def test_graph_same_id_replacement_publishes_new_canonical_version(revisio
         latest = cold.get_tuple(build_checkpoint_config(admission.thread_id))
         messages = checkpoint_messages(cold, latest)
         assert messages[-1].content == "从真实图替换的正文"
-        assert checkpoint_messages(cold, cold.get_tuple(child))[-1].content == "原始正文"
+        old_messages = checkpoint_messages(cold, cold.get_tuple(child))
+        assert old_messages[-1].content == "原始正文"
         new_anchor = canonical_message_anchor(saver._storage.storage._codec().to_dict(messages[-1]))
         assert new_anchor != source.item_id
         stored, = cold._storage.storage.read_items(admission.session_id, admission.thread_id, item_ids=(new_anchor,))
         assert stored.provenance_relations[-1].target_id == source.item_id
         assert stored.provenance_relations[-1].target_model_call_id == source.projection_identity.model_call_id
+        with sqlite3.connect(index) as connection:
+            before_preflight = tuple(connection.iterdump())
+        jsonl = index.with_name("rollout.jsonl")
+        before_jsonl = jsonl.read_bytes()
+        # 同一 logical ID 已有两个版本；显式 anchor 和无 anchor 的内存状态
+        # 都只能解析到当前冻结选集，不能因缩小查询范围接受旧版本。
+        unanchored = [message.model_copy(update={"response_metadata": {
+            key: value for key, value in message.response_metadata.items() if key != CANONICAL_GROUP_FIELD
+        }}) for message in messages]
+        for state in (messages, unanchored):
+            assert cold.safe_compaction_prefix_cutoffs(
+                admission.session_id, admission.thread_id, checkpoint_ns="",
+                state_messages=state, cutoff_indexes=[0, 1, 2],
+            ) == frozenset({0, 1, 2})
+        with pytest.raises(RuntimeError, match="缺少指定 canonical item"):
+            cold.safe_compaction_prefix_cutoffs(
+                admission.session_id, admission.thread_id, checkpoint_ns="",
+                state_messages=old_messages, cutoff_indexes=[2],
+            )
+        with sqlite3.connect(index) as connection:
+            assert tuple(connection.iterdump()) == before_preflight
+        assert jsonl.read_bytes() == before_jsonl
         # 同一输入再次执行只复用新版本，不再制造相同 logical ID 正文。
         if asynchronous:
             await compiled.ainvoke({"messages": []}, latest.config)

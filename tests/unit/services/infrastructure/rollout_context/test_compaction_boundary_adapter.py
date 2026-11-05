@@ -16,6 +16,7 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.boundary import (
+    compaction_boundary_adapter,
     tool_protocol_boundary,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
@@ -333,6 +334,41 @@ def test_candidate_batch_reads_pairing_once_without_copying_each_prefix(
            "pairing_analyses": analyses, "copied_prefix_items": copied_prefix_items})
     assert analyses == 1
     assert copied_prefix_items == 0
+
+
+@pytest.mark.parametrize("message_count", [8, 64])
+def test_preflight_locator_selection_does_not_repeat_entire_view(
+    tmp_path: Path, session_bundle_factory, monkeypatch, message_count: int,
+) -> None:
+    saver = _make_saver(tmp_path, session_bundle_factory)
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    messages = [HumanMessage(content="读取配置", id="user-1"), *[
+        AIMessage(content=f"历史-{index}", id=f"locator-history-{index}")
+        for index in range(1, message_count)
+    ]]
+    config = _put_checkpoint(saver, build_checkpoint_config(thread), "locator-preflight", messages, 1)
+    with session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread), langgraph_thread_id=thread):
+        state = saver.get_tuple(config).checkpoint["channel_values"]["messages"]
+    state = [*state, AIMessage(content="尚未持久化", id="inflight-locator")]
+    selected_parameters = 0
+    lookups = 0
+    original = compaction_boundary_adapter.find_message_locator
+
+    def observe(connection, message_id, *, item_id=None, sequences=None):
+        nonlocal selected_parameters, lookups
+        lookups += 1
+        if sequences is not None:
+            selected_parameters += len(sequences)
+        return original(connection, message_id, item_id=item_id, sequences=sequences)
+
+    monkeypatch.setattr(compaction_boundary_adapter, "find_message_locator", observe)
+    assert saver.safe_compaction_prefix_cutoffs(
+        SESSION_ID, thread, checkpoint_ns="", state_messages=state,
+        cutoff_indexes=[0, message_count, len(state)],
+    ) == frozenset({0, message_count, len(state)})
+    print({"locator_history": message_count, "lookups": lookups,
+           "selected_sequence_parameters": selected_parameters})
+    assert selected_parameters <= message_count
 
 
 @pytest.mark.parametrize("message_count", [8, 64])
