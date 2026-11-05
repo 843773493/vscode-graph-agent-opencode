@@ -19,6 +19,7 @@ from app.agents.policy.tool_capability import (
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
+    ResourceMemberBinding,
     ResourceProvenanceRef,
 )
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogPublication
@@ -26,8 +27,6 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingError,
     ExtensionCatalogUnavailableError,
     ExtensionDispatchBindingRef,
-    ExtensionTargetBindingInput,
-    build_extension_catalog_binding,
     extension_catalog_binding_from_members,
     payload_digest,
 )
@@ -82,12 +81,14 @@ class McpCatalogResourcePublisher:
             context="工作区 custom extension typed members",
             error_type=ExtensionCatalogBindingError,
         )
-        self._custom_members = build_extension_catalog_binding(
-            catalog_revision=self._custom_revision, generation=1,
-            targets=(ExtensionTargetBindingInput(
-                target_id=name, origin="custom", input_schema=definition.input_schema,
-            ) for name, definition in self._custom_definitions.items()),
-        ).members
+        # 定义已冻结完整 schema 摘要；只构造成员，不再解码、哈希 schema 或构造随即丢弃的 binding。
+        self._custom_members = tuple(
+            ResourceMemberBinding(
+                member_id=name, member_kind="custom", schema_hash=definition.schema_hash,
+                server_id=None, revision=self._custom_revision,
+            )
+            for name, definition in self._custom_definitions.items()
+        )
         registry.register_descriptor(SemanticResourceDescriptor(
             resource_id=MCP_TOOL_CATALOG_RESOURCE_ID, resource_kind="mcp_tool_catalog",
             facet="activation", display_uri=None,
