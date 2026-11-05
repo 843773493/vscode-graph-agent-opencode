@@ -156,17 +156,21 @@ class ContextDispatchOwnerMixin:
             thread_id, checkpoint_ns, session_id=session_id, read_only=True,
         ) as connection:
             self._storage.storage._require_v2_runtime(connection)
+            # 分别使用调用 ID / model-call 索引定位候选；用 OR 合并会遍历全部 assistant 历史。
+            # 这里只缩小候选集合，下方仍逐条核对 canonical typed provenance 与 scope。
             call_rows = connection.execute(
                 "SELECT t.tool_call_id, i.projection_manifest_json "
                 "FROM tool_calls t JOIN messages m "
                 "ON m.message_sequence = t.assistant_message_sequence "
-                "JOIN item_catalog i ON i.jsonl_offset = m.jsonl_offset "
+                "JOIN item_catalog i " + (
+                    "INDEXED BY item_catalog_model_tool_index " if model_call_id is not None else ""
+                ) + "ON i.jsonl_offset = m.jsonl_offset "
                 "AND i.jsonl_length = m.jsonl_length "
-                "WHERE m.role = 'assistant' AND "
-                "((? IS NULL AND t.tool_call_id = ?) OR "
-                "json_extract(i.projection_manifest_json, "
-                "'$.projection_identity.model_call_id') = ?)",
-                (model_call_id, tool_call_id, model_call_id),
+                "WHERE m.role = 'assistant' AND " + (
+                    "t.tool_call_id = ?" if model_call_id is None else
+                    "json_extract(i.projection_manifest_json, '$.projection_identity.model_call_id') = ?"
+                ),
+                (tool_call_id if model_call_id is None else model_call_id,),
             ).fetchall()
             model_call_ids: set[str] = set()
             for stored_call_id, raw_manifest in call_rows:
