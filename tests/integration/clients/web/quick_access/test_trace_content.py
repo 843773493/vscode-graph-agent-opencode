@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -59,6 +60,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
                      "BOXTEAM_TRACE_SEARCH_INTERACTIONS": json.dumps(interactions), "BOXTEAM_TRACE_SEARCH_QUERY": QUERY,
                      "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
+                     "BOXTEAM_BROWSER_PYTHON": sys.executable, "BOXTEAM_BROWSER_WORKSPACE": str(workspace),
                      "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "trace-content-failure.png"),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
                 capture_output=True, text=True, timeout=180, check=False)
@@ -68,9 +70,12 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
         for key in ("unselectedHasNoContentQuery", "unopenedChildLocated", "samePaneNewLocation", "exactRecordAfterAppend",
-                    "staleReferenceRejected", "noFullTraceRead", "onlySelectedOwnerAndCategory"):
+                    "staleReferenceRejected", "deletedRecordRejected", "noFullTraceRead", "onlySelectedOwnerAndCategory"):
             assert receipt[key], key
         assert receipt["pageErrors"] == []
+        # 删除定位结束后还原同一原件，后续继续证明追加引起file_changed。
+        assert not Path(receipt["deletion"]["path"]).exists()
+        Path(receipt["deletion"]["backup"]).replace(receipt["deletion"]["path"])
         diagnostic = receipt["cursorDiagnostics"]
         transport = GatewaySessionContextClient(gateway_url=f"http://127.0.0.1:{gateway.port}",
             local_token_supplier=lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"])

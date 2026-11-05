@@ -50,6 +50,8 @@
 
 `test_trace_content` 通过执行及 fork 入口创建未打开 child 的真实事件；只选 Trace 后查询并定位原行，原事件面板显示有界上下文与码点高亮。核验同一编辑器接受另一位置、日志追加后的原行读取、旧版本拒绝及零全量 Trace 请求；正式搜索 SDK 继续核对原 owner 的独立续点拒绝。
 
+请求日志和 Trace 的删除场景先经产品执行、真实搜索生成候选；`record_deletion.py` 复用原 owner 核验引用及 catalog 路径后，将原件移到本次产物目录，明确注入原位置删除。随后点击仍显示的旧候选，核真实409、原owner／原因／request_id、旧高亮清除及零全量读取／自动重搜；页面完成后移回同一原件，保留下游原目录变更／追加的游标断言。该故障注入不表示产品新增留存或删除入口，不预写历史或替换定位响应。
+
 `test_static_upgrade` 复制正式 Workbench 产物，仅在副本的 main／原 editor Worker 追加可观测版本标记；同一真实 Gateway 和 Chromium 保留 HTTP 缓存，核对内容地址分块热读零正文、main／Worker 再验证304、升级后实际执行新版本及缺失 Worker 失败。副本改写是明确的 Integration 装具边界，不修改共享构建、不预写缓存、不替换响应，不代替打包 Electron 或 Webview 隔离宿主验收。
 
 `test_development_hmr` 使用完整 Git 源码快照和当前差异、固定上游副本及只读依赖链接，经产品 Node／Vite 入口和真实 Gateway 打开页面；只在独占副本中修改导航观测属性，验证自动更新通知及新页面内容，不手动刷新、不替换响应。Vite 可以按原行为自动整页重载；脚本 URL 按路径核对并保留查询参数原件。依赖链接引起的字体访问拒绝及原生关闭诊断如实保留，不据 HMR 通过宣称界面零错误、发行或 Electron 验收。

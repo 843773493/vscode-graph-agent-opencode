@@ -48,4 +48,5 @@ inFlightRequests 是跨子包复用的在途请求登记原语：`hooks/session/
 - 导入其他 hook 或共享模块时使用显式相对路径，禁止任何指向旧平铺路径的转发层。
 - 代码注释使用中文，专业术语除外。
 - 修改本目录后需要运行前端静态检查和 `bun run build`。
+- `useRecordNavigation.test.ts` 运行真实请求日志／Trace hook，仅在原定位 API 边界控制结算，验证取消、迟到结果和精确归属；不把该合同替代真实 Gateway、原记录删除或页面定位验收。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
@@ -132,6 +133,26 @@ try {
   await expect(pane.getByRole('alert')).toContainText('命中的 Trace 记录已变化或裁剪');
   await expect(mark).toHaveCount(0);
   result.staleReferenceRejected = true;
+  result.phase = 'reject-deleted-record';
+  await page.unroute('**/traces/locate');
+  await command('workbench.action.quickOpen', 'content ' + query); await openSearch();
+  const beforeDeletion = result.searches.length;
+  // 只删除刚由产品执行生成并经原 owner 核验的文件，保留旧候选测试失效出口。
+  result.deletion = JSON.parse(execFileSync(process.env.BOXTEAM_BROWSER_PYTHON,
+    ['-m', 'tests.integration.clients.web.quick_access.record_deletion', 'trace',
+      process.env.BOXTEAM_BROWSER_WORKSPACE, JSON.stringify(first), output + '.removed-original'], { encoding: 'utf8', timeout: 15_000 }));
+  expect(result.deletion).toMatchObject({ category: 'trace', exists_after: false });
+  expect(result.deletion.removed_bytes).toBeGreaterThan(0);
+  const deleted = page.waitForResponse(response => response.url().endsWith('/traces/locate') && response.status() === 409);
+  await rows.first().locator('[data-quick-input-id]').click();
+  const deletedResponse = await deleted, deletedPayload = await deletedResponse.json();
+  expect(deletedPayload.request_id).toBe(deletedResponse.headers()['x-request-id']);
+  expect(deletedPayload.detail).toMatchObject({ owner: 'trace_event_store', code: 'stale_trace_reference', reason: 'file_deleted' });
+  await expect(pane.getByRole('alert')).toContainText('命中的 Trace 文件已删除');
+  await expect(mark).toHaveCount(0);
+  expect(result.searches).toHaveLength(beforeDeletion);
+  expect(result.fullTraces).toHaveLength(0);
+  result.deletedRecordRejected = true;
   result.owner = { ...owner, session_id: session.session_id, main, child };
   result.phase = 'complete';
 } catch (error) {

@@ -5,7 +5,9 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -43,11 +45,11 @@ async def test_request_content_search_opens_only_the_exact_record(
         workspace_root=workspace, default_backend_url=backend_url, port=port_block.port(20),
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     model = "browser-chat-tool-loop-stub"
-    interaction = build_cassette(asset_id="request-content", model=model,
+    interaction = cast(list[object], build_cassette(asset_id="request-content", model=model,
         url=f"http://127.0.0.1:{port_block.port(10)}/v1/chat/completions",
         frames=chat_completion_frames(response_id="request-content", model=model,
             deltas=[{"role": "assistant", "content": "已完成请求日志验收"}], finish_reason="stop"),
-    ).raw["interactions"][0]
+    ).raw["interactions"])[0]
     result_path = context.artifacts_dir / "request-content.json"
     command = ["bun", "tests/integration/clients/web/quick_access/request_content.mjs"]
     try:
@@ -57,6 +59,7 @@ async def test_request_content_search_opens_only_the_exact_record(
                      "BOXTEAM_REQUEST_SEARCH_INTERACTION": json.dumps(interaction),
                      "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
+                     "BOXTEAM_BROWSER_PYTHON": sys.executable, "BOXTEAM_BROWSER_WORKSPACE": str(workspace),
                      "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "request-content-failure.png"),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
                 capture_output=True, text=True, timeout=150, check=False)
@@ -65,9 +68,13 @@ async def test_request_content_search_opens_only_the_exact_record(
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": completed.returncode}) + "\n")
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
-        for key in ("unselectedHasNoContentQuery", "exactRecordLocated", "samePaneNewLocation", "staleReferenceRejected", "noFullLogRead"):
+        for key in ("unselectedHasNoContentQuery", "exactRecordLocated", "samePaneNewLocation", "staleReferenceRejected",
+                    "deletedRecordRejected", "noFullLogRead"):
             assert receipt[key], key
         assert receipt["pageErrors"] == []
+        # 页面已证明原位置删除；恢复原件，让下方目录变更游标验证保持独立。
+        assert not Path(receipt["deletion"]["path"]).exists()
+        Path(receipt["deletion"]["backup"]).replace(receipt["deletion"]["path"])
         diagnostic = receipt["cursorDiagnostics"]
         transport = GatewaySessionContextClient(gateway_url=f"http://127.0.0.1:{gateway.port}",
             local_token_supplier=lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"])

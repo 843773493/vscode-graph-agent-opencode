@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
@@ -138,6 +139,26 @@ try {
   await api('/api/v1/sessions', { title: '日志查询后的目录变化' });
   const stale = await rejectCursor(cursor, 409, 'stale_request_log_cursor', 'catalog_changed');
   result.cursorDiagnostics = { owner, searchQuery, cursor, malformed, mismatched, stale };
+  result.phase = 'reject-deleted-record';
+  await page.unroute(pattern);
+  await command('workbench.action.quickOpen', 'content ' + query); await openSearch();
+  const beforeDeletion = result.searches.length;
+  // 搜索和定位均使用真实记录；此处仅注入原文件删除，不新增产品清理入口。
+  result.deletion = JSON.parse(execFileSync(process.env.BOXTEAM_BROWSER_PYTHON,
+    ['-m', 'tests.integration.clients.web.quick_access.record_deletion', 'request',
+      process.env.BOXTEAM_BROWSER_WORKSPACE, JSON.stringify(first), output + '.removed-original'], { encoding: 'utf8', timeout: 15_000 }));
+  expect(result.deletion).toMatchObject({ category: 'request', exists_after: false });
+  expect(result.deletion.removed_bytes).toBeGreaterThan(0);
+  const deleted = page.waitForResponse(response => response.url().endsWith('/llm-request-logs/locate') && response.status() === 409);
+  await candidates.first().click();
+  const deletedResponse = await deleted, deletedPayload = await deletedResponse.json();
+  expect(deletedPayload.request_id).toBe(deletedResponse.headers()['x-request-id']);
+  expect(deletedPayload.detail).toMatchObject({ owner: 'llm_request_log', code: 'stale_request_log_reference', reason: 'record_deleted' });
+  await expect(pane.getByRole('alert')).toContainText('命中的请求日志已删除');
+  await expect(mark).toHaveCount(0);
+  expect(result.searches).toHaveLength(beforeDeletion);
+  expect(result.fullLogs).toHaveLength(0);
+  result.deletedRecordRejected = true;
   result.phase = 'passed';
 } catch (error) {
   failure = error; result.error = String(error?.stack ?? error);
