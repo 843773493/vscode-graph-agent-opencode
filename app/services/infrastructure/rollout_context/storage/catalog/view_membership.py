@@ -27,6 +27,46 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 )
 
 
+def _insert_view_ranges(
+    connection: sqlite3.Connection, view_id: str, parent_view_id: str | None,
+    sequence_values: Sequence[int], view_kind: str,
+) -> None:
+    """登记父来源和本次消息范围；克隆成员仍须保留完整的重试与审计证据。"""
+    ranges: list[tuple[int, int]] = []
+    for sequence in sequence_values:
+        if not ranges or sequence != ranges[-1][1] + 1:
+            ranges.append((sequence, sequence))
+        else:
+            ranges[-1] = (ranges[-1][0], sequence)
+    range_index = 0
+    if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
+        # range 保留增量 checkpoint 的父来源证据，供完整审计检查；
+        # 实际消息选集已冻结在 membership，不在普通读取时展开祖先图。
+        range_cursor = connection.execute(
+            "INSERT INTO context_view_ranges(view_id, range_index, source_kind, source_view_id, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'view', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL)",
+            (view_id, range_index, parent_view_id, range_index),
+        )
+        if range_cursor.rowcount != 1:
+            raise RuntimeError(f"context view parent range 插入失败: {view_id}")
+        range_index += 1
+    for start_sequence, end_sequence in ranges:
+        range_cursor = connection.execute(
+            "INSERT INTO context_view_ranges(view_id, range_index, source_kind, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'messages', ?, ?, ?, ?, ?, NULL, NULL)",
+            (
+                view_id,
+                range_index,
+                start_sequence,
+                end_sequence,
+                start_sequence,
+                end_sequence,
+                range_index,
+            ),
+        )
+        if range_cursor.rowcount != 1:
+            raise RuntimeError(f"context view message range 插入失败: {view_id}")
+        range_index += 1
+
+
 class RolloutViewMembershipMixin:
     """集中维护 view-local item ordinal，避免各写入入口各自分配顺序。"""
 
@@ -274,61 +314,56 @@ class RolloutViewMembershipMixin:
         )
         if any(value == 0 for value in sequence_values):
             raise ValueError("messages.message_sequence 必须为正数")
-        if view_kind == "active":
-            if parent_view_id is None or sequence_values:
-                raise ValueError("active successor 必须严格复制一个既有 parent view")
-            # active writer 的 successor 只复制已冻结的 view-local 事实；
-            # 不从全局 Turn/item catalog 重投影，避免夹带 checkpoint 后的新事实。
+        parent_sequences: tuple[int, ...] = ()
+        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
+            parent_sequences = tuple(self._view_message_sequences_from_connection(connection, parent_view_id))
+        if view_kind == "active" and (parent_view_id is None or sequence_values):
+            raise ValueError("active successor 必须严格复制一个既有 parent view")
+        if view_kind == "active" or (
+            view_kind == "checkpoint_messages" and parent_view_id is not None
+            and sequence_values == parent_sequences and ordered_context_item_ids is None
+        ):
+            # 消息选择未变时与 active successor 共用冻结成员克隆，
+            # 不能为 metadata-only checkpoint 重建全部成员并重算旧块摘要。
             header = connection.execute(
                 "INSERT INTO context_views(view_id, branch_id, parent_view_id, view_kind, "
                 "head_turn_id, head_message_sequence, logical_turn_count, control_sequence, created_at) "
-                "SELECT ?, ?, ?, 'active', head_turn_id, head_message_sequence, "
+                "SELECT ?, ?, ?, ?, head_turn_id, head_message_sequence, "
                 "logical_turn_count, control_sequence, ? FROM context_views WHERE view_id = ?",
-                (view_id, branch_id, parent_view_id, timestamp, parent_view_id),
+                (view_id, branch_id, parent_view_id, view_kind, timestamp, parent_view_id),
             )
             if header.rowcount != 1:
-                raise RuntimeError(f"active successor parent view 不存在: {parent_view_id}")
+                raise RuntimeError(f"context view 克隆的 parent 不存在: {parent_view_id}")
             clone_members(connection, parent_view_id, view_id)
             connection.execute(
                 "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, "
                 "user_message_sequence, final_message_sequence, root_input_item_id, fork_lineage_json) "
                 "SELECT ?, turn_id, logical_turn_ordinal, user_message_sequence, "
-                "final_message_sequence, root_input_item_id, fork_lineage_json "
+                "final_message_sequence, root_input_item_id, "
+                "CASE WHEN ?='active' THEN fork_lineage_json ELSE ? END "
                 "FROM context_view_turns WHERE view_id = ?",
-                (view_id, parent_view_id),
+                (view_id, view_kind, _json({"source_view_id": parent_view_id, "source_branch_id": branch_id}), parent_view_id),
             )
-            connection.execute(
-                "INSERT INTO context_view_ranges(view_id, range_index, source_kind, source_view_id, "
-                "start_message_sequence, end_message_sequence, source_start_turn_ordinal, "
-                "source_end_turn_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal, "
-                "range_ordinal, source_start_ordinal, source_end_ordinal, message_start_sequence, "
-                "message_end_sequence, logical_start_ordinal, logical_end_ordinal) "
-                "SELECT ?, range_index, source_kind, source_view_id, start_message_sequence, "
-                "end_message_sequence, source_start_turn_ordinal, source_end_turn_ordinal, "
-                "logical_start_turn_ordinal, logical_end_turn_ordinal, range_ordinal, "
-                "source_start_ordinal, source_end_ordinal, message_start_sequence, "
-                "message_end_sequence, logical_start_ordinal, logical_end_ordinal "
-                "FROM context_view_ranges WHERE view_id = ?",
-                (view_id, parent_view_id),
-            )
+            if view_kind == "checkpoint_messages":
+                _insert_view_ranges(connection, view_id, parent_view_id, sequence_values, view_kind)
+            else:
+                connection.execute(
+                    "INSERT INTO context_view_ranges(view_id, range_index, source_kind, source_view_id, "
+                    "start_message_sequence, end_message_sequence, source_start_turn_ordinal, "
+                    "source_end_turn_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal, "
+                    "range_ordinal, source_start_ordinal, source_end_ordinal, message_start_sequence, "
+                    "message_end_sequence, logical_start_ordinal, logical_end_ordinal) "
+                    "SELECT ?, range_index, source_kind, source_view_id, start_message_sequence, "
+                    "end_message_sequence, source_start_turn_ordinal, source_end_turn_ordinal, "
+                    "logical_start_turn_ordinal, logical_end_turn_ordinal, range_ordinal, "
+                    "source_start_ordinal, source_end_ordinal, message_start_sequence, "
+                    "message_end_sequence, logical_start_ordinal, logical_end_ordinal "
+                    "FROM context_view_ranges WHERE view_id = ?",
+                    (view_id, parent_view_id),
+                )
             insert_view_jumps(connection, view_id)
             return view_id
-        materialized_sequences = sequence_values
-        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
-            # 新 checkpoint 的 visible_sequences 可能只是本次 delta；Turn
-            # 索引也必须基于完整的父链，否则最新 view 会只有 ToolMessage，
-            # 历史分页会暂时看不到这条正在执行的 Turn。
-            materialized_sequences = tuple(
-                dict.fromkeys(
-                    [
-                        *self._view_message_sequences_from_connection(
-                            connection,
-                            parent_view_id,
-                        ),
-                        *sequence_values,
-                    ]
-                )
-            )
+        materialized_sequences = tuple(dict.fromkeys((*parent_sequences, *sequence_values)))
         message_rows = (
             connection.execute(
                 # 一次取回 Turn 与 canonical locator，避免再遍历消息并逐条查 catalog。
@@ -459,39 +494,7 @@ class RolloutViewMembershipMixin:
         )
         if view_cursor.rowcount != 1:
             raise RuntimeError(f"context view 插入失败: {view_id}")
-        ranges: list[tuple[int, int]] = []
-        for sequence in sequence_values:
-            if not ranges or sequence != ranges[-1][1] + 1:
-                ranges.append((sequence, sequence))
-            else:
-                ranges[-1] = (ranges[-1][0], sequence)
-        range_index = 0
-        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
-            # range 保留增量 checkpoint 的父来源证据，供完整审计检查；
-            # 实际消息选集已冻结在 membership，不在普通读取时展开祖先图。
-            range_cursor = connection.execute(
-                "INSERT INTO context_view_ranges(view_id, range_index, source_kind, source_view_id, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'view', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL)",
-                (view_id, range_index, parent_view_id, range_index),
-            )
-            if range_cursor.rowcount != 1:
-                raise RuntimeError(f"context view parent range 插入失败: {view_id}")
-            range_index += 1
-        for start_sequence, end_sequence in ranges:
-            range_cursor = connection.execute(
-                "INSERT INTO context_view_ranges(view_id, range_index, source_kind, start_message_sequence, end_message_sequence, message_start_sequence, message_end_sequence, range_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal) VALUES (?, ?, 'messages', ?, ?, ?, ?, ?, NULL, NULL)",
-                (
-                    view_id,
-                    range_index,
-                    start_sequence,
-                    end_sequence,
-                    start_sequence,
-                    end_sequence,
-                    range_index,
-                ),
-            )
-            if range_cursor.rowcount != 1:
-                raise RuntimeError(f"context view message range 插入失败: {view_id}")
-            range_index += 1
+        _insert_view_ranges(connection, view_id, parent_view_id, sequence_values, view_kind)
         if parent_view_id:
             insert_view_jumps(connection, view_id)
         for turn_id, ordinal, user_sequence, final_sequence, root_item_id in rows:
