@@ -312,3 +312,8 @@
 
 - 八份客户端测试使用正式完整owner key，核真实API双目标头；同UUID跨Gateway的child列表切换保留原空窗与迟到隔离。消息流的终态缓存定位复用原 `sessionScopeKey`，删除测试自身的裸字符串拼键，保留全部终态清理、失败归属及410重连断言；文件树的健康请求期望按现行固定owner链删除，目录重读次数不放宽。
 - 最终定向67 passed／510断言；首轮消息流23／25的缓存键装具失败和整文件25／25补验均保留。完整Web tsc仍28／28原诊断，本批八文件零诊断，新增0。根复核差异和完整交付SHA，准确命令／外部保护／原始输出在 `out/tests/temp/identity_remaining_backend_20261105/artifacts/src-evidence-index-05.json`、`src-checks-index-05.json` 与 `src-web-type-attribution-05.json`；不代替真实浏览器或原生客户端验收，6.4仍未完成。
+
+### 2026-11-05：6.4 附件组件与目录搜索身份
+
+- 附件装具使用完整owner、原生UUID URI及真实API双目标头；保留缩略图失败重试、原件预览和具体附件错误正文断言。附件组件在受保护组合中通过，随后manual browser失败，未把整组记为通过；首轮Vite扫描与多alert歧义按准确入口／预览region修正。
+- 同UUID跨Gateway的目录搜索流单测核运行、未读及离线摘要隔离，原定向5 passed／28断言。附件harness真实tsc、Ruff与JS语法通过，完整Web原28条诊断无新增；源码匹配与原始结果见 `out/tests/temp/identity_remaining_web_20261105/artifacts/attachment-component-source-attribution.json` 及其引用的03证据。本批不代替完整产品附件／远端验收，6.4继续未勾。

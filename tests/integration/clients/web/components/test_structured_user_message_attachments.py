@@ -68,6 +68,13 @@ async def test_structured_user_attachment_message_boundaries_in_real_browser() -
         f"结果: {result_path}\n截图: {screenshot_path}"
     )
     result = json.loads(result_path.read_text(encoding="utf-8"))
+    owner = result["owner"]
+    assert owner["gatewayId"] and owner["workspaceId"]
+    assert result["attachmentRequests"]
+    assert all(
+        {key: item[key] for key in ("gatewayId", "workspaceId")} == owner
+        for item in result["attachmentRequests"]
+    )
     assert result["thumbnailRequest"]["maxEdge"] == "512"
     assert result["retryRecovered"] is True
     assert result["noRawPayloadVisible"] is True

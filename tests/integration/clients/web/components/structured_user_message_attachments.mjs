@@ -19,6 +19,7 @@ const resultPath = join(runContext.artifactsDir, "structured-user-message-attach
 const screenshotPath = join(runContext.artifactsDir, "structured-user-message-attachments-failure.png");
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
 const harnessPath = dirname(testFile);
+const owner = { gatewayId: "gateway-attachments", workspaceId: "019d1b4a-1111-7000-8000-000000000001" };
 const imageBytes = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
@@ -41,6 +42,7 @@ try {
   const vite = await createServer({
     root: harnessPath,
     cacheDir: join(runtimeDirectory, "vite-cache"),
+    optimizeDeps: { entries: ["structured_user_message_attachments_harness.html"] },
     logLevel: "error",
     server: {
       host: "127.0.0.1",
@@ -86,7 +88,12 @@ try {
     const fileId = url.searchParams.get("file_id") || "";
     const variant = url.searchParams.get("variant") || "";
     const maxEdge = url.searchParams.get("max_edge");
-    attachmentRequests.push({ fileId, variant, maxEdge });
+    const requestOwner = { gatewayId: route.request().headers()["x-boxteam-target-gateway-id"],
+      workspaceId: route.request().headers()["x-boxteam-workspace-id"] };
+    if (requestOwner.gatewayId !== owner.gatewayId || requestOwner.workspaceId !== owner.workspaceId) {
+      throw new Error(`附件装具收到错误工作区 owner: ${JSON.stringify(requestOwner)}`);
+    }
+    attachmentRequests.push({ fileId, variant, maxEdge, ...requestOwner });
 
     if (fileId.endsWith("att_561d18fc1caaeb847ba561feab9afd9d") && variant === "thumbnail" && brokenThumbnailAttempts++ === 0) {
       await route.fulfill({
@@ -128,6 +135,7 @@ try {
   });
 
   const result = {
+    owner,
     thumbnailRequest: null,
     retryRecovered: false,
     noRawPayloadVisible: false,
@@ -140,7 +148,7 @@ try {
 
   try {
     await page.goto(
-      `http://127.0.0.1:${address.port}/structured_user_message_attachments_harness.html`,
+      `http://127.0.0.1:${address.port}/structured_user_message_attachments_harness.html?${new URLSearchParams(owner)}`,
       { waitUntil: "networkidle", timeout: 30_000 },
     );
     const messageSurface = page.getByTestId("message-surface");
@@ -192,8 +200,9 @@ try {
     await messageSurface.locator('button[aria-label="在右侧打开附件：report.pdf"]').click();
     await resourcePanel.getByRole("region", { name: "附件预览：report.pdf" }).waitFor({ state: "visible", timeout: 10_000 });
     await messageSurface.locator('button[aria-label="在右侧打开附件：notes.txt"]').click();
-    await resourcePanel.getByRole("alert").waitFor({ state: "visible", timeout: 10_000 });
-    result.failedOriginalVisible = true;
+    const failedOriginal = resourcePanel.getByRole("region", { name: "附件预览：notes.txt" }).getByRole("alert");
+    await failedOriginal.waitFor({ state: "visible", timeout: 10_000 });
+    result.failedOriginalVisible = (await failedOriginal.innerText()).includes("模拟原件已被清理");
 
     result.noPageErrors = pageErrors.length === 0;
     if (!result.retryRecovered || !result.imageOpenedInResourcePanel || !result.pdfOpenedInResourcePanel || !result.textOpenedInResourcePanel || !result.failedOriginalVisible || !result.noPageErrors) {

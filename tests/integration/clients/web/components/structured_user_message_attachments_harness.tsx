@@ -4,25 +4,33 @@ import type { AttachmentRef } from "../../../../../src/clients/web/src/types/bac
 import MessageAttachments from "../../../../../src/clients/web/src/components/chat/turn/MessageAttachments";
 import WorkspaceAttachmentPreview from "../../../../../src/clients/web/src/components/workspace/preview/WorkspaceAttachmentPreview";
 import WorkspaceAuxiliaryPanel from "../../../../../src/clients/web/src/components/workspace/WorkspaceAuxiliaryPanel";
+import { gatewayWorkspaceKey } from "../../../../../src/clients/web/src/api/workspaceIdentity";
+
+const parameters = new URLSearchParams(window.location.search);
+const gatewayId = parameters.get("gatewayId");
+const workspaceId = parameters.get("workspaceId");
+if (!gatewayId || !workspaceId) throw new Error("附件装具缺少完整工作区 owner");
+const workspaceKey = gatewayWorkspaceKey({ gatewayId, workspaceId });
+const attachmentRoot = `boxteam://workspace/${workspaceId}/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments`;
 
 const attachments: AttachmentRef[] = [
   {
-    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_ca0fdda93084dec429773195bbc9904e",
+    file_id: `${attachmentRoot}/att_ca0fdda93084dec429773195bbc9904e`,
     name: "valid.png",
     content_type: "image/png",
   },
   {
-    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_561d18fc1caaeb847ba561feab9afd9d",
+    file_id: `${attachmentRoot}/att_561d18fc1caaeb847ba561feab9afd9d`,
     name: "broken.png",
     content_type: "image/png",
   },
   {
-    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_6466e450a16b77b865c5829d6b6c56d9",
+    file_id: `${attachmentRoot}/att_6466e450a16b77b865c5829d6b6c56d9`,
     name: "report.pdf",
     content_type: "application/pdf",
   },
   {
-    file_id: "boxteam://workspace/019d1b4a-1111-7000-8000-000000000001/resources/session/ses_0a66466c292b7d138cb8baf7bd444745/attachments/att_e39538e7f27a7bf579cd9b85a103c0f0",
+    file_id: `${attachmentRoot}/att_e39538e7f27a7bf579cd9b85a103c0f0`,
     name: "notes.txt",
     content_type: "text/plain",
   },
@@ -43,7 +51,7 @@ function StructuredUserMessageAttachmentsHarness(): React.ReactNode {
           attachments={attachments}
           apiPort={8014}
           sessionId="session-test"
-          workspaceId="workspace-test"
+          workspaceId={workspaceKey}
           onOpenAttachment={setSelected}
         />
       </section>
@@ -52,7 +60,7 @@ function StructuredUserMessageAttachmentsHarness(): React.ReactNode {
         flexRatio={1}
         tab="files"
         apiPort={8014}
-        workspaceId="workspace-test"
+        workspaceId={workspaceKey}
         workspaceFileTreeReady={false}
         workspaceName="附件集成测试工作区"
         sessionId="session-test"
@@ -73,13 +81,13 @@ function StructuredUserMessageAttachmentsHarness(): React.ReactNode {
             attachment={selected}
             apiPort={8014}
             sessionId="session-test"
-            workspaceId="workspace-test"
+            workspaceId={workspaceKey}
           />
         ) : null}
         resourcePanel={null}
         runtimePreview={null}
         debugPanel={null}
-        goalPanel={null}
+        taskPanel={null}
         onToggleSearch={() => undefined}
         onCollapseAll={() => undefined}
         onSelectSessionChangeset={() => undefined}
