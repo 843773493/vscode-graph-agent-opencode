@@ -83,6 +83,7 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
     path = identity.workspace_identity_path(tmp_path)
     original = path.read_bytes()
     creating = stage in {"create", "flush", "publish", "sync_directory"}
+    io_path = identity.native_io_path(path)
     if creating:
         path.unlink()
     before = path.read_bytes() if path.exists() else None
@@ -92,22 +93,22 @@ def test_native_identity_io_error_keeps_category_codes_cause_and_original_bytes(
     real_open = identity.os.open
 
     def read(target: Path, encoding: str | None = None, errors: str | None = None) -> str:
-        if target == path:
+        if target == io_path:
             raise raw
         return real_read(target, encoding=encoding, errors=errors)
 
     def stat(target: Path, *args: object, **kwargs: object):
-        if target == path:
+        if target == io_path:
             raise raw
         return real_stat(target, *args, **kwargs)
 
     def mkdir(target: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False) -> None:
-        if target == path.parent:
+        if target == io_path.parent:
             raise raw
         real_mkdir(target, mode=mode, parents=parents, exist_ok=exist_ok)
 
     def open_file(target, *args, **kwargs):
-        if target.parent == path.parent and target.name.startswith(f".{path.name}."):
+        if target.parent == io_path.parent and target.name.startswith(f".{path.name}."):
             raise raw
         return real_open(target, *args, **kwargs)
 
@@ -181,11 +182,12 @@ def test_binding_mismatch_exposes_only_expected_and_actual_uuid(
     expected = str(uuid4())
     path = identity.workspace_identity_path(tmp_path)
     original = path.read_bytes()
+    io_path = identity.native_io_path(path)
     if concurrent:
         real_stat = Path.stat
 
         def stat(target: Path, *args, **kwargs):
-            if target == path:
+            if target == io_path:
                 raise FileNotFoundError(errno.ENOENT, "只让原stat观察不到并发创建")
             return real_stat(target, *args, **kwargs)
 
@@ -228,16 +230,17 @@ def test_concurrent_creator_read_failure_keeps_read_stage_and_direct_cause(
     path = identity.workspace_identity_path(tmp_path)
     original = path.read_bytes()
     raw = PermissionError(errno.EACCES, "并发创建后的身份读取拒绝", str(path))
+    io_path = identity.native_io_path(path)
     real_stat = Path.stat
     real_read = Path.read_text
 
     def stat(target: Path, *args, **kwargs):
-        if target == path:
+        if target == io_path:
             raise FileNotFoundError(errno.ENOENT, "只让原stat观察不到并发创建")
         return real_stat(target, *args, **kwargs)
 
     def read(target: Path, encoding: str | None = None, errors: str | None = None) -> str:
-        if target == path:
+        if target == io_path:
             raise raw
         return real_read(target, encoding=encoding, errors=errors)
 
