@@ -1,7 +1,7 @@
 """真实 seal 的同次 canonical 读取、首错顺序与提交完整性合同。"""
 
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import partial
@@ -62,6 +62,30 @@ def canonical_reader(registry_db, request):
         )
 
     return storage, session, thread, connection, item_id, read
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+def test_canonical_readers_copy_only_when_validation_scope_retains_items(
+    canonical_reader, monkeypatch, scoped,
+):
+    storage, session, thread, _connection, _item_id, read = canonical_reader
+    jsonl = storage.jsonl_path(session, thread_id=thread)
+    before = jsonl.read_bytes()
+    copy = integrity.deepcopy
+    copied = []
+
+    def observe(item):
+        copied.append(item.item_id)
+        return copy(item)
+
+    monkeypatch.setattr(integrity, "deepcopy", observe)
+    with storage.catalog_body_validation_scope() if scoped else nullcontext():
+        first = read()
+        expected = first.to_dict()
+        first.producer_ref["producer_id"] = "caller mutation"
+        assert read().to_dict() == expected
+    assert len(copied) == (2 if scoped else 0)
+    assert jsonl.read_bytes() == before
 
 
 def test_canonical_readers_reuse_validated_bytes_but_recheck_projection(

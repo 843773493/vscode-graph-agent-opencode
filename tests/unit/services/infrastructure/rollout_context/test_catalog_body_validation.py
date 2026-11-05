@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 
 import pytest
 
@@ -113,8 +114,9 @@ def test_borrowed_scope_respects_outer_capacity(
     assert len(validation_calls) == 3
 
 
+@pytest.mark.parametrize("scoped", [False, True])
 def test_body_validation_returns_isolated_nested_values_on_every_read(
-    validation_calls: list[object],
+    validation_calls: list[object], scoped: bool,
 ) -> None:
     item = CanonicalItemRecord.create(
         item_sequence=1, item_id="nested-validation", semantic_kind="user_input",
@@ -129,7 +131,7 @@ def test_body_validation_returns_isolated_nested_values_on_every_read(
         "payload_length": payload_content_length(item.payload_kind, item.payload),
         "source_revision": f"canonical:{item.item_id}:{item.content_hash}",
     }
-    with integrity.catalog_body_validation_scope():
+    with integrity.catalog_body_validation_scope() if scoped else nullcontext():
         first = integrity.read_catalog_body(raw, **parameters)
         assert isinstance(first.payload, dict)
         assert isinstance(first.payload["text"], list)
@@ -143,9 +145,24 @@ def test_body_validation_returns_isolated_nested_values_on_every_read(
         second.payload["text"].append("second caller mutation")
         third = integrity.read_catalog_body(raw, **parameters)
         assert third.to_dict() == item.to_dict()
-    assert len(validation_calls) == 1
+    assert len(validation_calls) == (1 if scoped else 3)
     assert integrity.read_catalog_body(raw, **parameters).to_dict() == item.to_dict()
-    assert len(validation_calls) == 2
+    assert len(validation_calls) == (2 if scoped else 4)
+
+
+def test_unscoped_body_read_does_not_copy_a_newly_parsed_item(
+    body_input_factory: _BodyInputFactory, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, parameters = body_input_factory()
+
+    def unexpected_copy(_item):
+        raise AssertionError("无缓存作用域的解析结果已独占，不需要再次深拷贝")
+
+    monkeypatch.setattr(integrity, "deepcopy", unexpected_copy)
+    first = integrity.read_catalog_body(raw, **parameters)
+    first.producer_ref["producer_id"] = "caller mutation"
+    second = integrity.read_catalog_body(raw, **parameters)
+    assert second.producer_ref["producer_id"] == "body-ingress"
 
 
 @pytest.mark.parametrize(("field", "changed"), [

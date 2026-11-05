@@ -150,11 +150,13 @@ def read_catalog_body(
     """返回调用方独有的 typed item，避免可变正文污染同次校验结果。
 
     同次 prepare 只复用完整原字节和 catalog 参数均相等的成功结果；缓存
-    不持有调用方可修改的容器，每次返回独立副本。投影索引仍由读取方现查。
+    不持有调用方可修改的容器，每次返回独立对象。投影索引仍由读取方现查。
     """
-    return deepcopy(_validated_catalog_body(
+    item = _validated_catalog_body(
         (raw, sequence, item_id, catalog_hash, payload_length, source_revision),
-    ))
+    )
+    # 无校验作用域时解析结果未被缓存，已由本次读取独占，无须再复制整份正文。
+    return deepcopy(item) if _body_validation_scope.get() is not None else item
 
 
 def _validated_catalog_body(key: _BodyValidationKey) -> CanonicalItemRecord:
