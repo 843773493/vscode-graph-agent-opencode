@@ -40,6 +40,7 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     COMMIT_IDEMPOTENCY_INDEX_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
     ITEM_CATALOG_LOCATOR_INDEX_SQL,
+    ITEM_CATALOG_MODEL_TOOL_INDEX_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
@@ -601,4 +602,5 @@ class RolloutMaintenanceOwner(
                 if not needs_schema:
                     connection.execute(ITEM_CATALOG_LOCATOR_INDEX_SQL)
                     connection.execute(COMMIT_IDEMPOTENCY_INDEX_SQL)
+                    connection.execute(ITEM_CATALOG_MODEL_TOOL_INDEX_SQL)
                 return manifest

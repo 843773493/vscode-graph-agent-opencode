@@ -80,16 +80,11 @@ def _tool_result_identity(
     )
 
 
-def _tool_result_scope(identity: ItemProjectionIdentity | None) -> str | None:
-    """只读取已封存 typed model-call scope。"""
-    return f"model-call:{identity.model_call_id}" if identity is not None and identity.model_call_id is not None else None
-
-
 def _select_existing_tool_result(
     connection: sqlite3.Connection,
     item: CanonicalItemRecord,
 ) -> sqlite3.Row | None:
-    """按 turn 与规范化 provider call identity 选择既有结果。
+    """按同一 Turn、ModelCall 与规范化 provider call identity 选择既有结果。
 
     checkpoint carrier 通常只保存原始 call ID，而 stream carrier 可能保存
     ``{model_call_id}:tool-call:{call_id}``。两者是同一次工具结果；但同一
@@ -101,20 +96,22 @@ def _select_existing_tool_result(
     if identity is None or item.projection_identity is None or item.projection_identity.model_call_id is None:
         return None
     raw_tool_call_id, normalized_tool_call_id = identity
+    model_call_id = item.projection_identity.model_call_id
+    # 先按 typed 调用坐标缩小候选，不反复解码同一 Turn（含全部内部历史）的结果。
+    # 候选按载体类型和数量消歧，不依赖历史排序，避免为排序扫描整个类别索引。
     rows = connection.execute(
-        "SELECT item_id, content_hash, commit_id, jsonl_offset, jsonl_length, "
-        "projection_manifest_json, tool_call_id FROM item_catalog "
-        "WHERE semantic_kind = 'tool_result' AND turn_id IS ? "
-        "ORDER BY item_sequence",
-        (item.turn_id,),
+        "SELECT item_id, commit_id, projection_manifest_json, tool_call_id FROM item_catalog "
+        "WHERE semantic_kind='tool_result' AND turn_id IS ? AND tool_call_id IN (?,?) "
+        "AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=?",
+        (item.turn_id, normalized_tool_call_id, f"{model_call_id}:tool-call:{normalized_tool_call_id}", model_call_id),
     ).fetchall()
-    incoming_scope = _tool_result_scope(item.projection_identity)
+    incoming_request = item.projection_identity.projection_message_id is not None
     scoped_candidates: list[sqlite3.Row] = []
+    same_carrier: list[sqlite3.Row] = []
     for row in rows:
-        manifest = parse_item_projection_manifest(json.loads(row[5]))
-        projection = manifest["projection_identity"]
-        identity = ItemProjectionIdentity.from_dict(projection) if projection is not None else None
-        existing_raw_tool_call_id = row[6]
+        manifest = parse_item_projection_manifest(json.loads(row[2]))
+        identity = ItemProjectionIdentity.from_dict(manifest["projection_identity"])
+        existing_raw_tool_call_id = row[3]
         if not isinstance(existing_raw_tool_call_id, str) or not existing_raw_tool_call_id:
             raise RuntimeError(f"既有 tool_result 缺少 typed call identity: {row[0]}")
         if (
@@ -122,13 +119,9 @@ def _select_existing_tool_result(
             != normalized_tool_call_id
         ):
             continue
-        if incoming_scope is not None and _tool_result_scope(identity) == incoming_scope:
-            scoped_candidates.append(row)
-    incoming_request = item.projection_identity.projection_message_id is not None
-    same_carrier = [
-        row for row in scoped_candidates
-        if (parse_item_projection_manifest(json.loads(row[5]))["projection_identity"].get("projection_message_id") is not None) == incoming_request
-    ]
+        scoped_candidates.append(row)
+        if (identity.projection_message_id is not None) == incoming_request:
+            same_carrier.append(row)
     # P 与 A 是同一结果的不同投影；复用时优先同类，不能把已有合法双载体当歧义。
     preferred = same_carrier or scoped_candidates
     if len(preferred) == 1:

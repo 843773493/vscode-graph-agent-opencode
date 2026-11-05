@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
@@ -21,10 +20,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
-from app.domain.itemized.records import (
-    CanonicalItemRecord,
-    parse_item_projection_manifest,
-)
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.tool_result_identity import (
     _same_tool_result_payload,
     _select_existing_tool_result,
@@ -63,9 +59,11 @@ class CanonicalItemCommitMixin:
                 ).fetchone()
                 if model_owner != (admission.execution_id,):
                     raise RuntimeError("工具终态的 ModelCall 不属于原 execution")
+                # 先按调用索引取得 locator，再恢复声明原序，避免为排序遍历全部历史工具调用。
                 declarations = connection.execute(
-                    "SELECT item_id,execution_id,turn_id FROM item_catalog WHERE semantic_kind='tool_call' "
-                    "AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=? ORDER BY item_sequence",
+                    "SELECT item_id,execution_id,turn_id FROM item_catalog WHERE item_sequence IN ("
+                    "SELECT item_sequence FROM item_catalog WHERE semantic_kind='tool_call' "
+                    "AND json_extract(projection_manifest_json,'$.projection_identity.model_call_id')=?) ORDER BY item_sequence",
                     (completion.model_call_id,),
                 ).fetchall()
                 declaration_items = self._storage.read_items(
@@ -270,72 +268,15 @@ class CanonicalItemCommitMixin:
                                 existing_result[0],
                                 field="item_catalog.item_id",
                             )
-                            result_offset = strict_non_negative_int(
-                                existing_result[3],
-                                field="item_catalog.jsonl_offset",
-                            )
-                            result_length = strict_non_negative_int(
-                                existing_result[4],
-                                field="item_catalog.jsonl_length",
-                            )
                             result_commit_id = strict_non_negative_int(
-                                existing_result[2],
+                                existing_result[1],
                                 field="item_catalog.commit_id",
                             )
-                            if result_length == 0:
-                                raise RuntimeError(
-                                    "既有 tool_result canonical locator 长度非法: "
-                                    f"{result_item_id}"
-                                )
-                            result_path = self._storage.jsonl_path(
-                                session_id,
-                                checkpoint_ns,
-                                thread_id=thread_id,
+                            # 复用统一的定点读取与完整性校验，不能为一条结果加载整个 JSONL。
+                            existing_item = self._storage._read_canonical_item_from_catalog(
+                                connection, session_id=session_id, thread_id=thread_id,
+                                checkpoint_ns=checkpoint_ns, item_id=result_item_id,
                             )
-                            raw_result = result_path.read_bytes()[
-                                result_offset : result_offset + result_length
-                            ]
-                            try:
-                                existing_envelope = json.loads(
-                                    raw_result.decode("utf-8")
-                                )
-                            except (
-                                UnicodeDecodeError,
-                                json.JSONDecodeError,
-                            ) as error:
-                                raise RuntimeError(
-                                    "既有 tool_result canonical envelope 无法读取: "
-                                    f"{result_item_id}"
-                                ) from error
-                            if not isinstance(existing_envelope, Mapping):
-                                raise RuntimeError(
-                                    "既有 tool_result canonical envelope 非 object: "
-                                    f"{result_item_id}"
-                                )
-                            existing_item = CanonicalItemRecord.from_dict(
-                                existing_envelope
-                            )
-                            existing_manifest = parse_item_projection_manifest(
-                                json.loads(existing_result[5])
-                            )
-                            if (
-                                existing_item.item_id != result_item_id
-                                or existing_manifest
-                                != existing_item.projection_manifest()
-                                or existing_item.content_hash != existing_result[1]
-                            ):
-                                raise RuntimeError(
-                                    f"既有 tool_result catalog 与 JSONL 不一致: {result_item_id}"
-                                )
-                            existing_call = (
-                                existing_item.tool_result_evidence.tool_call_id
-                                if existing_item.tool_result_evidence
-                                else existing_item.payload["tool_call_id"]
-                            )
-                            if existing_call != existing_result[6]:
-                                raise RuntimeError(
-                                    f"既有 tool_result 派生 call identity 与 JSONL 不一致: {result_item_id}"
-                                )
                             if not _same_tool_result_payload(existing_item, item):
                                 identity = _tool_result_identity(item)
                                 raise ItemSchemaError(
