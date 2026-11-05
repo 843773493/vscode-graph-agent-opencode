@@ -296,8 +296,9 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             return source_ordinal
         if expected_source_revision is not None:
             raise ValueError("context contribution revision CAS 冲突：slot 不存在")
+        # 显式匹配现有部分索引的条件，让取末尾序号使用索引，避免每次登记扫描全部来源。
         source_ordinal_row = connection.execute(
-            "SELECT COALESCE(MAX(source_ordinal), -1) + 1 FROM context_contributions"
+            "SELECT COALESCE(MAX(source_ordinal), -1) + 1 FROM context_contributions WHERE source_ordinal IS NOT NULL"
         ).fetchone()
         if source_ordinal_row is None:
             raise RuntimeError("context contribution source_ordinal 查询失败")
