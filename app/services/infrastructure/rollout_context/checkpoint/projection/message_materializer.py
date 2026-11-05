@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
-from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import read_view_ancestry
+from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import (
+    read_view_ancestry,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
@@ -75,6 +78,12 @@ class RolloutMessageMaterializerMixin:
             checkpoint_ns,
             thread_id=thread_id,
         ).open("rb") as stream:
+            # 同一批消息只读同一事务；commit 与历史授权共用成功校验，
+            # 每条 item 的 locator、正文和投影仍逐条核验，下一批重新检查。
+            read_item = partial(
+                self._storage._read_v2_item_at,
+                validated_commits=set(), validated_scopes=set(),
+            )
             for (
                 sequence_value,
                 message_id,
@@ -114,7 +123,7 @@ class RolloutMessageMaterializerMixin:
                     stream,
                     offset=offset,
                     length=length,
-                    read_item=self._storage._read_v2_item_at,
+                    read_item=read_item,
                 )
                 item = items[-1]
                 # checkpoint 与 fork anchor 会再次进入 canonical 提交，必须保留原 payload；

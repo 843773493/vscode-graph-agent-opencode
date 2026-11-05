@@ -11,7 +11,9 @@ from collections.abc import Sequence
 from typing import BinaryIO
 
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.storage.catalog.history_scope import require_historical_scope
+from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
+    require_historical_scope,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
     read_catalog_body,
     validate_catalog_projection,
@@ -23,7 +25,6 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_text,
     validate_stored_commit,
 )
-
 
 # 与正文 locator 同次查询提交和 owner；按 item 主键选集做索引连接，不扫描未消费历史。
 CATALOG_READ_COLUMNS = (
@@ -78,6 +79,8 @@ class RolloutCanonicalReadMixin:
         sequence: int,
         offset: int,
         length: int,
+        validated_commits: set[int] | None = None,
+        validated_scopes: set[tuple[str, str]] | None = None,
     ) -> CanonicalItemRecord:
         """从 catalog 指向的 JSONL line 读取并校验唯一 canonical item。
 
@@ -121,7 +124,8 @@ class RolloutCanonicalReadMixin:
             )
         validate_catalog_read_boundary(
             connection, catalog[8:], item_id=item_id, offset=offset, length=length,
-            validated_commits=set(), validated_scopes=set(),
+            validated_commits=set() if validated_commits is None else validated_commits,
+            validated_scopes=set() if validated_scopes is None else validated_scopes,
         )
         item = read_catalog_body(
             raw, sequence=sequence, item_id=item_id,

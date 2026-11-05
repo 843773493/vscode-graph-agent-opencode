@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
@@ -484,13 +485,18 @@ class IndexedRecordQueryMixin:
             checkpoint_ns,
             thread_id=thread_id,
         ).open("rb") as stream:
+            # 只在本次有界只读批次复用提交与历史授权，不能跨请求或写入复用。
+            read_item = partial(
+                self._storage._read_v2_item_at,
+                validated_commits=set(), validated_scopes=set(),
+            )
             for sequence, turn_id_value, offset, length in indexed_rows:
                 items = read_message_group(
                     connection,
                     stream,
                     offset=offset,
                     length=length,
-                    read_item=self._storage._read_v2_item_at,
+                    read_item=read_item,
                 )
                 message = self._context.attachment_projection.project_message_attachments(session_id, thread_id, self._storage._codec().project_message(items))
                 message_identity = messages_by_sequence.get(sequence)
