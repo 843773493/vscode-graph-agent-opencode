@@ -43,7 +43,7 @@
 
 Workspace／Session 资源 metadata 只验证对象结构；定位字段在具体 typed schema 和 owner 明确声明。删除按 path/cwd/directory 后缀扫描的实现及调用，不留空兼容函数。真实 cwd_relative 的原生相对约束仍由其资源 owner 执行。
 
-已知文件操作使用已核定的文件错误事实保留目标、系统码与原因；不能把任意异常全文当作可公开诊断。Provider、凭据、配置正文和内部校验输入继续按来源保护。共享失败出口保持异常身份、cause、request_id 与日志次错结算，不为展示路径引入另一错误存储链。
+已知文件操作使用已核定的文件错误事实保留目标、系统码与原因；file_access／file_access_error_detail 与 DetailFiles._path_access 不得在下游仅为隐藏路径再次去掉 filename／strerror。迁齐权威错误写入方、直接／间接展示和冷读测试后物理删除旧包装，不叠加新的异常适配层。不能把任意异常全文当作可公开诊断。Provider、凭据、配置正文和内部校验输入继续按来源保护。共享失败出口保持异常身份、cause、request_id 与日志次错结算，不为展示路径引入另一错误存储链。
 
 ### D1a：三种文件输入在目标端统一解释
 

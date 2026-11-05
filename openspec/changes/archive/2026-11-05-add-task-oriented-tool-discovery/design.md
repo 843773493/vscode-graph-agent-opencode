@@ -1,3 +1,5 @@
+2026-11-04 交付边界：主动跨 execution 持有／释放 MCP 逻辑会话继续延期，保留需求而不作为本轮实现、验收或归档前置；不新增通用工具、固定机制或第二账本。本轮其余功能按真实证据收尾。
+
 ## Context
 
 动机见 proposal.md。本设计以当前已落地的唯一 owner／Registry／activation／seal 链路为基线，并承接进行中的上下文与 itemized 规格，不另建运行时。
