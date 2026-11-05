@@ -76,7 +76,7 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     state.record_gateway_runtime_generation.return_value = SimpleNamespace(state="starting")
     state.update_gateway_runtime_generation.side_effect = lambda **kwargs: SimpleNamespace(state=kwargs["state"])
     state.close.side_effect = lambda: drain("state")
-    registry = Mock(active_workspace_id=None)
+    registry = Mock(active_workspace=None, active_workspace_dto=None)
     registry.targets.return_value = ()
     registry.close.side_effect = lambda **kwargs: drain("registry")
     config = GatewayConfig(

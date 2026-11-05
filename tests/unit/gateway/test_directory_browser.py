@@ -269,7 +269,7 @@ async def test_registration_http_consumes_selected_directory_uri(
     listing = await _directory_listing(gateway_directory_request, str(directory_root), limit=120)
     app = gateway_directory_request.app
     registry = AsyncMock()
-    registry.active_workspace_id = None
+    registry.active_workspace_dto = None
     registry.list_dtos.return_value = []
     app.include_router(router)
     app.dependency_overrides[verify_gateway_token] = lambda: "local-token"

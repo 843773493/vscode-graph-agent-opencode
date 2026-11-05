@@ -123,10 +123,10 @@ async def skill_route_case(tmp_path: Path):
             owner = GatewaySkillSourceOwner(gateway_id=gateway_id, skills_root=root / "skills")
             owner._publish()
             owners.append(owner)
-            registry = GatewayWorkspaceRegistry(storage_path=root / "registry.json")
+            registry = GatewayWorkspaceRegistry(storage_path=root / "registry.json", gateway_id=gateway_id)
             registry.upsert(WorkspaceTarget(
-                workspace_id="local-workspace", name="shared", root_path=str(tmp_path / "workspace"),
-                backend_workspace_id=WORKSPACE_ID, backend_url="http://unused.test",
+                gateway_id=gateway_id, workspace_id=WORKSPACE_ID, name="shared", root_path=str(tmp_path / "workspace"),
+                backend_url="http://unused.test",
                 connection_kind="local", managed=False,
             ))
             registries.append(registry)

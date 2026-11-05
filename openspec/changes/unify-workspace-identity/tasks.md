@@ -302,3 +302,8 @@
 - 两组真实Gateway装具均从原生Gateway健康响应与工作区身份文件核验完整owner，普通请求固定双目标头，不从活动项补齐归属。HTTP Skill双工作区入口保留共享原件只获取一次、每个工作区冻结与更新后的原强断言，正式矩阵1 passed／93.32秒、退出0。
 - 会话生成策略正式矩阵6 passed／1 failed／129.08秒；失败项已创建并执行分支，在原40次等待内仍reporting，未放宽期限或宣称整组通过。原trace随后显示汇报Job完成，创建至完成8.90秒，agent_start至模型请求4.87秒；TODO保持：进一步定位请求前准备耗时。另一个原长窗口终态用例通过，不能替代短窗口性能验收。
 - 原始命令、首尾源码SHA及退出码：`out/tests/temp/identity_remaining_web_20261105/artifacts/gateway-http-skill-owner-product-1793858643861942969.json`、`task-generation-owner-product-1793858388101593363.json`、`generation-report-timing-attribution.json`。两文件与既有静态交付及真实执行首尾完全相同，Ruff通过；五文件Pyright72／72既存诊断，新增0，原件在 `identity_remaining_backend_20261105/artifacts/evidence-index.json` 和 `pyright-attribution-01.json`，匹配收据为 `generation-skill-source-attribution.json`。6.4尚未完成。
+
+### 2026-11-05：6.4 Skill、代理及日志面板单测消费者
+
+- 原生Gateway的Skill publication／联邦路由、catalog端口刷新、WebSocket、目录注册及lifespan装具删除旧身份字段；registry与controller明确读取同隔离Gateway根的权威身份。Skill43项通过；Gateway原51项中的41项通过后保持源码不变，修正controller身份装具的完整文件补验10项通过，原失败保留。
+- 日志面板3 passed／24断言，以相同UUID、不同Gateway验证真实API双目标头，保留迟到输出、切换空窗和隐藏停止读取的原断言。最终Ruff／ESM与diff检查通过，八文件Pyright当前26／完整提交归档基线36，无新增；完整Web tsc28／28无新增。根复核差异及交付SHA，命令、源码和原始结果在 `out/tests/temp/identity_remaining_backend_20261105/artifacts/extra-evidence-index-04.json`、`extra-checks-index-04.json`、`extra-pyright-attribution-seal-04.json` 与 `extra-web-type-attribution-04.json`。此组不代替真实Web／联邦网络验收，6.4保持未勾。

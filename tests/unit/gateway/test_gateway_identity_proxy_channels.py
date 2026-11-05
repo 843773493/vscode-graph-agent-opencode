@@ -1,9 +1,9 @@
 """3.4-C：三条代理通道都必须按请求注入权威 ``X-BoxTeam-Gateway-Id``。
 
 覆盖 Gateway 侧三条原本漏注入的代理通道：WebSocket 中继、生命周期/配置
-control-plane（``_backend_headers``）、联邦冷 catalog 端口。三者取值必须与两条
-HTTP 代理同源（``load_proxy_gateway_id``），且必须是本机 ``identity.json`` 里的
-真实 gateway_id，而不是任何字面量或瞬时通道标识。
+control-plane（``_backend_headers``）、联邦冷 catalog 端口。控制面读取 registry
+的原生 Gateway 身份，代理与联邦端口读取同一隔离 Gateway 根的 ``identity.json``；
+三者必须保留真实 gateway_id，而不是任何字面量或瞬时通道标识。
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def test_backend_headers_inject_authoritative_gateway_id(tmp_path: Path) -> None
     """生命周期/配置 control-plane 的 ``_backend_headers`` 注入真实 gateway_id。"""
 
     controller = GatewayWorkspaceRuntimeController(
-        registry=GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json"),
+        registry=GatewayWorkspaceRegistry(storage_path=get_gateway_root() / "workspaces.json"),
         project_root=tmp_path,
         log_dir=tmp_path / "logs",
     )
@@ -107,7 +107,7 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     ) as client:
         port = WorkspaceCatalogPort(http_client=client)
         port.project_workspaces(
-            (("gw_catalog", "http://127.0.0.1:41100", "00000000-0000-4000-8000-000000000001"),)
+            (("00000000-0000-4000-8000-000000000001", "http://127.0.0.1:41100"),)
         )
         workspaces = await port.local_session_workspaces("session_catalog_identity")
 
@@ -153,15 +153,17 @@ async def test_auxiliary_websocket_injects_authoritative_gateway_id(
 ) -> None:
     """WebSocket 中继在握手时注入权威 gateway_id，客户端无法自带该头。"""
 
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    gateway_id = load_or_create_gateway_id(get_gateway_root() / "identity.json")
+    workspace_id = "00000000-0000-4000-8000-000000000001"
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json", gateway_id=gateway_id)
     registry.upsert(
         WorkspaceTarget(
-            workspace_id="gw_ws",
+            gateway_id=gateway_id,
+            workspace_id=workspace_id,
             name="ws",
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41100",
             connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"terminal_manager": "http://127.0.0.1:41101/api"}
@@ -172,6 +174,7 @@ async def test_auxiliary_websocket_injects_authoritative_gateway_id(
     application = FastAPI()
     application.state.registry = registry
     websocket = _FakeWebSocket(application)
+    websocket.headers = {"X-BoxTeam-Target-Gateway-Id": gateway_id, "X-BoxTeam-Workspace-Id": workspace_id}
     websocket.query_params = {"token": get_gateway_local_token()}
 
     handshake: dict[str, object] = {}
@@ -208,7 +211,7 @@ async def test_auxiliary_websocket_injects_authoritative_gateway_id(
     with anyio.move_on_after(2):
         await _proxy_auxiliary_websocket(
             websocket=websocket,  # type: ignore[arg-type]
-            workspace_id="gw_ws",
+            workspace_id=workspace_id,
             service="terminal_manager",
             socket_path="terminal",
         )
@@ -218,6 +221,7 @@ async def test_auxiliary_websocket_injects_authoritative_gateway_id(
     headers = handshake["headers"]
     assert isinstance(headers, dict)
     assert headers["X-BoxTeam-Gateway-Id"] == _gateway_id(tmp_path)
+    assert headers["X-BoxTeam-Workspace-Id"] == workspace_id
     # WebSocket 握手只转发显式写入的头部；客户端自定义无关头不会漂到上游。
     assert "X-BoxTeam-Federation-Token" not in headers
-    assert registry.route_reference_counts("gw_ws") == (0, 0)
+    assert registry.route_reference_counts((gateway_id, workspace_id)) == (0, 0)

@@ -69,10 +69,10 @@ async def publication_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requ
     skill.parent.mkdir(parents=True)
     skill.write_text("已发布的初版\n")
     owner = GatewaySkillSourceOwner(gateway_id=GATEWAY, skills_root=skill.parent.parent)
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json", gateway_id=GATEWAY)
     registry.upsert(WorkspaceTarget(
-        workspace_id="local-workspace", name="test", root_path=str(tmp_path / "workspace"),
-        backend_workspace_id=WORKSPACE, backend_url="http://unused.test", connection_kind="local", managed=False,
+        gateway_id=GATEWAY, workspace_id=WORKSPACE, name="test", root_path=str(tmp_path / "workspace"),
+        backend_url="http://unused.test", connection_kind="local", managed=False,
     ))
     app = FastAPI()
     app.add_middleware(TraceMiddleware)

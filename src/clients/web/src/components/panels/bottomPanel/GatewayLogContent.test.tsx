@@ -6,10 +6,17 @@ import {
 } from "../../../tests/fixtures/session/gatewayEnvironment";
 import { GatewayLogContent } from "./GatewayLogContent";
 import type { ReactNode } from "react";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 
 afterEach(() => restoreGatewayTestEnvironment());
 
 const renderToolbar = (tools: ReactNode) => <header>{tools}</header>;
+const workspaces = [
+  { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001", label: "ws_a" },
+  { gatewayId: "gateway_00000000000040008000000000000002", workspaceId: "00000000-0000-4000-8000-000000000001", label: "ws_b" },
+];
+const owners = workspaces.map(({ gatewayId, workspaceId }) => ({ gatewayId, workspaceId }));
+const workspaceKeys = workspaces.map(gatewayWorkspaceKey);
 
 /** GatewayLogContent 会注册 3 秒轮询，测试环境必须显式提供 setInterval。 */
 function installPollingWindow(port: number): void {
@@ -27,27 +34,28 @@ function installPollingWindow(port: number): void {
   });
 }
 
-function diagnosticsPayload(workspaceId: string) {
+function diagnosticsPayload(workspace: typeof workspaces[number]) {
+  const { gatewayId, workspaceId, label } = workspace;
   return {
-    gateway_id: "gateway_local",
+    gateway_id: gatewayId,
     gateway_name: "本机 Gateway",
     gateway_connection_id: null,
     connection_kind: "local",
     status: "ready",
     checked_at: "2026-08-02T00:00:00Z",
     selected_workspace_id: workspaceId,
-    selected_log_id: `log_${workspaceId}`,
+    selected_log_id: `log_${label}`,
     workspaces: [],
     logs: [
       {
-        log_id: `log_${workspaceId}`,
+        log_id: `log_${label}`,
         source: "workspace",
         workspace_id: workspaceId,
-        workspace_name: workspaceId,
+        workspace_name: label,
         service: "workspace",
-        label: `输出-${workspaceId}`,
+        label: `输出-${label}`,
         status: "available",
-        tail: `TAIL_${workspaceId}`,
+        tail: `TAIL_${label}`,
         truncated: false,
         line_count: 1,
         size_bytes: 10,
@@ -59,23 +67,27 @@ function diagnosticsPayload(workspaceId: string) {
 }
 
 interface PendingDiagnosticsRequest {
-  workspaceId: string;
+  owner: { gatewayId: string; workspaceId: string };
   resolve: () => void;
 }
 
 function installPendingDiagnosticsFetch(token: string): PendingDiagnosticsRequest[] {
   const pendingRequests: PendingDiagnosticsRequest[] = [];
-  installGatewayFetch(({ url, path, method }) => {
+  installGatewayFetch(({ url, path, method, init }) => {
     if (path !== "/api/gateway/diagnostics" || (method && method !== "GET")) return undefined;
     const workspaceId = new URL(url, "http://localhost").searchParams.get("workspace_id");
     if (!workspaceId) return undefined;
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(workspaceId);
+    const workspace = workspaces.find(item => item.gatewayId === headers.get("X-BoxTeam-Target-Gateway-Id") && item.workspaceId === workspaceId);
+    if (!workspace) throw new Error("输出装具收到未声明的完整工作区 owner");
     return new Promise<Response>((resolve) => {
       pendingRequests.push({
-        workspaceId,
+        owner: { gatewayId: workspace.gatewayId, workspaceId },
         resolve: () =>
           resolve(
             Response.json({
-              data: diagnosticsPayload(workspaceId),
+              data: diagnosticsPayload(workspace),
               request_id: `req_${workspaceId}`,
             }),
           ),
@@ -101,7 +113,7 @@ test("切换工作区后到达的旧输出不得覆盖新工作区", async () =>
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <GatewayLogContent apiPort={8025} workspaceId="ws_a" active renderToolbar={renderToolbar} />,
+      <GatewayLogContent apiPort={8025} workspaceId={workspaceKeys[0]} active renderToolbar={renderToolbar} />,
     );
   });
   await flush();
@@ -109,11 +121,11 @@ test("切换工作区后到达的旧输出不得覆盖新工作区", async () =>
   // 第一次请求仍在途时切换工作区，触发第二次请求。
   act(() => {
     renderer.update(
-      <GatewayLogContent apiPort={8025} workspaceId="ws_b" active renderToolbar={renderToolbar} />,
+      <GatewayLogContent apiPort={8025} workspaceId={workspaceKeys[1]} active renderToolbar={renderToolbar} />,
     );
   });
   await flush();
-  expect(pendingRequests.map((request) => request.workspaceId)).toEqual(["ws_a", "ws_b"]);
+  expect(pendingRequests.map((request) => request.owner)).toEqual(owners);
 
   // 新工作区先返回，旧工作区后返回。
   await act(async () => {
@@ -140,7 +152,7 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <GatewayLogContent apiPort={8028} workspaceId="ws_a" active renderToolbar={renderToolbar} />,
+      <GatewayLogContent apiPort={8028} workspaceId={workspaceKeys[0]} active renderToolbar={renderToolbar} />,
     );
   });
   await flush();
@@ -154,7 +166,7 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   // 切到 ws_b：该工作区的诊断请求仍在途。
   act(() => {
     renderer.update(
-      <GatewayLogContent apiPort={8028} workspaceId="ws_b" active renderToolbar={renderToolbar} />,
+      <GatewayLogContent apiPort={8028} workspaceId={workspaceKeys[1]} active renderToolbar={renderToolbar} />,
     );
   });
   await flush();
@@ -164,7 +176,7 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
   expect(during).not.toContain("请刷新后重试");
 
   // ws_b 到达后正常渲染，证明上面是切换空窗而不是把面板彻底卡死。
-  expect(pendingRequests.map((request) => request.workspaceId)).toEqual(["ws_a", "ws_b"]);
+  expect(pendingRequests.map((request) => request.owner)).toEqual(owners);
   await act(async () => {
     pendingRequests[1].resolve();
     await Promise.resolve();
@@ -178,13 +190,17 @@ test("切换工作区到新工作区期间不得继续渲染旧工作区日志",
 
 test("原生宿主隐藏输出时停止读取，重新展开保留筛选输入", async () => {
   let reads = 0;
-  installGatewayFetch(({ path }) => {
+  installGatewayFetch(({ path, url, init }) => {
     if (path !== "/api/gateway/diagnostics") return undefined;
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(owners[0].gatewayId);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(owners[0].workspaceId);
+    expect(new URL(url, "http://localhost").searchParams.get("workspace_id")).toBe(owners[0].workspaceId);
     reads += 1;
-    return Response.json({ data: diagnosticsPayload("ws_a"), request_id: "req_visibility" });
+    return Response.json({ data: diagnosticsPayload(workspaces[0]), request_id: "req_visibility" });
   }, { token: "visibility-token" });
   installPollingWindow(8025);
-  const view = (active: boolean) => <GatewayLogContent apiPort={8025} workspaceId="ws_a" active={active} renderToolbar={tools => <div>{tools}</div>} />;
+  const view = (active: boolean) => <GatewayLogContent apiPort={8025} workspaceId={workspaceKeys[0]} active={active} renderToolbar={tools => <div>{tools}</div>} />;
   let renderer!: ReactTestRenderer;
   await act(async () => { renderer = create(view(false)); });
   expect(reads).toBe(0);
