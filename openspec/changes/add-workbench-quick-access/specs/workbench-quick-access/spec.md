@@ -193,6 +193,22 @@
 - **WHEN** 用户分别选择文件、会话消息、工具结果、LLM 请求记录、Trace／运行日志并查询该类别中实际存在的内容
 - **THEN** 每类均能通过对应真实领域查询取得有界命中并定位原记录，不以空占位、只查标题、重复其它类别结果或仅查前端已加载内容冒充接入
 
+### Requirement: 运行日志以明确诊断来源接入同一联邦生命周期
+
+`runtime_log/content` SHALL 通过同一个 Gateway SearchJob 队列、剩余期限、配额、增量输出和唯一终态查询原 diagnostics owner。查询 SHALL 显式携带 `diagnostic_targets`，每个 Gateway 一条来源分支；分支的工作区 `owner` 与具名 `diagnostics` 归属必须二选一，原工作区冻结 scope 与 Provider 合同不变。Gateway 必须来自原冻结集合的 Gateway，workspace 来源只接受同 Gateway 的已选工作区子集；Gateway 自有来源单独明确选择，不隐式添加。事件 SHALL 携带原 Gateway typed 日志页及独立续点，不以虚假的工作区页承载共享进程日志。
+
+Quick Access SHALL 经同一个 `streamFederatedSearch` 展示有界命中、原来源与共享工作区、受限状态及继续动作。接受命中 SHALL 沿具名 diagnostics 精确定位入口在原诊断视图临时显示原行并高亮码点位置；不得仅导航到视图再要求重新搜索。日志查询和定位继续遵守原受认证管理权限，不作为普通文件、URI 或上下文引用发布。
+
+#### Scenario: 共享 Backend 不因选 A 与 B 重复读取
+
+- **WHEN** 用户明确选择 A+B 的运行日志，二者关联同一 Backend 文件
+- **THEN** 同一 Gateway 只分发一个诊断分支，原 owner 只读取一份文件并显示实际关联工作区；不自动加入 Gateway 自有日志
+
+#### Scenario: Gateway 日志命中可精确打开
+
+- **WHEN** 用户单独明确选择 Gateway 来源并接受一个正文命中
+- **THEN** 同一联邦客户端返回该来源的原行引用，原诊断视图精确读取并定位该行；旧行失效明确报错，不回退到最新 tail
+
 ### Requirement: 索引必须由各搜索 owner 自主负责
 
 是否使用索引及其技术、建立、维护、失效与重建 SHALL 由各搜索 owner 根据领域数据决定。统一快速访问 MUST NOT 要求所有数据汇入全局索引，MUST NOT 要求所有 owner 使用同一种索引技术。查询或聚合 SHALL 消费各 owner 的有界结果，不成为另一份业务权威；owner 使用索引时 SHALL 按原领域合同披露覆盖与新鲜度，保持权限、范围和查询语义。

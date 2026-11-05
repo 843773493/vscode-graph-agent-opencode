@@ -6,6 +6,8 @@
 
 /* eslint-disable */
 import {
+  GatewayDiagnosticLogQueryResultDTO,
+  GatewayDiagnosticLogQueryScopeDTO,
   GatewaySearchScopeRequest,
   GatewaySearchScopeResolutionDTO,
   GatewaySearchWorkspaceOwnerDTO,
@@ -24,6 +26,11 @@ export interface FederatedFileSearchTargetDTO {
   target: WorkspaceFileSearchTargetDTO | undefined;
 }
 
+export interface FederatedDiagnosticLogTargetDTO {
+  gateway_id: string;
+  scope: GatewayDiagnosticLogQueryScopeDTO | undefined;
+}
+
 export interface FederatedSearchQueryDTO {
   category: string;
   operation: string;
@@ -35,13 +42,18 @@ export interface FederatedSearchQueryDTO {
   file_targets: FederatedFileSearchTargetDTO[];
   allow_catalog_mirror?: boolean | undefined;
   context?: WorkspaceContextSearchOptionsDTO | undefined;
+  diagnostic_targets: FederatedDiagnosticLogTargetDTO[];
 }
 
 export interface FederatedSearchBranchKeyDTO {
   owner: GatewaySearchWorkspaceOwnerDTO | undefined;
   category: string;
   operation: string;
-  resource_uri?: string | undefined;
+  resource_uri?:
+    | string
+    | undefined;
+  /** 与 workspace owner 二选一；原始运行日志由 Gateway diagnostics 持有。 */
+  diagnostics?: FederatedDiagnosticLogTargetDTO | undefined;
 }
 
 export interface FederatedSearchContinuationDTO {
@@ -99,6 +111,7 @@ export interface FederatedSearchEventDTO {
   page: WorkspaceSearchResultDTO | undefined;
   summary: FederatedSearchSummaryDTO | undefined;
   source: FederatedSearchSourceDTO | undefined;
+  diagnostic_logs?: GatewayDiagnosticLogQueryResultDTO | undefined;
 }
 
 /** 复用原 Gateway inventory 的 read 授权，不新增资源种类或全局 cursor。 */
@@ -150,6 +163,44 @@ export const FederatedFileSearchTargetDTO: MessageFns<FederatedFileSearchTargetD
   },
 };
 
+function createBaseFederatedDiagnosticLogTargetDTO(): FederatedDiagnosticLogTargetDTO {
+  return { gateway_id: "", scope: undefined };
+}
+
+export const FederatedDiagnosticLogTargetDTO: MessageFns<FederatedDiagnosticLogTargetDTO> = {
+  fromJSON(object: any): FederatedDiagnosticLogTargetDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      scope: isSet(object.scope) ? GatewayDiagnosticLogQueryScopeDTO.fromJSON(object.scope) : undefined,
+    };
+  },
+
+  toJSON(message: FederatedDiagnosticLogTargetDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.scope !== undefined) {
+      obj.scope = GatewayDiagnosticLogQueryScopeDTO.toJSON(message.scope);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FederatedDiagnosticLogTargetDTO>, I>>(base?: I): FederatedDiagnosticLogTargetDTO {
+    return FederatedDiagnosticLogTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FederatedDiagnosticLogTargetDTO>, I>>(
+    object: I,
+  ): FederatedDiagnosticLogTargetDTO {
+    const message = createBaseFederatedDiagnosticLogTargetDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.scope = (object.scope !== undefined && object.scope !== null)
+      ? GatewayDiagnosticLogQueryScopeDTO.fromPartial(object.scope)
+      : undefined;
+    return message;
+  },
+};
+
 function createBaseFederatedSearchQueryDTO(): FederatedSearchQueryDTO {
   return {
     category: "",
@@ -161,6 +212,7 @@ function createBaseFederatedSearchQueryDTO(): FederatedSearchQueryDTO {
     file_targets: [],
     allow_catalog_mirror: undefined,
     context: undefined,
+    diagnostic_targets: [],
   };
 }
 
@@ -180,6 +232,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
         ? globalThis.Boolean(object.allow_catalog_mirror)
         : undefined,
       context: isSet(object.context) ? WorkspaceContextSearchOptionsDTO.fromJSON(object.context) : undefined,
+      diagnostic_targets: globalThis.Array.isArray(object?.diagnostic_targets)
+        ? object.diagnostic_targets.map((e: any) => FederatedDiagnosticLogTargetDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -212,6 +267,9 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     if (message.context !== undefined) {
       obj.context = WorkspaceContextSearchOptionsDTO.toJSON(message.context);
     }
+    if (message.diagnostic_targets?.length) {
+      obj.diagnostic_targets = message.diagnostic_targets.map((e) => FederatedDiagnosticLogTargetDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -231,12 +289,14 @@ export const FederatedSearchQueryDTO: MessageFns<FederatedSearchQueryDTO> = {
     message.context = (object.context !== undefined && object.context !== null)
       ? WorkspaceContextSearchOptionsDTO.fromPartial(object.context)
       : undefined;
+    message.diagnostic_targets =
+      object.diagnostic_targets?.map((e) => FederatedDiagnosticLogTargetDTO.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseFederatedSearchBranchKeyDTO(): FederatedSearchBranchKeyDTO {
-  return { owner: undefined, category: "", operation: "", resource_uri: undefined };
+  return { owner: undefined, category: "", operation: "", resource_uri: undefined, diagnostics: undefined };
 }
 
 export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO> = {
@@ -246,6 +306,7 @@ export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO
       category: isSet(object.category) ? globalThis.String(object.category) : "",
       operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
       resource_uri: isSet(object.resource_uri) ? globalThis.String(object.resource_uri) : undefined,
+      diagnostics: isSet(object.diagnostics) ? FederatedDiagnosticLogTargetDTO.fromJSON(object.diagnostics) : undefined,
     };
   },
 
@@ -263,6 +324,9 @@ export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO
     if (message.resource_uri !== undefined) {
       obj.resource_uri = message.resource_uri;
     }
+    if (message.diagnostics !== undefined) {
+      obj.diagnostics = FederatedDiagnosticLogTargetDTO.toJSON(message.diagnostics);
+    }
     return obj;
   },
 
@@ -277,6 +341,9 @@ export const FederatedSearchBranchKeyDTO: MessageFns<FederatedSearchBranchKeyDTO
     message.category = object.category ?? "";
     message.operation = object.operation ?? "";
     message.resource_uri = object.resource_uri ?? undefined;
+    message.diagnostics = (object.diagnostics !== undefined && object.diagnostics !== null)
+      ? FederatedDiagnosticLogTargetDTO.fromPartial(object.diagnostics)
+      : undefined;
     return message;
   },
 };
@@ -573,6 +640,7 @@ function createBaseFederatedSearchEventDTO(): FederatedSearchEventDTO {
     page: undefined,
     summary: undefined,
     source: undefined,
+    diagnostic_logs: undefined,
   };
 }
 
@@ -587,6 +655,9 @@ export const FederatedSearchEventDTO: MessageFns<FederatedSearchEventDTO> = {
       page: isSet(object.page) ? WorkspaceSearchResultDTO.fromJSON(object.page) : undefined,
       summary: isSet(object.summary) ? FederatedSearchSummaryDTO.fromJSON(object.summary) : undefined,
       source: isSet(object.source) ? FederatedSearchSourceDTO.fromJSON(object.source) : undefined,
+      diagnostic_logs: isSet(object.diagnostic_logs)
+        ? GatewayDiagnosticLogQueryResultDTO.fromJSON(object.diagnostic_logs)
+        : undefined,
     };
   },
 
@@ -616,6 +687,9 @@ export const FederatedSearchEventDTO: MessageFns<FederatedSearchEventDTO> = {
     if (message.source !== undefined) {
       obj.source = FederatedSearchSourceDTO.toJSON(message.source);
     }
+    if (message.diagnostic_logs !== undefined) {
+      obj.diagnostic_logs = GatewayDiagnosticLogQueryResultDTO.toJSON(message.diagnostic_logs);
+    }
     return obj;
   },
 
@@ -641,6 +715,9 @@ export const FederatedSearchEventDTO: MessageFns<FederatedSearchEventDTO> = {
       : undefined;
     message.source = (object.source !== undefined && object.source !== null)
       ? FederatedSearchSourceDTO.fromPartial(object.source)
+      : undefined;
+    message.diagnostic_logs = (object.diagnostic_logs !== undefined && object.diagnostic_logs !== null)
+      ? GatewayDiagnosticLogQueryResultDTO.fromPartial(object.diagnostic_logs)
       : undefined;
     return message;
   },

@@ -6,6 +6,11 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
 from app.gateway.federation.grants import ContextGrantTarget
+from app.schemas.canonical_params import CanonicalGatewayId
+from app.schemas.gateway.diagnostics import (
+    GatewayDiagnosticLogQueryResultDTO,
+    GatewayDiagnosticLogQueryScopeDTO,
+)
 from app.schemas.gateway.search import (
     GatewaySearchScopeRequest,
     GatewaySearchScopeResolutionDTO,
@@ -33,6 +38,13 @@ class FederatedFileSearchTargetDTO(BaseModel):
     target: WorkspaceFileSearchTargetDTO
 
 
+class FederatedDiagnosticLogTargetDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gateway_id: CanonicalGatewayId
+    scope: GatewayDiagnosticLogQueryScopeDTO
+
+
 class FederatedSearchQueryDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -45,6 +57,7 @@ class FederatedSearchQueryDTO(BaseModel):
     file_targets: tuple[FederatedFileSearchTargetDTO, ...] = Field(default=(), max_length=MAX_SEARCH_BRANCHES)
     allow_catalog_mirror: bool = False
     context: WorkspaceContextSearchOptionsDTO | None = None
+    diagnostic_targets: tuple[FederatedDiagnosticLogTargetDTO, ...] = Field(default=(), max_length=64)
 
     @model_validator(mode="after")
     def validate_file_targets(self) -> Self:
@@ -54,6 +67,13 @@ class FederatedSearchQueryDTO(BaseModel):
             raise ValueError("只有文件搜索接受目录根集合")
         if self.context is not None and self.category != "context":
             raise ValueError("只有上下文搜索接受来源及字符预算")
+        if self.category == "runtime_log":
+            if not self.diagnostic_targets or (self.operation, self.contract_version, self.match_mode) != ("content", 1, "literal"):
+                raise ValueError("运行日志查询需要明确 diagnostics 来源，并只支持 content v1 literal 合同")
+        elif self.diagnostic_targets:
+            raise ValueError("只有运行日志搜索接受 diagnostics 来源")
+        if len({target.gateway_id for target in self.diagnostic_targets}) != len(self.diagnostic_targets):
+            raise ValueError("同一次运行日志查询每个 Gateway 只能声明一个明确来源")
         keys = [(item.owner, item.target.uri) for item in self.file_targets]
         if len(set(keys)) != len(keys):
             raise ValueError("文件根不得重复声明；不同局部选项不能隐式覆盖")
@@ -63,13 +83,20 @@ class FederatedSearchQueryDTO(BaseModel):
 class FederatedSearchBranchKeyDTO(BaseModel, frozen=True):
     model_config = ConfigDict(extra="forbid")
 
-    owner: GatewaySearchWorkspaceOwnerDTO
+    owner: GatewaySearchWorkspaceOwnerDTO | None = None
+    diagnostics: FederatedDiagnosticLogTargetDTO | None = None
     category: str = Field(min_length=1, max_length=64)
     operation: str = Field(default="name", min_length=1, max_length=64)
     resource_uri: NavigationResourceURI | None = None
 
     @model_validator(mode="after")
     def validate_resource_branch(self) -> Self:
+        if (self.owner is None) == (self.diagnostics is None):
+            raise ValueError("搜索分支必须且只能属于工作区或明确 diagnostics 来源")
+        if (self.category == "runtime_log") != (self.diagnostics is not None):
+            raise ValueError("运行日志分支必须使用真实 diagnostics 来源，不得伪造工作区 owner")
+        if self.diagnostics is not None and self.operation != "content":
+            raise ValueError("运行日志分支只支持正文查询")
         if self.resource_uri is not None and self.category != "file":
             raise ValueError("只有文件分支接受目录根身份")
         return self
@@ -151,14 +178,21 @@ class FederatedSearchEventDTO(BaseModel):
     page: WorkspaceSearchResultDTO | None = None
     summary: FederatedSearchSummaryDTO | None = None
     source: FederatedSearchSourceDTO | None = None
+    diagnostic_logs: GatewayDiagnosticLogQueryResultDTO | None = None
 
     @model_validator(mode="after")
     def validate_payload(self) -> Self:
-        actual = self.scope is not None, self.branch is not None, self.page is not None, self.summary is not None
+        if self.page is not None and self.diagnostic_logs is not None:
+            raise ValueError("搜索事件不能同时携带工作区与 diagnostics 领域页")
+        actual = self.scope is not None, self.branch is not None, self.page is not None or self.diagnostic_logs is not None, self.summary is not None
         expected = {"scope": (True, False, False, False), "page": (False, True, True, False),
                     "branch": (False, True, False, False), "end": (False, False, False, True)}
         if actual != expected[self.type]:
             raise ValueError("搜索事件类型与 payload 不符")
+        if self.type == "page" and self.branch is not None and (
+            (self.branch.branch.diagnostics is not None) != (self.diagnostic_logs is not None)
+        ):
+            raise ValueError("搜索领域页必须属于分支声明的工作区或 diagnostics owner")
         if self.source is not None and self.type != "page":
             raise ValueError("只有搜索页携带来源信息")
         return self

@@ -35,7 +35,7 @@ from app.services.infrastructure.gateway_session_context_client import (
 )
 
 REQUEST_ID = "req_resource_search"
-OWNER = {"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "workspace_id": "workspace-a"}
+OWNER = {"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "workspace_id": "00000000-0000-4000-8000-000000000001"}
 
 
 class Stream(httpx.AsyncByteStream):
@@ -124,6 +124,58 @@ async def test_stream_preserves_domain_cursor_and_uses_only_one_gateway_request(
     assert request_body.deadline_at is None
 
 
+@pytest.fixture
+def diagnostic_request() -> FederatedSearchRequest:
+    return FederatedSearchRequest.model_validate({
+        "scope": {"mode": "origin", "origin": OWNER},
+        "queries": [{"category": "runtime_log", "operation": "content", "match_mode": "literal", "query": "日志😀词",
+                     "diagnostic_targets": [{"gateway_id": OWNER["gateway_id"], "scope": {"source": "workspace", "workspace_ids": [OWNER["workspace_id"]]}}]}],
+    })
+
+
+@pytest.fixture
+def diagnostic_events(events: list[dict], diagnostic_request: FederatedSearchRequest) -> list[dict]:
+    target = diagnostic_request.queries[0].diagnostic_targets[0]
+    branch = {"branch": {"diagnostics": target.model_dump(mode="json"), "category": "runtime_log", "operation": "content"},
+              "state": "limited", "code": "result_limit", "cursor": "original-log-cursor", "allocated_results": 1, "returned_results": 0}
+    page = {"gateway_id": target.gateway_id, "scope": target.scope.model_dump(mode="json"), "query": diagnostic_request.queries[0].query,
+            "items": [], "sources": [], "complete": False, "cursor": "original-log-cursor", "limited_reason": "result_limit",
+            "scanned_sources": 0, "scanned_lines": 0, "scanned_bytes": 0}
+    return [events[0], {"sequence": 2, "request_id": REQUEST_ID, "type": "page", "branch": branch, "diagnostic_logs": page},
+            {"sequence": 3, "request_id": REQUEST_ID, "type": "branch", "branch": branch},
+            {"sequence": 4, "request_id": REQUEST_ID, "type": "end", "summary": {"state": "incomplete", "branches": [branch], "returned_results": 0}}]
+
+
+async def test_diagnostics_use_same_original_sse_decoder_and_cursor(client, monkeypatch, diagnostic_events, diagnostic_request):
+    stream, requests = install_response(monkeypatch, client, diagnostic_events)
+    actual = [event async for event in client.resource_search.search(diagnostic_request, request_id=REQUEST_ID)]
+    assert stream.closed and len(requests) == 1
+    assert actual[1].page is None and actual[1].diagnostic_logs.query == "日志😀词"
+    assert actual[-1].summary.branches[0].cursor == "original-log-cursor"
+    assert actual[-1].summary.branches[0].branch.owner is None
+
+
+@pytest.mark.parametrize("damage", ["query", "unselected_target", "missing_branch", "scope"])
+async def test_diagnostics_cannot_change_query_source_or_omit_terminal(client, monkeypatch, diagnostic_events, diagnostic_request, damage):
+    if damage == "query":
+        diagnostic_events[1]["diagnostic_logs"]["query"] = "其它查询"
+    elif damage == "unselected_target":
+        for event in diagnostic_events:
+            if "branch" in event:
+                event["branch"]["branch"]["diagnostics"]["scope"]["workspace_ids"] = ["00000000-0000-4000-8000-000000000002"]
+        diagnostic_events[1]["diagnostic_logs"]["scope"]["workspace_ids"] = ["00000000-0000-4000-8000-000000000002"]
+    elif damage == "missing_branch":
+        diagnostic_events = [diagnostic_events[0], {"sequence": 2, "request_id": REQUEST_ID, "type": "end",
+                            "summary": {"state": "complete", "branches": [], "returned_results": 0}}]
+    else:
+        diagnostic_request = diagnostic_request.model_copy(update={"scope": diagnostic_request.scope.model_copy(update={"mode": "all", "origin": None})})
+        diagnostic_events[0]["scope"]["scope"]["owners"] = [{**OWNER, "workspace_id": "00000000-0000-4000-8000-000000000002"}]
+    stream, _ = install_response(monkeypatch, client, diagnostic_events)
+    with pytest.raises(RuntimeError):
+        _ = [event async for event in client.resource_search.search(diagnostic_request, request_id=REQUEST_ID)]
+    assert stream.closed
+
+
 @pytest.mark.parametrize("damage", ["request_id", "sequence", "scope", "page_owner", "count", "end", "duplicate", "early_end"])
 async def test_protocol_damage_is_explicit_and_closes_connection(client, monkeypatch, events, request_body, damage):
     if damage == "request_id":
@@ -131,9 +183,9 @@ async def test_protocol_damage_is_explicit_and_closes_connection(client, monkeyp
     elif damage == "sequence":
         events[1]["sequence"] = 6
     elif damage == "scope":
-        events[0]["scope"]["scope"]["owners"][0]["workspace_id"] = "workspace-b"
+        events[0]["scope"]["scope"]["owners"][0]["workspace_id"] = "00000000-0000-4000-8000-000000000002"
     elif damage == "page_owner":
-        events[1]["page"]["workspace_id"] = "workspace-b"
+        events[1]["page"]["workspace_id"] = "00000000-0000-4000-8000-000000000002"
     elif damage == "count":
         events[1]["branch"]["returned_results"] = 1
     elif damage == "end":

@@ -110,6 +110,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO",
         "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
         "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
+        "GatewayDiagnosticLogQueryRequest", "GatewayDiagnosticLogQueryResultDTO",
+        "GatewayDiagnosticLogLocateRequest", "GatewayDiagnosticLogLocationDTO",
         "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
         "GatewayConfigSourcesDTO", "GatewayConfigReloadStatusDTO", "GatewayConfigEventsDTO",
         "GatewayConfigPendingHealthProofRequest", "GatewayConfigPendingDiscardRequest",

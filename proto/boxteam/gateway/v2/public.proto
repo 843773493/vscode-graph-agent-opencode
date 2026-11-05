@@ -377,6 +377,73 @@ message GatewayDiagnosticsDTO {
   repeated GatewayDiagnosticProcessDTO processes = 11;
 }
 
+message GatewayDiagnosticLogQueryScopeDTO {
+  string source = 1;
+  repeated string workspace_ids = 2;
+}
+
+message GatewayDiagnosticLogQueryRequest {
+  GatewayDiagnosticLogQueryScopeDTO scope = 1;
+  string query = 2;
+  optional int32 limit = 3;
+  optional string cursor = 4;
+  optional double deadline_at = 5;
+}
+
+message GatewayDiagnosticLogQuerySourceDTO {
+  string log_id = 1;
+  string source = 2;
+  string service = 3;
+  string label = 4;
+  repeated string workspace_ids = 5;
+  string status = 6;
+  optional string error = 7;
+}
+
+message GatewayDiagnosticLogReferenceDTO {
+  string gateway_id = 1;
+  string log_id = 2;
+  string device = 3;
+  string inode = 4;
+  int64 line_start = 5;
+  int64 line_end = 6;
+  string content_version = 7;
+  int64 start_codepoint = 8;
+  int64 end_codepoint = 9;
+}
+
+message GatewayDiagnosticLogMatchDTO {
+  GatewayDiagnosticLogQuerySourceDTO source = 1;
+  GatewayDiagnosticLogReferenceDTO reference = 2;
+  string preview = 3;
+  int64 preview_start_codepoint = 4;
+}
+
+message GatewayDiagnosticLogQueryResultDTO {
+  string gateway_id = 1;
+  GatewayDiagnosticLogQueryScopeDTO scope = 2;
+  string query = 3;
+  repeated GatewayDiagnosticLogMatchDTO items = 4;
+  repeated GatewayDiagnosticLogQuerySourceDTO sources = 5;
+  bool complete = 6;
+  optional string cursor = 7;
+  optional string limited_reason = 8;
+  int64 scanned_sources = 9;
+  int64 scanned_lines = 10;
+  int64 scanned_bytes = 11;
+}
+
+message GatewayDiagnosticLogLocateRequest {
+  GatewayDiagnosticLogQueryScopeDTO scope = 1;
+  GatewayDiagnosticLogReferenceDTO reference = 2;
+}
+
+message GatewayDiagnosticLogLocationDTO {
+  GatewayDiagnosticLogQuerySourceDTO source = 1;
+  GatewayDiagnosticLogReferenceDTO reference = 2;
+  string text = 3;
+}
+
 message GatewayDirectoryEntryDTO {
   string name = 1;
   string path = 2;

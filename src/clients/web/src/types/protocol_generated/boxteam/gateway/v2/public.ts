@@ -381,6 +381,73 @@ export interface GatewayDiagnosticsDTO {
   processes: GatewayDiagnosticProcessDTO[];
 }
 
+export interface GatewayDiagnosticLogQueryScopeDTO {
+  source: string;
+  workspace_ids: string[];
+}
+
+export interface GatewayDiagnosticLogQueryRequest {
+  scope: GatewayDiagnosticLogQueryScopeDTO | undefined;
+  query: string;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  deadline_at?: number | undefined;
+}
+
+export interface GatewayDiagnosticLogQuerySourceDTO {
+  log_id: string;
+  source: string;
+  service: string;
+  label: string;
+  workspace_ids: string[];
+  status: string;
+  error?: string | undefined;
+}
+
+export interface GatewayDiagnosticLogReferenceDTO {
+  gateway_id: string;
+  log_id: string;
+  device: string;
+  inode: string;
+  line_start: number;
+  line_end: number;
+  content_version: string;
+  start_codepoint: number;
+  end_codepoint: number;
+}
+
+export interface GatewayDiagnosticLogMatchDTO {
+  source: GatewayDiagnosticLogQuerySourceDTO | undefined;
+  reference: GatewayDiagnosticLogReferenceDTO | undefined;
+  preview: string;
+  preview_start_codepoint: number;
+}
+
+export interface GatewayDiagnosticLogQueryResultDTO {
+  gateway_id: string;
+  scope: GatewayDiagnosticLogQueryScopeDTO | undefined;
+  query: string;
+  items: GatewayDiagnosticLogMatchDTO[];
+  sources: GatewayDiagnosticLogQuerySourceDTO[];
+  complete: boolean;
+  cursor?: string | undefined;
+  limited_reason?: string | undefined;
+  scanned_sources: number;
+  scanned_lines: number;
+  scanned_bytes: number;
+}
+
+export interface GatewayDiagnosticLogLocateRequest {
+  scope: GatewayDiagnosticLogQueryScopeDTO | undefined;
+  reference: GatewayDiagnosticLogReferenceDTO | undefined;
+}
+
+export interface GatewayDiagnosticLogLocationDTO {
+  source: GatewayDiagnosticLogQuerySourceDTO | undefined;
+  reference: GatewayDiagnosticLogReferenceDTO | undefined;
+  text: string;
+}
+
 export interface GatewayDirectoryEntryDTO {
   name: string;
   path: string;
@@ -3400,6 +3467,487 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     message.workspaces = object.workspaces?.map((e) => GatewayDiagnosticWorkspaceDTO.fromPartial(e)) || [];
     message.logs = object.logs?.map((e) => GatewayDiagnosticLogDTO.fromPartial(e)) || [];
     message.processes = object.processes?.map((e) => GatewayDiagnosticProcessDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogQueryScopeDTO(): GatewayDiagnosticLogQueryScopeDTO {
+  return { source: "", workspace_ids: [] };
+}
+
+export const GatewayDiagnosticLogQueryScopeDTO: MessageFns<GatewayDiagnosticLogQueryScopeDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLogQueryScopeDTO {
+    return {
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogQueryScopeDTO): unknown {
+    const obj: any = {};
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogQueryScopeDTO>, I>>(
+    base?: I,
+  ): GatewayDiagnosticLogQueryScopeDTO {
+    return GatewayDiagnosticLogQueryScopeDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogQueryScopeDTO>, I>>(
+    object: I,
+  ): GatewayDiagnosticLogQueryScopeDTO {
+    const message = createBaseGatewayDiagnosticLogQueryScopeDTO();
+    message.source = object.source ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogQueryRequest(): GatewayDiagnosticLogQueryRequest {
+  return { scope: undefined, query: "", limit: undefined, cursor: undefined, deadline_at: undefined };
+}
+
+export const GatewayDiagnosticLogQueryRequest: MessageFns<GatewayDiagnosticLogQueryRequest> = {
+  fromJSON(object: any): GatewayDiagnosticLogQueryRequest {
+    return {
+      scope: isSet(object.scope) ? GatewayDiagnosticLogQueryScopeDTO.fromJSON(object.scope) : undefined,
+      query: isSet(object.query) ? globalThis.String(object.query) : "",
+      limit: isSet(object.limit) ? globalThis.Number(object.limit) : undefined,
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      deadline_at: isSet(object.deadline_at) ? globalThis.Number(object.deadline_at) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogQueryRequest): unknown {
+    const obj: any = {};
+    if (message.scope !== undefined) {
+      obj.scope = GatewayDiagnosticLogQueryScopeDTO.toJSON(message.scope);
+    }
+    if (message.query !== "") {
+      obj.query = message.query;
+    }
+    if (message.limit !== undefined) {
+      obj.limit = Math.round(message.limit);
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.deadline_at !== undefined) {
+      obj.deadline_at = message.deadline_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogQueryRequest>, I>>(
+    base?: I,
+  ): GatewayDiagnosticLogQueryRequest {
+    return GatewayDiagnosticLogQueryRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogQueryRequest>, I>>(
+    object: I,
+  ): GatewayDiagnosticLogQueryRequest {
+    const message = createBaseGatewayDiagnosticLogQueryRequest();
+    message.scope = (object.scope !== undefined && object.scope !== null)
+      ? GatewayDiagnosticLogQueryScopeDTO.fromPartial(object.scope)
+      : undefined;
+    message.query = object.query ?? "";
+    message.limit = object.limit ?? undefined;
+    message.cursor = object.cursor ?? undefined;
+    message.deadline_at = object.deadline_at ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogQuerySourceDTO(): GatewayDiagnosticLogQuerySourceDTO {
+  return { log_id: "", source: "", service: "", label: "", workspace_ids: [], status: "", error: undefined };
+}
+
+export const GatewayDiagnosticLogQuerySourceDTO: MessageFns<GatewayDiagnosticLogQuerySourceDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLogQuerySourceDTO {
+    return {
+      log_id: isSet(object.log_id) ? globalThis.String(object.log_id) : "",
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      service: isSet(object.service) ? globalThis.String(object.service) : "",
+      label: isSet(object.label) ? globalThis.String(object.label) : "",
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogQuerySourceDTO): unknown {
+    const obj: any = {};
+    if (message.log_id !== "") {
+      obj.log_id = message.log_id;
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.service !== "") {
+      obj.service = message.service;
+    }
+    if (message.label !== "") {
+      obj.label = message.label;
+    }
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogQuerySourceDTO>, I>>(
+    base?: I,
+  ): GatewayDiagnosticLogQuerySourceDTO {
+    return GatewayDiagnosticLogQuerySourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogQuerySourceDTO>, I>>(
+    object: I,
+  ): GatewayDiagnosticLogQuerySourceDTO {
+    const message = createBaseGatewayDiagnosticLogQuerySourceDTO();
+    message.log_id = object.log_id ?? "";
+    message.source = object.source ?? "";
+    message.service = object.service ?? "";
+    message.label = object.label ?? "";
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    message.status = object.status ?? "";
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogReferenceDTO(): GatewayDiagnosticLogReferenceDTO {
+  return {
+    gateway_id: "",
+    log_id: "",
+    device: "",
+    inode: "",
+    line_start: 0,
+    line_end: 0,
+    content_version: "",
+    start_codepoint: 0,
+    end_codepoint: 0,
+  };
+}
+
+export const GatewayDiagnosticLogReferenceDTO: MessageFns<GatewayDiagnosticLogReferenceDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLogReferenceDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      log_id: isSet(object.log_id) ? globalThis.String(object.log_id) : "",
+      device: isSet(object.device) ? globalThis.String(object.device) : "",
+      inode: isSet(object.inode) ? globalThis.String(object.inode) : "",
+      line_start: isSet(object.line_start) ? globalThis.Number(object.line_start) : 0,
+      line_end: isSet(object.line_end) ? globalThis.Number(object.line_end) : 0,
+      content_version: isSet(object.content_version) ? globalThis.String(object.content_version) : "",
+      start_codepoint: isSet(object.start_codepoint) ? globalThis.Number(object.start_codepoint) : 0,
+      end_codepoint: isSet(object.end_codepoint) ? globalThis.Number(object.end_codepoint) : 0,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogReferenceDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.log_id !== "") {
+      obj.log_id = message.log_id;
+    }
+    if (message.device !== "") {
+      obj.device = message.device;
+    }
+    if (message.inode !== "") {
+      obj.inode = message.inode;
+    }
+    if (message.line_start !== 0) {
+      obj.line_start = Math.round(message.line_start);
+    }
+    if (message.line_end !== 0) {
+      obj.line_end = Math.round(message.line_end);
+    }
+    if (message.content_version !== "") {
+      obj.content_version = message.content_version;
+    }
+    if (message.start_codepoint !== 0) {
+      obj.start_codepoint = Math.round(message.start_codepoint);
+    }
+    if (message.end_codepoint !== 0) {
+      obj.end_codepoint = Math.round(message.end_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogReferenceDTO>, I>>(
+    base?: I,
+  ): GatewayDiagnosticLogReferenceDTO {
+    return GatewayDiagnosticLogReferenceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogReferenceDTO>, I>>(
+    object: I,
+  ): GatewayDiagnosticLogReferenceDTO {
+    const message = createBaseGatewayDiagnosticLogReferenceDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.log_id = object.log_id ?? "";
+    message.device = object.device ?? "";
+    message.inode = object.inode ?? "";
+    message.line_start = object.line_start ?? 0;
+    message.line_end = object.line_end ?? 0;
+    message.content_version = object.content_version ?? "";
+    message.start_codepoint = object.start_codepoint ?? 0;
+    message.end_codepoint = object.end_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogMatchDTO(): GatewayDiagnosticLogMatchDTO {
+  return { source: undefined, reference: undefined, preview: "", preview_start_codepoint: 0 };
+}
+
+export const GatewayDiagnosticLogMatchDTO: MessageFns<GatewayDiagnosticLogMatchDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLogMatchDTO {
+    return {
+      source: isSet(object.source) ? GatewayDiagnosticLogQuerySourceDTO.fromJSON(object.source) : undefined,
+      reference: isSet(object.reference) ? GatewayDiagnosticLogReferenceDTO.fromJSON(object.reference) : undefined,
+      preview: isSet(object.preview) ? globalThis.String(object.preview) : "",
+      preview_start_codepoint: isSet(object.preview_start_codepoint)
+        ? globalThis.Number(object.preview_start_codepoint)
+        : 0,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogMatchDTO): unknown {
+    const obj: any = {};
+    if (message.source !== undefined) {
+      obj.source = GatewayDiagnosticLogQuerySourceDTO.toJSON(message.source);
+    }
+    if (message.reference !== undefined) {
+      obj.reference = GatewayDiagnosticLogReferenceDTO.toJSON(message.reference);
+    }
+    if (message.preview !== "") {
+      obj.preview = message.preview;
+    }
+    if (message.preview_start_codepoint !== 0) {
+      obj.preview_start_codepoint = Math.round(message.preview_start_codepoint);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogMatchDTO>, I>>(base?: I): GatewayDiagnosticLogMatchDTO {
+    return GatewayDiagnosticLogMatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogMatchDTO>, I>>(object: I): GatewayDiagnosticLogMatchDTO {
+    const message = createBaseGatewayDiagnosticLogMatchDTO();
+    message.source = (object.source !== undefined && object.source !== null)
+      ? GatewayDiagnosticLogQuerySourceDTO.fromPartial(object.source)
+      : undefined;
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? GatewayDiagnosticLogReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.preview = object.preview ?? "";
+    message.preview_start_codepoint = object.preview_start_codepoint ?? 0;
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogQueryResultDTO(): GatewayDiagnosticLogQueryResultDTO {
+  return {
+    gateway_id: "",
+    scope: undefined,
+    query: "",
+    items: [],
+    sources: [],
+    complete: false,
+    cursor: undefined,
+    limited_reason: undefined,
+    scanned_sources: 0,
+    scanned_lines: 0,
+    scanned_bytes: 0,
+  };
+}
+
+export const GatewayDiagnosticLogQueryResultDTO: MessageFns<GatewayDiagnosticLogQueryResultDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLogQueryResultDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      scope: isSet(object.scope) ? GatewayDiagnosticLogQueryScopeDTO.fromJSON(object.scope) : undefined,
+      query: isSet(object.query) ? globalThis.String(object.query) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => GatewayDiagnosticLogMatchDTO.fromJSON(e))
+        : [],
+      sources: globalThis.Array.isArray(object?.sources)
+        ? object.sources.map((e: any) => GatewayDiagnosticLogQuerySourceDTO.fromJSON(e))
+        : [],
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
+      limited_reason: isSet(object.limited_reason) ? globalThis.String(object.limited_reason) : undefined,
+      scanned_sources: isSet(object.scanned_sources) ? globalThis.Number(object.scanned_sources) : 0,
+      scanned_lines: isSet(object.scanned_lines) ? globalThis.Number(object.scanned_lines) : 0,
+      scanned_bytes: isSet(object.scanned_bytes) ? globalThis.Number(object.scanned_bytes) : 0,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogQueryResultDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.scope !== undefined) {
+      obj.scope = GatewayDiagnosticLogQueryScopeDTO.toJSON(message.scope);
+    }
+    if (message.query !== "") {
+      obj.query = message.query;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => GatewayDiagnosticLogMatchDTO.toJSON(e));
+    }
+    if (message.sources?.length) {
+      obj.sources = message.sources.map((e) => GatewayDiagnosticLogQuerySourceDTO.toJSON(e));
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.cursor !== undefined) {
+      obj.cursor = message.cursor;
+    }
+    if (message.limited_reason !== undefined) {
+      obj.limited_reason = message.limited_reason;
+    }
+    if (message.scanned_sources !== 0) {
+      obj.scanned_sources = Math.round(message.scanned_sources);
+    }
+    if (message.scanned_lines !== 0) {
+      obj.scanned_lines = Math.round(message.scanned_lines);
+    }
+    if (message.scanned_bytes !== 0) {
+      obj.scanned_bytes = Math.round(message.scanned_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogQueryResultDTO>, I>>(
+    base?: I,
+  ): GatewayDiagnosticLogQueryResultDTO {
+    return GatewayDiagnosticLogQueryResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogQueryResultDTO>, I>>(
+    object: I,
+  ): GatewayDiagnosticLogQueryResultDTO {
+    const message = createBaseGatewayDiagnosticLogQueryResultDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.scope = (object.scope !== undefined && object.scope !== null)
+      ? GatewayDiagnosticLogQueryScopeDTO.fromPartial(object.scope)
+      : undefined;
+    message.query = object.query ?? "";
+    message.items = object.items?.map((e) => GatewayDiagnosticLogMatchDTO.fromPartial(e)) || [];
+    message.sources = object.sources?.map((e) => GatewayDiagnosticLogQuerySourceDTO.fromPartial(e)) || [];
+    message.complete = object.complete ?? false;
+    message.cursor = object.cursor ?? undefined;
+    message.limited_reason = object.limited_reason ?? undefined;
+    message.scanned_sources = object.scanned_sources ?? 0;
+    message.scanned_lines = object.scanned_lines ?? 0;
+    message.scanned_bytes = object.scanned_bytes ?? 0;
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogLocateRequest(): GatewayDiagnosticLogLocateRequest {
+  return { scope: undefined, reference: undefined };
+}
+
+export const GatewayDiagnosticLogLocateRequest: MessageFns<GatewayDiagnosticLogLocateRequest> = {
+  fromJSON(object: any): GatewayDiagnosticLogLocateRequest {
+    return {
+      scope: isSet(object.scope) ? GatewayDiagnosticLogQueryScopeDTO.fromJSON(object.scope) : undefined,
+      reference: isSet(object.reference) ? GatewayDiagnosticLogReferenceDTO.fromJSON(object.reference) : undefined,
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogLocateRequest): unknown {
+    const obj: any = {};
+    if (message.scope !== undefined) {
+      obj.scope = GatewayDiagnosticLogQueryScopeDTO.toJSON(message.scope);
+    }
+    if (message.reference !== undefined) {
+      obj.reference = GatewayDiagnosticLogReferenceDTO.toJSON(message.reference);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogLocateRequest>, I>>(
+    base?: I,
+  ): GatewayDiagnosticLogLocateRequest {
+    return GatewayDiagnosticLogLocateRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogLocateRequest>, I>>(
+    object: I,
+  ): GatewayDiagnosticLogLocateRequest {
+    const message = createBaseGatewayDiagnosticLogLocateRequest();
+    message.scope = (object.scope !== undefined && object.scope !== null)
+      ? GatewayDiagnosticLogQueryScopeDTO.fromPartial(object.scope)
+      : undefined;
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? GatewayDiagnosticLogReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseGatewayDiagnosticLogLocationDTO(): GatewayDiagnosticLogLocationDTO {
+  return { source: undefined, reference: undefined, text: "" };
+}
+
+export const GatewayDiagnosticLogLocationDTO: MessageFns<GatewayDiagnosticLogLocationDTO> = {
+  fromJSON(object: any): GatewayDiagnosticLogLocationDTO {
+    return {
+      source: isSet(object.source) ? GatewayDiagnosticLogQuerySourceDTO.fromJSON(object.source) : undefined,
+      reference: isSet(object.reference) ? GatewayDiagnosticLogReferenceDTO.fromJSON(object.reference) : undefined,
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+    };
+  },
+
+  toJSON(message: GatewayDiagnosticLogLocationDTO): unknown {
+    const obj: any = {};
+    if (message.source !== undefined) {
+      obj.source = GatewayDiagnosticLogQuerySourceDTO.toJSON(message.source);
+    }
+    if (message.reference !== undefined) {
+      obj.reference = GatewayDiagnosticLogReferenceDTO.toJSON(message.reference);
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayDiagnosticLogLocationDTO>, I>>(base?: I): GatewayDiagnosticLogLocationDTO {
+    return GatewayDiagnosticLogLocationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayDiagnosticLogLocationDTO>, I>>(
+    object: I,
+  ): GatewayDiagnosticLogLocationDTO {
+    const message = createBaseGatewayDiagnosticLogLocationDTO();
+    message.source = (object.source !== undefined && object.source !== null)
+      ? GatewayDiagnosticLogQuerySourceDTO.fromPartial(object.source)
+      : undefined;
+    message.reference = (object.reference !== undefined && object.reference !== null)
+      ? GatewayDiagnosticLogReferenceDTO.fromPartial(object.reference)
+      : undefined;
+    message.text = object.text ?? "";
     return message;
   },
 };

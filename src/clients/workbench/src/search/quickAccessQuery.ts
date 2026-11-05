@@ -6,15 +6,16 @@ import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspa
 import { QueryBuilder } from '../../upstream/src/vs/workbench/services/search/common/queryBuilder.js';
 import type { FederatedSearchQueryDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
 import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { fileOptions, validateQuery } from './query.js';
 import { SearchWorkspaceContext, type SearchScope } from './scope.js';
 
 export type NameSearchCategory = '会话' | 'Thread' | '文件';
-export type ContentSearchCategory = '会话消息' | '工具结果' | 'LLM 请求记录' | 'Trace';
+export type ContentSearchCategory = '会话消息' | '工具结果' | 'LLM 请求记录' | 'Trace' | '运行日志' | 'Gateway 日志';
 export type SearchCategory = NameSearchCategory | ContentSearchCategory;
 export type ResourceSearchItem = { title: string; description: string; detail: string } & (
-  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO; trace?: TraceMatchDTO } | { kind: 'session'; sessionId: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string }
+  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO; trace?: TraceMatchDTO } | { kind: 'session'; sessionId: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string } | { kind: 'log'; location: GatewayDiagnosticLogLocateRequest }
 );
 
 /** 原 QueryBuilder 继续解释配置；只构建根局部条件，远端分发统一交 Gateway。 */
@@ -27,6 +28,7 @@ export function quickAccessFileQuery(filter: string, scope: SearchScope, instant
     const query = validateQuery(builder.file(context.getWorkspace().folders, { filePattern: filter, maxResults: 50 }), identity);
     return { category: 'file', operation: 'name', contract_version: 1, query: query.filePattern || '**/*',
       match_mode: query.shouldGlobMatchFilePattern || !query.filePattern ? 'glob' : 'fuzzy', limit: 50,
+      diagnostic_targets: [],
       file_targets: query.folderQueries.map(folder => {
         const owner = workspaceFileSource(folder.folder);
         return { owner: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId },

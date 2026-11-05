@@ -8,10 +8,19 @@ import {
 
 export function validateFederatedSearchEvent(value) {
   const event = validateGenerated('FederatedSearchEventDTO', validateFederatedSearchEventDTO, value);
-  const actual = [event.scope, event.branch, event.page, event.summary].map(value => value != null).join(',');
+  if (event.page != null && event.diagnostic_logs != null) throw new Error('搜索事件不能携带两类领域页');
+  const actual = [event.scope != null, event.branch != null, event.page != null || event.diagnostic_logs != null, event.summary != null].join(',');
   const expected = { scope: 'true,false,false,false', page: 'false,true,true,false',
     branch: 'false,true,false,false', end: 'false,false,false,true' };
   if (actual !== expected[event.type]) throw new Error('搜索事件类型与 payload 不符');
+  const branch = event.branch?.branch;
+  if (branch && ((branch.owner == null) === (branch.diagnostics == null)
+    || (branch.category === 'runtime_log') !== (branch.diagnostics != null))) {
+    throw new Error('搜索分支必须属于真实工作区或 diagnostics 来源');
+  }
+  if (event.type === 'page' && (branch.diagnostics != null) !== (event.diagnostic_logs != null)) {
+    throw new Error('搜索领域页与分支 owner 不符');
+  }
   return event;
 }
 

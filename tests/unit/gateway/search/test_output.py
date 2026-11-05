@@ -27,9 +27,9 @@ from app.services.business.session_navigation.name_search_budget import NameSear
 
 @pytest.fixture
 def output_scope() -> GatewaySearchScopeResolutionDTO:
-    owners = [{"gateway_id": "gw", "workspace_id": f"ws-{index}"} for index in range(3)]
+    owners = [{"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "workspace_id": f"00000000-0000-4000-8000-{index:012d}"} for index in range(3)]
     return GatewaySearchScopeResolutionDTO.model_validate({
-        "scope": {"gateway_id": "gw", "resolved_at": datetime.now(UTC), "mode": "selected", "owners": owners},
+        "scope": {"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "resolved_at": datetime.now(UTC), "mode": "selected", "owners": owners},
         "branches": [{"owner": owner, "state": "registered", "target_id": f"route-{index}"} for index, owner in enumerate(owners)],
     })
 

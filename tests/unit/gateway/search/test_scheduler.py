@@ -32,7 +32,7 @@ from app.services.business.session_navigation.name_search_budget import NameSear
 
 
 def test_file_roots_keep_local_options_and_independent_continuations(scope: GatewaySearchScopeResolutionDTO) -> None:
-    targets = [{"owner": scope.scope.owners[0], "target": {"uri": f"boxteam://workspace/ws-0/resources/files/root/{root}",
+    targets = [{"owner": scope.scope.owners[0], "target": {"uri": f"boxteam://workspace/00000000-0000-4000-8000-000000000000/resources/files/root/{root}",
                 "search_options": {"include_globs": [pattern]}}} for root, pattern in (("one", "*.txt"), ("two", "*.md"))]
     request = FederatedSearchRequest.model_validate({"scope": {"mode": "resume", "scope": scope.scope},
         "queries": [{"category": "file", "query": "needle", "file_targets": targets}], "max_results": 3})
@@ -43,17 +43,17 @@ def test_file_roots_keep_local_options_and_independent_continuations(scope: Gate
     next_jobs = plan_search(resumed, scope)
     assert len(next_jobs) == 1 and next_jobs[0].request.cursor == "root-two-cursor"
     assert next_jobs[0].request.file == jobs[1].request.file
-    wrong = resumed.continuations[0].branch.model_copy(update={"resource_uri": "boxteam://workspace/ws-0/resources/files/root/other"})
+    wrong = resumed.continuations[0].branch.model_copy(update={"resource_uri": "boxteam://workspace/00000000-0000-4000-8000-000000000000/resources/files/root/other"})
     with pytest.raises(SearchScopeError, match="目录根"):
         plan_search(FederatedSearchRequest.model_validate({**request.model_dump(), "continuations": [{"branch": wrong}]}), scope)
-    targets[0]["owner"] = {"gateway_id": "gw", "workspace_id": "outside"}
+    targets[0]["owner"] = {"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "workspace_id": "00000000-0000-4000-8000-999999999998"}
     with pytest.raises(SearchScopeError, match="工作区集合"):
         plan_search(FederatedSearchRequest.model_validate({**request.model_dump(), "queries": [{"category": "file", "query": "needle", "file_targets": targets}]}), scope)
 
 
 @pytest.mark.parametrize("operation", ["name", "content"])
 async def test_file_page_counts_domain_units_and_rejects_wrong_root(scope: GatewaySearchScopeResolutionDTO, operation: str) -> None:
-    root = "boxteam://workspace/ws-0/resources/files/root/one"
+    root = "boxteam://workspace/00000000-0000-4000-8000-000000000000/resources/files/root/one"
     request = FederatedSearchRequest.model_validate({"scope": {"mode": "resume", "scope": scope.scope},
         "queries": [{"category": "file", "operation": operation, "query": "needle", "limit": 1,
                      "file_targets": [{"owner": scope.scope.owners[0], "target": {"uri": root}}]}]})
@@ -87,9 +87,9 @@ async def test_file_page_counts_domain_units_and_rejects_wrong_root(scope: Gatew
 
 @pytest.fixture
 def scope() -> GatewaySearchScopeResolutionDTO:
-    owners = [{"gateway_id": "gw", "workspace_id": f"ws-{index}"} for index in range(7)]
+    owners = [{"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "workspace_id": f"00000000-0000-4000-8000-{index:012d}"} for index in range(7)]
     return GatewaySearchScopeResolutionDTO(
-        scope=GatewaySearchScopeDTO(gateway_id="gw", resolved_at=datetime.now(UTC), mode="all", owners=owners),
+        scope=GatewaySearchScopeDTO(gateway_id="gateway_0123456789abcdef0123456789abcdef", resolved_at=datetime.now(UTC), mode="all", owners=owners),
         branches=[{"owner": owner, "target_id": f"route-{index}", "state": "registered"} for index, owner in enumerate(owners)],
     )
 
@@ -119,9 +119,9 @@ async def test_fast_page_precedes_slow_branch_and_terminal_is_unique(
 
     async def query(job: SearchJob) -> SearchPage:
         entered.append(job.key.owner.workspace_id)
-        if job.key.owner.workspace_id == "ws-0":
+        if job.key.owner.workspace_id == "00000000-0000-4000-8000-000000000000":
             await release.wait()
-        if job.key.owner.workspace_id == "ws-1":
+        if job.key.owner.workspace_id == "00000000-0000-4000-8000-000000000001":
             raise SearchBranchError("target_unavailable", "B 离线", retryable=True)
         return page(job, cursor="owner-cursor")
 
@@ -131,12 +131,12 @@ async def test_fast_page_precedes_slow_branch_and_terminal_is_unique(
     received = [first]
     while not any(event.type == "page" for event in received):
         received.append(await anext(events))
-    assert received[-1].branch.branch.owner.workspace_id == "ws-2"
+    assert received[-1].branch.branch.owner.workspace_id == "00000000-0000-4000-8000-000000000002"
     assert not release.is_set()
     # 慢消费不补排队分支，最多三份原页占用内存。
     for _ in range(4):
         await asyncio.sleep(0)
-    assert entered == ["ws-0", "ws-1", "ws-2"]
+    assert entered == ["00000000-0000-4000-8000-000000000000", "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]
     release.set()
     received.extend([event async for event in events])
     assert [event.sequence for event in received] == list(range(1, len(received) + 1))
@@ -144,7 +144,7 @@ async def test_fast_page_precedes_slow_branch_and_terminal_is_unique(
     assert [event.type for event in received].count("end") == 1 and received[-1].type == "end"
     summary = received[-1].summary
     assert summary.state == "incomplete" and len(summary.branches) == 7
-    assert [item.branch.owner.workspace_id for item in summary.branches] == [f"ws-{index}" for index in range(7)]
+    assert [item.branch.owner.workspace_id for item in summary.branches] == [f"00000000-0000-4000-8000-{index:012d}" for index in range(7)]
     assert summary.branches[1].code == "target_unavailable"
     assert len([event for event in received if event.type == "branch"]) == 7
 
@@ -183,7 +183,7 @@ async def test_closing_stream_cancels_inflight_and_does_not_dispatch_queue(
 
     async def query(job: SearchJob) -> SearchPage:
         entered.append(job.key.owner.workspace_id)
-        if job.key.owner.workspace_id == "ws-0":
+        if job.key.owner.workspace_id == "00000000-0000-4000-8000-000000000000":
             return page(job)
         started.set()
         try:
@@ -197,7 +197,7 @@ async def test_closing_stream_cancels_inflight_and_does_not_dispatch_queue(
     assert (await anext(events)).type == "page"
     await started.wait()
     await events.aclose()
-    assert settled.is_set() and entered == ["ws-0", "ws-1", "ws-2"]
+    assert settled.is_set() and entered == ["00000000-0000-4000-8000-000000000000", "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]
 
 
 @pytest.mark.parametrize("limit,expected", [(0, [0] * 7), (1, [1, 0, 0, 0, 0, 0, 0]), (10, [2, 2, 2, 1, 1, 1, 1])])
@@ -224,7 +224,7 @@ def test_continuation_is_original_owner_subset_and_preserves_cursor(
     resumed = FederatedSearchRequest.model_validate({**request_body.model_dump(), "continuations": [{"branch": branch, "cursor": "b-own-cursor"}]})
     jobs = plan_search(resumed, scope)
     assert len(jobs) == 1 and jobs[0].key.owner == scope.scope.owners[1] and jobs[0].request.cursor == "b-own-cursor"
-    branch["owner"] = {"gateway_id": "gw", "workspace_id": "unknown"}
+    branch["owner"] = {"gateway_id": "gateway_0123456789abcdef0123456789abcdef", "workspace_id": "00000000-0000-4000-8000-999999999999"}
     wrong = FederatedSearchRequest.model_validate({**request_body.model_dump(), "continuations": [{"branch": branch}]})
     with pytest.raises(SearchScopeError, match="不属于"):
         plan_search(wrong, scope)
@@ -296,7 +296,7 @@ async def test_content_page_counts_domain_hits_and_preserves_owner_continuation(
     async def query(job: SearchJob) -> SearchPage:
         hit = {"thread": {
             "workspace_id": job.key.owner.workspace_id, "session_id": "session", "thread_id": "child",
-            "thread_uri": thread_resource_uri(job.key.owner.workspace_id, "session", "child", gateway_authority="gw"),
+            "thread_uri": thread_resource_uri(job.key.owner.workspace_id, "session", "child", gateway_authority="gateway_0123456789abcdef0123456789abcdef"),
             "kind": "child", "title": "child", "session_title": "Session",
             "created_at": datetime.now(UTC),
         }, "match": {

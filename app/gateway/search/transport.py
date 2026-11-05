@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from time import time
+from typing import NoReturn
 
 import httpx
 from pydantic import ValidationError
@@ -11,10 +12,16 @@ from pydantic import ValidationError
 from app.core.failures import report_failure
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
+from app.gateway.control.diagnostic_log_transport import read_diagnostic_log_target
 from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.runtime.log_query import RuntimeLogQueryError
 from app.gateway.search.scheduler import SearchBranchError, SearchJob, SearchPage
+from app.schemas.gateway.diagnostics import GatewayDiagnosticLogQueryRequest
 from app.schemas.internal_v2.common import APIResponse
-from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
+from app.schemas.internal_v2.search import (
+    WorkspaceSearchRequest,
+    WorkspaceSearchResultDTO,
+)
 from app.schemas.search_federation import (
     MAX_SEARCH_ERROR_CHARS,
     FederatedSearchSourceDTO,
@@ -33,6 +40,21 @@ class SearchTransport:
         self.catalog_mirror = catalog_mirror
 
     async def query(self, job: SearchJob) -> SearchPage:
+        if job.key.diagnostics is not None:
+            assert isinstance(job.request, GatewayDiagnosticLogQueryRequest)
+            try:
+                return SearchPage(await read_diagnostic_log_target(self.registry, job.request,
+                    gateway_id=job.key.diagnostics.gateway_id, request_id=self.request_id, max_bytes=job.max_bytes))
+            except RuntimeLogQueryError as error:
+                raise SearchBranchError(error.code, str(error), retryable=True, error_owner="runtime_log",
+                                        reason=error.reason, http_status=error.http_status) from error
+            except LookupError as error:
+                raise SearchBranchError("owner_unavailable", str(error), retryable=True) from error
+            except httpx.HTTPStatusError as error:
+                self._raise_owner_error(error.response.status_code, bytearray(error.response.content))
+            except httpx.RequestError as error:
+                raise self._network_error(error) from error
+        assert job.key.owner is not None
         key = (job.key.owner.gateway_id, job.key.owner.workspace_id)
         if not self.registry.has_target(key):
             raise SearchBranchError("owner_unavailable", "搜索目标已移除", retryable=True)
@@ -44,6 +66,7 @@ class SearchTransport:
             return self._query_mirror(job, error)
 
     def _query_mirror(self, job: SearchJob, unavailable: SearchBranchError) -> SearchPage:
+        assert job.key.owner is not None
         if self.catalog_mirror is None:
             raise unavailable
         try:
@@ -72,6 +95,7 @@ class SearchTransport:
         ))
 
     async def _query_owner(self, job: SearchJob) -> WorkspaceSearchResultDTO:
+        assert job.key.owner is not None and isinstance(job.request, WorkspaceSearchRequest)
         target_id = (job.key.owner.gateway_id, job.key.owner.workspace_id)
         target = self.registry.resolve(target_id)
         try:
@@ -101,6 +125,7 @@ class SearchTransport:
                 self.registry.release_route_reference(target_id, streaming=False)
 
     async def _read(self, job: SearchJob, url: str, headers: dict[str, str]) -> WorkspaceSearchResultDTO:
+        assert job.key.owner is not None
         headers = {**headers, "X-Request-ID": self.request_id, "X-BoxTeam-Gateway-Id": self.gateway_id}
         deadline = job.request.deadline_at
         assert deadline is not None
@@ -122,12 +147,8 @@ class SearchTransport:
                 if envelope.code != 0 or envelope.request_id != self.request_id or envelope.data is None:
                     raise SearchBranchError("invalid_response", "领域响应的 request_id 或数据不符")
                 return envelope.data
-        except httpx.TimeoutException as error:
-            raise SearchBranchError("deadline", f"领域查询超时: {type(error).__name__}: {error}", retryable=True,
-                                    error_owner="search_transport", reason=type(error).__name__) from error
         except httpx.RequestError as error:
-            raise SearchBranchError("target_unavailable", f"领域请求失败: {error}", retryable=True,
-                                    error_owner="search_transport", reason=type(error).__name__) from error
+            raise self._network_error(error) from error
         except ValidationError as error:
             detail = str(error.errors(include_input=False, include_url=False))[:MAX_SEARCH_ERROR_CHARS]
             message = report_failure(error, diagnostic_logger=logger, detail=(
@@ -136,7 +157,15 @@ class SearchTransport:
             raise SearchBranchError("invalid_response", message) from error
 
     @staticmethod
-    def _raise_owner_error(status: int, body: bytearray) -> None:
+    def _network_error(error: httpx.RequestError) -> SearchBranchError:
+        if isinstance(error, httpx.TimeoutException):
+            return SearchBranchError("deadline", f"领域查询超时: {type(error).__name__}: {error}", retryable=True,
+                                     error_owner="search_transport", reason=type(error).__name__)
+        return SearchBranchError("target_unavailable", f"领域请求失败: {error}", retryable=True,
+                                 error_owner="search_transport", reason=type(error).__name__)
+
+    @staticmethod
+    def _raise_owner_error(status: int, body: bytearray) -> NoReturn:
         try:
             payload = json.loads(body)
         except (ValueError, UnicodeDecodeError):

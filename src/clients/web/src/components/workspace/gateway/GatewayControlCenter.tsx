@@ -17,6 +17,8 @@ import type { GatewayBackendRuntimeActions } from "./GatewayBackendRuntimePanel"
 import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 import { errorMessage } from "../../../utils/errorMessage";
+import type { GatewayDiagnosticLogLocateRequest } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
+import GatewayDiagnosticLogLocation from "./GatewayDiagnosticLogLocation";
 
 const GatewayBackendRuntimePanel = lazy(() => import("./GatewayBackendRuntimePanel"));
 const GatewayConnectionDialog = lazy(() => import("./GatewayConnectionDialog"));
@@ -33,6 +35,8 @@ interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
   onRefresh: () => Promise<void>;
   uiSettings: WebUiSettings;
   onUpdateUiSettings: (update: WebUiSettingsUpdate) => Promise<void>;
+  diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
+  onCloseDiagnosticLocation?: () => void;
 }
 
 export default function GatewayControlCenter({
@@ -44,6 +48,7 @@ export default function GatewayControlCenter({
   onStart, onStop, onSafeRestart, onForceRestart,
   uiSettings,
   onUpdateUiSettings,
+  diagnosticLocation, onCloseDiagnosticLocation,
 }: GatewayControlCenterProps) {
   const confirm = useWarmConfirm();
   const [health, setHealth] = useState<GatewayHealth | null>(null);
@@ -58,6 +63,7 @@ export default function GatewayControlCenter({
   const [restartingDevelopment, setRestartingDevelopment] = useState(false);
   const [deviceRevision, setDeviceRevision] = useState(0);
   const [activePage, setActivePage] = useState<"connections" | "theme" | "diagnostics" | "runtime">("connections");
+  useEffect(() => { if (diagnosticLocation) setActivePage("diagnostics"); }, [diagnosticLocation]);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -223,7 +229,8 @@ export default function GatewayControlCenter({
             ) : activePage === "runtime" ? (
               <GatewayBackendRuntimePanel workspaces={workspaces} onStart={onStart} onStop={onStop} onSafeRestart={onSafeRestart} onForceRestart={onForceRestart} />
             ) : activePage === "diagnostics" ? (
-              <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
+              diagnosticLocation ? <GatewayDiagnosticLogLocation apiPort={apiPort} request={diagnosticLocation} workspaces={workspaces}
+                onClose={() => onCloseDiagnosticLocation?.()} /> : <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
             ) : <>
 
           <div className="gateway-console-feedback-slot">

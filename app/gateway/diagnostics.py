@@ -94,7 +94,9 @@ def _process_log_path(service: str, port: int | None) -> Path | None:
     return load_runtime_log_contract().path_for(get_runtime_log_root(), role, port)
 
 
-def _candidate_gateway_logs(known_workspace_files: set[str]) -> list[_LogCandidate]:
+def _candidate_gateway_logs(
+    known_workspace_files: set[str], *, max_entries: int = _MAX_GATEWAY_LOG_ENTRIES,
+) -> list[_LogCandidate]:
     candidates = [_launcher_log_candidate()]
     log_dir = get_runtime_log_root()
     if not log_dir.exists():
@@ -118,7 +120,7 @@ def _candidate_gateway_logs(known_workspace_files: set[str]) -> list[_LogCandida
                     yield metadata.st_mtime, log_path.name, log_path
 
     newest_log_entries = heapq.nlargest(
-        _MAX_GATEWAY_LOG_ENTRIES,
+        max_entries,
         gateway_log_entries(),
         key=lambda log_entry: log_entry[:2],
     )

@@ -6,7 +6,7 @@ import { TriggerAction } from '../../upstream/src/vs/platform/quickinput/browser
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from '../../../web/src/api/http.js';
 import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
-import type { FederatedSearchBranchDTO, FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
+import type { FederatedDiagnosticLogTargetDTO, FederatedSearchBranchDTO, FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
 import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import type { WorkspaceSearchResultDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -20,7 +20,9 @@ import { workspaceFileUri } from '../workspaceFiles.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 
 interface SearchBranch<Category extends SearchCategory = SearchCategory> {
-  owner: WorkspaceOwner;
+  contextOwner: WorkspaceOwner;
+  diagnostics?: FederatedDiagnosticLogTargetDTO;
+  diagnosticSummary?: string;
   category: Category;
   key: string;
   label: string;
@@ -31,8 +33,8 @@ interface SearchBranch<Category extends SearchCategory = SearchCategory> {
 }
 
 
-const categories = { '文件': 'file', '会话': 'catalog', 'Thread': 'thread', '会话消息': 'message', '工具结果': 'tool_result', 'LLM 请求记录': 'llm_request', 'Trace': 'trace' } as const;
-export function isContentSearchCategory(category: string): category is ContentSearchCategory { return category === '会话消息' || category === '工具结果' || category === 'LLM 请求记录' || category === 'Trace'; }
+const categories = { '文件': 'file', '会话': 'catalog', 'Thread': 'thread', '会话消息': 'message', '工具结果': 'tool_result', 'LLM 请求记录': 'llm_request', 'Trace': 'trace', '运行日志': 'runtime_log', 'Gateway 日志': 'runtime_log' } as const;
+export function isContentSearchCategory(category: string): category is ContentSearchCategory { return category === '会话消息' || category === '工具结果' || category === 'LLM 请求记录' || category === 'Trace' || category === '运行日志' || category === 'Gateway 日志'; }
 
 /** 原领域页只投影为候选；网络、范围和分页统一交 Gateway。 */
 function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, label: string): ResourceSearchItem[] {
@@ -88,12 +90,23 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
   const alive = () => !abort.signal.aborted && !token.isCancellationRequested;
   const snapshot = workspaceContext.getSnapshot();
   const ownerLabel = (owner: WorkspaceOwner) => snapshot.workspaces.find(target => target.gateway_id === owner.gatewayId && target.workspace_id === owner.workspaceId)?.name ?? owner.workspaceId;
+  const gatewayLabel = (gatewayId: string) => gatewayId === snapshot.gatewayId ? '本机 Gateway'
+    : snapshot.workspaces.flatMap(workspace => workspace.remote_gateways).find(gateway => gateway.gateway_id === gatewayId)?.name ?? gatewayId;
   scopeLabel(owners.map(ownerLabel).join('、'));
-  const branches: SearchBranch<SearchCategory>[] = selected.flatMap(category => owners.map(owner => ({ owner, category,
-    key: `${searchOwnerKey(owner)}/${category}`, label: owners.length === 1 ? category : `${ownerLabel(owner)} · ${category}`,
-    picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${ownerLabel(owner)} · ${category} · 正在查询` } })));
+  const branches: SearchBranch<SearchCategory>[] = selected.flatMap(category => {
+    const diagnostic = category === '运行日志' || category === 'Gateway 日志';
+    const selectedOwners = diagnostic ? [...new Map(owners.map(owner => [owner.gatewayId, owner])).values()] : owners;
+    return selectedOwners.map(owner => {
+      const diagnostics = diagnostic ? { gateway_id: owner.gatewayId, scope: { source: category === '运行日志' ? 'workspace' : 'gateway',
+        workspace_ids: category === '运行日志' ? owners.filter(item => item.gatewayId === owner.gatewayId).map(item => item.workspaceId) : [] } } : undefined;
+      const label = diagnostic ? `${gatewayLabel(owner.gatewayId)} · ${category}` : owners.length === 1 ? category : `${ownerLabel(owner)} · ${category}`;
+      return { contextOwner: owner, diagnostics, category, key: `${diagnostic ? owner.gatewayId : searchOwnerKey(owner)}/${category}`, label,
+        picks: [], pending: false, status: { id: `status-${searchOwnerKey(owner)}/${category}`, label: `${label} · 正在查询` } };
+    });
+  });
   const key = (branch: SearchBranch<SearchCategory>): FederatedSearchBranchKeyDTO => ({
-    owner: { gateway_id: branch.owner.gatewayId, workspace_id: branch.owner.workspaceId }, category: categories[branch.category], operation: isContentSearchCategory(branch.category) ? 'content' : 'name',
+    owner: branch.diagnostics ? undefined : { gateway_id: branch.contextOwner.gatewayId, workspace_id: branch.contextOwner.workspaceId }, diagnostics: branch.diagnostics,
+    category: categories[branch.category], operation: isContentSearchCategory(branch.category) ? 'content' : 'name',
     ...(branch.fileRoot ? { resource_uri: branch.fileRoot } : {}),
   });
   const fileQueries = new Map<SearchBranch, FederatedSearchQueryDTO>();
@@ -112,7 +125,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
     branch.status = { id: `status-${branch.key}`,
       label: `${branch.label} · ${failed ? `查询失败：${state.code === 'deadline' ? '查询超时：' : ''}${state.message ?? state.code ?? state.state}`
         : limited ? `本次查询覆盖受限（${state.code ?? '还有更多结果'}）` : branch.picks.length ? '本次查询完成' : '没有匹配的资源'}`,
-      detail: `本次读取 ${branch.picks.length} 项，不代表全局快照 · request_id: ${requestId}`,
+      detail: `${branch.diagnosticSummary ?? `本次读取 ${branch.picks.length} 项，不代表全局快照`} · request_id: ${requestId}`,
       ...((continuation || (failed && state.retryable)) ? { buttons: [continuation ? moreButton : retryButton],
         trigger: async () => { await run([branch], continuation ? state.cursor : undefined); return TriggerAction.NO_ACTION; } } : {}) };
   };
@@ -135,7 +148,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
     try {
       const fileBranches = active.filter(branch => branch.category === '文件' && !fileQueries.has(branch));
       if (fileBranches.length) {
-        const roots = await loadSearchRoots(fileBranches.map(branch => branch.owner), requestAbort.signal);
+        const roots = await loadSearchRoots(fileBranches.map(branch => branch.contextOwner), requestAbort.signal);
         if (!alive()) return;
         roots.forEach((root, index) => {
           const branch = fileBranches[index];
@@ -167,7 +180,8 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
           return { ...first, limit: fileLimit, file_targets: selectedFiles.flatMap(branch => fileQueries.get(branch)!.file_targets) };
         }
         return { category: categories[category], operation: isContentSearchCategory(category) ? 'content' : 'name',
-          contract_version: 1, query: filter, match_mode: isContentSearchCategory(category) ? 'literal' : 'fuzzy', limit: 50, file_targets: [] };
+          contract_version: 1, query: filter, match_mode: isContentSearchCategory(category) ? 'literal' : 'fuzzy', limit: 50, file_targets: [],
+          diagnostic_targets: ready.filter(branch => branch.category === category && branch.diagnostics).map(branch => branch.diagnostics!) };
       });
       await streamFederatedSearch(0, {
         scope: scope ? { mode: 'resume', scope, owners: [] } : { mode: 'selected', owners: owners.map(owner => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId })) },
@@ -183,8 +197,17 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
         const branch = byKey.get(searchBranchKey(event.branch.branch));
         if (!branch) throw new Error('联邦搜索返回未选择的分支');
         if (inFlight.get(branch) !== operation) return;
-        if (event.type === 'page' && event.page) {
-          const merged = new Map([...branch.picks, ...searchItems(event.page, branch.owner, ownerLabel(branch.owner)).map(item => map(item, branch.owner))].map(pick => [pick.id, pick]));
+        if (event.type === 'page' && (event.page || event.diagnostic_logs)) {
+          const logs = event.diagnostic_logs;
+          const items: ResourceSearchItem[] = logs ? logs.items.map(hit => {
+            if (!hit.source || !hit.reference || !logs.scope) throw new Error('运行日志命中缺少原来源或精确位置');
+            const workspaces = hit.source.workspace_ids.map(id => ownerLabel({ gatewayId: logs.gateway_id, workspaceId: id }));
+            return { kind: 'log', location: { scope: logs.scope, reference: hit.reference }, title: hit.source.label,
+              description: hit.preview.replace(/\s+/g, ' '),
+              detail: `${gatewayLabel(logs.gateway_id)} · ${hit.source.source === 'gateway' ? 'Gateway 控制面' : `受管进程 · ${workspaces.join('、')}${workspaces.length > 1 ? '（共享来源）' : ''}`} · ${hit.reference.line_start}` };
+          }) : searchItems(event.page!, branch.contextOwner, ownerLabel(branch.contextOwner));
+          if (logs) branch.diagnosticSummary = `本页检查 ${logs.scanned_sources} 个来源、${logs.scanned_lines} 行、${logs.scanned_bytes} 字节${logs.sources.some(source => source.status === 'unavailable') ? '；存在不可用来源' : ''}；仅当前日志，不含轮转归档`;
+          const merged = new Map([...branch.picks, ...items.map(item => map(item, branch.contextOwner))].map(pick => [pick.id, pick]));
           branch.picks = isContentSearchCategory(branch.category) ? [...merged.values()] : rankResourcePicks([...merged.values()], filter, cache);
           status(branch, event.branch, event.request_id);
         } else if (event.type === 'branch') {

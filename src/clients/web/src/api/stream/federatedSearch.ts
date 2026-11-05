@@ -1,16 +1,37 @@
 import type {
   FederatedSearchBranchKeyDTO,
   FederatedSearchEventDTO,
+  FederatedSearchQueryDTO,
   FederatedSearchRequest,
   FederatedSearchSummaryDTO,
 } from "../../types/protocol_generated/boxteam/search/v1/public";
+import type { GatewayDiagnosticLogQueryResultDTO } from "../../types/protocol_generated/boxteam/gateway/v2/public";
 import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import { validateFederatedSearchEvent } from "../../sse/sseRuntimeSchemas";
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, requestGatewayResponse } from "../http";
 
 export function searchBranchKey(branch: FederatedSearchBranchKeyDTO): string {
+  if (branch.diagnostics) {
+    if (branch.owner || branch.category !== "runtime_log" || !branch.diagnostics.scope) throw new Error("诊断搜索分支归属无效");
+    return JSON.stringify(["diagnostics", branch.diagnostics.gateway_id, branch.diagnostics.scope.source,
+      branch.diagnostics.scope.workspace_ids, branch.category, branch.operation]);
+  }
   if (!branch.owner) throw new Error("搜索分支缺少 owner");
   return JSON.stringify([branch.owner.gateway_id, branch.owner.workspace_id, branch.category, branch.operation, branch.resource_uri ?? null]);
+}
+
+function diagnosticPageMatches(page: GatewayDiagnosticLogQueryResultDTO, branch: FederatedSearchBranchKeyDTO,
+  query: FederatedSearchQueryDTO, allocated: number): boolean {
+  const target = branch.diagnostics;
+  if (!target?.scope || page.gateway_id !== target.gateway_id || page.query !== query.query
+    || page.scope?.source !== target.scope.source || JSON.stringify(page.scope.workspace_ids) !== JSON.stringify(target.scope.workspace_ids)
+    || page.items.length > allocated || page.complete !== (page.limited_reason == null) || page.complete && page.cursor != null) return false;
+  const sources = new Map(page.sources.map(source => [source.log_id, source]));
+  return sources.size === page.sources.length && page.sources.every(source => source.source === target.scope!.source
+    && (source.source === "gateway" ? source.workspace_ids.length === 0
+      : source.workspace_ids.some(id => target.scope!.workspace_ids.includes(id))))
+    && page.items.every(item => item.reference?.gateway_id === target.gateway_id && item.reference.log_id === item.source?.log_id
+      && item.source?.status !== "unavailable" && JSON.stringify(sources.get(item.source?.log_id ?? "")) === JSON.stringify(item.source));
 }
 
 /** 只消费 Gateway 的调度结果；不预检目标、不重试读分支、不另建跨目标队列。 */
@@ -55,10 +76,17 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
             owner.gateway_id !== requestedOwners[index]?.gateway_id || owner.workspace_id !== requestedOwners[index]?.workspace_id))) {
             throw new Error("搜索实际范围改变了指定 owner 或顺序");
           }
+          for (const query of request.queries) for (const target of query.diagnostic_targets) {
+            const workspaces = owners.filter(owner => owner.gateway_id === target.gateway_id).map(owner => owner.workspace_id);
+            if (!target.scope || !workspaces.length || target.scope.workspace_ids.some(id => !workspaces.includes(id))) {
+              throw new Error("诊断搜索来源不属于冻结范围");
+            }
+          }
           expected = new Set(request.continuations.length ? request.continuations.map(item => {
             if (!item.branch) throw new Error("搜索续查缺少分支");
             return searchBranchKey(item.branch);
-          }) : request.queries.flatMap(query => owners.flatMap(owner => {
+          }) : request.queries.flatMap(query => query.category === "runtime_log" ? query.diagnostic_targets.map(diagnostics =>
+            searchBranchKey({ owner: undefined, diagnostics, category: query.category, operation: query.operation })) : owners.flatMap(owner => {
             const targets = query.file_targets?.length ? query.file_targets.filter(item => item.owner?.gateway_id === owner.gateway_id
               && item.owner.workspace_id === owner.workspace_id).map(item => item.target?.uri) : [undefined];
             return targets.map(resource_uri => searchBranchKey({ owner, category: query.category, operation: query.operation, resource_uri }));
@@ -67,8 +95,12 @@ export async function streamFederatedSearch(port: number, request: FederatedSear
           const branch = event.branch.branch, key = searchBranchKey(branch);
           if (!expected.has(key) || terminals.has(key)) throw new Error("搜索返回未知分支或重复终态");
           if (event.type === "page") {
-            if (pages.has(key) || !event.page || event.page.workspace_id !== branch.owner?.workspace_id
-              || event.page.category !== branch.category || event.page.operation !== branch.operation) {
+            const valid = branch.diagnostics ? event.diagnostic_logs && !event.page
+              && diagnosticPageMatches(event.diagnostic_logs, branch, request.queries.find(query => query.category === "runtime_log")!, event.branch.allocated_results)
+              && event.diagnostic_logs.items.length === event.branch.returned_results
+              : event.page && !event.diagnostic_logs && event.page.workspace_id === branch.owner?.workspace_id
+                && event.page.category === branch.category && event.page.operation === branch.operation;
+            if (pages.has(key) || !valid) {
               throw new Error("搜索领域页重复或归属不符");
             }
             pages.add(key);

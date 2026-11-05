@@ -66,7 +66,7 @@ export async function searchCatalogView(port: number, query: string, navigation:
       update();
     }),
     streamFederatedSearch(port, { scope: { mode: "all", owners: [] }, queries: [{ category: "catalog", operation: "name",
-      contract_version: 1, query, match_mode: "fuzzy", limit: 50, file_targets: [], allow_catalog_mirror: true }],
+      contract_version: 1, query, match_mode: "fuzzy", limit: 50, file_targets: [], diagnostic_targets: [], allow_catalog_mirror: true }],
       continuations: [], max_results: 200 }, { signal: querySignal, onEvent: event => {
       if (event.type === "scope") {
         for (const branch of event.scope?.branches ?? []) {

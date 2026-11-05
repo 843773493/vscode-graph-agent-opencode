@@ -36,6 +36,7 @@ class GatewaySearchEventValidator:
         self.pages: set[FederatedSearchBranchKeyDTO] = set()
         self.ended = False
         self.sequence = 0
+        self.diagnostic_branches: set[FederatedSearchBranchKeyDTO] = set()
 
     def accept(self, event: FederatedSearchEventDTO) -> None:
         self.sequence += 1
@@ -51,26 +52,50 @@ class GatewaySearchEventValidator:
                 selection.mode == "resume" and self.scope != selection.scope
             ):
                 raise RuntimeError("Gateway 搜索实际范围与明确选择不一致")
+            for query in self.request.queries:
+                for diagnostic in query.diagnostic_targets:
+                    workspaces = {owner.workspace_id for owner in self.scope.owners if owner.gateway_id == diagnostic.gateway_id}
+                    if not workspaces or not set(diagnostic.scope.workspace_ids).issubset(workspaces):
+                        raise RuntimeError("Gateway diagnostics 来源不属于冻结范围")
+                    self.diagnostic_branches.add(FederatedSearchBranchKeyDTO(
+                        diagnostics=diagnostic, category=query.category, operation=query.operation,
+                    ))
+            if self.request.continuations:
+                self.diagnostic_branches.intersection_update(item.branch for item in self.request.continuations)
         elif self.scope is None:
             raise RuntimeError("Gateway 搜索缺少实际范围")
         elif event.branch is not None:
             branch = event.branch.branch
-            if branch.owner not in self.scope.owners or branch in self.terminals:
+            diagnostic = branch.diagnostics
+            selected_diagnostic = branch in self.diagnostic_branches
+            if (not selected_diagnostic if diagnostic is not None else branch.owner not in self.scope.owners) or branch in self.terminals:
                 raise RuntimeError("Gateway 搜索分支归属错误或终态后继续发布")
             if event.type == "page":
-                page = event.page
-                if page is None or branch in self.pages or (page.workspace_id, page.category, page.operation) != (
-                    branch.owner.workspace_id, branch.category, branch.operation,
-                ) or event.branch.returned_results != page.result_count:
+                if diagnostic is not None:
+                    logs = event.diagnostic_logs
+                    query = next(query for query in self.request.queries if diagnostic in query.diagnostic_targets)
+                    valid = (logs is not None and logs.gateway_id == diagnostic.gateway_id and logs.scope == diagnostic.scope
+                             and logs.query == query.query and logs.result_count <= event.branch.allocated_results)
+                    count = logs.result_count if logs is not None else -1
+                else:
+                    page = event.page
+                    valid = page is not None and branch.owner is not None and (page.workspace_id, page.category, page.operation) == (
+                        branch.owner.workspace_id, branch.category, branch.operation,
+                    )
+                    count = page.result_count if page is not None else -1
+                if not valid or branch in self.pages or event.branch.returned_results != count:
                     raise RuntimeError("Gateway 搜索领域页归属、计数或重复发布无效")
                 self.pages.add(branch)
             else:
+                if diagnostic is not None and event.branch.returned_results and branch not in self.pages:
+                    raise RuntimeError("Gateway 日志分支没有交付对应正文页")
                 self.terminals[branch] = event.branch
         elif event.summary is not None:
             summary = event.summary
             if {item.branch: item for item in summary.branches} != self.terminals or (
                 len(summary.branches) != len(self.terminals)
                 or summary.returned_results != sum(item.returned_results for item in self.terminals.values())
+                or not self.diagnostic_branches.issubset(self.terminals)
             ):
                 raise RuntimeError("Gateway 搜索汇总与已结算分支不一致")
             self.ended = True

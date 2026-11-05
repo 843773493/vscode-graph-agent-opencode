@@ -9,6 +9,10 @@ from typing import Literal
 from app.core.resource_uri import parse_resource_uri
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.search.scope import SearchScopeError
+from app.schemas.gateway.diagnostics import (
+    GatewayDiagnosticLogQueryRequest,
+    GatewayDiagnosticLogQueryResultDTO,
+)
 from app.schemas.gateway.search import (
     GatewaySearchScopeBranchDTO,
     GatewaySearchScopeResolutionDTO,
@@ -53,15 +57,15 @@ class SearchBranchError(ValueError):
 @dataclass(frozen=True)
 class SearchJob:
     key: FederatedSearchBranchKeyDTO
-    scope_branch: GatewaySearchScopeBranchDTO
-    request: WorkspaceSearchRequest
+    scope_branch: GatewaySearchScopeBranchDTO | None
+    request: WorkspaceSearchRequest | GatewayDiagnosticLogQueryRequest
     max_bytes: int
     allow_catalog_mirror: bool = False
 
 
 @dataclass(frozen=True)
 class SearchPage:
-    result: WorkspaceSearchResultDTO
+    result: WorkspaceSearchResultDTO | GatewayDiagnosticLogQueryResultDTO
     source: FederatedSearchSourceDTO = field(default_factory=FederatedSearchSourceDTO)
 
 
@@ -84,6 +88,15 @@ def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolu
     entries: list[tuple[FederatedSearchBranchKeyDTO, FederatedSearchQueryDTO, WorkspaceFileSearchTargetDTO | None]] = []
     # 名称类别沿原固定组序；尚未登记的类别也有确定次序，不按响应快慢决定归属顺序。
     for query in sorted(request.queries, key=lambda item: ({"catalog": 0, "thread": 1}.get(item.category, 2), item.category, item.operation)):
+        if query.category == "runtime_log":
+            for target in query.diagnostic_targets:
+                selected_owners = [owner for owner in scope.scope.owners if owner.gateway_id == target.gateway_id]
+                if not selected_owners or any(workspace_id not in {owner.workspace_id for owner in selected_owners}
+                                              for workspace_id in target.scope.workspace_ids):
+                    raise SearchScopeError("owner_mismatch", "诊断来源不属于本次冻结 Gateway／工作区集合", status_code=400)
+                entries.append((FederatedSearchBranchKeyDTO(diagnostics=target, category=query.category,
+                                                           operation=query.operation), query, None))
+            continue
         if any(target.owner not in owners for target in query.file_targets):
             raise SearchScopeError("owner_mismatch", "文件根不属于本次冻结工作区集合", status_code=400)
         for owner in scope.scope.owners:
@@ -100,15 +113,25 @@ def plan_search(request: FederatedSearchRequest, scope: GatewaySearchScopeResolu
     if len(entries) > MAX_SEARCH_BRANCHES:
         raise SearchScopeError("branch_limit", f"搜索超过 {MAX_SEARCH_BRANCHES} 个分支，请缩小范围或类别")
     per_branch, remainder = divmod(request.max_results, len(entries))
-    return [SearchJob(
-        key=key, scope_branch=owners[key.owner], max_bytes=MAX_SEARCH_PAGE_BYTES // len(entries),
-        allow_catalog_mirror=query.allow_catalog_mirror,
-        request=WorkspaceSearchRequest(
-            workspace_id=key.owner.workspace_id, **query.model_dump(exclude={"limit", "file_targets", "allow_catalog_mirror"}), file=target,
-            limit=min(query.limit, per_branch + int(index < remainder)), cursor=selected.get(key),
-            deadline_at=request.deadline_at,
-        ),
-    ) for index, (key, query, target) in enumerate(entries)]
+    jobs: list[SearchJob] = []
+    for index, (key, query, target) in enumerate(entries):
+        limit = min(query.limit, per_branch + int(index < remainder))
+        if key.diagnostics is not None:
+            owner_request: WorkspaceSearchRequest | GatewayDiagnosticLogQueryRequest = GatewayDiagnosticLogQueryRequest(
+                scope=key.diagnostics.scope, query=query.query, limit=min(100, limit),
+                cursor=selected.get(key), deadline_at=request.deadline_at,
+            )
+        else:
+            assert key.owner is not None
+            owner_request = WorkspaceSearchRequest(
+                workspace_id=key.owner.workspace_id,
+                **query.model_dump(exclude={"limit", "file_targets", "allow_catalog_mirror", "diagnostic_targets"}),
+                file=target, limit=limit, cursor=selected.get(key), deadline_at=request.deadline_at,
+            )
+        jobs.append(SearchJob(key=key, scope_branch=owners[key.owner] if key.owner is not None else None,
+                              max_bytes=MAX_SEARCH_PAGE_BYTES // len(entries), request=owner_request,
+                              allow_catalog_mirror=query.allow_catalog_mirror))
+    return jobs
 
 
 async def search_events(
@@ -168,7 +191,7 @@ async def search_events(
             while next_index < len(jobs) and len(pending) < SEARCH_CONCURRENCY:
                 index, next_index = next_index, next_index + 1
                 job = jobs[index]
-                if job.scope_branch.state != "registered":
+                if job.scope_branch is not None and job.scope_branch.state != "registered":
                     statuses[index] = status(job, state="failed", code=job.scope_branch.code,
                                              message=job.scope_branch.message, retryable=True, cursor=job.request.cursor)
                 elif job.request.limit == 0:
@@ -190,16 +213,25 @@ async def search_events(
             for task in sorted(completed, key=lambda item: pending[item]):
                 index = pending.pop(task)
                 job = jobs[index]
-                page: WorkspaceSearchResultDTO | None = None
+                page: WorkspaceSearchResultDTO | GatewayDiagnosticLogQueryResultDTO | None = None
                 try:
                     reply = task.result()
                     page = reply.result
                     budget.check()
-                    if (page.workspace_id, page.category, page.operation, page.contract_version) != (
-                        job.key.owner.workspace_id, job.key.category, job.key.operation, job.request.contract_version,
-                    ):
+                    if isinstance(page, GatewayDiagnosticLogQueryResultDTO):
+                        target = job.key.diagnostics
+                        if target is None or page.gateway_id != target.gateway_id or page.scope != target.scope or (
+                            page.query != job.request.query or any(item.reference.gateway_id != target.gateway_id
+                            or item.source.source != target.scope.source or (target.scope.source == "workspace"
+                            and not set(item.source.workspace_ids).intersection(target.scope.workspace_ids)) for item in page.items)
+                        ):
+                            raise SearchBranchError("invalid_response", "运行日志搜索返回了其它 diagnostics 来源的页")
+                    elif job.key.owner is None or not isinstance(job.request, WorkspaceSearchRequest) or (
+                        page.workspace_id, page.category, page.operation, page.contract_version
+                    ) != (job.key.owner.workspace_id, job.key.category, job.key.operation, job.request.contract_version):
                         raise SearchBranchError("invalid_response", "搜索 Provider 返回了其它 owner／类别／版本的页")
-                    if page.context is not None:
+                    if isinstance(page, WorkspaceSearchResultDTO) and page.context is not None:
+                        assert job.key.owner is not None
                         context = page.context
                         references = [(context, "workspace_sessions"), *((match, "session") for match in context.matches)]
                         for reference, kind in references:
@@ -217,7 +249,8 @@ async def search_events(
                             if resource.resource_identity != expected_identity:
                                 raise SearchBranchError("invalid_response", "上下文搜索的资源身份与规范 URI 不一致")
                     count = page.result_count
-                    if (page.files is not None and job.request.file is not None and job.request.file.uri is not None
+                    if (isinstance(page, WorkspaceSearchResultDTO) and isinstance(job.request, WorkspaceSearchRequest)
+                        and job.key.owner is not None and page.files is not None and job.request.file is not None and job.request.file.uri is not None
                         and page.files.node.uri != parse_resource_uri(job.request.file.uri, local_gateway_id=job.key.owner.gateway_id).display_uri):
                         raise SearchBranchError("invalid_response", "文件搜索返回了其它目录根的页")
                     if count > job.request.limit:
@@ -237,7 +270,9 @@ async def search_events(
                     statuses[index] = status(job, state=page.state, provider_id=page.provider_id,
                                              code=page.limited_reason, cursor=page.cursor,
                                              returned_results=count)
-                    event = FederatedSearchEventDTO(sequence=sequence + 1, request_id=request_id, type="page", branch=statuses[index], page=page, source=reply.source)
+                    event = FederatedSearchEventDTO(sequence=sequence + 1, request_id=request_id, type="page", branch=statuses[index],
+                        page=page if isinstance(page, WorkspaceSearchResultDTO) else None,
+                        diagnostic_logs=page if isinstance(page, GatewayDiagnosticLogQueryResultDTO) else None, source=reply.source)
                     if publish(event):
                         sequence += 1
                         yield event

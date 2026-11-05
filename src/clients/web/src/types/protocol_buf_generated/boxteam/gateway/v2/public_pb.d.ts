@@ -1610,6 +1610,309 @@ export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v2.GatewayD
 export declare const GatewayDiagnosticsDTOSchema: GenMessage<GatewayDiagnosticsDTO>;
 
 /**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO
+ */
+export declare type GatewayDiagnosticLogQueryScopeDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO"> & {
+  /**
+   * @generated from field: string source = 1;
+   */
+  source: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 2;
+   */
+  workspaceIds: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO.
+ * Use `create(GatewayDiagnosticLogQueryScopeDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogQueryScopeDTOSchema: GenMessage<GatewayDiagnosticLogQueryScopeDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogQueryRequest
+ */
+export declare type GatewayDiagnosticLogQueryRequest = Message<"boxteam.gateway.v2.GatewayDiagnosticLogQueryRequest"> & {
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO scope = 1;
+   */
+  scope?: GatewayDiagnosticLogQueryScopeDTO | undefined;
+
+  /**
+   * @generated from field: string query = 2;
+   */
+  query: string;
+
+  /**
+   * @generated from field: optional int32 limit = 3;
+   */
+  limit?: number | undefined;
+
+  /**
+   * @generated from field: optional string cursor = 4;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: optional double deadline_at = 5;
+   */
+  deadlineAt?: number | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogQueryRequest.
+ * Use `create(GatewayDiagnosticLogQueryRequestSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogQueryRequestSchema: GenMessage<GatewayDiagnosticLogQueryRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogQuerySourceDTO
+ */
+export declare type GatewayDiagnosticLogQuerySourceDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticLogQuerySourceDTO"> & {
+  /**
+   * @generated from field: string log_id = 1;
+   */
+  logId: string;
+
+  /**
+   * @generated from field: string source = 2;
+   */
+  source: string;
+
+  /**
+   * @generated from field: string service = 3;
+   */
+  service: string;
+
+  /**
+   * @generated from field: string label = 4;
+   */
+  label: string;
+
+  /**
+   * @generated from field: repeated string workspace_ids = 5;
+   */
+  workspaceIds: string[];
+
+  /**
+   * @generated from field: string status = 6;
+   */
+  status: string;
+
+  /**
+   * @generated from field: optional string error = 7;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogQuerySourceDTO.
+ * Use `create(GatewayDiagnosticLogQuerySourceDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogQuerySourceDTOSchema: GenMessage<GatewayDiagnosticLogQuerySourceDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogReferenceDTO
+ */
+export declare type GatewayDiagnosticLogReferenceDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticLogReferenceDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string log_id = 2;
+   */
+  logId: string;
+
+  /**
+   * @generated from field: string device = 3;
+   */
+  device: string;
+
+  /**
+   * @generated from field: string inode = 4;
+   */
+  inode: string;
+
+  /**
+   * @generated from field: int64 line_start = 5;
+   */
+  lineStart: bigint;
+
+  /**
+   * @generated from field: int64 line_end = 6;
+   */
+  lineEnd: bigint;
+
+  /**
+   * @generated from field: string content_version = 7;
+   */
+  contentVersion: string;
+
+  /**
+   * @generated from field: int64 start_codepoint = 8;
+   */
+  startCodepoint: bigint;
+
+  /**
+   * @generated from field: int64 end_codepoint = 9;
+   */
+  endCodepoint: bigint;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogReferenceDTO.
+ * Use `create(GatewayDiagnosticLogReferenceDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogReferenceDTOSchema: GenMessage<GatewayDiagnosticLogReferenceDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogMatchDTO
+ */
+export declare type GatewayDiagnosticLogMatchDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticLogMatchDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogQuerySourceDTO source = 1;
+   */
+  source?: GatewayDiagnosticLogQuerySourceDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogReferenceDTO reference = 2;
+   */
+  reference?: GatewayDiagnosticLogReferenceDTO | undefined;
+
+  /**
+   * @generated from field: string preview = 3;
+   */
+  preview: string;
+
+  /**
+   * @generated from field: int64 preview_start_codepoint = 4;
+   */
+  previewStartCodepoint: bigint;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogMatchDTO.
+ * Use `create(GatewayDiagnosticLogMatchDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogMatchDTOSchema: GenMessage<GatewayDiagnosticLogMatchDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogQueryResultDTO
+ */
+export declare type GatewayDiagnosticLogQueryResultDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticLogQueryResultDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO scope = 2;
+   */
+  scope?: GatewayDiagnosticLogQueryScopeDTO | undefined;
+
+  /**
+   * @generated from field: string query = 3;
+   */
+  query: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.GatewayDiagnosticLogMatchDTO items = 4;
+   */
+  items: GatewayDiagnosticLogMatchDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.GatewayDiagnosticLogQuerySourceDTO sources = 5;
+   */
+  sources: GatewayDiagnosticLogQuerySourceDTO[];
+
+  /**
+   * @generated from field: bool complete = 6;
+   */
+  complete: boolean;
+
+  /**
+   * @generated from field: optional string cursor = 7;
+   */
+  cursor?: string | undefined;
+
+  /**
+   * @generated from field: optional string limited_reason = 8;
+   */
+  limitedReason?: string | undefined;
+
+  /**
+   * @generated from field: int64 scanned_sources = 9;
+   */
+  scannedSources: bigint;
+
+  /**
+   * @generated from field: int64 scanned_lines = 10;
+   */
+  scannedLines: bigint;
+
+  /**
+   * @generated from field: int64 scanned_bytes = 11;
+   */
+  scannedBytes: bigint;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogQueryResultDTO.
+ * Use `create(GatewayDiagnosticLogQueryResultDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogQueryResultDTOSchema: GenMessage<GatewayDiagnosticLogQueryResultDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogLocateRequest
+ */
+export declare type GatewayDiagnosticLogLocateRequest = Message<"boxteam.gateway.v2.GatewayDiagnosticLogLocateRequest"> & {
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO scope = 1;
+   */
+  scope?: GatewayDiagnosticLogQueryScopeDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogReferenceDTO reference = 2;
+   */
+  reference?: GatewayDiagnosticLogReferenceDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogLocateRequest.
+ * Use `create(GatewayDiagnosticLogLocateRequestSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogLocateRequestSchema: GenMessage<GatewayDiagnosticLogLocateRequest>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayDiagnosticLogLocationDTO
+ */
+export declare type GatewayDiagnosticLogLocationDTO = Message<"boxteam.gateway.v2.GatewayDiagnosticLogLocationDTO"> & {
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogQuerySourceDTO source = 1;
+   */
+  source?: GatewayDiagnosticLogQuerySourceDTO | undefined;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogReferenceDTO reference = 2;
+   */
+  reference?: GatewayDiagnosticLogReferenceDTO | undefined;
+
+  /**
+   * @generated from field: string text = 3;
+   */
+  text: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayDiagnosticLogLocationDTO.
+ * Use `create(GatewayDiagnosticLogLocationDTOSchema)` to create a new message.
+ */
+export declare const GatewayDiagnosticLogLocationDTOSchema: GenMessage<GatewayDiagnosticLogLocationDTO>;
+
+/**
  * @generated from message boxteam.gateway.v2.GatewayDirectoryEntryDTO
  */
 export declare type GatewayDirectoryEntryDTO = Message<"boxteam.gateway.v2.GatewayDirectoryEntryDTO"> & {

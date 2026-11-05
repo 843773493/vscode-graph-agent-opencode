@@ -17,6 +17,7 @@ runtime/
 ├── process_groups.py      POSIX session/process group 身份核验
 ├── process_ports.py       端口占用检查与预留
 ├── process_logs.py        子进程日志句柄、写入归属与接管核验
+├── log_query.py           原诊断文件的有界行查询和精确区间核验
 ├── ssh_process.py         SSH 隧道进程
 ├── port_forwarding.py     本地与 SSH 端口转发
 ├── consumer_protocol.py   runtime consumer 健康证明协议

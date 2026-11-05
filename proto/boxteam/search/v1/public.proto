@@ -10,6 +10,11 @@ message FederatedFileSearchTargetDTO {
   boxteam.workspace.v2.WorkspaceFileSearchTargetDTO target = 2;
 }
 
+message FederatedDiagnosticLogTargetDTO {
+  string gateway_id = 1;
+  boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO scope = 2;
+}
+
 message FederatedSearchQueryDTO {
   string category = 1;
   string operation = 2;
@@ -21,6 +26,7 @@ message FederatedSearchQueryDTO {
   repeated FederatedFileSearchTargetDTO file_targets = 7;
   optional bool allow_catalog_mirror = 8;
   optional boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO context = 9;
+  repeated FederatedDiagnosticLogTargetDTO diagnostic_targets = 10;
 }
 
 message FederatedSearchBranchKeyDTO {
@@ -28,6 +34,8 @@ message FederatedSearchBranchKeyDTO {
   string category = 2;
   string operation = 3;
   optional string resource_uri = 4;
+  // 与 workspace owner 二选一；原始运行日志由 Gateway diagnostics 持有。
+  optional FederatedDiagnosticLogTargetDTO diagnostics = 5;
 }
 
 message FederatedSearchContinuationDTO {
@@ -83,6 +91,7 @@ message FederatedSearchEventDTO {
   boxteam.workspace.v2.WorkspaceSearchResultDTO page = 6;
   FederatedSearchSummaryDTO summary = 7;
   FederatedSearchSourceDTO source = 8;
+  optional boxteam.gateway.v2.GatewayDiagnosticLogQueryResultDTO diagnostic_logs = 9;
 }
 
 // 复用原 Gateway inventory 的 read 授权，不新增资源种类或全局 cursor。

@@ -6,7 +6,7 @@ import { streamFederatedSearch } from "./federatedSearch";
 const owners = ["A", "B"].map(workspace_id => ({ gateway_id: "gateway", workspace_id }));
 const scope = { version: 1, gateway_id: "gateway", resolved_at: "2026-11-03T00:00:00Z", mode: "selected", owners };
 const request = () => FederatedSearchRequest.create({ scope: { mode: "selected", owners }, max_results: 100,
-  queries: [{ category: "message", operation: "content", contract_version: 1, query: "😀词", match_mode: "literal", limit: 50, file_targets: [] }] });
+  queries: [{ category: "message", operation: "content", contract_version: 1, query: "😀词", match_mode: "literal", limit: 50, file_targets: [], diagnostic_targets: [] }] });
 const key = (index: number) => ({ owner: owners[index], category: "message", operation: "content" });
 const branch = (index: number, state = "complete") => ({ branch: key(index), state, retryable: false,
   allocated_results: 50, returned_results: 0, ...(state === "limited" ? { code: "scan_limit", cursor: "original-owner-cursor" } : {}) });
@@ -47,7 +47,7 @@ test("同 owner 多根各自结算，续查只接受原文件根而不合并游�
   const roots = ["one", "two"].map(name => `boxteam://workspace/A/resources/files/root/${name}`);
   const input = FederatedSearchRequest.create({ scope: { mode: "selected", owners }, max_results: 3,
     queries: [{ category: "file", operation: "name", contract_version: 1, query: "needle", match_mode: "fuzzy", limit: 1,
-      file_targets: roots.map(uri => ({ owner: owners[0], target: { uri, max_bytes: 65536 } })) }] });
+      file_targets: roots.map(uri => ({ owner: owners[0], target: { uri, max_bytes: 65536 } })), diagnostic_targets: [] }] });
   const branches = roots.map((resource_uri, index) => ({ ...branch(0, "limited"), cursor: `cursor-${index}`,
     branch: { owner: owners[0], category: "file", operation: "name", resource_uri } }));
   const backend = install(), received: string[] = [];
@@ -148,5 +148,63 @@ test("总期限包含正文读取，心跳不能延长期限", async () => {
   expect(error).toBeInstanceOf(DOMException);
   expect(error.name).toBe("TimeoutError");
   expect(error.message).toBe("搜索总期限已到");
+  expect(backend.cancelled).toBe(true);
+});
+
+const diagnosticTarget = () => ({ gateway_id: "gateway", scope: { source: "workspace", workspace_ids: ["A", "B"] } });
+const diagnosticRequest = () => FederatedSearchRequest.create({ scope: { mode: "selected", owners },
+  queries: [{ category: "runtime_log", operation: "content", contract_version: 1, match_mode: "literal", query: "😀词", limit: 1,
+    diagnostic_targets: [diagnosticTarget()] }] });
+const diagnosticBranch = () => ({ branch: { owner: undefined, diagnostics: diagnosticTarget(), category: "runtime_log", operation: "content" },
+  state: "limited", retryable: false, allocated_results: 1, returned_results: 1, cursor: "original-log-cursor", code: "result_limit" });
+const diagnosticPage = () => {
+  const source = { log_id: "shared-backend", source: "workspace", service: "workspace_api", label: "共享 Backend",
+    workspace_ids: ["A", "B"], status: "available" };
+  return { gateway_id: "gateway", scope: diagnosticTarget().scope, query: "😀词", sources: [source],
+    items: [{ source, reference: { gateway_id: "gateway", log_id: source.log_id, device: "1", inode: "2", line_start: 0,
+      line_end: 20, content_version: "a".repeat(64), start_codepoint: 2, end_codepoint: 4 }, preview: "开头😀词", preview_start_codepoint: 0 }],
+    complete: false, cursor: "original-log-cursor", limited_reason: "result_limit", scanned_sources: 1, scanned_lines: 1, scanned_bytes: 20 };
+};
+const diagnosticSummary = () => ({ state: "incomplete", order: "category-scope-owner-v1", branches: [diagnosticBranch()], returned_results: 1 });
+
+test("运行日志每 Gateway 只有真实诊断分支，共享来源及原 cursor 通过同一流", async () => {
+  const backend = install(), received: string[] = [];
+  const running = streamFederatedSearch(49_356, diagnosticRequest(), { signal: new AbortController().signal,
+    onEvent: event => received.push(event.type) });
+  await until(() => backend.calls.length === 1);
+  backend.send("scope", { scope: resolution() });
+  backend.send("page", { branch: diagnosticBranch(), diagnostic_logs: diagnosticPage() });
+  backend.send("branch", { branch: diagnosticBranch() });
+  backend.send("end", { summary: diagnosticSummary() }); backend.close();
+  expect((await running).branches[0].cursor).toBe("original-log-cursor");
+  expect(received).toEqual(["scope", "page", "branch", "end"]);
+  expect(backend.calls[0].body.queries[0].diagnostic_targets).toEqual([diagnosticTarget()]);
+  const nextRequest = diagnosticRequest();
+  nextRequest.scope = { mode: "resume", scope, owners: [] };
+  nextRequest.continuations = [{ branch: diagnosticBranch().branch, cursor: "original-log-cursor" }];
+  const resumed = install();
+  const next = streamFederatedSearch(49_357, nextRequest, { signal: new AbortController().signal, onEvent() {} });
+  await until(() => resumed.calls.length === 1);
+  resumed.send("scope", { scope: resolution() });
+  resumed.send("page", { branch: diagnosticBranch(), diagnostic_logs: diagnosticPage() });
+  resumed.send("branch", { branch: diagnosticBranch() });
+  resumed.send("end", { summary: diagnosticSummary() }); resumed.close();
+  expect((await next).branches).toHaveLength(1);
+  expect(resumed.calls[0].body.continuations).toEqual(nextRequest.continuations);
+});
+
+test.each(["query", "scope", "source", "reference", "duplicate", "wrong_payload", "outside_scope"])("运行日志拒绝非法领域页并释放流：%s", async damage => {
+  const backend = install(), input = diagnosticRequest(), data = diagnosticPage();
+  if (damage === "outside_scope") input.queries[0].diagnostic_targets[0].scope!.workspace_ids = ["C"];
+  const outcome = streamFederatedSearch(49_358, input, { signal: new AbortController().signal, onEvent() {} }).catch(error => error);
+  await until(() => backend.calls.length === 1);
+  backend.send("scope", { scope: resolution() });
+  if (damage === "query") data.query = "其它词";
+  if (damage === "scope") data.scope = { source: "gateway", workspace_ids: [] };
+  if (damage === "source") data.sources[0].workspace_ids = ["C"];
+  if (damage === "reference") data.items[0].reference.gateway_id = "other-gateway";
+  if (damage !== "outside_scope") backend.send("page", { branch: diagnosticBranch(), ...(damage === "wrong_payload" ? { page: page(0) } : { diagnostic_logs: data }) });
+  if (damage === "duplicate") backend.send("page", { branch: diagnosticBranch(), diagnostic_logs: data });
+  expect(await outcome).toBeInstanceOf(Error);
   expect(backend.cancelled).toBe(true);
 });

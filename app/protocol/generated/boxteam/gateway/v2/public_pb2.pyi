@@ -640,6 +640,124 @@ class GatewayDiagnosticsDTO(_message.Message):
     processes: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticProcessDTO]
     def __init__(self, gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., checked_at: _Optional[str] = ..., selected_workspace_id: _Optional[str] = ..., selected_log_id: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[GatewayDiagnosticWorkspaceDTO, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[GatewayDiagnosticLogDTO, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[GatewayDiagnosticProcessDTO, _Mapping]]] = ...) -> None: ...
 
+class GatewayDiagnosticLogQueryScopeDTO(_message.Message):
+    __slots__ = ("source", "workspace_ids")
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    source: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, source: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class GatewayDiagnosticLogQueryRequest(_message.Message):
+    __slots__ = ("scope", "query", "limit", "cursor", "deadline_at")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    QUERY_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    DEADLINE_AT_FIELD_NUMBER: _ClassVar[int]
+    scope: GatewayDiagnosticLogQueryScopeDTO
+    query: str
+    limit: int
+    cursor: str
+    deadline_at: float
+    def __init__(self, scope: _Optional[_Union[GatewayDiagnosticLogQueryScopeDTO, _Mapping]] = ..., query: _Optional[str] = ..., limit: _Optional[int] = ..., cursor: _Optional[str] = ..., deadline_at: _Optional[float] = ...) -> None: ...
+
+class GatewayDiagnosticLogQuerySourceDTO(_message.Message):
+    __slots__ = ("log_id", "source", "service", "label", "workspace_ids", "status", "error")
+    LOG_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDS_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    log_id: str
+    source: str
+    service: str
+    label: str
+    workspace_ids: _containers.RepeatedScalarFieldContainer[str]
+    status: str
+    error: str
+    def __init__(self, log_id: _Optional[str] = ..., source: _Optional[str] = ..., service: _Optional[str] = ..., label: _Optional[str] = ..., workspace_ids: _Optional[_Iterable[str]] = ..., status: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+
+class GatewayDiagnosticLogReferenceDTO(_message.Message):
+    __slots__ = ("gateway_id", "log_id", "device", "inode", "line_start", "line_end", "content_version", "start_codepoint", "end_codepoint")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    LOG_ID_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_FIELD_NUMBER: _ClassVar[int]
+    INODE_FIELD_NUMBER: _ClassVar[int]
+    LINE_START_FIELD_NUMBER: _ClassVar[int]
+    LINE_END_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    START_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    END_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    log_id: str
+    device: str
+    inode: str
+    line_start: int
+    line_end: int
+    content_version: str
+    start_codepoint: int
+    end_codepoint: int
+    def __init__(self, gateway_id: _Optional[str] = ..., log_id: _Optional[str] = ..., device: _Optional[str] = ..., inode: _Optional[str] = ..., line_start: _Optional[int] = ..., line_end: _Optional[int] = ..., content_version: _Optional[str] = ..., start_codepoint: _Optional[int] = ..., end_codepoint: _Optional[int] = ...) -> None: ...
+
+class GatewayDiagnosticLogMatchDTO(_message.Message):
+    __slots__ = ("source", "reference", "preview", "preview_start_codepoint")
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    PREVIEW_FIELD_NUMBER: _ClassVar[int]
+    PREVIEW_START_CODEPOINT_FIELD_NUMBER: _ClassVar[int]
+    source: GatewayDiagnosticLogQuerySourceDTO
+    reference: GatewayDiagnosticLogReferenceDTO
+    preview: str
+    preview_start_codepoint: int
+    def __init__(self, source: _Optional[_Union[GatewayDiagnosticLogQuerySourceDTO, _Mapping]] = ..., reference: _Optional[_Union[GatewayDiagnosticLogReferenceDTO, _Mapping]] = ..., preview: _Optional[str] = ..., preview_start_codepoint: _Optional[int] = ...) -> None: ...
+
+class GatewayDiagnosticLogQueryResultDTO(_message.Message):
+    __slots__ = ("gateway_id", "scope", "query", "items", "sources", "complete", "cursor", "limited_reason", "scanned_sources", "scanned_lines", "scanned_bytes")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    QUERY_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    SOURCES_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
+    LIMITED_REASON_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_SOURCES_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_LINES_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_BYTES_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    scope: GatewayDiagnosticLogQueryScopeDTO
+    query: str
+    items: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticLogMatchDTO]
+    sources: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticLogQuerySourceDTO]
+    complete: bool
+    cursor: str
+    limited_reason: str
+    scanned_sources: int
+    scanned_lines: int
+    scanned_bytes: int
+    def __init__(self, gateway_id: _Optional[str] = ..., scope: _Optional[_Union[GatewayDiagnosticLogQueryScopeDTO, _Mapping]] = ..., query: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayDiagnosticLogMatchDTO, _Mapping]]] = ..., sources: _Optional[_Iterable[_Union[GatewayDiagnosticLogQuerySourceDTO, _Mapping]]] = ..., complete: _Optional[bool] = ..., cursor: _Optional[str] = ..., limited_reason: _Optional[str] = ..., scanned_sources: _Optional[int] = ..., scanned_lines: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
+
+class GatewayDiagnosticLogLocateRequest(_message.Message):
+    __slots__ = ("scope", "reference")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    scope: GatewayDiagnosticLogQueryScopeDTO
+    reference: GatewayDiagnosticLogReferenceDTO
+    def __init__(self, scope: _Optional[_Union[GatewayDiagnosticLogQueryScopeDTO, _Mapping]] = ..., reference: _Optional[_Union[GatewayDiagnosticLogReferenceDTO, _Mapping]] = ...) -> None: ...
+
+class GatewayDiagnosticLogLocationDTO(_message.Message):
+    __slots__ = ("source", "reference", "text")
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    TEXT_FIELD_NUMBER: _ClassVar[int]
+    source: GatewayDiagnosticLogQuerySourceDTO
+    reference: GatewayDiagnosticLogReferenceDTO
+    text: str
+    def __init__(self, source: _Optional[_Union[GatewayDiagnosticLogQuerySourceDTO, _Mapping]] = ..., reference: _Optional[_Union[GatewayDiagnosticLogReferenceDTO, _Mapping]] = ..., text: _Optional[str] = ...) -> None: ...
+
 class GatewayDirectoryEntryDTO(_message.Message):
     __slots__ = ("name", "path")
     NAME_FIELD_NUMBER: _ClassVar[int]

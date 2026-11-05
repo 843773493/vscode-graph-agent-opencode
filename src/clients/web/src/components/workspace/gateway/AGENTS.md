@@ -2,6 +2,8 @@
 
 `components/workspace/gateway/` 存放 Gateway 控制面的专用组件：控制中心 GatewayControlCenter、连接对话框 GatewayConnectionDialog、入站访问面板 GatewayInboundAccessPanel、诊断面板 GatewayDiagnosticsPanel、主题设置 GatewayThemeSettings，以及工作区分组纯逻辑 gatewayWorkspacePresentation。
 
+`GatewayDiagnosticLogLocation` 是原诊断视图的临时原行定位展示，只调用具名精确读取；切换或关闭释放原文，不读取整份日志、不改变工作区或会话状态。
+
 本目录与相邻子包的边界：
 
 - `components/workspace/`：工作区会话级组件（文件、编辑器、预览）的平铺实现，本目录只承载 Gateway 控制面单一目标的渲染与交互。

@@ -1,4 +1,5 @@
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "./api/workspaceIdentity";
+import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
@@ -84,6 +85,16 @@ export async function getGatewayDiagnostics(
       { headers: workspaceHeader(options.workspaceId), timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
     ),
   );
+}
+
+export async function locateGatewayDiagnosticLog(
+  port: number, reference: GatewayDiagnosticLogLocateRequest, options: { signal?: AbortSignal } = {},
+): Promise<GatewayDiagnosticLogLocationDTO> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayDiagnosticLogLocationDTO>>(
+    port, "/api/gateway/diagnostics/locate", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reference), ...options,
+    },
+  ));
 }
 
 export async function restartDevelopmentRuntime(

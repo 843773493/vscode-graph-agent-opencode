@@ -94,8 +94,8 @@
   - 已实现精确 Thread 及工作区范围的 canonical 正文查询、共享预算、版本绑定续页及原 around 入口的独立位置核验；真实消息 API 验证长正文、Unicode 和 main／child 隔离，真实图同步／异步替换与 rewind 验证随当前 view 选择版本。工作区分支发现未打开 child 并保持冷历史不物化；React 原文定位及真实 Gateway／Workbench 页面验收已完成，详见本文件消息正文切片证据。
 - [x] 9.4 在原工具结果 owner 实现有界正文查询、执行／结果身份与精确读取，复用原工具详情，查询不触发工具重放。
 - [x] 9.5 在原 LLM 请求记录 owner 实现有界正文查询及请求详情定位，不拉全量日志到前端或把它重复作为聊天命中。
-- [ ] 9.6 在原 Trace／运行日志 owner 实现分类正文查询及记录定位，区分工作区与 Gateway 日志，不越过明确范围与权限。
-  - Trace 已沿原事件存储接入独立 Provider、版本绑定续点及精确 Thread／原行定位，真实 Gateway／Workbench 验证见 2026-11-04 Trace 切片证据；工作区与 Gateway 运行日志仍未接入，整项保持未完成。
+- [x] 9.6 在原 Trace／运行日志 owner 实现分类正文查询及记录定位，区分工作区与 Gateway 日志，不越过明确范围与权限。
+  - Trace 的原事件查询、独立续点及精确 Thread／原行定位沿 2026-11-04 切片证据；运行日志已迁齐原 diagnostics owner、公开协议、联邦客户端、Quick Access 和原诊断视图，验收及适用边界见 2026-11-05 运行日志切片证据。
 - [ ] 9.7 将命中通过精确 owner、目标组与请求代际交给 React 虚拟列表／原详情加载，等待缺页与实际挂载后定位，失效记录明确报错而不回顶部。
 - [ ] 9.8 用各类独有词、未打开 child、未加载工具／日志、多行与 emoji、截断片段及已删除记录验证真实 owner 查询和位置，未选类别没有请求。
 
@@ -896,3 +896,11 @@
 
 - 工作区服务先关闭全部准入，再等待所有原 registration 完成安全结算；任一 release 失败不使服务提前返回。保留单一关闭任务和原错误实例，多错聚合；调用方取消等待清理后继续传播，释放失败保留为原因链，不重复 release、不切换 Provider 或发布迟到结果。
 - 修改前判别反例 1 failed；相关搜索目录 62 passed，补充直接 registration 取消场景后服务模块 27 passed，Ruff 与项目 Python 3.12 Pyright 零诊断。原始输出、准确命令及最终源码指纹：`out/tests/temp/search_provider_close_sol_20261104/artifacts/verification.json`。本切片未运行真实 HTTP、Web 或 Electron，不替代本组完整生命周期与流式验收，16.3／16.20 保持未勾选。
+
+### 2026-11-05：运行日志正文查询与原行定位（9.6）
+
+- 原 diagnostics owner 从受管进程发现来源，按真实文件合并共享 Backend 并披露关联工作区；Gateway 自有来源单独选择。新增有界行查询和精确原行读取，不读工作区业务目录，不建日志正文副本、索引或另一队列。`runtime_log/content` 用明确 diagnostics 分支接入原 SearchJob 和同一 Python／Web 联邦客户端，保留冻结范围、原管理鉴权、期限、配额、取消结算及唯一终态。
+- 原行引用采用文件身份、字节区间、完整目标行版本及 Unicode 码点位置；精确读取只核目标区间和边界。追加使旧查询续点失效，但未改完整行继续定位；轮转、删除及原行改写明确拒绝，不回读 tail。具名诊断视图临时显示原行，不发布为普通文件或聊天引用。
+- 后端定向186项、前端31项通过；包含共享文件单次读取、独立来源、范围越界、零配额、分页、原鉴权、远端错误／总期限／取消和引用释放。正式 Gateway＋受管 Backend＋Workbench＋Chromium 验收1 passed／117.45秒、退出0，原件 `out/tests/integration/clients/web/quick_access/test_runtime_log_content/runs/run-85556df0c000/nodes/node-e85125f74669/artifacts/`；关键日志由真实文件失败和原 DTO 拒绝产生，核A/B进程隔离、同Pane另一处emoji、追加后精确定位、旧版本拒绝及零整批诊断读取，5份搜索收据，页面错误为空。共享Backend由真实owner单测覆盖，此页面的A/B是独立进程；联邦传输／故障为显式替身，未声称真实跨机或Windows通过。
+- 真实Workbench类型检查44份转换源码、正式Web构建、protocol生成一致性／Buf breaking及OpenAPI校验退出0；最终产品Python Ruff／Pyright零诊断。完整Web类型与原基线28／28诊断一致，无新增。命令、源码指纹、原输出、失败归因和退出码保留在 `out/tests/temp/quick_access_logs_20261105/artifacts/` 的 `final-backend-12.json`、`final-browser-tests-13.json`、`runtime-browser-diagnostic-14.json`、`final-ruff-15.json`、`final-pyright-15.json`、`final-web-types-15.json`、`web-types-comparison-12.json`、`workbench-typecheck-08.json`、`web-build-11.json`、`protocol-check-09.json` 和 `openapi-check-09.json`；根复核当前owned源码与相应回执一致，复用成功构建。早期错误装具假定共享进程、注册后未刷新列表及QuickInput切换观察的失败保留，不以放宽业务断言处理。
+- 仅关闭9.6；9.1、9.7、9.8及第15／16组的完整组合验收继续按原任务推进，不以本切片替代Electron、Windows或其它领域动作。

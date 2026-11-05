@@ -45,6 +45,7 @@ import type { SessionNavigation } from '../sessionNavigation.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
 import type { ThreadEditorOptions } from '../threadPane.js';
 import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
@@ -255,6 +256,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const branches = queryFederatedSearchBranches(run.owners, categories, filter, queryDisposables, queryCancellation.token, run.cache,
       (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message, item.trace)
         : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail, item.requestLog)
+          : item.kind === 'log' ? this.logPick(run, item.location, item.title, item.description, item.detail)
           : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
       branches => {
         if (!queryAlive()) return;
@@ -282,14 +284,14 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       const providerOptions: AccessOptions = { ...run.options, contentCategory: category, searchOwners: run.owners, searchGroup: run.group };
       this.quickInput.quickAccess.show(prefix + filter, { preserveValue: true, providerOptions });
     };
-    // TODO：工作区运行日志及 Gateway 自有诊断日志仍待各原 owner 的独立查询与权限切片。
     return [
       { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child', accept: () => select('content ', '会话消息') },
       { id: 'content-category-tool', label: '工具结果', description: 'canonical 结果及不可变完整输出 · 不重放工具', accept: () => select('content ', '工具结果') },
       { id: 'content-category-file', label: '文件', description: '转到 % 文件内容搜索，保留所选工作区', accept: () => select('%') },
       { id: 'content-category-request', label: 'LLM 请求记录', description: 'Session 级原请求／响应 · 精确记录定位', accept: () => select('content ', 'LLM 请求记录') },
       { id: 'content-category-trace', label: 'Trace', description: '工作区原事件 · 精确 Thread／记录定位', accept: () => select('content ', 'Trace') },
-      { id: 'content-category-pending-logs', label: '运行日志 · 尚未接入' },
+      { id: 'content-category-runtime-logs', label: '运行日志', description: '所选工作区关联的受管进程 · 共享来源会明确标示', accept: () => select('content ', '运行日志') },
+      { id: 'content-category-gateway-logs', label: 'Gateway 日志', description: '明确查询所选 Gateway 自有来源 · 不含工作区进程', accept: () => select('content ', 'Gateway 日志') },
     ];
   }
 
@@ -392,6 +394,19 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         const view = await this.views.openView<SessionNavigation>('boxteam.sessions', !event.inBackground);
         if (!view) throw new Error('会话导航视图不可用');
         await view.revealFolder(target, nodeId, !event.inBackground);
+      })()) };
+  }
+
+  private logPick(run: AccessRun, location: GatewayDiagnosticLogLocateRequest, label: string, description: string, detail: string): ResourcePick {
+    const reference = location.reference!;
+    return { id: `log:${reference.gateway_id}/${reference.log_id}/${reference.device}/${reference.inode}/${reference.line_start}/${reference.content_version}/${reference.start_codepoint}`,
+      label, description, detail, iconClass: ThemeIcon.asClassName(Codicon.output),
+      accept: (_mods, event) => this.report((async () => {
+        this.assertAccess(run);
+        const view = await this.views.openView<SessionNavigation>('boxteam.sessions', !event.inBackground);
+        this.assertAccess(run);
+        if (!view) throw new Error('Gateway 诊断视图不可用');
+        view.revealDiagnosticLog(location);
       })()) };
   }
 

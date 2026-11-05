@@ -11,6 +11,7 @@ from app.gateway.control.router import router as gateway_control_router
 from app.gateway.device_connections import router as device_connections_router
 from app.gateway.federation.router import router as federation_router
 from app.gateway.routes import (
+    diagnostic_logs,
     federation,
     health_config,
     native_directories,
@@ -41,6 +42,7 @@ ROUTE_MODULES = (
     native_directories,
     resource_addresses,
     search,
+    diagnostic_logs,
 )
 
 

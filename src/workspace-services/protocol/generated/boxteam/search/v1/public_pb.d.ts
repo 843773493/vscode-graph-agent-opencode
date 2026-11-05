@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
-import type { GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v2/public_pb.js";
+import type { GatewayDiagnosticLogQueryResultDTO, GatewayDiagnosticLogQueryScopeDTO, GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v2/public_pb.js";
 import type { ContextGrantTarget, WorkspaceContextSearchOptionsDTO, WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
 
 /**
@@ -32,6 +32,27 @@ export declare type FederatedFileSearchTargetDTO = Message<"boxteam.search.v1.Fe
  * Use `create(FederatedFileSearchTargetDTOSchema)` to create a new message.
  */
 export declare const FederatedFileSearchTargetDTOSchema: GenMessage<FederatedFileSearchTargetDTO>;
+
+/**
+ * @generated from message boxteam.search.v1.FederatedDiagnosticLogTargetDTO
+ */
+export declare type FederatedDiagnosticLogTargetDTO = Message<"boxteam.search.v1.FederatedDiagnosticLogTargetDTO"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: boxteam.gateway.v2.GatewayDiagnosticLogQueryScopeDTO scope = 2;
+   */
+  scope?: GatewayDiagnosticLogQueryScopeDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.search.v1.FederatedDiagnosticLogTargetDTO.
+ * Use `create(FederatedDiagnosticLogTargetDTOSchema)` to create a new message.
+ */
+export declare const FederatedDiagnosticLogTargetDTOSchema: GenMessage<FederatedDiagnosticLogTargetDTO>;
 
 /**
  * @generated from message boxteam.search.v1.FederatedSearchQueryDTO
@@ -83,6 +104,11 @@ export declare type FederatedSearchQueryDTO = Message<"boxteam.search.v1.Federat
    * @generated from field: optional boxteam.workspace.v2.WorkspaceContextSearchOptionsDTO context = 9;
    */
   context?: WorkspaceContextSearchOptionsDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.search.v1.FederatedDiagnosticLogTargetDTO diagnostic_targets = 10;
+   */
+  diagnosticTargets: FederatedDiagnosticLogTargetDTO[];
 };
 
 /**
@@ -114,6 +140,13 @@ export declare type FederatedSearchBranchKeyDTO = Message<"boxteam.search.v1.Fed
    * @generated from field: optional string resource_uri = 4;
    */
   resourceUri?: string | undefined;
+
+  /**
+   * 与 workspace owner 二选一；原始运行日志由 Gateway diagnostics 持有。
+   *
+   * @generated from field: optional boxteam.search.v1.FederatedDiagnosticLogTargetDTO diagnostics = 5;
+   */
+  diagnostics?: FederatedDiagnosticLogTargetDTO | undefined;
 };
 
 /**
@@ -359,6 +392,11 @@ export declare type FederatedSearchEventDTO = Message<"boxteam.search.v1.Federat
    * @generated from field: boxteam.search.v1.FederatedSearchSourceDTO source = 8;
    */
   source?: FederatedSearchSourceDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.gateway.v2.GatewayDiagnosticLogQueryResultDTO diagnostic_logs = 9;
+   */
+  diagnosticLogs?: GatewayDiagnosticLogQueryResultDTO | undefined;
 };
 
 /**

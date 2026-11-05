@@ -11,6 +11,8 @@
 - `gateway_runtime_generation/`：Gateway runtime generation 生命周期与健康证明垂直链路（`GatewayRuntimeGenerationMixin`）。
 - `catalog_search.py`：保留原后台目录同步、配置健康与 owner-v3 派生镜像；不提供聚合搜索或查询时同步。离线联邦仅复用原 catalog owner 的纯查询。
 - `workspace_discovery.py`：按原 registry／navigation 元数据提供有界工作区发现；返回完整 Gateway／工作区 UUID owner，不生成另一工作区路由身份，不探测健康、启动目标或读取工作区数据。
+- `diagnostic_logs.py`：复用原 diagnostics 来源提供有界正文查询与原行定位；工作区仅筛选关联受管文件，共享进程按文件去重，Gateway 自有来源须明确选择，不成为普通资源或聊天来源。
+- `diagnostic_log_transport.py`：原诊断管理的目标路由、联邦凭据与有界响应校验；搜索队列和具名管理入口共用，不实现正文匹配或另建调度。
 - 联邦搜索范围与跨目标查询编排归 `../search/`，不在目录镜像或控制面路由中另建调度器。
 
 # 可修改内容
