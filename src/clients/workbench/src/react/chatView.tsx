@@ -212,7 +212,8 @@ function ChatView({ input, active, editors, onTheme, onUpdate, onFileOpenMenu, o
       await gateway.assertWorkspace(owner);
       const [session, agents, access, workspaces, settings, browserViewScope] = await Promise.all([
         getSession(0, owner.sessionId, owner.workspaceKey), listAgents(0, owner.workspaceKey),
-        ensureGatewayUserAccess(0), gateway.workspaces(), getBrowserUiSettings(0), browserGatewayId(0),
+        // 会话只需登记归属；显式健康刷新仍由 Gateway 导航入口发起。
+        ensureGatewayUserAccess(0), gateway.workspaces(false), getBrowserUiSettings(0), browserGatewayId(0),
       ]);
       if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error('会话编辑器初始化归属不一致');
       const history = await cacheLoad;

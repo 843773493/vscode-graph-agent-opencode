@@ -37,12 +37,14 @@
 - 证据：代码存在显式`validate_integrity`和离线恢复的`PRAGMA integrity_check`；这些检查的存在本身不证明普通请求执行了它们。schema/正文验证路径还需通过真实请求和原trace判断调用频率，不能仅搜到函数就下结论。
 - 处理：OpenSpec明确无变化暖读不无条件全库审计；原迁移／恢复／损坏拒绝合同保留。没有原始请求证据，不擅自改这些生产链路或增加另一套监控。
 
-### PERF-004：会话恢复依赖全工作区健康探测
+### PERF-004：会话恢复不再等待无关工作区健康探测
 
-- 状态：已确认调用边界；多工作区／不可达目标造成的实际延迟待测，不能认定首轮会话等待全由它造成。
-- 位置：`src/clients/workbench/src/react/chatView.tsx` 的 `initialize` 调用 `gateway.workspaces()`；`src/clients/workbench/src/agentApi.ts` 的默认 `checkHealth=true`；`app/gateway/routes/workspaces.py` 和 `app/gateway/registry/dtos.py::list_dtos`。
-- 证据：恢复一个 Thread 时，初始化 Promise.all 包含探测所有已登记工作区及其辅助服务的列表请求。单目标已经返回正确 Session，也要等待这个全范围分支完成。原 `resolveWorkspaceTarget` 则明确使用 `workspaces(false)` 只解析登记归属。
-- 影响与建议：普通会话恢复与显式“刷新所有健康状态”应明确各自需要的事实；验证前不要直接关闭探测。下一项最小场景为 A 正常、B 不可达，检查打开 A 的请求与总体耗时，确认它是否等待 B。保留真实故障展示，避免用健康缓存伪报正常。
+- 状态：已通过受控无响应目标的真实页面对照；未将其推广为真实远端故障或所有多目标场景已通过。
+- 位置：`src/clients/workbench/src/react/chatView.tsx::initialize` 改用 `gateway.workspaces(false)` 取得登记归属；原目标校验、实际 Session／Thread bootstrap 和显式全目标健康检查保留。
+- 根因：原初始化 Promise.all 默认探测所有登记工作区。A 已能提供正确会话时，仍等待无关 B 的 HTTP 超时。沿项目既有 `resolveWorkspaceTarget` 的登记读取边界消除该依赖，没有新增健康缓存；参考仓库原 ChatEditorInput 按明确 session resource 调用 `acquireOrLoadSession`，也不把打开单会话扩展为所有目标预检。
+- 对照：`integration-web-thread-restore-health` 使用正式 Workbench、真实 Gateway／A 后端，B 仅在外部健康 HTTP 边界保持无响应。旧实现 `run-cc4c3836e55e` 打开耗时2570.53ms，确有 `check_health=true` 请求，超过原2000ms预算；改后 `run-e5670d78c7b5` 耗时732.85ms，恢复期间登记请求均为 false。两次均核精确 Session／Thread、bootstrap200及原request_id，未调用模型。
+- 故障透明：修复后同一页面显式 `check_health=true` 耗时2118.27ms，B 仍显示 offline 和原 ReadTimeout，A 输入框继续可编辑。没有用登记路由的存在代替当前业务请求成功，也没有删除探测或吞掉故障。
+- 范围：各一次未筛选样本，只证明该等待依赖被移除，不是20次暖读统计、真实远端断网、深历史或 Electron 验收。原始命令、源码指纹、构建、页面结果及旧失败保留在同名正式测试产物和 `out/tests/temp/frozen_wire_20261105/artifacts/thread-restore-{before,after}-001-*.json`。
 
 ### PERF-005：只读 Agent 列表重复构建模型对象已移除
 

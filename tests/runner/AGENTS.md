@@ -117,6 +117,8 @@
 
 ## 规范
 
+`integration-web-thread-restore-health` 使用正式 Workbench、真实 Gateway 和 A 后端，B 的健康 HTTP 边界可保持无响应；验证单 Thread 恢复不发起全目标探测，显式健康刷新仍报告 B 离线。固定300秒／4GiB，沿原集成独占闸门；不将受控 B 当作真实远程机器故障验收。
+
 - `integration-web-turn-source-freezing` 经真实 Workbench Composer／Gateway／受管 Backend 和 model_stream 验证工具循环中的 AGENTS Turn 冻结、下轮更新及安全重启后 API／UI／冷 Saver 原文与请求 hash；固定660秒／4GiB并沿集成独占闸门。公共构建装具、默认服务和 Section 8 总验收 owner 不变，不代替 model_call policy、Skill、团队或 Windows 验收。
 
 - `integration-skill-selection-recovery`经真实Skill文件发布/工具调用、Saver准入与封存，验证模式切换、A→B→A选择、checkpoint/rewind/compaction、冷Saver及24→25→26维护迁移的原字节和hash，固定60秒/4GiB；冻结来源装具不代表完整Agent、Backend进程重启、Gateway/Web或Windows实机。
