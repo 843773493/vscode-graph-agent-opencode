@@ -26,6 +26,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
     canonical_json_text,
 )
+from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
 _BODY_VALIDATION_MAX_BYTES = 8 * 1024 * 1024
 _BODY_VALIDATION_MAX_ENTRIES = 4096
@@ -207,7 +208,8 @@ def _validated_catalog_body(key: _BodyValidationKey) -> CanonicalItemRecord:
 
 
 def validate_projection_membership(connection: sqlite3.Connection) -> None:
-    """已有 projection 必须有对应 catalog；最小 catalog 不强制重型索引。"""
+    """完整审计 projection 的 catalog 归属及全部 view 的成员坐标与顺序。"""
+    _validate_context_view_orders(connection)
     orphan = connection.execute(
         "SELECT p.item_id FROM item_projections p LEFT JOIN item_catalog c "
         "ON c.item_id = p.item_id AND c.item_sequence = p.item_sequence "
@@ -217,4 +219,95 @@ def validate_projection_membership(connection: sqlite3.Connection) -> None:
         raise RuntimeError(
             f"item projection 与 canonical catalog membership 不一致: "
             f"orphan={orphan}"
+        )
+
+
+def _validate_context_view_orders(connection: sqlite3.Connection) -> None:
+    """拒绝缺失、重复或互相冲突的既有 view membership 坐标。"""
+    # 一次审计全部 view，避免 initialize 被写入方反复调用时逐 view 重做查询。
+    # 普通分页只检查消费到的成员和顺序；未读旧历史留到恢复或显式完整校验。
+    invalid_coordinate = connection.execute(
+        "SELECT view_id, item_id FROM context_view_items "
+        "WHERE (typeof(logical_item_ordinal) != 'integer' OR logical_item_ordinal < 0) "
+        "LIMIT 1",
+    ).fetchone()
+    if invalid_coordinate is not None:
+        raise RuntimeError(
+            "context view projection integrity error: logical_item_ordinal 非法 "
+            f"view_id={invalid_coordinate[0]}, item_id={invalid_coordinate[1]}"
+        )
+
+    duplicate_coordinate = connection.execute(
+        "SELECT view_id, logical_item_ordinal FROM context_view_items "
+        "GROUP BY view_id, logical_item_ordinal HAVING COUNT(*) > 1 LIMIT 1",
+    ).fetchone()
+    if duplicate_coordinate is not None:
+        raise RuntimeError(
+            "context view projection integrity error: logical_item_ordinal 重复 "
+            f"view_id={duplicate_coordinate[0]}, ordinal={duplicate_coordinate[1]}"
+        )
+
+    unknown_membership = connection.execute(
+        "SELECT item_id, source_kind FROM context_view_items "
+        "WHERE source_kind NOT IN ('canonical', 'display_only') LIMIT 1",
+    ).fetchone()
+    if unknown_membership is not None:
+        raise RuntimeError(
+            "context view item source_kind 未注册: "
+            f"{strict_text(unknown_membership[1], field='context_view_items.source_kind')}"
+        )
+
+    missing_membership = connection.execute(
+        "SELECT cvt.view_id, cvt.turn_id FROM context_view_turns AS cvt "
+        "JOIN turn_records AS canonical_turn ON canonical_turn.turn_id = cvt.turn_id "
+        "JOIN item_catalog AS root ON root.item_id = canonical_turn.root_input_item_id "
+        "LEFT JOIN context_view_items AS membership "
+        "ON membership.view_id = cvt.view_id AND membership.item_id = root.item_id "
+        "WHERE root.turn_id = canonical_turn.turn_id "
+        "AND root.semantic_kind = 'user_input' AND root.turn_scope = 'turn_root' "
+        "AND root.status = 'completed' AND membership.item_id IS NULL LIMIT 1",
+    ).fetchone()
+    if missing_membership is not None:
+        raise RuntimeError(
+            "context view projection integrity error: Turn root 缺少 view membership "
+            f"view_id={missing_membership[0]}, turn_id={missing_membership[1]}"
+        )
+
+    invalid_root_membership = connection.execute(
+        "SELECT cvt.view_id, cvt.turn_id FROM context_view_turns AS cvt "
+        "JOIN turn_records AS canonical_turn ON canonical_turn.turn_id = cvt.turn_id "
+        "JOIN item_catalog AS root ON root.item_id = canonical_turn.root_input_item_id "
+        "JOIN context_view_items AS membership "
+        "ON membership.view_id = cvt.view_id AND membership.item_id = root.item_id "
+        "WHERE root.turn_id = canonical_turn.turn_id "
+        "AND root.semantic_kind = 'user_input' AND root.turn_scope = 'turn_root' "
+        "AND root.status = 'completed' AND membership.source_kind != 'canonical' LIMIT 1",
+    ).fetchone()
+    if invalid_root_membership is not None:
+        raise RuntimeError(
+            "context view projection integrity error: Turn root 不是 canonical member "
+            f"view_id={invalid_root_membership[0]}, turn_id={invalid_root_membership[1]}"
+        )
+
+    unordered_roots = connection.execute(
+        "SELECT view_id, turn_id, logical_turn_ordinal, root_ordinal, previous_root_ordinal FROM ("
+        "SELECT cvt.view_id, cvt.turn_id, cvt.logical_turn_ordinal, membership.logical_item_ordinal AS root_ordinal, "
+        "LAG(membership.logical_item_ordinal) OVER (PARTITION BY cvt.view_id ORDER BY cvt.logical_turn_ordinal) AS previous_root_ordinal "
+        "FROM context_view_turns AS cvt "
+        "JOIN turn_records AS canonical_turn ON canonical_turn.turn_id = cvt.turn_id "
+        "JOIN item_catalog AS root ON root.item_id = canonical_turn.root_input_item_id "
+        "JOIN context_view_items AS membership "
+        "ON membership.view_id = cvt.view_id AND membership.item_id = root.item_id "
+        "WHERE cvt.root_input_item_id = canonical_turn.root_input_item_id "
+        "AND root.turn_id = canonical_turn.turn_id AND root.semantic_kind = 'user_input' "
+        "AND root.turn_scope = 'turn_root' AND root.status = 'completed' "
+        "AND membership.source_kind = 'canonical'"
+        ") WHERE previous_root_ordinal IS NOT NULL AND root_ordinal <= previous_root_ordinal LIMIT 1",
+    ).fetchone()
+    if unordered_roots is not None:
+        raise RuntimeError(
+            "context view projection integrity error: Turn root membership 顺序与 Turn ordinal 冲突 "
+            f"view_id={unordered_roots[0]}, turn_id={unordered_roots[1]}, "
+            f"turn_ordinal={unordered_roots[2]}, root_ordinal={unordered_roots[3]}, "
+            f"previous_root_ordinal={unordered_roots[4]}"
         )

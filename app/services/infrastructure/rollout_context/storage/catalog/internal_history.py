@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from itertools import pairwise
 
 from app.core.sqlite_state import load_sql
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
@@ -13,7 +14,6 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
 )
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     VISIBLE_NORMAL_TURN_PREDICATE,
-    require_context_view_order_integrity,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     ContextTurnItemWindow,
@@ -59,7 +59,6 @@ class InternalExecutionHistoryMixin:
             is None
         ):
             raise KeyError(f"context view 不存在: {view_id}")
-        require_context_view_order_integrity(snapshot, view_id)
         turn_row = connection.execute(
             "SELECT MAX(cvt.logical_turn_ordinal) "
             "FROM context_view_turns AS cvt "
@@ -384,6 +383,10 @@ class InternalExecutionHistoryMixin:
         selected = rows[:limit]
         if direction == "before":
             selected.reverse()
+        # keyset 只消费本页坐标；全 view 的缺失、重复及 source_kind 由完整校验负责。
+        ordinals = [strict_non_negative_int(row[7], field="context_view_items.logical_item_ordinal") for row in selected]
+        if any(current <= previous for previous, current in pairwise(ordinals)):
+            raise RuntimeError(f"context view projection integrity error: logical_item_ordinal 重复: view_id={view_id}")
         item_ids = tuple(
             strict_text(row[1], field="item_catalog.item_id")
             for row in selected

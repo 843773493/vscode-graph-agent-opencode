@@ -1144,7 +1144,7 @@ def test_v1_rollout_is_rejected_by_the_real_context_reader(
     "corruption",
     ["duplicate", "negative", "missing_root", "turn_order"],
 )
-def test_context_view_order_integrity_rejects_corrupt_coordinates(
+def test_full_validation_rejects_corrupt_view_coordinates(
     history_environment: Callable[..., HistoryEnvironment],
     corruption: str,
 ) -> None:
@@ -1184,9 +1184,15 @@ def test_context_view_order_integrity_rejects_corrupt_coordinates(
             )
         connection.commit()
 
-    with environment.open_snapshot() as snapshot:
-        chain = environment.context_reader.resolve_chain(snapshot)
-        with pytest.raises(
-            RuntimeError, match="projection integrity|logical_item_ordinal 重复"
+    # 全局损坏沿公开完整校验入口报告，不再要求普通 bounds 扫描整段历史。
+    with pytest.raises(RuntimeError, match="projection integrity|logical_item_ordinal 重复"):
+        environment.storage.storage.validate_index(environment.session_id, environment.thread_id)
+
+    if corruption in {"negative", "turn_order"}:
+        with (
+            environment.open_snapshot() as snapshot,
+            pytest.raises(RuntimeError, match="非负整数|membership 顺序"),
         ):
-            environment.context_reader.read_history_snapshot_bounds(snapshot, chain)
+            environment.storage.storage.read_context_turn_ids(
+                snapshot, _VIEW_ID, ["job-0002", "job-0007", "job-0013"],
+            )

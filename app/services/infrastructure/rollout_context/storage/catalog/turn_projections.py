@@ -38,133 +38,35 @@ VISIBLE_NORMAL_TURN_PREDICATE = (
 )
 
 
-def _turn_page_row(row: tuple[object, ...]) -> tuple[str, int, int, int, int]:
-    if len(row) != 5:
-        raise RuntimeError("Turn projection row 字段数量不一致")
-    turn_id = strict_text(row[0], field="context_view_turns.turn_id")
-    first_sequence = strict_non_negative_int(
-        row[1], field=f"turns.first_message_sequence:{turn_id}"
-    )
-    last_sequence = strict_non_negative_int(
-        row[2], field=f"turns.last_message_sequence:{turn_id}"
-    )
-    ordinal = strict_non_negative_int(
-        row[3], field=f"context_view_turns.logical_turn_ordinal:{turn_id}"
-    )
-    root_ordinal = strict_non_negative_int(
-        row[4], field=f"context_view_items.root_logical_item_ordinal:{turn_id}"
-    )
-    if first_sequence == 0 or last_sequence == 0 or last_sequence < first_sequence:
-        raise RuntimeError(f"Turn projection message range 非法: {turn_id}")
-    if ordinal == 0:
-        raise RuntimeError(f"Turn projection logical ordinal 非法: {turn_id}")
-    return turn_id, first_sequence, last_sequence, ordinal, root_ordinal
-
-
-def require_context_view_order_integrity(snapshot: RolloutReadSnapshot, view_id: str) -> None:
-    """拒绝缺失、重复或互相冲突的既有 view membership 坐标。"""
-    connection = snapshot.connection
-    # 同一只读事务的边界、分页与投影共享校验；可写连接不能复用成功结果。
-    read_only_transaction = (
-        connection.in_transaction
-        and connection.execute("PRAGMA query_only").fetchone() == (1,)
-    )
-    validation_key = (connection, view_id)
-    if read_only_transaction and validation_key in snapshot._validated_history_orders:
-        return
-    invalid_coordinate = connection.execute(
-        "SELECT item_id FROM context_view_items WHERE view_id = ? "
-        "AND (typeof(logical_item_ordinal) != 'integer' OR logical_item_ordinal < 0) "
-        "LIMIT 1",
-        (view_id,),
-    ).fetchone()
-    if invalid_coordinate is not None:
-        raise RuntimeError(
-            "context view projection integrity error: logical_item_ordinal 非法 "
-            f"view_id={view_id}, item_id={invalid_coordinate[0]}"
+def _turn_page_rows(rows: Iterable[tuple[object, ...]]) -> list[tuple[str, int, int, int, int]]:
+    """只校验本页实际使用的 root 坐标，避免每次分页遍历整个 view。"""
+    result: list[tuple[str, int, int, int, int]] = []
+    previous_root: int | None = None
+    for row in rows:
+        if len(row) != 5:
+            raise RuntimeError("Turn projection row 字段数量不一致")
+        turn_id = strict_text(row[0], field="context_view_turns.turn_id")
+        first_sequence = strict_non_negative_int(
+            row[1], field=f"turns.first_message_sequence:{turn_id}"
         )
-
-    duplicate_coordinate = connection.execute(
-        "SELECT logical_item_ordinal FROM context_view_items WHERE view_id = ? "
-        "GROUP BY logical_item_ordinal HAVING COUNT(*) > 1 LIMIT 1",
-        (view_id,),
-    ).fetchone()
-    if duplicate_coordinate is not None:
-        raise RuntimeError(
-            "context view projection integrity error: logical_item_ordinal 重复 "
-            f"view_id={view_id}, ordinal={duplicate_coordinate[0]}"
+        last_sequence = strict_non_negative_int(
+            row[2], field=f"turns.last_message_sequence:{turn_id}"
         )
-
-    unknown_membership = connection.execute(
-        "SELECT item_id, source_kind FROM context_view_items WHERE view_id = ? "
-        "AND source_kind NOT IN ('canonical', 'display_only') LIMIT 1",
-        (view_id,),
-    ).fetchone()
-    if unknown_membership is not None:
-        raise RuntimeError(
-            "context view item source_kind 未注册: "
-            f"{strict_text(unknown_membership[1], field='context_view_items.source_kind')}"
+        ordinal = strict_non_negative_int(
+            row[3], field=f"context_view_turns.logical_turn_ordinal:{turn_id}"
         )
-
-    missing_membership = connection.execute(
-        "SELECT cvt.turn_id FROM context_view_turns AS cvt "
-        "JOIN turn_records AS canonical_turn ON canonical_turn.turn_id = cvt.turn_id "
-        "JOIN item_catalog AS root ON root.item_id = canonical_turn.root_input_item_id "
-        "LEFT JOIN context_view_items AS membership "
-        "ON membership.view_id = cvt.view_id AND membership.item_id = root.item_id "
-        "WHERE cvt.view_id = ? AND root.turn_id = canonical_turn.turn_id "
-        "AND root.semantic_kind = 'user_input' AND root.turn_scope = 'turn_root' "
-        "AND root.status = 'completed' AND membership.item_id IS NULL LIMIT 1",
-        (view_id,),
-    ).fetchone()
-    if missing_membership is not None:
-        raise RuntimeError(
-            "context view projection integrity error: Turn root 缺少 view membership "
-            f"view_id={view_id}, turn_id={missing_membership[0]}"
+        root_ordinal = strict_non_negative_int(
+            row[4], field=f"context_view_items.root_logical_item_ordinal:{turn_id}"
         )
-
-    invalid_root_membership = connection.execute(
-        "SELECT cvt.turn_id FROM context_view_turns AS cvt "
-        "JOIN turn_records AS canonical_turn ON canonical_turn.turn_id = cvt.turn_id "
-        "JOIN item_catalog AS root ON root.item_id = canonical_turn.root_input_item_id "
-        "JOIN context_view_items AS membership "
-        "ON membership.view_id = cvt.view_id AND membership.item_id = root.item_id "
-        "WHERE cvt.view_id = ? AND root.turn_id = canonical_turn.turn_id "
-        "AND root.semantic_kind = 'user_input' AND root.turn_scope = 'turn_root' "
-        "AND root.status = 'completed' AND membership.source_kind != 'canonical' LIMIT 1",
-        (view_id,),
-    ).fetchone()
-    if invalid_root_membership is not None:
-        raise RuntimeError(
-            "context view projection integrity error: Turn root 不是 canonical member "
-            f"view_id={view_id}, turn_id={invalid_root_membership[0]}"
-        )
-
-    unordered_roots = connection.execute(
-        "SELECT turn_id, logical_turn_ordinal, root_ordinal, previous_root_ordinal FROM ("
-        "SELECT cvt.turn_id, cvt.logical_turn_ordinal, membership.logical_item_ordinal AS root_ordinal, "
-        "LAG(membership.logical_item_ordinal) OVER (ORDER BY cvt.logical_turn_ordinal) AS previous_root_ordinal "
-        "FROM context_view_turns AS cvt "
-        "JOIN turn_records AS canonical_turn ON canonical_turn.turn_id = cvt.turn_id "
-        "JOIN item_catalog AS root ON root.item_id = canonical_turn.root_input_item_id "
-        "JOIN context_view_items AS membership "
-        "ON membership.view_id = cvt.view_id AND membership.item_id = root.item_id "
-        "WHERE cvt.view_id = ? AND cvt.root_input_item_id = canonical_turn.root_input_item_id "
-        "AND root.turn_id = canonical_turn.turn_id AND root.semantic_kind = 'user_input' "
-        "AND root.turn_scope = 'turn_root' AND root.status = 'completed' "
-        "AND membership.source_kind = 'canonical'"
-        ") WHERE previous_root_ordinal IS NOT NULL AND root_ordinal <= previous_root_ordinal LIMIT 1",
-        (view_id,),
-    ).fetchone()
-    if unordered_roots is not None:
-        raise RuntimeError(
-            "context view projection integrity error: Turn root membership 顺序与 Turn ordinal 冲突 "
-            f"view_id={view_id}, turn_id={unordered_roots[0]}, "
-            f"turn_ordinal={unordered_roots[1]}, root_ordinal={unordered_roots[2]}, "
-            f"previous_root_ordinal={unordered_roots[3]}"
-        )
-    if read_only_transaction:
-        snapshot._validated_history_orders.add(validation_key)
+        if first_sequence == 0 or last_sequence == 0 or last_sequence < first_sequence:
+            raise RuntimeError(f"Turn projection message range 非法: {turn_id}")
+        if ordinal == 0:
+            raise RuntimeError(f"Turn projection logical ordinal 非法: {turn_id}")
+        if previous_root is not None and root_ordinal <= previous_root:
+            raise RuntimeError(f"context view projection integrity error: Turn root membership 顺序与 Turn ordinal 冲突: {turn_id}")
+        previous_root = root_ordinal
+        result.append((turn_id, first_sequence, last_sequence, ordinal, root_ordinal))
+    return result
 
 
 class TurnProjectionQueryMixin:
@@ -197,7 +99,6 @@ class TurnProjectionQueryMixin:
             raise ValueError("turn_page.upper_ordinal 必须大于 0")
         connection = self._snapshot_connection(snapshot)
         self._require_v2_runtime(connection)
-        require_context_view_order_integrity(snapshot, view_id)
         if (
             connection.execute(
                 "SELECT 1 FROM context_views WHERE view_id = ?",
@@ -242,7 +143,7 @@ class TurnProjectionQueryMixin:
         selected = rows[:limit]
         if direction in {"tail", "before"}:
             selected.reverse()
-        return [_turn_page_row(row) for row in selected], has_more
+        return _turn_page_rows(selected), has_more
 
     def read_context_turn_window(
         self,
@@ -264,7 +165,6 @@ class TurnProjectionQueryMixin:
             raise ValueError("around keyset 参数非法")
         connection = self._snapshot_connection(snapshot)
         self._require_v2_runtime(connection)
-        require_context_view_order_integrity(snapshot, view_id)
         rows = connection.execute(
             "SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence, "
             "cvt.logical_turn_ordinal, root_membership.logical_item_ordinal "
@@ -275,7 +175,7 @@ class TurnProjectionQueryMixin:
             "ORDER BY cvt.logical_turn_ordinal",
             (view_id, max(1, anchor_ordinal - before), anchor_ordinal + after),
         ).fetchall()
-        return [_turn_page_row(row) for row in rows]
+        return _turn_page_rows(rows)
 
     def read_context_turn_ids(
         self,
@@ -294,7 +194,6 @@ class TurnProjectionQueryMixin:
             return []
         connection = self._snapshot_connection(snapshot)
         self._require_v2_runtime(connection)
-        require_context_view_order_integrity(snapshot, view_id)
         placeholders = ",".join("?" for _ in ids)
         rows = connection.execute(
             f"SELECT cvt.turn_id, t.first_message_sequence, t.last_message_sequence, "
@@ -306,7 +205,7 @@ class TurnProjectionQueryMixin:
             "ORDER BY cvt.logical_turn_ordinal",
             (view_id, *ids),
         ).fetchall()
-        return [_turn_page_row(row) for row in rows]
+        return _turn_page_rows(rows)
 
     def _upsert_turn(
         self,

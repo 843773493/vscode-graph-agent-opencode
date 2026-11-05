@@ -15,7 +15,7 @@ import time
 from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol, Self, TypeVar
 from weakref import WeakValueDictionary
@@ -666,10 +666,6 @@ class RolloutReadSnapshot:
     thread_node: Path
     sessions_root: Path
     _closed: bool = False
-    # 只读事务内复用成功的顺序校验；replace 快照时不继承，且绑定原连接。
-    _validated_history_orders: set[tuple[sqlite3.Connection, str]] = field(
-        default_factory=set, init=False, repr=False, compare=False,
-    )
 
     @property
     def rollout_id(self) -> str:
@@ -687,7 +683,6 @@ class RolloutReadSnapshot:
         if self._closed:
             return
         self._closed = True
-        self._validated_history_orders.clear()
         # 逆序释放；任一步失败仍执行其余释放，并保留完整异常链。
         with ExitStack() as cleanup:
             cleanup.callback(self.file_lock.release)
