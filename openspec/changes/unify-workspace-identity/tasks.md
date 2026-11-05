@@ -285,3 +285,8 @@
 
 - Chromium文件装具以真实UUID／Gateway装配生产hook、HTTP文件owner与IndexedDB，原 `gw-files-a/b` 仅作测试控制标签；刷新、目标切换与多Tab持久意图不再保存双工作区ID。文件根接口的首轮500定位为装具缺原生目录绑定，现复用真实 `GatewayStateStore` 根owner，未添加产品回退；日志／trace改用原 `TestRunContext` 分运行保存。
 - 受保护完整脚本28.77秒通过、退出0，正式产物 `run-8d52e06916b7`。新建文件／目录、复制／粘贴／上传、Blob刷新恢复、未知结果原ID续查、冻结目标、多Tab因果依赖及SSE原强断言保留；此边界的Gateway认证／传输仍为显式受控替身，不等同完整Workbench E2E。Ruff与JS纯语法退出0，Pyright剩1条原有私有worker替换签名诊断，新增0。首轮和最终原件在 `out/tests/temp/identity_remaining_web_20261105/artifacts/file-operations-product-1793857502355789163.json`、`file-operations-native-binding-product-1793857796702424509.json`、`file-owner-ruff-1793857712881955058.json`、`file-owner-pyright-1793857712861006124.json` 与 `file-owner-js-parse-1793857712881328628.json`；交付源码与最终验收首尾SHA一致，6.4仍未完成。
+
+### 2026-11-05：6.4 资源关闭与跨 Gateway URI 消费者
+
+- 资源关闭按原生Gateway／UUID唯一选目标并核本地连接，两种模型协议在组合中逐项通过；随后a06因测试客户端的来源目标头与远端URI冲突返回400而停止，未将组合记为通过。context/read现显式带URI目标双头，后续消息仍固定来源owner；a06独立补验1 passed／116.68秒、退出0，保留冷读零物化、切换／重连、send／wait冻结目标、真实工具顺序配对和持久通信事实断言。
+- 原组合与补验命令／源码指纹／原始结果分别为 `out/tests/temp/identity_remaining_web_20261105/artifacts/backend-owner-consumers-product-1793857872642301432.json` 和 `context-uri-target-product-1793858070035877626.json`。资源关闭静态沿已交付相同SHA的 `identity_remaining_backend_20261105/artifacts/evidence-index.json` 复用；a06最终Ruff退出0、Pyright8／8既存诊断无新增，对照 `context-uri-target-type-comparison.json`。其余Backend消费者尚未完成，6.4继续未勾；联邦沿原loopback传输装具，不代表真实SSH或Windows。

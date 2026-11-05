@@ -173,15 +173,19 @@ async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activa
     case = communication_triad
     nodes, artifacts = case.nodes, case.artifacts
     source, target, hub = nodes["b"], nodes["c"], nodes["a"]
-    # 全部业务请求固定 Gateway workspace ID，不能依赖 active target。
+    # 全部业务请求固定原生 Gateway／workspace owner，不能依赖 active target。
     inventories = {}
     for name, node in nodes.items():
         response = await node.client.get("/api/gateway/workspaces")
         assert response.status_code == 200, response.text
         inventories[name] = response.json()["data"]
-        own = next(item for item in inventories[name]["items"] if item["backend_workspace_id"] == node.workspace_id
-                   and item["connection_kind"] == "local")
-        node.client.headers["X-BoxTeam-Workspace-Id"] = own["workspace_id"]
+        own, = (item for item in inventories[name]["items"]
+                if (item["gateway_id"], item["workspace_id"]) == (node.gateway_id, node.workspace_id))
+        assert own["connection_kind"] == "local"
+        node.client.headers.update({
+            "X-BoxTeam-Target-Gateway-Id": own["gateway_id"],
+            "X-BoxTeam-Workspace-Id": own["workspace_id"],
+        })
     source_session = await create_session(source.client, "a06-uri-source")
     target_session = await create_session(target.client, "a06-uri-target")
     cold_session = await create_session(target.client, "a06-uri-cold")
@@ -203,12 +207,14 @@ async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activa
     assert not any(before.values())
     read_request = {"resource_identity": str(session_resource_identity(target.workspace_id, cold_session)),
                     "uri": cold_uri, "scope": "workspace", "view": "information"}
-    read = await source.client.post("/api/v1/context/read", json=read_request)
+    target_headers = {"X-BoxTeam-Target-Gateway-Id": target.gateway_id,
+                      "X-BoxTeam-Workspace-Id": target.workspace_id}
+    read = await source.client.post("/api/v1/context/read", json=read_request, headers=target_headers)
     assert read.status_code == 200, read.text
     assert read.headers["X-Request-ID"] == read.json()["request_id"]
     assert read.json()["data"]["uri"] == cold_uri and read.json()["data"]["items"]
     assert cold_materialization_counts(cold_thread_node) == before
-    rejected = await source.client.post("/api/v1/context/read", json={**read_request, "scope": "gateway"})
+    rejected = await source.client.post("/api/v1/context/read", json={**read_request, "scope": "gateway"}, headers=target_headers)
     assert rejected.status_code == 400 and rejected.json()["detail"]["code"] == "scope_mismatch", rejected.text
     ambiguity = await source.client.post("/api/gateway/federation/discovery", json={
         "source": source_address, "session_id": AMBIGUOUS_SESSION,
@@ -238,13 +244,25 @@ async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activa
         # 与原模型屏障一致：durable accepted后只允许45秒完成activate/reconnect并释放。
         async with asyncio.timeout_at(accepted_event["at"] + 45):
             receipt = json.loads(case.tool_result(source_session, send_call)["content"])
-            remote_b = next(item for item in inventories["a"]["items"]
-                            if (item.get("remote") or {}).get("gateway_id") == source.gateway_id)
-            remote_c = next(item for item in inventories["a"]["items"]
-                            if (item.get("remote") or {}).get("gateway_id") == target.gateway_id)
-            activation = await hub.client.post(f"/api/gateway/workspaces/{remote_b['workspace_id']}/activate")
+            remote_b, = (item for item in inventories["a"]["items"]
+                         if (item["gateway_id"], item["workspace_id"]) == (source.gateway_id, source.workspace_id))
+            remote_c, = (item for item in inventories["a"]["items"]
+                         if (item["gateway_id"], item["workspace_id"]) == (target.gateway_id, target.workspace_id))
+            assert remote_b["connection_kind"] == remote_c["connection_kind"] == "remote_gateway"
+            activation = await hub.client.post(
+                f"/api/gateway/workspaces/{remote_b['workspace_id']}/activate",
+                headers={"X-BoxTeam-Target-Gateway-Id": source.gateway_id,
+                         "X-BoxTeam-Workspace-Id": source.workspace_id},
+            )
             assert activation.status_code == 200, activation.text
-            reconnection = await hub.client.post(f"/api/gateway/workspaces/{remote_c['workspace_id']}/reconnect")
+            assert activation.json()["data"]["active_workspace"] == {
+                "gateway_id": source.gateway_id, "workspace_id": source.workspace_id,
+            }
+            reconnection = await hub.client.post(
+                f"/api/gateway/workspaces/{remote_c['workspace_id']}/reconnect",
+                headers={"X-BoxTeam-Target-Gateway-Id": target.gateway_id,
+                         "X-BoxTeam-Workspace-Id": target.workspace_id},
+            )
             assert reconnection.status_code == 200, reconnection.text
             middle = await case.plan(source, source_session, [
                 _tool("wait_for_session", {"target_session_id": target_session,

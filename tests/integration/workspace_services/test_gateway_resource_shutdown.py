@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import ModelStreamCassette, load_cassette
 from configs.runtime import read_jsonc_object, validate_config
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
@@ -147,12 +148,24 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
             reply = await client.get("/api/gateway/workspaces")
             assert reply.status_code == 200, reply.text
             data = reply.json()["data"]
-            target = next(item for item in data["items"] if item["workspace_id"] == data["active_workspace_id"])
+            gateway_health = await client.get("/api/gateway/health")
+            assert gateway_health.status_code == 200, gateway_health.text
+            owner = {
+                "gateway_id": gateway_health.json()["data"]["gateway_id"],
+                "workspace_id": read_workspace_id(workspace),
+            }
+            assert data["active_workspace"] == owner
+            target, = (item for item in data["items"]
+                       if (item["gateway_id"], item["workspace_id"]) == (owner["gateway_id"], owner["workspace_id"]))
+            assert target["connection_kind"] == "local"
+            client.headers.update({
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+            })
             for service in ("workspace_api", "terminal_manager", "browser_manager"):
                 url = target["services"][service]["local_url"]
                 health = await client.get(
                     url + ("/api/v1/health" if service == "workspace_api" else "/health"),
-                    headers={"X-BoxTeam-Workspace-Id": target["backend_workspace_id"]},
                 )
                 assert health.status_code == 200, health.text
                 pids[service] = health.json()["process_id"]
