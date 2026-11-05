@@ -151,6 +151,9 @@ async def search_tool_catalog(
     }
     results: list[dict[str, object]] = []
     result["results"] = results
+    # JCS 无空白：空信封扣除 null cursor，逐项累计正文及数组逗号，避免反复编码整个前缀。
+    envelope_bytes = len(canonical_json_bytes(result)) - len(b"null")
+    results_bytes = 0
     for index in range(offset, min(offset + limit, len(candidates))):
         tool_id, reasons = candidates[index]
         definition = definitions.get(tool_id)
@@ -164,11 +167,12 @@ async def search_tool_catalog(
             entry = _definition_result(definition, policies[tool_id], catalog, reasons,
                                        control_discoverable=control_discoverable)
         next_cursor = _cursor(snapshot_key, index + 1) if index + 1 < len(candidates) else None
-        trial = {**result, "results": [*results, entry], "next_cursor": next_cursor}
-        if len(canonical_json_bytes(trial)) > max_response_bytes:
+        cursor_bytes = len(canonical_json_bytes(next_cursor))
+        entry_bytes = len(canonical_json_bytes(entry))
+        required_bytes = envelope_bytes + results_bytes + len(results) + entry_bytes + cursor_bytes
+        if required_bytes > max_response_bytes:
             if results:
                 break
-            required_bytes = len(canonical_json_bytes(trial))
             if definition is not None and entry["status"] == "available":
                 try:
                     reference = await materialize(definition, entry)
@@ -184,10 +188,13 @@ async def search_tool_catalog(
                     "read_path": reference.read_path, "schema_pointer": "/input_schema",
                     "content_sha256": reference.content_sha256, "byte_count": reference.byte_count,
                 })
-            if len(canonical_json_bytes({**result, "results": [entry], "next_cursor": next_cursor})) > max_response_bytes:
+                entry_bytes = len(canonical_json_bytes(entry))
+            if envelope_bytes + entry_bytes + cursor_bytes > max_response_bytes:
                 entry = _error(tool_id, "definition-too-large", required_response_bytes=required_bytes,
                                max_response_bytes=max_response_bytes)
+                entry_bytes = len(canonical_json_bytes(entry))
         results.append(entry)
+        results_bytes += entry_bytes
         result["next_cursor"] = next_cursor
     encoded = canonical_json_bytes(result)
     if len(encoded) > max_response_bytes:
