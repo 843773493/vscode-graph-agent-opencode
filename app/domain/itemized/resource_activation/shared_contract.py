@@ -6,6 +6,7 @@ snapshot.py 各自 import，禁止复制常量或 helper。
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -24,6 +25,8 @@ _AVAILABILITIES: Final[frozenset[str]] = frozenset(
 )
 _TOKEN_PATTERN: Final = "^[a-z][a-z0-9_-]{0,63}$"
 _TOKEN_PATTERN_ERROR: Final = f"必须匹配 {_TOKEN_PATTERN}"
+_TOKEN_REGEX: Final = re.compile(_TOKEN_PATTERN)
+_CONTROL_CHARACTER: Final = re.compile(r"[\x00-\x1f\x7f]")
 _DISPLAY_URI_SCHEME: Final = "boxteam://"
 
 # 公开的单点事实：boundary 集合与 token 正则只在此定义一次，本包与 services
@@ -252,7 +255,7 @@ def _schema_error(message: str, *, diagnostic: str | None = None) -> ResourceAct
 def _non_empty_string(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise _schema_error(f"{field_name} 必须是非空字符串")
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+    if _CONTROL_CHARACTER.search(value) is not None:
         raise _schema_error(f"{field_name} 不得携带控制字符")
     return value
 
@@ -266,15 +269,8 @@ def _non_negative_int(value: object, field_name: str) -> int:
 def _token(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise _schema_error(f"{field_name} 必须是非空字符串")
-    if (
-        value[0] not in "abcdefghijklmnopqrstuvwxyz"
-        or len(value) > 64
-        or any(
-            not (char.isascii() and (char.islower() or char.isdigit()))
-            and char not in "_-"
-            for char in value
-        )
-    ):
+    # 复用唯一 grammar 的编译结果，避免每条 provenance 在 Python 中逐字符验证。
+    if _TOKEN_REGEX.fullmatch(value) is None:
         raise _schema_error(f"{field_name} {_TOKEN_PATTERN_ERROR}", diagnostic=repr(value))
     return value
 
