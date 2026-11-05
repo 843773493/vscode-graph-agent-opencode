@@ -19,6 +19,64 @@ from app.schemas.event import (
 from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["bootstrap", "recovery", "migration", "cursor", "threads"])
+async def test_trace_read_loads_current_manifest_once(
+    tmp_path: Path,
+    trace_event_store_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    session_id = "ses_019c3e6c2a7a7208aa9f84e0f0478713"
+    store, session_dir = trace_event_store_factory(session_id)
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    manifest_path = session_dir / "logs" / "traces" / "turn-events.index.json"
+    read_text = Path.read_text
+    manifest_reads = 0
+
+    def observe_read(path, *args, **kwargs):
+        nonlocal manifest_reads
+        if path == manifest_path:
+            manifest_reads += 1
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", observe_read)
+    for ordinal in range(2):
+        event = JobCreatedEvent(
+            event_id=f"evt_manifest_read_{ordinal}",
+            job_id=f"job_manifest_read_{ordinal}",
+            timestamp=datetime.now(UTC),
+            payload=JobCreatedPayload(
+                session_id=session_id, thread_id=thread_id,
+                message=f"current-{ordinal}", agent_id="default",
+            ),
+        )
+        receipt = await store.append(session_id, event)
+        manifest_reads = 0
+        if operation == "bootstrap":
+            batch = store.read_turn_bootstrap_batch(session_id, max_events=128, max_bytes=65536)
+            assert [entry.event.event_id for entry in batch.events] == [event.event_id]
+            assert batch.event_cursor == event.event_id
+        elif operation == "recovery":
+            batch = store.read_turn_recovery_batch(
+                session_id, after_event_id=event.event_id, max_events=128, max_bytes=65536,
+            )
+            assert batch.complete and not batch.events
+            assert batch.event_offset == receipt.projected_event_offset
+        elif operation == "migration":
+            snapshot = store.capture_turn_migration_snapshot(session_id)
+            assert snapshot.event_cursor == event.event_id
+            assert snapshot.projected_event_offset == receipt.projected_event_offset
+        elif operation == "cursor":
+            assert store._offset_after_event(
+                session_id, store._trace_file(session_id), event.event_id,
+            ) == receipt.trace_end_offset
+        else:
+            assert store.event_threads(session_id, [event]) == {event.event_id: thread_id}
+        # 第二轮必须取得新提交，复用仅限一次受锁保护的调用，不能跨请求缓存。
+        assert manifest_reads == 1
+
+
 def test_trace_turn_prepare_serializes_source_event_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

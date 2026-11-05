@@ -41,7 +41,7 @@ class TraceTurnIndex:
         serialized_size: int,
         projects_turn: bool,
     ) -> PreparedTraceTurnEntry:
-        manifest = self._recover()
+        manifest = self._recover(self._storage.load_manifest())
         actual_trace_start = self._trace_size()
         if actual_trace_start != trace_start:
             raise RuntimeError(
@@ -94,7 +94,7 @@ class TraceTurnIndex:
 
     def recover_before_append(self) -> int:
         """在统一 append 分支前恢复 pending 事务并返回稳定 Trace 末端。"""
-        manifest = self._recover()
+        manifest = self._recover(self._storage.load_manifest())
         self._storage.repair_uncommitted_trace_tail(manifest)
         return self._trace_size()
 
@@ -126,13 +126,13 @@ class TraceTurnIndex:
         max_events: int,
         max_bytes: int,
     ) -> TurnBootstrapBatch:
-        manifest = self._load_manifest()
+        manifest = self._storage.load_manifest()
         if manifest is None:
             raise RuntimeError(
                 "Trace Turn bootstrap 阶段缺少索引 manifest: "
                 f"path={self._trace_dir / 'turn-events.index.json'}"
             )
-        manifest = self._recover()
+        manifest = self._recover(manifest)
         if manifest.has_unindexed_prefix:
             raise RuntimeError(
                 "Trace Turn bootstrap 阶段存在未索引语义事件: "
@@ -182,10 +182,10 @@ class TraceTurnIndex:
         max_events: int,
         max_bytes: int,
     ) -> TurnRecoveryBatch:
-        manifest = self._load_manifest()
+        manifest = self._storage.load_manifest()
         if manifest is None:
             return TurnRecoveryBatch(event_cursor=None, complete=False)
-        manifest = self._recover()
+        manifest = self._recover(manifest)
         if (
             after_event_id is not None
             and after_event_id == manifest.event_cursor
@@ -249,7 +249,8 @@ class TraceTurnIndex:
         )
 
     def snapshot(self) -> TraceTurnIndexManifest | None:
-        return self._recover() if self._load_manifest() is not None else None
+        manifest = self._storage.load_manifest()
+        return self._recover(manifest) if manifest is not None else None
 
     def job_threads(self, session_id: str, job_ids: set[str]) -> dict[str, str]:
         """只从已提交的 Job 创建/启动事实取得归属，不读取历史请求正文。"""
@@ -309,10 +310,10 @@ class TraceTurnIndex:
         max_index_bytes: int = 256 * 1024,
     ) -> int | None:
         """O(1) 命中最新语义 cursor，旧 cursor 只读取有界 index 尾部。"""
-        manifest = self._load_manifest()
+        manifest = self._storage.load_manifest()
         if manifest is None:
             return None
-        manifest = self._recover()
+        manifest = self._recover(manifest)
         if event_id == manifest.event_cursor:
             return manifest.projected_trace_offset
         entries, _ = self._read_tail_entries(
@@ -324,8 +325,9 @@ class TraceTurnIndex:
         matched = next((entry for entry in entries if entry.event_id == event_id), None)
         return matched.trace_end if matched is not None else None
 
-    def _recover(self) -> TraceTurnIndexManifest:
+    def _recover(self, manifest: TraceTurnIndexManifest | None) -> TraceTurnIndexManifest:
         return self._storage.recover(
+            manifest,
             validate_committed_entry=self._validate_committed_entry,
             commit_prepared=self.commit,
         )
@@ -408,9 +410,6 @@ class TraceTurnIndex:
         if event.event_id != entry.event_id:
             raise RuntimeError(f"Trace index 指向错误事件: event_id={entry.event_id}")
         return event
-
-    def _load_manifest(self) -> TraceTurnIndexManifest | None:
-        return self._storage.load_manifest()
 
     def _trace_size(self) -> int:
         return self._storage.trace_size()

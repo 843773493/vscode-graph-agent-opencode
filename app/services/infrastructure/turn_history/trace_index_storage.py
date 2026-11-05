@@ -22,11 +22,13 @@ class TraceIndexStorage:
 
     def recover(
         self,
+        manifest: TraceTurnIndexManifest | None,
         *,
         validate_committed_entry: Callable[[TraceTurnIndexEntry], None],
         commit_prepared: Callable[[PreparedTraceTurnEntry], None],
     ) -> TraceTurnIndexManifest:
-        manifest = self.load_manifest()
+        # 消费本次调用已读取的 manifest，避免存在性判断后再次读盘和解析；
+        # pending 提交成功后仍重读已发布结果，不缓存跨请求的恢复状态。
         if manifest is None:
             message_size = self.message_size()
             manifest = TraceTurnIndexManifest(
