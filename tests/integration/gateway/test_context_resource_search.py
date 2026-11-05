@@ -60,6 +60,7 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
     request: pytest.FixtureRequest, restart_source_case: RestartRuntimeSourceCase,
 ) -> None:
     case = restart_source_case
+    assert case.mount is not None
     backend = case.backends[-1]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=case.workspace,
         default_backend_url=f"http://127.0.0.1:{backend.port}", port=integration_port_block_for_file(Path(request.node.path)).port(20),
@@ -73,9 +74,12 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
             await acquire_gateway_guest(ui)
             gateway_id = (await ui.get("/api/gateway/health")).json()["data"]["gateway_id"]
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
-            route = listing["active_workspace_id"]
-            owner = {"gateway_id": gateway_id, "workspace_id": next(item["backend_workspace_id"] for item in listing["items"] if item["workspace_id"] == route)}
-            ui.headers["X-BoxTeam-Workspace-Id"] = route
+            owner = listing["active_workspace"]
+            assert owner == {"gateway_id": gateway_id, "workspace_id": case.mount.workspace_id}
+            ui.headers.update({
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+            })
             case.client = ui
             session_id = await create_session(ui, "Context Search Execution")
             await case.plan(session_id, [{"content": "assistant scope-proof🧪 done"}])
@@ -175,7 +179,10 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         # 经真实模型工具入口消费相同 Provider；不替产品准备执行或工具结果。
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
             await acquire_gateway_guest(ui)
-            ui.headers["X-BoxTeam-Workspace-Id"] = route
+            ui.headers.update({
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+            })
             caller = await create_session(ui, "Context Search Tool Caller")
             calls = await case.plan(caller, [
                 _tool_reply("invoke_extension_tool", {"tool_name": "search_resources", "arguments": {
@@ -209,7 +216,10 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         # 同一执行入口验证 search_context 的 Gateway inventory，不让测试手工写工具结果。
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
             await acquire_gateway_guest(ui)
-            ui.headers["X-BoxTeam-Workspace-Id"] = route
+            ui.headers.update({
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+            })
             gateway_caller = await create_session(ui, "Gateway Context Tool Caller")
             gateway_calls = await case.plan(gateway_caller, [
                 _tool_reply("invoke_extension_tool", {"tool_name": "search_context", "arguments": {

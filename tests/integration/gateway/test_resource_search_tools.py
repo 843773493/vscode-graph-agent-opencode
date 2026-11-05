@@ -41,6 +41,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.processes.workspace import workspace_backend_id_for_root
 
 
 async def test_python_search_without_browser_has_exact_scope_and_restart_continuation(network: Network) -> None:
@@ -54,10 +55,16 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
             await acquire_gateway_guest(ui)
             gateway_id = (await ui.get("/api/gateway/health")).json()["data"]["gateway_id"]
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
-            route_a = next(item["workspace_id"] for item in listing["items"] if item["workspace_id"] not in {"route_b", "route_c"})
-            owners = {item["workspace_id"]: {"gateway_id": gateway_id, "workspace_id": item["backend_workspace_id"]} for item in listing["items"]}
+            workspace_a, workspace_b, workspace_c = (
+                workspace_backend_id_for_root(root) for root in (network.workspace, network.secondary, network.stopped)
+            )
+            assert gateway_id == network.gateway_id
+            ui.headers["X-BoxTeam-Target-Gateway-Id"] = gateway_id
+            owners = {item["workspace_id"]: {"gateway_id": item["gateway_id"], "workspace_id": item["workspace_id"]} for item in listing["items"]}
+            assert set(owners) == {workspace_a, workspace_b, workspace_c}
+            assert all(owner["gateway_id"] == gateway_id for owner in owners.values())
             sessions = {}
-            for route in (route_a, "route_b"):
+            for route in (workspace_a, workspace_b):
                 ui.headers["X-BoxTeam-Workspace-Id"] = route
                 sessions[route] = [await create_session(ui, f"Headless Search {index}") for index in range(3)]
         assert not transport._http_client.cookies
@@ -71,20 +78,20 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
             return events
 
         discovery = await transport.resource_search.discover_workspaces(query="Unrelated", request_id="req_headless_discover")
-        assert [item.owner.model_dump() for item in discovery.items] == [owners["route_b"]]
-        first = await search({"scope": {"mode": "origin", "origin": owners[route_a]}, "queries": [query]}, "req_headless_a")
+        assert [item.owner.model_dump() for item in discovery.items] == [owners[workspace_b]]
+        first = await search({"scope": {"mode": "origin", "origin": owners[workspace_a]}, "queries": [query]}, "req_headless_a")
         first_page, = [event for event in first if event.type == "page"]
         assert first_page.page is not None and first_page.page.catalog is not None
-        assert first_page.page.catalog.items[0].node.session_id == sessions[route_a][0]
+        assert first_page.page.catalog.items[0].node.session_id == sessions[workspace_a][0]
 
-        both = await search({"scope": {"mode": "selected", "owners": [owners[route_a], owners["route_b"]]}, "queries": [query]}, "req_headless_ab")
+        both = await search({"scope": {"mode": "selected", "owners": [owners[workspace_a], owners[workspace_b]]}, "queries": [query]}, "req_headless_ab")
         assert both[0].scope is not None
         frozen = both[0].scope.scope.model_dump(mode="json")
-        page_b, = [event for event in both if event.page is not None and event.page.workspace_id == owners["route_b"]["workspace_id"]]
+        page_b, = [event for event in both if event.page is not None and event.page.workspace_id == owners[workspace_b]["workspace_id"]]
         assert page_b.branch is not None and page_b.branch.cursor is not None
         full = await search({"scope": {"mode": "all"}, "queries": [query]}, "req_headless_all")
         assert full[-1].summary is not None and full[-1].summary.state == "incomplete"
-        stopped, = [item for item in full[-1].summary.branches if item.branch.owner.workspace_id == owners["route_c"]["workspace_id"]]
+        stopped, = [item for item in full[-1].summary.branches if item.branch.owner.workspace_id == owners[workspace_c]["workspace_id"]]
         assert stopped.state == "failed" and stopped.code == "target_unavailable" and stopped.retryable
         assert not (network.stopped / ".boxteam/sessions").exists()
 
@@ -107,7 +114,7 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
                                 "continuations": [{"branch": page_b.branch.branch.model_dump(mode="json"), "cursor": page_b.branch.cursor}]}, "req_headless_resume_b")
         resumed_page, = [event for event in resumed if event.type == "page"]
         assert resumed_page.page is not None and resumed_page.page.catalog is not None
-        assert resumed_page.page.catalog.items[0].node.session_id == sessions["route_b"][1]
+        assert resumed_page.page.catalog.items[0].node.session_id == sessions[workspace_b][1]
         assert resumed[-1].summary is not None and len(resumed[-1].summary.branches) == 1
         assert resumed[0].scope is not None and resumed[0].scope.scope.model_dump(mode="json") == frozen
     finally:
@@ -115,7 +122,7 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
         if gateway is not None:
             await asyncio.to_thread(close_gateway_process, gateway)
         (network.artifacts / "headless-search.json").write_text(json.dumps(observed, ensure_ascii=False, indent=2) + "\n")
-    logs = [(network.artifacts / f"backend-{index}.stderr.log").read_text() for index in (0, 1)]
+    logs = [(network.artifacts / f"backend-{index}.stderr.log").read_text(encoding="utf-8") for index in (0, 1)]
     actual = {request: [index for index, log in enumerate(logs) if f'request_id="{request}"' in log]
               for request in ("req_headless_discover", "req_headless_a", "req_headless_ab", "req_headless_all", "req_headless_resume_b")}
     assert actual == {"req_headless_discover": [], "req_headless_a": [0], "req_headless_ab": [0, 1],
@@ -143,6 +150,7 @@ async def test_model_execution_invokes_discovery_and_resource_search_through_gat
     request: pytest.FixtureRequest, restart_source_case: RestartRuntimeSourceCase,
 ) -> None:
     case = restart_source_case
+    assert case.mount is not None
     backend = case.backends[-1]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=case.workspace,
         default_backend_url=f"http://127.0.0.1:{backend.port}", port=integration_port_block_for_file(Path(request.node.path)).port(20),
@@ -152,9 +160,12 @@ async def test_model_execution_invokes_discovery_and_resource_search_through_gat
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
             await acquire_gateway_guest(ui)
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
-            route = listing["active_workspace_id"]
-            owner = next(item["backend_workspace_id"] for item in listing["items"] if item["workspace_id"] == route)
-            ui.headers["X-BoxTeam-Workspace-Id"] = route
+            owner = listing["active_workspace"]
+            assert owner["workspace_id"] == case.mount.workspace_id
+            ui.headers.update({
+                "X-BoxTeam-Workspace-Id": owner["workspace_id"],
+                "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+            })
             case.client = ui
             target = await create_session(ui, "Agent Search Target🧪")
             caller = await create_session(ui, "Agent Search Caller")
@@ -172,10 +183,10 @@ async def test_model_execution_invokes_discovery_and_resource_search_through_gat
         assert isinstance(job_id, str)
         await _job(case, job_id)
         discovered = GatewayWorkspaceDiscoveryResultsDTO.model_validate(case.tool_result(calls[0] + ":tool-call:call_discover"))
-        assert any(item.owner.workspace_id == owner for item in discovered.items)
+        assert any(item.owner.model_dump() == owner for item in discovered.items)
         events = TypeAdapter(list[FederatedSearchEventDTO]).validate_python(case.tool_result(calls[1] + ":tool-call:call_resources"))
         assert events[0].scope is not None and events[0].scope.scope.mode == "origin"
-        assert [item.workspace_id for item in events[0].scope.scope.owners] == [owner]
+        assert [item.model_dump() for item in events[0].scope.scope.owners] == [owner]
         page, = [event.page for event in events if event.type == "page"]
         assert page is not None and page.catalog is not None
         assert [item.node.session_id for item in page.catalog.items] == [target]
@@ -192,7 +203,7 @@ async def test_model_execution_invokes_discovery_and_resource_search_through_gat
         case.client = original_client
         await asyncio.to_thread(close_gateway_process, gateway)
     actual_requests = re.findall(r'request_id="([^"]+)".*"(?:GET /api/gateway/search/workspaces(?:\?[^ ]*)?|POST /api/gateway/search/agent) HTTP',
-                                 (case.artifacts_dir / "gateway.stderr.log").read_text())
+                                 (case.artifacts_dir / "gateway.stderr.log").read_text(encoding="utf-8"))
     assert len(actual_requests) == len(set(actual_requests)) == 2
     assert actual_requests[1] == events[0].request_id
     case.write_actual("agent-search-request-ids", {"request_ids": actual_requests})

@@ -18,7 +18,7 @@
 - 下游替身必须作为独立本地 HTTP 服务启动并显式清理。
 - 导航 scope 下游装具在启动成功前由 `ExitStack` 管理日志，成功后由返回句柄接管；就绪失败或中断仍释放进程和全部日志，清理失败独立汇总并保留启动异常。诊断引用原始日志路径，不全量读取追加日志。
 - 正式产物写入 `out/tests/integration/gateway/`。
-- `test_search_scope_changes.py` 复用现有双后端装具与正式搜索 SDK；经产品创建 Session／保存独有文件正文／删除登记，Gateway 停止后沿原 registry owner 准备有真实 UUID 的新离线目标。核 all 的冻结范围、旧 route 复用和实际后端分发，不将该控制面准备作为新增工作区管理 UI 的验收。
+- `test_search_scope_changes.py` 复用现有双后端装具与正式搜索 SDK；经产品创建 Session／保存独有文件正文／删除登记，Gateway 停止后沿原 registry owner 准备有真实 UUID 的新离线目标。核 all 的冻结范围、移除后同名但不同 UUID 的新登记和实际后端分发，不将该控制面准备作为新增工作区管理 UI 的验收。
 - `test_mounted_file_targets.py` 复用共享 Backend fixture，经真实注册及整组重启建立双挂载；文件引用、并发读写和未注册目录绑定均经产品 HTTP 入口验证，原生正文不作资源目标。工作区和端口沿当前测试文件隔离，不使用共享开发服务。
 
 `test_gateway_launcher_handoff.py` 通过真实 Launcher、Gateway 和受管工作区运行；`runtime_logging_controls.py` 驱动原服务 HTTP、原 Launcher socket 和真实用户配置 watcher，不准备执行或资源状态。核对五类进程的私有认证、实例／revision 冲突、真实配置热应用、实际 DEBUG 落盘、WARNING 过滤及换代后的旧实例拒绝，观察结果保存到本测试 `artifacts/runtime-logging-*.json`。其 Web 驱动 `clients/web/runtime_logging_diagnostics.mjs` 使用同一现场，经真实 Gateway 初始化并打开日志诊断，产物仍归父测试目录。两个工作区通过真实注册和受控重启共享 Backend，并逐轮核7个实际进程及4个活动资源；这项正常热应用验收不代替真实失败补偿。
