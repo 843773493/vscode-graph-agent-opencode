@@ -194,7 +194,9 @@ class RolloutCheckpointPersistenceMixin:
                 last_message_sequence=strict_non_negative_int(meta[1], field="database_meta.last_message_sequence"),
                 next_item_sequence=strict_non_negative_int(meta[3], field="database_meta.last_item_sequence") + 1,
                 offset=jsonl_offset_before,
-                locator_sequences=self._storage._view_message_sequences_from_connection(connection, locator_view[0]) if locator_view else None,
+                read_locator_sequences=(
+                    lambda: self._storage._view_message_sequences_from_connection(connection, locator_view[0])
+                ) if locator_view else None,
                 allow_revisions=new_message_version and not repeated_checkpoint,
             )
             compaction_event = new_compaction_event(

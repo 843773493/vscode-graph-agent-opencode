@@ -64,10 +64,11 @@ def prepare_messages(
     last_message_sequence: int,
     next_item_sequence: int,
     offset: int,
-    locator_sequences: Sequence[int] | None = None,
+    read_locator_sequences: Callable[[], Sequence[int]] | None = None,
     allow_revisions: bool = False,
 ) -> MessageBatch:
     batch = MessageBatch(next_item_sequence, last_message_sequence)
+    locator_sequences: Sequence[int] | None = None
     canonical_message_ids = [
         codec.message_id(message, index) for index, message in enumerate(messages)
     ]
@@ -83,6 +84,10 @@ def prepare_messages(
             multiple_versions = explicit_anchor is None and connection.execute(
                 "SELECT 1 FROM messages WHERE message_id=? LIMIT 1 OFFSET 1", (canonical_message_id,),
             ).fetchone() is not None
+            # 只有裸 logical ID 的多版本定位才消费父 view；同批消歧共用这次读取。
+            if multiple_versions and read_locator_sequences is not None:
+                locator_sequences = read_locator_sequences()
+                read_locator_sequences = None
             message_locator = find_message_locator(
                 connection, canonical_message_id, item_id=explicit_anchor,
                 sequences=locator_sequences if multiple_versions else None,
