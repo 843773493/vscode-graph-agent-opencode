@@ -192,9 +192,14 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     metadata_frontend: str,
 ) -> None:
     client, context, workspace, provider = metadata_case
-    await metadata_data(client, "/api/gateway/health")
+    health = await metadata_data(client, "/api/gateway/health")
     workspaces = await metadata_data(client, "/api/gateway/workspaces")
-    active = next(item for item in workspaces["items"] if item["workspace_id"] == workspaces["active_workspace_id"])
+    owner = workspaces["active_workspace"]
+    active = next(item for item in workspaces["items"]
+                  if item["gateway_id"] == owner["gateway_id"] and item["workspace_id"] == owner["workspace_id"])
+    assert owner["gateway_id"] == health["gateway_id"]
+    client.headers.update({"X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                           "X-BoxTeam-Workspace-Id": owner["workspace_id"]})
     external = workspace.with_name("未注册目录 Ω")
     external.mkdir()
     external_file = external / "未注册 %.txt"
@@ -213,7 +218,7 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     responses = {}
     for endpoint in ("/api/v1/workspace", "/api/v1/workspace/context"):
         data = await metadata_data(client, endpoint)
-        assert data["workspace_id"] == active["backend_workspace_id"]
+        assert data["workspace_id"] == active["workspace_id"]
         assert "root_path" not in data and "root" not in data["git"]
         assert str(workspace) not in json.dumps(data, ensure_ascii=False)
         responses[endpoint] = data
@@ -224,7 +229,7 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     environment = {
         **os.environ,
         "BOXTEAM_BROWSER_BASE_URL": metadata_frontend,
-        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": active["workspace_id"], "backendWorkspaceId": active["backend_workspace_id"],
+        "BOXTEAM_BROWSER_FIXTURE": json.dumps({"workspaceId": active["workspace_id"], "gatewayId": active["gateway_id"],
             "nativeDirectory": {"sessionId": session_id, "threadId": thread_id, "rootUri": root_uri, "fileName": external_file.name,
                                 "content": "未注册目录原正文\n", "edited": "浏览器修改后的未注册目录正文 Ω\n"}}),
         "BOXTEAM_BROWSER_RESULT_PATH": str(result_path),
@@ -241,7 +246,7 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     (context.artifacts_dir / "playwright.log").write_text(process.stdout + process.stderr)
     assert process.returncode == 0, process.stdout + process.stderr
     result = json.loads(result_path.read_text())
-    assert result["metadata"]["data"]["workspace_id"] == active["backend_workspace_id"]
+    assert result["metadata"]["data"]["workspace_id"] == active["workspace_id"]
     assert result["page_errors"] == []
     assert result["route_stubs"] == []
     assert result["workspace_navigation_visible"] is True
@@ -264,8 +269,8 @@ async def test_workspace_metadata_without_root_initializes_real_web(
     assert external_file.read_text(encoding="utf-8") == "浏览器修改后的未注册目录正文 Ω\n"
     assert not (external / ".boxteam").exists()
     after = await metadata_data(client, "/api/gateway/workspaces")
-    assert [(item["workspace_id"], item["backend_workspace_id"]) for item in after["items"]] == [
-        (item["workspace_id"], item["backend_workspace_id"]) for item in workspaces["items"]]
+    assert [(item["gateway_id"], item["workspace_id"]) for item in after["items"]] == [
+        (item["gateway_id"], item["workspace_id"]) for item in workspaces["items"]]
     # 在 transport 匹配前核真实 ModelCall 分配，失败的意外调用也不能伪装成零请求。
     with provider.control._condition:
         calls = {namespace: count for namespace, count in provider.control._counters.items()

@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { afterEach, expect, test } from "bun:test";
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from "../session/sessionApiFetchMock";
 import { FederatedSearchEventDTO } from "../../types/protocol_generated/boxteam/search/v1/public";
@@ -29,7 +30,7 @@ test("目录消费者仅发一次明确 all，快页先发布并保留离线来�
   const views: CatalogSearchView[] = [];
   const running = searchCatalogView(49_361, "needle", null, new AbortController().signal, view => views.push(structuredClone(view)));
   for (let count = 0; !output && count < 100; count++) await Bun.sleep(1);
-  send("scope", { scope: { scope, branches: owners.map((owner, index) => ({ owner, target_id: `route-${index}`, state: "registered" })) } });
+  send("scope", { scope: { scope, branches: owners.map(owner => ({ owner, state: "registered" })) } });
   const page = (index: number) => ({ provider_id: "session-catalog", workspace_id: owners[index].workspace_id,
     category: "catalog", operation: "name", contract_version: 1, state: "complete", catalog: { revision: "r1", catalog_revision: 7,
       total: 1, items: [{ node: { node_id: `folder-${index}`, kind: "folder", name: "Needle", node_revision: 1, state: "active" },
@@ -38,7 +39,7 @@ test("目录消费者仅发一次明确 all，快页先发布并保留离线来�
   send("branch", { branch: branch(0) });
   for (let count = 0; !views.some(view => view.items.some(item => item.node_id === "folder-0")) && count < 100; count++) await Bun.sleep(1);
   expect(views.at(-1)?.items.some(item => item.node_id === "folder-0")).toBe(true);
-  expect(views.at(-1)?.workspaces.find(item => item.workspace_id === "route-1")?.status).toBe("searching");
+  expect(views.at(-1)?.workspaces.find(item => item.workspace_id === gatewayWorkspaceKey(owners[1]))?.status).toBe("searching");
   const source = { kind: "gateway_catalog_mirror", updated_at: scope.resolved_at, stale: true, unavailable_reason: "目标断开" };
   send("page", { branch: branch(1), page: page(1), source });
   send("branch", { branch: branch(1) });
@@ -48,20 +49,20 @@ test("目录消费者仅发一次明确 all，快页先发布并保留离线来�
   expect(calls).toHaveLength(2);
   expect(calls.find(call => call.path === "/api/gateway/search")?.body).toMatchObject({ scope: { mode: "all" }, queries: [{ category: "catalog", allow_catalog_mirror: true }] });
   expect(views.at(-1)?.items.map(item => item.node_id)).toEqual(["gateway-folder", "folder-0", "folder-1"]);
-  expect(views.at(-1)?.workspaces[1]).toMatchObject({ workspace_id: "route-1", status: "stale", source });
+  expect(views.at(-1)?.workspaces[1]).toMatchObject({ workspace_id: gatewayWorkspaceKey(owners[1]), status: "stale", source });
   expect(views.at(-1)?.items.at(-1)?.owner).toEqual(owners[1]);
 });
 
-test("点击旧目录命中按稳定 owner 重解路由，明确失败不改投活动目标", async () => {
+test("目录命中按完整 owner 解析目标，明确失败不改投活动目标", async () => {
   let calls = 0;
   installSessionApiFetchMock(({ path, init }) => {
     expect(path).toBe("/api/gateway/search/resolve");
     expect(JSON.parse(String(init?.body))).toEqual({ mode: "origin", origin: owners[1] });
     return ++calls === 1 ? Response.json({ code: 0, request_id: "resolve", data: { scope, branches: [
-      { owner: owners[1], target_id: "new-route-for-B", state: "registered" },
+      { owner: owners[1], state: "registered" },
     ] } }) : Response.json({ detail: { code: "owner_unavailable", message: "原目标已移除" } }, { status: 404 });
   });
-  expect(await resolveCatalogSearchTarget(49_362, owners[1])).toBe("new-route-for-B");
+  expect(await resolveCatalogSearchTarget(49_362, owners[1])).toBe(gatewayWorkspaceKey(owners[1]));
   await expect(resolveCatalogSearchTarget(49_362, owners[1])).rejects.toThrow(/404/);
   expect(calls).toBe(2);
 });

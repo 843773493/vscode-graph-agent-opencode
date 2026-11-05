@@ -88,7 +88,7 @@ async function verifyThemeBackgroundWarning() {
   await expect(control.getByRole("status").filter({ hasText: "已恢复当前主题的默认背景。" })).toBeVisible();
   await expect(backgroundInput).toHaveValue("");
   await control.getByRole("button", { name: "关闭 Gateway 控制中心", exact: true }).click();
-  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.backendWorkspaceId}"][data-session-id="${fixture.nativeDirectory.sessionId}"][data-thread-id="${fixture.nativeDirectory.threadId}"]`);
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${fixture.nativeDirectory.sessionId}"][data-thread-id="${fixture.nativeDirectory.threadId}"]`);
   await expect(thread.getByTestId("composer-input")).toBeVisible();
 }
 
@@ -175,17 +175,20 @@ try {
   const payload = await response.json();
   check(response.status() === 200, `产品初始化元数据失败 ${response.status()}: ${JSON.stringify(payload)}`);
   check(response.headers()["x-request-id"] === payload.request_id, "产品初始化元数据 request_id 不一致");
-  check(payload.data.workspace_id === fixture.backendWorkspaceId, "页面初始化取得了其他工作区的元数据");
+  check(payload.data.workspace_id === fixture.workspaceId, "页面初始化取得了其他工作区的元数据");
+  const metadataHeaders = await response.request().allHeaders();
+  check(metadataHeaders["x-boxteam-workspace-id"] === fixture.workspaceId
+    && metadataHeaders["x-boxteam-target-gateway-id"] === fixture.gatewayId, "页面初始化请求归属错误");
   check(!Object.hasOwn(payload.data, "root_path") && !Object.hasOwn(payload.data.git, "root"), "产品元数据仍包含重复路径");
   result.metadata = payload;
-  const workspace = page.getByTestId(`workspace-node-${fixture.workspaceId}`);
+  const workspace = page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`);
   await workspace.waitFor({ state: "visible", timeout: 30_000 });
   result.workspace_navigation_visible = true;
   const native = fixture.nativeDirectory;
   check(native, "缺少未注册目录验收输入");
   const openNativeFile = async () => {
     await page.locator(`button[data-session-id="${native.sessionId}"]`).dblclick();
-    const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.backendWorkspaceId}"][data-session-id="${native.sessionId}"][data-thread-id="${native.threadId}"]`);
+    const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${native.sessionId}"][data-thread-id="${native.threadId}"]`);
     await expect(thread).toBeVisible();
     const toggle = thread.getByRole("button", { name: "切换会话资源", exact: true });
     if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();

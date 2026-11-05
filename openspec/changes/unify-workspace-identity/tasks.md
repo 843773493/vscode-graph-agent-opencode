@@ -270,3 +270,8 @@
 
 - 持久任务四组驱动和资源身份纠正统一传原生 Gateway／Workspace owner，目录节点选择使用完整 owner key；模型调用、目标切换、错误重读和浏览器刷新原断言保留。原组合前五项逐项通过，随后 fork 看门狗因未经矩阵退出，未将整组记为成功；fork 改由原正式矩阵单独补验 1 passed／186.41秒，Turn来源冻结矩阵另 1 passed／208.12秒。
 - 交付测试源码与各次验收前后SHA一致，Ruff／Pyright及JS语法沿相同源码既有零诊断收据复用，根线程核对差异及调用方。原始命令／退出码／失败与补验在 `out/tests/temp/identity_thread_consumers_20261105/artifacts/thread-owner-product-1793852080482450852.json`、`thread-owner-fork-matrix-1793854149195698064.json` 和 `thread-owner-turn-matrix-1793854497728786801.json`；不替代其余消费者，6.4继续未勾。
+
+### 2026-11-05：6.4 元数据初始化与搜索协议消费者
+
+- 元数据浏览器驱动删除双工作区 ID，按完整 active owner 选择目标，核初始化请求双目标头及原 UUID；目录节点使用完整归属 key，未注册目录编辑、原生能力、配置刷新和零意外模型调用断言保留。正式矩阵在静态 Workbench／真实 Vite 两个运行面均通过，2 passed／257.95秒、退出0，测试源码首尾指纹一致。原件见 `out/tests/temp/identity_remaining_web_20261105/artifacts/metadata-product-1793856808190962658.json`，正式运行 `run-3ca8197a28c6`；复用同批 Workbench 构建，不代表 Windows 验收。
+- 两个搜索 API 单测移除退役 target_id 和路由别名预期，保留来源、顺序、请求次数及失败不改投断言，16 passed／93断言。Ruff、驱动纯语法检查退出0；完整 Web 真类型检查与完整提交归档基线逐条一致，28／28原有诊断，新增0，原始输出及对照在同目录 `search-owner-unit.log`、`final-root-ruff-1793857413091164909.json`、`final-root-js-parse-1793857413102710692.json` 和 `web-type-comparison-final.json`。其余消费者尚在核验，6.4保持未勾。

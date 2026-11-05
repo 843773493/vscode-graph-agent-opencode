@@ -10,7 +10,7 @@ const request = () => FederatedSearchRequest.create({ scope: { mode: "selected",
 const key = (index: number) => ({ owner: owners[index], category: "message", operation: "content" });
 const branch = (index: number, state = "complete") => ({ branch: key(index), state, retryable: false,
   allocated_results: 50, returned_results: 0, ...(state === "limited" ? { code: "scan_limit", cursor: "original-owner-cursor" } : {}) });
-const resolution = () => ({ scope, branches: owners.map(owner => ({ owner, state: "registered", target_id: owner.workspace_id })) });
+const resolution = () => ({ scope, branches: owners.map(owner => ({ owner, state: "registered" })) });
 const page = (index: number) => ({ provider_id: "canonical-history", workspace_id: owners[index].workspace_id,
   category: "message", operation: "content", contract_version: 1, state: "complete", messages: { catalog_revision: 1,
     items: [], cursor: null, complete: true, limited_reason: null, scanned_sessions: 1, scanned_threads: 1, scanned_items: 1, scanned_bytes: 5 } });
