@@ -40,7 +40,7 @@ test('任务编辑首次保留原版本，冲突重读后保留草稿并允许�
   restores.push(() => watch.mockRestore(), () => list.mockRestore(), () => history.mockRestore(), () => update.mockRestore());
   await act(async () => {
     renderer = create(<WarmConfirmProvider><PersistentTasks apiPort={0} target={{ gateway_id: "gateway-test", workspace_id: 'backend' }}
-      sessionId="session" goalSessionId="session" onOpenSession={async () => {}} onOpenThread={async () => {}} onStatusChange={() => {}} /></WarmConfirmProvider>);
+      onAction={(action, source, configuration) => source.run(action, configuration)} sessionId="session" goalSessionId="session" onOpenSession={async () => {}} onOpenThread={async () => {}} onStatusChange={() => {}} /></WarmConfirmProvider>);
   });
   const root = () => renderer!.root;
   const button = (text: string) => root().findAllByType('button').find(node => node.children.includes(text))!;

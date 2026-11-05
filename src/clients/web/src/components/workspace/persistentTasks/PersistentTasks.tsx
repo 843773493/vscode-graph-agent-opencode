@@ -1,12 +1,12 @@
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
-import { useState } from "react";
-import type { PersistentTaskDTO, TaskThreadTargetDTO } from "../../../api/persistentTasks";
+import { useEffect, useRef, useState } from "react";
+import type { PersistentTaskDTO, PersistentTaskConfigurationDTO, TaskThreadTargetDTO } from "../../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { getSessionMainThread } from "../../../api/session/sessions";
 import { getWorkspace } from "../../../api/workspace";
 import { useGenerationActivity } from "../../../hooks/persistentTasks/useGenerationActivity";
 import { usePersistentTasks } from "../../../hooks/persistentTasks/usePersistentTasks";
-import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
+import type { DispatchPersistentTaskAction, PersistentTaskAction, PersistentTaskActionSource } from "../../../hooks/persistentTasks/taskActions";
 import { errorMessage } from "../../../utils/errorMessage";
 import TaskEditor, { configurationProblem, type TaskTemplate } from "./TaskEditor";
 import TaskGoalDetail from "./TaskGoalDetail";
@@ -16,19 +16,22 @@ import { taskLabel as label, taskName, taskSchedule, taskType } from "./taskPres
 
 const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : "—";
 type Editor = { task: PersistentTaskDTO | null; key: string; template: TaskTemplate | "goal" | null; targetUri?: string; saveFailed?: boolean };
-export default function PersistentTasks({ apiPort, target, sessionId, goalSessionId, onStatusChange, onOpenSession, onOpenThread, active = true }: {
+export default function PersistentTasks({ apiPort, target, sessionId, goalSessionId, onStatusChange, onOpenSession, onOpenThread, onAction, intent, active = true }: {
   apiPort: number; target: GatewayWorkspaceRequestTarget; sessionId?: string; goalSessionId: string | null;
   onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
   onStatusChange: (message: string) => void; onOpenSession: (sessionId: string) => Promise<void>;
   active?: boolean;
+  onAction: DispatchPersistentTaskAction;
+  intent?: { task: PersistentTaskDTO; action: "details" | "history" | "edit"; sequence: number };
 }) {
   const state = usePersistentTasks(apiPort, target, sessionId, active);
   // 工作区入口负责生成动作的通知策略；会话视图只观察，避免双重通知或导航。
-  const activityError = useGenerationActivity(apiPort, target, state.items, active && state.loaded && !sessionId, { onStatusChange, onOpenSession });
-  const confirm = useWarmConfirm();
+  const activityError = useGenerationActivity(apiPort, target, state.items, active && state.loaded && !sessionId && !intent, { onStatusChange, onOpenSession });
   const [editor, setEditor] = useState<Editor | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
+  const historyHeading = useRef<HTMLHeadingElement>(null);
+  const focusedHistory = useRef<number>();
   const task = state.selected;
   const editable = task?.application_type === "automation" && task.configuration;
   const problem = editable ? configurationProblem(editable) : null;
@@ -47,9 +50,34 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
     } catch (cause) { setNavigationError(errorMessage(cause)); }
     finally { setPreparing(false); }
   };
-  const terminate = async (value: PersistentTaskDTO) => {
-    if (await confirm({ title: "终止持久任务？", message: "将停止后续检查与投递。已经接受的工作执行继续由执行入口管理。", confirmText: "终止任务", danger: true })) await state.control(value, "terminate");
+  const source = (value: PersistentTaskDTO): PersistentTaskActionSource => ({
+    target: { ...target }, task: structuredClone(value),
+    run: async (action, configuration) => {
+      if (!state.isCurrent()) return false;
+      if (action === "details" || action === "history" || action === "edit") {
+        state.select(value.task_id);
+        setEditor(action === "edit" ? { task: value, key: crypto.randomUUID(), template: "scheduled" } : null);
+        return true;
+      }
+      return state.run(value, action, configuration);
+    },
+  });
+  const dispatch = async (action: PersistentTaskAction, value: PersistentTaskDTO, configuration?: PersistentTaskConfigurationDTO) => {
+    setNavigationError(null);
+    try { return await onAction(action, source(value), configuration); }
+    catch (cause) { setNavigationError(errorMessage(cause)); return false; }
   };
+  useEffect(() => {
+    if (!intent || !state.loaded) return;
+    if (!state.items.some(item => item.task_id === intent.task.task_id)) { setNavigationError("所选任务已不存在，请重新查找"); return; }
+    // 打开意图仅应用展示态；编辑保存仍使用用户接受时的原 revision。
+    void source(intent.task).run(intent.action);
+  }, [intent?.sequence, intent?.task.task_id, state.loaded]);
+  useEffect(() => {
+    if (intent?.action !== "history" || task?.task_id !== intent.task.task_id || focusedHistory.current === intent.sequence) return;
+    focusedHistory.current = intent.sequence;
+    historyHeading.current?.focus();
+  }, [intent?.sequence, task?.task_id]);
   const back = () => { setEditor(null); state.select(""); };
 
   return <section className={`persistent-tasks${sessionId ? " persistent-tasks-session" : ""}${detailOpen ? " has-detail" : ""}`} aria-label={sessionId ? "当前会话关联任务" : "工作区持久任务"}>
@@ -67,7 +95,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
     <div className="persistent-task-layout">
       <div className="persistent-task-list" aria-label="持久任务列表">
         {state.loaded && !state.error && state.items.length === 0 ? <div className="persistent-task-empty"><span className="codicon codicon-checklist" aria-hidden="true" /><strong>{sessionId ? "当前会话没有关联任务。" : "还没有持久任务。"}</strong><p>设置一个目标，或让任务在定时、脚本条件满足时继续工作。</p></div> : null}
-        {state.items.map((item) => <button type="button" key={item.task_id} aria-label={taskName(item)} aria-pressed={task?.task_id === item.task_id} onClick={() => { state.select(item.task_id); setEditor(null); }}>
+        {state.items.map((item) => <button type="button" key={item.task_id} aria-label={taskName(item)} aria-pressed={task?.task_id === item.task_id} onClick={() => void dispatch("details", item)}>
           <span className="persistent-task-row-heading"><strong>{taskName(item)}</strong><span className={`persistent-task-badge is-${item.lifecycle}`}>{label(item.lifecycle)}</span></span>
           <span>{taskType(item)} · {item.recovering ? "正在恢复" : label(item.phase)}</span>
           {item.reason ? <span className="persistent-task-reason">{item.reason}</span> : null}
@@ -91,7 +119,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
             // 首次提交冻结编辑开始时的版本；失败重读后，用户重试才采用最新版本，草稿不重建。
             const base = editor.task && editor.saveFailed
               ? state.items.find(item => item.task_id === editor.task!.task_id) ?? editor.task : editor.task;
-            const saved = base ? await state.update(base, configuration) : await state.create(configuration, editor.key);
+            const saved = base ? await dispatch("update", base, configuration) : await state.create(configuration, editor.key);
             if (!saved) setEditor(current => current?.key === editor.key ? { ...current, saveFailed: true } : current);
             return saved;
           }} /> : task ? <>
@@ -101,11 +129,11 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
           {task.reason ? <p className="persistent-task-reason">{task.reason}</p> : null}
           {editable ? <>
             <div className="persistent-task-actions">
-              {task.lifecycle === "active" ? <button disabled={state.busy} onClick={() => void state.control(task, "pause")}>暂停任务</button> : !terminal ? <button disabled={state.busy} onClick={() => void state.control(task, "resume")}>恢复任务</button> : null}
-              <button disabled={state.busy || terminal || Boolean(problem)} onClick={() => setEditor({ task, key: crypto.randomUUID(), template: "scheduled" })}>编辑任务</button>
-              <button disabled={state.busy || task.lifecycle !== "active"} onClick={() => void state.check(task, false)}>立即检查</button>
-              <button disabled={state.busy || terminal} onClick={() => void state.check(task, true)}>检查试运行</button>
-              <button disabled={state.busy || terminal} onClick={() => void terminate(task)}>终止任务</button>
+              {task.lifecycle === "active" ? <button disabled={state.busy} onClick={() => void dispatch("pause", task)}>暂停任务</button> : !terminal ? <button disabled={state.busy} onClick={() => void dispatch("resume", task)}>恢复任务</button> : null}
+              <button disabled={state.busy || terminal || Boolean(problem)} onClick={() => void dispatch("edit", task)}>编辑任务</button>
+              <button disabled={state.busy || task.lifecycle !== "active"} onClick={() => void dispatch("check", task)}>立即检查</button>
+              <button disabled={state.busy || terminal} onClick={() => void dispatch("checkOnly", task)}>检查试运行</button>
+              <button disabled={state.busy || terminal} onClick={() => void dispatch("terminate", task)}>终止任务</button>
             </div>
             {problem ? <div role="alert">{problem}</div> : null}
             <dl><dt>触发方式</dt><dd>{taskSchedule(task)}</dd><dt>工作目标</dt><dd><code>{editable.action?.target_uri ?? editable.action?.generation?.session_strategy?.mode}</code></dd><dt>下次触发</dt><dd>{time(task.next_run_at)}</dd><dt>提示内容（当前定义）</dt><dd><pre>{editable.context?.content || "（由生成动作构造）"}</pre></dd></dl>
@@ -118,7 +146,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
               void onOpenSession(task.goal!.session_id).catch((cause: unknown) => setNavigationError(errorMessage(cause)));
             }}>打开目标会话</button>
           </> : <div role="alert">不支持的任务应用：{task.application_type} / {task.application_version}</div>}
-          <h4>运行记录</h4>
+          <h4 ref={historyHeading} tabIndex={-1}>运行记录</h4>
           {state.history?.loading ? <p role="status">正在读取运行记录…</p> : state.history?.error ? <div role="alert">{state.history.error}</div> : state.history?.runs.length ? <TaskRunHistory apiPort={apiPort} target={target} runs={state.history.runs} onOpenSession={onOpenSession} onOpenThread={onOpenThread} /> : <p className="persistent-task-hint">暂无运行记录。</p>}
         </> : <div className="persistent-task-empty"><span className="codicon codicon-checklist" aria-hidden="true" /><p>选择任务查看详情，或创建新的持久任务。</p></div>}
       </div>

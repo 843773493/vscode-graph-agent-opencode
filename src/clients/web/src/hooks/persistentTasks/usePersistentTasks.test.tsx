@@ -76,7 +76,7 @@ test("切换后端工作区后不保留旧详情，旧订阅和动作闭包均�
   await act(async () => { renderer.update(<Probe owner={{ ...target, workspace_id: "backend-two" }} />); });
   expect(stream.signal.aborted).toBe(true);
   expect(value.selected).toBeNull();
-  await act(async () => { stream.publish(snapshot([original])); await previous.control(original, "pause"); });
+  await act(async () => { stream.publish(snapshot([original])); await previous.run(original, "pause"); });
   expect(value.items).toEqual(records);
   expect(control).not.toHaveBeenCalled();
 });
@@ -86,7 +86,7 @@ test("revision冲突后读回完整对象，保留后端错误且不伪造暂停
   restores.push(() => control.mockRestore());
   await mount();
   records = [{ ...original, revision: 2, definition_revision: 2, reason: "另一客户端已编辑", configuration: { ...original.configuration!, name: "完整新任务", context: { ...original.configuration!.context!, content: "完整新正文" } } }];
-  await act(async () => { expect(await value.control(original, "pause")).toBe(false); });
+  await act(async () => { expect(await value.run(original, "pause")).toBe(false); });
   expect(value.error).toContain("revision已变化");
   expect(value.items).toEqual(records);
   expect(value.items[0].lifecycle).toBe("active");
@@ -101,7 +101,7 @@ test("写入停止旧订阅；恢复中的暂停使用完整回执，迟到快�
   restores.push(() => control.mockRestore());
   await mount();
   const stream = streams[0];
-  await act(async () => { await value.control(value.items[0], "pause"); stream.publish(snapshot([original])); });
+  await act(async () => { await value.run(value.items[0], "pause"); stream.publish(snapshot([original])); });
   expect(stream.signal.aborted).toBe(true);
   expect(value.items).toEqual([paused]);
   await act(async () => { streams[streams.length - 1].publish(snapshot([{ ...paused, phase: "paused", recovering: false }])); });

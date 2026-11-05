@@ -6,16 +6,22 @@ import type { TaskThreadTargetDTO } from '../../../web/src/api/persistentTasks.j
 import { gateway, type ThreadOwner } from '../agentApi.js';
 import { ThreadInput } from '../threadInput.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { commands } from '../../upstream/src/vs/workbench/browser/web.factory.js';
+import { taskActionCommand } from '../automation/actions.js';
+import type { PersistentTaskDTO } from '../../../web/src/api/persistentTasks.js';
+import type { TaskPresentationAction } from '../automation/input.js';
 
-export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, editors, active }: {
+export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, editors, active, intent }: {
   owner: Pick<ThreadOwner, 'workspaceKey' | 'workspaceId'>; sessionId?: string; goalSessionId?: string | null;
   editors: IEditorService; active: boolean;
+  intent?: { task: PersistentTaskDTO; action: TaskPresentationAction; sequence: number };
 }) {
   const [target, setTarget] = useState<{ route: GatewayWorkspaceRequestTarget; gatewayId: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   useEffect(() => {
     let disposed = false;
+    setTarget(null); setError(null);
     void (async () => {
       await gateway.assertWorkspace(owner);
       const workspaces = await gateway.workspaces();
@@ -25,7 +31,7 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
       if (!disposed) setTarget({ route, gatewayId: identity.gatewayId });
     })().catch((cause: unknown) => { if (!disposed) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { disposed = true; };
-  }, [owner]);
+  }, [owner.workspaceKey, owner.workspaceId]);
 
   const openThread = async ({ session_id, thread_id, uri }: TaskThreadTargetDTO) => {
     const path = `workspace/${encodeURIComponent(owner.workspaceId)}/resources/session/${encodeURIComponent(session_id)}/threads/${encodeURIComponent(thread_id)}`;
@@ -41,6 +47,8 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
 
   return <WarmConfirmProvider>
     {error ? <p role="alert">任务加载失败：{error}</p> : target ? <PersistentTasks apiPort={0} target={target.route} sessionId={sessionId} goalSessionId={goalSessionId} active={active}
+      intent={intent} onAction={async (action, source, configuration) => (await commands.executeCommand(taskActionCommand(action),
+        { owner: gatewayWorkspaceOwner(source.target), task: source.task, source, configuration })) === true}
       onStatusChange={setNotice} onOpenSession={openSession} onOpenThread={openThread} /> : <p role="status">正在确认任务所属工作区…</p>}
     {notice ? <p role="status">{notice}</p> : null}
   </WarmConfirmProvider>;

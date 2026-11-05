@@ -8,6 +8,7 @@ import './changeFiles.js';
 import { installReadonlyDocumentSerialization } from './readonlyDocuments.js';
 import './search/nameModes.js';
 import './search/workspaceQuickAccess.js';
+import './automation/contribution.js';
 
 installReadonlyDocumentSerialization();
 

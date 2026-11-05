@@ -116,7 +116,8 @@
 
 - [ ] 11.1 将项目业务动作注册为同一 Action／Command，迁齐原菜单、React 操作和 picker 消费者；目标优先显式参数，再发起 editor owner，仍不明确才选择。
 - [ ] 11.2 接入 `session `／`thread `／`resource `，覆盖 Skill／AGENTS／配置、附件／工具结果、变更的真实数据与能力，非文本交相应视图，不为各类再建通用状态机。
-- [ ] 11.3 接入 `automation ` 的任务详情、已有开始／暂停／继续／编辑／终止／删除／试运行及历史操作，按原状态和 revision 可用；暂停任务不冒充停止 turn，试运行不自动执行后续动作。
+- [x] 11.3 接入 `automation ` 的任务详情、已有开始／暂停／继续／编辑／终止／删除／试运行及历史操作，按原状态和 revision 可用；暂停任务不冒充停止 turn，试运行不自动执行后续动作。
+  - 原任务按钮与Quick Access共用具名Action／Command及唯一写入／权威回读结算；未打开详情可直接暂停、恢复、检查试运行或确认终止，详情／编辑／历史复用精确owner的原TaskView。后端无独立start／delete，不虚构API；Goal仅发现与展示，控制继续原Goal卡片。29项合同／159条断言与真实Gateway＋正式Workbench页面通过，核12个写回执、真实409、A/B隔离、关闭未受理浮层零写入及受理后不撤销／重放，pageErrors与多余写入均零。根集成51份实际转换的类型检查、正式Web构建和同29项短测通过；Web独立tsc仍有28条原诊断，无本片新增。精确补丁、源码指纹、失败原件与适用边界见 `out/tests/temp/2026/11/05/automation_quick_actions/artifacts/verification.json` 和 `root-integration.json`；综合动作／目录outbox、恢复与Electron验收继续由原未完成项追踪。
 - [x] 11.4 接入 `workspace ` 的真实控制面候选、范围选择与独立切换／连接／启动动作，执行时核验冻结目标，不因浏览候选启动后台服务。
   - 原控制面发现复用有界查询；三个原Command交回导航hooks，菜单和控制中心同链。执行前只读`check_health=false`登记，不增加全目标健康探测；明确来源解析错误直接暴露，无owner才选择。25项定向合同、共享树Workbench真实类型、Ruff及正式构建通过；真实Gateway页面验证浏览／范围取消零写入、启动B不激活、独立切换及原导航切回，零模型调用／页面错误。证据`out/tests/temp/2026/11/05/workspace_quick_actions/artifacts/root-integration-037.json`。同批Composer提示断言失败另行修复，不宣称组合全绿；远程连接、多成员确认和Electron未由本页覆盖。
 - [ ] 11.5 接入终端／浏览器／MCP 等已有资源的查找、聚焦和原生命周期动作，保持 stop／detach／delete 区分及合法关联范围。

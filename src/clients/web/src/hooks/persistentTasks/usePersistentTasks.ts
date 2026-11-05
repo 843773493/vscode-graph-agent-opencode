@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
+import { requestTaskMutation, settleTaskOperation, type TaskMutation } from "./taskActions";
 
 export function usePersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, sessionId?: string, active = true) {
   const owner = useMemo(() => ({ ...target }), [target.gateway_id, target.workspace_id]);
@@ -60,35 +61,19 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
     scope.busy = true;
     scope.reader.abort();
     setView((previous) => ({ ...previous, scope, busy: true, error: null }));
-    let succeeded = false;
-    try {
-      const result = await operation();
-      if (current.current === scope && !scope.controller.signal.aborted) {
-        if (result) {
-          setView((previous) => ({ ...previous, items: [result, ...previous.items.filter((item) => item.task_id !== result.task_id)] }));
-          setSelection({ scope, id: result.task_id });
-        }
-        succeeded = true;
+    const valid = () => current.current === scope && !scope.controller.signal.aborted;
+    const result = await settleTaskOperation(port, owner, scope.controller.signal, operation, (result) => {
+      if (valid()) {
+        setView((previous) => ({ ...previous, items: [result, ...previous.items.filter((item) => item.task_id !== result.task_id)] }));
+        setSelection({ scope, id: result.task_id });
       }
-    } catch (cause) {
-      if (current.current === scope && !scope.controller.signal.aborted) setView((previous) => ({ ...previous, error: errorMessage(cause) }));
-    } finally {
-      // 失败也读回完整列表；状态流在写入后重新建立，旧快照不能覆盖写入回执。
-      if (current.current === scope && !scope.controller.signal.aborted) {
-        try {
-          const next = await api.listPersistentTasks(port, owner, scope.controller.signal, sessionId);
-          if (current.current === scope && !scope.controller.signal.aborted) setView((previous) => ({ ...previous, ...next, loaded: true }));
-        } catch (cause) {
-          if (current.current === scope && !scope.controller.signal.aborted) setView((previous) => ({ ...previous, error: [previous.error, `刷新失败：${errorMessage(cause)}`].filter(Boolean).join("；") }));
-        }
-        if (current.current === scope && !scope.controller.signal.aborted) {
-          scope.busy = false;
-          setView((previous) => ({ ...previous, busy: false }));
-          setVersion((value) => value + 1);
-        }
-      }
+    }, sessionId);
+    if (valid()) {
+      scope.busy = false;
+      setView((previous) => ({ ...previous, ...(result.snapshot ?? {}), loaded: Boolean(result.snapshot) || previous.loaded, error: result.error, busy: false }));
+      setVersion((value) => value + 1);
     }
-    return succeeded;
+    return valid() && result.succeeded;
   }, [port, owner, scope, sessionId]);
 
   const select = useCallback((id: string) => setSelection({ scope, id }), [scope]);
@@ -99,10 +84,10 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
     runtime: view.scope === scope ? view.runtime : null,
     history: history.scope === scope && history.taskId === selected?.task_id ? history : null,
     select,
+    isCurrent: () => current.current === scope && !scope.controller.signal.aborted,
     refresh: () => act(async () => null),
     create: (configuration: api.PersistentTaskConfigurationDTO, key: string) => act(() => api.createPersistentTask(port, owner, configuration, key, scope.controller.signal)),
-    update: (task: api.PersistentTaskDTO, configuration: api.PersistentTaskConfigurationDTO) => act(() => api.updatePersistentTask(port, owner, task, configuration, scope.controller.signal)),
-    control: (task: api.PersistentTaskDTO, action: api.TaskControl) => act(() => api.controlPersistentTask(port, owner, task, action, scope.controller.signal)),
-    check: (task: api.PersistentTaskDTO, checkOnly: boolean) => act(async () => { await api.checkPersistentTask(port, owner, task, checkOnly, scope.controller.signal); return null; }),
+    run: (task: api.PersistentTaskDTO, action: TaskMutation, configuration?: api.PersistentTaskConfigurationDTO) =>
+      act(() => requestTaskMutation(port, owner, task, action, scope.controller.signal, configuration)),
   };
 }

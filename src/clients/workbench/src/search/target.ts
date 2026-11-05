@@ -8,6 +8,7 @@ import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_gene
 import { gateway } from '../agentApi.js';
 import { changeFileSource } from '../readonlyDocuments.js';
 import { ThreadInput } from '../threadInput.js';
+import { AutomationInput } from '../automation/input.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { sourceDocumentSource } from '../sourceDocuments.js';
@@ -36,6 +37,7 @@ export function prepareSearchInvocation(options: IQuickAccessOptions | undefined
 /** 必须在 Quick Input 获得焦点前同步读取；异步查根期间不重新采样活动目标。 */
 export function captureSearchOwner(editors: IEditorService): WorkspaceOwner {
   const input = editors.activeEditor;
+  if (input instanceof AutomationInput) return { ...input.owner };
   if (input instanceof ThreadInput) return { gatewayId: input.owner.gatewayId, workspaceId: input.owner.workspaceId };
   const resource = EditorResourceAccessor.getCanonicalUri(input, { supportSideBySide: SideBySideEditor.PRIMARY });
   if (resource?.scheme === 'boxteam-file') {
