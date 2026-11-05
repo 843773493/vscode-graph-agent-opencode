@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from functools import cache
 
 from langchain_core.messages import (
     AIMessage,
@@ -34,10 +35,7 @@ from app.domain.itemized.identity.item_projection import (
     ItemSourceManifest,
     ProjectionPartRef,
 )
-from app.domain.itemized.identity.tool_call_identity import (
-    matches_tool_call_id,
-    provider_tool_call_id,
-)
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     InternalDisplayPart,
@@ -264,42 +262,64 @@ class LangChainMessageCodec:
             return message_id.removeprefix("lc_run--") or None
         return None
 
-    def tool_message_model_call_id(
-        self, messages: Sequence[object], index: int,
-    ) -> str | None:
-        """按消息顺序把 ToolMessage 绑定到它前面的 assistant carrier。"""
-        message = messages[index]
-        direct = self.model_call_id(message)
-        if direct is not None:
-            return direct
-        tool_call_id = getattr(message, "tool_call_id", None)
-        if not isinstance(tool_call_id, str) or not tool_call_id:
+    def tool_message_model_call_resolver(
+        self, messages: Sequence[object],
+    ) -> Callable[[int], str | None]:
+        """同一次消息消费共享前缀索引，保留最近声明、显式身份及懒报错边界。"""
+        @cache
+        def model_call(index: int) -> str | None:
+            return self.model_call_id(messages[index])
+
+        declarations: dict[int, tuple[int, ItemProjectionIdentity, frozenset[str]] | None] = {}
+
+        def preceding(index: int) -> tuple[int, ItemProjectionIdentity, frozenset[str]] | None:
+            visited = []
+            while index >= 0 and index not in declarations:
+                model_call_id = model_call(index)
+                if model_call_id is not None:
+                    identity = ItemProjectionIdentity(model_call_id=model_call_id)
+                    call_ids = frozenset(
+                        provider_tool_call_id(identity, call_id)
+                        for call in self.tool_calls(messages[index])
+                        if isinstance(call_id := call.get("id") or call.get("tool_call_id"), str)
+                    )
+                    if call_ids:
+                        declarations[index] = (index, identity, call_ids)
+                        break
+                visited.append(index)
+                index -= 1
+            declaration = declarations.get(index)
+            # 只跨过实际核对过且没有声明的消息。并行结果不再反复扫前面所有结果，
+            # 未经过的旧消息仍不预检，最近匹配之前的损坏不会被提前暴露。
+            for position in visited:
+                declarations[position] = declaration
+            return declaration
+
+        def resolve(index: int) -> str | None:
+            direct = model_call(index)
+            if direct is not None:
+                return direct
+            tool_call_id = getattr(messages[index], "tool_call_id", None)
+            if not isinstance(tool_call_id, str) or not tool_call_id:
+                return None
+            declaration = preceding(index - 1)
+            while declaration is not None:
+                position, identity, call_ids = declaration
+                if provider_tool_call_id(identity, tool_call_id) in call_ids:
+                    return identity.model_call_id
+                declaration = preceding(position - 1)
             return None
-        # 借用原序列按坐标逆查；逐个 ToolMessage 复制前缀会累积平方级复制量。
-        # 仍只消费当前位置之前、实际匹配经过的消息，保留最近匹配和错误边界。
-        for preceding_index in range(index - 1, -1, -1):
-            preceding = messages[preceding_index]
-            model_call_id = self.model_call_id(preceding)
-            if model_call_id is None:
-                continue
-            identity = ItemProjectionIdentity(model_call_id=model_call_id)
-            if any(
-                isinstance(call.get("id") or call.get("tool_call_id"), str)
-                and matches_tool_call_id(
-                    identity, call.get("id") or call["tool_call_id"], tool_call_id,
-                )
-                for call in self.tool_calls(preceding)
-            ):
-                return model_call_id
-        return None
+
+        return resolve
 
     def tool_result_call_ids(self, messages: Sequence[object]) -> tuple[str, ...]:
         """从真实 ToolMessage 与其 emitting assistant 取得结果的 scoped identity。"""
         call_ids = []
+        resolve_model_call = self.tool_message_model_call_resolver(messages)
         for index, message in enumerate(messages):
             if not isinstance(message, ToolMessage):
                 continue
-            model_call_id = self.tool_message_model_call_id(messages, index)
+            model_call_id = resolve_model_call(index)
             identity = ItemProjectionIdentity(model_call_id=model_call_id)
             raw_call_id = provider_tool_call_id(identity, message.tool_call_id)
             call_ids.append(

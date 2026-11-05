@@ -134,6 +134,7 @@ def prepare_messages(
     ]
     if len(set(canonical_message_ids)) != len(canonical_message_ids):
         raise ValueError("一个 checkpoint 不能重复引用同一个 canonical message_id")
+    resolve_model_call = codec.tool_message_model_call_resolver(messages)
     with jsonl.open("rb") as stream:
         for index, (canonical_message_id, message) in enumerate(
             zip(canonical_message_ids, messages, strict=True)
@@ -245,7 +246,7 @@ def prepare_messages(
                         f"{admission.execution_origin!r}"
                     )
             model_call_id = (
-                codec.tool_message_model_call_id(messages, index)
+                resolve_model_call(index)
                 if message_role == "tool"
                 else codec.model_call_id(message)
                 if message_role == "assistant"

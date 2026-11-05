@@ -13,7 +13,7 @@ import sqlite3
 import threading
 import time
 from collections import deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,9 +68,9 @@ class MessageCodec(Protocol):
 
     def model_call_id(self, message: object) -> str | None: ...
 
-    def tool_message_model_call_id(
-        self, messages: Sequence[object], index: int,
-    ) -> str | None: ...
+    def tool_message_model_call_resolver(
+        self, messages: Sequence[object],
+    ) -> Callable[[int], str | None]: ...
 
     def items_for_message(
         self,

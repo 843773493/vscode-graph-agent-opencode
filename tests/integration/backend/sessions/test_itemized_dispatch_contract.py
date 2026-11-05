@@ -3048,9 +3048,7 @@ async def test_real_prepare_observes_completed_unknown_canonical_terminal_notifi
     codec = LangChainMessageCodec()
     assert committed_result.projection_identity is not None
     result_message_index = projected_messages.index(projected_tool_result)
-    inferred_model_call_id = codec.tool_message_model_call_id(
-        projected_messages, result_message_index,
-    )
+    inferred_model_call_id = codec.tool_message_model_call_resolver(projected_messages)(result_message_index)
     assert inferred_model_call_id == model_call_id
     recoded_result, = codec.items_for_message(
         projected_tool_result,
