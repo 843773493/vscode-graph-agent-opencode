@@ -612,20 +612,3 @@ class IndexedRecordQueryMixin:
             _turn_span_row(tuple(row), field="indexed_turn_spans_for_ranges.row")
             for row in rows
         ]
-
-    def context_turn_count(
-        self,
-        snapshot: RolloutReadSnapshot,
-        view_id: str,
-    ) -> int:
-        """返回一个逻辑 context view 的 Turn 数量，不读取消息正文。"""
-        connection = self._storage._snapshot_connection(snapshot)
-        self._storage._require_v2_runtime(connection)
-        view_id = strict_text(view_id, field="context_turn_count.view_id")
-        row = connection.execute(
-            f"SELECT COUNT(*) FROM context_view_turns AS cvt WHERE cvt.view_id = ? AND {VISIBLE_NORMAL_TURN_PREDICATE}",
-            (view_id,),
-        ).fetchone()
-        if row is None:
-            raise RuntimeError("context_turn_count COUNT 查询未返回结果")
-        return strict_non_negative_int(row[0], field="context_turn_count.count")

@@ -282,16 +282,6 @@ class RolloutContextReader:
             raise RuntimeError("context view 链为空")
         return chain.ranges[-1][0]
 
-    def context_turn_count(
-        self,
-        snapshot: RolloutReadSnapshot,
-        chain: ContextChain,
-    ) -> int:
-        return self._storage.checkpoints.context_turn_count(
-            snapshot,
-            self.context_view_id(chain),
-        )
-
     def read_history_snapshot_bounds(
         self,
         snapshot: RolloutReadSnapshot,

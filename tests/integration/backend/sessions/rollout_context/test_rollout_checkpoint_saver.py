@@ -1642,7 +1642,7 @@ def test_history_reads_accepted_turn_from_active_successor_before_next_checkpoin
         ).fetchone()[0] == 0
         frozen_chain = context_reader.resolve_chain(snapshot, checkpoint.message_sequence)
         assert context_reader.context_view_id(frozen_chain) == checkpoint.view_id
-        assert context_reader.context_turn_count(snapshot, frozen_chain) == 1
+        assert [row[0] for row in context_reader.read_turn_spans(snapshot, frozen_chain)] == ["turn-1"]
 
     for history_reader in (reader, RolloutHistoryReader(context_reader)):
         detail = history_reader.load(

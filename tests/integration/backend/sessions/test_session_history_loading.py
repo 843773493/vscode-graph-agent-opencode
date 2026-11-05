@@ -1581,7 +1581,6 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
         view_id = history_catalog_copy.execute(
             "SELECT head_view_id FROM branches WHERE status = 'active'"
         ).fetchone()[0]
-        assert storage.checkpoints.context_turn_count(copied, view_id) == expected
         bounds = storage.storage.read_history_snapshot_bounds(copied, view_id)
         rows, has_more = storage.storage.read_context_turn_page(
             copied,

@@ -737,7 +737,6 @@ def test_indexed_history_cache_keeps_same_local_ids_and_revisions_in_each_thread
         assert history is not None
         with history.snapshot as snapshot:
             assert (snapshot.session_id, snapshot.thread_id) == (SESSION_ID, thread)
-            assert history.turn_count == 1
             revisions.append((snapshot.manifest.history_view_revision, snapshot.manifest.committed_sequence))
             key = (SESSION_ID, thread)
             cached = snapshots._indexed_history_cache[key]

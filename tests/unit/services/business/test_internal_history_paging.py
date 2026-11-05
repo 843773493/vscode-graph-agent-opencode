@@ -170,7 +170,6 @@ def history_setup() -> _HistorySetup:
         rollout_id="rollout-1",
         projection_epoch=3,
         view_id="view-1",
-        turn_count=5,
         snapshot=snapshot,
         chain=SimpleNamespace(),
     )

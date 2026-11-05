@@ -33,7 +33,6 @@ class IndexedHistoryCacheEntry:
     active_branch_id: str
     history_view_revision: int
     view_id: str
-    turn_count: int
     context_ranges: tuple[tuple[str, int, int], ...]
 
 
@@ -42,7 +41,6 @@ class IndexedHistory:
     rollout_id: str
     projection_epoch: int
     view_id: str | None
-    turn_count: int
     snapshot: RolloutReadSnapshot
     chain: ContextChain
 
@@ -98,7 +96,6 @@ class IndexedHistorySnapshots:
                 rollout_id=manifest.rollout_id,
                 projection_epoch=manifest.projection_epoch,
                 view_id=cache_entry.view_id,
-                turn_count=cache_entry.turn_count,
                 snapshot=snapshot,
                 chain=ContextChain(
                     message_sequence=manifest.committed_sequence,
@@ -109,7 +106,7 @@ class IndexedHistorySnapshots:
         view_id = self._context_reader.context_view_id(chain)
         if view_id != active_view_id:
             raise RuntimeError("history chain 与同一 snapshot 的 active view 不一致")
-        turn_count = self._context_reader.context_turn_count(snapshot, chain)
+        # 分页以同一 snapshot 的边界和 limit+1 判断是否还有数据，无需统计全部可见 Turn。
         self._cache_indexed_history(
             session_id,
             snapshot.thread_id,
@@ -120,7 +117,6 @@ class IndexedHistorySnapshots:
                 active_branch_id=manifest.active_branch_id,
                 history_view_revision=manifest.history_view_revision,
                 view_id=view_id,
-                turn_count=turn_count,
                 context_ranges=chain.ranges,
             ),
         )
@@ -128,7 +124,6 @@ class IndexedHistorySnapshots:
             rollout_id=manifest.rollout_id,
             projection_epoch=manifest.projection_epoch,
             view_id=view_id,
-            turn_count=turn_count,
             snapshot=snapshot,
             chain=chain,
         )
