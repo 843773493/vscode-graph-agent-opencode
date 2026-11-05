@@ -404,9 +404,11 @@ class RolloutViewMembershipMixin:
                     message_row[0], field=f"messages.message_sequence: {value}"
                 )
                 for message_row in connection.execute(
+                    # 固定先按 Turn 定位消息再核 membership；SQLite 若先扫父 view，
+                    # 每个 Turn 都会重扫全部父成员，使 checkpoint 创建退化为 O(Turn 数 × 成员数)。
                     "SELECT m.message_sequence FROM messages m "
-                    "JOIN item_catalog i ON i.jsonl_offset=m.jsonl_offset AND i.jsonl_length=m.jsonl_length "
-                    "JOIN context_view_items member ON member.item_id=i.item_id "
+                    "CROSS JOIN item_catalog i ON i.jsonl_offset=m.jsonl_offset AND i.jsonl_length=m.jsonl_length "
+                    "CROSS JOIN context_view_items member ON member.item_id=i.item_id "
                     "WHERE member.view_id=? AND member.visible=1 AND m.turn_id=?"
                     if inherited_turn else
                     "SELECT message_sequence FROM messages WHERE turn_id=?",
