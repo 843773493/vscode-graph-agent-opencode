@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import Counter
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,8 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     detail_record_from_mapping,
     detail_relative_path,
 )
+from app.services.infrastructure.rollout_context.runtime import detail_files
+from tests.harness.python.run_context import TestRunContext
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -182,6 +185,93 @@ def test_prepared_detail_encodes_once_and_cold_read_still_rejects_tampering(
         cold.read(**owner, record=prepared.record)
     assert target.read_bytes() == damaged_bytes
 
+
+
+@pytest.mark.parametrize("protection", ["public", "redacted", "protected"])
+def test_write_resolves_node_once_per_publication_and_rechecks_next_call(
+    detail_store, detail_arguments, monkeypatch, protection, request,
+):
+    resolver = detail_store._resolver
+    session_node = resolver.resolve_session_node(SESSION_ID)
+    control = session_node / "session-control.sqlite"
+    backup = session_node / "session-control.sqlite.unavailable"
+    resolve = resolver.resolve_thread_node
+    stage, calls = None, []
+
+    def observe_resolve(session_id, thread_id):
+        if stage is not None:
+            calls.append(stage)
+        return resolve(session_id, thread_id)
+
+    monkeypatch.setattr(resolver, "resolve_thread_node", observe_resolve)
+    arguments = {**detail_arguments, "protection": protection, "sensitive": protection != "public"}
+    stage = "first"
+    record = detail_store.write(**arguments)
+    stage = None
+    assert detail_store.read(
+        session_id=SESSION_ID, thread_id=record.thread_id, record=record, include_sensitive=True,
+    )["detail"] == detail_arguments["detail"]
+    control.rename(backup)
+    try:
+        stage = "blocked"
+        with pytest.raises(RuntimeError, match="Session control 数据库缺失"):
+            detail_store.write(**{**arguments, "assembly_id": "unavailable-control"})
+        assert not control.exists()
+    finally:
+        stage = None
+        backup.rename(control)
+    stage = "recovered"
+    recovered = detail_store.write(**{**arguments, "assembly_id": "recovered-control"})
+    stage = None
+    assert detail_store.read(
+        session_id=SESSION_ID, thread_id=recovered.thread_id, record=recovered, include_sensitive=True,
+    )["detail"] == detail_arguments["detail"]
+    measurements = dict(Counter(calls))
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "detail-publish-node-resolutions.json").write_text(
+        json.dumps({"protection": protection, "resolutions": measurements}, indent=2), encoding="utf-8",
+    )
+    print(f"detail publication resolutions ({protection}): {measurements}")
+    assert measurements == {"first": 1, "blocked": 1, "recovered": 1}
+
+
+def test_publication_rechecks_parent_after_writing_temporary_file(
+    detail_store, detail_arguments, detail_case_root, monkeypatch,
+):
+    prepared = detail_store.prepare(**detail_arguments)
+    target = detail_store._files.path(prepared.record.detail_ref, create=True)
+    parent = target.parent
+    displaced = parent.with_name(parent.name + ".displaced")
+    outside = detail_case_root / "outside"
+    outside.mkdir()
+    marker = outside / "existing"
+    marker.write_bytes(b"original outside data")
+    fsync = detail_files.os.fsync
+    changed = False
+
+    def replace_parent(descriptor):
+        nonlocal changed
+        result = fsync(descriptor)
+        if not changed:
+            changed = True
+            parent.rename(displaced)
+            parent.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(detail_files.os, "fsync", replace_parent)
+    try:
+        with pytest.raises(DetailUnavailableError, match="符号链接"):
+            detail_store.publish(prepared)
+        assert changed
+        assert list(outside.iterdir()) == [marker]
+        assert marker.read_bytes() == b"original outside data"
+        assert not target.exists()
+    finally:
+        if changed:
+            parent.unlink()
+            displaced.rename(parent)
+    # 注入动作把临时文件移入了旧目录；它不能变成已发布的正文。
+    assert not target.exists()
 
 
 @pytest.mark.parametrize("protection", ["public", "redacted", "protected"])

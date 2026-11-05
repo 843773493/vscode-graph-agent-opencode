@@ -77,6 +77,18 @@ class DetailFiles:
         storage_owner: tuple[str, str] | None = None,
         snapshot: RolloutReadSnapshot | None = None,
     ) -> Path | None:
+        root = self._resolve_node(
+            ref, create=create, creation_record=creation_record,
+            storage_owner=storage_owner, snapshot=snapshot,
+        )
+        return self._path_in_node(ref, root, create=create)
+
+    def _resolve_node(
+        self, ref: DetailRef, *, create: bool = False,
+        creation_record: SessionCreationRecord | None = None,
+        storage_owner: tuple[str, str] | None = None,
+        snapshot: RolloutReadSnapshot | None = None,
+    ) -> Path:
         owner_session, owner_thread = storage_owner or (ref.session_id, ref.thread_id)
         if snapshot is not None:
             if snapshot.closed:
@@ -85,7 +97,6 @@ class DetailFiles:
                 raise ValueError("read snapshot 与 detail 目标 owner 不一致")
             if snapshot.sessions_root != self._resolver.sessions_root:
                 raise ValueError("read snapshot 与 detail 工作区不一致")
-        relative = detail_relative_path(ref)
         if create or creation_record is not None:
             ref.require_owner(owner_session, owner_thread)
         if creation_record is not None and creation_record.session_id != ref.session_id:
@@ -113,7 +124,11 @@ class DetailFiles:
                     current_owner=(owner_session, owner_thread),
                 )
         # locator 与 typed identity 保持原文，只在物理 I/O owner 扩展 Windows 路径。
-        root = native_io_path(root)
+        return native_io_path(root)
+
+    def _path_in_node(self, ref: DetailRef, root: Path, *, create: bool = False) -> Path | None:
+        """消费本次已解析节点，每次仍逐级检查实际文件形态和路径边界。"""
+        relative = detail_relative_path(ref)
         root_info = self._info(ref, root)
         if root_info is None or not stat.S_ISDIR(root_info.st_mode):
             raise self._invalid_path(ref, root, "session node 不是安全普通目录")
@@ -167,7 +182,10 @@ class DetailFiles:
     def publish(
         self, ref: DetailRef, raw: bytes, *, creation_record: SessionCreationRecord | None = None,
     ) -> Path:
-        target = self.path(ref, create=True, creation_record=creation_record)
+        # 同次同步发布只定位一次；写前、link 前和回滚时仍重查实际路径。
+        # 不跨调用缓存 locator，下一次发布重新核 catalog/control 与 owner。
+        root = self._resolve_node(ref, create=True, creation_record=creation_record)
+        target = self._path_in_node(ref, root, create=True)
         if target is None:
             raise DetailUnavailableError("detail 写入目录未创建")
         temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
@@ -186,7 +204,7 @@ class DetailFiles:
                     stream.flush()
                     os.fsync(stream.fileno())
                 # link 是排他发布，不能用 replace 覆盖已经存在的 immutable detail。
-                self.path(ref, creation_record=creation_record)
+                self._path_in_node(ref, root)
                 os.link(temporary, target, follow_symlinks=False)
                 published = True
                 temporary.unlink()
@@ -194,7 +212,7 @@ class DetailFiles:
             except BaseException:
                 # 发布后清理临时 link 失败也不能留下无 record 可追踪的正文。
                 if published:
-                    self.path(ref, creation_record=creation_record)
+                    self._path_in_node(ref, root)
                     target.unlink()
                 raise
             finally:
