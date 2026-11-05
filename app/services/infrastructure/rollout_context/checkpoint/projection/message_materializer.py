@@ -292,7 +292,8 @@ class RolloutMessageMaterializerMixin:
         head_sequence = strict_non_negative_int(
             row[1], field="context_views.head_message_sequence"
         )
-        self._validate_context_view_chain_connection(connection, view_id)
+        # 当前 view 已冻结完整 membership，分页和正文读取不沿祖先继承成员。
+        # 父链、jump/range 审计留给显式校验，避免普通读取随历史深度重复遍历。
         return ((view_id, 0, head_sequence),)
 
 
