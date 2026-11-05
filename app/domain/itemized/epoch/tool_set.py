@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.domain.itemized.epoch.prefix_epoch import toolset_compatibility_key
 from app.domain.itemized.epoch.root_compilation import (
@@ -49,6 +49,7 @@ class ToolSetSnapshot:
     policy_version: str
     wire_tool_order: tuple[str, ...]
     _tools_json: bytes
+    _revision: str = field(init=False, repr=False, compare=False)
 
     def __init__(
         self,
@@ -80,6 +81,14 @@ class ToolSetSnapshot:
         names = self.tool_names
         if len(names) != len(set(names)):
             raise ItemSchemaError("ToolSetSnapshot 存在重复工具名")
+        # 正文 bytes、policy 和 wire 顺序均已冻结，只在构造时计算一次 revision。
+        # tools 仍逐次解析为独立容器；新定义必须创建新快照，不沿用旧 token。
+        object.__setattr__(self, "_revision", sha256_jcs({
+            "tools": self.tools,
+            "policy_keys": self.policy_keys,
+            "policy_version": self.policy_version,
+            "wire_tool_order": self.wire_tool_order,
+        }))
 
     @property
     def tools(self) -> tuple[Mapping[str, object], ...]:
@@ -100,14 +109,7 @@ class ToolSetSnapshot:
 
     @property
     def revision(self) -> str:
-        return sha256_jcs(
-            {
-                "tools": self.tools,
-                "policy_keys": self.policy_keys,
-                "policy_version": self.policy_version,
-                "wire_tool_order": self.wire_tool_order,
-            }
-        )
+        return self._revision
 
     @property
     def snapshot_id(self) -> str:

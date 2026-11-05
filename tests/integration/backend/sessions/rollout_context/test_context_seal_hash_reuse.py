@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.root_compilation import CompiledRootSourceProvenance
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.epoch import tool_set as tool_set_domain
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
@@ -51,6 +52,77 @@ from tests.integration.backend.sessions.rollout_context.test_context_production_
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+
+
+@pytest.mark.parametrize("tool_count", [1, 16])
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+def test_prepare_computes_each_frozen_tool_revision_once(
+    production_context, monkeypatch, request, tool_count, target_format,
+):
+    saver, session, thread, _connection, _manager, prepare = production_context
+    tools = [{"type": "function", "function": {
+        "name": f"revision_tool_{index:02}", "description": f"冻结工具 {index}：中文与换行\n",
+        "parameters": {"type": "object", "properties": {
+            f"arg_{number}": {"type": "string", "description": "冻结参数", "enum": ["甲", "乙"]}
+            for number in range(8)
+        }},
+    }} for index in reversed(range(tool_count))]
+    original_tools = json.loads(canonical_json_bytes(tools))
+    wire_order = [tool["function"]["name"] for tool in original_tools]
+    expected_revision = sha256_jcs({
+        "tools": sorted(original_tools, key=lambda tool: tool["function"]["name"]),
+        "policy_keys": (), "policy_version": "v1", "wire_tool_order": wire_order,
+    })
+    digest, hashes = tool_set_domain.sha256_jcs, []
+
+    def observe_digest(value):
+        result = digest(value)
+        if set(value) == {"tools", "policy_keys", "policy_version", "wire_tool_order"}:
+            hashes.append(result)
+        return result
+
+    monkeypatch.setattr(tool_set_domain, "sha256_jcs", observe_digest)
+    desired = ToolSetSnapshot(selection_revision=sha256_jcs({"selection": 1}), tools=tools)
+    first = prepare("tool-revision-first", supplier=lambda: desired, target_format=target_format)
+    tools[0]["function"]["parameters"]["properties"]["arg_0"]["enum"].append("输入修改")
+    desired.tools[0]["function"]["parameters"]["properties"]["arg_0"]["enum"].append("读取修改")
+    second = prepare("tool-revision-second", supplier=lambda: desired, target_format=target_format)
+    assert desired.tools == tuple(sorted(original_tools, key=lambda tool: tool["function"]["name"]))
+    assert first["tools"] == second["tools"]
+    assert first["snapshot"].seal_binding.prefix.state.epoch.ordinal == second["snapshot"].seal_binding.prefix.state.epoch.ordinal
+    for prepared in (first, second):
+        binding = prepared["snapshot"].seal_binding
+        assert binding.applied_toolset_revision == expected_revision
+        assert binding.tool_set_snapshot_id == "tool-set:" + expected_revision
+        assert list(prepared["snapshot"].tool_set_refs[0].tool_policy["wire_tool_order"]) == wire_order
+
+    changed_tools = json.loads(canonical_json_bytes(original_tools))
+    changed_tools[0]["function"]["description"] = "新版本工具定义必须切换 epoch"
+    changed = ToolSetSnapshot(selection_revision=sha256_jcs({"selection": 2}), tools=changed_tools)
+    third = prepare("tool-revision-changed", supplier=lambda: changed, target_format=target_format)
+    new_binding = third["snapshot"].seal_binding
+    assert new_binding.applied_toolset_revision != expected_revision
+    assert new_binding.prefix.state.epoch.ordinal == second["snapshot"].seal_binding.prefix.state.epoch.ordinal + 1
+    assert third["tools"] != second["tools"]
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        for prepared in (first, third):
+            projection = cold.project_context_plan_for_dispatch(
+                session, thread, prepared["snapshot"].as_sealed_plan(), target_format=target_format,
+            )
+            assert projection.assembly == prepared["snapshot"]
+            assert projection.messages == prepared["messages"]
+            assert projection.tools == prepared["tools"]
+            assert projection.losses == prepared["losses"]
+            assert projection.native == prepared.get("native_projection")
+    measurements = {"tools": tool_count, "target_format": target_format,
+                    "original_revision_hashes": hashes.count(expected_revision),
+                    "changed_revision_hashes": hashes.count(new_binding.applied_toolset_revision)}
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "tool-snapshot-revision-hashes.json").write_text(
+        json.dumps(measurements, indent=2), encoding="utf-8",
+    )
+    print(f"frozen tool revision hashes: {measurements}")
+    assert measurements["original_revision_hashes"] == measurements["changed_revision_hashes"] == 1
 
 
 @pytest.mark.parametrize("body", [{"规则": ["中文\n", "引号\"", 1e-7]}, "中文\n引号\"\\"])
