@@ -78,8 +78,9 @@ class ContextSourceControlOwnerMixin:
 
     def install_runtime_context_sources(self, session_id: str, thread_id: str, manager: ContextSourceManager) -> None:
         """安全prepare边界只重水合canonical状态版本，不读取任务当前定义或外部来源。"""
-        states = tuple(state for state in self.load_context_source_control_states(ContextSourceOwnerKey(session_id, thread_id))
-                       if state.source_kind == "runtime_state" and state.latest_revision is not None and state.tracking_status == "tracked")
+        states = tuple(state for state in self.load_context_source_control_states(
+            ContextSourceOwnerKey(session_id, thread_id), source_kind="runtime_state",
+        ) if state.latest_revision is not None and state.tracking_status == "tracked")
         if not states:
             return
         storage = self._storage.storage
@@ -106,7 +107,12 @@ class ContextSourceControlOwnerMixin:
             for state in states:
                 assert state.latest_revision is not None
                 content = read(state.source_id, state.latest_revision)
-                baseline = None if state.latest_visible_committed_revision is None else read(state.source_id, state.latest_visible_committed_revision)
+                baseline = None
+                if state.latest_visible_committed_revision is not None:
+                    # 同一来源同一版本复用本次已校验正文，不重复定位和读取 JSONL。
+                    baseline = content if state.latest_visible_committed_revision == state.latest_revision else read(
+                        state.source_id, state.latest_visible_committed_revision,
+                    )
                 frozen.append((state, content, baseline))
         for state, content, baseline in frozen:
             manager.register(ContextSourceDescriptor(
@@ -152,6 +158,7 @@ class ContextSourceControlOwnerMixin:
         owner: ContextSourceOwnerKey,
         *,
         source_ids: frozenset[str] | None = None,
+        source_kind: str | None = None,
     ) -> tuple[ContextSourceControlState, ...]:
         if not isinstance(owner, ContextSourceOwnerKey):
             raise TypeError(
@@ -161,6 +168,7 @@ class ContextSourceControlOwnerMixin:
             owner.session_id,
             thread_id=owner.thread_id,
             source_ids=source_ids,
+            source_kind=source_kind,
         )
 
     def apply_context_source_control_mutation(

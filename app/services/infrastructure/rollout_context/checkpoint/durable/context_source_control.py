@@ -232,6 +232,7 @@ class ContextSourceControlStorageMixin:
         *,
         thread_id: str,
         source_ids: frozenset[str] | None = None,
+        source_kind: str | None = None,
     ) -> tuple[ContextSourceControlState, ...]:
         """按需读取该 SessionThread 的控制状态，不建库、不执行恢复副作用。"""
         # 本次读取的 owner 检查与快照打开复用路径；退出后下次读取仍重新校验 catalog。
@@ -253,6 +254,10 @@ class ContextSourceControlStorageMixin:
                         # JSON 集合沿已有复合主键定位，也避免批量确认受 SQL 参数数量限制。
                         where += "AND source_id IN (SELECT value FROM json_each(?)) "
                         parameters.append(canonical_json_bytes(sorted(source_ids)).decode("utf-8"))
+                    if source_kind is not None:
+                        # 按类别消费状态时先缩小 SQL 结果，不恢复无关来源的完整控制行。
+                        where += "AND source_kind = ? "
+                        parameters.append(source_kind)
                     rows = connection.execute(
                         f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
                         + where + "ORDER BY created_at, source_id",
