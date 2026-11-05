@@ -250,21 +250,22 @@ class IndexedRecordQueryMixin:
                 )
         if view_id is not None and result:
             # backing 只供恢复与归属校验；历史正文必须整组属于实际展示 view。
+            # 从本页消息定位 item；逐成员聚合 membership，避免 LEFT JOIN 展开所有历史 view。
+            # MIN 要求命中的 membership 全部可见且为 canonical；无 membership 的 NULL 同样拒绝。
             visible_rows = connection.execute(
                 "SELECT m.message_sequence FROM messages AS m "
-                "JOIN item_catalog AS anchor ON anchor.jsonl_offset = m.jsonl_offset "
+                "CROSS JOIN item_catalog AS anchor ON anchor.jsonl_offset = m.jsonl_offset "
                 "AND anchor.jsonl_length = m.jsonl_length "
-                "JOIN context_view_items AS membership ON membership.item_id = anchor.item_id "
+                "CROSS JOIN context_view_items AS membership ON membership.item_id = anchor.item_id "
                 "AND membership.view_id = ? AND membership.visible = 1 "
                 "AND membership.source_kind = 'canonical' "
                 "WHERE m.message_sequence IN ("
                 + ",".join("?" for _ in result)
                 + ") AND NOT EXISTS (SELECT 1 FROM item_catalog AS member "
-                "LEFT JOIN context_view_items AS selected ON selected.item_id = member.item_id "
-                "AND selected.view_id = membership.view_id "
                 "WHERE member.message_group_id = anchor.message_group_id "
-                "AND (selected.item_id IS NULL OR selected.visible != 1 "
-                "OR selected.source_kind != 'canonical'))",
+                "AND (SELECT MIN(selected.visible = 1 AND selected.source_kind = 'canonical') "
+                "FROM context_view_items AS selected WHERE selected.item_id = member.item_id "
+                "AND selected.view_id = membership.view_id) IS NOT 1)",
                 (view_id, *(row[0] for row in result)),
             ).fetchall()
             visible_sequences = {row[0] for row in visible_rows}
