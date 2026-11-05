@@ -9,7 +9,7 @@ const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 if (!base || !output || !screenshot) throw new Error('只读模型验收缺少隔离目标或产物目录');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_change_documents.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], reads: [], sources: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], reads: [], sources: [], mcpReads: [],
   boundary: '真实Gateway／后端／正式Workbench；模型协议采用model_stream；产品执行创建文件和更改，无预写历史、缓存或HTTP响应替身' };
 let page, failure;
 try {
@@ -22,6 +22,8 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (path === '/api/v1/mcp/servers') result.mcpReads.push({ path,
+      gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
     if (/\/changesets\/.+$/.test(path)) result.reads.push({ phase: result.phase, path,
       gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
     if (path === '/api/v1/resources/navigation' && request.postDataJSON()?.operation === 'read') {
@@ -142,6 +144,20 @@ try {
   await page.locator('.quick-input-widget').getByText('打开链接', { exact: true }).click();
   await expect(text()).toHaveCount(1);
   await expect(text().locator('.view-lines')).toContainText('只读来源模型验收');
+  result.phase = 'split-readonly-source';
+  await command('workbench.action.splitEditorRight');
+  await expect(groups).toHaveCount(3);
+  const sourceText = index => groups.nth(index).locator('.editor-instance .monaco-editor').filter({ visible: true });
+  await expect(sourceText(2).locator('.view-lines')).toContainText('只读来源模型验收');
+  expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+  await sourceText(2).getByRole('textbox').focus();
+  await page.keyboard.insertText('UNEXPECTED SOURCE MUTATION');
+  await expect(sourceText(2).locator('.view-lines')).not.toContainText('UNEXPECTED SOURCE MUTATION');
+  await command('workbench.action.closeActiveEditor');
+  await expect(groups).toHaveCount(2);
+  await expect(text().locator('.view-lines')).toContainText('只读来源模型验收');
+  expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+  result.sourceSplitShared = true;
   result.phase = 'source-refresh-restore';
   await reload();
   await expect(text()).toHaveCount(1);

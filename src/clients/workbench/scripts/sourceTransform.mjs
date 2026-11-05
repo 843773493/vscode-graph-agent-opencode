@@ -7,6 +7,7 @@ import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [
   'src/vs/workbench/browser/web.main.ts',
+  'src/vs/workbench/browser/layout.ts',
   'src/vs/workbench/browser/quickaccess.ts',
   'src/vs/platform/quickinput/browser/quickAccess.ts',
   'src/vs/platform/quickinput/browser/helpQuickAccess.ts',
@@ -53,6 +54,16 @@ export function sourceTransform(root, productConfiguration, extensions) {
       '/*BUILD->INSERT_BUILTIN_EXTENSIONS*/': JSON.stringify(extensions).slice(1, -1),
     };
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
+    if (path === join(upstream, 'src/vs/workbench/browser/layout.ts')) {
+      // 自动恢复关闭面板时不得抢走 Quick Input 等外部控件的焦点；只交回原本属于面板的焦点。
+      const start = 'private setPanelHidden(hidden: boolean, skipLayout?: boolean): void {';
+      const end = '\n\tprivate inMaximizedAuxiliaryBarTransition = false;';
+      const method = contents.slice(contents.indexOf(start), contents.indexOf(end));
+      let restored = replaceOnce(method, 'const wasHidden = !this.isVisible(Parts.PANEL_PART);',
+        'const hadPanelFocus = this.hasFocus(Parts.PANEL_PART);\n\t\tconst wasHidden = !this.isVisible(Parts.PANEL_PART);');
+      restored = replaceOnce(restored, 'focusEditor = true;', 'focusEditor = hadPanelFocus;');
+      contents = replaceOnce(contents, method, restored);
+    }
     if (path === join(upstream, 'src/vs/workbench/contrib/webview/common/webview.ts')) {
       // 允许根中的 HTTP 扩展文件也走原隔离 Worker；第三方 URL 保留直接加载语义。
       contents = replaceOnce(contents, 'export function asWebviewUri(resource: URI, remoteInfo?: WebviewRemoteInfo): URI {',

@@ -9,6 +9,7 @@ import type { IStorageService } from '../upstream/src/vs/platform/storage/common
 import type { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
 import type { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { workspaceContext } from '../src/workspaceContext.js';
+import { pinnedUpstreamCommit, sourceTransform } from './sourceTransform.mjs';
 
 interface PanelOwner { dispose(): void }
 type PanelConstructor = new (panes: IPaneCompositePartService, layout: IWorkbenchLayoutService, storage: IStorageService,
@@ -194,4 +195,54 @@ test('释放 owner 后迟到恢复不再展开深链接', async () => {
   await fixture.settle();
   expect(fixture.openView).not.toHaveBeenCalled();
   expect(fixture.setPartHidden).not.toHaveBeenCalled();
+});
+
+// 执行正式构建使用的原 Layout 方法；焦点必须在 Grid 隐藏 DOM 前读取。
+const workbenchRoot = resolve(process.cwd(), 'src/clients/workbench');
+const layoutPath = resolve(workbenchRoot, 'upstream/src/vs/workbench/browser/layout.ts');
+const layoutSource = await sourceTransform(workbenchRoot, { commit: pinnedUpstreamCommit }, [])(layoutPath, await readFile(layoutPath, 'utf8'));
+const layoutAst = ts.createSourceFile(layoutPath, layoutSource, ts.ScriptTarget.Latest, true);
+const layoutMethod = layoutAst.statements.filter(ts.isClassDeclaration).flatMap(node => node.members)
+  .find(node => ts.isMethodDeclaration(node) && node.name.getText(layoutAst) === 'setPanelHidden');
+if (!layoutMethod) throw new Error('正式转换后的 Layout 缺少 setPanelHidden');
+const layoutJs = ts.transpileModule(`class PanelLayout { ${layoutMethod.getText(layoutAst)} }`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2024, module: ts.ModuleKind.None },
+}).outputText;
+
+test.each([
+  { origin: 'Quick Input', panelFocus: false, ios: false, auxiliaryMaximized: false, focused: 0 },
+  { origin: '底部面板', panelFocus: true, ios: false, auxiliaryMaximized: false, focused: 1 },
+  { origin: '最大化底部面板', panelFocus: true, panelMaximized: true, ios: false, auxiliaryMaximized: false, focused: 1 },
+  { origin: '最大化面板外的 Quick Input', panelFocus: false, panelMaximized: true, ios: false, auxiliaryMaximized: false, focused: 0 },
+  { origin: 'iOS 底部面板', panelFocus: true, ios: true, auxiliaryMaximized: false, focused: 0 },
+  { origin: '最大化右侧区域', panelFocus: true, ios: false, auxiliaryMaximized: true, focused: 0 },
+])('原生隐藏面板仅交回面板自身焦点：$origin', ({ panelFocus, panelMaximized = false, ios, auxiliaryMaximized, focused }) => {
+  const parts = { PANEL_PART: 'panel' };
+  const keys = { PANEL_HIDDEN: 'hidden', PANEL_WAS_LAST_MAXIMIZED: 'maximized' };
+  const hide = new Function('Parts', 'LayoutStateKeys', 'LayoutClasses', 'ViewContainerLocation', 'isIOS',
+    `${layoutJs}\nreturn PanelLayout.prototype.setPanelHidden;`)(parts, keys, { PANEL_HIDDEN: 'hidden' }, { Panel: 1 }, ios) as (hidden: boolean) => void;
+  let hasFocus = panelFocus;
+  let visible = true;
+  const focus = mock(() => {});
+  const hideActive = mock(() => {});
+  const runtime = new Map<string, boolean>();
+  const layout = {
+    workbenchGrid: { setViewVisible: (_view: object, shown: boolean) => { visible = shown; hasFocus = false; } },
+    panelPartView: {},
+    hasFocus: () => hasFocus,
+    isVisible: () => visible,
+    isPanelMaximized: () => panelMaximized,
+    toggleMaximizedPanel: () => { hasFocus = false; },
+    isAuxiliaryBarMaximized: () => auxiliaryMaximized,
+    stateModel: { setRuntimeValue: (key: string, value: boolean) => runtime.set(key, value) },
+    panelOpensMaximized: () => false,
+    mainContainer: { classList: { add() {}, remove() {} } },
+    paneCompositeService: { getActivePaneComposite: () => ({}), hideActivePaneComposite: hideActive },
+    editorGroupService: { mainPart: { activeGroup: { focus } } },
+  };
+  hide.call(layout, true);
+  expect(visible).toBe(false);
+  expect(runtime.get('hidden')).toBe(true);
+  expect(hideActive).toHaveBeenCalledTimes(1);
+  expect(focus).toHaveBeenCalledTimes(focused);
 });

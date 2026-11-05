@@ -120,6 +120,16 @@ export async function verifyViewNavigation({ page, command, owner, result }) {
     await command('workbench.action.quickOpen', `view ${label}`);
     // 单视图容器与同名视图都由原 Provider 提供，二者均聚焦相同产品视图。
     await view(label).click();
+    if (kind === 'mcp') {
+      // MCP 已迁到原生列表，仍须核对当前工作区 owner 的实际读取。
+      const list = page.locator('.part.panel .mcp-servers-list');
+      // 原 updateBody 在空目录时隐藏列表，展示同一视图的明确空状态。
+      await expect(list).toHaveClass(/\bhidden\b/);
+      await expect(page.locator('.part.panel .message-container .message').filter({ visible: true })).toHaveText('No MCP Servers found.');
+      expect(result.mcpReads.some(read => read.gatewayId === owner.gatewayId && read.workspaceId === owner.workspaceId)).toBe(true);
+      visited.push(kind);
+      continue;
+    }
     const panel = page.locator('.part.panel').locator(`.native-workspace-panel[data-panel-kind="${kind}"][data-workspace-id="${owner.workspaceId}"]`);
     await expect(panel).toBeVisible();
     const content = panel.locator('.native-workspace-panel-content:not([hidden])');

@@ -924,3 +924,9 @@
 - 原 Gateway 错误出口将四个既有 invalid／stale 请求日志和 Trace 游标代码标为可重新查询；保留原 owner、code、reason、HTTP状态、输入cursor及零交付计数。原客户端继续查询携原cursor，失败重新查询只选原分支并省略已拒绝cursor，不新增解析器、DTO或分类链。
 - 43项传输、40项原owner／API、55项调度／输出／Service及26项真实Chromium组件合同通过；共享树43项补验、Ruff和ESM检查通过。组件核scope／类别／查询保持与命令URI／HTML只作文字；SSE和宿主边界为显式装具。真实Trace经执行／fork／Gateway页面定位及SDK失效cursor检查1项通过。正式构建通过；49宿主类型检查保留完整归档基线两错，Python测试旧32条诊断与基线相同，未宣称全绿。
 - 真实请求日志停在原Quick Input整体隐藏后的焦点断言，新retryable断言尚未到达；未放宽焦点或业务断言，正独立取证。16.18整项保持未勾。完整原件 `out/tests/temp/2026/11/05/search_error_contract/artifacts/verification-008.json`；根集成与精确归属 `root-integration-009.json`（SHA256 `9e1dc2350daf53c070a0bd379df882391459c7d730e7fd0eef986d33de823288`）。
+
+### 2026-11-05：原面板恢复焦点与编辑器导航回归（14.2 部分）
+
+- 同步失焦调用栈确认：保存为closed的面板先由原服务恢复标签，再隐藏时原Layout无条件聚焦编辑器，Quick Input随后因失焦关闭。唯一sourceTransform在隐藏／取消最大化前捕获面板焦点，仅交回面板自身的焦点；不改固定上游、不添加焦点补偿或第二状态。原标签／尺寸、路由代际和显式MCP深链接保持。
+- 原完整更改／来源浏览器场景通过，真实dirty关闭按钮、不保存确认、两组Diff／MRU、关闭一个副本、文本符号及六类工作区视图均通过；MCP测试迁到原生列表的明确空状态，同时核实际Gateway／工作区头。16项定向检查覆盖面板、外部Quick Input、面板自身最大化、iOS和右侧区域最大化；完整类型与正式Web构建通过。
+- 命令、原始失焦栈、源码指纹和产品证据见 `out/tests/temp/2026/11/05/model_sharing/artifacts/verification-004.json`。同批独立语言测试失败已分开记录，不宣称整批全绿；14.2其余IME、失焦设置等场景保持待验收。缓存模型完整证据归独立变更18.2，不在此重复勾选。

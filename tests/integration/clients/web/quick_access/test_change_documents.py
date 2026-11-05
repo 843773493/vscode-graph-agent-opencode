@@ -72,7 +72,7 @@ async def test_diff_and_source_models_share_references_and_restore(
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         result = json.loads(result_path.read_text())
         for key in ("singleDiffRead", "splitShared", "readonly", "patch", "legacyMigrated", "diffRestored", "sourceRestored", "lastCloseRereads",
-                    "editorGroupAndMru", "editorDirtyClose", "editorCloseIsolated", "textSymbolsAfterThread"):
+                    "sourceSplitShared", "editorGroupAndMru", "editorDirtyClose", "editorCloseIsolated", "textSymbolsAfterThread"):
             assert result[key], key
         assert result["pageErrors"] == []
         assert result["existingWorkspaceViews"] == ["terminal", "output", "automation", "ports", "mcp", "browser"]
