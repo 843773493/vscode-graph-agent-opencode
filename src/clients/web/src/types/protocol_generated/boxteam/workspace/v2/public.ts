@@ -713,6 +713,110 @@ export interface McpAuthorizationResponseDTO {
   protocol_version: number;
 }
 
+/** 原生安装域与工作区配置范围分别表达；route 和进程 generation 不属于安装身份。 */
+export interface McpInstallationTargetDTO {
+  kind: string;
+  gateway_id: string;
+  backend_id: string;
+}
+
+/** definition 仅供明确手动来源；目录来源由目标读取原始 manifest，不消费展示 DTO。 */
+export interface McpCandidateSourceDTO {
+  kind: string;
+  name: string;
+  version: string;
+  endpoint?: string | undefined;
+  protocol?: string | undefined;
+  entry_url?: string | undefined;
+  entry_id?: string | undefined;
+  definition?: { [key: string]: any } | undefined;
+}
+
+export interface McpCandidateProvenanceDTO {
+  kind: string;
+  name: string;
+  version: string;
+  endpoint?: string | undefined;
+  protocol?: string | undefined;
+  entry_url?: string | undefined;
+  entry_id?: string | undefined;
+}
+
+export interface McpTargetPlatformDTO {
+  operating_system: string;
+  architecture: string;
+}
+
+/** ordinal 仅在同一完整 manifest digest 内有效，不能按类型或名称重新择首项。 */
+export interface McpCandidateVariantRefDTO {
+  kind: string;
+  index: number;
+  digest: string;
+}
+
+export interface McpCandidateVariantDTO {
+  ref: McpCandidateVariantRefDTO | undefined;
+  transport: string;
+  registry_type?: string | undefined;
+  identifier?: string | undefined;
+  version?: string | undefined;
+}
+
+export interface McpCandidateInspectRequestDTO {
+  target: McpInstallationTargetDTO | undefined;
+  source: McpCandidateSourceDTO | undefined;
+}
+
+export interface McpCandidateInspectDTO {
+  source: McpCandidateProvenanceDTO | undefined;
+  manifest_digest: string;
+  platform: McpTargetPlatformDTO | undefined;
+  variants: McpCandidateVariantDTO[];
+}
+
+export interface McpCandidatePlanRequestDTO {
+  target: McpInstallationTargetDTO | undefined;
+  source: McpCandidateSourceDTO | undefined;
+  manifest_digest: string;
+  variant: McpCandidateVariantRefDTO | undefined;
+  inputs: { [key: string]: any } | undefined;
+}
+
+/** 此计划不代表安装或配置成功；parameters 是脱敏展示，消费时重新校验原始请求。 */
+export interface McpCandidatePlanDTO {
+  source: McpCandidateProvenanceDTO | undefined;
+  manifest_digest: string;
+  variant: McpCandidateVariantRefDTO | undefined;
+  platform: McpTargetPlatformDTO | undefined;
+  plan_digest: string;
+  disposition: string;
+  download_required: boolean;
+  parameters: { [key: string]: any } | undefined;
+}
+
+export interface McpCandidatePlanValidationRequestDTO {
+  candidate: McpCandidatePlanRequestDTO | undefined;
+  plan_digest: string;
+}
+
+export interface McpCandidateInspectResponseDTO {
+  code: number;
+  message: string;
+  data: McpCandidateInspectDTO | undefined;
+  request_id: string;
+  target: McpInstallationTargetDTO | undefined;
+  protocol_version: number;
+}
+
+export interface McpCandidatePlanResponseDTO {
+  code: number;
+  message: string;
+  data: McpCandidatePlanDTO | undefined;
+  request_id: string;
+  target: McpInstallationTargetDTO | undefined;
+  protocol_version: number;
+}
+
 export interface MessageCreateRequest {
   role?: string | undefined;
   content: string;
@@ -8087,6 +8191,691 @@ export const McpAuthorizationResponseDTO: MessageFns<McpAuthorizationResponseDTO
     message.request_id = object.request_id ?? "";
     message.target = (object.target !== undefined && object.target !== null)
       ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
+    return message;
+  },
+};
+
+function createBaseMcpInstallationTargetDTO(): McpInstallationTargetDTO {
+  return { kind: "", gateway_id: "", backend_id: "" };
+}
+
+export const McpInstallationTargetDTO: MessageFns<McpInstallationTargetDTO> = {
+  fromJSON(object: any): McpInstallationTargetDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      backend_id: isSet(object.backend_id) ? globalThis.String(object.backend_id) : "",
+    };
+  },
+
+  toJSON(message: McpInstallationTargetDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.backend_id !== "") {
+      obj.backend_id = message.backend_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpInstallationTargetDTO>, I>>(base?: I): McpInstallationTargetDTO {
+    return McpInstallationTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpInstallationTargetDTO>, I>>(object: I): McpInstallationTargetDTO {
+    const message = createBaseMcpInstallationTargetDTO();
+    message.kind = object.kind ?? "";
+    message.gateway_id = object.gateway_id ?? "";
+    message.backend_id = object.backend_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpCandidateSourceDTO(): McpCandidateSourceDTO {
+  return {
+    kind: "",
+    name: "",
+    version: "",
+    endpoint: undefined,
+    protocol: undefined,
+    entry_url: undefined,
+    entry_id: undefined,
+    definition: undefined,
+  };
+}
+
+export const McpCandidateSourceDTO: MessageFns<McpCandidateSourceDTO> = {
+  fromJSON(object: any): McpCandidateSourceDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      endpoint: isSet(object.endpoint) ? globalThis.String(object.endpoint) : undefined,
+      protocol: isSet(object.protocol) ? globalThis.String(object.protocol) : undefined,
+      entry_url: isSet(object.entry_url) ? globalThis.String(object.entry_url) : undefined,
+      entry_id: isSet(object.entry_id) ? globalThis.String(object.entry_id) : undefined,
+      definition: isObject(object.definition) ? object.definition : undefined,
+    };
+  },
+
+  toJSON(message: McpCandidateSourceDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.endpoint !== undefined) {
+      obj.endpoint = message.endpoint;
+    }
+    if (message.protocol !== undefined) {
+      obj.protocol = message.protocol;
+    }
+    if (message.entry_url !== undefined) {
+      obj.entry_url = message.entry_url;
+    }
+    if (message.entry_id !== undefined) {
+      obj.entry_id = message.entry_id;
+    }
+    if (message.definition !== undefined) {
+      obj.definition = message.definition;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateSourceDTO>, I>>(base?: I): McpCandidateSourceDTO {
+    return McpCandidateSourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateSourceDTO>, I>>(object: I): McpCandidateSourceDTO {
+    const message = createBaseMcpCandidateSourceDTO();
+    message.kind = object.kind ?? "";
+    message.name = object.name ?? "";
+    message.version = object.version ?? "";
+    message.endpoint = object.endpoint ?? undefined;
+    message.protocol = object.protocol ?? undefined;
+    message.entry_url = object.entry_url ?? undefined;
+    message.entry_id = object.entry_id ?? undefined;
+    message.definition = object.definition ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpCandidateProvenanceDTO(): McpCandidateProvenanceDTO {
+  return {
+    kind: "",
+    name: "",
+    version: "",
+    endpoint: undefined,
+    protocol: undefined,
+    entry_url: undefined,
+    entry_id: undefined,
+  };
+}
+
+export const McpCandidateProvenanceDTO: MessageFns<McpCandidateProvenanceDTO> = {
+  fromJSON(object: any): McpCandidateProvenanceDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      version: isSet(object.version) ? globalThis.String(object.version) : "",
+      endpoint: isSet(object.endpoint) ? globalThis.String(object.endpoint) : undefined,
+      protocol: isSet(object.protocol) ? globalThis.String(object.protocol) : undefined,
+      entry_url: isSet(object.entry_url) ? globalThis.String(object.entry_url) : undefined,
+      entry_id: isSet(object.entry_id) ? globalThis.String(object.entry_id) : undefined,
+    };
+  },
+
+  toJSON(message: McpCandidateProvenanceDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.version !== "") {
+      obj.version = message.version;
+    }
+    if (message.endpoint !== undefined) {
+      obj.endpoint = message.endpoint;
+    }
+    if (message.protocol !== undefined) {
+      obj.protocol = message.protocol;
+    }
+    if (message.entry_url !== undefined) {
+      obj.entry_url = message.entry_url;
+    }
+    if (message.entry_id !== undefined) {
+      obj.entry_id = message.entry_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateProvenanceDTO>, I>>(base?: I): McpCandidateProvenanceDTO {
+    return McpCandidateProvenanceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateProvenanceDTO>, I>>(object: I): McpCandidateProvenanceDTO {
+    const message = createBaseMcpCandidateProvenanceDTO();
+    message.kind = object.kind ?? "";
+    message.name = object.name ?? "";
+    message.version = object.version ?? "";
+    message.endpoint = object.endpoint ?? undefined;
+    message.protocol = object.protocol ?? undefined;
+    message.entry_url = object.entry_url ?? undefined;
+    message.entry_id = object.entry_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpTargetPlatformDTO(): McpTargetPlatformDTO {
+  return { operating_system: "", architecture: "" };
+}
+
+export const McpTargetPlatformDTO: MessageFns<McpTargetPlatformDTO> = {
+  fromJSON(object: any): McpTargetPlatformDTO {
+    return {
+      operating_system: isSet(object.operating_system) ? globalThis.String(object.operating_system) : "",
+      architecture: isSet(object.architecture) ? globalThis.String(object.architecture) : "",
+    };
+  },
+
+  toJSON(message: McpTargetPlatformDTO): unknown {
+    const obj: any = {};
+    if (message.operating_system !== "") {
+      obj.operating_system = message.operating_system;
+    }
+    if (message.architecture !== "") {
+      obj.architecture = message.architecture;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpTargetPlatformDTO>, I>>(base?: I): McpTargetPlatformDTO {
+    return McpTargetPlatformDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpTargetPlatformDTO>, I>>(object: I): McpTargetPlatformDTO {
+    const message = createBaseMcpTargetPlatformDTO();
+    message.operating_system = object.operating_system ?? "";
+    message.architecture = object.architecture ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpCandidateVariantRefDTO(): McpCandidateVariantRefDTO {
+  return { kind: "", index: 0, digest: "" };
+}
+
+export const McpCandidateVariantRefDTO: MessageFns<McpCandidateVariantRefDTO> = {
+  fromJSON(object: any): McpCandidateVariantRefDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      index: isSet(object.index) ? globalThis.Number(object.index) : 0,
+      digest: isSet(object.digest) ? globalThis.String(object.digest) : "",
+    };
+  },
+
+  toJSON(message: McpCandidateVariantRefDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.index !== 0) {
+      obj.index = Math.round(message.index);
+    }
+    if (message.digest !== "") {
+      obj.digest = message.digest;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateVariantRefDTO>, I>>(base?: I): McpCandidateVariantRefDTO {
+    return McpCandidateVariantRefDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateVariantRefDTO>, I>>(object: I): McpCandidateVariantRefDTO {
+    const message = createBaseMcpCandidateVariantRefDTO();
+    message.kind = object.kind ?? "";
+    message.index = object.index ?? 0;
+    message.digest = object.digest ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpCandidateVariantDTO(): McpCandidateVariantDTO {
+  return { ref: undefined, transport: "", registry_type: undefined, identifier: undefined, version: undefined };
+}
+
+export const McpCandidateVariantDTO: MessageFns<McpCandidateVariantDTO> = {
+  fromJSON(object: any): McpCandidateVariantDTO {
+    return {
+      ref: isSet(object.ref) ? McpCandidateVariantRefDTO.fromJSON(object.ref) : undefined,
+      transport: isSet(object.transport) ? globalThis.String(object.transport) : "",
+      registry_type: isSet(object.registry_type) ? globalThis.String(object.registry_type) : undefined,
+      identifier: isSet(object.identifier) ? globalThis.String(object.identifier) : undefined,
+      version: isSet(object.version) ? globalThis.String(object.version) : undefined,
+    };
+  },
+
+  toJSON(message: McpCandidateVariantDTO): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = McpCandidateVariantRefDTO.toJSON(message.ref);
+    }
+    if (message.transport !== "") {
+      obj.transport = message.transport;
+    }
+    if (message.registry_type !== undefined) {
+      obj.registry_type = message.registry_type;
+    }
+    if (message.identifier !== undefined) {
+      obj.identifier = message.identifier;
+    }
+    if (message.version !== undefined) {
+      obj.version = message.version;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateVariantDTO>, I>>(base?: I): McpCandidateVariantDTO {
+    return McpCandidateVariantDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateVariantDTO>, I>>(object: I): McpCandidateVariantDTO {
+    const message = createBaseMcpCandidateVariantDTO();
+    message.ref = (object.ref !== undefined && object.ref !== null)
+      ? McpCandidateVariantRefDTO.fromPartial(object.ref)
+      : undefined;
+    message.transport = object.transport ?? "";
+    message.registry_type = object.registry_type ?? undefined;
+    message.identifier = object.identifier ?? undefined;
+    message.version = object.version ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpCandidateInspectRequestDTO(): McpCandidateInspectRequestDTO {
+  return { target: undefined, source: undefined };
+}
+
+export const McpCandidateInspectRequestDTO: MessageFns<McpCandidateInspectRequestDTO> = {
+  fromJSON(object: any): McpCandidateInspectRequestDTO {
+    return {
+      target: isSet(object.target) ? McpInstallationTargetDTO.fromJSON(object.target) : undefined,
+      source: isSet(object.source) ? McpCandidateSourceDTO.fromJSON(object.source) : undefined,
+    };
+  },
+
+  toJSON(message: McpCandidateInspectRequestDTO): unknown {
+    const obj: any = {};
+    if (message.target !== undefined) {
+      obj.target = McpInstallationTargetDTO.toJSON(message.target);
+    }
+    if (message.source !== undefined) {
+      obj.source = McpCandidateSourceDTO.toJSON(message.source);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateInspectRequestDTO>, I>>(base?: I): McpCandidateInspectRequestDTO {
+    return McpCandidateInspectRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateInspectRequestDTO>, I>>(
+    object: I,
+  ): McpCandidateInspectRequestDTO {
+    const message = createBaseMcpCandidateInspectRequestDTO();
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpInstallationTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.source = (object.source !== undefined && object.source !== null)
+      ? McpCandidateSourceDTO.fromPartial(object.source)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseMcpCandidateInspectDTO(): McpCandidateInspectDTO {
+  return { source: undefined, manifest_digest: "", platform: undefined, variants: [] };
+}
+
+export const McpCandidateInspectDTO: MessageFns<McpCandidateInspectDTO> = {
+  fromJSON(object: any): McpCandidateInspectDTO {
+    return {
+      source: isSet(object.source) ? McpCandidateProvenanceDTO.fromJSON(object.source) : undefined,
+      manifest_digest: isSet(object.manifest_digest) ? globalThis.String(object.manifest_digest) : "",
+      platform: isSet(object.platform) ? McpTargetPlatformDTO.fromJSON(object.platform) : undefined,
+      variants: globalThis.Array.isArray(object?.variants)
+        ? object.variants.map((e: any) => McpCandidateVariantDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: McpCandidateInspectDTO): unknown {
+    const obj: any = {};
+    if (message.source !== undefined) {
+      obj.source = McpCandidateProvenanceDTO.toJSON(message.source);
+    }
+    if (message.manifest_digest !== "") {
+      obj.manifest_digest = message.manifest_digest;
+    }
+    if (message.platform !== undefined) {
+      obj.platform = McpTargetPlatformDTO.toJSON(message.platform);
+    }
+    if (message.variants?.length) {
+      obj.variants = message.variants.map((e) => McpCandidateVariantDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateInspectDTO>, I>>(base?: I): McpCandidateInspectDTO {
+    return McpCandidateInspectDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateInspectDTO>, I>>(object: I): McpCandidateInspectDTO {
+    const message = createBaseMcpCandidateInspectDTO();
+    message.source = (object.source !== undefined && object.source !== null)
+      ? McpCandidateProvenanceDTO.fromPartial(object.source)
+      : undefined;
+    message.manifest_digest = object.manifest_digest ?? "";
+    message.platform = (object.platform !== undefined && object.platform !== null)
+      ? McpTargetPlatformDTO.fromPartial(object.platform)
+      : undefined;
+    message.variants = object.variants?.map((e) => McpCandidateVariantDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseMcpCandidatePlanRequestDTO(): McpCandidatePlanRequestDTO {
+  return { target: undefined, source: undefined, manifest_digest: "", variant: undefined, inputs: undefined };
+}
+
+export const McpCandidatePlanRequestDTO: MessageFns<McpCandidatePlanRequestDTO> = {
+  fromJSON(object: any): McpCandidatePlanRequestDTO {
+    return {
+      target: isSet(object.target) ? McpInstallationTargetDTO.fromJSON(object.target) : undefined,
+      source: isSet(object.source) ? McpCandidateSourceDTO.fromJSON(object.source) : undefined,
+      manifest_digest: isSet(object.manifest_digest) ? globalThis.String(object.manifest_digest) : "",
+      variant: isSet(object.variant) ? McpCandidateVariantRefDTO.fromJSON(object.variant) : undefined,
+      inputs: isObject(object.inputs) ? object.inputs : undefined,
+    };
+  },
+
+  toJSON(message: McpCandidatePlanRequestDTO): unknown {
+    const obj: any = {};
+    if (message.target !== undefined) {
+      obj.target = McpInstallationTargetDTO.toJSON(message.target);
+    }
+    if (message.source !== undefined) {
+      obj.source = McpCandidateSourceDTO.toJSON(message.source);
+    }
+    if (message.manifest_digest !== "") {
+      obj.manifest_digest = message.manifest_digest;
+    }
+    if (message.variant !== undefined) {
+      obj.variant = McpCandidateVariantRefDTO.toJSON(message.variant);
+    }
+    if (message.inputs !== undefined) {
+      obj.inputs = message.inputs;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidatePlanRequestDTO>, I>>(base?: I): McpCandidatePlanRequestDTO {
+    return McpCandidatePlanRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidatePlanRequestDTO>, I>>(object: I): McpCandidatePlanRequestDTO {
+    const message = createBaseMcpCandidatePlanRequestDTO();
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpInstallationTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.source = (object.source !== undefined && object.source !== null)
+      ? McpCandidateSourceDTO.fromPartial(object.source)
+      : undefined;
+    message.manifest_digest = object.manifest_digest ?? "";
+    message.variant = (object.variant !== undefined && object.variant !== null)
+      ? McpCandidateVariantRefDTO.fromPartial(object.variant)
+      : undefined;
+    message.inputs = object.inputs ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpCandidatePlanDTO(): McpCandidatePlanDTO {
+  return {
+    source: undefined,
+    manifest_digest: "",
+    variant: undefined,
+    platform: undefined,
+    plan_digest: "",
+    disposition: "",
+    download_required: false,
+    parameters: undefined,
+  };
+}
+
+export const McpCandidatePlanDTO: MessageFns<McpCandidatePlanDTO> = {
+  fromJSON(object: any): McpCandidatePlanDTO {
+    return {
+      source: isSet(object.source) ? McpCandidateProvenanceDTO.fromJSON(object.source) : undefined,
+      manifest_digest: isSet(object.manifest_digest) ? globalThis.String(object.manifest_digest) : "",
+      variant: isSet(object.variant) ? McpCandidateVariantRefDTO.fromJSON(object.variant) : undefined,
+      platform: isSet(object.platform) ? McpTargetPlatformDTO.fromJSON(object.platform) : undefined,
+      plan_digest: isSet(object.plan_digest) ? globalThis.String(object.plan_digest) : "",
+      disposition: isSet(object.disposition) ? globalThis.String(object.disposition) : "",
+      download_required: isSet(object.download_required) ? globalThis.Boolean(object.download_required) : false,
+      parameters: isObject(object.parameters) ? object.parameters : undefined,
+    };
+  },
+
+  toJSON(message: McpCandidatePlanDTO): unknown {
+    const obj: any = {};
+    if (message.source !== undefined) {
+      obj.source = McpCandidateProvenanceDTO.toJSON(message.source);
+    }
+    if (message.manifest_digest !== "") {
+      obj.manifest_digest = message.manifest_digest;
+    }
+    if (message.variant !== undefined) {
+      obj.variant = McpCandidateVariantRefDTO.toJSON(message.variant);
+    }
+    if (message.platform !== undefined) {
+      obj.platform = McpTargetPlatformDTO.toJSON(message.platform);
+    }
+    if (message.plan_digest !== "") {
+      obj.plan_digest = message.plan_digest;
+    }
+    if (message.disposition !== "") {
+      obj.disposition = message.disposition;
+    }
+    if (message.download_required !== false) {
+      obj.download_required = message.download_required;
+    }
+    if (message.parameters !== undefined) {
+      obj.parameters = message.parameters;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidatePlanDTO>, I>>(base?: I): McpCandidatePlanDTO {
+    return McpCandidatePlanDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidatePlanDTO>, I>>(object: I): McpCandidatePlanDTO {
+    const message = createBaseMcpCandidatePlanDTO();
+    message.source = (object.source !== undefined && object.source !== null)
+      ? McpCandidateProvenanceDTO.fromPartial(object.source)
+      : undefined;
+    message.manifest_digest = object.manifest_digest ?? "";
+    message.variant = (object.variant !== undefined && object.variant !== null)
+      ? McpCandidateVariantRefDTO.fromPartial(object.variant)
+      : undefined;
+    message.platform = (object.platform !== undefined && object.platform !== null)
+      ? McpTargetPlatformDTO.fromPartial(object.platform)
+      : undefined;
+    message.plan_digest = object.plan_digest ?? "";
+    message.disposition = object.disposition ?? "";
+    message.download_required = object.download_required ?? false;
+    message.parameters = object.parameters ?? undefined;
+    return message;
+  },
+};
+
+function createBaseMcpCandidatePlanValidationRequestDTO(): McpCandidatePlanValidationRequestDTO {
+  return { candidate: undefined, plan_digest: "" };
+}
+
+export const McpCandidatePlanValidationRequestDTO: MessageFns<McpCandidatePlanValidationRequestDTO> = {
+  fromJSON(object: any): McpCandidatePlanValidationRequestDTO {
+    return {
+      candidate: isSet(object.candidate) ? McpCandidatePlanRequestDTO.fromJSON(object.candidate) : undefined,
+      plan_digest: isSet(object.plan_digest) ? globalThis.String(object.plan_digest) : "",
+    };
+  },
+
+  toJSON(message: McpCandidatePlanValidationRequestDTO): unknown {
+    const obj: any = {};
+    if (message.candidate !== undefined) {
+      obj.candidate = McpCandidatePlanRequestDTO.toJSON(message.candidate);
+    }
+    if (message.plan_digest !== "") {
+      obj.plan_digest = message.plan_digest;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidatePlanValidationRequestDTO>, I>>(
+    base?: I,
+  ): McpCandidatePlanValidationRequestDTO {
+    return McpCandidatePlanValidationRequestDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidatePlanValidationRequestDTO>, I>>(
+    object: I,
+  ): McpCandidatePlanValidationRequestDTO {
+    const message = createBaseMcpCandidatePlanValidationRequestDTO();
+    message.candidate = (object.candidate !== undefined && object.candidate !== null)
+      ? McpCandidatePlanRequestDTO.fromPartial(object.candidate)
+      : undefined;
+    message.plan_digest = object.plan_digest ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpCandidateInspectResponseDTO(): McpCandidateInspectResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpCandidateInspectResponseDTO: MessageFns<McpCandidateInspectResponseDTO> = {
+  fromJSON(object: any): McpCandidateInspectResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? McpCandidateInspectDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpInstallationTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpCandidateInspectResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = McpCandidateInspectDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpInstallationTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidateInspectResponseDTO>, I>>(base?: I): McpCandidateInspectResponseDTO {
+    return McpCandidateInspectResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidateInspectResponseDTO>, I>>(
+    object: I,
+  ): McpCandidateInspectResponseDTO {
+    const message = createBaseMcpCandidateInspectResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? McpCandidateInspectDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpInstallationTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
+    return message;
+  },
+};
+
+function createBaseMcpCandidatePlanResponseDTO(): McpCandidatePlanResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpCandidatePlanResponseDTO: MessageFns<McpCandidatePlanResponseDTO> = {
+  fromJSON(object: any): McpCandidatePlanResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? McpCandidatePlanDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpInstallationTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpCandidatePlanResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = McpCandidatePlanDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpInstallationTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpCandidatePlanResponseDTO>, I>>(base?: I): McpCandidatePlanResponseDTO {
+    return McpCandidatePlanResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpCandidatePlanResponseDTO>, I>>(object: I): McpCandidatePlanResponseDTO {
+    const message = createBaseMcpCandidatePlanResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? McpCandidatePlanDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpInstallationTargetDTO.fromPartial(object.target)
       : undefined;
     message.protocol_version = object.protocol_version ?? 0;
     return message;

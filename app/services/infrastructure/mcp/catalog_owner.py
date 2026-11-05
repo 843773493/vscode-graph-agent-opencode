@@ -35,12 +35,28 @@ from app.agents.policy.tool_capability import metadata_for_tool
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.mcp_candidates import (
+    McpCandidateConflict,
+    McpCandidateManifest,
+    candidate_parameters,
+    parse_candidate_manifest,
+)
 from app.schemas.internal_v2.config import McpCleanupDTO
+from app.schemas.internal_v2.mcp import (
+    McpCandidateInspectDTO,
+    McpCandidateInspectRequestDTO,
+    McpCandidatePlanDTO,
+    McpCandidatePlanRequestDTO,
+    McpCandidatePlanValidationRequestDTO,
+    McpCandidateProvenanceDTO,
+    McpInstallationTargetDTO,
+)
 from app.services.infrastructure.config.contracts import (
     ConfigApplyRecorder,
     ConfigPublication,
 )
+from app.services.infrastructure.config.source_document import redact_source_payload
 from app.services.infrastructure.events.channel_events import (
     McpCatalogEventPublisher,
     ResourceStateEventPublisher,
@@ -48,6 +64,10 @@ from app.services.infrastructure.events.channel_events import (
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.mcp.candidate_source import (
+    native_mcp_platform,
+    read_candidate_source,
 )
 from app.services.infrastructure.mcp.config import (
     McpServerConfig,
@@ -533,6 +553,65 @@ class McpCatalogOwner:
             if extension_schema_hash(export_model_tool_json_schema(active.tool)) != binding.schema_hash:
                 return f"sealed target 与原连接当前参数 schema 不一致: {binding.target_id}"
             return None
+
+    async def _installation_candidate(
+        self, request: McpCandidateInspectRequestDTO, actual_target: McpInstallationTargetDTO,
+    ) -> tuple[McpCandidateManifest, McpCandidateProvenanceDTO]:
+        if request.target != actual_target:
+            raise McpCandidateConflict("MCP 安装目标不属于当前原生 Gateway／Backend，不能改投当前工作区")
+        source = request.source
+        raw = await read_candidate_source(source)
+        manifest = parse_candidate_manifest(raw, kind=source.kind, protocol=source.protocol,
+            name=source.name, version=source.version, entry_id=source.entry_id)
+        provenance = McpCandidateProvenanceDTO(
+            kind=source.kind, name=source.name, version=source.version,
+            endpoint=source.endpoint.rstrip("/") if source.endpoint is not None else None,
+            protocol=source.protocol, entry_url=source.entry_url, entry_id=manifest.entry_id,
+        )
+        return manifest, provenance
+
+    async def inspect_installation_candidate(
+        self, request: McpCandidateInspectRequestDTO, *, actual_target: McpInstallationTargetDTO,
+    ) -> McpCandidateInspectDTO:
+        """只列出原件中的全部 variant；选择、安装、配置和连接分别发生。"""
+        manifest, provenance = await self._installation_candidate(request, actual_target)
+        return McpCandidateInspectDTO.model_validate({
+            "source": provenance, "manifest_digest": manifest.digest, "platform": native_mcp_platform(),
+            "variants": [variant.describe() for variant in manifest.variants],
+        })
+
+    async def prepare_installation_candidate(
+        self, request: McpCandidatePlanRequestDTO, *, actual_target: McpInstallationTargetDTO,
+    ) -> McpCandidatePlanDTO:
+        manifest, provenance = await self._installation_candidate(request, actual_target)
+        selected = request.variant
+        variant = manifest.select(request.manifest_digest, selected.kind, selected.index, selected.digest)
+        disposition, parameters = candidate_parameters(variant, request.inputs)
+        if disposition != "requires_artifact":
+            server, = parse_mcp_server_configs({"servers": {"candidate": parameters}}, workspace_root=self._workspace_root)
+            # 沿原配置 parser 在目标侧解析环境引用，不向浏览器泄露 env/headers 值。
+            parameters = dict(server.connection)
+            if server.oauth is not None:
+                parameters["oauth"] = {"redirect_uri": server.oauth.redirect_uri}
+        platform = native_mcp_platform()
+        fingerprint = {"target": actual_target.model_dump(), "source": provenance.model_dump(),
+                       "manifest_digest": manifest.digest, "variant": variant.ref(), "platform": platform.model_dump(),
+                       "disposition": disposition, "parameters": parameters}
+        redacted = redact_source_payload(parameters, ("mcp", "servers", "candidate"))
+        return McpCandidatePlanDTO.model_validate({
+            "source": provenance, "manifest_digest": manifest.digest, "variant": variant.ref(), "platform": platform,
+            "plan_digest": sha256_jcs(fingerprint), "disposition": disposition,
+            "download_required": disposition == "requires_artifact", "parameters": redacted,
+        })
+
+    async def validate_installation_candidate(
+        self, request: McpCandidatePlanValidationRequestDTO, *, actual_target: McpInstallationTargetDTO,
+    ) -> McpCandidatePlanDTO:
+        """消费前重读原来源；无计划账本、预览 token 或首项回退。"""
+        plan = await self.prepare_installation_candidate(request.candidate, actual_target=actual_target)
+        if plan.plan_digest != request.plan_digest:
+            raise McpCandidateConflict("MCP 候选的目标平台或参数已改变，必须重新生成计划")
+        return plan
 
     async def prepare_config(
         self, raw_config: object, scope: LifetimeScope, record_side_effect: ConfigApplyRecorder,

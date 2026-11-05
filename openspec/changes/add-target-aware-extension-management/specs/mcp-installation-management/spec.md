@@ -40,6 +40,8 @@
 
 计划 SHALL 绑定单一确切 variant；多个同类型候选、所选项消失、参数不支持或 manifest 基线变化时明确拒绝或重新选择，不能回退首项。当前 stdio／Streamable HTTP 支持范围必须真实公布，不把旧 SSE 冒充 Streamable HTTP。
 
+候选 SHALL 从显式 endpoint／协议／entry URL 读取完整原件，不把 Gallery 展示投影当安装 manifest，不探测其它协议或重定向换源。v0.1 envelope 的 registry official metadata SHALL 只从顶层 `_meta` 读取，发布者的 `server._meta` 不得冒充目录身份；来源没有稳定 ID 时保留缺省，以名称、精确版本、来源及完整 manifest digest 冻结，不合成 ID。variant SHALL 同时绑定原 ordinal 与内容 digest，消费前由原 MCP owner 重读来源并核目标原生平台、参数及计划 digest；候选生成和重验本身不下载包、不启动 MCP、不写配置或安装账本。
+
 #### Scenario: 安装一个无需包的 HTTP MCP
 - **WHEN** 用户从目录选择 HTTP 服务并为 A1 配置 endpoint
 - **THEN** 展示配置、授权和连接阶段，无虚假包下载；只有 A1 沿原配置与 MCP owner 接入，A2 不被启用
@@ -111,6 +113,8 @@ VSIX 定义 SHALL 绑定公开 extension ID、稳定目标／安装实例、host
 ### Requirement: MCP 安装与配置写入必须由原生目标授权
 
 目标发现／读取权限 MUST NOT 自动授予安装、进程执行或配置写入。远端原生 owner SHALL 最终校验对应管理能力，Relay 不提升权限、不直接修改远端业务文件。秘密 SHALL 留在实际消费端的私有存储，普通配置投影、日志、浏览器缓存与历史不得包含凭据值。
+
+候选 manifest 读取、确切 variant 规划、消费前重验和制品安装管理 SHALL 核原 policy 的 `mcp_installation_manage`，默认拒绝，仅精确绑定已认证主体的显式 allow 授权。普通 read、discovery、managed_workspace_admin 和配置读写均不代授；配置保存继续独立核 configuration_write，重启与宿主管理沿各自能力。无安装管理权限时，原生 Gateway SHALL 在访问 Backend 或目录来源前拒绝；Relay 不改用本机权限。
 
 现有 OAuth token store 不代表已具备通用 input secret 能力。系统 SHALL 在原 MCP 凭据／配置 owner 补齐工作区私有输入写入、引用 schema／API、连接端解析及版本合同，身份区分稳定 workspace、server、输入键／版本及服务来源／endpoint。值保存在该工作区 `.boxteam/credentials/`，不放目标共享制品区；未实现该能力前明确拒绝依赖它的新条目。旧明文输入和 OAuth 保持原合同，不能自动迁移或用遮罩覆盖原值。
 

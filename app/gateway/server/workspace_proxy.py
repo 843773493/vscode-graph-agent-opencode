@@ -105,15 +105,15 @@ def _is_streaming_workspace_path(path: str) -> bool:
     )
 
 
-def _is_configuration_path(path: str) -> bool:
-    """按上游最终路径识别两种配置 mount，编码不能绕过同一权限边界。"""
+def _workspace_path_segments(path: str) -> list[str]:
+    """两种 mount 共用实际路径分类，编码不能绕过管理权限边界。"""
     decoded = unquote(path)
     while decoded != path:
         path, decoded = decoded, unquote(decoded)
     segments = [segment for segment in decoded.split("/") if segment and segment != "."]
     if len(segments) >= 3 and segments[0] == "workspaces":
         segments = segments[2:]
-    return bool(segments) and segments[0] == "config"
+    return segments
 
 
 def _is_retryable_message_stream_availability(
@@ -397,13 +397,19 @@ async def _proxy_workspace_request(
             status_code=400,
             detail="bounded federation 禁止通过远程 Gateway 继续代理嵌套工作区",
         )
-    configuration_request = _is_configuration_path(path)
+    segments = _workspace_path_segments(path)
+    configuration_request = bool(segments) and segments[0] == "config"
+    installation_request = len(segments) >= 2 and segments[0] == "mcp" and segments[1] in {"candidate-manifests", "candidate-plans"}
     if configuration_request:
         if auth is None:
             raise RuntimeError("配置代理请求缺少已认证 Gateway 主体")
         require_federation_capability(request, auth, "configuration_read")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             require_federation_capability(request, auth, "configuration_write")
+    if installation_request:
+        if auth is None:
+            raise RuntimeError("MCP 安装候选请求缺少已认证 Gateway 主体")
+        require_federation_capability(request, auth, "mcp_installation_manage")
     client = _http_client(
         request,
         streaming=_is_streaming_workspace_path(path),
@@ -549,6 +555,9 @@ async def _proxy_workspace_request(
                 require_federation_capability(request, auth, "configuration_read")
                 if request.method not in {"GET", "HEAD", "OPTIONS"}:
                     require_federation_capability(request, auth, "configuration_write")
+            if installation_request:
+                assert auth is not None
+                require_federation_capability(request, auth, "mcp_installation_manage")
             try:
                 response = await send_upstream_request(client, forwarded)
                 if retry_availability:
@@ -609,13 +618,13 @@ async def _proxy_workspace_request(
                 detail=f"工作区 availability 请求未获得响应: {target_url}",
             )
         media_type = response.headers.get("content-type")
-        if configuration_request and not (media_type and "text/event-stream" in media_type):
+        if (configuration_request or installation_request) and not (media_type and "text/event-stream" in media_type):
             try:
                 body = await response.aread()
             finally:
                 await response.aclose()
             assert auth is not None
-            require_federation_capability(request, auth, "configuration_read")
+            require_federation_capability(request, auth, "configuration_read" if configuration_request else "mcp_installation_manage")
             return Response(content=body, status_code=response.status_code,
                             headers=_response_headers(response), media_type=media_type)
         if navigation_deadline_at is not None:

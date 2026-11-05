@@ -1206,6 +1206,180 @@ class McpAuthorizationResponseDTO(_message.Message):
     protocol_version: int
     def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Union[McpAuthorizationDTO, _Mapping]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpWorkspaceTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
 
+class McpInstallationTargetDTO(_message.Message):
+    __slots__ = ("kind", "gateway_id", "backend_id")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    gateway_id: str
+    backend_id: str
+    def __init__(self, kind: _Optional[str] = ..., gateway_id: _Optional[str] = ..., backend_id: _Optional[str] = ...) -> None: ...
+
+class McpCandidateSourceDTO(_message.Message):
+    __slots__ = ("kind", "name", "version", "endpoint", "protocol", "entry_url", "entry_id", "definition")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    ENDPOINT_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_FIELD_NUMBER: _ClassVar[int]
+    ENTRY_URL_FIELD_NUMBER: _ClassVar[int]
+    ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
+    DEFINITION_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    name: str
+    version: str
+    endpoint: str
+    protocol: str
+    entry_url: str
+    entry_id: str
+    definition: _struct_pb2.Struct
+    def __init__(self, kind: _Optional[str] = ..., name: _Optional[str] = ..., version: _Optional[str] = ..., endpoint: _Optional[str] = ..., protocol: _Optional[str] = ..., entry_url: _Optional[str] = ..., entry_id: _Optional[str] = ..., definition: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class McpCandidateProvenanceDTO(_message.Message):
+    __slots__ = ("kind", "name", "version", "endpoint", "protocol", "entry_url", "entry_id")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    ENDPOINT_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_FIELD_NUMBER: _ClassVar[int]
+    ENTRY_URL_FIELD_NUMBER: _ClassVar[int]
+    ENTRY_ID_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    name: str
+    version: str
+    endpoint: str
+    protocol: str
+    entry_url: str
+    entry_id: str
+    def __init__(self, kind: _Optional[str] = ..., name: _Optional[str] = ..., version: _Optional[str] = ..., endpoint: _Optional[str] = ..., protocol: _Optional[str] = ..., entry_url: _Optional[str] = ..., entry_id: _Optional[str] = ...) -> None: ...
+
+class McpTargetPlatformDTO(_message.Message):
+    __slots__ = ("operating_system", "architecture")
+    OPERATING_SYSTEM_FIELD_NUMBER: _ClassVar[int]
+    ARCHITECTURE_FIELD_NUMBER: _ClassVar[int]
+    operating_system: str
+    architecture: str
+    def __init__(self, operating_system: _Optional[str] = ..., architecture: _Optional[str] = ...) -> None: ...
+
+class McpCandidateVariantRefDTO(_message.Message):
+    __slots__ = ("kind", "index", "digest")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    INDEX_FIELD_NUMBER: _ClassVar[int]
+    DIGEST_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    index: int
+    digest: str
+    def __init__(self, kind: _Optional[str] = ..., index: _Optional[int] = ..., digest: _Optional[str] = ...) -> None: ...
+
+class McpCandidateVariantDTO(_message.Message):
+    __slots__ = ("ref", "transport", "registry_type", "identifier", "version")
+    REF_FIELD_NUMBER: _ClassVar[int]
+    TRANSPORT_FIELD_NUMBER: _ClassVar[int]
+    REGISTRY_TYPE_FIELD_NUMBER: _ClassVar[int]
+    IDENTIFIER_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    ref: McpCandidateVariantRefDTO
+    transport: str
+    registry_type: str
+    identifier: str
+    version: str
+    def __init__(self, ref: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., transport: _Optional[str] = ..., registry_type: _Optional[str] = ..., identifier: _Optional[str] = ..., version: _Optional[str] = ...) -> None: ...
+
+class McpCandidateInspectRequestDTO(_message.Message):
+    __slots__ = ("target", "source")
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    target: McpInstallationTargetDTO
+    source: McpCandidateSourceDTO
+    def __init__(self, target: _Optional[_Union[McpInstallationTargetDTO, _Mapping]] = ..., source: _Optional[_Union[McpCandidateSourceDTO, _Mapping]] = ...) -> None: ...
+
+class McpCandidateInspectDTO(_message.Message):
+    __slots__ = ("source", "manifest_digest", "platform", "variants")
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    MANIFEST_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_FIELD_NUMBER: _ClassVar[int]
+    VARIANTS_FIELD_NUMBER: _ClassVar[int]
+    source: McpCandidateProvenanceDTO
+    manifest_digest: str
+    platform: McpTargetPlatformDTO
+    variants: _containers.RepeatedCompositeFieldContainer[McpCandidateVariantDTO]
+    def __init__(self, source: _Optional[_Union[McpCandidateProvenanceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., variants: _Optional[_Iterable[_Union[McpCandidateVariantDTO, _Mapping]]] = ...) -> None: ...
+
+class McpCandidatePlanRequestDTO(_message.Message):
+    __slots__ = ("target", "source", "manifest_digest", "variant", "inputs")
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    MANIFEST_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    VARIANT_FIELD_NUMBER: _ClassVar[int]
+    INPUTS_FIELD_NUMBER: _ClassVar[int]
+    target: McpInstallationTargetDTO
+    source: McpCandidateSourceDTO
+    manifest_digest: str
+    variant: McpCandidateVariantRefDTO
+    inputs: _struct_pb2.Struct
+    def __init__(self, target: _Optional[_Union[McpInstallationTargetDTO, _Mapping]] = ..., source: _Optional[_Union[McpCandidateSourceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., variant: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., inputs: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class McpCandidatePlanDTO(_message.Message):
+    __slots__ = ("source", "manifest_digest", "variant", "platform", "plan_digest", "disposition", "download_required", "parameters")
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    MANIFEST_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    VARIANT_FIELD_NUMBER: _ClassVar[int]
+    PLATFORM_FIELD_NUMBER: _ClassVar[int]
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    DISPOSITION_FIELD_NUMBER: _ClassVar[int]
+    DOWNLOAD_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    PARAMETERS_FIELD_NUMBER: _ClassVar[int]
+    source: McpCandidateProvenanceDTO
+    manifest_digest: str
+    variant: McpCandidateVariantRefDTO
+    platform: McpTargetPlatformDTO
+    plan_digest: str
+    disposition: str
+    download_required: bool
+    parameters: _struct_pb2.Struct
+    def __init__(self, source: _Optional[_Union[McpCandidateProvenanceDTO, _Mapping]] = ..., manifest_digest: _Optional[str] = ..., variant: _Optional[_Union[McpCandidateVariantRefDTO, _Mapping]] = ..., platform: _Optional[_Union[McpTargetPlatformDTO, _Mapping]] = ..., plan_digest: _Optional[str] = ..., disposition: _Optional[str] = ..., download_required: _Optional[bool] = ..., parameters: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class McpCandidatePlanValidationRequestDTO(_message.Message):
+    __slots__ = ("candidate", "plan_digest")
+    CANDIDATE_FIELD_NUMBER: _ClassVar[int]
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    candidate: McpCandidatePlanRequestDTO
+    plan_digest: str
+    def __init__(self, candidate: _Optional[_Union[McpCandidatePlanRequestDTO, _Mapping]] = ..., plan_digest: _Optional[str] = ...) -> None: ...
+
+class McpCandidateInspectResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: McpCandidateInspectDTO
+    request_id: str
+    target: McpInstallationTargetDTO
+    protocol_version: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Union[McpCandidateInspectDTO, _Mapping]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpInstallationTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
+
+class McpCandidatePlanResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: McpCandidatePlanDTO
+    request_id: str
+    target: McpInstallationTargetDTO
+    protocol_version: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Union[McpCandidatePlanDTO, _Mapping]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpInstallationTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
+
 class MessageCreateRequest(_message.Message):
     __slots__ = ("role", "content", "attachments", "metadata")
     ROLE_FIELD_NUMBER: _ClassVar[int]

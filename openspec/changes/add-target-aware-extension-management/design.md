@@ -64,8 +64,11 @@
 
 远端设置新增 `configuration_read` 与 `configuration_write` 能力：前者覆盖获准目标的脱敏 schema／source／effective／pending／提交状态读取及事件订阅；后者覆盖来源预检／候选创建／提交／删除覆盖和 pending 管理，需读取能力时分别核验。重启另沿原生命周期管理能力，不由配置写权限隐式授予。两者沿原 policy 注册，作为管理能力默认拒绝，允许须绑定已认证主体；通配的 discovery／read／managed_workspace_admin 不代授。长订阅在实际披露点核现行权限，撤权停止后续披露／写入准入；已接受操作仍按原身份查询可获准状态，不伪报撤销副作用。该要求不擅自重定义其它既有业务 API 的授权语义。
 
+MCP 候选规划与后续制品安装管理使用原 policy 的独立 `mcp_installation_manage`。该能力默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin 和配置读写均不代授，安装管理也不授予配置写入、Backend 重启或宿主管理。两种 workspace API mount 的候选原件读取、计划生成和消费前重验均在下游请求前及实际披露前核现行能力；Relay 沿原目标路由透传，原生 Gateway 最终判权，无权限时不访问 Backend 或目录来源。
+
 | 操作 | 权限与执行边界 |
 |---|---|
+| MCP 候选原件读取、确切 variant 计划、消费前重验及后续制品安装管理 | `mcp_installation_manage`，原生 Gateway 按精确认证主体校验；配置提交、重启与宿主管理分别核其能力 |
 | source／effective／pending／操作状态读取和事件 | `configuration_read`，按目标和实际披露内容校验 |
 | 预检、创建／提交、删除覆盖、pending retry／discard／resolve／失败记录 | `configuration_write`；返回配置投影另核 read，保留原 CAS／证明／fencing 校验。retry 状态不等于执行重启，resolve 不接受客户端伪造健康证明 |
 | 实际重启受管 Backend | 原 `managed_backend_restart` 是操作名，仍核 `managed_workspace_admin` 管理能力；若消费配置 candidate，再核 `configuration_write`，不以 retry 按钮绕过 |
@@ -82,6 +85,8 @@ VSIX 可从经验证目录或用户明确提供的 VSIX 安装；MCP 可从目�
 安装计划展示确切目标、来源、解析后的版本、平台、依赖／运行方式和配置范围。版本范围在一次操作内解析为精确制品并记录摘要；不在每次运行时偷偷追随 latest。下载完成、包验证成功、配置已保存／待生效、连接就绪和工具目录已发布是不同阶段；安装不自动向任意 Thread 附加工具或触发 turn。
 
 来源身份包含目录 endpoint／registry 身份、该来源稳定 entry ID（仅有名称时冻结名称及 manifest digest）、显式选择的 package／remote variant 和解析后的版本／制品摘要，再与安装域组合；显示名与 server_id 不是包身份。多个 registry 同名条目不合并；安装／更新冻结 manifest 和 variant，候选消失或同名内容被替换须重做计划，不能退回第一个 remote、package 或另一 registry。只支持当前 stdio／Streamable HTTP 的合法映射，旧 SSE 不冒充 Streamable HTTP。
+
+候选原件读取、计划与重验直接扩展原 `McpCatalogOwner`，不建立计划数据库、缓存或 token。目标侧按显式 endpoint／协议／entry URL 有界读取完整原件；v0.1 的 official metadata 只认 envelope 顶层 `_meta`，不从发布者 `server._meta` 借用身份，无稳定 ID 就保持缺省。完整 manifest digest、原 variant ordinal／digest、目标原生平台及解析参数共同冻结计划；消费时同 owner 重读并核原 digest，变化返回冲突。返回的 parameters 只是脱敏展示，配置保存须重新提交原请求并经原 source／CAS owner，不能把该投影保存作 launch。package 计划只表达待制品准备的意图，HTTP 表达纯配置，既有显式动态命令仍不受管；候选阶段不下载、不启动 MCP、不写配置或安装记录。
 
 上游 MCP “安装”主要写 manifest／launch configuration，并以 npx／uvx／docker／dnx 运行时解析包；它不是本设计要求的已验证制品发布。新增的目标安装服务沿原 install seam 工作，但必须准备锁定依赖的隔离环境／精确可执行制品，容器使用不可变镜像 digest；项目连接的实际 launch 绑定安装 generation／digest，不能配置看似 pinned、实际仍运行动态 latest。生态无法提供该链时，条目标明不支持制品安装。用户已有的显式动态命令仍按原合同运行，不能追认成受管安装或在升级界面时擅自改写。
 

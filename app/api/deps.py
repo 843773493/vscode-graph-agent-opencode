@@ -8,9 +8,13 @@ from fastapi import Depends, Header, HTTPException, Request
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.path_utils import SessionCatalogComponents, workspace_context
-from app.core.trace_middleware import get_request_id  # noqa: F401
+from app.core.trace_middleware import (
+    get_request_id,  # noqa: F401
+    require_current_gateway_id,
+)
 from app.core.workspace_identity import validate_workspace_id
 from app.runtime.session_orchestrator import SessionOrchestrator
+from app.schemas.internal_v2.mcp import McpInstallationTargetDTO
 from app.services.business.agent_service import AgentService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
@@ -364,6 +368,15 @@ def get_tool_test_service(request: Request) -> ToolTestService:
 
 def get_mcp_catalog_owner(request: Request) -> McpCatalogOwner:
     return _require_service(request, "mcp_catalog_owner", McpCatalogOwner, "McpCatalogOwner 尚未在应用启动阶段初始化")
+
+
+def get_mcp_installation_target(request: Request) -> McpInstallationTargetDTO:
+    backend_id = getattr(request.app.state, "backend_id", None)
+    if backend_id is None:
+        raise RuntimeError("MCP 安装候选需要原生 Backend 已初始化的稳定身份")
+    return McpInstallationTargetDTO(
+        gateway_id=require_current_gateway_id("MCP 安装候选"), backend_id=backend_id,
+    )
 
 
 def get_mcp_connection_service(request: Request) -> McpConnectionService:

@@ -705,6 +705,110 @@ message McpAuthorizationResponseDTO {
   uint32 protocol_version = 6;
 }
 
+// 原生安装域与工作区配置范围分别表达；route 和进程 generation 不属于安装身份。
+message McpInstallationTargetDTO {
+  string kind = 1;
+  string gateway_id = 2;
+  string backend_id = 3;
+}
+
+// definition 仅供明确手动来源；目录来源由目标读取原始 manifest，不消费展示 DTO。
+message McpCandidateSourceDTO {
+  string kind = 1;
+  string name = 2;
+  string version = 3;
+  optional string endpoint = 4;
+  optional string protocol = 5;
+  optional string entry_url = 6;
+  optional string entry_id = 7;
+  optional google.protobuf.Struct definition = 8;
+}
+
+message McpCandidateProvenanceDTO {
+  string kind = 1;
+  string name = 2;
+  string version = 3;
+  optional string endpoint = 4;
+  optional string protocol = 5;
+  optional string entry_url = 6;
+  optional string entry_id = 7;
+}
+
+message McpTargetPlatformDTO {
+  string operating_system = 1;
+  string architecture = 2;
+}
+
+// ordinal 仅在同一完整 manifest digest 内有效，不能按类型或名称重新择首项。
+message McpCandidateVariantRefDTO {
+  string kind = 1;
+  int64 index = 2;
+  string digest = 3;
+}
+
+message McpCandidateVariantDTO {
+  McpCandidateVariantRefDTO ref = 1;
+  string transport = 2;
+  optional string registry_type = 3;
+  optional string identifier = 4;
+  optional string version = 5;
+}
+
+message McpCandidateInspectRequestDTO {
+  McpInstallationTargetDTO target = 1;
+  McpCandidateSourceDTO source = 2;
+}
+
+message McpCandidateInspectDTO {
+  McpCandidateProvenanceDTO source = 1;
+  string manifest_digest = 2;
+  McpTargetPlatformDTO platform = 3;
+  repeated McpCandidateVariantDTO variants = 4;
+}
+
+message McpCandidatePlanRequestDTO {
+  McpInstallationTargetDTO target = 1;
+  McpCandidateSourceDTO source = 2;
+  string manifest_digest = 3;
+  McpCandidateVariantRefDTO variant = 4;
+  google.protobuf.Struct inputs = 5;
+}
+
+// 此计划不代表安装或配置成功；parameters 是脱敏展示，消费时重新校验原始请求。
+message McpCandidatePlanDTO {
+  McpCandidateProvenanceDTO source = 1;
+  string manifest_digest = 2;
+  McpCandidateVariantRefDTO variant = 3;
+  McpTargetPlatformDTO platform = 4;
+  string plan_digest = 5;
+  string disposition = 6;
+  bool download_required = 7;
+  google.protobuf.Struct parameters = 8;
+}
+
+message McpCandidatePlanValidationRequestDTO {
+  McpCandidatePlanRequestDTO candidate = 1;
+  string plan_digest = 2;
+}
+
+message McpCandidateInspectResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpCandidateInspectDTO data = 3;
+  string request_id = 4;
+  McpInstallationTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
+message McpCandidatePlanResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpCandidatePlanDTO data = 3;
+  string request_id = 4;
+  McpInstallationTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
 message MessageCreateRequest {
   optional string role = 1;
   string content = 2;

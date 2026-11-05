@@ -91,7 +91,7 @@ def test_workspace_admin_requires_explicit_authenticated_peer_principal(rules, e
     assert snapshot.evaluate(capability="managed_workspace_admin", origin_gateway_id="peer", principal_ref="peer-principal") is expected
 
 
-@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write"])
+@pytest.mark.parametrize("capability", ["configuration_read", "configuration_write", "mcp_installation_manage"])
 @pytest.mark.parametrize("binding,expected", [
     ({}, False),
     ({"origin_gateway_id": "peer"}, False),

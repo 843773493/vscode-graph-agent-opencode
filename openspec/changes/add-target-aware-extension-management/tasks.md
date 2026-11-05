@@ -9,6 +9,7 @@
   - 2026-11-05 MCP 管理合同切片：原 Workspace proto／OpenAPI、生成客户端及七个成功出口统一返回目标和协议版本，保留原 data 数组／对象；目录 revision／generation 与精确 connection_ref 从唯一 publication／runtime 投影，无新账本。Web 在消费前拒绝错误 owner、未知类型／版本，两个原 MCP 浏览器驱动迁齐完整 Gateway／UUID 和双目标头。真实 Gateway→Backend→MCP 1 passed／37.22 秒，Web 授权／真实工具执行及逐调用审批 2 passed／284.11 秒；HTTP 合同 322 passed，最终 Python 定向 59 passed，Web API／hook 22 passed。Buf 格式／lint／build、真实 HEAD 基线 breaking、生成一致性、Ruff 和完整 Web 构建通过；Web tsc 的 28 条诊断与完整 HEAD 归档原始输出相同，Pyright 两条原测试诊断无新增。命令、源码指纹、原始输出及基线对照见 `out/tests/temp/extension_target_contracts_20261104/artifacts/`；安装／host 协议及跨目标闭包尚未完成，本项保持未勾选。
 - [ ] 1.4 在原联邦 policy 登记安装／宿主管理能力及 configuration_read／configuration_write 与 schema，迁齐默认拒绝／认证主体规则和调用方；覆盖脱敏读取、订阅披露、预检／提交／pending 管理和独立重启权限，验证撤权、Relay 不提权、只有发现权限时无目标写入，不另建权限系统。
   - 配置能力已沿原 policy／schema 接入 Gateway 自有配置路由与两种 workspace 代理 mount；安装／宿主管理能力和实网目标验收仍未完成，整项保持未勾选。
+  - MCP 候选规划切片沿原 policy／schema 登记独立 `mcp_installation_manage`，默认拒绝且须精确绑定认证主体；两种 workspace mount 的原件读取／计划／重验共用原生 Gateway 权限边界。该切片不代替后续制品安装、宿主管理及整项验收，本项保持未勾选。
 - [ ] 1.5 实现绑定稳定目标的能力／状态发现及实际路由，区分离线镜像和实时状态；验证同名、route 变化／重用、停止和权限撤销，无隐式启动或本地 fallback。
 - [ ] 1.6 清点各功能将使用的既有 URI 与字段；在原配置／联邦／MCP owner 补本稿已明确需要的 source 读写、私有输入引用、受管 launch binding、管理能力正式 delta／schema／消费者；确需新增 URI 时补原寻址 owner delta，不在前端拼 grammar。
 
@@ -16,7 +17,8 @@
 
 - [x] 2.1 沿原 gallery 服务合同接入可配置 MCP 来源，验证实际协议、分页、取消及未配置／失败／无匹配；与 VSIX 来源分开，查询不下载、不启动或扩展来源范围。
   - 2026-11-05：原 MCP Gallery 统一单源 queryPage／pager，显式 v0.1／v0，不再探测版本或将失败折叠为空页；换源取消旧查询并拒绝晚到结果，原列表／只读详情共用同一服务。受保护定向 54 passed／220 断言，44 份实际转换源码类型检查、Python 静态及正式 Workbench 构建通过；真实 Gateway／Workbench 对受控 registry 完整场景 1 passed／79.22 秒（`run-b402b78e555b`），覆盖分页、续页503、未配置、无匹配、首屏错误、只读详情和换源。旧失败定位为测试驱动跨浏览器序列化 IEditorPane，改为浏览器内等待完成，不改生产期限；原件与最终指纹在 `out/tests/temp/mcp_gallery_contract_20261105/artifacts/2026-11-05T05-28-14-246Z-fingerprint.json`。不代表公网、安装或原生 Gallery 验收。
-- [ ] 2.2 实现目录条目、手动定义及 HTTP 服务的同一候选计划，冻结来源／entry／manifest digest／确切 variant／目标平台／版本与参数；验证同名不同源、variant 消失、多同类候选和 SSE 明确拒绝，无首项 fallback，HTTP 不虚报包下载。
+- [x] 2.2 实现目录条目、手动定义及 HTTP 服务的同一候选计划，冻结来源／entry／完整 manifest digest／确切 variant 原 ordinal 与 digest／目标原生平台／版本与参数；沿 mcp_installation_manage 由原生 Gateway 判权并在消费前重验，验证同名不同源、无稳定 ID 的真实 envelope、variant 消失、多同类候选和 SSE 明确拒绝，无首项 fallback，HTTP 不虚报包下载，候选不启动 MCP 或写安装／配置事实。
+  - 2026-11-05 候选后端切片：原 McpCatalogOwner 扩展三个无副作用 API，读取完整 v0.1／显式 v0 原件，确切选择与消费前重验使用唯一 JCS 摘要；新 secret input 在私有引用能力完成前明确拒绝，原显式 env／headers 沿原 parser 并脱敏展示。候选／API／原生权限短批 102 passed，旧 MCP／配置／代理及最终 API 回归 350 passed，公开 HTTP 合同 57 passed，各批有重叠不相加。真实双 Gateway／双 Backend socket 1 passed／50.08 秒，覆盖同 workspace UUID 不同 Backend、两种 mount、原生默认拒绝／精确主体／撤权和无权限零 Backend；仅 SSH 执行与隧道复用受控本机替身。另实际 localhost registry→HTTPX→owner→API 1 passed／3.39 秒，原件变化后旧计划 409。完整协议生成及一致性、Buf lint／build／完整 HEAD breaking、OpenAPI 导出、Web 构建与 OpenSpec strict 通过；Web tsc 的 28 条诊断与完整基线相同，无新增。准确命令、源码指纹、原始输出、静态基线对照及未验证边界见 `out/tests/temp/mcp_candidate_plan_20261105/artifacts/final-evidence.json`。未启用安装 UI、制品发布、配置保存或秘密引用；集成复核确认本项完成，1.4 保持未勾选。
 - [ ] 2.3 在目标侧建立唯一安装记录与真实制品发布链，复用生态工具／隔离环境、锁定依赖及不可变镜像 digest；核 launch 实际使用发布路径／generation，不能把原版动态 npx／uvx 配置视为安装。缺 runtime／安装能力明确失败，保留既有显式动态命令，不自动全局安装系统环境。
 - [ ] 2.4 实现有界进度、日志、意图指纹／幂等操作、取消及中断查询，暂存验证后发布；核同键异参数冲突、断流／重启不重放未知脚本，安装、配置与 ready 分阶段报告。
 - [ ] 2.5 实现同安装域精确版本复用、工作区引用、更新失败保留旧版及物理卸载检查；制品引用绑定原 connection generation，沿原退休／监督释放；验证 A1/A2、并发同意图、旧调用／cleanup_failed／结果未知保留和有引用拒绝卸载。

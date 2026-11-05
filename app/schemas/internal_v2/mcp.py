@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
 
@@ -123,3 +123,122 @@ class McpConnectionOperationResponseDTO(_McpResponse):
 
 class McpAuthorizationResponseDTO(_McpResponse):
     data: McpAuthorizationDTO
+
+
+class _McpCandidateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+
+class McpInstallationTargetDTO(_McpCandidateModel):
+    """安装域来自原生 Backend 身份，不借用工作区或进程代际。"""
+
+    kind: Literal["backend"] = "backend"
+    gateway_id: CanonicalGatewayId
+    backend_id: str = Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+class McpCandidateSourceDTO(_McpCandidateModel):
+    kind: Literal["gallery", "manual"]
+    name: str = Field(min_length=1, max_length=512)
+    version: str = Field(min_length=1, max_length=128)
+    endpoint: str | None = None
+    protocol: Literal["v0.1", "v0"] | None = None
+    entry_url: str | None = None
+    entry_id: str | None = None
+    definition: dict[str, object] | None = Field(default=None, repr=False,
+        description="手动来源的 packages/remotes manifest，或原 stdio/streamable_http 配置；不接受秘密输入。")
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_gallery_protocol(cls, value: object) -> object:
+        if isinstance(value, dict) and value.get("kind") == "gallery" and "protocol" not in value:
+            return {**value, "protocol": "v0.1"}
+        return value
+
+    @model_validator(mode="after")
+    def validate_source(self) -> McpCandidateSourceDTO:
+        if self.kind == "gallery":
+            if not self.endpoint or not self.entry_url or self.protocol is None or self.definition is not None:
+                raise ValueError("目录来源必须指定 endpoint、协议和精确 entry_url，不能附带手动定义")
+        elif self.definition is None or any(value is not None for value in (self.endpoint, self.protocol, self.entry_url, self.entry_id)):
+            raise ValueError("手动来源必须只携带明确 definition，不得借用目录身份")
+        return self
+
+
+class McpCandidateProvenanceDTO(_McpCandidateModel):
+    kind: Literal["gallery", "manual"]
+    name: str
+    version: str
+    endpoint: str | None = None
+    protocol: Literal["v0.1", "v0"] | None = None
+    entry_url: str | None = None
+    entry_id: str | None = None
+
+
+class McpTargetPlatformDTO(_McpCandidateModel):
+    operating_system: str
+    architecture: str
+
+
+class McpCandidateVariantRefDTO(_McpCandidateModel):
+    kind: Literal["package", "remote", "manual"]
+    index: int = Field(ge=0)
+    digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+
+
+class McpCandidateVariantDTO(_McpCandidateModel):
+    ref: McpCandidateVariantRefDTO
+    transport: str
+    registry_type: str | None = None
+    identifier: str | None = None
+    version: str | None = None
+
+
+class McpCandidateInspectRequestDTO(_McpCandidateModel):
+    target: McpInstallationTargetDTO
+    source: McpCandidateSourceDTO
+
+
+class McpCandidateInspectDTO(_McpCandidateModel):
+    source: McpCandidateProvenanceDTO
+    manifest_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+    platform: McpTargetPlatformDTO
+    variants: list[McpCandidateVariantDTO]
+
+
+class McpCandidatePlanRequestDTO(McpCandidateInspectRequestDTO):
+    manifest_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+    variant: McpCandidateVariantRefDTO
+    inputs: dict[str, object] = Field(default_factory=dict, repr=False)
+
+
+class McpCandidatePlanDTO(_McpCandidateModel):
+    source: McpCandidateProvenanceDTO
+    manifest_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+    variant: McpCandidateVariantRefDTO
+    platform: McpTargetPlatformDTO
+    plan_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+    disposition: Literal["requires_artifact", "configuration_only", "explicit_command"]
+    download_required: bool
+    parameters: dict[str, object] = Field(description="冻结参数的脱敏展示；实际消费须由原 owner 重新验证原请求，不能保存此投影作 launch 配置。")
+
+
+class McpCandidatePlanValidationRequestDTO(_McpCandidateModel):
+    candidate: McpCandidatePlanRequestDTO
+    plan_digest: str = Field(pattern=r"^sha256:jcs:v1:[0-9a-f]{64}$")
+
+
+class _McpCandidateResponse(_McpCandidateModel):
+    code: int = 0
+    message: str = "ok"
+    request_id: str
+    target: McpInstallationTargetDTO
+    protocol_version: Literal[1] = 1
+
+
+class McpCandidateInspectResponseDTO(_McpCandidateResponse):
+    data: McpCandidateInspectDTO
+
+
+class McpCandidatePlanResponseDTO(_McpCandidateResponse):
+    data: McpCandidatePlanDTO

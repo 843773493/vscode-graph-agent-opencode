@@ -1,5 +1,19 @@
 ## ADDED Requirements
 
+### Requirement: MCP 候选规划与安装管理必须使用独立原生授权
+
+原联邦 policy 与 Gateway schema SHALL 登记 `mcp_installation_manage`，覆盖 MCP 候选 manifest 读取、确切 variant 计划、消费前重验及后续制品安装管理。该管理能力 SHALL 默认拒绝，只有精确绑定已认证主体的显式 allow 生效；discovery、read、managed_workspace_admin、configuration_read 和 configuration_write 均不得代授。此能力不隐式授予配置写入、进程重启或宿主管理。
+
+两种 workspace API mount SHALL 使用相同能力边界。Relay SHALL 透传冻结目标、原请求、原错误与同一 request_id，由原生 Gateway 在访问 Backend 前及实际披露前核现行授权；等待目标运行或读取响应期间撤权，不得继续准入或披露候选。无权限时 MUST NOT 请求 Backend、读取目录来源、下载制品、写配置或改投本地。
+
+#### Scenario: 普通能力与通配 allow 不能规划 MCP 安装
+- **WHEN** 远端主体只有发现、读取、配置或受管 Backend 管理能力，或安装 allow 未精确绑定该认证主体
+- **THEN** 两种 mount 的候选原件、计划及重验请求均被原生 Gateway 拒绝，下游 Backend 与目录来源没有请求，Relay 不使用本机权限代授
+
+#### Scenario: 候选请求等待或披露前撤销管理权限
+- **WHEN** 精确主体获准的候选请求正在等待 Backend 或等待完整响应，原生 Gateway 撤销 mcp_installation_manage
+- **THEN** 原生 Gateway 在下一准入或实际披露点拒绝，关闭已取得响应并结清本次路由引用，不返回冻结前的旧授权结果
+
 ### Requirement: 远端配置管理必须使用独立读写能力
 
 远端配置管理 SHALL 在原联邦 policy 注册 `configuration_read` 与 `configuration_write`，两者默认拒绝，仅精确绑定已认证主体的显式 allow 授权。discovery、普通 read 或 managed_workspace_admin 不代授配置能力；Relay 透传原请求、稳定目标、CAS／幂等身份及错误，由原生 Gateway 最终判权和配置 owner 执行，不保存可生效远端副本。

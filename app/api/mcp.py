@@ -9,22 +9,33 @@ from pydantic import ValidationError
 from app.api.deps import (
     get_mcp_catalog_owner,
     get_mcp_connection_service,
+    get_mcp_installation_target,
     get_request_id,
     verify_local_token,
 )
 from app.core.trace_middleware import get_current_gateway_id
+from app.domain.mcp_candidates import McpCandidateConflict
 from app.schemas.internal_v2.mcp import (
     McpAuthorizationCallbackDTO,
     McpAuthorizationResponseDTO,
+    McpCandidateInspectRequestDTO,
+    McpCandidateInspectResponseDTO,
+    McpCandidatePlanRequestDTO,
+    McpCandidatePlanResponseDTO,
+    McpCandidatePlanValidationRequestDTO,
     McpConnectionOperationListResponseDTO,
     McpConnectionOperationResponseDTO,
     McpConnectionRequestDTO,
+    McpInstallationTargetDTO,
     McpServerDTO,
     McpServerListResponseDTO,
     McpToolDTO,
     McpWorkspaceTargetDTO,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
+from app.services.infrastructure.mcp.candidate_source import (
+    McpCandidateSourceUnavailable,
+)
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -32,6 +43,65 @@ router = APIRouter(prefix="/mcp", tags=["mcp"])
 
 def _target(service: McpConnectionService) -> McpWorkspaceTargetDTO:
     return McpWorkspaceTargetDTO(gateway_id=get_current_gateway_id(), workspace_id=service.workspace_id)
+
+
+@contextmanager
+def _candidate_errors():
+    try:
+        yield
+    except McpCandidateConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except McpCandidateSourceUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except (TypeError, ValueError) as error:
+        if isinstance(error, ValidationError):
+            raise
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post("/candidate-manifests", response_model=McpCandidateInspectResponseDTO, summary="读取 MCP 安装候选原始来源与全部 variant")
+async def inspect_mcp_candidate(
+    payload: McpCandidateInspectRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        data = await owner.inspect_installation_candidate(payload, actual_target=target)
+    return McpCandidateInspectResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.post("/candidate-plans", response_model=McpCandidatePlanResponseDTO, summary="生成绑定确切目标、manifest 与 variant 的 MCP 计划")
+async def prepare_mcp_candidate(
+    payload: McpCandidatePlanRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        data = await owner.prepare_installation_candidate(payload, actual_target=target)
+    return McpCandidatePlanResponseDTO(data=data, request_id=request_id, target=target)
+
+
+@router.post("/candidate-plans/validate", response_model=McpCandidatePlanResponseDTO, summary="消费前重新核验原 MCP 候选，不执行安装或配置")
+async def validate_mcp_candidate(
+    payload: McpCandidatePlanValidationRequestDTO,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
+    target: Annotated[McpInstallationTargetDTO, Depends(get_mcp_installation_target)],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    with _candidate_errors():
+        data = await owner.validate_installation_candidate(payload, actual_target=target)
+    return McpCandidatePlanResponseDTO(data=data, request_id=request_id, target=target)
 
 
 @router.get(
