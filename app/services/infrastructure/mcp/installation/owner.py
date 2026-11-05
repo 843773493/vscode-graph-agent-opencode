@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import cast
 
-from app.core.identifier import create_uuid_hex
 from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.mcp_candidates import McpCandidateConflict
@@ -27,7 +26,11 @@ from app.services.infrastructure.mcp.installation.python import (
     prepare_python_artifact,
     python_package,
 )
-from app.services.infrastructure.mcp.installation.store import InstallationStore
+from app.services.infrastructure.mcp.installation.store import (
+    InstallationReservation,
+    InstallationStore,
+    artifact_key,
+)
 
 
 class McpInstallationOwner:
@@ -61,17 +64,19 @@ class McpInstallationOwner:
         intent_digest = sha256_jcs({"target": request.candidate.target.model_dump(), "plan_digest": plan.plan_digest,
             "entrypoint": request.entrypoint, "registry": index, "package": name, "version": version})
         now = time.time()
-        operation, created = self._store.reserve(McpInstallationOperationDTO(
-            operation_id=request.operation_id, intent_digest=intent_digest, status="running", stage="prepare", created_at=now, updated_at=now))
-        if created:
-            task = asyncio.create_task(self._prepare(operation, request, plan, name, version, index),
+        reservation = self._store.reserve(McpInstallationOperationDTO(
+            operation_id=request.operation_id, intent_digest=intent_digest, status="running", stage="prepare", created_at=now, updated_at=now),
+            key=artifact_key(plan, identifier=name, version=version, entrypoint=request.entrypoint))
+        if reservation.artifact is not None or reservation.preparation is not None:
+            task = asyncio.create_task(self._prepare(reservation, request, plan, name, version, index),
                 name=f"mcp-installation:{request.operation_id}")
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
-        return operation
+        return reservation.operation
 
-    async def _prepare(self, operation: McpInstallationOperationDTO, request: McpInstallationRequestDTO,
+    async def _prepare(self, reservation: InstallationReservation, request: McpInstallationRequestDTO,
         plan: McpCandidatePlanDTO, name: str, version: str, index: str) -> None:
+        operation = reservation.operation
         async def progress(stage: str, output: str = "") -> None:
             nonlocal operation
             operation = operation.model_copy(update={"stage": cast(str, stage), "updated_at": time.time(),
@@ -79,15 +84,16 @@ class McpInstallationOwner:
             operation = await run_sync_shielded(self._store.update, operation)
 
         try:
-            # TODO(2.5)：这里只复用已发布制品；冷态并发同制品的准备归并仍需实现。
-            artifact = await run_sync_shielded(self._store.reusable, plan, identifier=name, version=version, entrypoint=request.entrypoint)
+            artifact = reservation.artifact
             if artifact is not None:
                 await progress("verify", "核验已有精确制品，复用原 generation；不重新下载或解析依赖\n")
                 await run_sync_shielded(self.resolve, artifact.binding, verify=True)
                 await progress("publish")
             else:
-                installation_id = create_uuid_hex(namespace="mcp-installation")
-                generation = create_uuid_hex(namespace="mcp-artifact")
+                preparation = reservation.preparation
+                if preparation is None:
+                    raise RuntimeError("MCP 制品准备缺少事务准入，不能自行分配新 generation")
+                installation_id, generation = preparation.installation_id, preparation.generation
                 root = self._root / "generations" / installation_id / generation
                 command, lock_digest, distributions = await prepare_python_artifact(root,
                     name=name, version=version, index=index, entrypoint=request.entrypoint, progress=progress)
