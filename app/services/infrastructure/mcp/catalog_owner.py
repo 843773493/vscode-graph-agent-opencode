@@ -115,6 +115,16 @@ class McpServerSnapshot:
     tools: tuple[McpToolDescriptor, ...]
     # 最近一次 relist 的错误事实；原始异常仅留诊断，成功 relist 后清空。
     last_relist_error: str | None = None
+    connection_ref: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class McpManagementSnapshot:
+    """同一 publication 锁内读取目录代际及连接状态，不另存管理目录。"""
+
+    catalog_revision: str
+    catalog_generation: int
+    servers: tuple[McpServerSnapshot, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -797,9 +807,16 @@ class McpCatalogOwner:
         return frozenset(self.publication_snapshot().tools)
 
     def list_servers(self) -> list[McpServerSnapshot]:
+        return list(self.management_snapshot().servers)
+
+    def management_snapshot(self) -> McpManagementSnapshot:
         with self._publication_lock:
-            self._require_started()
-            return list(self._build_server_snapshots())
+            publication = self.publication_snapshot()
+            return McpManagementSnapshot(
+                catalog_revision=publication.binding_ref.catalog_revision,
+                catalog_generation=publication.binding_ref.generation,
+                servers=self._build_server_snapshots(),
+            )
 
     def cleanup_diagnostics(self) -> tuple[McpCleanupDTO, ...]:
         """诊断不触发 relist，不影响已提交的配置或新连接 readiness。"""
@@ -1125,7 +1142,8 @@ class McpCatalogOwner:
         snapshots: list[McpServerSnapshot] = []
         for server in self._servers:
             runtime = self._runtimes.get(server.server_id)
-            connected = runtime is not None and runtime.running
+            connection_ref = self._connection_ref(runtime) if runtime is not None and runtime.running else None
+            connected = connection_ref is not None
             known_authorization = self._publication is not None and any(
                 self._publication.definitions[descriptor.tool_id].readiness == "authorization_required"
                 for descriptor in self._descriptors_by_server.get(server.server_id, ())
@@ -1143,6 +1161,7 @@ class McpCatalogOwner:
                     tools=self._descriptors_by_server.get(server.server_id, ()) if connected else (),
                     last_relist_error=
                     runtime.last_relist_error if runtime is not None else None,
+                    connection_ref=connection_ref,
                 )
             )
         return tuple(snapshots)

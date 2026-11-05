@@ -2714,6 +2714,13 @@ export declare type McpServerDTO = Message<"boxteam.workspace.v2.McpServerDTO"> 
    * @generated from field: repeated boxteam.workspace.v2.McpToolDTO tools = 5;
    */
   tools: McpToolDTO[];
+
+  /**
+   * 精确连接含原 owner 实例及连接代际；不可用时不借目录 revision 补造执行身份。
+   *
+   * @generated from field: optional string connection_ref = 6;
+   */
+  connectionRef?: string | undefined;
 };
 
 /**
@@ -2882,6 +2889,210 @@ export declare type McpAuthorizationCallbackDTO = Message<"boxteam.workspace.v2.
  * Use `create(McpAuthorizationCallbackDTOSchema)` to create a new message.
  */
 export declare const McpAuthorizationCallbackDTOSchema: GenMessage<McpAuthorizationCallbackDTO>;
+
+/**
+ * MCP 仍属于精确工作区；直接 Backend 读取没有 Gateway 上下文时明确为空。
+ *
+ * @generated from message boxteam.workspace.v2.McpWorkspaceTargetDTO
+ */
+export declare type McpWorkspaceTargetDTO = Message<"boxteam.workspace.v2.McpWorkspaceTargetDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: optional string gateway_id = 2;
+   */
+  gatewayId?: string | undefined;
+
+  /**
+   * @generated from field: string workspace_id = 3;
+   */
+  workspaceId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpWorkspaceTargetDTO.
+ * Use `create(McpWorkspaceTargetDTOSchema)` to create a new message.
+ */
+export declare const McpWorkspaceTargetDTOSchema: GenMessage<McpWorkspaceTargetDTO>;
+
+/**
+ * 保留原 data 数组/对象；目标与协议版本在接收业务内容前核对。
+ *
+ * @generated from message boxteam.workspace.v2.McpServerListResponseDTO
+ */
+export declare type McpServerListResponseDTO = Message<"boxteam.workspace.v2.McpServerListResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.McpServerDTO data = 3;
+   */
+  data: McpServerDTO[];
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+
+  /**
+   * @generated from field: string catalog_revision = 7;
+   */
+  catalogRevision: string;
+
+  /**
+   * @generated from field: int64 catalog_generation = 8;
+   */
+  catalogGeneration: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpServerListResponseDTO.
+ * Use `create(McpServerListResponseDTOSchema)` to create a new message.
+ */
+export declare const McpServerListResponseDTOSchema: GenMessage<McpServerListResponseDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpConnectionOperationListResponseDTO
+ */
+export declare type McpConnectionOperationListResponseDTO = Message<"boxteam.workspace.v2.McpConnectionOperationListResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.McpConnectionOperationDTO data = 3;
+   */
+  data: McpConnectionOperationDTO[];
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpConnectionOperationListResponseDTO.
+ * Use `create(McpConnectionOperationListResponseDTOSchema)` to create a new message.
+ */
+export declare const McpConnectionOperationListResponseDTOSchema: GenMessage<McpConnectionOperationListResponseDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpConnectionOperationResponseDTO
+ */
+export declare type McpConnectionOperationResponseDTO = Message<"boxteam.workspace.v2.McpConnectionOperationResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpConnectionOperationDTO data = 3;
+   */
+  data?: McpConnectionOperationDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpConnectionOperationResponseDTO.
+ * Use `create(McpConnectionOperationResponseDTOSchema)` to create a new message.
+ */
+export declare const McpConnectionOperationResponseDTOSchema: GenMessage<McpConnectionOperationResponseDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.McpAuthorizationResponseDTO
+ */
+export declare type McpAuthorizationResponseDTO = Message<"boxteam.workspace.v2.McpAuthorizationResponseDTO"> & {
+  /**
+   * @generated from field: int32 code = 1;
+   */
+  code: number;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpAuthorizationDTO data = 3;
+   */
+  data?: McpAuthorizationDTO | undefined;
+
+  /**
+   * @generated from field: string request_id = 4;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.McpWorkspaceTargetDTO target = 5;
+   */
+  target?: McpWorkspaceTargetDTO | undefined;
+
+  /**
+   * @generated from field: uint32 protocol_version = 6;
+   */
+  protocolVersion: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.McpAuthorizationResponseDTO.
+ * Use `create(McpAuthorizationResponseDTOSchema)` to create a new message.
+ */
+export declare const McpAuthorizationResponseDTOSchema: GenMessage<McpAuthorizationResponseDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.MessageCreateRequest

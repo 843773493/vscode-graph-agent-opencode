@@ -195,6 +195,53 @@ async def test_empty_catalog_publishes_fixed_envelope_and_relist_does_not_advanc
         await owner.shutdown()
 
 
+async def test_management_snapshot_tracks_publication_and_exact_connection_generation(
+    tmp_path: Path, event_channel_service: EventChannelService,
+) -> None:
+    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
+    owner = _make_owner(tmp_path, factory, event_channel_service, {
+        **_stdio_server(), "disabled": {"enabled": False, "transport": "stdio", "command": "unused"},
+    })
+    await owner.start()
+    try:
+        first = owner.management_snapshot()
+        publication = owner.publication_snapshot()
+        assert (first.catalog_revision, first.catalog_generation) == (
+            publication.binding_ref.catalog_revision, publication.binding_ref.generation,
+        )
+        ready = next(server for server in first.servers if server.server_id == "mini")
+        disabled = next(server for server in first.servers if server.server_id == "disabled")
+        assert ready.connection_ref == publication.binding_ref.members[0].revision
+        assert ready.connection_ref is not None and disabled.connection_ref is None
+        assert owner.list_servers() == list(first.servers)
+
+        factory.notify_callbacks["mini"]()
+        await _drain_pending_relists(owner)
+        assert owner.management_snapshot() == first
+
+        await owner.disconnect_server("mini", admit=lambda: None)
+        disconnected = owner.management_snapshot()
+        assert next(server for server in disconnected.servers if server.server_id == "mini").connection_ref is None
+        await owner.connect_server("mini", admit=lambda: None, on_initialized=lambda: None)
+        reconnected = owner.management_snapshot()
+        current = next(server for server in reconnected.servers if server.server_id == "mini")
+        assert current.connection_ref is not None and current.connection_ref != ready.connection_ref
+        assert (reconnected.catalog_revision, reconnected.catalog_generation) == (
+            first.catalog_revision, first.catalog_generation,
+        )
+        assert current.connection_ref == owner.publication_snapshot().binding_ref.members[0].revision
+
+        factory.sessions["mini"].tool_names.append("new")
+        factory.notify_callbacks["mini"]()
+        await _drain_pending_relists(owner)
+        changed = owner.management_snapshot()
+        assert changed.catalog_revision != first.catalog_revision
+        assert changed.catalog_generation == first.catalog_generation + 1
+        assert next(server for server in changed.servers if server.server_id == "mini").connection_ref == current.connection_ref
+    finally:
+        await owner.shutdown()
+
+
 async def test_list_changed_publishes_new_revision_and_removal_tombstone(
     tmp_path: Path,
     event_channel_service: EventChannelService,

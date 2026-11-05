@@ -625,6 +625,8 @@ export interface McpServerDTO {
   /** ready 表示在线；disabled 表示配置禁用；failed 表示原连接不可用；authorization_required 表示标准 OAuth 尚需用户授权。 */
   status: string;
   tools: McpToolDTO[];
+  /** 精确连接含原 owner 实例及连接代际；不可用时不借目录 revision 补造执行身份。 */
+  connection_ref?: string | undefined;
 }
 
 export interface McpToolDTO {
@@ -663,6 +665,52 @@ export interface McpAuthorizationDTO {
 export interface McpAuthorizationCallbackDTO {
   code: string;
   state: string;
+}
+
+/** MCP 仍属于精确工作区；直接 Backend 读取没有 Gateway 上下文时明确为空。 */
+export interface McpWorkspaceTargetDTO {
+  kind: string;
+  gateway_id?: string | undefined;
+  workspace_id: string;
+}
+
+/** 保留原 data 数组/对象；目标与协议版本在接收业务内容前核对。 */
+export interface McpServerListResponseDTO {
+  code: number;
+  message: string;
+  data: McpServerDTO[];
+  request_id: string;
+  target: McpWorkspaceTargetDTO | undefined;
+  protocol_version: number;
+  catalog_revision: string;
+  catalog_generation: number;
+}
+
+export interface McpConnectionOperationListResponseDTO {
+  code: number;
+  message: string;
+  data: McpConnectionOperationDTO[];
+  request_id: string;
+  target: McpWorkspaceTargetDTO | undefined;
+  protocol_version: number;
+}
+
+export interface McpConnectionOperationResponseDTO {
+  code: number;
+  message: string;
+  data: McpConnectionOperationDTO | undefined;
+  request_id: string;
+  target: McpWorkspaceTargetDTO | undefined;
+  protocol_version: number;
+}
+
+export interface McpAuthorizationResponseDTO {
+  code: number;
+  message: string;
+  data: McpAuthorizationDTO | undefined;
+  request_id: string;
+  target: McpWorkspaceTargetDTO | undefined;
+  protocol_version: number;
 }
 
 export interface MessageCreateRequest {
@@ -7465,7 +7513,7 @@ export const WorkspaceTraceSearchResultsDTO: MessageFns<WorkspaceTraceSearchResu
 };
 
 function createBaseMcpServerDTO(): McpServerDTO {
-  return { server_id: "", transport: "", enabled: false, status: "", tools: [] };
+  return { server_id: "", transport: "", enabled: false, status: "", tools: [], connection_ref: undefined };
 }
 
 export const McpServerDTO: MessageFns<McpServerDTO> = {
@@ -7476,6 +7524,7 @@ export const McpServerDTO: MessageFns<McpServerDTO> = {
       enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       tools: globalThis.Array.isArray(object?.tools) ? object.tools.map((e: any) => McpToolDTO.fromJSON(e)) : [],
+      connection_ref: isSet(object.connection_ref) ? globalThis.String(object.connection_ref) : undefined,
     };
   },
 
@@ -7496,6 +7545,9 @@ export const McpServerDTO: MessageFns<McpServerDTO> = {
     if (message.tools?.length) {
       obj.tools = message.tools.map((e) => McpToolDTO.toJSON(e));
     }
+    if (message.connection_ref !== undefined) {
+      obj.connection_ref = message.connection_ref;
+    }
     return obj;
   },
 
@@ -7509,6 +7561,7 @@ export const McpServerDTO: MessageFns<McpServerDTO> = {
     message.enabled = object.enabled ?? false;
     message.status = object.status ?? "";
     message.tools = object.tools?.map((e) => McpToolDTO.fromPartial(e)) || [];
+    message.connection_ref = object.connection_ref ?? undefined;
     return message;
   },
 };
@@ -7738,6 +7791,304 @@ export const McpAuthorizationCallbackDTO: MessageFns<McpAuthorizationCallbackDTO
     const message = createBaseMcpAuthorizationCallbackDTO();
     message.code = object.code ?? "";
     message.state = object.state ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpWorkspaceTargetDTO(): McpWorkspaceTargetDTO {
+  return { kind: "", gateway_id: undefined, workspace_id: "" };
+}
+
+export const McpWorkspaceTargetDTO: MessageFns<McpWorkspaceTargetDTO> = {
+  fromJSON(object: any): McpWorkspaceTargetDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+    };
+  },
+
+  toJSON(message: McpWorkspaceTargetDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.gateway_id !== undefined) {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpWorkspaceTargetDTO>, I>>(base?: I): McpWorkspaceTargetDTO {
+    return McpWorkspaceTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpWorkspaceTargetDTO>, I>>(object: I): McpWorkspaceTargetDTO {
+    const message = createBaseMcpWorkspaceTargetDTO();
+    message.kind = object.kind ?? "";
+    message.gateway_id = object.gateway_id ?? undefined;
+    message.workspace_id = object.workspace_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMcpServerListResponseDTO(): McpServerListResponseDTO {
+  return {
+    code: 0,
+    message: "",
+    data: [],
+    request_id: "",
+    target: undefined,
+    protocol_version: 0,
+    catalog_revision: "",
+    catalog_generation: 0,
+  };
+}
+
+export const McpServerListResponseDTO: MessageFns<McpServerListResponseDTO> = {
+  fromJSON(object: any): McpServerListResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: globalThis.Array.isArray(object?.data)
+        ? object.data.map((e: any) => McpServerDTO.fromJSON(e))
+        : [],
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.String(object.catalog_revision) : "",
+      catalog_generation: isSet(object.catalog_generation) ? globalThis.Number(object.catalog_generation) : 0,
+    };
+  },
+
+  toJSON(message: McpServerListResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data?.length) {
+      obj.data = message.data.map((e) => McpServerDTO.toJSON(e));
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    if (message.catalog_revision !== "") {
+      obj.catalog_revision = message.catalog_revision;
+    }
+    if (message.catalog_generation !== 0) {
+      obj.catalog_generation = Math.round(message.catalog_generation);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpServerListResponseDTO>, I>>(base?: I): McpServerListResponseDTO {
+    return McpServerListResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpServerListResponseDTO>, I>>(object: I): McpServerListResponseDTO {
+    const message = createBaseMcpServerListResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = object.data?.map((e) => McpServerDTO.fromPartial(e)) || [];
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
+    message.catalog_revision = object.catalog_revision ?? "";
+    message.catalog_generation = object.catalog_generation ?? 0;
+    return message;
+  },
+};
+
+function createBaseMcpConnectionOperationListResponseDTO(): McpConnectionOperationListResponseDTO {
+  return { code: 0, message: "", data: [], request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpConnectionOperationListResponseDTO: MessageFns<McpConnectionOperationListResponseDTO> = {
+  fromJSON(object: any): McpConnectionOperationListResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: globalThis.Array.isArray(object?.data)
+        ? object.data.map((e: any) => McpConnectionOperationDTO.fromJSON(e))
+        : [],
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpConnectionOperationListResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data?.length) {
+      obj.data = message.data.map((e) => McpConnectionOperationDTO.toJSON(e));
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpConnectionOperationListResponseDTO>, I>>(
+    base?: I,
+  ): McpConnectionOperationListResponseDTO {
+    return McpConnectionOperationListResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpConnectionOperationListResponseDTO>, I>>(
+    object: I,
+  ): McpConnectionOperationListResponseDTO {
+    const message = createBaseMcpConnectionOperationListResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = object.data?.map((e) => McpConnectionOperationDTO.fromPartial(e)) || [];
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
+    return message;
+  },
+};
+
+function createBaseMcpConnectionOperationResponseDTO(): McpConnectionOperationResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpConnectionOperationResponseDTO: MessageFns<McpConnectionOperationResponseDTO> = {
+  fromJSON(object: any): McpConnectionOperationResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? McpConnectionOperationDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpConnectionOperationResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = McpConnectionOperationDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpConnectionOperationResponseDTO>, I>>(
+    base?: I,
+  ): McpConnectionOperationResponseDTO {
+    return McpConnectionOperationResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpConnectionOperationResponseDTO>, I>>(
+    object: I,
+  ): McpConnectionOperationResponseDTO {
+    const message = createBaseMcpConnectionOperationResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? McpConnectionOperationDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
+    return message;
+  },
+};
+
+function createBaseMcpAuthorizationResponseDTO(): McpAuthorizationResponseDTO {
+  return { code: 0, message: "", data: undefined, request_id: "", target: undefined, protocol_version: 0 };
+}
+
+export const McpAuthorizationResponseDTO: MessageFns<McpAuthorizationResponseDTO> = {
+  fromJSON(object: any): McpAuthorizationResponseDTO {
+    return {
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      data: isSet(object.data) ? McpAuthorizationDTO.fromJSON(object.data) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      target: isSet(object.target) ? McpWorkspaceTargetDTO.fromJSON(object.target) : undefined,
+      protocol_version: isSet(object.protocol_version) ? globalThis.Number(object.protocol_version) : 0,
+    };
+  },
+
+  toJSON(message: McpAuthorizationResponseDTO): unknown {
+    const obj: any = {};
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.data !== undefined) {
+      obj.data = McpAuthorizationDTO.toJSON(message.data);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.target !== undefined) {
+      obj.target = McpWorkspaceTargetDTO.toJSON(message.target);
+    }
+    if (message.protocol_version !== 0) {
+      obj.protocol_version = Math.round(message.protocol_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<McpAuthorizationResponseDTO>, I>>(base?: I): McpAuthorizationResponseDTO {
+    return McpAuthorizationResponseDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<McpAuthorizationResponseDTO>, I>>(object: I): McpAuthorizationResponseDTO {
+    const message = createBaseMcpAuthorizationResponseDTO();
+    message.code = object.code ?? 0;
+    message.message = object.message ?? "";
+    message.data = (object.data !== undefined && object.data !== null)
+      ? McpAuthorizationDTO.fromPartial(object.data)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? McpWorkspaceTargetDTO.fromPartial(object.target)
+      : undefined;
+    message.protocol_version = object.protocol_version ?? 0;
     return message;
   },
 };

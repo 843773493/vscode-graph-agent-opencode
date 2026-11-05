@@ -414,8 +414,8 @@ def test_tool_http_routes_check_catalog_selection_test_and_connection_management
                     pending.append(body["schema"])
     roots = _public_roots(http_openapi, pending)
     assert roots == {
-        "McpServerDTO", "McpConnectionOperationDTO", "McpConnectionRequestDTO",
-        "McpAuthorizationDTO", "McpAuthorizationCallbackDTO", "ToolDTO", "ToolSelectionPatchRequest",
+        "McpServerListResponseDTO", "McpConnectionOperationListResponseDTO", "McpConnectionOperationResponseDTO",
+        "McpConnectionRequestDTO", "McpAuthorizationResponseDTO", "McpAuthorizationCallbackDTO", "ToolDTO", "ToolSelectionPatchRequest",
         "ToolTestStartRequest", "ToolTestRunDTO", "ToolTestRunListDTO",
     }
     assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"工具入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"

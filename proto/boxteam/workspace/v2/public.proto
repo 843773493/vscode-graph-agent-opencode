@@ -617,6 +617,8 @@ message McpServerDTO {
   // ready 表示在线；disabled 表示配置禁用；failed 表示原连接不可用；authorization_required 表示标准 OAuth 尚需用户授权。
   string status = 4;
   repeated McpToolDTO tools = 5;
+  // 精确连接含原 owner 实例及连接代际；不可用时不借目录 revision 补造执行身份。
+  optional string connection_ref = 6;
 }
 
 message McpToolDTO {
@@ -655,6 +657,52 @@ message McpAuthorizationDTO {
 message McpAuthorizationCallbackDTO {
   string code = 1;
   string state = 2;
+}
+
+// MCP 仍属于精确工作区；直接 Backend 读取没有 Gateway 上下文时明确为空。
+message McpWorkspaceTargetDTO {
+  string kind = 1;
+  optional string gateway_id = 2;
+  string workspace_id = 3;
+}
+
+// 保留原 data 数组/对象；目标与协议版本在接收业务内容前核对。
+message McpServerListResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  repeated McpServerDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
+  string catalog_revision = 7;
+  int64 catalog_generation = 8;
+}
+
+message McpConnectionOperationListResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  repeated McpConnectionOperationDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
+message McpConnectionOperationResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpConnectionOperationDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
+}
+
+message McpAuthorizationResponseDTO {
+  int32 code = 1;
+  string message = 2;
+  McpAuthorizationDTO data = 3;
+  string request_id = 4;
+  McpWorkspaceTargetDTO target = 5;
+  uint32 protocol_version = 6;
 }
 
 message MessageCreateRequest {

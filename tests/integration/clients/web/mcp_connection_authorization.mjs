@@ -60,16 +60,22 @@ try {
     const token = (await credential.json()).data.token;
     const results = [];
     let owner;
+    let gatewayId;
     for (const url of ["/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"]) {
       const headers = { "X-Local-Token": token };
       if (url === "/api/v1/workspace") {
-        if (!owner) throw new Error("Gateway 未登记目标 Backend 工作区");
+        if (!owner) throw new Error("Gateway 未登记完整目标工作区");
+        headers["X-BoxTeam-Target-Gateway-Id"] = owner.gateway_id;
         headers["X-BoxTeam-Workspace-Id"] = owner.workspace_id;
-        if (owner.connection_kind === "local") headers["X-BoxTeam-Backend-Workspace-Id"] = owner.backend_workspace_id;
       }
       const response = await fetch(url, { headers });
       const body = await response.json();
-      if (url === "/api/gateway/workspaces") owner = body.data.items.find((item) => item.backend_workspace_id === workspaceId);
+      if (url === "/api/gateway/health") gatewayId = body.data.gateway_id;
+      if (url === "/api/gateway/workspaces") {
+        const candidates = body.data.items.filter(item => item.gateway_id === gatewayId && item.workspace_id === workspaceId);
+        if (candidates.length !== 1) throw new Error("Gateway／UUID 目标必须唯一登记");
+        [owner] = candidates;
+      }
       results.push({ url, status: response.status, requestId: response.headers.get("x-request-id"), body });
     }
     return { results, owner };
@@ -94,7 +100,9 @@ try {
     assert.equal(response.status(), 200);
     const request = response.request();
     assert.equal(new URL(request.url()).pathname, `/api/v1/sessions/${fixture.sessionId}/threads/${fixture.threadId}/messages`);
-    assert.equal((await request.allHeaders())["x-boxteam-workspace-id"], initialization.owner.workspace_id);
+    const headers = await request.allHeaders();
+    assert.equal(headers["x-boxteam-target-gateway-id"], initialization.owner.gateway_id);
+    assert.equal(headers["x-boxteam-workspace-id"], initialization.owner.workspace_id);
     const body = await response.json();
     assert.equal(response.headers()["x-request-id"], body.request_id);
     return body.data.job_id;
@@ -162,7 +170,7 @@ try {
     await thread.getByRole("link", { name: "查看此工作区的 MCP 授权与连接状态" }).first().click({ timeout: 60000 });
     const management = await managementPromise;
     await management.getByRole("heading", { name: "工作区 MCP 连接与授权", exact: true }).waitFor();
-    assert.equal(new URL(management.url()).searchParams.get("mcp_workspace"), initialization.owner.workspace_id);
+    assert.deepEqual(JSON.parse(new URL(management.url()).searchParams.get("mcp_workspace")), [initialization.owner.gateway_id, initialization.owner.workspace_id]);
     assert.equal(await management.locator(".monaco-workbench").count(), 0);
     const secure = management.getByRole("region", { name: "MCP Server secure", exact: true });
     await secure.getByRole("button", { name: "打开授权页面", exact: true }).waitFor({ timeout: 30000 });
@@ -190,8 +198,8 @@ try {
     assert.equal(payload.code, callback.searchParams.get("code"));
     assert.equal(payload.state, callback.searchParams.get("state"));
     const headers = await callbackPosts[0].allHeaders();
+    assert.equal(headers["x-boxteam-target-gateway-id"], initialization.owner.gateway_id);
     assert.equal(headers["x-boxteam-workspace-id"], initialization.owner.workspace_id);
-    assert.equal(headers["x-boxteam-backend-workspace-id"], initialization.owner.connection_kind === "local" ? fixture.workspaceId : undefined);
     const secrets = [payload.code, payload.state];
     for (const request of requests) {
       assert(secrets.every((secret) => !request.headers.referer?.includes(secret)), "Referer 含私有回调参数");

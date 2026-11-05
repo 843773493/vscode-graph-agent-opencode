@@ -247,6 +247,22 @@ def stored_operation(
         store.close()
 
 
+@pytest.mark.parametrize("gateway_id", [None, "gateway_00000000000040008000000000000001"])
+def test_operation_receipt_projects_native_workspace_and_request_gateway(
+    stored_operation: tuple[TestClient, WorkspaceStateStore, McpConnectionOperationDTO], gateway_id: str | None,
+) -> None:
+    client, _, original = stored_operation
+    headers = {"X-BoxTeam-Gateway-Id": gateway_id} if gateway_id is not None else {}
+    response = client.get(BASE + f"/{OPERATION_ID}", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["data"] == original.model_dump()
+    assert body["target"] == {"kind": "workspace", "gateway_id": gateway_id,
+                              "workspace_id": original.connection_id.split(":")[2]}
+    assert body["protocol_version"] == 1
+    assert body["request_id"] == response.headers["X-Request-ID"] == REQUEST_ID
+
+
 @pytest.mark.parametrize("native", NATIVE_PATHS)
 def test_real_store_validation_does_not_rewrite_operation_and_can_be_retried(
     stored_operation: tuple[TestClient, WorkspaceStateStore, McpConnectionOperationDTO],

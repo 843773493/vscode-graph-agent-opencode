@@ -77,6 +77,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionSkillUntrackRequest", "SessionSkillUntrackResultDTO",
         "McpServerDTO", "McpConnectionOperationDTO", "McpConnectionRequestDTO",
         "McpAuthorizationDTO", "McpAuthorizationCallbackDTO",
+        "McpServerListResponseDTO", "McpConnectionOperationListResponseDTO",
+        "McpConnectionOperationResponseDTO", "McpAuthorizationResponseDTO",
         "ToolDTO", "ToolSelectionPatchRequest", "ToolTestStartRequest", "ToolTestRunDTO", "ToolTestRunListDTO",
         "PersistentTaskCreateRequest", "PersistentTaskUpdateRequest", "PersistentTaskControlRequest",
         "PersistentTaskCheckRequest", "PersistentTaskNotificationRequest", "SessionGeneratorImportRequest",

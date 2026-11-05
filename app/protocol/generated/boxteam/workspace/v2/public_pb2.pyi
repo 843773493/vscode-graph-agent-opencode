@@ -1053,18 +1053,20 @@ class WorkspaceTraceSearchResultsDTO(_message.Message):
     def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceTraceMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_nodes: _Optional[int] = ..., scanned_records: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
 class McpServerDTO(_message.Message):
-    __slots__ = ("server_id", "transport", "enabled", "status", "tools")
+    __slots__ = ("server_id", "transport", "enabled", "status", "tools", "connection_ref")
     SERVER_ID_FIELD_NUMBER: _ClassVar[int]
     TRANSPORT_FIELD_NUMBER: _ClassVar[int]
     ENABLED_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     TOOLS_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_REF_FIELD_NUMBER: _ClassVar[int]
     server_id: str
     transport: str
     enabled: bool
     status: str
     tools: _containers.RepeatedCompositeFieldContainer[McpToolDTO]
-    def __init__(self, server_id: _Optional[str] = ..., transport: _Optional[str] = ..., enabled: _Optional[bool] = ..., status: _Optional[str] = ..., tools: _Optional[_Iterable[_Union[McpToolDTO, _Mapping]]] = ...) -> None: ...
+    connection_ref: str
+    def __init__(self, server_id: _Optional[str] = ..., transport: _Optional[str] = ..., enabled: _Optional[bool] = ..., status: _Optional[str] = ..., tools: _Optional[_Iterable[_Union[McpToolDTO, _Mapping]]] = ..., connection_ref: _Optional[str] = ...) -> None: ...
 
 class McpToolDTO(_message.Message):
     __slots__ = ("tool_id", "server_id", "remote_name", "description")
@@ -1125,6 +1127,84 @@ class McpAuthorizationCallbackDTO(_message.Message):
     code: str
     state: str
     def __init__(self, code: _Optional[str] = ..., state: _Optional[str] = ...) -> None: ...
+
+class McpWorkspaceTargetDTO(_message.Message):
+    __slots__ = ("kind", "gateway_id", "workspace_id")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    gateway_id: str
+    workspace_id: str
+    def __init__(self, kind: _Optional[str] = ..., gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...
+
+class McpServerListResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version", "catalog_revision", "catalog_generation")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: _containers.RepeatedCompositeFieldContainer[McpServerDTO]
+    request_id: str
+    target: McpWorkspaceTargetDTO
+    protocol_version: int
+    catalog_revision: str
+    catalog_generation: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Iterable[_Union[McpServerDTO, _Mapping]]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpWorkspaceTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ..., catalog_revision: _Optional[str] = ..., catalog_generation: _Optional[int] = ...) -> None: ...
+
+class McpConnectionOperationListResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: _containers.RepeatedCompositeFieldContainer[McpConnectionOperationDTO]
+    request_id: str
+    target: McpWorkspaceTargetDTO
+    protocol_version: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Iterable[_Union[McpConnectionOperationDTO, _Mapping]]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpWorkspaceTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
+
+class McpConnectionOperationResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: McpConnectionOperationDTO
+    request_id: str
+    target: McpWorkspaceTargetDTO
+    protocol_version: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Union[McpConnectionOperationDTO, _Mapping]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpWorkspaceTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
+
+class McpAuthorizationResponseDTO(_message.Message):
+    __slots__ = ("code", "message", "data", "request_id", "target", "protocol_version")
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    PROTOCOL_VERSION_FIELD_NUMBER: _ClassVar[int]
+    code: int
+    message: str
+    data: McpAuthorizationDTO
+    request_id: str
+    target: McpWorkspaceTargetDTO
+    protocol_version: int
+    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ..., data: _Optional[_Union[McpAuthorizationDTO, _Mapping]] = ..., request_id: _Optional[str] = ..., target: _Optional[_Union[McpWorkspaceTargetDTO, _Mapping]] = ..., protocol_version: _Optional[int] = ...) -> None: ...
 
 class MessageCreateRequest(_message.Message):
     __slots__ = ("role", "content", "attachments", "metadata")

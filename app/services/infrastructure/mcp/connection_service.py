@@ -57,6 +57,10 @@ class McpConnectionService:
         self._changed = asyncio.Event()
         self._started = False
 
+    @property
+    def workspace_id(self) -> str:
+        return self._workspace_id
+
     def _configuration_ref(self, server_id: str) -> str:
         return sha256_jcs(asdict(self._owner.server_configuration(server_id)))
 

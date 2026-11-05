@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.canonical_params import CanonicalGatewayId, CanonicalWorkspaceId
+
 
 class McpInvocationReceipt(BaseModel):
     """本地等待结束不代表远端副作用已停止；不保存异常自由正文。"""
@@ -42,6 +44,7 @@ class McpServerDTO(BaseModel):
     enabled: bool
     status: Literal["disabled", "ready", "failed", "authorization_required"]
     tools: list[McpToolDTO] = Field(default_factory=list)
+    connection_ref: str | None = Field(default=None, pattern=r"^mcp-connection:v1:[0-9a-f]{32}:[1-9][0-9]*$")
 
 
 class McpConnectionOperationDTO(BaseModel):
@@ -82,3 +85,41 @@ class McpAuthorizationCallbackDTO(BaseModel):
 
     code: str = Field(min_length=1, max_length=8192, repr=False)
     state: str = Field(min_length=1, max_length=1024, repr=False)
+
+
+class McpWorkspaceTargetDTO(BaseModel):
+    """原生 Backend 可直接读取；经 Gateway 使用时必须核对完整 owner。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["workspace"] = "workspace"
+    gateway_id: CanonicalGatewayId | None
+    workspace_id: CanonicalWorkspaceId
+
+
+class _McpResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: int = 0
+    message: str = "ok"
+    request_id: str
+    target: McpWorkspaceTargetDTO
+    protocol_version: Literal[1] = 1
+
+
+class McpServerListResponseDTO(_McpResponse):
+    data: list[McpServerDTO]
+    catalog_revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    catalog_generation: int = Field(ge=1)
+
+
+class McpConnectionOperationListResponseDTO(_McpResponse):
+    data: list[McpConnectionOperationDTO]
+
+
+class McpConnectionOperationResponseDTO(_McpResponse):
+    data: McpConnectionOperationDTO
+
+
+class McpAuthorizationResponseDTO(_McpResponse):
+    data: McpAuthorizationDTO

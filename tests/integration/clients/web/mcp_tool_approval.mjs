@@ -37,27 +37,33 @@ try {
   await session.dblclick();
   const thread = page.locator(`section.boxteam-thread[data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
   await expect(thread).toBeVisible();
-  const initialization = await page.evaluate(async (backendWorkspaceId) => {
+  const initialization = await page.evaluate(async (workspaceId) => {
     const tokenResponse = await fetch("/api/gateway/auth/local-credential");
     if (!tokenResponse.ok) throw new Error("读取本机凭证失败");
     const token = (await tokenResponse.json()).data.token;
     const results = [];
     let owner;
+    let gatewayId;
     for (const url of ["/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace"]) {
       const headers = { "X-Local-Token": token };
       if (url === "/api/v1/workspace") {
         if (!owner) throw new Error("缺少已注册的目标工作区");
+        headers["X-BoxTeam-Target-Gateway-Id"] = owner.gateway_id;
         headers["X-BoxTeam-Workspace-Id"] = owner.workspace_id;
-        headers["X-BoxTeam-Backend-Workspace-Id"] = owner.backend_workspace_id;
       }
       const response = await fetch(url, { headers });
       const body = await response.json();
-      if (url === "/api/gateway/workspaces") owner = body.data.items.find((item) => item.backend_workspace_id === backendWorkspaceId);
+      if (url === "/api/gateway/health") gatewayId = body.data.gateway_id;
+      if (url === "/api/gateway/workspaces") {
+        const candidates = body.data.items.filter(item => item.gateway_id === gatewayId && item.workspace_id === workspaceId);
+        if (candidates.length !== 1) throw new Error("Gateway／UUID 目标必须唯一登记");
+        [owner] = candidates;
+      }
       results.push({ url, status: response.status, requestId: response.headers.get("x-request-id"), body });
     }
-    return results;
+    return { results, owner };
   }, fixture.workspaceId);
-  for (const result of initialization) {
+  for (const result of initialization.results) {
     assert.equal(result.status, 200, result.url);
     assert(result.requestId);
     assert.equal(result.requestId, result.body.request_id);
@@ -69,7 +75,8 @@ try {
   assert.equal(acceptance.status(), 200);
   assert.equal(new URL(acceptance.url()).pathname, `/api/v1/sessions/${fixture.sessionId}/threads/${fixture.threadId}/messages`);
   const messageHeaders = await acceptance.request().allHeaders();
-  const acceptedOwner = initialization.find(item => item.url === "/api/gateway/workspaces").body.data.items.find(item => item.backend_workspace_id === fixture.workspaceId);
+  const acceptedOwner = initialization.owner;
+  assert.equal(messageHeaders["x-boxteam-target-gateway-id"], acceptedOwner.gateway_id);
   assert.equal(messageHeaders["x-boxteam-workspace-id"], acceptedOwner.workspace_id);
   await expect(thread).toHaveAttribute("data-workspace-id", fixture.workspaceId);
   const jobId = (await acceptance.json()).data.job_id;
@@ -93,7 +100,9 @@ try {
   assert.equal(result.status(), 200, JSON.stringify(body));
   assert.equal(result.headers()["x-request-id"], body.request_id);
   assert.equal(body.data.status, "accepted");
-  assert.equal((await result.request().allHeaders())["x-boxteam-workspace-id"], acceptedOwner.workspace_id);
+  const approvalHeaders = await result.request().allHeaders();
+  assert.equal(approvalHeaders["x-boxteam-target-gateway-id"], acceptedOwner.gateway_id);
+  assert.equal(approvalHeaders["x-boxteam-workspace-id"], acceptedOwner.workspace_id);
   const request = result.request().postDataJSON();
   assert.equal(request.responses[0].decisions[0].type, "edit");
   assert.equal(request.responses[0].decisions[1].type, "reject");
