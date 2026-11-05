@@ -175,7 +175,7 @@
 
 - [x] 16.1 清点 Gateway catalog 全范围查询／镜像匹配、旧 React 资源导航、Workbench 多目标分支、原文件 SearchService、Agent 工具及测试的全部直接／间接消费者，确定唯一两级调用链与删除清单。
 - [ ] 16.2 在原协议 owner 定义 Provider 能力、类型化领域命中联合及联邦范围／分支／增量／结束信封，同步 OpenAPI／proto／生成客户端与真实类型检查；只共享生命周期，不引入全局业务对象或索引库。
-- [ ] 16.3 在工作区 SearchService 注册原 catalog／Thread／文件／消息／工具结果／请求／Trace Provider，按类别＋操作／模式唯一分派，支持能力／版本发现、精确 scope、选项拒绝及原分页／位置；冲突报错，缺 Provider 不永久等待。注册句柄可释放，禁止新准入、取消并等待在途安全结算后释放资源，不能切换 Provider 或发布迟到命中；原领域接口复用同一查询，不复制扫描器或强制 Searchable 基类。
+- [x] 16.3 在工作区 SearchService 注册原 catalog／Thread／文件／消息／工具结果／请求／Trace Provider，按类别＋操作／模式唯一分派，支持能力／版本发现、精确 scope、选项拒绝及原分页／位置；冲突报错，缺 Provider 不永久等待。注册句柄可释放，禁止新准入、取消并等待在途安全结算后释放资源，不能切换 Provider 或发布迟到命中；原领域接口复用同一查询，不复制扫描器或强制 Searchable 基类。
 - [x] 16.4 在 Gateway 实现发起上下文、显式集合与 all 的范围解析，返回稳定集合／时间／顺序；无上下文、空集合、未知或越权 ID 明确拒绝，续页冻结范围，登记变动不静默增删目标，停止目标不启动。
 - [x] 16.5 复用 Gateway 控制面提供有界工作区名称／ID／导航发现，使“相关工作区 → 明确集合 → 会话树／Thread／正文”可由 UI／工具组合；直接集合及 all 查询不以项目名称相关性预筛。
 - [ ] 16.6 在 Gateway 实现唯一跨目标有界队列；核心使用取消／进度／最终完成 typed 合同，SSE 仅作网络编码。统一剩余期限、实际路由、单次 fan-out 相同 request_id 及新读取新 ID、分支重试和部分失败；首批及时、后续有界批次／缓冲、结算前 flush、唯一终态，慢消费不无限积累，Provider 无 SSE 依赖，不新增持久搜索会话或广播搜索结果。
@@ -945,3 +945,8 @@
 - 原 Quick Access 的显式 pick 复用原 QuickPick 多选；勾选后 Esc 返回空集合并取消 reader，show 与原单选保持原行为。文件候选可选、状态行不可选，同查询续页按资源身份保留勾选，身份失效清空选择。全部来源通过唯一 URI owner 解析后才调用一次已捕获的原 Composer writer，任一不支持或解析失败均零追加。
 - 共享根47项 Chromium 合同／506条断言、51份实际转换源码的完整类型检查、Ruff／Python 3.12 Pyright及MJS语法通过。正式Workbench构建与真实Gateway／双工作区页面1 passed／97.98秒（外层100.86秒），核勾选后取消、第二项真实grammar拒绝、延迟第二项且切换焦点、零新Tab／正文读取／执行及刷新后草稿恢复；运行期间源码指纹不变。
 - 首轮页面150秒超时原件保留：复选框焦点的Enter由原Toggle用于切换勾选并停止传播，驱动改为原输入框确认且等待选择器关闭，原断言和期限不变；补充阶段原始输出。精确补丁、前后指纹、失败与通过命令及收据见 `out/tests/temp/2026/11/05/content_selection_audit/artifacts/multi-reference-verification-041.json`。固定版本、二级返回及Electron未由本片证明，12.1／12.4／12.5继续未勾选。
+
+### 2026-11-05：工作区 Provider 注册与注销证据闭环（16.3）
+
+- 核对容器注册、服务关闭及原catalog／Thread／workspace history消费者，均复用唯一SearchService与领域owner；能力／版本／选项、原分页及位置不另建实现。70项服务检查及真实A/B Backend／Gateway的注销和版本交接，按当前生产源码精确指纹复用：关闭准入、安全结算后释放、禁止迟到页及版本切换前冲突均已证明。
+- 当前名称HTTP、页预算、消息／工具和请求／Trace产品页面分别与对应owner逐文件SHA一致；补齐早前缺少的当前Trace页面证据。原四页组合仍记1失败3通过，消息页随后独立通过，不改写旧失败。完整匹配及原始收据索引见 `out/tests/temp/2026/11/05/provider_registration_closure/artifacts/verification-001.json`；未变化的检查不重复运行。本项关闭，第16.20组缓存、预热及流式组合继续未勾选。
