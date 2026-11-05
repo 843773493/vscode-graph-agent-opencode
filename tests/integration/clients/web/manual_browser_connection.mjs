@@ -30,6 +30,9 @@ const pageErrors = [];
 const requestFailures = [];
 let delayedInitialSnapshot = false;
 let delayedClientModule = false;
+let delayedClientStylesheet = false;
+let releaseClientStylesheet;
+const clientStylesheetGate = new Promise((resolve) => { releaseClientStylesheet = resolve; });
 let clientModuleCacheControl = null;
 let abortClientModuleOnce = false;
 const result = {
@@ -97,6 +100,10 @@ try {
       await route.continue();
       return;
     }
+    if (!delayedClientStylesheet && url.pathname === "/api/gateway/attach/browser/styles.css") {
+      delayedClientStylesheet = true;
+      await clientStylesheetGate;
+    }
     if (url.pathname === "/api/gateway/attach/browser/main.js") {
       if (abortClientModuleOnce) {
         abortClientModuleOnce = false;
@@ -126,7 +133,7 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   await page.locator(`button[data-session-id="${fixture.sessionId}"]`).dblclick();
-  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.backendWorkspaceId}"][data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
+  const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
   await expect(thread).toBeVisible();
   const toggle = thread.getByRole("button", { name: "切换会话资源", exact: true });
   if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
@@ -147,9 +154,12 @@ try {
   assertCondition(typeof browserId === "string" && browserId, "新建浏览器响应缺少 resource_id");
   result.browser_id = browserId;
   const creation = createResponse.request().postDataJSON();
-  result.creation_owner = { workspaceId: (await createResponse.request().allHeaders())["x-boxteam-workspace-id"],
+  const creationHeaders = await createResponse.request().allHeaders();
+  result.creation_owner = { gatewayId: creationHeaders["x-boxteam-target-gateway-id"],
+    workspaceId: creationHeaders["x-boxteam-workspace-id"],
     sessionId: creation.session_id, threadId: creation.thread_id };
-  assertCondition(result.creation_owner.workspaceId === fixture.workspaceId
+  assertCondition(result.creation_owner.gatewayId === fixture.gatewayId
+    && result.creation_owner.workspaceId === fixture.workspaceId
     && result.creation_owner.sessionId === fixture.sessionId && result.creation_owner.threadId === fixture.threadId,
   `新建浏览器请求归属错误: ${JSON.stringify(result.creation_owner)}`);
   result.preview_owner = { workspaceId: await thread.getAttribute("data-workspace-id"),
@@ -165,6 +175,7 @@ try {
   assertCondition(
     result.attach_url?.includes(`/api/gateway/attach/browser/`)
       && result.attach_url.includes(`workspaceId=${encodeURIComponent(fixture.workspaceId)}`)
+      && result.attach_url.includes(`target_gateway_id=${encodeURIComponent(fixture.gatewayId)}`)
       && result.attach_url.includes(`browserId=${encodeURIComponent(browserId)}`),
     `浏览器预览未使用 Gateway attach 地址: ${result.attach_url}`,
   );
@@ -185,6 +196,7 @@ try {
     overlay: (await overlay.textContent())?.trim() || "",
     parentNotice: (await thread.locator(".resource-notice").textContent())?.trim() || "",
     queuedAddress: await address.inputValue(),
+    documentUrl: await attachedPage.locator("body").evaluate(() => window.location.href),
   };
   const transitionText = Object.values(result.transition).join(" ");
   assertCondition(!transitionText.includes("等待连接"), `初始化阶段出现虚假等待状态: ${transitionText}`);
@@ -194,6 +206,9 @@ try {
     `初始化阶段没有明确连接反馈: ${transitionText}`,
   );
   assertCondition(result.transition.queuedAddress === targetUrl, "初始化阶段提交的 URL 没有保留");
+  assertCondition(result.transition.documentUrl === result.attach_url, "初始化阶段回车改变了 attach 页的 owner 地址");
+  assertCondition(delayedClientStylesheet, "初始化阶段没有阻塞真实样式加载");
+  releaseClientStylesheet();
 
   await badge.waitFor({ state: "visible", timeout: 15_000 });
   await expect(badge).toHaveAttribute("aria-label", /已连接/, { timeout: 20_000 });
@@ -214,6 +229,7 @@ try {
     firstNavigationTitle: "Manual Ready",
     delayedInitialSnapshot,
     delayedClientModule,
+    delayedClientStylesheet,
     clientModuleCacheControl,
   };
   assertCondition(result.final.badge.includes("已连接"), `首次导航后连接状态异常: ${result.final.badge}`);
@@ -361,6 +377,7 @@ try {
   await recoveryPage.close();
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
 } catch (error) {
+  releaseClientStylesheet();
   executionError = error;
   if (page) await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => undefined);
   result.console_errors = consoleErrors;
@@ -388,6 +405,7 @@ try {
   await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
   throw error;
 } finally {
+  releaseClientStylesheet();
   try {
     await runContext.close();
   } catch (cleanupError) {

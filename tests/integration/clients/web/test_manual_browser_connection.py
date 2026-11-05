@@ -95,7 +95,11 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             await acquire_gateway_guest(client)
             workspaces_response = await client.get("/api/gateway/workspaces")
             assert workspaces_response.status_code == 200, workspaces_response.text
-            workspace_id = workspaces_response.json()["data"]["active_workspace_id"]
+            owner = workspaces_response.json()["data"]["active_workspace"]
+            workspace_id = owner["workspace_id"]
+            gateway_id = owner["gateway_id"]
+            client.headers.update({"X-BoxTeam-Workspace-Id": workspace_id,
+                                   "X-BoxTeam-Target-Gateway-Id": gateway_id})
             session_title = "手动浏览器首航 E2E"
             session_response = await client.post(
                 "/api/v1/sessions",
@@ -103,6 +107,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             )
             assert session_response.status_code == 200, session_response.text
             session = session_response.json()["data"]
+            assert session["workspace_id"] == workspace_id
             main = await client.get(f"/api/v1/sessions/{session['session_id']}/main-thread")
             assert main.status_code == 200, main.text
 
@@ -115,7 +120,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
                         "sessionTitle": session_title,
                         "workspaceId": workspace_id,
                         "sessionId": session["session_id"],
-                        "backendWorkspaceId": session["workspace_id"],
+                        "gatewayId": gateway_id,
                         "threadId": main.json()["data"]["thread_id"],
                     },
                     ensure_ascii=False,
@@ -149,7 +154,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
         }
         assert browser_result["popup_count"] == 0
         assert browser_result["creation_owner"] == {
-            "workspaceId": workspace_id, "sessionId": session["session_id"],
+            "gatewayId": gateway_id, "workspaceId": workspace_id, "sessionId": session["session_id"],
             "threadId": main.json()["data"]["thread_id"],
         }
         assert browser_result["transition"]["badge"] in {"正在初始化", "连接中"}

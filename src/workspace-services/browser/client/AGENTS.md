@@ -24,6 +24,8 @@ client/
 ```
 
 `main.js` 持有页面运行态并连接协议与控制器；新增功能优先放入对应的同级职责模块，避免主入口继续膨胀。
+
+HTML 的早期地址提交处理在样式与模块加载前安装到 document；初始化期间回车只保存待导航地址，不能触发表单原生跳转而清空 Gateway／工作区／Browser 参数。完整模块装配后仍由原工具栏与同一 navigate 链路接手。
 `browserDebugElementTree.js` 以迭代顺序构建 DOM 检查树，并限制单次可见行数为 2,000；超出时显示明确的截断提示，避免把宽 DOM 快照全部铺成大型页面节点树。
 
 `clickedAtPerformanceMs`、`decodeStartedAtPerformanceMs` 和 `drawStartedAtPerformanceMs` 都来自当前页面的 `performance.now()`，只能在同一页面时钟内求差；`decodeMs/drawMs` 是传给后端的耗时，不是事件时间。`frameDecodeSequence` 则是本地解码结果的失效序号，开始解码和切页都会递增；不能用于后端 `frameId` 确认、资源身份或跨页面排序。

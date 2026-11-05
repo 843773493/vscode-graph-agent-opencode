@@ -19,6 +19,67 @@
         }
       }
     </script>
+    <script>
+      (() => {
+        const initializationFailures = [];
+        const describeFailure = (reason) => {
+          if (reason instanceof Error) {
+            return reason.stack || reason.message;
+          }
+          if (reason && typeof reason === "object" && "message" in reason) {
+            return String(reason.message);
+          }
+          return String(reason || "未知初始化错误");
+        };
+        window.addEventListener("error", (event) => {
+          initializationFailures.push(describeFailure(event.error || event.message));
+        });
+        window.addEventListener("unhandledrejection", (event) => {
+          initializationFailures.push(describeFailure(event.reason));
+        });
+        // 先于样式和模块装配，避免首次回车触发表单导航并丢失 owner 参数。
+        document.addEventListener("submit", (event) => {
+          if (event.target.id !== "url-form" || window.BOXTEAM_BROWSER_CLIENT_READY === true) {
+            return;
+          }
+          event.preventDefault();
+          const address = document.querySelector("#address-input");
+          const status = document.querySelector("#status-line");
+          const targetUrl = address.value.trim();
+          if (!targetUrl) {
+            status.title = "请输入要打开的 URL";
+            status.setAttribute("aria-label", "请输入要打开的 URL");
+            status.classList.add("error");
+            return;
+          }
+          window.BOXTEAM_BROWSER_EARLY_URL = targetUrl;
+          status.title = "浏览器正在初始化，将在连接后打开该地址";
+          status.setAttribute("aria-label", "浏览器正在初始化，将在连接后打开该地址");
+          status.classList.remove("error");
+        });
+        window.setTimeout(() => {
+          if (window.BOXTEAM_BROWSER_CLIENT_READY === true) {
+            return;
+          }
+          const badge = document.querySelector("#attach-state-badge");
+          const status = document.querySelector("#status-line");
+          const overlay = document.querySelector("#screen-overlay");
+          badge.className = "attach-state-badge failed";
+          badge.title = "初始化失败";
+          badge.setAttribute("aria-label", "初始化失败");
+          const failure = initializationFailures.at(-1);
+          const statusMessage = failure
+            ? `浏览器界面初始化失败：${failure}；请点击画面区域重新加载`
+            : "浏览器界面初始化失败，请点击画面区域重新加载";
+          status.title = statusMessage;
+          status.setAttribute("aria-label", statusMessage);
+          status.classList.add("error");
+          overlay.textContent = "初始化失败，点击重新加载";
+          overlay.style.cursor = "pointer";
+          overlay.addEventListener("click", () => window.location.reload(), { once: true });
+        }, 8000);
+      })();
+    </script>
     <link rel="stylesheet" href="./vendor/codicon/codicon.css" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -267,66 +328,6 @@
         </aside>
       </div>
     </main>
-    <script>
-      (() => {
-        const initializationFailures = [];
-        const describeFailure = (reason) => {
-          if (reason instanceof Error) {
-            return reason.stack || reason.message;
-          }
-          if (reason && typeof reason === "object" && "message" in reason) {
-            return String(reason.message);
-          }
-          return String(reason || "未知初始化错误");
-        };
-        window.addEventListener("error", (event) => {
-          initializationFailures.push(describeFailure(event.error || event.message));
-        });
-        window.addEventListener("unhandledrejection", (event) => {
-          initializationFailures.push(describeFailure(event.reason));
-        });
-        const form = document.querySelector("#url-form");
-        const address = document.querySelector("#address-input");
-        const status = document.querySelector("#status-line");
-        const badge = document.querySelector("#attach-state-badge");
-        const overlay = document.querySelector("#screen-overlay");
-        form.addEventListener("submit", (event) => {
-          if (window.BOXTEAM_BROWSER_CLIENT_READY === true) {
-            return;
-          }
-          event.preventDefault();
-          const targetUrl = address.value.trim();
-          if (!targetUrl) {
-            status.title = "请输入要打开的 URL";
-            status.setAttribute("aria-label", "请输入要打开的 URL");
-            status.classList.add("error");
-            return;
-          }
-          window.BOXTEAM_BROWSER_EARLY_URL = targetUrl;
-          status.title = "浏览器正在初始化，将在连接后打开该地址";
-          status.setAttribute("aria-label", "浏览器正在初始化，将在连接后打开该地址");
-          status.classList.remove("error");
-        });
-        window.setTimeout(() => {
-          if (window.BOXTEAM_BROWSER_CLIENT_READY === true) {
-            return;
-          }
-          badge.className = "attach-state-badge failed";
-          badge.title = "初始化失败";
-          badge.setAttribute("aria-label", "初始化失败");
-          const failure = initializationFailures.at(-1);
-          const statusMessage = failure
-            ? `浏览器界面初始化失败：${failure}；请点击画面区域重新加载`
-            : "浏览器界面初始化失败，请点击画面区域重新加载";
-          status.title = statusMessage;
-          status.setAttribute("aria-label", statusMessage);
-          status.classList.add("error");
-          overlay.textContent = "初始化失败，点击重新加载";
-          overlay.style.cursor = "pointer";
-          overlay.addEventListener("click", () => window.location.reload(), { once: true });
-        }, 8000);
-      })();
-    </script>
     <script src="./config.js"></script>
     <script type="module" src="./main.js"></script>
   </body>

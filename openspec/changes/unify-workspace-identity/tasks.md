@@ -317,3 +317,8 @@
 
 - 附件装具使用完整owner、原生UUID URI及真实API双目标头；保留缩略图失败重试、原件预览和具体附件错误正文断言。附件组件在受保护组合中通过，随后manual browser失败，未把整组记为通过；首轮Vite扫描与多alert歧义按准确入口／预览region修正。
 - 同UUID跨Gateway的目录搜索流单测核运行、未读及离线摘要隔离，原定向5 passed／28断言。附件harness真实tsc、Ruff与JS语法通过，完整Web原28条诊断无新增；源码匹配与原始结果见 `out/tests/temp/identity_remaining_web_20261105/artifacts/attachment-component-source-attribution.json` 及其引用的03证据。本批不代替完整产品附件／远端验收，6.4继续未勾。
+
+### 2026-11-05：6.4 Browser attach 早期输入与归属
+
+- 样式阻塞的真实Chromium最小复现确认：原HTML在提交监听器安装前接受回车，触发原生表单跳转、清空地址及owner查询参数。现将同一早期处理提前到样式前，模块完成后继续复用原navigate，不新增导航链路；回归明确阻塞首次样式并核URL、双目标创建头及Thread归属。
+- 真实Gateway/Workbench手动Browser场景通过，保留首次导航、焦点、空白标签、导航错误恢复、无randomUUID和模块失败重载断言；同组合file-cache与session-info通过，catalog在随后main打开阶段失败，整体3 passed／1 failed，不记全组通过。HTML／JS静态通过，准确命令、首尾源码及独立patch见 `out/tests/temp/browser_early_navigation_20261105/artifacts/source-attribution.json`；viewport的他人改动未纳入本提交。6.4继续未勾。
