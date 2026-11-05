@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -18,12 +19,15 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
 )
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -32,6 +36,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from tests.support.rollout.fixture_output import commit_fixture_output
+from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 OTHER_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd657"
@@ -298,6 +303,108 @@ def test_new_user_turn_append_uses_acceptance_and_prefix_replay_needs_no_admissi
         ("accepted-user-root", USER_EXECUTION_ID),
         ("accepted-final", USER_EXECUTION_ID),
     ]
+
+
+@pytest.mark.parametrize("materialize_backing", [False, True])
+def test_checkpoint_preserves_sparse_history_coordinates_and_hidden_high_water(
+    tmp_path: Path, session_bundle_factory, materialize_backing: bool,
+) -> None:
+    storage, saver, thread_id = _make_saver(tmp_path, session_bundle_factory)
+    first, first_message = _user_admission(saver, thread_id)
+    gap = AIMessage(content="只作恢复 backing 的中间输出", id="gap-backing")
+    config = _put_with_admission(
+        saver, session_id=SESSION_ID, thread_id=thread_id, admission=first,
+        config=cast(RunnableConfig, build_checkpoint_config(thread_id)), checkpoint_id="sparse-first",
+        messages=[first_message, gap],
+    )
+    second = saver.accept_turn(
+        SESSION_ID, thread_id=thread_id, accepted_ingress_id="second-ingress",
+        acceptance_idempotency_key="second-acceptance", job_id="second-job",
+        admission_idempotency_key="second-admission", payload="第二条输入",
+        root_item_id="item-second-root", initial_execution_id="second-execution",
+    )
+    admission = saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id="second-execution")
+    second_message = HumanMessage(content="第二条输入", id="second-root")
+    tail = AIMessage(content="截点外的恢复 backing", id="tail-backing")
+    all_messages: list[object] = [first_message, gap, second_message, tail]
+    config = _put_with_admission(
+        saver, session_id=SESSION_ID, thread_id=thread_id, admission=admission,
+        config=config, checkpoint_id="sparse-source", messages=all_messages,
+    )
+    # 只准备 storage 单元的 fork 式稀疏 membership；后续 checkpoint、
+    # acceptance、history 与 Provider plan 均走真实 owner 入口。
+    with storage.storage.write_connection(SESSION_ID, thread_id, "") as connection:
+        source_view = storage.storage._active_context_view_id(connection, "")
+        mutate_view_members(connection,
+            "UPDATE context_view_items SET logical_item_ordinal=CASE item_id "
+            "WHEN 'item-second-root' THEN 5 WHEN 'item-tail-backing' THEN 15 ELSE logical_item_ordinal END, "
+            "visible=CASE WHEN item_id IN ('item-gap-backing','item-tail-backing') THEN 0 ELSE 1 END, "
+            "context_selected=CASE WHEN item_id IN ('item-gap-backing','item-tail-backing') THEN 0 ELSE 1 END, "
+            "context_ordinal=CASE item_id WHEN 'item-accepted-user-root' THEN 0 "
+            "WHEN 'item-second-root' THEN 1 END WHERE view_id=?", (source_view,),
+        )
+        connection.commit()
+    membership_sql = (
+        "SELECT item_id,logical_item_ordinal,visible,context_selected,context_ordinal "
+        "FROM context_view_items WHERE view_id=? ORDER BY logical_item_ordinal"
+    )
+    frozen = _query(storage, SESSION_ID, thread_id, membership_sql, (source_view,))
+    assert frozen == [
+        ("item-accepted-user-root", 0, 1, 1, 0), ("item-gap-backing", 1, 0, 0, None),
+        ("item-second-root", 5, 1, 1, 1), ("item-tail-backing", 15, 0, 0, None),
+    ]
+    initial = saver.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user"]))
+    expected_roots = [(USER_TURN_ID, 0), (second["turn_id"], 5)]
+    assert [(turn.turn_id, turn.root_logical_item_ordinal) for turn in initial.items] == expected_roots
+    messages: list[object] = all_messages if materialize_backing else [first_message, second_message]
+    for number in range(2):
+        config = _put_with_admission(
+            saver, session_id=SESSION_ID, thread_id=thread_id, admission=admission,
+            config=config, checkpoint_id=f"sparse-empty-{number}", messages=messages,
+        )
+        current = _query(storage, SESSION_ID, thread_id,
+            "SELECT head_view_id FROM branches WHERE status='active'")[0][0]
+        assert _query(storage, SESSION_ID, thread_id, membership_sql, (current,)) == frozen
+        history = saver.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user"]))
+        assert history.projection_epoch == initial.projection_epoch
+        assert [(turn.turn_id, turn.root_logical_item_ordinal) for turn in history.items] == expected_roots
+        with (
+            session_thread_owner_scope(_owner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            plan = saver.compose_committed_context_plan(
+                SESSION_ID, thread_id, plan_id=f"sparse-plan-{number}",
+                tool_set=ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
+            )
+        assert [ref.ref_id for ref in plan.refs if ref.ref_type == "canonical_item"] == [
+            "item-accepted-user-root", "item-second-root",
+        ]
+    third = saver.accept_turn(
+        SESSION_ID, thread_id=thread_id, accepted_ingress_id="third-ingress",
+        acceptance_idempotency_key="third-acceptance", job_id="third-job",
+        admission_idempotency_key="third-admission", payload="新的续写输入",
+        root_item_id="item-third-root", initial_execution_id="third-execution",
+    )
+    third_admission = saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id="third-execution")
+    _put_with_admission(
+        saver, session_id=SESSION_ID, thread_id=thread_id, admission=third_admission,
+        config=config, checkpoint_id="sparse-successor", messages=[
+            *messages, HumanMessage(content="新的续写输入", id="third-root"),
+            AIMessage(content="新增 checkpoint 输出", id="third-output"),
+        ],
+    )
+    current = _query(storage, SESSION_ID, thread_id,
+        "SELECT head_view_id FROM branches WHERE status='active'")[0][0]
+    assert _query(storage, SESSION_ID, thread_id, membership_sql, (current,)) == [
+        *frozen, ("item-third-root", 16, 1, 1, 2), ("item-third-output", 17, 1, 1, 3),
+    ]
+    assert _query(storage, SESSION_ID, thread_id, membership_sql, (source_view,)) == frozen
+    with RolloutCheckpointSaver(storage.storage.sessions_dir) as cold:
+        history = cold.load_history(SESSION_ID, thread_id, TurnHistoryLoadRequest(include=["user"]))
+        assert history.projection_epoch == initial.projection_epoch
+        assert [(turn.turn_id, turn.root_logical_item_ordinal) for turn in history.items] == [
+            *expected_roots, (third["turn_id"], 16),
+        ]
 
 
 def test_internal_notice_and_tool_outputs_remain_turnless_and_do_not_reopen_final_turn(

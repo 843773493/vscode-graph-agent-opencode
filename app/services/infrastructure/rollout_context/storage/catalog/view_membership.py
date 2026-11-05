@@ -583,21 +583,25 @@ class RolloutViewMembershipMixin:
         display_only_item_ids: set[str] = set()
         parent_item_order: list[str] = []
         parent_context_order: list[str] = []
+        inherited_members: dict[str, tuple[str, int, int, str, int, int | None]] = {}
+        backing_only_ids: set[str] = set()
         if parent_view_id is not None and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
             parent_members = connection.execute(
-                "SELECT item_id, source_kind, context_selected, context_ordinal FROM context_view_items "
-                "WHERE view_id = ? AND visible = 1 ORDER BY logical_item_ordinal",
+                "SELECT item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal "
+                "FROM context_view_items WHERE view_id = ? ORDER BY logical_item_ordinal",
                 (parent_view_id,),
             ).fetchall()
+            inherited_members = {row[0]: row for row in parent_members}
+            backing_only_ids = {row[0] for row in parent_members if row[2] == 0}
             parent_item_order = [row[0] for row in parent_members]
             parent_context_order = [row[0] for row in sorted(
-                (row for row in parent_members if row[2] == 1),
-                key=lambda row: strict_non_negative_int(row[3], field="context_view_items.context_ordinal"),
+                (row for row in parent_members if row[2] == 1 and row[4] == 1),
+                key=lambda row: strict_non_negative_int(row[5], field="context_view_items.context_ordinal"),
             )]
             candidate_item_ids.update(parent_item_order)
             display_only_item_ids = {
                 strict_text(row[0], field="context_view_items.item_id")
-                for row in parent_members if row[1] == "display_only"
+                for row in parent_members if row[3] == "display_only"
             }
             candidate_item_ids.update(display_only_item_ids)
         if candidate_item_ids:
@@ -623,10 +627,17 @@ class RolloutViewMembershipMixin:
             )
             if len(context_order) != len(set(context_order)) or set(context_order) - set(item_rows_by_id):
                 raise ValueError("context selection 含重复或不属于该历史 view 的 item")
+            context_order = [item_id for item_id in context_order if item_id not in backing_only_ids]
             context_ordinals = {item_id: ordinal for ordinal, item_id in enumerate(context_order)}
-            logical_item_ordinal = 0
+            # 展示坐标跨普通 checkpoint 保持稳定；不可见 backing 也保留原行，
+            # 使连续空 checkpoint 不丢失高水位，且不会因 raw message 候选而复活。
+            next_logical_item_ordinal = max((row[1] for row in inherited_members.values()), default=-1) + 1
             members = []
             for item_id, semantic_kind, turn_id, turn_scope, execution_id in ordered_item_rows:
+                if item_id in backing_only_ids:
+                    members.append(inherited_members[item_id])
+                    continue
+                inherited = inherited_members.get(item_id)
                 item_id = strict_text(item_id, field="item_catalog.item_id")
                 semantic_kind = strict_text(
                     semantic_kind, field=f"item_catalog.semantic_kind:{item_id}"
@@ -672,8 +683,12 @@ class RolloutViewMembershipMixin:
                     # Turn-less internal checkpoint message 不会因为进入
                     # LangGraph messages channel 而变成 canonical history。
                     continue
+                if inherited is None:
+                    logical_item_ordinal = next_logical_item_ordinal
+                    next_logical_item_ordinal += 1
+                else:
+                    logical_item_ordinal = inherited[1]
                 members.append((item_id, logical_item_ordinal, 1, source_kind, int(item_id in context_ordinals), context_ordinals.get(item_id)))
-                logical_item_ordinal += 1
             replace_members(connection, view_id, members)
         return view_id
 
