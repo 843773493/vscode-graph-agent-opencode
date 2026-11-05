@@ -23,7 +23,7 @@ export class WorkspaceMcpCatalog {
   snapshot: McpCatalogSnapshot = { operations: [] };
   private generation = 0;
   private busy = false;
-  private reading?: Promise<void>;
+  private reading?: { promise: Promise<void>; refresh: boolean };
   private readonly controller = new AbortController();
 
   constructor(target: GatewayWorkspaceRequestTarget, readonly label: string, private readonly changed: () => void) {
@@ -36,19 +36,22 @@ export class WorkspaceMcpCatalog {
   get pending(): boolean { return this.snapshot.operations.some(pendingMcpOperation); }
   get isBusy(): boolean { return this.busy; }
 
-  refresh(): Promise<void> {
+  refresh({ refresh = false }: { refresh?: boolean } = {}): Promise<void> {
     if (this.controller.signal.aborted) return Promise.reject(new Error('MCP 工作区目标已移除'));
-    if (this.reading) return this.reading;
-    const generation = this.generation;
-    const reading = this.read(generation).finally(() => { if (this.reading === reading) this.reading = undefined; });
-    this.reading = reading;
-    return reading;
+    if (this.reading) {
+      if (!refresh || this.reading.refresh) return this.reading.promise;
+      // 被动读取无论成功与否，显式刷新都要在其后真正访问原 owner；并发刷新由下一次 reading 归并。
+      return this.reading.promise.then(() => this.refresh({ refresh: true }), () => this.refresh({ refresh: true }));
+    }
+    const promise = this.read(this.generation, refresh).finally(() => { if (this.reading?.promise === promise) this.reading = undefined; });
+    this.reading = { promise, refresh };
+    return promise;
   }
 
-  private async read(generation: number): Promise<void> {
+  private async read(generation: number, refresh: boolean): Promise<void> {
     try {
       const [catalog, operations] = await Promise.all([
-        getMcpCatalog(0, this.target, this.controller.signal), listMcpOperations(0, this.target, this.controller.signal),
+        getMcpCatalog(0, this.target, { refresh, signal: this.controller.signal }), listMcpOperations(0, this.target, this.controller.signal),
       ]);
       if (generation !== this.generation || this.controller.signal.aborted) return;
       this.snapshot = { catalog, operations, actionError: this.snapshot.actionError };
@@ -92,9 +95,8 @@ export class WorkspaceMcpCatalog {
     }
     try {
       // 写入前的读取可继续收尾，但不能越过操作代次发布；失败同样重取唯一 owner。
-      try { await this.reading; }
+      try { await this.reading?.promise; }
       catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], 'MCP 操作与并发读取均失败'); }
-      this.reading = undefined;
       try { await this.refresh(); }
       catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], 'MCP 操作与状态重读均失败'); }
     } finally {

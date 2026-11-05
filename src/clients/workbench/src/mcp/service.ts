@@ -139,14 +139,14 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     else for (const model of changed) this.updates.fire(model);
   }
 
-  async queryLocal(): Promise<WorkspaceMcpServer[]> {
+  async queryLocal(options?: { refresh?: boolean }): Promise<WorkspaceMcpServer[]> {
     if (workspaceContext.getSnapshot().loading) await workspaceContext.refresh();
     this.synchronizeTargets();
     const snapshot = workspaceContext.getSnapshot();
     if (snapshot.error) throw new Error(snapshot.error);
     if (this.selectionError) throw this.selectionError;
     if (!this.selected) throw new Error('请先选择目标工作区，再读取 MCP 服务');
-    await this.selected.refresh();
+    await this.selected.refresh(options);
     return this.local;
   }
 
@@ -183,7 +183,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     await this.editors.openEditor(new McpServerEditorInput(model), options);
   }
   async activateCollections(): Promise<void> { await this.queryLocal(); }
-  resetCaches(): void { void this.queryLocal().catch(error => this.notifications.error(error)); }
+  resetCaches(): void { void this.queryLocal({ refresh: true }).catch(error => this.notifications.error(error)); }
   resetTrust(): void { throw new Error('MCP 授权归目标工作区 owner，Workbench 不维护第二套 trust 状态'); }
   autostart(): ReturnType<IMcpService['autostart']> { throw new Error('Workbench 不自动启动项目 MCP 服务，请对明确目标发起连接'); }
   cancelAutostart(): void { throw new Error('Workbench 没有自动启动的 MCP 操作，请取消原目标连接操作'); }

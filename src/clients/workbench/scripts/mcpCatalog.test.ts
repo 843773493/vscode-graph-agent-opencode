@@ -47,6 +47,7 @@ test('完整目录封套与精确 owner 保留，同名服务共享原对象但�
   const selection = { ...target }, a = create(selection), b = create(other);
   selection.gateway_id = 'changed-selection';
   await Promise.all([a.refresh(), b.refresh()]);
+  expect(mocks.read).toHaveBeenCalledWith(0, target, { refresh: false, signal: expect.any(AbortSignal) });
   const ma = model(a), mb = model(b);
   expect(a.snapshot.catalog).toEqual(envelope(target));
   expect(a.target).toEqual(target);
@@ -57,6 +58,78 @@ test('完整目录封套与精确 owner 保留，同名服务共享原对象但�
   expect(b.snapshot.operations).toEqual([]);
   expect(ma.local).toBeUndefined();
   expect(ma.tools.get()).toEqual([]);
+});
+
+test('被动读取在途时显式刷新随后真实执行，多次主动刷新仍归并到同一请求', async () => {
+  const catalog = create();
+  const passive = Promise.withResolvers<McpServerListResponseDTO>(), active = Promise.withResolvers<McpServerListResponseDTO>();
+  const started = Promise.withResolvers<void>();
+  mocks.read.mockImplementationOnce(() => passive.promise).mockImplementationOnce(() => { started.resolve(); return active.promise; });
+  const read = catalog.refresh();
+  expect(catalog.refresh()).toBe(read);
+  const explicit = catalog.refresh({ refresh: true }), repeated = catalog.refresh({ refresh: true });
+  expect(mocks.read).toHaveBeenCalledTimes(1);
+  expect(mocks.read.mock.calls[0]![2]?.refresh).toBe(false);
+  passive.resolve(envelope());
+  await started.promise;
+  expect(mocks.read).toHaveBeenCalledTimes(2);
+  expect(mocks.read.mock.calls[1]![2]?.refresh).toBe(true);
+  expect(catalog.refresh()).toBe(catalog.refresh({ refresh: true }));
+  active.resolve(envelope(target, [server], 2));
+  await Promise.all([read, explicit, repeated]);
+  expect(mocks.read).toHaveBeenCalledTimes(2);
+  expect(mocks.operations).toHaveBeenCalledTimes(2);
+  expect(catalog.snapshot.catalog?.catalog_generation).toBe(2);
+});
+
+test('被动读取失败仍交还原调用者，排队的显式刷新可独立访问 owner 并恢复', async () => {
+  const catalog = create();
+  const passive = Promise.withResolvers<McpServerListResponseDTO>();
+  mocks.read.mockImplementationOnce(() => passive.promise).mockResolvedValueOnce(envelope(target, [server], 2));
+  const failure = new Error('published catalog unavailable');
+  const readError = catalog.refresh().catch(error => error);
+  const explicit = catalog.refresh({ refresh: true });
+  passive.reject(failure);
+  expect(await readError).toBe(failure);
+  await explicit;
+  expect(mocks.read.mock.calls.map(call => call[2]?.refresh)).toEqual([false, true]);
+  expect(catalog.snapshot.catalog?.catalog_generation).toBe(2);
+  expect(catalog.snapshot.error).toBeUndefined();
+});
+
+test('主动刷新在途时被动观察共享其完整回执，不增加第二次读取', async () => {
+  const catalog = create();
+  const active = Promise.withResolvers<McpServerListResponseDTO>();
+  mocks.read.mockImplementationOnce(() => active.promise);
+  const explicit = catalog.refresh({ refresh: true });
+  expect(catalog.refresh()).toBe(explicit);
+  expect(catalog.refresh({ refresh: true })).toBe(explicit);
+  active.resolve(envelope(target, [server], 2));
+  await explicit;
+  expect(mocks.read).toHaveBeenCalledTimes(1);
+  expect(mocks.read.mock.calls[0]![2]?.refresh).toBe(true);
+  expect(catalog.snapshot.catalog).toEqual(envelope(target, [server], 2));
+});
+
+test('操作收尾保留已排队主动刷新的句柄，旧读取不能清除它或覆盖新代次', async () => {
+  const published: McpServerListResponseDTO[] = [];
+  const catalog = create(target, () => { if (catalog.snapshot.catalog) published.push(catalog.snapshot.catalog); });
+  await catalog.refresh();
+  const passive = Promise.withResolvers<McpServerListResponseDTO>(), active = Promise.withResolvers<McpServerListResponseDTO>();
+  const activeStarted = Promise.withResolvers<void>(), submitted = Promise.withResolvers<void>();
+  mocks.read.mockImplementationOnce(() => passive.promise).mockImplementationOnce(() => { activeStarted.resolve(); return active.promise; });
+  mocks.submit.mockImplementationOnce(async () => { submitted.resolve(); return operation; });
+  const read = catalog.refresh(), explicit = catalog.refresh({ refresh: true });
+  const action = catalog.act('secure', 'connect');
+  await submitted.promise;
+  passive.resolve(envelope(target, [{ ...server, status: 'ready' }], 99));
+  await activeStarted.promise;
+  active.resolve(envelope(target, [server], 2));
+  await Promise.all([read, explicit, action]);
+  expect(mocks.read.mock.calls.map(call => call[2]?.refresh)).toEqual([false, false, true]);
+  expect(published.some(value => value.catalog_generation === 99)).toBe(false);
+  expect(catalog.snapshot.catalog?.catalog_generation).toBe(2);
+  expect(catalog.isBusy).toBe(false);
 });
 
 test('提交前的迟到目录不能越过操作代次覆盖，收尾重新读取原 owner', async () => {
@@ -191,7 +264,7 @@ test('移除目标中止原请求，迟到结果不发布，也不改投当前�
   const late = Promise.withResolvers<McpServerListResponseDTO>();
   mocks.read.mockImplementationOnce(() => late.promise);
   const read = catalog.refresh();
-  const signal = mocks.read.mock.calls.at(-1)![2]!;
+  const signal = mocks.read.mock.calls.at(-1)![2]!.signal!;
   catalog.dispose();
   late.resolve(envelope(target, [], 2));
   await read;

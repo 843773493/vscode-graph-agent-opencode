@@ -5,6 +5,7 @@ import {
   getMcpInstallationCapabilities, inspectMcpInstallationCandidate, planMcpInstallation, installMcpArtifact, getMcpInstallationOperation,
 } from "./mcpConnections";
 import type { McpConnectionOperationDTO, McpServerDTO } from "./mcpConnections";
+import type { McpServerListResponseDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 
 const originalFetch = globalThis.fetch;
@@ -85,6 +86,7 @@ test("所有 MCP 消费者传递完整 owner，保留完整目录封套及原操
   expect(await getMcpAuthorization(port, target, "operation/id", signal)).toEqual(authorization);
   expect(await completeMcpAuthorization(port, target, "operation/id", { code: "private-code", state: "private-state" }, signal)).toEqual(operation);
   expect(requests).toHaveLength(6);
+  expect(requests[0]!.url.search).toBe("?refresh=true");
   for (const { init } of requests) {
     const headers = new Headers(init?.headers);
     expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
@@ -96,6 +98,34 @@ test("所有 MCP 消费者传递完整 owner，保留完整目录封套及原操
   expect(intent).toMatchObject({ server_id: "server", action: "connect" });
   expect(typeof intent.operation_id).toBe("string");
   expect(JSON.parse(String(requests[5]!.init?.body))).toEqual({ code: "private-code", state: "private-state" });
+});
+
+test("被动目录查询明确禁用远端刷新，保留取消信号、精确 owner 和完整信封", async () => {
+  const requests: { url: URL; init: RequestInit | undefined }[] = [];
+  const catalog: McpServerListResponseDTO = {
+    code: 0, message: "ok", request_id: "req-mcp", protocol_version: 1,
+    target: { kind: "workspace", ...target }, data: [], catalog_revision: revision, catalog_generation: 2,
+  };
+  const port = installFetch((url, init) => { requests.push({ url, init }); return catalog; });
+  const signal = new AbortController().signal;
+  expect(await getMcpCatalog(port, target, { refresh: false, signal })).toEqual(catalog);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.url.pathname).toBe("/api/v1/mcp/servers");
+  expect(requests[0]!.url.search).toBe("?refresh=false");
+  expect(requests[0]!.init?.signal).toBeInstanceOf(AbortSignal);
+  expect(new Headers(requests[0]!.init?.headers).get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
+  expect(new Headers(requests[0]!.init?.headers).get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id);
+  expect(requests[0]!.init?.cache).toBe("no-store");
+  const controller = new AbortController();
+  const reason = new DOMException("目录观察已取消", "AbortError");
+  const abortPort = installFetch((_url, init) => {
+    expect(init?.signal?.aborted).toBe(false);
+    controller.abort(reason);
+    expect(init?.signal?.aborted).toBe(true);
+    expect(init?.signal?.reason).toBe(reason);
+    return catalog;
+  });
+  await expect(getMcpCatalog(abortPort, target, { refresh: false, signal: controller.signal })).rejects.toBe(reason);
 });
 
 test.each([

@@ -287,6 +287,10 @@ async function ensureGuest(page, url = baseUrl) {
   } else if (current.status !== 200) {
     throw new Error(`检查游客访问失败: ${current.status} ${current.body}`);
   }
+  // 原版编辑器恢复不等待主题；本装具默认浅色主题的最后一个 include 下载完成后才能再次导航。
+  await page.waitForFunction(() => performance.getEntriesByName("code/didRestoreEditors", "mark").length > 0
+    && performance.getEntriesByName(new URL("/extensions/theme-defaults/themes/light_vs.json", location.href).href,
+      "resource").some(entry => entry.responseEnd > 0));
 }
 
 function isSessionMessageRequest(request) {
@@ -10791,7 +10795,7 @@ async function mcpBinding(owner, call) {
   const node = await sessionCatalogNode(owner);
   const rolloutIndex = await threadRolloutLocator(owner, node);
   const rows = await testControl({ action: "read_sql", name: owner.name, relative_path: rolloutIndex,
-    query: "SELECT b.revision,b.captured_registry_generation,b.effective_boundary,b.activation_ordinal,b.source_lineage_digest,s.lineage_detail_ref,s.lineage_manifest_digest,d.relative_path,d.content_hash AS detail_content_hash FROM context_assemblies a JOIN resource_activation_assembly_bindings r USING(session_id,thread_id,assembly_id) JOIN resource_activation_snapshots s USING(session_id,thread_id,activation_snapshot_id) JOIN resource_activation_bindings b USING(session_id,thread_id,activation_snapshot_id) JOIN context_plan_details d ON d.detail_ref=s.lineage_detail_ref AND d.session_id=s.session_id AND d.thread_id=s.thread_id WHERE a.model_call_id=? AND a.status IN ('sealed','terminal') AND b.resource_id='mcp-tool-catalog:v1'", parameters: [call] });
+    query: "SELECT b.revision,b.captured_registry_generation,b.effective_boundary,b.activation_ordinal,b.source_lineage_digest,s.activation_snapshot_id,s.lineage_detail_ref,s.lineage_manifest_digest,d.relative_path,d.content_hash AS detail_content_hash FROM context_assemblies a JOIN resource_activation_assembly_bindings r USING(session_id,thread_id,assembly_id) JOIN resource_activation_snapshots s USING(session_id,thread_id,activation_snapshot_id) JOIN resource_activation_bindings b USING(session_id,thread_id,activation_snapshot_id) JOIN context_plan_details d ON d.detail_ref=s.lineage_detail_ref AND d.session_id=s.session_id AND d.thread_id=s.thread_id WHERE a.model_call_id=? AND a.status IN ('sealed','terminal') AND b.resource_id='mcp-tool-catalog:v1'", parameters: [call] });
   assert.equal(rows.length, 1, "MCP 指引与 typed members 只能来自一个冻结父行");
   const row = rows[0];
   const ref = JSON.parse(row.lineage_detail_ref);
@@ -10820,7 +10824,62 @@ async function mcpBinding(owner, call) {
   for (const member of members.filter(member => member.member_kind === "mcp")) {
     assert.match(member.revision, /^mcp-connection:v1:[0-9a-f]{32}:[1-9][0-9]*$/, "冻结 MCP 成员必须保留精确执行连接身份");
   }
-  return { ...row, binding_id: `ext-catalog:v3:${row.captured_registry_generation}:${revisions[0][1]}:${digestJcsJson(members)}` };
+  return { ...row, members, lineages: detail.detail.lineages, catalog_revision: revisions[0][1],
+    binding_id: `ext-catalog:v3:${row.captured_registry_generation}:${revisions[0][1]}:${digestJcsJson(members)}` };
+}
+
+async function mcpFrozenCatalog(owner, call, binding) {
+  const rows = await readRollout(owner,
+    "SELECT b.*,d.relative_path FROM context_assemblies a JOIN resource_activation_assembly_bindings r USING(session_id,thread_id,assembly_id) JOIN resource_activation_bindings b USING(session_id,thread_id,activation_snapshot_id) JOIN context_plan_details d ON d.detail_ref=b.detail_ref AND d.session_id=b.session_id AND d.thread_id=b.thread_id WHERE a.model_call_id=? AND a.status IN ('sealed','terminal') AND b.resource_kind='mcp_tool_catalog' ORDER BY b.resource_id", [call]);
+  assert.equal(rows.length, binding.members.length + 1, "同次冻结目录必须具有完整的一对一 definition facets 和唯一父行");
+  const node = await sessionCatalogNode(owner);
+  const threadLocator = (await threadRolloutLocator(owner, node)).slice(0, -"/rollout/index.sqlite".length);
+  const definitions = [];
+  let guidance;
+  const parent = binding.lineages.find(lineage => lineage.resource_id === "mcp-tool-catalog:v1");
+  for (const row of rows) {
+    assert.deepEqual([row.session_id, row.thread_id, row.activation_snapshot_id],
+      [owner.sessionId, owner.threadId, binding.activation_snapshot_id]);
+    assert.equal(row.captured_registry_generation, binding.captured_registry_generation);
+    assert.equal(row.effective_boundary, binding.effective_boundary);
+    assert.equal(row.availability, "available");
+    const ref = JSON.parse(row.detail_ref);
+    assert.deepEqual([ref.session_id, ref.thread_id, ref.assembly_id],
+      [owner.sessionId, owner.threadId, binding.activation_snapshot_id]);
+    assert.equal(row.relative_path, `rollout/context-plan-details/${ref.assembly_id}/${ref.detail_id}`);
+    const detail = JSON.parse(await readFile(join(owner.workspace, threadLocator, row.relative_path), "utf8"));
+    assert.deepEqual(detail.detail_ref, ref);
+    assert.equal(detail.detail_kind, "resource_activation_payload");
+    assert.equal(detail.required, true);
+    assert.equal(detail.protection, "protected");
+    assert.deepEqual([row.revision, row.content_hash, detail.source_revision, detail.detail_content_hash],
+      Array(4).fill(digestJcsJson(detail.detail)));
+    assert.deepEqual([row.content_length, detail.length], Array(2).fill(Buffer.byteLength(canonicalizeJcsJson(detail.detail))));
+    const lineages = binding.lineages.filter(lineage => lineage.resource_id === row.resource_id);
+    assert.equal(lineages.length, 1);
+    const lineage = lineages[0];
+    assert.equal(lineage.activation_ordinal, row.activation_ordinal);
+    assert.equal(lineage.source_lineage_digest, row.source_lineage_digest);
+    assert.equal(lineage.source_lineage_ref.digest, row.source_lineage_digest);
+    assert.deepEqual(lineage.source_lineage_ref.sources, parent.source_lineage_ref.sources);
+    if (row.resource_id === "mcp-tool-catalog:v1") {
+      assert.equal(row.facet, "activation");
+      assert.equal(row.revision, binding.revision);
+      assert.deepEqual(lineage.members, binding.members);
+      guidance = detail.detail;
+    } else {
+      assert.equal(row.facet, "definition");
+      const members = binding.members.filter(member => row.resource_id === `extension-tool-definition:v1:${digestJcsJson(member.member_id).split(":").at(-1)}`);
+      assert.equal(members.length, 1);
+      const member = members[0];
+      assert.deepEqual(lineage.members, [member], "完整定义必须属于冻结父目录中的同一个 typed member");
+      assert.deepEqual(Object.keys(detail.detail).sort(), ["description", "group_id", "input_schema", "kind"]);
+      assert.equal(member.schema_hash, digestJcsJson({ schema: "extension-input-schema:v2", input_schema: detail.detail.input_schema }).replace("sha256:jcs:v1:", "sha256:"));
+      definitions.push({ member, binding: row, payload: detail.detail });
+    }
+  }
+  assert.ok(guidance);
+  return { definitions: definitions.sort((left, right) => left.member.member_id < right.member.member_id ? -1 : 1), guidance };
 }
 
 async function runMcpActivation(surface, boundary) {
@@ -10831,11 +10890,11 @@ async function runMcpActivation(surface, boundary) {
     turns.push({ calls: turn.calls, sent: turn.sent });
     return turn;
   };
-  const refresh = async () => (await ownerApi(surface, "/api/v1/mcp/servers")).data;
+  const readCatalog = async ({ refresh = false } = {}) => (await ownerApi(surface, `/api/v1/mcp/servers?refresh=${refresh}`)).data;
   const notify = async (tools) => {
     await updateMcpCatalog(surface, "notify", tools);
     await waitUntil(async () => {
-      const server = (await refresh()).find((entry) => entry.server_id === "notify");
+      const server = (await readCatalog()).find((entry) => entry.server_id === "notify");
       return JSON.stringify(server.tools.map(({ remote_name, description }) => ({ remote_name, description })))
         === JSON.stringify(tools.map(({ name, description }) => ({ remote_name: name, description })));
     }, "真实 MCP 通知完成完整目录发布");
@@ -10848,17 +10907,32 @@ async function runMcpActivation(surface, boundary) {
     tool_name: "mcp__notify__echo", arguments: { text, ...(version === undefined ? {} : { version }) },
   });
   try {
-    assert.ok((await refresh()).every((server) => server.tools.length === 0));
+    assert.ok((await readCatalog()).every((server) => server.tools.length === 0));
     const listCount = () => testControl({ action: "events" }).then((events) => events.filter((event) => event.phase === "mcp.list.after_capture" && event.operation_id.includes(`/mcp/${surface.name}/`)).length);
     const listsBefore = await listCount();
     const empty = await finish("空目录仍保留固定信封", [finalResponse(`${boundary}-mcp-empty`, "空目录工具面已确认。")]);
-    assert.equal(await listCount(), listsBefore, "model-call preparation 不得访问 MCP tools/list");
+    const listsAfter = await listCount();
+    assert.equal(listsAfter, listsBefore, "纯模型 Turn 与页面被动观察的完整窗口不得访问 MCP tools/list");
+    assert.equal(empty.calls.length, 1);
+    const emptyEvents = await testControl({ action: "events" });
+    const queueStarted = emptyEvents.filter(event => event.phase === "execution.queue.started" && event.operation_id === empty.sent.jobId);
+    const responseReady = emptyEvents.filter(event => event.phase === "model.response_ready" && event.operation_id === empty.calls[0]);
+    assert.equal(queueStarted.length, 1, "必须唯一取得本次真实 Job 的 queue.started");
+    assert.equal(responseReady.length, 1, "必须唯一取得本次原模型调用的 response_ready");
+    assert.equal(queueStarted[0].details.session_id, owner.sessionId);
+    assert.equal(queueStarted[0].details.thread_id, owner.threadId);
+    assert.ok(Number.isFinite(queueStarted[0].at) && Number.isFinite(responseReady[0].at));
+    assert.ok(queueStarted[0].at < responseReady[0].at, "真实队列与模型响应事件必须按原时序结算");
+    const modelWindowLists = emptyEvents.filter(event => event.phase === "mcp.list.after_capture"
+      && event.operation_id.includes(`/mcp/${surface.name}/`) && event.at >= queueStarted[0].at && event.at <= responseReady[0].at);
+    assert.deepEqual(modelWindowLists, [], "真实 queue.started 至 model.response_ready 窗口不得访问 MCP tools/list");
+    const passiveObservation = { listsBefore, listsAfter, queueStarted: queueStarted[0], responseReady: responseReady[0], modelWindowLists };
     const emptyAssembly = (await mcpAssemblies(owner, empty.calls))[0];
     const beforeText = `目录原版-${boundary}`;
     const afterText = `目录新版-${boundary}`;
     await notify([mcpEcho(beforeText)]);
     await updateMcpCatalog(surface, "silent_a", [mcpEcho(`显式刷新-${boundary}`)]);
-    const silent = (await refresh()).find((server) => server.server_id === "silent_a");
+    const silent = (await readCatalog({ refresh: true })).find((server) => server.server_id === "silent_a");
     assert.deepEqual(silent.tools.map((tool) => tool.tool_id), ["mcp__silent_a__echo"]);
 
     const inflightText = `${boundary}-mcp-inflight`;
@@ -10916,7 +10990,7 @@ async function runMcpActivation(surface, boundary) {
     const valid = await mcpBinding(owner, revokeCalls.at(-1));
     await updateMcpCatalog(surface, "silent_a", [mcpEcho(`整批新增-${boundary}`)]);
     await updateMcpCatalog(surface, "silent_b", [], `整批拒绝-${boundary}`);
-    const rejected = await ownerApiResponse(surface, "/api/v1/mcp/servers");
+    const rejected = await ownerApiResponse(surface, "/api/v1/mcp/servers?refresh=true");
     const failure = { node: surface.name, backendLog: surface.backendLog, ...rejected };
     (result.diagnostics.mcpCatalogFailures ??= []).push(failure);
     assert.equal(rejected.status, 503);
@@ -10936,12 +11010,78 @@ async function runMcpActivation(surface, boundary) {
     failure.diagnostic = following.slice(0, next < 0 ? undefined : next).join("\n");
     assert.ok(failure.diagnostic.includes(`mcp.shared.exceptions.McpError: 整批拒绝-${boundary}`), "同请求的完整诊断必须保留实际远端拒绝");
     await updateMcpCatalog(surface, "silent_b", [mcpEcho(`整批完成-${boundary}`)]);
-    await refresh();
-    const recovered = await finish("失败 candidate 只在全部有效后一次发布", [finalResponse(`${boundary}-mcp-recovered-final`, "完整目录已恢复。")]);
+    await readCatalog({ refresh: true });
+    const recoveredToolIds = ["mcp__silent_a__echo", "mcp__silent_b__echo"];
+    const recoveredSearchLabel = `${boundary}-mcp-recovered-search`;
+    const recovered = await finish("失败 candidate 只在全部有效后一次发布", [
+      toolResponse(recoveredSearchLabel, "search_tools", { tool_ids: recoveredToolIds }),
+      finalResponse(`${boundary}-mcp-recovered-final`, "完整目录已恢复。"),
+    ]);
+    assert.equal(recovered.calls.length, 2);
     const recoveredBinding = await mcpBinding(owner, recovered.calls[0]);
     assert.equal(recoveredBinding.captured_registry_generation, valid.captured_registry_generation + 1, "失败刷新不能先发布部分目录或推进有效 generation");
-    const recoveredRequest = JSON.stringify((await modelRequest(recovered.calls[0])).request.messages);
-    assert.ok(recoveredRequest.includes(`整批新增-${boundary}`) && recoveredRequest.includes(`整批完成-${boundary}`));
+    const recoveredCatalog = await mcpFrozenCatalog(owner, recovered.calls[0], recoveredBinding);
+    const mcpDefinitions = recoveredCatalog.definitions.filter(entry => entry.member.member_kind === "mcp");
+    assert.deepEqual(mcpDefinitions.map(entry => [entry.member.member_id, entry.member.server_id]),
+      [["mcp__notify__echo", "notify"], ["mcp__silent_a__echo", "silent_a"], ["mcp__silent_b__echo", "silent_b"]]);
+    const descriptions = { notify: afterText, silent_a: `整批新增-${boundary}`, silent_b: `整批完成-${boundary}` };
+    for (const { member, payload } of mcpDefinitions) {
+      const description = descriptions[member.server_id];
+      assert.deepEqual(payload, { description, group_id: `mcp:${member.server_id}`, kind: "extension",
+        input_schema: { ...mcpEcho(description, member.server_id === "notify" ? 2 : 1).inputSchema, description } });
+      const previous = valid.members.find(entry => entry.member_id === member.member_id);
+      if (previous) assert.equal(member.revision, previous.revision, "目录批次更新不得伪造原连接代际");
+    }
+    const recoveredRequest = await modelRequest(recovered.calls[0]);
+    const recoveredSources = recoveredRequest.request.messages
+      .filter(message => message.role === "user" && typeof message.content === "string"
+        && message.content.startsWith('{"protocol":"boxteam-context-sources:v2"'))
+      .flatMap(message => JSON.parse(message.content).sources)
+      .filter(source => source.source_identity === "mcp-tool-guidance:v1" && source.revision === recoveredBinding.revision);
+    assert.equal(recoveredSources.length, 1, "原 Provider 请求必须包含本次完整发布的唯一冻结指引");
+    const recoveredSource = recoveredSources[0];
+    assert.deepEqual([recoveredSource.root_placement, recoveredSource.source_tracking_at_seal,
+      recoveredSource.operation, recoveredSource.representation], ["tail_only", "untracked", "update", "full"]);
+    assert.equal(recoveredSource.body, recoveredCatalog.guidance.content);
+    assert.equal(digestJcsJson({ content: recoveredSource.body }), recoveredBinding.revision);
+    const navigation = JSON.parse(recoveredSource.body);
+    const groups = Map.groupBy(recoveredCatalog.definitions, entry => entry.payload.group_id);
+    const groupIds = [...groups.keys()].sort();
+    assert.deepEqual(groupIds, ["agent-collaboration", "debugging", "extension:browser", "extension:resource_search",
+      "extension:testing", "extension:web", "mcp:notify", "mcp:silent_a", "mcp:silent_b"]);
+    assert.deepEqual(navigation.navigation, groupIds.slice(0, 8).map(group => ({ group,
+      tool_count: groups.get(group).length,
+      example_capability: groups.get(group)[0].payload.description.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 120),
+    })), "原请求的导航必须由同次完整冻结定义确定，并遵守既有8组上限");
+    assert.equal(navigation.additional_groups, 1);
+    const notifyDefinition = mcpDefinitions[0];
+    assert.deepEqual(navigation.automatic_definitions, [{ tool_name: notifyDefinition.member.member_id,
+      ...notifyDefinition.payload, schema_hash: notifyDefinition.member.schema_hash }]);
+
+    const recoveredTurn = (await loadThreadHistory(owner, { turn_ids: [recovered.sent.turnId] })).items[0];
+    const recoveredResult = assertBoundToolResult(owner, recovered.sent, recoveredTurn, recovered.calls[0], recoveredSearchLabel, "search_tools");
+    const discovery = JSON.parse(recoveredResult.result);
+    assert.equal(discovery.catalog_revision, recoveredBinding.catalog_revision);
+    assert.match(discovery.policy_revision, /^sha256:jcs:v1:[a-f0-9]{64}$/);
+    assert.equal(discovery.next_cursor, null);
+    assert.deepEqual(discovery.results.map(entry => entry.tool_id), recoveredToolIds);
+    for (const entry of discovery.results) {
+      const frozen = mcpDefinitions.find(definition => definition.member.member_id === entry.tool_id);
+      const { effective_policy, ...definition } = entry;
+      assert.deepEqual(definition, { tool_id: frozen.member.member_id, status: "available", schema_state: "inline_complete",
+        origin: "mcp", server_id: frozen.member.server_id, ...frozen.payload, schema_hash: frozen.member.schema_hash,
+        catalog_revision: recoveredBinding.catalog_revision, match_reasons: ["精确工具 ID"], readiness: "ready",
+        missing_connections: [], execution_ready: true,
+        invocation: { entry_point: "invoke_extension_tool", tool_name: frozen.member.member_id },
+        provenance: { activation_snapshot_id: recoveredBinding.activation_snapshot_id,
+          resource_id: frozen.binding.resource_id, revision: frozen.binding.revision },
+      }, "真实 search_tools 必须返回同次冻结定义的完整正文、schema 与精确 provenance");
+      assert.deepEqual([effective_policy.execution_enabled, effective_policy.model_visible,
+        effective_policy.execution_locked, effective_policy.model_visibility_locked], [true, false, false, false]);
+    }
+    const recoveredContinuation = await assertToolResultContinuation(owner, recovered.calls, recoveredSearchLabel, recoveredResult);
+    const recoveredDiscovery = { source: recoveredSource, result: recoveredResult, continuation: recoveredContinuation,
+      definitions: mcpDefinitions, navigationGroups: groupIds };
 
     const reopen = await replaceNodePage(surface, [owner]);
     await testControl({ action: "process", name: surface.name, operation: "restart" });
@@ -10955,7 +11095,7 @@ async function runMcpActivation(surface, boundary) {
     await notify([]);
     await updateMcpCatalog(surface, "silent_a", []);
     await updateMcpCatalog(surface, "silent_b", []);
-    const deletedCatalog = await refresh();
+    const deletedCatalog = await readCatalog({ refresh: true });
     for (const serverId of ["notify", "silent_a", "silent_b"]) {
       const server = deletedCatalog.find((entry) => entry.server_id === serverId);
       assert.ok(server, `删除后缺少真实 MCP server ${serverId}`);
@@ -10996,10 +11136,11 @@ async function runMcpActivation(surface, boundary) {
     }
     assert.equal((await graphLifecycle(owner)).built.length, 2);
     assert.deepEqual((await mcpAssemblies(owner, empty.calls)).map((row) => row.bytes), [emptyAssembly.bytes], "后续变化不能改写旧 sealed bytes");
-    return { sessionId: owner.sessionId, boundary, turns, firstBinding, secondBinding, recoveredBinding, removedCalls: removed.calls, evidence: await verifyOwnerTurns(owner) };
+    return { sessionId: owner.sessionId, boundary, turns, passiveObservation, firstBinding, secondBinding,
+      recoveredBinding, recoveredDiscovery, removedCalls: removed.calls, evidence: await verifyOwnerTurns(owner) };
   } finally {
     for (const server of Object.keys(surface.mcpCatalogs)) await updateMcpCatalog(surface, server, []);
-    await refresh();
+    await readCatalog({ refresh: true });
   }
 }
 

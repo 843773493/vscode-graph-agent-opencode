@@ -181,12 +181,18 @@ async def list_mcp_servers(
     request_id: Annotated[str, Depends(get_request_id)],
     owner: Annotated[McpCatalogOwner, Depends(get_mcp_catalog_owner)],
     service: Annotated[McpConnectionService, Depends(get_mcp_connection_service)],
+    refresh: Annotated[bool, Query(description="默认主动刷新无变更通知的 MCP 服务；false 仅读取已发布目录快照")] = True,
 ):
-    try:
-        await owner.relist_servers_without_notifications()
-    except McpCatalogRelistError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+    if refresh:
+        try:
+            await owner.relist_servers_without_notifications()
+        except McpCatalogRelistError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
     snapshot = owner.management_snapshot()
+    if not refresh:
+        errors = [server.last_relist_error for server in snapshot.servers if server.last_relist_error]
+        if errors:
+            raise HTTPException(status_code=503, detail="; ".join(errors))
     servers = [
         McpServerDTO(
             server_id=server.server_id,

@@ -49,20 +49,29 @@ export function originalConsoleLocation(location, proof, identity) {
     url: match[1], line, column, lineNumber: line, columnNumber: column };
 }
 
+function workbenchBundleOrigin(url) {
+  if (!URL.canParse(url)) return null;
+  const resource = new URL(url);
+  return !resource.search && !resource.hash
+    && /^\/out\/(?:main|chunks\/chunk-[\w-]+)\.js$/.test(resource.pathname) ? resource.origin : null;
+}
+
 function isExtensionHostDisposeStack(stack, url) {
   const frames = stack.split('\n');
-  const methods = ['canceled', null, 'Array.forEach', '_RPCProtocol.dispose',
-    'ExtensionHostManager.dispose', 'ExtensionHostManagerData.dispose',
-    'ExtensionHostCollection.stopAllInReverse', 'async ExtensionService._doStopExtensionHosts'];
+  // 正式 ESM 产物会压缩函数／类名并拆出公共 chunk；原版方法链及同源构建资源仍须逐帧匹配。
+  const methods = [/^[$\w]+$/, /^$/, null, /^[$\w]+\.dispose$/,
+    /^[$\w]+\.dispose$/, /^[$\w]+\.dispose$/,
+    /^[$\w]+\.stopAllInReverse$/, /^async [$\w]+\._doStopExtensionHosts$/];
+  const origin = workbenchBundleOrigin(url);
+  if (!origin) return false;
   if (frames.length !== methods.length + 1 || frames[0] !== 'Canceled: Canceled') return false;
   return methods.every((method, index) => {
     const frame = frames[index + 1];
-    if (method === 'Array.forEach') return frame === '    at Array.forEach (<anonymous>)';
-    const prefix = method === null ? '    at ' : `    at ${method} (`;
-    const suffix = method === null ? '' : ')';
-    if (!frame.startsWith(prefix + url) || !frame.endsWith(suffix)) return false;
-    const coordinates = frame.slice((prefix + url).length, suffix ? -1 : undefined);
-    return /^:\d+:\d+$/.test(coordinates);
+    if (method === null) return frame === '    at Array.forEach (<anonymous>)';
+    const named = /^    at (.+) \((https?:\/\/[^\s()]+):(\d+):(\d+)\)$/.exec(frame);
+    const anonymous = /^    at (https?:\/\/[^\s()]+):(\d+):(\d+)$/.exec(frame);
+    return named ? method.test(named[1]) && workbenchBundleOrigin(named[2]) === origin
+      : anonymous !== null && method.test('') && workbenchBundleOrigin(anonymous[1]) === origin;
   });
 }
 
@@ -102,7 +111,7 @@ export function classifyNativeShutdownLogs(errors, events) {
   const shutdowns = handled.filter(fact => fact.joiner === 'join.stopExtensionHosts');
   const consumedObjects = new Set();
   for (const error of errors) {
-    if (error.callSiteError || !URL.canParse(error.url) || new URL(error.url).pathname !== '/out/main.js') continue;
+    if (error.callSiteError || !workbenchBundleOrigin(error.url)) continue;
     const proof = events.find(event => event.kind === 'console-call'
       && event.pageId === error.pageId && event.documentId === error.documentId
       && event.observationOrder + 1 === error.observationOrder);
@@ -187,6 +196,23 @@ export function runNativeShutdownClassifierSelfTest() {
     classifyNativeShutdownLogs(errors, events).filter(fact => fact.kind === 'extension-host-rpc-cancellation');
   assert.equal(rpc().length, 1);
   assert.equal(rpc(cancellation, proof, [error, cancellation], [hidden, proof, closed]).length, 1);
+  const chunk = 'http://127.0.0.1:19000/out/chunks/chunk-6HHVFX35.js';
+  const bundledStack = stack.replace(`canceled (${url}`, `WW (${chunk}`)
+    .replace('_RPCProtocol.dispose', 's.dispose').replace('ExtensionHostManager.dispose', 'C1.dispose')
+    .replace('ExtensionHostManagerData.dispose', '$eo.dispose').replace('ExtensionHostCollection.stopAllInReverse', 'Keo.stopAllInReverse')
+    .replace('ExtensionService._doStopExtensionHosts', 'NSt._doStopExtensionHosts');
+  const bundledProof = { ...proof, stack: bundledStack, callStack: `Error\n    at s.log (${chunk}:32:15781)` };
+  const bundledCancellation = { ...cancellation, text: `%c  ERR color: #f33 ${bundledStack}`,
+    ...originalConsoleLocation({}, bundledProof, { pageId: 7, documentId: 8, observationOrder: 23 }) };
+  assert.equal(rpc(bundledCancellation, bundledProof).length, 1, '正式拆包压缩产物沿同一对象与关闭证据归因');
+  for (const changed of [bundledStack.replace('Keo.stopAllInReverse', 'Keo.stop'),
+    bundledStack.replace('s.dispose', 's.invoke'), bundledStack.replace(chunk, chunk.replace(':19000', ':19001')),
+    bundledStack.replace(chunk, chunk.replace('/out/chunks/', '/business/')),
+    bundledStack.replace(`at WW (${chunk}`, `at WW (${chunk}?wrong`),
+  ]) {
+    assert.deepEqual(rpc({ ...bundledCancellation, text: `%c  ERR color: #f33 ${changed}` },
+      { ...bundledProof, stack: changed }), [], '方法链、构建资源与同源身份仍须完整匹配');
+  }
   const second = { ...cancellation, index: 2, observationOrder: 25, consoleCallObservationOrder: 24 };
   const secondProof = { ...proof, errorObjectId: 2, observationOrder: 24 };
   assert.equal(rpc(cancellation, proof, [error, cancellation, second],

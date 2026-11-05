@@ -30,7 +30,7 @@ export async function showWorkspaceMcpOptions(accessor: ServicesAccessor, id: st
   if (server.canConnect) items.push({ label: 'Start Server', run: async () => { await server.start(); } });
   if (server.canAuthorize) items.push({ label: 'Authorize', run: () => server.authorize() });
   if (server.canStop) items.push({ label: server.isPending ? 'Cancel Connection Operation' : 'Stop Server', run: () => server.stop() });
-  items.push({ label: 'Show Details', run: () => service.open(server) }, { label: 'Refresh MCP Status', run: () => server.catalog.refresh() });
+  items.push({ label: 'Show Details', run: () => service.open(server) }, { label: 'Refresh MCP Status', run: () => server.catalog.refresh({ refresh: true }) });
   const pick = await accessor.get(IQuickInputService).pick(items, { placeHolder: `${server.label} · ${server.catalog.label} · ${server.statusLabel}` });
   await pick?.run();
 }

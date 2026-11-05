@@ -33,7 +33,7 @@ try {
   const initialCatalogError = "MCP 首次目录读取暂不可用（测试替身）";
   if (fixture.mode === "authorize") {
     // 初次加载时保留显式失败，待原列表实际展示错误后恢复真实 Gateway。
-    await context.route("**/api/v1/mcp/servers", async (route) => {
+    await context.route(url => url.pathname === "/api/v1/mcp/servers", async (route) => {
       const sender = new URL(route.request().frame().url());
       if (sender.searchParams.has("mcp_workspace") && initialCatalogUnavailable) {
         const headers = await route.request().allHeaders();
