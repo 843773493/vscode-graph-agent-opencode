@@ -23,6 +23,8 @@ message GatewayResourceAddressDTO {
   optional string file_root_uri = 6;
   optional string session_id = 7;
   optional string thread_id = 8;
+  // 用于复制与跨 Gateway 引用，始终包含所属 Gateway；不表示资源存在或访问授权。
+  string reference_uri = 9;
 }
 // WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
 

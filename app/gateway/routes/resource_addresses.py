@@ -9,6 +9,7 @@ from app.core.resource_uri import (
     file_uri_root,
     parse_resource_uri,
     parse_session_thread_uri,
+    resource_display_uri,
 )
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
@@ -35,6 +36,11 @@ def parse_resource_address(
             _, session_id, thread_id = parse_session_thread_uri(parsed.display_uri)
         return APIResponse(data=GatewayResourceAddressDTO(
             uri=parsed.display_uri,
+            reference_uri=resource_display_uri(
+                scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+                tail_segments=parsed.tail_segments,
+                gateway_authority=parsed.gateway_authority or request.app.state.gateway_id,
+            ),
             gateway_id=parsed.gateway_authority or request.app.state.gateway_id,
             scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
             file_root_uri=file_uri_root(parsed.display_uri) if parsed.kind in {"files", "attachments"} else None,

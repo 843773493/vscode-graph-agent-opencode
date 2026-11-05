@@ -79,6 +79,13 @@ export declare type GatewayResourceAddressDTO = Message<"boxteam.gateway.v2.Gate
    * @generated from field: optional string thread_id = 8;
    */
   threadId?: string | undefined;
+
+  /**
+   * 用于复制与跨 Gateway 引用，始终包含所属 Gateway；不表示资源存在或访问授权。
+   *
+   * @generated from field: string reference_uri = 9;
+   */
+  referenceUri: string;
 };
 
 /**

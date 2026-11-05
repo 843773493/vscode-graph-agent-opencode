@@ -12,6 +12,7 @@ class GatewayResourceAddressRequest(BaseModel):
 class GatewayResourceAddressDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     uri: str
+    reference_uri: str
     gateway_id: str
     scope: str
     scope_id: str

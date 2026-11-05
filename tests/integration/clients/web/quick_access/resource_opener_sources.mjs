@@ -18,7 +18,7 @@ try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('Chromium', () => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1800, height: 1050 } });
+  const context = await browser.newContext({ viewport: { width: 1800, height: 1050 }, permissions: ['clipboard-read', 'clipboard-write'] });
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
@@ -110,6 +110,18 @@ try {
   result.phase = 'baseline-source';
   await open(`boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/agent-spec/root/AGENTS.md`);
   await expect(text(0).locator('.view-lines')).toContainText('资源打开归属基线');
+  result.phase = 'copy-source-reference';
+  await command('workbench.action.showCommands');
+  await quick.locator('input').fill('>复制资源 URI');
+  const copyCommand = quick.locator('.monaco-list-row').filter({ hasText: '复制资源 URI' });
+  await expect(copyCommand).toHaveCount(1);
+  await copyCommand.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+    `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/agent-spec/root/AGENTS.md`);
+  expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.fileReads.filter(read => read.phase === result.phase)).toEqual([]);
+  await expect(groups).toHaveCount(1);
+  result.sourceReferenceCopied = true;
   result.phase = 'canonical-tool-result';
   const address = await open(toolUri, ['Alt']);
   expect(address).toMatchObject({ kind: 'session', session_id: null });
@@ -124,6 +136,13 @@ try {
       max_bytes: 33554432, max_response_bytes: 50331648 } },
   ]);
   result.toolArtifactOpened = true;
+  result.phase = 'copy-tool-reference';
+  await command('boxteam.resource.copyUri');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(address.reference_uri);
+  expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.fileReads.filter(read => read.phase === result.phase)).toEqual([]);
+  await expect(groups).toHaveCount(2);
+  result.toolReferenceCopied = true;
   // 默认截断预览不含第 1201 行，原 Go to Line 必须到达完整正文中间。
   await command('workbench.action.gotoLine');
   await expect(quick.locator('input')).toHaveValue(/^:/);
@@ -172,6 +191,26 @@ try {
   await expect(text(0).locator('.view-lines')).toContainText('large-output-line-0000');
   expect(result.sources.filter(read => read.phase === result.phase)).toHaveLength(1);
   result.unsupportedSourceRejected = true;
+  result.phase = 'copy-file-candidate';
+  await command('workbench.action.quickOpen', 'AGENTS.md');
+  const candidate = quick.locator('[data-quick-input-id^="boxteam-file:"]').filter({ hasText: 'AGENTS.md' });
+  await expect(candidate).toHaveCount(1);
+  const [copied] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/resource-addresses/parse'),
+    candidate.getByRole('button', { name: '复制资源 URI', exact: true }).click(),
+  ]);
+  const copiedBody = await copied.json();
+  expect(copied.status()).toBe(200);
+  expect(copiedBody.request_id).toBe(copied.headers()['x-request-id']);
+  expect(copiedBody.data).toMatchObject({ gateway_id: owner.gatewayId, scope_id: owner.workspaceId, kind: 'files' });
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(copiedBody.data.reference_uri);
+  await expect(quick.locator('input')).toBeFocused();
+  expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.fileReads.filter(read => read.phase === result.phase)).toEqual([]);
+  await expect(groups).toHaveCount(1);
+  await expect(text(0).locator('.view-lines')).toContainText('large-output-line-0000');
+  await page.keyboard.press('Escape');
+  result.fileReferenceCopiedWithoutOpen = true;
   expect(result.fileReads).toEqual([]);
   expect(result.executions).toEqual([{ phase: 'execute-output',
     path: `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`,

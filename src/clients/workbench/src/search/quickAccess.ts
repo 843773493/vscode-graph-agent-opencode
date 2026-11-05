@@ -6,6 +6,7 @@ import { basename } from '../../upstream/src/vs/base/common/resources.js';
 import { ThemeIcon } from '../../upstream/src/vs/base/common/themables.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IContextKeyService } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../upstream/src/vs/platform/keybinding/common/keybinding.js';
@@ -46,6 +47,7 @@ import type { ResourceOpenOptions } from '../resourceOpener.js';
 import type { ThreadEditorOptions } from '../threadPane.js';
 import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import { COPY_RESOURCE_URI, supportsResourceReference } from '../resourceActions.js';
 
 interface AccessRun {
   picker: IQuickPick<ResourcePick, { useSeparators: true }>;
@@ -353,16 +355,22 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     editor?: EditorInput | IResourceEditorInput, message?: TurnMessageMatchDTO, trace?: TraceMatchDTO): ResourcePick {
     const side = run.options.includeOpenToSideButton !== false;
     const dirty = editor && isEditorInput(editor) && editor.isDirty() && !editor.isSaving();
+    const copyReference = supportsResourceReference(resource);
     const input = editor ?? { resource, label: title, options: message ? { boxteamMessage: message } as ThreadEditorOptions : trace ? { boxteamTrace: trace } as ThreadEditorOptions : undefined };
     return { id: message ? `${resource.toString()}#${message.reference!.item_id}/${message.reference!.start_codepoint}`
       : trace ? `${resource.toString()}#trace/${trace.reference!.event_id}/${trace.reference!.start_codepoint}` : resource.toString(), resource, editor, label: title, description, detail,
       ariaLabel: `${title} ${description ?? ''}${dirty ? '，未保存' : ''}`,
       iconClass: ThemeIcon.asClassName(resource.scheme === 'boxteam-thread' ? Codicon.commentDiscussion : Codicon.file),
       buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }] : []),
-        ...(editor ? [{ iconClass: ThemeIcon.asClassName(dirty ? Codicon.circleFilled : Codicon.close), tooltip: '从最近打开中移除', alwaysVisible: !!dirty }] : [])],
+        ...(editor ? [{ iconClass: ThemeIcon.asClassName(dirty ? Codicon.circleFilled : Codicon.close), tooltip: '从最近打开中移除', alwaysVisible: !!dirty }] : []),
+        ...(copyReference ? [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }] : [])],
       trigger: (index, mods) => {
         if (side && index === 0) { this.report(this.open(run, input, mods, false, true)); return TriggerAction.CLOSE_PICKER; }
-        if (editor) { this.history.removeFromHistory(editor); return TriggerAction.REMOVE_ITEM; }
+        if (editor && index === Number(side)) { this.history.removeFromHistory(editor); return TriggerAction.REMOVE_ITEM; }
+        if (copyReference && index === Number(side) + Number(!!editor)) {
+          this.assertAccess(run);
+          this.report(this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(COPY_RESOURCE_URI, resource)));
+        }
         return TriggerAction.NO_ACTION;
       },
       accept: (mods, event) => this.report(this.open(run, input, mods, event.inBackground)),

@@ -19,7 +19,7 @@ class GatewayResourceAddressRequest(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., local_gateway_id: _Optional[str] = ...) -> None: ...
 
 class GatewayResourceAddressDTO(_message.Message):
-    __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id")
+    __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id", "reference_uri")
     URI_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     SCOPE_FIELD_NUMBER: _ClassVar[int]
@@ -28,6 +28,7 @@ class GatewayResourceAddressDTO(_message.Message):
     FILE_ROOT_URI_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    REFERENCE_URI_FIELD_NUMBER: _ClassVar[int]
     uri: str
     gateway_id: str
     scope: str
@@ -36,7 +37,8 @@ class GatewayResourceAddressDTO(_message.Message):
     file_root_uri: str
     session_id: str
     thread_id: str
-    def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
+    reference_uri: str
+    def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., reference_uri: _Optional[str] = ...) -> None: ...
 
 class AcquireGatewayUserRequest(_message.Message):
     __slots__ = ("client_label",)

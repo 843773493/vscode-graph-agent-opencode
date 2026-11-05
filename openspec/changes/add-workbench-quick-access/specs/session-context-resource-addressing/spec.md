@@ -1,5 +1,14 @@
 ## ADDED Requirements
 
+### Requirement: 复制引用由统一寻址 owner 明确 Gateway 归属
+
+Gateway 资源地址解析 SHALL 在保留原 `uri`、文件根及定位字段语义的同时，返回包含明确 Gateway 的 `reference_uri`，供复制和跨工作区／Gateway 的草稿引用消费。两者 SHALL 使用同一个资源 URI grammar 构造与解析；客户端只反转已有内部编辑器投影，不拼装公开 URI 模板。该字段不表示资源存在、可读、已授权或已固定版本，引用不自动变成上传附件或激活上下文来源。
+
+#### Scenario: 本机简称与远端来源的复制
+
+- **WHEN** 用户复制本机简称或带明确远端 Gateway 的资源
+- **THEN** 返回的引用携带其原 Gateway，接收方不会把简称解释成自己的本机资源；原非法 URI 仍由同一 grammar 拒绝
+
 ### Requirement: 联邦上下文查询复用原来源与分页
 
 工作区搜索 SHALL 提供独立 `context/content` Provider，委托原上下文查询 owner，保留 `effective_context`、`session_catalog`、`session_information` 来源、literal／regex、大小写、字符预算及原 revision／cursor。省略来源仍为有效上下文。该类别 MUST NOT 用 canonical 消息正文、文件或日志搜索替代；精确单资源读取及 inventory 继续沿原接口。

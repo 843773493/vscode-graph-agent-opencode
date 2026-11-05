@@ -71,7 +71,8 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
             result["owner"]["gatewayId"], workspace_id,
         ) for source in result["sources"])
         for key in ("toolArtifactOpened", "toolArtifactReadonly", "toolArtifactSplitShared", "toolArtifactRestored",
-                    "toolArtifactReopen", "unsupportedSourceRejected", "noExecutionOrFileFallback"):
+                    "toolArtifactReopen", "unsupportedSourceRejected", "noExecutionOrFileFallback",
+                    "sourceReferenceCopied", "toolReferenceCopied", "fileReferenceCopiedWithoutOpen"):
             assert result[key], key
         assert result["pageErrors"] == []
     finally:

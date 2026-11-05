@@ -7,6 +7,8 @@ import { OpenWithEditorPicker } from '../upstream/src/vs/workbench/services/edit
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import type { ThreadOwner } from './agentApi.js';
 import { workspaceFileUri } from './workspaceFiles.js';
+import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
+import { COPY_RESOURCE_URI } from './resourceActions.js';
 
 /** 原生菜单及打开方式共用同一后端文件 URI，所有动作冻结右键时的工作区归属。 */
 export function showFileOpenMenu(path: string, anchor: { x: number; y: number }, owner: ThreadOwner,
@@ -27,6 +29,8 @@ export function showFileOpenMenu(path: string, anchor: { x: number; y: number },
       return editors.openEditor({ resource, options: { pinned: true } }, target.id);
     }),
     new Separator(),
+    new Action(COPY_RESOURCE_URI, '复制资源 URI', '', true,
+      () => instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(COPY_RESOURCE_URI, resource))),
     new Action('boxteam.file.openWith', '打开方式…', '', true, async () => {
       const options = await instantiation.createInstance(OpenWithEditorPicker).pick({ resource });
       if (options) await editors.openEditor({ resource, options: { ...options, pinned: true } }, group.id);

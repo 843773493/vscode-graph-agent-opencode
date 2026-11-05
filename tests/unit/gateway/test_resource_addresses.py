@@ -50,6 +50,11 @@ def test_session_and_child_keep_explicit_owner_without_reading_resources(
     assert data["file_root_uri"] is None
     expected = uri.replace(f"boxteam://{GATEWAY}/", "boxteam://")
     assert data["uri"] == expected
+    assert data["reference_uri"] == resource_display_uri(
+        scope="workspace", scope_id=WORKSPACE, kind="session",
+        tail_segments=(SESSION, "threads", THREAD) if child else (SESSION,),
+        gateway_authority=authority or GATEWAY,
+    )
 
 
 def test_file_root_comes_from_same_uri_owner(address_client: TestClient) -> None:
@@ -59,6 +64,7 @@ def test_file_root_comes_from_same_uri_owner(address_client: TestClient) -> None
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["uri"] == uri
+    assert data["reference_uri"] == uri.replace("boxteam://", f"boxteam://{GATEWAY}/", 1)
     assert data["file_root_uri"] == root
     assert data["session_id"] is data["thread_id"] is None
 

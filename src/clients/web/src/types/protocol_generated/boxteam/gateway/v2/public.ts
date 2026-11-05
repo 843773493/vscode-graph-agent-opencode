@@ -23,7 +23,11 @@ export interface GatewayResourceAddressDTO {
   kind: string;
   file_root_uri?: string | undefined;
   session_id?: string | undefined;
-  thread_id?: string | undefined;
+  thread_id?:
+    | string
+    | undefined;
+  /** 用于复制与跨 Gateway 引用，始终包含所属 Gateway；不表示资源存在或访问授权。 */
+  reference_uri: string;
 }
 
 export interface AcquireGatewayUserRequest {
@@ -1013,6 +1017,7 @@ function createBaseGatewayResourceAddressDTO(): GatewayResourceAddressDTO {
     file_root_uri: undefined,
     session_id: undefined,
     thread_id: undefined,
+    reference_uri: "",
   };
 }
 
@@ -1027,6 +1032,7 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
       file_root_uri: isSet(object.file_root_uri) ? globalThis.String(object.file_root_uri) : undefined,
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      reference_uri: isSet(object.reference_uri) ? globalThis.String(object.reference_uri) : "",
     };
   },
 
@@ -1056,6 +1062,9 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
     if (message.thread_id !== undefined) {
       obj.thread_id = message.thread_id;
     }
+    if (message.reference_uri !== "") {
+      obj.reference_uri = message.reference_uri;
+    }
     return obj;
   },
 
@@ -1072,6 +1081,7 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
     message.file_root_uri = object.file_root_uri ?? undefined;
     message.session_id = object.session_id ?? undefined;
     message.thread_id = object.thread_id ?? undefined;
+    message.reference_uri = object.reference_uri ?? "";
     return message;
   },
 };
