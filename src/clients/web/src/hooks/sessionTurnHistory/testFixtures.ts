@@ -1,5 +1,7 @@
 import type { Session, SessionTurnBootstrap, TurnDetail } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   invalidateGatewayToken,
   invalidateGatewayUserSession,
@@ -8,8 +10,10 @@ import {
 
 export const SESSION_ID = "ses_partial_projection";
 export const THREAD_ID = "thr_018f0000000070008000000000000001";
-export const WORKSPACE_ID = "workspace_partial_projection";
-export const SCOPE_KEY = `${WORKSPACE_ID}::${SESSION_ID}`;
+export const WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
+export const WORKSPACE_OWNER = { gateway_id: "gateway-history-fixture", workspace_id: WORKSPACE_ID } as const;
+export const WORKSPACE_KEY = gatewayWorkspaceKey(WORKSPACE_OWNER);
+export const SCOPE_KEY = sessionScopeKey(WORKSPACE_KEY, SESSION_ID);
 export const HISTORY_SOURCE_BINDING = {
   source_view_id: "view_history_fixture",
   source_view_revision: 1,
@@ -134,10 +138,10 @@ export function appState(): AppState {
   const currentSession = session();
   return {
     sessions: [currentSession],
-    sessionsByWorkspace: new Map([[WORKSPACE_ID, [currentSession]]]),
-    sessionGatewayWorkspaceById: new Map(),
+    sessionsByWorkspace: new Map([[WORKSPACE_KEY, [currentSession]]]),
+    sessionGatewayWorkspaceById: new Map([[SCOPE_KEY, WORKSPACE_KEY]]),
     currentSession,
-    currentSessionWorkspaceId: WORKSPACE_ID,
+    currentSessionWorkspaceId: WORKSPACE_KEY,
     eventQueuesBySession: new Map(),
     pendingConversations: new Map(),
     activeJobIdsBySession: new Map(),

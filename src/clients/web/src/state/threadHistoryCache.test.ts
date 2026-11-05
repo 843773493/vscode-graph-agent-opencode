@@ -2,9 +2,9 @@ import 'fake-indexeddb/auto';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { ThreadHistoryCache, type ThreadHistoryOwner } from './threadHistoryCache';
 import { applyTurnBootstrap, applyTurnHistoryPage, beginTurnBootstrap, createSessionTurnTimeline, upsertTurns } from './session/turnTimeline';
-import { bootstrap, HISTORY_SOURCE_BINDING, THREAD_ID, turnDetail } from '../hooks/sessionTurnHistory/testFixtures';
+import { bootstrap, HISTORY_SOURCE_BINDING, SESSION_ID, THREAD_ID, WORKSPACE_ID, turnDetail } from '../hooks/sessionTurnHistory/testFixtures';
 
-const owner = (gatewayId: string): ThreadHistoryOwner => ({ gatewayId, workspaceId: 'workspace-a', sessionId: 'session-a', threadId: THREAD_ID });
+const owner = (gatewayId: string): ThreadHistoryOwner => ({ gatewayId, workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, threadId: THREAD_ID });
 const failure = (error: unknown) => { throw error; };
 function history(scopeKey = 'scope-a') {
   return { ...upsertTurns(createSessionTurnTimeline(scopeKey), [turnDetail(1)]),
@@ -63,7 +63,7 @@ describe('独立于 Tab 的会话历史镜像', () => {
     const cache = new ThreadHistoryCache();
     cache.remember(target, history(), failure);
     await cache.flush(target);
-    for (const other of [{ ...target, gatewayId: 'other' }, { ...target, workspaceId: 'other' },
+    for (const other of [{ ...target, gatewayId: 'other' }, { ...target, workspaceId: '00000000-0000-4000-8000-000000000002' },
       { ...target, sessionId: 'other' }, { ...target, threadId: 'other' }]) {
       expect(await cache.read(other, 'same-scope')).toBeNull();
     }

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import {
-  SESSION_ID, THREAD_ID, SCOPE_KEY, WORKSPACE_ID, appState, bootstrap,
+  SESSION_ID, THREAD_ID, SCOPE_KEY, WORKSPACE_KEY, appState, bootstrap,
   emptyHistoryPageResponse, installWindow, originalFetch, restoreTurnHistoryTestGlobals,
   turnDetail,
 } from "./testFixtures";
@@ -40,7 +40,7 @@ test.each(["manual", "event"] as const)("%s 历史校准清空旧窗口但始终
   }));
   const getCurrentTimeline = () => current.turnTimelinesBySession.get(SCOPE_KEY) ?? null;
   function Harness({ reloadNonce = 0 }: { reloadNonce?: number }): React.ReactNode {
-    history = useSessionTurnHistory({ apiPort, sessionId: SESSION_ID, workspaceId: WORKSPACE_ID,
+    history = useSessionTurnHistory({ apiPort, sessionId: SESSION_ID, workspaceId: WORKSPACE_KEY,
       sessionCacheKey: SCOPE_KEY, getCurrentTimeline, reloadNonce,
       setState: (update) => {
         current = typeof update === "function" ? update(current) : update;

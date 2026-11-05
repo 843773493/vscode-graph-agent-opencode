@@ -14,13 +14,17 @@ import type { TurnMessageLocationDTO } from "../../types/protocol_generated/boxt
 import { useAroundTurnLoader, useInitialTurnLoader, useOlderTurnLoader } from "./page";
 import { turnDetail } from "./testFixtures";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 
 const originalFetch = globalThis.fetch;
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const SESSION_ID = "session-page-epoch";
 const THREAD_ID = "thr_page_current_target";
-const WORKSPACE_ID = "workspace-page-epoch";
-const SCOPE_KEY = `${WORKSPACE_ID}::${SESSION_ID}`;
+const WORKSPACE_ID = "00000000-0000-4000-8000-000000000010";
+const WORKSPACE_OWNER = { gateway_id: "gateway-page-fixture", workspace_id: WORKSPACE_ID } as const;
+const WORKSPACE_KEY = gatewayWorkspaceKey(WORKSPACE_OWNER);
+const SCOPE_KEY = sessionScopeKey(WORKSPACE_KEY, SESSION_ID);
 const HISTORY_SOURCE_BINDING = { source_view_id: "view-page-current", source_view_revision: 1 } as const;
 let aroundRenderer: ReactTestRenderer | null = null;
 
@@ -110,7 +114,7 @@ function aroundHarness(port: number, respond: (request: AroundRequest) => Respon
     return respond(request);
   }, { preconnect: originalFetch.preconnect });
   function Harness() {
-    load = useAroundTurnLoader({ apiPort: port, sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, sessionCacheKey: SCOPE_KEY,
+    load = useAroundTurnLoader({ apiPort: port, sessionId: SESSION_ID, workspaceId: WORKSPACE_KEY, sessionCacheKey: SCOPE_KEY,
       getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
       generationRef, requestSignal: controller.signal,
       setState: (update) => { currentState = typeof update === "function" ? update(currentState) : update; },
@@ -151,6 +155,7 @@ describe("指定 Turn 的真实 history reader", () => {
       expect(request.path).toBe(`/api/v1/sessions/${SESSION_ID}/threads/${THREAD_ID}/history`);
       expect(request.body).toEqual({ direction: "around", anchor_turn_id: "turn-anchor", before_turns: 3, after_turns: 3 });
       expect(request.headers.get("X-BoxTeam-Workspace-Id")).toBe(WORKSPACE_ID);
+      expect(request.headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(WORKSPACE_OWNER.gateway_id);
     }
     expect(harness.timeline().orderedTurnIds).toEqual(["turn-anchor"]);
     expect(harness.timeline().loadingBefore).toBe(false);
@@ -354,7 +359,7 @@ async function runPageCase({
     loadOlder = useOlderTurnLoader({
       apiPort: port,
       sessionId: SESSION_ID,
-      workspaceId: WORKSPACE_ID,
+      workspaceId: WORKSPACE_KEY,
       sessionCacheKey: SCOPE_KEY,
       getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
       generationRef,
@@ -437,7 +442,7 @@ describe("Turn 历史分页 epoch 协调", () => {
       loadInitial = useInitialTurnLoader({
         apiPort: port,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         generationRef,
         requestSignal: requestController.signal,
@@ -513,7 +518,7 @@ describe("Turn 历史分页 epoch 协调", () => {
       loadInitial = useInitialTurnLoader({
         apiPort: port,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         generationRef,
         requestSignal: requestController.signal,
@@ -618,7 +623,7 @@ describe("Turn 历史分页 epoch 协调", () => {
       loadInitial = useInitialTurnLoader({
         apiPort: port,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         generationRef,
         requestSignal: requestController.signal,

@@ -5,6 +5,8 @@ import type { AppState, ConversationView } from "../../types/frontend";
 import type { PendingRequestList } from "../../types/backend";
 import { getConversationsForSession, writePendingSnapshot } from "../../state/conversations";
 import { cloneMaps } from "../../state/appStateMaps";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import { createSessionTurnTimeline, upsertTurns } from "../../state/session/turnTimeline";
 import { TurnActivitySummary } from "../../components/chat/turn/TurnActivitySummary";
 import { useSessionJobTurnLoader } from "../session/useSessionTurnTimeline";
@@ -14,6 +16,8 @@ import {
   THREAD_ID,
   SCOPE_KEY,
   WORKSPACE_ID,
+  WORKSPACE_KEY,
+  WORKSPACE_OWNER,
   appState,
   bootstrap,
   emptyHistoryPageResponse,
@@ -114,7 +118,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         latest.current = state;
         const getCurrentTimeline = React.useCallback(() => latest.current.turnTimelinesBySession.get(SCOPE_KEY) ?? null, []);
         history = useSessionTurnHistory({ apiPort, sessionId: SESSION_ID,
-          workspaceId: WORKSPACE_ID, sessionCacheKey: SCOPE_KEY, getCurrentTimeline,
+          workspaceId: WORKSPACE_KEY, sessionCacheKey: SCOPE_KEY, getCurrentTimeline,
           reloadNonce: state.sessionHistoryReloadNonce, setState });
         useSessionJobTurnLoader({ state, loadTurnDetails: history.loadTurnDetails,
           latestStateRef: latest, sessionCacheKey: SCOPE_KEY,
@@ -248,8 +252,9 @@ describe("useSessionTurnHistory pending bootstrap", () => {
     const jobId = "job_late_metadata";
     const turnId = "turn_late_metadata";
     const targetSessionId = scope === "session" ? "ses_target_metadata" : SESSION_ID;
-    const targetWorkspaceId = scope === "workspace" ? "workspace_target_metadata" : WORKSPACE_ID;
-    const targetScopeKey = `${targetWorkspaceId}::${targetSessionId}`;
+    const targetWorkspaceId = scope === "workspace" ? "00000000-0000-4000-8000-000000000004" : WORKSPACE_ID;
+    const targetWorkspaceKey = gatewayWorkspaceKey({ ...WORKSPACE_OWNER, workspace_id: targetWorkspaceId });
+    const targetScopeKey = sessionScopeKey(targetWorkspaceKey, targetSessionId);
     installWindow(apiPort);
     const initialState = appState();
     initialState.pendingConversations.set(SCOPE_KEY, [{ conversationId: turnId,
@@ -291,7 +296,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       updateState = setState;
       const latest = React.useRef(state);
       latest.current = state;
-      const scopeKey = `${state.currentSessionWorkspaceId}::${state.currentSession!.session_id}`;
+      const scopeKey = sessionScopeKey(state.currentSessionWorkspaceId, state.currentSession!.session_id);
       const getCurrentTimeline = React.useCallback(() => latest.current.turnTimelinesBySession.get(scopeKey) ?? null, [scopeKey]);
       const setHistoryState = React.useCallback((update: React.SetStateAction<AppState>) => {
         if (holdWriteBack) delayedUpdates.push(update);
@@ -320,7 +325,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
     expect(delayedUpdates).toHaveLength(1);
     await act(async () => { updateState((previous) => ({ ...previous,
       currentSession: { ...previous.currentSession!, session_id: targetSessionId, workspace_id: targetWorkspaceId },
-      currentSessionWorkspaceId: targetWorkspaceId })); await wait(40); });
+      currentSessionWorkspaceId: targetWorkspaceKey })); await wait(40); });
     const previousTimeline = currentState.turnTimelinesBySession.get(SCOPE_KEY);
     const targetBefore = currentState.turnTimelinesBySession.get(targetScopeKey);
     await act(async () => { updateState(delayedUpdates[0]!); await wait(30); });
@@ -417,7 +422,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -517,7 +522,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -583,7 +588,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { partialBootstrapPollDelay } from "./bootstrap";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   createSessionTurnTimeline,
   upsertTurns,
@@ -11,7 +13,8 @@ import {
   SESSION_ID,
   THREAD_ID,
   SCOPE_KEY,
-  WORKSPACE_ID,
+  WORKSPACE_KEY,
+  WORKSPACE_OWNER,
   appState,
   bootstrap,
   emptyHistoryPageResponse,
@@ -47,7 +50,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     }, { preconnect: originalFetch.preconnect });
     function Harness({ index }: { index: number }): React.ReactNode {
       const key = `${SCOPE_KEY}::${threads[index]}`;
-      readers[index] = useSessionTurnHistory({ apiPort: 0, sessionId: SESSION_ID, threadId: threads[index], workspaceId: WORKSPACE_ID,
+      readers[index] = useSessionTurnHistory({ apiPort: 0, sessionId: SESSION_ID, threadId: threads[index], workspaceId: WORKSPACE_KEY,
         sessionCacheKey: key, getCurrentTimeline: () => states[index].turnTimelinesBySession.get(key) ?? null,
         reloadNonce: 0, setState: (update) => { states[index] = typeof update === "function" ? update(states[index]) : update; } });
       return null;
@@ -80,7 +83,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       throw new Error(`未声明的 owner 验证请求: ${path}`);
     }, { preconnect: originalFetch.preconnect });
     function Harness(): React.ReactNode {
-      useSessionTurnHistory({ apiPort, sessionId: SESSION_ID, workspaceId: WORKSPACE_ID,
+      useSessionTurnHistory({ apiPort, sessionId: SESSION_ID, workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY, getCurrentTimeline: () => current.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0, setState: (update) => { current = typeof update === "function" ? update(current) : update; } });
       return null;
@@ -173,7 +176,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce,
@@ -214,8 +217,8 @@ describe("useSessionTurnHistory partial bootstrap", () => {
 
   test("切换到已就绪的历史缓存不再请求 bootstrap", async () => {
     const apiPort = 9116;
-    const cachedWorkspaceId = "workspace_cached_history";
-    const cachedScopeKey = `${cachedWorkspaceId}::${SESSION_ID}`;
+    const cachedWorkspaceKey = gatewayWorkspaceKey({ ...WORKSPACE_OWNER, workspace_id: "00000000-0000-4000-8000-000000000002" });
+    const cachedScopeKey = sessionScopeKey(cachedWorkspaceKey, SESSION_ID);
     installWindow(apiPort);
     let currentScopeKey = SCOPE_KEY;
     let currentState = appState();
@@ -290,7 +293,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<Harness scopeKey={SCOPE_KEY} workspaceId={WORKSPACE_ID} />);
+      renderer = create(<Harness scopeKey={SCOPE_KEY} workspaceId={WORKSPACE_KEY} />);
       await wait(80);
     });
     expect(bootstrapCalls).toBe(1);
@@ -298,7 +301,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     currentScopeKey = cachedScopeKey;
     await act(async () => {
       renderer!.update(
-        <Harness scopeKey={cachedScopeKey} workspaceId={cachedWorkspaceId} />,
+        <Harness scopeKey={cachedScopeKey} workspaceId={cachedWorkspaceKey} />,
       );
       await wait(80);
     });
@@ -311,8 +314,8 @@ describe("useSessionTurnHistory partial bootstrap", () => {
 
   test.each([true, false])("around取消%s时切owner再回访缓存仍可双向加载，旧响应不清新请求", async (settlesOnAbort) => {
     const apiPort = 9150;
-    const otherWorkspaceId = "workspace-return-history";
-    const otherScopeKey = `${otherWorkspaceId}::${SESSION_ID}`;
+    const otherWorkspaceKey = gatewayWorkspaceKey({ ...WORKSPACE_OWNER, workspace_id: "00000000-0000-4000-8000-000000000003" });
+    const otherScopeKey = sessionScopeKey(otherWorkspaceKey, SESSION_ID);
     installWindow(apiPort);
     let currentScopeKey = SCOPE_KEY;
     let currentState = appState();
@@ -375,7 +378,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       return null;
     }
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<Harness scopeKey={SCOPE_KEY} workspaceId={WORKSPACE_ID} />); await wait(60); });
+    await act(async () => { renderer = create(<Harness scopeKey={SCOPE_KEY} workspaceId={WORKSPACE_KEY} />); await wait(60); });
     await act(async () => { await history.loadAroundTurn("job_latest"); });
     const before = currentState.turnTimelinesBySession.get(SCOPE_KEY)!;
     expect(before.phase).toBe("ready");
@@ -388,8 +391,8 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.loadingBefore).toBe(true);
     expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.loadingAfter).toBe(true);
     currentScopeKey = otherScopeKey;
-    currentState.currentSessionWorkspaceId = otherWorkspaceId;
-    await act(async () => { renderer.update(<Harness scopeKey={otherScopeKey} workspaceId={otherWorkspaceId} />); await wait(0); });
+    currentState.currentSessionWorkspaceId = otherWorkspaceKey;
+    await act(async () => { renderer.update(<Harness scopeKey={otherScopeKey} workspaceId={otherWorkspaceKey} />); await wait(0); });
     expect(aroundSignal?.aborted).toBe(true);
     expect(currentState.turnTimelinesBySession.get(otherScopeKey)?.generation).toBe(2);
     if (settlesOnAbort) {
@@ -397,8 +400,8 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.loadingAfter).toBe(false);
     }
     currentScopeKey = SCOPE_KEY;
-    currentState.currentSessionWorkspaceId = WORKSPACE_ID;
-    await act(async () => { renderer.update(<Harness scopeKey={SCOPE_KEY} workspaceId={WORKSPACE_ID} />); await wait(0); });
+    currentState.currentSessionWorkspaceId = WORKSPACE_KEY;
+    await act(async () => { renderer.update(<Harness scopeKey={SCOPE_KEY} workspaceId={WORKSPACE_KEY} />); await wait(0); });
     const returned = currentState.turnTimelinesBySession.get(SCOPE_KEY)!;
     expect(bootstrapCalls).toBe(1);
     expect(returned.generation).toBe(3);
@@ -507,7 +510,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -580,7 +583,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -697,7 +700,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
       history = useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce,

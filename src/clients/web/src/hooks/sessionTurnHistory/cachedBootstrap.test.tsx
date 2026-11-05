@@ -4,7 +4,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { useSessionTurnHistory } from './useSessionTurnHistory';
 import { createSessionTurnTimeline, upsertTurns } from '../../state/session/turnTimeline';
 import { appState, bootstrap, emptyHistoryPageResponse, installWindow, originalFetch,
-  restoreTurnHistoryTestGlobals, SESSION_ID, SCOPE_KEY, THREAD_ID, WORKSPACE_ID, turnDetail, wait } from './testFixtures';
+  restoreTurnHistoryTestGlobals, SESSION_ID, SCOPE_KEY, THREAD_ID, WORKSPACE_KEY, turnDetail, wait } from './testFixtures';
 
 afterEach(restoreTurnHistoryTestGlobals);
 
@@ -27,7 +27,7 @@ test('真实历史入口先保留恢复镜像，等待 bootstrap 与 history，�
   }, { preconnect: originalFetch.preconnect });
   const current = () => state.turnTimelinesBySession.get(SCOPE_KEY)!;
   function Harness() {
-    useSessionTurnHistory({ apiPort: 9149, sessionId: SESSION_ID, threadId: THREAD_ID, workspaceId: WORKSPACE_ID,
+    useSessionTurnHistory({ apiPort: 9149, sessionId: SESSION_ID, threadId: THREAD_ID, workspaceId: WORKSPACE_KEY,
       sessionCacheKey: SCOPE_KEY, getCurrentTimeline: current, reloadNonce: 0,
       setState: update => { state = typeof update === 'function' ? update(state) : update; } });
     return null;

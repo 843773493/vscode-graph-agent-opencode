@@ -6,7 +6,7 @@ import {
   SESSION_ID,
   THREAD_ID,
   SCOPE_KEY,
-  WORKSPACE_ID,
+  WORKSPACE_KEY,
   appState,
   bootstrap,
   emptyHistoryPageResponse,
@@ -53,7 +53,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
     }, { preconnect: originalFetch.preconnect });
     function Harness({ reloadNonce }: { reloadNonce: number }): React.ReactNode {
       history = useSessionTurnHistory({ apiPort, sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID, sessionCacheKey: SCOPE_KEY,
+        workspaceId: WORKSPACE_KEY, sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce, setState: (update) => {
           currentState = typeof update === "function" ? update(currentState) : update;
@@ -144,7 +144,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
       history = useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -242,7 +242,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
       history = useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -322,7 +322,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
       history = useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -399,7 +399,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
       history = useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
@@ -478,7 +478,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
       history = useSessionTurnHistory({
         apiPort,
         sessionId: SESSION_ID,
-        workspaceId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY,
         getCurrentTimeline: () => currentState.turnTimelinesBySession.get(SCOPE_KEY) ?? null,
         reloadNonce: 0,
